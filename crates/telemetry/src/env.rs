@@ -1,3 +1,4 @@
+// [iCodex] - 2026-07-20T08:51:00Z - fail-closed product telemetry permission
 //! Environment-driven configuration for `send_telemetry`.
 //!
 //! Pure-function helpers that read process env vars. Kept separate
@@ -45,12 +46,18 @@ pub(crate) fn reset_binding_armed() {
     BINDING_ARMED.store(false, Ordering::SeqCst);
 }
 
-/// Returns `true` if the user has explicitly disabled telemetry, or
-/// if the process is running in a `test` or `dev` environment.
+/// Returns `true` unless product analytics have been explicitly enabled
+/// and no higher-priority suppression policy applies.
 ///
-/// Mirrors Python utils.py:194-199 — `TELEMETRY_DISABLED` is treated
-/// as truthy whenever it is set to a non-empty string, and `ENV` is
-/// treated as disabling for the literal values `test` and `dev`.
+/// The local sovereign baseline is fail-closed: compiling the telemetry
+/// feature provides a capability but does not grant permission to emit.
+/// `COGNEE_PRODUCT_TELEMETRY_ENABLED` must be exactly one of `1`, `true`,
+/// `yes`, or `on` (ASCII case-insensitive). Missing, empty, false-like, or
+/// unknown values leave telemetry disabled.
+///
+/// Existing upstream opt-outs remain authoritative. `TELEMETRY_DISABLED`
+/// disables whenever it is a non-empty string, and `ENV` disables for the
+/// literal values `test` and `dev`.
 ///
 /// Additionally — per gap 07 decision 10 — returns `true` when a
 /// binding has armed analytics (see [`arm_binding_emission`]) AND
@@ -77,7 +84,14 @@ pub fn is_disabled() -> bool {
     {
         return true;
     }
-    false
+    !std::env::var("COGNEE_PRODUCT_TELEMETRY_ENABLED")
+        .map(|value| {
+            matches!(
+                value.to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
 }
 
 /// Total HTTP request timeout in seconds, clamped to `[1, 60]`.
@@ -143,6 +157,7 @@ mod tests {
         //   of TELEMETRY_DISABLED / ENV exists while this body runs.
         unsafe {
             std::env::remove_var("ENV");
+            std::env::set_var("COGNEE_PRODUCT_TELEMETRY_ENABLED", "1");
             std::env::set_var("TELEMETRY_DISABLED", "1");
         }
         assert!(is_disabled());
@@ -155,24 +170,64 @@ mod tests {
         // SAFETY: still inside the same serial section.
         unsafe {
             std::env::remove_var("TELEMETRY_DISABLED");
+            std::env::remove_var("COGNEE_PRODUCT_TELEMETRY_ENABLED");
         }
     }
 
     #[test]
     #[serial]
-    fn telemetry_disabled_empty_value() {
+    fn telemetry_is_disabled_by_default() {
         // SAFETY: `#[serial]` orders this test against every other
         //   env-mutating test in the crate.
         unsafe {
             std::env::remove_var("ENV");
-            std::env::set_var("TELEMETRY_DISABLED", "");
+            std::env::remove_var("TELEMETRY_DISABLED");
+            std::env::remove_var("COGNEE_PRODUCT_TELEMETRY_ENABLED");
         }
-        // Python's `if os.getenv("TELEMETRY_DISABLED"):` treats empty
-        // as falsy — we do too.
-        assert!(!is_disabled());
+        assert!(is_disabled());
+    }
+
+    #[test]
+    #[serial]
+    fn explicit_opt_in_enables_telemetry() {
+        // SAFETY: `#[serial]` orders this test against every other
+        //   env-mutating test in the crate.
+        unsafe {
+            std::env::remove_var("ENV");
+            std::env::remove_var("TELEMETRY_DISABLED");
+        }
+        for value in ["1", "true", "TRUE", "yes", "On"] {
+            // SAFETY: still inside the same serial section.
+            unsafe {
+                std::env::set_var("COGNEE_PRODUCT_TELEMETRY_ENABLED", value);
+            }
+            assert!(!is_disabled(), "recognized opt-in value: {value}");
+        }
         // SAFETY: still inside the same serial section.
         unsafe {
+            std::env::remove_var("COGNEE_PRODUCT_TELEMETRY_ENABLED");
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn ambiguous_opt_in_values_fail_closed() {
+        // SAFETY: `#[serial]` orders this test against every other
+        //   env-mutating test in the crate.
+        unsafe {
+            std::env::remove_var("ENV");
             std::env::remove_var("TELEMETRY_DISABLED");
+        }
+        for value in ["", "0", "false", "disabled", "maybe", " true "] {
+            // SAFETY: still inside the same serial section.
+            unsafe {
+                std::env::set_var("COGNEE_PRODUCT_TELEMETRY_ENABLED", value);
+            }
+            assert!(is_disabled(), "unrecognized opt-in value: {value}");
+        }
+        // SAFETY: still inside the same serial section.
+        unsafe {
+            std::env::remove_var("COGNEE_PRODUCT_TELEMETRY_ENABLED");
         }
     }
 
@@ -184,6 +239,7 @@ mod tests {
         //   hand-rolled race-guard read of `TELEMETRY_DISABLED`.
         unsafe {
             std::env::remove_var("TELEMETRY_DISABLED");
+            std::env::set_var("COGNEE_PRODUCT_TELEMETRY_ENABLED", "1");
             std::env::set_var("ENV", "test");
         }
         assert!(is_disabled());
@@ -200,6 +256,7 @@ mod tests {
         // SAFETY: still inside the same serial section.
         unsafe {
             std::env::remove_var("ENV");
+            std::env::remove_var("COGNEE_PRODUCT_TELEMETRY_ENABLED");
         }
     }
 
@@ -211,6 +268,7 @@ mod tests {
         unsafe {
             std::env::remove_var("TELEMETRY_DISABLED");
             std::env::remove_var("ENV");
+            std::env::set_var("COGNEE_PRODUCT_TELEMETRY_ENABLED", "1");
         }
         reset_binding_armed();
         arm_binding_emission();
@@ -222,6 +280,7 @@ mod tests {
         // SAFETY: still inside the same serial section.
         unsafe {
             std::env::remove_var("COGNEE_HOST_SDK");
+            std::env::remove_var("COGNEE_PRODUCT_TELEMETRY_ENABLED");
         }
         reset_binding_armed();
     }
@@ -234,6 +293,7 @@ mod tests {
         unsafe {
             std::env::remove_var("TELEMETRY_DISABLED");
             std::env::remove_var("ENV");
+            std::env::set_var("COGNEE_PRODUCT_TELEMETRY_ENABLED", "1");
         }
         reset_binding_armed();
         // SAFETY: still inside the same serial section.
@@ -244,6 +304,7 @@ mod tests {
         // SAFETY: still inside the same serial section.
         unsafe {
             std::env::remove_var("COGNEE_HOST_SDK");
+            std::env::remove_var("COGNEE_PRODUCT_TELEMETRY_ENABLED");
         }
     }
 

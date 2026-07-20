@@ -60,17 +60,15 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(telemetry_otlp::setup_telemetry, m)?)?;
 
     // Analytics entrypoint (gap-07 task 06): argument-less, idempotent.
-    // Arms `send_telemetry` per the Python-SDK parity policy (ON unless
-    // TELEMETRY_DISABLED / ENV in {test,dev} / COGNEE_HOST_SDK is set).
+    // Evaluates `send_telemetry` under the fail-closed policy (explicit
+    // opt-in required; TELEMETRY_DISABLED / ENV / COGNEE_HOST_SDK suppress).
     // Decisions 10, 12.
     m.add_function(wrap_pyfunction!(
         telemetry_analytics::setup_telemetry_analytics,
         m
     )?)?;
-    // Arm analytics automatically on import so telemetry is ON by default
-    // (Python-SDK parity) without requiring an explicit
-    // `setup_telemetry_analytics()` call. Idempotent; honours the
-    // standard opt-out env vars at emission time via `is_disabled()`.
+    // Evaluate analytics automatically on import without granting opt-in.
+    // Idempotent; `is_disabled()` remains authoritative per emission.
     let _ = telemetry_analytics::arm();
 
     // Register engine-tier exception types (PipelineError hierarchy).

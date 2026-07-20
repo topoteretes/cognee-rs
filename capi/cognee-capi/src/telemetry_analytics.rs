@@ -1,17 +1,15 @@
 //! `cognee_init_telemetry()` C entrypoint (gap 07 task 06).
 //!
 //! Argument-less, idempotent reporter of cognee product-analytics
-//! emission state for this process (Python-SDK parity — analytics ON by
-//! default).
+//! emission state for this process (local sovereign policy — analytics
+//! OFF by default).
 //!
 //! Note: `cg_init` / `cg_init_with_threads` already auto-arm analytics
-//! (see `runtime.rs::arm_telemetry_analytics`), so emission is ON by
-//! default without calling this function. `cognee_init_telemetry`
-//! re-affirms the arm and reports the effective state:
+//! (see `runtime.rs::arm_telemetry_analytics`), but arming alone never
+//! grants emission. `cognee_init_telemetry` reports the effective state:
 //!
-//! * `armed` unless `TELEMETRY_DISABLED` is set, `ENV` is
-//!   `"test"`/`"dev"`, or `COGNEE_HOST_SDK` is set to any non-empty
-//!   value.
+//! * `armed` only when `COGNEE_PRODUCT_TELEMETRY_ENABLED` is a
+//!   recognized explicit opt-in and no suppression variable applies.
 //!
 //! Idempotent via `OnceLock<Mutex<Option<bool>>>` (decision 12). It
 //! calls [`cognee_telemetry::env::arm_binding_emission`] so the
@@ -27,16 +25,13 @@ static ARMED: OnceLock<Mutex<Option<bool>>> = OnceLock::new();
 
 /// Arm cognee product-analytics emission for this process.
 ///
-/// Default policy (Python-SDK parity): analytics are ON by default
-/// (also auto-armed by `cg_init`). This call re-affirms the arm and
-/// reports the effective state, which is armed unless the opt-outs
-/// recognized by [`cognee_telemetry::env::is_disabled`] are set
-/// (`TELEMETRY_DISABLED`, `ENV in {test, dev}`, or `COGNEE_HOST_SDK`
-/// non-empty).
+/// Default policy: analytics are OFF unless the explicit opt-in and all
+/// suppressions recognized by [`cognee_telemetry::env::is_disabled`]
+/// permit emission. `cg_init` auto-arms evaluation but does not opt in.
 ///
 /// Returns:
 /// * `0` — armed (analytics will fire on subsequent `send_telemetry`
-///   calls — subject to runtime opt-out re-evaluation).
+///   calls — subject to runtime permission/suppression re-evaluation).
 /// * `1` — not armed (the per-binding policy suppressed emission).
 /// * `2` — internal lock poisoning (should not happen).
 ///

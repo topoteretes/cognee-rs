@@ -4,12 +4,10 @@
 //! product-analytics emission for this Node.js process subject to the
 //! per-binding policy from gap 07 decision 11.
 //!
-//! Policy (Neon is the canonical sender in the JS ecosystem — no
-//! upstream JS cognee SDK to defer to):
+//! Local sovereign policy (Neon remains the canonical JS sender):
 //!
-//! * `armed` unless `TELEMETRY_DISABLED` is set to any non-empty
-//!   value, OR `ENV` is `"test"` / `"dev"`, OR `COGNEE_HOST_SDK` is
-//!   set to any non-empty value.
+//! * `armed` only when `COGNEE_PRODUCT_TELEMETRY_ENABLED` is a
+//!   recognized explicit opt-in and no suppression variable applies.
 //!
 //! Idempotent via `OnceLock<Mutex<Option<bool>>>` (decision 12). When
 //! the policy arms emission this calls
@@ -27,11 +25,11 @@ static ARMED: OnceLock<Mutex<Option<bool>>> = OnceLock::new();
 
 /// Arm cognee product-analytics emission for this Node.js process.
 ///
-/// Default policy (Python-SDK parity): ON unless `TELEMETRY_DISABLED`
-/// is set, `ENV` is `"test"`/`"dev"`, or `COGNEE_HOST_SDK` is set.
+/// Default policy: OFF unless `COGNEE_PRODUCT_TELEMETRY_ENABLED` is a
+/// recognized explicit opt-in; suppression variables remain authoritative.
 ///
 /// Returns a JS boolean — `true` if analytics are effective for this
-/// process, `false` if an opt-out env var suppresses them. Idempotent.
+/// process, `false` if opt-in is absent/invalid or suppression applies.
 pub fn setup_telemetry_analytics(mut cx: FunctionContext) -> JsResult<JsBoolean> {
     Ok(cx.boolean(arm()))
 }

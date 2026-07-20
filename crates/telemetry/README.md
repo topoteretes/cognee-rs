@@ -1,6 +1,14 @@
 # cognee-telemetry
 
-Cognee product-analytics client (`send_telemetry`) — fires fire-and-forget aggregate-usage events to the cognee maintainers, mirroring the Python SDK's `send_telemetry` behaviour.
+Cognee product-analytics client (`send_telemetry`). The local sovereign
+baseline is fail-closed: compiling the client does not authorize network
+emission. Events are sent only when
+`COGNEE_PRODUCT_TELEMETRY_ENABLED=1` (or `true`, `yes`, `on`) explicitly opts
+in and no higher-priority suppression applies.
+
+`TELEMETRY_DISABLED`, `ENV=test|dev`, and binding-host suppression remain
+authoritative. Missing, empty, false-like, and unknown opt-in values emit
+nothing.
 
 Part of [cognee-rs](https://github.com/topoteretes/cognee-rs) — see the [project README](../../README.md) for an architecture overview and how the pieces fit together.
 

@@ -152,7 +152,8 @@ print(cfg)
 | `RUST_LOG`, `LOG_LEVEL` | Standard `tracing-subscriber` env-filter level overrides. |
 | `COGNEE_LOG_*`, `LOG_FILE_NAME` | Consumed by `setup_logging()` — see docs/configuration.md (Logging section). |
 | `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_SERVICE_NAME` and other `OTEL_*` vars | Consumed by `setup_telemetry()`. |
-| `TELEMETRY_DISABLED`, `ENV` | Honoured by `setup_telemetry_analytics()` via `cognee_telemetry::env::is_disabled`. |
+| `COGNEE_PRODUCT_TELEMETRY_ENABLED` | Explicitly opts in to product analytics. |
+| `TELEMETRY_DISABLED`, `ENV` | Higher-priority suppressions honoured by `setup_telemetry_analytics()`. |
 
 ## Operations reference
 
@@ -443,20 +444,22 @@ import cognee_py  # Rust spans now flow into Python logging
 Set `COGNEE_BINDING_SUPPRESS_LOGS=1` **before** importing `cognee_py` to
 skip the default subscriber. The host then owns all subscriber setup.
 
-### Analytics defaults
+### Analytics permission
 
-Analytics emission is **ON by default** — Python-SDK parity. Analytics are
-armed automatically on import (no explicit `setup_telemetry_analytics()` call
-required); the function is still exposed and returns the effective state.
+Analytics emission is **OFF by default**. The transport capability is evaluated
+automatically on import, but emission requires a recognized
+`COGNEE_PRODUCT_TELEMETRY_ENABLED` opt-in. The function is still exposed and
+returns the effective state.
 
 | Condition | Behaviour |
 |---|---|
-| No opt-out env set | Armed. `setup_telemetry_analytics()` returns `True`. |
+| No explicit opt-in | Suppressed. `setup_telemetry_analytics()` returns `False`. |
+| `COGNEE_PRODUCT_TELEMETRY_ENABLED=1` | Armed unless a suppression below applies. Returns `True`. |
 | `TELEMETRY_DISABLED=<non-empty>` | Suppressed. Returns `False`. |
 | `ENV` is `test` / `dev` | Suppressed. Returns `False`. |
 | `COGNEE_HOST_SDK=<any non-empty>` | Suppressed (defers to the host SDK). Returns `False`. |
 
-**Important — if you run this binding underneath another `cognee` SDK that is
+Suppressions take precedence over opt-in. If you run this binding underneath another `cognee` SDK that is
 already the canonical sender of `send_telemetry` events:** set
 `COGNEE_HOST_SDK=<name>` so this binding defers and you avoid double-counting.
 
@@ -515,7 +518,7 @@ All pipeline-engine symbols (`Pipeline`, `TaskContext`, `PipelineRunHandle`,
 - **`ImportError` on `cognee_py`** — run `maturin develop` (or install from PyPI) first.
 - **Embedding model download on first run** — set `MOCK_EMBEDDING=true` to skip it in tests.
 - **`OPENAI_URL` / `OPENAI_TOKEN` not set** — all examples exit 0 with a `SKIP` message when these are absent; export them before running.
-- **Analytics doubly-sent** — analytics are ON by default; if you run this binding underneath another `cognee` SDK that already emits `send_telemetry`, set `COGNEE_HOST_SDK=<name>` so this binding defers.
+- **Analytics doubly-sent** — this fork requires explicit opt-in; if another host SDK already emits `send_telemetry`, leave the opt-in unset or set `COGNEE_HOST_SDK=<name>` so this binding defers.
 
 ## References
 

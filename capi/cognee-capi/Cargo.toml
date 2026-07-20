@@ -35,14 +35,16 @@ default = [
     "tiktoken",
     "sqlite",
     "testing",
-    # Product-analytics emission ON by default — Python-SDK parity. The
-    # cognee-lib `send_telemetry` call sites are otherwise compiled out
+    # Product-analytics transport capability is compiled by default. Runtime
+    # emission remains OFF until explicit opt-in. The cognee-lib
+    # `send_telemetry` call sites are otherwise compiled out
     # because cognee-lib is pulled with `default-features = false`.
     "telemetry",
 ]
 # Compiles in the cognee-lib/search/session/core `send_telemetry` call
 # sites. Runtime emission is still gated by `is_disabled()`
-# (TELEMETRY_DISABLED / ENV / COGNEE_HOST_SDK) — see telemetry_analytics.rs.
+# (explicit opt-in plus TELEMETRY_DISABLED / ENV / COGNEE_HOST_SDK) — see
+# telemetry_analytics.rs.
 telemetry     = ["cognee-lib/telemetry"]
 visualization = ["cognee-lib/visualization",         "cognee-bindings-common/visualization"]
 # The closed `cognee-c-cloud` cdylib (T15e) re-adds cloud via

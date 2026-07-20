@@ -165,15 +165,16 @@ cfg.setGraphDbConfig(Map.of("graph_db_provider", "kuzu"));
 Map<String, Object> current = cfg.get();
 ```
 
-## Telemetry opt-out
+## Telemetry permission
 
-Product analytics follow the shared opt-out policy and are **off unless armed**
-by calling `Cognee.initTelemetry()` (which returns whether analytics are
-effective for this process). Even when armed, emission is suppressed when:
+Product analytics are **off unless explicitly opted in** with
+`COGNEE_PRODUCT_TELEMETRY_ENABLED`. `Cognee.initTelemetry()` reports whether
+analytics are effective for this process; it does not itself grant permission.
+Even with opt-in, emission is suppressed when:
 
 - `COGNEE_HOST_SDK` is set — signals the host is an embedding SDK, so the
   binding must not emit its own analytics; or
-- `TELEMETRY_DISABLED` (or `ENV`) requests the standard opt-out.
+- `TELEMETRY_DISABLED` (or `ENV`) requests suppression.
 
 `Cognee.setupLogging()` and `Cognee.initOtlp()` (OTLP trace export) are likewise
 opt-in and read their configuration from environment variables. See
@@ -232,7 +233,8 @@ The public API (`ai.cognee.*`) carries class/method Javadoc; the internal shim
 | `OPENAI_MODEL` | LLM model name (default: `gpt-4o-mini`). |
 | `COGNEE_JAVA_LIB_PATH` | Load this cdylib directly instead of the bundled per-platform library (dev). |
 | `COGNEE_HOST_SDK` | Suppress binding-armed analytics when the host is an embedding SDK. |
-| `TELEMETRY_DISABLED`, `ENV` | Standard analytics opt-outs for `initTelemetry()`. |
+| `COGNEE_PRODUCT_TELEMETRY_ENABLED` | Explicitly opts in to product analytics. |
+| `TELEMETRY_DISABLED`, `ENV` | Higher-priority analytics suppressions. |
 | `RUST_LOG`, `LOG_LEVEL` | `tracing-subscriber` env-filter level overrides. |
 | `COGNEE_LOG_*`, `LOG_FILE_NAME` | Consumed by `setupLogging()`. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, `OTEL_*` | Consumed by `initOtlp()`. |
