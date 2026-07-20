@@ -2,7 +2,7 @@
 # iPlan_Cognee_Sovereign_Intake_20260720
 
 Signoff: iCodex (GPT-5), under Vishvakarma
-Status: PARTIAL — scoped implementation complete; Rust execution held after interruption
+Status: PASS for Amendment 1 — scoped telemetry implementation and bounded hosted gates complete; original A1–A7 intentionally skipped
 
 ## Authority and scope
 
@@ -109,18 +109,18 @@ pre-amendment record as chronology, not standing scope.
 
 ### Amended anticipated outcomes
 
-- [ ] **B1 — explicit permission:** product analytics remain disabled when
+- [x] **B1 — explicit permission:** product analytics remain disabled when
       `COGNEE_PRODUCT_TELEMETRY_ENABLED` is missing, empty, false-like, or
       unknown; recognized ASCII-case-insensitive values are exactly `1`,
       `true`, `yes`, and `on`.
-- [ ] **B2 — suppression precedence:** a non-empty `TELEMETRY_DISABLED`,
+- [x] **B2 — suppression precedence:** a non-empty `TELEMETRY_DISABLED`,
       `ENV=test|dev`, and binding-host suppression still prevent emission even
       when explicit permission is present.
 - [x] **B3 — pre-transport gate:** permission is evaluated before identity
       derivation, client construction, runtime fallback, or HTTP dispatch. No
       new API, endpoint, listener, server, credential, or background process is
       added.
-- [ ] **B4 — bounded regression coverage:** update only the telemetry unit and
+- [x] **B4 — bounded regression coverage:** update only the telemetry unit and
       existing integration fixtures that require intentional opt-in. Run
       formatter, telemetry library tests, check, and clippy with at most 3
       jobs. Socket-backed integration tests are inspected but not executed

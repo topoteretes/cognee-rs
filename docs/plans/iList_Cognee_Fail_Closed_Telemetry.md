@@ -25,10 +25,10 @@ Date: 2026-07-20
 - [x] Run lightweight shell/Python/TOML syntax, diff, secret-pattern,
       forbidden-path, and runtime-expansion scans.
 - [x] Run targeted pre-interruption formatter checks for modified Rust files.
-- [ ] Run Rust compile/test/clippy gates — **HELD/PARTIAL**: the bounded
-      telemetry test was interrupted while compiling dependencies; zero tests
-      executed and no PASS is claimed. Per resumed instruction, it was not
-      restarted.
+- [x] Run bounded Rust format/check/Clippy/test gates on one GitHub-hosted
+      Ubuntu job with one Cargo worker and no matrix. Run `29733787615` passed;
+      the telemetry library suite is 23/23 green. No Cargo or rustc process was
+      run on the Mac for this receipt.
 - [ ] Run socket-backed integration suites — **HELD** by the task's explicit
       no-server/no-listener bound.
 - [x] Stop the interrupted Cargo process and move its generated target tree
