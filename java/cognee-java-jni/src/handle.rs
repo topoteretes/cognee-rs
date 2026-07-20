@@ -8,8 +8,8 @@ use jni::sys::jlong;
 
 use jni::objects::JObject;
 
-use cognee_bindings_common::{HandleState, SdkError};
 use cognee::config::{ConfigManager, Settings};
+use cognee_bindings_common::{HandleState, SdkError};
 
 use crate::errors::{throw_cognee_exception, throw_sdk_error};
 use crate::{guard_jlong, guard_void};

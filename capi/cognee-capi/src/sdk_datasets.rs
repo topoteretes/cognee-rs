@@ -14,8 +14,8 @@
 use std::ffi::c_char;
 use std::sync::Arc;
 
-use cognee_bindings_common::ops::datasets;
 use cognee_bindings_common::SdkError;
+use cognee_bindings_common::ops::datasets;
 
 use crate::sdk::{CgSdk, CgSdkResultCallback, SendUserData, spawn_sdk_op};
 use crate::sdk_ops::parse_c_str_or_fire;
@@ -45,7 +45,9 @@ pub unsafe extern "C" fn cg_sdk_list_datasets(
     }
     let state = Arc::clone(unsafe { &(*sdk).state });
     let ud = SendUserData(user_data);
-    spawn_sdk_op(callback, ud, async move { datasets::list_datasets(&state).await });
+    spawn_sdk_op(callback, ud, async move {
+        datasets::list_datasets(&state).await
+    });
 }
 
 /// List all data items in a dataset.
@@ -78,11 +80,9 @@ pub unsafe extern "C" fn cg_sdk_list_data(
     };
 
     let ud = SendUserData(user_data);
-    spawn_sdk_op(
-        callback,
-        ud,
-        async move { datasets::list_data(&state, &id_str).await },
-    );
+    spawn_sdk_op(callback, ud, async move {
+        datasets::list_data(&state, &id_str).await
+    });
 }
 
 /// Check whether a dataset has any data.
@@ -115,11 +115,9 @@ pub unsafe extern "C" fn cg_sdk_has_data(
     };
 
     let ud = SendUserData(user_data);
-    spawn_sdk_op(
-        callback,
-        ud,
-        async move { datasets::has_data(&state, &id_str).await },
-    );
+    spawn_sdk_op(callback, ud, async move {
+        datasets::has_data(&state, &id_str).await
+    });
 }
 
 /// Get the pipeline run status for a list of dataset UUIDs.

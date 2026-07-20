@@ -33,9 +33,9 @@ use crate::sdk::{CgSdk, CgSdkResultCallback, SendUserData, spawn_sdk_op};
 
 // These are only used in the feature-enabled paths.
 #[cfg(feature = "visualization")]
-use cognee_bindings_common::ops::visualization;
-#[cfg(feature = "visualization")]
 use crate::error::set_last_error;
+#[cfg(feature = "visualization")]
+use cognee_bindings_common::ops::visualization;
 #[cfg(feature = "visualization")]
 use serde_json::json;
 #[cfg(feature = "visualization")]

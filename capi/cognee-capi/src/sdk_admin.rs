@@ -20,9 +20,9 @@
 use std::ffi::c_char;
 use std::sync::Arc;
 
+use cognee_bindings_common::SdkError;
 use cognee_bindings_common::ops::admin;
 use cognee_bindings_common::ops::sessions;
-use cognee_bindings_common::SdkError;
 
 use crate::sdk::{CgSdk, CgSdkResultCallback, SendUserData, spawn_sdk_op};
 use crate::sdk_ops::parse_c_str_or_fire;
@@ -381,11 +381,9 @@ pub unsafe extern "C" fn cg_sdk_list_notebooks(
     }
     let state = Arc::clone(unsafe { &(*sdk).state });
     let ud = SendUserData(user_data);
-    spawn_sdk_op(
-        callback,
-        ud,
-        async move { admin::run_list_notebooks(&state).await },
-    );
+    spawn_sdk_op(callback, ud, async move {
+        admin::run_list_notebooks(&state).await
+    });
 }
 
 /// Create a new notebook.

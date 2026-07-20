@@ -33,8 +33,8 @@ use std::ffi::{CStr, CString, c_char};
 use std::future::Future;
 use std::sync::{Arc, Condvar, Mutex};
 
-use cognee_bindings_common::{HandleState, SdkError};
 use cognee::config::ConfigManager;
+use cognee_bindings_common::{HandleState, SdkError};
 
 use crate::error::{CgErrorCode, set_last_error};
 use crate::runtime::{ensure_runtime, global_runtime};

@@ -72,7 +72,8 @@ pub fn cognee_visualize(mut cx: FunctionContext) -> JsResult<JsPromise> {
             throw_sdk_error(
                 &mut cx,
                 SdkError::FeatureNotBuilt(
-                    "visualization feature not compiled in this build of cognee-ts-neon".to_string(),
+                    "visualization feature not compiled in this build of cognee-ts-neon"
+                        .to_string(),
                 ),
             )
         });
@@ -116,7 +117,8 @@ pub fn cognee_visualize_to_file(mut cx: FunctionContext) -> JsResult<JsPromise> 
             throw_sdk_error(
                 &mut cx,
                 SdkError::FeatureNotBuilt(
-                    "visualization feature not compiled in this build of cognee-ts-neon".to_string(),
+                    "visualization feature not compiled in this build of cognee-ts-neon"
+                        .to_string(),
                 ),
             )
         });
