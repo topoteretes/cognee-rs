@@ -237,6 +237,115 @@ pub fn pg_test_url() -> Option<String> {
     Some(format!("postgres://{user}:{pass}@{host}:{port}/{name}"))
 }
 
+/// The shared-Postgres integration-test URL from `TEST_POSTGRES_URL`, or `None`
+/// to skip. Distinct from [`pg_test_url`] (which builds a URL from the `DB_*`
+/// vars): several suites read this single explicit variable to target one
+/// Postgres server for the single-database (relational + pgvector +
+/// Postgres-graph) scenario.
+pub fn test_postgres_url() -> Option<String> {
+    std::env::var("TEST_POSTGRES_URL")
+        .ok()
+        .filter(|v| !v.is_empty())
+}
+
+/// A throwaway PostgreSQL database created for a single test, dropped by
+/// [`cleanup`](TempPostgresDb::cleanup).
+///
+/// See [`create_temp_postgres_db`] for why per-test databases are used instead
+/// of sharing (and resetting) one.
+pub struct TempPostgresDb {
+    name: String,
+    url: String,
+    maintenance_url: String,
+}
+
+impl TempPostgresDb {
+    /// Connection URL for the freshly-created database.
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
+    /// Drop the database. Best-effort — a failure here (e.g. the server went
+    /// away) only leaks a uniquely-named throwaway database (harmless, and
+    /// trivially reclaimed), never the test result. `WITH (FORCE)` (Postgres 13+)
+    /// terminates any lingering connections first.
+    pub async fn cleanup(self) {
+        use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
+        if let Ok(admin) = cognee_database::connect(&self.maintenance_url).await {
+            let _ = admin
+                .execute(Statement::from_string(
+                    DatabaseBackend::Postgres,
+                    format!("DROP DATABASE IF EXISTS \"{}\" WITH (FORCE)", self.name),
+                ))
+                .await;
+        }
+    }
+}
+
+/// Create a uniquely-named throwaway PostgreSQL database for a single test,
+/// derived from `base_url`.
+///
+/// # Why per-test databases
+///
+/// Several PG suites target one Postgres server when a developer points
+/// `TEST_POSTGRES_URL` / `PGGRAPH_TEST_URL` / `PGVECTOR_TEST_URL` at the same
+/// instance to validate the single-database deployment. Sharing (and wiping) one
+/// database is unsafe here for two reasons: `cargo nextest` runs every test in
+/// its **own process**, so an in-process `#[serial]` guard cannot serialize them
+/// and their schema mutations would race; and unconditionally dropping tables
+/// would destroy any unrelated data the developer keeps in that database. Giving
+/// each test its own database avoids both — tests run in parallel with no shared
+/// state, and cleanup only ever drops the database this call created.
+///
+/// The new database's host/port/credentials come from `base_url`; a maintenance
+/// connection to the server's `postgres` database is used to `CREATE`/`DROP` it
+/// (neither can run while connected to the target database). The `vector`
+/// extension is not installed here — suites that need it get it from
+/// `PgVectorAdapter::new`, whose migrator runs `CREATE EXTENSION IF NOT EXISTS
+/// vector`.
+///
+/// Requires the caller's build to enable a Postgres driver (e.g.
+/// `cognee-database/postgres`) and the connecting role to have `CREATEDB`.
+pub async fn create_temp_postgres_db(base_url: &str) -> Result<TempPostgresDb, sea_orm::DbErr> {
+    use sea_orm::{ConnectionTrait, DatabaseBackend, DbErr, Statement};
+
+    // Never interpolate the URL into the error — it may carry credentials.
+    let parse = |u: &str| {
+        url::Url::parse(u)
+            .map_err(|e| DbErr::Custom(format!("could not parse the Postgres base URL: {e}")))
+    };
+
+    // Unique db name; `_`-separated so it is a bare identifier — quoting is
+    // trivially safe (the value is ours, never user input).
+    let name = format!("cognee_test_{}", uuid::Uuid::new_v4().simple());
+
+    // Maintenance URL: same server, the always-present `postgres` database.
+    let mut maintenance = parse(base_url)?;
+    maintenance.set_path("/postgres");
+    let maintenance_url = maintenance.to_string();
+
+    // Target URL: same server, the new database.
+    let mut target = parse(base_url)?;
+    target.set_path(&format!("/{name}"));
+    let url = target.to_string();
+
+    let admin = cognee_database::connect(&maintenance_url)
+        .await
+        .map_err(|e| DbErr::Custom(format!("connect to maintenance database failed: {e}")))?;
+    admin
+        .execute(Statement::from_string(
+            DatabaseBackend::Postgres,
+            format!("CREATE DATABASE \"{name}\""),
+        ))
+        .await?;
+
+    Ok(TempPostgresDb {
+        name,
+        url,
+        maintenance_url,
+    })
+}
+
 /// Build a [`TaskContext`] with all-mock backends and an in-memory SQLite database.
 ///
 /// Returns `(CancellationHandle, Arc<TaskContext>, Arc<DatabaseConnection>)`.
