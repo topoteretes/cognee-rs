@@ -135,6 +135,7 @@ mod tests {
                 api_key: "sk-test".to_string(),
                 endpoint: String::new(),
                 max_retries: 3,
+                max_completion_tokens: cognee_llm::OpenAIAdapter::DEFAULT_MAX_COMPLETION_TOKENS,
                 llm_args: serde_json::Map::new(),
                 mock: false,
                 cassette: String::new(),

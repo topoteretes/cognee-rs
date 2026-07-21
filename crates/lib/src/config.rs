@@ -844,6 +844,7 @@ impl Settings {
                 api_key: self.llm_api_key.clone(),
                 endpoint: self.llm_endpoint.clone(),
                 max_retries: self.llm_max_retries,
+                max_completion_tokens: self.llm_max_completion_tokens,
                 llm_args: self.llm_args.clone(),
                 mock: self.llm_mock,
                 cassette: self.llm_cassette.clone(),
@@ -1048,7 +1049,9 @@ impl Default for Settings {
             llm_api_version: String::new(),
             llm_temperature: 0.0,
             llm_streaming: false,
-            llm_max_completion_tokens: 16384,
+            // Single-sourced with the adapter/http-server default so lowering
+            // the global completion ceiling in one place applies everywhere.
+            llm_max_completion_tokens: cognee_llm::OpenAIAdapter::DEFAULT_MAX_COMPLETION_TOKENS,
             llm_max_retries: 2,
             llm_max_parallel_requests: 20,
             llm_args: serde_json::Map::new(),
