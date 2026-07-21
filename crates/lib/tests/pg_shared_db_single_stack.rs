@@ -24,14 +24,14 @@
 //!     cargo test -p cognee --features pggraph,pgvector,postgres \
 //!       --test pg_shared_db_single_stack -- --nocapture
 //!
-//! Skipped cleanly when `TEST_POSTGRES_URL` is unset. Runs serially (shared DB).
+//! Skipped cleanly when `TEST_POSTGRES_URL` is unset. Provisions its own
+//! throwaway database (dropped at the end), so it needs no serialization and
+//! never touches unrelated data on the server.
 #![cfg(all(feature = "pggraph", feature = "pgvector", feature = "postgres"))]
 
 use cognee::database::ops::datasets::create_dataset;
-use cognee::database::ops::graph_storage::{
-    get_edges_by_data, get_nodes_by_data, upsert_edges, upsert_nodes,
-};
-use cognee::database::{GraphEdge, GraphNode, connect, initialize};
+use cognee::database::ops::graph_storage::{get_nodes_by_data, upsert_nodes};
+use cognee::database::{GraphNode, connect, initialize};
 use cognee::models::Dataset;
 
 use cognee_graph::{GraphDBTrait, GraphDBTraitExt, PgGraphAdapter};
@@ -40,15 +40,7 @@ use cognee_vector::{PgVectorAdapter, VectorDB, VectorPoint};
 use chrono::Utc;
 use serde::Serialize;
 use serde_json::json;
-use serial_test::serial;
 use uuid::Uuid;
-
-/// The single shared-Postgres URL, or `None` to skip.
-fn postgres_url() -> Option<String> {
-    std::env::var("TEST_POSTGRES_URL")
-        .ok()
-        .filter(|v| !v.is_empty())
-}
 
 #[derive(Debug, Clone, Serialize)]
 struct TestNode {
@@ -59,26 +51,33 @@ struct TestNode {
 }
 
 #[tokio::test]
-#[serial]
 async fn relational_pgvector_pggraph_coexist_in_one_database() {
-    let Some(url) = postgres_url() else {
+    let Some(base_url) = cognee_test_utils::test_postgres_url() else {
         eprintln!(
             "TEST_POSTGRES_URL not set — skipping relational_pgvector_pggraph_coexist_in_one_database"
         );
         return;
     };
 
+    // Own throwaway database: the three stores share ONE database (the point of
+    // this test), but it is isolated from every other test and from any
+    // pre-existing data on the server, so no reset or `#[serial]` is needed.
+    let tmp = cognee_test_utils::create_temp_postgres_db(&base_url)
+        .await
+        .expect("create temp Postgres database");
+    let url = tmp.url();
+
     // ---- 1. Relational core: migrate into the shared DB. --------------------
-    let db = connect(&url).await.expect("connect relational");
+    let db = connect(url).await.expect("connect relational");
     initialize(&db).await.expect("relational migrate");
 
     // ---- 2. pgvector: separate migrator, same DB. ---------------------------
-    let vector = PgVectorAdapter::new(&url, 3)
+    let vector = PgVectorAdapter::new(url, 3)
         .await
         .expect("PgVectorAdapter must initialize on the shared DB");
 
     // ---- 3. Postgres graph-as-tables: third migrator, same DB. --------------
-    let graph = PgGraphAdapter::new(&url)
+    let graph = PgGraphAdapter::new(url)
         .await
         .expect("PgGraphAdapter must initialize on the shared DB");
 
@@ -134,10 +133,12 @@ async fn relational_pgvector_pggraph_coexist_in_one_database() {
         gedges.len()
     );
 
-    // ---- 6. Provenance graph upsert with a DUPLICATE id (Fix 1). ------------
-    // This writes to the relational `nodes`/`edges` provenance tables that
-    // share the same DB. A batch that repeats a primary key must NOT trip
-    // Postgres' "ON CONFLICT DO UPDATE ... cannot affect row a second time".
+    // ---- 6. Provenance duplicate-id upsert coexists in the same DB. ---------
+    // The provenance `nodes` table lives in the same database; a batch repeating
+    // a primary key must collapse to one row rather than tripping Postgres' ON
+    // CONFLICT "cannot affect row a second time". The full node+edge dedup
+    // contract is covered by `provenance_batch`; here we only confirm it works
+    // alongside the pgvector and pggraph stores.
     let user = Uuid::new_v4();
     let dataset = Uuid::new_v4();
     let data = Uuid::new_v4();
@@ -163,67 +164,23 @@ async fn relational_pgvector_pggraph_coexist_in_one_database() {
     };
     upsert_nodes(&db, &[mk_node("first"), mk_node("last")])
         .await
-        .expect("duplicate-id provenance node upsert must succeed on the shared DB");
-
-    let endpoints = [
-        GraphNode {
-            id: Uuid::new_v4(),
-            ..mk_node("a")
-        },
-        GraphNode {
-            id: Uuid::new_v4(),
-            ..mk_node("b")
-        },
-    ];
-    upsert_nodes(&db, &endpoints)
-        .await
-        .expect("seed provenance edge endpoints");
-
-    let edge_id = Uuid::new_v4();
-    let mk_edge = |rel: &str| GraphEdge {
-        id: edge_id,
-        slug: Uuid::new_v4(),
-        user_id: user,
-        data_id: data,
-        dataset_id: dataset,
-        source_node_id: endpoints[0].id,
-        destination_node_id: endpoints[1].id,
-        relationship_name: rel.into(),
-        label: Some(rel.into()),
-        attributes: None,
-        created_at: Utc::now(),
-    };
-    upsert_edges(&db, &[mk_edge("first_rel"), mk_edge("last_rel")])
-        .await
-        .expect("duplicate-id provenance edge upsert must succeed on the shared DB");
-
-    // Duplicate ids collapse to one row each, last write winning.
+        .expect("duplicate-id provenance upsert must succeed alongside pgvector + pggraph");
     let pnodes = get_nodes_by_data(&db, data, dataset)
         .await
         .expect("read provenance nodes");
     assert_eq!(
-        pnodes.iter().filter(|n| n.id == node_id).count(),
+        pnodes.len(),
         1,
         "duplicate provenance node id must collapse to a single row"
     );
-    assert_eq!(
-        pnodes
-            .iter()
-            .find(|n| n.id == node_id)
-            .and_then(|n| n.label.as_deref()),
-        Some("last"),
-        "last occurrence must win the provenance node upsert"
-    );
-    let pedges = get_edges_by_data(&db, data, dataset)
-        .await
-        .expect("read provenance edges");
-    let dup_edge = pedges.iter().filter(|e| e.id == edge_id).count();
-    assert_eq!(
-        dup_edge, 1,
-        "duplicate provenance edge id must collapse to a single row"
-    );
 
-    // ---- Cleanup (best-effort). ---------------------------------------------
+    // ---- Cleanup. -----------------------------------------------------------
     let _ = vector.delete_collection(&data_type, "text").await;
     let _ = graph.delete_graph().await;
+    // Close every connection before dropping the database so cleanup does not
+    // depend on `WITH (FORCE)` terminating our own backends.
+    drop(vector);
+    drop(graph);
+    drop(db);
+    tmp.cleanup().await;
 }

@@ -27,6 +27,12 @@ cognee-graph = { path = "../graph", features = ["testing"] }
 cognee-llm = { path = "../llm" }
 cognee-storage = { path = "../storage", features = ["testing"] }
 cognee-vector = { path = "../vector", features = ["testing"] }
+# Used only by the `create_temp_postgres_db` helper for raw SQL (ConnectionTrait
+# / Statement / DatabaseBackend). No driver features here — the concrete
+# `DatabaseConnection` impl and its runtime come from `cognee-database`, and
+# Cargo unifies this with that build.
+sea-orm = { version = "1.1", default-features = false }
+url.workspace = true
 dotenv.workspace = true
 serde_json.workspace = true
 tracing = { workspace = true }
