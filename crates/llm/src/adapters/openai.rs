@@ -88,10 +88,12 @@ pub struct OpenAIAdapter {
     ///   control of `max_tokens` (including `None` = no cap), so the config
     ///   default never overrides an explicit choice.
     /// - Structured-output extraction (`structured_output_impl`) deliberately
-    ///   ignores this default: a cap there would truncate tool-call JSON
-    ///   mid-object, so it stays uncapped — matching cognify's explicit
-    ///   `max_tokens: None` stance and keeping internal structured calls (e.g.
-    ///   feedback detection) robust regardless of the configured ceiling.
+    ///   ignores this *configured* default and keeps the historical
+    ///   [`GenerationOptions::default`] cap (16384) for option-less calls: a
+    ///   lower cap there would truncate tool-call JSON mid-object, so lowering
+    ///   the completion ceiling never silently breaks internal structured calls
+    ///   (e.g. feedback detection). Callers wanting NO cap pass explicit
+    ///   `max_tokens: None` (as cognify's extraction paths do).
     ///
     /// `None` means "send no default cap". Defaults to
     /// [`Some(DEFAULT_MAX_COMPLETION_TOKENS)`](Self::DEFAULT_MAX_COMPLETION_TOKENS),
@@ -835,11 +837,13 @@ impl OpenAIAdapter {
             |parsed: &Value| -> Option<String> { validator.and_then(|v| v(parsed).err()) };
 
         // Structured extraction intentionally does NOT inherit the config
-        // `default_max_tokens` (that cap targets user-facing *answer* length via
-        // `generate`). A cap here would truncate the tool-call JSON mid-object;
-        // the cognify extraction paths already opt out with explicit
-        // `max_tokens: None`, and internal structured calls (e.g. feedback
-        // detection) must not silently break when a user lowers the answer cap.
+        // `default_max_tokens` (the global completion ceiling applied to
+        // `generate`): it keeps the historical `GenerationOptions::default()`
+        // cap (16384) for option-less calls. Applying the *configured* ceiling
+        // here risks truncating the tool-call JSON mid-object, so a user
+        // lowering the answer ceiling never silently breaks internal structured
+        // calls (e.g. feedback detection). Callers that want NO cap at all pass
+        // explicit `max_tokens: None` (as cognify's extraction paths do).
         let opts = options.unwrap_or_default();
         // Align the advertised `required` array with what instructor sends on its
         // default TOOLS path (every non-default property is required). See

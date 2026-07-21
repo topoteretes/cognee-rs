@@ -190,7 +190,10 @@ async fn structured_output_ignores_configured_default_max_tokens() {
             when.method(POST)
                 .path("/chat/completions")
                 // Historical default, NOT the small configured answer cap (256).
-                .json_body_includes(r#"{"max_tokens": 16384}"#);
+                .json_body_includes(format!(
+                    r#"{{"max_tokens": {}}}"#,
+                    OpenAIAdapter::DEFAULT_MAX_COMPLETION_TOKENS
+                ));
             then.status(200)
                 .header("content-type", "application/json")
                 .body(tool_call_response(r#"{"name":"Alice"}"#));
