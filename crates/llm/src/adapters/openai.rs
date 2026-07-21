@@ -65,6 +65,39 @@ pub struct OpenAIAdapter {
     /// would otherwise truncate a dense graph-extraction tool call mid-JSON.
     /// Empty by default (Python default `llm_args = {}`) — a no-op.
     extra_args: serde_json::Map<String, Value>,
+    /// Default output-token ceiling applied to a plain-completion
+    /// ([`generate`](Self::generate)) request when the caller passes **no**
+    /// [`GenerationOptions`] at all. Lowered from
+    /// `Settings.llm_max_completion_tokens` (`setLlmMaxCompletionTokens`) by the
+    /// component factory so config actually governs the `max_tokens` the
+    /// search/completion retrievers emit (issue #67).
+    ///
+    /// This is a *global* completion ceiling, not an answer-length knob: it
+    /// applies to every option-less `generate` call — the user-facing
+    /// `recall`/`search` answer **and** the internal machine generations that
+    /// share that path (NL→Cypher query synthesis, the feeling-lucky retriever
+    /// selector, graph-summary intermediates). That is deliberate: its primary
+    /// purpose is to stay under a provider's hard `max_tokens` limit (e.g. Groq
+    /// rejects `> 8192`), which requires *all* of those calls to respect it —
+    /// leaving any uncapped would still emit the 16384 default and 400 on such a
+    /// provider. Set it high enough to satisfy the largest internal generation.
+    ///
+    /// Scope and precedence:
+    /// - Only the *fully option-less* `generate` path is filled from this
+    ///   default. A caller that passes explicit `GenerationOptions` keeps full
+    ///   control of `max_tokens` (including `None` = no cap), so the config
+    ///   default never overrides an explicit choice.
+    /// - Structured-output extraction (`structured_output_impl`) deliberately
+    ///   ignores this default: a cap there would truncate tool-call JSON
+    ///   mid-object, so it stays uncapped — matching cognify's explicit
+    ///   `max_tokens: None` stance and keeping internal structured calls (e.g.
+    ///   feedback detection) robust regardless of the configured ceiling.
+    ///
+    /// `None` means "send no default cap". Defaults to
+    /// [`Some(DEFAULT_MAX_COMPLETION_TOKENS)`](Self::DEFAULT_MAX_COMPLETION_TOKENS),
+    /// matching the historical [`GenerationOptions::default`] cap so an adapter
+    /// built without config behaves exactly as before.
+    default_max_tokens: Option<u32>,
 }
 
 impl OpenAIAdapter {
@@ -79,6 +112,11 @@ impl OpenAIAdapter {
     pub const DEFAULT_STRUCTURED_OUTPUT_RETRIES: usize = 5;
     /// Default retry attempts for transient network/server errors.
     pub const DEFAULT_NETWORK_RETRIES: usize = 3;
+    /// Default output-token cap applied to option-less calls, mirroring the
+    /// historical [`GenerationOptions::default`] cap and Python cognee's
+    /// `llm_max_completion_tokens` default (`config.py`). Overridden per-adapter
+    /// via [`with_default_max_tokens`](Self::with_default_max_tokens).
+    pub const DEFAULT_MAX_COMPLETION_TOKENS: u32 = 16384;
 
     /// Create a new OpenAI adapter.
     ///
@@ -125,6 +163,7 @@ impl OpenAIAdapter {
             network_retries: Self::DEFAULT_NETWORK_RETRIES,
             transcription_model,
             extra_args: serde_json::Map::new(),
+            default_max_tokens: Some(Self::DEFAULT_MAX_COMPLETION_TOKENS),
         })
     }
 
@@ -139,6 +178,39 @@ impl OpenAIAdapter {
     pub fn with_extra_args(mut self, args: serde_json::Map<String, Value>) -> Self {
         self.extra_args = args;
         self
+    }
+
+    /// Set the output-token cap applied to an option-less
+    /// [`generate`](Self::generate) call, lowered from
+    /// `Settings.llm_max_completion_tokens` (`setLlmMaxCompletionTokens`). See
+    /// the [`default_max_tokens`](Self::default_max_tokens) field docs for scope
+    /// and precedence.
+    ///
+    /// A `Some(0)` is treated as "no cap" (`None`): `0` is meaningless as an
+    /// output cap and providers reject `max_tokens: 0` with HTTP 400, so a
+    /// stray `setLlmMaxCompletionTokens(0)` must not break `recall`/`search`.
+    pub fn with_default_max_tokens(mut self, value: Option<u32>) -> Self {
+        self.default_max_tokens = value.filter(|&v| v > 0);
+        self
+    }
+
+    /// Resolve caller options for the plain-completion ([`generate`](Self::generate))
+    /// path. When the caller passes no options at all, the config-derived
+    /// [`default_max_tokens`](Self::default_max_tokens) becomes the output cap
+    /// (every other field takes [`GenerationOptions::default`]); when the caller
+    /// passes explicit options they are honoured verbatim, so an explicit
+    /// `max_tokens` (including `None` = no cap) always wins over config. This
+    /// applies the configured completion ceiling to every option-less
+    /// `generate` call while leaving explicit callers (and, separately,
+    /// structured extraction) alone.
+    fn resolve_options(&self, options: Option<GenerationOptions>) -> GenerationOptions {
+        match options {
+            Some(opts) => opts,
+            None => GenerationOptions {
+                max_tokens: self.default_max_tokens,
+                ..GenerationOptions::default()
+            },
+        }
     }
 
     /// Merge [`extra_args`](Self::extra_args) into a request body, filling only
@@ -556,7 +628,7 @@ impl Llm for OpenAIAdapter {
         messages: Vec<Message>,
         options: Option<GenerationOptions>,
     ) -> LlmResult<GenerationResponse> {
-        let opts = options.unwrap_or_default();
+        let opts = self.resolve_options(options);
 
         let mut request_body = json!({
             "model": self.model,
@@ -762,6 +834,12 @@ impl OpenAIAdapter {
         let validation_error =
             |parsed: &Value| -> Option<String> { validator.and_then(|v| v(parsed).err()) };
 
+        // Structured extraction intentionally does NOT inherit the config
+        // `default_max_tokens` (that cap targets user-facing *answer* length via
+        // `generate`). A cap here would truncate the tool-call JSON mid-object;
+        // the cognify extraction paths already opt out with explicit
+        // `max_tokens: None`, and internal structured calls (e.g. feedback
+        // detection) must not silently break when a user lowers the answer cap.
         let opts = options.unwrap_or_default();
         // Align the advertised `required` array with what instructor sends on its
         // default TOOLS path (every non-default property is required). See

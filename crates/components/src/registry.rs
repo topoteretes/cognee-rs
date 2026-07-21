@@ -404,6 +404,7 @@ mod tests {
                 api_key: "sk-test".to_string(),
                 endpoint: String::new(),
                 max_retries: 3,
+                max_completion_tokens: 16384,
                 llm_args: serde_json::Map::new(),
                 mock: false,
                 cassette: String::new(),
