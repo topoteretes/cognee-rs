@@ -1,3 +1,4 @@
+// [iCodex] - 2026-07-20T08:51:00Z - explicit telemetry permission fixtures
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -32,6 +33,7 @@ const ENV_VARS: &[&str] = &[
     "TRACKING_ID",
     "LLM_API_KEY",
     "TELEMETRY_API_KEY_TRACKING_SALT",
+    "COGNEE_PRODUCT_TELEMETRY_ENABLED",
     "TELEMETRY_DISABLED",
     "ENV",
     "TELEMETRY_REQUEST_TIMEOUT",
@@ -58,6 +60,7 @@ impl IsolatedEnv {
             std::env::set_var("TRACKING_ID", "fixed-anon-12345");
             std::env::set_var("LLM_API_KEY", "sk-test-fixture");
             std::env::remove_var("TELEMETRY_API_KEY_TRACKING_SALT");
+            std::env::set_var("COGNEE_PRODUCT_TELEMETRY_ENABLED", "1");
             std::env::remove_var("TELEMETRY_DISABLED");
             std::env::remove_var("ENV");
             std::env::remove_var("TELEMETRY_REQUEST_TIMEOUT");
@@ -196,7 +199,7 @@ async fn schema_parity_against_reference() {
 
 #[tokio::test]
 #[serial]
-async fn opt_out_via_telemetry_disabled() {
+async fn suppression_via_telemetry_disabled() {
     let mut server = Server::new_async().await;
     let mock = server
         .mock("POST", "/")
@@ -215,6 +218,29 @@ async fn opt_out_via_telemetry_disabled() {
 
     // Wait a generous window to ensure no late dispatch sneaks
     // through.
+    tokio::time::sleep(Duration::from_millis(1_000)).await;
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+#[serial]
+async fn default_without_explicit_opt_in_emits_nothing() {
+    let mut server = Server::new_async().await;
+    let mock = server
+        .mock("POST", "/")
+        .with_status(200)
+        .expect(0)
+        .create_async()
+        .await;
+    let _env = IsolatedEnv::install(&server.url());
+    // SAFETY: `#[serial]` orders this against every other env-mutating
+    //   test; `_env` restores the variable on drop.
+    unsafe {
+        std::env::remove_var("COGNEE_PRODUCT_TELEMETRY_ENABLED");
+    }
+
+    send_telemetry("cognee.forget", "user", None);
+
     tokio::time::sleep(Duration::from_millis(1_000)).await;
     mock.assert_async().await;
 }

@@ -78,8 +78,8 @@ pub(crate) fn arm_analytics() -> bool {
     armed
 }
 
-/// `initTelemetry() -> boolean` — arm product analytics per the per-binding
-/// policy (ON unless TELEMETRY_DISABLED / ENV∈{test,dev} / COGNEE_HOST_SDK).
+/// `initTelemetry() -> boolean` — evaluate product analytics per the
+/// fail-closed policy (explicit opt-in required; suppressions still win).
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_ai_cognee_internal_Native_initTelemetry<'l>(
     mut env: JNIEnv<'l>,

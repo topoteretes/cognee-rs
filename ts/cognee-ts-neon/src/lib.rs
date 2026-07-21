@@ -266,17 +266,15 @@ fn main(mut cx: ModuleContext) -> NeonResult<()> {
     cx.export_function("setupTelemetry", telemetry_otlp::setup_telemetry)?;
 
     // Analytics entrypoint (gap-07 task 06): argument-less, idempotent.
-    // Arms `send_telemetry` per the Python-SDK parity policy (ON unless
-    // TELEMETRY_DISABLED / ENV in {test,dev} / COGNEE_HOST_SDK is set).
+    // Evaluates `send_telemetry` under the fail-closed policy (explicit
+    // opt-in required; TELEMETRY_DISABLED / ENV / COGNEE_HOST_SDK suppress).
     // Decisions 10, 12.
     cx.export_function(
         "setupTelemetryAnalytics",
         telemetry_analytics::setup_telemetry_analytics,
     )?;
-    // Arm analytics automatically on module load so telemetry is ON by
-    // default (Python-SDK parity) without requiring an explicit
-    // `setupTelemetryAnalytics()` call. Idempotent; honours the standard
-    // opt-out env vars at emission time via `is_disabled()`.
+    // Evaluate analytics automatically on module load without granting
+    // opt-in. Idempotent; `is_disabled()` remains authoritative per event.
     let _ = telemetry_analytics::arm();
 
     // Values

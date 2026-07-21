@@ -2,9 +2,9 @@
  * Verify the per-binding analytics policy for the Neon binding
  * (gap 07 decision 11).
  *
- * Neon defaults analytics **ON**: ``setupTelemetryAnalytics()`` returns
- * ``true`` unless ``TELEMETRY_DISABLED`` is set, ``ENV`` is
- * ``"test"``/``"dev"``, or ``COGNEE_HOST_SDK`` is set. Each scenario
+ * Neon defaults analytics **OFF**: ``setupTelemetryAnalytics()`` returns
+ * ``true`` only with an explicit ``COGNEE_PRODUCT_TELEMETRY_ENABLED``
+ * opt-in and no suppressing variable. Each scenario
  * spawns its own child process because the binding latches the
  * decision in a ``OnceLock<Mutex<Option<bool>>>`` (decision 12).
  */
@@ -23,6 +23,7 @@ function runChild(env: Record<string, string>): boolean {
   // Wipe inherited env vars that could shadow the per-test scenario.
   const baseEnv = { ...process.env };
   delete baseEnv.TELEMETRY_DISABLED;
+  delete baseEnv.COGNEE_PRODUCT_TELEMETRY_ENABLED;
   delete baseEnv.COGNEE_HOST_SDK;
   delete baseEnv.ENV;
   const res = spawnSync(process.execPath, ["-e", script], {
@@ -39,23 +40,41 @@ function runChild(env: Record<string, string>): boolean {
 }
 
 describe("setupTelemetryAnalytics (Neon)", () => {
-  it("defaults to ON when no opt-out env is set", () => {
-    expect(runChild({})).toBe(true);
+  it("defaults to OFF when no explicit opt-in is set", () => {
+    expect(runChild({})).toBe(false);
+  });
+
+  it("enables only with explicit opt-in", () => {
+    expect(runChild({ COGNEE_PRODUCT_TELEMETRY_ENABLED: "1" })).toBe(true);
   });
 
   it("TELEMETRY_DISABLED=1 suppresses analytics", () => {
-    expect(runChild({ TELEMETRY_DISABLED: "1" })).toBe(false);
+    expect(
+      runChild({
+        COGNEE_PRODUCT_TELEMETRY_ENABLED: "1",
+        TELEMETRY_DISABLED: "1",
+      }),
+    ).toBe(false);
   });
 
   it("ENV=test suppresses analytics", () => {
-    expect(runChild({ ENV: "test" })).toBe(false);
+    expect(
+      runChild({ COGNEE_PRODUCT_TELEMETRY_ENABLED: "1", ENV: "test" }),
+    ).toBe(false);
   });
 
   it("ENV=dev suppresses analytics", () => {
-    expect(runChild({ ENV: "dev" })).toBe(false);
+    expect(
+      runChild({ COGNEE_PRODUCT_TELEMETRY_ENABLED: "1", ENV: "dev" }),
+    ).toBe(false);
   });
 
   it("COGNEE_HOST_SDK=python suppresses analytics", () => {
-    expect(runChild({ COGNEE_HOST_SDK: "python" })).toBe(false);
+    expect(
+      runChild({
+        COGNEE_PRODUCT_TELEMETRY_ENABLED: "1",
+        COGNEE_HOST_SDK: "python",
+      }),
+    ).toBe(false);
   });
 });

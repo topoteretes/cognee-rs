@@ -205,7 +205,8 @@ Tested on Linux x86_64 (CI) and Android aarch64 (slim build, ONNX local embeddin
 | `RUST_LOG`, `LOG_LEVEL` | `tracing-subscriber` env-filter level overrides. |
 | `COGNEE_LOG_*`, `LOG_FILE_NAME` | Consumed by `cognee_setup_logging()` — see docs/configuration.md (Logging section). |
 | `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, `OTEL_*` | Consumed by `cognee_init_otlp()`. |
-| `TELEMETRY_DISABLED`, `ENV` | Analytics opt-outs for `cognee_init_telemetry()`. |
+| `COGNEE_PRODUCT_TELEMETRY_ENABLED` | Explicitly opt in to product analytics. |
+| `TELEMETRY_DISABLED`, `ENV` | Higher-priority analytics suppressions. |
 
 All env-var values can also be passed programmatically as JSON to `cg_sdk_new()` or
 via `cg_sdk_config_set_str()`, which take precedence over environment variables.
@@ -218,7 +219,7 @@ Three optional, idempotent, argument-less init functions extend the base `cg_ini
 |---|---|
 | `cognee_setup_logging()` | File + stdout logging from `COGNEE_LOG_*`, `LOG_LEVEL`, `RUST_LOG` |
 | `cognee_init_otlp()` | OpenTelemetry OTLP export from `COGNEE_TRACING_ENABLED` / `OTEL_*` |
-| `cognee_init_telemetry()` | Arms product-analytics (suppressed by `TELEMETRY_DISABLED`, `ENV=test/dev`) |
+| `cognee_init_telemetry()` | Evaluates fail-closed product analytics (explicit opt-in required) |
 
 None of them are required; the C binding installs no default subscriber so you get no noise
 unless you call them.

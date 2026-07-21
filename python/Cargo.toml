@@ -43,14 +43,16 @@ default = [
     "tiktoken",
     "sqlite",
     "testing",
-    # Product-analytics emission ON by default — Python-SDK parity. The
+    # Product-analytics transport capability is compiled by default. Runtime
+    # emission remains OFF until the explicit opt-in is present. The
     # cognee `send_telemetry` call sites are otherwise compiled out
     # because cognee is pulled with `default-features = false`.
     "telemetry",
 ]
 # Compiles in the cognee/search/session/core `send_telemetry` call
 # sites. Runtime emission is still gated by `is_disabled()`
-# (TELEMETRY_DISABLED / ENV / COGNEE_HOST_SDK) — see telemetry_analytics.rs.
+# (explicit opt-in plus TELEMETRY_DISABLED / ENV / COGNEE_HOST_SDK) — see
+# telemetry_analytics.rs.
 telemetry     = ["cognee/telemetry"]
 visualization = ["cognee/visualization", "cognee-bindings-common/visualization"]
 ladybug       = ["cognee/ladybug",       "cognee-bindings-common/ladybug"]
@@ -84,8 +86,8 @@ log                = "0.4"
 # Optional opentelemetry / send_telemetry surfaces. Both have noop
 # bodies when the `telemetry` feature is off, so the binding can
 # still build under `--no-default-features` once feature wiring is
-# in place (out of scope for v1 — feature is on by default here per
-# gap 07 decision 3).
+# in place (out of scope for v1 — transport capability is compiled by default
+# here per gap 07 decision 3, while runtime emission remains fail-closed).
 cognee-observability = { path = "../crates/observability", features = ["telemetry"] }
 cognee-telemetry     = { path = "../crates/telemetry",     features = ["telemetry"] }
 pyo3 = { version = "0.23", features = ["extension-module", "multiple-pymethods"] }

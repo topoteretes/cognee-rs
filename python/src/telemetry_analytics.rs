@@ -3,15 +3,14 @@
 //! Argument-less, idempotent installer that arms cognee
 //! product-analytics emission for this Python process.
 //!
-//! Policy (Python-SDK parity — analytics ON by default):
+//! Local sovereign policy (analytics OFF by default):
 //!
-//! * `armed` unless `TELEMETRY_DISABLED` is set to any non-empty value,
-//!   OR `ENV` is `"test"` / `"dev"`, OR `COGNEE_HOST_SDK` is set to any
-//!   non-empty value.
+//! * `armed` only when `COGNEE_PRODUCT_TELEMETRY_ENABLED` is an explicit
+//!   recognized opt-in and no suppression variable applies.
 //!
-//! This mirrors the upstream `cognee` Python SDK, which emits telemetry
-//! by default and only honours `TELEMETRY_DISABLED` / `ENV`. The
-//! Rust-specific `COGNEE_HOST_SDK` sentinel additionally lets an
+//! This deliberately diverges from the upstream Python SDK's opt-out
+//! policy. `TELEMETRY_DISABLED`, `ENV`, and the Rust-specific
+//! `COGNEE_HOST_SDK` sentinel let an
 //! embedding host SDK suppress this binding's emissions to avoid
 //! double-counting.
 //!
@@ -35,12 +34,12 @@ static ARMED: OnceLock<Mutex<Option<bool>>> = OnceLock::new();
 
 /// Arm cognee product-analytics emission from this Python process.
 ///
-/// Default policy (Python-SDK parity): analytics are ON unless
-/// `TELEMETRY_DISABLED` is set, `ENV` is `"test"`/`"dev"`, or
-/// `COGNEE_HOST_SDK` is set.
+/// Default policy: analytics are OFF unless
+/// `COGNEE_PRODUCT_TELEMETRY_ENABLED` is a recognized explicit opt-in;
+/// `TELEMETRY_DISABLED`, `ENV`, and `COGNEE_HOST_SDK` can still suppress.
 ///
 /// Returns `True` if analytics are effective for this process,
-/// `False` if an opt-out env var suppresses them. Idempotent —
+/// `False` if opt-in is absent/invalid or a suppression applies. Idempotent —
 /// repeated calls return the latched decision without re-evaluating
 /// the environment.
 #[pyfunction]

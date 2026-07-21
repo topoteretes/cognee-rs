@@ -1,3 +1,4 @@
+// [iCodex] - 2026-07-20T08:51:00Z - explicit telemetry permission fixtures
 //! Wire-level proof of the binding-arm / `COGNEE_HOST_SDK` interaction
 //! that the language bindings (PyO3, Neon, C-API) rely on.
 //!
@@ -39,6 +40,7 @@ use cognee_telemetry::send_telemetry;
 const ENV_VARS: &[&str] = &[
     "HOME",
     "TRACKING_ID",
+    "COGNEE_PRODUCT_TELEMETRY_ENABLED",
     "TELEMETRY_DISABLED",
     "ENV",
     "COGNEE_HOST_SDK",
@@ -59,6 +61,7 @@ impl IsolatedEnv {
         unsafe {
             std::env::set_var("HOME", home.path());
             std::env::set_var("TRACKING_ID", "fixed-anon-arm-test");
+            std::env::set_var("COGNEE_PRODUCT_TELEMETRY_ENABLED", "1");
             std::env::remove_var("TELEMETRY_DISABLED");
             std::env::remove_var("ENV");
             std::env::remove_var("COGNEE_HOST_SDK");

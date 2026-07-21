@@ -1,13 +1,16 @@
+// [iCodex] - 2026-07-20T08:51:00Z - document fail-closed telemetry permission
 //! Cognee product-analytics client (`send_telemetry`).
 //!
-//! Mirrors Python's `cognee.shared.utils.send_telemetry`. Fires a
-//! single fire-and-forget HTTP POST to `https://test.prometh.ai` for
-//! every public API call so the cognee maintainers have an aggregate
-//! view of how the SDK is exercised.
+//! Derives from Python's `cognee.shared.utils.send_telemetry`. When an
+//! operator explicitly authorizes analytics, public API calls can fire a
+//! single fire-and-forget HTTP POST to `https://test.prometh.ai` so the
+//! cognee maintainers have an aggregate view of how the SDK is exercised.
 //!
-//! Enabled by default (locked decision 1 — Python parity). The runtime
-//! check happens **before** any identity derivation or HTTP code path,
-//! so disabling at runtime costs zero.
+//! Disabled by default in the local sovereign baseline. Compiling the
+//! `telemetry` feature provides transport capability, but emission still
+//! requires the explicit runtime permission
+//! `COGNEE_PRODUCT_TELEMETRY_ENABLED=1`. The permission check happens
+//! **before** any identity derivation or HTTP code path.
 //!
 //! See [`docs/observability/send_telemetry.md`][user-doc] for the full
 //! operator-facing reference (payload schema, salt rotation, privacy
@@ -30,10 +33,11 @@
 //! # }
 //! ```
 //!
-//! # Opt-out
+//! # Opt-in and suppression
 //!
-//! At runtime: `TELEMETRY_DISABLED=1` (any non-empty value) or
-//! `ENV=test` / `ENV=dev`.
+//! At runtime, set `COGNEE_PRODUCT_TELEMETRY_ENABLED=1` to opt in.
+//! `TELEMETRY_DISABLED=1` (any non-empty value) and `ENV=test` /
+//! `ENV=dev` remain higher-priority suppressions.
 //!
 //! At compile time: build `cognee` (or any consumer) with
 //! `--no-default-features`. [`send_telemetry`] and
@@ -45,6 +49,7 @@
 //!
 //! | Var | Default | Effect |
 //! |---|---|---|
+//! | `COGNEE_PRODUCT_TELEMETRY_ENABLED` | unset | `1`, `true`, `yes`, or `on` explicitly enables; every other value fails closed. |
 //! | `TELEMETRY_DISABLED` | unset | Any non-empty value disables. Read on every call. |
 //! | `ENV` | unset | If `test` or `dev`, disables. Read on every call. |
 //! | `LLM_API_KEY` | unset | Source of `api_key_tracking_id` (locked decision 11 — read at every event-emission, never cached). |
@@ -204,6 +209,8 @@ pub fn cognee_version() -> &'static str {
 /// - the `telemetry` cargo feature is disabled at compile time
 ///   (function still exists but compiles to an empty body, so
 ///   consuming code stays binary-compatible across feature flips),
+/// - `COGNEE_PRODUCT_TELEMETRY_ENABLED` is absent or not a recognized
+///   explicit opt-in value,
 /// - `TELEMETRY_DISABLED` is set to a non-empty value at runtime,
 /// - `ENV` is `"test"` or `"dev"`.
 ///
@@ -211,6 +218,7 @@ pub fn cognee_version() -> &'static str {
 ///
 /// | Var | Default | Effect |
 /// |---|---|---|
+/// | `COGNEE_PRODUCT_TELEMETRY_ENABLED` | unset | `1`, `true`, `yes`, or `on` explicitly enables. |
 /// | `TELEMETRY_DISABLED` | unset | Any non-empty value disables. |
 /// | `ENV` | unset | If `test` or `dev`, disables. |
 /// | `LLM_API_KEY` | unset | Hashed into `api_key_tracking_id` (read at every call). |
@@ -241,7 +249,7 @@ pub fn send_telemetry<'a>(
 /// In current builds this function always returns `Ok(())`. The
 /// [`TelemetryError`] variant exists so future failure modes
 /// (e.g. backpressure rejection) can be surfaced without a breaking
-/// change to the signature. Honours the same opt-out and runtime
+/// change to the signature. Honours the same opt-in, suppression, and runtime
 /// fallback semantics as [`send_telemetry`]; see that function's
 /// rustdoc for env-var details.
 pub fn try_send_telemetry<'a>(

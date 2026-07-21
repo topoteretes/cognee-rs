@@ -64,8 +64,8 @@ default = [
     "unstructured",
     "visualization",
     "mock-llm",
-    # decision 1: telemetry is ON by default in cognee. Disable with
-    # --no-default-features for compile-time opt-out.
+    # Telemetry transport capability is compiled by default, but product
+    # analytics remain runtime-disabled until explicit opt-in.
     "telemetry",
 ]
 # Record/replay cassette-based mock LLM support (MOCK_LLM / COGNEE_RECORD_LLM).

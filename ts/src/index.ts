@@ -76,12 +76,12 @@ export function setupTelemetry(): void {
 /**
  * Arm cognee product-analytics emission for this Node.js process.
  *
- * Default policy (gap 07 decision 11): ON unless `TELEMETRY_DISABLED`
- * is set, `ENV` is `"test"`/`"dev"`, or `COGNEE_HOST_SDK` is set —
- * Neon is the canonical sender in the JS ecosystem.
+ * Default policy: OFF unless `COGNEE_PRODUCT_TELEMETRY_ENABLED` is an
+ * explicit recognized opt-in. `TELEMETRY_DISABLED`, `ENV`, and
+ * `COGNEE_HOST_SDK` remain authoritative suppressions.
  *
  * Returns `true` if analytics were armed by this call (or a prior
- * call), `false` if the policy suppressed emission. Idempotent.
+ * call), `false` if opt-in is absent/invalid or suppression applies.
  */
 export function setupTelemetryAnalytics(): boolean {
   return native.setupTelemetryAnalytics();

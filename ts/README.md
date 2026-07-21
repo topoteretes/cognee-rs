@@ -381,7 +381,8 @@ auto-installed stderr subscriber if your host manages the logging pipeline.
 | `MOCK_EMBEDDING` | Set `true` to use zero-vector mock embeddings (no model download). |
 | `COGNEE_BINDING_SUPPRESS_LOGS` | Suppress the auto-installed stderr fmt subscriber. |
 | `COGNEE_HOST_SDK` | Suppress binding-armed analytics when the host is an embedding SDK. |
-| `TELEMETRY_DISABLED`, `ENV` | Standard analytics opt-outs for `setupTelemetryAnalytics()`. |
+| `COGNEE_PRODUCT_TELEMETRY_ENABLED` | Explicitly opt in to product analytics. |
+| `TELEMETRY_DISABLED`, `ENV` | Higher-priority analytics suppressions. |
 | `RUST_LOG`, `LOG_LEVEL` | `tracing-subscriber` env-filter level overrides. |
 | `COGNEE_LOG_*`, `LOG_FILE_NAME` | Consumed by `setupLogging()`. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, `OTEL_*` | Consumed by `setupTelemetry()`. |

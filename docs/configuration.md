@@ -220,8 +220,8 @@ Setting `system_root_directory` cascades to the default `graph_file_path` and
 
 ## Observability & telemetry
 
-cognee emits OpenTelemetry traces (behind the `telemetry` feature) and opt-out
-product analytics. The **deep references** are
+cognee can emit OpenTelemetry traces (behind the `telemetry` feature) and
+explicit-opt-in product analytics. The **deep references** are
 [observability/opentelemetry.md](observability/opentelemetry.md) and
 [observability/send_telemetry.md](observability/send_telemetry.md); the env surface:
 
@@ -233,7 +233,8 @@ product analytics. The **deep references** are
 | `OTEL_EXPORTER_OTLP_HEADERS` / `_PROTOCOL` | _(empty)_ / `grpc` | Exporter headers / protocol. |
 | `OTEL_SPAN_PROCESSOR` | `batch` | `batch` or `simple`. |
 | `OTEL_TRACES_SAMPLER` / `_ARG` | _(empty)_ | Sampler selection. |
-| `TELEMETRY_DISABLED`, `ENV=test\|dev` | _(unset)_ | Opt out of product analytics. |
+| `COGNEE_PRODUCT_TELEMETRY_ENABLED` | _(unset)_ | Explicitly opt in to product analytics with `1`, `true`, `yes`, or `on`. |
+| `TELEMETRY_DISABLED`, `ENV=test\|dev` | _(unset)_ | Higher-priority product-analytics suppression. |
 
 ## HTTP server
 

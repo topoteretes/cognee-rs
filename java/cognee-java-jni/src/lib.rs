@@ -46,8 +46,9 @@ pub extern "system" fn JNI_OnLoad(vm: JavaVM, _reserved: *mut c_void) -> jint {
     let _ = JAVA_VM.set(vm); // infallible; needs no panic guard
     // Parity with neon's `#[neon::main]`: install the default stderr subscriber
     // before any native method runs (honours `COGNEE_BINDING_SUPPRESS_LOGS`),
-    // and arm product analytics so the `COGNEE_HOST_SDK` opt-out is authoritative
-    // for any binding-hosted `send_telemetry` call.
+    // and evaluate product analytics so explicit permission and the
+    // `COGNEE_HOST_SDK` suppression remain authoritative for every
+    // binding-hosted `send_telemetry` call.
     //
     // This runs during `System.load`; a panic unwinding into the JVM here is UB,
     // so guard the non-trivial body and always return a supported JNI version.

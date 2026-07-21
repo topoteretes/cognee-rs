@@ -1,3 +1,4 @@
+// [iCodex] - 2026-07-20T08:51:00Z - explicit telemetry permission fixtures
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -69,6 +70,7 @@ const ENV_VARS: &[&str] = &[
     "TRACKING_ID",
     "LLM_API_KEY",
     "TELEMETRY_API_KEY_TRACKING_SALT",
+    "COGNEE_PRODUCT_TELEMETRY_ENABLED",
     "TELEMETRY_DISABLED",
     "ENV",
     "TELEMETRY_REQUEST_TIMEOUT",
@@ -94,6 +96,7 @@ impl IsolatedEnv {
             std::env::set_var("TRACKING_ID", "fixed-anon-pipeline-tests");
             std::env::remove_var("LLM_API_KEY");
             std::env::remove_var("TELEMETRY_API_KEY_TRACKING_SALT");
+            std::env::set_var("COGNEE_PRODUCT_TELEMETRY_ENABLED", "1");
             std::env::remove_var("TELEMETRY_DISABLED");
             std::env::remove_var("ENV");
             std::env::remove_var("TELEMETRY_REQUEST_TIMEOUT");
@@ -517,7 +520,7 @@ async fn pipeline_run_errored_fires_after_retries_exhausted() {
 }
 
 // ---------------------------------------------------------------------------
-// 4.3.4 — Opt-out via TELEMETRY_DISABLED produces zero POSTs
+// 4.3.4 — Suppression via TELEMETRY_DISABLED produces zero POSTs
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -539,7 +542,7 @@ async fn telemetry_disabled_emits_zero_events() {
     }
 
     let task = Task::async_fn_typed(|_: &i32, _| Box::pin(async move { Ok(Box::new(0_i32)) }));
-    let pipeline = Pipeline::new("opt-out")
+    let pipeline = Pipeline::new("suppressed")
         .with_name("optout_pipeline")
         .with_task(task);
 
