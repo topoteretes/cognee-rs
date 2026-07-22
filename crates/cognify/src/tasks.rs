@@ -2489,10 +2489,8 @@ async fn upsert_provenance(
         });
     }
 
-    if !prov_nodes.is_empty() {
-        graph_storage::upsert_nodes(db, &prov_nodes).await?;
-        info!("Upserted {} provenance node records", prov_nodes.len());
-    }
+    // Node provenance is written together with the edges below, in a single
+    // transaction, so a mid-way failure cannot leave nodes without their edges.
 
     // ── Provenance edges ────────────────────────────────────────────────
     let mut prov_edges: Vec<GraphEdge> = Vec::new();
@@ -2575,9 +2573,16 @@ async fn upsert_provenance(
         });
     }
 
-    if !prov_edges.is_empty() {
-        graph_storage::upsert_edges(db, &prov_edges).await?;
-        info!("Upserted {} provenance edge records", prov_edges.len());
+    // Write the node and edge provenance batches atomically: a failure partway
+    // through rolls the whole group back (see `upsert_provenance_graph`).
+    if !prov_nodes.is_empty() || !prov_edges.is_empty() {
+        graph_storage::upsert_provenance_graph(db, &prov_nodes, &prov_edges).await?;
+        if !prov_nodes.is_empty() {
+            info!("Upserted {} provenance node records", prov_nodes.len());
+        }
+        if !prov_edges.is_empty() {
+            info!("Upserted {} provenance edge records", prov_edges.len());
+        }
     }
 
     Ok(())
@@ -3776,6 +3781,72 @@ mod tests {
         .await
         .unwrap();
         assert!(!result.chunks.is_empty());
+    }
+
+    /// Drives the cognify-level provenance wrapper (`upsert_provenance`) and its
+    /// guard, not just the DB seam (`upsert_provenance_graph`): one document
+    /// must produce exactly one provenance node written through the wrapper, so
+    /// a regression in the wrapper's own wiring (dropped call, broken guard) is
+    /// caught deterministically without an LLM.
+    #[tokio::test]
+    async fn upsert_provenance_writes_document_node_through_wrapper() {
+        use cognee_database::ops::datasets::create_dataset;
+        use cognee_database::ops::graph_storage::get_nodes_by_dataset;
+        use cognee_database::{connect, initialize};
+        use cognee_models::Dataset;
+
+        let db = connect("sqlite::memory:").await.expect("connect");
+        initialize(&db).await.expect("migrate");
+
+        let user_id = Uuid::new_v4();
+        let dataset_id = Uuid::new_v4();
+        create_dataset(
+            &db,
+            Dataset::new("prov-wrapper".into(), user_id, None, dataset_id),
+        )
+        .await
+        .expect("seed dataset");
+
+        let doc_id = Uuid::new_v4();
+        let mut base = DataPoint::new("TextDocument", None);
+        base.id = doc_id;
+        base.set_metadata("index_fields", serde_json::json!(["name"]));
+        let doc = Document {
+            base,
+            document_type: "text".to_string(),
+            name: "prov.txt".to_string(),
+            raw_data_location: "text://prov".to_string(),
+            mime_type: "text/plain".to_string(),
+            extension: "txt".to_string(),
+            data_id: doc_id,
+            external_metadata: None,
+        };
+
+        upsert_provenance(
+            &db,
+            None,
+            user_id,
+            dataset_id,
+            &[],    // chunks
+            &[],    // entities
+            &[],    // edges
+            &[],    // summaries
+            &[doc], // documents
+            &[],    // structural_edges
+        )
+        .await
+        .expect("wrapper provenance upsert must succeed");
+
+        let nodes = get_nodes_by_dataset(&db, dataset_id).await.expect("query");
+        assert_eq!(
+            nodes.len(),
+            1,
+            "the document's provenance node must be written through the wrapper",
+        );
+        assert_eq!(
+            nodes[0].slug, doc_id,
+            "provenance node slug is the document id",
+        );
     }
 
     #[tokio::test]

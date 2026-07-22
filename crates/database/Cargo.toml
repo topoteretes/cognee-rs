@@ -15,7 +15,7 @@ authors.workspace = true
 workspace = true
 
 [features]
-sqlite   = ["sea-orm/sqlx-sqlite"]
+sqlite   = ["sea-orm/sqlx-sqlite", "dep:log"]
 postgres = ["sea-orm/sqlx-postgres"]
 
 [dependencies]
@@ -24,6 +24,8 @@ cognee-utils      = { path = "../utils", version = "0.1.3" }
 async-trait.workspace = true
 chrono.workspace  = true
 include_dir = "0.7"
+# `log::LevelFilter` for sqlx statement-log levels; only the sqlite path needs it.
+log = { workspace = true, optional = true }
 sea-orm = { version = "1.1", features = [
     "runtime-tokio-rustls",
     "with-chrono",

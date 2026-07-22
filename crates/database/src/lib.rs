@@ -16,7 +16,20 @@ pub use ops::tutorial_seeder::{
     TUTORIAL_BASICS_ID, TUTORIAL_PYTHON_DEV_ID, seed_tutorials_if_first_call,
 };
 
-pub use connection::{connect, initialize};
+pub use connection::{connect, initialize, sqlite_url_is_in_memory};
+
+/// Generic backend-label helper shared by the concrete public fn below and the
+/// transaction-scoped internals in `ops::graph_storage` (a `DatabaseTransaction`
+/// also implements `ConnectionTrait`). Kept crate-private so the published API
+/// keeps its pre-0.1.4 `&DatabaseConnection` signature.
+pub(crate) fn connection_system_label<C: sea_orm::ConnectionTrait>(db: &C) -> &'static str {
+    use sea_orm::DatabaseBackend;
+    match db.get_database_backend() {
+        DatabaseBackend::Sqlite => "sqlite",
+        DatabaseBackend::Postgres => "postgres",
+        DatabaseBackend::MySql => "mysql",
+    }
+}
 
 /// Map the active SeaORM backend to a `cognee.db.system` string
 /// matching the values used by the vector / graph adapters.
@@ -24,13 +37,8 @@ pub use connection::{connect, initialize};
 /// The tag values mirror Python's observability layer
 /// (`cognee/modules/observability/tracing.py`) and the
 /// `cognee.db.system` attribute exposed by every relational op span.
-pub fn database_system_label(db: &sea_orm::DatabaseConnection) -> &'static str {
-    use sea_orm::{ConnectionTrait, DatabaseBackend};
-    match db.get_database_backend() {
-        DatabaseBackend::Sqlite => "sqlite",
-        DatabaseBackend::Postgres => "postgres",
-        DatabaseBackend::MySql => "mysql",
-    }
+pub fn database_system_label(db: &DatabaseConnection) -> &'static str {
+    connection_system_label(db)
 }
 pub use ops::checkpoint::{CheckpointStore, SeaOrmCheckpointStore};
 pub use pipelines::sea_orm_impl::SeaOrmPipelineRunRepository;

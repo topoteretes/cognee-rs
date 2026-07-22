@@ -4,8 +4,8 @@ use chrono::{DateTime, Utc};
 use cognee_utils::tracing_keys::{COGNEE_DB_ROW_COUNT, COGNEE_DB_SYSTEM};
 use sea_orm::sea_query::{Alias, Expr, OnConflict, Query};
 use sea_orm::{
-    ColumnTrait, Condition, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
-    QueryOrder, QuerySelect,
+    ColumnTrait, Condition, ConnectionTrait, DatabaseConnection, EntityTrait, PaginatorTrait,
+    QueryFilter, QueryOrder, QuerySelect, TransactionTrait,
 };
 use tracing::{Span, instrument};
 use uuid::Uuid;
@@ -53,6 +53,17 @@ where
     out
 }
 
+/// Upsert node provenance rows on the given connection.
+///
+/// Delegates to the connection-generic impl; this concrete signature is the
+/// published API (cognee-database is on crates.io, and generalizing the
+/// parameter would break `&Arc<DatabaseConnection>` callers via lost deref
+/// coercion). Transactional callers go through [`upsert_provenance_graph`].
+///
+/// The `err`-recording span lives here on the public entry point (and on
+/// [`upsert_provenance_graph`]), not on the generic `_on` impl, so a single
+/// failure records exactly one ERROR event whether the caller is a direct
+/// upsert or the transactional provenance path.
 #[instrument(
     name = "cognee.db.relational.graph_storage.upsert_nodes",
     level = "info",
@@ -64,7 +75,14 @@ pub async fn upsert_nodes(
     db: &DatabaseConnection,
     nodes: &[GraphNode],
 ) -> Result<(), DatabaseError> {
-    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
+    upsert_nodes_on(db, nodes).await
+}
+
+async fn upsert_nodes_on<C: ConnectionTrait>(
+    db: &C,
+    nodes: &[GraphNode],
+) -> Result<(), DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, crate::connection_system_label(db));
     if nodes.is_empty() {
         return Ok(());
     }
@@ -146,6 +164,13 @@ pub async fn delete_nodes_by_data(
     Ok(())
 }
 
+/// Upsert edge provenance rows on the given connection.
+///
+/// Delegates to the connection-generic impl; this concrete signature is the
+/// published API (see [`upsert_nodes`]). Transactional callers go through
+/// [`upsert_provenance_graph`]. The `err` span lives here, not on the generic
+/// `_on` impl, so one failure records exactly one ERROR event (see
+/// [`upsert_nodes`]).
 #[instrument(
     name = "cognee.db.relational.graph_storage.upsert_edges",
     level = "info",
@@ -157,7 +182,14 @@ pub async fn upsert_edges(
     db: &DatabaseConnection,
     edges: &[GraphEdge],
 ) -> Result<(), DatabaseError> {
-    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
+    upsert_edges_on(db, edges).await
+}
+
+async fn upsert_edges_on<C: ConnectionTrait>(
+    db: &C,
+    edges: &[GraphEdge],
+) -> Result<(), DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, crate::connection_system_label(db));
     if edges.is_empty() {
         return Ok(());
     }
@@ -189,6 +221,45 @@ pub async fn upsert_edges(
             .await
             .map_err(map_sea_err)?;
     }
+    Ok(())
+}
+
+/// Upsert a provenance node+edge group atomically in one transaction.
+///
+/// A failure partway through rolls the whole group back (the transaction is
+/// dropped uncommitted, which sea-orm turns into a rollback), so the
+/// provenance graph never ends up half-written.
+///
+/// `begin()` issues a deferred `BEGIN`, but this transaction is write-first:
+/// the first statement is an upsert, which takes SQLite's write lock
+/// immediately, so there is no read-to-write lock upgrade to deadlock on.
+///
+/// On SQLite this holds the single writer lock for the whole group (all node
+/// batches, then all edge batches) — a deliberate trade for atomicity. Under
+/// WAL, readers are never blocked; a concurrent writer on the same file waits
+/// out the 120s `busy_timeout` (`SQLITE_BUSY_TIMEOUT`, see `connect_sqlite`)
+/// rather than failing with `SQLITE_BUSY`, since the batches are pre-built
+/// local inserts that commit well within that window.
+#[instrument(
+    name = "cognee.db.relational.graph_storage.upsert_provenance_graph",
+    level = "info",
+    skip_all,
+    fields(cognee.db.system = tracing::field::Empty),
+    err,
+)]
+pub async fn upsert_provenance_graph(
+    db: &DatabaseConnection,
+    nodes: &[GraphNode],
+    edges: &[GraphEdge],
+) -> Result<(), DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
+    if nodes.is_empty() && edges.is_empty() {
+        return Ok(());
+    }
+    let txn = db.begin().await.map_err(map_sea_err)?;
+    upsert_nodes_on(&txn, nodes).await?;
+    upsert_edges_on(&txn, edges).await?;
+    txn.commit().await.map_err(map_sea_err)?;
     Ok(())
 }
 
