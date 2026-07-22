@@ -297,3 +297,63 @@ async fn read_only_percent_encoded_path_connects_without_wal() {
     perms.set_readonly(false);
     std::fs::set_permissions(&path, perms).unwrap();
 }
+
+/// An existing, writable DB file inside a read-only *directory* must still
+/// connect: WAL creates `-wal`/`-shm` sidecars in that directory, so forcing
+/// WAL would fail the connect where the file previously opened read-only. The
+/// probe checks parent-directory writability, not just the file.
+#[cfg(unix)]
+#[tokio::test]
+async fn writable_file_in_read_only_dir_connects_without_wal() {
+    use std::os::unix::fs::PermissionsExt;
+
+    use sea_orm::sqlx::ConnectOptions as _;
+    use sea_orm::sqlx::sqlite::SqliteConnectOptions;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("ro_dir");
+    std::fs::create_dir(&dir).unwrap();
+    let path = dir.join("app.db");
+
+    // Seed with raw sqlx so the file stays in the default DELETE journal.
+    {
+        use sea_orm::sqlx::Connection;
+        let mut conn = SqliteConnectOptions::new()
+            .filename(&path)
+            .create_if_missing(true)
+            .connect()
+            .await
+            .expect("seed connect");
+        sea_orm::sqlx::query("CREATE TABLE t (x INTEGER)")
+            .execute(&mut conn)
+            .await
+            .expect("seed schema");
+        conn.close().await.expect("close seed connection");
+    }
+
+    // Directory read-only (r-x), file itself still writable.
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+    // If the environment can't enforce the read-only directory (e.g. running as
+    // root), the regression can't be exercised — restore and skip.
+    let can_create = std::fs::File::create(dir.join(".probe")).is_ok();
+    if can_create {
+        let _ = std::fs::remove_file(dir.join(".probe"));
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        return;
+    }
+
+    let url = format!("sqlite://{}", path.display());
+    let db = connect(&url)
+        .await
+        .expect("writable file in a read-only dir must still connect");
+
+    assert_eq!(
+        journal_mode(&db).await,
+        "delete",
+        "read-only dir must not force WAL (sidecars can't be created there)",
+    );
+
+    // Restore so tempdir cleanup can remove the directory.
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+}

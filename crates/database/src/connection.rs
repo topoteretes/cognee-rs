@@ -207,16 +207,50 @@ async fn connect_sqlite(url: &str) -> Result<DatabaseConnection, DatabaseError> 
 ///
 /// Takes the driver's already-decoded filename
 /// (`SqliteConnectOptions::get_filename`) so an escaped path is probed exactly
-/// as sqlx will open it. Only an *existing* file that cannot be opened for
-/// writing forces read-only: a missing file is created by the driver
-/// (`mode=rwc`), and if its parent is unwritable the connect fails the same way
-/// with or without WAL. The write probe does not truncate or create.
+/// as sqlx will open it. WAL writes the database file's header *and* creates
+/// `-wal`/`-shm` sidecars next to it, so both the file and its parent directory
+/// must be writable:
+///
+/// - The file is writable when it can be opened for writing, or when it does
+///   not exist yet (the driver creates it via `mode=rwc`).
+/// - The parent directory is writable when a temporary file can be created in
+///   it. This catches an existing, writable file inside a read-only directory
+///   (`chmod 555`), where the file opens fine but the sidecars cannot be
+///   created and `PRAGMA journal_mode=WAL` fails the connect.
+///
+/// Neither probe truncates or modifies the database.
 #[cfg(feature = "sqlite")]
 fn sqlite_path_is_writable(path: &std::path::Path) -> bool {
-    if path.exists() {
+    let file_writable = if path.exists() {
         std::fs::OpenOptions::new().write(true).open(path).is_ok()
     } else {
         true
+    };
+    file_writable && sqlite_parent_dir_is_writable(path)
+}
+
+/// Whether a file can be created next to `path`, probed by actually creating a
+/// uniquely named temporary file (permission bits do not reliably reflect
+/// effective writability across platforms, mounts, and ACLs). `AlreadyExists`
+/// means the directory accepted the create attempt, so it counts as writable.
+#[cfg(feature = "sqlite")]
+fn sqlite_parent_dir_is_writable(path: &std::path::Path) -> bool {
+    let parent = match path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => std::path::Path::new("."),
+    };
+    let probe = parent.join(format!(".cognee-wal-probe-{}.tmp", std::process::id()));
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe)
+    {
+        Ok(_) => {
+            let _ = std::fs::remove_file(&probe);
+            true
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => true,
+        Err(_) => false,
     }
 }
 

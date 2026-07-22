@@ -197,9 +197,9 @@ async fn upsert_edges_on<C: ConnectionTrait>(
 /// On SQLite this holds the single writer lock for the whole group (all node
 /// batches, then all edge batches) — a deliberate trade for atomicity. Under
 /// WAL, readers are never blocked; a concurrent writer on the same file waits
-/// out the 5s `busy_timeout` (see `connect_sqlite`) rather than failing with
-/// `SQLITE_BUSY`, since the batches are pre-built local inserts that commit
-/// well within that window.
+/// out the 120s `busy_timeout` (`SQLITE_BUSY_TIMEOUT`, see `connect_sqlite`)
+/// rather than failing with `SQLITE_BUSY`, since the batches are pre-built
+/// local inserts that commit well within that window.
 #[instrument(
     name = "cognee.db.relational.graph_storage.upsert_provenance_graph",
     level = "info",
