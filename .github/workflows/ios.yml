@@ -1,0 +1,101 @@
+name: iOS bindings
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Incremental state is useless on CI (fresh checkout every run) and wastes
+  # 2–5 GB of the macOS runner's ~14 GB disk.
+  CARGO_INCREMENTAL: "0"
+  # Debug info inflates .a files by ~40 %; strip it on CI to reduce disk pressure.
+  CARGO_PROFILE_DEV_DEBUG: "0"
+
+jobs:
+  ios-check:
+    name: iOS targets (cargo check + Swift parse)
+    # macos-14 = Apple Silicon (M1).  Required for aarch64-apple-ios targets.
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (1.91 + iOS targets)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.91"
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim
+          components: rustfmt,clippy
+
+      - name: Cache Cargo registry + git sources
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-cargo-ios-${{ hashFiles('capi/Cargo.lock', 'Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-ios-
+
+      # lance-encoding v6.0.0 has a build script that calls `protoc`;
+      # it is not pre-installed on macos-14 runners.
+      - name: Install protoc (required by lance-encoding build script)
+        run: brew install protobuf
+
+      # `cargo check` type-checks the crate for iOS without linking —
+      # avoids the 6–7 GB .a files that a full `cargo build --release` produces
+      # and keeps peak disk usage well under the runner's ~14 GB limit.
+      - name: Check — aarch64-apple-ios (device)
+        run: |
+          cargo check \
+            --target aarch64-apple-ios \
+            --manifest-path capi/cognee-capi/Cargo.toml \
+            --no-default-features \
+            --features sqlite,testing,mock-llm
+
+      - name: Check — aarch64-apple-ios-sim (simulator)
+        run: |
+          cargo check \
+            --target aarch64-apple-ios-sim \
+            --manifest-path capi/cognee-capi/Cargo.toml \
+            --no-default-features \
+            --features sqlite,testing,mock-llm
+
+      # Validate Package.swift parses correctly (does not require the xcframework
+      # binary — `dump-package` only reads the manifest).
+      - name: Validate Package.swift
+        run: |
+          cd ios
+          swift package dump-package > /dev/null
+          echo "Package.swift is valid"
+
+      # Type-check the Swift wrapper against the real C header — resolves
+      # `import CogneeSDKCore` via a synthesised Clang module so that renamed
+      # or removed `cg_sdk_*` symbols, changed argument counts, and changed
+      # `CgErrorCode` values are caught without the xcframework binary.
+      # capi/include/module.modulemap is a committed file; no cat/heredoc needed.
+      - name: Type-check Swift wrapper against the C header
+        run: |
+          swiftc -typecheck \
+            -sdk "$(xcrun --sdk iphonesimulator --show-sdk-path)" \
+            -target arm64-apple-ios13.0-simulator \
+            -Xcc -fmodule-map-file="$PWD/capi/include/module.modulemap" \
+            -Xcc -I"$PWD/capi/include" \
+            ios/Sources/CogneeSDK/ContinuationBox.swift \
+            ios/Sources/CogneeSDK/CogneeError.swift \
+            ios/Sources/CogneeSDK/Cognee.swift
+
+      # The test target stays on -parse: `@testable import CogneeSDK` requires
+      # a built module, which in turn requires the xcframework (not in CI).
+      - name: Parse-check Swift tests
+        run: |
+          swiftc -parse \
+            ios/Tests/CogneeSDKTests/PipelineTests.swift

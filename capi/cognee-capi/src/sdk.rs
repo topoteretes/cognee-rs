@@ -33,8 +33,8 @@ use std::ffi::{CStr, CString, c_char};
 use std::future::Future;
 use std::sync::{Arc, Condvar, Mutex};
 
+use cognee::config::ConfigManager;
 use cognee_bindings_common::{HandleState, SdkError};
-use cognee_lib::config::ConfigManager;
 
 use crate::error::{CgErrorCode, set_last_error};
 use crate::runtime::{ensure_runtime, global_runtime};
@@ -214,9 +214,9 @@ pub unsafe extern "C" fn cg_sdk_new(settings_json: *const c_char) -> *mut CgSdk 
 /// canonical snake_case names or call `cg_sdk_config_set` / `cg_sdk_config_set_str`
 /// after construction.
 fn apply_settings_json_patch(
-    base: cognee_lib::config::Settings,
+    base: cognee::config::Settings,
     json: &str,
-) -> Result<cognee_lib::config::Settings, String> {
+) -> Result<cognee::config::Settings, String> {
     let patch: serde_json::Value =
         serde_json::from_str(json).map_err(|e| format!("settings_json parse error: {e}"))?;
 
@@ -232,7 +232,7 @@ fn apply_settings_json_patch(
         // mismatches are reported as errors since they indicate caller bugs.
         match cm.set(key, value.clone()) {
             Ok(()) => {}
-            Err(cognee_lib::config::ConfigError::UnknownKey(_)) => {
+            Err(cognee::config::ConfigError::UnknownKey(_)) => {
                 // Silently skip unrecognised keys — new fields added to Settings
                 // in future versions will not break older JSON overlays.
             }

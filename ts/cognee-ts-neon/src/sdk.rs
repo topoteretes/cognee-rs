@@ -7,13 +7,13 @@
 //!
 //! Phase 1 exports: `cogneeNew`, `cogneeWarm`, `cogneeOwnerId`. SDK operations
 //! (add/cognify/search/…) are later phases and follow the canonical pattern:
-//! `let svc = handle.services().await?; <cognee-lib api>(…, svc.*); serde_to_js`.
+//! `let svc = handle.services().await?; <cognee api>(…, svc.*); serde_to_js`.
 
 use std::sync::Arc;
 
 use neon::prelude::*;
 
-use cognee_lib::config::{ConfigManager, Settings};
+use cognee::config::{ConfigManager, Settings};
 
 // Re-export HandleState at the crate level so sdk_*.rs modules that reference
 // `crate::sdk::HandleState` continue to resolve.

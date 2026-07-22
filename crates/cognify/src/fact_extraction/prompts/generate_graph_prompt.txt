@@ -18,6 +18,9 @@ The aim is to achieve simplicity and clarity in the knowledge graph.
   - Node IDs should be names or human-readable identifiers found in the text.
 **Node Names**: Every node MUST include a "name" field.
   - Use the most complete human-readable name for the entity (e.g., "Albert Einstein", "Python").
+**Node Descriptions**: Every node MUST include a "description" field.
+  - Provide a brief 1-2 sentence description of the entity, grounded in the source text.
+  - Do not add outside knowledge. If the text says little about the entity, keep it short.
 # 2. Handling Numerical Data and Dates
   - For example, when you identify an entity representing a date, make sure it has type **"Date"**.
   - Extract the date in the format "YYYY-MM-DD"

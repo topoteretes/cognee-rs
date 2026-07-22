@@ -3,10 +3,10 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::{GraphDBTrait, NodeData};
 use cognee_llm::{GenerationOptions, Llm, LlmExt, Message};
+use cognee_models::{RawExtractedTimestamp, to_cognify_timestamp};
 use cognee_vector::VectorDB;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -30,30 +30,64 @@ const TEMPORAL_DATA_TYPE: &str = "Event";
 const TEMPORAL_FIELD_NAME: &str = "name";
 const DEFAULT_TEMPORAL_INTERVAL_PROMPT: &str = "You are tasked with identifying relevant time periods where the answer to a given query should be searched.\nCurrent date is:  `{time_now}`. Determine relevant period(s) and return structured intervals.\n\nExtraction rules:\n\n1. Query without specific timestamp: use the time period with starts_at set to None and ends_at set to now.\n2. Explicit time intervals: If the query specifies a range (e.g., from 2010 to 2020, between January and March 2023), extract both start and end dates. Always assign the earlier date to starts_at and the later date to ends_at.\n3. Single timestamp: If the query refers to one specific moment (e.g., in 2015, on March 5, 2022), set starts_at and ends_at to that same timestamp.\n4. Open-ended time references: For phrases such as \"before X\" or \"after X\", represent the unspecified side as None. For example: before 2009 → starts_at: None, ends_at: 2009; after 2009 → starts_at: 2009, ends_at: None.\n5. Current-time references (\"now\", \"current\", \"today\"): If the query explicitly refers to the present, set both starts_at and ends_at to now (the ingestion timestamp).\n6. \"Who is\" and \"Who was\" questions: These imply a general identity or biographical inquiry without a specific temporal scope. Set both starts_at and ends_at to None.\n7. Ordering rule: Always ensure the earlier date is assigned to starts_at and the later date to ends_at.\n8. No temporal information: If no valid or inferable time reference is found, set both starts_at and ends_at to None.";
 
+/// The interval extracted from a query by the LLM.
+///
+/// Each bound reuses [`RawExtractedTimestamp`] from `cognee-models` — the same
+/// structured model the temporal cognify pipeline extracts into (and a faithful
+/// port of Python cognee's `Timestamp`, `cognee/tasks/temporal_graph/models.py`).
+/// Its `year` field is **required** while the finer components default (month/day
+/// to 1, time to 0). A required integer `year` is what reliably drives the LLM to
+/// extract a concrete date even for a coarse query such as "in 2021": the earlier
+/// free-form `Option<String>` schema let the model return `null` for the whole
+/// bound on broad year queries, which routed them down the empty triplet-fallback
+/// path (all events dropped), while narrower month-scoped queries happened to
+/// extract cleanly.
+///
+/// Unspecified finer components resolve to the *start* of their unit (a date-only
+/// bound → 00:00:00, a single-moment query where `starts_at == ends_at` → one
+/// instant). This is intentional parity with Python cognee, whose `Timestamp`
+/// applies the same 1/0 defaults and whose `date_to_int` performs no end-of-period
+/// expansion; it is deliberately not "widened" to end-of-day here so the two SDKs
+/// return matching event sets.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 struct QueryInterval {
-    starts_at: Option<String>,
-    ends_at: Option<String>,
+    starts_at: Option<RawExtractedTimestamp>,
+    ends_at: Option<RawExtractedTimestamp>,
 }
 
+/// Millisecond bounds (epoch UTC) of an extracted interval; `None` on a side
+/// means that bound is open.
 #[derive(Debug, Clone)]
 struct ParsedInterval {
-    start: Option<DateTime<Utc>>,
-    end: Option<DateTime<Utc>>,
+    start: Option<i64>,
+    end: Option<i64>,
 }
 
 impl QueryInterval {
-    fn parse(self) -> ParsedInterval {
-        ParsedInterval {
-            start: self
-                .starts_at
-                .as_deref()
-                .and_then(|value| parse_bound(value, false)),
-            end: self
-                .ends_at
-                .as_deref()
-                .and_then(|value| parse_bound(value, true)),
+    /// Convert the extracted bounds to millisecond epoch bounds.
+    ///
+    /// Returns `None` — signalling "no usable interval, fall back to triplet
+    /// search" — in two cases: no bound was provided at all (both sides absent),
+    /// or a *provided* bound is not a valid calendar date (e.g. a hallucinated
+    /// `2024-02-30`). A single-sided interval (only `starts_at` or only `ends_at`)
+    /// is kept. Discarding the whole interval on an impossible date mirrors Python
+    /// (where `date_to_int` raises) and, crucially, avoids silently dropping one
+    /// side and widening a bounded query into an open-ended scan of all history.
+    fn into_millis_interval(self) -> Option<ParsedInterval> {
+        let start = match self.starts_at {
+            Some(ts) => Some(to_cognify_timestamp(ts)?.time_at),
+            None => None,
+        };
+        let end = match self.ends_at {
+            Some(ts) => Some(to_cognify_timestamp(ts)?.time_at),
+            None => None,
+        };
+
+        if start.is_none() && end.is_none() {
+            return None;
         }
+
+        Some(ParsedInterval { start, end })
     }
 }
 
@@ -130,12 +164,9 @@ impl TemporalRetriever {
             Err(_) => return Ok(None),
         };
 
-        let parsed = interval.parse();
-        if parsed.start.is_none() && parsed.end.is_none() {
-            return Ok(None);
-        }
-
-        Ok(Some(parsed))
+        // `None` here means "no usable interval" (no bound, or a provided bound
+        // was an impossible date) — degrade to the triplet fallback.
+        Ok(interval.into_millis_interval())
     }
 
     fn get_graph_retrieval_config(&self, params: &SearchParams) -> GraphRetrievalConfig {
@@ -353,8 +384,8 @@ impl SearchRetriever for TemporalRetriever {
             )]))
             .await?;
 
-        let interval_from_ms = interval.start.map(|dt| dt.timestamp_millis());
-        let interval_to_ms = interval.end.map(|dt| dt.timestamp_millis());
+        let interval_from_ms = interval.start;
+        let interval_to_ms = interval.end;
 
         let matching_ts_ids: Vec<String> = candidate_timestamps
             .into_iter()
@@ -511,69 +542,6 @@ fn is_within_interval_ms(time_at_ms: i64, from_ms: Option<i64>, to_ms: Option<i6
     from_ms.is_none_or(|from| time_at_ms >= from) && to_ms.is_none_or(|to| time_at_ms <= to)
 }
 
-fn parse_bound(input: &str, is_end: bool) -> Option<DateTime<Utc>> {
-    let trimmed = input.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    if let Ok(timestamp) = DateTime::parse_from_rfc3339(trimmed) {
-        return Some(timestamp.with_timezone(&Utc));
-    }
-
-    if let Ok(naive_dt) = NaiveDateTime::parse_from_str(trimmed, "%Y-%m-%d %H:%M:%S") {
-        return Some(Utc.from_utc_datetime(&naive_dt));
-    }
-
-    if let Ok(date) = NaiveDate::parse_from_str(trimmed, "%Y-%m-%d") {
-        return to_datetime(date, is_end);
-    }
-
-    if trimmed.len() == 7 {
-        let month_candidate = format!("{trimmed}-01");
-        if let Ok(date) = NaiveDate::parse_from_str(&month_candidate, "%Y-%m-%d") {
-            return if is_end {
-                let (next_year, next_month) = if date.month() == 12 {
-                    (date.year() + 1, 1)
-                } else {
-                    (date.year(), date.month() + 1)
-                };
-
-                let next_month_start = NaiveDate::from_ymd_opt(next_year, next_month, 1)?;
-                let month_end = next_month_start.pred_opt()?;
-                to_datetime(month_end, true)
-            } else {
-                to_datetime(date, false)
-            };
-        }
-    }
-
-    if trimmed.len() == 4
-        && trimmed.chars().all(|character| character.is_ascii_digit())
-        && let Ok(year) = trimmed.parse::<i32>()
-    {
-        let date = if is_end {
-            NaiveDate::from_ymd_opt(year, 12, 31)?
-        } else {
-            NaiveDate::from_ymd_opt(year, 1, 1)?
-        };
-
-        return to_datetime(date, is_end);
-    }
-
-    None
-}
-
-fn to_datetime(date: NaiveDate, is_end: bool) -> Option<DateTime<Utc>> {
-    let naive_dt = if is_end {
-        date.and_hms_opt(23, 59, 59)?
-    } else {
-        date.and_hms_opt(0, 0, 0)?
-    };
-
-    Some(Utc.from_utc_datetime(&naive_dt))
-}
-
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -604,6 +572,7 @@ mod tests {
     use crate::graph_retrieval::RankedGraphEdge;
     use crate::retrievers::SearchRetriever;
     use crate::types::{SearchItem, SearchOutput, SearchParams};
+    use cognee_models::RawExtractedTimestamp;
 
     struct TestEmbeddingEngine;
 
@@ -912,6 +881,25 @@ mod tests {
         }
     }
 
+    /// Build a `RawExtractedTimestamp` for tests (date-only; time is 00:00:00).
+    fn qts(year: u16, month: u8, day: u8) -> RawExtractedTimestamp {
+        RawExtractedTimestamp {
+            year,
+            month,
+            day,
+            hour: 0,
+            minute: 0,
+            second: 0,
+        }
+    }
+
+    /// Epoch-millis for a UTC date at 00:00:00, for asserting interval bounds.
+    fn millis_at(year: i32, month: u32, day: u32) -> i64 {
+        Utc.with_ymd_and_hms(year, month, day, 0, 0, 0)
+            .unwrap()
+            .timestamp_millis()
+    }
+
     fn event_node_data(id: &str, name: &str) -> NodeData {
         HashMap::from([
             (Cow::Borrowed("id"), json!(id)),
@@ -1010,8 +998,8 @@ mod tests {
         let llm = Arc::new(TestLlm {
             completion_response: "temporal answer".to_string(),
             interval_response: Some(QueryInterval {
-                starts_at: Some("2024-01-01".to_string()),
-                ends_at: Some("2024-12-31".to_string()),
+                starts_at: Some(qts(2024, 1, 1)),
+                ends_at: Some(qts(2024, 12, 31)),
             }),
             fail_structured_output: false,
             last_messages: Mutex::new(vec![]),
@@ -1046,128 +1034,51 @@ mod tests {
         );
     }
 
-    // ── parse_bound tests ──────────────────────────────────────────────
+    // ── QueryInterval::into_millis_interval tests ───────────────────────
 
     #[test]
-    fn parse_bound_datetime_space_format() {
-        use chrono::{TimeZone, Utc};
-        let result = super::parse_bound("2024-01-15 10:30:00", false);
-        assert_eq!(
-            result,
-            Some(Utc.with_ymd_and_hms(2024, 1, 15, 10, 30, 0).unwrap())
-        );
+    fn year_only_bound_deserializes_and_defaults_to_january_first() {
+        // The coarse-query path the whole fix hinges on: the LLM returns only a
+        // `year`, and serde must default month/day to 1 (not 0, which would make
+        // the date invalid) and time to 0. Exercised via real JSON deserialization
+        // so a regression in the `#[serde(default …)]` attributes is caught here.
+        let qi: QueryInterval =
+            serde_json::from_value(json!({ "starts_at": { "year": 2021 }, "ends_at": null }))
+                .unwrap();
+        let parsed = qi
+            .into_millis_interval()
+            .expect("a year-only start bound is a usable interval");
+        assert_eq!(parsed.start, Some(millis_at(2021, 1, 1)));
+        assert_eq!(parsed.end, None);
     }
 
     #[test]
-    fn parse_bound_rfc3339_format() {
-        use chrono::{TimeZone, Utc};
-        let result = super::parse_bound("2024-01-15T10:30:00Z", false);
-        assert_eq!(
-            result,
-            Some(Utc.with_ymd_and_hms(2024, 1, 15, 10, 30, 0).unwrap())
-        );
+    fn invalid_present_bound_discards_whole_interval() {
+        // A hallucinated impossible date (Feb 30) on one side must NOT silently
+        // collapse to a half-open range (which would widen the search to all of
+        // history); the entire interval is discarded so the caller falls back to
+        // triplet search.
+        let qi = QueryInterval {
+            starts_at: Some(RawExtractedTimestamp {
+                year: 2024,
+                month: 2,
+                day: 30,
+                hour: 0,
+                minute: 0,
+                second: 0,
+            }),
+            ends_at: Some(qts(2024, 3, 15)),
+        };
+        assert!(qi.into_millis_interval().is_none());
     }
 
     #[test]
-    fn parse_bound_date_only_start() {
-        use chrono::{TimeZone, Utc};
-        let result = super::parse_bound("2024-03-15", false);
-        assert_eq!(
-            result,
-            Some(Utc.with_ymd_and_hms(2024, 3, 15, 0, 0, 0).unwrap())
-        );
-    }
-
-    #[test]
-    fn parse_bound_date_only_end() {
-        use chrono::{TimeZone, Utc};
-        let result = super::parse_bound("2024-03-15", true);
-        assert_eq!(
-            result,
-            Some(Utc.with_ymd_and_hms(2024, 3, 15, 23, 59, 59).unwrap())
-        );
-    }
-
-    #[test]
-    fn parse_bound_month_start() {
-        use chrono::{TimeZone, Utc};
-        let result = super::parse_bound("2024-03", false);
-        assert_eq!(
-            result,
-            Some(Utc.with_ymd_and_hms(2024, 3, 1, 0, 0, 0).unwrap())
-        );
-    }
-
-    #[test]
-    fn parse_bound_month_end() {
-        use chrono::{TimeZone, Utc};
-        let result = super::parse_bound("2024-03", true);
-        assert_eq!(
-            result,
-            Some(Utc.with_ymd_and_hms(2024, 3, 31, 23, 59, 59).unwrap())
-        );
-    }
-
-    #[test]
-    fn parse_bound_month_end_leap_year() {
-        use chrono::{TimeZone, Utc};
-        let result = super::parse_bound("2024-02", true);
-        assert_eq!(
-            result,
-            Some(Utc.with_ymd_and_hms(2024, 2, 29, 23, 59, 59).unwrap())
-        );
-    }
-
-    #[test]
-    fn parse_bound_month_end_non_leap_year() {
-        use chrono::{TimeZone, Utc};
-        let result = super::parse_bound("2023-02", true);
-        assert_eq!(
-            result,
-            Some(Utc.with_ymd_and_hms(2023, 2, 28, 23, 59, 59).unwrap())
-        );
-    }
-
-    #[test]
-    fn parse_bound_month_end_december_wrap() {
-        use chrono::{TimeZone, Utc};
-        let result = super::parse_bound("2024-12", true);
-        assert_eq!(
-            result,
-            Some(Utc.with_ymd_and_hms(2024, 12, 31, 23, 59, 59).unwrap())
-        );
-    }
-
-    #[test]
-    fn parse_bound_year_start() {
-        use chrono::{TimeZone, Utc};
-        let result = super::parse_bound("2024", false);
-        assert_eq!(
-            result,
-            Some(Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap())
-        );
-    }
-
-    #[test]
-    fn parse_bound_year_end() {
-        use chrono::{TimeZone, Utc};
-        let result = super::parse_bound("2024", true);
-        assert_eq!(
-            result,
-            Some(Utc.with_ymd_and_hms(2024, 12, 31, 23, 59, 59).unwrap())
-        );
-    }
-
-    #[test]
-    fn parse_bound_empty_and_whitespace_returns_none() {
-        assert_eq!(super::parse_bound("", false), None);
-        assert_eq!(super::parse_bound("  ", false), None);
-    }
-
-    #[test]
-    fn parse_bound_invalid_input_returns_none() {
-        assert_eq!(super::parse_bound("not-a-date", false), None);
-        assert_eq!(super::parse_bound("abc", false), None);
+    fn both_bounds_none_yields_no_interval() {
+        let qi = QueryInterval {
+            starts_at: None,
+            ends_at: None,
+        };
+        assert!(qi.into_millis_interval().is_none());
     }
 
     // ── is_within_interval_ms tests ───────────────────────────────────
@@ -1209,62 +1120,35 @@ mod tests {
     // ── QueryInterval::parse tests ────────────────────────────────────
 
     #[test]
-    fn query_interval_parse_both_bounds() {
-        use chrono::{TimeZone, Utc};
-
+    fn into_millis_interval_both_bounds() {
         let qi = QueryInterval {
-            starts_at: Some("2024-01-01".to_string()),
-            ends_at: Some("2024-12-31".to_string()),
+            starts_at: Some(qts(2024, 1, 1)),
+            ends_at: Some(qts(2024, 12, 31)),
         };
-        let parsed = qi.parse();
-        assert_eq!(
-            parsed.start,
-            Some(Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap())
-        );
-        assert_eq!(
-            parsed.end,
-            Some(Utc.with_ymd_and_hms(2024, 12, 31, 23, 59, 59).unwrap())
-        );
+        let parsed = qi.into_millis_interval().expect("both bounds present");
+        assert_eq!(parsed.start, Some(millis_at(2024, 1, 1)));
+        assert_eq!(parsed.end, Some(millis_at(2024, 12, 31)));
     }
 
     #[test]
-    fn query_interval_parse_none_bounds() {
-        let qi = QueryInterval {
-            starts_at: None,
-            ends_at: None,
-        };
-        let parsed = qi.parse();
-        assert!(parsed.start.is_none());
-        assert!(parsed.end.is_none());
-    }
-
-    #[test]
-    fn query_interval_parse_partial_bounds() {
-        use chrono::{TimeZone, Utc};
-
+    fn into_millis_interval_partial_bounds() {
         // Only starts_at
         let qi = QueryInterval {
-            starts_at: Some("2024-06".to_string()),
+            starts_at: Some(qts(2024, 6, 1)),
             ends_at: None,
         };
-        let parsed = qi.parse();
-        assert_eq!(
-            parsed.start,
-            Some(Utc.with_ymd_and_hms(2024, 6, 1, 0, 0, 0).unwrap())
-        );
+        let parsed = qi.into_millis_interval().expect("start bound present");
+        assert_eq!(parsed.start, Some(millis_at(2024, 6, 1)));
         assert!(parsed.end.is_none());
 
         // Only ends_at
         let qi = QueryInterval {
             starts_at: None,
-            ends_at: Some("2024".to_string()),
+            ends_at: Some(qts(2024, 12, 31)),
         };
-        let parsed = qi.parse();
+        let parsed = qi.into_millis_interval().expect("end bound present");
         assert!(parsed.start.is_none());
-        assert_eq!(
-            parsed.end,
-            Some(Utc.with_ymd_and_hms(2024, 12, 31, 23, 59, 59).unwrap())
-        );
+        assert_eq!(parsed.end, Some(millis_at(2024, 12, 31)));
     }
 
     #[tokio::test]
@@ -1378,8 +1262,8 @@ mod tests {
         let llm = TestLlm {
             completion_response: String::new(),
             interval_response: Some(QueryInterval {
-                starts_at: Some("2024-01-01".into()),
-                ends_at: Some("2024-12-31".into()),
+                starts_at: Some(qts(2024, 1, 1)),
+                ends_at: Some(qts(2024, 12, 31)),
             }),
             fail_structured_output: false,
             last_messages: Mutex::new(vec![]),
@@ -1393,14 +1277,8 @@ mod tests {
             .unwrap();
 
         let parsed = result.expect("should return Some(ParsedInterval)");
-        assert_eq!(
-            parsed.start,
-            Some(Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap())
-        );
-        assert_eq!(
-            parsed.end,
-            Some(Utc.with_ymd_and_hms(2024, 12, 31, 23, 59, 59).unwrap())
-        );
+        assert_eq!(parsed.start, Some(millis_at(2024, 1, 1)));
+        assert_eq!(parsed.end, Some(millis_at(2024, 12, 31)));
     }
 
     #[tokio::test]
@@ -1449,7 +1327,7 @@ mod tests {
         let llm = TestLlm {
             completion_response: String::new(),
             interval_response: Some(QueryInterval {
-                starts_at: Some("2024-01-01".into()),
+                starts_at: Some(qts(2024, 1, 1)),
                 ends_at: None,
             }),
             fail_structured_output: false,
@@ -1464,10 +1342,7 @@ mod tests {
             .unwrap();
 
         let parsed = result.expect("should return Some(ParsedInterval)");
-        assert_eq!(
-            parsed.start,
-            Some(Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap())
-        );
+        assert_eq!(parsed.start, Some(millis_at(2024, 1, 1)));
         assert_eq!(parsed.end, None);
     }
 
@@ -1477,7 +1352,7 @@ mod tests {
             completion_response: String::new(),
             interval_response: Some(QueryInterval {
                 starts_at: None,
-                ends_at: Some("2024-12-31".into()),
+                ends_at: Some(qts(2024, 12, 31)),
             }),
             fail_structured_output: false,
             last_messages: Mutex::new(vec![]),
@@ -1492,10 +1367,7 @@ mod tests {
 
         let parsed = result.expect("should return Some(ParsedInterval)");
         assert_eq!(parsed.start, None);
-        assert_eq!(
-            parsed.end,
-            Some(Utc.with_ymd_and_hms(2024, 12, 31, 23, 59, 59).unwrap())
-        );
+        assert_eq!(parsed.end, Some(millis_at(2024, 12, 31)));
     }
 
     // ---- Phase 3: get_context edge case tests ----
@@ -1597,7 +1469,7 @@ mod tests {
         let llm = Arc::new(TestLlm {
             completion_response: String::new(),
             interval_response: Some(QueryInterval {
-                starts_at: Some("2024-01-01".to_string()),
+                starts_at: Some(qts(2024, 1, 1)),
                 ends_at: None,
             }),
             fail_structured_output: false,
@@ -1701,7 +1573,7 @@ mod tests {
             completion_response: String::new(),
             interval_response: Some(QueryInterval {
                 starts_at: None,
-                ends_at: Some("2021-12-31".to_string()),
+                ends_at: Some(qts(2021, 12, 31)),
             }),
             fail_structured_output: false,
             last_messages: Mutex::new(vec![]),
@@ -1800,8 +1672,8 @@ mod tests {
         let llm = Arc::new(TestLlm {
             completion_response: String::new(),
             interval_response: Some(QueryInterval {
-                starts_at: Some("2030".to_string()),
-                ends_at: Some("2031".to_string()),
+                starts_at: Some(qts(2030, 1, 1)),
+                ends_at: Some(qts(2031, 1, 1)),
             }),
             fail_structured_output: false,
             last_messages: Mutex::new(vec![]),
@@ -1911,8 +1783,8 @@ mod tests {
         let llm = Arc::new(TestLlm {
             completion_response: String::new(),
             interval_response: Some(QueryInterval {
-                starts_at: Some("2024-01-01".to_string()),
-                ends_at: Some("2024-12-31".to_string()),
+                starts_at: Some(qts(2024, 1, 1)),
+                ends_at: Some(qts(2024, 12, 31)),
             }),
             fail_structured_output: false,
             last_messages: Mutex::new(vec![]),
@@ -1987,8 +1859,8 @@ mod tests {
         let llm = Arc::new(TestLlm {
             completion_response: String::new(),
             interval_response: Some(QueryInterval {
-                starts_at: Some("2024-02".to_string()),
-                ends_at: Some("2024-03".to_string()),
+                starts_at: Some(qts(2024, 2, 1)),
+                ends_at: Some(qts(2024, 3, 31)),
             }),
             fail_structured_output: false,
             last_messages: Mutex::new(vec![]),
@@ -2013,6 +1885,74 @@ mod tests {
         assert_eq!(
             context[0].payload.get("event_name").and_then(Value::as_str),
             Some("Team Meeting")
+        );
+    }
+
+    #[tokio::test]
+    async fn get_context_matches_non_midnight_event_within_range() {
+        // Guards intra-period inclusivity: every other fixture pins events to
+        // 00:00:00, so a mid-day event landing strictly inside the interval
+        // (not on either boundary instant) would otherwise be unverified.
+        let ts_id = "aa000000-0000-0000-0000-000000000030";
+        let ev_id = "bb000000-0000-0000-0000-000000000030";
+        // 2024-02-15T14:30:00Z — deliberately not midnight.
+        let mid_day_ms = Utc
+            .with_ymd_and_hms(2024, 2, 15, 14, 30, 0)
+            .unwrap()
+            .timestamp_millis();
+
+        let graph_db = Arc::new(TestGraphDb {
+            nodes: vec![
+                timestamp_node(ts_id, mid_day_ms),
+                event_graph_node(ev_id, "Mid-day event"),
+            ],
+            edges: vec![(
+                ev_id.to_string(),
+                ts_id.to_string(),
+                "at".to_string(),
+                HashMap::new(),
+            )],
+            neighbors: HashMap::from([(
+                ts_id.to_string(),
+                vec![event_node_data(ev_id, "Mid-day event")],
+            )]),
+        });
+
+        let vector_db = Arc::new(TestVectorDb {
+            collections: HashMap::from([(
+                TestVectorDb::key("Event", "name"),
+                vec![SearchResult {
+                    id: uuid::Uuid::parse_str(ev_id).unwrap(),
+                    score: 0.9,
+                    metadata: HashMap::new(),
+                }],
+            )]),
+        });
+
+        // Interval [2024-01-01 00:00:00, 2024-12-31 00:00:00] strictly contains
+        // the mid-day event.
+        let llm = Arc::new(TestLlm {
+            completion_response: String::new(),
+            interval_response: Some(QueryInterval {
+                starts_at: Some(qts(2024, 1, 1)),
+                ends_at: Some(qts(2024, 12, 31)),
+            }),
+            fail_structured_output: false,
+            last_messages: Mutex::new(vec![]),
+            ..TestLlm::default()
+        });
+
+        let retriever = build_retriever(vector_db, graph_db, llm);
+
+        let context = retriever
+            .get_context("What happened in 2024?", &SearchParams::default())
+            .await
+            .unwrap();
+
+        assert_eq!(context.len(), 1, "mid-day event should be within range");
+        assert_eq!(
+            context[0].payload.get("event_name").and_then(Value::as_str),
+            Some("Mid-day event")
         );
     }
 
@@ -2184,8 +2124,8 @@ mod tests {
         let llm = Arc::new(TestLlm {
             completion_response: "answer from internal context".to_string(),
             interval_response: Some(QueryInterval {
-                starts_at: Some("2024-01-01".to_string()),
-                ends_at: Some("2024-12-31".to_string()),
+                starts_at: Some(qts(2024, 1, 1)),
+                ends_at: Some(qts(2024, 12, 31)),
             }),
             last_messages: Mutex::new(vec![]),
             last_structured_messages: Mutex::new(vec![]),

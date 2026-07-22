@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use cognee_embedding::mock::MockEmbeddingEngine;
 use cognee_graph::{GraphDBTrait, GraphDBTraitExt, LadybugAdapter};
-use cognee_llm::{Llm, OpenAIAdapter};
+use cognee_llm::{Llm, build_openai_compatible_adapter};
 use cognee_search::{
     SearchParams, SessionContext, TemporalRetriever,
     retrievers::SearchRetriever,
@@ -46,9 +46,13 @@ fn build_test_llm() -> Option<Arc<dyn Llm>> {
         .ok()
         .or_else(|| std::env::var("LLM_MODEL").ok())
         .unwrap_or_else(|| "gpt-4o-mini".to_string());
+    // Route through the production factory (provider from env, default `openai`)
+    // so litellm-style prefixes like `baseten/openai/gpt-oss-120b` are stripped
+    // exactly as in a real run — building the adapter directly would 404.
+    let provider = std::env::var("LLM_PROVIDER").unwrap_or_else(|_| "openai".to_string());
     Some(Arc::new(
-        OpenAIAdapter::new(model, token, Some(url))
-            .expect("OpenAIAdapter::new should succeed with valid args"),
+        build_openai_compatible_adapter(&provider, &model, &token, &url, 3)
+            .expect("build_openai_compatible_adapter should succeed with valid args"),
     ))
 }
 

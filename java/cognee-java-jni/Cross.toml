@@ -1,0 +1,36 @@
+# Cross-compilation config for the Java JNI cdylib (cross-rs).
+#
+# cognee-java-jni is a standalone (nested) workspace, so cross-rs by default
+# mounts only that directory — leaving its path-deps (../../crates/*) and the
+# root Cargo.toml outside the container ("failed to find a workspace root").
+# `volumes` below mounts the whole repo (COGNEE_REPO_ROOT) at its host path so
+# those resolve, without folding the crate into the root workspace.
+#
+# The cross containers are also minimal Ubuntu images that lack the toolchain
+# the bundled lbug C++ engine needs; see ci/cross/aarch64-gnu.Dockerfile (a
+# gcc-11 image — lbug needs C++20 <span> + libstdc++ 11 heterogeneous lookup)
+# and the build-step env that disables simsimd's advanced ARM SIMD kernels.
+#
+#   - ORT_CACHE_DIR: writable in-container path for ort-sys to download into.
+#   - CFLAGS_*/CXXFLAGS_*: SIMSIMD_TARGET_*=0 disables SVE / NEON-bf16 kernels
+#     the cross toolchain can't assemble (basic NEON + serial fallbacks remain).
+#
+# musl targets are intentionally NOT supported: ort-sys ships no musl ONNX
+# Runtime binary (its dist manifest covers only gnu/msvc/darwin/android/ios),
+# and Rust's *-linux-musl target doesn't produce a cdylib without disabling
+# crt-static. See the ts-prebuild 4-target set this matrix mirrors.
+
+[build.env]
+# Mount the whole repo (value of $COGNEE_REPO_ROOT) at the same path, so the
+# standalone JNI workspace's ../../crates path-deps resolve in the container.
+volumes = ["COGNEE_REPO_ROOT"]
+passthrough = [
+    "CFLAGS_aarch64_unknown_linux_gnu",
+    "CXXFLAGS_aarch64_unknown_linux_gnu",
+    "ORT_CACHE_DIR",
+]
+
+# gcc-11 (Ubuntu 22.04) cross image — lbug needs libstdc++ 11. See the
+# Dockerfile for details. Build deps (cmake/protoc/libssl) are baked in.
+[target.aarch64-unknown-linux-gnu]
+dockerfile = "../../ci/cross/aarch64-gnu.Dockerfile"

@@ -8,11 +8,11 @@
 //! ## Function shapes
 //!
 //! - `cogneeVisualize(handle, opts?) -> Promise<string>` — calls
-//!   `cognee_lib::visualization::render(&*graph_db)` and returns the HTML
+//!   `cognee::visualization::render(&*graph_db)` and returns the HTML
 //!   as a string.  No disk I/O in the binding layer; callers can stream,
 //!   embed, or persist the HTML as they see fit.
 //! - `cogneeVisualizeToFile(handle, opts?) -> Promise<string>` — calls
-//!   `cognee_lib::visualize(&*graph_db, destination_path)` and returns the
+//!   `cognee::visualize(&*graph_db, destination_path)` and returns the
 //!   absolute path of the written file as a string.  `opts.destinationPath`
 //!   is optional; when absent the default output path
 //!   (`~/graph_visualization.html`) is used.
@@ -72,7 +72,8 @@ pub fn cognee_visualize(mut cx: FunctionContext) -> JsResult<JsPromise> {
             throw_sdk_error(
                 &mut cx,
                 SdkError::FeatureNotBuilt(
-                    "visualization feature not compiled in this build of cognee-ts-neon".to_string(),
+                    "visualization feature not compiled in this build of cognee-ts-neon"
+                        .to_string(),
                 ),
             )
         });
@@ -116,7 +117,8 @@ pub fn cognee_visualize_to_file(mut cx: FunctionContext) -> JsResult<JsPromise> 
             throw_sdk_error(
                 &mut cx,
                 SdkError::FeatureNotBuilt(
-                    "visualization feature not compiled in this build of cognee-ts-neon".to_string(),
+                    "visualization feature not compiled in this build of cognee-ts-neon"
+                        .to_string(),
                 ),
             )
         });

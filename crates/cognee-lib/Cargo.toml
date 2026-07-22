@@ -1,0 +1,99 @@
+[package]
+name = "cognee-lib"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Deprecated: renamed to the `cognee` crate. A thin re-export shim kept for backwards compatibility — depend on `cognee` instead."
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+authors.workspace = true
+
+# docs.rs cannot build `ort`'s default static-link mode (see the `cognee` crate's
+# note). Mirror its docs.rs config: disable defaults and re-enable the same set,
+# enabling BOTH `onnx` (gates the onnx-cfg'd code) and `onnx-dynamic` (flips the
+# `ort` dep into dlopen mode) so ort builds without the static-link download.
+[package.metadata.docs.rs]
+no-default-features = true
+features = [
+    "onnx",
+    "onnx-dynamic",
+    "ladybug",
+    "pgvector",
+    "pggraph",
+    "sqlite",
+    "postgres",
+    "hf-tokenizer",
+    "tiktoken",
+    "pdf-pdfium",
+    "csv-loader",
+    "html-loader",
+    "image-loader",
+    "audio-loader",
+    "unstructured",
+    "visualization",
+    "mock-llm",
+    "telemetry",
+]
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints]
+workspace = true
+
+# Every feature forwards 1:1 to `cognee` so existing `cognee-lib/<feature>`
+# selections keep working unchanged. Keep this table in sync with `crates/lib`.
+[features]
+default = [
+    "onnx",
+    "ladybug",
+    "pgvector",
+    "pggraph",
+    "sqlite",
+    "postgres",
+    "hf-tokenizer",
+    "tiktoken",
+    "pdf-pdfium",
+    "csv-loader",
+    "html-loader",
+    "image-loader",
+    "audio-loader",
+    "unstructured",
+    "visualization",
+    "mock-llm",
+    "telemetry",
+]
+mock-llm          = ["cognee/mock-llm"]
+visualization     = ["cognee/visualization"]
+onnx              = ["cognee/onnx"]
+onnx-dynamic      = ["cognee/onnx-dynamic"]
+ort-cuda          = ["cognee/ort-cuda"]
+ort-tensorrt      = ["cognee/ort-tensorrt"]
+ladybug           = ["cognee/ladybug"]
+pgvector          = ["cognee/pgvector"]
+pggraph           = ["cognee/pggraph"]
+sqlite            = ["cognee/sqlite"]
+postgres          = ["cognee/postgres"]
+hf-tokenizer      = ["cognee/hf-tokenizer"]
+tiktoken          = ["cognee/tiktoken"]
+telemetry         = ["cognee/telemetry"]
+pdf-pdfium        = ["cognee/pdf-pdfium"]
+pdf-pure-rust     = ["cognee/pdf-pure-rust"]
+csv-loader        = ["cognee/csv-loader"]
+html-loader       = ["cognee/html-loader"]
+image-loader      = ["cognee/image-loader"]
+audio-loader      = ["cognee/audio-loader"]
+unstructured      = ["cognee/unstructured"]
+unstructured-xlsx = ["cognee/unstructured-xlsx"]
+unstructured-docx = ["cognee/unstructured-docx"]
+unstructured-pptx = ["cognee/unstructured-pptx"]
+unstructured-epub = ["cognee/unstructured-epub"]
+unstructured-eml  = ["cognee/unstructured-eml"]
+unstructured-odt  = ["cognee/unstructured-odt"]
+unstructured-odp  = ["cognee/unstructured-odp"]
+android-default   = ["cognee/android-default"]
+testing           = ["cognee/testing"]
+
+[dependencies]
+cognee = { path = "../lib", version = "0.1.3", default-features = false }

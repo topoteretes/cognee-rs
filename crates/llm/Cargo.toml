@@ -40,6 +40,9 @@ thiserror.workspace = true
 # HTTP client (for API-based implementations)
 reqwest = { workspace = true, features = ["multipart"] }
 
+# Jitter for retry backoff
+rand = { workspace = true }
+
 tracing.workspace = true
 
 # Shared tracing-key constants
@@ -53,4 +56,4 @@ cognee-test-utils = { path = "../test-utils" }
 dotenv.workspace = true
 httpmock = "0.8"
 tempfile = { workspace = true }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "test-util"] }

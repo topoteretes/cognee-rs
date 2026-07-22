@@ -1,0 +1,285 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>io.github.topoteretes</groupId>
+  <artifactId>cognee</artifactId>
+  <version>0.1.3</version>
+  <packaging>jar</packaging>
+
+  <name>cognee</name>
+  <description>Java SDK for cognee — an AI memory pipeline over a Rust core (JNI).</description>
+  <url>https://www.cognee.ai</url>
+
+  <!-- Maven Central requires license, developer and SCM metadata on every
+       published artifact. These are harmless outside publishing, so they live
+       at the top level rather than inside the release profile. -->
+  <licenses>
+    <license>
+      <name>MIT License</name>
+      <url>https://opensource.org/licenses/MIT</url>
+      <distribution>repo</distribution>
+    </license>
+    <license>
+      <name>Apache License, Version 2.0</name>
+      <url>https://www.apache.org/licenses/LICENSE-2.0.txt</url>
+      <distribution>repo</distribution>
+    </license>
+  </licenses>
+
+  <developers>
+    <developer>
+      <id>topoteretes</id>
+      <name>Topoteretes</name>
+      <organization>Topoteretes</organization>
+      <organizationUrl>https://www.cognee.ai</organizationUrl>
+    </developer>
+  </developers>
+
+  <scm>
+    <connection>scm:git:https://github.com/topoteretes/cognee-rs.git</connection>
+    <developerConnection>scm:git:ssh://git@github.com/topoteretes/cognee-rs.git</developerConnection>
+    <url>https://github.com/topoteretes/cognee-rs</url>
+  </scm>
+
+  <properties>
+    <maven.compiler.release>17</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <jackson.version>2.17.2</jackson.version>
+    <junit.version>5.10.2</junit.version>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+      <version>${jackson.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <version>${junit.version}</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <resources>
+      <!-- Only version.properties is interpolated; a future binary resource
+           dropped into src/main/resources must NOT be filtered (interpolation
+           would corrupt it), so scope filtering narrowly and copy the rest
+           verbatim. -->
+      <resource>
+        <directory>src/main/resources</directory>
+        <filtering>true</filtering>
+        <includes>
+          <include>**/version.properties</include>
+        </includes>
+      </resource>
+      <resource>
+        <directory>src/main/resources</directory>
+        <filtering>false</filtering>
+        <excludes>
+          <exclude>**/version.properties</exclude>
+        </excludes>
+      </resource>
+    </resources>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <version>3.2.5</version>
+        <configuration>
+          <argLine>-Xcheck:jni</argLine>
+          <!-- Make the unit tests hermetic: engine construction requires an
+               LLM key (a dummy value suffices — OpenAIAdapter::new does no
+               network I/O at construction), and MOCK_EMBEDDING avoids any real
+               embedding call / ONNX download. Without these the tests only pass
+               where the ambient env already carries OPENAI/LLM creds (e.g. a
+               dev's .env), and fail in CI's no-secrets lane. The LLM-gated
+               EndToEndIT runs under failsafe (below) and is intentionally NOT
+               given these, so it still uses real creds and self-skips without
+               OPENAI_URL/OPENAI_TOKEN. -->
+          <environmentVariables>
+            <MOCK_EMBEDDING>true</MOCK_EMBEDDING>
+            <LLM_API_KEY>sk-test</LLM_API_KEY>
+          </environmentVariables>
+        </configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-failsafe-plugin</artifactId>
+        <version>3.2.5</version>
+        <configuration>
+          <argLine>-Xcheck:jni</argLine>
+        </configuration>
+        <executions>
+          <execution>
+            <goals>
+              <goal>integration-test</goal>
+              <goal>verify</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-javadoc-plugin</artifactId>
+        <version>3.6.3</version>
+        <configuration>
+          <excludePackageNames>ai.cognee.internal</excludePackageNames>
+          <quiet>true</quiet>
+          <doclint>none</doclint>
+        </configuration>
+        <!-- Run javadoc during `package` so broken doc comments surface at
+             `mvn verify` (i.e. in check.sh / CI) rather than at publish time. -->
+        <executions>
+          <execution>
+            <id>attach-javadocs</id>
+            <phase>package</phase>
+            <goals>
+              <goal>jar</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+
+  <profiles>
+    <!--
+      Publishing to Maven Central. Guarded behind `-P release` so ordinary
+      `mvn verify` (check.sh / CI) is completely unaffected. Activate with:
+        mvn -P release deploy
+      Requires: a GPG signing key (env MAVEN_GPG_PASSPHRASE, key imported into
+      the agent) and a Central Portal token in settings.xml server id `central`
+      (env MAVEN_CENTRAL_USERNAME / MAVEN_CENTRAL_PASSWORD in CI).
+      For a local dry run without a key: -Dgpg.skip=true.
+    -->
+    <profile>
+      <id>release</id>
+      <build>
+        <plugins>
+          <!-- Central requires a -sources jar. -->
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-source-plugin</artifactId>
+            <version>3.3.1</version>
+            <executions>
+              <execution>
+                <id>attach-sources</id>
+                <goals>
+                  <goal>jar-no-fork</goal>
+                </goals>
+              </execution>
+            </executions>
+          </plugin>
+
+          <!-- Central requires GPG signatures for every artifact. The
+               passphrase comes from env MAVEN_GPG_PASSPHRASE; loopback pinentry
+               lets it sign non-interactively in CI. -->
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-gpg-plugin</artifactId>
+            <version>3.2.4</version>
+            <executions>
+              <execution>
+                <id>sign-artifacts</id>
+                <phase>verify</phase>
+                <goals>
+                  <goal>sign</goal>
+                </goals>
+              </execution>
+            </executions>
+            <configuration>
+              <passphraseEnvName>MAVEN_GPG_PASSPHRASE</passphraseEnvName>
+              <gpgArguments>
+                <arg>--pinentry-mode</arg>
+                <arg>loopback</arg>
+              </gpgArguments>
+            </configuration>
+          </plugin>
+
+          <!-- Central Portal publisher (the current path; legacy OSSRH/
+               nexus-staging is retired). `mvn -P release deploy` uploads a
+               signed bundle to the Portal. autoPublish=false leaves it in the
+               Portal for a human to review + release. -->
+          <plugin>
+            <groupId>org.sonatype.central</groupId>
+            <artifactId>central-publishing-maven-plugin</artifactId>
+            <!-- 0.11.0: 0.7.0's DeploymentApiResponse model rejects the Central
+                 Portal's newer `warnings` field (UnrecognizedPropertyException),
+                 failing the build after a successful upload. -->
+            <version>0.11.0</version>
+            <extensions>true</extensions>
+            <configuration>
+              <publishingServerId>central</publishingServerId>
+              <autoPublish>false</autoPublish>
+            </configuration>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+
+    <!--
+      Attach the per-classifier native jars (built by java-prebuild.yml on the
+      4-target matrix) to this artifact so they are signed and deployed under
+      the same coordinates. Activated only when -Dnatives.dir=<path> points at a
+      directory holding cognee-<version>-<classifier>.jar for each classifier;
+      kept separate from `release` so a local `mvn -P release package` (which has
+      no native jars) still succeeds.
+    -->
+    <profile>
+      <id>attach-natives</id>
+      <activation>
+        <property>
+          <name>natives.dir</name>
+        </property>
+      </activation>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.codehaus.mojo</groupId>
+            <artifactId>build-helper-maven-plugin</artifactId>
+            <version>3.6.0</version>
+            <executions>
+              <execution>
+                <id>attach-native-classifier-jars</id>
+                <phase>package</phase>
+                <goals>
+                  <goal>attach-artifact</goal>
+                </goals>
+                <configuration>
+                  <artifacts>
+                    <artifact>
+                      <file>${natives.dir}/cognee-${project.version}-linux-x86_64.jar</file>
+                      <type>jar</type>
+                      <classifier>linux-x86_64</classifier>
+                    </artifact>
+                    <artifact>
+                      <file>${natives.dir}/cognee-${project.version}-linux-aarch_64.jar</file>
+                      <type>jar</type>
+                      <classifier>linux-aarch_64</classifier>
+                    </artifact>
+                    <artifact>
+                      <file>${natives.dir}/cognee-${project.version}-osx-aarch_64.jar</file>
+                      <type>jar</type>
+                      <classifier>osx-aarch_64</classifier>
+                    </artifact>
+                    <artifact>
+                      <file>${natives.dir}/cognee-${project.version}-windows-x86_64.jar</file>
+                      <type>jar</type>
+                      <classifier>windows-x86_64</classifier>
+                    </artifact>
+                  </artifacts>
+                </configuration>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
+</project>

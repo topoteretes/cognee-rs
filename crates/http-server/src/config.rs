@@ -202,6 +202,12 @@ pub struct HttpServerConfig {
     /// Env: `LLM_MAX_RETRIES`.
     pub llm_max_retries: u32,
 
+    /// Output-token cap for the option-less completion (`recall`/`search`
+    /// answer) LLM call. Env: `LLM_MAX_COMPLETION_TOKENS`. Mirrors
+    /// `Settings.llm_max_completion_tokens` so the setter caps search on the
+    /// HTTP-server surface too (issue #67).
+    pub llm_max_completion_tokens: u32,
+
     /// Session store backend selector.
     /// Env: `COGNEE_SESSION_STORE`.
     pub session_store_backend: String,
@@ -228,10 +234,10 @@ pub struct HttpServerConfig {
     /// The resulting owner id is
     /// `Uuid::new_v5(&Uuid::NAMESPACE_OID, default_user_email.as_bytes())`
     /// — the same derivation used by
-    /// [`cognee_lib::api::user::get_or_create_default_user`] and the
+    /// [`cognee::api::user::get_or_create_default_user`] and the
     /// Python reference SDK (`uuid5(NAMESPACE_OID, email)`).
     ///
-    /// Mirrors `Settings::default_user_email` in `cognee-lib` so the HTTP
+    /// Mirrors `Settings::default_user_email` in `cognee` so the HTTP
     /// server and the bindings/CLI agree on owner ids for the same
     /// configured email. Env: `DEFAULT_USER_EMAIL`. Default:
     /// `"default_user@example.com"`.
@@ -346,6 +352,7 @@ impl Default for HttpServerConfig {
             llm_api_key: SecretString::new(String::new().into()),
             llm_endpoint: String::new(),
             llm_max_retries: 3,
+            llm_max_completion_tokens: cognee_llm::OpenAIAdapter::DEFAULT_MAX_COMPLETION_TOKENS,
             session_store_backend: "seaorm".to_string(),
             session_root_directory: default_session_root_directory(&system_root),
             notebook_runner_enabled: false,
@@ -537,6 +544,13 @@ impl HttpServerConfig {
                 .parse::<u32>()
                 .map_err(|e| ServerError::Other(anyhow::anyhow!("LLM_MAX_RETRIES: {e}")))?;
         }
+        // Honor the `LLM_MAX_TOKENS` alias too, matching the CLI/Settings path
+        // (`str_alias("LLM_MAX_COMPLETION_TOKENS", "LLM_MAX_TOKENS")`).
+        if let Some(v) = first_non_empty_env(&["LLM_MAX_COMPLETION_TOKENS", "LLM_MAX_TOKENS"]) {
+            cfg.llm_max_completion_tokens = v.parse::<u32>().map_err(|e| {
+                ServerError::Other(anyhow::anyhow!("LLM_MAX_COMPLETION_TOKENS: {e}"))
+            })?;
+        }
 
         if let Ok(v) = std::env::var("COGNEE_SESSION_STORE") {
             cfg.session_store_backend = v;
@@ -573,7 +587,7 @@ impl HttpServerConfig {
 impl HttpServerConfig {
     /// Lower these settings into a [`cognee_components::BackendBuildContext`].
     ///
-    /// Unlike `cognee-lib`'s `Settings::backend_context`, the standalone server
+    /// Unlike `cognee`'s `Settings::backend_context`, the standalone server
     /// deliberately does **not** read `MOCK_LLM` / `MOCK_EMBEDDING` or wire the
     /// recording path: a production server must never silently honor those.
     /// Mock backends are opt-in through the `dev-mock` feature + an explicit
@@ -664,6 +678,15 @@ impl HttpServerConfig {
                 api_key: self.llm_api_key.expose_secret().to_string(),
                 endpoint: self.llm_endpoint.clone(),
                 max_retries: self.llm_max_retries,
+                // Env-configurable via `LLM_MAX_COMPLETION_TOKENS`, mirroring
+                // `Settings.llm_max_completion_tokens` on the CLI/SDK path so
+                // `recall`/`search` is capped consistently across surfaces.
+                max_completion_tokens: self.llm_max_completion_tokens,
+                // The HTTP server config does not yet expose an `LLM_ARGS`
+                // equivalent; default to no extra request params (a no-op).
+                // The CLI/ComponentManager path wires `LLM_ARGS` via
+                // `cognee::Settings`.
+                llm_args: serde_json::Map::new(),
                 mock: false,
                 cassette: String::new(),
                 record_path: String::new(),

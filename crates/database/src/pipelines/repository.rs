@@ -154,7 +154,7 @@ pub trait PipelineRunRepository: Send + Sync {
     ///
     /// Supersedes the temporary `list_pipeline_names_for_dataset` helper that
     /// task 08-05 introduced. Used by
-    /// `cognee_lib::api::pipeline_runs::reset_dataset_pipeline_run_status`
+    /// `cognee::api::pipeline_runs::reset_dataset_pipeline_run_status`
     /// and the delete crate's prune flow to enumerate pipelines per dataset.
     ///
     /// Python parity: matches

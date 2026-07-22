@@ -21,7 +21,7 @@ use uuid::Uuid;
 
 use cognee_core::pipeline_run_registry::{PipelineFuture, RunHandle, RunOutcome, RunSpec};
 // IDs live in `cognee-core` so library callers (e.g. the reset helpers in
-// `cognee-lib`) can derive them without depending on `cognee-http-server`.
+// `cognee`) can derive them without depending on `cognee-http-server`.
 use cognee_core::pipeline_run_registry::ids as id_helpers;
 
 use crate::{auth::AuthenticatedUser, error::ApiError, state::AppState};

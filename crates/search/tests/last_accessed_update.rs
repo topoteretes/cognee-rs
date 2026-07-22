@@ -142,7 +142,7 @@ async fn test_search_updates_last_accessed_timestamp() {
     {
         Ok(_) => {}
         Err(e) => {
-            test_utils::fail_loudly_on_replay_miss("cognify", &e);
+            test_utils::fail_loudly_in_cassette_mode("cognify", &e);
             eprintln!("Skipping test: cognify failed: {e}");
             return;
         }

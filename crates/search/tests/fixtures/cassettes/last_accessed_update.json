@@ -1,31 +1,41 @@
 {
   "version": 1,
-  "model": "gpt-4o-mini",
+  "model": "openai/gpt-oss-120b",
   "entries": {
-    "8906d2a86d44806c877c11378c21fa1920f9c653b9c905179c4ecc6fba78a7d4": {
+    "bc43a4459d234edd47aeee428a0774a83d6181bcac5643ef4c15e2cbfaa62d90": {
       "method": "structured_output",
       "user_input_preview": "Artificial intelligence enables machines to simulate human intelligence.",
       "schema_name": "KnowledgeGraph",
       "response": {
         "edges": [
           {
-            "description": "Artificial intelligence enables machines to simulate human intelligence.",
             "relationship_name": "enables",
             "source_node_id": "Artificial intelligence",
             "target_node_id": "machines"
+          },
+          {
+            "relationship_name": "simulates",
+            "source_node_id": "machines",
+            "target_node_id": "human intelligence"
           }
         ],
         "nodes": [
           {
-            "description": "Artificial intelligence is a field of computer science focused on creating systems capable of performing tasks that typically require human intelligence.",
+            "description": "Artificial intelligence enables machines to simulate human intelligence.",
             "id": "Artificial intelligence",
             "name": "Artificial intelligence",
             "type": "CONCEPT"
           },
           {
-            "description": "Machines are devices that can perform tasks automatically or with minimal human intervention.",
+            "description": "Machines are devices that can be enabled by artificial intelligence to simulate human intelligence.",
             "id": "machines",
             "name": "machines",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "Human intelligence is the intelligence exhibited by humans, which machines aim to simulate.",
+            "id": "human intelligence",
+            "name": "human intelligence",
             "type": "CONCEPT"
           }
         ]

@@ -616,7 +616,8 @@ describe("Phase-5 memory ops (Tier-B — skips without LLM creds)", () => {
     );
     expect(result).toBeDefined();
     expect(result.status).toBe("PipelineRunCompleted");
-    expect(result.datasetName).toBe("tier_b_remember");
+    // `remember` results are snake_case (Python-parity wire shape); see #46.
+    expect(result.dataset_name).toBe("tier_b_remember");
   });
 
   it("cogneeMemify runs without error and returns MemifyResult", async () => {

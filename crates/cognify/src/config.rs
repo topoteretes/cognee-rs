@@ -72,11 +72,6 @@ pub struct CognifyConfig {
     /// Default: true (matches Python)
     pub enable_summarization: bool,
 
-    /// Batch size for summarization (parallel summary generation).
-    /// Python default: No explicit batching (processes all chunks in parallel)
-    /// Rust: Prevents spawning too many tasks
-    pub summarization_batch_size: usize,
-
     /// Whether to generate and index triplet embeddings.
     /// Triplets are formatted as "source › relationship › target"
     /// Python config: CognifyConfig.triplet_embedding (default: False)
@@ -219,7 +214,6 @@ impl Default for CognifyConfig {
             custom_extraction_prompt: None,
 
             enable_summarization: true,
-            summarization_batch_size: 50,
 
             embed_triplets: false,
             embedding_batch_size: 100,
@@ -283,12 +277,6 @@ impl CognifyConfig {
     /// Enable or disable summarization.
     pub fn with_summarization(mut self, enable: bool) -> Self {
         self.enable_summarization = enable;
-        self
-    }
-
-    /// Set summarization batch size.
-    pub fn with_summarization_batch_size(mut self, batch_size: usize) -> Self {
-        self.summarization_batch_size = batch_size;
         self
     }
 
@@ -461,12 +449,6 @@ impl CognifyConfig {
             ));
         }
 
-        if self.summarization_batch_size == 0 {
-            return Err(ConfigError::InvalidParameter(
-                "summarization_batch_size must be greater than 0".to_string(),
-            ));
-        }
-
         if self.data_per_batch == 0 {
             return Err(ConfigError::InvalidParameter(
                 "data_per_batch must be greater than 0".to_string(),
@@ -593,7 +575,6 @@ mod tests {
 
         // Summarization defaults
         assert!(config.enable_summarization);
-        assert_eq!(config.summarization_batch_size, 50);
 
         // Embedding defaults
         assert!(!config.embed_triplets);
@@ -698,12 +679,6 @@ mod tests {
             ..Default::default()
         };
         assert!(config2.validate().is_err());
-
-        let config3 = CognifyConfig {
-            summarization_batch_size: 0,
-            ..Default::default()
-        };
-        assert!(config3.validate().is_err());
     }
 
     /// Local ONNX/BGE default: the model's 512-token sequence limit binds →

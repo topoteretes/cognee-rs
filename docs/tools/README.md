@@ -9,7 +9,7 @@ How you invoke the pipeline. All cover the same operations
 ([operations.md](../operations.md)).
 
 - **[cli.md](cli.md)** — `cognee-cli`: subcommands, flags, `config`, retries, logging.
-- **[bindings.md](bindings.md)** — Python / C / JavaScript SDKs (shared `bindings-common`) + config-setter ergonomics.
+- **[bindings.md](bindings.md)** — Python / C / JavaScript / Java SDKs (shared `bindings-common`) + config-setter ergonomics.
 - **[http-server.md](http-server.md)** — `cognee-http-server`: launch the binary or embed the library. Endpoint specs under [../http-server/](../http-server/README.md).
 
 ## Backends

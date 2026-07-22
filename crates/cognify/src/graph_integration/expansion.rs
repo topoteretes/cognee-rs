@@ -10,6 +10,7 @@ use cognee_core::{HasDataPoint, ProvenanceContext, stamp_tree};
 use cognee_models::{Entity, EntityType};
 use cognee_ontology::traits::OntologyEdge;
 use cognee_ontology::{AttachedOntologyNode, NodeCategory, OntologyResolver};
+use cognee_utils::{generate_edge_name, normalize_identifier};
 use tracing::warn;
 
 use crate::fact_extraction::{KnowledgeGraph, Node};
@@ -130,7 +131,7 @@ pub async fn expand_with_nodes_and_edges(
 
                             // Canonicalize: rename + regenerate deterministic ID
                             et.mark_ontology_valid(Some(canonical_name.clone()));
-                            et.base.id = ontology_name_to_uuid(&canonical_name);
+                            et.base.id = EntityType::id_for(&canonical_name);
 
                             // Record key mapping if canonical differs
                             let new_type_key = format!("{canonical_name}_type");
@@ -149,7 +150,18 @@ pub async fn expand_with_nodes_and_edges(
                                 user_label,
                                 &mut local_visited,
                             );
+                            // The resolver returns the matched root class
+                            // *separately* from `onto_nodes` (it is not in the
+                            // node list). An ontology `is_a` edge whose endpoint
+                            // names that root must still resolve to the root's
+                            // class id, so include it in the category lookup for
+                            // edge resolution only — NOT in `process_ontology_nodes`,
+                            // which would double-create it (the main loop already
+                            // created the canonical type node).
+                            let mut edge_category_nodes = onto_nodes.clone();
+                            edge_category_nodes.push(root_node.clone());
                             process_ontology_edges(
+                                &edge_category_nodes,
                                 &onto_edges,
                                 existing_edges_set,
                                 &mut ontology_edge_keys,
@@ -222,7 +234,7 @@ pub async fn expand_with_nodes_and_edges(
 
                             // Replace name and ID with canonical form
                             entity_pair.entity.name = canonical_name.clone();
-                            entity_pair.entity.base.id = ontology_name_to_uuid(&canonical_name);
+                            entity_pair.entity.base.id = Entity::id_for(&canonical_name);
                             entity_pair.entity.base.set_ontology_valid(true);
 
                             // Defer subgraph processing until after insert
@@ -238,8 +250,13 @@ pub async fn expand_with_nodes_and_edges(
                     }
                 }
 
-                // Track node_id -> entity_id mapping for edge resolution
-                node_id_to_entity_id.insert(node.id.clone(), entity_pair.entity.base.id);
+                // Track node_id -> entity_id mapping for edge resolution.
+                // Key on the *normalized* node id so an edge that references the
+                // same entity with different casing/spacing still resolves — the
+                // way Python's `Entity.id_for` hashing is normalization-insensitive
+                // (expand_with_nodes_and_edges.py:300-304).
+                node_id_to_entity_id
+                    .insert(normalize_identifier(&node.id), entity_pair.entity.base.id);
 
                 e.insert(entity_pair);
             }
@@ -257,6 +274,7 @@ pub async fn expand_with_nodes_and_edges(
                     &mut local_visited,
                 );
                 process_ontology_edges(
+                    &ont_nodes,
                     &ont_edges,
                     existing_edges_set,
                     &mut ontology_edge_keys,
@@ -269,7 +287,9 @@ pub async fn expand_with_nodes_and_edges(
         for edge in graph.edges {
             // Look up entity IDs from node IDs; skip edges the LLM produced with
             // node IDs that don't match any extracted node (common with local models).
-            let Some(source_entity_id) = node_id_to_entity_id.get(&edge.source_node_id) else {
+            let Some(source_entity_id) =
+                node_id_to_entity_id.get(&normalize_identifier(&edge.source_node_id))
+            else {
                 warn!(
                     "Skipping edge: source node '{}' not found in extracted nodes",
                     edge.source_node_id
@@ -277,7 +297,9 @@ pub async fn expand_with_nodes_and_edges(
                 continue;
             };
 
-            let Some(target_entity_id) = node_id_to_entity_id.get(&edge.target_node_id) else {
+            let Some(target_entity_id) =
+                node_id_to_entity_id.get(&normalize_identifier(&edge.target_node_id))
+            else {
                 warn!(
                     "Skipping edge: target node '{}' not found in extracted nodes",
                     edge.target_node_id
@@ -390,22 +412,6 @@ fn create_entity_node(
     }
 }
 
-/// Compute a deterministic UUID5 from a normalized name.
-///
-/// Follows Python's `generate_node_id()` pattern: lowercase, replace spaces
-/// with underscores, strip apostrophes, then hash with UUID5 NAMESPACE_OID.
-fn ontology_name_to_uuid(name: &str) -> Uuid {
-    let normalized = name.to_lowercase().replace(' ', "_").replace('\'', "");
-    Uuid::new_v5(&Uuid::NAMESPACE_OID, normalized.as_bytes())
-}
-
-/// Normalize an edge/relationship name for deduplication and storage.
-///
-/// Lowercases, replaces spaces with underscores, and strips apostrophes.
-fn normalize_edge_name(name: &str) -> String {
-    name.to_lowercase().replace(' ', "_").replace('\'', "")
-}
-
 /// Convert ontology subgraph nodes into graph integration types.
 ///
 /// For each [`AttachedOntologyNode`]:
@@ -427,10 +433,10 @@ fn process_ontology_nodes(
     visited: &mut HashSet<Uuid>,
 ) {
     for node in ontology_nodes {
-        let node_id = ontology_name_to_uuid(&node.name);
-
         match node.category {
             NodeCategory::Classes => {
+                // Python: `EntityType.id_for(name)` for ontology class nodes.
+                let node_id = EntityType::id_for(&node.name);
                 let dedup_key = format!("{node_id}_type");
                 // Skip if the LLM already extracted this type (check by name-based key)
                 let llm_type_key = format!("{}_type", node.name);
@@ -452,6 +458,8 @@ fn process_ontology_nodes(
                 ontology_types_map.insert(dedup_key, et);
             }
             NodeCategory::Individuals => {
+                // Python: `Entity.id_for(name)` for ontology individual nodes.
+                let node_id = Entity::id_for(&node.name);
                 let dedup_key = format!("{node_id}_entity");
                 // Skip if already present in either map
                 if node_map.contains_key(&dedup_key)
@@ -465,10 +473,12 @@ fn process_ontology_nodes(
                 entity.base.set_ontology_valid(true);
                 pre_stamp_extraction(&mut entity, user_label, visited);
 
-                // Placeholder EntityType for the GraphNodePair
+                // Placeholder EntityType for the GraphNodePair (Rust-only; the
+                // Python `Entity(is_a=...)` field is optional). Its id is stable
+                // but has no Python counterpart.
                 let mut placeholder_et =
                     EntityType::new("OntologyIndividual", "", Some(dataset_id));
-                placeholder_et.base.id = ontology_name_to_uuid("ontologyindividual");
+                placeholder_et.base.id = EntityType::id_for("OntologyIndividual");
                 pre_stamp_extraction(&mut placeholder_et, user_label, visited);
 
                 let pair = GraphNodePair {
@@ -487,15 +497,32 @@ fn process_ontology_nodes(
 /// deterministic UUID5 source/target IDs and normalized relationship names. Edges
 /// that already exist (in `existing_edge_keys` or `ontology_edge_keys`) are skipped.
 fn process_ontology_edges(
+    ontology_nodes: &[AttachedOntologyNode],
     ontology_edges: &[OntologyEdge],
     existing_edge_keys: &HashSet<String>,
     ontology_edge_keys: &mut HashSet<String>,
     ontology_edges_out: &mut Vec<GraphEdgePair>,
 ) {
+    // Mirror Python's `node_category = {node.name: node.category ...}`: an edge
+    // endpoint that names a class resolves via `EntityType::id_for`, otherwise
+    // `Entity::id_for` (expand_with_nodes_and_edges.py:84-89). Endpoints not in
+    // the node list default to Entity, as in Python.
+    let is_class: HashMap<&str, bool> = ontology_nodes
+        .iter()
+        .map(|n| (n.name.as_str(), matches!(n.category, NodeCategory::Classes)))
+        .collect();
+    let endpoint_id = |name: &str| -> Uuid {
+        if is_class.get(name).copied().unwrap_or(false) {
+            EntityType::id_for(name)
+        } else {
+            Entity::id_for(name)
+        }
+    };
+
     for (source, relation, target) in ontology_edges {
-        let source_id = ontology_name_to_uuid(source);
-        let target_id = ontology_name_to_uuid(target);
-        let rel_name = normalize_edge_name(relation);
+        let source_id = endpoint_id(source);
+        let target_id = endpoint_id(target);
+        let rel_name = generate_edge_name(relation);
         let edge_key = format!("{source_id}_{target_id}_{rel_name}");
 
         if existing_edge_keys.contains(&edge_key) || ontology_edge_keys.contains(&edge_key) {
@@ -884,6 +911,8 @@ mod tests {
                         category: NodeCategory::Classes,
                     };
                     Ok((
+                        // Real resolver returns only the traversed subgraph
+                        // (ancestors); the matched root is returned separately.
                         vec![ancestor],
                         vec![(
                             "organisation".to_string(),
@@ -1017,22 +1046,24 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn test_ontology_name_to_uuid_deterministic() {
-        // "Car" and "car" should produce the same UUID (both normalize to "car")
-        let uuid_upper = ontology_name_to_uuid("Car");
-        let uuid_lower = ontology_name_to_uuid("car");
-        assert_eq!(uuid_upper, uuid_lower);
-
-        // Should match the canonical UUID5 derivation for "car"
-        let expected = Uuid::new_v5(&Uuid::NAMESPACE_OID, b"car");
-        assert_eq!(uuid_upper, expected);
+    fn test_ontology_node_ids_are_class_namespaced() {
+        // Ontology class nodes hash as EntityType, individuals as Entity, so a
+        // class and an individual sharing a name never collide (parity with
+        // Python expand_with_nodes_and_edges.py:46-49).
+        assert_ne!(EntityType::id_for("Car"), Entity::id_for("Car"));
+        // Normalization still holds within a class.
+        assert_eq!(EntityType::id_for("Car"), EntityType::id_for("car"));
+        assert_eq!(
+            EntityType::id_for("Car"),
+            Uuid::new_v5(&Uuid::NAMESPACE_OID, b"EntityType:car"),
+        );
     }
 
     #[test]
-    fn test_normalize_edge_name() {
-        assert_eq!(normalize_edge_name("is a"), "is_a");
-        assert_eq!(normalize_edge_name("Is A"), "is_a");
-        assert_eq!(normalize_edge_name("don't know"), "dont_know");
+    fn test_generate_edge_name_normalizes_relations() {
+        assert_eq!(generate_edge_name("is a"), "is_a");
+        assert_eq!(generate_edge_name("Is A"), "is_a");
+        assert_eq!(generate_edge_name("don't know"), "dont_know");
     }
 
     #[test]
@@ -1076,13 +1107,13 @@ mod tests {
         }
 
         // Check deterministic IDs
-        let vehicle_key = format!("{}_type", ontology_name_to_uuid("Vehicle"));
-        let car_key = format!("{}_type", ontology_name_to_uuid("Car"));
+        let vehicle_key = format!("{}_type", EntityType::id_for("Vehicle"));
+        let car_key = format!("{}_type", EntityType::id_for("Car"));
         assert!(ontology_types_map.contains_key(&vehicle_key));
         assert!(ontology_types_map.contains_key(&car_key));
 
         let vehicle_et = &ontology_types_map[&vehicle_key];
-        assert_eq!(vehicle_et.base.id, ontology_name_to_uuid("Vehicle"));
+        assert_eq!(vehicle_et.base.id, EntityType::id_for("Vehicle"));
         assert_eq!(vehicle_et.name, "Vehicle");
     }
 
@@ -1149,16 +1180,16 @@ mod tests {
         assert_eq!(ontology_entities_map.len(), 1);
         assert!(ontology_types_map.is_empty());
 
-        let dedup_key = format!("{}_entity", ontology_name_to_uuid("MyCar"));
+        let dedup_key = format!("{}_entity", Entity::id_for("MyCar"));
         let pair = &ontology_entities_map[&dedup_key];
         assert!(pair.entity.base.ontology_valid);
-        assert_eq!(pair.entity.base.id, ontology_name_to_uuid("MyCar"));
+        assert_eq!(pair.entity.base.id, Entity::id_for("MyCar"));
         assert_eq!(pair.entity.name, "MyCar");
         // Placeholder type
         assert_eq!(pair.entity_type.name, "OntologyIndividual");
         assert_eq!(
             pair.entity_type.base.id,
-            ontology_name_to_uuid("ontologyindividual")
+            EntityType::id_for("OntologyIndividual")
         );
     }
 
@@ -1177,7 +1208,10 @@ mod tests {
         let mut ontology_edge_keys = HashSet::new();
         let mut ontology_edges_out = Vec::new();
 
+        // No node list → endpoints default to Entity::id_for (matches Python's
+        // `node_category.get(x) != "classes" → Entity`).
         process_ontology_edges(
+            &[],
             &edges,
             &existing_edge_keys,
             &mut ontology_edge_keys,
@@ -1188,8 +1222,8 @@ mod tests {
         assert_eq!(ontology_edge_keys.len(), 2);
 
         // Verify first edge: Car -> Vehicle via "is_a"
-        let car_id = ontology_name_to_uuid("Car");
-        let vehicle_id = ontology_name_to_uuid("Vehicle");
+        let car_id = Entity::id_for("Car");
+        let vehicle_id = Entity::id_for("Vehicle");
         let edge0 = &ontology_edges_out[0];
         assert_eq!(edge0.source_entity_id, car_id);
         assert_eq!(edge0.target_entity_id, vehicle_id);
@@ -1208,7 +1242,7 @@ mod tests {
         );
 
         // Verify second edge: Vehicle -> Engine via "has_part"
-        let engine_id = ontology_name_to_uuid("Engine");
+        let engine_id = Entity::id_for("Engine");
         let edge1 = &ontology_edges_out[1];
         assert_eq!(edge1.source_entity_id, vehicle_id);
         assert_eq!(edge1.target_entity_id, engine_id);
@@ -1217,8 +1251,8 @@ mod tests {
 
     #[test]
     fn test_process_ontology_edges_skips_existing() {
-        let car_id = ontology_name_to_uuid("Car");
-        let vehicle_id = ontology_name_to_uuid("Vehicle");
+        let car_id = Entity::id_for("Car");
+        let vehicle_id = Entity::id_for("Vehicle");
         let existing_key = format!("{}_{}_{}", car_id, vehicle_id, "is_a");
 
         let mut existing_edge_keys = HashSet::new();
@@ -1237,6 +1271,7 @@ mod tests {
         let mut ontology_edges_out = Vec::new();
 
         process_ontology_edges(
+            &[],
             &edges,
             &existing_edge_keys,
             &mut ontology_edge_keys,
@@ -1339,9 +1374,10 @@ mod tests {
 
         let is_a = &is_a_edges[0];
 
-        // Source = organisation, target = legalentity (deterministic UUIDs)
-        assert_eq!(is_a.source_entity_id, ontology_name_to_uuid("organisation"));
-        assert_eq!(is_a.target_entity_id, ontology_name_to_uuid("legalentity"));
+        // Source = organisation, target = legalentity — both ontology classes,
+        // so they resolve via EntityType::id_for.
+        assert_eq!(is_a.source_entity_id, EntityType::id_for("organisation"));
+        assert_eq!(is_a.target_entity_id, EntityType::id_for("legalentity"));
 
         // Should be marked as ontology-derived
         assert_eq!(

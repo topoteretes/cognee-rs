@@ -1,4 +1,4 @@
-//! Built-in graph database factories: ladybug/kuzu (embedded) and Postgres.
+//! Built-in graph database factories: ladybug/kuzu (embedded), Postgres, and mock.
 //!
 //! Every item here lives behind a graph-backend feature, so the imports are
 //! gated too — otherwise a build with neither `ladybug` nor `pggraph` (e.g. a
@@ -7,19 +7,19 @@
 
 #[cfg(any(feature = "ladybug", feature = "pggraph"))]
 use std::path::Path;
-#[cfg(any(feature = "ladybug", feature = "pggraph"))]
+#[cfg(any(feature = "ladybug", feature = "pggraph", feature = "testing"))]
 use std::sync::Arc;
 
-#[cfg(any(feature = "ladybug", feature = "pggraph"))]
+#[cfg(any(feature = "ladybug", feature = "pggraph", feature = "testing"))]
 use async_trait::async_trait;
-#[cfg(any(feature = "ladybug", feature = "pggraph"))]
+#[cfg(any(feature = "ladybug", feature = "pggraph", feature = "testing"))]
 use cognee_graph::GraphDBTrait;
 
-#[cfg(any(feature = "ladybug", feature = "pggraph"))]
+#[cfg(any(feature = "ladybug", feature = "pggraph", feature = "testing"))]
 use crate::context::BackendBuildContext;
-#[cfg(any(feature = "ladybug", feature = "pggraph"))]
+#[cfg(any(feature = "ladybug", feature = "pggraph", feature = "testing"))]
 use crate::error::ComponentError;
-#[cfg(any(feature = "ladybug", feature = "pggraph"))]
+#[cfg(any(feature = "ladybug", feature = "pggraph", feature = "testing"))]
 use crate::traits::GraphDbFactory;
 
 /// Embedded ladybug/kuzu graph backend, stored at a local file path.
@@ -113,5 +113,24 @@ impl GraphDbFactory for PgGraphFactory {
             .await
             .map_err(|e| ComponentError::GraphDb(format!("pggraph init failed: {e}")))?;
         Ok(Arc::new(adapter))
+    }
+}
+
+/// In-memory mock graph backend for tests / provider-free local dev.
+#[cfg(feature = "testing")]
+pub struct MockGraphFactory;
+
+#[cfg(feature = "testing")]
+#[async_trait]
+impl GraphDbFactory for MockGraphFactory {
+    fn provider(&self) -> &str {
+        "mock"
+    }
+
+    async fn build(
+        &self,
+        _ctx: &BackendBuildContext,
+    ) -> Result<Arc<dyn GraphDBTrait>, ComponentError> {
+        Ok(Arc::new(cognee_graph::MockGraphDB::new()))
     }
 }

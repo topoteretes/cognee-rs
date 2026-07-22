@@ -1,6 +1,6 @@
 # Router: improve
 
-The improve router is a memory-oriented alias for `/api/v1/memify`. The HTTP surface and the underlying pipeline are nearly identical to memify; the difference lives one layer down in the Rust delegate (`cognee_lib::api::improve::improve`), which adds three optional session-bridging stages on top of the memify enrichment when `session_ids` is supplied. (Note: the Python HTTP router does not currently expose `session_ids` — it forwards to `cognee_improve(...)` without it. The capability is reserved for future extension and parity with the Python `cognee.improve()` SDK.)
+The improve router is a memory-oriented alias for `/api/v1/memify`. The HTTP surface and the underlying pipeline are nearly identical to memify; the difference lives one layer down in the Rust delegate (`cognee::api::improve::improve`), which adds three optional session-bridging stages on top of the memify enrichment when `session_ids` is supplied. (Note: the Python HTTP router does not currently expose `session_ids` — it forwards to `cognee_improve(...)` without it. The capability is reserved for future extension and parity with the Python `cognee.improve()` SDK.)
 
 It distinguishes itself from `/api/v1/memify` (same enrichment pipeline, no session bridging) by:
 
@@ -37,7 +37,7 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
 
 - **Response body**:
 
-  - **Success — blocking (`run_in_background=false`)** — `200 OK`, `application/json`. Body is the raw return value of `cognee_lib::api::improve::improve` (Python returns it directly at [line 88](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/improve/routers/get_improve_router.py#L88)). When `session_ids` is not provided, this is structurally identical to `/memify`'s response — a single `PipelineRunInfoDTO`:
+  - **Success — blocking (`run_in_background=false`)** — `200 OK`, `application/json`. Body is the raw return value of `cognee::api::improve::improve` (Python returns it directly at [line 88](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/improve/routers/get_improve_router.py#L88)). When `session_ids` is not provided, this is structurally identical to `/memify`'s response — a single `PipelineRunInfoDTO`:
 
     ```json
     {
@@ -60,7 +60,7 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
   | `400` | `{"detail": "Either datasetId or datasetName must be provided."}` | Both `dataset_id` and `dataset_name` are missing/empty. Note: Python uses `HTTPException(400, detail=...)`, so the body is `{"detail": "..."}`. | [Python lines 67–71](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/improve/routers/get_improve_router.py#L67-L71) |
   | `400` | `{"detail": [{...}]}` | Body fails JSON validation. | Custom `Json` extractor |
   | `401` | `{"detail": "Unauthorized"}` | No JWT/cookie/API key. | `AuthenticatedUser` |
-  | `403` | `{"detail": "..."}` | User lacks `write` permission on the target dataset. | `cognee_lib::permissions` |
+  | `403` | `{"detail": "..."}` | User lacks `write` permission on the target dataset. | `cognee::permissions` |
   | `409` | `{"error": "An error occurred during graph improvement."}` | Any other exception during processing — the router-level catch-all. **Note**: Python returns `409`, not `500`, here ([lines 89–94](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/improve/routers/get_improve_router.py#L89-L94)). The body uses `error`, no `detail`. | Python parity |
   | **`420`** | `<PipelineRunErrored object as dict>` | `improve_run` returns a `PipelineRunErrored`. **The status code is 420 (Enhance Your Calm), unique to this router.** Python encodes the entire `PipelineRunErrored` object as the response body — see parity note below. | [Python line 87](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/improve/routers/get_improve_router.py#L87) |
   | `422` | `{"detail": [...]}` | Pydantic-level type errors. | |
@@ -76,7 +76,7 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
     - Writes triplet embeddings into the `Triplet:text` vector collection.
   - **Future (with `session_ids`)**: also reads/updates `feedback_weight` on graph nodes/edges, cognifies session Q&A into the graph tagged with `node_set="user_sessions_from_cache"`, and incrementally syncs new graph relationships back into the session cache. See [Python `improve.py`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/improve/improve.py) for the full description.
 
-- **Delegation target**: `cognee_lib::api::improve::improve(ImproveConfig { extraction_tasks, enrichment_tasks, data, dataset, node_name, run_in_background, user, session_ids: None })`. The Rust port matches Python's `cognee.api.v1.improve.improve` — same task resolution, same fallback to `cognee_lib::cognify::memify::memify` when no session-bridging stages run.
+- **Delegation target**: `cognee::api::improve::improve(ImproveConfig { extraction_tasks, enrichment_tasks, data, dataset, node_name, run_in_background, user, session_ids: None })`. The Rust port matches Python's `cognee.api.v1.improve.improve` — same task resolution, same fallback to `cognee::cognify::memify::memify` when no session-bridging stages run.
 
 - **Validation rules**:
   - At least one of `dataset_id` / `dataset_name` must be set.
@@ -84,7 +84,7 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
   - Empty `data=""` is treated as "no data — use the existing graph" (Python parity).
   - Unknown task names surface as `409` via the catch-all (Python parity).
 
-- **Permission gate**: `write` on the target dataset via `state.lib.permissions().user_can(user.id, dataset_id, "write")` (see [../tenants.md §9](../tenants.md#9-repository-surface)). Improve mutates the graph and the vector index. The check is enforced inside `cognee_lib::api::improve::improve` via the internal `resolve_authorized_user_datasets` helper (which calls the same `PermissionsRepository::user_can` underneath).
+- **Permission gate**: `write` on the target dataset via `state.lib.permissions().user_can(user.id, dataset_id, "write")` (see [../tenants.md §9](../tenants.md#9-repository-surface)). Improve mutates the graph and the vector index. The check is enforced inside `cognee::api::improve::improve` via the internal `resolve_authorized_user_datasets` helper (which calls the same `PermissionsRepository::user_can` underneath).
 
 - **Rate / size limits**: standard JSON body limit (1 MiB by default). Same considerations as `/memify`.
 
@@ -116,7 +116,7 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
   - `RunSpec { run_id: Some(prid), pipeline_name: "improve_pipeline", user_id: Some(user.id), dataset_id }`.
   - When `session_ids` ships in a later phase, additional `pipeline_id`s for `"improve_feedback"`, `"improve_persist_session"`, and `"improve_sync_to_cache"` will be created. Out of scope for Phase 3.
 
-- **Library API note**: `cognee_lib::api::improve::improve()` no longer accepts a `run_in_background` parameter. The current library implementation has a `run_in_background: bool` flag at [crates/lib/src/api/improve.rs:59](../../../crates/lib/src/api/improve.rs#L59) and a `has_sessions && !run_in_background` branch at [:197-198](../../../crates/lib/src/api/improve.rs#L197-L198) — that flag is being removed as a prerequisite of this router landing. After the refactor, `improve()` always runs the full session-bridging path when sessions are present; the HTTP layer wraps it via the registry. See [pipelines.md §2](../pipelines.md#2-library-refactor-prerequisite).
+- **Library API note**: `cognee::api::improve::improve()` no longer accepts a `run_in_background` parameter. The current library implementation has a `run_in_background: bool` flag at [crates/lib/src/api/improve.rs:59](../../../crates/lib/src/api/improve.rs#L59) and a `has_sessions && !run_in_background` branch at [:197-198](../../../crates/lib/src/api/improve.rs#L197-L198) — that flag is being removed as a prerequisite of this router landing. After the refactor, `improve()` always runs the full session-bridging path when sessions are present; the HTTP layer wraps it via the registry. See [pipelines.md §2](../pipelines.md#2-library-refactor-prerequisite).
 
 - **No WebSocket**: `/improve` does not expose a WS endpoint; subscribers can attach to the cognify WS at `/api/v1/cognify/subscribe/{pipeline_run_id}` if they know the deterministic id but it's not officially supported (Python parity — see [websocket.md §1](../websocket.md#1-goals--non-goals)).
 
@@ -208,7 +208,7 @@ pub type ImproveResponseDTO = PipelineRunInfoDTO;
 3. Add the handler `post_improve` in `crates/http-server/src/routers/improve.rs`:
    - Validate at least one of `dataset_id` / `dataset_name`.
    - Resolve the dataset.
-   - Call the HTTP-side dispatcher (`crates/http-server/src/pipelines/dispatch.rs`) which builds a `RunSpec { pipeline_name: "improve_pipeline", .. }` and invokes `state.pipelines.register_inline` or `register_background` against the `cognee_core::PipelineRunRegistry`. The `work` future is `cognee_lib::api::improve::improve(...)` (sync — no `run_in_background` parameter; see library refactor note above).
+   - Call the HTTP-side dispatcher (`crates/http-server/src/pipelines/dispatch.rs`) which builds a `RunSpec { pipeline_name: "improve_pipeline", .. }` and invokes `state.pipelines.register_inline` or `register_background` against the `cognee_core::PipelineRunRegistry`. The `work` future is `cognee::api::improve::improve(...)` (sync — no `run_in_background` parameter; see library refactor note above).
    - On `PipelineRunErrored`, return `ApiError::PipelineErrored { source: Improve, run_info: serde_json::to_value(...)? }`.
    - On any other exception, return `ApiError::Conflict("An error occurred during graph improvement.")` (mapping to 409 with the literal Python message).
 4. Wire the router into `build_router`:
@@ -221,8 +221,8 @@ pub type ImproveResponseDTO = PipelineRunInfoDTO;
 6. Add unit tests in the same file:
    - Both `dataset_id` and `dataset_name` empty → `400` with `{"detail": "Either datasetId or datasetName must be provided."}`.
    - `dataset_id=""` and `dataset_name="foo"` → resolves by name.
-   - Mocked `cognee_lib::improve` returning `PipelineRunErrored` → **`420`** with the run object as the body (assert the status code literally — this is the parity quirk).
-   - Mocked `cognee_lib::improve` raising any other exception → `409` with the literal `error` body.
+   - Mocked `cognee::improve` returning `PipelineRunErrored` → **`420`** with the run object as the body (assert the status code literally — this is the parity quirk).
+   - Mocked `cognee::improve` raising any other exception → `409` with the literal `error` body.
    - Mocked success → `200` with `PipelineRunInfoDTO` shape.
 7. Add integration tests in `crates/http-server/tests/test_improve.rs`:
    - End-to-end blocking improve on a tmpfs workspace with a real graph (gated behind `OPENAI_URL`).

@@ -1,288 +1,528 @@
 {
   "version": 1,
-  "model": "gpt-4o-mini",
+  "model": "openai/gpt-oss-120b",
   "entries": {
-    "298278a343caf204d4ccceac9689ecf1f471ff1a29dcdcb561f2aa70ace9a89a": {
+    "3d8acd1ff4f2deec219dc511a868f74f13b601e916175d3fb92f09e61028166f": {
       "method": "structured_output",
       "user_input_preview": "Artificial intelligence (AI) is the intelligence of machines or software, as opposed to the intelligence of living being",
       "schema_name": "KnowledgeGraph",
       "response": {
         "edges": [
           {
-            "description": "Artificial intelligence is a field of research in computer science that develops and studies methods and software.",
-            "relationship_name": "is_a_field_of",
-            "source_node_id": "Artificial Intelligence",
-            "target_node_id": "Computer Science"
-          },
-          {
-            "description": "Artificial intelligence enables machines to perceive their environment and use learning and intelligence to take actions.",
-            "relationship_name": "enables",
-            "source_node_id": "Artificial Intelligence",
+            "relationship_name": "intelligence_of",
+            "source_node_id": "Artificial intelligence",
             "target_node_id": "Machines"
           },
           {
-            "description": "Large language models are a type of artificial intelligence trained on enormous amounts of text data.",
-            "relationship_name": "is_a_type_of",
-            "source_node_id": "Large Language Models",
-            "target_node_id": "Artificial Intelligence"
+            "relationship_name": "field_of_research_in",
+            "source_node_id": "Artificial intelligence",
+            "target_node_id": "Computer science"
           },
           {
-            "description": "GPT-4 is one of the most capable large language models developed by OpenAI.",
-            "relationship_name": "is_developed_by",
+            "relationship_name": "enables",
+            "source_node_id": "Artificial intelligence",
+            "target_node_id": "Machines"
+          },
+          {
+            "relationship_name": "includes_application",
+            "source_node_id": "Artificial intelligence",
+            "target_node_id": "Google Search"
+          },
+          {
+            "relationship_name": "includes_application",
+            "source_node_id": "Artificial intelligence",
+            "target_node_id": "YouTube"
+          },
+          {
+            "relationship_name": "includes_application",
+            "source_node_id": "Artificial intelligence",
+            "target_node_id": "Amazon"
+          },
+          {
+            "relationship_name": "includes_application",
+            "source_node_id": "Artificial intelligence",
+            "target_node_id": "Netflix"
+          },
+          {
+            "relationship_name": "includes_application",
+            "source_node_id": "Artificial intelligence",
+            "target_node_id": "Google Assistant"
+          },
+          {
+            "relationship_name": "includes_application",
+            "source_node_id": "Artificial intelligence",
+            "target_node_id": "Siri"
+          },
+          {
+            "relationship_name": "includes_application",
+            "source_node_id": "Artificial intelligence",
+            "target_node_id": "Alexa"
+          },
+          {
+            "relationship_name": "includes_application",
+            "source_node_id": "Artificial intelligence",
+            "target_node_id": "Waymo"
+          },
+          {
+            "relationship_name": "includes_application",
+            "source_node_id": "Artificial intelligence",
+            "target_node_id": "ChatGPT"
+          },
+          {
+            "relationship_name": "includes_application",
+            "source_node_id": "Artificial intelligence",
+            "target_node_id": "AI art"
+          },
+          {
+            "relationship_name": "includes_application",
+            "source_node_id": "Artificial intelligence",
+            "target_node_id": "Chess"
+          },
+          {
+            "relationship_name": "includes_application",
+            "source_node_id": "Artificial intelligence",
+            "target_node_id": "Go"
+          },
+          {
+            "relationship_name": "type_of",
+            "source_node_id": "Large language models",
+            "target_node_id": "Artificial intelligence"
+          },
+          {
+            "relationship_name": "developed_by",
             "source_node_id": "GPT-4",
             "target_node_id": "OpenAI"
           },
           {
-            "description": "PaLM is a large language model developed by Google that demonstrates strong reasoning and multilingual capabilities.",
-            "relationship_name": "is_developed_by",
+            "relationship_name": "developed_by",
             "source_node_id": "PaLM",
             "target_node_id": "Google"
           },
           {
-            "description": "LLaMA is an open-weights model released by Meta that has enabled widespread research and experimentation.",
-            "relationship_name": "is_released_by",
+            "relationship_name": "released_by",
             "source_node_id": "LLaMA",
             "target_node_id": "Meta"
           },
           {
-            "description": "Claude is a large language model developed by Anthropic that emphasizes safety and helpfulness.",
-            "relationship_name": "is_developed_by",
+            "relationship_name": "developed_by",
             "source_node_id": "Claude",
             "target_node_id": "Anthropic"
           },
           {
-            "description": "AI safety and alignment research focuses on ensuring that AI systems behave as intended and do not cause unintended harm.",
-            "relationship_name": "focuses_on",
-            "source_node_id": "AI Safety and Alignment Research",
-            "target_node_id": "AI Systems"
+            "relationship_name": "uses_architecture",
+            "source_node_id": "Large language models",
+            "target_node_id": "Transformer architecture"
           },
           {
-            "description": "Researchers at organizations like Anthropic, DeepMind, and OpenAI are working on AI safety and alignment.",
-            "relationship_name": "are_working_on",
-            "source_node_id": "Researchers",
-            "target_node_id": "AI Safety and Alignment Research"
+            "relationship_name": "uses_mechanism",
+            "source_node_id": "Transformer architecture",
+            "target_node_id": "Self-attention mechanism"
           },
           {
-            "description": "The economic and social impacts of AI are profound, affecting job displacement and creation.",
-            "relationship_name": "affects",
-            "source_node_id": "AI",
-            "target_node_id": "Economic and Social Impacts"
+            "relationship_name": "trained_by_predicting",
+            "source_node_id": "Large language models",
+            "target_node_id": "Next token"
+          },
+          {
+            "relationship_name": "aligned_using",
+            "source_node_id": "Large language models",
+            "target_node_id": "Reinforcement learning from human feedback"
+          },
+          {
+            "relationship_name": "researches",
+            "source_node_id": "Anthropic",
+            "target_node_id": "AI safety and alignment research"
+          },
+          {
+            "relationship_name": "researches",
+            "source_node_id": "DeepMind",
+            "target_node_id": "AI safety and alignment research"
+          },
+          {
+            "relationship_name": "researches",
+            "source_node_id": "OpenAI",
+            "target_node_id": "AI safety and alignment research"
+          },
+          {
+            "relationship_name": "develops",
+            "source_node_id": "Policymakers",
+            "target_node_id": "AI regulations"
           }
         ],
         "nodes": [
           {
-            "description": "Artificial intelligence refers to the intelligence exhibited by machines or software, as opposed to the intelligence of living beings.",
-            "id": "Artificial Intelligence",
-            "name": "Artificial Intelligence",
+            "description": "Artificial intelligence is the intelligence of machines or software, contrasted with human intelligence.",
+            "id": "Artificial intelligence",
+            "name": "Artificial intelligence",
             "type": "CONCEPT"
           },
           {
-            "description": "Computer science is the study of computers and computational systems, encompassing both theoretical and practical aspects.",
-            "id": "Computer Science",
-            "name": "Computer Science",
-            "type": "CONCEPT"
-          },
-          {
-            "description": "Machines are devices that use power to perform tasks, often associated with automation and artificial intelligence.",
+            "description": "Machines are non-living devices that can be enabled by artificial intelligence.",
             "id": "Machines",
             "name": "Machines",
             "type": "CONCEPT"
           },
           {
-            "description": "Large language models are a type of artificial intelligence that are trained on vast amounts of text data to understand and generate human-like text.",
-            "id": "Large Language Models",
-            "name": "Large Language Models",
+            "description": "Computer science is the academic discipline that studies artificial intelligence as a field of research.",
+            "id": "Computer science",
+            "name": "Computer science",
             "type": "CONCEPT"
           },
           {
-            "description": "GPT-4 is a large language model developed by OpenAI, known for its ability to generate coherent text and answer complex questions.",
+            "description": "Google Search is an advanced web search engine powered by artificial intelligence.",
+            "id": "Google Search",
+            "name": "Google Search",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "YouTube is a video platform that uses AI recommendation systems.",
+            "id": "YouTube",
+            "name": "YouTube",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "Amazon is an e‑commerce platform that uses AI recommendation systems.",
+            "id": "Amazon",
+            "name": "Amazon",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "Netflix is a streaming service that uses AI recommendation systems.",
+            "id": "Netflix",
+            "name": "Netflix",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "Google Assistant is a voice‑based AI assistant for human speech interaction.",
+            "id": "Google Assistant",
+            "name": "Google Assistant",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "Siri is Apple’s AI voice assistant for human speech interaction.",
+            "id": "Siri",
+            "name": "Siri",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "Alexa is Amazon’s AI voice assistant for human speech interaction.",
+            "id": "Alexa",
+            "name": "Alexa",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "Waymo is an autonomous vehicle project that uses artificial intelligence.",
+            "id": "Waymo",
+            "name": "Waymo",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "ChatGPT is a generative AI tool based on large language models.",
+            "id": "ChatGPT",
+            "name": "ChatGPT",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "AI art refers to generative creative tools powered by artificial intelligence.",
+            "id": "AI art",
+            "name": "AI art",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "Chess is a strategy game where AI systems achieve superhuman play.",
+            "id": "Chess",
+            "name": "Chess",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "Go is a strategy board game where AI systems achieve superhuman play.",
+            "id": "Go",
+            "name": "Go",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "Large language models are AI systems trained on massive text corpora.",
+            "id": "Large language models",
+            "name": "Large language models",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "GPT-4 is a highly capable large language model developed by OpenAI.",
             "id": "GPT-4",
             "name": "GPT-4",
             "type": "CONCEPT"
           },
           {
-            "description": "PaLM is a large language model developed by Google, recognized for its reasoning and multilingual capabilities.",
-            "id": "PaLM",
-            "name": "PaLM",
-            "type": "CONCEPT"
-          },
-          {
-            "description": "LLaMA is an open-weights large language model released by Meta, facilitating research and experimentation in AI.",
-            "id": "LLaMA",
-            "name": "LLaMA",
-            "type": "CONCEPT"
-          },
-          {
-            "description": "Claude is a large language model developed by Anthropic, focusing on safety and helpfulness in AI applications.",
-            "id": "Claude",
-            "name": "Claude",
-            "type": "CONCEPT"
-          },
-          {
-            "description": "AI safety and alignment research aims to ensure that AI systems operate safely and align with human values and intentions.",
-            "id": "AI Safety and Alignment Research",
-            "name": "AI Safety and Alignment Research",
-            "type": "CONCEPT"
-          },
-          {
-            "description": "Researchers are individuals or groups engaged in scientific or academic study, often working on specific projects or fields.",
-            "id": "Researchers",
-            "name": "Researchers",
-            "type": "CONCEPT"
-          },
-          {
-            "description": "The economic and social impacts of AI refer to the significant changes and effects that AI technologies have on society and the economy.",
-            "id": "Economic and Social Impacts",
-            "name": "Economic and Social Impacts",
-            "type": "CONCEPT"
-          },
-          {
-            "description": "DeepMind is an artificial intelligence company known for its research and development in AI technologies.",
-            "id": "DeepMind",
-            "name": "DeepMind",
-            "type": "ORGANIZATION"
-          },
-          {
-            "description": "OpenAI is an artificial intelligence research organization that aims to promote and develop friendly AI for the benefit of humanity.",
+            "description": "OpenAI is an organization that develops artificial intelligence technologies.",
             "id": "OpenAI",
             "name": "OpenAI",
             "type": "ORGANIZATION"
           },
           {
-            "description": "Google is a multinational technology company specializing in Internet-related services and products, including AI research.",
+            "description": "PaLM is a large language model developed by Google with strong reasoning abilities.",
+            "id": "PaLM",
+            "name": "PaLM",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "Google is a technology company that develops artificial intelligence systems.",
             "id": "Google",
             "name": "Google",
             "type": "ORGANIZATION"
           },
           {
-            "description": "Meta is a technology company that focuses on social media and AI research, previously known as Facebook.",
+            "description": "LLaMA is an open‑weights large language model released by Meta.",
+            "id": "LLaMA",
+            "name": "LLaMA",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "Meta is a technology company that released the LLaMA model.",
             "id": "Meta",
             "name": "Meta",
             "type": "ORGANIZATION"
           },
           {
-            "description": "Anthropic is an AI safety and research company focused on developing AI systems that are safe and aligned with human values.",
+            "description": "Claude is a large language model developed by Anthropic emphasizing safety.",
+            "id": "Claude",
+            "name": "Claude",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "Anthropic is an AI research organization focusing on safety and helpfulness.",
             "id": "Anthropic",
             "name": "Anthropic",
             "type": "ORGANIZATION"
+          },
+          {
+            "description": "Transformer architecture is a neural network design using self‑attention mechanisms.",
+            "id": "Transformer architecture",
+            "name": "Transformer architecture",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "Self‑attention mechanism allows models to weigh relationships between tokens.",
+            "id": "Self-attention mechanism",
+            "name": "Self-attention mechanism",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "Next token prediction is the training objective for large language models.",
+            "id": "Next token",
+            "name": "Next token",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "Reinforcement learning from human feedback aligns model behavior with human preferences.",
+            "id": "Reinforcement learning from human feedback",
+            "name": "Reinforcement learning from human feedback",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "AI safety and alignment research aims to ensure AI systems behave as intended.",
+            "id": "AI safety and alignment research",
+            "name": "AI safety and alignment research",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "DeepMind is an AI research organization working on safety and alignment.",
+            "id": "DeepMind",
+            "name": "DeepMind",
+            "type": "ORGANIZATION"
+          },
+          {
+            "description": "Policymakers are officials developing regulations for artificial intelligence.",
+            "id": "Policymakers",
+            "name": "Policymakers",
+            "type": "PERSON"
+          },
+          {
+            "description": "AI regulations are rules governing the deployment and use of artificial intelligence.",
+            "id": "AI regulations",
+            "name": "AI regulations",
+            "type": "CONCEPT"
           }
         ]
       }
     },
-    "d53ccfffff3904ed5adaa98fc791267e608eb00ded43c8049a5f80e8d7d2dba6": {
+    "dfafc0a563e0544bd538ac38cf931f9623378de4a6a4a59186e159a64b17ec0b": {
       "method": "structured_output",
       "user_input_preview": "Machine learning is a core subfield of artificial intelligence that enables computers to learn from data without being e",
       "schema_name": "KnowledgeGraph",
       "response": {
         "edges": [
           {
-            "description": "Machine learning is a core subfield of artificial intelligence.",
-            "relationship_name": "is_a_subfield_of",
-            "source_node_id": "Machine Learning",
-            "target_node_id": "Artificial Intelligence"
+            "relationship_name": "subfield_of",
+            "source_node_id": "Machine learning",
+            "target_node_id": "Artificial intelligence"
           },
           {
-            "description": "Deep learning is a type of machine learning that uses neural networks with many layers.",
-            "relationship_name": "is_a_type_of",
-            "source_node_id": "Deep Learning",
-            "target_node_id": "Machine Learning"
+            "relationship_name": "uses",
+            "source_node_id": "Deep learning",
+            "target_node_id": "Neural networks"
           },
           {
-            "description": "Deep learning has driven breakthroughs in natural language processing and computer vision.",
-            "relationship_name": "drives_breakthroughs_in",
-            "source_node_id": "Deep Learning",
-            "target_node_id": "Natural Language Processing"
+            "relationship_name": "has_driven_breakthroughs_in",
+            "source_node_id": "Deep learning",
+            "target_node_id": "Natural language processing"
           },
           {
-            "description": "Deep learning has driven breakthroughs in natural language processing and computer vision.",
-            "relationship_name": "drives_breakthroughs_in",
-            "source_node_id": "Deep Learning",
-            "target_node_id": "Computer Vision"
+            "relationship_name": "has_driven_breakthroughs_in",
+            "source_node_id": "Deep learning",
+            "target_node_id": "Computer vision"
           },
           {
-            "description": "GPT-4 is a large language model from OpenAI that demonstrates the power of transformer architectures.",
-            "relationship_name": "is_a_large_language_model_of",
+            "relationship_name": "demonstrates_power_of",
+            "source_node_id": "Large language models",
+            "target_node_id": "Transformer architectures"
+          },
+          {
+            "relationship_name": "trained_on",
+            "source_node_id": "Transformer architectures",
+            "target_node_id": "Massive datasets"
+          },
+          {
+            "relationship_name": "example_of",
+            "source_node_id": "GPT-4",
+            "target_node_id": "Large language models"
+          },
+          {
+            "relationship_name": "developed_by",
             "source_node_id": "GPT-4",
             "target_node_id": "OpenAI"
           },
           {
-            "description": "LLaMA is a large language model from Meta that demonstrates the power of transformer architectures.",
-            "relationship_name": "is_a_large_language_model_of",
+            "relationship_name": "example_of",
+            "source_node_id": "LLaMA",
+            "target_node_id": "Large language models"
+          },
+          {
+            "relationship_name": "developed_by",
             "source_node_id": "LLaMA",
             "target_node_id": "Meta"
           },
           {
-            "description": "Large language models like GPT-4 and LLaMA are trained on massive datasets.",
-            "relationship_name": "are_trained_on",
-            "source_node_id": "GPT-4",
-            "target_node_id": "Massive Datasets"
+            "relationship_name": "branch_of",
+            "source_node_id": "Reinforcement learning",
+            "target_node_id": "Machine learning"
           },
           {
-            "description": "Large language models like GPT-4 and LLaMA are trained on massive datasets.",
-            "relationship_name": "are_trained_on",
-            "source_node_id": "LLaMA",
-            "target_node_id": "Massive Datasets"
+            "relationship_name": "trains",
+            "source_node_id": "Reinforcement learning",
+            "target_node_id": "Agents"
           },
           {
-            "description": "Reinforcement learning is another branch of machine learning that trains agents through trial and error.",
-            "relationship_name": "is_a_branch_of",
-            "source_node_id": "Reinforcement Learning",
-            "target_node_id": "Machine Learning"
+            "relationship_name": "through",
+            "source_node_id": "Reinforcement learning",
+            "target_node_id": "Trial and error"
+          },
+          {
+            "relationship_name": "in",
+            "source_node_id": "Reinforcement learning",
+            "target_node_id": "Complex environments"
           }
         ],
         "nodes": [
           {
-            "description": "Machine learning is a core subfield of artificial intelligence that enables computers to learn from data without being explicitly programmed.",
-            "id": "Machine Learning",
-            "name": "Machine Learning",
+            "description": "A core subfield of artificial intelligence that enables computers to learn from data without being explicitly programmed.",
+            "id": "Machine learning",
+            "name": "Machine learning",
             "type": "CONCEPT"
           },
           {
-            "description": "Artificial intelligence is the simulation of human intelligence processes by machines, especially computer systems.",
-            "id": "Artificial Intelligence",
-            "name": "Artificial Intelligence",
+            "description": "The broader field of artificial intelligence encompassing machine learning.",
+            "id": "Artificial intelligence",
+            "name": "Artificial intelligence",
             "type": "CONCEPT"
           },
           {
-            "description": "Deep learning is a type of machine learning that uses neural networks with many layers.",
-            "id": "Deep Learning",
-            "name": "Deep Learning",
+            "description": "A subfield of machine learning that uses neural networks with many layers.",
+            "id": "Deep learning",
+            "name": "Deep learning",
             "type": "CONCEPT"
           },
           {
-            "description": "Natural language processing is a subfield of artificial intelligence that focuses on the interaction between computers and humans through natural language.",
-            "id": "Natural Language Processing",
-            "name": "Natural Language Processing",
+            "description": "Computational models composed of interconnected nodes organized in layers.",
+            "id": "Neural networks",
+            "name": "Neural networks",
             "type": "CONCEPT"
           },
           {
-            "description": "Computer vision is a field of artificial intelligence that trains computers to interpret and understand the visual world.",
-            "id": "Computer Vision",
-            "name": "Computer Vision",
+            "description": "A field of AI focused on understanding and generating human language.",
+            "id": "Natural language processing",
+            "name": "Natural language processing",
             "type": "CONCEPT"
           },
           {
-            "description": "GPT-4 is a large language model developed by OpenAI, known for its advanced natural language understanding capabilities.",
+            "description": "A field of AI focused on interpreting visual information from images and videos.",
+            "id": "Computer vision",
+            "name": "Computer vision",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "Large language models such as GPT-4 and LLaMA that demonstrate the power of transformer architectures.",
+            "id": "Large language models",
+            "name": "Large language models",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "A transformer-based model released by OpenAI, exemplifying large language models.",
             "id": "GPT-4",
             "name": "GPT-4",
             "type": "CONCEPT"
           },
           {
-            "description": "LLaMA is a large language model developed by Meta, designed for various natural language processing tasks.",
+            "description": "An organization that developed the LLaMA model.",
+            "id": "Meta",
+            "name": "Meta",
+            "type": "ORGANIZATION"
+          },
+          {
+            "description": "An organization that developed GPT-4.",
+            "id": "OpenAI",
+            "name": "OpenAI",
+            "type": "ORGANIZATION"
+          },
+          {
+            "description": "A transformer-based architecture used in large language models.",
+            "id": "Transformer architectures",
+            "name": "Transformer architectures",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "Extremely large datasets used to train transformer architectures.",
+            "id": "Massive datasets",
+            "name": "Massive datasets",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "A branch of machine learning that trains agents through trial and error in complex environments.",
+            "id": "Reinforcement learning",
+            "name": "Reinforcement learning",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "Entities that act within environments and are trained by reinforcement learning.",
+            "id": "Agents",
+            "name": "Agents",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "A learning method involving trial and error.",
+            "id": "Trial and error",
+            "name": "Trial and error",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "Complex environments where reinforcement learning agents operate.",
+            "id": "Complex environments",
+            "name": "Complex environments",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "A large language model released by Meta, exemplifying large language models.",
             "id": "LLaMA",
             "name": "LLaMA",
-            "type": "CONCEPT"
-          },
-          {
-            "description": "Massive datasets are large collections of data used to train machine learning models, particularly in deep learning.",
-            "id": "Massive Datasets",
-            "name": "Massive Datasets",
-            "type": "CONCEPT"
-          },
-          {
-            "description": "Reinforcement learning is a type of machine learning that trains agents to make decisions by rewarding desired behaviors and punishing undesired ones.",
-            "id": "Reinforcement Learning",
-            "name": "Reinforcement Learning",
             "type": "CONCEPT"
           }
         ]

@@ -9,8 +9,8 @@ This document locks in the structural decisions for the Rust HTTP server port of
 - **Dual surface, two artifacts**: the server is a **library** (`cognee-http-server`) that any Rust program can embed, plus a **standalone binary** (`cognee-http-server`, a new executable distinct from `cognee-cli`) that ships as a ready-to-run server. The library is the primary artifact; the binary is a thin `main()` over it.
 - **Independent of `cognee-cli`**: the new binary does not extend `cognee-cli`. They are separate executables with separate argument surfaces and separate release cadences. `cognee-cli` keeps its existing subcommand set unchanged.
 - **Byte-compatible endpoint layer**: URL paths, HTTP verbs, request/response JSON shapes, status codes, and error envelopes mirror Python so existing clients (frontend, MCP, SDKs) work unmodified.
-- **Reuse the existing Rust stack**: routers delegate into `cognee-lib` facades; no business logic re-implementation in the server crate.
-- **Feature-gated SDK exposure**: any HTTP surface re-exported from `cognee-lib` is behind a non-default `server` feature. SDK-only consumers (Android runner, wasm targets, embedders that just want `add`/`cognify`/`search`) compile zero axum/tower/hyper code.
+- **Reuse the existing Rust stack**: routers delegate into `cognee` facades; no business logic re-implementation in the server crate.
+- **Feature-gated SDK exposure**: any HTTP surface re-exported from `cognee` is behind a non-default `server` feature. SDK-only consumers (Android runner, wasm targets, embedders that just want `add`/`cognify`/`search`) compile zero axum/tower/hyper code.
 - **Testable**: the `Router` is constructible in tests without binding a socket.
 
 ### Non-goals
@@ -27,7 +27,7 @@ This document locks in the structural decisions for the Rust HTTP server port of
 │  (new standalone binary)     │     │                              │
 │                              │     │  // direct dependency:       │
 │  fn main() {                 │     │  //   cognee-http-server     │
-│    let cfg = Config::parse();│     │  // OR via cognee-lib's      │
+│    let cfg = Config::parse();│     │  // OR via cognee's      │
 │    let state = AppState::    │     │  //   `server` feature.      │
 │      build(cfg).await?;      │     │                              │
 │    cognee_http_server::run(  │     │  let router = cognee_http_   │
@@ -50,10 +50,10 @@ This document locks in the structural decisions for the Rust HTTP server port of
          └──────────────────┬───────────────────┘
                             ↓
          ┌──────────────────────────────────────┐
-         │  cognee-lib (existing facade)        │
+         │  cognee (existing facade)        │
          │  + cognee-{ingestion, cognify, …}    │
          │                                      │
-         │  cognee_lib::http  ←  feature-gated  │
+         │  cognee::http  ←  feature-gated  │
          │     (re-exports cognee-http-server   │
          │      only when `server` feature is   │
          │      enabled by the consumer)        │
@@ -64,7 +64,7 @@ This document locks in the structural decisions for the Rust HTTP server port of
          HTTP server crate.
 ```
 
-**Why two binaries, not one**: keeping `cognee-http-server` separate from `cognee-cli` decouples the operational concerns. The CLI is a one-shot tool that runs to completion (`add`, `cognify`, `search`, `serve` for the cloud OAuth flow); the HTTP server is a long-running daemon with its own deployment story (systemd unit, Docker `CMD`, k8s `Deployment`, init scripts). Bundling them would force every CLI invocation to compile in the entire HTTP stack, and every server deployment to ship the CLI surface — neither is desirable. They share business logic via `cognee-lib`, not via a shared binary.
+**Why two binaries, not one**: keeping `cognee-http-server` separate from `cognee-cli` decouples the operational concerns. The CLI is a one-shot tool that runs to completion (`add`, `cognify`, `search`, `serve` for the cloud OAuth flow); the HTTP server is a long-running daemon with its own deployment story (systemd unit, Docker `CMD`, k8s `Deployment`, init scripts). Bundling them would force every CLI invocation to compile in the entire HTTP stack, and every server deployment to ship the CLI surface — neither is desirable. They share business logic via `cognee`, not via a shared binary.
 
 **Why the library exists at all**: the binary is a thin `main()`; everything reusable (the `Router`, middleware, lifecycle helpers, `AppState` builder) lives in the library so tests, embedded runners (Android, custom embedders, integration suites), and downstream consumers who want the cognee HTTP surface inside their own binary all share one code path. `axum::serve` plus a `Router` is what `cognee_http_server::run` provides — embedders are free to take the `Router` and host it themselves (TLS, custom listener, behind a tower service stack of their own).
 
@@ -91,10 +91,10 @@ crates/http-server/
 └── tests/                  # End-to-end tests via axum Router
 ```
 
-**Why a new crate, not a module in `cognee-lib`**:
+**Why a new crate, not a module in `cognee`**:
 
 - Keeps the tower/axum dependency graph out of the core SDK.
-- Lets CI build `cognee-lib` without pulling HTTP framework deps when compiling SDK-only targets (Android runner, wasm, embedded consumers).
+- Lets CI build `cognee` without pulling HTTP framework deps when compiling SDK-only targets (Android runner, wasm, embedded consumers).
 - Mirrors how `cognee-cloud` was introduced as a standalone crate behind a feature.
 
 **Why one crate hosts both library and binary**:
@@ -139,9 +139,9 @@ dotenv               = { workspace = true, optional = true }
 
 Library consumers do `cognee-http-server = { path = "../http-server" }`. To install the binary: `cargo install --path crates/http-server --features bin`, or in workspace builds `cargo build -p cognee-http-server --features bin --bin cognee-http-server`.
 
-### Re-export through `cognee-lib` is feature-gated
+### Re-export through `cognee` is feature-gated
 
-`cognee-lib` exposes the server under `cognee_lib::http` **only** behind a non-default `server` feature. With the feature off (the default), `cognee-lib` does not depend on `cognee-http-server` at all, no axum/tower code is compiled, and `cognee_lib::http` does not exist as a module.
+`cognee` exposes the server under `cognee::http` **only** behind a non-default `server` feature. With the feature off (the default), `cognee` does not depend on `cognee-http-server` at all, no axum/tower code is compiled, and `cognee::http` does not exist as a module.
 
 ```toml
 # crates/lib/Cargo.toml
@@ -165,7 +165,7 @@ pub mod http {
 }
 ```
 
-**Important**: `cognee-cli` does **not** enable the `server` feature on `cognee-lib`, and does not gain a `serve-http` subcommand. The HTTP server ships as the separate `cognee-http-server` binary defined inside `crates/http-server/`. See §17.
+**Important**: `cognee-cli` does **not** enable the `server` feature on `cognee`, and does not gain a `serve-http` subcommand. The HTTP server ships as the separate `cognee-http-server` binary defined inside `crates/http-server/`. See §17.
 
 ## 4. HTTP framework — `axum` 0.8
 
@@ -224,7 +224,7 @@ pub struct AppState {
 
 - All fields are `Arc<…>` so `AppState: Clone` is cheap; axum clones per request.
 - `ComponentHandles` is a thin wrapper around the existing `ComponentManager` + `ConfigManager` so routers can call `state.lib.add().execute(...)` etc. without reconstructing components per request. It is `Option<…>` because tests and library embedders may construct an `AppState` before the backends are wired.
-- New HTTP-specific types live beside the server (`SpanBuffer`, `SyncRegistry`) and are *not* pushed into `cognee-lib`. The pipeline-run lifecycle is handled by `cognee_core::PipelineRunRegistry` (a reusable component shared with the CLI / MCP / embedders, see [pipelines.md](pipelines.md)) — `AppState` holds an `Arc<dyn PipelineRunRegistry>` rather than an HTTP-local registry struct.
+- New HTTP-specific types live beside the server (`SpanBuffer`, `SyncRegistry`) and are *not* pushed into `cognee`. The pipeline-run lifecycle is handled by `cognee_core::PipelineRunRegistry` (a reusable component shared with the CLI / MCP / embedders, see [pipelines.md](pipelines.md)) — `AppState` holds an `Arc<dyn PipelineRunRegistry>` rather than an HTTP-local registry struct.
 
 **Python parity note**: in Python, `get_authenticated_user` is a `Depends(...)`. In Rust, we implement it as an axum extractor (`FromRequestParts`) that reads the JWT/cookie/API key, looks up the user in the relational DB via `AppState::auth`, and returns an `AuthenticatedUser` value. Handlers that need the user simply add it as a parameter:
 
@@ -425,16 +425,16 @@ Three layers of gating, matched to who pays the compile cost:
 - The **binary** is opt-in via a `bin` feature on the crate (see §3 Cargo.toml). Library-only consumers don't compile `clap`/`dotenv` or the `main.rs` entry point.
 - Optional sub-features for individual capabilities — e.g. `redis-sessions`, `websocket` (always on by default; flag exists only so embedders can drop it for size-sensitive builds), `notebooks` (binds to the Python sandbox once that lands).
 
-### Layer 2 — `cognee-lib` re-export
+### Layer 2 — `cognee` re-export
 
-- `cognee-lib` defines a non-default `server` feature: `server = ["dep:cognee-http-server"]`.
-- `cognee-http-server` is declared as `optional = true` in `cognee-lib`'s `[dependencies]`, so disabling the feature truly removes it from the build graph (no transitive axum/tower compilation).
-- The `cognee_lib::http` module is wrapped in `#[cfg(feature = "server")]`. Without the feature, the path simply does not exist; downstream code that touches it fails to compile, which is the correct signal.
-- The feature is **not** added to `cognee-lib`'s `default` feature list. SDK consumers who do not need the HTTP surface (Android runner, wasm targets, library embedders that just call `add`/`cognify`/`search`) get a smaller dep graph by default.
+- `cognee` defines a non-default `server` feature: `server = ["dep:cognee-http-server"]`.
+- `cognee-http-server` is declared as `optional = true` in `cognee`'s `[dependencies]`, so disabling the feature truly removes it from the build graph (no transitive axum/tower compilation).
+- The `cognee::http` module is wrapped in `#[cfg(feature = "server")]`. Without the feature, the path simply does not exist; downstream code that touches it fails to compile, which is the correct signal.
+- The feature is **not** added to `cognee`'s `default` feature list. SDK consumers who do not need the HTTP surface (Android runner, wasm targets, library embedders that just call `add`/`cognify`/`search`) get a smaller dep graph by default.
 
 ### Layer 3 — `cognee-cli` is unaffected
 
-- `cognee-cli` neither depends on `cognee-http-server` nor enables `cognee-lib/server`. It does not gain a `serve-http` subcommand.
+- `cognee-cli` neither depends on `cognee-http-server` nor enables `cognee/server`. It does not gain a `serve-http` subcommand.
 - Anyone wanting an HTTP server installs the `cognee-http-server` binary separately (`cargo install cognee-http-server --features bin`, or pulls the released binary). Distros and Docker images can ship both binaries side by side; users only deploy what they need.
 
 ### Library deps (full list)
@@ -446,7 +446,7 @@ tokio                = { workspace = true, features = ["full"] }
 tower                = "0.5"
 tower-http           = { version = "0.6", features = ["cors", "trace", "limit"] }
 hyper                = { version = "1", features = ["server", "http1", "http2"] }  # axum 0.8 needs hyper 1.x. The qdrant v0.14 hyper fork lives in closed cognee-cloud-rs, so hyper 1.x is the only version in the OSS graph.
-cognee-lib           = { path = "../lib" }       # no `server` feature on cognee-lib here — that would be a cycle
+cognee           = { path = "../lib" }       # no `server` feature on cognee here — that would be a cycle
 cognee-models        = { path = "../models" }
 serde                = { workspace = true, features = ["derive"] }
 serde_json           = { workspace = true }
@@ -533,7 +533,7 @@ fn init_tracing() {
 
 - The new binary is named **`cognee-http-server`** (matches the package name; unambiguous on `$PATH`).
 - The existing `cognee-cli serve` subcommand (commit `ab18925`) handles the cloud OAuth flow. It stays as-is; this work does not modify `cognee-cli`.
-- A user who wants both installs both: `cargo install cognee-cli` and `cargo install cognee-http-server --features bin`. Distribution-wise (Docker, deb/rpm, brew) we publish them as two artifacts.
+- A user who wants both installs both: the `cognee-cli` binary (built from source — `cargo build --release -p cognee-cli`; it is not published to crates.io) and `cargo install cognee-http-server --features bin`. Distribution-wise (Docker, deb/rpm, brew) we publish them as two artifacts.
 
 ### Deployment shape
 
@@ -561,7 +561,7 @@ Test DTOs, fixtures, and helpers live in `crates/http-server/tests/support/` —
 
 ## 19. Background task registry
 
-Specified in [pipelines.md §6](pipelines.md#6-cognee_corepipelinerunregistry--the-new-component): a new `cognee_core::PipelineRunRegistry` trait + impl, runtime-agnostic `Stream`-based subscribe API, implements the existing `cognee_core::PipelineWatcher` trait per-run, takes `Arc<dyn PipelineRunRepository>` for durable status writes. The HTTP server's `AppState::pipelines` field holds an `Arc<dyn PipelineRunRegistry>`; handlers with `run_in_background=true` call `register_background(spec, work)`. WebSocket protocol in [websocket.md](websocket.md). Library refactor prerequisite (drop `run_in_background` from `cognee_lib::api::remember()` and `improve()`) in [pipelines.md §2](pipelines.md#2-library-refactor-prerequisite).
+Specified in [pipelines.md §6](pipelines.md#6-cognee_corepipelinerunregistry--the-new-component): a new `cognee_core::PipelineRunRegistry` trait + impl, runtime-agnostic `Stream`-based subscribe API, implements the existing `cognee_core::PipelineWatcher` trait per-run, takes `Arc<dyn PipelineRunRepository>` for durable status writes. The HTTP server's `AppState::pipelines` field holds an `Arc<dyn PipelineRunRegistry>`; handlers with `run_in_background=true` call `register_background(spec, work)`. WebSocket protocol in [websocket.md](websocket.md). Library refactor prerequisite (drop `run_in_background` from `cognee::api::remember()` and `improve()`) in [pipelines.md §2](pipelines.md#2-library-refactor-prerequisite).
 
 ## 20. Selected-libraries summary
 
@@ -626,6 +626,6 @@ No runtime GIL, no dynamic dispatch on handlers, no global mutable state — all
 - Python server entry point: [`cognee/api/client.py`](https://github.com/topoteretes/cognee/blob/main/cognee/api/client.py).
 - Python router modules: [`cognee/api/v1/*/routers/`](https://github.com/topoteretes/cognee/tree/main/cognee/api/v1).
 - Existing CLI binary (unchanged by this work): [`crates/cli/src/main.rs`](../../crates/cli/src/main.rs).
-- Existing library facade: [`crates/lib/src/lib.rs`](../../crates/lib/src/lib.rs) — the `cognee_lib::http` re-export module is added behind a non-default `server` feature (see §16).
+- Existing library facade: [`crates/lib/src/lib.rs`](../../crates/lib/src/lib.rs) — the `cognee::http` re-export module is added behind a non-default `server` feature (see §16).
 - Cloud crate (reference for "new feature-gated crate" pattern): [`crates/cloud/`](../../crates/cloud/).
 - Memory API (callable via this server): [`crates/lib/src/api/`](../../crates/lib/src/api/) (`recall`, `remember`, `improve`, `forget`).

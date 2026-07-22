@@ -68,7 +68,7 @@ Five endpoints. Listed in HTTP-method order (`GET → POST → PUT → DELETE`);
   | `500` | `{"detail": "Internal server error"}` | DB write failed. |
 
 - **Side effects**: inserts one row into `notebooks` with `owner_id = user.id`, `deletable=true`, `created_at = now()`. Generates a fresh `uuid4` id.
-- **Delegation target**: `cognee_lib::notebooks::create_notebook(user_id, name, cells, deletable=true)`.
+- **Delegation target**: `cognee::notebooks::create_notebook(user_id, name, cells, deletable=true)`.
 - **Validation rules**: per Python, `name` is `Optional` but uses Pydantic `Field(...)` which makes the field required at the schema level (a missing `name` triggers a validation error). The Rust DTO mirrors this with a `Option<String>` that the `Json` extractor accepts as `null` *only if explicitly provided* — practically, treat the field as required for parity. Cell ids are client-supplied UUIDs; if absent the server does **not** generate them (Python relies on the client). Document this: the frontend always sends ids.
 - **Permission gate**: none beyond ownership (the new row is owned by the caller).
 - **OpenAPI**: tag `notebooks`. Request body `NotebookDataDTO`, response `NotebookDTO`.
@@ -92,7 +92,7 @@ Five endpoints. Listed in HTTP-method order (`GET → POST → PUT → DELETE`);
   | `500` | `{"detail": "Internal server error"}` | DB write failed. |
 
 - **Side effects**: updates the `name` and/or `cells` columns of the matching row when the new value differs. The Python implementation only assigns when `notebook_data.name and notebook_data.name != notebook.name` — falsy `name` (empty string, `None`) leaves the existing name unchanged. Same for `cells`: only overwritten when `notebook_data.cells` is *truthy* (non-empty list). An empty cells list **does not clear cells**. We replicate this exactly.
-- **Delegation target**: `cognee_lib::notebooks::update_notebook(notebook_id, user_id, patch) -> Option<Notebook>`.
+- **Delegation target**: `cognee::notebooks::update_notebook(notebook_id, user_id, patch) -> Option<Notebook>`.
 - **Validation rules**: `notebook_id` parsed as `Uuid` via `Path<Uuid>` extractor; malformed UUIDs trigger `400 {"detail": "..."}`.
 - **Permission gate**: ownership check via `WHERE id = $1 AND owner_id = $2`. A row owned by another user returns `404` (not `403`) — Python does the same to avoid leaking the existence of foreign rows.
 - **OpenAPI**: tag `notebooks`. Path param `notebook_id: uuid`. Response `NotebookDTO`.

@@ -33,9 +33,9 @@ cargo check --all-targets --features telemetry
 
 echo ""
 echo "================================================================"
-echo "=== Rust: Compilation check (no default features, cognee-lib) ==="
+echo "=== Rust: Compilation check (no default features, cognee) ==="
 echo "================================================================"
-cargo check -p cognee-lib --no-default-features
+cargo check -p cognee --no-default-features
 
 echo ""
 echo "================================================================"
@@ -88,6 +88,12 @@ echo "================================================================"
 echo "=== JS/TS: Building and running tests ==="
 echo "================================================================"
 "$REPO_ROOT/ts/scripts/check.sh"
+
+echo ""
+echo "================================================================"
+echo "=== Java: Building bindings and running tests ==="
+echo "================================================================"
+"$REPO_ROOT/java/scripts/check.sh"
 
 echo ""
 echo "================================================================"

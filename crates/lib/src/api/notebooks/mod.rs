@@ -1,4 +1,4 @@
-//! `cognee_lib::notebooks` — per-user notebook CRUD facade.
+//! `cognee::notebooks` — per-user notebook CRUD facade.
 //!
 //! Wraps `cognee_database::NotebookDb` with tutorial seeding and the Python
 //! truthiness-bug compat notes documented in `docs/http-server/routers/notebooks.md`.

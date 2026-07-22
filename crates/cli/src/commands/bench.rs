@@ -13,17 +13,17 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use cognee_lib::add::AddPipeline;
-use cognee_lib::api::prune::{PruneTarget, prune_data, prune_system};
-use cognee_lib::cognify::{ChunkStrategy, CognifyConfig, cognify};
-use cognee_lib::core::RayonThreadPool;
-use cognee_lib::database::{IngestDb, PipelineRunRepository, SeaOrmPipelineRunRepository, ops};
-use cognee_lib::models::DataInput;
-use cognee_lib::ontology::{NoOpOntologyResolver, OntologyResolver};
-use cognee_lib::search::{
+use cognee::add::AddPipeline;
+use cognee::api::prune::{PruneTarget, prune_data, prune_system};
+use cognee::cognify::{ChunkStrategy, CognifyConfig, TokenCounterKind, cognify};
+use cognee::core::RayonThreadPool;
+use cognee::database::{IngestDb, PipelineRunRepository, SeaOrmPipelineRunRepository, ops};
+use cognee::models::DataInput;
+use cognee::ontology::{NoOpOntologyResolver, OntologyResolver};
+use cognee::search::{
     SeaOrmSessionStore, SearchBuilder, SearchRequest, SearchType, SessionManager,
 };
-use cognee_lib::{ComponentManager, PipelineContext};
+use cognee::{ComponentManager, PipelineContext};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -68,6 +68,9 @@ struct BenchResult {
     status: BenchStatus,
     success: bool,
     config: BenchConfig,
+    /// Graph size after cognify. Also drives the stale-cassette guard.
+    node_count: i64,
+    edge_count: i64,
 }
 
 /// Per-phase status: `"success"` or `"failed: <msg>"` (Python parity).
@@ -82,9 +85,117 @@ struct BenchStatus {
 
 const PHASE_OK: &str = "success";
 
+/// Start a SIGPROF sampling profiler for one phase, if profiling is enabled and
+/// `--profile-dir` was given. Returns `None` (a no-op) otherwise. pprof-rs uses
+/// signal-based sampling, so it needs no `perf` permissions and no root. It
+/// captures every thread in the process, both the tokio workers and the Rayon
+/// pool, which is what the mocked replay needs.
+#[cfg(feature = "profiling")]
+fn start_phase_profiler(profile_dir: Option<&str>) -> Option<pprof::ProfilerGuard<'static>> {
+    profile_dir?;
+    match pprof::ProfilerGuardBuilder::default()
+        .frequency(997)
+        .blocklist(&["libc", "libgcc", "pthread", "vdso"])
+        .build()
+    {
+        Ok(guard) => Some(guard),
+        Err(error) => {
+            warn!("profiler: failed to start: {error}");
+            None
+        }
+    }
+}
+
+/// Stop a phase profiler and write `<profile_dir>/<phase>.svg`.
+#[cfg(feature = "profiling")]
+fn finish_phase_profiler(
+    guard: Option<pprof::ProfilerGuard<'static>>,
+    profile_dir: Option<&str>,
+    phase: &str,
+) {
+    let (Some(guard), Some(dir)) = (guard, profile_dir) else {
+        return;
+    };
+    let report = match guard.report().build() {
+        Ok(report) => report,
+        Err(error) => {
+            warn!("profiler: failed to build report for {phase}: {error}");
+            return;
+        }
+    };
+    if let Err(error) = std::fs::create_dir_all(dir) {
+        warn!("profiler: cannot create dir '{dir}': {error}");
+        return;
+    }
+    let svg_path = format!("{dir}/{phase}.svg");
+    match std::fs::File::create(&svg_path) {
+        Ok(file) => match report.flamegraph(file) {
+            Ok(()) => info!("profiler: wrote {svg_path}"),
+            Err(error) => warn!("profiler: flamegraph write failed for {phase}: {error}"),
+        },
+        Err(error) => warn!("profiler: cannot create '{svg_path}': {error}"),
+    }
+}
+
+// No-op shims so the call sites stay identical when the feature is off.
+#[cfg(not(feature = "profiling"))]
+fn start_phase_profiler(_profile_dir: Option<&str>) -> Option<()> {
+    None
+}
+
+#[cfg(not(feature = "profiling"))]
+fn finish_phase_profiler(_guard: Option<()>, _profile_dir: Option<&str>, _phase: &str) {}
+
+/// Arm the per-stage span-timing telemetry for one phase (see
+/// `bench_telemetry`). Complements the flamegraph: attributes the off-CPU
+/// await/IO time the sampling profiler cannot see. No-op unless profiling is
+/// enabled and `--profile-dir` was given.
+#[cfg(feature = "profiling")]
+fn start_phase_telemetry(profile_dir: Option<&str>) {
+    if profile_dir.is_some() {
+        super::bench_telemetry::arm();
+    }
+}
+
+/// Disarm the telemetry and write `<profile_dir>/<phase>.telemetry.json`.
+#[cfg(feature = "profiling")]
+fn finish_phase_telemetry(profile_dir: Option<&str>, phase: &str) {
+    if let Some(dir) = profile_dir {
+        super::bench_telemetry::finish_phase(dir, phase);
+    }
+}
+
+#[cfg(not(feature = "profiling"))]
+fn start_phase_telemetry(_profile_dir: Option<&str>) {}
+
+#[cfg(not(feature = "profiling"))]
+fn finish_phase_telemetry(_profile_dir: Option<&str>, _phase: &str) {}
+
 /// Round to 3 decimals to match Python's `round(x, 3)` output.
 fn round3(value: f64) -> f64 {
     (value * 1000.0).round() / 1000.0
+}
+
+/// Read `(node_count, edge_count)` from the graph after cognify. Returns
+/// `(0, 0)` (which trips the sanity guard) if the metrics can't be read.
+async fn graph_counts(cm: &Arc<ComponentManager>) -> (i64, i64) {
+    let graph_db = match cm.graph_db().await {
+        Ok(db) => db,
+        Err(error) => {
+            warn!("graph metrics unavailable: {error}");
+            return (0, 0);
+        }
+    };
+    match graph_db.get_graph_metrics(false).await {
+        Ok(metrics) => {
+            let get = |k: &str| metrics.get(k).and_then(|v| v.as_i64()).unwrap_or(0);
+            (get("node_count"), get("edge_count"))
+        }
+        Err(error) => {
+            warn!("graph metrics query failed: {error}");
+            (0, 0)
+        }
+    }
 }
 
 /// Shape a memory into the document text — mirrors Python `memory_to_text`:
@@ -238,6 +349,8 @@ pub fn run(args: BenchArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
         owner_id,
         &args.dataset_name,
         &memories,
+        args.profile_dir.as_deref(),
+        args.min_graph_nodes,
         BenchConfig {
             llm_model,
             embedding_model,
@@ -270,6 +383,8 @@ async fn run_phases(
     owner_id: Uuid,
     dataset_name: &str,
     memories: &[Memory],
+    profile_dir: Option<&str>,
+    min_graph_nodes: u64,
     config: BenchConfig,
 ) -> BenchResult {
     let n = memories.len();
@@ -302,30 +417,60 @@ async fn run_phases(
     // ── Add ────────────────────────────────────────────────────────────────
     eprintln!("Phase 1: Adding {n} memories...");
     let t_add_start = Instant::now();
+    start_phase_telemetry(profile_dir);
+    let add_prof = start_phase_profiler(profile_dir);
     if let Err(msg) = phase_add(cm, owner_id, dataset_name, memories).await {
         warn!("Add FAILED: {msg}");
         status.add = format!("failed: {msg}");
     }
+    finish_phase_profiler(add_prof, profile_dir, "add");
+    finish_phase_telemetry(profile_dir, "add");
     let t_add = t_add_start.elapsed().as_secs_f64();
 
     // ── Cognify ──────────────────────────────────────────────────────────
     eprintln!("Phase 2: Running cognify (knowledge graph build)...");
     let t_cognify_start = Instant::now();
+    start_phase_telemetry(profile_dir);
+    let cognify_prof = start_phase_profiler(profile_dir);
     if let Err(msg) = phase_cognify(cm, owner_id, dataset_name).await {
         warn!("Cognify FAILED: {msg}");
         status.cognify = format!("failed: {msg}");
     }
+    finish_phase_profiler(cognify_prof, profile_dir, "cognify");
+    finish_phase_telemetry(profile_dir, "cognify");
     let t_cognify = t_cognify_start.elapsed().as_secs_f64();
 
     let t_total = t_add + t_cognify;
 
+    // ── Graph sanity guard ─────────────────────────────────────────────────
+    // Cognify over a non-empty corpus must produce a non-empty graph. An empty
+    // (or below-floor) graph means the replay cassette fell through to the
+    // empty-graph fallback, which happens with a stale cassette. Fail the phase
+    // loudly instead of reporting a silent "success" over nothing.
+    let (node_count, edge_count) = graph_counts(cm).await;
+    eprintln!("Graph after cognify: {node_count} nodes, {edge_count} edges");
+    if status.cognify == PHASE_OK && !memories.is_empty() {
+        let floor = min_graph_nodes.max(1);
+        if (node_count as u64) < floor {
+            let msg = format!(
+                "graph sanity: {node_count} nodes < floor {floor} (stale cassette / empty-graph fallback?)"
+            );
+            warn!("{msg}");
+            status.cognify = format!("failed: {msg}");
+        }
+    }
+
     // ── Search ───────────────────────────────────────────────────────────
     eprintln!("Phase 3: Running search query...");
     let t_search_start = Instant::now();
+    start_phase_telemetry(profile_dir);
+    let search_prof = start_phase_profiler(profile_dir);
     if let Err(msg) = phase_search(cm, owner_id, dataset_name).await {
         warn!("Search FAILED: {msg}");
         status.search = format!("failed: {msg}");
     }
+    finish_phase_profiler(search_prof, profile_dir, "search");
+    finish_phase_telemetry(profile_dir, "search");
     let t_search = t_search_start.elapsed().as_secs_f64();
 
     let success = status.prune == PHASE_OK
@@ -345,6 +490,8 @@ async fn run_phases(
         status,
         success,
         config,
+        node_count,
+        edge_count,
     }
 }
 
@@ -444,7 +591,7 @@ async fn phase_cognify(
     // the closed cloud build), so `user_email` always falls back to `None`.
     let user_email: Option<String> = None;
 
-    let thread_pool: Arc<dyn cognee_lib::core::CpuPool> =
+    let thread_pool: Arc<dyn cognee::core::CpuPool> =
         Arc::new(RayonThreadPool::with_default_threads().map_err(|e| format!("thread pool: {e}"))?);
     let pipeline_run_repo: Arc<dyn PipelineRunRepository> =
         Arc::new(SeaOrmPipelineRunRepository::new(Arc::clone(&database)));
@@ -461,6 +608,15 @@ async fn phase_cognify(
             .with_chunk_overlap(s.chunk_overlap as usize)
             .with_chunk_strategy(chunk_strategy)
             .with_max_parallel_extractions(s.llm_max_parallel_requests.max(1) as usize)
+            // Pin the token counter so chunk boundaries are deterministic and
+            // independent of ambient env. CognifyConfig::default() derives the
+            // counter from TokenCounterKind::from_env() (reads EMBEDDING_PROVIDER
+            // / COGNEE_TOKEN_COUNTER / a discovered .env, with a silent WordCounter
+            // fallback). That made the record/replay cassette hash depend on the
+            // host environment, not the commit — a cassette recorded in one env
+            // replayed to empty-graph fallbacks in another. gpt-4o-mini uses
+            // cl100k, so TikToken is the correct, portable choice for the bench.
+            .with_token_counter(TokenCounterKind::TikToken)
     };
 
     cognify(
@@ -485,37 +641,16 @@ async fn phase_cognify(
     Ok(())
 }
 
-/// One `search("What is in the document", only_context=true)` query.
-async fn phase_search(
-    cm: &Arc<ComponentManager>,
-    owner_id: Uuid,
+/// Build a bench `SearchRequest` for one query type over the bench dataset.
+fn bench_search_request(
+    query_text: &str,
+    search_type: SearchType,
     dataset_name: &str,
-) -> Result<(), String> {
-    let vector_db = cm.vector_db().await.map_err(|e| e.to_string())?;
-    let embedding_engine = cm.embedding_engine().await.map_err(|e| e.to_string())?;
-    let graph_db = cm.graph_db().await.map_err(|e| e.to_string())?;
-    let llm = cm.llm().await.map_err(|e| e.to_string())?;
-    let database = cm.database().await.map_err(|e| e.to_string())?;
-
-    let session_store = SeaOrmSessionStore::new(Arc::clone(&database))
-        .await
-        .map_err(|e| e.to_string())?;
-    let session_manager = Arc::new(SessionManager::new(Arc::new(session_store)));
-    let search_history_db = Arc::clone(&database) as Arc<dyn cognee_lib::database::SearchHistoryDb>;
-    let orchestrator = SearchBuilder::new(
-        vector_db,
-        embedding_engine,
-        graph_db,
-        llm,
-        search_history_db,
-    )
-    .with_session_manager(session_manager)
-    .with_dataset_resolver(Arc::clone(&database) as Arc<dyn IngestDb>)
-    .build();
-
-    let request = SearchRequest {
-        query_text: "What is in the document".to_string(),
-        search_type: SearchType::GraphCompletion,
+    owner_id: Uuid,
+) -> SearchRequest {
+    SearchRequest {
+        query_text: query_text.to_string(),
+        search_type,
         top_k: Some(10),
         datasets: Some(vec![dataset_name.to_string()]),
         dataset_ids: None,
@@ -540,12 +675,62 @@ async fn phase_search(
         auto_feedback_detection: None,
         neighborhood_depth: None,
         neighborhood_seed_top_k: None,
-    };
+    }
+}
 
-    orchestrator
-        .search(&request)
+/// Exercise retrieval across representative query types so the search phase is
+/// actually profiled, not just the one graph-completion path.
+///
+/// Runs the no-LLM retrievers (`Chunks`, `Summaries`, pure vector fetch) and the
+/// LLM one (`GraphCompletion`). Under the mocked LLM the completion call is
+/// near-free, so the no-LLM retrievers are what surface the real retrieval cost
+/// (vector KNN plus chunk/summary materialization) in `search.svg`. Per-query
+/// wall times are logged. The phase aggregate is what `search_time` reports.
+async fn phase_search(
+    cm: &Arc<ComponentManager>,
+    owner_id: Uuid,
+    dataset_name: &str,
+) -> Result<(), String> {
+    let vector_db = cm.vector_db().await.map_err(|e| e.to_string())?;
+    let embedding_engine = cm.embedding_engine().await.map_err(|e| e.to_string())?;
+    let graph_db = cm.graph_db().await.map_err(|e| e.to_string())?;
+    let llm = cm.llm().await.map_err(|e| e.to_string())?;
+    let database = cm.database().await.map_err(|e| e.to_string())?;
+
+    let session_store = SeaOrmSessionStore::new(Arc::clone(&database))
         .await
         .map_err(|e| e.to_string())?;
+    let session_manager = Arc::new(SessionManager::new(Arc::new(session_store)));
+    let search_history_db = Arc::clone(&database) as Arc<dyn cognee::database::SearchHistoryDb>;
+    let orchestrator = SearchBuilder::new(
+        vector_db,
+        embedding_engine,
+        graph_db,
+        llm,
+        search_history_db,
+    )
+    .with_session_manager(session_manager)
+    .with_dataset_resolver(Arc::clone(&database) as Arc<dyn IngestDb>)
+    .build();
+
+    let query_text = "What is in the document";
+    // No-LLM retrievers first (Chunks/Summaries) so retrieval cost is visible,
+    // then the LLM path (GraphCompletion). Labels feed the per-query log lines.
+    let queries = [
+        ("chunks", SearchType::Chunks),
+        ("summaries", SearchType::Summaries),
+        ("graph_completion", SearchType::GraphCompletion),
+    ];
+
+    for (label, search_type) in queries {
+        let request = bench_search_request(query_text, search_type, dataset_name, owner_id);
+        let t = Instant::now();
+        orchestrator
+            .search(&request)
+            .await
+            .map_err(|e| format!("{label}: {e}"))?;
+        info!("search[{label}] took {:.3}s", t.elapsed().as_secs_f64());
+    }
     Ok(())
 }
 

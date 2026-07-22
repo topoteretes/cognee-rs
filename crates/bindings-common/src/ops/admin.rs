@@ -6,7 +6,7 @@
 //! These functions contain the pure-Rust async logic shared between every
 //! language binding surface (C API, Neon JS, Python). Each function takes a
 //! [`HandleState`] reference plus typed arguments, performs the operation
-//! against the underlying cognee-lib APIs, and returns a
+//! against the underlying cognee APIs, and returns a
 //! `serde_json::Value` result (or an [`SdkError`]).
 //!
 //! The binding-specific wrappers (C string parsing, Neon JS promise settling,
@@ -17,12 +17,10 @@ use std::sync::Arc;
 
 use uuid::Uuid;
 
-use cognee_lib::api::get_or_create_default_user;
-use cognee_lib::api::notebooks::{
-    create_notebook, delete_notebook, list_notebooks, update_notebook,
-};
-use cognee_lib::api::{reset_dataset_pipeline_run_status, reset_pipeline_run_status};
-use cognee_lib::database::{NotebookDb, NotebookUpdatePatch};
+use cognee::api::get_or_create_default_user;
+use cognee::api::notebooks::{create_notebook, delete_notebook, list_notebooks, update_notebook};
+use cognee::api::{reset_dataset_pipeline_run_status, reset_pipeline_run_status};
+use cognee::database::{NotebookDb, NotebookUpdatePatch};
 
 use crate::{HandleState, SdkError};
 

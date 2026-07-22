@@ -1,9 +1,9 @@
 //! Read-only view of the observability-relevant subset of `Settings`.
 //!
-//! Defined here (not in `cognee-lib`) to avoid a hard dependency on the
-//! umbrella crate. `cognee-lib::Settings` implements this trait in a
+//! Defined here (not in `cognee`) to avoid a hard dependency on the
+//! umbrella crate. `cognee::Settings` implements this trait in a
 //! sibling task so HTTP middleware and other upstream callers can drive
-//! [`crate::init_telemetry`] without going through `cognee-lib`.
+//! [`crate::init_telemetry`] without going through `cognee`.
 
 /// Borrow-only adapter over the OTEL fields of cognee `Settings`.
 ///
@@ -29,8 +29,8 @@ pub trait SettingsView: Send + Sync {
     fn traces_sampler_arg(&self) -> &str;
 }
 
-// Defaults mirror `cognee-lib::Settings::default()` (config.rs lines 644-651).
-// Kept here so callers that don't depend on `cognee-lib` (e.g. `cognee-http-server`)
+// Defaults mirror `cognee::Settings::default()` (config.rs lines 644-651).
+// Kept here so callers that don't depend on `cognee` (e.g. `cognee-http-server`)
 // still get the same defaults; a unit test below pins the two views together.
 pub(crate) const DEFAULT_TRACING_ENABLED: bool = false;
 pub(crate) const DEFAULT_SERVICE_NAME: &str = "cognee";
@@ -43,7 +43,7 @@ pub(crate) const DEFAULT_TRACES_SAMPLER_ARG: &str = "";
 
 /// Snapshot of OTEL-relevant env vars usable as a [`SettingsView`].
 ///
-/// Lets crates that don't depend on `cognee-lib::Settings` (e.g. the HTTP
+/// Lets crates that don't depend on `cognee::Settings` (e.g. the HTTP
 /// server) drive [`crate::init_telemetry`] directly from the environment.
 #[derive(Debug, Clone)]
 pub struct EnvSettingsView {
@@ -74,7 +74,7 @@ impl Default for EnvSettingsView {
 
 impl EnvSettingsView {
     /// Read all eight OTEL env vars. Missing or empty vars fall back to
-    /// the same defaults as `cognee-lib::Settings::default()`.
+    /// the same defaults as `cognee::Settings::default()`.
     pub fn from_env() -> Self {
         let mut view = Self::default();
 

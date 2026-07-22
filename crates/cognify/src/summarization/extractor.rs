@@ -33,6 +33,41 @@ fn default_summary_options() -> GenerationOptions {
 /// drift guard.
 const DEFAULT_SUMMARY_PROMPT: &str = include_str!("prompts/summarize_content.txt");
 
+/// Summarize a single chunk of text. Shared by [`SummaryExtractor::extract_summary`]
+/// and the bounded [`SummaryExtractor::summarize_chunks`] pipeline so neither has
+/// to fabricate a throwaway extractor per call.
+async fn summarize_one(
+    llm: &Arc<dyn Llm>,
+    summary_schema: &Option<serde_json::Value>,
+    text: &str,
+    custom_prompt: Option<&str>,
+) -> Result<SummarizedContent, CognifyError> {
+    let system_prompt = custom_prompt.unwrap_or(DEFAULT_SUMMARY_PROMPT);
+    let options = Some(default_summary_options());
+
+    match summary_schema {
+        None => llm
+            .create_structured_output(text, system_prompt, options)
+            .await
+            .map_err(|e| CognifyError::LlmError(e.to_string())),
+        Some(schema) => {
+            let raw: serde_json::Value = llm
+                .create_structured_output_raw(text, system_prompt, schema, options)
+                .await
+                .map_err(|e| CognifyError::LlmError(e.to_string()))?;
+            let summary = raw.get("summary").and_then(|v| v.as_str()).ok_or_else(|| {
+                CognifyError::LlmError(
+                    "summary_schema output missing string `summary` field".to_string(),
+                )
+            })?;
+            Ok(SummarizedContent {
+                summary: summary.to_string(),
+                description: String::new(),
+            })
+        }
+    }
+}
+
 /// Summary extractor for text chunks.
 ///
 /// Uses an LLM (via the Llm trait) to generate hierarchical summaries from text chunks.
@@ -58,14 +93,23 @@ pub struct SummaryExtractor {
     /// When `Some`, the dynamic schema path is taken instead of the typed
     /// `SummarizedContent` path (Python `summarization_model` parity).
     summary_schema: Option<serde_json::Value>,
+    /// Maximum number of concurrent summarization LLM calls. Bounds in-flight
+    /// requests on large documents (see issue #19).
+    max_parallel: usize,
 }
 
 impl SummaryExtractor {
+    /// Default cap on concurrent summarization LLM calls. Matches the graph
+    /// extractor's default `max_parallel_extractions` so both stages share the
+    /// same in-flight ceiling.
+    pub const DEFAULT_MAX_PARALLEL: usize = 20;
+
     /// Create a new summary extractor using the built-in `SummarizedContent` schema.
     pub fn new(llm: Arc<dyn Llm>) -> Self {
         Self {
             llm,
             summary_schema: None,
+            max_parallel: Self::DEFAULT_MAX_PARALLEL,
         }
     }
 
@@ -78,7 +122,15 @@ impl SummaryExtractor {
         Self {
             llm,
             summary_schema: schema,
+            max_parallel: Self::DEFAULT_MAX_PARALLEL,
         }
+    }
+
+    /// Set the maximum number of concurrent summarization LLM calls. Values
+    /// below 1 are coerced to 1.
+    pub fn with_max_parallel(mut self, max_parallel: usize) -> Self {
+        self.max_parallel = max_parallel.max(1);
+        self
     }
 
     /// Extract a summary from text.
@@ -91,35 +143,7 @@ impl SummaryExtractor {
         text: &str,
         custom_prompt: Option<&str>,
     ) -> Result<SummarizedContent, CognifyError> {
-        let system_prompt = custom_prompt.unwrap_or(DEFAULT_SUMMARY_PROMPT);
-        let options = Some(default_summary_options());
-
-        match &self.summary_schema {
-            None => {
-                let summarized: SummarizedContent = self
-                    .llm
-                    .create_structured_output(text, system_prompt, options)
-                    .await
-                    .map_err(|e| CognifyError::LlmError(e.to_string()))?;
-                Ok(summarized)
-            }
-            Some(schema) => {
-                let raw: serde_json::Value = self
-                    .llm
-                    .create_structured_output_raw(text, system_prompt, schema, options)
-                    .await
-                    .map_err(|e| CognifyError::LlmError(e.to_string()))?;
-                let summary = raw.get("summary").and_then(|v| v.as_str()).ok_or_else(|| {
-                    CognifyError::LlmError(
-                        "summary_schema output missing string `summary` field".to_string(),
-                    )
-                })?;
-                Ok(SummarizedContent {
-                    summary: summary.to_string(),
-                    description: String::new(),
-                })
-            }
-        }
+        summarize_one(&self.llm, &self.summary_schema, text, custom_prompt).await
     }
 
     /// Summarize multiple text chunks in parallel.
@@ -142,45 +166,47 @@ impl SummaryExtractor {
             return Ok(vec![]);
         }
 
-        let mut tasks = Vec::new();
+        use futures::stream::{self, StreamExt, TryStreamExt};
 
-        for chunk in chunks {
-            let llm_clone = Arc::clone(&self.llm);
-            let schema_clone = self.summary_schema.clone();
-            let prompt_clone = custom_prompt.clone();
-            let text = chunk.text.clone();
-
-            let task = tokio::spawn(async move {
-                let extractor = SummaryExtractor {
-                    llm: llm_clone,
-                    summary_schema: schema_clone,
-                };
-                extractor
-                    .extract_summary(&text, prompt_clone.as_deref())
-                    .await
-            });
-
-            tasks.push(task);
-        }
-
-        let results = futures::future::join_all(tasks).await;
-
-        // Get model name from LLM
         let model_name = self.llm.model().to_string();
 
-        let mut summaries = Vec::new();
-        for (chunk_index, result) in results.into_iter().enumerate() {
-            let chunk = &chunks[chunk_index];
-            let summarized =
-                result.map_err(|e| CognifyError::LlmError(format!("Task join error: {e}")))??;
+        // Pre-extract owned per-chunk inputs (index, text, chunk id) so the
+        // stream yields owned items. Mapping a stream over borrowed `&chunk`
+        // references trips a higher-ranked-lifetime inference bug when the
+        // surrounding future is boxed; owning the items avoids it.
+        let inputs: Vec<(usize, String, uuid::Uuid)> = chunks
+            .iter()
+            .enumerate()
+            .map(|(index, chunk)| (index, chunk.text.clone(), chunk.base.id))
+            .collect();
 
-            let text_summary =
-                TextSummary::from_summarized_content(chunk.base.id, summarized, model_name.clone());
+        // Bounded-concurrency pipeline: at most `max_parallel` summarization
+        // calls are in flight at once. This replaces the previous unbounded
+        // per-chunk `tokio::spawn`, which opened one request per chunk on a large
+        // document — a rate-limit and memory risk (issue #19). `buffer_unordered`
+        // keeps the global cap while pipelining across chunks; results arrive out
+        // of order, so each future carries its chunk index and we re-sort to
+        // preserve the input order the callers expect.
+        let mut indexed: Vec<(usize, TextSummary)> = stream::iter(inputs)
+            .map(|(index, text, chunk_id)| {
+                let llm = Arc::clone(&self.llm);
+                let summary_schema = self.summary_schema.clone();
+                let model_name = model_name.clone();
+                let prompt = custom_prompt.clone();
+                async move {
+                    let summarized =
+                        summarize_one(&llm, &summary_schema, &text, prompt.as_deref()).await?;
+                    let summary =
+                        TextSummary::from_summarized_content(chunk_id, summarized, model_name);
+                    Ok::<(usize, TextSummary), CognifyError>((index, summary))
+                }
+            })
+            .buffer_unordered(self.max_parallel)
+            .try_collect()
+            .await?;
 
-            summaries.push(text_summary);
-        }
-
-        Ok(summaries)
+        indexed.sort_by_key(|(index, _)| *index);
+        Ok(indexed.into_iter().map(|(_, summary)| summary).collect())
     }
 
     /// Get a reference to the underlying LLM.
@@ -210,6 +236,87 @@ mod tests {
     fn test_default_prompt_not_empty() {
         assert!(!DEFAULT_SUMMARY_PROMPT.is_empty());
         assert!(DEFAULT_SUMMARY_PROMPT.contains("Summarize the chunk for retrieval"));
+    }
+
+    #[tokio::test]
+    async fn summarize_chunks_bounds_concurrency_and_preserves_order() {
+        use cognee_llm::{GenerationResponse, LlmResult, Message};
+        use serde_json::{Value, json};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use uuid::Uuid;
+
+        /// Mock LLM that records the peak number of concurrent in-flight calls.
+        struct ConcurrencyTracker {
+            in_flight: AtomicUsize,
+            max_seen: AtomicUsize,
+            calls: AtomicUsize,
+        }
+
+        #[async_trait::async_trait]
+        impl Llm for ConcurrencyTracker {
+            async fn generate(
+                &self,
+                _messages: Vec<Message>,
+                _options: Option<GenerationOptions>,
+            ) -> LlmResult<GenerationResponse> {
+                unreachable!("summarization uses structured output, not generate")
+            }
+
+            async fn create_structured_output_with_messages_raw(
+                &self,
+                _messages: Vec<Message>,
+                _json_schema: &Value,
+                _options: Option<GenerationOptions>,
+            ) -> LlmResult<Value> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                let current = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                self.max_seen.fetch_max(current, Ordering::SeqCst);
+                // Hold the "request" open so overlapping calls are observable.
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                self.in_flight.fetch_sub(1, Ordering::SeqCst);
+                Ok(json!({ "summary": "s", "description": "d" }))
+            }
+
+            fn model(&self) -> &str {
+                "mock-tracker"
+            }
+        }
+
+        let tracker = Arc::new(ConcurrencyTracker {
+            in_flight: AtomicUsize::new(0),
+            max_seen: AtomicUsize::new(0),
+            calls: AtomicUsize::new(0),
+        });
+        let llm: Arc<dyn Llm> = tracker.clone();
+
+        let doc_id = Uuid::new_v4();
+        let chunks: Vec<DocumentChunk> = (0..10)
+            .map(|i| {
+                DocumentChunk::new(
+                    Uuid::new_v4(),
+                    format!("chunk text {i}"),
+                    3,
+                    i,
+                    "paragraph_end".to_string(),
+                    doc_id,
+                )
+            })
+            .collect();
+        let expected: Vec<Option<Uuid>> = chunks.iter().map(|c| Some(c.base.id)).collect();
+
+        let extractor = SummaryExtractor::new(llm).with_max_parallel(3);
+        let summaries = extractor.summarize_chunks(&chunks, None).await.unwrap();
+
+        // Every chunk produced one summary, in the original input order.
+        assert_eq!(summaries.len(), 10);
+        assert_eq!(tracker.calls.load(Ordering::SeqCst), 10);
+        let got: Vec<Option<Uuid>> = summaries.iter().map(|s| s.made_from).collect();
+        assert_eq!(got, expected, "summaries must preserve input chunk order");
+
+        // Concurrency was real (overlapping) but never exceeded the cap of 3.
+        let peak = tracker.max_seen.load(Ordering::SeqCst);
+        assert!(peak >= 2, "expected overlapping calls, peak was {peak}");
+        assert!(peak <= 3, "concurrency cap exceeded: peak {peak} > 3");
     }
 
     #[test]

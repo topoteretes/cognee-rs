@@ -9,7 +9,7 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
 - Router file: `crates/http-server/src/routers/ontologies.rs`
 - Python source: [`cognee/api/v1/ontologies/routers/get_ontology_router.py`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/ontologies/routers/get_ontology_router.py)
 - Underlying SDK class: [`cognee/api/v1/ontologies/ontologies.py`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/ontologies/ontologies.py) (`OntologyService`)
-- Rust delegation target: the existing [`cognee_ontology::OntologyManager`](../../../crates/ontology/src/manager.rs) (re-exported as `cognee_lib::ontology::OntologyManager`). Methods: `OntologyManager::list`, `::upload`, `::get_contents` ([manager.rs:152, :249, :263](../../../crates/ontology/src/manager.rs)). The Python class is `OntologyService`; the Rust port reuses the existing `OntologyManager` rather than mirroring the Python class name.
+- Rust delegation target: the existing [`cognee_ontology::OntologyManager`](../../../crates/ontology/src/manager.rs) (re-exported as `cognee::ontology::OntologyManager`). Methods: `OntologyManager::list`, `::upload`, `::get_contents` ([manager.rs:152, :249, :263](../../../crates/ontology/src/manager.rs)). The Python class is `OntologyService`; the Rust port reuses the existing `OntologyManager` rather than mirroring the Python class name.
 
 ## 2. Endpoints
 
@@ -40,7 +40,7 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
   | `500` | `{"error": "<inner>"}` | Generic catch — Python returns `{"error": str(e)}`. Source: [`get_ontology_router.py:107`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/ontologies/routers/get_ontology_router.py#L107). Note `{error}` envelope (not `{detail}`). |
 
 - **Side effects**: reads `metadata.json` at `/tmp/ontologies/<user_id>/metadata.json`. Creates the user directory if missing (lazy).
-- **Delegation target**: `cognee_ontology::OntologyManager::list(user) -> serde_json::Map<String, OntologyMetadata>` (re-exported as `cognee_lib::ontology::OntologyManager::list`).
+- **Delegation target**: `cognee_ontology::OntologyManager::list(user) -> serde_json::Map<String, OntologyMetadata>` (re-exported as `cognee::ontology::OntologyManager::list`).
 - **Validation rules**: none.
 - **Permission gate**: per-user (the directory is keyed by `user.id`); no per-dataset permission needed because ontologies are not currently associated with datasets at the storage layer.
 - **OpenAPI**: tag `["ontologies"]`, response `200: object` (free-form). `additionalProperties: OntologyMetadataDTO`.
@@ -105,7 +105,7 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
   - **File storage**: writes `<file_path> = $TMPDIR/ontologies/<user_id>/<ontology_key>.owl` and rewrites `$TMPDIR/ontologies/<user_id>/metadata.json` with the new key. **No cognee storage layer is used** — the OntologyService writes directly to the OS temp dir. This is a known limitation: ontologies are lost on container restart in ephemeral filesystem deployments. Document loudly. The Rust port preserves this behavior for parity but **adds** a configurable base dir via `COGNEE_ONTOLOGY_DIR` env var (falls back to `std::env::temp_dir().join("ontologies")` when unset). Python honors `tempfile.gettempdir()` ([`ontologies.py:26`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/ontologies/ontologies.py#L26)).
   - **Relational DB**: none — ontology metadata is **not** persisted in the relational DB. (This is a real gap; tracked as open question.)
   - **Graph / Vector DB**: none.
-- **Delegation target**: `cognee_ontology::OntologyManager::upload(user, ontology_key, file: impl AsyncRead, description: Option<String>) -> OntologyMetadata` (re-exported as `cognee_lib::ontology::OntologyManager::upload`).
+- **Delegation target**: `cognee_ontology::OntologyManager::upload(user, ontology_key, file: impl AsyncRead, description: Option<String>) -> OntologyMetadata` (re-exported as `cognee::ontology::OntologyManager::upload`).
 - **Validation rules**:
   1. Exactly one `ontology_file` part. >1 → 400.
   2. `ontology_key.trim()` must not start with `[` or `{`.
@@ -232,7 +232,7 @@ Field-level mapping vs Python:
 ## 5. Implementation tasks
 
 1. Add DTOs in `crates/http-server/src/dto/ontologies.rs` (all of §4).
-2. The existing [`cognee_ontology::OntologyManager`](../../../crates/ontology/src/manager.rs) (`list` / `upload` / `get_contents`) is the delegation target — re-export it under `cognee_lib::ontology::OntologyManager` if not already exposed. The on-disk format (`<base>/<user_id>/<key>.owl` + `metadata.json`) is handled by the manager.
+2. The existing [`cognee_ontology::OntologyManager`](../../../crates/ontology/src/manager.rs) (`list` / `upload` / `get_contents`) is the delegation target — re-export it under `cognee::ontology::OntologyManager` if not already exposed. The on-disk format (`<base>/<user_id>/<key>.owl` + `metadata.json`) is handled by the manager.
 3. Add the `get_list` and `post_upload` handlers in `crates/http-server/src/routers/ontologies.rs`:
    - `get_list`: simple delegation; map service result to `OntologyListResponseDTO`.
    - `post_upload`: parse multipart, validate (5 rules), stream to disk, update metadata, return `OntologyUploadResponseDTO`.

@@ -1,8 +1,8 @@
 //! `ComponentHandles` — pre-built component instances passed to P2 handlers.
 //!
-//! This struct is a lightweight alternative to `cognee_lib::ComponentManager`
-//! that avoids a dependency cycle: `cognee-lib` may eventually import
-//! `cognee-http-server`, so `cognee-http-server` must not import `cognee-lib`.
+//! This struct is a lightweight alternative to `cognee::ComponentManager`
+//! that avoids a dependency cycle: `cognee` may eventually import
+//! `cognee-http-server`, so `cognee-http-server` must not import `cognee`.
 //!
 //! All components are eagerly initialized in `AppState::build`; there is no
 //! lazy caching here (unlike `ComponentManager`'s `RwLock` slots).

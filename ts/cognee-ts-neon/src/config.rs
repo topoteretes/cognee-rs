@@ -20,7 +20,7 @@ use std::collections::HashMap;
 
 use neon::prelude::*;
 
-use cognee_lib::config::ConfigError;
+use cognee::config::ConfigError;
 
 use crate::json::{js_to_value, parse_js};
 use crate::sdk::CogneeHandle;

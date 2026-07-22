@@ -75,17 +75,36 @@ mod tests {
 
     #[test]
     fn test_deduplicate_nodes_removes_duplicates() {
+        // Two entities with the same name now share a deterministic id
+        // (Entity::id_for), so they dedup without any manual id-forcing. This is
+        // the unit-level regression for issue #57: random v4 ids used to make the
+        // same entity duplicate silently across runs.
         let node1 = create_test_node("TechCorp", "Organization");
         let node2 = create_test_node("TechCorp", "Organization");
+        assert_eq!(
+            node1.entity.base.id, node2.entity.base.id,
+            "same-name entities must derive the same id"
+        );
 
-        // Force same entity ID to create duplicate
-        let mut node2_clone = node2.clone();
-        node2_clone.entity.base.id = node1.entity.base.id;
-
-        let result = deduplicate_nodes_and_edges(vec![node1.clone(), node2_clone], vec![]);
+        let result = deduplicate_nodes_and_edges(vec![node1, node2], vec![]);
 
         assert_eq!(result.unique_nodes.len(), 1);
         assert_eq!(result.unique_nodes[0].entity.name, "TechCorp");
+    }
+
+    #[test]
+    fn test_deduplicate_keys_purely_on_entity_id() {
+        // Two entities with DIFFERENT names but the same forced id must collapse
+        // to one — proving the dedup key is `entity.base.id` alone (not name or
+        // other fields). Guards against a future change that keys on more than
+        // the id, which would let issue-#57-style silent duplication reappear.
+        let node1 = create_test_node("Alpha", "Organization");
+        let mut node2 = create_test_node("Beta", "Organization");
+        node2.entity.base.id = node1.entity.base.id;
+
+        let result = deduplicate_nodes_and_edges(vec![node1, node2], vec![]);
+
+        assert_eq!(result.unique_nodes.len(), 1);
     }
 
     #[test]
@@ -186,13 +205,10 @@ mod tests {
     fn test_deduplicate_mixed_unique_and_duplicate() {
         let node1 = create_test_node("TechCorp", "Organization");
         let node2 = create_test_node("Alice", "Person");
-        let node3_dup = create_test_node("Alice", "Person");
+        // Same name → same deterministic id, no manual forcing needed.
+        let node3 = create_test_node("Alice", "Person");
 
-        // Force node3 to have same ID as node2
-        let mut node3 = node3_dup.clone();
-        node3.entity.base.id = node2.entity.base.id;
-
-        let result = deduplicate_nodes_and_edges(vec![node1, node2.clone(), node3], vec![]);
+        let result = deduplicate_nodes_and_edges(vec![node1, node2, node3], vec![]);
 
         // Should have 2 unique nodes (TechCorp and Alice)
         assert_eq!(result.unique_nodes.len(), 2);

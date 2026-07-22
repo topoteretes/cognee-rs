@@ -173,7 +173,7 @@ async fn build_app_with_session_and_llm(llm: Arc<dyn Llm>) -> (axum::Router, Arc
 // Default anonymous user id used by `AuthenticatedUser` when auth is disabled.
 // Derived per F1 as `Uuid::new_v5(NAMESPACE_OID, default_user_email.as_bytes())`
 // where `default_user_email` = "default_user@example.com" (the default in
-// `cognee_lib::config::Settings::default()` at config.rs:762). The pre-F1
+// `cognee::config::Settings::default()` at config.rs:762). The pre-F1
 // all-zeros UUID is no longer the runtime value.
 const DEFAULT_USER_ID: &str = "da4164c9-2221-5d39-af3e-25533e4bc868";
 

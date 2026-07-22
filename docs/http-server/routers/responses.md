@@ -43,7 +43,7 @@ One endpoint.
 
 - **Side effects**:
   - One outgoing HTTP request to `https://api.openai.com/v1/responses` (or the configured base URL).
-  - For each `function_call` in the upstream response, a synchronous in-process call to the matching `cognee_lib::*` function (`add`, `cognify`, `search`, `prune`). These can in turn write to the relational DB, graph DB, vector DB, file storage, embedding engine, and LLM.
+  - For each `function_call` in the upstream response, a synchronous in-process call to the matching `cognee::*` function (`add`, `cognify`, `search`, `prune`). These can in turn write to the relational DB, graph DB, vector DB, file storage, embedding engine, and LLM.
   - Costs OpenAI tokens; the response includes a `usage` block.
 
 - **Delegation target**: the handler (`create_response` in `crates/http-server/src/routers/responses.rs`) calls the configured `ResponsesClient` for the upstream request, then routes each returned `function_call` through `crate::responses_dispatch` (the `dispatch_function` analogue that pattern-matches function names to cognee facade calls). The upstream client reuses the `reqwest`+`rustls` stack from `cognee-llm`.
@@ -100,12 +100,12 @@ The dispatcher does a single `match` on the function name from the upstream outp
 
 | Function name | Cognee facade call | Result string |
 |---|---|---|
-| `search` | `cognee_lib::search::SearchOrchestrator::search(...)` (instance method on `SearchOrchestrator`/`SearchBuilder`; no top-level free `search()` function exists). | List of search results, JSON-encoded. |
-| `cognify` | optional `cognee_ingestion::AddPipeline::run(text, user)` (re-exported as `cognee_lib::add::AddPipeline`) then `cognee_lib::cognify::cognify(user, ontology_file_path, custom_prompt)`. | Hard-coded success string. |
-| `prune` | `cognee_lib::api::prune::prune_data()` (and/or `prune_system()` per Python's `cognee.prune` semantics). | `"Memory has been pruned successfully."` |
+| `search` | `cognee::search::SearchOrchestrator::search(...)` (instance method on `SearchOrchestrator`/`SearchBuilder`; no top-level free `search()` function exists). | List of search results, JSON-encoded. |
+| `cognify` | optional `cognee_ingestion::AddPipeline::run(text, user)` (re-exported as `cognee::add::AddPipeline`) then `cognee::cognify::cognify(user, ontology_file_path, custom_prompt)`. | Hard-coded success string. |
+| `prune` | `cognee::api::prune::prune_data()` (and/or `prune_system()` per Python's `cognee.prune` semantics). | `"Memory has been pruned successfully."` |
 | anything else | — | `"Error: Unknown function <name>"` (HTTP 200, in-band). |
 
-The `SearchOrchestrator`, `AddPipeline`, `cognify`, and `prune_*` facades all exist on the Rust side; the dispatcher is wiring over them, not new functionality. Note that `add` is a *module* in `cognee_lib`, not a function — the corresponding entry point is `AddPipeline::run`.
+The `SearchOrchestrator`, `AddPipeline`, `cognify`, and `prune_*` facades all exist on the Rust side; the dispatcher is wiring over them, not new functionality. Note that `add` is a *module* in `cognee`, not a function — the corresponding entry point is `AddPipeline::run`.
 
 ### 3.5 OpenAI client, sync-only execution, telemetry
 

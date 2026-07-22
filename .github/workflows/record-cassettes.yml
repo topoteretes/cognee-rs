@@ -26,9 +26,13 @@ env:
   CCACHE_COMPILERCHECK: content
   # Record mode: wrap the real adapter and write/merge each cassette on drop.
   COGNEE_RECORD_LLM: "1"
-  OPENAI_URL: https://api.openai.com/v1
-  OPENAI_TOKEN: ${{ secrets.OPENAI_KEY }}
-  OPENAI_MODEL: gpt-4o-mini
+  # Integration cassettes are baselined on Baseten's gpt-oss-120b — a non-strict
+  # tool-caller — so replay exercises the same fallback path real edge/self-host
+  # users hit (see issue #66). Requires a BASETEN_KEY repo/org secret; the only
+  # other LLM secret is OPENAI_KEY, which cannot reach this endpoint.
+  OPENAI_URL: https://inference.baseten.co/v1
+  OPENAI_TOKEN: ${{ secrets.BASETEN_KEY }}
+  OPENAI_MODEL: baseten/openai/gpt-oss-120b
 
 jobs:
   record:
@@ -94,8 +98,19 @@ jobs:
       # so tests in the same file merge into one cassette without racing the
       # final atomic write. The deterministic embedding engine is chosen in-code
       # (no MOCK_EMBEDDING env needed), so embeddings match replay exactly.
+      # Delete first so each recording is clean: RecordingLlm merges into an
+      # existing file, which would keep now-orphaned entries after a prompt/schema
+      # change (mirrors record-perf-cassette.yml). The refreshed files are what
+      # gets committed below. Delete only the cassettes this step regenerates (NOT
+      # a `*.json` wildcard) so a cassette owned by a test not listed here isn't
+      # wiped without being re-recorded — keep this list in sync with the --test
+      # targets below.
       - name: Record cognify cassettes
         run: |
+          cd crates/cognify/tests/fixtures/cassettes
+          rm -f fact_extraction.json summarization.json triplet_vector_cleanup.json \
+                delete_preview_accuracy.json shared_entity_graph_delete.json lifecycle_loop.json
+          cd - >/dev/null
           cargo test -p cognee-cognify \
             --test integration_fact_extraction \
             --test integration_summarization \
@@ -106,16 +121,20 @@ jobs:
             -- --test-threads=1
 
       - name: Record search cassettes
-        run: cargo test -p cognee-search --test last_accessed_update -- --test-threads=1
+        run: |
+          rm -f crates/search/tests/fixtures/cassettes/last_accessed_update.json
+          cargo test -p cognee-search --test last_accessed_update -- --test-threads=1
 
       - name: Record delete cassettes
-        run: cargo test -p cognee-delete --test hard_mode_orphan_sweep -- --test-threads=1
+        run: |
+          rm -f crates/delete/tests/fixtures/cassettes/hard_mode_orphan_sweep.json
+          cargo test -p cognee-delete --test hard_mode_orphan_sweep -- --test-threads=1
 
       - name: Commit refreshed cassettes
         # Pass the user-controlled ref through an env var, never interpolated
         # directly into the shell — `${{ … }}` is substituted as raw text before
         # bash parses it, so a crafted ref would be a script-injection sink on a
-        # runner holding contents:write + OPENAI_KEY.
+        # runner holding contents:write + BASETEN_KEY.
         env:
           REF: ${{ github.event.inputs.ref }}
         run: |

@@ -16,7 +16,7 @@ workspace = true
 
 [features]
 # Standalone builds register the common OSS provider set. Downstream crates
-# (cognee-lib, cognee-http-server) depend with `default-features = false` and
+# (cognee, cognee-http-server) depend with `default-features = false` and
 # forward exactly the features they want, so `--no-default-features` builds
 # stay precise.
 default = ["onnx", "ladybug", "pgvector", "pggraph", "mock-llm"]
@@ -30,8 +30,8 @@ pgvector     = ["cognee-vector/pgvector", "dep:url"]
 pggraph      = ["cognee-graph/postgres", "dep:url"]
 # Record/replay cassette-based mock LLM (MOCK_LLM / COGNEE_RECORD_LLM).
 mock-llm     = ["cognee-llm/mock"]
-# Enables the in-memory `mock` vector provider in `with_builtins()`.
-testing      = ["cognee-vector/testing"]
+# Enables the in-memory `mock` vector and graph providers in `with_builtins()`.
+testing      = ["cognee-vector/testing", "cognee-graph/testing"]
 
 [dependencies]
 cognee-database = { path = "../database", version = "0.1.3" }
@@ -41,6 +41,7 @@ cognee-llm = { path = "../llm", version = "0.1.3" }
 cognee-storage = { path = "../storage", version = "0.1.3" }
 cognee-vector = { path = "../vector", version = "0.1.3" }
 async-trait.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 url = { workspace = true, optional = true }

@@ -34,14 +34,16 @@ impl EdgeType {
 
     /// Compute a deterministic UUID for an EdgeType from its relationship name.
     ///
-    /// Mirrors Python's `generate_edge_id(edge_id=text)`:
-    /// `uuid5(NAMESPACE_OID, text.lower().replace(" ", "_").replace("'", ""))`
+    /// Mirrors Python's `EdgeType.id_for(relationship_name)`
+    /// (`identity_fields=["relationship_name"]`):
+    /// `uuid5(NAMESPACE_OID, "EdgeType:<normalized relationship_name>")`.
+    ///
+    /// The `EdgeType:` class prefix was added upstream in cognee 1.2.0
+    /// (`namespace_edge_type_point_ids.py`) — the previous bare-name scheme
+    /// (`uuid5(OID, normalized)`) let a relationship and a same-named node
+    /// collide on one point id.
     pub fn deterministic_id(relationship_name: &str) -> Uuid {
-        let normalized = relationship_name
-            .to_lowercase()
-            .replace(' ', "_")
-            .replace('\'', "");
-        Uuid::new_v5(&Uuid::NAMESPACE_OID, normalized.as_bytes())
+        cognee_utils::data_point_id_for("EdgeType", &[relationship_name])
     }
 
     /// Create a new EdgeType with a random UUID.
@@ -236,14 +238,13 @@ mod tests {
 
     #[test]
     fn test_deterministic_id_matches_python() {
-        // Python: uuid5(NAMESPACE_OID, "works_at") with NAMESPACE_OID = 6ba7b812-...
-        // We can verify the computation is correct by ensuring it is a v5 UUID
-        // in the OID namespace.
+        // Python: EdgeType.id_for("works_at") = uuid5(OID, "EdgeType:works_at")
+        // (class-namespaced since cognee 1.2.0, namespace_edge_type_point_ids.py).
         let id = EdgeType::deterministic_id("works_at");
         assert_eq!(
             id,
-            Uuid::new_v5(&Uuid::NAMESPACE_OID, b"works_at"),
-            "deterministic_id('works_at') should equal uuid5(OID, 'works_at')"
+            Uuid::new_v5(&Uuid::NAMESPACE_OID, b"EdgeType:works_at"),
+            "deterministic_id('works_at') should equal uuid5(OID, 'EdgeType:works_at')"
         );
     }
 

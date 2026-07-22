@@ -127,6 +127,35 @@ pub fn require_env(var_name: &str) -> String {
     panic!("❌ Required environment variable '{var_name}' is not set")
 }
 
+/// Fail loudly when a pipeline error occurs in either cassette mode, so the
+/// `Err(e) => { eprintln!("Skipping…"); return }` skip blocks the e2e tests use
+/// to tolerate a missing real LLM don't swallow it and pass with zero assertions.
+///
+/// - Replay mode (`COGNEE_TEST_REPLAY`): the error is a cassette miss — a
+///   stale/edited prompt or schema whose input hash no longer matches a recorded
+///   entry (`ReplayLlm` returns `LlmError::InvalidResponse`). Re-record.
+/// - Record mode (`COGNEE_RECORD_LLM`): the live LLM call failed, so the cassette
+///   would be silently left empty/partial (`RecordingLlm` only records successful
+///   calls) and pass recording but fail the next replay. Fail now instead. Note
+///   Baseten 501 "Error making prediction" is transient — just re-run.
+///
+/// Outside both modes (a legacy live run with no cassette) it is a no-op and the
+/// legitimate "no LLM configured" skip proceeds. Single source of truth: the
+/// per-crate `tests/test_utils.rs` shims re-export this so the skip-swallowing
+/// gap it closes cannot silently reopen in one copy.
+pub fn fail_loudly_in_cassette_mode(what: &str, err: &impl std::fmt::Display) {
+    if std::env::var("COGNEE_TEST_REPLAY").is_ok_and(|v| !v.is_empty()) {
+        panic!(
+            "{what} failed in replay mode — likely a stale/missing cassette entry; re-record cassettes. Error: {err}"
+        );
+    }
+    if std::env::var("COGNEE_RECORD_LLM").is_ok_and(|v| !v.is_empty()) {
+        panic!(
+            "{what} failed while recording — the cassette would be left empty/partial; fix the LLM error and re-record (Baseten 501s are transient — retry). Error: {err}"
+        );
+    }
+}
+
 /// Returns `true` when live LLM credentials are configured — `OPENAI_URL`/
 /// `OPENAI_TOKEN` or the canonical `LLM_ENDPOINT`/`LLM_API_KEY`. Integration/E2E
 /// tests call this to skip gracefully (per the repo convention) instead of
@@ -164,8 +193,18 @@ pub fn create_openai_adapter_from_env() -> Arc<OpenAIAdapter> {
     let base_url = require_env("OPENAI_URL");
     let api_token = require_env("OPENAI_TOKEN");
     let model = llm_model_from_env();
+    // Route through the production factory so litellm-style provider prefixes
+    // (`openai/`, `baseten/`, …) are stripped exactly as in a real run — e.g.
+    // `baseten/openai/gpt-oss-120b` → `openai/gpt-oss-120b`. Building the adapter
+    // directly would send the prefixed slug verbatim and 404.
+    //
+    // NOTE: the default provider here is `openai`, which strips a leading
+    // `openai/` segment. A custom endpoint whose *real* model slug legitimately
+    // begins with `openai/` (org "openai") must therefore set `LLM_PROVIDER=custom`
+    // (or `openai_compatible`) so the slug is passed through verbatim.
+    let provider = std::env::var("LLM_PROVIDER").unwrap_or_else(|_| "openai".to_string());
     Arc::new(
-        OpenAIAdapter::new(model, api_token, Some(base_url))
+        cognee_llm::build_openai_compatible_adapter(&provider, &model, &api_token, &base_url, 3)
             .unwrap_or_else(|e| panic!("❌ Failed to create OpenAI adapter: {e}")),
     )
 }
@@ -196,6 +235,115 @@ pub fn pg_test_url() -> Option<String> {
     let user = std::env::var("DB_USERNAME").unwrap_or_else(|_| "postgres".to_string());
     let pass = std::env::var("DB_PASSWORD").unwrap_or_default();
     Some(format!("postgres://{user}:{pass}@{host}:{port}/{name}"))
+}
+
+/// The shared-Postgres integration-test URL from `TEST_POSTGRES_URL`, or `None`
+/// to skip. Distinct from [`pg_test_url`] (which builds a URL from the `DB_*`
+/// vars): several suites read this single explicit variable to target one
+/// Postgres server for the single-database (relational + pgvector +
+/// Postgres-graph) scenario.
+pub fn test_postgres_url() -> Option<String> {
+    std::env::var("TEST_POSTGRES_URL")
+        .ok()
+        .filter(|v| !v.is_empty())
+}
+
+/// A throwaway PostgreSQL database created for a single test, dropped by
+/// [`cleanup`](TempPostgresDb::cleanup).
+///
+/// See [`create_temp_postgres_db`] for why per-test databases are used instead
+/// of sharing (and resetting) one.
+pub struct TempPostgresDb {
+    name: String,
+    url: String,
+    maintenance_url: String,
+}
+
+impl TempPostgresDb {
+    /// Connection URL for the freshly-created database.
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
+    /// Drop the database. Best-effort — a failure here (e.g. the server went
+    /// away) only leaks a uniquely-named throwaway database (harmless, and
+    /// trivially reclaimed), never the test result. `WITH (FORCE)` (Postgres 13+)
+    /// terminates any lingering connections first.
+    pub async fn cleanup(self) {
+        use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
+        if let Ok(admin) = cognee_database::connect(&self.maintenance_url).await {
+            let _ = admin
+                .execute(Statement::from_string(
+                    DatabaseBackend::Postgres,
+                    format!("DROP DATABASE IF EXISTS \"{}\" WITH (FORCE)", self.name),
+                ))
+                .await;
+        }
+    }
+}
+
+/// Create a uniquely-named throwaway PostgreSQL database for a single test,
+/// derived from `base_url`.
+///
+/// # Why per-test databases
+///
+/// Several PG suites target one Postgres server when a developer points
+/// `TEST_POSTGRES_URL` / `PGGRAPH_TEST_URL` / `PGVECTOR_TEST_URL` at the same
+/// instance to validate the single-database deployment. Sharing (and wiping) one
+/// database is unsafe here for two reasons: `cargo nextest` runs every test in
+/// its **own process**, so an in-process `#[serial]` guard cannot serialize them
+/// and their schema mutations would race; and unconditionally dropping tables
+/// would destroy any unrelated data the developer keeps in that database. Giving
+/// each test its own database avoids both — tests run in parallel with no shared
+/// state, and cleanup only ever drops the database this call created.
+///
+/// The new database's host/port/credentials come from `base_url`; a maintenance
+/// connection to the server's `postgres` database is used to `CREATE`/`DROP` it
+/// (neither can run while connected to the target database). The `vector`
+/// extension is not installed here — suites that need it get it from
+/// `PgVectorAdapter::new`, whose migrator runs `CREATE EXTENSION IF NOT EXISTS
+/// vector`.
+///
+/// Requires the caller's build to enable a Postgres driver (e.g.
+/// `cognee-database/postgres`) and the connecting role to have `CREATEDB`.
+pub async fn create_temp_postgres_db(base_url: &str) -> Result<TempPostgresDb, sea_orm::DbErr> {
+    use sea_orm::{ConnectionTrait, DatabaseBackend, DbErr, Statement};
+
+    // Never interpolate the URL into the error — it may carry credentials.
+    let parse = |u: &str| {
+        url::Url::parse(u)
+            .map_err(|e| DbErr::Custom(format!("could not parse the Postgres base URL: {e}")))
+    };
+
+    // Unique db name; `_`-separated so it is a bare identifier — quoting is
+    // trivially safe (the value is ours, never user input).
+    let name = format!("cognee_test_{}", uuid::Uuid::new_v4().simple());
+
+    // Maintenance URL: same server, the always-present `postgres` database.
+    let mut maintenance = parse(base_url)?;
+    maintenance.set_path("/postgres");
+    let maintenance_url = maintenance.to_string();
+
+    // Target URL: same server, the new database.
+    let mut target = parse(base_url)?;
+    target.set_path(&format!("/{name}"));
+    let url = target.to_string();
+
+    let admin = cognee_database::connect(&maintenance_url)
+        .await
+        .map_err(|e| DbErr::Custom(format!("connect to maintenance database failed: {e}")))?;
+    admin
+        .execute(Statement::from_string(
+            DatabaseBackend::Postgres,
+            format!("CREATE DATABASE \"{name}\""),
+        ))
+        .await?;
+
+    Ok(TempPostgresDb {
+        name,
+        url,
+        maintenance_url,
+    })
 }
 
 /// Build a [`TaskContext`] with all-mock backends and an in-memory SQLite database.

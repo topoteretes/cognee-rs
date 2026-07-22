@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
-use cognee_lib::cognee_core::{CpuPool, RayonThreadPool};
-use cognee_lib::cognify::{MemifyConfig, run_memify};
-use cognee_lib::database::{PipelineRunRepository, SeaOrmPipelineRunRepository, ops};
-use cognee_lib::{ComponentManager, PipelineContext};
+use cognee::cognify::{MemifyConfig, run_memify};
+use cognee::core::{CpuPool, RayonThreadPool};
+use cognee::database::{PipelineRunRepository, SeaOrmPipelineRunRepository, ops};
+use cognee::{ComponentManager, PipelineContext};
 use tracing::{debug, info};
 use uuid::Uuid;
 

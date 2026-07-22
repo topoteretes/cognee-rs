@@ -23,6 +23,7 @@ cognee-embedding = { path = "../embedding", version = "0.1.3" }
 cognee-database = { path = "../database", version = "0.1.3" }
 cognee-graph = { path = "../graph", version = "0.1.3" }
 cognee-llm = { path = "../llm", version = "0.1.3" }
+cognee-models = { path = "../models", version = "0.1.3" }
 cognee-session = { path = "../session", version = "0.1.3", features = ["sea-orm-store"] }
 cognee-telemetry = { path = "../telemetry", version = "0.1.3" }
 cognee-utils = { path = "../utils", version = "0.1.3" }
@@ -46,7 +47,6 @@ cognee-database  = { path = "../database" }
 cognee-embedding  = { path = "../embedding", features = ["onnx"] }
 cognee-graph      = { path = "../graph", features = ["testing", "ladybug"] }
 cognee-vector     = { path = "../vector", features = ["testing"] }
-cognee-models     = { path = "../models" }
 cognee-storage    = { path = "../storage" }
 cognee-ingestion  = { path = "../ingestion" }
 cognee-cognify    = { path = "../cognify" }

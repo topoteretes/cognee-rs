@@ -4,7 +4,7 @@ This test cannot fail meaningfully until a binding starts emitting
 ``send_telemetry`` events from the Rust side. Today the Python ``cognee``
 SDK fires analytics from its own Python code; the Rust
 ``cognee_py`` binding exposes only the pipeline surface and
-never reaches the ``cognee_lib::api::*`` call sites that emit. The
+never reaches the ``cognee::api::*`` call sites that emit. The
 harness wiring lives here so the test runs automatically the moment a
 future gap surfaces those APIs through PyO3.
 
@@ -30,7 +30,7 @@ import pytest
 
 pytestmark = pytest.mark.skip(
     reason=(
-        "Pending binding surfacing of cognee_lib::api::* (gap 07 decision 13). "
+        "Pending binding surfacing of cognee::api::* (gap 07 decision 13). "
         "Wired into the harness so the test runs automatically when the "
         "double-emit path becomes reachable from a binding."
     )

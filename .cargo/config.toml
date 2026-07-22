@@ -38,3 +38,8 @@ CCACHE_NOHASHDIR = "true"
 CC_aarch64_linux_android = "aarch64-linux-android21-clang"
 CXX_aarch64_linux_android = "aarch64-linux-android21-clang++"
 AR_aarch64_linux_android = "llvm-ar"
+# Minimum iOS version required by our dependencies (lz4, blake3, zstd reference
+# ___chkstk_darwin which entered the iOS runtime in iOS 13). Without this, Rust
+# defaults to iOS 10.0 and the device-target link fails with undefined symbols.
+# force = false means a caller can still override via their shell environment.
+IPHONEOS_DEPLOYMENT_TARGET = { value = "13.0", force = false }

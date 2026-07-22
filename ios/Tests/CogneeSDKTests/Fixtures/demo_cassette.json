@@ -1,0 +1,92 @@
+{
+  "version": 1,
+  "model": "llama3.2:3b",
+  "entries": {
+    "0357bb65e990f0f9cc19a8a3a6f7e8ed48576478ee865c81795459d92507836f": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Alan Turing\n\nAlan Turing was a British mathematician and computer scientist born in London in 1912. He is widely ",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "edges": [
+          {
+            "description": "born in London",
+            "relationship_name": "born_in",
+            "source_node_id": "Alan_Turing",
+            "target_node_id": "London"
+          },
+          {
+            "description": "led the team that cracked the Enigma cipher used by Nazi Germany",
+            "relationship_name": "worked_at",
+            "source_node_id": "Alan_Turing",
+            "target_node_id": "Bletchley_Park"
+          },
+          {
+            "description": "cracked the Enigma cipher used by Nazi Germany, significantly shortening the war",
+            "relationship_name": "contribution_to",
+            "source_node_id": "Alan_Turing",
+            "target_node_id": "World_War_II"
+          },
+          {
+            "description": "developed the Turing test to evaluate machine intelligence",
+            "relationship_name": "worked_at",
+            "source_node_id": "Alan_Turing",
+            "target_node_id": "University_of_Manchester"
+          },
+          {
+            "description": "awarded the OBE in 1946 for his wartime services",
+            "relationship_name": "award",
+            "source_node_id": "Alan_Turing",
+            "target_node_id": "OBE"
+          }
+        ],
+        "nodes": [
+          {
+            "description": "",
+            "id": "Alan_Turing",
+            "name": "Alan Turing",
+            "type": "Person"
+          },
+          {
+            "description": "",
+            "id": "London",
+            "name": "London",
+            "type": "Location"
+          },
+          {
+            "description": "",
+            "id": "Bletchley_Park",
+            "name": "Bletchley Park",
+            "type": "Organization"
+          },
+          {
+            "description": "",
+            "id": "World_War_II",
+            "name": "World War II",
+            "type": "Event"
+          },
+          {
+            "description": "",
+            "id": "University_of_Manchester",
+            "name": "University of Manchester",
+            "type": "Organization"
+          },
+          {
+            "description": "",
+            "id": "OBE",
+            "name": "OBE",
+            "type": "Award"
+          }
+        ]
+      }
+    },
+    "74716e91d25f2c2cd94b47fbae7e7373648f3dc8d421c731a2f7240261064a66": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Alan Turing\n\nAlan Turing was a British mathematician and computer scientist born in London in 1912. He is widely ",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "description": "",
+        "summary": ""
+      }
+    }
+  }
+}

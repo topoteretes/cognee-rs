@@ -90,7 +90,7 @@ Mirror the existing per-method instrumentation/span pattern from the two adapter
 **Crate-cycle note:** `cognee-graph` and `cognee-vector` must not form a
 dependency cycle. Confirm the current direction (likely neither depends on the
 other) and place `PgHybridAdapter` where it can `use` both — most cleanly a new
-leaf crate `cognee-hybrid` depending on both, re-exported by `cognee-lib`.
+leaf crate `cognee-hybrid` depending on both, re-exported by `cognee`.
 
 ### PR 2 — Unified-engine concept + `ComponentManager` wiring
 
@@ -154,7 +154,7 @@ combined write path (graph + vector consistency after `add_nodes_with_vectors`).
 - [crates/lib/src/component_manager.rs](../../crates/lib/src/component_manager.rs) — pghybrid construction + same-`Arc` wiring
 - [crates/lib/src/config.rs](../../crates/lib/src/config.rs) — `USE_UNIFIED_PROVIDER` handling
 - [crates/graph/src/lib.rs](../../crates/graph/src/lib.rs) / [crates/cognify/src/tasks.rs](../../crates/cognify/src/tasks.rs) — capability hook + combined-write path (PR 3)
-- Cargo manifests — `pghybrid` feature plumbing through `cognee-lib`/`cognee-cli` defaults
+- Cargo manifests — `pghybrid` feature plumbing through `cognee`/`cognee-cli` defaults
 - README — `USE_UNIFIED_PROVIDER=pghybrid` documentation
 
 ## Acceptance criteria

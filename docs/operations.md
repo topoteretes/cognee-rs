@@ -10,8 +10,8 @@ rustdoc (`cargo doc --no-deps --open`); this page is the conceptual map.
 ## The memory API
 
 Cognee's primary surface is four operations that turn raw input into queryable,
-self-improving memory. They live in the [`cognee-lib`](../crates/lib/) `api`
-module (`cognee_lib::api::{remember, recall, improve, forget}`) and surface as
+self-improving memory. They live in the [`cognee`](../crates/lib/) `api`
+module (`cognee::api::{remember, recall, improve, forget}`) and surface as
 the always-built `cognee-cli` verbs `remember` / `recall` / `improve` / `forget`.
 
 ```
@@ -100,7 +100,7 @@ Unified orchestration across 15 retrieval strategies selected by `SearchType`
 
 ## Additional operations
 
-These live in the [`cognee-lib`](../crates/lib/) `api` module (and `DatasetManager`):
+These live in the [`cognee`](../crates/lib/) `api` module (and `DatasetManager`):
 
 | Operation | What it does | rustdoc |
 |---|---|---|

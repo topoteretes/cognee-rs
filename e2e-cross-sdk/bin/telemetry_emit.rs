@@ -1,6 +1,6 @@
 //! Harness-only Rust telemetry driver for the cross-SDK parity test.
 //!
-//! Calls `cognee_lib::telemetry::send_telemetry("cognee.forget", ...)`
+//! Calls `cognee::telemetry::send_telemetry("cognee.forget", ...)`
 //! once with fixed args, then waits briefly so the detached dispatch
 //! task finishes its POST before the process exits. Captured by the
 //! Python proxy at `COGNEE_TELEMETRY_PROXY_URL_FOR_TESTS`.
@@ -13,7 +13,7 @@
 //!
 //! See docs/telemetry/02/10-cross-sdk-parity.md §4.3.
 
-use cognee_lib::telemetry;
+use cognee::telemetry;
 use std::time::Duration;
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]

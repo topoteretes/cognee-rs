@@ -12,12 +12,12 @@
 
 use std::sync::Arc;
 
+use cognee::api::improve::{ImproveParams, improve};
 use cognee_cognify::CognifyConfig;
 use cognee_database::{DatabaseConnection, IngestDb, SeaOrmCheckpointStore, connect, initialize};
 use cognee_embedding::MockEmbeddingEngine;
 use cognee_graph::MockGraphDB;
 use cognee_ingestion::AddPipeline;
-use cognee_lib::api::improve::{ImproveParams, improve};
 use cognee_ontology::{NoOpOntologyResolver, OntologyResolver};
 use cognee_session::{FsSessionStore, ImproveLockGuard, SessionManager, SessionStore};
 use cognee_storage::{LocalStorage, StorageTrait};
@@ -57,7 +57,7 @@ async fn make_harness() -> Harness {
     let vector_db = Arc::new(MockVectorDB::new());
     let add_pipeline = AddPipeline::new(Arc::clone(&storage), ingest_db)
         .with_thread_pool(Arc::new(
-            cognee_lib::core::RayonThreadPool::with_default_threads().unwrap(),
+            cognee::core::RayonThreadPool::with_default_threads().unwrap(),
         ))
         .with_graph_db(graph_db.clone() as Arc<dyn cognee_graph::GraphDBTrait>)
         .with_vector_db(vector_db.clone() as Arc<dyn cognee_vector::VectorDB>)

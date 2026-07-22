@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking (graph data):** `Entity`, `EntityType`, and `EdgeType` node/point
+  ids are now **deterministic and class-namespaced** —
+  `uuid5(NAMESPACE_OID, "{ClassName}:{normalized_value}")` — matching upstream
+  Python cognee's `DataPoint.id_for`. Previously entities/entity-types were
+  assigned random `uuid4` ids, so the same entity duplicated across `cognify`
+  runs instead of merging (issue [#57]), and database-backed edge dedup never
+  matched. Ontology/temporal/memify id sites were also brought onto the same
+  scheme. Graphs created before this change hold the old ids and will **not**
+  merge with newly-created nodes — re-run `cognify` on existing datasets (no
+  automatic migration is provided). See [#57] for details.
+
+[#57]: https://github.com/topoteretes/cognee-rs/issues/57
+
 ## [0.1.3](https://github.com/topoteretes/cognee-rs/compare/v0.1.0...v0.1.3) - 2026-07-02
 
 ### Added
@@ -24,7 +39,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Enable the HTML loader in the Neon (Node.js) binding for URL ingestion (#50)
 - Fail loudly when NATURAL_LANGUAGE search is unsupported by the backend (#51)
 - Fix reported TypeScript SDK bugs and cross-dataset deduplication (#11)
-
 
 ## [0.1.1](https://github.com/topoteretes/cognee-rs/compare/cognee-models-v0.1.0...cognee-models-v0.1.1) - 2026-06-26
 

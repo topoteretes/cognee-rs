@@ -1,5 +1,5 @@
 //! [`ComponentRegistry`] — the pluggable provider → factory map shared by the
-//! `ComponentManager` (cognee-lib) and the HTTP server's standalone wiring.
+//! `ComponentManager` (cognee) and the HTTP server's standalone wiring.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -83,6 +83,8 @@ impl ComponentRegistry {
                 "postgresql",
             )));
         }
+        #[cfg(feature = "testing")]
+        reg.register_graph(Arc::new(crate::builtins::graph::MockGraphFactory));
 
         // ── llm ───────────────────────────────────────────────────────────
         for id in llm::OPENAI_COMPATIBLE_PROVIDERS {
@@ -253,6 +255,7 @@ fn unsupported_msg(field: &str, provider: &str, supported: &[String]) -> String 
         "graph_database_provider" => match p.as_str() {
             "ladybug" | "kuzu" => " Rebuild with the `ladybug` crate feature to enable it.",
             "postgres" | "postgresql" => " Rebuild with the `pggraph` crate feature to enable it.",
+            "mock" => " Rebuild with the `testing` crate feature to enable it.",
             _ => "",
         },
         "vector_db_provider" => match p.as_str() {
@@ -329,6 +332,11 @@ mod tests {
         for id in ["postgres", "postgresql"] {
             assert!(reg.graph_providers().iter().any(|p| p == id));
         }
+        #[cfg(feature = "testing")]
+        assert!(
+            reg.graph_providers().iter().any(|p| p == "mock"),
+            "the `testing` feature must register the `mock` graph provider"
+        );
 
         // LLM: every OpenAI-compatible provider id.
         for id in crate::builtins::llm::OPENAI_COMPATIBLE_PROVIDERS {
@@ -396,6 +404,8 @@ mod tests {
                 api_key: "sk-test".to_string(),
                 endpoint: String::new(),
                 max_retries: 3,
+                max_completion_tokens: cognee_llm::OpenAIAdapter::DEFAULT_MAX_COMPLETION_TOKENS,
+                llm_args: serde_json::Map::new(),
                 mock: false,
                 cassette: String::new(),
                 record_path: String::new(),

@@ -368,7 +368,7 @@ genuine blockers from the audit remain, plus the storage finding above:
 5. **Not blockers** (already pure Rust / HTTP): `BruteForceVectorDB`,
    `OpenAICompatibleEmbeddingEngine`, `TikTokenCounter` / `WordCounter`.
 
-A `wasm` feature set on `cognee-lib` (mirroring the existing `android-default`
+A `wasm` feature set on `cognee` (mirroring the existing `android-default`
 set, dropping onnx/pgvector/pggraph/postgres/pdfium/server/gRPC-telemetry and
 keeping brute-force vector + tiktoken + HTTP embedding) is the umbrella-crate
 entry point for Config 2, with cfg-guards on the native-only deps mirroring the

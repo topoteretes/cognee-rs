@@ -4,7 +4,7 @@
 //! These functions contain the pure-Rust async logic that is shared between
 //! every language binding surface (C API, Neon JS, Python). Each function takes
 //! a [`HandleState`] reference and `serde_json::Value` arguments, performs the
-//! operation against the underlying cognee-lib APIs, and returns a
+//! operation against the underlying cognee APIs, and returns a
 //! `serde_json::Value` result (or an [`SdkError`]).
 //!
 //! The binding-specific wrappers (C string parsing, Neon JS promise settling,
@@ -38,12 +38,12 @@
 use serde_json::json;
 use uuid::Uuid;
 
-use cognee_lib::add::generate_dataset_id;
-use cognee_lib::api::{
+use cognee::add::generate_dataset_id;
+use cognee::api::{
     DatasetRef, ForgetTarget, PruneTarget, forget as cognee_forget,
     prune_data as cognee_prune_data, prune_system as cognee_prune_system, update as cognee_update,
 };
-use cognee_lib::database::IngestDb;
+use cognee::database::IngestDb;
 
 use crate::wire::{cognify_result_json, marshal_inputs};
 use crate::{HandleState, SdkError};

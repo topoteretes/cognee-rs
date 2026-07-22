@@ -2,6 +2,8 @@ pub mod add;
 pub mod add_and_cognify;
 #[cfg(feature = "bench")]
 pub mod bench;
+#[cfg(feature = "profiling")]
+pub mod bench_telemetry;
 pub mod cognify;
 pub mod config;
 pub mod delete;

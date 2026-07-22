@@ -43,7 +43,7 @@ use cognee_graph::{GraphDBTrait, LadybugAdapter};
 use cognee_http_server::components::ComponentHandles;
 use cognee_http_server::{AppState, HttpServerConfig, build_router};
 use cognee_ingestion::AddPipeline;
-use cognee_llm::{Llm, OpenAIAdapter};
+use cognee_llm::{Llm, build_openai_compatible_adapter};
 use cognee_models::DataInput;
 use cognee_storage::{LocalStorage, StorageTrait};
 use cognee_test_utils::MockVectorDB;
@@ -114,9 +114,12 @@ async fn post_cognify_blocking_executes_real_pipeline() {
     // In-memory mock vector DB (qdrant extracted to closed cognee-vector-qdrant).
     let vector_db: Arc<dyn VectorDB> = Arc::new(MockVectorDB::new());
 
+    // Route through the production factory (provider from env, default `openai`)
+    // so litellm-style model prefixes are stripped exactly as in a real run.
+    let provider = std::env::var("LLM_PROVIDER").unwrap_or_else(|_| "openai".to_string());
     let llm: Arc<dyn Llm> = Arc::new(
-        OpenAIAdapter::new(openai_model, openai_token, Some(openai_url))
-            .expect("OpenAIAdapter::new"),
+        build_openai_compatible_adapter(&provider, &openai_model, &openai_token, &openai_url, 3)
+            .expect("build_openai_compatible_adapter"),
     );
 
     let thread_pool: Arc<dyn cognee_core::CpuPool> = Arc::new(

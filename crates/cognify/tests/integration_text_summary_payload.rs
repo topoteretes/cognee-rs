@@ -42,7 +42,10 @@ async fn text_summary_payload_contains_text_field() {
     // 1. Empty knowledge graph  (consumed by the graph-extraction stage)
     // 2. Summarization response (consumed by the summarize-text stage)
     let mock_llm = MockLlm::new(vec![
-        // Response 1: graph extraction -> empty graph
+        // Response 1: graph extraction -> empty graph. Field is `edges`, not the
+        // ignored `relationships`: since #83 dropped `#[serde(default)]` from
+        // `KnowledgeGraph.edges`, it is a required field and a payload missing it
+        // fails typed deserialization ("missing field `edges`").
         json!({"nodes": [], "edges": []}).to_string(),
         // Response 2: summarization -> deterministic summary
         json!({

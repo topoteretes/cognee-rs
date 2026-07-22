@@ -282,10 +282,10 @@ Specific reproduction rules:
   2. `SELECT data.* FROM data JOIN dataset_data ON data.id = dataset_data.data_id WHERE dataset_data.dataset_id = ?`.
   3. `state.lib.formatted_graph_data(dataset_id, &user)` — wrapped in `try/except`; any error yields empty `nodes`/`edges`.
 - **Delegation target**:
-  - `state.lib.datasets().get_by_id(dataset_id)` — existing in `cognee-lib`.
+  - `state.lib.datasets().get_by_id(dataset_id)` — existing in `cognee`.
   - `state.lib.datasets().list_data(dataset_id)` — existing.
   - `state.lib.formatted_graph_data(dataset_id, user)` — existing (used by the WebSocket frame builder, [../pipelines.md §10](../pipelines.md#10-websocket-integration)).
-  - The Markdown rendering itself is **handler-local** — it doesn't belong in `cognee-lib` because it's HTTP-presentation logic. Lives in `crates/http-server/src/routers/activity/export.rs` as a free `fn render_markdown(...) -> String`.
+  - The Markdown rendering itself is **handler-local** — it doesn't belong in `cognee` because it's HTTP-presentation logic. Lives in `crates/http-server/src/routers/activity/export.rs` as a free `fn render_markdown(...) -> String`.
 - **Validation rules**: none beyond UUID parsing.
 - **Rate / size limits**: response body is bounded only by graph size. A 100k-node graph produces a multi-MiB Markdown blob. Configurable via `HttpServerConfig::activity_export_max_bytes` (default 10 MiB); if exceeded, truncate with `...truncated...` footer. Open Question: should the limit be a hard 413 instead?
 - **Permission gate**: **none**. Python does not check permission on this endpoint — it relies on the graph fetch to fail when the user can't read. Rust matches verbatim: no `PermissionsRepository` call, no application-level gate. The graph-read path produces an empty result for an unauthorized caller, which the handler renders to an effectively empty Markdown report.
@@ -406,7 +406,7 @@ pub struct SpansErrorEnvelopeDTO {
 1. Add DTO structs in `crates/http-server/src/dto/activity.rs`.
 2. Extend `PipelineRunRepository` (in `cognee-database`) with `list_recent_with_attribution(dataset_id: Option<Uuid>, limit: u32) -> Result<Vec<PipelineRunRow>, DbError>` joining on `datasets` ⨝ `users`. Include indexes on `pipeline_runs.dataset_id` (already present per [../pipelines.md §5](../pipelines.md#5-database-persistence--pipeline_runs-table)).
 3. Extend `UserRepository` with `list_active_with_api_key_counts() -> Result<Vec<(User, u64)>, DbError>` for `/agents`.
-4. Add `state.lib.users().list_in_tenant(tenant_id)` adapter for `/users` (re-export of `cognee_lib::users::tenants::get_users_in_tenant`).
+4. Add `state.lib.users().list_in_tenant(tenant_id)` adapter for `/users` (re-export of `cognee::users::tenants::get_users_in_tenant`).
 5. Add `crates/http-server/src/routers/activity.rs` with five handlers wired via `Router::new().route(...).route(...)...`.
 6. Add `crates/http-server/src/routers/activity/export.rs` with `pub fn render_markdown(...) -> String` and unit tests around it (line-by-line snapshots vs Python output for a fixed graph fixture).
 7. Add `#[utoipa::path(...)]` annotations and `#[derive(ToSchema)]` on DTOs.

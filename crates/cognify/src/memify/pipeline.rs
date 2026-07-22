@@ -14,7 +14,7 @@ use cognee_core::{
 use cognee_database::{DatabaseConnection, PipelineRunRepository};
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
-use cognee_models::Triplet;
+use cognee_models::{Entity, Triplet};
 use cognee_vector::VectorDB;
 use tracing::info;
 use uuid::Uuid;
@@ -233,8 +233,15 @@ pub async fn memify(
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown")
                 .to_string();
-            let source_id = Uuid::new_v5(&Uuid::NAMESPACE_OID, source.to_lowercase().as_bytes());
-            let target_id = Uuid::new_v5(&Uuid::NAMESPACE_OID, target.to_lowercase().as_bytes());
+            // Custom-triplet endpoints use the same `Entity::id_for` scheme as
+            // graph entities, so a custom node connects to an existing entity
+            // when its name matches that entity's LLM node id (which
+            // `Entity::from_node` hashes). When the graph entity's node id
+            // differs from its display name, the ids won't coincide — but this
+            // is still strictly better than the previous bare `to_lowercase`
+            // hash, which shared no id space with entities at all.
+            let source_id = Entity::id_for(&source);
+            let target_id = Entity::id_for(&target);
             let text = format!("{source}-\u{203A}{relationship}-\u{203A}{target}");
             custom_triplets.push(
                 Triplet::new(source_id, target_id, relationship, text).with_names(source, target),

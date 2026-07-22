@@ -103,12 +103,22 @@ pub struct Edge {
 /// * `edges` - List of relationships between nodes
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct KnowledgeGraph {
-    /// List of nodes (entities and concepts)
-    #[serde(default)]
+    /// List of nodes (entities and concepts).
+    ///
+    /// Intentionally NOT `#[serde(default)]`: schemars honours serde `default`
+    /// by emitting a JSON-schema `"default"` and dropping the field from the
+    /// `required` array, which advertises the field as optional to the model.
+    /// gpt-oss-120b (and other non-strict tool-callers) then omit it. Requiring
+    /// `nodes`/`edges` here makes schemars list them in `required` (forcing the
+    /// model to return both) and makes a payload missing either field fail typed
+    /// deserialization, driving the adapter's corrective-retry loop instead of
+    /// silently yielding a 0-edge graph. Mirrors what instructor does in Python,
+    /// where its TOOLS-mode schema builder re-adds non-default fields to
+    /// `required` (Python's `default_factory` emits no schema `"default"`).
     pub nodes: Vec<Node>,
 
-    /// List of edges (relationships between nodes)
-    #[serde(default)]
+    /// List of edges (relationships between nodes). NOT `#[serde(default)]` — see
+    /// the note on `nodes`. An empty graph must send `{"nodes":[],"edges":[]}`.
     pub edges: Vec<Edge>,
 }
 

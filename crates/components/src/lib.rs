@@ -1,6 +1,6 @@
 //! `cognee-components` — shared construction of pipeline backends.
 //!
-//! Both the `ComponentManager` (cognee-lib, lazy version-cached) and the HTTP
+//! Both the `ComponentManager` (cognee, lazy version-cached) and the HTTP
 //! server's standalone wiring (eager) build the same seven backends — storage,
 //! relational database, graph DB, vector DB, embedding engine, LLM, and
 //! transcriber. This crate holds that construction logic once, behind a

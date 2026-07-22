@@ -1,5 +1,5 @@
 [package]
-name = "cognee-lib"
+name = "cognee"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -64,7 +64,7 @@ default = [
     "unstructured",
     "visualization",
     "mock-llm",
-    # decision 1: telemetry is ON by default in cognee-lib. Disable with
+    # decision 1: telemetry is ON by default in cognee. Disable with
     # --no-default-features for compile-time opt-out.
     "telemetry",
 ]

@@ -109,11 +109,11 @@ docker compose up --build
 scripts/check_all.sh
 ```
 
-Runs in order: `cargo fmt --check` → `cargo check --all-targets` → `cargo clippy -- -D warnings` → C API check (`capi/scripts/check.sh`) → Python binding check (`python/scripts/check.sh`) → TS binding check (`ts/scripts/check.sh`).
+Runs in order: `cargo fmt --check` → `cargo check --all-targets` → `cargo clippy -- -D warnings` → C API check (`capi/scripts/check.sh`) → Python binding check (`python/scripts/check.sh`) → TS binding check (`ts/scripts/check.sh`) → Java binding check (`java/scripts/check.sh`).
 
 ### CI (GitHub Actions)
 
-`ci.yml` runs on push/PR to main: lint (fmt + check + clippy), tests (with `OPENAI_KEY` secret via `scripts/run_tests_with_openai.sh`), `cargo doc --no-deps`, and C/Python/TS binding checks. `http-parity.yml` runs the cross-SDK Rust↔Python parity suite (`workflow_dispatch` only; see task 12). `ts-prebuild.yml` builds Neon prebuilt binaries for multiple platforms (publishes the `cognee-ts` npm package).
+`ci.yml` runs on push/PR to main: lint (fmt + check + clippy), tests (with `OPENAI_KEY` secret via `scripts/run_tests_with_openai.sh`), `cargo doc --no-deps`, and C/Python/TS/Java binding checks. `http-parity.yml` runs the cross-SDK Rust↔Python parity suite (`workflow_dispatch` only; see task 12). `ts-prebuild.yml` builds Neon prebuilt binaries for multiple platforms (publishes the `cognee-ts` npm package).
 
 ## Coding Conventions
 

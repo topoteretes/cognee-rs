@@ -274,7 +274,7 @@ This flattening is the responsibility of `crates/http-server/src/dto/search.rs::
 1. **`Feedback` variant**: present in the core Rust `SearchType` enum but absent from Python's. Resolved: the wire-facing `WireSearchType` drops it entirely, so the HTTP DTO mirrors Python's set verbatim. Library callers reach `SearchType::Feedback` via the core enum directly.
 2. **`top_k <= 0` strictness**: Python silently returns `[]`. Rust matches — return `[]` (no `400`) and emit a `tracing::warn!` for diagnostics.
 3. **`query` length cap**: Python has none. Rust matches — no application-level cap. The HTTP body-size limit ([../architecture.md §8](../architecture.md#8-middleware-stack)) provides the only effective bound.
-4. **`response_schema` parameter**: the orchestrator supports `SearchParams.response_schema` for `SearchOutput::Structured`, but Python's HTTP DTO does not expose it. Strict mirror — the field is not on the HTTP DTO. Library callers can still access it via `cognee_lib::search` directly.
+4. **`response_schema` parameter**: the orchestrator supports `SearchParams.response_schema` for `SearchOutput::Structured`, but Python's HTTP DTO does not expose it. Strict mirror — the field is not on the HTTP DTO. Library callers can still access it via `cognee::search` directly.
 5. **`session_id` on search**: Python's `search()` library function accepts `session_id`, but the HTTP DTO does not expose it. Rust matches: no `session_id` on `SearchPayloadDTO`. Confirmed.
 6. **History `limit` query param**: Python does not paginate the history endpoint. Rust matches — no `?limit=N` query parameter. Frontends needing pagination must implement client-side slicing.
 

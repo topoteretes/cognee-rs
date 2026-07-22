@@ -8,14 +8,14 @@
 //! ## Function shapes
 //!
 //! - `cg_sdk_visualize(sdk, opts_json, cb, user_data)` — calls
-//!   `cognee_lib::visualization::render(&*graph_db)` and delivers the
+//!   `cognee::visualization::render(&*graph_db)` and delivers the
 //!   self-contained HTML document as a **quoted JSON string** (D9).  The HTML
 //!   may be several hundred kilobytes; copy it out of the callback or use
 //!   `cg_json_string_decode` (see `util.rs`) to unescape into raw UTF-8.
 //!   Prefer `cg_sdk_visualize_to_file` for large graphs.
 //!
 //! - `cg_sdk_visualize_to_file(sdk, file_path, opts_json, cb, user_data)` —
-//!   calls `cognee_lib::visualize(&*graph_db, destination_path)` and delivers
+//!   calls `cognee::visualize(&*graph_db, destination_path)` and delivers
 //!   the written file path as a **quoted JSON string** (D9).
 //!   `opts_json.destinationPath` is optional; absent → default
 //!   `~/graph_visualization.html`.
@@ -33,9 +33,9 @@ use crate::sdk::{CgSdk, CgSdkResultCallback, SendUserData, spawn_sdk_op};
 
 // These are only used in the feature-enabled paths.
 #[cfg(feature = "visualization")]
-use cognee_bindings_common::ops::visualization;
-#[cfg(feature = "visualization")]
 use crate::error::set_last_error;
+#[cfg(feature = "visualization")]
+use cognee_bindings_common::ops::visualization;
 #[cfg(feature = "visualization")]
 use serde_json::json;
 #[cfg(feature = "visualization")]

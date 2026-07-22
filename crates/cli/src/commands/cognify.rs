@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
-use cognee_lib::cognify::{ChunkStrategy, CognifyConfig, cognify};
-use cognee_lib::database::{
+use cognee::cognify::{ChunkStrategy, CognifyConfig, cognify};
+use cognee::database::{
     DatabaseConnection, PipelineRunRepository, SeaOrmPipelineRunRepository, ops,
 };
-use cognee_lib::ontology::{NoOpOntologyResolver, OntologyResolver, RdfLibOntologyResolver};
-use cognee_lib::{ComponentManager, PipelineContext};
+use cognee::ontology::{NoOpOntologyResolver, OntologyResolver, RdfLibOntologyResolver};
+use cognee::{ComponentManager, PipelineContext};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
@@ -157,8 +157,8 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
             // the provenance stamp.
             let user_email: Option<String> = None;
 
-            let thread_pool: Arc<dyn cognee_lib::core::CpuPool> = Arc::new(
-                cognee_lib::core::RayonThreadPool::with_default_threads().map_err(|e| {
+            let thread_pool: Arc<dyn cognee::core::CpuPool> = Arc::new(
+                cognee::core::RayonThreadPool::with_default_threads().map_err(|e| {
                     CliError::Runtime(format!("failed to construct thread pool: {e}"))
                 })?,
             );
