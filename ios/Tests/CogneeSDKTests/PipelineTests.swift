@@ -65,6 +65,24 @@ final class PipelineTests: XCTestCase {
         return "Title: \(title)\n\n\(content)\n\nReferences: \(refs)"
     }
 
+    // MARK: – Result types
+
+    /// Typed mirror of `CogneeAddResult` (cognee_sdk.h §D3):
+    /// `{"datasetName":"…","added":[…],"addedCount":N,"deduplicated":[…],"deduplicatedCount":M}`
+    private struct AddResult: Decodable {
+        let addedCount: Int
+        let deduplicatedCount: Int
+    }
+
+    /// Typed mirror of `CogneeCognifyResult` (cognee_sdk.h §D3):
+    /// `{"chunks":N,"entities":N,"edges":N,"summaries":N}`
+    private struct CognifyResult: Decodable {
+        let chunks: Int
+        let entities: Int
+        let edges: Int
+        let summaries: Int
+    }
+
     // MARK: – Tests
 
     /// Full offline pipeline: warm → add → cognify → search.
@@ -93,22 +111,53 @@ final class PipelineTests: XCTestCase {
         let inputsJSON = try textInputsJSON(memoryText)
         let addResult = try await cognee.add(inputsJSON: inputsJSON, dataset: "demo")
 
-        XCTAssertFalse(addResult.isEmpty,   "add() must return a non-empty JSON string")
-        XCTAssertNotEqual(addResult, "null", "add() must not return null")
+        // Decode CogneeAddResult and assert on numeric fields.
+        // On a fresh in-memory store the first add() must ingest ≥ 1 chunk with
+        // nothing deduplicated (the store was empty before warm()).
+        let addParsed = try JSONDecoder().decode(
+            AddResult.self,
+            from: try XCTUnwrap(addResult.data(using: .utf8), "add() returned non-UTF-8 data")
+        )
+        XCTAssertGreaterThan(addParsed.addedCount, 0,
+            "add() must ingest ≥ 1 chunk; got addedCount=\(addParsed.addedCount)")
+        XCTAssertEqual(addParsed.deduplicatedCount, 0,
+            "first add() on a fresh store must deduplicate 0 items")
 
         // ── 4. Cognify — replays cassette: graph extraction + summarisation ─
         let cognifyResult = try await cognee.cognify(dataset: "demo")
 
-        XCTAssertFalse(cognifyResult.isEmpty,    "cognify() must return a non-empty JSON string")
-        XCTAssertNotEqual(cognifyResult, "null",  "cognify() must not return null")
+        // Decode CogneeCognifyResult and assert on numeric fields.
+        // The cassette records 6 extracted nodes and 5 edges, so all counts ≥ 1.
+        let cognifyParsed = try JSONDecoder().decode(
+            CognifyResult.self,
+            from: try XCTUnwrap(cognifyResult.data(using: .utf8), "cognify() returned non-UTF-8 data")
+        )
+        XCTAssertGreaterThan(cognifyParsed.chunks, 0,
+            "cognify() must process ≥ 1 chunk")
+        XCTAssertGreaterThan(cognifyParsed.entities, 0,
+            "cognify() must extract ≥ 1 entity; cassette records 6 nodes")
+        XCTAssertGreaterThan(cognifyParsed.edges, 0,
+            "cognify() must extract ≥ 1 edge; cassette records 5 edges")
 
         // ── 5. Search — brute-force vector search over the stored chunks ────
         //     The mock graph store is a no-op so graph-based enrichment is
         //     skipped; the raw chunk hits are still returned.
         let searchResult = try await cognee.search(query: "Who was Alan Turing?")
 
-        XCTAssertFalse(searchResult.isEmpty,    "search() must return a non-empty JSON string")
-        XCTAssertNotEqual(searchResult, "null",  "search() must not return null")
+        // The mock graph store is a no-op, so only brute-force vector search
+        // runs — no LLM completion call is made.  The returned chunks must
+        // contain content from the Alan Turing text that was added.
+        XCTAssertFalse(searchResult.isEmpty,
+            "search() must return a non-empty JSON string")
+        XCTAssertNotEqual(searchResult, "null",
+            "search() must not return the JSON null literal")
+        XCTAssertTrue(
+            searchResult.lowercased().contains("turing") ||
+            searchResult.lowercased().contains("alan") ||
+            searchResult.lowercased().contains("mathematician"),
+            "search('Who was Alan Turing?') must return content about Alan Turing; " +
+            "got: \(searchResult.prefix(200))"
+        )
     }
 
     /// Smoke-test: SDK initialises without throwing.

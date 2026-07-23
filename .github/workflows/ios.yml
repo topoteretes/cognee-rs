@@ -19,7 +19,7 @@ env:
 
 jobs:
   ios-check:
-    name: iOS targets (cargo check + Swift parse)
+    name: iOS targets (cargo build + Swift typecheck)
     # macos-14 = Apple Silicon (M1).  Required for aarch64-apple-ios targets.
     runs-on: macos-14
 
@@ -50,20 +50,19 @@ jobs:
       - name: Install protoc (required by lance-encoding build script)
         run: brew install protobuf
 
-      # `cargo check` type-checks the crate for iOS without linking —
-      # avoids the 6–7 GB .a files that a full `cargo build --release` produces
-      # and keeps peak disk usage well under the runner's ~14 GB limit.
-      - name: Check — aarch64-apple-ios (device)
+      # `cargo build` (debug, CARGO_PROFILE_DEV_DEBUG=0) links both iOS targets,
+      # catching linker errors that type-checking alone misses.
+      - name: Build — aarch64-apple-ios (device)
         run: |
-          cargo check \
+          cargo build \
             --target aarch64-apple-ios \
             --manifest-path capi/cognee-capi/Cargo.toml \
             --no-default-features \
             --features sqlite,testing,mock-llm
 
-      - name: Check — aarch64-apple-ios-sim (simulator)
+      - name: Build — aarch64-apple-ios-sim (simulator)
         run: |
-          cargo check \
+          cargo build \
             --target aarch64-apple-ios-sim \
             --manifest-path capi/cognee-capi/Cargo.toml \
             --no-default-features \
