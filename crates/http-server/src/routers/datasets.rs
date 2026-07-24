@@ -8,10 +8,15 @@ use std::collections::HashMap;
 
 use axum::{
     Json, Router,
-    extract::{Path, Query, State},
+    extract::{Path, State},
     http::StatusCode,
     routing::{delete, get, post, put},
 };
+// serde_html_form-backed Query: deserializes single (`?dataset=a`) and repeated
+// (`?dataset=a&dataset=b`) params into `Vec<Uuid>`. axum's default Query uses
+// serde_urlencoded, which cannot deserialize a sequence and rejects the request
+// with HTTP 400 "invalid type: string …, expected a sequence".
+use axum_extra::extract::Query;
 use cognee_database::{
     DatasetConfigDb, DeleteDb, IngestDb, PipelineRunStatus as DbPipelineRunStatus,
 };
