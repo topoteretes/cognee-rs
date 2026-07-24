@@ -90,6 +90,10 @@ dev-mock = ["cognee-vector/testing", "cognee-components/testing"]
 # in the closed cognee-cloud-rs workspace alongside the qdrant adapter —
 # so the version pinned below is the only hyper in the OSS dependency graph.
 axum = { version = "0.8", features = ["multipart", "ws"] }
+# `query` feature provides a serde_html_form-backed Query extractor that, unlike
+# axum's default serde_urlencoded Query, deserializes repeated/single params into
+# a Vec (used by GET /datasets/status).
+axum-extra = { version = "0.10", features = ["query"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace", "limit"] }
 hyper = { version = "1", features = ["server", "http1", "http2"] }

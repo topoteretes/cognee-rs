@@ -89,8 +89,11 @@ pub struct DatasetSchemaResponseDTO {
 /// Query string for `GET /api/v1/datasets/status`.
 #[derive(Debug, Deserialize, IntoParams)]
 pub struct DatasetStatusQuery {
-    /// Repeated query param `?dataset=<uuid>&dataset=<uuid>`.
-    /// Defaults to an empty list when the parameter is absent.
+    /// Dataset ids as a single (`?dataset=<uuid>`) or repeated
+    /// (`?dataset=<uuid>&dataset=<uuid>`) query param. Deserialized via the
+    /// `axum_extra` (serde_html_form) Query extractor; the default axum Query
+    /// (serde_urlencoded) cannot decode a sequence here. Defaults to an empty
+    /// list when the parameter is absent.
     #[serde(rename = "dataset", default)]
     pub dataset: Vec<Uuid>,
 }
