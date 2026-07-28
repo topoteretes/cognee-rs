@@ -83,7 +83,7 @@ where
         // gets no `Timings`, so it is ignored in `on_close`. This keeps
         // per-phase attribution clean and skips all work while disarmed.
         let store = store();
-        if !store.enabled.load(Ordering::Relaxed) {
+        if !store.enabled.load(Ordering::Acquire) {
             return;
         }
         if let Some(span) = ctx.span(id) {
@@ -97,7 +97,7 @@ where
     }
 
     fn on_enter(&self, id: &Id, ctx: Context<'_, S>) {
-        if !store().enabled.load(Ordering::Relaxed) {
+        if !store().enabled.load(Ordering::Acquire) {
             return;
         }
         if let Some(span) = ctx.span(id)
@@ -110,7 +110,7 @@ where
     }
 
     fn on_exit(&self, id: &Id, ctx: Context<'_, S>) {
-        if !store().enabled.load(Ordering::Relaxed) {
+        if !store().enabled.load(Ordering::Acquire) {
             return;
         }
         if let Some(span) = ctx.span(id)
@@ -124,7 +124,7 @@ where
 
     fn on_close(&self, id: Id, ctx: Context<'_, S>) {
         let store = store();
-        if !store.enabled.load(Ordering::Relaxed) {
+        if !store.enabled.load(Ordering::Acquire) {
             return;
         }
         let Some(span) = ctx.span(&id) else {
@@ -139,7 +139,11 @@ where
                 return;
             };
             // Skip spans created in an earlier phase so their time is not
-            // booked onto whichever phase they happen to close in.
+            // booked onto whichever phase they happen to close in. A span that
+            // straddles a phase boundary is therefore dropped from every phase
+            // total (it cannot be cleanly attributed to either) — an accepted
+            // trade-off, since such spans are rare and small relative to the
+            // per-stage spans that open and close within one armed phase.
             if t.epoch != current_epoch {
                 return;
             }
@@ -168,7 +172,10 @@ pub fn arm() {
     let store = store();
     store.aggs.lock().unwrap().clear();
     store.epoch.fetch_add(1, Ordering::Relaxed);
-    store.enabled.store(true, Ordering::Relaxed);
+    // Release so a worker that later observes `enabled == true` (Acquire, in the
+    // layer callbacks) is guaranteed to also see this incremented epoch rather
+    // than a stale one, which would otherwise mistag and silently drop the span.
+    store.enabled.store(true, Ordering::Release);
 }
 
 /// One serialized row of the per-stage breakdown (milliseconds).
@@ -187,7 +194,7 @@ struct SpanRow {
 /// empty array so the artifact set is predictable.
 pub fn finish_phase(profile_dir: &str, phase: &str) {
     let store = store();
-    store.enabled.store(false, Ordering::Relaxed);
+    store.enabled.store(false, Ordering::Release);
     let snapshot: Vec<(&'static str, SpanAgg)> = {
         let aggs = store.aggs.lock().unwrap();
         aggs.iter().map(|(k, v)| (*k, v.clone())).collect()

@@ -179,10 +179,11 @@ fn round3(value: f64) -> f64 {
 /// Read `(node_count, edge_count)` from the graph after cognify.
 ///
 /// Returns `None` if the metrics cannot be read (backend unavailable or the
-/// metrics query itself failed). The caller uses `None` to distinguish a
-/// genuinely empty graph — which should trip the stale-cassette sanity guard —
-/// from a transient metrics-read failure, which must not be mistaken for an
-/// empty graph and fail an otherwise-successful cognify.
+/// metrics query itself failed), which the caller distinguishes from a
+/// genuinely empty graph: an empty graph trips the stale-cassette guard with a
+/// "N nodes < floor" message, while unreadable metrics fail the run with a
+/// distinct "metrics unreadable" message — rather than being coerced to a
+/// fabricated 0-node count that a parity comparison would read as real.
 async fn graph_counts(cm: &Arc<ComponentManager>) -> Option<(i64, i64)> {
     let graph_db = match cm.graph_db().await {
         Ok(db) => db,
@@ -479,14 +480,21 @@ async fn run_phases(
             }
             // Healthy graph — guard passes.
             Some(_) => {}
-            // Metrics unreadable: we cannot evaluate the guard. Warn, but do
-            // not mislabel an otherwise-successful cognify as failed.
-            None => warn!("graph sanity: metrics unavailable; skipping stale-cassette guard"),
+            // Metrics unreadable: we cannot confirm cognify produced a
+            // non-empty graph. Fail rather than emit a fabricated 0/0 count
+            // alongside success=true, which a parity comparison would read as a
+            // genuine 0-node measurement of a successful run.
+            None => {
+                let msg = "graph sanity: graph metrics unreadable; cannot verify non-empty graph"
+                    .to_string();
+                warn!("{msg}");
+                status.cognify = format!("failed: {msg}");
+            }
         }
     }
-    // `BenchResult` requires integer counts (Python parity schema), so an
-    // unreadable metrics read is reported as 0/0 — the sanity guard above has
-    // already been skipped in that case so this does not fail the run.
+    // `BenchResult` requires integer counts (Python parity schema). Unreadable
+    // metrics are reported as 0/0, but the guard above has already flipped
+    // cognify to "failed" in that case, so 0/0 never coincides with success.
     let (node_count, edge_count) = counts.unwrap_or((0, 0));
 
     // ── Search ───────────────────────────────────────────────────────────
