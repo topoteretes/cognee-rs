@@ -19,7 +19,7 @@
 #![allow(clippy::unwrap_used, reason = "lock poison is unrecoverable")]
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -44,6 +44,10 @@ struct SpanAgg {
 /// Shared registry the layer writes into and the bench driver reads.
 struct Store {
     enabled: AtomicBool,
+    /// Bumped on every `arm()`. A span only counts in the phase (epoch) it was
+    /// created in, so a span that lives across a phase boundary is not booked
+    /// onto whichever phase it happens to close in.
+    epoch: AtomicU64,
     aggs: Mutex<BTreeMap<&'static str, SpanAgg>>,
 }
 
@@ -52,6 +56,7 @@ static STORE: OnceLock<Store> = OnceLock::new();
 fn store() -> &'static Store {
     STORE.get_or_init(|| Store {
         enabled: AtomicBool::new(false),
+        epoch: AtomicU64::new(0),
         aggs: Mutex::new(BTreeMap::new()),
     })
 }
@@ -62,6 +67,8 @@ struct Timings {
     idle: Duration,
     /// Timestamp of the last state transition (open / enter / exit).
     last: Instant,
+    /// The armed epoch this span was created in (see `Store::epoch`).
+    epoch: u64,
 }
 
 /// A `tracing` layer that accumulates busy/idle time per span name while armed.
@@ -72,16 +79,27 @@ where
     S: Subscriber + for<'a> LookupSpan<'a>,
 {
     fn on_new_span(&self, _attrs: &Attributes<'_>, id: &Id, ctx: Context<'_, S>) {
+        // Only track spans that open while armed. A span opened before `arm()`
+        // gets no `Timings`, so it is ignored in `on_close`. This keeps
+        // per-phase attribution clean and skips all work while disarmed.
+        let store = store();
+        if !store.enabled.load(Ordering::Relaxed) {
+            return;
+        }
         if let Some(span) = ctx.span(id) {
             span.extensions_mut().insert(Timings {
                 busy: Duration::ZERO,
                 idle: Duration::ZERO,
                 last: Instant::now(),
+                epoch: store.epoch.load(Ordering::Relaxed),
             });
         }
     }
 
     fn on_enter(&self, id: &Id, ctx: Context<'_, S>) {
+        if !store().enabled.load(Ordering::Relaxed) {
+            return;
+        }
         if let Some(span) = ctx.span(id)
             && let Some(t) = span.extensions_mut().get_mut::<Timings>()
         {
@@ -92,6 +110,9 @@ where
     }
 
     fn on_exit(&self, id: &Id, ctx: Context<'_, S>) {
+        if !store().enabled.load(Ordering::Relaxed) {
+            return;
+        }
         if let Some(span) = ctx.span(id)
             && let Some(t) = span.extensions_mut().get_mut::<Timings>()
         {
@@ -109,6 +130,7 @@ where
         let Some(span) = ctx.span(&id) else {
             return;
         };
+        let current_epoch = store.epoch.load(Ordering::Relaxed);
         // Read the accumulated timings and the final idle interval, then drop
         // the extensions borrow before reading the span name and the store.
         let (busy_ns, idle_ns) = {
@@ -116,6 +138,11 @@ where
             let Some(t) = ext.get_mut::<Timings>() else {
                 return;
             };
+            // Skip spans created in an earlier phase so their time is not
+            // booked onto whichever phase they happen to close in.
+            if t.epoch != current_epoch {
+                return;
+            }
             let now = Instant::now();
             t.idle += now.saturating_duration_since(t.last);
             (t.busy.as_nanos(), t.idle.as_nanos())
@@ -134,10 +161,13 @@ pub fn layer() -> BoxedLayer {
     Box::new(SpanTimingLayer)
 }
 
-/// Arm the layer: drop any prior aggregates and start recording closed spans.
+/// Arm the layer: drop any prior aggregates, advance the epoch, and start
+/// recording closed spans. Advancing the epoch means spans still open from a
+/// previous phase are ignored rather than attributed to this one.
 pub fn arm() {
     let store = store();
     store.aggs.lock().unwrap().clear();
+    store.epoch.fetch_add(1, Ordering::Relaxed);
     store.enabled.store(true, Ordering::Relaxed);
 }
 
