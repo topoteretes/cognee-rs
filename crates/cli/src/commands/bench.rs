@@ -171,6 +171,27 @@ fn start_phase_telemetry(_profile_dir: Option<&str>) {}
 #[cfg(not(feature = "profiling"))]
 fn finish_phase_telemetry(_profile_dir: Option<&str>, _phase: &str) {}
 
+/// Run one pipeline phase with profiling/telemetry armed, timing only the
+/// workload. The timer starts *after* the profiler/telemetry are armed and
+/// stops *before* the flamegraph/telemetry artifacts are written, so the
+/// returned elapsed is workload-only — not inflated by profiler startup or
+/// report generation. Centralizes the bracketing so the three phases (add /
+/// cognify / search) cannot drift out of sync. Returns `(elapsed_secs, result)`.
+async fn timed_phase(
+    profile_dir: Option<&str>,
+    phase: &str,
+    work: impl std::future::Future<Output = Result<(), String>>,
+) -> (f64, Result<(), String>) {
+    start_phase_telemetry(profile_dir);
+    let guard = start_phase_profiler(profile_dir);
+    let start = Instant::now();
+    let result = work.await;
+    let elapsed = start.elapsed().as_secs_f64();
+    finish_phase_profiler(guard, profile_dir, phase);
+    finish_phase_telemetry(profile_dir, phase);
+    (elapsed, result)
+}
+
 /// Round to 3 decimals to match Python's `round(x, 3)` output.
 fn round3(value: f64) -> f64 {
     (value * 1000.0).round() / 1000.0
@@ -252,6 +273,14 @@ pub fn run(args: BenchArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
     }
     if let Some(limit) = args.num_memories {
         memories.truncate(limit);
+        // Truncating to an empty corpus would skip the graph sanity guard in
+        // run_phases (which is gated on a non-empty corpus) and let a 0/0 graph
+        // be reported with success=true. Reject it up front.
+        if memories.is_empty() {
+            return Err(CliError::Validation(
+                "--num-memories must be at least 1 (0 leaves an empty corpus)".to_string(),
+            ));
+        }
     }
 
     // ── Mock plumbing: configure Settings BEFORE any component init ──────
@@ -421,36 +450,30 @@ async fn run_phases(
     let t_db_setup = t_db_start.elapsed().as_secs_f64();
 
     // ── Add ────────────────────────────────────────────────────────────────
-    // Bracket the timer strictly around the workload: start it after the
-    // profiler/telemetry are armed and stop it before the flamegraph/telemetry
-    // artifacts are written, so reported phase time is workload-only and not
-    // inflated by profiler startup or report generation.
     eprintln!("Phase 1: Adding {n} memories...");
-    start_phase_telemetry(profile_dir);
-    let add_prof = start_phase_profiler(profile_dir);
-    let t_add_start = Instant::now();
-    let add_res = phase_add(cm, owner_id, dataset_name, memories).await;
-    let t_add = t_add_start.elapsed().as_secs_f64();
+    let (t_add, add_res) = timed_phase(
+        profile_dir,
+        "add",
+        phase_add(cm, owner_id, dataset_name, memories),
+    )
+    .await;
     if let Err(msg) = add_res {
         warn!("Add FAILED: {msg}");
         status.add = format!("failed: {msg}");
     }
-    finish_phase_profiler(add_prof, profile_dir, "add");
-    finish_phase_telemetry(profile_dir, "add");
 
     // ── Cognify ──────────────────────────────────────────────────────────
     eprintln!("Phase 2: Running cognify (knowledge graph build)...");
-    start_phase_telemetry(profile_dir);
-    let cognify_prof = start_phase_profiler(profile_dir);
-    let t_cognify_start = Instant::now();
-    let cognify_res = phase_cognify(cm, owner_id, dataset_name).await;
-    let t_cognify = t_cognify_start.elapsed().as_secs_f64();
+    let (t_cognify, cognify_res) = timed_phase(
+        profile_dir,
+        "cognify",
+        phase_cognify(cm, owner_id, dataset_name),
+    )
+    .await;
     if let Err(msg) = cognify_res {
         warn!("Cognify FAILED: {msg}");
         status.cognify = format!("failed: {msg}");
     }
-    finish_phase_profiler(cognify_prof, profile_dir, "cognify");
-    finish_phase_telemetry(profile_dir, "cognify");
 
     let t_total = t_add + t_cognify;
 
@@ -499,17 +522,16 @@ async fn run_phases(
 
     // ── Search ───────────────────────────────────────────────────────────
     eprintln!("Phase 3: Running search query...");
-    start_phase_telemetry(profile_dir);
-    let search_prof = start_phase_profiler(profile_dir);
-    let t_search_start = Instant::now();
-    let search_res = phase_search(cm, owner_id, dataset_name).await;
-    let t_search = t_search_start.elapsed().as_secs_f64();
+    let (t_search, search_res) = timed_phase(
+        profile_dir,
+        "search",
+        phase_search(cm, owner_id, dataset_name),
+    )
+    .await;
     if let Err(msg) = search_res {
         warn!("Search FAILED: {msg}");
         status.search = format!("failed: {msg}");
     }
-    finish_phase_profiler(search_prof, profile_dir, "search");
-    finish_phase_telemetry(profile_dir, "search");
 
     let success = status.prune == PHASE_OK
         && status.db_setup == PHASE_OK
