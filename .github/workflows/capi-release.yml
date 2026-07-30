@@ -74,7 +74,13 @@ jobs:
             archive_suffix: windows-x86_64
 
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    # 150, not 45. The windows-x86_64 leg never reached a real compile before —
+    # the wrong-linker bug (see the native build step) killed it ~4 minutes in, so
+    # 45 was only ever exercised by the faster Linux/macOS legs. ts-prebuild's
+    # win32 leg builds a comparable dependency graph (full cognee stack + ort +
+    # lbug's bundled C++) and needed >90 minutes, so fixing the linker without
+    # raising this would just swap a link error for a timeout.
+    timeout-minutes: 150
 
     steps:
       - name: Checkout
@@ -174,9 +180,19 @@ jobs:
         shell: bash
         run: ci/ort/prefetch.sh "${{ matrix.target }}" "${{ github.workspace }}/capi/target/ort-cache"
 
+      # NO `shell: bash` here. On Windows that selects Git Bash, which prepends
+      # C:\Program Files\Git\usr\bin to PATH — and that directory ships GNU
+      # coreutils' `link.exe` (the Unix hard-link tool), which SHADOWS the MSVC
+      # linker that ilammy/msvc-dev-cmd just put on PATH. rustc then invokes the
+      # wrong linker and every build script dies with:
+      #   /usr/bin/link: extra operand '...build_script_build...rcgu.o'
+      # This silently undid the MSVC setup above and broke the 0.2.0 windows-x86_64
+      # tarball. ts-prebuild.yml's equivalent step has always used the default
+      # shell (pwsh on Windows) — the Windows fixes were ported from there but the
+      # shell difference was missed. The default shell is bash on Linux/macOS, so
+      # dropping the override changes nothing for the other legs.
       - name: Build release library (native)
         if: "!matrix.cross"
-        shell: bash
         env:
           ORT_CACHE_DIR: ${{ github.workspace }}/capi/target/ort-cache
         run: cargo build --release --manifest-path capi/Cargo.toml --target ${{ matrix.target }}

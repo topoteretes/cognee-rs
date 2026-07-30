@@ -38,7 +38,13 @@ jobs:
     name: Build ${{ matrix.platform }}
     # Cap each leg so a stuck build (e.g. a hung native compile) fails fast
     # instead of running to the 6h/24h default and burning runner time.
-    timeout-minutes: 90
+    #
+    # 150, not 90: at 0.2.0 the win32-x64-msvc leg was cancelled at 90m59s while
+    # still legitimately compiling (ort + lbug's bundled C++ + lancedb on a cold
+    # cache), which left @cognee/neon-win32-x64-msvc unpublished. It built fine at
+    # 0.1.3, so this is dependency-graph growth rather than a hang — the cap needs
+    # headroom above the real build time, not a tighter leash.
+    timeout-minutes: 150
     strategy:
       fail-fast: false
       matrix:
@@ -318,8 +324,22 @@ jobs:
           path: /tmp/neon-artifacts
           merge-multiple: false
 
+      # A missing artifact is a HARD FAILURE, not a warning.
+      #
+      # This used to `echo "WARNING: artifact missing"` and carry on, which is how
+      # 0.2.0 shipped broken: the win32-x64-msvc leg timed out, its .node was never
+      # produced, the platform publish logged "SKIP win32-x64-msvc: no .node built"
+      # — and then @cognee/cognee-ts@0.2.0 published anyway as `latest`, pinning an
+      # exact optionalDependency on @cognee/neon-win32-x64-msvc@0.2.0 that did not
+      # exist. Windows installs succeeded (the dep is *optional*) and then failed at
+      # runtime with no native addon. java-prebuild.yml already gets this right via
+      # its "Verify all four classifier jars are present" gate; this mirrors it.
+      #
+      # Publishing an incomplete platform set is never correct — better to ship
+      # nothing and re-dispatch than to leave a broken `latest` on the registry.
       - name: Place artifacts into platform package directories
         run: |
+          missing=0
           for PLATFORM in \
             linux-x64-gnu linux-arm64-gnu \
             darwin-arm64 \
@@ -330,9 +350,11 @@ jobs:
               cp "$SRC" "$DEST"
               echo "Placed $DEST"
             else
-              echo "WARNING: artifact missing for $PLATFORM" >&2
+              echo "::error::artifact missing for ${PLATFORM} — its build leg did not produce cognee_ts_neon.node. Refusing to publish an incomplete platform set."
+              missing=1
             fi
           done
+          [ "$missing" = 0 ] || exit 1
 
       # Publish each platform package.
       - name: Publish platform packages
@@ -366,6 +388,33 @@ jobs:
         env:
           COGNEE_SKIP_POSTINSTALL: "1"
         run: npm run build:ts
+
+      # Gate the main package on every platform pin being resolvable.
+      #
+      # ts/package.json pins each @cognee/neon-* optionalDependency to an EXACT
+      # version. If one of them is not on the registry, `npm install` still succeeds
+      # (optional deps fail soft) and then breaks at runtime when the addon can't be
+      # loaded. So the main package must not go live until all four are published —
+      # checked against the registry rather than the local artifacts, since a
+      # platform publish can also fail for registry-side reasons.
+      - name: Verify every platform package is on the registry
+        working-directory: ts
+        run: |
+          VER=$(node -p "require('./package.json').version")
+          missing=0
+          for PLATFORM in \
+            linux-x64-gnu linux-arm64-gnu \
+            darwin-arm64 \
+            win32-x64-msvc; do
+            PKG="@cognee/neon-${PLATFORM}"
+            if npm view "${PKG}@${VER}" version >/dev/null 2>&1; then
+              echo "ok ${PKG}@${VER}"
+            else
+              echo "::error::${PKG}@${VER} is not on the registry — @cognee/cognee-ts@${VER} pins it exactly and would install broken on that platform."
+              missing=1
+            fi
+          done
+          [ "$missing" = 0 ] || exit 1
 
       # Publish the main cognee-ts package (idempotent: skip if already on registry).
       - name: Publish cognee-ts

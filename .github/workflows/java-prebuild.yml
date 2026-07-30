@@ -47,7 +47,11 @@ jobs:
     name: Build ${{ matrix.platform }}
     # Cap each leg so a stuck build (e.g. a hung native compile) fails fast
     # instead of running to the 6h/24h default and burning runner time.
-    timeout-minutes: 90
+    #
+    # 150, not 90: matches ts-prebuild.yml. At 0.2.0 the win32-x64-msvc leg was
+    # cancelled at ~91m while still legitimately compiling, so the four-jar gate
+    # correctly withheld the Maven Central bundle. See ts-prebuild.yml for detail.
+    timeout-minutes: 150
     strategy:
       fail-fast: false
       matrix:
