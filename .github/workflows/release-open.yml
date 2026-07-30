@@ -156,7 +156,7 @@ jobs:
           {
             echo "Automated release PR for **${TAG}**, opened from issue #${ISSUE}."
             echo
-            echo "Merging this PR publishes to crates.io, npm, and the C-API GitHub Release."
+            echo "Merging this PR publishes to crates.io, npm, Maven Central, and the C-API GitHub Release."
             echo "Review the \`CHANGELOG.md\` diff below and the green PR checks first."
             echo
             echo "## Changelog"

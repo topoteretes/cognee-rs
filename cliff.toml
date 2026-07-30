@@ -25,6 +25,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 # One version section. `version`/`previous.version` are the git tag names
 # (vX.Y.Z); the heading shows the bare number and links to the tag-to-tag diff.
+#
+# Conventional-commit breaking markers (`feat!:` / `fix(x)!:` / a BREAKING CHANGE
+# trailer) set `commit.breaking`, which prefixes the bullet with **[BREAKING]**.
+# Without it a breaking commit renders as an ordinary bullet in its type's group
+# and the changelog never says the release breaks anything. Prose explaining the
+# migration still belongs in CHANGELOG.md by hand — this only guarantees the
+# commit itself is flagged.
 body = """
 {% if version %}\
 ## [{{ version | trim_start_matches(pat="v") }}]\
@@ -35,7 +42,7 @@ body = """
 {% for group, commits in commits | group_by(attribute="group") %}
 ### {{ group | upper_first }}
 {% for commit in commits %}
-- {{ commit.message | split(pat="\n") | first | upper_first | trim }}\
+- {% if commit.breaking %}**[BREAKING]** {% endif %}{{ commit.message | split(pat="\n") | first | upper_first | trim }}\
 {% endfor %}
 {% endfor %}
 """
@@ -55,21 +62,60 @@ tag_pattern = "v[0-9]*.[0-9]*.[0-9]*"
 topo_order = false
 sort_commits = "newest"
 
-# Conventional-commit prefix -> changelog section. First match wins; the final
-# catch-all keeps everything else under "Other".
+# Conventional-commit prefix -> changelog section. FIRST MATCH WINS, so every
+# skip rule below must precede the group rules.
+#
+# This changelog is user-facing: it answers "what changed for someone depending
+# on cognee?". Repo-internal churn (CI, cassettes, benchmarks, build plumbing,
+# intra-PR review fixups) is deliberately dropped — it is noise to a consumer and
+# it buries the entries that matter. `git log` remains the complete record.
+#
+# The skip rules are categorical, not per-commit, so they keep working as new
+# commits land. They are also deliberately blunt: a genuinely user-facing change
+# that happens to be typed `chore:`/`ci:` or to mention one of the plumbing
+# keywords WILL be dropped. Reviewing the generated section on the release PR is
+# still part of the flow (see docs/RELEASE.md) — re-type such a commit, or add
+# the entry to CHANGELOG.md by hand.
 commit_parsers = [
   { message = "^Merge ",          skip = true },
   { message = "^chore: release",  skip = true },
   { message = "^chore\\(release\\)", skip = true },
+
+  # ── Internal-only: never reaches the changelog ──────────────────────
+  # Whole types that describe repo upkeep rather than shipped behaviour.
+  { message = "^test",            skip = true },
+  { message = "^chore",           skip = true },
+  { message = "^ci",              skip = true },
+  { message = "^build",           skip = true },
+  { message = "^spike",           skip = true },
+
+  # Scopes that are purely benchmark / fixture / test-harness infrastructure,
+  # whatever type they carry (e.g. `perf(bench):`, `perf(fixtures):`).
+  { message = "^[a-z]+\\((bench|fixtures|ios-tests)\\)", skip = true },
+
+  # Intra-PR review fixups ("address PR #41 review findings", "apply review
+  # feedback", "address GraDKh review round 2"). The substantive change is
+  # already represented by its parent feat/fix bullet, so these only add noise.
+  # Anchored on a leading address/apply verb so a real fix that merely mentions
+  # review follow-ups in passing is NOT dropped.
+  { message = "(?i)^[a-z]+(\\([^)]*\\))?!?: *(address|apply) .*review", skip = true },
+
+  # Build/test plumbing keywords: recorded LLM cassettes, XCTest wiring, load
+  # harnesses, build.rs / cargo invocation and header-sync gate fixes. None of
+  # these change library behaviour.
+  #
+  # `^[^\n]*` restricts the match to the SUBJECT line. These parsers run against
+  # the full commit message, so an unanchored keyword also matches the body —
+  # which silently dropped real user-facing fixes whose bodies merely mentioned a
+  # cassette or build.rs. Rust's `regex` has `.`/`[^\n]` not crossing newlines
+  # and `^` not multiline by default, so this cannot leak past the first line.
+  { message = "^[^\\n]*(?i:cassette|xctest|xctunwrap|test bundle|load-harness|build\\.rs|--crate-type|header-sync|protoc)", skip = true },
+
+  # ── User-facing groups ──────────────────────────────────────────────
   { message = "^feat",            group = "Added" },
   { message = "^fix",             group = "Fixed" },
   { message = "^perf",            group = "Changed" },
   { message = "^refactor",        group = "Changed" },
   { message = "^doc",             group = "Documentation" },
-  { message = "^spike",           group = "Other" },
-  { message = "^ci",              group = "Other" },
-  { message = "^build",           group = "Other" },
-  { message = "^chore",           group = "Other" },
-  { message = "^test",            skip = true },
   { message = ".*",               group = "Other" },
 ]

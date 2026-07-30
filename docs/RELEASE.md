@@ -7,7 +7,8 @@ Releasing cognee-rust is a **two-phase, release-PR-driven** flow:
 2. **Verify** — the normal PR CI builds everything and dry-run-packages the
    crates; you review the changelog and the green checks.
 3. **Publish** — merging the PR (with a required-reviewer approval on the publish
-   job) publishes to **crates.io + npm + the C-API GitHub Release**.
+   job) publishes to **crates.io + npm + Maven Central + the C-API GitHub
+   Release**.
 
 ## TL;DR — cut a release
 
@@ -40,6 +41,20 @@ commits, pushes, and opens a PR labelled `autorelease:pending`. The PAT (not
 
 A human reviews the changelog diff + green checks, approves the review, and merges.
 
+**What the changelog review must actually check** — `cliff.toml` drops
+repo-internal churn (CI, chores, cassettes, benchmark/fixture scopes, intra-PR
+review fixups, build plumbing) so the generated section is user-facing by
+default. Two things it cannot do for you:
+
+- **Reposition the breaking notes.** The generated section is inserted directly
+  after the `## [Unreleased]` marker, so any hand-written `### Breaking changes`
+  prose ends up *below* it. Move that block to the top of the new version's
+  section (see the `RELEASER:` comment in `CHANGELOG.md`).
+- **Catch a mis-typed commit.** The skip rules are categorical, so a user-facing
+  change committed as `chore:`/`ci:` — or whose subject happens to mention a
+  plumbing keyword — is silently dropped. Skim `git log <prev-tag>..HEAD` against
+  the generated bullets and hand-add anything missing.
+
 ### Phase 2 — `release-publish.yml` (trigger: the release PR is merged)
 Runs behind the **`release` environment** (required reviewers). Order:
 0. **Preflight** — `cargo owner --list -p cognee-models` and `npm whoami` (real
@@ -56,7 +71,19 @@ Runs behind the **`release` environment** (required reviewers). Order:
      ONNX Runtime for it (mirrors ts-prebuild dropping darwin-x64).
    - `ts-prebuild.yml` → prebuilt `.node` binaries + `@cognee/neon-*` and
      `@cognee/cognee-ts` npm packages (gated on `NPM_TOKEN`).
+   - `java-prebuild.yml` → 4 per-platform classifier jars (linux-x86_64,
+     linux-aarch_64, osx-aarch_64, windows-x86_64) + the main/sources/javadoc
+     jars, GPG-signed and uploaded as a bundle to the Central Portal as
+     `io.github.topoteretes:cognee:X.Y.Z` (gated on `MAVEN_CENTRAL_PASSWORD`).
+     `autoPublish=false` — the bundle lands in the Portal and **a human must
+     review and release it**, so Maven Central is the one target that is not
+     fully automatic. Its version comes solely from `java/pom.xml`, and Central
+     releases are immutable: re-deploying an existing version fails.
 3. **GitHub Release** — created/updated with the changelog section.
+
+`ios.yml` is **not** part of the release. It is a `main`/PR check only (cargo
+check for the iOS targets + a Swift parse) and ships no artifact; the Swift
+package is consumed from source.
 
 Publishing crates.io *before* the tag cascade means a crates.io failure aborts
 before any npm / C-API artifact ships.
@@ -69,6 +96,8 @@ before any npm / C-API artifact ships.
 | `capi/Cargo.toml` | `cargo set-version --manifest-path capi/Cargo.toml` |
 | `ts/cognee-ts-neon/Cargo.toml` | `cargo set-version --manifest-path …` |
 | `ts/package.json` + `@cognee/neon-*` pins + `ts/platform-packages/*/package.json` | node script |
+| `java/cognee-java-jni/Cargo.toml` | `cargo set-version --manifest-path …` (standalone crate, like ts-neon) |
+| `java/pom.xml` (`<project>` version) | python edit, anchored to the `io.github.topoteretes:cognee` coordinates so dependency/plugin `<version>` tags are untouched |
 | `python/` (`cognee-python`) | **automatic** — inherits `version.workspace`; `pyproject.toml` is `dynamic` |
 
 The Python binding is **not published to PyPI**; users build from source
@@ -81,6 +110,8 @@ The Python binding is **not published to PyPI**; users build from source
 | `RELEASE_PAT` | Repo secret. Fine-grained PAT scoped to this repo with **Contents: Read and write**, **Pull requests: Read and write**, **Issues: Read and write** (or a classic PAT with the `repo` scope). The owner only needs **write** access, not admin — the flow never pushes to `main` (it pushes a `release/*` branch and a tag; `main` advances via the PR merge). It must be a PAT rather than `GITHUB_TOKEN` so the opened PR triggers CI and the pushed tag cascades. | `release-open.yml` (open PR, push branch), `release-publish.yml` (push tag, create Release) |
 | `CARGO_REGISTRY_TOKEN` | **Environment** secret on `release`. crates.io token with publish rights for all `cognee-*` crates. | `release-publish.yml` preflight + publish |
 | `NPM_TOKEN` | Repo secret. npm token with publish rights to the `@cognee` org. | `release-verify.yml`, `ts-prebuild.yml`, `release-publish.yml` preflight |
+| `MAVEN_CENTRAL_USERNAME` / `MAVEN_CENTRAL_PASSWORD` | Repo secrets. Central Portal user token for `io.github.topoteretes`. `MAVEN_CENTRAL_PASSWORD` doubles as the publish gate — absent, the Java deploy silently no-ops. | `java-prebuild.yml` |
+| `MAVEN_GPG_PRIVATE_KEY` / `MAVEN_GPG_PASSPHRASE` | Repo secrets. GPG key used to sign the Maven artifacts (Central requires signatures). | `java-prebuild.yml` |
 
 **One-time setup:** in **Settings → Environments**, create an environment named
 `release`, add the required reviewers who must approve each publish, and store
@@ -118,6 +149,10 @@ git push origin main v0.1.3
 2. Verify installs: `npm install @cognee/cognee-ts@X.Y.Z` and a `maturin develop`
    smoke build for the Python binding.
 3. Confirm the `cognee-*` crates are live on crates.io.
+4. **Release the Maven bundle** — `java-prebuild.yml` uploads with
+   `autoPublish=false`, so the deploy is not live until someone reviews and
+   releases it in the [Central Portal](https://central.sonatype.com/publishing).
+   Then confirm `io.github.topoteretes:cognee:X.Y.Z` resolves.
 
 ## Notes / tradeoffs
 
@@ -159,3 +194,9 @@ Release. If it fails partway:
   directly: `capi-release.yml` (`workflow_dispatch` with the tag) and/or
   `ts-prebuild.yml` (`workflow_dispatch`). Both are idempotent — they skip
   platforms/packages already published.
+- **The Java deploy failed** — re-run `java-prebuild.yml` via
+  `workflow_dispatch`. Unlike the others this is **not** idempotent against a
+  *released* Central version (releases are immutable, so a duplicate deploy
+  fails); if `java/pom.xml` was left at the previous version, fix the pom on
+  `main` first, then dispatch. A bundle that is merely *uploaded* (not yet
+  released in the Portal) can be dropped there and re-deployed.

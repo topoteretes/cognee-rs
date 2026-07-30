@@ -7,9 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
+<!-- RELEASER: release-open.yml inserts the git-cliff-generated section directly
+     after the `## [Unreleased]` marker above, which lands it BEFORE any
+     hand-written prose below. When reviewing the release PR, move this
+     `### Breaking changes` block to the TOP of the new version's section —
+     ahead of Added/Changed/Fixed — so the breaking notes are the first thing a
+     reader sees. git-cliff only flags breaking *commits* (`feat!:` → a
+     **[BREAKING]** bullet); migration prose like the entries below is always
+     hand-written and always needs this manual reposition. -->
 
-- **Breaking (graph data):** `Entity`, `EntityType`, and `EdgeType` node/point
+### Breaking changes
+
+- **Umbrella crate renamed `cognee-lib` → `cognee`.** Depend on `cognee` instead
+  (`cargo add cognee`) and import from it (`use cognee::api::remember;` rather
+  than `use cognee_lib::api::remember;`). `cognee-lib` is still published as a
+  thin re-export shim so existing dependents keep compiling unchanged, but it is
+  deprecated and will not be maintained indefinitely. Every Cargo feature
+  forwards 1:1, so no feature flags need changing. See [#93].
+
+- **Graph data:** `Entity`, `EntityType`, and `EdgeType` node/point
   ids are now **deterministic and class-namespaced** —
   `uuid5(NAMESPACE_OID, "{ClassName}:{normalized_value}")` — matching upstream
   Python cognee's `DataPoint.id_for`. Previously entities/entity-types were
@@ -21,6 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   automatic migration is provided). See [#57] for details.
 
 [#57]: https://github.com/topoteretes/cognee-rs/issues/57
+[#93]: https://github.com/topoteretes/cognee-rs/pull/93
 
 ## [0.1.3](https://github.com/topoteretes/cognee-rs/compare/v0.1.0...v0.1.3) - 2026-07-02
 

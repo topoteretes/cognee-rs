@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Set EVERY cognee-rust version location to a single X.Y.Z.
 #
-# cognee-rust ships from four separate manifests plus a set of npm package.json
-# files, and they must all carry the same version at release time. This script
+# cognee-rust ships from five separate Cargo manifests plus a set of npm
+# package.json files plus the Java pom, and they must all carry the same version
+# at release time. This script
 # is the single source of truth for that bump — the release-open workflow
 # (.github/workflows/release-open.yml) calls it, and it is safe to run by
 # hand for a local dry run.
@@ -18,9 +19,16 @@
 #   3. ts-neon crate   — ts/cognee-ts-neon/Cargo.toml [package] version.
 #   4. TS npm packages — ts/package.json version, its @cognee/neon-*
 #      optionalDependencies pins, and each ts/platform-packages/*/package.json.
+#   5. java-jni crate  — java/cognee-java-jni/Cargo.toml [package] version
+#      (standalone crate, mirrors ts-neon).
+#   6. Java pom        — java/pom.xml's <project> version. Load-bearing: the
+#      tag-cascaded java-prebuild.yml derives the jar version and the Maven
+#      Central coordinates from this file alone, and Central releases are
+#      IMMUTABLE — a missed bump here makes the deploy re-publish the previous
+#      version and fail, stranding Java users on the old release.
 #
-# Requires cargo-edit (`cargo install cargo-edit`) for `cargo set-version` and
-# node for the JSON edits.
+# Requires cargo-edit (`cargo install cargo-edit`) for `cargo set-version`,
+# node for the JSON edits, and python3 for the pom edit.
 #
 # Usage:
 #   scripts/release/set-version.sh 0.1.3
@@ -55,6 +63,10 @@ if ! cargo set-version --help >/dev/null 2>&1; then
 fi
 if ! command -v node >/dev/null 2>&1; then
   echo "error: node not found — required to bump the TS package.json files" >&2
+  exit 3
+fi
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "error: python3 not found — required to bump java/pom.xml" >&2
   exit 3
 fi
 
@@ -109,5 +121,33 @@ for (const entry of fs.readdirSync(platDir, { withFileTypes: true })) {
   edit(rel, (pkg) => { pkg.version = version; });
 }
 NODE
+
+# 5. java-jni standalone crate.
+echo "-- java/cognee-java-jni/Cargo.toml"
+cargo set-version --manifest-path "$ROOT/java/cognee-java-jni/Cargo.toml" "$VERSION"
+
+# 6. Java pom — the <version> that is a direct child of <project>, anchored to
+#    the project coordinates so dependency/plugin <version> tags are never
+#    touched. Fails loudly if the anchor is gone (a silent skip here would ship
+#    a broken Maven Central deploy).
+echo "-- java/pom.xml"
+python3 - "$VERSION" "$ROOT/java/pom.xml" <<'PY'
+import re, sys
+version, pom = sys.argv[1], sys.argv[2]
+src = open(pom, encoding="utf-8").read()
+# <groupId>…</groupId><artifactId>cognee</artifactId><version>X.Y.Z</version>
+pat = re.compile(
+    r"(<groupId>io\.github\.topoteretes</groupId>\s*"
+    r"<artifactId>cognee</artifactId>\s*<version>)([^<]+)(</version>)"
+)
+new, n = pat.subn(lambda m: m.group(1) + version + m.group(3), src, count=1)
+if n != 1:
+    sys.exit(
+        "error: could not locate the <project> version in java/pom.xml — the "
+        "project coordinates changed; update set-version.sh before releasing"
+    )
+open(pom, "w", encoding="utf-8").write(new)
+print(f"   java/pom.xml -> {version}")
+PY
 
 echo "== Done. Review with: git diff --stat =="

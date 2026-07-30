@@ -7,9 +7,13 @@
 # release where one crate lags the tag. This script is the gate: it runs on the
 # release PR (release-verify.yml) and can be run locally after set-version.sh.
 #
-# Checks the PACKAGE version of every crate in all three Cargo workspaces (root,
-# capi, ts-neon) and every npm package.json (+ its @cognee/neon-*
-# optionalDependencies pins). This is the one thing cargo cannot catch for us: a
+# Checks the PACKAGE version of every crate in all four Cargo workspaces (root,
+# capi, ts-neon, java-jni), every npm package.json (+ its @cognee/neon-*
+# optionalDependencies pins), and java/pom.xml's <project> version — the pom is
+# the sole source of the Maven Central coordinates in the tag-cascaded
+# java-prebuild.yml, and Central releases are immutable, so a stale version
+# there fails the deploy after crates.io has already shipped.
+# This is the one thing cargo cannot catch for us: a
 # stale intra-workspace *dependency requirement* already makes `cargo update` /
 # `cargo publish --dry-run` fail to resolve (a bumped crate no longer satisfies
 # the old `^x.y.z`), so ci.yml + publish-dry-run.yml cover that — this script
@@ -32,12 +36,13 @@ fail() { echo "  MISMATCH: $*" >&2; fails=$((fails + 1)); }
 
 # --- Cargo manifests: package version of every workspace member ----------------
 # Uses cargo metadata so inherited (version.workspace) members resolve correctly.
-# Covers all three workspaces: root (all cognee-* crates), capi, and ts-neon.
+# Covers all four workspaces: root (all cognee-* crates), capi, ts-neon, java-jni.
 python3 - "$VERSION" <<'PY' || fails=$((fails + 1))
 import json, subprocess, sys
 version = sys.argv[1]
 bad = []
-for manifest in ("Cargo.toml", "capi/Cargo.toml", "ts/cognee-ts-neon/Cargo.toml"):
+for manifest in ("Cargo.toml", "capi/Cargo.toml", "ts/cognee-ts-neon/Cargo.toml",
+                 "java/cognee-java-jni/Cargo.toml"):
     meta = json.loads(subprocess.check_output(
         ["cargo", "metadata", "--no-deps", "--format-version", "1",
          "--manifest-path", manifest]))
@@ -78,6 +83,23 @@ if (bad.length) {
 }
 console.log("  npm packages: all at", version);
 NODE
+
+# --- Java pom (Maven Central coordinates) --------------------------------------
+python3 - "$VERSION" "$ROOT/java/pom.xml" <<'PY' || fails=$((fails + 1))
+import re, sys
+version, pom = sys.argv[1], sys.argv[2]
+src = open(pom, encoding="utf-8").read()
+m = re.search(
+    r"<groupId>io\.github\.topoteretes</groupId>\s*"
+    r"<artifactId>cognee</artifactId>\s*<version>([^<]+)</version>",
+    src,
+)
+if not m:
+    sys.exit("  MISMATCH (maven): could not locate the <project> version in java/pom.xml")
+if m.group(1) != version:
+    sys.exit(f"  MISMATCH (maven):\n    - java/pom.xml <project> version={m.group(1)}")
+print("  maven pom: at", version)
+PY
 
 if [ "$fails" -gt 0 ]; then
   echo "assert-version: FAILED — ${fails} location group(s) not at ${VERSION}" >&2
