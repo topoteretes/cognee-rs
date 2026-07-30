@@ -247,6 +247,20 @@ bash scripts/run_tests_with_openai.sh
 bash scripts/run_tests_with_openai.sh test_fact_extraction
 ```
 
+## Reclaiming disk space
+
+The bindings live in their own Cargo workspaces, so a root `cargo clean` leaves their
+`target/` dirs (tens of GB) behind. Clean all of them at once:
+
+```bash
+bash scripts/clean_all.sh                   # cargo clean every workspace
+bash scripts/clean_all.sh --dry-run --all   # report sizes, delete nothing
+bash scripts/clean_all.sh --help            # flags and what each one removes
+```
+
+See [CONTRIBUTING.md § Cleaning build artifacts](CONTRIBUTING.md#cleaning-build-artifacts)
+for what is kept back (downloaded models, the iOS xcframework) and why.
+
 ## Observability
 
 Cognee emits OpenTelemetry traces from every pipeline stage. To export them

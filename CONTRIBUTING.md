@@ -101,6 +101,42 @@ cargo update -p roaring@0.11.4 --precise 0.11.3         # one transitive dep
 # capi/ is its own workspace — run the same from inside capi/ if it drifts there.
 ```
 
+## Cleaning build artifacts
+
+This repo contains **four** Cargo workspaces, so a plain `cargo clean` at the root leaves
+most of the disk usage behind (the Neon `target/` alone routinely exceeds 20 GB). Use:
+
+```bash
+bash scripts/clean_all.sh                   # cargo clean all 4 workspaces
+bash scripts/clean_all.sh --all             # ...plus non-Cargo build outputs
+bash scripts/clean_all.sh --dry-run --all   # report sizes, delete nothing
+bash scripts/clean_all.sh --help            # authoritative flag/artifact list
+```
+
+| Workspace / crate | Cleaned by root `cargo clean`? |
+|---|---|
+| `Cargo.toml` (root — `crates/`, `examples/`, `python/`) | yes |
+| `capi/Cargo.toml` (separate workspace, decision D10) | **no** |
+| `ts/cognee-ts-neon/Cargo.toml` (standalone crate) | **no** |
+| `java/cognee-java-jni/Cargo.toml` (standalone crate) | **no** |
+
+`--all` adds the generated non-Cargo outputs (npm, tsc, the Neon `.node` binaries, Maven,
+`capi/build*`, `ios/.build`, wheels, `__pycache__`); run `--dry-run --all` for the exact
+list with sizes rather than trusting a copy of it here. Two things are deliberately **not**
+in `--all`, because nothing in `scripts/check_all.sh` or the per-binding check scripts
+brings them back:
+
+- **`target/models`** — downloaded ONNX/tokenizer files, the default `EMBEDDING_MODEL_PATH`
+  and the source `scripts/android-build-and-deploy.sh` stages models from. It is preserved
+  across the root `cargo clean` (stashed and restored); pass `--include-models` to drop it.
+- **`capi/CogneeSDK.xcframework`** — ~6.6 GB, 20–30 min to rebuild via
+  `capi/scripts/build_xcframework.sh`, and `ios/Package.swift` cannot resolve without it.
+  Pass `--xcframework` to drop it.
+
+Local databases and data stores (`cognee.db`, `.data_storage/`, `.cognee_system/`) are never
+removed — they can hold a developer's own knowledge graph. Docker layers from the
+`e2e-cross-sdk/` harness are separate — use `docker system prune`.
+
 ## Language bindings
 
 Each binding has its own check script (also invoked by `scripts/check_all.sh`):

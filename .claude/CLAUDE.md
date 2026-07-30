@@ -45,6 +45,20 @@ cargo test
 scripts/check_all.sh
 ```
 
+### Cleaning build artifacts (disk space)
+
+The repo has **four** Cargo workspaces, so `cargo clean` at the root only clears one of
+them (`ts/cognee-ts-neon/target` alone routinely exceeds 20 GB). Never hand-roll `rm -rf`
+over target dirs — use `bash scripts/clean_all.sh` (`--help` lists the flags, `--dry-run`
+reports sizes without deleting).
+
+Do not restate the flag/artifact list here or in the READMEs — it drifts. The canonical
+prose lives in
+[CONTRIBUTING.md § Cleaning build artifacts](../CONTRIBUTING.md#cleaning-build-artifacts)
+and the runtime source of truth is the script's own `--help`. When a new Cargo workspace or
+generated artifact dir is added, extend `CARGO_MANIFESTS` / `ALL_ARTIFACTS` in the script
+(and its header comment, which is what `--help` prints).
+
 ## Test Patterns
 
 - **Async tests:** `#[tokio::test]` for all async test functions (only async runtime used)

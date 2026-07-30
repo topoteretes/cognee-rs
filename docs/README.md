@@ -55,6 +55,7 @@ signatures.
 
 ### Build & release
 - **[build/lbug-rebuilds.md](build/lbug-rebuilds.md)** — Ladybug rebuild troubleshooting.
+- **Reclaiming disk space** — `bash scripts/clean_all.sh` cleans all four Cargo workspaces (a root `cargo clean` misses the binding workspaces); see [CONTRIBUTING.md § Cleaning build artifacts](../CONTRIBUTING.md#cleaning-build-artifacts).
 - **[RELEASE.md](RELEASE.md)** — release runbook.
 
 ### Roadmap
