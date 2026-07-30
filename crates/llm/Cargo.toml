@@ -46,7 +46,7 @@ rand = { workspace = true }
 tracing.workspace = true
 
 # Shared tracing-key constants
-cognee-utils = { path = "../utils", version = "0.1.3" }
+cognee-utils = { path = "../utils", version = "0.2.0" }
 
 # Content hashing (cassette mock, feature-gated)
 sha2 = { workspace = true, optional = true }

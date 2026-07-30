@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/topoteretes/cognee-rs/compare/v0.1.3...v0.2.0) - 2026-07-30
+
+### Added
+
+- Port HybridRetriever (HYBRID_COMPLETION) to Rust — Phase 1 core + default-off Phase 2 truth-subspace (#107)
+- Azure OpenAI support (Tier 3) (#41)
+- **[BREAKING]** Rename umbrella crate cognee-lib to cognee (#93)
+- Native Anthropic Messages API adapter (Tier 2)
+- Java SDK bindings (JNI) for cognee-rust (#82)
+- Batch multiple chunks per extraction request (#19) (#63)
+- Add iOS bindings with Swift async/await wrapper
+
+### Changed
+
+- Wrap bulk provenance writes in a transaction + configure connection pool (#35)
+- Remove now-unused summarization_batch_size knob
+- Bound summarization concurrency and add retry jitter
+- Extract cognee-components + pluggable adapter registry (#56)
+
+### Documentation
+
+- Correct cognee-cli install note and workspace tree root (#92)
+- Package is live on Maven Central; use version-agnostic install (#86)
+- Add Swift package README
+
+### Fixed
+
+- Harden connect_sqlite + review follow-ups from #35 (#103)
+- Accept single & repeated dataset params on GET /datasets/status (#101)
+- Apply llm_max_completion_tokens to recall/search (#67) (#97)
+- Single-database (relational + pgvector + pggraph) deploys (#95)
+- Give aux migrators their own tracking tables for shared-Postgres deploys (#89)
+- Reliably extract year-only temporal intervals (#90)
+- Require node descriptions in prompt so non-strict LLMs don't fail (#66) (#88)
+- Require KnowledgeGraph edges so extraction captures relationships (#83)
+- Litellm-parity for OpenAI-compatible adapter (custom endpoints) (#78)
+- Deterministic class-namespaced Entity/EntityType/EdgeType ids (#57) (#77)
+- Type remember() result & document snake_case parity (#46) (#70)
+- Npm publish path + capi-release platform/cross fixes (#62)
+
+
 <!-- RELEASER: release-open.yml inserts the git-cliff-generated section directly
      after the `## [Unreleased]` marker above, which lands it BEFORE any
      hand-written prose below. When reviewing the release PR, move this
