@@ -33,6 +33,11 @@ on:
         description: "Version to publish, e.g. 0.1.3 (must already be on main)"
         required: true
         type: string
+      allow_new_crates:
+        description: "Skip the 'every crate name already exists on crates.io' preflight. Only for a token you KNOW has the publish-new scope — otherwise the publish loop 403s partway and leaves a partial release."
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: release-publish
@@ -136,6 +141,54 @@ jobs:
           # entry is a dependency-free leaf that could be a brand-new,
           # not-yet-published crate, which would make a valid token look invalid.
           cargo owner --list cognee-models
+
+      # Publishing a brand-new crate NAME needs the `publish-new` token scope;
+      # updating an existing crate only needs `publish-update`. crates.io exposes
+      # no way to introspect a token's scopes, and `cargo owner --list` above only
+      # proves the token can read an *existing* crate — so a token holding just
+      # `publish-update` sails through both and then 403s partway down the publish
+      # loop, leaving a PARTIAL release: some crates live at the new version, the
+      # rest not, and no tag.
+      #
+      # That is exactly what happened cutting 0.2.0: 14 crates published, then
+      # `cognee-components` (a new name) failed with
+      #   403 Forbidden: this token does not have the required permissions
+      # and the release had to be finished with a re-issued token.
+      #
+      # Since the scope can't be probed, assert the property that makes it moot:
+      # every crate in publish-order.sh must ALREADY exist on crates.io, so every
+      # release publish is an update. New names get reserved once, out of band, at
+      # crate-creation time — the pattern already used for `cognee` itself, which
+      # sat as a 0.0.0 placeholder until 0.2.0 filled it in.
+      - name: Preflight — every crate name already exists on crates.io
+        env:
+          SKIP_CHECK: ${{ inputs.allow_new_crates }}
+        run: |
+          set -uo pipefail
+          if [ "${SKIP_CHECK:-false}" = "true" ]; then
+            echo "::warning::allow_new_crates=true — skipping the new-crate-name check. The token must hold publish-new or the publish loop will 403 partway and leave a partial release."
+            exit 0
+          fi
+          absent=""
+          while read -r crate; do
+            [ -n "$crate" ] || continue
+            code=$(curl -s -o /dev/null -w '%{http_code}' \
+              -H 'User-Agent: cognee-release-preflight (github.com/topoteretes/cognee-rs)' \
+              "https://crates.io/api/v1/crates/${crate}")
+            case "$code" in
+              200) ;;
+              404) absent="${absent} ${crate}" ;;
+              *)   echo "::error::crates.io returned HTTP ${code} for '${crate}' — cannot verify it exists; aborting rather than risk a partial publish"
+                   exit 1 ;;
+            esac
+          done < <(bash scripts/split/publish-order.sh)
+          if [ -n "$absent" ]; then
+            echo "::error::These crate names are not on crates.io yet:${absent}"
+            echo "::error::Publishing them needs a token with the 'publish-new' scope, which cannot be verified up front — if it is missing, the publish loop 403s partway and leaves a PARTIAL release."
+            echo "::error::Fix: reserve each name once by publishing a 0.0.0 placeholder (how 'cognee' was reserved), then re-run. Or, if CARGO_REGISTRY_TOKEN definitely has publish-new, re-trigger via workflow_dispatch with allow_new_crates=true."
+            exit 1
+          fi
+          echo "all publishable crate names already exist on crates.io — every publish this run is an update"
 
       - name: Preflight — npm token
         env:

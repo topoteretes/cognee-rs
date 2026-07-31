@@ -34,7 +34,12 @@ commits, pushes, and opens a PR labelled `autorelease:pending`. The PAT (not
 ### Phase 1 verification — the PR checks (all pre-existing, plus one)
 - `ci.yml` — workspace build/test + `capi-check` (C library) + `ts-check` (Neon
   addon) + `python-check`. Runs on same-repo PRs, so the release branch qualifies.
-- `publish-dry-run.yml` — `cargo publish --dry-run` over every crate.
+- `publish-dry-run.yml` — `cargo publish --dry-run` over every crate. **Note it
+  deliberately SKIPS on `release/*` PRs**, so it is not part of this barrier: a
+  release branch bumps every internal `cognee-* = "^X.Y.Z"` requirement to a
+  version not yet on the index, which a per-crate dry run cannot resolve. It
+  gates normal PRs and `main`; the ordered real publish is the only thing that
+  exercises a release branch's dependency graph.
 - `release-verify.yml` (release branches only) — asserts every version location
   is consistent ([`assert-version.sh`](../scripts/release/assert-version.sh)) and
   runs an early `npm whoami` to confirm the npm token.
@@ -57,9 +62,11 @@ default. Two things it cannot do for you:
 
 ### Phase 2 — `release-publish.yml` (trigger: the release PR is merged)
 Runs behind the **`release` environment** (required reviewers). Order:
-0. **Preflight** — `cargo owner --list -p cognee-models` and `npm whoami` (real
+0. **Preflight** — `cargo owner --list cognee-models` and `npm whoami` (real
    authenticated calls; `cargo publish --dry-run` does **not** validate a token,
-   so this is the only way to fail before anything irreversible).
+   so this is the only way to fail before anything irreversible), plus an
+   assertion that **every crate name in `publish-order.sh` already exists on
+   crates.io** (see [New crates](#new-crates-must-be-reserved-first)).
 1. **crates.io** — `cargo publish` each crate in
    [`publish-order.sh`](../scripts/split/publish-order.sh) order (cargo waits for
    the index between dependents; already-published versions are skipped, so
@@ -103,12 +110,46 @@ before any npm / C-API artifact ships.
 The Python binding is **not published to PyPI**; users build from source
 (`cd python && maturin develop`, or `maturin build --release`).
 
+## New crates must be reserved first
+
+**Before a release that introduces a new `cognee-*` crate, publish a `0.0.0`
+placeholder for it.** Otherwise the release aborts in preflight.
+
+Why: publishing a brand-new crate *name* requires the crates.io **`publish-new`**
+token scope, while updating an existing crate only needs `publish-update`.
+crates.io offers no way to introspect a token's scopes, and `cargo owner --list`
+only proves the token can read a crate that already exists — so a token holding
+just `publish-update` passes every check and then **403s partway down the publish
+loop**, leaving some crates live at the new version, the rest not, and no tag.
+
+That is not hypothetical: cutting 0.2.0, 14 crates published and then
+`cognee-components` failed with `403 Forbidden: this token does not have the
+required permissions`, and the release had to be finished with a re-issued token.
+
+Since the scope cannot be probed, `release-publish.yml` asserts the property that
+makes it moot — every name in
+[`publish-order.sh`](../scripts/split/publish-order.sh) must already be on
+crates.io, so every release publish is an *update*. Reserving a name is a one-off
+action at crate-creation time, not release time; `cognee` itself sat as a `0.0.0`
+placeholder until 0.2.0 filled it in.
+
+```bash
+# From the new crate's directory, with version = "0.0.0" in its Cargo.toml:
+cargo publish -p cognee-<newcrate>
+# then restore the workspace-inherited version and commit
+```
+
+If `CARGO_REGISTRY_TOKEN` definitely holds `publish-new` and you would rather
+publish new names directly, re-trigger via `workflow_dispatch` with
+`allow_new_crates=true`. That only skips the check — if the scope is in fact
+missing, you get the partial release the check exists to prevent.
+
 ## Required secrets and setup
 
 | Secret | Scope | Used by |
 |---|---|---|
 | `RELEASE_PAT` | Repo secret. Fine-grained PAT scoped to this repo with **Contents: Read and write**, **Pull requests: Read and write**, **Issues: Read and write** (or a classic PAT with the `repo` scope). The owner only needs **write** access, not admin — the flow never pushes to `main` (it pushes a `release/*` branch and a tag; `main` advances via the PR merge). It must be a PAT rather than `GITHUB_TOKEN` so the opened PR triggers CI and the pushed tag cascades. | `release-open.yml` (open PR, push branch), `release-publish.yml` (push tag, create Release) |
-| `CARGO_REGISTRY_TOKEN` | **Environment** secret on `release`. crates.io token with publish rights for all `cognee-*` crates. | `release-publish.yml` preflight + publish |
+| `CARGO_REGISTRY_TOKEN` | **Environment** secret on `release`. crates.io token with publish rights for all `cognee-*` crates. Needs **`publish-update`**; also **`publish-new`** if you publish unreserved crate names (see [New crates](#new-crates-must-be-reserved-first)). Scope it to all crates or a pattern covering `cognee` **and** `cognee-*` — a list of literal names silently omits new ones. | `release-publish.yml` preflight + publish |
 | `NPM_TOKEN` | Repo secret. npm token with publish rights to the `@cognee` org. | `release-verify.yml`, `ts-prebuild.yml`, `release-publish.yml` preflight |
 | `MAVEN_CENTRAL_USERNAME` / `MAVEN_CENTRAL_PASSWORD` | Repo secrets. Central Portal user token for `io.github.topoteretes`. `MAVEN_CENTRAL_PASSWORD` doubles as the publish gate — absent, the Java deploy silently no-ops. | `java-prebuild.yml` |
 | `MAVEN_GPG_PRIVATE_KEY` / `MAVEN_GPG_PASSPHRASE` | Repo secrets. GPG key used to sign the Maven artifacts (Central requires signatures). | `java-prebuild.yml` |
@@ -188,6 +229,15 @@ Release. If it fails partway:
   land the fix on `main` and re-trigger with
   `gh workflow run release-publish.yml -f version=X.Y.Z` (the `workflow_dispatch`
   path publishes from `main`, still behind the `release` approval gate).
+
+  If it failed with **`403 Forbidden: this token does not have the required
+  permissions`**, the token is missing a scope for that specific crate — almost
+  always `publish-new` on a brand-new name (see
+  [New crates](#new-crates-must-be-reserved-first)). Re-issue
+  `CARGO_REGISTRY_TOKEN` on the `release` environment with `publish-new` +
+  `publish-update` and a crate scope covering `cognee` and `cognee-*`, then
+  "Re-run failed jobs" — a re-run re-reads secrets, so no workflow change is
+  needed. Crates already published stay published; the loop skips them.
 - **Tag pushed but the npm / C-API cascade failed** (e.g. `ts-prebuild.yml` hit a
   transient npm error) — re-running `release-publish` will **not** re-fire the
   cascade (it skips the already-pushed tag). Instead re-run the failed workflow
