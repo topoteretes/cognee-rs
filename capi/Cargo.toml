@@ -37,6 +37,83 @@ uuid = { version = "1.21", features = ["v4", "v5", "serde"] }
 panic = "abort"
 
 [profile.release]
-# Keep the existing debug-info setting for release builds and add panic=abort.
+# Full debug info for first-party code (see the per-package overrides below),
+# plus panic=abort.
 debug = true
 panic = "abort"
+
+# Debug info for third-party dependencies only. `debug = true` above applies to
+# cognee-capi itself; every cognee-* crate is re-enabled individually below, so
+# the net effect is "full DWARF for our code, none for the ~625 external
+# crates". Measured on aarch64-apple-darwin, from clean:
+#
+#                                    capi/target    libcognee_capi.a
+#   debug = true everywhere            21.7 GiB          4.65 GiB
+#   debug = 0 everywhere                3.5 GiB          0.46 GiB
+#   this config                         4.7 GiB          0.78 GiB
+#
+# The `.a` column is what matters most: it is the input to each xcframework
+# slice, so this takes CogneeSDK.xcframework from ~6.6 GB to ~1.1 GB while
+# keeping file/line symbolication for every cognee frame in an iOS crash
+# report. Third-party frames (arrow, datafusion, tokio, lbug, …) still
+# symbolicate to function names via the symbol table, just without line
+# numbers. All 139 exported cg_sdk_* symbols are unaffected.
+#
+# Setting debug = 0 for dependencies also flips lbug's bundled CMake tree from
+# RelWithDebInfo to Release (2.6 GiB -> 213 MiB) — see docs/build/lbug-rebuilds.md.
+#
+# Cargo has no prefix glob for package overrides, so first-party crates are
+# listed one by one. The list is the path-dependency closure of cognee-capi;
+# a crate missing from it silently loses its debug info rather than breaking
+# the build, so re-check it when adding a crate to crates/.
+[profile.release.package."*"]
+debug = 0
+
+[profile.release.package.cognee]
+debug = true
+[profile.release.package.cognee-bindings-common]
+debug = true
+[profile.release.package.cognee-chunking]
+debug = true
+[profile.release.package.cognee-cognify]
+debug = true
+[profile.release.package.cognee-components]
+debug = true
+[profile.release.package.cognee-core]
+debug = true
+[profile.release.package.cognee-database]
+debug = true
+[profile.release.package.cognee-delete]
+debug = true
+[profile.release.package.cognee-embedding]
+debug = true
+[profile.release.package.cognee-graph]
+debug = true
+[profile.release.package.cognee-ingestion]
+debug = true
+[profile.release.package.cognee-llm]
+debug = true
+[profile.release.package.cognee-logging]
+debug = true
+[profile.release.package.cognee-models]
+debug = true
+[profile.release.package.cognee-observability]
+debug = true
+[profile.release.package.cognee-ontology]
+debug = true
+[profile.release.package.cognee-search]
+debug = true
+[profile.release.package.cognee-session]
+debug = true
+[profile.release.package.cognee-storage]
+debug = true
+[profile.release.package.cognee-telemetry]
+debug = true
+[profile.release.package.cognee-truth-subspace]
+debug = true
+[profile.release.package.cognee-utils]
+debug = true
+[profile.release.package.cognee-vector]
+debug = true
+[profile.release.package.cognee-visualization]
+debug = true
