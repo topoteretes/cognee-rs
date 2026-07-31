@@ -23,6 +23,23 @@ cmake --build build
 
 Link with `-lcognee_capi` (and `-ldl -lm -lpthread` on Linux).
 
+When you link the **static** library (`libcognee_capi.a`) yourself, your build has to name
+the native libraries the Rust side depends on — a staticlib carries no link directives of
+its own. On macOS that is:
+
+```
+-lc++ -liconv -framework Security -framework CoreFoundation \
+-framework SystemConfiguration -framework Foundation -framework CoreML
+```
+
+`capi/CMakeLists.txt` does this for the bundled examples. The authoritative list for any
+given feature set comes from:
+
+```bash
+cargo rustc --manifest-path capi/cognee-capi/Cargo.toml \
+    --crate-type staticlib -- --print native-static-libs
+```
+
 ### Three-step pattern: init → warm → ops
 
 ```c

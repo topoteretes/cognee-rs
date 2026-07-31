@@ -61,9 +61,39 @@ add_dependencies(cognee_capi cognee_capi_cargo)
 # stdc++ is required because cognee-graph depends on lbug (C++ graph engine)
 set(COGNEE_SYSTEM_LIBS pthread dl m stdc++)
 
-# macOS requires CoreFoundation for iana_time_zone (used by chrono)
+# macOS: a Rust *staticlib* does not carry the `#[link]` / `cargo:rustc-link-lib`
+# directives its dependencies declare — rustc only acts on those when it drives
+# the final link itself (cdylib, bin). Because CMake links libcognee_capi.a with
+# clang instead, every Apple framework and system library the Rust side needs
+# must be named here, or the examples fail with undefined symbols such as
+# `_kSecValueData` / `_kSecClass` coming out of the security_framework objects
+# inside the archive.
+#
+# This list is the deduplicated output of
+#   cargo rustc --manifest-path capi/cognee-capi/Cargo.toml \
+#       --crate-type staticlib -- --print native-static-libs
+# minus the entries clang already links by default (-lSystem, -lc, -lm,
+# -lclang_rt.osx) and -lc++ (covered by `stdc++` above, which clang maps to
+# libc++ on Apple). Re-run that command and refresh this list whenever a
+# dependency that binds an Apple API is added, removed, or swapped out.
+#
+#   Security            — security-framework-sys, reached via rustls-native-certs
+#                         (reqwest -> hyper-rustls) reading the system trust store
+#   CoreFoundation      — core-foundation-sys: iana-time-zone (chrono) plus the
+#                         CF types the Security bindings pass around
+#   SystemConfiguration — whoami's SCDynamicStoreCopyComputerName, used for the
+#                         host name reported in telemetry
+#   Foundation, CoreML  — ort-sys (ONNX Runtime) and its CoreML execution provider
+#   iconv               — libc's Apple bindings declare `#[link(name = "iconv")]`
 if(APPLE)
-    list(APPEND COGNEE_SYSTEM_LIBS "-framework CoreFoundation")
+    list(APPEND COGNEE_SYSTEM_LIBS
+        "-framework Security"
+        "-framework CoreFoundation"
+        "-framework SystemConfiguration"
+        "-framework Foundation"
+        "-framework CoreML"
+        iconv
+    )
 endif()
 
 # Header include path
