@@ -602,7 +602,13 @@ describe("Phase-5 memory ops (Tier-B — skips without LLM creds)", () => {
       embedding_model_path: process.env.COGNEE_E2E_EMBED_MODEL_PATH,
     });
     await native.cogneeWarm(handle);
-  });
+    // 120s, matching the other Tier-B warm hooks (memory / recall / data-ops):
+    // this one builds a real ONNX embedding engine, which does not fit the 30s
+    // global default in jest.config.js. Latent today only because CI leaves
+    // COGNEE_E2E_EMBED_MODEL_PATH unset so the gate above skips the block —
+    // the moment those creds are set, this hook runs on a budget its siblings
+    // already judged insufficient.
+  }, 120_000);
 
   afterAll(() => {
     cleanupTmpDir(tmpDir);
