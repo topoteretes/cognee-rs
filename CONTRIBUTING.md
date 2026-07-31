@@ -134,8 +134,14 @@ brings them back:
   Pass `--xcframework` to drop it.
 
 Local databases and data stores (`cognee.db`, `.data_storage/`, `.cognee_system/`) are never
-removed — they can hold a developer's own knowledge graph. Docker layers from the
-`e2e-cross-sdk/` harness are separate — use `docker system prune`.
+removed — they can hold a developer's own knowledge graph.
+
+Docker is **reported but never pruned**. The `e2e-cross-sdk/` harness builds a 3-stage image
+containing both SDKs, and on a machine that has run it a few times the images plus BuildKit
+cache routinely outweigh all four Cargo `target/` dirs combined — so `clean_all.sh` prints the
+reclaimable total and leaves the decision to you (`docker system prune`, or
+`docker system prune -a --volumes` to go further). The daemon is shared with everything else
+on the machine, which is why the script will not touch it.
 
 ### Which profile settings drive the size
 

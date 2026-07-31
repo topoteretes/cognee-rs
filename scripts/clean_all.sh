@@ -31,8 +31,14 @@
 #   -n, --dry-run      report what would be freed, delete nothing.
 #
 # Not touched: local databases and data stores (cognee.db, .data_storage/,
-# .cognee_system/) — they can hold a developer's own knowledge graph. Docker
-# layers from e2e-cross-sdk/ are separate: use `docker system prune`.
+# .cognee_system/) — they can hold a developer's own knowledge graph.
+#
+# Docker is reported but never touched. The e2e-cross-sdk/ harness builds a
+# 3-stage image containing both SDKs, and its layers plus BuildKit cache
+# routinely outweigh every Cargo target/ combined — but they are shared with
+# whatever else uses Docker on the machine, so reclaiming them is a decision
+# this script leaves to you: `docker system prune` (add `-a --volumes` to go
+# further).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -250,6 +256,38 @@ else
     echo "=== Freed $(human "$freed_kb") ==="
 fi
 echo "================================================================"
+
+# Docker: report only. The e2e-cross-sdk image, its build cache and volumes
+# frequently dwarf the Cargo targets, and a developer who has just run
+# clean_all should at least be told the number. Never pruned from here — the
+# daemon is shared with everything else on the machine.
+#
+# `docker system df` is skipped entirely when the daemon is not reachable;
+# the CLI blocks for several seconds before failing otherwise.
+if command -v docker > /dev/null 2>&1 && docker system df > /dev/null 2>&1; then
+    docker_reclaimable=$(
+        docker system df --format '{{.Reclaimable}}' 2> /dev/null |
+            # "25.03GB (41%)" / "621.4MB" -> KiB, summed across all four rows.
+            # Docker prints SI units (1 GB = 10^9 B), while `human` and every
+            # other figure in this script are binary — so convert through bytes
+            # rather than treating GB as GiB (which overstates by ~7 %).
+            awk '{
+                v = $1
+                sub(/[A-Za-z]+$/, "", v)
+                unit = substr($1, length(v) + 1)
+                mult = (unit == "TB") ? 1e12 : \
+                       (unit == "GB") ? 1e9 : \
+                       (unit == "MB") ? 1e6 : \
+                       (unit == "kB" || unit == "KB") ? 1e3 : 0
+                total += v * mult
+            } END { printf "%d", total / 1024 }'
+    )
+    if [[ ${docker_reclaimable:-0} -gt 0 ]]; then
+        echo ""
+        printf 'Docker (NOT touched): %s reclaimable — run: docker system prune\n' \
+            "$(human "$docker_reclaimable")"
+    fi
+fi
 
 if [[ $ALL -eq 0 ]]; then
     echo "Cargo targets only. --all also drops node_modules, the Neon .node"
