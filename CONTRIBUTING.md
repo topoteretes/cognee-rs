@@ -81,24 +81,42 @@ Plain unit tests that don't touch the LLM run with `cargo test`.
 
 ### MSRV & lockfiles
 
-The MSRV is **1.89**, declared via `rust-version` in `[workspace.package]` and pinned for
-local builds by `rust-toolchain.toml`. (On x86_64 the embedded qdrant `quantization` crate
-uses AVX-512 intrinsics stabilized in Rust 1.89; the aarch64 build skips that path, so a Mac
-may build on an older toolchain while CI on x86_64 will not.) `Cargo.lock` is intentionally
-**not committed** (see `.gitignore`); the edition-2024 MSRV-aware resolver (`resolver = "3"`)
-picks dependency versions compatible with 1.89 on a fresh resolve.
+The MSRV is **1.91**, declared via `rust-version` and pinned for local builds by
+`rust-toolchain.toml`. It must be stated in **every** workspace root, because the four of
+them are independent: `[workspace.package]` in `Cargo.toml` and `capi/Cargo.toml`, and the
+`[package]` sections of `ts/cognee-ts-neon/Cargo.toml` and `java/cognee-java-jni/Cargo.toml`.
+Keep them equal — see the resolution note below.
+
+(The hard floor from dependencies is lower: on x86_64 the embedded qdrant `quantization`
+crate uses AVX-512 intrinsics stabilized in Rust 1.89, and edition 2024 + resolver 3 would
+allow 1.85 in principle. The aarch64 build never compiles the AVX-512 path, so a Mac may
+build on an older toolchain while CI on x86_64 will not. 1.91 is the declared floor
+regardless, and the `msrv` CI lane builds against it.)
+
+`Cargo.lock` is intentionally **not committed** (see `.gitignore`); the edition-2024
+MSRV-aware resolver (`resolver = "3"`) picks dependency versions compatible with the declared
+`rust-version` on a fresh resolve.
+
+That last point is why the four declarations have to agree. The resolver caps each workspace
+at versions its own `rust-version` allows, so a workspace declaring a lower MSRV resolves an
+older graph. While `capi`/`ts` said 1.89 and root/`java` said 1.91, the two groups picked
+`cc 1.2.65` and `cc 1.4.0` respectively — and 175 of 836 external crates differed in version
+between them. `cc` sits in lbug's build-dependency closure, so that split alone forced a
+second full build of the bundled Ladybug C++ tree
+(see [docs/build/lbug-rebuilds.md](docs/build/lbug-rebuilds.md)).
 
 If `scripts/check_all.sh` fails with an error like
-`roaring@x.y.z requires rustc 1.90.0` (or any other "requires rustc > 1.89"), you have a
+`roaring@x.y.z requires rustc 1.92.0` (or any other "requires rustc > 1.91"), you have a
 **stale local lockfile** that pinned a version published with a higher MSRV — it is not a
-real breakage (a fresh resolve under the pinned toolchain selects a 1.89-compatible version).
+real breakage (a fresh resolve under the pinned toolchain selects a 1.91-compatible version).
 Recover by regenerating the lock or pinning the offending crate down, e.g.:
 
 ```bash
-# Regenerate fresh (uses the 1.89-aware resolver), or pin the specific crate:
+# Regenerate fresh (uses the 1.91-aware resolver), or pin the specific crate:
 cargo update                                            # whole workspace
 cargo update -p roaring@0.11.4 --precise 0.11.3         # one transitive dep
-# capi/ is its own workspace — run the same from inside capi/ if it drifts there.
+# capi/, ts/cognee-ts-neon/ and java/cognee-java-jni/ are their own workspaces —
+# run the same from inside whichever one drifted.
 ```
 
 ## Cleaning build artifacts

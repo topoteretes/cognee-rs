@@ -199,7 +199,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Rust 1.89
+      - name: Install Rust 1.91
         uses: dtolnay/rust-toolchain@1.91.0
 
       - name: Install mold linker
