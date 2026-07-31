@@ -164,15 +164,35 @@ jobs:
         env:
           SKIP_CHECK: ${{ inputs.allow_new_crates }}
         run: |
-          set -uo pipefail
+          set -euo pipefail
           if [ "${SKIP_CHECK:-false}" = "true" ]; then
             echo "::warning::allow_new_crates=true — skipping the new-crate-name check. The token must hold publish-new or the publish loop will 403 partway and leave a partial release."
             exit 0
           fi
+          # Materialize the crate list FIRST and require it to be non-empty.
+          # A safety check that silently verifies nothing is worse than no check:
+          # with process substitution a failing publish-order.sh (e.g. a
+          # `cargo metadata` error) makes the loop run zero iterations, leaves
+          # `absent` empty, and reports a clean bill of health for a release that
+          # is about to hit the very 403 this step exists to prevent. `set -e`
+          # plus the emptiness guard turn that into a hard failure.
+          crates="$(bash scripts/split/publish-order.sh)"
+          count="$(printf '%s\n' "$crates" | grep -c '[^[:space:]]' || true)"
+          if [ "${count:-0}" -eq 0 ]; then
+            echo "::error::scripts/split/publish-order.sh produced no crates — refusing to treat an empty list as 'every name exists'"
+            exit 1
+          fi
+          echo "checking ${count} crate name(s) against crates.io"
           absent=""
-          while read -r crate; do
-            [ -n "$crate" ] || continue
-            code=$(curl -s -o /dev/null -w '%{http_code}' \
+          # --max-time / --retry so a network stall fails the job instead of
+          # hanging it; no -f, so a 404 still yields a body-less 404 status
+          # rather than a non-zero exit that `set -e` would abort on.
+          # Word-split $crates directly rather than piping into `while read`:
+          # a pipeline would run the loop in a subshell and `absent` would be
+          # empty afterwards. Crate names never contain whitespace.
+          for crate in $crates; do
+            code=$(curl -sS -o /dev/null -w '%{http_code}' \
+              --max-time 20 --retry 3 --retry-delay 2 --retry-connrefused \
               -H 'User-Agent: cognee-release-preflight (github.com/topoteretes/cognee-rs)' \
               "https://crates.io/api/v1/crates/${crate}")
             case "$code" in
@@ -181,7 +201,7 @@ jobs:
               *)   echo "::error::crates.io returned HTTP ${code} for '${crate}' — cannot verify it exists; aborting rather than risk a partial publish"
                    exit 1 ;;
             esac
-          done < <(bash scripts/split/publish-order.sh)
+          done
           if [ -n "$absent" ]; then
             echo "::error::These crate names are not on crates.io yet:${absent}"
             echo "::error::Publishing them needs a token with the 'publish-new' scope, which cannot be verified up front — if it is missing, the publish loop 403s partway and leaves a PARTIAL release."
