@@ -590,10 +590,25 @@ impl GraphDBTrait for LadybugAdapter {
             GraphDBError::ConnectionError(format!("Failed to create connection: {e}"))
         })?;
 
-        // Try to install and load JSON extension (optional)
-        // Ignore errors if extension is not available
-        let _ = conn.query("INSTALL json");
-        let _ = conn.query("LOAD EXTENSION json");
+        // No `INSTALL json` / `LOAD EXTENSION json` here, on purpose.
+        //
+        // Nothing in this repo issues a ladybug JSON query: node and edge
+        // properties are a plain `STRING` column (see the DDL below) and JSON is
+        // parsed on the Rust side via `serde_json` (`lbug_value_to_json`). The
+        // pair used to be run here "optionally", with both errors discarded.
+        //
+        // `INSTALL` fetches the extension over *plaintext HTTP* from
+        // extension.ladybugdb.com and `LOAD EXTENSION` then dlopens the result,
+        // so the two statements bought us an unconditional network round-trip on
+        // every first `initialize()` — cached under `$HOME/.lbug`, which CI never
+        // caches, and bounded only by a ~300s connect timeout — plus an MITM
+        // code-execution path, in exchange for a capability we never use. On a
+        // cold runner that stall is invisible: nothing here is instrumented, so
+        // it looks like a hung warm-up. It also contradicts this project's
+        // offline/edge target, where first-call network access is a defect.
+        //
+        // If a JSON query is ever genuinely needed, statically link the
+        // extension rather than downloading it at runtime.
 
         // Create Node table
         let create_node_table = r#"
