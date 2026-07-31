@@ -42,31 +42,42 @@ panic = "abort"
 debug = true
 panic = "abort"
 
-# Debug info for third-party dependencies only. `debug = true` above applies to
-# cognee-capi itself; every cognee-* crate is re-enabled individually below, so
-# the net effect is "full DWARF for our code, none for the ~625 external
-# crates". Measured on aarch64-apple-darwin, from clean:
+# Graded debug info: full DWARF for first-party code, line tables for
+# third-party Rust, none for the vendored C++. `debug = true` above applies to
+# cognee-capi itself; every cognee-* crate is re-enabled individually below.
+# Measured on aarch64-apple-darwin, from clean:
 #
-#                                    capi/target    libcognee_capi.a
-#   debug = true everywhere            21.7 GiB          4.65 GiB
-#   debug = 0 everywhere                3.5 GiB          0.46 GiB
-#   this config                         4.7 GiB          0.78 GiB
+#                                          capi/target   libcognee_capi.a
+#   debug = true everywhere                  21.7 GiB         4.65 GiB
+#   deps debug = 0                            4.7 GiB         0.78 GiB
+#   deps line-tables-only (lbug included)    16.2 GiB         3.12 GiB
+#   this config                              10.5 GiB         2.02 GiB
 #
 # The `.a` column is what matters most: it is the input to each xcframework
-# slice, so this takes CogneeSDK.xcframework from ~6.6 GB to ~1.1 GB while
-# keeping file/line symbolication for every cognee frame in an iOS crash
-# report. Third-party frames (arrow, datafusion, tokio, lbug, …) still
-# symbolicate to function names via the symbol table, just without line
-# numbers. All 139 exported cg_sdk_* symbols are unaffected.
+# slice. This takes CogneeSDK.xcframework from ~6.6 GB to ~2.9 GB (estimated:
+# the two iOS slices were not built, the host slice was measured) while every
+# Rust frame in an iOS crash report — ours and our dependencies' — resolves to
+# file and line rather than a bare function name. All 139 exported cg_sdk_*
+# symbols are unaffected.
 #
-# Setting debug = 0 for dependencies also flips lbug's bundled CMake tree from
-# RelWithDebInfo to Release (2.6 GiB -> 213 MiB) — see docs/build/lbug-rebuilds.md.
+# The lbug override below is what makes line tables affordable. Cargo hands a
+# build script DEBUG=true for ANY non-zero debug level, and the `cmake` crate
+# maps that to RelWithDebInfo, so line-tables-only alone re-inflates the
+# bundled Ladybug C++ tree 213 MiB -> 2.6 GiB (the third row above). Pinning
+# just lbug back to 0 keeps that tree a plain Release build and costs only the
+# line tables of lbug's own thin Rust binding layer, which is generated
+# FFI glue nobody steps through. See docs/build/lbug-rebuilds.md.
 #
 # Cargo has no prefix glob for package overrides, so first-party crates are
 # listed one by one. The list is the path-dependency closure of cognee-capi;
-# a crate missing from it silently loses its debug info rather than breaking
+# a crate missing from it silently drops to line tables rather than breaking
 # the build, so re-check it when adding a crate to crates/.
 [profile.release.package."*"]
+debug = "line-tables-only"
+
+# Not line tables: this crate's build script compiles the bundled Ladybug C++
+# tree, and any non-zero debug level costs 2.4 GiB there. See above.
+[profile.release.package.lbug]
 debug = 0
 
 [profile.release.package.cognee]

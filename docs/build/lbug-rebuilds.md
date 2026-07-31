@@ -121,6 +121,32 @@ build. Both binding workspaces set exactly that pair in their `[profile.dev]`
 for this reason (`ts/cognee-ts-neon/Cargo.toml` carries the measurement
 table); it is the difference between a 12.1 GiB and a 3.3 GiB debug `target/`.
 
+### Escaping the trade-off: pin lbug, not the whole graph
+
+Wanting debug info for Rust dependencies while *not* paying for it in the
+vendored C++ is a normal thing to want, and the two are separable — the rule
+above keys off lbug's own profile, so overriding that one package is enough:
+
+```toml
+[profile.release.package."*"]
+debug = "line-tables-only"   # every Rust dependency keeps line tables
+
+[profile.release.package.lbug]
+debug = 0                    # …except lbug, whose build script builds the C++
+```
+
+Measured in `capi` (release, aarch64-apple-darwin, from clean):
+
+| Third-party `debug` | lbug `out/` | `capi/target` | `libcognee_capi.a` |
+|---|---:|---:|---:|
+| `0` | 213 MiB | 4.7 GiB | 0.78 GiB |
+| `"line-tables-only"`, lbug included | 2.6 GiB | 16.2 GiB | 3.12 GiB |
+| `"line-tables-only"`, lbug pinned to `0` | 213 MiB | 10.5 GiB | 2.02 GiB |
+
+The pin costs only the line tables of lbug's own Rust binding layer — generated
+FFI glue nobody steps through — and saves 5.7 GiB of `target/` plus 1.1 GiB of
+static library. `capi/Cargo.toml` ships this configuration.
+
 Measured from clean on aarch64-apple-darwin, one workspace at a time. The
 per-workspace totals that follow from it:
 
