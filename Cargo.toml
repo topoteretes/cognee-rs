@@ -151,11 +151,23 @@ unwrap_used = "warn"
 expect_used = "warn"
 
 [profile.dev.package."*"]
-# At opt-level=0 (dev default), LLVM emits very large unoptimized IR for every
-# dependency. Level 1 enables constant-folding and dead-code elimination without
-# full optimization, which typically halves the size of dependency artifacts.
-# This does not affect workspace-member crates (they stay at opt-level=0 so
-# debug builds remain fast), only external dependencies (lbug, qdrant, ort, …).
+# Level 1 enables constant-folding and dead-code elimination without full
+# optimization, so dependencies (lbug, qdrant, ort, …) run at a usable speed in
+# debug builds. Workspace-member crates are unaffected — they stay at
+# opt-level=0 so the edit-compile loop stays fast.
+#
+# This is a *runtime speed* setting, not a disk one. An earlier version of this
+# comment claimed it "typically halves the size of dependency artifacts";
+# measured on this dependency graph (aarch64-apple-darwin, from clean) the
+# opposite is true — it costs ~8 %:
+#
+#   dev deps at opt-level 0   12.1 GiB   (rlibs 4486 MiB, 6315 .o / 2475 MiB)
+#   dev deps at opt-level 1   13.0 GiB   (rlibs 4874 MiB, 4591 .o / 3115 MiB)
+#
+# It does pay for disk in one specific combination: paired with `debug = 0` it
+# flips lbug's bundled CMake tree from a Debug to a Release C++ build (2.9 GiB
+# -> 213 MiB), which is why both binding workspaces set the two together. See
+# ts/cognee-ts-neon/Cargo.toml and docs/build/lbug-rebuilds.md.
 opt-level = 1
 
 [profile.release]

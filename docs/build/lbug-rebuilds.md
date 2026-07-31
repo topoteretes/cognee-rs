@@ -91,6 +91,47 @@ over `[env]`).
 Caveat: the launcher is a POSIX `sh` script; on Windows set the
 `CMAKE_*_COMPILER_LAUNCHER` env vars to `ccache` directly or to empty.
 
+## The cargo profile decides how big the C++ tree is (2.9 GiB vs 213 MiB)
+
+Investigated 2026-07-31, separately from the rebuild-frequency problem above:
+the *size* of each `out/` tree is set by the cargo profile of whatever is
+being built, and the mapping is not the obvious one.
+
+Cargo hands every build script an `OPT_LEVEL` and a `DEBUG` env var derived
+from the profile of the package it belongs to. The `cmake` crate turns that
+pair into a `CMAKE_BUILD_TYPE`, so lbug's Ladybug tree inherits the Rust
+profile:
+
+| `opt-level` | `debug` | CMake build type | `out/` size |
+|---|---|---|---|
+| 0 | any | `Debug` | 2.9 GiB |
+| ≥ 1 | non-zero (incl. `"line-tables-only"`) | `RelWithDebInfo` | 2.6 GiB |
+| ≥ 1 | `0` | `Release` | **213 MiB** |
+
+Two consequences that are easy to get wrong:
+
+- **`debug = "line-tables-only"` does nothing for the C++ side.** Any non-zero
+  debug level reads as "wants debug info", so the tree stays at 2.6 GiB. It is
+  a good setting for the Rust half and irrelevant to this one.
+- **`opt-level = 1` alone does nothing either** — at `debug = 2` (the dev
+  default) it only moves Debug to RelWithDebInfo, 2.9 → 2.6 GiB.
+
+Only `opt-level >= 1` **and** `debug = 0` together reach a plain Release C++
+build. Both binding workspaces set exactly that pair in their `[profile.dev]`
+for this reason (`ts/cognee-ts-neon/Cargo.toml` carries the measurement
+table); it is the difference between a 12.1 GiB and a 3.3 GiB debug `target/`.
+
+Measured from clean on aarch64-apple-darwin, one workspace at a time. The
+per-workspace totals that follow from it:
+
+| Workspace | Profile | `target/` |
+|---|---|---|
+| `capi` | release, `debug = true` | 21.7 GiB |
+| root | dev, `--all-targets` | 19.9 GiB |
+| `ts` | dev, cargo defaults | 12.1 GiB |
+| `ts` | dev, opt-level 1 + debug 0 | 3.3 GiB |
+| `ts` / `java` | release | 2.8 GiB each |
+
 ## Complementary measures
 
 ### Keep resolutions stable (no committed lockfile)

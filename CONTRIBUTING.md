@@ -137,6 +137,18 @@ Local databases and data stores (`cognee.db`, `.data_storage/`, `.cognee_system/
 removed — they can hold a developer's own knowledge graph. Docker layers from the
 `e2e-cross-sdk/` harness are separate — use `docker system prune`.
 
+### Which profile settings drive the size
+
+Debug info is the dominant term, and it reaches further than the Rust artifacts: cargo derives
+the `OPT_LEVEL`/`DEBUG` env vars it passes to build scripts from the profile, and the `cmake`
+crate maps those onto the `CMAKE_BUILD_TYPE` used for lbug's bundled Ladybug C++ tree. Setting
+`opt-level >= 1` **and** `debug = 0` together takes that tree from 2.9 GiB to 213 MiB; either
+one alone does nothing for it (`debug = "line-tables-only"` counts as "wants debug info").
+Both binding workspaces set the pair in `[profile.dev]` — a debug build of
+`ts/cognee-ts-neon` went from 12.1 GiB to 3.3 GiB. See
+[docs/build/lbug-rebuilds.md](docs/build/lbug-rebuilds.md) for the full table, and use
+`CARGO_PROFILE_DEV_DEBUG=2 cargo build` when you do need full debug info.
+
 ## Language bindings
 
 Each binding has its own check script (also invoked by `scripts/check_all.sh`):

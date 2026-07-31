@@ -96,3 +96,35 @@ thiserror = "2.0"
 serde_json = "1"
 # Decode base64 `bytes` for binary `DataInput` inputs over the JSON bridge.
 base64 = "0.22"
+
+# Debug-profile disk tuning. This is a standalone workspace, so it inherits
+# nothing from the root Cargo.toml and used to run on plain cargo defaults —
+# a `npm run build:rust:debug` produced a 12.1 GiB target/ for a single
+# cdylib. Measured on aarch64-apple-darwin, from clean:
+#
+#   defaults (opt-level 0, debug 2)  12.1 GiB      lbug C++ tree 2.9 GiB
+#   opt-level = 1 only               13.0 GiB      lbug C++ tree 2.6 GiB
+#   debug = 0 only                    7.8 GiB      lbug C++ tree 2.9 GiB
+#   both (this config)                3.3 GiB      lbug C++ tree 213 MiB
+#
+# The two settings are only worth having together. Cargo derives the
+# OPT_LEVEL/DEBUG env vars it hands to build scripts from the profile of the
+# package being built, and the `cmake` crate maps those onto CMAKE_BUILD_TYPE
+# for lbug's bundled Ladybug tree: opt-level 0 selects a Debug C++ build
+# whatever `debug` says, and any non-zero `debug` selects RelWithDebInfo
+# whatever `opt-level` says. Only opt-level >= 1 *and* debug = 0 reaches a
+# plain Release C++ build — hence the 2.9 GiB -> 213 MiB step in the last row.
+# See docs/build/lbug-rebuilds.md.
+#
+# Trade-off: Rust frames in a panic backtrace keep their function names (the
+# symbol table is untouched) but lose file/line. Nothing here is debugged
+# through lldb in practice — this profile exists for fast local iteration, and
+# the release build that actually ships already runs at debug = false. To get
+# full debug info back for one build:
+#
+#   CARGO_PROFILE_DEV_DEBUG=2 cargo build
+[profile.dev]
+debug = 0
+
+[profile.dev.package."*"]
+opt-level = 1
