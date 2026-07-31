@@ -346,8 +346,8 @@ public final class Cognee implements AutoCloseable {
         Native.initOtlp();
     }
 
-    /** Arm product-analytics emission (per the opt-out policy); returns whether
-     *  analytics are effective for this process. */
+    /** Evaluate fail-closed product analytics; explicit opt-in is required.
+     *  Returns whether analytics are effective for this process. */
     public static boolean initTelemetry() {
         return Native.initTelemetry();
     }

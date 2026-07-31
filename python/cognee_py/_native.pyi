@@ -897,8 +897,9 @@ def setup_telemetry() -> None:
     ...
 
 def setup_telemetry_analytics() -> None:
-    """Arm the product-analytics client (opt-out via ``TELEMETRY_DISABLED``).
+    """Evaluate product analytics (explicit opt-in required).
 
+    ``TELEMETRY_DISABLED`` and environment/host suppressions take precedence.
     Idempotent.
     """
     ...

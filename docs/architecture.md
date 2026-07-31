@@ -37,7 +37,7 @@ cognee-rs/
 │   ├── http-server/            # axum HTTP server (library + cognee-http-server binary)
 │   ├── visualization/          # Self-contained HTML knowledge-graph visualization (d3.js)
 │   ├── observability/          # OpenTelemetry tracing pipeline (OTLP exporter, telemetry feature)
-│   ├── telemetry/              # Product-analytics client (send_telemetry → prometh.ai, opt-out)
+│   ├── telemetry/              # Product analytics (explicit opt-in; fail-closed)
 │   ├── logging/                # Shared file logging (rotation, Python-compatible plain formatter)
 │   ├── lib/                    # Top-level library `cognee` aggregating all crates (public api/ module)
 │   ├── cognee-lib/             # Deprecated re-export shim keeping the old `cognee-lib` crate name
@@ -100,7 +100,11 @@ cognee-rs/
 
 **cognee-observability** — OpenTelemetry tracing pipeline. Bridges `#[tracing::instrument]` sites into an OTLP exporter. Entry point: `init_telemetry` (tracing layer + RAII `TelemetryGuard`). Activated by `COGNEE_TRACING_ENABLED=true` or a non-empty `OTEL_EXPORTER_OTLP_ENDPOINT`; real exporter behind the `telemetry` feature. See [observability/opentelemetry.md](observability/opentelemetry.md).
 
-**cognee-telemetry** — Product-analytics client (`send_telemetry`). Fire-and-forget POST to `https://test.prometh.ai` per public API call; opt out with `TELEMETRY_DISABLED`, `ENV=test|dev`, or `--no-default-features`. See [observability/send_telemetry.md](observability/send_telemetry.md).
+**cognee-telemetry** — Product-analytics client (`send_telemetry`). Compiled
+capability is disabled at runtime unless `COGNEE_PRODUCT_TELEMETRY_ENABLED` is
+an explicit recognized opt-in; `TELEMETRY_DISABLED`, `ENV=test|dev`, and
+binding-host suppression still win. See
+[observability/send_telemetry.md](observability/send_telemetry.md).
 
 **cognee-logging** — Shared file-based logging: rotation, the Python-compatible plain-text formatter, and a noise-suppressing `EnvFilter`. Entry point: `init_logging`, called by the CLI and HTTP server. Env-var surface documented in [configuration.md §logging](configuration.md#logging).
 

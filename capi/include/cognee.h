@@ -46,9 +46,10 @@ int cognee_init_otlp(void);
 
 /* Product-analytics arming (gap-07 task 06): argument-less, idempotent.
  * Arms cognee product-analytics emission for this process subject to
- * the per-binding policy (decision 11): emission is armed unless
- * TELEMETRY_DISABLED is set, ENV is "test"/"dev", or COGNEE_HOST_SDK
- * is set to any non-empty value. When armed, future calls to
+ * the fail-closed policy: emission is armed only when
+ * COGNEE_PRODUCT_TELEMETRY_ENABLED is an explicit recognized opt-in;
+ * TELEMETRY_DISABLED, ENV, and COGNEE_HOST_SDK still suppress. When
+ * armed, future calls to
  * cognee_telemetry::env::is_disabled inside the bindings honour the
  * COGNEE_HOST_SDK sentinel (decision 10).
  * Returns: 0 = armed, 1 = not armed (policy suppressed),

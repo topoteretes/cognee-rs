@@ -16,7 +16,8 @@ static GLOBAL_RUNTIME: OnceLock<AsyncRuntime> = OnceLock::new();
 /// parity) with `COGNEE_HOST_SDK` deferral working even without an
 /// explicit `cognee_init_telemetry()` call. Arming only ever *adds*
 /// suppression — emission is still gated per event by `is_disabled()`
-/// (`TELEMETRY_DISABLED` / `ENV` / `COGNEE_HOST_SDK`). No-op when the
+/// (explicit opt-in plus `TELEMETRY_DISABLED` / `ENV` /
+/// `COGNEE_HOST_SDK`). No-op when the
 /// `telemetry` feature is disabled.
 #[cfg(feature = "telemetry")]
 #[inline]

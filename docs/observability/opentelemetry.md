@@ -123,7 +123,7 @@ export OTEL_TRACES_SAMPLER_ARG=0.1
 
 ## Product analytics vs. tracing
 
-OTEL tracing (this document) is **distinct** from the opt-out product-analytics
+OTEL tracing (this document) is **distinct** from the explicit-opt-in product-analytics
 client (`send_telemetry`). The latter posts anonymous aggregate usage events to
 `https://test.prometh.ai` and is documented in
 [`send_telemetry.md`](send_telemetry.md). The two are configured independently.

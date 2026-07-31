@@ -18,7 +18,7 @@ How you invoke the pipeline. All cover the same operations
 
 ## Dev & ops tooling
 
-- **Observability** — [../observability/opentelemetry.md](../observability/opentelemetry.md) (OTLP tracing) and [../observability/send_telemetry.md](../observability/send_telemetry.md) (opt-out product analytics).
+- **Observability** — [../observability/opentelemetry.md](../observability/opentelemetry.md) (OTLP tracing) and [../observability/send_telemetry.md](../observability/send_telemetry.md) (explicit-opt-in product analytics).
 - **Logging** — [../configuration.md#logging](../configuration.md#logging).
 - **Visualization** — `cognee-cli visualize` (see [cli.md](cli.md)); [`cognee-visualization`](../../crates/visualization/).
 - **Benchmarking** — [../performance/mock-benchmark.md](../performance/mock-benchmark.md) (offline mock-LLM benchmark) and its [design rationale](../performance/python-approach.md).

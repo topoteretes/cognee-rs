@@ -58,8 +58,9 @@ A `.env` file at startup is loaded automatically. Logging is configured via the
 
 ## Features
 
-- `telemetry` (default) — OpenTelemetry export via `cognee-observability`.
-  Disable with `--no-default-features` for a compile-time opt-out.
+- `telemetry` (default) — compiles OpenTelemetry/product-telemetry capability.
+  Product analytics remain runtime-disabled until explicit opt-in; use
+  `--no-default-features` to remove the capability at compile time.
 - `bin` — builds the standalone `cognee-http-server` binary and its
   argument-parsing dependencies.
 

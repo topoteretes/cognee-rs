@@ -2,17 +2,16 @@
  * Gap 07 task 06 — `cognee_init_telemetry` smoke test.
  *
  * Verifies that:
- *   1. `cognee_init_telemetry` returns 0 ("armed") under the Python-SDK
- *      parity policy (analytics ON by default) when no opt-out env var
- *      is set.
+ *   1. `cognee_init_telemetry` returns 1 ("not_armed") by default and
+ *      returns 0 only with the explicit product-telemetry opt-in.
  *   2. The function is idempotent — a second call returns the same
  *      latched decision without re-evaluating the environment.
  *
  * The driver in `capi/scripts/check.sh` runs this twice in two
  * separate child processes:
- *   * fresh env with no opt-outs       → expect exit code 0.
- *   * `TELEMETRY_DISABLED=1` in env    → expect exit code 0
- *                                        and stdout "not_armed".
+ *   * fresh env with no opt-in         → stdout "not_armed".
+ *   * explicit opt-in                  → stdout "armed".
+ *   * opt-in + `TELEMETRY_DISABLED=1` → stdout "not_armed".
  *
  * Inside one process, the singleton latches on the first call, so we
  * only test the same-process idempotency invariant here.

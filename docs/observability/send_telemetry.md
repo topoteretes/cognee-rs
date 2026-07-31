@@ -1,28 +1,35 @@
 # Product Analytics (`send_telemetry`)
 
-Cognee-Rust includes an opt-out product-analytics client that mirrors Python's
-`cognee.shared.utils.send_telemetry`. For every public API call it fires a
-single fire-and-forget HTTP POST to `https://test.prometh.ai`, giving the cognee
-maintainers an aggregate view of how the SDK is exercised. It is implemented in
-the [`cognee-telemetry`](../../crates/telemetry/) crate.
+Cognee-Rust includes a product-analytics client derived from Python's
+`cognee.shared.utils.send_telemetry`. When explicitly authorized, public API
+calls can fire a single fire-and-forget HTTP POST to `https://test.prometh.ai`.
+It is implemented in the
+[`cognee-telemetry`](../../crates/telemetry/) crate.
 
 This is **separate** from OpenTelemetry tracing — see
 [`opentelemetry.md`](opentelemetry.md) for that. The two are configured
 independently.
 
-## Enabled by default
+## Disabled by default
 
-Analytics is on by default (Python parity). It is **fire-and-forget**: events
-are dispatched without blocking the API call, and failures are swallowed (logged
-at debug under the `cognee.telemetry` target only).
+The local sovereign baseline deliberately diverges from Python parity: analytics
+are off unless the operator explicitly opts in. Compiling the `telemetry`
+feature supplies capability only; it does not grant runtime permission.
 
-## Opting out
+When authorized, events are **fire-and-forget**: they are dispatched without
+blocking the API call, and failures are swallowed (logged at debug under the
+`cognee.telemetry` target only).
+
+## Opting in and suppressing
 
 | How | Effect |
 |---|---|
+| `COGNEE_PRODUCT_TELEMETRY_ENABLED=1` | Explicitly enables product analytics. `true`, `yes`, and `on` are also accepted case-insensitively. Missing or any other value fails closed. |
 | `TELEMETRY_DISABLED=1` (any non-empty value) | Disables at runtime. Checked on every call before any identity derivation or HTTP work, so the cost is zero. |
 | `ENV=test` or `ENV=dev` | Disables at runtime. |
 | Build with `--no-default-features` | Disables at compile time. `send_telemetry` / `try_send_telemetry` remain in the public surface but compile to no-op bodies — no `reqwest`, no tokio fallback, no PBKDF2 cost. |
+
+Suppressions take precedence over opt-in.
 
 ## Identity
 
@@ -56,6 +63,7 @@ Each event is a JSON object:
 
 | Variable | Default | Effect |
 |---|---|---|
+| `COGNEE_PRODUCT_TELEMETRY_ENABLED` | _(unset)_ | Explicit runtime permission. Recognized values: `1`, `true`, `yes`, `on`. |
 | `TELEMETRY_DISABLED` | _(unset)_ | Any non-empty value disables. Read on every call. |
 | `ENV` | _(unset)_ | `test` or `dev` disables. Read on every call. |
 | `LLM_API_KEY` | _(unset)_ | Source of `api_key_tracking_id`; read at every event, never cached. |
@@ -84,3 +92,6 @@ send_telemetry(
     Some(json!({ "endpoint": "POST /api/v1/forget" })),
 );
 ```
+
+Without the explicit opt-in, this call is a no-op before identity derivation or
+network-client construction.

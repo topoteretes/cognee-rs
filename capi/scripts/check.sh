@@ -216,13 +216,26 @@ env -u OTEL_EXPORTER_OTLP_ENDPOINT -u COGNEE_TRACING_ENABLED \
     "$BUILD_DIR/examples/init_otlp_smoke"
 
 echo ""
-echo "--- Running: init_telemetry_smoke (default policy) ---"
-env -u TELEMETRY_DISABLED -u COGNEE_HOST_SDK -u ENV \
-    "$BUILD_DIR/examples/init_telemetry_smoke"
+echo "--- Running: init_telemetry_smoke (default fail-closed policy) ---"
+DEFAULT_OUT=$(env -u COGNEE_PRODUCT_TELEMETRY_ENABLED -u TELEMETRY_DISABLED \
+    -u COGNEE_HOST_SDK -u ENV "$BUILD_DIR/examples/init_telemetry_smoke")
+if [ "$DEFAULT_OUT" != "not_armed" ]; then
+    echo "FAIL: expected default 'not_armed', got '$DEFAULT_OUT'" >&2
+    exit 1
+fi
+
+echo "--- Running: init_telemetry_smoke (explicit opt-in) ---"
+ENABLED_OUT=$(env -u TELEMETRY_DISABLED -u COGNEE_HOST_SDK -u ENV \
+    COGNEE_PRODUCT_TELEMETRY_ENABLED=1 "$BUILD_DIR/examples/init_telemetry_smoke")
+if [ "$ENABLED_OUT" != "armed" ]; then
+    echo "FAIL: expected explicit opt-in 'armed', got '$ENABLED_OUT'" >&2
+    exit 1
+fi
 
 echo ""
 echo "--- Running: init_telemetry_smoke (TELEMETRY_DISABLED=1 suppresses) ---"
-SUPPRESSED_OUT=$(env -u COGNEE_HOST_SDK -u ENV TELEMETRY_DISABLED=1 \
+SUPPRESSED_OUT=$(env -u COGNEE_HOST_SDK -u ENV \
+    COGNEE_PRODUCT_TELEMETRY_ENABLED=1 TELEMETRY_DISABLED=1 \
     "$BUILD_DIR/examples/init_telemetry_smoke")
 if [ "$SUPPRESSED_OUT" != "not_armed" ]; then
     echo "FAIL: expected 'not_armed', got '$SUPPRESSED_OUT'" >&2
