@@ -136,12 +136,18 @@ brings them back:
 Local databases and data stores (`cognee.db`, `.data_storage/`, `.cognee_system/`) are never
 removed — they can hold a developer's own knowledge graph.
 
-Docker is **reported but never pruned**. The `e2e-cross-sdk/` harness builds a 3-stage image
-containing both SDKs, and on a machine that has run it a few times the images plus BuildKit
-cache routinely outweigh all four Cargo `target/` dirs combined — so `clean_all.sh` prints the
-reclaimable total and leaves the decision to you (`docker system prune`, or
-`docker system prune -a --volumes` to go further). The daemon is shared with everything else
-on the machine, which is why the script will not touch it.
+For Docker, `--docker` removes **only the images this repo builds** — today just the
+~5 GB `cognee-e2e-cross-sdk` image from the `e2e-cross-sdk/` harness. It is not part of
+`--all` because rebuilding it recompiles both SDKs from scratch, and it is a no-op when
+docker is absent or the daemon is down.
+
+Everything else Docker holds is left alone on purpose. A dev machine typically also carries
+unrelated images (kind node images, other services' `:local` tags) and a BuildKit cache
+shared across every project, so `clean_all.sh` prints the daemon-wide reclaimable total for
+information and never runs `docker system prune` itself. Two details worth knowing if you
+extend `DOCKER_IMAGES`: removal is by `repo:tag` rather than image ID, because several tags
+routinely share one ID and `docker rmi <id>` would delete all of them; and the freed total
+counts each image once no matter how many tags point at it.
 
 ### Which profile settings drive the size
 
