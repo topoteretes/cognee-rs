@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use tokio::sync::RwLock as TokioRwLock;
+use tracing::instrument;
 
 use cognee_components::ComponentRegistry;
 use cognee_database::DatabaseConnection;
@@ -126,31 +127,52 @@ impl ComponentManager {
         ctx
     }
 
+    // Each `init_*` below carries an INFO span so that engine construction —
+    // the bulk of a cold `warm()` — is visible in a trace.
+    //
+    // The spans go on these private constructors rather than on the public
+    // accessors because the accessors run `versioned_accessor!`, whose read-lock
+    // fast path returns a cached `Arc`. Instrumenting there would emit a span per
+    // cache *hit* — thousands per pipeline run, all ~0s — drowning the handful
+    // that represent real work. `init_*` runs only on the slow path: once per
+    // component per config version, which is exactly the event worth timing.
+
+    #[instrument(name = "cognee.component.storage", level = "info", skip_all, err)]
     async fn init_storage(&self) -> Result<Arc<dyn StorageTrait>, ComponentError> {
         let ctx = self.build_context().await;
         cognee_components::build_storage(&ctx).await
     }
 
+    #[instrument(name = "cognee.component.database", level = "info", skip_all, err)]
     async fn init_database(&self) -> Result<Arc<DatabaseConnection>, ComponentError> {
         let ctx = self.build_context().await;
         cognee_components::build_database(&ctx).await
     }
 
+    #[instrument(name = "cognee.component.graph_db", level = "info", skip_all, err)]
     async fn init_graph_db(&self) -> Result<Arc<dyn GraphDBTrait>, ComponentError> {
         let ctx = self.build_context().await;
         self.registry.build_graph(&ctx).await
     }
 
+    #[instrument(name = "cognee.component.vector_db", level = "info", skip_all, err)]
     async fn init_vector_db(&self) -> Result<Arc<dyn VectorDB>, ComponentError> {
         let ctx = self.build_context().await;
         self.registry.build_vector(&ctx).await
     }
 
+    #[instrument(
+        name = "cognee.component.embedding_engine",
+        level = "info",
+        skip_all,
+        err
+    )]
     async fn init_embedding_engine(&self) -> Result<Arc<dyn EmbeddingEngine>, ComponentError> {
         let ctx = self.build_context().await;
         self.registry.build_embedding(&ctx).await
     }
 
+    #[instrument(name = "cognee.component.llm", level = "info", skip_all, err)]
     async fn init_llm(&self) -> Result<Arc<dyn Llm>, ComponentError> {
         let ctx = self.build_context().await;
         self.registry.build_llm(&ctx).await
