@@ -755,11 +755,14 @@ jobs:
       # both reintroduce the release-profile rebuild that command exists to
       # avoid, and mask any breakage in check.sh's own bootstrap — CI would
       # stay green against an environment this step had already prepared.
+      # Bounded below at the same 1.5 python/pyproject.toml's dev extra
+      # requires, and below 2 so a major release cannot change `develop` /
+      # `--extras` behaviour under CI without a deliberate bump here.
       - name: Create venv and install maturin
         run: |
           python -m venv .venv
           source .venv/bin/activate
-          pip install maturin
+          pip install 'maturin>=1.5,<2'
       - name: Run Python check
         run: |
           source .venv/bin/activate
