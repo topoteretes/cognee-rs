@@ -35,6 +35,45 @@ else()
     set(CARGO_FEATURE_ARGS "")
 endif()
 
+# Re-enable lbug's internal consistency checks (KU_ASSERT / RUNTIME_CHECK).
+#
+# capi/Cargo.toml's [profile.dev] deliberately builds lbug's bundled Ladybug
+# tree as a Release C++ build (2.9 GiB -> 208 MiB), and Release defines NDEBUG.
+# lbug gates those checks on `defined(LBUG_RUNTIME_CHECKS) || !defined(NDEBUG)`
+# (lbug-src/src/include/common/assert.h), so they are off by default here.
+#
+# Defining LBUG_RUNTIME_CHECKS satisfies the first half of that condition
+# independently of NDEBUG, which re-arms the asserts while keeping the small
+# Release tree — cheaper than dropping to a Debug C++ build for the same
+# effect. Turning an assert failure into a thrown InternalException is what
+# makes a bad handle or index crossing the cg_sdk_* boundary stop at a precise
+# file and line instead of running into undefined behaviour.
+#
+# CXXFLAGS is the injection point because the `cmake` crate builds lbug from
+# lbug's own build.rs — this project never invokes that CMake run directly and
+# so cannot pass -DENABLE_RUNTIME_CHECKS=ON to it. Appending keeps any CXXFLAGS
+# the caller already set.
+#
+# Caveat: cargo fingerprints the lbug build-script unit on its build-dependency
+# closure, not on CXXFLAGS, so toggling this does NOT by itself force the C++
+# tree to rebuild. Run `cargo clean -p lbug --manifest-path capi/Cargo.toml`
+# (or a full clean) after flipping it.
+option(COGNEE_CAPI_LBUG_ASSERTS
+    "Define LBUG_RUNTIME_CHECKS so lbug's KU_ASSERT/RUNTIME_CHECK stay compiled in"
+    OFF)
+
+if(COGNEE_CAPI_LBUG_ASSERTS)
+    # string(STRIP) so an unset caller CXXFLAGS does not leave a leading space
+    # in the value; `cmake -E env` would pass it through verbatim.
+    string(STRIP "$ENV{CXXFLAGS} -DLBUG_RUNTIME_CHECKS" CARGO_CXXFLAGS)
+    set(CARGO_ASSERT_ENV "CXXFLAGS=${CARGO_CXXFLAGS}")
+    message(STATUS "cognee-capi: lbug runtime checks ENABLED (CXXFLAGS=${CARGO_CXXFLAGS})")
+else()
+    # `env` treats an empty list element as nothing to set, so this is a no-op
+    # and the caller's own CXXFLAGS pass through untouched.
+    set(CARGO_ASSERT_ENV "")
+endif()
+
 # Build Rust library via cargo.
 # CARGO_TARGET_DIR is forwarded explicitly so cargo writes artifacts into
 # capi/target/ (pinned above) regardless of the calling directory. Without
@@ -43,6 +82,7 @@ endif()
 add_custom_target(cognee_capi_cargo ALL
     COMMAND ${CMAKE_COMMAND} -E env
         CARGO_TARGET_DIR=${CARGO_TARGET_DIR}
+        ${CARGO_ASSERT_ENV}
         cargo build --manifest-path "${CMAKE_SOURCE_DIR}/cognee-capi/Cargo.toml"
         ${CARGO_NO_DEFAULT_ARGS}
         ${CARGO_FEATURE_ARGS}

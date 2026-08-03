@@ -36,6 +36,132 @@ uuid = { version = "1.21", features = ["v4", "v5", "serde"] }
 [profile.dev]
 panic = "abort"
 
+# Same graded debug-info split as the release profile below, and for a bigger
+# payoff: capi/CMakeLists.txt runs a bare `cargo build` (no --release) and
+# imports `${CARGO_TARGET_DIR}/debug/libcognee_capi.a`, so the Rust half of
+# every CMake build — and therefore every `scripts/check_all.sh` run — uses
+# this profile whatever -DCMAKE_BUILD_TYPE is set to. The release profile is
+# reached only by an explicit `cargo build --release`.
+#
+# Untuned, that cost 36.5 GiB per check_all.sh run. Measured from clean on
+# aarch64-apple-darwin:
+#
+#                            capi/target   capi/build   lbug C++   per example
+#   panic=abort only            27 GiB       9.5 GiB     2.9 GiB      510 MiB
+#   this config                 10 GiB       4.9 GiB     208 MiB      264 MiB
+#
+# capi/build is the CMake tree: 19 example binaries, each statically linking
+# libcognee_capi.a, so the archive's debug info is paid for 19 times over.
+#
+# `opt-level = 1` on dependencies is not a speed setting. The `cmake` crate
+# derives CMAKE_BUILD_TYPE from the OPT_LEVEL/DEBUG cargo exports to a build
+# script (cmake 0.1.58: opt-level 0 -> Debug; opt-level >= 1 with debug=false
+# -> Release; opt-level >= 1 with debug -> RelWithDebInfo), so this pairing is
+# what flips lbug's bundled Ladybug tree to a Release C++ build — the
+# 2.9 GiB -> 208 MiB row. See docs/build/lbug-rebuilds.md.
+#
+# Deliberate trade-off: Release and RelWithDebInfo both define NDEBUG, and lbug
+# gates its internal KU_ASSERT/RUNTIME_CHECK on
+# `defined(LBUG_RUNTIME_CHECKS) || !defined(NDEBUG)` (lbug-src assert.h), so
+# those checks are compiled out here — this profile was the last one in which
+# they still fired. To get them back without giving up the small tree,
+# configure with -DCOGNEE_CAPI_LBUG_ASSERTS=ON (see capi/CMakeLists.txt): that
+# defines LBUG_RUNTIME_CHECKS, satisfying the first half of the condition
+# independently of NDEBUG.
+#
+# panic = "abort" is untouched: it is the FFI safety floor, and neither
+# opt-level nor debug interacts with it.
+[profile.dev.package."*"]
+debug = 0
+opt-level = 1
+
+# First-party crates: full debug info AND an explicit opt-level 0 — both are
+# needed. Named package overrides *merge onto* the "*" glob rather than
+# replacing it, so `debug = true` alone would leave these at the glob's
+# opt-level 1, giving optimized-out locals and reordered lines when stepping
+# through cognee frames in a C example, plus optimization paid on every
+# incremental edit. These crates are path *dependencies* of cognee-capi rather
+# than members of this workspace, so the glob does catch them (unlike the root
+# workspace, whose members are exempt by definition).
+#
+# Hand-maintained, like the release list, because cargo has no prefix glob for
+# package overrides. A crate added to crates/ and pulled into this closure
+# silently falls under the glob instead — debug = 0, so no line tables at all —
+# and cargo warns only for specs matching *no* package, never for one matching
+# only the glob. Re-check this list when adding a crate to crates/.
+[profile.dev.package.cognee]
+debug = true
+opt-level = 0
+[profile.dev.package.cognee-bindings-common]
+debug = true
+opt-level = 0
+[profile.dev.package.cognee-chunking]
+debug = true
+opt-level = 0
+[profile.dev.package.cognee-cognify]
+debug = true
+opt-level = 0
+[profile.dev.package.cognee-components]
+debug = true
+opt-level = 0
+[profile.dev.package.cognee-core]
+debug = true
+opt-level = 0
+[profile.dev.package.cognee-database]
+debug = true
+opt-level = 0
+[profile.dev.package.cognee-delete]
+debug = true
+opt-level = 0
+[profile.dev.package.cognee-embedding]
+debug = true
+opt-level = 0
+[profile.dev.package.cognee-graph]
+debug = true
+opt-level = 0
+[profile.dev.package.cognee-ingestion]
+debug = true
+opt-level = 0
+[profile.dev.package.cognee-llm]
+debug = true
+opt-level = 0
+[profile.dev.package.cognee-logging]
+debug = true
+opt-level = 0
+[profile.dev.package.cognee-models]
+debug = true
+opt-level = 0
+[profile.dev.package.cognee-observability]
+debug = true
+opt-level = 0
+[profile.dev.package.cognee-ontology]
+debug = true
+opt-level = 0
+[profile.dev.package.cognee-search]
+debug = true
+opt-level = 0
+[profile.dev.package.cognee-session]
+debug = true
+opt-level = 0
+[profile.dev.package.cognee-storage]
+debug = true
+opt-level = 0
+[profile.dev.package.cognee-telemetry]
+debug = true
+opt-level = 0
+[profile.dev.package.cognee-truth-subspace]
+debug = true
+opt-level = 0
+[profile.dev.package.cognee-utils]
+debug = true
+opt-level = 0
+[profile.dev.package.cognee-vector]
+debug = true
+opt-level = 0
+[profile.dev.package.cognee-visualization]
+debug = true
+opt-level = 0
+
 [profile.release]
 # Full debug info for first-party code (see the per-package overrides below),
 # plus panic=abort.
