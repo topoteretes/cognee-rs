@@ -19,14 +19,17 @@ fi
 # architecture so it cannot shadow the freshly-built one.
 rm -f cognee_py/_native*.so
 
-maturin develop
-
-echo ""
-echo "================================================================"
-echo "=== Python: Installing test dependencies ==="
-echo "================================================================"
-
-pip install -e ".[test]"
+# --extras installs the [test] extra's dependencies as part of this same
+# dev-profile install, which is why there is no `pip install -e ".[test]"`
+# afterwards. That command looked free but was not: it handed the build to the
+# maturin PEP-517 backend, which defaults to --release, so the whole ~630-crate
+# graph was compiled a second time in a second profile — measured at 9.8 GiB of
+# target/release and ~4 minutes — purely to land two pure-Python wheels.
+#
+# Let maturin/pip resolve the specifiers rather than parsing pyproject.toml
+# here: they handle PEP 508 markers, quoting and spaces correctly, and this
+# script then needs no TOML parser (python < 3.11 has no stdlib tomllib).
+maturin develop --extras test
 
 echo ""
 echo "================================================================"

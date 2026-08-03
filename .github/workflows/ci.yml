@@ -749,12 +749,17 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Create venv and install dependencies
+      # Only maturin: python/scripts/check.sh runs `maturin develop --extras
+      # test`, which builds the extension and installs the test extra itself.
+      # Pre-installing the project here with `pip install -e ".[test]"` would
+      # both reintroduce the release-profile rebuild that command exists to
+      # avoid, and mask any breakage in check.sh's own bootstrap — CI would
+      # stay green against an environment this step had already prepared.
+      - name: Create venv and install maturin
         run: |
           python -m venv .venv
           source .venv/bin/activate
           pip install maturin
-          cd python && pip install -e ".[test]"
       - name: Run Python check
         run: |
           source .venv/bin/activate
