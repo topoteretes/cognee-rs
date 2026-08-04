@@ -182,11 +182,19 @@ jobs:
           workspaces: bindings -> target
           cache-on-failure: true
 
+      # Same key as ts-prebuild.yml on purpose. Both workflows now point
+      # ORT_CACHE_DIR at bindings/target/ort-cache, and their platform matrices
+      # are identical (linux-x64-gnu, linux-arm64-gnu, darwin-arm64,
+      # win32-x64-msvc, same rust-target for each), so a given matrix.platform
+      # means the same ONNX Runtime binary in both. Separate `java-ort-` and
+      # `ort-` prefixes stored two copies of it and made whichever workflow ran
+      # second re-download. They could not share before this PR — the two
+      # workflows cached different paths under their own target dirs.
       - name: Cache ORT binary
         uses: actions/cache@v4
         with:
           path: bindings/target/ort-cache
-          key: java-ort-v2.0.0-rc.12-cpu-${{ matrix.platform }}
+          key: ort-v2.0.0-rc.12-cpu-${{ matrix.platform }}
 
       - name: Set up JDK (for the jar tool)
         uses: actions/setup-java@v4
