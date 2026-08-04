@@ -211,10 +211,28 @@ Stale agent worktrees each hold a 13–18 GB target dir; remove with
   runners, so `http-parity.yml` persists the mount with
   `reproducible-containers/buildkit-cache-dance` + `actions/cache`
   (inject before build, extract after).
-- Rust-side equivalent: `sccache` as `RUSTC_WRAPPER` would also cache the
-  ~700 dependency crates across fresh worktree target dirs. Not wired because
-  a hard `RUSTC_WRAPPER` breaks machines without sccache; revisit if worktree
-  warm-up (not lbug) becomes the bottleneck.
+- Rust-side equivalent: `sccache` as `RUSTC_WRAPPER` also caches the ~700
+  dependency crates across fresh worktree target dirs. Now wired — see
+  "sccache for the Rust half" below for how it stays safe on machines that do
+  not have it, and for the two ways of wiring it that are *not* safe.
+
+### sccache for the Rust half (wired, opt-in by installation)
+
+`.cargo/config.toml` sets `build.rustc-wrapper = "scripts/rustc-wrapper.sh"`,
+which execs `sccache` when installed and is a transparent pass-through
+otherwise — the same contract as the ccache launcher above.
+
+The objection previously recorded here (that a hard `RUSTC_WRAPPER` breaks
+machines without it) is handled by the pass-through, and toggling the wrapper
+does **not** invalidate cargo fingerprints: verified by building, rebuilding
+with a pass-through wrapper, then rebuilding without — both follow-ups were
+0-crate no-ops. So installing or removing sccache costs no rebuild.
+
+What it will not cache, by design rather than by failure: units built with
+`-C incremental` (every first-party crate), proc macros, build scripts, and
+the final bin/cdylib/staticlib links. Those fall back to a normal compile. The
+registry dependencies are the cached part — the same graph this repo compiles
+four times over.
 
 ### Escape hatch: prebuilt Ladybug (`LBUG_LIBRARY_DIR`)
 

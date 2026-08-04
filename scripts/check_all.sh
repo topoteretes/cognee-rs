@@ -8,6 +8,27 @@ REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 
 cd "$REPO_ROOT"
 
+# Route Rust compilation through sccache when it is installed. Set here rather
+# than as `build.rustc-wrapper` in .cargo/config.toml, and pointed at the
+# sccache binary rather than at a wrapper script, because both alternatives are
+# broken in ways that only show up off this developer's machine:
+#
+#   * A `#!/bin/sh` wrapper drops every environment variable whose name is not
+#     a valid shell identifier. On Linux /bin/sh is dash, which discards
+#     CARGO_BIN_EXE_cognee-cli before exec'ing rustc, so crates/cli/tests
+#     fails to compile. macOS /bin/sh is bash and keeps it, so the breakage is
+#     invisible locally and red on every Linux runner.
+#   * A committed config.toml entry applies to Windows too, where CreateProcess
+#     cannot launch a .sh at all — that would break every Windows release leg.
+#     (capi-release.yml already resets the CMake launcher vars on Windows for
+#     exactly this reason.)
+#
+# Exec'ing the sccache binary directly has neither problem, and a caller-set
+# RUSTC_WRAPPER still wins.
+if command -v sccache > /dev/null 2>&1; then
+    export RUSTC_WRAPPER="${RUSTC_WRAPPER:-sccache}"
+fi
+
 echo "================================================================"
 echo "=== Rust: Checking formatting ==="
 echo "================================================================"

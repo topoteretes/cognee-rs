@@ -61,8 +61,12 @@ __pycache__/
 # Runtime data storage (created by CLI in cwd)
 .data_storage/
 
-# Runtime artifacts written into cwd by un-isolated test runs (any directory)
+# Runtime artifacts written into cwd by un-isolated test runs (any directory).
+# The -wal/-shm siblings appear whenever SQLite runs in WAL mode; without
+# them a smoke-test run leaves two untracked files behind.
 cognee.db
+cognee.db-wal
+cognee.db-shm
 .cognee_system/
 
 # Generated Locust benchmark artifacts
