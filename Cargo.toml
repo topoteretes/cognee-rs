@@ -169,6 +169,7 @@ expect_used = "warn"
 # -> 213 MiB), which is why both binding workspaces set the two together. See
 # ts/cognee-ts-neon/Cargo.toml and docs/build/lbug-rebuilds.md.
 opt-level = 1
+debug = 0
 
 [profile.release]
 # "line-tables-only" gives backtraces and profiler source-line info at a
