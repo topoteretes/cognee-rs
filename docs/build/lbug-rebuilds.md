@@ -218,15 +218,31 @@ Stale agent worktrees each hold a 13–18 GB target dir; remove with
 
 ### sccache for the Rust half (wired, opt-in by installation)
 
-`.cargo/config.toml` sets `build.rustc-wrapper = "scripts/rustc-wrapper.sh"`,
-which execs `sccache` when installed and is a transparent pass-through
-otherwise — the same contract as the ccache launcher above.
+`scripts/check_all.sh` exports `RUSTC_WRAPPER=sccache` when that binary is on
+PATH, and leaves it unset otherwise. A caller-set `RUSTC_WRAPPER` still wins.
 
-The objection previously recorded here (that a hard `RUSTC_WRAPPER` breaks
-machines without it) is handled by the pass-through, and toggling the wrapper
-does **not** invalidate cargo fingerprints: verified by building, rebuilding
-with a pass-through wrapper, then rebuilding without — both follow-ups were
-0-crate no-ops. So installing or removing sccache costs no rebuild.
+Deliberately *not* done two more obvious ways, both of which are broken in ways
+that only surface off a macOS dev machine:
+
+- **A `#!/bin/sh` wrapper script**, mirroring `ccache-launcher.sh`. A shell
+  interposed between cargo and rustc drops every environment variable whose
+  name is not a valid shell identifier. Linux `/bin/sh` is dash, which discards
+  `CARGO_BIN_EXE_cognee-cli`, so `crates/cli/tests` fails to compile;
+  `env CARGO_BIN_EXE_cognee-cli=X dash wrapper.sh env | grep -c cognee-cli`
+  prints 0 under dash and 1 under bash. This was tried and turned PR CI red on
+  every Linux runner while passing locally.
+- **`build.rustc-wrapper` in `.cargo/config.toml`.** That applies on Windows
+  too, where CreateProcess cannot launch a `.sh` at all, breaking every Windows
+  release leg — the same hazard `capi-release.yml` already resets the CMake
+  launcher variables for.
+
+Toggling sccache does **not** invalidate cargo fingerprints: verified by
+building, rebuilding with a wrapper, then rebuilding without — both follow-ups
+were 0-crate no-ops. So installing or removing it costs no rebuild.
+
+The trade against the config.toml approach is scope: this covers
+`check_all.sh` runs rather than every `cargo` invocation. Export it yourself
+for interactive builds.
 
 What it will not cache, by design rather than by failure: units built with
 `-C incremental` (every first-party crate), proc macros, build scripts, and

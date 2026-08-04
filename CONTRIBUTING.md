@@ -174,12 +174,18 @@ counts each image once no matter how many tags point at it.
 the `.a` — rather than the static archive. Linking the archive embeds the whole
 bundled Ladybug engine into every binary (lbug marks its 17 C++ archives
 `+whole-archive`), which is 264 MB each and a 4.9 GiB `capi/build` tree; against
-the dylib they are ~50 KB each and the tree is ~17 MB.
+the dylib they are ~50 KB each.
 
-`example_sync_task` stays statically linked on purpose, with `-dead_strip`. It is
-the canary for the `.a` link path and for the hand-maintained Apple-framework
-list in `capi/CMakeLists.txt` — a missing entry there is what broke the build in
-\#116, and nothing else would catch it now. Pass
+`example_sync_task` stays statically linked on purpose, so `capi/build` is
+~267 MB rather than ~17 MB — that one binary is nearly all of it. It is the
+canary for the `.a` link path and for the hand-maintained Apple-framework list
+in `capi/CMakeLists.txt`; a missing entry there is what broke the build in
+\#116, and nothing else would catch it now.
+
+**Do not add `-Wl,-dead_strip` to it.** That would take it to ~16 MB and is
+tempting for exactly that reason, but ld64 dead-strips before it checks for
+undefined symbols, so the flag silently discards the missing-framework errors
+the canary exists to raise — verified both ways on the real link line. Pass
 `-DCOGNEE_CAPI_STATIC_EXAMPLES=ON` to link everything statically again.
 
 ### Which profile settings drive the size
