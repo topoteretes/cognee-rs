@@ -1,5 +1,5 @@
 # Cross-compilation config for the C-API (cross-rs), mirroring the proven
-# ts/cognee-ts-neon/Cross.toml setup that already builds the aarch64 Neon addon.
+# bindings/Cross.toml setup that already builds the aarch64 Neon addon.
 #
 # capi/ is a standalone (nested) workspace, so cross-rs by default mounts only
 # this directory — leaving its path-deps (../crates/*) and the root Cargo.toml

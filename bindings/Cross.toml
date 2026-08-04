@@ -1,10 +1,14 @@
-# Cross-compilation config for the TS Neon addon (cross-rs).
+# Cross-compilation config for both cdylib bindings (cross-rs).
 #
-# cognee-ts-neon is a standalone (nested) workspace, so cross-rs by default
-# mounts only that directory — leaving its path-deps (../../crates/*) and the
-# root Cargo.toml outside the container ("failed to find a workspace root").
+# One file, because cross reads Cross.toml from the *workspace root* and both
+# cognee-ts-neon and cognee-java-jni are members of this workspace. The two
+# per-crate copies this replaces were identical apart from their comments.
+#
+# The workspace root has no sources under it — the members live in ../ts and
+# ../java, and their path-deps in ../crates — so cross's default of mounting
+# only the workspace root is not enough ("failed to find a workspace root").
 # `volumes` below mounts the whole repo (COGNEE_REPO_ROOT) at its host path so
-# those resolve, without folding the crate into the root workspace.
+# those resolve, without folding the crates into the root workspace.
 #
 # The cross containers are also minimal Ubuntu images that lack the toolchain
 # the bundled lbug C++ engine needs; see ci/cross/aarch64-gnu.Dockerfile (a
@@ -15,14 +19,17 @@
 #   - CFLAGS_*/CXXFLAGS_*: SIMSIMD_TARGET_*=0 disables SVE / NEON-bf16 kernels
 #     the cross toolchain can't assemble (basic NEON + serial fallbacks remain).
 #
+# Both prebuild workflows run `cross build -p <crate>` from this directory, so
+# the cwd is the workspace root — the shape cross expects.
+#
 # musl targets are intentionally NOT supported: ort-sys ships no musl ONNX
 # Runtime binary (its dist manifest covers only gnu/msvc/darwin/android/ios),
 # and Rust's *-linux-musl target doesn't produce a cdylib without disabling
-# crt-static. See the dropped linux-*-musl platform packages.
+# crt-static. See the 4-target matrix both prebuild workflows share.
 
 [build.env]
 # Mount the whole repo (value of $COGNEE_REPO_ROOT) at the same path, so the
-# standalone neon workspace's ../../crates path-deps resolve in the container.
+# workspace's ../ts, ../java and ../crates path-deps resolve in the container.
 volumes = ["COGNEE_REPO_ROOT"]
 passthrough = [
     "CFLAGS_aarch64_unknown_linux_gnu",
@@ -32,5 +39,7 @@ passthrough = [
 
 # gcc-11 (Ubuntu 22.04) cross image — lbug needs libstdc++ 11. See the
 # Dockerfile for details. Build deps (cmake/protoc/libssl) are baked in.
+# The path is relative to this file, which now sits one level below the repo
+# root rather than two.
 [target.aarch64-unknown-linux-gnu]
-dockerfile = "../../ci/cross/aarch64-gnu.Dockerfile"
+dockerfile = "../ci/cross/aarch64-gnu.Dockerfile"

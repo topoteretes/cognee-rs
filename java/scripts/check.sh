@@ -11,8 +11,9 @@ echo "================================================================"
 echo "=== Java: Checking version parity with Cargo workspace ==="
 echo "================================================================"
 WS_VERSION=$(grep -m1 '^version' "$REPO_ROOT/Cargo.toml" | sed -E 's/.*"(.*)".*/\1/')
-# The JNI crate is standalone (not a workspace member), so its version is a
-# literal that can drift independently. The runtime version handshake is
+# The JNI crate belongs to the bindings/ workspace, not the root one, and that
+# workspace declares no [workspace.package] version — so this crate's version
+# is a literal that can drift independently. The runtime version handshake is
 # pom <-> the cdylib's CARGO_PKG_VERSION (i.e. this crate's version), so it is
 # the load-bearing pair; assert all three agree.
 JNI_VERSION=$(grep -m1 '^version' "$JAVA_DIR/cognee-java-jni/Cargo.toml" | sed -E 's/.*"(.*)".*/\1/')
@@ -49,8 +50,10 @@ if ! command -v mvn >/dev/null 2>&1 || ! command -v java >/dev/null 2>&1; then
   exit 0
 fi
 
-# Resolve the built library path across platforms.
-LIBDIR="$JAVA_DIR/cognee-java-jni/target/debug"
+# Resolve the built library path across platforms. cognee-java-jni is a member
+# of the workspace rooted at <repo>/bindings (shared with cognee-ts-neon), so
+# cargo writes into bindings/target rather than next to the crate.
+LIBDIR="$REPO_ROOT/bindings/target/debug"
 for cand in \
   "$LIBDIR/libcognee_java.so" \
   "$LIBDIR/libcognee_java.dylib" \

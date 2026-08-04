@@ -1,0 +1,99 @@
+# bindings/Cargo.toml — the Cargo workspace shared by the two cdylib language
+# bindings that are not members of the root workspace:
+#
+#   ../ts/cognee-ts-neon      Neon (Node.js) addon   -> @cognee/neon-<platform>
+#   ../java/cognee-java-jni   JNI (jni-rs) library   -> Maven classifier jars
+#
+# Both statically link the same ~700-crate cognee engine. Until they shared a
+# workspace they each carried their own Cargo.lock and their own target/, so a
+# machine that built both in the same profile compiled that engine twice.
+#
+# Measured on aarch64-apple-darwin (M4 Pro, 14 cores, warm lbug ccache), each
+# figure from a clean target dir. Building both cdylibs in the *dev* profile:
+#
+#                       two workspaces      this workspace
+#   first cdylib        3.31 GiB / 3m19s    3.32 GiB / 3m22s
+#   second cdylib      +3.32 GiB / 3m20s   +0.54 GiB / 7s     (7 crates)
+#   total               6.63 GiB            3.86 GiB
+#
+# The second cdylib compiles 7 crates — its own binding glue — instead of ~710.
+#
+# It does NOT help `scripts/check_all.sh`, and that is worth knowing before
+# reaching for this: ts/scripts/check.sh builds the Neon addon `--release`
+# (via `npm run build`) while java/scripts/check.sh builds the JNI one in dev.
+# Release and dev artifacts live in disjoint subtrees of one target/, so there
+# is nothing to share. Measured: 6.170 GiB across two workspaces, 6.169 GiB
+# here. Aligning the two check scripts on one profile is what would turn the
+# 2.78 GiB above into a check_all saving; it would also change which build the
+# ts jest suite exercises, so it is a separate decision.
+#
+# Merging is only safe because the two resolve the engine identically. Verified
+# with `cargo tree -e normal,build,features` before the merge: of the 714
+# packages each pulls in, 707 are common and every one of them resolves to the
+# same feature set in both. The only packages that differ are each binding's own
+# glue — neon / neon-macros / libloading / linkme / linkme-impl / send_wrapper on
+# the Neon side, jni / jni-sys / jni-sys-macros / cesu8 / combine on the JNI side.
+# In particular cognee-ts-neon's extra direct dependencies (cognee-core,
+# cognee-database "sqlite", cognee-graph "testing", cognee-vector "testing")
+# add nothing: `cognee`'s own `sqlite`/`testing`/`telemetry` features, which both
+# cdylibs enable, already turn those exact features on.
+#
+# One artifact-visible consequence, small but real: rustc emits source paths
+# relative to the workspace root when the file is under it and absolute
+# otherwise. Each crate used to *be* its own workspace root, so its own
+# `panic!`/`#[track_caller]` Location strings read `src/sdk_ops.rs`; they are now
+# absolute build-machine paths, like the 275 `crates/*` paths both cdylibs
+# already embedded. Measured on the release Neon addon: 21 strings swap to their
+# absolute form, +2,384 B of __cstring, 256,635,696 -> 256,652,384 B (+0.006 %).
+# Exported symbols are unchanged — `nm -gU` is byte-identical for both cdylibs
+# in dev and release.
+#
+# Not folded in here, and why:
+#
+#   * capi/ — its [profile.dev] sets panic = "abort", the FFI safety floor for
+#     the C API. Profiles are a property of the workspace root, so a shared
+#     workspace would have to either drop it there or impose it on both cdylibs.
+#   * the root workspace — ~30 members with their own profile overrides, and a
+#     whole-workspace build would unify features across all of them.
+#
+# The members live outside this directory, which cargo accepts; each one points
+# back with `workspace = "../../bindings"` in its [package] section, because
+# walking up from ts/ or java/ finds the root workspace first and the root does
+# not list them. Building one member only is `-p <crate>` (or
+# `--manifest-path <crate>/Cargo.toml`); a bare `cargo build` in here builds both.
+[workspace]
+members = ["../ts/cognee-ts-neon", "../java/cognee-java-jni"]
+resolver = "3"
+
+# Debug-profile disk tuning, moved here verbatim from the two crate manifests
+# (which carried character-identical copies; a [profile] block in a non-root
+# member is ignored by cargo).
+#
+# The two settings are only worth having together. Cargo derives the
+# OPT_LEVEL/DEBUG env vars it hands to build scripts from the profile of the
+# package being built, and the `cmake` crate maps those onto CMAKE_BUILD_TYPE
+# for lbug's bundled Ladybug tree: opt-level 0 selects a Debug C++ build
+# whatever `debug` says, and any non-zero `debug` selects RelWithDebInfo
+# whatever `opt-level` says. Only opt-level >= 1 *and* debug = 0 reaches a plain
+# Release C++ build. Measured on aarch64-apple-darwin, from clean, for a debug
+# build of cognee-ts-neon:
+#
+#   defaults (opt-level 0, debug 2)  12.1 GiB      lbug C++ tree 2.9 GiB
+#   opt-level = 1 only               13.0 GiB      lbug C++ tree 2.6 GiB
+#   debug = 0 only                    7.8 GiB      lbug C++ tree 2.9 GiB
+#   both (this config)                3.3 GiB      lbug C++ tree 213 MiB
+#
+# See docs/build/lbug-rebuilds.md.
+#
+# Trade-off: Rust frames in a panic backtrace keep their function names (the
+# symbol table is untouched) but lose file/line. Nothing here is debugged
+# through lldb in practice — this profile exists for fast local iteration, and
+# the release build that actually ships already runs at debug = false. To get
+# full debug info back for one build:
+#
+#   CARGO_PROFILE_DEV_DEBUG=2 cargo build
+[profile.dev]
+debug = 0
+
+[profile.dev.package."*"]
+opt-level = 1

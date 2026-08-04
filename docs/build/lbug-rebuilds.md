@@ -37,7 +37,7 @@ toolchain matter.
 |---|---|
 | Main workspace | `target/` |
 | Each Claude agent worktree | `.claude/worktrees/*/target` |
-| `ts/cognee-ts-neon` workspace | `ts/cognee-ts-neon/target` |
+| `bindings` workspace (Neon + JNI cdylibs) | `bindings/target` |
 | `capi` workspace (default-features check) | `capi/target` |
 | e2e Docker harness | inside the image |
 
@@ -84,7 +84,7 @@ ccache --max-size 20G        # optional headroom; one lbug tree is ~0.3 GiB comp
 
 Nothing else — the committed launcher + `[env]` config picks it up
 automatically, including in worktrees (each worktree carries the config) and
-in the `js`/`capi` workspaces (cargo walks up to the root config). To bypass
+in the `bindings`/`capi` workspaces (cargo walks up to the root config). To bypass
 per-shell: `CMAKE_CXX_COMPILER_LAUNCHER="" cargo build …` (a set env var wins
 over `[env]`).
 
@@ -117,9 +117,10 @@ Two consequences that are easy to get wrong:
   default) it only moves Debug to RelWithDebInfo, 2.9 → 2.6 GiB.
 
 Only `opt-level >= 1` **and** `debug = 0` together reach a plain Release C++
-build. Both binding workspaces set exactly that pair in their `[profile.dev]`
-for this reason (`ts/cognee-ts-neon/Cargo.toml` carries the measurement
-table); it is the difference between a 12.1 GiB and a 3.3 GiB debug `target/`.
+build. The `bindings/` workspace (the Neon + JNI cdylibs) sets exactly that pair
+in its `[profile.dev]` for this reason, and `bindings/Cargo.toml` carries the
+measurement table; it is the difference between a 12.1 GiB and a 3.3 GiB debug
+`target/`.
 
 ### Escaping the trade-off: pin lbug, not the whole graph
 
@@ -154,9 +155,16 @@ per-workspace totals that follow from it:
 |---|---|---|
 | `capi` | release, `debug = true` | 21.7 GiB |
 | root | dev, `--all-targets` | 19.9 GiB |
-| `ts` | dev, cargo defaults | 12.1 GiB |
-| `ts` | dev, opt-level 1 + debug 0 | 3.3 GiB |
-| `ts` / `java` | release | 2.8 GiB each |
+| `bindings`, Neon only | dev, cargo defaults | 12.1 GiB |
+| `bindings`, Neon only | dev, opt-level 1 + debug 0 | 3.3 GiB |
+| `bindings`, both cdylibs | dev, opt-level 1 + debug 0 | 3.9 GiB |
+| `bindings`, either cdylib | release | 2.8 GiB |
+
+The "both cdylibs" row is the one the shared workspace buys: adding the second
+cdylib to a dev tree that already holds the first costs 0.54 GiB and 7 crates
+rather than a second 3.3 GiB engine build. It only applies when both are built
+in the *same* profile — `ts/scripts/check.sh` builds release and
+`java/scripts/check.sh` builds dev, so a `check_all.sh` run gets no sharing.
 
 ## Complementary measures
 
@@ -197,7 +205,7 @@ Stale agent worktrees each hold a 13–18 GB target dir; remove with
   target caches of **all** jobs at once, and GitHub runners have only 4
   vCPUs for the from-scratch C++ build. ccache keys on
   compiler + flags + source content (not cargo's unit hash), so the
-  capi/js workspaces' independent resolutions hit the same entries.
+  capi/bindings workspaces' independent resolutions hit the same entries.
   `CCACHE_COMPILERCHECK=content` is set workflow-wide because runner-image
   updates touch `/usr/bin/cc` mtimes, which would invalidate the default
   mtime-based compiler check.
@@ -248,7 +256,8 @@ What it will not cache, by design rather than by failure: units built with
 `-C incremental` (every first-party crate), proc macros, build scripts, and
 the final bin/cdylib/staticlib links. Those fall back to a normal compile. The
 registry dependencies are the cached part — the same graph this repo compiles
-four times over.
+three times over (root, capi, bindings; the two cdylibs in bindings share one
+build only when both use the same profile).
 
 ### Escape hatch: prebuilt Ladybug (`LBUG_LIBRARY_DIR`)
 

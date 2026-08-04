@@ -8,8 +8,9 @@
 #
 #   Cargo.toml                      root workspace (crates/, examples/, python/)
 #   capi/Cargo.toml                 C API workspace          (decision D10)
-#   ts/cognee-ts-neon/Cargo.toml    Neon cdylib, standalone crate
-#   java/cognee-java-jni/Cargo.toml JNI cdylib, standalone crate
+#   bindings/Cargo.toml             Neon + JNI cdylibs (members live in
+#                                   ts/cognee-ts-neon and java/cognee-java-jni;
+#                                   the shared target/ is bindings/target)
 #
 # Usage:
 #   bash scripts/clean_all.sh                   # cargo clean every workspace above
@@ -53,12 +54,11 @@ SELF="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$REPO_ROOT"
 
-# Cargo workspaces / standalone crates, each with its own target/ dir.
+# Cargo workspaces, each with its own target/ dir.
 CARGO_MANIFESTS=(
     "Cargo.toml"
     "capi/Cargo.toml"
-    "ts/cognee-ts-neon/Cargo.toml"
-    "java/cognee-java-jni/Cargo.toml"
+    "bindings/Cargo.toml"
 )
 
 # Non-Cargo build outputs, removed only with --all. Every entry is gitignored
@@ -71,6 +71,12 @@ ALL_ARTIFACTS=(
     "ts/cognee_ts_neon.node"                      # copied Neon cdylib (~470 MB)
     "ts/platform-packages/"*"/cognee_ts_neon.node" # prebuilt per-platform cdylibs (~240 MB each)
     "java/target"                                 # Maven output
+    # Orphans from before the two cdylibs joined the bindings/ workspace: each
+    # is a full ~3.3 GiB engine build that nothing writes to any more, and no
+    # `cargo clean` reaches them now that their manifests are not workspace
+    # roots. Harmless to keep listed once every checkout has been cleaned once.
+    "ts/cognee-ts-neon/target"
+    "java/cognee-java-jni/target"
     "capi/build"                                  # cmake/example build dir
     "capi/build-"*                                # per-platform variants
     "ios/.build"                                  # SwiftPM (re-resolves on next build)

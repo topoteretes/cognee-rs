@@ -104,7 +104,9 @@ jobs:
           set -euo pipefail
           cargo update --workspace --manifest-path Cargo.toml
           cargo update --workspace --manifest-path capi/Cargo.toml
-          cargo update --workspace --manifest-path ts/cognee-ts-neon/Cargo.toml
+          # bindings/ covers both cdylibs (cognee-ts-neon + cognee-java-jni);
+          # they share one lockfile since they share one workspace.
+          cargo update --workspace --manifest-path bindings/Cargo.toml
 
       - name: Generate changelog section
         run: |

@@ -23,7 +23,7 @@ name: Java Prebuild
 #   cargo build --release --manifest-path java/cognee-java-jni/Cargo.toml
 #   VER=$(sed -n 's:.*<version>\(.*\)</version>.*:\1:p' java/pom.xml | head -1)
 #   mkdir -p staging/native/linux-x86_64
-#   cp java/cognee-java-jni/target/release/libcognee_java.so staging/native/linux-x86_64/
+#   cp bindings/target/release/libcognee_java.so staging/native/linux-x86_64/
 #   jar cf "cognee-${VER}-linux-x86_64.jar" -C staging native
 #   jar tf "cognee-${VER}-linux-x86_64.jar"  # lists native/linux-x86_64/libcognee_java.so
 
@@ -173,17 +173,19 @@ jobs:
           max-size: 1G
           save: true
 
-      - name: Cache cargo (Java JNI workspace)
+      # cognee-java-jni is a member of the bindings/ workspace (shared with
+      # cognee-ts-neon), so its build output lands in bindings/target.
+      - name: Cache cargo (bindings workspace)
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: java-jni-${{ matrix.platform }}-v1
-          workspaces: java/cognee-java-jni -> target
+          workspaces: bindings -> target
           cache-on-failure: true
 
       - name: Cache ORT binary
         uses: actions/cache@v4
         with:
-          path: java/cognee-java-jni/target/ort-cache
+          path: bindings/target/ort-cache
           key: java-ort-v2.0.0-rc.12-cpu-${{ matrix.platform }}
 
       - name: Set up JDK (for the jar tool)
@@ -203,25 +205,30 @@ jobs:
       - name: Prefetch ONNX Runtime from mirror
         if: runner.os != 'Windows'
         shell: bash
-        run: ci/ort/prefetch.sh "${{ matrix.rust-target }}" "${{ github.workspace }}/java/cognee-java-jni/target/ort-cache"
+        run: ci/ort/prefetch.sh "${{ matrix.rust-target }}" "${{ github.workspace }}/bindings/target/ort-cache"
 
       # Build the cdylib for the target platform.
+      #
+      # Run from the workspace root (bindings/) with an explicit `-p`, not from
+      # the crate dir: the workspace root is where cross-rs looks for Cross.toml
+      # and what it mounts, and it is the only member selector that keeps the
+      # Neon cdylib out of this build.
       - name: Build cdylib (native)
         if: "!matrix.cross"
-        working-directory: java/cognee-java-jni
+        working-directory: bindings
         env:
-          ORT_CACHE_DIR: ${{ github.workspace }}/java/cognee-java-jni/target/ort-cache
-        run: cargo build --release --target ${{ matrix.rust-target }}
+          ORT_CACHE_DIR: ${{ github.workspace }}/bindings/target/ort-cache
+        run: cargo build --release -p cognee-java-jni --target ${{ matrix.rust-target }}
 
       - name: Build cdylib (cross)
         if: matrix.cross
-        working-directory: java/cognee-java-jni
-        # cognee-java-jni stays a standalone workspace; java/cognee-java-jni/Cross.toml
-        # mounts the whole repo (volumes=COGNEE_REPO_ROOT) so its ../../crates
-        # path-deps resolve in the container, and selects a gcc-11 image for the
-        # arm64 target (lbug needs C++20 / libstdc++ 11). cross mounts the crate
-        # target at /target. Disable simsimd's advanced ARM SIMD kernels (SVE /
-        # NEON-bf16) the cross toolchain can't assemble.
+        working-directory: bindings
+        # bindings/Cross.toml mounts the whole repo (volumes=COGNEE_REPO_ROOT)
+        # so the workspace's ../ts, ../java and ../crates path-deps resolve in
+        # the container, and selects a gcc-11 image for the arm64 target (lbug
+        # needs C++20 / libstdc++ 11). cross mounts the workspace target at
+        # /target. Disable simsimd's advanced ARM SIMD kernels (SVE / NEON-bf16)
+        # the cross toolchain can't assemble.
         env:
           ORT_CACHE_DIR: /target/ort-cache
           COGNEE_REPO_ROOT: ${{ github.workspace }}
@@ -229,13 +236,13 @@ jobs:
           SVE="-DSIMSIMD_TARGET_NEON_I8=0 -DSIMSIMD_TARGET_NEON_F16=0 -DSIMSIMD_TARGET_NEON_BF16=0 -DSIMSIMD_TARGET_SVE=0 -DSIMSIMD_TARGET_SVE_I8=0 -DSIMSIMD_TARGET_SVE_F16=0 -DSIMSIMD_TARGET_SVE_BF16=0 -DSIMSIMD_TARGET_SVE2=0"
           TGT_US=$(echo "${{ matrix.rust-target }}" | tr '-' '_')
           export CFLAGS_${TGT_US}="$SVE" CXXFLAGS_${TGT_US}="$SVE"
-          cross build --release --target ${{ matrix.rust-target }}
+          cross build --release -p cognee-java-jni --target ${{ matrix.rust-target }}
 
       - name: Stage native lib and pack classifier jar
         shell: bash
         run: |
           VER=$(sed -n 's:.*<version>\(.*\)</version>.*:\1:p' java/pom.xml | head -1)
-          SRC="java/cognee-java-jni/target/${{ matrix.rust-target }}/release/${{ matrix.libfile }}"
+          SRC="bindings/target/${{ matrix.rust-target }}/release/${{ matrix.libfile }}"
           STAGE="staging/native/${{ matrix.classifier }}"
           mkdir -p "$STAGE"
           cp "$SRC" "$STAGE/${{ matrix.libfile }}"

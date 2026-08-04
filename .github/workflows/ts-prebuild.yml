@@ -164,21 +164,23 @@ jobs:
           max-size: 1G
           save: true
 
-      - name: Cache cargo (Neon workspace)
+      # cognee-ts-neon is a member of the bindings/ workspace (shared with
+      # cognee-java-jni), so its build output lands in bindings/target.
+      - name: Cache cargo (bindings workspace)
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: ts-neon-${{ matrix.platform }}-v1
-          workspaces: ts/cognee-ts-neon -> target
+          workspaces: bindings -> target
           cache-on-failure: true
 
       - name: Cache ORT binary
         uses: actions/cache@v4
         with:
-          path: ts/cognee-ts-neon/target/ort-cache
+          path: bindings/target/ort-cache
           key: ort-v2.0.0-rc.12-cpu-${{ matrix.platform }}
         env:
-          # Point ort-sys at the neon workspace's target dir.
-          ORT_CACHE_DIR: ${{ github.workspace }}/ts/cognee-ts-neon/target/ort-cache
+          # Point ort-sys at the bindings workspace's target dir.
+          ORT_CACHE_DIR: ${{ github.workspace }}/bindings/target/ort-cache
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -200,25 +202,30 @@ jobs:
       - name: Prefetch ONNX Runtime from mirror
         if: runner.os != 'Windows'
         shell: bash
-        run: ci/ort/prefetch.sh "${{ matrix.rust-target }}" "${{ github.workspace }}/ts/cognee-ts-neon/target/ort-cache"
+        run: ci/ort/prefetch.sh "${{ matrix.rust-target }}" "${{ github.workspace }}/bindings/target/ort-cache"
 
       # Build the Neon cdylib for the target platform.
+      #
+      # Run from the workspace root (bindings/) with an explicit `-p`, not from
+      # the crate dir: the workspace root is where cross-rs looks for Cross.toml
+      # and what it mounts, and it is the only member selector that keeps the
+      # java cdylib out of this build.
       - name: Build Neon addon (native)
         if: "!matrix.cross"
-        working-directory: ts/cognee-ts-neon
+        working-directory: bindings
         env:
-          ORT_CACHE_DIR: ${{ github.workspace }}/ts/cognee-ts-neon/target/ort-cache
-        run: cargo build --release --target ${{ matrix.rust-target }}
+          ORT_CACHE_DIR: ${{ github.workspace }}/bindings/target/ort-cache
+        run: cargo build --release -p cognee-ts-neon --target ${{ matrix.rust-target }}
 
       - name: Build Neon addon (cross)
         if: matrix.cross
-        working-directory: ts/cognee-ts-neon
-        # cognee-ts-neon stays a standalone workspace; ts/cognee-ts-neon/Cross.toml
-        # mounts the whole repo (volumes=COGNEE_REPO_ROOT) so its ../../crates
-        # path-deps resolve in the container, and selects a gcc-11 image for the
-        # arm64 target (lbug needs C++20 / libstdc++ 11). cross mounts the crate
-        # target at /target. Disable simsimd's advanced ARM SIMD kernels (SVE /
-        # NEON-bf16) the cross toolchain can't assemble.
+        working-directory: bindings
+        # bindings/Cross.toml mounts the whole repo (volumes=COGNEE_REPO_ROOT)
+        # so the workspace's ../ts, ../java and ../crates path-deps resolve in
+        # the container, and selects a gcc-11 image for the arm64 target (lbug
+        # needs C++20 / libstdc++ 11). cross mounts the workspace target at
+        # /target. Disable simsimd's advanced ARM SIMD kernels (SVE / NEON-bf16)
+        # the cross toolchain can't assemble.
         env:
           ORT_CACHE_DIR: /target/ort-cache
           COGNEE_REPO_ROOT: ${{ github.workspace }}
@@ -226,13 +233,13 @@ jobs:
           SVE="-DSIMSIMD_TARGET_NEON_I8=0 -DSIMSIMD_TARGET_NEON_F16=0 -DSIMSIMD_TARGET_NEON_BF16=0 -DSIMSIMD_TARGET_SVE=0 -DSIMSIMD_TARGET_SVE_I8=0 -DSIMSIMD_TARGET_SVE_F16=0 -DSIMSIMD_TARGET_SVE_BF16=0 -DSIMSIMD_TARGET_SVE2=0"
           TGT_US=$(echo "${{ matrix.rust-target }}" | tr '-' '_')
           export CFLAGS_${TGT_US}="$SVE" CXXFLAGS_${TGT_US}="$SVE"
-          cross build --release --target ${{ matrix.rust-target }}
+          cross build --release -p cognee-ts-neon --target ${{ matrix.rust-target }}
 
       # Copy the built artifact into the platform package directory.
       - name: Copy artifact (Linux / macOS)
         if: runner.os != 'Windows'
         run: |
-          TARGET_DIR="ts/cognee-ts-neon/target/${{ matrix.rust-target }}/release"
+          TARGET_DIR="bindings/target/${{ matrix.rust-target }}/release"
           DEST="ts/platform-packages/${{ matrix.platform }}/cognee_ts_neon.node"
           # Prefer .so (Linux), then .dylib (macOS).
           for candidate in \
@@ -253,7 +260,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $src = "ts/cognee-ts-neon/target/${{ matrix.rust-target }}/release/cognee_ts_neon.dll"
+          $src = "bindings/target/${{ matrix.rust-target }}/release/cognee_ts_neon.dll"
           $dst = "ts/platform-packages/${{ matrix.platform }}/cognee_ts_neon.node"
           Copy-Item $src $dst -Force
           Write-Host "Copied $src -> $dst"

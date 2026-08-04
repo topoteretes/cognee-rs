@@ -11,7 +11,7 @@
  *      cargo build --manifest-path java/cognee-java-jni/Cargo.toml
  *      mvn -f java/pom.xml package -DskipTests
  * 2. Point the loader at the built cdylib (dev path):
- *      export COGNEE_JAVA_LIB_PATH="$(pwd)/java/cognee-java-jni/target/debug/libcognee_java.so"
+ *      export COGNEE_JAVA_LIB_PATH="$(pwd)/bindings/target/debug/libcognee_java.so"
  *    (.dylib on macOS, .dll on Windows)
  * 3. Set the LLM credentials (absent -> the example prints SKIP and exits 0):
  *      export OPENAI_URL=https://api.openai.com/v1   # or any OpenAI-compatible endpoint

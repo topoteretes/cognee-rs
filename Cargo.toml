@@ -166,8 +166,8 @@ expect_used = "warn"
 #
 # It does pay for disk in one specific combination: paired with `debug = 0` it
 # flips lbug's bundled CMake tree from a Debug to a Release C++ build (2.9 GiB
-# -> 213 MiB), which is why both binding workspaces set the two together. See
-# ts/cognee-ts-neon/Cargo.toml and docs/build/lbug-rebuilds.md.
+# -> 213 MiB), which is why the bindings workspace sets the two together. See
+# bindings/Cargo.toml and docs/build/lbug-rebuilds.md.
 opt-level = 1
 debug = 0
 

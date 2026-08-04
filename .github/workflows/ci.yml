@@ -783,8 +783,9 @@ jobs:
       # `ladybug` feature), whose build.rs compiles bundled C++ with CMake.
       - run: sudo apt-get update && sudo apt-get install -y cmake protobuf-compiler
       # Restore-only: the lint job saves the shared lbug C++ ccache. The
-      # ts/cognee-ts-neon workspace resolves its own dep graph, but ccache keys
-      # on compiler+flags+source content, so it hits the same entries.
+      # bindings/ workspace resolves its own dep graph separately from the root
+      # one, but ccache keys on compiler+flags+source content, so it hits the
+      # same entries.
       - name: ccache (lbug bundled C++, restore-only)
         uses: hendrikmuhs/ccache-action@v1.2
         with:
@@ -799,7 +800,7 @@ jobs:
           shared-key: workspace-ts-v1
           workspaces: |
             . -> target
-            ts/cognee-ts-neon -> target
+            bindings -> target
           cache-on-failure: true
       - uses: actions/cache@v4
         with:
@@ -837,13 +838,15 @@ jobs:
           key: lbug-cxx
           max-size: 1G
           save: false
-      # Dedicated cache key for the standalone JNI workspace (mirrors ts-check).
+      # Dedicated cache key for the bindings/ workspace (mirrors ts-check).
+      # Same workspace, different key on purpose: ts-check builds it --release
+      # and java-check builds it dev, so the two caches hold disjoint trees.
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: workspace-java-v1
           workspaces: |
             . -> target
-            java/cognee-java-jni -> target
+            bindings -> target
           cache-on-failure: true
       - uses: actions/cache@v4
         with:

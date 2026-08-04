@@ -103,7 +103,7 @@ before any npm / C-API artifact ships.
 | `capi/Cargo.toml` | `cargo set-version --manifest-path capi/Cargo.toml` |
 | `ts/cognee-ts-neon/Cargo.toml` | `cargo set-version --manifest-path …` |
 | `ts/package.json` + `@cognee/neon-*` pins + `ts/platform-packages/*/package.json` | node script |
-| `java/cognee-java-jni/Cargo.toml` | `cargo set-version --manifest-path …` (standalone crate, like ts-neon) |
+| `java/cognee-java-jni/Cargo.toml` | `cargo set-version --manifest-path …` (bindings/ workspace member, like ts-neon) |
 | `java/pom.xml` (`<project>` version) | python edit, anchored to the `io.github.topoteretes:cognee` coordinates so dependency/plugin `<version>` tags are untouched |
 | `python/` (`cognee-python`) | **automatic** — inherits `version.workspace`; `pyproject.toml` is `dynamic` |
 

@@ -47,10 +47,10 @@ scripts/check_all.sh
 
 ### Cleaning build artifacts (disk space)
 
-The repo has **four** Cargo workspaces, so `cargo clean` at the root only clears one of
-them (`ts/cognee-ts-neon/target` alone routinely exceeds 20 GB). Never hand-roll `rm -rf`
-over target dirs — use `bash scripts/clean_all.sh` (`--help` lists the flags, `--dry-run`
-reports sizes without deleting).
+The repo has **three** Cargo workspaces (root, `capi/`, `bindings/`), so `cargo clean` at
+the root only clears one of them (`bindings/target` alone routinely exceeds 20 GB). Never
+hand-roll `rm -rf` over target dirs — use `bash scripts/clean_all.sh` (`--help` lists the
+flags, `--dry-run` reports sizes without deleting).
 
 Do not restate the flag/artifact list here or in the READMEs — it drifts. The canonical
 prose lives in

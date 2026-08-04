@@ -56,7 +56,7 @@ native cdylib and point the loader at it with `COGNEE_JAVA_LIB_PATH`:
 
 ```bash
 cargo build --manifest-path java/cognee-java-jni/Cargo.toml
-export COGNEE_JAVA_LIB_PATH="$(pwd)/java/cognee-java-jni/target/debug/libcognee_java.so"   # .dylib on macOS, .dll on Windows
+export COGNEE_JAVA_LIB_PATH="$(pwd)/bindings/target/debug/libcognee_java.so"   # .dylib on macOS, .dll on Windows
 ```
 
 When `COGNEE_JAVA_LIB_PATH` is set, `NativeLibLoader` loads that file directly
@@ -207,7 +207,7 @@ Compile and run it against the built classes and native library — it prints a
 
 ```bash
 # Build the jar + native library first (see "Install / build" above), then:
-export COGNEE_JAVA_LIB_PATH="$(pwd)/java/cognee-java-jni/target/debug/libcognee_java.so"
+export COGNEE_JAVA_LIB_PATH="$(pwd)/bindings/target/debug/libcognee_java.so"
 CP="java/target/classes:$(mvn -q -f java/pom.xml dependency:build-classpath -Dmdep.outputFile=/dev/stdout 2>/dev/null | tail -1)"
 javac -cp "$CP" -d "$TMPDIR/cognee-examples" java/examples/Quickstart.java
 java  -cp "$CP:$TMPDIR/cognee-examples" Quickstart

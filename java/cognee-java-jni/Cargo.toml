@@ -8,9 +8,11 @@ description = "JNI (jni-rs) native binding for the cognee Rust SDK (Java)."
 repository = "https://github.com/topoteretes/cognee-rs"
 homepage = "https://www.cognee.ai"
 publish = false
-
-# Standalone crate — not part of the parent workspace (mirrors cognee-ts-neon).
-[workspace]
+# Member of the bindings/ workspace, which it shares with cognee-ts-neon so the
+# ~700-crate engine graph is compiled once for both. Stated explicitly because
+# walking up from here finds the root workspace first, and the root does not
+# (and should not) list this crate. See bindings/Cargo.toml.
+workspace = "../../bindings"
 
 [lib]
 name = "cognee_java"
@@ -50,16 +52,6 @@ jni = "0.21"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
 serde_json = "1"
 
-# Debug-profile disk tuning — mirrors ts/cognee-ts-neon/Cargo.toml, which
-# carries the full measurement table and the explanation of why opt-level and
-# debug only pay off together (cargo's OPT_LEVEL/DEBUG env vars drive the
-# CMAKE_BUILD_TYPE the `cmake` crate picks for lbug's bundled Ladybug tree).
-# Both binding workspaces build the same engine, so both were producing a
-# ~12 GiB debug target/ on plain cargo defaults.
-#
-# Override for one build with: CARGO_PROFILE_DEV_DEBUG=2 cargo build
-[profile.dev]
-debug = 0
-
-[profile.dev.package."*"]
-opt-level = 1
+# The debug-profile disk tuning that used to live here (a character-identical
+# copy of cognee-ts-neon's) moved to bindings/Cargo.toml when both crates became
+# members of that workspace: cargo ignores [profile] in a non-root manifest.

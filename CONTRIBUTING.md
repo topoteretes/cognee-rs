@@ -82,10 +82,12 @@ Plain unit tests that don't touch the LLM run with `cargo test`.
 ### MSRV & lockfiles
 
 The MSRV is **1.91**, declared via `rust-version` and pinned for local builds by
-`rust-toolchain.toml`. It must be stated in **every** workspace root, because the four of
-them are independent: `[workspace.package]` in `Cargo.toml` and `capi/Cargo.toml`, and the
-`[package]` sections of `ts/cognee-ts-neon/Cargo.toml` and `java/cognee-java-jni/Cargo.toml`.
-Keep them equal — see the resolution note below.
+`rust-toolchain.toml`. It must be stated in **every** workspace, because the three of
+them resolve independently: `[workspace.package]` in `Cargo.toml` and `capi/Cargo.toml`,
+and the `[package]` sections of `ts/cognee-ts-neon/Cargo.toml` and
+`java/cognee-java-jni/Cargo.toml` (the two members of the `bindings/` workspace, which
+declares no `[workspace.package]` of its own). Keep them equal — see the resolution note
+below.
 
 (The hard floor from dependencies is lower: on x86_64 the embedded qdrant `quantization`
 crate uses AVX-512 intrinsics stabilized in Rust 1.89, and edition 2024 + resolver 3 would
@@ -97,7 +99,7 @@ regardless, and the `msrv` CI lane builds against it.)
 MSRV-aware resolver (`resolver = "3"`) picks dependency versions compatible with the declared
 `rust-version` on a fresh resolve.
 
-That last point is why the four declarations have to agree. The resolver caps each workspace
+That last point is why the declarations have to agree. The resolver caps each workspace
 at versions its own `rust-version` allows, so a workspace declaring a lower MSRV resolves an
 older graph. While `capi`/`ts` said 1.89 and root/`java` said 1.91, the two groups picked
 `cc 1.2.65` and `cc 1.4.0` respectively — and 175 of 836 external crates differed in version
@@ -115,28 +117,27 @@ Recover by regenerating the lock or pinning the offending crate down, e.g.:
 # Regenerate fresh (uses the 1.91-aware resolver), or pin the specific crate:
 cargo update                                            # whole workspace
 cargo update -p roaring@0.11.4 --precise 0.11.3         # one transitive dep
-# capi/, ts/cognee-ts-neon/ and java/cognee-java-jni/ are their own workspaces —
-# run the same from inside whichever one drifted.
+# capi/ and bindings/ are their own workspaces — run the same from inside
+# whichever one drifted (bindings/ covers both cdylibs at once).
 ```
 
 ## Cleaning build artifacts
 
-This repo contains **four** Cargo workspaces, so a plain `cargo clean` at the root leaves
-most of the disk usage behind (the Neon `target/` alone routinely exceeds 20 GB). Use:
+This repo contains **three** Cargo workspaces, so a plain `cargo clean` at the root leaves
+most of the disk usage behind (the bindings `target/` alone routinely exceeds 20 GB). Use:
 
 ```bash
-bash scripts/clean_all.sh                   # cargo clean all 4 workspaces
+bash scripts/clean_all.sh                   # cargo clean all 3 workspaces
 bash scripts/clean_all.sh --all             # ...plus non-Cargo build outputs
 bash scripts/clean_all.sh --dry-run --all   # report sizes, delete nothing
 bash scripts/clean_all.sh --help            # authoritative flag/artifact list
 ```
 
-| Workspace / crate | Cleaned by root `cargo clean`? |
-|---|---|
-| `Cargo.toml` (root — `crates/`, `examples/`, `python/`) | yes |
-| `capi/Cargo.toml` (separate workspace, decision D10) | **no** |
-| `ts/cognee-ts-neon/Cargo.toml` (standalone crate) | **no** |
-| `java/cognee-java-jni/Cargo.toml` (standalone crate) | **no** |
+| Workspace | Target dir | Cleaned by root `cargo clean`? |
+|---|---|---|
+| `Cargo.toml` (root — `crates/`, `examples/`, `python/`) | `target/` | yes |
+| `capi/Cargo.toml` (separate workspace, decision D10) | `capi/target/` | **no** |
+| `bindings/Cargo.toml` (`ts/cognee-ts-neon` + `java/cognee-java-jni`) | `bindings/target/` | **no** |
 
 `--all` adds the generated non-Cargo outputs (npm, tsc, the Neon `.node` binaries, Maven,
 `capi/build*`, `ios/.build`, wheels, `__pycache__`); run `--dry-run --all` for the exact
@@ -195,7 +196,7 @@ the `OPT_LEVEL`/`DEBUG` env vars it passes to build scripts from the profile, an
 crate maps those onto the `CMAKE_BUILD_TYPE` used for lbug's bundled Ladybug C++ tree. Setting
 `opt-level >= 1` **and** `debug = 0` together takes that tree from 2.9 GiB to 213 MiB; either
 one alone does nothing for it (`debug = "line-tables-only"` counts as "wants debug info").
-Both binding workspaces set the pair in `[profile.dev]` — a debug build of
+The `bindings/` workspace sets the pair in `[profile.dev]` — a debug build of
 `ts/cognee-ts-neon` went from 12.1 GiB to 3.3 GiB. See
 [docs/build/lbug-rebuilds.md](docs/build/lbug-rebuilds.md) for the full table, and use
 `CARGO_PROFILE_DEV_DEBUG=2 cargo build` when you do need full debug info.
@@ -207,7 +208,7 @@ Each binding has its own check script (also invoked by `scripts/check_all.sh`):
 | Binding | Source | Check | Notes |
 |---|---|---|---|
 | **C API** (`capi/`) | separate Cargo workspace | `bash capi/scripts/check.sh` | FFI must never panic across the boundary — sanitize/propagate, never `unwrap()` caller data. Headers + built lib are the artifact. |
-| **JavaScript/TypeScript** (`ts/`) | Neon (`ts/cognee-ts-neon/`, standalone crate) | `bash ts/scripts/check.sh` | Return JS errors instead of panicking into the V8 runtime. |
+| **JavaScript/TypeScript** (`ts/`) | Neon (`ts/cognee-ts-neon/`, member of the `bindings/` workspace) | `bash ts/scripts/check.sh` | Return JS errors instead of panicking into the V8 runtime. |
 | **Python** (`python/`) | PyO3 (`cognee-python`, workspace member) | `bash python/scripts/check.sh` | Exercised by pytest (the Rust test harness is disabled for the extension module — it has no libpython at link time). |
 
 When you change core crate behavior, check whether the bindings expose it and update them

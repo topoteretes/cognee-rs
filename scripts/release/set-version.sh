@@ -20,7 +20,7 @@
 #   4. TS npm packages — ts/package.json version, its @cognee/neon-*
 #      optionalDependencies pins, and each ts/platform-packages/*/package.json.
 #   5. java-jni crate  — java/cognee-java-jni/Cargo.toml [package] version
-#      (standalone crate, mirrors ts-neon).
+#      (bindings/ workspace member, mirrors ts-neon).
 #   6. Java pom        — java/pom.xml's <project> version. Load-bearing: the
 #      tag-cascaded java-prebuild.yml derives the jar version and the Maven
 #      Central coordinates from this file alone, and Central releases are
@@ -83,7 +83,7 @@ cargo set-version --workspace "$VERSION"
 echo "-- capi/Cargo.toml"
 cargo set-version --manifest-path "$ROOT/capi/Cargo.toml" "$VERSION"
 
-# 3. ts-neon standalone crate.
+# 3. ts-neon (member of the bindings/ workspace).
 echo "-- ts/cognee-ts-neon/Cargo.toml"
 cargo set-version --manifest-path "$ROOT/ts/cognee-ts-neon/Cargo.toml" "$VERSION"
 
@@ -122,7 +122,7 @@ for (const entry of fs.readdirSync(platDir, { withFileTypes: true })) {
 }
 NODE
 
-# 5. java-jni standalone crate.
+# 5. java-jni (member of the bindings/ workspace).
 echo "-- java/cognee-java-jni/Cargo.toml"
 cargo set-version --manifest-path "$ROOT/java/cognee-java-jni/Cargo.toml" "$VERSION"
 

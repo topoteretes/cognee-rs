@@ -12,7 +12,10 @@ const path = require("path");
 
 const profile = process.argv[2] === "debug" ? "debug" : "release";
 const tsDir = path.resolve(__dirname, "..");
-const targetDir = path.join(tsDir, "cognee-ts-neon", "target", profile);
+// cognee-ts-neon is a member of the bindings/ workspace it shares with
+// cognee-java-jni, so cargo writes into <repo>/bindings/target — not into a
+// target/ next to the crate. See bindings/Cargo.toml.
+const targetDir = path.join(tsDir, "..", "bindings", "target", profile);
 const dest = path.join(tsDir, "cognee_ts_neon.node");
 
 // Platform-specific cdylib names produced by `cargo build`.

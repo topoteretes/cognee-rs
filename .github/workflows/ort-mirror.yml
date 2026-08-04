@@ -24,7 +24,8 @@ permissions:
 
 env:
   CARGO_INCREMENTAL: "0"
-  ORT_CACHE_DIR: ${{ github.workspace }}/ts/cognee-ts-neon/target/ort-cache
+  # cognee-ts-neon builds into the shared bindings/ workspace target dir.
+  ORT_CACHE_DIR: ${{ github.workspace }}/bindings/target/ort-cache
 
 jobs:
   mirror:
@@ -102,14 +103,16 @@ jobs:
       # Real build so ort-sys downloads + decodes the ONNX Runtime archive into
       # ORT_CACHE_DIR/dfbin/<target>/<hash>/. (This step is the one that needs
       # the pyke CDN reachable — run the workflow when it is not blocking.)
+      # Run from the workspace root with an explicit `-p` — see ts-prebuild.yml
+      # for why (Cross.toml discovery + keeping the java cdylib out of it).
       - name: Build Neon addon (native)
         if: "!matrix.cross"
-        working-directory: ts/cognee-ts-neon
-        run: cargo build --release --target ${{ matrix.rust-target }}
+        working-directory: bindings
+        run: cargo build --release -p cognee-ts-neon --target ${{ matrix.rust-target }}
 
       - name: Build Neon addon (cross)
         if: matrix.cross
-        working-directory: ts/cognee-ts-neon
+        working-directory: bindings
         env:
           ORT_CACHE_DIR: /target/ort-cache
           COGNEE_REPO_ROOT: ${{ github.workspace }}
@@ -117,7 +120,7 @@ jobs:
           SVE="-DSIMSIMD_TARGET_NEON_I8=0 -DSIMSIMD_TARGET_NEON_F16=0 -DSIMSIMD_TARGET_NEON_BF16=0 -DSIMSIMD_TARGET_SVE=0 -DSIMSIMD_TARGET_SVE_I8=0 -DSIMSIMD_TARGET_SVE_F16=0 -DSIMSIMD_TARGET_SVE_BF16=0 -DSIMSIMD_TARGET_SVE2=0"
           TGT_US=$(echo "${{ matrix.rust-target }}" | tr '-' '_')
           export CFLAGS_${TGT_US}="$SVE" CXXFLAGS_${TGT_US}="$SVE"
-          cross build --release --target ${{ matrix.rust-target }}
+          cross build --release -p cognee-ts-neon --target ${{ matrix.rust-target }}
 
       # Repackage the extracted cache dir (flat: libonnxruntime.a + provider
       # libs) as a plain gzip tarball and publish it to the mirror release.
@@ -130,10 +133,10 @@ jobs:
           TARGET="${{ matrix.rust-target }}"
           TAG=$(awk '/^VERSION/ {print $4}' ci/ort/runtime.lock)
           HASH=$(awk -v t="$TARGET" '$1==t {print $2}' ci/ort/runtime.lock)
-          SRC="ts/cognee-ts-neon/target/ort-cache/dfbin/$TARGET/$HASH"
+          SRC="bindings/target/ort-cache/dfbin/$TARGET/$HASH"
           if [ ! -d "$SRC" ]; then
             echo "::error::expected ort cache dir not found: $SRC (did ort-sys change its layout or hash?)"
-            ls -la "ts/cognee-ts-neon/target/ort-cache/dfbin/$TARGET" || true
+            ls -la "bindings/target/ort-cache/dfbin/$TARGET" || true
             exit 1
           fi
           ASSET="ort-$TARGET.tar.gz"
