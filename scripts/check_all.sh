@@ -36,6 +36,15 @@ cargo fmt --all -- --check
 
 echo ""
 echo "================================================================"
+echo "=== bindings/: prebuild-workflow path contract ==="
+echo "================================================================"
+# Sub-second. ts-prebuild.yml and java-prebuild.yml run only on tags and
+# workflow_dispatch, so their paths are otherwise first exercised during a
+# release; this asserts the contract instead of building it.
+bash "$REPO_ROOT/ci/assert-bindings-layout.sh"
+
+echo ""
+echo "================================================================"
 echo "=== Rust: Checking compilation (all targets) ==="
 echo "================================================================"
 cargo check --all-targets

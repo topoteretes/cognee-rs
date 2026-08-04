@@ -125,6 +125,13 @@ jobs:
       - name: rustfmt (check)
         run: cargo fmt --all -- --check
 
+      # Sub-second path-contract check for the bindings/ workspace. Lives in the
+      # lint job rather than its own, because ts-prebuild.yml and
+      # java-prebuild.yml never run on PRs and a dedicated job would cost a
+      # runner to assert a handful of paths.
+      - name: Check bindings layout contract
+        run: bash ci/assert-bindings-layout.sh
+
       - name: Compilation check
         run: cargo check --all-targets
 
