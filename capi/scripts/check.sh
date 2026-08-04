@@ -40,7 +40,19 @@ echo "================================================================"
 BUILD_DIR="$CAPI_DIR/build"
 mkdir -p "$BUILD_DIR"
 
-cmake -S "$CAPI_DIR" -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Debug
+# `testing-panic` is enabled here rather than in a second build dir. It is
+# purely additive — it exports one extra symbol, `cg_test_force_panic` — so it
+# does not change what any other smoke test exercises, and building it in the
+# main tree lets `panic_hook_smoke` (below) reuse this build instead of
+# triggering a whole second cargo build + archive + relink cycle.
+#
+# It is safe for the header-sync check: check_header_sync.sh greps
+# `pub extern "C" fn` out of the *source*, which sees the symbol whether or not
+# the feature is on, so enabling it changes nothing there.
+cmake -S "$CAPI_DIR" -B "$BUILD_DIR" \
+    -DCMAKE_BUILD_TYPE=Debug \
+    -DCOGNEE_BUILD_PANIC_SMOKE=ON \
+    -DCOGNEE_CAPI_CARGO_FEATURES=testing-panic
 cmake --build "$BUILD_DIR"
 
 echo ""
@@ -185,25 +197,6 @@ MOCK_EMBEDDING=true \
     COGNEE_TRACING_ENABLED="" \
     "$BUILD_DIR/examples/sdk_feature_smoke"
 
-echo ""
-echo "================================================================"
-echo "=== Phase 7 slim build: CG_ERR_FEATURE_NOT_BUILT verification ==="
-echo "================================================================"
-
-SLIM_BUILD_DIR="$CAPI_DIR/build-slim"
-rm -rf "$SLIM_BUILD_DIR"
-cmake -S "$CAPI_DIR" -B "$SLIM_BUILD_DIR" \
-    -DCMAKE_BUILD_TYPE=Debug \
-    -DCOGNEE_CAPI_NO_DEFAULT_FEATURES=ON \
-    -DCOGNEE_CAPI_CARGO_FEATURES=sqlite,testing \
-    > /dev/null
-cmake --build "$SLIM_BUILD_DIR" --target sdk_feature_smoke_slim
-
-echo ""
-echo "--- Running: sdk_feature_smoke_slim (slim build — all four ops expect CG_ERR_FEATURE_NOT_BUILT) ---"
-MOCK_EMBEDDING=true \
-    COGNEE_TRACING_ENABLED="" \
-    "$SLIM_BUILD_DIR/examples/sdk_feature_smoke_slim"
 
 echo ""
 echo "================================================================"
@@ -235,19 +228,12 @@ echo "================================================================"
 echo "=== Gap 07 panic-hook smoke (testing-panic feature) ==="
 echo "================================================================"
 
-# Configure a separate CMake build dir that opts the smoke target in
-# and passes `--features testing-panic` through to the cargo build
-# wrapped by CMake's `cognee_capi_cargo` custom target. The feature is
-# purely additive (it only adds an exported symbol), so this rebuild
-# only adds `cg_test_force_panic` on top of the existing static lib.
-PANIC_BUILD_DIR="$CAPI_DIR/build-panic"
-rm -rf "$PANIC_BUILD_DIR"
-cmake -S "$CAPI_DIR" -B "$PANIC_BUILD_DIR" \
-    -DCMAKE_BUILD_TYPE=Debug \
-    -DCOGNEE_BUILD_PANIC_SMOKE=ON \
-    -DCOGNEE_CAPI_CARGO_FEATURES=testing-panic \
-    > /dev/null
-cmake --build "$PANIC_BUILD_DIR" --target panic_hook_smoke
+# panic_hook_smoke is built by the main CMake configure above, which enables
+# both COGNEE_BUILD_PANIC_SMOKE and the additive `testing-panic` feature. It
+# used to get its own build dir, which meant a second full cargo build with a
+# different feature set, a re-archive of the ~805 MB .a into the shared
+# capi/target/debug, and a relink of every example on the following run.
+PANIC_BUILD_DIR="$BUILD_DIR"
 
 echo ""
 echo "--- Running: panic_hook_smoke (expect [cognee-capi panic] on stderr, non-zero exit) ---"
@@ -271,6 +257,45 @@ fi
 echo "  panic hook fired with marker on stderr (exit=$PANIC_EXIT)"
 rm -f "$PANIC_STDERR"
 
+echo ""
+# Kept last on purpose. This build shares capi/target with the default one,
+# so it overwrites libcognee_capi.{a,dylib} with the slim-featured variant —
+# and every other example is dynamically linked against that dylib, so any
+# $BUILD_DIR binary run after this point would fail at load time with a
+# missing symbol (cg_test_force_panic was the one that caught this).
+#
+# Redirecting it to its own CARGO_TARGET_DIR would also avoid the clobber but
+# costs 3.8 GiB — check-slim goes 1.6 -> 5.4 GiB, holding a full build rather
+# than just `cargo check` metadata. Ordering is free, so order it is.
+echo "================================================================"
+echo "=== Phase 7 slim build: CG_ERR_FEATURE_NOT_BUILT verification ==="
+echo "================================================================"
+
+SLIM_BUILD_DIR="$CAPI_DIR/build-slim"
+rm -rf "$SLIM_BUILD_DIR"
+cmake -S "$CAPI_DIR" -B "$SLIM_BUILD_DIR" \
+    -DCMAKE_BUILD_TYPE=Debug \
+    -DCOGNEE_CAPI_NO_DEFAULT_FEATURES=ON \
+    -DCOGNEE_CAPI_CARGO_FEATURES=sqlite,testing \
+    > /dev/null
+cmake --build "$SLIM_BUILD_DIR" --target sdk_feature_smoke_slim
+
+echo ""
+echo "--- Running: sdk_feature_smoke_slim (slim build — all four ops expect CG_ERR_FEATURE_NOT_BUILT) ---"
+MOCK_EMBEDDING=true \
+    COGNEE_TRACING_ENABLED="" \
+    "$SLIM_BUILD_DIR/examples/sdk_feature_smoke_slim"
+
+# Restore the default-featured library. The slim build above shares
+# capi/target, so it leaves libcognee_capi.{a,dylib} as the
+# --no-default-features variant — and every example in build/ is dynamically
+# linked against that absolute path. Without this, re-running any smoke by hand
+# after a green check (./capi/build/examples/sdk_data_smoke, panic_hook_smoke)
+# fails with a missing symbol or a spurious CG_ERR_FEATURE_NOT_BUILT. Cheap:
+# one cargo rebuild of cognee-capi plus ~50 KB relinks.
+echo ""
+echo "--- Restoring the default-featured libcognee_capi for build/ ---"
+cmake --build "$BUILD_DIR" > /dev/null
 echo ""
 echo "================================================================"
 echo "=== C API check passed ==="
