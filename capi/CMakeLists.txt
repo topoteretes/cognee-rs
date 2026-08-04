@@ -97,6 +97,62 @@ set_target_properties(cognee_capi PROPERTIES
 )
 add_dependencies(cognee_capi cognee_capi_cargo)
 
+# …and the shared library, which the same `cargo build` already produced.
+#
+# cognee-capi is `crate-type = ["cdylib", "staticlib"]`, so every build emits
+# both a ~805 MB .a and a ~185 MB .dylib. Linking the examples against the .a
+# is enormously wasteful: lbug's build.rs emits `static:+whole-archive` for
+# liblbug and all 16 bundled third-party C++ archives, so each example embeds
+# the entire Ladybug engine. Measured, linking one example:
+#
+#   against the .a                   276.3 MB   0.94 s
+#   against the .a + -dead_strip      15.7 MB   0.23 s
+#   against the .dylib                  35 KB   0.02 s
+#
+# 19 examples x ~264 MB is the 4.9 GiB `capi/build` tree. Linking them against
+# the .dylib instead makes that tree a rounding error, and the smoke tests
+# still exercise the real engine — the code just lives in the dylib rather
+# than being copied into each binary.
+#
+# How the examples find it at run time differs by platform, and neither route
+# is one we control from here:
+#   macOS - cargo links the dylib with an absolute install_name, though it
+#           points at the deps/ copy (`otool -D` shows
+#           .../target/debug/deps/libcognee_capi.dylib), not the path below.
+#   Linux - no absolute SONAME; the examples resolve it only because CMake
+#           injects a build-tree RPATH for a full-path imported library.
+# Both are fine for a local check tree and neither survives copying a binary
+# out of capi/build — which is fine, these are never distributed.
+add_library(cognee_capi_shared SHARED IMPORTED GLOBAL)
+set_target_properties(cognee_capi_shared PROPERTIES
+    IMPORTED_LOCATION "${CARGO_TARGET_DIR}/debug/${CMAKE_SHARED_LIBRARY_PREFIX}cognee_capi${CMAKE_SHARED_LIBRARY_SUFFIX}"
+)
+if(WIN32)
+    # On DLL platforms CMake needs the import library to build a link line at
+    # all; IMPORTED_LOCATION alone fails at generate time. cargo emits
+    # cognee_capi.dll.lib beside the DLL. Untested — nothing CMake-configures
+    # the capi tree on Windows today (COGNEE_SYSTEM_LIBS below is POSIX-only),
+    # so treat this as a starting point rather than a working configuration.
+    set_target_properties(cognee_capi_shared PROPERTIES
+        IMPORTED_IMPLIB "${CARGO_TARGET_DIR}/debug/cognee_capi.dll.lib"
+    )
+endif()
+add_dependencies(cognee_capi_shared cognee_capi_cargo)
+
+# Which library the examples link by default. ON restores the old all-static
+# behaviour for anyone who needs to reproduce a static-link problem.
+# capi/examples/CMakeLists.txt keeps one example statically linked either way,
+# so the .a path and the Apple-framework list below never go untested.
+option(COGNEE_CAPI_STATIC_EXAMPLES
+    "Link every C example against libcognee_capi.a instead of the .dylib"
+    OFF)
+
+if(COGNEE_CAPI_STATIC_EXAMPLES)
+    set(COGNEE_EXAMPLE_LIB cognee_capi)
+else()
+    set(COGNEE_EXAMPLE_LIB cognee_capi_shared)
+endif()
+
 # System libraries needed by the Rust static lib
 # stdc++ is required because cognee-graph depends on lbug (C++ graph engine)
 set(COGNEE_SYSTEM_LIBS pthread dl m stdc++)
