@@ -128,6 +128,36 @@ for wf in "${WORKFLOWS[@]}"; do
     done < <(grep -oE '(ts/cognee-ts-neon|java/cognee-java-jni)/target[^ "]*' "$wf" | sort -u)
 done
 
+# 7. The PyO3 extension module must keep its build script and the
+#    build-dependency that backs it. Nothing in CI would notice their removal:
+#    the flags they emit are macOS-only, the lint and MSRV jobs run
+#    `cargo check` (which never links), python-check runs on ubuntu where the
+#    helper is a documented no-op, and the prebuild workflows never build
+#    -p cognee-python at all. So the regression would only resurface on a macOS
+#    developer's machine, as 95 undefined `_Py*` symbols. A macOS link leg would
+#    cost minutes per run to protect two lines; this costs nothing.
+if [[ -f python/build.rs ]] && grep -q 'add_extension_module_link_args' python/build.rs; then
+    note "ok" "python/build.rs emits the PyO3 extension-module link args"
+else
+    fail "python/build.rs must call pyo3_build_config::add_extension_module_link_args() — without it \`cargo build\` cannot link cognee-python on macOS"
+fi
+if grep -qE '^pyo3-build-config[[:space:]]*=' python/Cargo.toml; then
+    note "ok" "python/Cargo.toml keeps the pyo3-build-config build-dependency"
+else
+    fail "python/Cargo.toml lost the pyo3-build-config build-dependency that build.rs needs"
+fi
+
+# 8. All three harness kinds stay disabled for the extension module. Any of
+#    them is a standalone executable that cannot resolve Py* symbols; `bench`
+#    is the one that defaults to true and is easy to drop.
+for kind in test doctest bench; do
+    if grep -qE "^${kind}[[:space:]]*=[[:space:]]*false" python/Cargo.toml; then
+        note "ok" "python [lib] $kind = false"
+    else
+        fail "python/Cargo.toml [lib] must set $kind = false; a $kind harness cannot link without libpython"
+    fi
+done
+
 echo ""
 if [[ $fails -eq 0 ]]; then
     echo "=== bindings layout OK ==="

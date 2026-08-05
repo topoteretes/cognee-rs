@@ -21,15 +21,23 @@ name = "cognee_py"
 crate-type = ["cdylib"]
 # This crate is a PyO3 extension module (`pyo3/extension-module`): it is built
 # as a cdylib whose Python symbols are resolved at runtime by the interpreter,
-# so libpython is intentionally not linked. A Rust test harness (`cargo test` /
-# `cargo nextest run --workspace`) would link a standalone binary and fail with
-# "undefined symbol: Py*". The crate's behaviour is covered by pytest via
-# `python/scripts/check.sh` (the `python-check` CI job), so disable the Rust
-# unit-test and doctest harnesses here. Sibling native crates (ts/cognee-ts-neon,
-# capi) sidestep this by not being workspace members; this crate is a member
-# (for `cargo check --all-targets` coverage), hence the explicit opt-out.
+# so libpython is intentionally not linked. Any *harness* target is a standalone
+# executable, which has no interpreter to resolve them and cannot link — build.rs
+# cannot help, because `rustc-cdylib-link-arg` applies only to the cdylib.
+#
+# So all three harness kinds are disabled. `bench` matters as much as the other
+# two and is easy to miss: it defaults to true, so leaving it out made
+# `cargo build --workspace --all-targets` and `cargo bench --workspace` fail to
+# link — cargo reports that unit as "cognee-python (lib test)", which reads like
+# a test harness and sent an earlier investigation down the wrong path.
+#
+# The crate's behaviour is covered by pytest via `python/scripts/check.sh` (the
+# `python-check` CI job). Sibling native crates (ts, java, capi) sidestep all of
+# this by not being members of this workspace; this one is a member so that
+# `cargo check --all-targets` covers it, hence the explicit opt-outs.
 test = false
 doctest = false
+bench = false
 
 [features]
 # Mirror cognee-ts-neon's default feature set (ts/cognee-ts-neon/Cargo.toml).
@@ -59,6 +67,19 @@ hf-tokenizer  = ["cognee/hf-tokenizer",  "cognee-bindings-common/hf-tokenizer"]
 tiktoken      = ["cognee/tiktoken",      "cognee-bindings-common/tiktoken"]
 sqlite        = ["cognee/sqlite",        "cognee-bindings-common/sqlite"]
 testing       = ["cognee/testing",       "cognee-bindings-common/testing"]
+
+[build-dependencies]
+# For build.rs — emits the `-undefined dynamic_lookup` cdylib link args a PyO3
+# extension module needs on macOS.
+#
+# Track `pyo3`'s *minor* version below, not its major: these are 0.x crates, so
+# 0.23 -> 0.24 is the breaking step. In practice pyo3 already pins it for us —
+# pyo3 0.23.5 declares `pyo3-build-config = "=0.23.5"` as its own
+# build-dependency, so cargo unifies both to one version and Cargo.lock holds a
+# single entry. Bumping `pyo3` here without bumping this line would resolve two
+# different pyo3-build-config copies, and this script would emit link args from
+# a version that no longer matches the pyo3 the crate compiles against.
+pyo3-build-config = "0.23"
 
 [dependencies]
 # Shared SDK facade (HandleState, CogneeServices, SdkError).
