@@ -21,8 +21,7 @@ on:
 # created a brand-new group, so cancel-in-progress had nothing to cancel and a
 # superseded 40-65 min run kept occupying runners until it finished on its own.
 # ios.yml, community.yml and http-parity.yml already key on the ref alone
-# (and do show cancelled runs); CI has 0 cancelled runs in its last 60, which
-# is how this surfaced.
+# (and do show cancelled runs); CI showed none, which is how this surfaced.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -117,6 +116,14 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: workspace-lint-v6
+          # Save only on main. Branch-scoped copies are what pushed the repo
+          # over GitHub's 10 GB cache quota and kept the LRU rotating (see the
+          # capi-check note below). Branches still *restore* main's caches;
+          # they just stop writing a second copy. Note this only bites on PRs
+          # that change the dependency graph — rust-cache skips the save
+          # entirely on an exact key hit, so dependency-neutral PRs already
+          # wrote nothing.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # ort-sys downloads the ONNX Runtime static library to ORT_CACHE_DIR
       # (target/ort-cache) during its build script. We cache it separately so
@@ -246,6 +253,8 @@ jobs:
         with:
           shared-key: workspace-msrv-v1
           cache-on-failure: true
+          # main-only save — see the note in the lint job.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Cache ORT binary
         uses: actions/cache@v4
@@ -299,6 +308,8 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: wasm-v1
+          # main-only save — see the note in the lint job.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # Build first so Cargo.lock exists (it is gitignored) before we pin the
       # runner to the resolved wasm-bindgen version below.
@@ -413,6 +424,8 @@ jobs:
         with:
           shared-key: workspace-test-v6
           cache-on-failure: true
+          # main-only save — see the note in the lint job.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Cache ORT binary
         uses: actions/cache@v4
@@ -682,24 +695,30 @@ jobs:
           key: lbug-cxx
           max-size: 1G
           save: false
-      # Restore-only (save-if:false): the capi workspace's cache is the single
-      # largest in the repo (~3 GB, covering both the root and capi/ target
-      # dirs). Saving it kept the repo over GitHub's 10 GB cache quota, so the
-      # LRU eviction rotated through the smaller working caches (lint, test,
-      # python) and left them cold (~37-min lint, ~61-min python). Dropping the
-      # save frees that ~3 GB so those stay warm; capi-check then runs cold
-      # (~37 min) every run (no job writes this key anymore), but it runs in
-      # parallel off `lint` and is no longer the binding constraint. Net: a
-      # stable critical path of ~lint(warm) + capi(~37 min cold) ≈ 42 min, vs a
-      # budget that otherwise bounces 70–98 min as eviction rotates. Re-enable
-      # the save (and bump the key) if the repo's cache quota is ever raised.
+      # This save was previously disabled outright. The reasoning was sound at
+      # the time: the capi cache is the largest in the repo (~3 GB), saving it
+      # kept the repo over the 10 GB quota, and the resulting LRU rotation left
+      # lint/test/python cold. The cost of that workaround was accepting a
+      # permanently cold ~37-min capi-check — which measurement showed is
+      # CI's critical path (lint 344s → capi-check 2436s ≈ the whole 46-min run).
+      #
+      # It is re-enabled now that the quota pressure has been addressed at its
+      # two real sources:
+      #   1. every other writer above is main-only, so branches no longer mint
+      #      duplicate copies on dependency-changing PRs;
+      #   2. caches belonging to merged PRs are deleted rather than left to sit
+      #      until their 7-day expiry — PR #127's caches alone were still
+      #      holding 4.61 GB of a 10.35 GB quota hours after it merged.
+      # Key bumped to v2: the tree no longer contains the check-slim target dir
+      # (removed with the redundant cargo check passes) and now contains the
+      # cargo test artifacts instead.
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: capi-check-v1
+          shared-key: capi-check-v2
           workspaces: |
             . -> target
             capi -> target
-          save-if: "false"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: actions/cache@v4
         with:
           path: capi/target/ort-cache
@@ -815,6 +834,8 @@ jobs:
             . -> target
             bindings -> target
           cache-on-failure: true
+          # main-only save — see the note in the lint job.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: actions/cache@v4
         with:
           path: target/ort-cache
@@ -861,6 +882,8 @@ jobs:
             . -> target
             bindings -> target
           cache-on-failure: true
+          # main-only save — see the note in the lint job.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: actions/cache@v4
         with:
           path: target/ort-cache
