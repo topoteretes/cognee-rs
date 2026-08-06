@@ -6,26 +6,30 @@ CAPI_DIR="$(dirname "$SCRIPT_DIR")"
 
 # ── Compile gate (R5) ────────────────────────────────────────────────
 # After workspace extraction (D10), the root `cargo check --all-targets`
-# no longer covers the capi workspace. We run it here (inside the capi
-# workspace) so `scripts/check_all.sh`'s capi stage still catches capi
-# compile breaks. Two configurations are checked:
-#   1. Default features (full build, mirrors cognee-ts-neon)
-#   2. Slim build (--no-default-features --features sqlite,testing) —
-#      the embedded/Android baseline (D6)
-echo "================================================================"
-echo "=== C API: cargo check (default features) ==="
-echo "================================================================"
-cargo check --all-targets --manifest-path "$CAPI_DIR/Cargo.toml"
-
-echo ""
-echo "================================================================"
-echo "=== C API: cargo check (slim: --no-default-features --features sqlite,testing) ==="
-echo "================================================================"
-CARGO_TARGET_DIR="$CAPI_DIR/target/check-slim" \
-    cargo check --all-targets \
-        --manifest-path "$CAPI_DIR/Cargo.toml" \
-        --no-default-features --features sqlite,testing
-
+# no longer covers the capi workspace, so the capi stage has to cover it.
+#
+# This used to be two standalone `cargo check --all-targets` passes (default
+# features, then slim in its own CARGO_TARGET_DIR). Both were near-pure
+# duplicate work: the two CMake builds further down run full `cargo build`s of
+# the same crate at the same two feature sets, and a build strictly subsumes a
+# check. Measured on CI run 31029376408 the two checks cost 475s + 420s = 15
+# min of a 38.7-min job — while every C smoke test in this script combined
+# takes 13.5s.
+#
+# What the checks covered that the CMake builds do not is cargo *test*
+# targets — cognee-capi has inline #[cfg(test)] modules (src/error.rs,
+# src/exec_status.rs) that only compile under --all-targets. Note they were
+# only ever *compiled* here, never run: nothing in CI executes the capi
+# workspace's Rust unit tests (the root `cargo test --workspace` does not
+# reach into capi/, which is a separate workspace).
+#
+# Restoring that compile-check via `cargo test --no-run` after the CMake build
+# was tried and measured at 819s — as expensive as the checks it replaced,
+# because `cargo test` pulls in dev-dependencies and rebuilds the lib as a
+# test harness rather than reusing the CMake build's artifacts. It was dropped
+# again. If those two test modules are worth covering, the cheap fix is to
+# make them *run* somewhere sensible rather than to buy a compile-only check
+# here for ~14 min of every CI run.
 echo ""
 echo "================================================================"
 echo "=== C API: Header sync check (exported vs. declared symbols) ==="
