@@ -89,21 +89,6 @@ jobs:
           swap-storage: true
           docker-images: true
 
-      # ── Docker layer cache ────────────────────────────────────────────────
-      - name: Cache Docker layers
-        uses: actions/cache@v4
-        with:
-          path: /tmp/.buildx-cache
-          key: >-
-            buildx-http-parity-${{
-              hashFiles(
-                'cognee-rust/e2e-cross-sdk/Dockerfile',
-                'cognee-rust/Cargo.lock'
-              )
-            }}
-          restore-keys: |
-            buildx-http-parity-
-
       - name: Set up Docker Buildx
         id: buildx
         uses: docker/setup-buildx-action@v3
@@ -137,6 +122,29 @@ jobs:
               "ccache-mount": "/ccache"
             }
 
+      # NOTE on layer caching — measured and rejected, do not re-add blindly.
+      #
+      # There used to be an actions/cache step for /tmp/.buildx-cache here.
+      # Nothing ever wrote that path (the compose build declares no
+      # cache-from/cache-to), so it restored in 0s and saved in 0s on every run
+      # and no buildx-http-parity-* key has ever existed. It is gone.
+      #
+      # A registry-backed replacement was then tried: an explicit
+      # `docker buildx build` with --cache-from/--cache-to pointed at
+      # ghcr.io (deliberately not `type=gha`, which shares the repo's already
+      # exhausted 10 GB Actions quota). Measured across two runs at an
+      # IDENTICAL commit — the best case a layer cache can ever get:
+      #   cold (cache absent, import "not found"): build 2085s
+      #   warm (cache present):                    build 2034s
+      # i.e. ~zero reuse, against a +179s cache-export cost (152s preparing +
+      # 27s sending). Net negative, so it was reverted.
+      #
+      # Why nothing was reused is still unexplained — the source was byte
+      # identical and the dependency resolution was stable (the rust-cache dep
+      # hash held at c4307474 across the same window). Worth understanding
+      # before any further attempt; the likely suspects are the regenerated
+      # Cargo.lock in the build context and the cache-mount RUN steps.
+      #
       # ── Phase-1a: no LLM required (unconditional release gate) ─────────────
       # Excludes add/forget/search: the Python `/add` endpoint instantiates an
       # LLM client and raises LLMAPIKeyNotSetError without a key, so add (and
