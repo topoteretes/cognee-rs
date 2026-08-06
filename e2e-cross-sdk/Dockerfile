@@ -55,33 +55,47 @@ COPY cognee-rust/python/ python/
 COPY cognee-rust/e2e-cross-sdk/telemetry-emit/ e2e-cross-sdk/telemetry-emit/
 COPY cognee-rust/e2e-cross-sdk/bin/telemetry_emit.rs e2e-cross-sdk/bin/telemetry_emit.rs
 
-# Build the CLI in release mode; cache cargo registry and target dir
+# Build all three release binaries in ONE cargo invocation.
+#
+# Splitting these across three `cargo build -p X` calls cost ~44 min of pure
+# waste per CI run. Each invocation resolves features for only its own
+# subgraph, so shared dependencies land on different feature sets and cargo
+# builds an *additional* variant of each rather than reusing the one already in
+# the (shared) target mount. Measured on run 31029376437: 1689s + 1350s +
+# 1309s = 72.5 min, with the second and third steps compiling 162 and 281
+# crates — the third rebuilding base-of-graph crates (proc-macro2, syn, serde,
+# tokio) for a binary that is a few hundred lines. Concretely, proc-macro2
+# resolves to `default,proc-macro,span-locations` under cognee-cli but
+# `default,proc-macro` under cognee-telemetry-emit, and that difference
+# cascades through syn into every proc-macro consumer.
+#
+# One invocation means one feature resolution, so every dependency is compiled
+# exactly once. Consequence to be aware of: resolver = "3" unifies features
+# across all selected packages, so cognee-cli here is built with
+# cognee-vector/testing + cognee-components/testing enabled (via the
+# http-server `dev-mock` feature). That only *registers* the mock vector
+# provider in ComponentRegistry::with_builtins(); it stays inert unless
+# VECTOR_DB_PROVIDER=mock is selected, which the CLI side of the harness does
+# not do.
+#
+# `bin` gates the http-server standalone entry point; `dev-mock` enables the
+# in-memory vector store (the harness is single-node with no Postgres, so
+# pgvector — the only other option — cannot connect and the server fails to
+# start). Both must be package-qualified because -p selects three packages.
+#
+# The `cp`s stay inside this RUN: target/ is a cache mount, so nothing under
+# it survives into the image layer.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/build/cognee-rust/target \
     --mount=type=cache,target=/ccache \
-    cargo build --release --package cognee-cli \
-    && cp target/release/cognee-cli /usr/local/bin/cognee-cli-rust
-
-# Build the HTTP server binary in release mode.
-# `dev-mock` enables the in-memory `VECTOR_DB_PROVIDER=mock` wiring: the harness
-# is single-node with no Postgres, so the server uses the mock vector store
-# (mirroring Python cognee's `brute-force` default). Without it the only vector
-# option is pgvector, which the server cannot connect to and fails to start.
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/build/cognee-rust/target \
-    --mount=type=cache,target=/ccache \
-    cargo build --release --package cognee-http-server --features bin,dev-mock \
-    && cp target/release/cognee-http-server /usr/local/bin/cognee-http-server
-
-# Build the harness-only telemetry emit binary used by the cross-SDK
-# parity test (docs/telemetry/02/10-cross-sdk-parity.md).
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/build/cognee-rust/target \
-    --mount=type=cache,target=/ccache \
-    cargo build --release --package cognee-telemetry-emit \
+    cargo build --release \
+        -p cognee-cli \
+        -p cognee-http-server \
+        -p cognee-telemetry-emit \
+        --features cognee-http-server/bin,cognee-http-server/dev-mock \
+    && cp target/release/cognee-cli /usr/local/bin/cognee-cli-rust \
+    && cp target/release/cognee-http-server /usr/local/bin/cognee-http-server \
     && cp target/release/cognee-telemetry-emit /usr/local/bin/cognee-telemetry-emit
 
 # Download ONNX embedding models (needed by Rust CLI for cognify)
