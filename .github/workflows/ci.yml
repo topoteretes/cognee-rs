@@ -17,8 +17,14 @@ on:
     types: [ opened, synchronize, reopened ]
   workflow_dispatch:
 
+# The group must NOT include github.sha. With the sha in it, every push
+# created a brand-new group, so cancel-in-progress had nothing to cancel and a
+# superseded 40-65 min run kept occupying runners until it finished on its own.
+# ios.yml, community.yml and http-parity.yml already key on the ref alone
+# (and do show cancelled runs); CI has 0 cancelled runs in its last 60, which
+# is how this surfaced.
 concurrency:
-  group: ci-${{ github.ref }}-${{ github.sha }}
+  group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 env:
