@@ -121,11 +121,7 @@ jobs:
         with:
           workspaces: cognee-rust -> target
           shared-key: http-parity-release-v1
-          # TEMPORARY (measurement only — revert before merge): lets this
-          # branch write the release cache so the cold-vs-warm delta is
-          # observable. Main-only, a branch never writes and so can never
-          # demonstrate the warm path.
-          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/perf/e2e-prebuilt-binaries' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Cache ORT binary
         uses: actions/cache@v4
