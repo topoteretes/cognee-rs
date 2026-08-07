@@ -40,12 +40,15 @@ impl VectorDbFactory for PgVectorFactory {
 
 /// Embedded LanceDB backend on non-Android targets.
 ///
-/// The provider id is target-invariant: on Android (where the LanceDB + Arrow
-/// native stack does not cross-compile) `build` transparently falls back to the
-/// in-memory brute-force backend. `vector_db_url = ":memory:"` is honored as an
-/// explicit brute-force opt-in for ephemeral / test workloads on all targets.
+/// Requires the `lancedb` feature. The provider id is target-invariant: on
+/// Android (where the LanceDB + Arrow native stack does not cross-compile)
+/// `build` transparently falls back to the in-memory brute-force backend.
+/// `vector_db_url = ":memory:"` is honored as an explicit brute-force opt-in for
+/// ephemeral / test workloads on all targets.
+#[cfg(feature = "lancedb")]
 pub struct LanceDbFactory;
 
+#[cfg(feature = "lancedb")]
 #[async_trait]
 impl VectorDbFactory for LanceDbFactory {
     fn provider(&self) -> &str {

@@ -636,12 +636,38 @@ impl HttpServerConfig {
             Some(self.embedding_api_key.expose_secret().to_string())
         };
 
-        // Source embedding scalar + ONNX-asset defaults from the embedding
-        // crate's own constructors rather than duplicating magic literals here
-        // (this crate always enables `cognee-embedding/onnx`, so both are
-        // available). Keeps these in lockstep with the embedding crate.
+        // Source embedding scalar defaults from the embedding crate's own
+        // constructor rather than duplicating magic literals here. Keeps these in
+        // lockstep with the embedding crate.
         let emb_defaults = cognee_embedding::EmbeddingConfig::default();
-        let onnx_defaults = cognee_embedding::OnnxEmbeddingConfig::default();
+
+        // ONNX asset defaults, which only exist under the `onnx` feature.
+        // `EmbeddingInputs` carries these fields unconditionally but consumes them
+        // only under that feature, so a build without it fills them with inert
+        // values instead of reaching for `OnnxEmbeddingConfig`.
+        #[cfg(feature = "onnx")]
+        let (onnx_model_path, onnx_tokenizer_path, onnx_max_sequence_length, onnx_batch_size) = {
+            let onnx_defaults = cognee_embedding::OnnxEmbeddingConfig::default();
+            (
+                // When no explicit ONNX asset path is configured, fall back to
+                // the embedding crate's own BGE-Small defaults.
+                self.embedding_model_path
+                    .clone()
+                    .unwrap_or(onnx_defaults.model_path),
+                self.embedding_tokenizer_path
+                    .clone()
+                    .unwrap_or(onnx_defaults.tokenizer_path),
+                onnx_defaults.max_sequence_length,
+                onnx_defaults.batch_size,
+            )
+        };
+        #[cfg(not(feature = "onnx"))]
+        let (onnx_model_path, onnx_tokenizer_path, onnx_max_sequence_length, onnx_batch_size) = (
+            self.embedding_model_path.clone().unwrap_or_default(),
+            self.embedding_tokenizer_path.clone().unwrap_or_default(),
+            0usize,
+            0usize,
+        );
 
         cognee_components::BackendBuildContext {
             data_root_directory: self.data_root_directory.clone(),
@@ -673,20 +699,12 @@ impl HttpServerConfig {
                 api_version: None,
                 huggingface_tokenizer: None,
                 max_completion_tokens: emb_defaults.max_completion_tokens,
-                // When no explicit ONNX asset path is configured, fall back to
-                // the embedding crate's own BGE-Small defaults.
-                onnx_model_path: self
-                    .embedding_model_path
-                    .clone()
-                    .unwrap_or(onnx_defaults.model_path),
-                onnx_tokenizer_path: self
-                    .embedding_tokenizer_path
-                    .clone()
-                    .unwrap_or(onnx_defaults.tokenizer_path),
+                onnx_model_path,
+                onnx_tokenizer_path,
                 onnx_model_name: self.embedding_model_name.clone(),
                 onnx_dimensions: self.embedding_dimensions as usize,
-                onnx_max_sequence_length: onnx_defaults.max_sequence_length,
-                onnx_batch_size: onnx_defaults.batch_size,
+                onnx_max_sequence_length,
+                onnx_batch_size,
             },
             llm: cognee_components::LlmInputs {
                 provider: self.llm_provider.to_ascii_lowercase(),

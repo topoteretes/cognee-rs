@@ -21,6 +21,7 @@ features = [
     "onnx",
     "onnx-dynamic",
     "ladybug",
+    "lancedb",
     "pgvector",
     "pggraph",
     "sqlite",
@@ -48,6 +49,7 @@ workspace = true
 default = [
     "onnx",
     "ladybug",
+    "lancedb",
     "pgvector",
     "pggraph",
     "sqlite",
@@ -71,6 +73,7 @@ onnx-dynamic      = ["cognee/onnx-dynamic"]
 ort-cuda          = ["cognee/ort-cuda"]
 ort-tensorrt      = ["cognee/ort-tensorrt"]
 ladybug           = ["cognee/ladybug"]
+lancedb           = ["cognee/lancedb"]
 pgvector          = ["cognee/pgvector"]
 pggraph           = ["cognee/pggraph"]
 sqlite            = ["cognee/sqlite"]

@@ -189,6 +189,18 @@ jobs:
           CARGO_TARGET_DIR: target/no-default
         run: cargo check -p cognee --no-default-features
 
+      # Canary for the backend feature seams: a consumer that runs every store on
+      # Postgres drops ort (onnx), the bundled ladybug C++ and the Arrow + lance
+      # stack this way. Without this lane the `#[cfg(feature = ...)]` paths behind
+      # those features rot and the seam silently stops building. Shares the
+      # no-default target dir.
+      - name: Compilation check (Postgres-only server)
+        env:
+          CARGO_TARGET_DIR: target/no-default
+        run: |
+          cargo check -p cognee-http-server --no-default-features \
+            --features telemetry,html-loader,pgvector,pggraph
+
       - name: License presence (every published crate)
         run: |
           cargo metadata --no-deps --format-version 1 \

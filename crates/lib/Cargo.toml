@@ -25,6 +25,7 @@ features = [
     "onnx",
     "onnx-dynamic",
     "ladybug",
+    "lancedb",
     "pgvector",
     "pggraph",
     "sqlite",
@@ -50,6 +51,7 @@ workspace = true
 default = [
     "onnx",
     "ladybug",
+    "lancedb",
     "pgvector",
     "pggraph",
     "sqlite",
@@ -77,6 +79,9 @@ onnx-dynamic   = ["cognee-embedding/onnx-dynamic", "cognee-components/onnx-dynam
 ort-cuda       = ["cognee-embedding/ort-cuda", "cognee-components/ort-cuda"]
 ort-tensorrt   = ["cognee-embedding/ort-tensorrt", "cognee-components/ort-tensorrt"]
 ladybug        = ["cognee-graph/ladybug", "cognee-components/ladybug"]
+# Embedded LanceDB vector store (Arrow + lance native stack — a large build, so
+# consumers on another vector backend can drop it).
+lancedb        = ["cognee-vector/lancedb", "cognee-components/lancedb"]
 pgvector       = ["cognee-vector/pgvector", "cognee-components/pgvector", "dep:url"]
 pggraph        = ["cognee-graph/postgres", "cognee-components/pggraph", "dep:url"]
 sqlite         = ["cognee-database/sqlite"]

@@ -17,7 +17,7 @@ publish = false
 
 # docs.rs cannot build `ort`'s default static-link mode (the build script needs
 # to download the ONNX Runtime binary archive, which the docs.rs sandbox blocks).
-# This crate carries an unconditional `cognee-embedding/onnx` dep, so we enable
+# This crate's `onnx` feature is default-on, so we enable
 # `cognee-embedding/onnx-dynamic` here to flip ort into dlopen mode for the docs
 # build only. Runtime / production builds are unaffected.
 [package.metadata.docs.rs]
@@ -41,7 +41,23 @@ required-features = ["bin"]
 # --no-default-features for compile-time opt-out.
 # html-loader is on by default so the server binary supports URL ingestion and
 # HTML documents out of the box (parity with the Python `/add` URL path).
-default = ["telemetry", "html-loader"]
+default = ["telemetry", "html-loader", "onnx", "ladybug", "lancedb", "pgvector"]
+# Embedded LanceDB vector store, forwarded to cognee-components + cognee-vector.
+# Default-on, so a plain build of this crate is unchanged; a consumer whose vector
+# backend is pgvector (or a closed adapter) can now drop the Arrow + lance native
+# stack via `default-features = false`.
+lancedb = ["cognee-components/lancedb", "cognee-vector/lancedb"]
+# ONNX embedding engine (bundles the ort runtime). Default-on; drop it when the
+# deployment embeds through an API (EMBEDDING_PROVIDER=openai/ollama/...).
+onnx = ["cognee-components/onnx", "cognee-embedding/onnx"]
+# Embedded ladybug/kuzu graph store (bundled C++). Default-on.
+ladybug = ["cognee-components/ladybug", "cognee-graph/ladybug"]
+# Postgres-backed vector store. Default-on.
+pgvector = ["cognee-components/pgvector", "cognee-vector/pgvector"]
+# Postgres graph-as-tables store. NOT default-on: this crate wires
+# `graph_postgres_url: None`, so the standalone server does not use it — it is
+# here for consumers that build their own BackendBuildContext.
+pggraph = ["cognee-components/pggraph", "cognee-graph/postgres"]
 # Enables the standalone-binary entry point and its arg-parsing deps.
 bin = [
     "dep:clap",
@@ -111,22 +127,24 @@ cognee-telemetry = { path = "../telemetry", version = "0.2.0", optional = true, 
 cognee-core = { path = "../core", version = "0.2.0", features = ["pipeline-run-registry"] }
 # Shared backend construction + adapter registry. Standalone wiring builds a
 # `ComponentRegistry::with_builtins()`; the enabled features here determine
-# which providers `with_builtins()` registers (onnx/ladybug/pgvector; mock-llm
-# is intentionally NOT enabled so a production server never honors MOCK_LLM).
-cognee-components = { path = "../components", version = "0.2.0", default-features = false, features = ["onnx", "ladybug", "pgvector"] }
+# which providers `with_builtins()` registers. They are forwarded from this
+# crate's own features (all default-on, so a plain build is unchanged) rather
+# than pinned here, so a consumer can drop a backend it does not use. mock-llm
+# is intentionally NOT forwarded so a production server never honors MOCK_LLM.
+cognee-components = { path = "../components", version = "0.2.0", default-features = false }
 cognee-database = { path = "../database", version = "0.2.0", features = ["sqlite"] }
 sea-orm = { version = "1", default-features = false, features = ["runtime-tokio-rustls", "with-chrono", "with-uuid", "with-json"] }
 cognee-storage = { path = "../storage", version = "0.2.0" }
 cognee-ingestion = { path = "../ingestion", version = "0.2.0" }
 cognee-cognify = { path = "../cognify", version = "0.2.0" }
-cognee-embedding = { path = "../embedding", version = "0.2.0", features = ["onnx"] }
+cognee-embedding = { path = "../embedding", version = "0.2.0" }
 cognee-delete = { path = "../delete", version = "0.2.0" }
 cognee-ontology = { path = "../ontology", version = "0.2.0" }
 cognee-search = { path = "../search", version = "0.2.0" }
 cognee-session = { path = "../session", version = "0.2.0" }
 cognee-llm = { path = "../llm", version = "0.2.0" }
-cognee-graph = { path = "../graph", version = "0.2.0", features = ["ladybug"] }
-cognee-vector = { path = "../vector", version = "0.2.0", features = ["pgvector"] }
+cognee-graph = { path = "../graph", version = "0.2.0" }
+cognee-vector = { path = "../vector", version = "0.2.0" }
 cognee-logging = { path = "../logging", version = "0.2.0" }
 cognee-visualization = { path = "../visualization", version = "0.2.0" }
 cognee-utils = { path = "../utils", version = "0.2.0" }

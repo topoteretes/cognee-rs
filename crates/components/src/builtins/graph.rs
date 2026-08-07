@@ -5,7 +5,10 @@
 //! consumer depending on this crate with `default-features = false`) would warn
 //! on unused imports and fail under `-D warnings`.
 
-#[cfg(any(feature = "ladybug", feature = "pggraph"))]
+// Only the ladybug factory touches the filesystem (it creates the graph file's
+// parent directory); the Postgres factory consumes a resolved URL. Gating this on
+// `pggraph` too warned on a `pggraph`-without-`ladybug` build.
+#[cfg(feature = "ladybug")]
 use std::path::Path;
 #[cfg(any(feature = "ladybug", feature = "pggraph", feature = "testing"))]
 use std::sync::Arc;

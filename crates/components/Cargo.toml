@@ -19,13 +19,18 @@ workspace = true
 # (cognee, cognee-http-server) depend with `default-features = false` and
 # forward exactly the features they want, so `--no-default-features` builds
 # stay precise.
-default = ["onnx", "ladybug", "pgvector", "pggraph", "mock-llm"]
+default = ["onnx", "ladybug", "lancedb", "pgvector", "pggraph", "mock-llm"]
 
 onnx         = ["cognee-embedding/onnx"]
 onnx-dynamic = ["onnx", "cognee-embedding/onnx-dynamic"]
 ort-cuda     = ["cognee-embedding/ort-cuda"]
 ort-tensorrt = ["cognee-embedding/ort-tensorrt"]
 ladybug      = ["cognee-graph/ladybug"]
+# Embedded LanceDB vector store. Gated because the Arrow + lance native stack is
+# one of the largest builds in the workspace and a consumer on pgvector (or a
+# closed adapter) does not need it; `with_builtins()` registers the `lancedb`
+# provider only when this is on.
+lancedb      = ["cognee-vector/lancedb"]
 pgvector     = ["cognee-vector/pgvector", "dep:url"]
 pggraph      = ["cognee-graph/postgres", "dep:url"]
 # Record/replay cassette-based mock LLM (MOCK_LLM / COGNEE_RECORD_LLM).

@@ -56,8 +56,11 @@ impl ComponentRegistry {
         // it registers under the single canonical key — this keeps a
         // `register_vector` override consistent across all spellings.
         reg.register_vector(Arc::new(crate::builtins::vector::BruteForceFactory));
-        // lancedb is registered unconditionally; the Android fallback lives
-        // inside its build(), keeping the provider id target-invariant.
+        // lancedb is behind its own feature (the Arrow/lance native stack is a
+        // large build, and not every consumer uses it). When enabled it registers
+        // on every target — the Android fallback lives inside its build(), which
+        // keeps the provider id target-invariant.
+        #[cfg(feature = "lancedb")]
         reg.register_vector(Arc::new(crate::builtins::vector::LanceDbFactory));
         #[cfg(feature = "pgvector")]
         reg.register_vector(Arc::new(crate::builtins::vector::PgVectorFactory));

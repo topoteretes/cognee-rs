@@ -29,6 +29,7 @@ workspace = true
 default = [
     "visualization",
     "ladybug",
+    "lancedb",
     "onnx",
     "hf-tokenizer",
     "tiktoken",
@@ -37,6 +38,7 @@ default = [
 ]
 visualization = ["cognee/visualization"]
 ladybug       = ["cognee/ladybug"]
+lancedb       = ["cognee/lancedb"]
 onnx          = ["cognee/onnx"]
 hf-tokenizer  = ["cognee/hf-tokenizer"]
 tiktoken      = ["cognee/tiktoken"]

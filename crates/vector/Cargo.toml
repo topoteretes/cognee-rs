@@ -15,6 +15,12 @@ authors.workspace = true
 workspace = true
 
 [features]
+# LanceDB pulls the Arrow + lance native stack, one of the largest builds in the
+# workspace. Consumers whose vector backend is something else (pgvector, a closed
+# adapter, brute-force) can now leave it out. Off at this level; `cognee`,
+# `cognee-http-server` and every binding enable it in their own defaults, so a
+# plain build of those is unchanged.
+lancedb  = ["dep:lancedb", "dep:arrow-array", "dep:arrow-schema", "dep:futures"]
 pgvector = ["dep:sea-orm", "dep:sea-orm-migration"]
 testing  = []
 
@@ -53,11 +59,11 @@ cognee-test-utils = { path = "../test-utils" }
 cognee-models = { path = "../models" }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
-# LanceDB adapter (durable embedded vector store) — pulled in only on
-# targets where the Arrow / lance native stack builds cleanly. Android
+# LanceDB adapter (durable embedded vector store) — behind the `lancedb` feature,
+# and only on targets where the Arrow / lance native stack builds cleanly. Android
 # cross-compiles fall back to BruteForceVectorDB; see lancedb_adapter.rs.
 [target.'cfg(not(target_os = "android"))'.dependencies]
-lancedb      = "=0.29"
-arrow-array  = "58"
-arrow-schema = "58"
-futures      = "0.3"
+lancedb      = { version = "=0.29", optional = true }
+arrow-array  = { version = "58", optional = true }
+arrow-schema = { version = "58", optional = true }
+futures      = { version = "0.3", optional = true }

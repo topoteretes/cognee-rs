@@ -25,6 +25,7 @@ default = [
     "visualization",
     # engine features — unchanged from Phase 0–5
     "ladybug",
+    "lancedb",
     "onnx",
     "hf-tokenizer",
     "tiktoken",
@@ -48,6 +49,7 @@ telemetry     = ["cognee/telemetry"]
 visualization = ["cognee/visualization", "cognee-bindings-common/visualization"]
 # Engine features forwarded to cognee and cognee-bindings-common.
 ladybug       = ["cognee/ladybug",       "cognee-bindings-common/ladybug"]
+lancedb       = ["cognee/lancedb",       "cognee-bindings-common/lancedb"]
 onnx          = ["cognee/onnx",          "cognee-bindings-common/onnx"]
 hf-tokenizer  = ["cognee/hf-tokenizer",  "cognee-bindings-common/hf-tokenizer"]
 tiktoken      = ["cognee/tiktoken",      "cognee-bindings-common/tiktoken"]
