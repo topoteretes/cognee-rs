@@ -15,7 +15,7 @@ on:
   pull_request:
     branches: [ main, master ]
     types: [ opened, synchronize, reopened ]
-  # Daily cache warm-up on main. Since the cache saves below are main-only,
+  # Twice-weekly cache warm-up on main. Since the cache saves below are main-only,
   # branches can only ever restore what a main run has already written — so
   # anything that invalidates main's caches leaves EVERY PR cold until main
   # next runs. Two things do that, and neither is rare:
@@ -47,8 +47,18 @@ on:
 # superseded 40-65 min run kept occupying runners until it finished on its own.
 # ios.yml, community.yml and http-parity.yml already key on the ref alone
 # (and do show cancelled runs); CI showed none, which is how this surfaced.
+#
+# Scheduled runs get their OWN group. A cron fires with
+# `github.ref == refs/heads/main`, so sharing the group meant the 03:11 warm-up
+# cancelled any still-running post-merge run — main runs take 40-65 min, so
+# anything merged after ~02:06 on a Mon/Thu was in range. That left the merge
+# commit with a cancelled check (`notify` is gated on `!cancelled()`, so the
+# aggregator did not even report) and skipped that run's main-only cache saves,
+# which is the exact opposite of what the cron is for. Keying the cron
+# separately keeps the invariant that only a newer push supersedes a main run,
+# while two overlapping crons still collapse to the newest.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event_name == 'schedule' && 'scheduled-warmup' || github.ref }}
   cancel-in-progress: true
 
 env:
