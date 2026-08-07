@@ -15,8 +15,7 @@ class CogneeConfigTest {
 
     @Test
     void setAndGetRoundTrip(@TempDir Path dir) {
-        try (SqliteSettle settle = SqliteSettle.on(dir);
-                Cognee cognee = handle(dir)) {
+        try (Cognee cognee = handle(dir)) {
             cognee.config().set("llm_model", "gpt-4o-mini");
             cognee.config().setLlmConfig(Map.of("llm_provider", "openai"));
             Map<String, Object> snapshot = cognee.config().get();
@@ -26,8 +25,7 @@ class CogneeConfigTest {
 
     @Test
     void typeMismatchSurfacesCode(@TempDir Path dir) {
-        try (SqliteSettle settle = SqliteSettle.on(dir);
-                Cognee cognee = handle(dir)) {
+        try (Cognee cognee = handle(dir)) {
             CogneeException ex = assertThrows(
                     CogneeException.class,
                     () -> cognee.config().set("chunk_size", "not-a-number"));
@@ -37,8 +35,7 @@ class CogneeConfigTest {
 
     @Test
     void unknownKeySurfacesCode(@TempDir Path dir) {
-        try (SqliteSettle settle = SqliteSettle.on(dir);
-                Cognee cognee = handle(dir)) {
+        try (Cognee cognee = handle(dir)) {
             CogneeException ex = assertThrows(
                     CogneeException.class,
                     () -> cognee.config().set("no_such_key", "x"));

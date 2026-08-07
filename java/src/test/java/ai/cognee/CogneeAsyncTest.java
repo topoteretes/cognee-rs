@@ -18,8 +18,7 @@ class CogneeAsyncTest {
 
     @Test
     void warmAndOwnerIdComplete(@TempDir Path dir) {
-        try (SqliteSettle settle = SqliteSettle.on(dir);
-                Cognee cognee = handle(dir)) {
+        try (Cognee cognee = handle(dir)) {
             assertDoesNotThrow(() -> cognee.warm().join());
             String owner = cognee.ownerId().join();
             assertNotNull(owner);
@@ -30,8 +29,7 @@ class CogneeAsyncTest {
     @Test
     void repeatedWarmIsStableUnderXcheckJni(@TempDir Path dir) {
         // Runs many completions so a global-/local-ref leak would trip -Xcheck:jni.
-        try (SqliteSettle settle = SqliteSettle.on(dir);
-                Cognee cognee = handle(dir)) {
+        try (Cognee cognee = handle(dir)) {
             for (int i = 0; i < 50; i++) {
                 cognee.warm().join();
             }
@@ -44,8 +42,7 @@ class CogneeAsyncTest {
         // exceptional-completion path (CogneeException via the cached class).
         Map<String, String> cfg = TestConfig.underTempDir(dir);
         cfg.put("vector_db_provider", "definitely-not-a-real-provider");
-        try (SqliteSettle settle = SqliteSettle.on(dir);
-                Cognee cognee = new Cognee(cfg)) {
+        try (Cognee cognee = new Cognee(cfg)) {
             CompletionException ex =
                     assertThrows(CompletionException.class, () -> cognee.warm().join());
             org.junit.jupiter.api.Assertions.assertTrue(

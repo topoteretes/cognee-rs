@@ -58,31 +58,68 @@ jobs:
           PR: ${{ github.event.pull_request.number || inputs.pr_number }}
         run: |
           set -euo pipefail
+
+          # Validate before building any URL or jq program. `pr_number` is a
+          # free-form workflow_dispatch string, and it used to be interpolated
+          # straight into a jq `select(.ref == "…")` predicate — a value
+          # containing a double quote rewrote the filter instead of being
+          # matched by it, and `x" or true or .ref=="` would have matched every
+          # cache in the repo and deleted main's warm caches wholesale.
+          if ! [[ "${PR}" =~ ^[0-9]+$ ]]; then
+            echo "error: pr_number must be digits only, got '${PR}'" >&2
+            exit 1
+          fi
           REF="refs/pull/${PR}/merge"
           echo "Reclaiming caches for ${REF}"
 
-          # `while read` over a process substitution rather than `mapfile`:
-          # mapfile is bash 4+, and the substitution form keeps FREED in this
-          # shell (a pipeline would run the loop in a subshell and lose it).
-          # The REST list pages at 100; a single PR ref never approaches that.
+          # Filter by ref SERVER-side and paginate.
+          #
+          # `GET /actions/caches` lists every cache in the repo, not just this
+          # ref's, so filtering client-side over a single 100-item page could
+          # miss a PR's entries entirely: the endpoint sorts by
+          # last_accessed_at descending, so the least recently used page out
+          # first — exactly the `workflow_dispatch`-an-old-PR case this
+          # workflow advertises. `?ref=` also means nothing is interpolated
+          # into the jq program any more.
+          #
+          # Written to a file with the exit status checked, NOT read from a
+          # process substitution: bash does not check a process substitution's
+          # status and `pipefail` does not cover `< <(…)`, so a 403, a
+          # secondary rate limit, a 5xx or a jq error produced zero lines and
+          # was reported as "no caches found — nothing to do" on a green run.
+          # A janitor job nobody watches must not fail silently.
+          CACHES="$(mktemp)"
+          if ! gh api --paginate \
+                "repos/${GH_REPO}/actions/caches?per_page=100&ref=${REF}" \
+                --jq '.actions_caches[] | [.id, .size_in_bytes, .key] | @tsv' \
+                > "${CACHES}"; then
+            echo "error: failed to list caches for ${REF} (see the API error above)" >&2
+            exit 1
+          fi
+
           FREED=0
           COUNT=0
-          while IFS="$(printf '\t')" read -r id size key; do
+          FAILED=0
+          while IFS=$'\t' read -r id size key; do
             [ -n "${id:-}" ] || continue
             COUNT=$((COUNT + 1))
-            # Keep going on individual failures: a cache can legitimately
-            # vanish between the list and the delete (concurrent eviction),
-            # and one 404 should not strand the rest.
-            if gh api -X DELETE "repos/${GH_REPO}/actions/caches/${id}" --silent 2>/dev/null; then
+            size="${size:-0}"
+            # Distinguish "vanished between list and delete" (a 404, benign
+            # concurrent eviction) from a real failure. The previous version
+            # sent every error to /dev/null and printed "already gone?", so a
+            # blanket 403 or a rate limit read as a successful cleanup of
+            # 0 MiB and pointed debugging at the wrong cause.
+            if err="$(gh api -X DELETE "repos/${GH_REPO}/actions/caches/${id}" --silent 2>&1)"; then
               echo "  deleted ${key} ($((size / 1024 / 1024)) MiB)"
               FREED=$((FREED + size))
+            elif printf '%s' "${err}" | grep -q '404'; then
+              echo "  gone already ${key} (404 — concurrent eviction)"
             else
-              echo "  skipped ${key} (already gone?)"
+              echo "  FAILED ${key}: ${err}" >&2
+              FAILED=$((FAILED + 1))
             fi
-          done < <(
-            gh api "repos/${GH_REPO}/actions/caches?per_page=100" \
-              --jq ".actions_caches[] | select(.ref == \"${REF}\") | \"\(.id)\t\(.size_in_bytes)\t\(.key)\""
-          )
+          done < "${CACHES}"
+          rm -f "${CACHES}"
 
           if [ "${COUNT}" -eq 0 ]; then
             echo "No caches found for ${REF} — nothing to do."
@@ -93,4 +130,13 @@ jobs:
           {
             echo "### Cache cleanup for PR #${PR}"
             echo "Reclaimed **$((FREED / 1024 / 1024)) MiB** across ${COUNT} cache entries."
+            if [ "${FAILED}" -gt 0 ]; then
+              echo ""
+              echo ":warning: **${FAILED}** delete(s) failed — see the job log."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "${FAILED}" -gt 0 ]; then
+            echo "error: ${FAILED} cache delete(s) failed for ${REF}" >&2
+            exit 1
+          fi

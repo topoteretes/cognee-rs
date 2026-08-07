@@ -18,8 +18,7 @@ class SessionsAdminTest {
 
     @Test
     void defaultUserResolves(@TempDir Path dir) {
-        try (SqliteSettle settle = SqliteSettle.on(dir);
-                Cognee cognee = handle(dir)) {
+        try (Cognee cognee = handle(dir)) {
             CogneeUser u = cognee.users().getOrCreateDefault().join();
             assertNotNull(u.id());
         }
@@ -27,8 +26,7 @@ class SessionsAdminTest {
 
     @Test
     void notebookCrud(@TempDir Path dir) {
-        try (SqliteSettle settle = SqliteSettle.on(dir);
-                Cognee cognee = handle(dir)) {
+        try (Cognee cognee = handle(dir)) {
             CogneeNotebook nb = cognee.notebooks().create("nb1").join();
             assertEquals("nb1", nb.name());
             assertTrue(cognee.notebooks().delete(nb.id()).join());
@@ -37,8 +35,7 @@ class SessionsAdminTest {
 
     @Test
     void graphContextRoundTrips(@TempDir Path dir) {
-        try (SqliteSettle settle = SqliteSettle.on(dir);
-                Cognee cognee = handle(dir)) {
+        try (Cognee cognee = handle(dir)) {
             String sessionId = "sess-round-trip";
             // No context stored yet.
             assertNull(cognee.sessions().getGraphContext(sessionId).join());
@@ -54,8 +51,7 @@ class SessionsAdminTest {
 
     @Test
     void pipelineRunStatusResetsAreNoOpSafe(@TempDir Path dir) {
-        try (SqliteSettle settle = SqliteSettle.on(dir);
-                Cognee cognee = handle(dir)) {
+        try (Cognee cognee = handle(dir)) {
             cognee.add(List.of(DataInput.text("reset me")), "ds").join();
             CogneeDataset ds = cognee.datasets().list().join().stream()
                     .filter(d -> "ds".equals(d.name())).findFirst().orElseThrow();
