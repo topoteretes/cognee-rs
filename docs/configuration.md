@@ -150,10 +150,13 @@ Provider values: `onnx`, `fastembed`, `openai`, `openai_compatible`, `ollama`, `
 | `VECTOR_DB_USERNAME` / `VECTOR_DB_PASSWORD` | … | _(empty)_ |
 
 Supported providers:
-- `lancedb` — embedded Apache-Arrow / Lance vector store, on disk. Default on
-  every target except Android. The on-disk layout matches the Python SDK's
-  default LanceDB store, so a Rust deployment can be opened from Python and
-  vice versa.
+- `lancedb` — embedded Apache-Arrow / Lance vector store, on disk. The default
+  provider, and default-on in `cognee`, `cognee-http-server` and every binding;
+  requires the `lancedb` Cargo feature (the Arrow/Lance native stack is a large
+  build, so a consumer on another vector store can drop it) and is unavailable on
+  Android, where its native stack does not cross-compile. The on-disk layout
+  matches the Python SDK's default LanceDB store, so a Rust deployment can be
+  opened from Python and vice versa.
 - `brute-force` — pure-Rust in-memory linear scan. Default on Android (where
   LanceDB's native stack does not cross-compile). Selected on any target by
   setting `vector_db_url = ":memory:"`.

@@ -199,8 +199,8 @@ cg_string_destroy(cfg);
 
 | CMake flag | Cargo equivalent | Effect |
 |---|---|---|
-| default | all default features | Full build: visualization, cloud, qdrant, ladybug, onnx, hf-tokenizer, tiktoken, sqlite |
-| `-DCOGNEE_CAPI_NO_DEFAULT_FEATURES=ON -DCOGNEE_CAPI_CARGO_FEATURES=sqlite,testing` | `--no-default-features --features sqlite,testing` | Slim/embedded build; `cg_sdk_visualize` and cloud ops return `CG_ERR_FEATURE_NOT_BUILT` |
+| default | all default features | Full build: visualization, cloud, qdrant, ladybug, lancedb, onnx, hf-tokenizer, tiktoken, sqlite |
+| `-DCOGNEE_CAPI_NO_DEFAULT_FEATURES=ON -DCOGNEE_CAPI_CARGO_FEATURES=sqlite,testing,lancedb` | `--no-default-features --features sqlite,testing,lancedb` | Slim/embedded build; `cg_sdk_visualize` and cloud ops return `CG_ERR_FEATURE_NOT_BUILT`. `lancedb` is explicit because it is the default vector provider and this build enables no other durable one |
 
 ## Platform support
 

@@ -1116,15 +1116,18 @@ impl Default for Settings {
             graph_filename: String::new(),
 
             // OSS default: legacy `"lancedb"` is kept as the literal value so
-            // existing configs continue to boot without edits. Post-T4/T5,
-            // `ComponentManager::init_vector_db` redirects `"lancedb"`/`"qdrant"`
-            // to the in-memory `BruteForceVectorDB` with a `tracing::warn!`.
-            // Production deployments should explicitly set
+            // existing configs continue to boot without edits. It is not a
+            // fallback — `ComponentManager::init_vector_db` hands the provider id
+            // to `ComponentRegistry::build_vector`, which ERRORS when no factory
+            // is registered under it. Production deployments should explicitly set
             // `vector_db_provider="pgvector"` (and supply `vector_db_url`) for
-            // durable storage. T5's earlier flip to `"pgvector"` broke OSS
-            // bindings (Neon/C-API/python defaults don't enable the `pgvector`
-            // Cargo feature) — keeping `"lancedb"` here is the lowest-friction
-            // OSS default that works in every OSS build out of the box.
+            // durable storage. T5's earlier flip to `"pgvector"` broke OSS bindings
+            // (their defaults don't enable the `pgvector` Cargo feature), so
+            // `"lancedb"` remains the lowest-friction default — but note it is now
+            // itself behind the `lancedb` feature (default-on in `cognee`,
+            // `cognee-http-server` and every binding). A consumer that drops that
+            // feature MUST set `vector_db_provider` explicitly; the registry's
+            // unsupported-provider error names the feature to rebuild with.
             vector_db_provider: "lancedb".to_string(),
             vector_db_url: String::new(),
             vector_db_port: 1234,

@@ -69,6 +69,16 @@ cargo check -p cognee --no-default-features
 
 echo ""
 echo "================================================================"
+echo "=== Rust: Test (cognee-vector lancedb lane) ==="
+echo "================================================================"
+# crates/vector declares no default features, so a per-crate `cargo test -p
+# cognee-vector` runs ZERO of the inline LanceDB adapter tests. Only the
+# workspace-wide run covers them today (via feature unification from `cognee`),
+# which hides a break behind an unrelated dependency edge. Spell the lane out.
+cargo test -p cognee-vector --features lancedb
+
+echo ""
+echo "================================================================"
 echo "=== Rust: Compilation check (Postgres-only server: no onnx/ladybug/lancedb) ==="
 echo "================================================================"
 # Guards the seam a downstream consumer uses to drop the embedded backends —

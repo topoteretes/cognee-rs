@@ -641,33 +641,24 @@ impl HttpServerConfig {
         // lockstep with the embedding crate.
         let emb_defaults = cognee_embedding::EmbeddingConfig::default();
 
-        // ONNX asset defaults, which only exist under the `onnx` feature.
-        // `EmbeddingInputs` carries these fields unconditionally but consumes them
-        // only under that feature, so a build without it fills them with inert
-        // values instead of reaching for `OnnxEmbeddingConfig`.
-        #[cfg(feature = "onnx")]
-        let (onnx_model_path, onnx_tokenizer_path, onnx_max_sequence_length, onnx_batch_size) = {
-            let onnx_defaults = cognee_embedding::OnnxEmbeddingConfig::default();
-            (
-                // When no explicit ONNX asset path is configured, fall back to
-                // the embedding crate's own BGE-Small defaults.
-                self.embedding_model_path
-                    .clone()
-                    .unwrap_or(onnx_defaults.model_path),
-                self.embedding_tokenizer_path
-                    .clone()
-                    .unwrap_or(onnx_defaults.tokenizer_path),
-                onnx_defaults.max_sequence_length,
-                onnx_defaults.batch_size,
-            )
-        };
-        #[cfg(not(feature = "onnx"))]
-        let (onnx_model_path, onnx_tokenizer_path, onnx_max_sequence_length, onnx_batch_size) = (
-            self.embedding_model_path.clone().unwrap_or_default(),
-            self.embedding_tokenizer_path.clone().unwrap_or_default(),
-            0usize,
-            0usize,
-        );
+        // ONNX asset defaults. Resolved by cognee-components, NOT behind a cfg
+        // here: `OnnxEmbeddingConfig` exists only under an `onnx` feature, and this
+        // crate's `onnx` can be off while cognee-components' is on (features unify
+        // per graph) — in which case `build_embedding_config` does read these
+        // fields. Asking the crate that consumes them keeps the two in lockstep.
+        let onnx_defaults = cognee_components::onnx_asset_defaults();
+        // When no explicit ONNX asset path is configured, fall back to the
+        // embedding crate's own BGE-Small defaults.
+        let onnx_model_path = self
+            .embedding_model_path
+            .clone()
+            .unwrap_or(onnx_defaults.model_path);
+        let onnx_tokenizer_path = self
+            .embedding_tokenizer_path
+            .clone()
+            .unwrap_or(onnx_defaults.tokenizer_path);
+        let onnx_max_sequence_length = onnx_defaults.max_sequence_length;
+        let onnx_batch_size = onnx_defaults.batch_size;
 
         cognee_components::BackendBuildContext {
             data_root_directory: self.data_root_directory.clone(),

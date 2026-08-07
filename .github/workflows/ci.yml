@@ -192,14 +192,23 @@ jobs:
       # Canary for the backend feature seams: a consumer that runs every store on
       # Postgres drops ort (onnx), the bundled ladybug C++ and the Arrow + lance
       # stack this way. Without this lane the `#[cfg(feature = ...)]` paths behind
-      # those features rot and the seam silently stops building. Shares the
-      # no-default target dir.
+      # those features rot and the seam silently stops building. Uses the
+      # no-default target dir to keep these odd feature sets out of the main cache
+      # (it shares little with the `-p cognee` lane above — different package and
+      # features — but both are small check-only trees).
       - name: Compilation check (Postgres-only server)
         env:
           CARGO_TARGET_DIR: target/no-default
         run: |
           cargo check -p cognee-http-server --no-default-features \
             --features telemetry,html-loader,pgvector,pggraph
+
+      # crates/vector declares no default features, so `cargo test -p cognee-vector`
+      # runs none of the inline LanceDB adapter tests; only the workspace-wide
+      # nextest run reaches them, via unification from `cognee`. Spell the lane out
+      # so the adapter keeps its own coverage.
+      - name: Test (cognee-vector lancedb lane)
+        run: cargo test -p cognee-vector --features lancedb
 
       - name: License presence (every published crate)
         run: |

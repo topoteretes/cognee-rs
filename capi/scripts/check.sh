@@ -280,7 +280,7 @@ rm -rf "$SLIM_BUILD_DIR"
 cmake -S "$CAPI_DIR" -B "$SLIM_BUILD_DIR" \
     -DCMAKE_BUILD_TYPE=Debug \
     -DCOGNEE_CAPI_NO_DEFAULT_FEATURES=ON \
-    -DCOGNEE_CAPI_CARGO_FEATURES=sqlite,testing \
+    -DCOGNEE_CAPI_CARGO_FEATURES=sqlite,testing,lancedb \
     > /dev/null
 cmake --build "$SLIM_BUILD_DIR" --target sdk_feature_smoke_slim
 

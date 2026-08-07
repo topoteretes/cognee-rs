@@ -59,7 +59,9 @@ impl ComponentRegistry {
         // lancedb is behind its own feature (the Arrow/lance native stack is a
         // large build, and not every consumer uses it). When enabled it registers
         // on every target — the Android fallback lives inside its build(), which
-        // keeps the provider id target-invariant.
+        // keeps the provider id target-invariant. NOTE: `lancedb` is also the
+        // default `vector_db_provider`, so a build that drops the feature must set
+        // VECTOR_DB_PROVIDER explicitly; unsupported_msg() hints at that.
         #[cfg(feature = "lancedb")]
         reg.register_vector(Arc::new(crate::builtins::vector::LanceDbFactory));
         #[cfg(feature = "pgvector")]
@@ -266,7 +268,9 @@ fn unsupported_msg(field: &str, provider: &str, supported: &[String]) -> String 
             _ => "",
         },
         "vector_db_provider" => match p.as_str() {
+            "lancedb" => " Rebuild with the `lancedb` crate feature to enable it.",
             "pgvector" => " Rebuild with the `pgvector` crate feature to enable it.",
+            "mock" => " Rebuild with the `testing` crate feature to enable it.",
             _ => "",
         },
         _ => "",
@@ -296,6 +300,10 @@ mod tests {
         assert!(g("postgres").contains("`pggraph` crate feature"));
         assert!(g("ladybug").contains("`ladybug` crate feature"));
         assert!(v("pgvector").contains("`pgvector` crate feature"));
+        // `lancedb` is both feature-gated and the default vector provider, so this
+        // is the hint an operator of a build without it actually sees.
+        assert!(v("lancedb").contains("`lancedb` crate feature"));
+        assert!(v("mock").contains("`testing` crate feature"));
         // No cross-kind hint: a graph provider in a vector error (and vice-versa)
         // gets no feature hint at all.
         assert!(!v("postgres").contains("crate feature"));
@@ -311,14 +319,25 @@ mod tests {
     fn builtins_register_documented_providers() {
         let reg = ComponentRegistry::with_builtins();
 
-        // Vector: brute-force (canonical) and lancedb are always present.
-        for id in ["brute-force", "lancedb"] {
-            assert!(
-                reg.vector_providers().iter().any(|p| p == id),
-                "vector provider '{id}' must be registered; have {:?}",
-                reg.vector_providers()
-            );
-        }
+        // Vector: brute-force (canonical) is always present; lancedb follows its
+        // feature, like pgvector and mock below.
+        assert!(
+            reg.vector_providers().iter().any(|p| p == "brute-force"),
+            "vector provider 'brute-force' must be registered; have {:?}",
+            reg.vector_providers()
+        );
+        #[cfg(feature = "lancedb")]
+        assert!(
+            reg.vector_providers().iter().any(|p| p == "lancedb"),
+            "the `lancedb` feature must register the `lancedb` vector provider; have {:?}",
+            reg.vector_providers()
+        );
+        #[cfg(not(feature = "lancedb"))]
+        assert!(
+            !reg.vector_providers().iter().any(|p| p == "lancedb"),
+            "without the `lancedb` feature the provider must NOT be registered; have {:?}",
+            reg.vector_providers()
+        );
         // The brute-force spelling variants canonicalize to the same key.
         assert_eq!(canonical_vector_provider("brute_force"), "brute-force");
         assert_eq!(canonical_vector_provider("bruteforce"), "brute-force");

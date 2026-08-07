@@ -19,7 +19,10 @@ INCLUDE_DIR="$CAPI_DIR/include"
 OUTPUT="$CAPI_DIR/CogneeSDK.xcframework"
 STAGING="$CAPI_DIR/xcframework-staging"
 
-CARGO_FLAGS="--manifest-path $MANIFEST --no-default-features --features sqlite,testing,mock-llm --release"
+# `lancedb` is explicit because it is a Cargo feature (crates/vector) and the
+# xcframework has no other durable vector store — cognee is pulled here with
+# default-features = false and pgvector is not enabled.
+CARGO_FLAGS="--manifest-path $MANIFEST --no-default-features --features sqlite,testing,mock-llm,lancedb --release"
 
 # ---------------------------------------------------------------------------
 # 1. Compile release static libraries for both iOS targets

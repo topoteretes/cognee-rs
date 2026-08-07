@@ -4,6 +4,7 @@
 //! is a single default embedding factory (replaceable via
 //! [`crate::ComponentRegistry::set_embedding`]) rather than a per-provider map.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -12,6 +13,46 @@ use cognee_embedding::{EmbeddingConfig, EmbeddingEngine, EmbeddingProvider, Mock
 use crate::context::{BackendBuildContext, EmbeddingInputs};
 use crate::error::ComponentError;
 use crate::traits::EmbeddingFactory;
+
+/// ONNX asset defaults for callers populating [`EmbeddingInputs`].
+pub struct OnnxAssetDefaults {
+    pub model_path: PathBuf,
+    pub tokenizer_path: PathBuf,
+    pub max_sequence_length: usize,
+    pub batch_size: usize,
+}
+
+/// The embedding crate's own ONNX asset defaults — or inert values when this
+/// crate's `onnx` feature is off.
+///
+/// Callers fill `EmbeddingInputs::onnx_*` but cannot see `OnnxEmbeddingConfig`
+/// unless *they* enable `onnx`, and cfg'ing on their own feature is wrong:
+/// features unify per build graph, so a caller compiled without `onnx` can still
+/// end up in a graph where this crate has it on and [`build_embedding_config`]
+/// reads those fields. Resolving the defaults here keeps the decision in the same
+/// crate — and behind the same cfg — as the code that consumes them, so the inert
+/// branch is provably unread rather than merely intended to be.
+pub fn onnx_asset_defaults() -> OnnxAssetDefaults {
+    #[cfg(feature = "onnx")]
+    {
+        let d = cognee_embedding::OnnxEmbeddingConfig::default();
+        OnnxAssetDefaults {
+            model_path: d.model_path,
+            tokenizer_path: d.tokenizer_path,
+            max_sequence_length: d.max_sequence_length,
+            batch_size: d.batch_size,
+        }
+    }
+    #[cfg(not(feature = "onnx"))]
+    {
+        OnnxAssetDefaults {
+            model_path: PathBuf::new(),
+            tokenizer_path: PathBuf::new(),
+            max_sequence_length: 0,
+            batch_size: 0,
+        }
+    }
+}
 
 /// Parse a provider id (case-insensitive) into an [`EmbeddingProvider`], or
 /// `None` if it is not a recognized backend. This is the *single* source of

@@ -59,7 +59,7 @@ jobs:
             --target aarch64-apple-ios \
             --manifest-path capi/cognee-capi/Cargo.toml \
             --no-default-features \
-            --features sqlite,testing,mock-llm
+            --features sqlite,testing,mock-llm,lancedb
 
       - name: Check — aarch64-apple-ios-sim (simulator)
         run: |
@@ -67,7 +67,7 @@ jobs:
             --target aarch64-apple-ios-sim \
             --manifest-path capi/cognee-capi/Cargo.toml \
             --no-default-features \
-            --features sqlite,testing,mock-llm
+            --features sqlite,testing,mock-llm,lancedb
 
       # Validate Package.swift parses correctly (does not require the xcframework
       # binary — `dump-package` only reads the manifest).

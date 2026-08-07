@@ -17,7 +17,7 @@ set(COGNEE_CAPI_CARGO_FEATURES "" CACHE STRING
     "Extra cargo features to enable when building cognee-capi (comma-separated)")
 
 # When ON, passes --no-default-features to the cargo invocation.
-# Used for the slim build (--no-default-features --features sqlite,testing)
+# Used for the slim build (--no-default-features --features sqlite,testing,lancedb)
 # verified in check.sh's build-slim stage (Phase 7, D6).
 option(COGNEE_CAPI_NO_DEFAULT_FEATURES
     "Pass --no-default-features to cargo when building cognee-capi"
