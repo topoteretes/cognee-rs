@@ -94,6 +94,12 @@ jobs:
           ws_members="$(cargo metadata --no-deps --format-version 1 --manifest-path Cargo.toml \
             | python3 -c 'import json,sys; print("\n".join(p["name"] for p in json.load(sys.stdin)["packages"]))')"
           is_ws_member() { printf '%s\n' "$ws_members" | grep -qxF "$1"; }
+          # "<crate><TAB><feature>" for every feature every workspace member
+          # declares in-tree. Used below to prove that a feature the *index* does
+          # not know about really does exist here, rather than being a typo.
+          ws_features="$(cargo metadata --no-deps --format-version 1 --manifest-path Cargo.toml \
+            | python3 -c 'import json,sys; print("\n".join(p["name"] + "\t" + f for p in json.load(sys.stdin)["packages"] for f in p["features"]))')"
+          has_ws_feature() { printf '%s\n' "$ws_features" | grep -qxF "$(printf '%s\t%s' "$1" "$2")"; }
           # Current workspace version. Every intra-workspace dep requirement is
           # pinned to it by scripts/release/set-version.sh, so a legitimately
           # unpublishable-yet sibling always requires exactly this version; any
@@ -134,11 +140,27 @@ jobs:
                 | head -1 | sed -E 's/^failed to select a version for the requirement `([^ ]+) =$/\1/' || true)"
               unmet_req="$(grep -oE 'the requirement `[^ ]+ = "[^"]+"' "$crate_log" \
                 | head -1 | sed -E 's/.*= "\^?=?([0-9][^"]*)"$/\1/' || true)"
+              # Third wording, same root cause: a sibling is on the index at the
+              # required version, but that published copy predates a feature added
+              # in-tree, so a cross-crate `<sibling>/<feature>` reference cannot
+              # resolve ("package `A` depends on `B` with feature `F` but `B` does
+              # not have that feature"). The ordered real publish fixes it. Downgrade
+              # to SKIP ONLY when B is a workspace member AND B really does declare F
+              # here — a typo'd or removed feature name has no in-tree declaration, so
+              # it still FAILs (and also reds `cargo check`, which resolves by path).
+              feat_line="$(grep -oE 'depends on `[^`]+` with feature `[^`]+` but `[^`]+` does not have that feature' "$crate_log" \
+                | head -1 || true)"
+              feat_crate="$(printf '%s' "$feat_line" | sed -nE 's/^depends on `([^`]+)` with feature .*/\1/p')"
+              feat_name="$(printf '%s' "$feat_line" | sed -nE 's/.*with feature `([^`]+)` but.*/\1/p')"
               if [ -n "$missing" ] && is_ws_member "$missing"; then
                 echo "SKIP (depends on not-yet-published workspace crate '$missing')"
                 skips=$((skips + 1))
               elif [ -n "$unmet" ] && is_ws_member "$unmet" && [ "$unmet_req" = "$ws_version" ]; then
                 echo "SKIP (workspace crate '$unmet' not yet published at v${ws_version})"
+                skips=$((skips + 1))
+              elif [ -n "$feat_crate" ] && is_ws_member "$feat_crate" \
+                   && has_ws_feature "$feat_crate" "$feat_name"; then
+                echo "SKIP (workspace crate '$feat_crate' declares feature '$feat_name' in-tree; published v${ws_version} predates it)"
                 skips=$((skips + 1))
               else
                 echo FAIL
