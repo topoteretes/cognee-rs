@@ -10,7 +10,8 @@ import org.junit.jupiter.api.io.TempDir;
 class CogneeAddTest {
     @Test
     void addReturnsTypedResult(@TempDir Path dir) {
-        try (Cognee cognee = new Cognee(TestConfig.underTempDir(dir))) {
+        try (SqliteSettle settle = SqliteSettle.on(dir);
+                Cognee cognee = new Cognee(TestConfig.underTempDir(dir))) {
             AddResult r = cognee.add(List.of(DataInput.text("hello cognee")), "ds").join();
             assertEquals("ds", r.datasetName());
             assertEquals(1, r.addedCount());

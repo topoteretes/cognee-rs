@@ -17,7 +17,8 @@ class EndToEndIT {
         assumeTrue(url != null && !url.isEmpty() && token != null && !token.isEmpty(),
                 "OPENAI_URL/OPENAI_TOKEN not set — skipping LLM E2E");
 
-        try (Cognee cognee = new Cognee(TestConfig.underTempDir(dir))) {
+        try (SqliteSettle settle = SqliteSettle.on(dir);
+                Cognee cognee = new Cognee(TestConfig.underTempDir(dir))) {
             cognee.config().setLlmConfig(Map.of(
                     "llm_provider", "openai", "llm_api_key", token, "llm_endpoint", url));
             cognee.warm().join();

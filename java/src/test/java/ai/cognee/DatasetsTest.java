@@ -10,7 +10,8 @@ import org.junit.jupiter.api.io.TempDir;
 class DatasetsTest {
     @Test
     void addThenListIsDeterministic(@TempDir Path dir) {
-        try (Cognee cognee = new Cognee(TestConfig.underTempDir(dir))) {
+        try (SqliteSettle settle = SqliteSettle.on(dir);
+                Cognee cognee = new Cognee(TestConfig.underTempDir(dir))) {
             cognee.add(List.of(DataInput.text("x")), "ds").join();
             List<CogneeDataset> ds = cognee.datasets().list().join();
             CogneeDataset d = ds.stream()
