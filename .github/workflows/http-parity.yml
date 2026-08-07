@@ -125,7 +125,7 @@ jobs:
         with:
           workspaces: cognee-rust -> target
           shared-key: http-parity-release-v2
-          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/perf/e2e-prebuilt-binaries' }}  # TEMP: measurement only, revert before merge
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Cache ORT binary
         uses: actions/cache@v4
