@@ -1,0 +1,96 @@
+name: Cache cleanup (closed PRs)
+
+# GitHub scopes a PR's caches to refs/pull/<n>/merge and then keeps them until
+# they go 7 days unread — merging or closing the PR does not reclaim anything.
+# On a repo whose Rust caches run ~1 GB each that is a large, permanent tax on
+# the 10 GB quota: hours after #127 merged, its refs/pull/127/merge entries
+# still held 4.61 GB of a 10.35 GB quota, and the resulting LRU eviction is
+# what kept the working caches cold.
+#
+# Deleting them on close is safe: once a PR is closed nothing can restore from
+# its ref again. A branch that is reopened simply repopulates from main.
+#
+# This is the other half of the main-only `save-if` policy in ci.yml — that
+# stops branches *writing* duplicates, this reclaims what PR runs already
+# wrote.
+
+on:
+  # pull_request_target, NOT pull_request. A `pull_request` run for a PR from a
+  # fork gets a read-only GITHUB_TOKEN no matter what the permissions block
+  # says, so the delete below would silently fail for exactly the PRs that most
+  # need it — community.yml (the fork lane) saves workspace-lint-v6 and
+  # workspace-test-v6 unrestricted, so a fork PR writes ~2 GB of its own.
+  #
+  # The usual pull_request_target hazard is running untrusted head code with a
+  # writable token. That does not apply here: this workflow has no checkout and
+  # executes nothing from the PR — it reads only the PR *number* from the event
+  # and calls the cache API.
+  pull_request_target:
+    types: [ closed ]
+  # Lets a maintainer reclaim a specific PR's caches by hand without waiting
+  # for a close event (e.g. for PRs closed before this workflow existed).
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number whose caches should be deleted"
+        required: true
+        type: string
+
+permissions:
+  # actions: write is what the cache delete API requires. contents: read has to
+  # be restated because naming any permission resets the rest to none.
+  actions: write
+  contents: read
+
+concurrency:
+  group: cache-cleanup-${{ github.event.pull_request.number || inputs.pr_number }}
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    name: Delete caches for closed PR
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete caches scoped to the PR ref
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number || inputs.pr_number }}
+        run: |
+          set -euo pipefail
+          REF="refs/pull/${PR}/merge"
+          echo "Reclaiming caches for ${REF}"
+
+          # `while read` over a process substitution rather than `mapfile`:
+          # mapfile is bash 4+, and the substitution form keeps FREED in this
+          # shell (a pipeline would run the loop in a subshell and lose it).
+          # The REST list pages at 100; a single PR ref never approaches that.
+          FREED=0
+          COUNT=0
+          while IFS="$(printf '\t')" read -r id size key; do
+            [ -n "${id:-}" ] || continue
+            COUNT=$((COUNT + 1))
+            # Keep going on individual failures: a cache can legitimately
+            # vanish between the list and the delete (concurrent eviction),
+            # and one 404 should not strand the rest.
+            if gh api -X DELETE "repos/${GH_REPO}/actions/caches/${id}" --silent 2>/dev/null; then
+              echo "  deleted ${key} ($((size / 1024 / 1024)) MiB)"
+              FREED=$((FREED + size))
+            else
+              echo "  skipped ${key} (already gone?)"
+            fi
+          done < <(
+            gh api "repos/${GH_REPO}/actions/caches?per_page=100" \
+              --jq ".actions_caches[] | select(.ref == \"${REF}\") | \"\(.id)\t\(.size_in_bytes)\t\(.key)\""
+          )
+
+          if [ "${COUNT}" -eq 0 ]; then
+            echo "No caches found for ${REF} — nothing to do."
+            exit 0
+          fi
+
+          echo "Reclaimed $((FREED / 1024 / 1024)) MiB for ${REF}"
+          {
+            echo "### Cache cleanup for PR #${PR}"
+            echo "Reclaimed **$((FREED / 1024 / 1024)) MiB** across ${COUNT} cache entries."
+          } >> "$GITHUB_STEP_SUMMARY"
