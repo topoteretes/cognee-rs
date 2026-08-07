@@ -74,3 +74,7 @@ e2e-cross-sdk/performance/locust/results/
 results/
 ghlogs/
 ios/.build/
+
+# Release binaries staged for the e2e-cross-sdk image (built on the CI
+# runner, copied in by e2e-cross-sdk/Dockerfile).
+dist/
