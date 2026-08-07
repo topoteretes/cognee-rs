@@ -25,7 +25,9 @@
 # `rustls-tls`, and the resolved graph for these three binaries contains no
 # openssl-sys or native-tls.
 #
-# To build the image outside CI, produce the binaries first:
+# To build the image outside CI, produce the binaries first — run these from
+# the cognee-rust repo root, so they land in cognee-rust/dist/ as the COPYs
+# below expect (the build context is the monorepo root above it):
 #   cargo build --release -p cognee-cli -p cognee-http-server \
 #     -p cognee-telemetry-emit \
 #     --features cognee-http-server/bin,cognee-http-server/dev-mock
@@ -96,10 +98,14 @@ COPY cognee-rust/dist/cognee-telemetry-emit /usr/local/bin/cognee-telemetry-emit
 
 # ONNX embedding models (needed by the Rust CLI for cognify). Fetched here
 # rather than in the deleted builder stage; ~30 MB, a few seconds.
+# --retry: these are build-time network fetches, so a transient DNS hiccup or
+# 5xx from the CDN would otherwise fail the whole image build.
 RUN mkdir -p /opt/models \
-    && curl -fL "https://huggingface.co/Xenova/bge-small-en-v1.5/resolve/main/onnx/model_quantized.onnx" \
+    && curl -fL --retry 3 --retry-delay 2 --retry-connrefused \
+       "https://huggingface.co/Xenova/bge-small-en-v1.5/resolve/main/onnx/model_quantized.onnx" \
        -o /opt/models/BGE-Small-v1.5-model_quantized.onnx \
-    && curl -fL "https://huggingface.co/Xenova/bge-small-en-v1.5/resolve/main/tokenizer.json" \
+    && curl -fL --retry 3 --retry-delay 2 --retry-connrefused \
+       "https://huggingface.co/Xenova/bge-small-en-v1.5/resolve/main/tokenizer.json" \
        -o /opt/models/bge-small-tokenizer.json
 
 # Copy Python virtualenv. The venv was created with `uv venv --relocatable`

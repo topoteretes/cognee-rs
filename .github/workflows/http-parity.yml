@@ -144,9 +144,11 @@ jobs:
           # release profile is `debug = "line-tables-only"`, which is right for
           # shipped artifacts but is a large share of the target dir — and this
           # cache is the single biggest addition to a 10 GB repo quota that is
-          # already near its ceiling. An evicted cache costs a 54-min cold run
-          # instead of an 11-min warm one, so size here directly buys
-          # reliability of the speedup.
+          # already near its ceiling. An evicted cache costs a ~43-min cold run
+          # instead of a ~9-min warm one, so size here directly buys
+          # reliability of the speedup. (Measured with this setting on:
+          # cold 42.6 min / warm 9.1 min / cache 0.92 GB, versus 54.1 / 11.3 /
+          # 2.61 GB when the tree kept line-tables-only debug info.)
           #
           # The trade: backtraces out of the e2e harness lose line numbers.
           # That only affects this parity harness, never a released binary, and
@@ -170,9 +172,17 @@ jobs:
              target/release/cognee-telemetry-emit \
              dist/
           ls -la dist/
-          # Fail loudly here rather than at container start if something did
-          # not link the way the harness image expects.
-          ldd dist/cognee-http-server || true
+          # A real gate: catch a copy that silently did not happen here,
+          # rather than at container start.
+          for b in cognee-cli cognee-http-server cognee-telemetry-emit; do
+            test -x "dist/$b" || { echo "error: dist/$b missing or not executable" >&2; exit 1; }
+          done
+          # Informational only. This runs on the runner, so it cannot prove the
+          # harness image provides these libraries — the parity phases below are
+          # what verify that. It is here so a newly-introduced dynamic
+          # dependency is visible in the log instead of surfacing as an opaque
+          # container start failure.
+          ldd dist/cognee-http-server
 
       # NOTE on layer caching — measured and rejected, do not re-add blindly.
       #
