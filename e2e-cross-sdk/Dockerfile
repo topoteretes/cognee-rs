@@ -41,11 +41,21 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
 
 WORKDIR /build/cognee-rust
 
-# Copy workspace
+# Copy workspace. Only root-workspace members belong here — every path copied
+# is a cache-invalidation surface for the ~34-minute cargo build below, so
+# copying something the build never reads costs real CI time whenever it
+# changes.
+#
+# capi/ used to be copied and is deliberately not: it is its OWN cargo
+# workspace (capi/Cargo.toml declares `[workspace] members = ["cognee-capi"]`),
+# it is not listed in the root workspace's members, nothing in the root
+# workspace path-depends on it, and there is no [patch] pointing at it. The
+# three binaries built here never reference it. Its only effect was that
+# editing anything under capi/ — including capi/scripts/check.sh, which is not
+# even Rust — busted this layer and forced a full dependency rebuild.
 COPY cognee-rust/Cargo.toml cognee-rust/Cargo.lock ./
 COPY cognee-rust/crates/ crates/
 COPY cognee-rust/examples/ examples/
-COPY cognee-rust/capi/ capi/
 COPY cognee-rust/python/ python/
 # Harness-only crate that drives cognee::telemetry::send_telemetry
 # directly. Source lives under e2e-cross-sdk/bin/telemetry_emit.rs;
