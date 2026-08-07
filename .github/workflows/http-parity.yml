@@ -117,10 +117,14 @@ jobs:
       # Its own key: this is a --release tree, disjoint from the debug caches
       # ci.yml keeps. Main-only save, matching the policy in ci.yml — branches
       # restore main's copy rather than minting a duplicate.
+      #
+      # v2 = the tree is now built with CARGO_PROFILE_RELEASE_DEBUG=0 (see the
+      # build step). Bumped rather than reused so a debug=0 build can never
+      # restore the older line-tables-only tree and thrash against it.
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: cognee-rust -> target
-          shared-key: http-parity-release-v1
+          shared-key: http-parity-release-v2
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Cache ORT binary
@@ -136,6 +140,19 @@ jobs:
           # under target/ is what lets the cache above pick it up.
           ORT_CACHE_DIR: ${{ github.workspace }}/cognee-rust/target/ort-cache
           CARGO_INCREMENTAL: "0"
+          # Strip debug info for these three binaries only. The workspace
+          # release profile is `debug = "line-tables-only"`, which is right for
+          # shipped artifacts but is a large share of the target dir — and this
+          # cache is the single biggest addition to a 10 GB repo quota that is
+          # already near its ceiling. An evicted cache costs a 54-min cold run
+          # instead of an 11-min warm one, so size here directly buys
+          # reliability of the speedup.
+          #
+          # The trade: backtraces out of the e2e harness lose line numbers.
+          # That only affects this parity harness, never a released binary, and
+          # a harness failure is reproduced by re-running the phase rather than
+          # read off a stack trace.
+          CARGO_PROFILE_RELEASE_DEBUG: "0"
         run: |
           # One invocation for all three: separate `cargo build -p X` calls
           # resolve features per-subgraph and build duplicate variants of
