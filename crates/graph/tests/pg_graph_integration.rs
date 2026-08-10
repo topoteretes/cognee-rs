@@ -30,27 +30,32 @@ fn test_url() -> Option<String> {
     std::env::var("PGGRAPH_TEST_URL").ok()
 }
 
-/// Provision a throwaway database and an adapter migrated onto it.
+/// Provision a throwaway database for one case.
 ///
 /// `None` means one thing only: no URL was configured, so the caller should
-/// skip. Once a URL *is* set, a failure to provision, connect or migrate is a
-/// real defect and panics with the underlying error — these used to be
-/// `.ok()?`-ed into the same `None`, so an adapter regression (a migrator
-/// collision, say) surfaced as "PGGRAPH_TEST_URL not set" and sent whoever
-/// read the CI log hunting for a broken service container instead.
+/// skip. Once a URL *is* set, a failure to provision is a real defect and panics
+/// with the underlying error; the same goes for the connect/migrate step in the
+/// macro below. These used to be `.ok()?`-ed into the same `None`, so an adapter
+/// regression (a migrator collision, say) surfaced as "PGGRAPH_TEST_URL not set"
+/// and sent whoever read the CI log hunting for a broken service container
+/// instead.
+///
+/// This deliberately stops at the database and does **not** build the adapter:
+/// everything that can panic after `CREATE DATABASE` has to run inside the
+/// macro's cleanup guard, or that panic strands the database. `CREATE DATABASE`
+/// is the last fallible step inside the helper, so an `Err` here means no
+/// database exists yet and there is nothing to drop.
 ///
 /// The database is empty by construction, so the old `delete_graph()` "clean
 /// slate" wipe is gone: it is no longer needed, and it is what made the shared
 /// database unsafe to point at anything real in the first place.
-async fn make_adapter() -> Option<(TempPostgresDb, PgGraphAdapter)> {
+async fn temp_db() -> Option<TempPostgresDb> {
     let base_url = test_url()?;
-    let tmp = create_temp_postgres_db(&base_url)
-        .await
-        .expect("PGGRAPH_TEST_URL is set, so CREATE DATABASE must succeed on that server");
-    let db = PgGraphAdapter::new(tmp.url())
-        .await
-        .expect("PGGRAPH_TEST_URL is set, so the adapter must connect and migrate");
-    Some((tmp, db))
+    Some(
+        create_temp_postgres_db(&base_url)
+            .await
+            .expect("PGGRAPH_TEST_URL is set, so CREATE DATABASE must succeed on that server"),
+    )
 }
 
 /// Register a shared-suite case as a test with a database of its own.
@@ -59,22 +64,33 @@ async fn make_adapter() -> Option<(TempPostgresDb, PgGraphAdapter)> {
 /// in-process serial guard does nothing under `cargo nextest`, where every test
 /// gets its own process.
 ///
-/// The case body runs on a spawned task so a failed assertion arrives as a
-/// `JoinError` rather than unwinding straight out of the test function.
-/// `TempPostgresDb::cleanup` is `async` and so cannot live in a `Drop` impl, so
-/// without catching the panic here every red case would strand its database on
-/// the server — across 32 cases that turns one failing run into a manual cleanup
-/// chore. The panic is re-raised unchanged afterwards, so libtest/nextest still
-/// report the original failure and message.
+/// **Everything fallible runs inside the spawned task**, adapter construction
+/// included, so a panic arrives as a `JoinError` instead of unwinding straight
+/// out of the test function. `TempPostgresDb::cleanup` is `async` and so cannot
+/// live in a `Drop` impl; without catching the panic here a red case would
+/// strand its database on the server, and across 32 cases that turns one failing
+/// run into a manual cleanup chore. Building the adapter *outside* the guard
+/// would have left exactly that hole on the connect/migrate path — the one
+/// failure this suite most exists to catch. The panic is re-raised unchanged
+/// afterwards, so libtest/nextest still report the original failure and message.
+///
+/// The one leak this cannot cover is a test hard-killed rather than unwound
+/// (nextest's `slow-timeout` terminate-after, or a `SIGKILL`), which no async
+/// cleanup can survive; the databases are uniquely named, so the fallback is
+/// dropping stragglers by hand.
 macro_rules! pggraph_test {
     ($name:ident) => {
         #[tokio::test]
         async fn $name() {
-            let Some((tmp, db)) = make_adapter().await else {
+            let Some(tmp) = temp_db().await else {
                 eprintln!("PGGRAPH_TEST_URL not set — skipping {}", stringify!($name));
                 return;
             };
+            let url = tmp.url().to_string();
             let outcome = tokio::spawn(async move {
+                let db = PgGraphAdapter::new(&url)
+                    .await
+                    .expect("PGGRAPH_TEST_URL is set, so the adapter must connect and migrate");
                 common::$name(&db).await;
                 // Hand the pooled connections back before the database is
                 // dropped, so cleanup does not have to lean on `WITH (FORCE)`.
