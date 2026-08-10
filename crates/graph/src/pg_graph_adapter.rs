@@ -1499,6 +1499,9 @@ mod migrator {
 // are skipped otherwise. They live inline (rather than under `tests/`) so they
 // can reuse the crate's own optional `sea-orm`/`sea-orm-migration` dependencies
 // without forcing a heavy dev-dependency onto the default (feature-off) build.
+// (`cognee-database` is now a dev-dependency, but only to pin down the sqlx
+// driver these tests' throwaway databases need at runtime — see the note on it
+// in Cargo.toml; sea-orm itself still comes from this crate.)
 // ---------------------------------------------------------------------------
 #[cfg(test)]
 #[allow(
@@ -1510,10 +1513,48 @@ mod shared_db_migration_tests {
     use super::PgGraphAdapter;
     use sea_orm::{ConnectionTrait, Database, DatabaseConnection, Statement};
     use sea_orm_migration::prelude::*;
-    use serial_test::serial;
 
     fn test_url() -> Option<String> {
         std::env::var("PGGRAPH_TEST_URL").ok()
+    }
+
+    /// Run `body` against a throwaway database of this test's own, dropped again
+    /// afterwards — even if `body` panics.
+    ///
+    /// Both cases below are about two migrators *coexisting inside one database*,
+    /// so the isolation is at the database level and nothing inside it is reset.
+    /// That replaces a `reset()` helper which dropped `graph_node`, `graph_edge`
+    /// and both `seaql_migrations*` tables on the way in and out: destructive
+    /// enough to wreck a developer's own database, and useless as mutual
+    /// exclusion under `cargo nextest`, where each test runs in its own process
+    /// and the `#[serial]` attribute these carried could not serialize anything.
+    ///
+    /// Not reaching a live Postgres is reported the same way as in the
+    /// integration suite: a missing URL prints a skip line and returns; anything
+    /// else — failing to create the database, connect, or migrate — panics with
+    /// the underlying error rather than masquerading as "not configured".
+    ///
+    /// `body` runs on a spawned task so a failed assertion surfaces as a
+    /// `JoinError` instead of unwinding past the drop. `TempPostgresDb::cleanup`
+    /// is `async`, so it cannot be a `Drop` impl; without this the database would
+    /// leak on every red run. The panic is re-raised unchanged afterwards.
+    async fn with_temp_db<F, Fut>(what: &str, body: F)
+    where
+        F: FnOnce(String) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
+        let Some(base_url) = test_url() else {
+            eprintln!("PGGRAPH_TEST_URL not set — skipping {what}");
+            return;
+        };
+        let tmp = cognee_test_utils::create_temp_postgres_db(&base_url)
+            .await
+            .expect("PGGRAPH_TEST_URL is set, so CREATE DATABASE must succeed on that server");
+        let outcome = tokio::spawn(body(tmp.url().to_string())).await;
+        tmp.cleanup().await;
+        if let Err(join_err) = outcome {
+            std::panic::resume_unwind(join_err.into_panic());
+        }
     }
 
     /// A stand-in for the downstream relational / auth migrator. It writes its
@@ -1568,22 +1609,6 @@ mod shared_db_migration_tests {
         }
     }
 
-    /// Drop every table and bookkeeping table so each run starts clean.
-    async fn reset(db: &DatabaseConnection) {
-        for stmt in [
-            "DROP TABLE IF EXISTS graph_edge CASCADE",
-            "DROP TABLE IF EXISTS graph_node CASCADE",
-            "DROP TABLE IF EXISTS rel_baseline_marker CASCADE",
-            "DROP TABLE IF EXISTS rel_auth_marker CASCADE",
-            "DROP TABLE IF EXISTS seaql_migrations CASCADE",
-            "DROP TABLE IF EXISTS seaql_migrations_pggraph CASCADE",
-        ] {
-            db.execute(Statement::from_string(db.get_database_backend(), stmt))
-                .await
-                .unwrap();
-        }
-    }
-
     /// Count rows in a bookkeeping table. Returns 0 **only** when the table does
     /// not exist; any other DB error panics so it fails the test rather than
     /// masquerading as an empty table (`table` is a fixed test literal, so
@@ -1614,88 +1639,82 @@ mod shared_db_migration_tests {
 
     /// The relational migrator and the graph adapter migrator must coexist in
     /// one Postgres DB without colliding on the default `seaql_migrations` table.
+    ///
+    /// The database is this test's own, but *both* migrators still run inside
+    /// that one database — sharing it is the thing under test.
     #[tokio::test]
-    #[serial]
     async fn pggraph_coexists_with_relational_migrator_in_shared_db() {
-        let Some(url) = test_url() else {
-            eprintln!("PGGRAPH_TEST_URL not set — skipping shared-DB migration test");
-            return;
-        };
+        with_temp_db("shared-DB migration test", |url| async move {
+            let db = Database::connect(&url).await.unwrap();
 
-        let db = Database::connect(&url).await.unwrap();
-        reset(&db).await;
+            // 1. Relational / auth migrator runs first and populates the default
+            //    `seaql_migrations` with versions the graph migrator does not own.
+            RelationalMigrator::up(&db, None)
+                .await
+                .expect("relational migrator should succeed");
+            assert_eq!(version_count(&db, "seaql_migrations").await, 2);
 
-        // 1. Relational / auth migrator runs first and populates the default
-        //    `seaql_migrations` with versions the graph migrator does not own.
-        RelationalMigrator::up(&db, None)
-            .await
-            .expect("relational migrator should succeed");
-        assert_eq!(version_count(&db, "seaql_migrations").await, 2);
+            // 2. Initialising the graph adapter against the SAME database must
+            //    succeed. Before the fix it aborted with "Migration file of version
+            //    'm20260914_000002_auth' is missing ...".
+            let adapter = PgGraphAdapter::new(&url).await;
+            assert!(
+                adapter.is_ok(),
+                "PgGraphAdapter init must not collide with the relational \
+                 seaql_migrations table; got: {:?}",
+                adapter.err()
+            );
 
-        // 2. Initialising the graph adapter against the SAME database must
-        //    succeed. Before the fix it aborted with "Migration file of version
-        //    'm20260914_000002_auth' is missing ...".
-        let adapter = PgGraphAdapter::new(&url).await;
-        assert!(
-            adapter.is_ok(),
-            "PgGraphAdapter init must not collide with the relational \
-             seaql_migrations table; got: {:?}",
-            adapter.err()
-        );
-
-        // 3. The graph migrator tracks its version in its OWN table and leaves
-        //    the relational bookkeeping untouched.
-        assert_eq!(version_count(&db, "seaql_migrations").await, 2);
-        assert_eq!(version_count(&db, "seaql_migrations_pggraph").await, 1);
-
-        reset(&db).await;
+            // 3. The graph migrator tracks its version in its OWN table and leaves
+            //    the relational bookkeeping untouched.
+            assert_eq!(version_count(&db, "seaql_migrations").await, 2);
+            assert_eq!(version_count(&db, "seaql_migrations_pggraph").await, 1);
+        })
+        .await;
     }
 
     /// Upgrade path: a legacy graph row left in the default `seaql_migrations`
     /// by an older build must be purged so the core migrator no longer chokes.
+    ///
+    /// Also runs in a database of its own, and again both migrators share it —
+    /// the legacy row and the purge are only meaningful in one database.
     #[tokio::test]
-    #[serial]
     async fn pggraph_purges_legacy_row_from_default_table_on_upgrade() {
-        let Some(url) = test_url() else {
-            eprintln!("PGGRAPH_TEST_URL not set — skipping legacy-purge test");
-            return;
-        };
+        with_temp_db("legacy-purge test", |url| async move {
+            let db = Database::connect(&url).await.unwrap();
 
-        let db = Database::connect(&url).await.unwrap();
-        reset(&db).await;
-
-        // Simulate an older build that recorded the graph version into the
-        // DEFAULT `seaql_migrations` table (aux-ran-before-core ordering).
-        db.execute(Statement::from_string(
-            db.get_database_backend(),
-            "CREATE TABLE seaql_migrations (version VARCHAR PRIMARY KEY, applied_at BIGINT NOT NULL)",
-        ))
-        .await
-        .unwrap();
-        db.execute(Statement::from_string(
-            db.get_database_backend(),
-            "INSERT INTO seaql_migrations (version, applied_at) \
-             VALUES ('m20250101_000001_create_graph_tables', 0)",
-        ))
-        .await
-        .unwrap();
-
-        // Upgraded build initialises the graph adapter.
-        PgGraphAdapter::new(&url)
+            // Simulate an older build that recorded the graph version into the
+            // DEFAULT `seaql_migrations` table (aux-ran-before-core ordering).
+            db.execute(Statement::from_string(
+                db.get_database_backend(),
+                "CREATE TABLE seaql_migrations (version VARCHAR PRIMARY KEY, applied_at BIGINT NOT NULL)",
+            ))
             .await
-            .expect("graph adapter should initialise on upgrade");
-
-        // The stale graph row is gone, so the core/relational migrator can now
-        // run against the default table without aborting.
-        assert_eq!(
-            version_count(&db, "seaql_migrations").await,
-            0,
-            "legacy graph row must be purged from the default seaql_migrations"
-        );
-        RelationalMigrator::up(&db, None)
+            .unwrap();
+            db.execute(Statement::from_string(
+                db.get_database_backend(),
+                "INSERT INTO seaql_migrations (version, applied_at) \
+                 VALUES ('m20250101_000001_create_graph_tables', 0)",
+            ))
             .await
-            .expect("core migrator must not choke after legacy row is purged");
+            .unwrap();
 
-        reset(&db).await;
+            // Upgraded build initialises the graph adapter.
+            PgGraphAdapter::new(&url)
+                .await
+                .expect("graph adapter should initialise on upgrade");
+
+            // The stale graph row is gone, so the core/relational migrator can now
+            // run against the default table without aborting.
+            assert_eq!(
+                version_count(&db, "seaql_migrations").await,
+                0,
+                "legacy graph row must be purged from the default seaql_migrations"
+            );
+            RelationalMigrator::up(&db, None)
+                .await
+                .expect("core migrator must not choke after legacy row is purged");
+        })
+        .await;
     }
 }

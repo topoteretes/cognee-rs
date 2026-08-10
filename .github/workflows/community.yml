@@ -226,6 +226,9 @@ jobs:
         with:
           make-default: true
 
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
@@ -245,27 +248,32 @@ jobs:
       # No ORT cache step — see the ci.yml twin: `cognee-graph` pulls in no
       # `ort-sys`, and an unguarded writer here can poison the shared ORT key.
 
-      # `--nocapture` plus the guard step below: a skipped case still reports
-      # `ok`, so the printed skip line is the only thing separating a real run
-      # from a green no-op. Keep as `cargo test`, not nextest — see the ci.yml
-      # twin for both rationales.
+      # `--success-output immediate` plus the guard step below: a skipped case
+      # still reports `ok`, so the printed skip line is the only thing separating
+      # a real run from a green no-op, and nextest would otherwise capture and
+      # discard it on a passing test. nextest is safe here now that each case owns
+      # its own throwaway database — see the ci.yml twin for the full history.
       #
       # Note there is deliberately no retry here, unlike `test-no-secrets`'s
       # `NEXTEST_PROFILE: ci`: a transient failure starting the Postgres service
       # container should be visible rather than absorbed, since a silently
       # retried infrastructure problem is how this suite went unexecuted for so
-      # long. Fork contributors who hit one can push an empty commit to re-run.
+      # long — and a retry would equally mask a race, which is the exact class of
+      # bug the per-test databases exist to rule out. Fork contributors who hit
+      # one can push an empty commit to re-run.
       - name: Run PgGraphAdapter integration tests
         run: |
           set -o pipefail
-          cargo test -p cognee-graph --features postgres,testing \
-            --test pg_graph_integration -- --nocapture 2>&1 | tee pggraph-integration.log
+          cargo nextest run -p cognee-graph --features postgres,testing \
+            --test pg_graph_integration --success-output immediate --color never \
+            2>&1 | tee pggraph-integration.log
 
       - name: Run PgGraphAdapter inline (lib) tests
         run: |
           set -o pipefail
-          cargo test -p cognee-graph --features postgres,testing \
-            --lib -- --nocapture 2>&1 | tee pggraph-lib.log
+          cargo nextest run -p cognee-graph --features postgres,testing \
+            --lib --success-output immediate --color never \
+            2>&1 | tee pggraph-lib.log
 
       - name: Assert the suite really executed
         run: bash scripts/ci/assert_pggraph_suite_ran.sh pggraph-integration.log pggraph-lib.log

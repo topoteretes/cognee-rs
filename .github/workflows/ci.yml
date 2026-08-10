@@ -731,10 +731,12 @@ jobs:
     services:
       postgres:
         # Stock Postgres, not pgvector/pgvector — the graph path needs no
-        # extensions. `POSTGRES_DB` is the graph database directly, which is why
-        # no `CREATE DATABASE` step is needed: a service container creates
-        # exactly one database, so naming it here matches the URL the test file
-        # already documents.
+        # extensions. `POSTGRES_DB` is no longer the database the tests write to:
+        # it is the one the URL connects *through* to reach the server, from
+        # where each case creates a throwaway database of its own and drops it
+        # again. Still no `CREATE DATABASE` step needed — the suite does that
+        # itself, and the default `postgres` superuser has the `CREATEDB` right
+        # `create_temp_postgres_db` requires.
         image: postgres:16
         env:
           POSTGRES_USER: postgres
@@ -762,6 +764,9 @@ jobs:
         uses: rui314/setup-mold@v1
         with:
           make-default: true
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
 
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
@@ -792,31 +797,44 @@ jobs:
       # a target/ whose ort-sys build-script output points into an empty
       # ort-cache — the link failure described at the top of this file.
 
-      # `--nocapture` is load-bearing here. A skipped `pggraph_test!` case still
-      # reports `ok`, so the printed `PGGRAPH_TEST_URL not set — skipping` line
-      # is the only signal that separates a real run from a green no-op. The
-      # logs are kept so the guard step below can assert on them.
+      # `--success-output immediate` is load-bearing, and is this lane's
+      # replacement for the `--nocapture` it used to pass libtest. A skipped
+      # `pggraph_test!` case still reports `ok`, so the printed
+      # `PGGRAPH_TEST_URL not set — skipping` line is the only signal separating
+      # a real run from a green no-op — and nextest captures a *passing* test's
+      # output by default, which would swallow precisely that line and disarm the
+      # guard below. `--color never` keeps the logs parseable regardless of what
+      # nextest infers about the terminal. The logs are kept for the guard step.
       #
-      # Keep this as `cargo test`, NOT `cargo nextest`. Every case shares the
-      # single `cognee_test_graph` database and wipes it on entry; that is only
-      # safe because `cargo test` runs the binary in one process where the
-      # `#[serial]` attributes actually serialize. nextest runs each test in its
-      # own process, where an in-process lock cannot help and the schema
-      # mutations would race. Switch to `cognee_test_utils::create_temp_postgres_db`
-      # first if this lane ever needs nextest for parity with the other lanes.
+      # This lane runs nextest like every other test lane in the repo. It used to
+      # insist on `cargo test`, and had to: all 34 cases shared the single
+      # `cognee_test_graph` database and wiped it on entry, which was only safe
+      # because `cargo test` runs the whole binary in one process, where the
+      # `#[serial]` attributes could actually serialize. nextest gives each test
+      # its own process, where an in-process lock cannot help — and it duly
+      # failed 33 of 59 cases with `relation "graph_edge" does not exist`. Each
+      # case now provisions its own throwaway database via
+      # `cognee_test_utils::create_temp_postgres_db` and drops it again, so there
+      # is no shared state left to race on and no `#[serial]` anywhere.
+      #
+      # Deliberately no `NEXTEST_PROFILE: ci`: that profile retries a failed test
+      # once, and a lane whose whole premise is that the races are gone must not
+      # paper over a residual one.
       - name: Run PgGraphAdapter integration tests
         run: |
           set -o pipefail
-          cargo test -p cognee-graph --features postgres,testing \
-            --test pg_graph_integration -- --nocapture 2>&1 | tee pggraph-integration.log
+          cargo nextest run -p cognee-graph --features postgres,testing \
+            --test pg_graph_integration --success-output immediate --color never \
+            2>&1 | tee pggraph-integration.log
 
       # The shared-DB migration and legacy-purge cases live inline in the crate,
       # not in the integration file, so they need their own invocation.
       - name: Run PgGraphAdapter inline (lib) tests
         run: |
           set -o pipefail
-          cargo test -p cognee-graph --features postgres,testing \
-            --lib -- --nocapture 2>&1 | tee pggraph-lib.log
+          cargo nextest run -p cognee-graph --features postgres,testing \
+            --lib --success-output immediate --color never \
+            2>&1 | tee pggraph-lib.log
 
       # Without this, a future change that stops the URL reaching the test
       # process (renamed env var, service container failing to bind) would leave

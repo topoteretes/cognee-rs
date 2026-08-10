@@ -5,7 +5,7 @@
 #
 # Every `pggraph_test!` case (crates/graph/tests/pg_graph_integration.rs) and
 # both inline `shared_db_migration_tests` cases return early — still reporting
-# `ok` — when their Postgres URL is absent, so libtest's exit status proves
+# `ok` — when their Postgres URL is absent, so the runner's exit status proves
 # nothing on its own. Run with the URL unset, both binaries print the exact
 # same "32 passed" / "24 passed" summaries as a real run, just in 0.00s. This
 # script is what separates the two.
@@ -14,6 +14,20 @@
 # mirrored lane in .github/workflows/community.yml. It lives here rather than
 # inline in both YAML files so the two copies cannot drift, and so it can be
 # tested against captured logs without a CI round-trip.
+#
+# Both runners are understood. The CI lanes run `cargo nextest`; a developer
+# reproducing a failure locally will usually reach for `cargo test`, and the two
+# print entirely different summaries. Every pattern below therefore accepts
+# either format, so the same script validates either log:
+#
+#   libtest   test result: ok. 32 passed; 0 failed; ...
+#             test <path>::<name> ... ok
+#   nextest       Summary [   2.30s] 32 tests run: 32 passed, 0 skipped
+#                 PASS [   0.05s] cognee-graph <path>::<name>
+#
+# Note the nextest lanes pass `--success-output immediate`: nextest captures a
+# passing test's output by default, which would swallow the skip line that check
+# 1 below exists to find.
 #
 # Usage: assert_pggraph_suite_ran.sh <integration-log> <lib-log>
 
@@ -80,20 +94,39 @@ fi
 # ── 2. A plausible number of integration cases actually ran ─────────────────
 # Absence of a skip marker is not presence of a test. Both targets are behind
 # `#[cfg(feature = "postgres")]`, so dropping `--features postgres,testing`
-# compiles them down to zero cases: libtest then prints "running 0 tests",
-# exits 0, and emits no skip line — indistinguishable from success without
-# this check.
-passed="$(sed -nE 's/^test result: ok\. ([0-9]+) passed;.*/\1/p' "$INTEGRATION_LOG" | head -1)"
+# compiles them down to zero cases: the runner then reports 0 tests, exits 0,
+# and emits no skip line — indistinguishable from success without this check.
+#
+# nextest's whole-run summary is checked FIRST, and the order is load-bearing.
+# nextest gives every test its own libtest process, and `--success-output
+# immediate` echoes each one's captured stdout — so a nextest log is full of
+# per-test `test result: ok. 1 passed;` lines. Reading libtest's pattern first
+# picks one of those up and concludes that a single test ran, failing a perfectly
+# good 32-case run. `Summary [` is emitted only by nextest, so trying it first is
+# unambiguous either way round.
+#
+# A log carrying neither summary falls through to the emptiness check below,
+# which fails closed — the safe direction, and the reason this stayed an
+# assertion instead of being relaxed when the lanes moved to nextest.
+passed="$(sed -nE 's/^[[:space:]]*Summary \[[^]]*\] [0-9]+ tests run: ([0-9]+) passed.*/\1/p' "$INTEGRATION_LOG" | head -1)"
+if [[ -z "$passed" ]]; then
+  passed="$(sed -nE 's/^test result: ok\. ([0-9]+) passed;.*/\1/p' "$INTEGRATION_LOG" | head -1)"
+fi
 [[ -n "$passed" ]] ||
-  fail "no libtest summary line in $INTEGRATION_LOG — the integration binary did not run to completion."
+  fail "no libtest or nextest summary line in $INTEGRATION_LOG — the integration binary did not run to completion."
 ((passed >= MIN_INTEGRATION_TESTS)) ||
   fail "only $passed integration tests ran, expected at least $MIN_INTEGRATION_TESTS — the postgres/testing features have probably stopped applying, which compiles the suite down to nothing."
 
 # ── 3. Both inline cases ran by name ────────────────────────────────────────
 # The lib target holds 20-odd unrelated unit tests, so a count floor would not
 # notice these two disappearing.
+#
+# `PASS \[` is matched unanchored rather than at line start: nextest prefixes a
+# retried case with `TRY n `, and the leading indentation is cosmetic. The names
+# are fixed `[a-z_]` literals from the array above, so embedding them in the
+# pattern needs no escaping.
 for test_name in "${INLINE_TESTS[@]}"; do
-  grep -qF -- "$test_name ... ok" "$LIB_LOG" ||
+  grep -qE "($test_name \.\.\. ok|PASS \[[^]]*\][[:space:]].*$test_name([[:space:]]|\$))" "$LIB_LOG" ||
     fail "inline test $test_name did not run (or did not pass) — see $LIB_LOG."
 done
 
