@@ -68,6 +68,32 @@ jobs:
       - name: Stub cognee-rust/.env (required by docker-compose env_file)
         run: touch cognee-rust/.env
 
+      # Path contract for the build-context ignore file, in the spirit of
+      # ci/assert-bindings-layout.sh.
+      #
+      # Docker resolves a bare `.dockerignore` at the CONTEXT ROOT, and this
+      # build's context is the monorepo root — so a `.dockerignore` next to the
+      # Dockerfile is silently inert. That was the state for months, and the only
+      # symptom was a slower build nobody attributed to it. BuildKit does honour
+      # `<dockerfile-name>.dockerignore`, so the name is load-bearing: renaming
+      # or moving the Dockerfile orphans it just as quietly.
+      - name: Assert the e2e build-context ignore contract
+        run: |
+          set -euo pipefail
+          d=cognee-rust/e2e-cross-sdk
+          if [ ! -f "$d/Dockerfile.dockerignore" ]; then
+            echo "error: $d/Dockerfile.dockerignore is missing." >&2
+            echo "       BuildKit reads it only under that exact name, beside $d/Dockerfile." >&2
+            exit 1
+          fi
+          if [ -e "$d/.dockerignore" ]; then
+            echo "error: $d/.dockerignore exists and is INERT — the context root is the" >&2
+            echo "       monorepo root, so Docker never reads it. Fold its rules into" >&2
+            echo "       $d/Dockerfile.dockerignore and delete it." >&2
+            exit 1
+          fi
+          echo "ok: $d/Dockerfile.dockerignore present, no inert .dockerignore beside it"
+
       # ubuntu-latest ships with ~14 GB free; the release build plus the cargo
       # registry and target cache needs more headroom. Mirror ci.yml.
       - name: Free disk space

@@ -1,50 +1,66 @@
-# Exclude build artifacts and large directories from the Docker build context.
-# Context is the monorepo root (the parent of cognee-rust/).
+# Build context allow-list for e2e-cross-sdk/Dockerfile.
 #
-# The filename matters. This was `.dockerignore` sitting next to the Dockerfile,
-# which Docker never reads: it resolves `.dockerignore` relative to the CONTEXT
-# ROOT, and the context here is the monorepo root one level above this repo.
-# `docker buildx build --check` confirmed it — `load .dockerignore` reported
-# `transferring context: 2B`, i.e. an empty ignore list. So none of the rules
-# below had ever applied. BuildKit does honour `<dockerfile-name>.dockerignore`
-# next to the Dockerfile, which is what this name is for.
+# ── The filename matters ──────────────────────────────────────────────────────
+# This was `.dockerignore` sitting next to the Dockerfile, which Docker never
+# reads: it resolves `.dockerignore` relative to the CONTEXT ROOT, and
+# docker-compose.yml sets `context: ../..` — the monorepo root one level above
+# this repo. So none of the rules had ever applied. `docker buildx build --check`
+# confirmed it: `load .dockerignore` reported `transferring context: 2B`, an
+# empty ignore list. BuildKit does honour `<dockerfile-name>.dockerignore` next
+# to the Dockerfile, which is what this name is for.
 #
-# This became load-bearing rather than cosmetic once the Rust binaries moved to
-# the runner: the build now runs AFTER `cargo build --release`, so a multi-GB
-# `cognee-rust/target/` sits in the context on CI too, not just locally.
+# ── Deny-all + allow-list, not a blacklist ───────────────────────────────────
+# The context is a whole multi-repo dev directory, so a blacklist has to name
+# every artifact dir, sibling checkout and stray download that ever appears
+# there — and the previous one had already fallen behind. The Dockerfile has a
+# small, fixed set of COPY sources, so inverting it bounds the context
+# permanently: anything not listed below is excluded, and a COPY of an
+# unlisted path fails loudly at build time instead of being silently included.
+#
+# Keep this in sync with the COPYs in the Dockerfile. Every `!` entry below
+# corresponds to one.
+#
+# ── Scope of the win ─────────────────────────────────────────────────────────
+# Modest, and worth stating honestly: BuildKit derives its context
+# include-patterns from the COPY sources, so paths no COPY references are not
+# transferred whether they are ignored or not. Measured on a synthetic 300 MB
+# context, an unreferenced directory added nothing to the transfer. What this
+# saves is the metadata walk over a large dev tree (locally, where sibling
+# repos and a multi-GB cognee-rust/target/ live), plus the guarantee that a
+# future COPY cannot accidentally start pulling in an artifact dir.
 
-# Rust build artifacts, in every workspace (root, capi/, bindings/, and the
-# python/ts binding trees). `cognee-rust/dist/` is deliberately NOT excluded —
-# the harness stage COPYs the release binaries from it.
-**/target/
+# Exclude everything by default.
+*
 
-# Git
-**/.git/
+# ── Rust side (cognee-rust/) ─────────────────────────────────────────────────
+# Release binaries built on the runner (see .github/workflows/http-parity.yml)
+# or by hand for a local build. NOT excluded — the harness stage COPYs these.
+!cognee-rust/dist/cognee-cli
+!cognee-rust/dist/cognee-http-server
+!cognee-rust/dist/cognee-telemetry-emit
 
-# Python caches
-**/__pycache__/
+# Harness: pytest suite, entrypoint scripts, fixtures.
+!cognee-rust/e2e-cross-sdk/harness
+!cognee-rust/e2e-cross-sdk/bin
+!cognee-rust/e2e-cross-sdk/test_data
+
+# ── Python side (cognee/, the sibling repo) ──────────────────────────────────
+# uv needs the manifest, the lockfile and README (referenced by pyproject).
+!cognee/pyproject.toml
+!cognee/uv.lock
+!cognee/README.md
+# The two packages cognee's wheel declares:
+#   [tool.hatch.build.targets.wheel] packages = ["cognee", "distributed"]
+!cognee/cognee
+!cognee/distributed
+
+# ── Re-exclusions inside the allowed trees ───────────────────────────────────
+# `!` above re-includes whole directories, so noise inside them comes back.
+# Cargo/Python artifacts cannot appear under the allowed paths today, but
+# __pycache__ readily does — the harness and the cognee package are both run
+# in-place during local development.
+**/__pycache__
 **/*.pyc
 **/*.pyo
-**/.pytest_cache/
-
-# Runtime data
-**/.data_storage/
-**/.cognee_system/
-**/.cognee_cache/
-
-# Node
-**/node_modules/
-
-# IDE
-**/.idea/
-**/.vscode/
-
-# OS
+**/.pytest_cache
 **/.DS_Store
-
-# Docker-in-Docker
-**/docker-compose.override.yml
-
-# Large unneeded dirs in Python repo
-cognee/cognee-frontend/
-cognee/.chromadb_data/

@@ -1,18 +1,31 @@
-name: Cache cleanup (closed PRs)
+name: Cache cleanup
 
-# GitHub scopes a PR's caches to refs/pull/<n>/merge and then keeps them until
-# they go 7 days unread — merging or closing the PR does not reclaim anything.
-# On a repo whose Rust caches run ~1 GB each that is a large, permanent tax on
-# the 10 GB quota: hours after #127 merged, its refs/pull/127/merge entries
-# still held 4.61 GB of a 10.35 GB quota, and the resulting LRU eviction is
-# what kept the working caches cold.
+# GitHub scopes a run's caches to the ref that produced them and keeps them
+# until they go 7 days unread — merging a PR, deleting a branch or deleting a
+# tag reclaims nothing. On a repo whose Rust caches run ~1 GB each that is a
+# large, standing tax on the 10 GB quota: hours after #127 merged, its
+# refs/pull/127/merge entries still held 4.61 GB of a 10.35 GB quota, and the
+# resulting LRU eviction is what kept the working caches cold.
 #
-# Deleting them on close is safe: once a PR is closed nothing can restore from
-# its ref again. A branch that is reopened simply repopulates from main.
+# Three ref shapes accumulate here, and all three are handled below:
+#   refs/pull/<n>/merge  — PR runs (ci.yml, community.yml, http-parity.yml, …)
+#   refs/heads/<branch>  — workflow_dispatch runs and pushes to non-PR branches
+#   refs/tags/<tag>      — capi-release.yml, ts-prebuild.yml, java-prebuild.yml
+#                          all run on `push: tags:` with unrestricted
+#                          rust-cache across a platform matrix
+#
+# How safe is deleting? It differs per shape, and it is worth being exact:
+#   - refs/pull/<n>/merge is genuinely unreachable once the PR closes.
+#   - refs/heads/<branch> CAN come back — GitHub's "Restore branch" button, or
+#     the same name re-pushed. So can a still-open stacked PR whose base was
+#     the deleted branch. In those cases the cost is a cold rebuild, not lost
+#     data: the next run repopulates from main. That is the tradeoff being
+#     made deliberately, since a branch that stays deleted is the common case.
+#   - refs/tags/<tag> comes back if a release tag is re-pushed, with the same
+#     cold-rebuild cost.
 #
 # This is the other half of the main-only `save-if` policy in ci.yml — that
-# stops branches *writing* duplicates, this reclaims what PR runs already
-# wrote.
+# stops branches *writing* duplicates, this reclaims what runs already wrote.
 
 on:
   # pull_request_target, NOT pull_request. A `pull_request` run for a PR from a
@@ -27,20 +40,25 @@ on:
   # and calls the cache API.
   pull_request_target:
     types: [ closed ]
-  # Branch deletion reclaims refs/heads/<branch> caches, which the PR path above
-  # does not cover. Anything dispatched via workflow_dispatch on a branch (or a
-  # push to a non-PR branch) writes under the branch ref, and those entries
-  # survive the branch itself until their 7-day expiry — during this repo's CI
-  # work they had to be deleted by hand twice, including a 0.92 GB release tree.
-  # Not fork-triggerable: deleting a branch requires push access.
+  # Branch and tag deletion, which the PR path does not cover. During this
+  # repo's CI work these had to be deleted by hand twice, including a 0.92 GB
+  # release tree. Not fork-triggerable: deleting a ref requires push access.
   delete:
-  # Lets a maintainer reclaim a specific PR's caches by hand without waiting
-  # for a close event (e.g. for PRs closed before this workflow existed).
+  # Manual escape hatch. The `delete` event fires exactly once per ref and
+  # cannot be replayed, so anything it misses would otherwise be unreachable:
+  # a run whose post-job cache save lands seconds AFTER the cleanup listed the
+  # ref, a ref deleted by an action using GITHUB_TOKEN (which GitHub does not
+  # turn into a workflow run), or a ref deleted before this workflow existed.
+  # Hence `ref` accepts any shape, not just a PR number.
   workflow_dispatch:
     inputs:
+      ref:
+        description: "Full ref to reclaim, e.g. refs/heads/my-branch or refs/tags/v0.2.0"
+        required: false
+        type: string
       pr_number:
-        description: "PR number whose caches should be deleted"
-        required: true
+        description: "PR number to reclaim (shorthand for refs/pull/<n>/merge)"
+        required: false
         type: string
 
 permissions:
@@ -50,68 +68,102 @@ permissions:
   contents: read
 
 concurrency:
-  # github.event.ref covers the delete event, where there is no PR number.
-  group: cache-cleanup-${{ github.event.pull_request.number || inputs.pr_number || github.event.ref }}
+  # Per-ref, deliberately NOT a single shared group. A shared group would look
+  # like the way to serialise a batch of branch deletions, but GitHub keeps only
+  # one running plus one pending run per group and CANCELS the rest — so
+  # deleting ten branches would silently skip most of the cleanups. Per-ref runs
+  # all survive; the API pressure that creates is handled by the retry/backoff
+  # around the DELETE below instead.
+  group: cache-cleanup-${{ github.event.pull_request.number || inputs.ref || inputs.pr_number || github.event.ref }}
   cancel-in-progress: false
 
 jobs:
   cleanup:
-    name: Delete caches for closed PR
+    name: Reclaim caches for a closed PR, deleted branch or tag
     runs-on: ubuntu-latest
     steps:
-      - name: Delete caches scoped to the PR ref
+      - name: Delete caches scoped to the ref
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           EVENT: ${{ github.event_name }}
           PR: ${{ github.event.pull_request.number || inputs.pr_number }}
+          INPUT_REF: ${{ inputs.ref }}
           DELETED_REF: ${{ github.event.ref }}
           DELETED_REF_TYPE: ${{ github.event.ref_type }}
+          # A secondary rate limit is transient; give it a few chances before
+          # calling the run red.
+          DELETE_RETRIES: "4"
+          DELETE_BACKOFF: "5"
         run: |
           set -euo pipefail
 
-          # Which ref to reclaim depends on the event: a closed PR owns
-          # refs/pull/<n>/merge, a deleted branch owns refs/heads/<branch>.
-          if [ "${EVENT}" = "delete" ]; then
-            # Tags never have caches of their own; only branches do.
-            if [ "${DELETED_REF_TYPE}" != "branch" ]; then
-              echo "${DELETED_REF_TYPE} deletion (${DELETED_REF}) — no caches to reclaim."
-              exit 0
-            fi
-            REF="refs/heads/${DELETED_REF}"
-            LABEL="deleted branch ${DELETED_REF}"
-          else
-            # Validate before building anything from it. `pr_number` is a
-            # free-form workflow_dispatch string, and it used to be interpolated
-            # straight into a jq `select(.ref == "…")` predicate — a value
-            # containing a double quote rewrote the filter instead of being
-            # matched by it, and `x" or true or .ref=="` would have matched
-            # every cache in the repo and deleted main's warm caches wholesale.
-            if ! [[ "${PR}" =~ ^[0-9]+$ ]]; then
-              echo "error: pr_number must be digits only, got '${PR}'" >&2
+          # ── Which ref are we reclaiming? ───────────────────────────────────
+          case "${EVENT}" in
+            delete)
+              # `github.event.ref` on a delete event is the UNQUALIFIED short
+              # name ("my-branch", "v0.2.0"), so it needs the refs/ prefix.
+              case "${DELETED_REF_TYPE}" in
+                branch) REF="refs/heads/${DELETED_REF}"; LABEL="deleted branch ${DELETED_REF}" ;;
+                tag)    REF="refs/tags/${DELETED_REF}";  LABEL="deleted tag ${DELETED_REF}" ;;
+                *)
+                  echo "error: unexpected ref_type '${DELETED_REF_TYPE}' for ${DELETED_REF}" >&2
+                  exit 1
+                  ;;
+              esac
+              ;;
+            pull_request_target)
+              REF="refs/pull/${PR}/merge"; LABEL="PR #${PR}"
+              ;;
+            workflow_dispatch)
+              if [ -n "${INPUT_REF}" ]; then
+                # Must be a real ref shape. The API filter is exact-match, so a
+                # malformed value would silently match nothing and report a
+                # green "nothing to do" — the fail-silent mode this file exists
+                # to avoid.
+                case "${INPUT_REF}" in
+                  refs/heads/*|refs/tags/*|refs/pull/*) ;;
+                  *)
+                    echo "error: ref must start with refs/heads/, refs/tags/ or refs/pull/, got '${INPUT_REF}'" >&2
+                    exit 1
+                    ;;
+                esac
+                REF="${INPUT_REF}"; LABEL="ref ${INPUT_REF}"
+              elif [ -n "${PR}" ]; then
+                # Digits-only. This used to be interpolated straight into a jq
+                # `select(.ref == "…")` predicate, where `x" or true or .ref=="`
+                # would have matched every cache in the repo and deleted main's
+                # warm caches wholesale.
+                if ! [[ "${PR}" =~ ^[0-9]+$ ]]; then
+                  echo "error: pr_number must be digits only, got '${PR}'" >&2
+                  exit 1
+                fi
+                REF="refs/pull/${PR}/merge"; LABEL="PR #${PR}"
+              else
+                echo "error: provide either 'ref' or 'pr_number'" >&2
+                exit 1
+              fi
+              ;;
+            *)
+              echo "error: unsupported event '${EVENT}'" >&2
               exit 1
-            fi
-            REF="refs/pull/${PR}/merge"
-            LABEL="PR #${PR}"
-          fi
+              ;;
+          esac
           echo "Reclaiming caches for ${REF}"
 
-          # Filter by ref SERVER-side and paginate.
+          # ── List: server-side ref filter, paginated ────────────────────────
+          # `GET /actions/caches` lists every cache in the repo, so filtering
+          # client-side over a single 100-item page could miss this ref's
+          # entries entirely — the endpoint sorts by last_accessed_at desc, so
+          # the least recently used page out first. Passing the ref via `-f`
+          # also means gh URL-encodes it and nothing is interpolated into a jq
+          # program.
           #
-          # `GET /actions/caches` lists every cache in the repo, not just this
-          # ref's, so filtering client-side over a single 100-item page could
-          # miss a PR's entries entirely: the endpoint sorts by
-          # last_accessed_at descending, so the least recently used page out
-          # first — exactly the `workflow_dispatch`-an-old-PR case this
-          # workflow advertises. `?ref=` also means nothing is interpolated
-          # into the jq program any more.
-          #
-          # Written to a file with the exit status checked, NOT read from a
-          # process substitution: bash does not check a process substitution's
-          # status and `pipefail` does not cover `< <(…)`, so a 403, a
-          # secondary rate limit, a 5xx or a jq error produced zero lines and
-          # was reported as "no caches found — nothing to do" on a green run.
-          # A janitor job nobody watches must not fail silently.
+          # Written to a file with the status checked, NOT read from a process
+          # substitution: bash does not check a process substitution's status
+          # and `pipefail` does not cover `< <(…)`, so a 403, a rate limit, a
+          # 5xx or a jq error produced zero lines and was reported as "nothing
+          # to do" on a green run.
           CACHES="$(mktemp)"
           if ! gh api --paginate -X GET "repos/${GH_REPO}/actions/caches" \
                 -f per_page=100 -f ref="${REF}" \
@@ -121,6 +173,30 @@ jobs:
             exit 1
           fi
 
+          # ── Delete, retrying the transient failures ────────────────────────
+          # 0 = deleted, 1 = already gone (404), 2 = real failure.
+          # DELETE_ERR carries the last error text.
+          delete_cache() {
+            local id="$1" attempt=1
+            while :; do
+              if DELETE_ERR="$(gh api -X DELETE "repos/${GH_REPO}/actions/caches/${id}" --silent 2>&1)"; then
+                return 0
+              fi
+              printf '%s' "${DELETE_ERR}" | grep -q '404' && return 1
+              # Concurrent cleanup runs (a batch of branch deletions) can trip
+              # the secondary rate limit on the same endpoint. Back off rather
+              # than turning routine housekeeping red.
+              if [ "${attempt}" -lt "${DELETE_RETRIES}" ] \
+                 && printf '%s' "${DELETE_ERR}" | grep -qiE '403|429|rate limit|abuse|secondary'; then
+                echo "  retrying ${id} after transient error (attempt ${attempt})"
+                sleep $((attempt * DELETE_BACKOFF))
+                attempt=$((attempt + 1))
+                continue
+              fi
+              return 2
+            done
+          }
+
           FREED=0
           COUNT=0
           FAILED=0
@@ -128,20 +204,13 @@ jobs:
             [ -n "${id:-}" ] || continue
             COUNT=$((COUNT + 1))
             size="${size:-0}"
-            # Distinguish "vanished between list and delete" (a 404, benign
-            # concurrent eviction) from a real failure. The previous version
-            # sent every error to /dev/null and printed "already gone?", so a
-            # blanket 403 or a rate limit read as a successful cleanup of
-            # 0 MiB and pointed debugging at the wrong cause.
-            if err="$(gh api -X DELETE "repos/${GH_REPO}/actions/caches/${id}" --silent 2>&1)"; then
-              echo "  deleted ${key} ($((size / 1024 / 1024)) MiB)"
-              FREED=$((FREED + size))
-            elif printf '%s' "${err}" | grep -q '404'; then
-              echo "  gone already ${key} (404 — concurrent eviction)"
-            else
-              echo "  FAILED ${key}: ${err}" >&2
-              FAILED=$((FAILED + 1))
-            fi
+            rc=0
+            delete_cache "${id}" || rc=$?
+            case "${rc}" in
+              0) echo "  deleted ${key} ($((size / 1024 / 1024)) MiB)"; FREED=$((FREED + size)) ;;
+              1) echo "  gone already ${key} (404 — concurrent eviction)" ;;
+              *) echo "  FAILED ${key}: ${DELETE_ERR}" >&2; FAILED=$((FAILED + 1)) ;;
+            esac
           done < "${CACHES}"
           rm -f "${CACHES}"
 
@@ -156,11 +225,13 @@ jobs:
             echo "Reclaimed **$((FREED / 1024 / 1024)) MiB** across ${COUNT} cache entries."
             if [ "${FAILED}" -gt 0 ]; then
               echo ""
-              echo ":warning: **${FAILED}** delete(s) failed — see the job log."
+              echo ":warning: **${FAILED}** delete(s) failed after ${DELETE_RETRIES} attempts — see the job log."
+              echo "Re-run this workflow manually with \`ref: ${REF}\` to retry."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
           if [ "${FAILED}" -gt 0 ]; then
             echo "error: ${FAILED} cache delete(s) failed for ${REF}" >&2
+            echo "       retry with: gh workflow run cache-cleanup.yml -f ref=${REF}" >&2
             exit 1
           fi
