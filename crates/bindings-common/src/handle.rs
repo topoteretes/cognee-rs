@@ -12,6 +12,7 @@
 //! C-specific wrappers (`CgSdk`) stay in `cognee-capi` (Phase 1 Part B).
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use tokio::sync::Mutex as TokioMutex;
 use uuid::Uuid;
@@ -63,6 +64,12 @@ pub struct HandleState {
     /// keeps the DB-free in-memory derivation; the closed cloud build attaches
     /// an impl that persists the `users` row.
     bootstrap: Option<Arc<dyn DefaultUserBootstrap>>,
+    /// Set by [`HandleState::close`] (the *explicit* teardown). Once set,
+    /// [`HandleState::services`] fails instead of re-warming, so a use-after-close
+    /// surfaces as a clear error rather than silently reopening the database.
+    /// [`HandleState::release`] deliberately leaves this alone — see the two
+    /// methods' docs.
+    closed: AtomicBool,
 }
 
 impl HandleState {
@@ -97,6 +104,7 @@ impl HandleState {
             owner_id: TokioMutex::new(None),
             tenant_id: None,
             bootstrap: None,
+            closed: AtomicBool::new(false),
         }
     }
 
@@ -125,6 +133,14 @@ impl HandleState {
     /// config version advanced. On the (re)build path the resolved owner id is
     /// written back into `owner_id`.
     pub async fn services(&self) -> Result<Arc<CogneeServices>, SdkError> {
+        // A handle closed through the explicit teardown must not silently reopen
+        // the database on the next op. This is the single choke point every op
+        // goes through, which is why the guard lives here and not in each binding.
+        if self.is_closed() {
+            return Err(SdkError::Runtime(
+                "cognee handle is closed (close() was called); create a new handle".to_string(),
+            ));
+        }
         let current_ver = self.cm.config().version();
 
         // Fast path: cache hit at the current version.
@@ -170,64 +186,129 @@ impl HandleState {
         Ok(svc)
     }
 
-    /// Release the resources this handle opened, now rather than at `Drop`.
+    /// Whether [`close`](Self::close) has been called on this handle.
     ///
-    /// Dropping the handle is **not** a close: the relational pool's destructor
-    /// only flags the pool closed and lets its connections tear down
-    /// concurrently, which for SQLite leaves the `-wal`/`-shm` sidecars orphaned
-    /// on disk (see `cognee::database::close` for the full mechanism and
-    /// topoteretes/cognee-rs#132 for the measurements). A binding with an explicit
-    /// teardown entry point calls this from it — the Java binding does, from
-    /// `Cognee.close()` — so the files are gone by the time that entry point
-    /// returns. Bindings whose only teardown is a GC finalizer (Python, TS) have
-    /// no such entry point yet and are still subject to the drop race.
+    /// Bindings use this for a cheap synchronous guard before dispatching an op,
+    /// so a use-after-close reports itself without building a future first.
+    pub fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::Acquire)
+    }
+
+    /// Whether this handle currently holds built services — i.e. whether a
+    /// teardown would have anything to release.
     ///
-    /// Non-poisoning and idempotent: the cached service bundle and the resolved
-    /// owner id are cleared too, so a later op on the same handle re-warms from
-    /// scratch against a fresh connection instead of failing. What it does *not*
-    /// do is wait for concurrent operations — an op that is mid-flight when this
-    /// runs holds its own `Arc<CogneeServices>` and will see a closed pool on its
-    /// next query, so bindings should only close once their own contract says the
-    /// handle is done.
+    /// Cheap and non-blocking, for use from a synchronous finalizer that wants to
+    /// skip the teardown entirely (and, with it, spinning up a runtime to drive
+    /// it) for a handle that never warmed. A contended lock reports `true`: the
+    /// safe direction is to attempt the release rather than skip a real one.
+    pub fn has_open_resources(&self) -> bool {
+        match self.services.try_lock() {
+            Ok(guard) => guard.is_some(),
+            Err(_) => true,
+        }
+    }
+
+    /// Release the resources this handle opened, leaving it usable.
+    ///
+    /// Dropping a handle is **not** a close: the relational pool's destructor only
+    /// flags the pool closed and lets its connections tear down concurrently,
+    /// which for SQLite leaves the `-wal`/`-shm` sidecars orphaned on disk (see
+    /// `cognee::database::close` for the mechanism, topoteretes/cognee-rs#132 for
+    /// the measurements). So every teardown path has to call one of these two
+    /// methods, and which one depends on whether the user asked:
+    ///
+    /// - `release` is for the **implicit** paths — a GC finalizer (`Drop for
+    ///   PyCognee`, neon's `Finalize`) reclaiming a handle the program dropped on
+    ///   the floor. The user never said "close", so this only gives the resources
+    ///   back: the handle stays warm-able, and anything still holding a clone of
+    ///   the state (a sub-handle like `cognee.datasets`, an in-flight op) keeps
+    ///   working — it just re-warms against a fresh connection.
+    /// - [`close`](Self::close) is for the **explicit** paths (`Cognee.close()`,
+    ///   `cg_sdk_close`). It additionally marks the handle closed, so later ops
+    ///   fail with a clear error instead of silently reopening the database.
+    ///
+    /// Both are idempotent. Neither waits for concurrent operations: an op that is
+    /// mid-flight holds its own `Arc<CogneeServices>` and will see a closed pool on
+    /// its next query, so a binding should only tear down when its own contract
+    /// says the handle is done.
+    pub async fn release(&self) {
+        self.teardown(false).await;
+    }
+
+    /// Release the handle's resources **and** mark it closed: every later op fails
+    /// with an explicit "handle is closed" error rather than re-warming.
+    ///
+    /// This is the explicit user-facing teardown — see [`release`](Self::release)
+    /// for how the two differ and why both exist.
     pub async fn close(&self) {
+        self.teardown(true).await;
+    }
+
+    /// Shared body of [`release`](Self::release) / [`close`](Self::close).
+    async fn teardown(&self, mark_closed: bool) {
+        // Mark first: a concurrent op then fails fast in `services()` instead of
+        // racing to warm a pool that is about to be closed underneath it.
+        if mark_closed {
+            self.closed.store(true, Ordering::Release);
+        }
         // Clear the cached bundle: it holds an `Arc` clone of the connection, and
-        // dropping it is what makes the close non-poisoning — the next
-        // `services()` rebuilds instead of handing out the closed pool. The lock
-        // is held across the close so a concurrent `services()` cannot slip a
-        // freshly built pool into the cache in between and have it closed
-        // underneath it. Lock order (services → owner id → the manager's caches)
-        // is the same one `services()` takes, so this cannot deadlock.
+        // dropping it is what lets `release` leave the handle re-warmable rather
+        // than holding a closed pool. The lock is held across the close so a
+        // concurrent `services()` cannot slip a freshly built pool into the cache
+        // in between and have it closed underneath it. Lock order (services →
+        // owner id → the manager's caches) is the same one `services()` takes, so
+        // this cannot deadlock.
         let mut guard = self.services.lock().await;
         drop(guard.take());
         *self.owner_id.lock().await = None;
         self.cm.close().await;
     }
 
-    /// Blocking wrapper around [`close`](Self::close) for a synchronous binding
-    /// teardown hook (the JNI `destroy`), which cannot `.await`.
+    /// Blocking [`close`](Self::close), for a synchronous binding teardown hook
+    /// (the JNI `destroy`, `cg_sdk_close`, Python's `close()`) that cannot
+    /// `.await`.
+    ///
+    /// See [`release_blocking`](Self::release_blocking) for how the thread is
+    /// handled.
+    pub fn close_blocking(self: &Arc<Self>, rt: &tokio::runtime::Handle) {
+        self.teardown_blocking(rt, true);
+    }
+
+    /// Blocking [`release`](Self::release), for a synchronous finalizer
+    /// (`Drop for PyCognee`) that cannot `.await`.
     ///
     /// `rt` is the binding's own runtime handle, used when the calling thread has
     /// no runtime of its own — the normal case, since teardown runs on the
-    /// embedder's thread (a Java `close()` call or the `Cleaner` thread). Teardown
-    /// invoked from *inside* the async runtime is also possible, though — a Java
-    /// `CompletableFuture` continuation runs on a worker thread — and blocking a
-    /// worker outright would stall the runtime, so that case hands the thread over
-    /// to the blocking pool first and still closes before returning.
-    pub fn close_blocking(self: &Arc<Self>, rt: &tokio::runtime::Handle) {
+    /// embedder's thread (a Java `close()` call or the `Cleaner` thread, a Python
+    /// interpreter thread running a `__del__`). Teardown invoked from *inside* the
+    /// async runtime is also possible, though — a Java `CompletableFuture`
+    /// continuation runs on a worker thread — and blocking a worker outright would
+    /// stall the runtime, so that case hands the thread over to the blocking pool
+    /// first and still finishes before returning.
+    pub fn release_blocking(self: &Arc<Self>, rt: &tokio::runtime::Handle) {
+        self.teardown_blocking(rt, false);
+    }
+
+    fn teardown_blocking(self: &Arc<Self>, rt: &tokio::runtime::Handle, mark_closed: bool) {
         use tokio::runtime::{Handle, RuntimeFlavor};
 
         match Handle::try_current() {
-            Err(_) => rt.block_on(self.close()),
+            Err(_) => rt.block_on(self.teardown(mark_closed)),
             Ok(current) if current.runtime_flavor() == RuntimeFlavor::MultiThread => {
-                tokio::task::block_in_place(|| current.block_on(self.close()));
+                tokio::task::block_in_place(|| current.block_on(self.teardown(mark_closed)));
             }
             Ok(current) => {
                 // A current-thread runtime cannot hand the thread off
-                // (`block_in_place` panics there), so the close cannot be awaited
-                // here without deadlocking the very runtime that has to drive it.
-                // Spawn it instead: the pool closes moments later.
+                // (`block_in_place` panics there), so the teardown cannot be
+                // awaited here without deadlocking the very runtime that has to
+                // drive it. Spawn it instead: the pool closes moments later. The
+                // closed flag is still set synchronously, so a use-after-close is
+                // reported even before the spawned teardown lands.
+                if mark_closed {
+                    self.closed.store(true, Ordering::Release);
+                }
                 let this = Arc::clone(self);
-                current.spawn(async move { this.close().await });
+                current.spawn(async move { this.teardown(mark_closed).await });
             }
         }
     }

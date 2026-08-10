@@ -9,6 +9,9 @@
  *   4. cg_sdk_warm               — warms the services bundle via waiter.
  *   5. cg_sdk_owner_id           — returns a quoted UUID via waiter.
  *   6. cg_sdk_clone + cg_sdk_destroy — ref-counting sanity.
+ *   7. cg_sdk_close              — releases the SQLite `-wal`/`-shm` sidecars
+ *      synchronously and closes the handle for good (issue #132); and
+ *      cg_sdk_destroy releases them when it drops the last reference.
  *
  * Environment:
  *   MOCK_EMBEDDING=true   — set via the JSON settings overlay in this test.
@@ -23,6 +26,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h> /* getpid, for the process-unique temp dirs in step 8 */
 
 #include "cognee_sdk.h"
 
@@ -47,6 +51,15 @@ static int g_failures = 0;
             g_failures++;                                           \
         }                                                           \
     } while (0)
+
+/** Whether a path exists and is readable (used for the WAL sidecar checks). */
+static int file_exists(const char* path)
+{
+    FILE* f = fopen(path, "rb");
+    if (!f) return 0;
+    fclose(f);
+    return 1;
+}
 
 /** Run an async op through the waiter.  Returns the op's CgErrorCode.
  *  Sets *out_result (caller must cg_string_destroy) on CG_OK. */
@@ -171,7 +184,74 @@ int main(void)
     }
     cg_sdk_destroy(sdk2);
 
-    /* ── 8. Cleanup ──────────────────────────────────────────────────────── */
+    /* ── 8. cg_sdk_close releases the SQLite sidecars (issue #132) ───────── */
+    /*
+     * A warmed handle runs its relational database in WAL mode, which creates
+     * `<db>-wal` and `<db>-shm` next to the file. Dropping the handle does not
+     * reliably remove them — sqlx's pool destructor lets its connections tear
+     * down concurrently and SQLite only unlinks the sidecars when the *last*
+     * connection closes — so they used to be orphaned until process exit.
+     * `cg_sdk_close` must leave nothing behind, synchronously, and must mark the
+     * handle closed. A second handle repeats the check for the `cg_sdk_destroy`
+     * path, which releases when it drops the last reference.
+     */
+    {
+        int failures_before = g_failures;
+        for (int use_close = 1; use_close >= 0; use_close--) {
+            char sys_dir[256];
+            char db_url[512];
+            char wal[512];
+            char shm[512];
+            snprintf(sys_dir, sizeof(sys_dir), "/tmp/cg_smoke_handle_%d_%d_sys",
+                     (int)getpid(), use_close);
+            snprintf(db_url, sizeof(db_url), "sqlite:%s/cognee.db?mode=rwc", sys_dir);
+            snprintf(wal, sizeof(wal), "%s/cognee.db-wal", sys_dir);
+            snprintf(shm, sizeof(shm), "%s/cognee.db-shm", sys_dir);
+
+            char settings_buf[2048];
+            snprintf(settings_buf, sizeof(settings_buf),
+                     "{"
+                     "  \"embedding_provider\": \"mock\","
+                     "  \"llm_api_key\": \"dummy-key-for-smoke-test\","
+                     "  \"vector_db_provider\": \"mock\","
+                     "  \"system_root_directory\": \"%s\","
+                     "  \"data_root_directory\": \"%s/data\","
+                     "  \"relational_db_url\": \"%s\""
+                     "}",
+                     sys_dir, sys_dir, db_url);
+
+            CgSdk* sdk_wal = cg_sdk_new(settings_buf);
+            ASSERT(sdk_wal != NULL, "cg_sdk_new(temp dirs) must return non-NULL");
+            if (!sdk_wal) continue;
+
+            rc = run_via_waiter(sdk_wal, cg_sdk_warm, NULL);
+            ASSERT_EQ(rc, CG_OK, "warm on the temp-dir handle must succeed");
+            ASSERT(file_exists(wal) && file_exists(shm),
+                   "a warmed handle must have both WAL sidecars on disk");
+
+            if (use_close) {
+                cg_sdk_close(sdk_wal);
+                ASSERT(!file_exists(wal), "cg_sdk_close must remove -wal");
+                ASSERT(!file_exists(shm), "cg_sdk_close must remove -shm");
+                /* Closed for good: an op afterwards must fail, not reopen. */
+                rc = run_via_waiter(sdk_wal, cg_sdk_warm, NULL);
+                ASSERT(rc != CG_OK, "warm after cg_sdk_close must fail");
+                ASSERT(!file_exists(wal), "a failed op must not reopen the database");
+                cg_sdk_close(sdk_wal); /* idempotent */
+                cg_sdk_destroy(sdk_wal);
+            } else {
+                /* No explicit close: destroying the last reference releases. */
+                cg_sdk_destroy(sdk_wal);
+                ASSERT(!file_exists(wal), "cg_sdk_destroy (last ref) must remove -wal");
+                ASSERT(!file_exists(shm), "cg_sdk_destroy (last ref) must remove -shm");
+            }
+        }
+        if (g_failures == failures_before) {
+            printf("sdk sidecar release        OK  (cg_sdk_close + last-ref destroy)\n");
+        }
+    }
+
+    /* ── 9. Cleanup ──────────────────────────────────────────────────────── */
     cg_sdk_destroy(sdk_env);
     cg_shutdown();
 

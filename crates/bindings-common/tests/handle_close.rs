@@ -57,8 +57,9 @@ fn sidecars(db: &Path) -> (PathBuf, PathBuf) {
     )
 }
 
+/// The explicit teardown: releases the sidecars *and* closes the handle for good.
 #[tokio::test(flavor = "multi_thread")]
-async fn close_releases_sqlite_sidecars_and_leaves_the_handle_reusable() {
+async fn close_releases_sqlite_sidecars_and_marks_the_handle_closed() {
     let dir = tempfile::tempdir().unwrap();
     let (state, db_path) = handle_under(dir.path());
     let (wal, shm) = sidecars(&db_path);
@@ -68,6 +69,7 @@ async fn close_releases_sqlite_sidecars_and_leaves_the_handle_reusable() {
         !wal.exists() && !shm.exists(),
         "constructing a handle must not open the database",
     );
+    assert!(!state.is_closed());
 
     state.services().await.expect("warm");
     assert!(
@@ -87,15 +89,52 @@ async fn close_releases_sqlite_sidecars_and_leaves_the_handle_reusable() {
         "-shm must be released by close(), got a leak"
     );
 
-    // Closing clears the caches rather than poisoning them, so the same handle
-    // can still be used — it just warms cold again.
-    state.services().await.expect("re-warm after close");
-    assert!(wal.exists(), "re-warming reopens the database");
+    // A closed handle stays closed: ops report it instead of reopening the DB.
+    assert!(state.is_closed());
+    // `CogneeServices` is not `Debug`, so match rather than `expect_err`.
+    let err = match state.services().await {
+        Ok(_) => panic!("an op after close() must fail"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("closed"),
+        "the error should name the cause, got: {err}"
+    );
+    assert!(
+        !wal.exists(),
+        "a failed op after close() must not reopen the database"
+    );
 
     // Idempotent.
     state.close().await;
     state.close().await;
     assert!(!wal.exists() && !shm.exists(), "close must be idempotent");
+}
+
+/// The implicit teardown (what a GC finalizer calls): releases the sidecars but
+/// leaves the handle usable, because the user never asked for a close — anything
+/// still holding a clone of the state, like a Python `cognee.datasets` sub-handle
+/// that outlived its parent, has to keep working.
+#[tokio::test(flavor = "multi_thread")]
+async fn release_frees_the_sidecars_without_closing_the_handle() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, db_path) = handle_under(dir.path());
+    let (wal, shm) = sidecars(&db_path);
+
+    state.services().await.expect("warm");
+    assert!(wal.exists() && shm.exists());
+
+    state.release().await;
+    assert!(!wal.exists() && !shm.exists(), "release must free both");
+    assert!(!state.is_closed(), "release must not close the handle");
+
+    // Still usable: it just warms cold again against a fresh connection.
+    state.services().await.expect("re-warm after release");
+    assert!(wal.exists(), "re-warming reopens the database");
+
+    state.release().await;
+    state.release().await;
+    assert!(!wal.exists() && !shm.exists(), "release must be idempotent");
 }
 
 /// `close_blocking` is what the synchronous binding teardown hooks call, and both
@@ -135,4 +174,23 @@ async fn close_blocking_releases_the_sidecars_on_either_thread() {
         !wal.exists() && !shm.exists(),
         "close_blocking from a runtime worker must release the sidecars",
     );
+
+    // (c) `release_blocking` — the finalizer path — is blocking too, and leaves
+    // the handle open.
+    let dir = tempfile::tempdir().unwrap();
+    let (state, db_path) = handle_under(dir.path());
+    let (wal, shm) = sidecars(&db_path);
+    state.services().await.expect("warm");
+    assert!(wal.exists() && shm.exists());
+    let off_thread = {
+        let state = std::sync::Arc::clone(&state);
+        let handle = handle.clone();
+        std::thread::spawn(move || state.release_blocking(&handle))
+    };
+    off_thread.join().expect("releasing thread");
+    assert!(
+        !wal.exists() && !shm.exists(),
+        "release_blocking must release the sidecars",
+    );
+    assert!(!state.is_closed());
 }

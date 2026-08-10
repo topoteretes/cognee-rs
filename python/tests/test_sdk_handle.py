@@ -177,3 +177,103 @@ async def test_warm_with_settings_override(tmp_path):
     cognee = _isolated_cognee(tmp_path, ', "llm_model": "gpt-4o-mini"')
     result = await cognee.warm()
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle: close() / context managers / GC release (issue #132)
+# ---------------------------------------------------------------------------
+
+def _sidecars(tmp_path):
+    """The WAL sidecar paths for the handle built by ``_isolated_cognee``."""
+    return tmp_path / "cognee.db-wal", tmp_path / "cognee.db-shm"
+
+
+def test_close_is_a_noop_on_a_never_warmed_handle(tmp_path):
+    """Constructing opens nothing, so close() has nothing to release."""
+    cognee = _isolated_cognee(tmp_path)
+    assert cognee.closed is False
+    cognee.close()
+    cognee.close()  # idempotent
+    assert cognee.closed is True
+    wal, shm = _sidecars(tmp_path)
+    assert not wal.exists() and not shm.exists()
+
+
+@SKIP_IF_NO_WARM
+@pytest.mark.asyncio
+async def test_close_releases_sqlite_sidecars(tmp_path):
+    """close() must return with the -wal/-shm files already gone.
+
+    Dropping the handle is not enough: the pool's destructor lets its
+    connections tear down concurrently, and SQLite only unlinks the sidecars
+    when the last connection closes (issue #132).
+    """
+    wal, shm = _sidecars(tmp_path)
+    cognee = _isolated_cognee(tmp_path)
+    await cognee.warm()
+    assert wal.exists() and shm.exists(), "a warmed handle runs the DB in WAL mode"
+
+    cognee.close()
+
+    # No waiting, no polling.
+    assert not wal.exists(), "close() must release cognee.db-wal"
+    assert not shm.exists(), "close() must release cognee.db-shm"
+
+
+@SKIP_IF_NO_WARM
+@pytest.mark.asyncio
+async def test_operations_after_close_raise(tmp_path):
+    """A closed handle reports itself instead of silently reopening the DB."""
+    wal, _ = _sidecars(tmp_path)
+    cognee = _isolated_cognee(tmp_path)
+    await cognee.warm()
+    cognee.close()
+
+    with pytest.raises(cp.CogneeRuntimeError, match="closed"):
+        await cognee.warm()
+    assert not wal.exists(), "a failed op must not reopen the database"
+
+
+@SKIP_IF_NO_WARM
+def test_sync_context_manager_closes(tmp_path):
+    """`with Cognee(...)` closes the handle on exit."""
+    wal, shm = _sidecars(tmp_path)
+    with _isolated_cognee(tmp_path) as cognee:
+        assert cognee.closed is False
+    assert cognee.closed is True
+    assert not wal.exists() and not shm.exists()
+
+
+@SKIP_IF_NO_WARM
+@pytest.mark.asyncio
+async def test_async_context_manager_closes(tmp_path):
+    """`async with Cognee(...)` warms inside the block and closes on exit."""
+    wal, shm = _sidecars(tmp_path)
+    async with _isolated_cognee(tmp_path) as cognee:
+        await cognee.warm()
+        assert wal.exists() and shm.exists()
+    assert cognee.closed is True
+    assert not wal.exists() and not shm.exists()
+
+
+@SKIP_IF_NO_WARM
+@pytest.mark.asyncio
+async def test_garbage_collection_releases_sidecars(tmp_path):
+    """A handle nobody closed must still release its sidecars when collected.
+
+    This is the implicit teardown (``Drop``), which releases without closing —
+    it is not a substitute for close(), but it keeps a forgotten handle from
+    leaking the files for the life of the process.
+    """
+    import gc
+
+    wal, shm = _sidecars(tmp_path)
+    cognee = _isolated_cognee(tmp_path)
+    await cognee.warm()
+    assert wal.exists() and shm.exists()
+
+    del cognee
+    gc.collect()
+
+    assert not wal.exists(), "GC must release cognee.db-wal"
+    assert not shm.exists(), "GC must release cognee.db-shm"

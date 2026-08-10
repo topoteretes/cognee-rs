@@ -90,6 +90,10 @@ export interface NativeBindings {
   cogneeNew(settings?: object | string): NativeBox;
   cogneeWarm(handle: NativeBox): Promise<void>;
   cogneeOwnerId(handle: NativeBox): Promise<string>;
+  // Sync and blocking on purpose: a close has to have finished when it returns
+  // (the caller may delete the directory the DB lives in), and `Symbol.dispose`
+  // cannot await. The work is a connection-pool drain, not I/O over a network.
+  cogneeClose(handle: NativeBox): void;
 
   // Pipeline ops (Phase 3). All async (build engines + run the pipeline).
   //

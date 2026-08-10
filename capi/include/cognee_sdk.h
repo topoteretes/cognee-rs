@@ -301,11 +301,42 @@ void cg_sdk_owner_id(const CgSdk* sdk, CgSdkResultCallback callback, void* user_
 CgSdk* cg_sdk_clone(const CgSdk* sdk);
 
 /**
+ * Close the handle: release the resources it opened and mark it closed.
+ *
+ * Releases the relational connection pool and, with it, a SQLite database's
+ * `-wal`/`-shm` sidecar files.  Dropping the handle is not enough on its own:
+ * sqlx's pool destructor lets its connections tear down concurrently, and
+ * SQLite only unlinks the sidecars when the *last* connection closes, so
+ * relying on the drop is a race that orphans the files (issue #132).
+ *
+ * **Blocking and deterministic**: when this returns the pool is closed and the
+ * sidecars are gone, so the directory holding them can be deleted.
+ *
+ * Call it when you are done with **every** clone of the handle and no async op
+ * is in flight.  It acts on the shared inner state, so it also closes every
+ * `cg_sdk_clone` of this handle, and any op started afterwards fails with
+ * `CG_ERR_SDK_RUNTIME` ("cognee handle is closed").  An op already in flight may
+ * fail on its next query.
+ *
+ * Idempotent; a no-op on a never-warmed handle or a NULL pointer.  You must
+ * still call `cg_sdk_destroy` to free the pointer.
+ */
+void cg_sdk_close(CgSdk* sdk);
+
+/**
  * Destroy a `CgSdk` handle.
  *
  * Drops the Arc reference.  In-flight async ops keep their own Arc clones,
  * so callbacks registered before this call may still fire afterwards.  Do
  * not access `sdk` from any callback after calling this.
+ *
+ * When this drops the **last** reference to the inner state (no surviving
+ * clone, no in-flight op) it first releases that state's resources, since a
+ * plain drop would orphan a SQLite database's `-wal`/`-shm` sidecars (issue
+ * #132).  That case is unobservable — nothing else can still use the state — so
+ * the contract above is unchanged.  It is *not* a close: for a deterministic
+ * teardown, or to release while clones are still alive, call `cg_sdk_close`
+ * first.
  *
  * No-op if `sdk` is NULL.
  */

@@ -18,6 +18,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 
+import { Cognee } from "../src/cognee";
 import { native } from "../src/native";
 
 /** RFC-4122 UUIDv5 (SHA-1) of `name` under the OID namespace. */
@@ -105,5 +106,86 @@ describe("Phase-1 SDK handle & facade", () => {
     // No cogneeWarm() — cogneeOwnerId warms on demand.
     const ownerId = await native.cogneeOwnerId(handle);
     expect(ownerId).toBe(uuid5Oid(email));
+  });
+
+  // ── close() and the WAL sidecars (issue #132) ──────────────────────────────
+  //
+  // A warmed handle runs its relational database in WAL mode, which creates
+  // `<db>-wal`/`<db>-shm`. Letting the handle be garbage-collected does not
+  // reliably remove them: the pool's destructor lets its connections tear down
+  // concurrently and SQLite only unlinks the sidecars when the *last* connection
+  // closes. `close()` must be deterministic about it.
+  describe("close()", () => {
+    let closeDir: string;
+    let closeDb: string;
+
+    beforeEach(() => {
+      closeDir = fs.mkdtempSync(path.join(os.tmpdir(), "cognee-sdk-close-"));
+      closeDb = path.join(closeDir, "cognee.db");
+    });
+
+    afterEach(() => {
+      try {
+        fs.rmSync(closeDir, { recursive: true, force: true });
+      } catch {
+        // best effort
+      }
+    });
+
+    function closeSettings() {
+      return {
+        ...makeSettings(),
+        system_root_directory: closeDir,
+        data_root_directory: path.join(closeDir, "data"),
+        relational_db_url: `sqlite:${closeDb}?mode=rwc`,
+      };
+    }
+
+    const wal = () => `${closeDb}-wal`;
+    const shm = () => `${closeDb}-shm`;
+
+    it("releases the WAL sidecars synchronously", async () => {
+      const c = new Cognee(closeSettings());
+      await c.warm();
+      expect(fs.existsSync(wal())).toBe(true);
+      expect(fs.existsSync(shm())).toBe(true);
+
+      c.close();
+
+      // No waiting, no polling.
+      expect(fs.existsSync(wal())).toBe(false);
+      expect(fs.existsSync(shm())).toBe(false);
+    });
+
+    it("is idempotent and rejects ops afterwards", async () => {
+      const c = new Cognee(closeSettings());
+      await c.warm();
+      c.close();
+      c.close();
+
+      await expect(c.warm()).rejects.toThrow(/closed/);
+      // A failed op must not reopen the database.
+      expect(fs.existsSync(wal())).toBe(false);
+    });
+
+    it("is a no-op on a handle that was never warmed", () => {
+      const c = new Cognee(closeSettings());
+      expect(() => c.close()).not.toThrow();
+      expect(fs.existsSync(wal())).toBe(false);
+    });
+
+    it("is wired to Symbol.dispose so `using` closes the handle", async () => {
+      // Exercised without `using` syntax so the test compiles on the repo's
+      // ES2020 target; `using` calls exactly this method.
+      const c = new Cognee(closeSettings());
+      await c.warm();
+      expect(fs.existsSync(wal())).toBe(true);
+      expect(typeof (c as unknown as Record<symbol, unknown>)[Symbol.dispose]).toBe(
+        "function"
+      );
+      c[Symbol.dispose]();
+      expect(fs.existsSync(wal())).toBe(false);
+      expect(fs.existsSync(shm())).toBe(false);
+    });
   });
 });

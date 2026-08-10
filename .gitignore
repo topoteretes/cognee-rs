@@ -50,6 +50,11 @@ ts/cognee.db
 # under older Node versions produces churn (lockfileVersion 1 vs 3).
 ts/package-lock.json
 
+# Python virtualenvs — `python/scripts/check.sh` needs maturin on PATH, and both
+# CI and the documented local flow create one at the repo root.
+.venv/
+.venv*/
+
 # Python cache
 __pycache__/
 *.pyc

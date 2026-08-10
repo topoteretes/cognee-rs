@@ -612,6 +612,43 @@ class Cognee:
         """Return the owner UUID string (warms the handle lazily)."""
         ...
 
+    # -- Lifecycle ------------------------------------------------------------
+
+    def close(self) -> None:
+        """Close the handle, releasing the resources it opened.
+
+        Blocking: when it returns, the relational connection pool is closed and
+        a SQLite database's ``-wal``/``-shm`` sidecars are gone, so the
+        directory holding them can be deleted. Idempotent. Any operation started
+        afterwards raises ``CogneeRuntimeError``.
+
+        Also available as a context manager (``with`` / ``async with``).
+        """
+        ...
+
+    @property
+    def closed(self) -> bool:
+        """Whether :meth:`close` has been called on this handle."""
+        ...
+
+    def __enter__(self) -> "Cognee": ...
+
+    def __exit__(
+        self,
+        exc_type: Optional[type] = None,
+        exc_value: Optional[BaseException] = None,
+        traceback: Optional[Any] = None,
+    ) -> bool: ...
+
+    async def __aenter__(self) -> "Cognee": ...
+
+    async def __aexit__(
+        self,
+        exc_type: Optional[type] = None,
+        exc_value: Optional[BaseException] = None,
+        traceback: Optional[Any] = None,
+    ) -> bool: ...
+
     # -- Core pipeline --------------------------------------------------------
 
     async def add(

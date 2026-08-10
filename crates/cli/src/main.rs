@@ -17,6 +17,51 @@ use commands::{
 };
 use tracing::error;
 
+/// How long to wait for the relational pool to close on exit. See
+/// [`close_components`].
+const CLOSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Close the relational connection pool before the process exits.
+///
+/// Exiting without closing leaves a SQLite database's `-wal`/`-shm` sidecars
+/// behind: dropping the pool only flags it closed and lets its connections tear
+/// down concurrently, and SQLite unlinks the sidecars only when the *last*
+/// connection closes (issue #132). The next `cognee` invocation recovers them, so
+/// nothing is corrupt, but the files linger next to the database and a caller
+/// that wraps the CLI in a temporary directory cannot clean up after it.
+///
+/// Each command owns (and drops) its own runtime, so this builds a small
+/// current-thread one purely to drive the close — a pool drain, not I/O.
+///
+/// Bounded by [`CLOSE_TIMEOUT`] because the close waits for connections to come
+/// back: if a command's runtime was dropped while one was still checked out, its
+/// pool permit is never released and the wait would never finish. Timing out
+/// costs only the sidecars we were trying to remove, whereas hanging would cost
+/// the caller their exit code, so this is deliberately best-effort.
+fn close_components(cm: &ComponentManager) {
+    let rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(error) => {
+            tracing::debug!(%error, "could not build a runtime to close the database");
+            return;
+        }
+    };
+    rt.block_on(async {
+        if tokio::time::timeout(CLOSE_TIMEOUT, cm.close())
+            .await
+            .is_err()
+        {
+            tracing::debug!(
+                "closing the relational database timed out after {CLOSE_TIMEOUT:?}; \
+                 its WAL sidecars may be left for the next run to recover"
+            );
+        }
+    });
+}
+
 fn run(settings: Settings) -> Result<(), CliError> {
     let cli = Cli::parse();
 
@@ -24,23 +69,33 @@ fn run(settings: Settings) -> Result<(), CliError> {
     let config = ConfigManager::new(settings);
     let cm = Arc::new(ComponentManager::new(config));
 
-    match cli.command {
-        Commands::Add(args) => add::run(args, Arc::clone(&cm)),
-        Commands::Cognify(args) => cognify::run(args, Arc::clone(&cm)),
-        Commands::AddAndCognify(args) => add_and_cognify::run(args, Arc::clone(&cm)),
-        Commands::Memify(args) => memify::run(args, Arc::clone(&cm)),
-        Commands::Search(args) => search::run(args, Arc::clone(&cm)),
-        Commands::Remember(args) => remember::run(args, Arc::clone(&cm)),
-        Commands::Recall(args) => recall::run(args, Arc::clone(&cm)),
-        Commands::Forget(args) => forget::run(args, Arc::clone(&cm)),
-        Commands::Improve(args) => improve::run(args, Arc::clone(&cm)),
-        Commands::Delete(args) => delete::run(args, Arc::clone(&cm)),
+    let result = dispatch(cli.command, &cm);
+
+    // Release the database before returning, whether the command succeeded or
+    // not — a failed run has usually opened it too.
+    close_components(&cm);
+
+    result
+}
+
+fn dispatch(command: Commands, cm: &Arc<ComponentManager>) -> Result<(), CliError> {
+    match command {
+        Commands::Add(args) => add::run(args, Arc::clone(cm)),
+        Commands::Cognify(args) => cognify::run(args, Arc::clone(cm)),
+        Commands::AddAndCognify(args) => add_and_cognify::run(args, Arc::clone(cm)),
+        Commands::Memify(args) => memify::run(args, Arc::clone(cm)),
+        Commands::Search(args) => search::run(args, Arc::clone(cm)),
+        Commands::Remember(args) => remember::run(args, Arc::clone(cm)),
+        Commands::Recall(args) => recall::run(args, Arc::clone(cm)),
+        Commands::Forget(args) => forget::run(args, Arc::clone(cm)),
+        Commands::Improve(args) => improve::run(args, Arc::clone(cm)),
+        Commands::Delete(args) => delete::run(args, Arc::clone(cm)),
         Commands::Config(args) => config::run(args),
-        Commands::RunSequence(args) => run_sequence::run(args, Arc::clone(&cm)),
+        Commands::RunSequence(args) => run_sequence::run(args, Arc::clone(cm)),
         #[cfg(feature = "visualization")]
-        Commands::Visualize(args) => visualize::run(args, Arc::clone(&cm)),
+        Commands::Visualize(args) => visualize::run(args, Arc::clone(cm)),
         #[cfg(feature = "bench")]
-        Commands::Bench(args) => bench::run(args, Arc::clone(&cm)),
+        Commands::Bench(args) => bench::run(args, Arc::clone(cm)),
     }
 }
 

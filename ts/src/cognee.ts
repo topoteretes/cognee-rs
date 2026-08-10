@@ -458,6 +458,52 @@ export class Cognee {
     }
   }
 
+  /**
+   * Close the handle, releasing the resources it opened.
+   *
+   * Synchronous and blocking: when it returns, the relational connection pool is
+   * closed and a SQLite database's `-wal`/`-shm` sidecar files are gone, so the
+   * directory holding them can be deleted. Letting the handle be
+   * garbage-collected is not equivalent — the pool's destructor lets its
+   * connections tear down concurrently and SQLite only unlinks the sidecars when
+   * the last connection closes, so the files can be orphaned until the process
+   * exits.
+   *
+   * Idempotent, and a no-op on a handle that was never warmed. Any operation
+   * started afterwards rejects with a "handle is closed" error instead of
+   * silently reopening the database.
+   *
+   * The handle is also a disposable, so `using` closes it at end of scope:
+   *
+   * ```ts
+   * using c = new Cognee(settings);
+   * await c.warm();
+   * ```
+   */
+  close(): void {
+    try {
+      native.cogneeClose(this._handle);
+    } catch (e) {
+      throw wrapNativeError(e);
+    }
+  }
+
+  /**
+   * `Symbol.dispose` — lets `using c = new Cognee(...)` close the handle when
+   * the scope ends (TypeScript 5.2+ / Node 20.11+).
+   *
+   * The type comes from the `ESNext.Disposable` lib, which is types-only, so this
+   * changes nothing about the emitted JavaScript or the supported Node range: on
+   * a runtime without `Symbol.dispose` the computed key degrades to the harmless
+   * string `"undefined"`, and `using` is unavailable there anyway.
+   *
+   * There is deliberately no `Symbol.asyncDispose`: {@link close} is synchronous,
+   * so `await using` would buy nothing over `using`.
+   */
+  [Symbol.dispose](): void {
+    this.close();
+  }
+
   // ── Pipeline ops ──────────────────────────────────────────────────────────
 
   /**

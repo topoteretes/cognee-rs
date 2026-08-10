@@ -38,6 +38,37 @@ const recall = await c.recall("What does the fox do?");
 console.log(recall.searchResponse?.result?.data);
 ```
 
+### Closing the handle
+
+`close()` releases what the handle opened — most visibly the relational
+connection pool, which for SQLite means the `-wal`/`-shm` sidecar files next to
+the database. It is synchronous, so the directory holding them can be deleted as
+soon as it returns, and it is idempotent. Operations attempted afterwards reject
+with a "handle is closed" error rather than silently reopening the database.
+
+The handle is a disposable, so `using` closes it at the end of the scope
+(TypeScript 5.2+ / Node 20.11+):
+
+```ts
+using c = new Cognee(settings);
+await c.warm();
+// closed here
+```
+
+```ts
+const c = new Cognee(settings);
+try {
+  await c.warm();
+} finally {
+  c.close();
+}
+```
+
+A handle that is garbage-collected without an explicit `close()` still gives its
+resources back, so a forgotten handle does not leak for the life of the process —
+but only `close()` is deterministic about *when*, which matters if the process is
+about to exit.
+
 Fully-annotated runnable examples are available in the [`examples/`](examples/) directory.
 
 | Example | npm script | What it covers |

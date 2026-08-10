@@ -216,4 +216,109 @@ impl PyCognee {
             Ok(id.to_string())
         })
     }
+
+    /// Close the handle, releasing the resources it opened.
+    ///
+    /// Blocking and deterministic: when this returns, the relational connection
+    /// pool is closed and a SQLite database's ``-wal``/``-shm`` sidecar files are
+    /// gone, so the directory holding them can be deleted. Dropping the handle is
+    /// not enough on its own — the pool's destructor lets its connections tear
+    /// down concurrently, and SQLite only unlinks the sidecars when the *last*
+    /// connection closes, so relying on the drop orphans the files.
+    ///
+    /// Idempotent, and a no-op on a handle that was never warmed. Any operation
+    /// started afterwards raises ``CogneeRuntimeError`` instead of silently
+    /// reopening the database — including operations on a surface obtained
+    /// earlier, such as ``cognee.datasets``.
+    ///
+    /// Usable as a context manager, which closes on exit:
+    ///
+    /// .. code-block:: python
+    ///
+    ///     with Cognee(settings) as cognee:
+    ///         ...
+    ///
+    ///     async with Cognee(settings) as cognee:
+    ///         await cognee.warm()
+    fn close(&self, py: Python<'_>) {
+        let rt = pyo3_async_runtimes::tokio::get_runtime();
+        // Release the GIL while blocking: the teardown is pure Rust and needs no
+        // interpreter, and holding the GIL would stall every other Python thread
+        // for the duration of the close.
+        py.allow_threads(|| self.inner.close_blocking(rt.handle()));
+    }
+
+    /// Enter the synchronous context manager (returns ``self``).
+    fn __enter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    /// Exit the synchronous context manager: closes the handle.
+    ///
+    /// Returns ``False`` so an exception raised inside the ``with`` body
+    /// propagates.
+    #[pyo3(signature = (_exc_type=None, _exc_value=None, _traceback=None))]
+    fn __exit__(
+        &self,
+        py: Python<'_>,
+        _exc_type: Option<&Bound<'_, PyAny>>,
+        _exc_value: Option<&Bound<'_, PyAny>>,
+        _traceback: Option<&Bound<'_, PyAny>>,
+    ) -> bool {
+        self.close(py);
+        false
+    }
+
+    /// Enter the async context manager (awaitable, returns ``self``).
+    fn __aenter__<'py>(slf: PyRef<'py, Self>, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let this = slf.into_pyobject(py)?.unbind();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move { Ok(this) })
+    }
+
+    /// Exit the async context manager: closes the handle without blocking the
+    /// event loop (the teardown is awaited on the tokio runtime).
+    ///
+    /// Resolves to ``False`` so an exception raised inside the ``async with``
+    /// body propagates.
+    #[pyo3(signature = (_exc_type=None, _exc_value=None, _traceback=None))]
+    fn __aexit__<'py>(
+        &self,
+        py: Python<'py>,
+        _exc_type: Option<&Bound<'_, PyAny>>,
+        _exc_value: Option<&Bound<'_, PyAny>>,
+        _traceback: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let handle = Arc::clone(&self.inner);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            handle.close().await;
+            Ok(false)
+        })
+    }
+
+    /// Whether :meth:`close` has been called on this handle.
+    #[getter]
+    fn closed(&self) -> bool {
+        self.inner.is_closed()
+    }
+}
+
+impl Drop for PyCognee {
+    /// Give the resources back when the handle is garbage-collected without an
+    /// explicit :meth:`close`.
+    ///
+    /// This is the *implicit* teardown, so it releases without closing: a surface
+    /// the caller kept a reference to (``d = cognee.datasets; del cognee``) shares
+    /// this handle's state and has to keep working — it simply re-warms against a
+    /// fresh connection. Blocking here is what makes the release deterministic:
+    /// spawning it would race with interpreter shutdown, which is exactly when a
+    /// handle nobody closed tends to be collected, and the sidecars would survive.
+    fn drop(&mut self) {
+        // Nothing was ever opened (a handle that never warmed) → nothing to give
+        // back, and in particular no reason to build a tokio runtime here.
+        if !self.inner.has_open_resources() {
+            return;
+        }
+        let rt = pyo3_async_runtimes::tokio::get_runtime();
+        self.inner.release_blocking(rt.handle());
+    }
 }

@@ -12,6 +12,17 @@ pub fn runtime() -> &'static tokio::runtime::Runtime {
         .expect("cognee-ts-neon: runtime not initialised – call init() first")
 }
 
+/// The global tokio runtime if one has been initialised, else `None`.
+///
+/// Unlike [`runtime`] this never panics, and unlike [`ensure_runtime`] it never
+/// builds one. Teardown paths (`cogneeClose`, the `Finalize` release) use it:
+/// they need the runtime only to drive a teardown, so if there is none there was
+/// also nothing to tear down, and spinning one up just to shut down would be
+/// backwards.
+pub fn try_runtime() -> Option<&'static tokio::runtime::Runtime> {
+    RUNTIME.get()
+}
+
 /// Initialise the global tokio runtime on first use and return a reference to
 /// it. Unlike [`init`], this is idempotent and never errors when the runtime is
 /// already set — it is the entry point the `CogneeHandle` path uses so callers

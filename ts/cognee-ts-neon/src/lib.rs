@@ -59,6 +59,7 @@ fn main(mut cx: ModuleContext) -> NeonResult<()> {
     cx.export_function("cogneeNew", sdk::cognee_new)?;
     cx.export_function("cogneeWarm", sdk::cognee_warm)?;
     cx.export_function("cogneeOwnerId", sdk::cognee_owner_id)?;
+    cx.export_function("cogneeClose", sdk::cognee_close)?;
 
     // Pipeline ops (Phase 3): add / cognify / add-and-cognify.
     cx.export_function("cogneeAdd", sdk_ops::cognee_add)?;

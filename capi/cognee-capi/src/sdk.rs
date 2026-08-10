@@ -436,11 +436,56 @@ pub unsafe extern "C" fn cg_sdk_clone(sdk: *const CgSdk) -> *mut CgSdk {
     Box::into_raw(Box::new(CgSdk { state }))
 }
 
+/// Close the SDK handle: release the resources it opened (relational connection
+/// pool and, with it, a SQLite database's `-wal`/`-shm` sidecars) and mark the
+/// handle closed.
+///
+/// **Blocking**, and deterministic: when this returns, the pool is closed and the
+/// sidecar files are gone. Dropping the handle is not enough on its own — sqlx's
+/// pool destructor lets its connections tear down concurrently, and SQLite only
+/// unlinks the sidecars when the *last* connection closes, so relying on the drop
+/// is a race that orphans the files (issue #132).
+///
+/// Call this when you are done with **every** clone of the handle and no async op
+/// is in flight. It affects the shared inner state, so it closes the handle for
+/// every `cg_sdk_clone` of it as well, and any op started afterwards fails with
+/// `CG_ERR_SDK_RUNTIME` ("cognee handle is closed"). An op that is already in
+/// flight may fail on its next query.
+///
+/// Idempotent, and a no-op on a handle that was never warmed (nothing is open) or
+/// on a null pointer. You must still call `cg_sdk_destroy` to free the pointer.
+///
+/// # Safety
+/// `sdk` must be a pointer previously returned by `cg_sdk_new` or `cg_sdk_clone`,
+/// or null, and must not be destroyed concurrently on another thread.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cg_sdk_close(sdk: *mut CgSdk) {
+    if sdk.is_null() {
+        return;
+    }
+    // SAFETY: non-null, and the caller guarantees the pointer is live for this
+    // call (same contract as every other `cg_sdk_*` entry point).
+    let state = unsafe { &(*sdk).state };
+    if let Some(rt) = crate::runtime::global_runtime() {
+        state.close_blocking(&rt.handle());
+    }
+}
+
 /// Destroy a `CgSdk` handle.
 ///
 /// Drops the `Arc<HandleState>`. In-flight async ops keep their own clones of
 /// the state, so callbacks may fire **after** this call — do not access `sdk`
 /// from any callback registered before destruction.
+///
+/// When this drops the **last** reference to the inner state — no surviving
+/// `cg_sdk_clone` handle, no in-flight op — it first releases the resources that
+/// state holds, because a plain drop would leave a SQLite database's
+/// `-wal`/`-shm` sidecars orphaned on disk (issue #132). That case is
+/// unobservable to the caller (nothing else can still use the state), so the
+/// contract above is unchanged: a clone or an in-flight op still keeps the handle
+/// alive and working, and this call still frees only the pointer. It is *not* a
+/// close — for a deterministic teardown that always releases, call `cg_sdk_close`
+/// first, which is also the only way to release while clones are still alive.
 ///
 /// No-op if `sdk` is null.
 ///
@@ -451,7 +496,17 @@ pub unsafe extern "C" fn cg_sdk_clone(sdk: *const CgSdk) -> *mut CgSdk {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cg_sdk_destroy(sdk: *mut CgSdk) {
     if !sdk.is_null() {
-        drop(unsafe { Box::from_raw(sdk) });
+        let sdk = unsafe { Box::from_raw(sdk) };
+        // `strong_count == 1` means this box owns the only reference, so nothing
+        // can observe the release; it cannot race upwards either, since a new
+        // clone could only be made through this very pointer. When the count is
+        // higher, someone else is still using the state and we must not touch it.
+        if Arc::strong_count(&sdk.state) == 1
+            && let Some(rt) = crate::runtime::global_runtime()
+        {
+            sdk.state.release_blocking(&rt.handle());
+        }
+        drop(sdk);
     }
 }
 

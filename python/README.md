@@ -43,6 +43,28 @@ async def main():
 asyncio.run(main())
 ```
 
+### Closing the handle
+
+`close()` releases what the handle opened — most visibly the relational
+connection pool, which for SQLite means the `-wal`/`-shm` sidecar files next to
+the database. It blocks until that is done, so the directory holding them can be
+deleted as soon as it returns, and it is idempotent. Operations attempted after
+it raise `CogneeRuntimeError` rather than silently reopening the database.
+
+Both context-manager forms close on exit:
+
+```python
+with Cognee(settings) as cognee:
+    ...
+
+async with Cognee(settings) as cognee:
+    await cognee.warm()
+```
+
+A handle that is garbage-collected without an explicit `close()` still gives its
+resources back, so a forgotten handle does not leak for the life of the process —
+but only `close()` is deterministic about *when*.
+
 Set environment variables before running:
 
 ```bash

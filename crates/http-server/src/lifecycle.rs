@@ -57,4 +57,19 @@ pub async fn on_shutdown(state: &crate::state::AppState) {
             aborted.len()
         );
     }
+
+    // Close the relational pool last, once the work that uses it has stopped.
+    //
+    // Exiting without closing leaves a SQLite database's `-wal`/`-shm` sidecars
+    // on disk: dropping the pool only flags it closed and lets its connections
+    // tear down concurrently, and SQLite unlinks the sidecars only when the
+    // *last* connection closes (issue #132). The next start recovers them, so
+    // nothing is corrupt, but a server whose data directory is ephemeral (a
+    // container, a test harness) leaves litter behind and looks like it crashed.
+    if let Some(lib) = state.lib.as_ref() {
+        match cognee_database::close(&lib.database).await {
+            Ok(()) => tracing::info!("relational database closed"),
+            Err(e) => tracing::warn!("closing the relational database failed (non-fatal): {e}"),
+        }
+    }
 }

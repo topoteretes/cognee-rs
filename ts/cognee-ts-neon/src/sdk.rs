@@ -21,15 +21,41 @@ pub use cognee_bindings_common::HandleState;
 
 use crate::errors::throw_sdk_error;
 use crate::json::stringify_js;
-use crate::runtime::{ensure_runtime, runtime};
+use crate::runtime::{ensure_runtime, runtime, try_runtime};
 
 /// The boxed SDK handle. Survives across JS calls (held by a `JsBox`).
 pub struct CogneeHandle {
     pub state: Arc<HandleState>,
 }
 
-// Default no-op finalize is fine: the `Arc`s drop when the `JsBox` is GC'd.
-impl Finalize for CogneeHandle {}
+impl Finalize for CogneeHandle {
+    /// Give the resources back when V8 collects a handle the program never
+    /// closed.
+    ///
+    /// Dropping the `Arc`s is not enough: the relational pool's destructor lets
+    /// its connections tear down concurrently, so a SQLite database's
+    /// `-wal`/`-shm` sidecars end up orphaned on disk (issue #132). This is the
+    /// *implicit* teardown, so it releases without closing — anything still
+    /// holding a clone of the state (an in-flight op) keeps working and simply
+    /// re-warms.
+    ///
+    /// `finalize` runs on the JavaScript thread during garbage collection, where
+    /// blocking would stall the event loop, so the teardown is handed to the
+    /// tokio runtime instead. That makes it best-effort: a process that exits
+    /// promptly afterwards may not give the task time to run, which is why
+    /// [`Cognee.close()`](cognee_close) exists and is the documented path.
+    fn finalize<'a, C: Context<'a>>(self, _cx: &mut C) {
+        // Nothing was ever opened → nothing to release, and no reason to touch
+        // the runtime (which may not even be initialised).
+        if !self.state.has_open_resources() {
+            return;
+        }
+        if let Some(rt) = try_runtime() {
+            let state = self.state;
+            rt.spawn(async move { state.release().await });
+        }
+    }
+}
 
 impl CogneeHandle {
     /// Build the handle from settings (sync, no I/O).
@@ -146,6 +172,30 @@ pub fn cognee_owner_id(mut cx: FunctionContext) -> JsResult<JsPromise> {
     });
 
     Ok(promise)
+}
+
+/// `cogneeClose(handle)`
+///
+/// Close the handle: release the relational connection pool and, with it, a
+/// SQLite database's `-wal`/`-shm` sidecar files, then mark the handle closed.
+///
+/// **Synchronous and blocking** — deliberately. The point of a close is that the
+/// files are gone when it returns (a caller's next act is often to delete the
+/// directory they live in), and a synchronous close is also what `Symbol.dispose`
+/// requires. The work is a pool drain, measured in microseconds, not a network
+/// round-trip. Dropping the handle instead is a race that orphans the files
+/// (issue #132).
+///
+/// Idempotent, and a no-op on a handle that was never warmed. Any op started
+/// afterwards rejects with a "handle is closed" error rather than silently
+/// reopening the database.
+pub fn cognee_close(mut cx: FunctionContext) -> JsResult<JsUndefined> {
+    let handle = cx.argument::<JsBox<CogneeHandle>>(0)?;
+    let state = Arc::clone(&handle.state);
+    if let Some(rt) = try_runtime() {
+        state.close_blocking(rt.handle());
+    }
+    Ok(cx.undefined())
 }
 
 /// `Settings` populated from the environment (defaults + env overlay).
