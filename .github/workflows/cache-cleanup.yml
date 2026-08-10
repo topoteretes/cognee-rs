@@ -74,7 +74,15 @@ concurrency:
   # deleting ten branches would silently skip most of the cleanups. Per-ref runs
   # all survive; the API pressure that creates is handled by the retry/backoff
   # around the DELETE below instead.
-  group: cache-cleanup-${{ github.event.pull_request.number || inputs.ref || inputs.pr_number || github.event.ref }}
+  # The delete-event fallback includes ref_type: `github.event.ref` is the
+  # UNQUALIFIED name, so a branch and a tag both called v0.2.0 would otherwise
+  # share one group. Note the fix is NOT `github.ref` — on a delete event that
+  # is not the deleted ref (it no longer exists), so it would collapse every
+  # deletion into a single group, and per the note above most of a batch would
+  # then be cancelled rather than queued.
+  group: >-
+    cache-cleanup-${{ github.event.pull_request.number || inputs.ref || inputs.pr_number
+    || format('{0}/{1}', github.event.ref_type, github.event.ref) }}
   cancel-in-progress: false
 
 jobs:
@@ -232,6 +240,6 @@ jobs:
 
           if [ "${FAILED}" -gt 0 ]; then
             echo "error: ${FAILED} cache delete(s) failed for ${REF}" >&2
-            echo "       retry with: gh workflow run cache-cleanup.yml -f ref=${REF}" >&2
+            echo "       retry with: gh workflow run cache-cleanup.yml -f ref='${REF}'" >&2
             exit 1
           fi
