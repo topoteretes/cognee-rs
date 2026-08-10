@@ -192,6 +192,9 @@ pub fn cognee_owner_id(mut cx: FunctionContext) -> JsResult<JsPromise> {
 pub fn cognee_close(mut cx: FunctionContext) -> JsResult<JsUndefined> {
     let handle = cx.argument::<JsBox<CogneeHandle>>(0)?;
     let state = Arc::clone(&handle.state);
+    // `cogneeNew` ensures the runtime, so a live handle always has one; the
+    // `None` arm is unreachable in practice and only avoids building a runtime
+    // for the sake of shutting it down.
     if let Some(rt) = try_runtime() {
         state.close_blocking(rt.handle());
     }

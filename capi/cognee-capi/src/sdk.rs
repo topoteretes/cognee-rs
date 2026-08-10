@@ -466,6 +466,9 @@ pub unsafe extern "C" fn cg_sdk_close(sdk: *mut CgSdk) {
     // SAFETY: non-null, and the caller guarantees the pointer is live for this
     // call (same contract as every other `cg_sdk_*` entry point).
     let state = unsafe { &(*sdk).state };
+    // `cg_sdk_new` initialises the runtime idempotently, so a live handle always
+    // has one; the `None` arm is unreachable in practice and only avoids building
+    // a runtime for the sake of shutting it down.
     if let Some(rt) = crate::runtime::global_runtime() {
         state.close_blocking(&rt.handle());
     }
