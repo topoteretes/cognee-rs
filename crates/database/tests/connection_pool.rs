@@ -357,3 +357,57 @@ async fn writable_file_in_read_only_dir_connects_without_wal() {
     // Restore so tempdir cleanup can remove the directory.
     std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
 }
+
+/// Closing the pool must remove the WAL sidecars, deterministically, and for a
+/// pool that actually has several connections open.
+///
+/// Dropping the connection cannot be asserted instead: sqlx's pool destructor
+/// only flags the pool closed and lets each connection tear down concurrently on
+/// its own worker thread, so whether any of them observes itself as the last
+/// connection — the precondition for SQLite unlinking `-wal`/`-shm` — is a race
+/// (issue #132). `close` closes them one at a time, so it is not.
+#[tokio::test(flavor = "multi_thread")]
+async fn close_releases_wal_sidecars() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("closing.db");
+    let wal = path.with_file_name("closing.db-wal");
+    let shm = path.with_file_name("closing.db-shm");
+    let url = format!("sqlite://{}?mode=rwc", path.display());
+
+    let db = std::sync::Arc::new(connect(&url).await.expect("connect"));
+    db.execute(Statement::from_string(
+        DatabaseBackend::Sqlite,
+        "CREATE TABLE t (x INTEGER)",
+    ))
+    .await
+    .unwrap();
+
+    // Force the pool past one connection: the single-connection drop path
+    // happens to clean up, so a one-connection pool would not exercise the bug.
+    let mut queries = Vec::new();
+    for _ in 0..8 {
+        let db = std::sync::Arc::clone(&db);
+        queries.push(tokio::spawn(async move {
+            db.query_one(Statement::from_string(DatabaseBackend::Sqlite, "SELECT 1"))
+                .await
+                .unwrap();
+        }));
+    }
+    for q in queries {
+        q.await.unwrap();
+    }
+    assert!(
+        db.get_sqlite_connection_pool().size() > 1,
+        "the concurrent queries should have opened more than one connection",
+    );
+    assert!(
+        wal.exists() && shm.exists(),
+        "WAL mode creates both sidecars"
+    );
+
+    cognee_database::close(&db).await.expect("close");
+
+    // No polling: the files are gone before `close` resolves.
+    assert!(!wal.exists(), "-wal must be removed by close");
+    assert!(!shm.exists(), "-shm must be removed by close");
+}

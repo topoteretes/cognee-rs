@@ -118,6 +118,17 @@ pub extern "system" fn Java_ai_cognee_internal_Native_newHandle<'l>(
 }
 
 /// `ai.cognee.internal.Native.destroy(long handle)`
+///
+/// Closes the handle's relational connection pool **before** dropping the state,
+/// blocking until it is closed. Dropping alone is not a close: SQLite would keep
+/// its `-wal`/`-shm` sidecars on disk until process exit (issue #132), so
+/// `Cognee.close()` has to return with the files already gone — a Java caller's
+/// next act is often to delete the directory they live in.
+///
+/// Each `Cognee` owns its own handle (there is no Java-level handle clone), so
+/// the only other references that can exist here are the `Arc` clones held by
+/// in-flight async ops. Those are ops started before `close()` and not yet
+/// awaited, which the Java contract already treats as a use-after-close.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_ai_cognee_internal_Native_destroy<'l>(
     mut env: JNIEnv<'l>,
@@ -129,9 +140,13 @@ pub extern "system" fn Java_ai_cognee_internal_Native_destroy<'l>(
             // SAFETY: `handle` came from `newHandle`; the Java op/close RW-lock
             // ensures no op is in flight here and `Cleanable.clean()` runs this
             // at most once, so `destroy` runs exactly once with no live borrow.
-            unsafe {
-                drop(Box::from_raw(handle as *mut Arc<HandleState>));
+            let state = unsafe { Box::from_raw(handle as *mut Arc<HandleState>) };
+            // A runtime that failed to build means no op ever ran, so there is
+            // nothing open to close.
+            if let Ok(rt) = crate::runtime::runtime() {
+                state.close_blocking(rt.handle());
             }
+            drop(state);
         }
     })
 }

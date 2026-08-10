@@ -83,8 +83,12 @@ try (Cognee cognee = new Cognee(Map.of("data_root_directory", "./data"))) {
 
 `Cognee` is `AutoCloseable` — use try-with-resources so the native handle is
 released promptly (a `Cleaner` is a leak backstop, but `close()` is the primary
-path). Settings keys are the canonical snake_case `Settings` field names; absent
-keys fall back to environment variables and then compiled-in defaults.
+path). `close()` blocks until the relational connection pool is closed, so a
+SQLite database's `-wal`/`-shm` sidecars are already gone when it returns and the
+directory holding them can be deleted; the flip side is that an operation still
+in flight may fail on its next query, so join your futures before closing.
+Settings keys are the canonical snake_case `Settings` field names; absent keys
+fall back to environment variables and then compiled-in defaults.
 
 ## Operation surface
 

@@ -314,6 +314,38 @@ fn sqlite_parent_dir_is_writable(path: &std::path::Path) -> bool {
     }
 }
 
+/// Close the relational connection pool, releasing SQLite's `-wal`/`-shm`
+/// sidecars deterministically.
+///
+/// **Dropping a [`DatabaseConnection`] is not a close.** sqlx's pool destructor
+/// only flags the pool closed and then lets every pooled connection tear itself
+/// down independently, each on its own sqlite worker thread, concurrently and in
+/// no defined order. SQLite removes the `-wal`/`-shm` sidecars only when the
+/// *last* connection to the file closes, and only if that close can take an
+/// exclusive lock on the shared-memory index: when two connections close at the
+/// same instant neither can take it, so neither runs the final
+/// checkpoint-and-unlink and the sidecars are orphaned on disk — observable as
+/// `<db>-wal`/`<db>-shm` files that outlive the last handle by minutes
+/// (topoteretes/cognee-rs#132). With a single pooled connection the drop path
+/// happens to clean up; with more than one it is a race, which is why relying on
+/// `Drop` is not enough.
+///
+/// [`sea_orm::DatabaseConnection::close_by_ref`] runs sqlx's real close: pooled
+/// connections are closed one at a time and checked-out ones are awaited, so
+/// exactly one connection observes itself as the last and the sidecars are gone
+/// before this future resolves.
+///
+/// Idempotent, and safe to call while other `Arc` clones of the connection are
+/// still alive: they observe a closed pool and fail their next query rather than
+/// silently reconnecting. Callers that may be reused (e.g.
+/// `ComponentManager::close`) drop their cached connection so the next access
+/// builds a fresh one.
+pub async fn close(db: &DatabaseConnection) -> Result<(), DatabaseError> {
+    db.close_by_ref()
+        .await
+        .map_err(|e| DatabaseError::ConnectionError(e.to_string()))
+}
+
 /// Run all pending migrations on an existing connection.
 pub async fn initialize(db: &DatabaseConnection) -> Result<(), DatabaseError> {
     Migrator::up(db, None)

@@ -206,6 +206,33 @@ impl ComponentManager {
         *guard = Some((current_ver, new.clone()));
         Ok(new)
     }
+
+    /// Release the cached components that hold OS resources beyond their own
+    /// memory, instead of waiting for `Drop`.
+    ///
+    /// Today that means the relational connection pool: dropping it does not
+    /// close it, so a SQLite database can leave its `-wal`/`-shm` sidecars
+    /// orphaned on disk long after the manager is gone (see
+    /// [`cognee_database::close`] for the mechanism). The other components
+    /// (storage, graph, vector, embedding, LLM, transcriber) expose no explicit
+    /// shutdown and release everything on drop, so they are left untouched.
+    ///
+    /// The connection is **taken out of the cache** before it is closed, so this
+    /// leaves the manager reusable — just cold: the next `database()` builds a
+    /// fresh pool rather than handing out the closed one. Calling this twice is a
+    /// no-op the second time, and calling it on a manager that never opened the
+    /// database does nothing at all.
+    ///
+    /// A close failure is logged rather than returned: the caller is tearing the
+    /// manager down and has no remedy, and the pool is unusable either way.
+    pub async fn close(&self) {
+        let cached = self.database.write().await.take();
+        if let Some((_, db)) = cached
+            && let Err(e) = cognee_database::close(&db).await
+        {
+            tracing::warn!(error = %e, "failed to close the relational connection pool");
+        }
+    }
 }
 
 // Versioned accessor helper macro — avoids repeating the double-checked

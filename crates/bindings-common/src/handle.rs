@@ -170,6 +170,68 @@ impl HandleState {
         Ok(svc)
     }
 
+    /// Release the resources this handle opened, now rather than at `Drop`.
+    ///
+    /// Dropping the handle is **not** a close: the relational pool's destructor
+    /// only flags the pool closed and lets its connections tear down
+    /// concurrently, which for SQLite leaves the `-wal`/`-shm` sidecars orphaned
+    /// on disk (see `cognee::database::close` for the full mechanism and
+    /// topoteretes/cognee-rs#132 for the measurements). A binding with an explicit
+    /// teardown entry point calls this from it — the Java binding does, from
+    /// `Cognee.close()` — so the files are gone by the time that entry point
+    /// returns. Bindings whose only teardown is a GC finalizer (Python, TS) have
+    /// no such entry point yet and are still subject to the drop race.
+    ///
+    /// Non-poisoning and idempotent: the cached service bundle and the resolved
+    /// owner id are cleared too, so a later op on the same handle re-warms from
+    /// scratch against a fresh connection instead of failing. What it does *not*
+    /// do is wait for concurrent operations — an op that is mid-flight when this
+    /// runs holds its own `Arc<CogneeServices>` and will see a closed pool on its
+    /// next query, so bindings should only close once their own contract says the
+    /// handle is done.
+    pub async fn close(&self) {
+        // Clear the cached bundle: it holds an `Arc` clone of the connection, and
+        // dropping it is what makes the close non-poisoning — the next
+        // `services()` rebuilds instead of handing out the closed pool. The lock
+        // is held across the close so a concurrent `services()` cannot slip a
+        // freshly built pool into the cache in between and have it closed
+        // underneath it. Lock order (services → owner id → the manager's caches)
+        // is the same one `services()` takes, so this cannot deadlock.
+        let mut guard = self.services.lock().await;
+        drop(guard.take());
+        *self.owner_id.lock().await = None;
+        self.cm.close().await;
+    }
+
+    /// Blocking wrapper around [`close`](Self::close) for a synchronous binding
+    /// teardown hook (the JNI `destroy`), which cannot `.await`.
+    ///
+    /// `rt` is the binding's own runtime handle, used when the calling thread has
+    /// no runtime of its own — the normal case, since teardown runs on the
+    /// embedder's thread (a Java `close()` call or the `Cleaner` thread). Teardown
+    /// invoked from *inside* the async runtime is also possible, though — a Java
+    /// `CompletableFuture` continuation runs on a worker thread — and blocking a
+    /// worker outright would stall the runtime, so that case hands the thread over
+    /// to the blocking pool first and still closes before returning.
+    pub fn close_blocking(self: &Arc<Self>, rt: &tokio::runtime::Handle) {
+        use tokio::runtime::{Handle, RuntimeFlavor};
+
+        match Handle::try_current() {
+            Err(_) => rt.block_on(self.close()),
+            Ok(current) if current.runtime_flavor() == RuntimeFlavor::MultiThread => {
+                tokio::task::block_in_place(|| current.block_on(self.close()));
+            }
+            Ok(current) => {
+                // A current-thread runtime cannot hand the thread off
+                // (`block_in_place` panics there), so the close cannot be awaited
+                // here without deadlocking the very runtime that has to drive it.
+                // Spawn it instead: the pool closes moments later.
+                let this = Arc::clone(self);
+                current.spawn(async move { this.close().await });
+            }
+        }
+    }
+
     /// Resolve the owner id, warming lazily if necessary.
     pub async fn owner_id(&self) -> Result<Uuid, SdkError> {
         // `services()` guarantees `owner_id` is populated on its build path.

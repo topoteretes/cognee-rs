@@ -54,3 +54,6 @@ uuid       = { workspace = true }
 tokio      = { workspace = true }
 async-trait = { workspace = true }
 base64      = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

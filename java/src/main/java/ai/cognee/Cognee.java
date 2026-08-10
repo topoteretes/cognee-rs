@@ -357,6 +357,17 @@ public final class Cognee implements AutoCloseable {
         return Native.version();
     }
 
+    /**
+     * Release the native handle and the resources it opened.
+     *
+     * <p>Blocks until the relational connection pool is closed, so once this
+     * returns the database's SQLite {@code -wal}/{@code -shm} sidecars are gone
+     * and the directory holding them can be deleted. Idempotent.
+     *
+     * <p>Any operation still in flight (started before {@code close()} and not
+     * yet joined) may therefore fail on its next query: closing releases the
+     * connections those operations are using. Join your futures first.
+     */
     @Override
     public void close() {
         lifecycleLock.writeLock().lock();
