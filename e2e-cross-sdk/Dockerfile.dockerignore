@@ -1,0 +1,50 @@
+# Exclude build artifacts and large directories from the Docker build context.
+# Context is the monorepo root (the parent of cognee-rust/).
+#
+# The filename matters. This was `.dockerignore` sitting next to the Dockerfile,
+# which Docker never reads: it resolves `.dockerignore` relative to the CONTEXT
+# ROOT, and the context here is the monorepo root one level above this repo.
+# `docker buildx build --check` confirmed it — `load .dockerignore` reported
+# `transferring context: 2B`, i.e. an empty ignore list. So none of the rules
+# below had ever applied. BuildKit does honour `<dockerfile-name>.dockerignore`
+# next to the Dockerfile, which is what this name is for.
+#
+# This became load-bearing rather than cosmetic once the Rust binaries moved to
+# the runner: the build now runs AFTER `cargo build --release`, so a multi-GB
+# `cognee-rust/target/` sits in the context on CI too, not just locally.
+
+# Rust build artifacts, in every workspace (root, capi/, bindings/, and the
+# python/ts binding trees). `cognee-rust/dist/` is deliberately NOT excluded —
+# the harness stage COPYs the release binaries from it.
+**/target/
+
+# Git
+**/.git/
+
+# Python caches
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/.pytest_cache/
+
+# Runtime data
+**/.data_storage/
+**/.cognee_system/
+**/.cognee_cache/
+
+# Node
+**/node_modules/
+
+# IDE
+**/.idea/
+**/.vscode/
+
+# OS
+**/.DS_Store
+
+# Docker-in-Docker
+**/docker-compose.override.yml
+
+# Large unneeded dirs in Python repo
+cognee/cognee-frontend/
+cognee/.chromadb_data/

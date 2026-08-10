@@ -27,6 +27,13 @@ on:
   # and calls the cache API.
   pull_request_target:
     types: [ closed ]
+  # Branch deletion reclaims refs/heads/<branch> caches, which the PR path above
+  # does not cover. Anything dispatched via workflow_dispatch on a branch (or a
+  # push to a non-PR branch) writes under the branch ref, and those entries
+  # survive the branch itself until their 7-day expiry — during this repo's CI
+  # work they had to be deleted by hand twice, including a 0.92 GB release tree.
+  # Not fork-triggerable: deleting a branch requires push access.
+  delete:
   # Lets a maintainer reclaim a specific PR's caches by hand without waiting
   # for a close event (e.g. for PRs closed before this workflow existed).
   workflow_dispatch:
@@ -43,7 +50,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: cache-cleanup-${{ github.event.pull_request.number || inputs.pr_number }}
+  # github.event.ref covers the delete event, where there is no PR number.
+  group: cache-cleanup-${{ github.event.pull_request.number || inputs.pr_number || github.event.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -55,21 +63,37 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
           PR: ${{ github.event.pull_request.number || inputs.pr_number }}
+          DELETED_REF: ${{ github.event.ref }}
+          DELETED_REF_TYPE: ${{ github.event.ref_type }}
         run: |
           set -euo pipefail
 
-          # Validate before building any URL or jq program. `pr_number` is a
-          # free-form workflow_dispatch string, and it used to be interpolated
-          # straight into a jq `select(.ref == "…")` predicate — a value
-          # containing a double quote rewrote the filter instead of being
-          # matched by it, and `x" or true or .ref=="` would have matched every
-          # cache in the repo and deleted main's warm caches wholesale.
-          if ! [[ "${PR}" =~ ^[0-9]+$ ]]; then
-            echo "error: pr_number must be digits only, got '${PR}'" >&2
-            exit 1
+          # Which ref to reclaim depends on the event: a closed PR owns
+          # refs/pull/<n>/merge, a deleted branch owns refs/heads/<branch>.
+          if [ "${EVENT}" = "delete" ]; then
+            # Tags never have caches of their own; only branches do.
+            if [ "${DELETED_REF_TYPE}" != "branch" ]; then
+              echo "${DELETED_REF_TYPE} deletion (${DELETED_REF}) — no caches to reclaim."
+              exit 0
+            fi
+            REF="refs/heads/${DELETED_REF}"
+            LABEL="deleted branch ${DELETED_REF}"
+          else
+            # Validate before building anything from it. `pr_number` is a
+            # free-form workflow_dispatch string, and it used to be interpolated
+            # straight into a jq `select(.ref == "…")` predicate — a value
+            # containing a double quote rewrote the filter instead of being
+            # matched by it, and `x" or true or .ref=="` would have matched
+            # every cache in the repo and deleted main's warm caches wholesale.
+            if ! [[ "${PR}" =~ ^[0-9]+$ ]]; then
+              echo "error: pr_number must be digits only, got '${PR}'" >&2
+              exit 1
+            fi
+            REF="refs/pull/${PR}/merge"
+            LABEL="PR #${PR}"
           fi
-          REF="refs/pull/${PR}/merge"
           echo "Reclaiming caches for ${REF}"
 
           # Filter by ref SERVER-side and paginate.
@@ -89,8 +113,8 @@ jobs:
           # was reported as "no caches found — nothing to do" on a green run.
           # A janitor job nobody watches must not fail silently.
           CACHES="$(mktemp)"
-          if ! gh api --paginate \
-                "repos/${GH_REPO}/actions/caches?per_page=100&ref=${REF}" \
+          if ! gh api --paginate -X GET "repos/${GH_REPO}/actions/caches" \
+                -f per_page=100 -f ref="${REF}" \
                 --jq '.actions_caches[] | [.id, .size_in_bytes, .key] | @tsv' \
                 > "${CACHES}"; then
             echo "error: failed to list caches for ${REF} (see the API error above)" >&2
@@ -128,7 +152,7 @@ jobs:
 
           echo "Reclaimed $((FREED / 1024 / 1024)) MiB for ${REF}"
           {
-            echo "### Cache cleanup for PR #${PR}"
+            echo "### Cache cleanup for ${LABEL}"
             echo "Reclaimed **$((FREED / 1024 / 1024)) MiB** across ${COUNT} cache entries."
             if [ "${FAILED}" -gt 0 ]; then
               echo ""
