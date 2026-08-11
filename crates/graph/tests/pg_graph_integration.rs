@@ -99,6 +99,15 @@ macro_rules! pggraph_test {
             .await;
             tmp.cleanup().await;
             if let Err(join_err) = outcome {
+                // A `JoinError` here can only be a panic: the task is never
+                // aborted and its handle is awaited immediately, so there is no
+                // cancellation path. Assert that rather than leaning on it —
+                // `into_panic()` panics on a cancelled task, which would replace
+                // the real failure with a confusing one.
+                assert!(
+                    join_err.is_panic(),
+                    "the case task was cancelled instead of panicking, which this harness never does: {join_err}"
+                );
                 std::panic::resume_unwind(join_err.into_panic());
             }
         }
