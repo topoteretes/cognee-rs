@@ -1,0 +1,59 @@
+[package]
+name = "cognee-mcp"
+version.workspace = true
+build = "build.rs"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "stdio MCP adapter for Cognee memory tools (remember / recall / forget)."
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+name = "cognee_mcp"
+path = "src/lib.rs"
+
+[[bin]]
+name = "cognee-agent"
+path = "src/bin/cognee-agent.rs"
+
+[features]
+default = []
+runtime = ["dep:rusqlite", "dep:libc"]
+engine = ["runtime", "dep:cognee-bindings-common", "dep:cognee"]
+fleet = [
+    "engine",
+    "cognee-bindings-common/ladybug",
+    "cognee-bindings-common/lancedb",
+    "cognee-bindings-common/sqlite",
+    "cognee-bindings-common/hf-tokenizer",
+    "cognee-bindings-common/tiktoken",
+]
+
+[dependencies]
+async-trait = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+strsim = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["io-std", "io-util", "macros", "rt", "sync", "time"] }
+url = { workspace = true }
+cognee-bindings-common = { path = "../bindings-common", version = "0.2.0", default-features = false, optional = true }
+cognee = { path = "../lib", version = "0.2.0", default-features = false, optional = true }
+rusqlite = { version = "0.32", optional = true }
+libc = { version = "0.2", optional = true }
+rustix = { version = "1", features = ["fs", "process"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["io-std", "io-util", "macros", "rt", "rt-multi-thread", "time"] }

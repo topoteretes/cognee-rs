@@ -46,6 +46,10 @@ members = [
     # Shared SDK facade (HandleState, CogneeServices, SdkError, wire helpers)
     # consumed by both the Neon JS binding and the C API binding (decision D1).
     "crates/bindings-common",
+
+    # stdio MCP adapter (remember / recall / forget). Default features empty so
+    # protocol tests do not pull the engine.
+    "crates/mcp",
 ]
 resolver = "3"
 

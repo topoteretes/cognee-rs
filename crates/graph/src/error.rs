@@ -8,6 +8,10 @@ pub type GraphDBResult<T> = Result<T, GraphDBError>;
 /// Errors that can occur during graph database operations.
 #[derive(Error, Debug)]
 pub enum GraphDBError {
+    /// A mutating operation was requested on an immutable graph generation.
+    #[error("Graph database is read-only")]
+    ReadOnly,
+
     /// Database initialization failed
     #[error("Failed to initialize database: {0}")]
     InitializationError(String),

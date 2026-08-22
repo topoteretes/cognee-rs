@@ -205,6 +205,7 @@ fn search_results_from_batches(batches: Vec<RecordBatch>) -> VectorDBResult<Vec<
 /// LanceDB-backed vector store.
 pub struct LanceDbAdapter {
     connection: Connection,
+    read_only: bool,
     /// Cached per-collection dimensions so we can rebuild Arrow schemas without
     /// re-opening each table on every write/search call.
     dimensions: Arc<RwLock<HashMap<String, usize>>>,
@@ -213,8 +214,34 @@ pub struct LanceDbAdapter {
 impl LanceDbAdapter {
     /// Open (or create) a LanceDB store at the given filesystem path.
     pub async fn new(path: PathBuf) -> VectorDBResult<Self> {
+        Self::open(path, false).await
+    }
+
+    /// Open an existing LanceDB directory for query-only use.
+    ///
+    /// LanceDB currently exposes no connection-level read-only flag, so this
+    /// constructor refuses missing paths and every adapter mutator is guarded.
+    /// Published generations additionally rely on filesystem permissions.
+    pub async fn new_read_only(path: PathBuf) -> VectorDBResult<Self> {
+        let metadata = std::fs::metadata(&path).map_err(|error| {
+            VectorDBError::StorageError(format!(
+                "read-only lancedb directory is unavailable ({}): {error}",
+                path.display()
+            ))
+        })?;
+        if !metadata.is_dir() {
+            return Err(VectorDBError::StorageError(format!(
+                "read-only lancedb path is not a directory: {}",
+                path.display()
+            )));
+        }
+        Self::open(path, true).await
+    }
+
+    async fn open(path: PathBuf, read_only: bool) -> VectorDBResult<Self> {
         if let Some(parent) = path.parent()
             && !parent.as_os_str().is_empty()
+            && !read_only
         {
             std::fs::create_dir_all(parent)?;
         }
@@ -224,8 +251,17 @@ impl LanceDbAdapter {
         let connection = connect(uri).execute().await.map_err(map_lance_err)?;
         Ok(Self {
             connection,
+            read_only,
             dimensions: Arc::new(RwLock::new(HashMap::new())),
         })
+    }
+
+    fn ensure_writable(&self) -> VectorDBResult<()> {
+        if self.read_only {
+            Err(VectorDBError::ReadOnly)
+        } else {
+            Ok(())
+        }
     }
 
     async fn cached_dimension(&self, table_name: &str) -> Option<usize> {
@@ -269,6 +305,7 @@ impl VectorDB for LanceDbAdapter {
         field_name: &str,
         dimension: usize,
     ) -> VectorDBResult<()> {
+        self.ensure_writable()?;
         let name = collection_name(data_type, field_name);
         if self.has_collection(data_type, field_name).await? {
             // Idempotent: matches BruteForceVectorDB.create_collection semantics.
@@ -301,6 +338,7 @@ impl VectorDB for LanceDbAdapter {
         field_name: &str,
         points: &[VectorPoint],
     ) -> VectorDBResult<()> {
+        self.ensure_writable()?;
         if points.is_empty() {
             return Ok(());
         }
@@ -380,6 +418,7 @@ impl VectorDB for LanceDbAdapter {
         field_name: &str,
         points: &[VectorPoint],
     ) -> VectorDBResult<()> {
+        self.ensure_writable()?;
         // Empty input is a no-op — must not touch `points[0]`.
         if points.is_empty() {
             return Ok(());
@@ -512,6 +551,7 @@ impl VectorDB for LanceDbAdapter {
     }
 
     async fn delete_collection(&self, data_type: &str, field_name: &str) -> VectorDBResult<()> {
+        self.ensure_writable()?;
         let name = collection_name(data_type, field_name);
         match self.connection.drop_table(&name, &[]).await {
             Ok(()) => {
@@ -529,6 +569,7 @@ impl VectorDB for LanceDbAdapter {
         field_name: &str,
         point_ids: &[Uuid],
     ) -> VectorDBResult<()> {
+        self.ensure_writable()?;
         if point_ids.is_empty() {
             return Ok(());
         }
@@ -590,6 +631,15 @@ impl VectorDB for LanceDbAdapter {
             })
             .collect())
     }
+
+    async fn prune(&self) -> VectorDBResult<()> {
+        self.ensure_writable()?;
+        let collections = self.list_collections().await?;
+        for (data_type, field_name) in collections {
+            self.delete_collection(&data_type, &field_name).await?;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -601,7 +651,65 @@ mod tests {
     )]
     use super::*;
     use serde_json::json;
+    use std::path::{Path, PathBuf};
     use tempfile::tempdir;
+
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
+    fn tree_snapshot(root: &Path) -> Vec<(PathBuf, bool, u64, Vec<u8>)> {
+        fn visit(root: &Path, path: &Path, out: &mut Vec<(PathBuf, bool, u64, Vec<u8>)>) {
+            let mut entries: Vec<_> = std::fs::read_dir(path)
+                .unwrap()
+                .map(|entry| entry.unwrap())
+                .collect();
+            entries.sort_by_key(|entry| entry.file_name());
+            for entry in entries {
+                let path = entry.path();
+                let metadata = entry.metadata().unwrap();
+                let relative = path.strip_prefix(root).unwrap().to_path_buf();
+                #[cfg(unix)]
+                let mode = u64::from(metadata.permissions().mode());
+                #[cfg(not(unix))]
+                let mode = u64::from(metadata.permissions().readonly());
+                if metadata.is_dir() {
+                    out.push((relative, true, mode, Vec::new()));
+                    visit(root, &path, out);
+                } else {
+                    out.push((relative, false, mode, std::fs::read(path).unwrap()));
+                }
+            }
+        }
+
+        let mut out = Vec::new();
+        visit(root, root, &mut out);
+        out
+    }
+
+    #[cfg(unix)]
+    fn set_tree_mode(root: &Path, dir_mode: u32, file_mode: u32) {
+        fn visit(path: &Path, dir_mode: u32, file_mode: u32) {
+            let entries: Vec<_> = std::fs::read_dir(path)
+                .unwrap()
+                .map(|entry| entry.unwrap())
+                .collect();
+            for entry in entries {
+                let path = entry.path();
+                let metadata = entry.metadata().unwrap();
+                if metadata.is_dir() {
+                    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(dir_mode))
+                        .unwrap();
+                    visit(&path, dir_mode, file_mode);
+                } else {
+                    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(file_mode))
+                        .unwrap();
+                }
+            }
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(dir_mode)).unwrap();
+        }
+
+        visit(root, dir_mode, file_mode);
+    }
 
     fn point(id: Uuid, vector: Vec<f32>, kind: &str) -> VectorPoint {
         VectorPoint::new(id, vector).with_metadata("kind", json!(kind))
@@ -612,6 +720,77 @@ mod tests {
         let path = dir.path().join("store.lance");
         let adapter = LanceDbAdapter::new(path).await.unwrap();
         (adapter, dir)
+    }
+
+    #[tokio::test]
+    async fn read_only_adapter_reads_rejects_mutation_and_preserves_tree() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("read-only.lance");
+        let id = Uuid::new_v4();
+        {
+            let adapter = LanceDbAdapter::new(path.clone()).await.unwrap();
+            adapter.create_collection("Chunk", "text", 2).await.unwrap();
+            adapter
+                .index_points("Chunk", "text", &[point(id, vec![1.0, 0.0], "seed")])
+                .await
+                .unwrap();
+        }
+
+        #[cfg(unix)]
+        set_tree_mode(&path, 0o555, 0o444);
+        let before = tree_snapshot(&path);
+
+        {
+            let adapter = LanceDbAdapter::new_read_only(path.clone()).await.unwrap();
+            let results = adapter
+                .search_similar("Chunk", "text", &[1.0, 0.0], 1)
+                .await
+                .unwrap();
+            assert_eq!(results.first().map(|result| result.id), Some(id));
+
+            assert!(matches!(
+                adapter.create_collection("Other", "text", 2).await,
+                Err(VectorDBError::ReadOnly)
+            ));
+            assert!(matches!(
+                adapter.index_points("Chunk", "text", &[]).await,
+                Err(VectorDBError::ReadOnly)
+            ));
+            assert!(matches!(
+                adapter.upsert_raw_vectors("Chunk", "text", &[]).await,
+                Err(VectorDBError::ReadOnly)
+            ));
+            assert!(matches!(
+                adapter.delete_collection("Chunk", "text").await,
+                Err(VectorDBError::ReadOnly)
+            ));
+            assert!(matches!(
+                adapter.delete_points("Chunk", "text", &[]).await,
+                Err(VectorDBError::ReadOnly)
+            ));
+            assert!(matches!(
+                adapter.prune().await,
+                Err(VectorDBError::ReadOnly)
+            ));
+        }
+
+        assert_eq!(tree_snapshot(&path), before);
+        #[cfg(unix)]
+        set_tree_mode(&path, 0o755, 0o644);
+    }
+
+    #[tokio::test]
+    async fn read_only_adapter_requires_an_existing_directory() {
+        let dir = tempdir().unwrap();
+        let missing = dir.path().join("missing.lance");
+
+        let err = match LanceDbAdapter::new_read_only(missing.clone()).await {
+            Ok(_) => panic!("missing read-only store must be rejected"),
+            Err(err) => err,
+        };
+
+        assert!(matches!(err, VectorDBError::StorageError(_)));
+        assert!(!missing.exists());
     }
 
     #[tokio::test]

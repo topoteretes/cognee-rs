@@ -7,7 +7,7 @@ use tracing::debug;
 
 use crate::error::SessionError;
 use crate::feedback;
-use crate::session_store::{SessionQAUpdate, SessionStore};
+use crate::session_store::{SessionQAUpdate, SessionStore, external_event_entry_id};
 use crate::types::{SessionQAEntry, SessionTraceStep, UsedGraphElementIds};
 
 const DEFAULT_SESSION_ID: &str = "default_session";
@@ -117,11 +117,49 @@ impl SessionManager {
         context: Option<&str>,
         used_graph_element_ids: Option<UsedGraphElementIds>,
     ) -> Result<String, SessionError> {
+        self.save_qa_with_external_event(
+            session_id,
+            user_id,
+            question,
+            answer,
+            context,
+            used_graph_element_ids,
+            None,
+        )
+        .await
+    }
+
+    /// Save a Q&A exchange with an optional exact-once external event key.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn save_qa_with_external_event(
+        &self,
+        session_id: Option<&str>,
+        user_id: Option<&str>,
+        question: &str,
+        answer: &str,
+        context: Option<&str>,
+        used_graph_element_ids: Option<UsedGraphElementIds>,
+        external_event_id: Option<&str>,
+    ) -> Result<String, SessionError> {
         let resolved_id = self.resolve_session_id(session_id);
-        let qa_id = self
-            .store
-            .create_qa_entry(resolved_id, user_id, question, answer, context)
-            .await?;
+        let qa_id = if let Some(event_id) = external_event_id {
+            let entry_id = external_event_entry_id(event_id);
+            self.store
+                .create_qa_entry_with_id(
+                    &entry_id,
+                    resolved_id,
+                    user_id,
+                    question,
+                    answer,
+                    context,
+                    Some(event_id),
+                )
+                .await?
+        } else {
+            self.store
+                .create_qa_entry(resolved_id, user_id, question, answer, context)
+                .await?
+        };
 
         // Write used_graph_element_ids if provided.
         if let Some(ids) = used_graph_element_ids
@@ -312,6 +350,19 @@ impl SessionManager {
             .await
     }
 
+    /// Whether a session already contains an external event.
+    pub async fn contains_external_event(
+        &self,
+        session_id: Option<&str>,
+        user_id: Option<&str>,
+        external_event_id: &str,
+    ) -> Result<bool, SessionError> {
+        let resolved_id = self.resolve_session_id(session_id);
+        self.store
+            .contains_external_event(resolved_id, user_id, external_event_id)
+            .await
+    }
+
     /// Append one agent-trace step to the session and return the generated
     /// `trace_id` (UUID4).
     ///
@@ -335,8 +386,42 @@ impl SessionManager {
         error_message: &str,
         generate_feedback: bool,
     ) -> Result<String, SessionError> {
+        self.add_agent_trace_step_with_external_event(
+            user_id,
+            session_id,
+            origin_function,
+            status,
+            memory_query,
+            memory_context,
+            method_params,
+            method_return_value,
+            error_message,
+            generate_feedback,
+            None,
+        )
+        .await
+    }
+
+    /// Append an agent trace step with an optional exact-once event key.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn add_agent_trace_step_with_external_event(
+        &self,
+        user_id: &str,
+        session_id: Option<&str>,
+        origin_function: &str,
+        status: &str,
+        memory_query: &str,
+        memory_context: &str,
+        method_params: serde_json::Value,
+        method_return_value: Option<serde_json::Value>,
+        error_message: &str,
+        generate_feedback: bool,
+        external_event_id: Option<&str>,
+    ) -> Result<String, SessionError> {
         let resolved_id = self.resolve_session_id(session_id);
-        let trace_id = uuid::Uuid::new_v4().to_string();
+        let trace_id = external_event_id
+            .map(external_event_entry_id)
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         let session_feedback = if generate_feedback {
             if let Some(llm) = self.llm.as_ref() {
                 feedback::generate_session_feedback(
@@ -361,6 +446,7 @@ impl SessionManager {
 
         let step = SessionTraceStep {
             trace_id: trace_id.clone(),
+            external_event_id: external_event_id.map(str::to_owned),
             origin_function: origin_function.to_string(),
             status: status.to_string(),
             memory_query: memory_query.to_string(),
@@ -410,6 +496,7 @@ mod tests {
     fn make_entry(question: &str, answer: &str) -> SessionQAEntry {
         SessionQAEntry {
             id: uuid::Uuid::new_v4(),
+            external_event_id: None,
             session_id: "s1".to_string(),
             user_id: None,
             question: question.to_string(),

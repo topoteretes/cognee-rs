@@ -54,6 +54,9 @@ pub struct OpenAIAdapter {
     /// `?api-version=<v>` query parameter. `None` is the standard OpenAI path.
     api_version: Option<String>,
     client: Client,
+    /// Optional caller identity sent on every request. Empty by default so
+    /// ordinary Cognee consumers retain reqwest's standard User-Agent.
+    user_agent: Option<String>,
     structured_output_retries: usize,
     /// Number of times to retry the HTTP request on transient network/server errors.
     network_retries: usize,
@@ -287,6 +290,7 @@ impl OpenAIAdapter {
             base_url,
             api_version: None,
             client,
+            user_agent: None,
             structured_output_retries: Self::DEFAULT_STRUCTURED_OUTPUT_RETRIES,
             network_retries: Self::DEFAULT_NETWORK_RETRIES,
             transcription_model,
@@ -417,6 +421,12 @@ impl OpenAIAdapter {
         self
     }
 
+    /// Set an optional User-Agent sent on every OpenAI-compatible request.
+    pub fn with_user_agent(mut self, user_agent: Option<String>) -> Self {
+        self.user_agent = user_agent.filter(|value| !value.trim().is_empty());
+        self
+    }
+
     /// Configure the model used for audio transcription (default: `"whisper-1"`).
     pub fn with_transcription_model(mut self, model: impl Into<String>) -> Self {
         self.transcription_model = model.into();
@@ -509,12 +519,16 @@ impl OpenAIAdapter {
         }
     }
 
-    /// Apply the provider's auth header: `api-key` for Azure, `Authorization:
-    /// Bearer` for standard OpenAI / OpenAI-compatible endpoints.
+    /// Apply headers shared by every request: provider auth plus the optional
+    /// caller identity.
     fn apply_auth(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-        match &self.api_version {
+        let req = match &self.api_version {
             Some(_) => req.header("api-key", &self.api_key),
             None => req.header("Authorization", self.auth_header()),
+        };
+        match &self.user_agent {
+            Some(user_agent) => req.header(reqwest::header::USER_AGENT, user_agent),
+            None => req,
         }
     }
 

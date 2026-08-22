@@ -127,6 +127,34 @@ pub async fn expand_with_nodes_and_edges(
     user_label: Option<&str>,
     task_rank: Option<i32>,
 ) -> (Vec<GraphNodePair>, Vec<GraphEdgePair>) {
+    expand_with_nodes_and_edges_for_external_events(
+        graphs,
+        dataset_id,
+        chunk_node_sets,
+        chunk_importance_weights,
+        &HashMap::new(),
+        existing_edges_set,
+        ontology_resolver,
+        user_label,
+        task_rank,
+    )
+    .await
+}
+
+/// Expand graphs while stamping a transport-neutral external event key onto
+/// every storage-layer node and edge derived from a tagged source chunk.
+#[allow(clippy::too_many_arguments)]
+pub async fn expand_with_nodes_and_edges_for_external_events(
+    graphs: Vec<(Uuid, KnowledgeGraph)>,
+    dataset_id: Uuid,
+    chunk_node_sets: &HashMap<Uuid, Vec<serde_json::Value>>,
+    chunk_importance_weights: &HashMap<Uuid, f64>,
+    chunk_external_event_ids: &HashMap<Uuid, String>,
+    existing_edges_set: &HashSet<String>,
+    ontology_resolver: &dyn OntologyResolver,
+    user_label: Option<&str>,
+    task_rank: Option<i32>,
+) -> (Vec<GraphNodePair>, Vec<GraphEdgePair>) {
     // Function-local visited set for the pre-stamp pass. The executor's
     // per-run set sees the same DataPoints during its own walk and
     // short-circuits via the `if dp.source_pipeline.is_none()` guard
@@ -151,6 +179,7 @@ pub async fn expand_with_nodes_and_edges(
 
     // Process all graphs — each graph carries its source chunk_id
     for (chunk_id, graph) in graphs {
+        let external_event_id = chunk_external_event_ids.get(&chunk_id).map(String::as_str);
         // The importance_weight every EntityType / Entity / ontology node
         // extracted from this chunk inherits, mirroring Python's
         // `importance_weight=data_chunk.importance_weight`
@@ -177,6 +206,10 @@ pub async fn expand_with_nodes_and_edges(
                 // (expand_with_nodes_and_edges.py:163).
                 et.base.importance_weight = Some(chunk_importance_weight);
                 pre_stamp_extraction(&mut et, user_label, task_rank, &mut local_visited);
+                if let Some(event_id) = external_event_id {
+                    et.base
+                        .set_metadata("cognee_external_event_id", serde_json::json!(event_id));
+                }
 
                 if ontology_resolver.is_loaded() {
                     match ontology_resolver.get_subgraph(&node.node_type, "classes", true) {
@@ -205,6 +238,7 @@ pub async fn expand_with_nodes_and_edges(
                                 user_label,
                                 task_rank,
                                 &mut local_visited,
+                                external_event_id,
                             );
                             // The resolver returns the matched root class
                             // *separately* from `onto_nodes` (it is not in the
@@ -222,6 +256,7 @@ pub async fn expand_with_nodes_and_edges(
                                 existing_edges_set,
                                 &mut ontology_edge_keys,
                                 &mut ontology_edges_out,
+                                external_event_id,
                             );
 
                             // Insert under canonical key
@@ -283,6 +318,16 @@ pub async fn expand_with_nodes_and_edges(
                     task_rank,
                     &mut local_visited,
                 );
+                if let Some(event_id) = external_event_id {
+                    entity_pair
+                        .entity
+                        .base
+                        .set_metadata("cognee_external_event_id", serde_json::json!(event_id));
+                    entity_pair
+                        .entity_type
+                        .base
+                        .set_metadata("cognee_external_event_id", serde_json::json!(event_id));
+                }
 
                 if ontology_resolver.is_loaded() {
                     match ontology_resolver.get_subgraph(&node.name, "individuals", true) {
@@ -337,6 +382,7 @@ pub async fn expand_with_nodes_and_edges(
                     user_label,
                     task_rank,
                     &mut local_visited,
+                    external_event_id,
                 );
                 process_ontology_edges(
                     &ont_nodes,
@@ -344,6 +390,7 @@ pub async fn expand_with_nodes_and_edges(
                     existing_edges_set,
                     &mut ontology_edge_keys,
                     &mut ontology_edges_out,
+                    external_event_id,
                 );
             }
         }
@@ -414,6 +461,9 @@ pub async fn expand_with_nodes_and_edges(
                 edge_pair.add_property("target_node_id", target_entity_id.to_string());
                 edge_pair.add_property("ontology_valid", "false");
                 edge_pair.add_property("edge_text", edge_text);
+                if let Some(event_id) = external_event_id {
+                    edge_pair.add_property("cognee_external_event_id", event_id);
+                }
 
                 e.insert(edge_pair);
             }
@@ -425,13 +475,19 @@ pub async fn expand_with_nodes_and_edges(
 
     // Convert ontology-derived class types into GraphNodePairs (as "type nodes")
     for et in ontology_types_map.into_values() {
-        let entity = Entity::from_node(
+        let external_event_id = et.base.get_metadata("cognee_external_event_id").cloned();
+        let mut entity = Entity::from_node(
             &et.name,
             &et.name,
             format!("Ontology-derived type: {}", et.name),
             et.base.id,
             Some(dataset_id),
         );
+        if let Some(event_id) = external_event_id {
+            entity
+                .base
+                .set_metadata("cognee_external_event_id", event_id);
+        }
         graph_nodes.push(GraphNodePair {
             entity,
             entity_type: et,
@@ -528,6 +584,7 @@ fn process_ontology_nodes(
     user_label: Option<&str>,
     task_rank: Option<i32>,
     visited: &mut HashSet<Uuid>,
+    external_event_id: Option<&str>,
 ) {
     for node in ontology_nodes {
         match node.category {
@@ -555,6 +612,10 @@ fn process_ontology_nodes(
                 // (expand_with_nodes_and_edges.py:66).
                 et.base.importance_weight = Some(importance_weight);
                 pre_stamp_extraction(&mut et, user_label, task_rank, visited);
+                if let Some(event_id) = external_event_id {
+                    et.base
+                        .set_metadata("cognee_external_event_id", serde_json::json!(event_id));
+                }
                 ontology_types_map.insert(dedup_key, et);
             }
             NodeCategory::Individuals => {
@@ -575,6 +636,11 @@ fn process_ontology_nodes(
                 // (expand_with_nodes_and_edges.py:79).
                 entity.base.importance_weight = Some(importance_weight);
                 pre_stamp_extraction(&mut entity, user_label, task_rank, visited);
+                if let Some(event_id) = external_event_id {
+                    entity
+                        .base
+                        .set_metadata("cognee_external_event_id", serde_json::json!(event_id));
+                }
 
                 // Placeholder EntityType for the GraphNodePair (Rust-only; the
                 // Python `Entity(is_a=...)` field is optional). Its id is stable
@@ -583,6 +649,11 @@ fn process_ontology_nodes(
                     EntityType::new("OntologyIndividual", "", Some(dataset_id));
                 placeholder_et.base.id = EntityType::id_for("OntologyIndividual");
                 pre_stamp_extraction(&mut placeholder_et, user_label, task_rank, visited);
+                if let Some(event_id) = external_event_id {
+                    placeholder_et
+                        .base
+                        .set_metadata("cognee_external_event_id", serde_json::json!(event_id));
+                }
 
                 let pair = GraphNodePair {
                     entity,
@@ -605,6 +676,7 @@ fn process_ontology_edges(
     existing_edge_keys: &HashSet<String>,
     ontology_edge_keys: &mut HashSet<String>,
     ontology_edges_out: &mut Vec<GraphEdgePair>,
+    external_event_id: Option<&str>,
 ) {
     // Mirror Python's `node_category = {node.name: node.category ...}`: an edge
     // endpoint that names a class resolves via `EntityType::id_for`, otherwise
@@ -637,6 +709,9 @@ fn process_ontology_edges(
         edge.add_property("relationship_name", &rel_name);
         edge.add_property("source_node_id", source_id.to_string());
         edge.add_property("target_node_id", target_id.to_string());
+        if let Some(event_id) = external_event_id {
+            edge.add_property("cognee_external_event_id", event_id);
+        }
 
         ontology_edge_keys.insert(edge_key);
         ontology_edges_out.push(edge);
@@ -713,6 +788,78 @@ mod tests {
         let names: Vec<String> = nodes.iter().map(|n| n.entity.name.clone()).collect();
         assert!(names.contains(&"TechCorp".to_string()));
         assert!(names.contains(&"Alice".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_expand_stamps_external_event_on_every_derived_node_and_edge() {
+        let chunk_id = Uuid::new_v4();
+        let event_ids = HashMap::from([(chunk_id, "evt-123".to_string())]);
+
+        let (nodes, edges) = expand_with_nodes_and_edges_for_external_events(
+            vec![(chunk_id, create_test_graph())],
+            Uuid::new_v4(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &event_ids,
+            &HashSet::new(),
+            &noop(),
+            None,
+            None,
+        )
+        .await;
+
+        assert!(!nodes.is_empty());
+        assert!(!edges.is_empty());
+        for node in nodes {
+            assert_eq!(
+                node.entity.base.get_metadata("cognee_external_event_id"),
+                Some(&serde_json::json!("evt-123"))
+            );
+            assert_eq!(
+                node.entity_type
+                    .base
+                    .get_metadata("cognee_external_event_id"),
+                Some(&serde_json::json!("evt-123"))
+            );
+        }
+        for edge in edges {
+            assert_eq!(
+                edge.properties.get("cognee_external_event_id"),
+                Some(&"evt-123".to_string())
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_external_event_expansion_is_byte_compatible_without_a_key() {
+        let chunk_id = Uuid::new_v4();
+        let dataset_id = Uuid::new_v4();
+        let graph = create_test_graph();
+        let legacy = expand_with_nodes_and_edges(
+            vec![(chunk_id, graph.clone())],
+            dataset_id,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            &noop(),
+            None,
+            None,
+        )
+        .await;
+        let external = expand_with_nodes_and_edges_for_external_events(
+            vec![(chunk_id, graph)],
+            dataset_id,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            &noop(),
+            None,
+            None,
+        )
+        .await;
+
+        assert_eq!(legacy, external);
     }
 
     #[tokio::test]
@@ -1414,6 +1561,7 @@ mod tests {
             None,
             None,
             &mut HashSet::new(),
+            None,
         );
 
         assert_eq!(ontology_types_map.len(), 2);
@@ -1466,6 +1614,7 @@ mod tests {
             None,
             None,
             &mut HashSet::new(),
+            None,
         );
 
         // Should be skipped because it already exists in type_map
@@ -1497,6 +1646,7 @@ mod tests {
             None,
             None,
             &mut HashSet::new(),
+            None,
         );
 
         assert_eq!(ontology_entities_map.len(), 1);
@@ -1538,6 +1688,7 @@ mod tests {
             &existing_edge_keys,
             &mut ontology_edge_keys,
             &mut ontology_edges_out,
+            None,
         );
 
         assert_eq!(ontology_edges_out.len(), 2);
@@ -1598,6 +1749,7 @@ mod tests {
             &existing_edge_keys,
             &mut ontology_edge_keys,
             &mut ontology_edges_out,
+            None,
         );
 
         // Only the second edge should be present; the first is in existing_edge_keys

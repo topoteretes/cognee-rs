@@ -15,6 +15,11 @@ use std::path::PathBuf;
 /// `build_storage` / `build_database` constructors.
 #[derive(Clone)]
 pub struct BackendBuildContext {
+    /// Open persistent backends for retrieval only. Factories must not create
+    /// directories, initialize schemas, or return adapters that can mutate
+    /// their backing stores when this is set.
+    pub read_only: bool,
+
     // ── storage / relational database ─────────────────────────────────────
     /// Root directory for ingested data files (LocalStorage).
     pub data_root_directory: PathBuf,
@@ -72,6 +77,8 @@ pub struct EmbeddingInputs {
     pub endpoint: Option<String>,
     /// Resolved API key (embedding-specific, falling back to the LLM key).
     pub api_key: Option<String>,
+    /// Optional caller identity for proxy application-key routing.
+    pub user_agent: Option<String>,
     pub batch_size: usize,
     /// `MOCK_EMBEDDING` opt-in — overrides `provider` to the mock engine.
     pub mock: bool,
@@ -101,6 +108,8 @@ pub struct LlmInputs {
     pub model: String,
     pub api_key: String,
     pub endpoint: String,
+    /// Optional caller identity for proxy application-key routing.
+    pub user_agent: Option<String>,
     /// Optional Anthropic Messages API base URL override (env `ANTHROPIC_BASE_URL`,
     /// alias `ANTHROPIC_API_BASE`). `None` uses the public Anthropic API. Kept
     /// separate from `endpoint` on purpose: `endpoint` aliases `OPENAI_URL`, so

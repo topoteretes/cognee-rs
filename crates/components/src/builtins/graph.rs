@@ -56,19 +56,27 @@ impl GraphDbFactory for LadybugGraphFactory {
             ctx.graph_file_path.clone()
         };
 
-        if let Some(parent) = Path::new(&graph_path).parent() {
+        if !ctx.read_only
+            && let Some(parent) = Path::new(&graph_path).parent()
+        {
             std::fs::create_dir_all(parent).map_err(|e| {
                 ComponentError::GraphDb(format!("create_dir_all({}): {e}", parent.display()))
             })?;
         }
 
-        let graph_db = cognee_graph::LadybugAdapter::new(&graph_path)
-            .await
-            .map_err(|e| ComponentError::GraphDb(format!("initialization failed: {e}")))?;
-        graph_db
-            .initialize()
-            .await
-            .map_err(|e| ComponentError::GraphDb(format!("schema initialization failed: {e}")))?;
+        let graph_db = if ctx.read_only {
+            cognee_graph::LadybugAdapter::new_read_only(&graph_path)
+                .await
+                .map_err(|e| ComponentError::GraphDb(format!("read-only open failed: {e}")))?
+        } else {
+            let graph_db = cognee_graph::LadybugAdapter::new(&graph_path)
+                .await
+                .map_err(|e| ComponentError::GraphDb(format!("initialization failed: {e}")))?;
+            graph_db.initialize().await.map_err(|e| {
+                ComponentError::GraphDb(format!("schema initialization failed: {e}"))
+            })?;
+            graph_db
+        };
         Ok(Arc::new(graph_db))
     }
 }
@@ -100,6 +108,11 @@ impl GraphDbFactory for PgGraphFactory {
         &self,
         ctx: &BackendBuildContext,
     ) -> Result<Arc<dyn GraphDBTrait>, ComponentError> {
+        if ctx.read_only {
+            return Err(ComponentError::Config(
+                "read-only engine mode does not support a Postgres graph backend".into(),
+            ));
+        }
         let url = match ctx.graph_postgres_url.as_ref() {
             Some(Ok(url)) => url,
             // Resolution failed — restate the specific cause (e.g. "Missing
@@ -132,8 +145,13 @@ impl GraphDbFactory for MockGraphFactory {
 
     async fn build(
         &self,
-        _ctx: &BackendBuildContext,
+        ctx: &BackendBuildContext,
     ) -> Result<Arc<dyn GraphDBTrait>, ComponentError> {
+        if ctx.read_only {
+            return Err(ComponentError::Config(
+                "read-only engine mode does not support an in-memory mock graph backend".into(),
+            ));
+        }
         Ok(Arc::new(cognee_graph::MockGraphDB::new()))
     }
 }

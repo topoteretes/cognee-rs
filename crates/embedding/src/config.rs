@@ -170,6 +170,9 @@ pub struct EmbeddingConfig {
     /// API key. Reads `EMBEDDING_API_KEY` first, falls back to `LLM_API_KEY`.
     pub api_key: Option<String>,
 
+    /// Optional caller identity sent on OpenAI-compatible HTTP requests.
+    pub user_agent: Option<String>,
+
     /// API version string (e.g. "2023-05-15" for Azure OpenAI).
     pub api_version: Option<String>,
 
@@ -251,6 +254,7 @@ impl Default for EmbeddingConfig {
             dimensions,
             endpoint,
             api_key: None,
+            user_agent: None,
             api_version: None,
             max_completion_tokens: 8191,
             batch_size: 36,

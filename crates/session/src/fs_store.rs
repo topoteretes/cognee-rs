@@ -12,6 +12,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::Utc;
@@ -31,6 +32,8 @@ struct FsQAEntry {
     context: String,
     answer: String,
     qa_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    external_event_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     feedback_text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -44,6 +47,7 @@ struct FsQAEntry {
 /// Filesystem-backed session store.
 pub struct FsSessionStore {
     base_dir: PathBuf,
+    write_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl FsSessionStore {
@@ -53,6 +57,7 @@ impl FsSessionStore {
     pub fn new(base_dir: impl Into<PathBuf>) -> Self {
         Self {
             base_dir: base_dir.into(),
+            write_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 }
@@ -90,13 +95,20 @@ async fn save_entries(path: &Path, entries: &[FsQAEntry]) -> Result<(), SessionE
     Ok(())
 }
 
-fn build_entry(qa_id: &str, question: &str, answer: &str, context: Option<&str>) -> FsQAEntry {
+fn build_entry(
+    qa_id: &str,
+    question: &str,
+    answer: &str,
+    context: Option<&str>,
+    external_event_id: Option<&str>,
+) -> FsQAEntry {
     FsQAEntry {
         time: Utc::now().to_rfc3339(),
         question: question.to_string(),
         context: context.unwrap_or("").to_string(),
         answer: answer.to_string(),
         qa_id: qa_id.to_string(),
+        external_event_id: external_event_id.map(str::to_owned),
         feedback_text: None,
         feedback_score: None,
         used_graph_element_ids: None,
@@ -116,6 +128,7 @@ fn fs_entry_to_domain(e: &FsQAEntry, session_id: &str) -> SessionQAEntry {
 
     SessionQAEntry {
         id: Uuid::parse_str(&e.qa_id).unwrap_or_else(|_| Uuid::new_v4()),
+        external_event_id: e.external_event_id.clone(),
         session_id: session_id.to_string(),
         user_id: None,
         question: e.question.clone(),
@@ -133,6 +146,28 @@ fn fs_entry_to_domain(e: &FsQAEntry, session_id: &str) -> SessionQAEntry {
         used_graph_element_ids,
         memify_metadata,
     }
+}
+
+fn qa_content_matches(
+    entry: &FsQAEntry,
+    question: &str,
+    answer: &str,
+    context: Option<&str>,
+) -> bool {
+    entry.question == question
+        && entry.answer == answer
+        && entry.context == context.unwrap_or_default()
+}
+
+fn trace_content_matches(existing: &SessionTraceStep, replay: &SessionTraceStep) -> bool {
+    existing.origin_function == replay.origin_function
+        && existing.status == replay.status
+        && existing.memory_query == replay.memory_query
+        && existing.memory_context == replay.memory_context
+        && existing.method_params == replay.method_params
+        && existing.method_return_value == replay.method_return_value
+        && existing.error_message == replay.error_message
+        && existing.session_feedback == replay.session_feedback
 }
 
 fn graph_context_file(base: &Path, user_id: Option<&str>, session_id: &str) -> PathBuf {
@@ -212,15 +247,45 @@ impl SessionStore for FsSessionStore {
         answer: &str,
         context: Option<&str>,
     ) -> Result<String, SessionError> {
-        let path = session_file(&self.base_dir, user_id, session_id);
         let qa_id = Uuid::new_v4().to_string();
-        let entry = build_entry(&qa_id, question, answer, context);
+        self.create_qa_entry_with_id(&qa_id, session_id, user_id, question, answer, context, None)
+            .await
+    }
 
+    async fn create_qa_entry_with_id(
+        &self,
+        qa_id: &str,
+        session_id: &str,
+        user_id: Option<&str>,
+        question: &str,
+        answer: &str,
+        context: Option<&str>,
+        external_event_id: Option<&str>,
+    ) -> Result<String, SessionError> {
+        let _guard = self.write_lock.lock().await;
+        let path = session_file(&self.base_dir, user_id, session_id);
         let mut entries = load_entries(&path).await?;
+
+        if let Some(event_id) = external_event_id
+            && let Some(existing) = entries
+                .iter()
+                .find(|entry| entry.external_event_id.as_deref() == Some(event_id))
+        {
+            if qa_content_matches(existing, question, answer, context) {
+                return Ok(existing.qa_id.clone());
+            }
+            return Err(SessionError::ExternalEventConflict {
+                event_id: event_id.to_owned(),
+                reason: "Q&A content differs from the persisted entry".into(),
+            });
+        }
+
+        let entry = build_entry(qa_id, question, answer, context, external_event_id);
+
         entries.push(entry);
         save_entries(&path, &entries).await?;
 
-        Ok(qa_id)
+        Ok(qa_id.to_owned())
     }
 
     async fn get_latest_qa_entries(
@@ -378,8 +443,22 @@ impl SessionStore for FsSessionStore {
         session_id: &str,
         step: SessionTraceStep,
     ) -> Result<String, SessionError> {
+        let _guard = self.write_lock.lock().await;
         let path = trace_session_file(&self.base_dir, user_id, session_id);
         let mut steps = load_trace_steps(&path).await?;
+        if let Some(event_id) = step.external_event_id.as_deref()
+            && let Some(existing) = steps
+                .iter()
+                .find(|entry| entry.external_event_id.as_deref() == Some(event_id))
+        {
+            if trace_content_matches(existing, &step) {
+                return Ok(existing.trace_id.clone());
+            }
+            return Err(SessionError::ExternalEventConflict {
+                event_id: event_id.to_owned(),
+                reason: "trace content differs from the persisted entry".into(),
+            });
+        }
         let trace_id = step.trace_id.clone();
         steps.push(step);
         save_trace_steps(&path, &steps).await?;
@@ -393,6 +472,31 @@ impl SessionStore for FsSessionStore {
     ) -> Result<Vec<SessionTraceStep>, SessionError> {
         let path = trace_session_file(&self.base_dir, user_id, session_id);
         load_trace_steps(&path).await
+    }
+
+    async fn contains_external_event(
+        &self,
+        session_id: &str,
+        user_id: Option<&str>,
+        external_event_id: &str,
+    ) -> Result<bool, SessionError> {
+        let _guard = self.write_lock.lock().await;
+        let qa_path = session_file(&self.base_dir, user_id, session_id);
+        if load_entries(&qa_path)
+            .await?
+            .iter()
+            .any(|entry| entry.external_event_id.as_deref() == Some(external_event_id))
+        {
+            return Ok(true);
+        }
+        let Some(user_id) = user_id else {
+            return Ok(false);
+        };
+        let trace_path = trace_session_file(&self.base_dir, user_id, session_id);
+        Ok(load_trace_steps(&trace_path)
+            .await?
+            .iter()
+            .any(|step| step.external_event_id.as_deref() == Some(external_event_id)))
     }
 }
 

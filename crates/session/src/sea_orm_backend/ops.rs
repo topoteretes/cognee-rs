@@ -3,7 +3,6 @@ use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter,
     QueryOrder, QuerySelect,
 };
-use uuid::Uuid;
 
 use super::entity;
 use crate::error::SessionError;
@@ -14,17 +13,26 @@ fn map_db_err(e: sea_orm::DbErr) -> SessionError {
     SessionError::StoreError(e.to_string())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn create_qa_entry(
     db: &DatabaseConnection,
-    id: Uuid,
+    id: &str,
     session_id: &str,
     user_id: Option<&str>,
     question: &str,
     answer: &str,
     context: Option<&str>,
-) -> Result<(), SessionError> {
+    external_event_id: Option<&str>,
+) -> Result<String, SessionError> {
+    if let Some(event_id) = external_event_id
+        && let Some(existing) = find_qa_entry_by_external_event(db, session_id, event_id).await?
+    {
+        return replayed_qa_result(existing, user_id, question, answer, context, event_id);
+    }
+
     let model = entity::ActiveModel {
-        id: Set(id.simple().to_string()),
+        id: Set(id.to_owned()),
+        external_event_id: Set(external_event_id.map(str::to_owned)),
         session_id: Set(session_id.to_string()),
         user_id: Set(user_id.map(|s| s.to_string())),
         question: Set(question.to_string()),
@@ -36,8 +44,53 @@ pub async fn create_qa_entry(
         used_graph_element_ids: Set(None),
         memify_metadata: Set(None),
     };
-    model.insert(db).await.map_err(map_db_err)?;
-    Ok(())
+    match model.insert(db).await {
+        Ok(inserted) => Ok(inserted.id),
+        Err(error) => {
+            let Some(event_id) = external_event_id else {
+                return Err(map_db_err(error));
+            };
+            let Some(existing) = find_qa_entry_by_external_event(db, session_id, event_id).await?
+            else {
+                return Err(map_db_err(error));
+            };
+            replayed_qa_result(existing, user_id, question, answer, context, event_id)
+        }
+    }
+}
+
+pub async fn find_qa_entry_by_external_event(
+    db: &DatabaseConnection,
+    session_id: &str,
+    external_event_id: &str,
+) -> Result<Option<entity::Model>, SessionError> {
+    entity::Entity::find()
+        .filter(entity::Column::SessionId.eq(session_id))
+        .filter(entity::Column::ExternalEventId.eq(external_event_id))
+        .one(db)
+        .await
+        .map_err(map_db_err)
+}
+
+fn replayed_qa_result(
+    existing: entity::Model,
+    user_id: Option<&str>,
+    question: &str,
+    answer: &str,
+    context: Option<&str>,
+    event_id: &str,
+) -> Result<String, SessionError> {
+    if existing.user_id.as_deref() == user_id
+        && existing.question == question
+        && existing.answer == answer
+        && existing.context.as_deref() == context
+    {
+        return Ok(existing.id);
+    }
+    Err(SessionError::ExternalEventConflict {
+        event_id: event_id.to_owned(),
+        reason: "Q&A content differs from the persisted entry".into(),
+    })
 }
 
 pub async fn get_latest_entries(
@@ -231,6 +284,19 @@ pub async fn save_trace_step(
         None => None,
     };
 
+    if let Some(event_id) = step.external_event_id.as_deref()
+        && let Some(existing) =
+            find_trace_step_by_external_event(db, user_id, session_id, event_id).await?
+    {
+        return replayed_trace_result(
+            existing,
+            &step,
+            &method_params_json,
+            method_return_value_json.as_deref(),
+            event_id,
+        );
+    }
+
     // Assign next `seq` for this `(user_id, session_id)` so reads return
     // entries in stable insertion order (independent of timestamp resolution).
     let max_seq: Option<i64> = entity::trace_step::Entity::find()
@@ -247,21 +313,79 @@ pub async fn save_trace_step(
     let trace_id = step.trace_id.clone();
     let model = entity::trace_step::ActiveModel {
         trace_id: Set(trace_id.clone()),
+        external_event_id: Set(step.external_event_id.clone()),
         user_id: Set(user_id.to_string()),
         session_id: Set(session_id.to_string()),
         seq: Set(next_seq),
         created_at: Set(Utc::now()),
-        origin_function: Set(step.origin_function),
-        status: Set(step.status),
-        memory_query: Set(step.memory_query),
-        memory_context: Set(step.memory_context),
-        method_params: Set(method_params_json),
-        method_return_value: Set(method_return_value_json),
-        error_message: Set(step.error_message),
-        session_feedback: Set(step.session_feedback),
+        origin_function: Set(step.origin_function.clone()),
+        status: Set(step.status.clone()),
+        memory_query: Set(step.memory_query.clone()),
+        memory_context: Set(step.memory_context.clone()),
+        method_params: Set(method_params_json.clone()),
+        method_return_value: Set(method_return_value_json.clone()),
+        error_message: Set(step.error_message.clone()),
+        session_feedback: Set(step.session_feedback.clone()),
     };
-    model.insert(db).await.map_err(map_db_err)?;
-    Ok(trace_id)
+    match model.insert(db).await {
+        Ok(_) => Ok(trace_id),
+        Err(error) => {
+            let Some(event_id) = step.external_event_id.as_deref() else {
+                return Err(map_db_err(error));
+            };
+            let Some(existing) =
+                find_trace_step_by_external_event(db, user_id, session_id, event_id).await?
+            else {
+                return Err(map_db_err(error));
+            };
+            replayed_trace_result(
+                existing,
+                &step,
+                &method_params_json,
+                method_return_value_json.as_deref(),
+                event_id,
+            )
+        }
+    }
+}
+
+pub async fn find_trace_step_by_external_event(
+    db: &DatabaseConnection,
+    user_id: &str,
+    session_id: &str,
+    external_event_id: &str,
+) -> Result<Option<entity::trace_step::Model>, SessionError> {
+    entity::trace_step::Entity::find()
+        .filter(entity::trace_step::Column::UserId.eq(user_id))
+        .filter(entity::trace_step::Column::SessionId.eq(session_id))
+        .filter(entity::trace_step::Column::ExternalEventId.eq(external_event_id))
+        .one(db)
+        .await
+        .map_err(map_db_err)
+}
+
+fn replayed_trace_result(
+    existing: entity::trace_step::Model,
+    replay: &SessionTraceStep,
+    method_params: &str,
+    method_return_value: Option<&str>,
+    event_id: &str,
+) -> Result<String, SessionError> {
+    if existing.origin_function == replay.origin_function
+        && existing.status == replay.status
+        && existing.memory_query == replay.memory_query
+        && existing.memory_context == replay.memory_context
+        && existing.method_params == method_params
+        && existing.method_return_value.as_deref() == method_return_value
+        && existing.error_message == replay.error_message
+        && existing.session_feedback == replay.session_feedback
+    {
+        return Ok(existing.trace_id);
+    }
+    Err(SessionError::ExternalEventConflict {
+        event_id: event_id.to_owned(),
+        reason: "trace content differs from the persisted entry".into(),
+    })
 }
 
 /// Read agent-trace steps for `(user_id, session_id)`, ordered oldest-first.
@@ -291,6 +415,7 @@ pub async fn read_trace_steps(
         };
         out.push(SessionTraceStep {
             trace_id: m.trace_id,
+            external_event_id: m.external_event_id,
             origin_function: m.origin_function,
             status: m.status,
             memory_query: m.memory_query,

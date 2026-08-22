@@ -21,7 +21,7 @@ use cognee_ingestion::AddPipeline;
 use cognee_llm::Llm;
 use cognee_models::{DataInput, FeedbackEntry, MemoryEntry, QAEntry, TraceEntry};
 use cognee_ontology::OntologyResolver;
-use cognee_session::{SessionManager, SessionQAUpdate, SessionStore};
+use cognee_session::{SessionManager, SessionQAUpdate, SessionStore, external_event_entry_id};
 use cognee_storage::StorageTrait;
 use cognee_vector::VectorDB;
 use serde::{Deserialize, Serialize};
@@ -218,6 +218,57 @@ pub async fn remember(
     ontology_resolver: Arc<dyn OntologyResolver>,
     cognify_config: Arc<CognifyConfig>,
 ) -> Result<RememberResult, ApiError> {
+    remember_with_external_event(
+        data,
+        dataset_name,
+        session_id,
+        self_improvement,
+        owner_id,
+        tenant_id,
+        add_pipeline,
+        llm,
+        storage,
+        graph_db,
+        vector_db,
+        embedding_engine,
+        db,
+        session_store,
+        session_manager,
+        checkpoint_store,
+        ontology_resolver,
+        cognify_config,
+        None,
+    )
+    .await
+}
+
+/// [`remember`] with an optional transport-neutral exact-once event key.
+///
+/// Existing callers continue through [`remember`] and retain the legacy
+/// UUID/content-deduplication behavior. The key is stored only as metadata; it
+/// is never appended to the text sent to an LLM.
+#[allow(clippy::too_many_arguments)]
+pub async fn remember_with_external_event(
+    data: Vec<DataInput>,
+    dataset_name: &str,
+    session_id: Option<&str>,
+    self_improvement: bool,
+    owner_id: Uuid,
+    tenant_id: Option<Uuid>,
+    add_pipeline: Arc<AddPipeline>,
+    llm: Arc<dyn Llm>,
+    storage: Arc<dyn StorageTrait>,
+    graph_db: Arc<dyn GraphDBTrait>,
+    vector_db: Arc<dyn VectorDB>,
+    embedding_engine: Arc<dyn EmbeddingEngine>,
+    db: Option<Arc<DatabaseConnection>>,
+    session_store: Option<Arc<dyn SessionStore>>,
+    session_manager: Option<Arc<SessionManager>>,
+    checkpoint_store: Option<Arc<dyn CheckpointStore>>,
+    ontology_resolver: Arc<dyn OntologyResolver>,
+    cognify_config: Arc<CognifyConfig>,
+    external_event_id: Option<&str>,
+) -> Result<RememberResult, ApiError> {
     let start = Instant::now();
 
     // Mirrors Python `send_telemetry("cognee.remember", ...)` from
@@ -271,11 +322,19 @@ pub async fn remember(
             ontology_resolver,
             cognify_config,
             start,
+            external_event_id,
         )
         .await;
     }
 
     // -- Permanent Memory Mode --
+    let data = match external_event_id {
+        Some(event_id) => data
+            .into_iter()
+            .map(|input| data_input_with_external_event(input, event_id))
+            .collect(),
+        None => data,
+    };
     remember_permanent_blocking(
         data,
         dataset_name,
@@ -294,6 +353,48 @@ pub async fn remember(
         start,
     )
     .await
+}
+
+fn data_input_with_external_event(input: DataInput, event_id: &str) -> DataInput {
+    match input {
+        DataInput::DataItem {
+            data,
+            label,
+            external_metadata,
+        } => DataInput::DataItem {
+            data,
+            label,
+            external_metadata: Some(external_event_metadata(external_metadata, event_id)),
+        },
+        data => DataInput::DataItem {
+            data: Box::new(data),
+            // The wrapper exists only to carry reserved metadata. An empty
+            // label does not enter the content stream or any LLM prompt.
+            label: String::new(),
+            external_metadata: Some(external_event_metadata(None, event_id)),
+        },
+    }
+}
+
+fn external_event_metadata(existing: Option<String>, event_id: &str) -> String {
+    let mut metadata = match existing {
+        Some(raw) => match serde_json::from_str::<serde_json::Value>(&raw) {
+            Ok(serde_json::Value::Object(object)) => object,
+            Ok(value) => {
+                serde_json::Map::from_iter([("data_item_external_metadata".to_string(), value)])
+            }
+            Err(_) => serde_json::Map::from_iter([(
+                "data_item_external_metadata_raw".to_string(),
+                serde_json::Value::String(raw),
+            )]),
+        },
+        None => serde_json::Map::new(),
+    };
+    metadata.insert(
+        "cognee_external_event_id".to_string(),
+        serde_json::Value::String(event_id.to_owned()),
+    );
+    serde_json::Value::Object(metadata).to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -544,6 +645,7 @@ async fn remember_session(
     ontology_resolver: Arc<dyn OntologyResolver>,
     cognify_config: Arc<CognifyConfig>,
     start: Instant,
+    external_event_id: Option<&str>,
 ) -> Result<RememberResult, ApiError> {
     let store = session_store.clone().ok_or_else(|| {
         ApiError::InvalidArgument(
@@ -565,9 +667,24 @@ async fn remember_session(
     let user_id_str = owner_id.to_string();
 
     // Store as a Q&A entry (question="" since this is ingestion, not a query).
-    store
-        .create_qa_entry(session_id, Some(&user_id_str), "", &combined_text, None)
-        .await?;
+    if let Some(event_id) = external_event_id {
+        let entry_id = external_event_entry_id(event_id);
+        store
+            .create_qa_entry_with_id(
+                &entry_id,
+                session_id,
+                Some(&user_id_str),
+                "",
+                &combined_text,
+                None,
+                Some(event_id),
+            )
+            .await?;
+    } else {
+        store
+            .create_qa_entry(session_id, Some(&user_id_str), "", &combined_text, None)
+            .await?;
+    }
 
     info!(
         session_id = session_id,
@@ -706,6 +823,35 @@ pub async fn remember_entry(
     session_manager: Option<Arc<SessionManager>>,
     llm: Option<Arc<dyn Llm>>,
 ) -> Result<RememberResult, ApiError> {
+    remember_entry_with_external_event(
+        entry,
+        dataset_name,
+        session_id,
+        owner_id,
+        _tenant_id,
+        db,
+        _session_store,
+        session_manager,
+        llm,
+        None,
+    )
+    .await
+}
+
+/// [`remember_entry`] with an optional exact-once external event key.
+#[allow(clippy::too_many_arguments)]
+pub async fn remember_entry_with_external_event(
+    entry: MemoryEntry,
+    dataset_name: &str,
+    session_id: &str,
+    owner_id: Uuid,
+    _tenant_id: Option<Uuid>,
+    db: Option<Arc<DatabaseConnection>>,
+    _session_store: Option<Arc<dyn SessionStore>>,
+    session_manager: Option<Arc<SessionManager>>,
+    llm: Option<Arc<dyn Llm>>,
+    external_event_id: Option<&str>,
+) -> Result<RememberResult, ApiError> {
     let start = Instant::now();
 
     if session_id.is_empty() {
@@ -760,7 +906,7 @@ pub async fn remember_entry(
             } = q;
 
             let qa_id = sm
-                .save_qa(
+                .save_qa_with_external_event(
                     Some(session_id),
                     Some(&user_id_str),
                     &question,
@@ -769,6 +915,7 @@ pub async fn remember_entry(
                     // used_graph_element_ids handled by the follow-up update below
                     // when the raw JSON value needs schema-validation first.
                     None,
+                    external_event_id,
                 )
                 .await?;
 
@@ -815,7 +962,7 @@ pub async fn remember_entry(
             } = t;
 
             let trace_id = sm
-                .add_agent_trace_step(
+                .add_agent_trace_step_with_external_event(
                     &user_id_str,
                     Some(session_id),
                     &origin_function,
@@ -826,6 +973,7 @@ pub async fn remember_entry(
                     method_return_value,
                     &error_message,
                     generate_feedback_with_llm,
+                    external_event_id,
                 )
                 .await?;
 
@@ -833,6 +981,11 @@ pub async fn remember_entry(
         }
 
         MemoryEntry::Feedback(f) => {
+            if let Some(event_id) = external_event_id {
+                return Err(ApiError::InvalidArgument(format!(
+                    "external event '{event_id}' cannot be attached to a feedback-only update"
+                )));
+            }
             let FeedbackEntry {
                 qa_id,
                 feedback_text,

@@ -32,7 +32,7 @@ use std::sync::Arc;
 use serde_json::json;
 use uuid::Uuid;
 
-use cognee::api::{ScopeInput, normalize_scope, recall as cognee_recall};
+use cognee::api::{RecallOptions, ScopeInput, normalize_scope, recall as cognee_recall};
 use cognee::search::{SearchRequest, SearchType};
 
 use crate::{HandleState, SdkError};
@@ -189,6 +189,20 @@ pub fn build_scope_input(opts: &serde_json::Value) -> Result<Option<ScopeInput>,
     }
 }
 
+/// Build graph-recall controls from camelCase binding options.
+///
+/// Leaving `saveInteraction` absent preserves the historical default (the
+/// search orchestrator persists interactions). Immutable reference recall sets
+/// it explicitly to `false` so opening a published generation stays read-only.
+pub fn build_recall_options(opts: &serde_json::Value) -> RecallOptions {
+    RecallOptions {
+        save_interaction: opts
+            .get("saveInteraction")
+            .and_then(|value| value.as_bool()),
+        ..RecallOptions::default()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Public top-level retrieval operations.
 // ---------------------------------------------------------------------------
@@ -279,6 +293,7 @@ pub async fn recall(
     // non-empty vec (including vec![Auto] from a missing/null/auto scope) is
     // passed as-is — recall() treats Some(vec![Auto]) and None identically.
     let scope_opt = if scope.is_empty() { None } else { Some(scope) };
+    let recall_options = build_recall_options(opts);
 
     // session_store and session_manager are Option<&dyn …> — borrow from Arc.
     let session_store_ref = Arc::clone(&svc.session_store);
@@ -296,7 +311,7 @@ pub async fn recall(
         Some(session_store_ref.as_ref()),
         Some(session_manager_ref.as_ref()),
         scope_opt,
-        None,
+        Some(recall_options),
     )
     .await
     .map_err(|e| SdkError::Runtime(format!("recall failed: {e}")))?;
@@ -327,4 +342,22 @@ pub async fn recall(
         "autoRouted": result.auto_routed,
         "searchResponse": search_response,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recall_options_preserve_default_and_accept_explicit_no_persistence() {
+        assert_eq!(
+            build_recall_options(&serde_json::json!({})).save_interaction,
+            None,
+            "absent saveInteraction must preserve the existing default"
+        );
+        assert_eq!(
+            build_recall_options(&serde_json::json!({ "saveInteraction": false })).save_interaction,
+            Some(false)
+        );
+    }
 }

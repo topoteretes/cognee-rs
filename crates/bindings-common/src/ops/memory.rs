@@ -53,9 +53,11 @@ use std::sync::Arc;
 use serde_json::json;
 use uuid::Uuid;
 
-use cognee::api::{ImproveParams, remember, remember_entry};
+use cognee::api::{
+    ImproveParams, remember_entry_with_external_event, remember_with_external_event,
+};
 use cognee::cognify::{MemifyConfig, run_memify};
-use cognee::database::{PipelineRunRepository, SeaOrmPipelineRunRepository};
+use cognee::database::{PipelineRunRepository, SeaOrmPipelineRunRepository, ops};
 use cognee::models::{FeedbackEntry, MemoryEntry, QAEntry, TraceEntry};
 
 use crate::wire::marshal_inputs;
@@ -72,6 +74,19 @@ fn opts_tenant(opts: &serde_json::Value) -> Result<Option<Uuid>, SdkError> {
             .map(Some)
             .map_err(|e| SdkError::Validation(format!("invalid `tenant` UUID: {e}"))),
         None => Ok(None),
+    }
+}
+
+fn opts_external_event_id(opts: &serde_json::Value) -> Result<Option<&str>, SdkError> {
+    match opts.get("externalEventId") {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::String(value)) if !value.is_empty() => Ok(Some(value)),
+        Some(serde_json::Value::String(_)) => Err(SdkError::Validation(
+            "`externalEventId` must not be empty".to_string(),
+        )),
+        Some(_) => Err(SdkError::Validation(
+            "`externalEventId` must be a string".to_string(),
+        )),
     }
 }
 
@@ -227,6 +242,7 @@ pub async fn run_remember(
 ) -> Result<serde_json::Value, SdkError> {
     let inputs = marshal_inputs(&inputs_json)?;
     let tenant_id = opts_tenant(opts)?;
+    let external_event_id = opts_external_event_id(opts)?;
     let session_id_owned = opts
         .get("sessionId")
         .and_then(|v| v.as_str())
@@ -242,7 +258,7 @@ pub async fn run_remember(
 
     let cognify_config = Arc::new(svc.cognify_config.clone());
 
-    let result = remember(
+    let result = remember_with_external_event(
         inputs,
         dataset_name,
         session_id,
@@ -261,6 +277,7 @@ pub async fn run_remember(
         Some(svc.checkpoint_store.clone()),
         svc.ontology_resolver.clone(),
         cognify_config,
+        external_event_id,
     )
     .await
     .map_err(|e| SdkError::Runtime(format!("remember failed: {e}")))?;
@@ -281,12 +298,13 @@ pub async fn run_remember_entry(
     opts: &serde_json::Value,
 ) -> Result<serde_json::Value, SdkError> {
     let tenant_id = opts_tenant(opts)?;
+    let external_event_id = opts_external_event_id(opts)?;
     let entry = marshal_memory_entry(&entry_json)?;
 
     let svc = state.services().await?;
     let owner_id = state.owner_id().await?;
 
-    let result = remember_entry(
+    let result = remember_entry_with_external_event(
         entry,
         dataset_name,
         session_id,
@@ -296,12 +314,58 @@ pub async fn run_remember_entry(
         Some(svc.session_store.clone()),
         Some(svc.session_manager.clone()),
         Some(svc.llm.clone()),
+        external_event_id,
     )
     .await
     .map_err(|e| SdkError::Runtime(format!("remember_entry failed: {e}")))?;
 
     serde_json::to_value(&result)
         .map_err(|e| SdkError::Runtime(format!("failed to serialize RememberResult: {e}")))
+}
+
+/// Check whether a session or dataset already contains an external event key.
+pub async fn run_contains_external_event(
+    state: &HandleState,
+    dataset_name: &str,
+    session_id: Option<&str>,
+    event_id: &str,
+) -> Result<bool, SdkError> {
+    if event_id.is_empty() {
+        return Err(SdkError::Validation(
+            "`event_id` must not be empty".to_string(),
+        ));
+    }
+
+    let svc = state.services().await?;
+    let owner_id = state.owner_id().await?;
+    if let Some(session_id) = session_id {
+        let user_id = owner_id.to_string();
+        return svc
+            .session_manager
+            .contains_external_event(Some(session_id), Some(&user_id), event_id)
+            .await
+            .map_err(|error| {
+                SdkError::Runtime(format!("failed to query session external event: {error}"))
+            });
+    }
+
+    let Some(dataset) =
+        ops::datasets::get_dataset_by_name(&svc.database, dataset_name, owner_id, None)
+            .await
+            .map_err(|error| {
+                SdkError::Runtime(format!(
+                    "failed to resolve dataset '{dataset_name}': {error}"
+                ))
+            })?
+    else {
+        return Ok(false);
+    };
+
+    ops::datasets::contains_external_event(&svc.database, dataset.id, event_id)
+        .await
+        .map_err(|error| {
+            SdkError::Runtime(format!("failed to query dataset external event: {error}"))
+        })
 }
 
 /// Run the memify pipeline: create triplet embeddings for all graph edges.

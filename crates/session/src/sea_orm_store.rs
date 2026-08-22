@@ -19,6 +19,7 @@ use crate::types::{SessionQAEntry, SessionTraceStep, UsedGraphElementIds};
 /// this backend is actually used (not as part of the generic database init).
 pub struct SeaOrmSessionStore {
     db: Arc<DatabaseConnection>,
+    read_only: bool,
 }
 
 impl SeaOrmSessionStore {
@@ -27,7 +28,27 @@ impl SeaOrmSessionStore {
         SessionMigrator::up(db.as_ref(), None)
             .await
             .map_err(|e| SessionError::StoreError(format!("session migration failed: {e}")))?;
-        Ok(Self { db })
+        Ok(Self {
+            db,
+            read_only: false,
+        })
+    }
+
+    /// Open an existing session schema without running migrations or allowing
+    /// mutations. Used by immutable reference-generation readers.
+    pub fn new_read_only(db: Arc<DatabaseConnection>) -> Self {
+        Self {
+            db,
+            read_only: true,
+        }
+    }
+
+    fn ensure_writable(&self) -> Result<(), SessionError> {
+        if self.read_only {
+            Err(SessionError::ReadOnly)
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -43,6 +64,7 @@ fn model_to_entry(m: entity::Model) -> SessionQAEntry {
 
     SessionQAEntry {
         id: Uuid::parse_str(&m.id).unwrap_or_default(),
+        external_event_id: m.external_event_id,
         session_id: m.session_id,
         user_id: m.user_id,
         question: m.question,
@@ -66,9 +88,36 @@ impl SessionStore for SeaOrmSessionStore {
         answer: &str,
         context: Option<&str>,
     ) -> Result<String, SessionError> {
-        let id = Uuid::new_v4();
-        ops::create_qa_entry(&self.db, id, session_id, user_id, question, answer, context).await?;
-        Ok(id.simple().to_string())
+        self.ensure_writable()?;
+        let id = Uuid::new_v4().simple().to_string();
+        ops::create_qa_entry(
+            &self.db, &id, session_id, user_id, question, answer, context, None,
+        )
+        .await
+    }
+
+    async fn create_qa_entry_with_id(
+        &self,
+        qa_id: &str,
+        session_id: &str,
+        user_id: Option<&str>,
+        question: &str,
+        answer: &str,
+        context: Option<&str>,
+        external_event_id: Option<&str>,
+    ) -> Result<String, SessionError> {
+        self.ensure_writable()?;
+        ops::create_qa_entry(
+            &self.db,
+            qa_id,
+            session_id,
+            user_id,
+            question,
+            answer,
+            context,
+            external_event_id,
+        )
+        .await
     }
 
     async fn get_latest_qa_entries(
@@ -95,6 +144,7 @@ impl SessionStore for SeaOrmSessionStore {
         session_id: &str,
         user_id: Option<&str>,
     ) -> Result<bool, SessionError> {
+        self.ensure_writable()?;
         let rows = ops::delete_session(&self.db, session_id, user_id).await?;
         Ok(rows > 0)
     }
@@ -105,11 +155,13 @@ impl SessionStore for SeaOrmSessionStore {
         user_id: Option<&str>,
         qa_id: &str,
     ) -> Result<bool, SessionError> {
+        self.ensure_writable()?;
         let deleted = ops::delete_qa_entry(&self.db, session_id, user_id, qa_id).await?;
         Ok(deleted)
     }
 
     async fn prune(&self) -> Result<(), SessionError> {
+        self.ensure_writable()?;
         ops::delete_all(&self.db).await
     }
 
@@ -120,6 +172,7 @@ impl SessionStore for SeaOrmSessionStore {
         qa_id: &str,
         updates: SessionQAUpdate,
     ) -> Result<bool, SessionError> {
+        self.ensure_writable()?;
         ops::update_qa_entry(&self.db, session_id, user_id, qa_id, updates).await
     }
 
@@ -137,6 +190,7 @@ impl SessionStore for SeaOrmSessionStore {
         user_id: Option<&str>,
         context: &str,
     ) -> Result<(), SessionError> {
+        self.ensure_writable()?;
         ops::set_graph_context(&self.db, session_id, user_id, context).await
     }
 
@@ -146,6 +200,7 @@ impl SessionStore for SeaOrmSessionStore {
         session_id: &str,
         step: SessionTraceStep,
     ) -> Result<String, SessionError> {
+        self.ensure_writable()?;
         ops::save_trace_step(&self.db, user_id, session_id, step).await
     }
 
@@ -155,5 +210,32 @@ impl SessionStore for SeaOrmSessionStore {
         session_id: &str,
     ) -> Result<Vec<SessionTraceStep>, SessionError> {
         ops::read_trace_steps(&self.db, user_id, session_id).await
+    }
+
+    async fn contains_external_event(
+        &self,
+        session_id: &str,
+        user_id: Option<&str>,
+        external_event_id: &str,
+    ) -> Result<bool, SessionError> {
+        if ops::find_qa_entry_by_external_event(&self.db, session_id, external_event_id)
+            .await?
+            .is_some()
+        {
+            return Ok(true);
+        }
+        let Some(user_id) = user_id else {
+            return Ok(false);
+        };
+        Ok(
+            ops::find_trace_step_by_external_event(
+                &self.db,
+                user_id,
+                session_id,
+                external_event_id,
+            )
+            .await?
+            .is_some(),
+        )
     }
 }

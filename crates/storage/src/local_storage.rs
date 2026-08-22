@@ -8,11 +8,33 @@ use uuid::Uuid;
 
 pub struct LocalStorage {
     base_path: PathBuf,
+    read_only: bool,
 }
 
 impl LocalStorage {
     pub fn new(base_path: PathBuf) -> Self {
-        Self { base_path }
+        Self {
+            base_path,
+            read_only: false,
+        }
+    }
+
+    /// Construct query-only local storage without creating its base path.
+    pub fn new_read_only(base_path: PathBuf) -> Self {
+        Self {
+            base_path,
+            read_only: true,
+        }
+    }
+
+    fn ensure_writable(&self, operation: &str) -> Result<(), StorageError> {
+        if self.read_only {
+            Err(StorageError::PermissionDenied(format!(
+                "local storage is read-only; cannot {operation}"
+            )))
+        } else {
+            Ok(())
+        }
     }
 
     /// Generate a UUID-based subdirectory structure for organizing files
@@ -55,6 +77,7 @@ impl LocalStorage {
 #[async_trait]
 impl StorageTrait for LocalStorage {
     async fn initialize(&self) -> Result<(), StorageError> {
+        self.ensure_writable("initialize")?;
         fs::create_dir_all(&self.base_path)
             .await
             .map_err(|e| StorageError::IoError(format!("Failed to create base directory: {e}")))
@@ -62,6 +85,7 @@ impl StorageTrait for LocalStorage {
 
     #[instrument(name = "storage.store", skip(self, data), fields(file_name, bytes = data.len()))]
     async fn store(&self, data: &[u8], file_name: &str) -> Result<String, StorageError> {
+        self.ensure_writable("store data")?;
         let relative_path = self.generate_storage_path(file_name);
         let full_path = self.base_path.join(&relative_path);
 
@@ -94,6 +118,7 @@ impl StorageTrait for LocalStorage {
         reader: &mut (dyn AsyncRead + Unpin + Send),
         file_name: &str,
     ) -> Result<String, StorageError> {
+        self.ensure_writable("store streamed data")?;
         let relative_path = self.generate_storage_path(file_name);
         let full_path = self.base_path.join(&relative_path);
 
@@ -123,6 +148,7 @@ impl StorageTrait for LocalStorage {
 
     #[instrument(name = "storage.create_writer", skip(self), fields(file_name))]
     async fn create_writer(&self, file_name: &str) -> Result<StorageWriter, StorageError> {
+        self.ensure_writable("create a writer")?;
         let relative_path = self.generate_storage_path(file_name);
         let full_path = self.base_path.join(&relative_path);
 
@@ -166,6 +192,7 @@ impl StorageTrait for LocalStorage {
 
     #[instrument(name = "storage.delete", skip(self), fields(location))]
     async fn delete(&self, location: &str) -> Result<(), StorageError> {
+        self.ensure_writable("delete data")?;
         let full_path = self.resolve_location(location);
 
         fs::remove_file(&full_path).await.map_err(|e| {
@@ -186,6 +213,7 @@ impl StorageTrait for LocalStorage {
     }
 
     async fn remove_all(&self) -> Result<(), StorageError> {
+        self.ensure_writable("remove all data")?;
         let mut entries = fs::read_dir(&self.base_path).await.map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 // Directory doesn't exist — nothing to remove.
@@ -236,7 +264,65 @@ impl StorageTrait for LocalStorage {
 )]
 mod tests {
     use super::*;
+    use std::path::{Path, PathBuf};
     use tempfile::TempDir;
+
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
+    fn tree_snapshot(root: &Path) -> Vec<(PathBuf, bool, u64, Vec<u8>)> {
+        fn visit(root: &Path, path: &Path, out: &mut Vec<(PathBuf, bool, u64, Vec<u8>)>) {
+            let mut entries: Vec<_> = std::fs::read_dir(path)
+                .unwrap()
+                .map(|entry| entry.unwrap())
+                .collect();
+            entries.sort_by_key(|entry| entry.file_name());
+            for entry in entries {
+                let path = entry.path();
+                let metadata = entry.metadata().unwrap();
+                let relative = path.strip_prefix(root).unwrap().to_path_buf();
+                #[cfg(unix)]
+                let mode = u64::from(metadata.permissions().mode());
+                #[cfg(not(unix))]
+                let mode = u64::from(metadata.permissions().readonly());
+                if metadata.is_dir() {
+                    out.push((relative, true, mode, Vec::new()));
+                    visit(root, &path, out);
+                } else {
+                    out.push((relative, false, mode, std::fs::read(path).unwrap()));
+                }
+            }
+        }
+
+        let mut out = Vec::new();
+        visit(root, root, &mut out);
+        out
+    }
+
+    #[cfg(unix)]
+    fn set_tree_mode(root: &Path, dir_mode: u32, file_mode: u32) {
+        fn visit(path: &Path, dir_mode: u32, file_mode: u32) {
+            let entries: Vec<_> = std::fs::read_dir(path)
+                .unwrap()
+                .map(|entry| entry.unwrap())
+                .collect();
+            for entry in entries {
+                let path = entry.path();
+                let metadata = entry.metadata().unwrap();
+                if metadata.is_dir() {
+                    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(dir_mode))
+                        .unwrap();
+                    visit(&path, dir_mode, file_mode);
+                } else {
+                    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(file_mode))
+                        .unwrap();
+                }
+            }
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(dir_mode)).unwrap();
+        }
+
+        visit(root, dir_mode, file_mode);
+    }
 
     #[tokio::test]
     async fn test_store_and_retrieve() {
@@ -327,5 +413,52 @@ mod tests {
         storage.delete(&location).await.unwrap();
 
         assert!(!storage.exists(&location).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn read_only_storage_reads_rejects_all_mutators_and_preserves_tree() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path().join("storage");
+        let location = {
+            let storage = LocalStorage::new(root.clone());
+            storage.initialize().await.unwrap();
+            storage.store(b"seed", "seed.txt").await.unwrap()
+        };
+
+        #[cfg(unix)]
+        set_tree_mode(&root, 0o555, 0o444);
+        let before = tree_snapshot(&root);
+        let storage = LocalStorage::new_read_only(root.clone());
+
+        assert_eq!(storage.retrieve(&location).await.unwrap(), b"seed");
+        assert!(matches!(
+            storage.initialize().await,
+            Err(StorageError::PermissionDenied(_))
+        ));
+        assert!(matches!(
+            storage.store(b"blocked", "blocked.txt").await,
+            Err(StorageError::PermissionDenied(_))
+        ));
+        let mut reader = tokio::io::empty();
+        assert!(matches!(
+            storage.store_stream_dyn(&mut reader, "blocked.txt").await,
+            Err(StorageError::PermissionDenied(_))
+        ));
+        assert!(matches!(
+            storage.create_writer("blocked.txt").await,
+            Err(StorageError::PermissionDenied(_))
+        ));
+        assert!(matches!(
+            storage.delete(&location).await,
+            Err(StorageError::PermissionDenied(_))
+        ));
+        assert!(matches!(
+            storage.remove_all().await,
+            Err(StorageError::PermissionDenied(_))
+        ));
+
+        assert_eq!(tree_snapshot(&root), before);
+        #[cfg(unix)]
+        set_tree_mode(&root, 0o755, 0o644);
     }
 }

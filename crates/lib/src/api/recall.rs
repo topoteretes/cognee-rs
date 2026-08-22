@@ -179,6 +179,7 @@ pub async fn recall(
                     top_k,
                     auto_route,
                     session_id,
+                    user_id.and_then(|value| uuid::Uuid::parse_str(value).ok()),
                     search_orchestrator,
                     &span,
                     options.as_ref(),

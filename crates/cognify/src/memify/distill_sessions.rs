@@ -840,6 +840,7 @@ mod tests {
     fn mk_entry(q: &str, a: &str, secs: i64) -> SessionQAEntry {
         SessionQAEntry {
             id: Uuid::new_v4(),
+            external_event_id: None,
             session_id: "s1".into(),
             user_id: None,
             question: q.into(),

@@ -113,6 +113,12 @@ pub struct Settings {
     pub default_user_id: String,
     pub default_dataset_name: String,
 
+    /// Explicit process-local access mode for immutable database generations.
+    /// This is deliberately not populated from a generic environment variable:
+    /// only a trusted constructor (such as the reference reader) may enable it.
+    #[serde(skip)]
+    pub read_only: bool,
+
     pub system_root_directory: String,
     pub data_root_directory: String,
     pub cache_root_directory: String,
@@ -133,6 +139,8 @@ pub struct Settings {
     pub llm_api_key: String,
     pub llm_endpoint: String,
     pub llm_api_version: String,
+    /// Optional caller identity sent on proxy-bound HTTP requests.
+    pub user_agent: String,
     /// Reasoning-model detection override (`LLM_REASONING`): `auto` (default,
     /// name/host auto-detection), `always` (force the reasoning parameter shape),
     /// or `never` (force the legacy `max_tokens`+sampling shape). Lets an operator
@@ -817,6 +825,7 @@ impl Settings {
             .unwrap_or(8191);
 
         cognee_components::BackendBuildContext {
+            read_only: self.read_only,
             data_root_directory: PathBuf::from(&self.data_root_directory),
             system_root_directory: PathBuf::from(&self.system_root_directory),
             relational_db_url: self.resolved_relational_db_url(),
@@ -833,6 +842,7 @@ impl Settings {
                 dimensions: self.embedding_dimensions as usize,
                 endpoint,
                 api_key,
+                user_agent: (!self.user_agent.trim().is_empty()).then(|| self.user_agent.clone()),
                 batch_size: self.embedding_batch_size as usize,
                 mock,
                 mock_deterministic,
@@ -851,6 +861,7 @@ impl Settings {
                 model: self.llm_model.clone(),
                 api_key: self.llm_api_key.clone(),
                 endpoint: self.llm_endpoint.clone(),
+                user_agent: (!self.user_agent.trim().is_empty()).then(|| self.user_agent.clone()),
                 anthropic_base_url: cognee_components::anthropic_base_url_from_env(),
                 max_retries: self.llm_max_retries,
                 max_completion_tokens: self.llm_max_completion_tokens,
@@ -1068,6 +1079,7 @@ impl Default for Settings {
         Self {
             default_user_id: "00000000-0000-0000-0000-000000000000".to_string(),
             default_dataset_name: "main_dataset".to_string(),
+            read_only: false,
             system_root_directory: "./.cognee_system".to_string(),
             data_root_directory: "./.data_storage".to_string(),
             cache_root_directory: "./.cognee_cache".to_string(),
@@ -1085,6 +1097,7 @@ impl Default for Settings {
             llm_api_key: String::new(),
             llm_endpoint: String::new(),
             llm_api_version: String::new(),
+            user_agent: String::new(),
             llm_reasoning: "auto".to_string(),
             llm_temperature: 0.0,
             llm_streaming: false,
@@ -3101,6 +3114,16 @@ mod tests {
                 "telemetry_snapshot leaked credential/URL substring: {forbidden}"
             );
         }
+    }
+
+    #[test]
+    fn read_only_mode_is_explicit_and_defaults_to_writable() {
+        let mut settings = Settings::default();
+        assert!(!settings.read_only);
+        assert!(!settings.backend_context().read_only);
+
+        settings.read_only = true;
+        assert!(settings.backend_context().read_only);
     }
 
     #[test]

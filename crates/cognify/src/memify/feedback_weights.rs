@@ -468,6 +468,7 @@ mod tests {
     fn is_eligible_valid_node_ids() {
         let entry = SessionQAEntry {
             id: Uuid::new_v4(),
+            external_event_id: None,
             session_id: "s".into(),
             user_id: None,
             question: "q".into(),
@@ -491,6 +492,7 @@ mod tests {
         meta.insert("feedback_weights_applied".to_string(), true);
         let entry = SessionQAEntry {
             id: Uuid::new_v4(),
+            external_event_id: None,
             session_id: "s".into(),
             user_id: None,
             question: "q".into(),
@@ -512,6 +514,7 @@ mod tests {
     fn is_eligible_rejects_missing_ids() {
         let entry = SessionQAEntry {
             id: Uuid::new_v4(),
+            external_event_id: None,
             session_id: "s".into(),
             user_id: None,
             question: "q".into(),
@@ -530,6 +533,7 @@ mod tests {
     fn is_eligible_rejects_invalid_score() {
         let entry = SessionQAEntry {
             id: Uuid::new_v4(),
+            external_event_id: None,
             session_id: "s".into(),
             user_id: None,
             question: "q".into(),

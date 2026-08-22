@@ -57,9 +57,11 @@ use uuid::Uuid;
 use crate::config::CognifyConfig;
 use crate::error::CognifyError;
 use crate::fact_extraction::{FactExtractor, KnowledgeGraph};
+#[cfg(test)]
+use crate::graph_integration::expand_with_nodes_and_edges;
 use crate::graph_integration::{
-    GraphEdgePair, GraphNodePair, deduplicate_nodes_and_edges, expand_with_nodes_and_edges,
-    retrieve_existing_edges,
+    GraphEdgePair, GraphNodePair, deduplicate_nodes_and_edges,
+    expand_with_nodes_and_edges_for_external_events, retrieve_existing_edges,
 };
 use crate::pipeline::{CognifyResult, IndexedFieldsStats};
 use crate::qualification::{Qualification, check_pipeline_run_qualification};
@@ -144,6 +146,21 @@ pub struct ExtractedTemporalEvents {
     pub dataset_id: Uuid,
     pub user_id: Option<Uuid>,
     pub tenant_id: Option<Uuid>,
+}
+
+fn document_external_event_id(document: &Document) -> Option<String> {
+    let metadata: serde_json::Value =
+        serde_json::from_str(document.external_metadata.as_deref()?).ok()?;
+    metadata
+        .get("cognee_external_event_id")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            metadata
+                .get("data_item_external_metadata")
+                .and_then(|nested| nested.get("cognee_external_event_id"))
+                .and_then(serde_json::Value::as_str)
+        })
+        .map(str::to_owned)
 }
 
 // ---------------------------------------------------------------------------
@@ -483,11 +500,31 @@ pub async fn extract_graph_from_data(
         .map(|chunk| (chunk.base.id, chunk.base.importance_weight.unwrap_or(0.5)))
         .collect();
 
-    let (nodes, edges) = expand_with_nodes_and_edges(
+    // This map is constructed only after fact extraction has completed, so
+    // the event key remains storage metadata and can never enter an LLM prompt.
+    let document_external_event_ids: HashMap<Uuid, String> = input
+        .documents
+        .iter()
+        .filter_map(|document| {
+            document_external_event_id(document).map(|event_id| (document.base.id, event_id))
+        })
+        .collect();
+    let chunk_external_event_ids: HashMap<Uuid, String> = chunks_for_extraction
+        .iter()
+        .filter_map(|chunk| {
+            document_external_event_ids
+                .get(&chunk.document_id)
+                .cloned()
+                .map(|event_id| (chunk.base.id, event_id))
+        })
+        .collect();
+
+    let (nodes, edges) = expand_with_nodes_and_edges_for_external_events(
         all_graphs,
         input.dataset_id,
         &chunk_node_sets,
         &chunk_importance_weights,
+        &chunk_external_event_ids,
         &existing_edges_set,
         ontology_resolver.as_ref(),
         user_label_owned.as_deref(),

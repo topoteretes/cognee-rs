@@ -8,6 +8,8 @@ pub struct Model {
     pub dataset_id: String,
     #[sea_orm(primary_key, auto_increment = false)]
     pub data_id: String,
+    /// Caller-supplied idempotency key. Null for legacy/non-idempotent writes.
+    pub external_event_id: Option<String>,
     pub created_at: DateTimeUtc,
 }
 

@@ -34,6 +34,33 @@ pub trait IngestDb: Send + Sync {
         data_id: Uuid,
     ) -> Result<(), DatabaseError>;
 
+    /// Attach data with an optional external idempotency key.
+    ///
+    /// The default preserves existing custom implementations for callers that
+    /// do not provide a key. DatabaseConnection overrides the keyed path.
+    async fn attach_data_to_dataset_with_external_event(
+        &self,
+        dataset_id: Uuid,
+        data_id: Uuid,
+        external_event_id: Option<&str>,
+    ) -> Result<(), DatabaseError> {
+        if external_event_id.is_some() {
+            return Err(DatabaseError::QueryError(
+                "external event idempotency is not supported by this database backend".into(),
+            ));
+        }
+        self.attach_data_to_dataset(dataset_id, data_id).await
+    }
+
+    /// Whether a dataset already contains an external event.
+    async fn contains_external_event(
+        &self,
+        _dataset_id: Uuid,
+        _external_event_id: &str,
+    ) -> Result<bool, DatabaseError> {
+        Ok(false)
+    }
+
     /// Update the `last_accessed` timestamp on the given Data records.
     ///
     /// Implementations should perform a bulk `UPDATE data SET last_accessed = ?
@@ -91,6 +118,29 @@ impl IngestDb for DatabaseConnection {
         data_id: Uuid,
     ) -> Result<(), DatabaseError> {
         datasets::attach_data_to_dataset(self, dataset_id, data_id).await
+    }
+
+    async fn attach_data_to_dataset_with_external_event(
+        &self,
+        dataset_id: Uuid,
+        data_id: Uuid,
+        external_event_id: Option<&str>,
+    ) -> Result<(), DatabaseError> {
+        datasets::attach_data_to_dataset_with_external_event(
+            self,
+            dataset_id,
+            data_id,
+            external_event_id,
+        )
+        .await
+    }
+
+    async fn contains_external_event(
+        &self,
+        dataset_id: Uuid,
+        external_event_id: &str,
+    ) -> Result<bool, DatabaseError> {
+        datasets::contains_external_event(self, dataset_id, external_event_id).await
     }
 
     async fn update_last_accessed(

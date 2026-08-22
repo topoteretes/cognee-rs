@@ -22,6 +22,11 @@ impl VectorDbFactory for PgVectorFactory {
     }
 
     async fn build(&self, ctx: &BackendBuildContext) -> Result<Arc<dyn VectorDB>, ComponentError> {
+        if ctx.read_only {
+            return Err(ComponentError::Config(
+                "read-only engine mode does not support a pgvector backend".into(),
+            ));
+        }
         let url = match ctx.vector_postgres_url.as_ref() {
             Some(Ok(url)) => url,
             Some(Err(cause)) => return Err(ComponentError::Config(cause.clone())),
@@ -57,6 +62,11 @@ impl VectorDbFactory for LanceDbFactory {
 
     async fn build(&self, ctx: &BackendBuildContext) -> Result<Arc<dyn VectorDB>, ComponentError> {
         if ctx.vector_db_url == ":memory:" {
+            if ctx.read_only {
+                return Err(ComponentError::Config(
+                    "read-only engine mode requires a persistent LanceDB directory".into(),
+                ));
+            }
             return Ok(Arc::new(BruteForceVectorDB::new()));
         }
 
@@ -69,9 +79,17 @@ impl VectorDbFactory for LanceDbFactory {
             } else {
                 std::path::PathBuf::from(&ctx.vector_db_url)
             };
-            let adapter = cognee_vector::LanceDbAdapter::new(path)
-                .await
-                .map_err(|e| ComponentError::VectorDb(format!("lancedb init failed: {e}")))?;
+            let adapter = if ctx.read_only {
+                cognee_vector::LanceDbAdapter::new_read_only(path)
+                    .await
+                    .map_err(|e| {
+                        ComponentError::VectorDb(format!("lancedb read-only open failed: {e}"))
+                    })?
+            } else {
+                cognee_vector::LanceDbAdapter::new(path)
+                    .await
+                    .map_err(|e| ComponentError::VectorDb(format!("lancedb init failed: {e}")))?
+            };
             Ok(Arc::new(adapter))
         }
         #[cfg(target_os = "android")]
@@ -96,7 +114,12 @@ impl VectorDbFactory for BruteForceFactory {
         "brute-force"
     }
 
-    async fn build(&self, _ctx: &BackendBuildContext) -> Result<Arc<dyn VectorDB>, ComponentError> {
+    async fn build(&self, ctx: &BackendBuildContext) -> Result<Arc<dyn VectorDB>, ComponentError> {
+        if ctx.read_only {
+            return Err(ComponentError::Config(
+                "read-only engine mode does not support an in-memory vector backend".into(),
+            ));
+        }
         Ok(Arc::new(BruteForceVectorDB::new()))
     }
 }
@@ -112,7 +135,12 @@ impl VectorDbFactory for MockVectorFactory {
         "mock"
     }
 
-    async fn build(&self, _ctx: &BackendBuildContext) -> Result<Arc<dyn VectorDB>, ComponentError> {
+    async fn build(&self, ctx: &BackendBuildContext) -> Result<Arc<dyn VectorDB>, ComponentError> {
+        if ctx.read_only {
+            return Err(ComponentError::Config(
+                "read-only engine mode does not support an in-memory mock vector backend".into(),
+            ));
+        }
         Ok(Arc::new(cognee_vector::MockVectorDB::new()))
     }
 }

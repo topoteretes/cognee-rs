@@ -148,6 +148,7 @@ pub async fn process_input(
         let loader = get_loader_name(&ext).to_string();
         (fname, ext.clone(), mime.clone(), ext, mime, lbl, loader)
     };
+    let label = label.filter(|value| !value.is_empty());
 
     // S3 ingestion is not yet implemented (decision D3): the loader-dispatch
     // path below must NOT silently store raw S3 bytes. Surface a clear error
@@ -431,9 +432,16 @@ pub async fn persist_data_with_acl(
     }
 
     let data_id = processed.data_id;
+    let external_event_id = external_event_id_from_metadata(processed.external_metadata.as_deref());
 
     if let Some(existing_data) = database.get_data(data_id).await? {
-        database.attach_data_to_dataset(dataset.id, data_id).await?;
+        database
+            .attach_data_to_dataset_with_external_event(
+                dataset.id,
+                data_id,
+                external_event_id.as_deref(),
+            )
+            .await?;
         info!(data_id = %data_id, is_duplicate = true, "input processed");
         return Ok(existing_data);
     }
@@ -472,7 +480,13 @@ pub async fn persist_data_with_acl(
 
     let saved_data = database.create_data(data).await?;
 
-    database.attach_data_to_dataset(dataset.id, data_id).await?;
+    database
+        .attach_data_to_dataset_with_external_event(
+            dataset.id,
+            data_id,
+            external_event_id.as_deref(),
+        )
+        .await?;
 
     info!(data_id = %data_id, is_duplicate = false, "input processed");
     Ok(saved_data)
@@ -734,6 +748,25 @@ fn merge_external_metadata(
     }
 
     serde_json::to_string(&serde_json::Value::Object(merged)).map(Some)
+}
+
+/// Extract the transport-neutral external event key from DataItem metadata.
+///
+/// URL metadata merging can preserve conflicting user metadata under
+/// `data_item_external_metadata`, so accept that compatibility shape as well
+/// as the normal top-level key.
+fn external_event_id_from_metadata(metadata: Option<&str>) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(metadata?).ok()?;
+    value
+        .get("cognee_external_event_id")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            value
+                .get("data_item_external_metadata")
+                .and_then(|nested| nested.get("cognee_external_event_id"))
+                .and_then(serde_json::Value::as_str)
+        })
+        .map(str::to_owned)
 }
 
 /// Derive a human-readable name for the stored Data record.
@@ -2198,6 +2231,40 @@ mod tests {
             result[0].label.as_deref(),
             Some("my-label"),
             "DataItem label must be stored in the Data record"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_data_item_empty_label_is_not_stored() {
+        let (pipeline, db) = make_pipeline().await;
+        let owner_id = Uuid::new_v4();
+
+        let result = pipeline
+            .add(
+                vec![DataInput::DataItem {
+                    data: Box::new(DataInput::Text("metadata-only wrapper".to_string())),
+                    label: String::new(),
+                    external_metadata: Some(
+                        r#"{"cognee_external_event_id":"evt-label"}"#.to_string(),
+                    ),
+                }],
+                "ds",
+                owner_id,
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result[0].label, None);
+        assert_eq!(
+            result[0].external_metadata.as_deref(),
+            Some(r#"{"cognee_external_event_id":"evt-label"}"#)
+        );
+        let dataset_id = generate_dataset_id("ds", owner_id, None);
+        assert!(
+            ops::datasets::contains_external_event(&db, dataset_id, "evt-label")
+                .await
+                .unwrap()
         );
     }
 

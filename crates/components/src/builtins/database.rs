@@ -50,6 +50,29 @@ fn sqlite_fs_path(url: &str) -> Option<String> {
     if path.is_empty() { None } else { Some(path) }
 }
 
+/// Rewrite a file-backed SQLite URL into an immutable read-only open while
+/// preserving unrelated query parameters. `mode=ro` makes sqlx request a
+/// read-only connection; `immutable=1` tells SQLite not to create journal,
+/// WAL, or shared-memory sidecars for the closed generation.
+fn sqlite_read_only_url(url: &str) -> Result<String, ComponentError> {
+    if !url.starts_with("sqlite:") || sqlite_url_is_in_memory(url) {
+        return Err(ComponentError::Config(
+            "read-only engine mode requires a file-backed SQLite relational database".into(),
+        ));
+    }
+
+    let (base, query) = url.split_once('?').unwrap_or((url, ""));
+    let mut params: Vec<&str> = query
+        .split('&')
+        .filter(|param| {
+            let key = param.split_once('=').map_or(*param, |(key, _)| key);
+            !param.is_empty() && key != "mode" && key != "immutable"
+        })
+        .collect();
+    params.extend(["mode=ro", "immutable=1"]);
+    Ok(format!("{base}?{}", params.join("&")))
+}
+
 /// Connect to and initialize the relational database from the resolved URL.
 ///
 /// For SQLite file-backed databases, the parent directory is created first
@@ -63,9 +86,17 @@ fn sqlite_fs_path(url: &str) -> Option<String> {
 pub async fn build_database(
     ctx: &BackendBuildContext,
 ) -> Result<Arc<DatabaseConnection>, ComponentError> {
-    let url = &ctx.relational_db_url;
+    let read_only_url;
+    let url = if ctx.read_only {
+        read_only_url = sqlite_read_only_url(&ctx.relational_db_url)?;
+        &read_only_url
+    } else {
+        &ctx.relational_db_url
+    };
 
-    if let Some(path) = sqlite_fs_path(url) {
+    if !ctx.read_only
+        && let Some(path) = sqlite_fs_path(url)
+    {
         let db_path = Path::new(&path);
         if let Some(parent) = db_path.parent()
             && !parent.as_os_str().is_empty()
@@ -84,9 +115,11 @@ pub async fn build_database(
     let db = connect(url)
         .await
         .map_err(|e| ComponentError::Database(format!("initialization failed: {e}")))?;
-    initialize(&db)
-        .await
-        .map_err(|e| ComponentError::Database(format!("schema initialization failed: {e}")))?;
+    if !ctx.read_only {
+        initialize(&db)
+            .await
+            .map_err(|e| ComponentError::Database(format!("schema initialization failed: {e}")))?;
+    }
     Ok(Arc::new(db))
 }
 
@@ -101,6 +134,7 @@ mod tests {
 
     fn ctx_with_db_url(url: String) -> BackendBuildContext {
         BackendBuildContext {
+            read_only: false,
             data_root_directory: std::path::PathBuf::from("/tmp"),
             system_root_directory: std::path::PathBuf::from("/tmp"),
             relational_db_url: url,
@@ -117,6 +151,7 @@ mod tests {
                 dimensions: 384,
                 endpoint: None,
                 api_key: None,
+                user_agent: None,
                 batch_size: 36,
                 mock: true,
                 mock_deterministic: false,
@@ -135,6 +170,7 @@ mod tests {
                 model: "gpt-4o-mini".to_string(),
                 api_key: "sk-test".to_string(),
                 endpoint: String::new(),
+                user_agent: None,
                 anthropic_base_url: None,
                 max_retries: 3,
                 max_completion_tokens: cognee_llm::OpenAIAdapter::DEFAULT_MAX_COMPLETION_TOKENS,
@@ -210,5 +246,50 @@ mod tests {
         build_database(&ctx_with_db_url("sqlite::memory:".to_string()))
             .await
             .expect("in-memory sqlite should connect");
+    }
+
+    #[test]
+    fn read_only_sqlite_url_replaces_write_mode_and_preserves_other_parameters() {
+        assert_eq!(
+            sqlite_read_only_url("sqlite:///tmp/cognee.db?cache=private&mode=rwc").unwrap(),
+            "sqlite:///tmp/cognee.db?cache=private&mode=ro&immutable=1"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_only_database_skips_migrations_and_preserves_existing_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("bare.db");
+        let writable_url = format!("sqlite://{}?mode=rwc", path.display());
+        let seed = cognee_database::connect(&writable_url)
+            .await
+            .expect("create bare sqlite database");
+        cognee_database::close(&seed).await.expect("close seed db");
+        let before = std::fs::read(&path).expect("read seed db");
+
+        let mut ctx = ctx_with_db_url(writable_url);
+        ctx.read_only = true;
+        let db = build_database(&ctx)
+            .await
+            .expect("read-only build must not run migrations");
+        cognee_database::close(&db)
+            .await
+            .expect("close read-only db");
+
+        assert_eq!(std::fs::read(&path).expect("read reopened db"), before);
+        assert!(!path.with_extension("db-wal").exists());
+        assert!(!path.with_extension("db-shm").exists());
+    }
+
+    #[tokio::test]
+    async fn read_only_database_does_not_create_a_missing_parent() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let parent = dir.path().join("missing").join("parent");
+        let path = parent.join("cognee.db");
+        let mut ctx = ctx_with_db_url(format!("sqlite://{}?mode=rwc", path.display()));
+        ctx.read_only = true;
+
+        assert!(build_database(&ctx).await.is_err());
+        assert!(!parent.exists());
     }
 }

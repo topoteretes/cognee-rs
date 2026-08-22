@@ -661,6 +661,9 @@ impl HttpServerConfig {
         let onnx_batch_size = onnx_defaults.batch_size;
 
         cognee_components::BackendBuildContext {
+            // The standalone service owns writable stores. Immutable reference
+            // generations opt in through the library Settings path instead.
+            read_only: false,
             data_root_directory: self.data_root_directory.clone(),
             system_root_directory: self.system_root_directory.clone(),
             // Ensure a file-backed SQLite URL carries `?mode=rwc` so the driver
@@ -684,6 +687,7 @@ impl HttpServerConfig {
                 dimensions: self.embedding_dimensions as usize,
                 endpoint,
                 api_key,
+                user_agent: None,
                 batch_size: emb_defaults.batch_size,
                 mock: false,
                 mock_deterministic: false,
@@ -702,6 +706,7 @@ impl HttpServerConfig {
                 model: self.llm_model.clone(),
                 api_key: self.llm_api_key.expose_secret().to_string(),
                 endpoint: self.llm_endpoint.clone(),
+                user_agent: None,
                 anthropic_base_url: cognee_components::anthropic_base_url_from_env(),
                 max_retries: self.llm_max_retries,
                 // Env-configurable via `LLM_MAX_COMPLETION_TOKENS`, mirroring

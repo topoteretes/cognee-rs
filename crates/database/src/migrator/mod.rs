@@ -1,6 +1,7 @@
 use sea_orm_migration::prelude::*;
 
 mod m20260914_000001_baseline;
+mod m20260914_000002_external_event_id;
 
 pub struct Migrator;
 
@@ -11,7 +12,10 @@ pub struct Migrator;
 /// The OSS [`Migrator`] simply delegates to this accessor so behaviour is
 /// unchanged for OSS-only builds.
 pub fn core_migrations() -> Vec<Box<dyn MigrationTrait>> {
-    vec![Box::new(m20260914_000001_baseline::Migration)]
+    vec![
+        Box::new(m20260914_000001_baseline::Migration),
+        Box::new(m20260914_000002_external_event_id::Migration),
+    ]
 }
 
 #[async_trait::async_trait]

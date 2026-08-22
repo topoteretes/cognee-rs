@@ -110,6 +110,7 @@ pub fn build_embedding_config(inputs: &EmbeddingInputs) -> EmbeddingConfig {
     config.dimensions = inputs.dimensions;
     config.endpoint = inputs.endpoint.clone();
     config.api_key = inputs.api_key.clone();
+    config.user_agent = inputs.user_agent.clone();
     config.api_version = inputs.api_version.clone();
     config.max_completion_tokens = inputs.max_completion_tokens;
     config.batch_size = inputs.batch_size;
@@ -198,6 +199,7 @@ mod tests {
             dimensions: 384,
             endpoint: None,
             api_key: None,
+            user_agent: None,
             batch_size: 36,
             mock,
             mock_deterministic: false,

@@ -38,6 +38,9 @@ pub struct RecallOptions {
     pub feedback_influence: Option<f32>,
     pub neighborhood_depth: Option<usize>,
     pub neighborhood_seed_top_k: Option<usize>,
+    /// Whether graph recall may persist query/result search-history rows.
+    /// `None` preserves the existing orchestrator default (`true`).
+    pub save_interaction: Option<bool>,
 }
 
 /// Source tag for recall results. Mirrors the discriminator strings emitted
@@ -424,6 +427,7 @@ pub async fn run_graph(
     top_k: usize,
     auto_route: bool,
     session_id: Option<&str>,
+    user_id: Option<uuid::Uuid>,
     search_orchestrator: &SearchOrchestrator,
     span: &tracing::Span,
     options: Option<&RecallOptions>,
@@ -466,8 +470,8 @@ pub async fn run_graph(
         node_name: options.and_then(|o| o.node_name.clone()),
         wide_search_top_k: options.and_then(|o| o.wide_search_top_k),
         triplet_distance_penalty: options.and_then(|o| o.triplet_distance_penalty),
-        save_interaction: None,
-        user_id: None,
+        save_interaction: options.and_then(|o| o.save_interaction),
+        user_id,
         verbose: None,
         feedback_influence: options.and_then(|o| o.feedback_influence),
         retriever_specific_config: None,
@@ -534,6 +538,72 @@ fn tokenize(text: &str) -> HashSet<String> {
 )]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
+    use cognee_database::{DatabaseError, SearchHistoryDb, SearchHistoryEntry};
+    use cognee_session::SessionContext;
+    use std::sync::Arc;
+
+    use crate::orchestration::SearchTypeRegistry;
+    use crate::retrievers::SearchRetriever;
+    use crate::types::{SearchContext, SearchOutput, SearchParams};
+
+    struct PanicHistoryDb;
+
+    #[async_trait]
+    impl SearchHistoryDb for PanicHistoryDb {
+        async fn log_query(
+            &self,
+            _query_text: &str,
+            _query_type: &str,
+            _user_id: Option<uuid::Uuid>,
+        ) -> Result<uuid::Uuid, DatabaseError> {
+            panic!("read-only recall must not write query history")
+        }
+
+        async fn log_result(
+            &self,
+            _query_id: uuid::Uuid,
+            _serialized_result: &str,
+            _user_id: Option<uuid::Uuid>,
+        ) -> Result<uuid::Uuid, DatabaseError> {
+            panic!("read-only recall must not write result history")
+        }
+
+        async fn get_history(
+            &self,
+            _user_id: Option<uuid::Uuid>,
+            _limit: Option<usize>,
+        ) -> Result<Vec<SearchHistoryEntry>, DatabaseError> {
+            Ok(Vec::new())
+        }
+    }
+
+    struct ReferenceChunksRetriever;
+
+    #[async_trait]
+    impl SearchRetriever for ReferenceChunksRetriever {
+        fn search_type(&self) -> SearchType {
+            SearchType::Chunks
+        }
+
+        async fn get_context(
+            &self,
+            _query: &str,
+            _params: &SearchParams,
+        ) -> Result<SearchContext, SearchError> {
+            Ok(Vec::new())
+        }
+
+        async fn get_completion(
+            &self,
+            _query: &str,
+            _context: Option<SearchContext>,
+            _session: &SessionContext,
+            _params: &SearchParams,
+        ) -> Result<SearchOutput, SearchError> {
+            Ok(SearchOutput::Text("reference result".to_string()))
+        }
+    }
 
     #[test]
     fn tokenize_splits_and_lowercases() {
@@ -697,5 +767,37 @@ mod tests {
         assert_eq!(RecallScope::Session.as_wire(), "session");
         assert_eq!(RecallScope::Trace.as_wire(), "trace");
         assert_eq!(RecallScope::GraphContext.as_wire(), "graph_context");
+    }
+
+    #[tokio::test]
+    async fn read_only_recall_does_not_persist_search_history() {
+        let mut registry = SearchTypeRegistry::new();
+        registry.register(Arc::new(ReferenceChunksRetriever));
+        let orchestrator = SearchOrchestrator::new(registry)
+            .with_database(Arc::new(PanicHistoryDb) as Arc<dyn SearchHistoryDb>);
+        let options = RecallOptions {
+            save_interaction: Some(false),
+            ..RecallOptions::default()
+        };
+
+        let (_, used_type, _, response) = run_graph(
+            "fleet standard",
+            Some(SearchType::Chunks),
+            None,
+            3,
+            false,
+            None,
+            None,
+            &orchestrator,
+            &tracing::Span::none(),
+            Some(&options),
+        )
+        .await
+        .expect("reference recall");
+
+        assert_eq!(used_type, SearchType::Chunks);
+        assert!(
+            matches!(response.result, SearchOutput::Text(ref text) if text == "reference result")
+        );
     }
 }

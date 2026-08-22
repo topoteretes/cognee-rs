@@ -30,7 +30,7 @@ mod sea_orm_store;
 pub use error::SessionError;
 pub use improve_lock::{ImproveLockGuard, release_improve_lock, try_acquire_improve_lock};
 pub use session_manager::SessionManager;
-pub use session_store::{SessionQAUpdate, SessionStore};
+pub use session_store::{SessionQAUpdate, SessionStore, external_event_entry_id};
 pub use types::{SessionContext, SessionQAEntry, SessionTraceStep, UsedGraphElementIds};
 
 #[cfg(feature = "fs")]

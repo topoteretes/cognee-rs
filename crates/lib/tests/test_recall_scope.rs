@@ -17,12 +17,15 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use cognee::api::recall::{RecallScope, RecallSource, ScopeInput, normalize_scope, recall};
+use cognee_database::{IngestDb, connect, initialize};
+use cognee_models::Dataset;
 use cognee_search::orchestration::SearchTypeRegistry;
 use cognee_search::retrievers::SearchRetriever;
 use cognee_search::types::{SearchContext, SearchError, SearchOutput, SearchParams};
 use cognee_search::{SearchOrchestrator, SearchType};
 use cognee_session::{FsSessionStore, SessionContext, SessionManager, SessionStore};
 use tempfile::TempDir;
+use uuid::Uuid;
 
 const USER_ID: &str = "user-1";
 const SESSION_ID: &str = "sess-1";
@@ -184,6 +187,46 @@ async fn test_scope_auto_without_session_id_uses_graph_path() {
     assert!(
         result.items.iter().all(|i| i.source == RecallSource::Graph),
         "all items should be graph-tagged when session_id is None"
+    );
+}
+
+#[tokio::test]
+async fn graph_recall_passes_owner_to_dataset_name_resolution() {
+    let owner = Uuid::new_v4();
+    let database = Arc::new(connect("sqlite::memory:").await.expect("connect database"));
+    initialize(&database).await.expect("initialize database");
+    cognee_database::ops::datasets::create_dataset(
+        &database,
+        Dataset::new("agent_sessions".to_owned(), owner, None, Uuid::new_v4()),
+    )
+    .await
+    .expect("seed dataset");
+    let orchestrator = build_orchestrator().with_dataset_resolver(database as Arc<dyn IngestDb>);
+    let owner = owner.to_string();
+
+    let result = recall(
+        "stable preferences",
+        Some(SearchType::Chunks),
+        Some(vec!["agent_sessions".to_owned()]),
+        10,
+        false,
+        None,
+        Some(&owner),
+        &orchestrator,
+        None,
+        None,
+        Some(vec![RecallScope::Graph]),
+        None,
+    )
+    .await
+    .expect("dataset-scoped graph recall");
+
+    assert!(
+        result
+            .items
+            .iter()
+            .any(|item| item.source == RecallSource::Graph),
+        "graph recall should complete after owner-scoped dataset resolution"
     );
 }
 

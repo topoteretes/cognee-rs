@@ -23,6 +23,7 @@ pub struct SearchBuilder {
     database: Arc<dyn SearchHistoryDb>,
     dataset_resolver: Option<Arc<dyn IngestDb>>,
     session_manager: Option<Arc<SessionManager>>,
+    enable_access_tracking: bool,
 }
 
 impl SearchBuilder {
@@ -38,6 +39,7 @@ impl SearchBuilder {
             database,
             dataset_resolver: None,
             session_manager: None,
+            enable_access_tracking: true,
         }
         .register_standard_retrievers(vector_db, embedding_engine, graph_db, llm)
     }
@@ -52,6 +54,14 @@ impl SearchBuilder {
     /// requests carrying `datasets` fail with `SearchError::InvalidInput`.
     pub fn with_dataset_resolver(mut self, resolver: Arc<dyn IngestDb>) -> Self {
         self.dataset_resolver = Some(resolver);
+        self
+    }
+
+    /// Control whether retrieval updates `Data.last_accessed` when a dataset
+    /// resolver is attached. Existing callers keep the historical writable
+    /// default; immutable reference readers disable it explicitly.
+    pub fn with_access_tracking(mut self, enabled: bool) -> Self {
+        self.enable_access_tracking = enabled;
         self
     }
 
@@ -289,11 +299,11 @@ impl SearchBuilder {
 
         let mut orchestrator = SearchOrchestrator::new(registry).with_database(self.database);
         if let Some(resolver) = self.dataset_resolver {
-            // Auto-enable access tracking when an IngestDb resolver is available,
-            // so last_accessed timestamps on Data records are updated on every search.
-            orchestrator = orchestrator
-                .with_dataset_resolver(resolver)
-                .with_access_tracking();
+            orchestrator = orchestrator.with_dataset_resolver(resolver);
+            if self.enable_access_tracking {
+                // Preserve the historical default for writable engines.
+                orchestrator = orchestrator.with_access_tracking();
+            }
         }
         if let Some(session_manager) = self.session_manager {
             orchestrator = orchestrator.with_session_manager(session_manager);
@@ -313,7 +323,9 @@ mod tests {
     use std::sync::Arc;
 
     use async_trait::async_trait;
-    use cognee_database::{DatabaseError, SearchHistoryDb, SearchHistoryEntry};
+    use cognee_database::{
+        DatabaseError, IngestDb, SearchHistoryDb, SearchHistoryEntry, connect, initialize, ops,
+    };
     use cognee_embedding::EmbeddingResult;
     use cognee_embedding::engine::EmbeddingEngine;
     use cognee_graph::{EdgeData, GraphDBResult, GraphDBTrait, GraphNode, NodeData};
@@ -640,6 +652,107 @@ mod tests {
         ) -> Result<SearchOutput, SearchError> {
             Ok(SearchOutput::Text("builder-executed".to_string()))
         }
+    }
+
+    struct AccessTrackingRetriever {
+        data_id: Uuid,
+    }
+
+    #[async_trait]
+    impl SearchRetriever for AccessTrackingRetriever {
+        fn search_type(&self) -> SearchType {
+            SearchType::Chunks
+        }
+
+        async fn get_context(
+            &self,
+            _query: &str,
+            _params: &SearchParams,
+        ) -> Result<SearchContext, SearchError> {
+            Ok(vec![crate::types::SearchItem {
+                id: None,
+                score: Some(1.0),
+                payload: json!({ "data_id": self.data_id.to_string(), "text": "reference" }),
+            }])
+        }
+
+        async fn get_completion(
+            &self,
+            _query: &str,
+            _context: Option<SearchContext>,
+            _session: &SessionContext,
+            _params: &SearchParams,
+        ) -> Result<SearchOutput, SearchError> {
+            Ok(SearchOutput::Text("reference".to_string()))
+        }
+    }
+
+    #[tokio::test]
+    async fn can_disable_access_tracking_without_disabling_dataset_resolution() {
+        let database = Arc::new(connect("sqlite::memory:").await.unwrap());
+        initialize(&database).await.unwrap();
+        let data_id = Uuid::new_v4();
+        let data = cognee_models::Data::builder(
+            data_id,
+            "reference.md",
+            "file:///reference.md",
+            "file:///reference.md",
+            "md",
+            "text/markdown",
+            "content-hash",
+            Uuid::nil(),
+        )
+        .build();
+        ops::data::create_data(&database, data).await.unwrap();
+
+        let orchestrator = SearchBuilder::new(
+            Arc::new(TestVectorDb),
+            Arc::new(TestEmbedding),
+            Arc::new(TestGraphDb),
+            Arc::new(TestLlm),
+            Arc::clone(&database) as Arc<dyn SearchHistoryDb>,
+        )
+        .with_dataset_resolver(Arc::clone(&database) as Arc<dyn IngestDb>)
+        .with_access_tracking(false)
+        .register_retriever(Arc::new(AccessTrackingRetriever { data_id }))
+        .build();
+
+        let request = SearchRequest {
+            query_text: "fleet standard".to_string(),
+            search_type: SearchType::Chunks,
+            top_k: Some(3),
+            datasets: None,
+            dataset_ids: None,
+            system_prompt: None,
+            system_prompt_path: None,
+            only_context: Some(true),
+            use_combined_context: Some(false),
+            session_id: None,
+            node_type: None,
+            node_name: None,
+            node_name_filter_operator: None,
+            wide_search_top_k: None,
+            triplet_distance_penalty: None,
+            save_interaction: Some(false),
+            user_id: None,
+            verbose: None,
+            feedback_influence: None,
+            retriever_specific_config: None,
+            response_schema: None,
+            custom_search_type: None,
+            auto_feedback_detection: None,
+            neighborhood_depth: None,
+            neighborhood_seed_top_k: None,
+            summarize_context: None,
+        };
+
+        orchestrator.search(&request).await.unwrap();
+
+        let stored = ops::data::get_data(&database, data_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.last_accessed, None);
     }
 
     #[tokio::test]

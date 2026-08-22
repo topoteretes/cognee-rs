@@ -458,6 +458,7 @@ mod tests {
             dimensions: 1024,
             endpoint: None,
             api_key: None,
+            user_agent: None,
             api_version: None,
             max_completion_tokens: 8191,
             batch_size: 10,

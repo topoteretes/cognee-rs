@@ -3,6 +3,10 @@ use thiserror::Error;
 /// Error type for vector database operations.
 #[derive(Error, Debug)]
 pub enum VectorDBError {
+    /// A mutating operation was requested on an immutable vector generation.
+    #[error("Vector database is read-only")]
+    ReadOnly,
+
     /// The requested collection does not exist.
     #[error("Collection not found: {0}")]
     CollectionNotFound(String),

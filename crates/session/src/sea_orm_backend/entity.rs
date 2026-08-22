@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub id: String,
+    #[sea_orm(column_type = "Text", nullable)]
+    pub external_event_id: Option<String>,
     pub session_id: String,
     pub user_id: Option<String>,
     pub question: String,
@@ -43,6 +45,8 @@ pub mod trace_step {
     pub struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
         pub trace_id: String,
+        #[sea_orm(column_type = "Text", nullable)]
+        pub external_event_id: Option<String>,
         pub user_id: String,
         pub session_id: String,
         /// Monotonically-increasing sequence assigned at insert time. Used to

@@ -142,6 +142,7 @@ fn sanitize_json_control_chars(s: &str) -> Cow<'_, str> {
 pub struct LadybugAdapter {
     db_path: String,
     db: Arc<Database>,
+    read_only: bool,
     // Single-process assumption: this lock serializes overlapping writes
     // within one process. Cross-process locking is intentionally out of scope.
     write_lock: Arc<Mutex<()>>,
@@ -166,7 +167,18 @@ impl LadybugAdapter {
     /// Returns GraphDBError::InitializationError if database creation fails
     ///
     pub async fn new(db_path: &str) -> GraphDBResult<Self> {
-        let config = SystemConfig::default().max_db_size(read_max_db_size());
+        Self::open(db_path, false).await
+    }
+
+    /// Open an existing Ladybug database without permitting any mutation.
+    pub async fn new_read_only(db_path: &str) -> GraphDBResult<Self> {
+        Self::open(db_path, true).await
+    }
+
+    async fn open(db_path: &str, read_only: bool) -> GraphDBResult<Self> {
+        let config = SystemConfig::default()
+            .max_db_size(read_max_db_size())
+            .read_only(read_only);
         let db = Database::new(db_path, config).map_err(|e| {
             GraphDBError::InitializationError(format!("Failed to create database: {e}"))
         })?;
@@ -174,8 +186,17 @@ impl LadybugAdapter {
         Ok(Self {
             db_path: db_path.to_string(),
             db: Arc::new(db),
+            read_only,
             write_lock: Arc::new(Mutex::new(())),
         })
+    }
+
+    fn ensure_writable(&self) -> GraphDBResult<()> {
+        if self.read_only {
+            Err(GraphDBError::ReadOnly)
+        } else {
+            Ok(())
+        }
     }
 
     /// Get the database path.
@@ -583,6 +604,7 @@ struct NodeProperties {
 #[async_trait]
 impl GraphDBTrait for LadybugAdapter {
     async fn initialize(&self) -> GraphDBResult<()> {
+        self.ensure_writable()?;
         let conn = Connection::new(&self.db).map_err(|e| {
             GraphDBError::ConnectionError(format!("Failed to create connection: {e}"))
         })?;
@@ -671,6 +693,7 @@ impl GraphDBTrait for LadybugAdapter {
     }
 
     async fn delete_graph(&self) -> GraphDBResult<()> {
+        self.ensure_writable()?;
         let conn = Connection::new(&self.db).map_err(|e| {
             GraphDBError::ConnectionError(format!("Failed to create connection: {e}"))
         })?;
@@ -706,6 +729,7 @@ impl GraphDBTrait for LadybugAdapter {
     }
 
     async fn add_node_raw(&self, node: Value) -> GraphDBResult<()> {
+        self.ensure_writable()?;
         let props = self.serialize_to_node_props(&node)?;
         let _write_guard = self.write_lock.lock().map_err(|_| {
             GraphDBError::ConnectionError("Ladybug write lock poisoned".to_string())
@@ -718,6 +742,7 @@ impl GraphDBTrait for LadybugAdapter {
     }
 
     async fn add_nodes_raw(&self, nodes: Vec<Value>) -> GraphDBResult<()> {
+        self.ensure_writable()?;
         // Batch insert optimization: process nodes in chunks to avoid
         // query size limits and improve performance
         const BATCH_SIZE: usize = 500;
@@ -774,6 +799,7 @@ impl GraphDBTrait for LadybugAdapter {
     }
 
     async fn delete_node(&self, node_id: &str) -> GraphDBResult<()> {
+        self.ensure_writable()?;
         let conn = Connection::new(&self.db).map_err(|e| {
             GraphDBError::ConnectionError(format!("Failed to create connection: {e}"))
         })?;
@@ -790,6 +816,7 @@ impl GraphDBTrait for LadybugAdapter {
     }
 
     async fn delete_nodes(&self, node_ids: &[String]) -> GraphDBResult<()> {
+        self.ensure_writable()?;
         for node_id in node_ids {
             self.delete_node(node_id).await?;
         }
@@ -880,6 +907,7 @@ impl GraphDBTrait for LadybugAdapter {
         relationship_name: &str,
         properties: Option<HashMap<Cow<'static, str>, serde_json::Value>>,
     ) -> GraphDBResult<()> {
+        self.ensure_writable()?;
         let _write_guard = self.write_lock.lock().map_err(|_| {
             GraphDBError::ConnectionError("Ladybug write lock poisoned".to_string())
         })?;
@@ -901,6 +929,7 @@ impl GraphDBTrait for LadybugAdapter {
     }
 
     async fn add_edges(&self, edges: &[EdgeData]) -> GraphDBResult<()> {
+        self.ensure_writable()?;
         if edges.is_empty() {
             return Ok(());
         }
@@ -1564,6 +1593,7 @@ impl GraphDBTrait for LadybugAdapter {
         key: &str,
         value: serde_json::Value,
     ) -> GraphDBResult<()> {
+        self.ensure_writable()?;
         let read_query = format!(
             "MATCH (n:Node) WHERE n.id = '{}' RETURN n.properties AS properties",
             node_id.replace('\\', "\\\\").replace('\'', "\\'")
@@ -1609,6 +1639,7 @@ impl GraphDBTrait for LadybugAdapter {
         key: &str,
         value: serde_json::Value,
     ) -> GraphDBResult<()> {
+        self.ensure_writable()?;
         let src_esc = source_id.replace('\\', "\\\\").replace('\'', "\\'");
         let tgt_esc = target_id.replace('\\', "\\\\").replace('\'', "\\'");
         let rel_esc = relationship_name.replace('\\', "\\\\").replace('\'', "\\'");
@@ -1695,6 +1726,7 @@ impl GraphDBTrait for LadybugAdapter {
         &self,
         updates: &HashMap<String, f64>,
     ) -> GraphDBResult<HashMap<String, bool>> {
+        self.ensure_writable()?;
         let mut out = HashMap::with_capacity(updates.len());
         for (id, w) in updates {
             let ok = self
@@ -1760,6 +1792,7 @@ impl GraphDBTrait for LadybugAdapter {
         &self,
         updates: &HashMap<String, crate::NodeTruthState>,
     ) -> GraphDBResult<HashMap<String, bool>> {
+        self.ensure_writable()?;
         // Ladybug's `update_node_property` is an in-place JSON-merge SET, so two
         // calls per id is cheap. A single `UNWIND` batched write is an optional
         // follow-up (see P2-04 Risks), not required here.
@@ -1815,6 +1848,7 @@ impl GraphDBTrait for LadybugAdapter {
         &self,
         updates: &HashMap<crate::traits::EdgeKey, f64>,
     ) -> GraphDBResult<HashMap<crate::traits::EdgeKey, bool>> {
+        self.ensure_writable()?;
         let mut out = HashMap::with_capacity(updates.len());
         for (key, w) in updates {
             let ok = self
@@ -1844,8 +1878,12 @@ mod tests {
     use crate::GraphDBTraitExt;
     use serde::Serialize;
     use serial_test::serial;
+    use std::path::{Path, PathBuf};
     use tempfile::TempDir;
     use tokio::task::JoinSet;
+
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
 
     /// Simple test node for testing batch operations
     #[derive(Debug, Clone, Serialize)]
@@ -1880,6 +1918,150 @@ mod tests {
             .unwrap();
         adapter.initialize().await.unwrap();
         (adapter, temp_dir)
+    }
+
+    fn tree_snapshot(root: &Path) -> Vec<(PathBuf, bool, u64, Vec<u8>)> {
+        fn visit(root: &Path, path: &Path, out: &mut Vec<(PathBuf, bool, u64, Vec<u8>)>) {
+            let mut entries: Vec<_> = std::fs::read_dir(path)
+                .unwrap()
+                .map(|entry| entry.unwrap())
+                .collect();
+            entries.sort_by_key(|entry| entry.file_name());
+            for entry in entries {
+                let path = entry.path();
+                let metadata = entry.metadata().unwrap();
+                let relative = path.strip_prefix(root).unwrap().to_path_buf();
+                #[cfg(unix)]
+                let mode = u64::from(metadata.permissions().mode());
+                #[cfg(not(unix))]
+                let mode = u64::from(metadata.permissions().readonly());
+                if metadata.is_dir() {
+                    out.push((relative, true, mode, Vec::new()));
+                    visit(root, &path, out);
+                } else {
+                    out.push((relative, false, mode, std::fs::read(path).unwrap()));
+                }
+            }
+        }
+
+        let mut out = Vec::new();
+        visit(root, root, &mut out);
+        out
+    }
+
+    #[cfg(unix)]
+    fn set_tree_mode(root: &Path, dir_mode: u32, file_mode: u32) {
+        fn visit(path: &Path, dir_mode: u32, file_mode: u32) {
+            let entries: Vec<_> = std::fs::read_dir(path)
+                .unwrap()
+                .map(|entry| entry.unwrap())
+                .collect();
+            for entry in entries {
+                let path = entry.path();
+                let metadata = entry.metadata().unwrap();
+                if metadata.is_dir() {
+                    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(dir_mode))
+                        .unwrap();
+                    visit(&path, dir_mode, file_mode);
+                } else {
+                    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(file_mode))
+                        .unwrap();
+                }
+            }
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(dir_mode)).unwrap();
+        }
+
+        visit(root, dir_mode, file_mode);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn read_only_adapter_reads_rejects_mutation_and_preserves_tree() {
+        let temp_dir = TempDir::new().unwrap();
+        let generation = temp_dir.path().join("generation");
+        std::fs::create_dir(&generation).unwrap();
+        let db_path = generation.join("read-only.db");
+        {
+            let adapter = LadybugAdapter::new(db_path.to_str().unwrap())
+                .await
+                .unwrap();
+            adapter.initialize().await.unwrap();
+            adapter
+                .add_node(&TestNode::new("node-1", "seed", 1))
+                .await
+                .unwrap();
+        }
+
+        #[cfg(unix)]
+        set_tree_mode(&generation, 0o555, 0o444);
+        let before = tree_snapshot(&generation);
+
+        {
+            let adapter = LadybugAdapter::new_read_only(db_path.to_str().unwrap())
+                .await
+                .unwrap();
+            assert!(adapter.has_node("node-1").await.unwrap());
+            assert!(matches!(
+                adapter.initialize().await,
+                Err(GraphDBError::ReadOnly)
+            ));
+            assert!(matches!(
+                adapter.delete_graph().await,
+                Err(GraphDBError::ReadOnly)
+            ));
+            assert!(matches!(
+                adapter.add_node_raw(json!({})).await,
+                Err(GraphDBError::ReadOnly)
+            ));
+            assert!(matches!(
+                adapter.add_nodes_raw(Vec::new()).await,
+                Err(GraphDBError::ReadOnly)
+            ));
+            assert!(matches!(
+                adapter.delete_node("node-1").await,
+                Err(GraphDBError::ReadOnly)
+            ));
+            assert!(matches!(
+                adapter.delete_nodes(&[]).await,
+                Err(GraphDBError::ReadOnly)
+            ));
+            assert!(matches!(
+                adapter.add_edge("node-1", "node-1", "self", None).await,
+                Err(GraphDBError::ReadOnly)
+            ));
+            assert!(matches!(
+                adapter.add_edges(&[]).await,
+                Err(GraphDBError::ReadOnly)
+            ));
+            assert!(matches!(
+                adapter
+                    .update_node_property("node-1", "blocked", json!(true))
+                    .await,
+                Err(GraphDBError::ReadOnly)
+            ));
+            assert!(matches!(
+                adapter
+                    .update_edge_property("node-1", "node-1", "self", "blocked", json!(true))
+                    .await,
+                Err(GraphDBError::ReadOnly)
+            ));
+            assert!(matches!(
+                adapter.set_node_feedback_weights(&HashMap::new()).await,
+                Err(GraphDBError::ReadOnly)
+            ));
+            assert!(matches!(
+                adapter.set_node_truth_state(&HashMap::new()).await,
+                Err(GraphDBError::ReadOnly)
+            ));
+            assert!(matches!(
+                adapter.set_edge_feedback_weights(&HashMap::new()).await,
+                Err(GraphDBError::ReadOnly)
+            ));
+        }
+
+        assert_eq!(tree_snapshot(&generation), before);
+        #[cfg(unix)]
+        set_tree_mode(&generation, 0o755, 0o644);
     }
 
     /// Regression: lbug supports a single batched `UNWIND … MERGE` (inline

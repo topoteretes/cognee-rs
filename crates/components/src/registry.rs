@@ -395,6 +395,7 @@ mod tests {
 
     fn test_ctx() -> BackendBuildContext {
         BackendBuildContext {
+            read_only: false,
             data_root_directory: std::path::PathBuf::from("/tmp/cognee-test-data"),
             system_root_directory: std::path::PathBuf::from("/tmp/cognee-test-system"),
             relational_db_url: "sqlite::memory:".to_string(),
@@ -411,6 +412,7 @@ mod tests {
                 dimensions: 384,
                 endpoint: None,
                 api_key: None,
+                user_agent: None,
                 batch_size: 36,
                 mock: false,
                 mock_deterministic: false,
@@ -429,6 +431,7 @@ mod tests {
                 model: "gpt-4o-mini".to_string(),
                 api_key: "sk-test".to_string(),
                 endpoint: String::new(),
+                user_agent: None,
                 anthropic_base_url: None,
                 max_retries: 3,
                 max_completion_tokens: cognee_llm::OpenAIAdapter::DEFAULT_MAX_COMPLETION_TOKENS,
@@ -440,5 +443,167 @@ mod tests {
                 record_path: String::new(),
             },
         }
+    }
+
+    #[cfg(feature = "ladybug")]
+    #[tokio::test]
+    async fn read_only_graph_factory_selects_read_only_adapter() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("graph");
+        {
+            let graph = cognee_graph::LadybugAdapter::new(path.to_str().unwrap())
+                .await
+                .expect("create graph");
+            graph.initialize().await.expect("initialize graph");
+            graph
+                .add_node_raw(serde_json::json!({
+                    "id": "seed",
+                    "name": "Seed",
+                    "type": "Reference",
+                    "created_at": "2026-08-21T00:00:00Z",
+                    "updated_at": "2026-08-21T00:00:00Z"
+                }))
+                .await
+                .expect("seed graph");
+        }
+
+        let mut ctx = test_ctx();
+        ctx.read_only = true;
+        ctx.graph_provider = "ladybug".into();
+        ctx.graph_file_path = path.to_string_lossy().into_owned();
+        let graph = ComponentRegistry::with_builtins()
+            .build_graph(&ctx)
+            .await
+            .expect("open read-only graph");
+
+        assert!(graph.has_node("seed").await.expect("read graph"));
+        assert!(matches!(
+            graph.delete_node("seed").await,
+            Err(cognee_graph::GraphDBError::ReadOnly)
+        ));
+    }
+
+    #[cfg(all(feature = "lancedb", not(target_os = "android")))]
+    #[tokio::test]
+    async fn read_only_vector_factory_selects_read_only_adapter() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("vectors");
+        let id = "beefbeef-beef-4eef-8eef-beefbeefbeef"
+            .parse()
+            .expect("uuid");
+        {
+            let vectors = cognee_vector::LanceDbAdapter::new(path.clone())
+                .await
+                .expect("create vectors");
+            vectors
+                .create_collection("Chunk", "text", 2)
+                .await
+                .expect("create collection");
+            vectors
+                .index_points(
+                    "Chunk",
+                    "text",
+                    &[cognee_vector::VectorPoint::new(id, vec![1.0, 0.0])],
+                )
+                .await
+                .expect("seed vector");
+        }
+
+        let mut ctx = test_ctx();
+        ctx.read_only = true;
+        ctx.vector_provider = "lancedb".into();
+        ctx.vector_db_url = path.to_string_lossy().into_owned();
+        let vectors = ComponentRegistry::with_builtins()
+            .build_vector(&ctx)
+            .await
+            .expect("open read-only vectors");
+
+        assert_eq!(
+            vectors
+                .collection_size("Chunk", "text")
+                .await
+                .expect("read collection"),
+            1
+        );
+        assert!(matches!(
+            vectors.delete_collection("Chunk", "text").await,
+            Err(cognee_vector::VectorDBError::ReadOnly)
+        ));
+    }
+
+    #[tokio::test]
+    async fn read_only_storage_factory_selects_read_only_adapter() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().join("data");
+        std::fs::create_dir(&root).expect("create storage root");
+        std::fs::write(root.join("seed.txt"), b"seed").expect("seed storage");
+
+        let mut ctx = test_ctx();
+        ctx.read_only = true;
+        ctx.data_root_directory = root;
+        let storage = crate::build_storage(&ctx)
+            .await
+            .expect("build read-only storage");
+
+        assert_eq!(
+            storage.retrieve("seed.txt").await.expect("read storage"),
+            b"seed"
+        );
+        assert!(matches!(
+            storage.initialize().await,
+            Err(cognee_storage::StorageError::PermissionDenied(_))
+        ));
+    }
+
+    #[cfg(feature = "ladybug")]
+    #[tokio::test]
+    async fn read_only_factories_do_not_create_missing_backend_paths() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut ctx = test_ctx();
+        ctx.read_only = true;
+
+        let database_parent = dir.path().join("database-parent");
+        ctx.relational_db_url = format!(
+            "sqlite://{}?mode=rwc",
+            database_parent.join("cognee.db").display()
+        );
+        assert!(crate::build_database(&ctx).await.is_err());
+        assert!(!database_parent.exists());
+
+        let graph_parent = dir.path().join("graph-parent");
+        ctx.graph_provider = "ladybug".into();
+        ctx.graph_file_path = graph_parent.join("graph").to_string_lossy().into_owned();
+        assert!(
+            ComponentRegistry::with_builtins()
+                .build_graph(&ctx)
+                .await
+                .is_err()
+        );
+        assert!(!graph_parent.exists());
+
+        #[cfg(all(feature = "lancedb", not(target_os = "android")))]
+        {
+            let vector_parent = dir.path().join("vector-parent");
+            ctx.vector_provider = "lancedb".into();
+            ctx.vector_db_url = vector_parent.join("vectors").to_string_lossy().into_owned();
+            assert!(
+                ComponentRegistry::with_builtins()
+                    .build_vector(&ctx)
+                    .await
+                    .is_err()
+            );
+            assert!(!vector_parent.exists());
+        }
+
+        let storage_root = dir.path().join("storage-root");
+        ctx.data_root_directory = storage_root.clone();
+        let storage = crate::build_storage(&ctx)
+            .await
+            .expect("read-only storage construction is side-effect free");
+        assert!(!storage_root.exists());
+        assert!(matches!(
+            storage.initialize().await,
+            Err(cognee_storage::StorageError::PermissionDenied(_))
+        ));
     }
 }

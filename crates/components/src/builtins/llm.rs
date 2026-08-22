@@ -49,6 +49,7 @@ impl LlmFactory for OpenAiCompatibleLlmFactory {
             ctx.llm.max_retries,
         )
         .map_err(|e| ComponentError::Llm(e.to_string()))?
+        .with_user_agent(ctx.llm.user_agent.clone())
         .with_extra_args(ctx.llm.llm_args.clone())
         .with_default_max_tokens(Some(ctx.llm.max_completion_tokens))
         .with_reasoning_override(ctx.llm.reasoning_override);
@@ -77,7 +78,8 @@ impl LlmFactory for OpenAiCompatibleLlmFactory {
             &ctx.llm.endpoint,
             ctx.llm.max_retries,
         )
-        .map_err(|e| ComponentError::Llm(e.to_string()))?;
+        .map_err(|e| ComponentError::Llm(e.to_string()))?
+        .with_user_agent(ctx.llm.user_agent.clone());
         Ok(Some(Arc::new(adapter) as Arc<dyn Transcriber>))
     }
 }
@@ -175,6 +177,7 @@ impl LlmFactory for AzureLlmFactory {
             ctx.llm.max_retries,
         )
         .map_err(|e| ComponentError::Llm(e.to_string()))?
+        .with_user_agent(ctx.llm.user_agent.clone())
         .with_api_version(api_version)
         .with_extra_args(ctx.llm.llm_args.clone())
         // Honour the operator's completion ceiling on Azure too, matching the

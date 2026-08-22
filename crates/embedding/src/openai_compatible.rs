@@ -92,6 +92,16 @@ impl OpenAICompatibleEmbeddingEngine {
         let auth_value = reqwest::header::HeaderValue::from_str(&bearer)
             .map_err(|e| EmbeddingError::ConfigError(format!("Invalid API key value: {e}")))?;
         default_headers.insert(reqwest::header::AUTHORIZATION, auth_value);
+        if let Some(user_agent) = config
+            .user_agent
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            let value = reqwest::header::HeaderValue::from_str(user_agent).map_err(|e| {
+                EmbeddingError::ConfigError(format!("Invalid User-Agent value: {e}"))
+            })?;
+            default_headers.insert(reqwest::header::USER_AGENT, value);
+        }
 
         // For Azure OpenAI the api-version is sent as a query parameter, not a
         // header.  We store the version on the struct and append it per-request.
@@ -379,6 +389,32 @@ mod tests {
             engine.embeddings_url(),
             "https://api.openai.com/v1/embeddings"
         );
+    }
+
+    #[tokio::test]
+    async fn configured_user_agent_is_sent_on_embedding_requests() {
+        let mut server = mockito::Server::new_async().await;
+        let request = server
+            .mock("POST", "/v1/embeddings")
+            .match_header("user-agent", "Apex/test")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"data":[{"embedding":[1.0,0.0]}]}"#)
+            .create_async()
+            .await;
+        let config = EmbeddingConfig {
+            endpoint: Some(server.url()),
+            model: "text-embedding-3-large".to_string(),
+            dimensions: 2,
+            user_agent: Some("Apex/test".to_string()),
+            ..EmbeddingConfig::default()
+        };
+        let engine = OpenAICompatibleEmbeddingEngine::new(&config).expect("engine");
+
+        let result = engine.embed(&["ping"]).await.expect("embedding response");
+
+        assert_eq!(result, vec![vec![1.0, 0.0]]);
+        request.assert_async().await;
     }
 
     // ── is_retryable ─────────────────────────────────────────────────────────

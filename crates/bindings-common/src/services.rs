@@ -81,6 +81,8 @@ impl CogneeServices {
     /// `llm_api_key` — `OpenAIAdapter::new` performs no network I/O at
     /// construction, so this never reaches the network.
     pub async fn build(cm: &ComponentManager) -> Result<(Self, Uuid), SdkError> {
+        let read_only = cm.settings().read_only;
+
         // --- 1. Raw engines (errors map to ComponentError → SdkError). ---
         let storage = cm.storage().await?;
         let database = cm.database().await?;
@@ -140,9 +142,13 @@ impl CogneeServices {
 
         // Session: v1 is always SeaOrmSessionStore (fs/redis features are not
         // built into the default binding configurations).
-        let session_store_concrete = SeaOrmSessionStore::new(Arc::clone(&database))
-            .await
-            .map_err(|e| SdkError::ServiceBuild(format!("session store: {e}")))?;
+        let session_store_concrete = if read_only {
+            SeaOrmSessionStore::new_read_only(Arc::clone(&database))
+        } else {
+            SeaOrmSessionStore::new(Arc::clone(&database))
+                .await
+                .map_err(|e| SdkError::ServiceBuild(format!("session store: {e}")))?
+        };
         let session_store: Arc<dyn SessionStore> = Arc::new(session_store_concrete);
         let session_manager = Arc::new(SessionManager::new(Arc::clone(&session_store)));
 
@@ -156,6 +162,7 @@ impl CogneeServices {
             )
             .with_session_manager(Arc::clone(&session_manager))
             .with_dataset_resolver(Arc::clone(&database) as Arc<dyn IngestDb>)
+            .with_access_tracking(!read_only)
             .build(),
         );
 

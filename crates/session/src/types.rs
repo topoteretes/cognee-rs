@@ -20,6 +20,8 @@ pub struct UsedGraphElementIds {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionQAEntry {
     pub id: Uuid,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_event_id: Option<String>,
     pub session_id: String,
     pub user_id: Option<String>,
     pub question: String,
@@ -62,10 +64,13 @@ pub struct SessionContext {
 /// Library-internal type; kept `snake_case` to match Python's persisted JSON
 /// shape so cross-SDK reads stay byte-equal. This is **not** an HTTP DTO —
 /// the wire-side camelCase rule (Decision 10) does not apply here.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SessionTraceStep {
     /// Server-generated UUID4 — returned by `SessionManager::add_agent_trace_step`.
     pub trace_id: String,
+    /// Optional caller-supplied idempotency key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_event_id: Option<String>,
     pub origin_function: String,
     /// Free-form per Python validator; typically `"success"` / `"error"`.
     pub status: String,

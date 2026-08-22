@@ -23,6 +23,8 @@ struct RedisQAEntry {
     context: String,
     answer: String,
     qa_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    external_event_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     feedback_text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -68,13 +70,20 @@ fn session_key(user_id: Option<&str>, session_id: &str) -> String {
     format!("agent_sessions:{uid}:{session_id}")
 }
 
-fn build_entry(qa_id: &str, question: &str, answer: &str, context: Option<&str>) -> RedisQAEntry {
+fn build_entry(
+    qa_id: &str,
+    question: &str,
+    answer: &str,
+    context: Option<&str>,
+    external_event_id: Option<&str>,
+) -> RedisQAEntry {
     RedisQAEntry {
         time: Utc::now().to_rfc3339(),
         question: question.to_string(),
         context: context.unwrap_or("").to_string(),
         answer: answer.to_string(),
         qa_id: qa_id.to_string(),
+        external_event_id: external_event_id.map(str::to_owned),
         feedback_text: None,
         feedback_score: None,
         used_graph_element_ids: None,
@@ -94,6 +103,7 @@ fn redis_entry_to_domain(e: &RedisQAEntry, session_id: &str) -> SessionQAEntry {
 
     SessionQAEntry {
         id: Uuid::parse_str(&e.qa_id).unwrap_or_else(|_| Uuid::new_v4()),
+        external_event_id: e.external_event_id.clone(),
         session_id: session_id.to_string(),
         user_id: None,
         question: e.question.clone(),
@@ -120,6 +130,70 @@ fn graph_context_key(user_id: Option<&str>, session_id: &str) -> String {
 
 fn trace_key(user_id: &str, session_id: &str) -> String {
     format!("cognee:trace:{user_id}:{session_id}")
+}
+
+fn qa_event_key(user_id: Option<&str>, session_id: &str) -> String {
+    let uid = user_id.unwrap_or("default");
+    format!("agent_sessions_external_events:{uid}:{session_id}")
+}
+
+fn trace_event_key(user_id: &str, session_id: &str) -> String {
+    format!("cognee:trace_external_events:{user_id}:{session_id}")
+}
+
+const IDEMPOTENT_APPEND_LUA: &str = r#"
+local known_id = redis.call('HGET', KEYS[2], ARGV[1])
+local entries = redis.call('LRANGE', KEYS[1], 0, -1)
+for _, raw in ipairs(entries) do
+    local item = cjson.decode(raw)
+    if item[ARGV[4]] == ARGV[1] or (known_id and item[ARGV[5]] == known_id) then
+        redis.call('HSET', KEYS[2], ARGV[1], item[ARGV[5]])
+        return raw
+    end
+end
+if known_id then
+    redis.call('HDEL', KEYS[2], ARGV[1])
+end
+redis.call('RPUSH', KEYS[1], ARGV[2])
+redis.call('HSET', KEYS[2], ARGV[1], ARGV[3])
+return ARGV[2]
+"#;
+
+const CONTAINS_EXTERNAL_EVENT_LUA: &str = r#"
+if redis.call('HEXISTS', KEYS[2], ARGV[1]) == 1 then
+    return 1
+end
+local entries = redis.call('LRANGE', KEYS[1], 0, -1)
+for _, raw in ipairs(entries) do
+    local item = cjson.decode(raw)
+    if item.external_event_id == ARGV[1] then
+        redis.call('HSET', KEYS[2], ARGV[1], item[ARGV[2]])
+        return 1
+    end
+end
+return 0
+"#;
+
+fn qa_content_matches(
+    entry: &RedisQAEntry,
+    question: &str,
+    answer: &str,
+    context: Option<&str>,
+) -> bool {
+    entry.question == question
+        && entry.answer == answer
+        && entry.context == context.unwrap_or_default()
+}
+
+fn trace_content_matches(existing: &SessionTraceStep, replay: &SessionTraceStep) -> bool {
+    existing.origin_function == replay.origin_function
+        && existing.status == replay.status
+        && existing.memory_query == replay.memory_query
+        && existing.memory_context == replay.memory_context
+        && existing.method_params == replay.method_params
+        && existing.method_return_value == replay.method_return_value
+        && existing.error_message == replay.error_message
+        && existing.session_feedback == replay.session_feedback
 }
 
 /// Apply a `SessionQAUpdate` to a `RedisQAEntry` in place.
@@ -170,15 +244,52 @@ impl SessionStore for RedisSessionStore {
         context: Option<&str>,
     ) -> Result<String, SessionError> {
         let qa_id = Uuid::new_v4().to_string();
-        let entry = build_entry(&qa_id, question, answer, context);
+        self.create_qa_entry_with_id(&qa_id, session_id, user_id, question, answer, context, None)
+            .await
+    }
+
+    async fn create_qa_entry_with_id(
+        &self,
+        qa_id: &str,
+        session_id: &str,
+        user_id: Option<&str>,
+        question: &str,
+        answer: &str,
+        context: Option<&str>,
+        external_event_id: Option<&str>,
+    ) -> Result<String, SessionError> {
+        let entry = build_entry(qa_id, question, answer, context, external_event_id);
         let json = serde_json::to_string(&entry)
             .map_err(|e| SessionError::StoreError(format!("json error: {e}")))?;
 
         let key = session_key(user_id, session_id);
         let mut conn = self.conn.clone();
-        conn.rpush::<_, _, ()>(&key, &json).await.map_err(map_err)?;
+        let Some(event_id) = external_event_id else {
+            conn.rpush::<_, _, ()>(&key, &json).await.map_err(map_err)?;
+            return Ok(qa_id.to_owned());
+        };
 
-        Ok(qa_id)
+        let persisted: String = redis::Script::new(IDEMPOTENT_APPEND_LUA)
+            .key(&key)
+            .key(qa_event_key(user_id, session_id))
+            .arg(event_id)
+            .arg(&json)
+            .arg(qa_id)
+            .arg("external_event_id")
+            .arg("qa_id")
+            .invoke_async(&mut conn)
+            .await
+            .map_err(map_err)?;
+        let persisted: RedisQAEntry = serde_json::from_str(&persisted)
+            .map_err(|e| SessionError::StoreError(format!("json parse error: {e}")))?;
+        if !qa_content_matches(&persisted, question, answer, context) {
+            return Err(SessionError::ExternalEventConflict {
+                event_id: event_id.to_owned(),
+                reason: "Q&A content differs from the persisted entry".into(),
+            });
+        }
+
+        Ok(persisted.qa_id)
     }
 
     async fn get_latest_qa_entries(
@@ -228,7 +339,8 @@ impl SessionStore for RedisSessionStore {
     ) -> Result<bool, SessionError> {
         let key = session_key(user_id, session_id);
         let mut conn = self.conn.clone();
-        let deleted: i64 = conn.del(&key).await.map_err(map_err)?;
+        let event_key = qa_event_key(user_id, session_id);
+        let deleted: i64 = conn.del((&key, &event_key)).await.map_err(map_err)?;
         Ok(deleted > 0)
     }
 
@@ -245,12 +357,14 @@ impl SessionStore for RedisSessionStore {
         let raw: Vec<String> = conn.lrange(&key, 0, -1).await.map_err(map_err)?;
 
         let mut found = false;
+        let mut removed_event_id = None;
         let mut kept = Vec::with_capacity(raw.len());
         for s in &raw {
             let e: RedisQAEntry = serde_json::from_str(s)
                 .map_err(|e| SessionError::StoreError(format!("json parse error: {e}")))?;
             if e.qa_id == qa_id {
                 found = true;
+                removed_event_id = e.external_event_id;
             } else {
                 kept.push(s.clone());
             }
@@ -266,36 +380,34 @@ impl SessionStore for RedisSessionStore {
                 .await
                 .map_err(map_err)?;
         }
+        if let Some(event_id) = removed_event_id {
+            conn.hdel::<_, _, ()>(qa_event_key(user_id, session_id), event_id)
+                .await
+                .map_err(map_err)?;
+        }
 
         Ok(true)
     }
 
     async fn prune(&self) -> Result<(), SessionError> {
         let mut conn = self.conn.clone();
-        let pattern = "agent_sessions:*";
-
-        // Use KEYS to find all session keys, then DEL them.
         // KEYS is acceptable here because prune() is an infrequent administrative
         // operation, and session keys are typically few in number.
-        let keys: Vec<String> = redis::cmd("KEYS")
-            .arg(pattern)
-            .query_async(&mut conn)
-            .await
-            .map_err(map_err)?;
-
-        if !keys.is_empty() {
-            conn.del::<_, ()>(&keys).await.map_err(map_err)?;
-        }
-
-        // Also delete graph_knowledge:* keys
-        let gk_keys: Vec<String> = redis::cmd("KEYS")
-            .arg("graph_knowledge:*")
-            .query_async(&mut conn)
-            .await
-            .map_err(map_err)?;
-
-        if !gk_keys.is_empty() {
-            conn.del::<_, ()>(&gk_keys).await.map_err(map_err)?;
+        for pattern in [
+            "agent_sessions:*",
+            "agent_sessions_external_events:*",
+            "graph_knowledge:*",
+            "cognee:trace:*",
+            "cognee:trace_external_events:*",
+        ] {
+            let keys: Vec<String> = redis::cmd("KEYS")
+                .arg(pattern)
+                .query_async(&mut conn)
+                .await
+                .map_err(map_err)?;
+            if !keys.is_empty() {
+                conn.del::<_, ()>(&keys).await.map_err(map_err)?;
+            }
         }
 
         Ok(())
@@ -382,9 +494,32 @@ impl SessionStore for RedisSessionStore {
         // Python uses RPUSH (NOT LPUSH) so LRANGE 0 -1 returns oldest-first.
         let key = trace_key(user_id, session_id);
         let mut conn = self.conn.clone();
-        conn.rpush::<_, _, ()>(&key, &json).await.map_err(map_err)?;
+        let Some(event_id) = step.external_event_id.as_deref() else {
+            conn.rpush::<_, _, ()>(&key, &json).await.map_err(map_err)?;
+            return Ok(trace_id);
+        };
 
-        Ok(trace_id)
+        let persisted: String = redis::Script::new(IDEMPOTENT_APPEND_LUA)
+            .key(&key)
+            .key(trace_event_key(user_id, session_id))
+            .arg(event_id)
+            .arg(&json)
+            .arg(&trace_id)
+            .arg("external_event_id")
+            .arg("trace_id")
+            .invoke_async(&mut conn)
+            .await
+            .map_err(map_err)?;
+        let persisted: SessionTraceStep = serde_json::from_str(&persisted)
+            .map_err(|e| SessionError::StoreError(format!("json parse error: {e}")))?;
+        if !trace_content_matches(&persisted, &step) {
+            return Err(SessionError::ExternalEventConflict {
+                event_id: event_id.to_owned(),
+                reason: "trace content differs from the persisted entry".into(),
+            });
+        }
+
+        Ok(persisted.trace_id)
     }
 
     async fn read_trace_steps(
@@ -402,5 +537,37 @@ impl SessionStore for RedisSessionStore {
                     .map_err(|e| SessionError::StoreError(format!("json parse error: {e}")))
             })
             .collect()
+    }
+
+    async fn contains_external_event(
+        &self,
+        session_id: &str,
+        user_id: Option<&str>,
+        external_event_id: &str,
+    ) -> Result<bool, SessionError> {
+        let mut conn = self.conn.clone();
+        let qa_found: i64 = redis::Script::new(CONTAINS_EXTERNAL_EVENT_LUA)
+            .key(session_key(user_id, session_id))
+            .key(qa_event_key(user_id, session_id))
+            .arg(external_event_id)
+            .arg("qa_id")
+            .invoke_async(&mut conn)
+            .await
+            .map_err(map_err)?;
+        if qa_found == 1 {
+            return Ok(true);
+        }
+        let Some(user_id) = user_id else {
+            return Ok(false);
+        };
+        let trace_found: i64 = redis::Script::new(CONTAINS_EXTERNAL_EVENT_LUA)
+            .key(trace_key(user_id, session_id))
+            .key(trace_event_key(user_id, session_id))
+            .arg(external_event_id)
+            .arg("trace_id")
+            .invoke_async(&mut conn)
+            .await
+            .map_err(map_err)?;
+        Ok(trace_found == 1)
     }
 }

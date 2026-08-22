@@ -5,6 +5,19 @@ use async_trait::async_trait;
 use crate::error::SessionError;
 use crate::types::{SessionQAEntry, SessionTraceStep, UsedGraphElementIds};
 
+/// UUIDv5 namespace reserved for Cognee external-event session entries.
+///
+/// This value is part of the persisted compatibility contract. Never replace
+/// it: the same external event must derive the same entry ID across processes,
+/// hosts, and storage backends.
+const EXTERNAL_EVENT_ID_NAMESPACE: uuid::Uuid =
+    uuid::Uuid::from_u128(0xa98f78ef05245cdd8b343aa876d97a49);
+
+/// Derive the stable session entry ID for an external event.
+pub fn external_event_entry_id(event_id: &str) -> String {
+    uuid::Uuid::new_v5(&EXTERNAL_EVENT_ID_NAMESPACE, event_id.as_bytes()).to_string()
+}
+
 /// Partial update DTO for a QA entry.
 ///
 /// - Outer `None` means "leave field unchanged".
@@ -38,6 +51,32 @@ pub trait SessionStore: Send + Sync {
         answer: &str,
         context: Option<&str>,
     ) -> Result<String, SessionError>;
+
+    /// Store a Q&A entry using a caller-supplied ID and optional external key.
+    ///
+    /// Official backends override this to provide exact-once semantics. The
+    /// default keeps third-party stores source-compatible and rejects keyed
+    /// writes rather than pretending they are idempotent.
+    #[allow(clippy::too_many_arguments)]
+    async fn create_qa_entry_with_id(
+        &self,
+        qa_id: &str,
+        session_id: &str,
+        user_id: Option<&str>,
+        question: &str,
+        answer: &str,
+        context: Option<&str>,
+        external_event_id: Option<&str>,
+    ) -> Result<String, SessionError> {
+        let _ = qa_id;
+        if external_event_id.is_some() {
+            return Err(SessionError::StoreError(
+                "external event idempotency is not implemented for this session store".into(),
+            ));
+        }
+        self.create_qa_entry(session_id, user_id, question, answer, context)
+            .await
+    }
 
     /// Retrieve the most recent `last_n` Q&A entries for a session, ordered oldest-first.
     async fn get_latest_qa_entries(
@@ -114,6 +153,31 @@ pub trait SessionStore: Send + Sync {
         user_id: Option<&str>,
         context: &str,
     ) -> Result<(), SessionError>;
+
+    /// Whether this session contains a Q&A or trace entry for the event key.
+    async fn contains_external_event(
+        &self,
+        session_id: &str,
+        user_id: Option<&str>,
+        external_event_id: &str,
+    ) -> Result<bool, SessionError> {
+        if self
+            .get_all_qa_entries(session_id, user_id)
+            .await?
+            .iter()
+            .any(|entry| entry.external_event_id.as_deref() == Some(external_event_id))
+        {
+            return Ok(true);
+        }
+        if let Some(user_id) = user_id
+            && let Ok(steps) = self.read_trace_steps(user_id, session_id).await
+        {
+            return Ok(steps
+                .iter()
+                .any(|step| step.external_event_id.as_deref() == Some(external_event_id)));
+        }
+        Ok(false)
+    }
 
     /// Append one agent-trace step to the session's trace list.
     ///

@@ -253,15 +253,23 @@ async fn baseline_creates_full_table_set_sqlite() {
 }
 
 // ---------------------------------------------------------------------------
-// D1.5 — Single-migration invariant
+// D1.5 — Ordered migration-chain invariant
 // ---------------------------------------------------------------------------
 
 #[test]
-fn relational_chain_has_one_migration() {
+fn relational_chain_has_baseline_then_external_event_migration() {
     use sea_orm_migration::MigratorTrait;
+
+    let names: Vec<String> = Migrator::migrations()
+        .iter()
+        .map(|migration| migration.name().to_string())
+        .collect();
     assert_eq!(
-        Migrator::migrations().len(),
-        1,
-        "relational chain must have exactly one baseline migration"
+        names,
+        [
+            "m20260914_000001_baseline",
+            "m20260914_000002_external_event_id",
+        ],
+        "relational migrations must retain their append-only order"
     );
 }

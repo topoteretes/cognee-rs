@@ -153,10 +153,12 @@ impl From<&Data> for data::ActiveModel {
 pub(crate) fn make_dataset_data_active(
     dataset_id: uuid::Uuid,
     data_id: uuid::Uuid,
+    external_event_id: Option<&str>,
 ) -> dataset_data::ActiveModel {
     dataset_data::ActiveModel {
         dataset_id: Set(uuid_hex::to_hex(dataset_id)),
         data_id: Set(uuid_hex::to_hex(data_id)),
+        external_event_id: Set(external_event_id.map(str::to_owned)),
         created_at: Set(Utc::now()),
     }
 }

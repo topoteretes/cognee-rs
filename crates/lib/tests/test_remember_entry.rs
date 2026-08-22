@@ -112,6 +112,7 @@ impl SessionStore for InMemorySessionStore {
         let qa_id = Uuid::new_v4().to_string();
         let entry = SessionQAEntry {
             id: Uuid::new_v4(),
+            external_event_id: None,
             session_id: session_id.to_string(),
             user_id: user_id.map(|s| s.to_string()),
             question: question.to_string(),

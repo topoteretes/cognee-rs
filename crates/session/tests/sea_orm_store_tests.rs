@@ -7,13 +7,79 @@
 
 use std::sync::Arc;
 
-use cognee_session::{SeaOrmSessionStore, SessionManager, SessionStore, SessionTraceStep};
+use cognee_session::{
+    SeaOrmSessionStore, SessionError, SessionManager, SessionQAUpdate, SessionStore,
+    SessionTraceStep,
+};
 use sea_orm::Database;
 
 async fn setup_store() -> Arc<SeaOrmSessionStore> {
     let db = Database::connect("sqlite::memory:").await.unwrap();
     // SeaOrmSessionStore::new runs its own migration
     Arc::new(SeaOrmSessionStore::new(Arc::new(db)).await.unwrap())
+}
+
+#[tokio::test]
+async fn read_only_store_skips_migration_and_rejects_all_mutators() {
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    let store = SeaOrmSessionStore::new_read_only(Arc::new(db));
+
+    assert!(matches!(
+        store.get_all_qa_entries("missing", None).await,
+        Err(SessionError::StoreError(_))
+    ));
+    assert!(matches!(
+        store
+            .create_qa_entry("s1", None, "question", "answer", None)
+            .await,
+        Err(SessionError::ReadOnly)
+    ));
+    assert!(matches!(
+        store
+            .create_qa_entry_with_id("qa-1", "s1", None, "question", "answer", None, None)
+            .await,
+        Err(SessionError::ReadOnly)
+    ));
+    assert!(matches!(
+        store.delete_session("s1", None).await,
+        Err(SessionError::ReadOnly)
+    ));
+    assert!(matches!(
+        store.delete_qa_entry("s1", None, "qa-1").await,
+        Err(SessionError::ReadOnly)
+    ));
+    assert!(matches!(store.prune().await, Err(SessionError::ReadOnly)));
+    assert!(matches!(
+        store
+            .update_qa_entry("s1", None, "qa-1", SessionQAUpdate::default())
+            .await,
+        Err(SessionError::ReadOnly)
+    ));
+    assert!(matches!(
+        store.set_graph_context("s1", None, "context").await,
+        Err(SessionError::ReadOnly)
+    ));
+    assert!(matches!(
+        store
+            .save_trace_step(
+                "user-1",
+                "s1",
+                SessionTraceStep {
+                    trace_id: "trace-1".to_string(),
+                    external_event_id: None,
+                    origin_function: "tool".to_string(),
+                    status: "success".to_string(),
+                    memory_query: String::new(),
+                    memory_context: String::new(),
+                    method_params: serde_json::json!({}),
+                    method_return_value: None,
+                    error_message: String::new(),
+                    session_feedback: String::new(),
+                },
+            )
+            .await,
+        Err(SessionError::ReadOnly)
+    ));
 }
 
 #[tokio::test]
@@ -501,6 +567,7 @@ async fn session_manager_graph_context_round_trip() {
 fn make_step(trace_id: &str, origin: &str) -> SessionTraceStep {
     SessionTraceStep {
         trace_id: trace_id.to_string(),
+        external_event_id: None,
         origin_function: origin.to_string(),
         status: "success".to_string(),
         memory_query: "q?".to_string(),
