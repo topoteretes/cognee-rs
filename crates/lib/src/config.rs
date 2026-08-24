@@ -1092,7 +1092,7 @@ impl Default for Settings {
             // the global completion ceiling in one place applies everywhere.
             llm_max_completion_tokens: cognee_llm::OpenAIAdapter::DEFAULT_MAX_COMPLETION_TOKENS,
             llm_max_retries: 2,
-            llm_max_parallel_requests: 20,
+            llm_max_parallel_requests: 128,
             llm_args: serde_json::Map::new(),
             llm_mock: false,
             llm_cassette: String::new(),

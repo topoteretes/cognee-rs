@@ -41,7 +41,7 @@ for retries and the `cognee-llm` rustdoc for the adapter.
 | `LLM_STREAMING` | `llm_streaming` | `false` |
 | `LLM_MAX_COMPLETION_TOKENS` / `LLM_MAX_TOKENS` | `llm_max_completion_tokens` | `16384` |
 | `LLM_MAX_RETRIES` | `llm_max_retries` | `2` |
-| `LLM_MAX_PARALLEL_REQUESTS` | `llm_max_parallel_requests` | `20` |
+| `LLM_MAX_PARALLEL_REQUESTS` | `llm_max_parallel_requests` | `128` |
 | `MOCK_LLM` | `llm_mock` | `false` |
 | `MOCK_LLM_CASSETTE` | `llm_cassette` | _(empty)_ |
 | `COGNEE_RECORD_LLM` | `llm_record_path` | _(empty)_ |
