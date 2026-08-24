@@ -8,12 +8,8 @@
 //! [`BedrockTransport::post_json`].
 //!
 //! Kept crate-internal on purpose: it is an implementation seam, not API. The
-//! adapter (R3) and the embedding engine (R4) consume it; nothing is
-//! re-exported from `lib.rs`.
-#![allow(
-    dead_code,
-    reason = "the seam is consumed by the Bedrock adapter (R3) and embedding engine (R4)"
-)]
+//! adapter ([`crate::adapters::bedrock::BedrockAdapter`]) and the embedding
+//! engine (R4) consume it; nothing is re-exported from `lib.rs`.
 
 use std::time::SystemTime;
 
