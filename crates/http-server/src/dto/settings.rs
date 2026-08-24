@@ -54,9 +54,15 @@ pub struct LLMConfigInputDTO {
     pub api_key: String,
 }
 
-/// Provider enum for `LLMConfigInputDTO::provider`. Note that `bedrock`
-/// is **not** in this list — Python's GET advertises it but the save
-/// `Literal` rejects it (`routers/settings.md §6.4`).
+/// Provider enum for `LLMConfigInputDTO::provider`. `bedrock` **is** accepted
+/// on save here — it is advertised by `GET /api/v1/settings` and the Bedrock
+/// LLM provider is registered by default.
+///
+/// Python's `LLMConfigInputDTO.provider` `Literal` union does not include
+/// `bedrock` yet (`cognee/api/v1/settings/routers/get_settings_router.py`), so
+/// its save still rejects the value; closing that gap is the upstream edit
+/// tracked as `docs/roadmap/bedrock-provider-plan.md` §5 P1, which has not
+/// shipped in `topoteretes/cognee` as of this writing.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, ToSchema, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum LlmProvider {
@@ -65,6 +71,7 @@ pub enum LlmProvider {
     Anthropic,
     Gemini,
     Mistral,
+    Bedrock,
 }
 
 #[derive(Debug, Clone, Deserialize, ToSchema)]
@@ -162,5 +169,23 @@ mod tests {
     #[test]
     fn should_persist_accepts_real_key() {
         assert!(should_persist_api_key("sk-real-key"));
+    }
+
+    #[test]
+    fn llm_provider_accepts_bedrock() {
+        let p: LlmProvider = serde_json::from_str("\"bedrock\"").expect("bedrock parses");
+        assert_eq!(p, LlmProvider::Bedrock);
+        // Round-trips back to the lowercase wire value Python uses.
+        assert_eq!(
+            serde_json::to_string(&LlmProvider::Bedrock).expect("serialize"),
+            "\"bedrock\""
+        );
+    }
+
+    #[test]
+    fn llm_provider_still_rejects_unknown_values() {
+        assert!(serde_json::from_str::<LlmProvider>("\"not-a-provider\"").is_err());
+        // Casing is significant: the enum is `rename_all = "lowercase"`.
+        assert!(serde_json::from_str::<LlmProvider>("\"Bedrock\"").is_err());
     }
 }
