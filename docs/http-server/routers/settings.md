@@ -264,20 +264,48 @@ pub fn should_persist_api_key(submitted: &str) -> bool {
      *(implemented)*
    - `test_post_settings_rejects_unknown_provider` — negative control: the enum is still closed, so
      a value outside it is rejected before the handler runs. *(implemented)*
-8. Cross-SDK parity test in `e2e-cross-sdk/harness/test_http_settings.py`: GET response from Python
-   and Rust must be byte-equal modulo the API-key portion (which depends on configured key), plus a
-   `POST provider: "bedrock"` leg. **Still to be written** — this is plan task
+8. Cross-SDK parity test in `e2e-cross-sdk/harness/test_http_settings.py` — *written* as plan task
    [§5 P4](../../roadmap/bedrock-provider-plan.md); it is the guard that keeps the provider/model
-   lists and the save-side enum from re-diverging. Whoever writes it: the POST leg can only assert
-   that *Rust* returns `200`, because upstream Python returns `400` until plan §5 P1 ships.
+   lists and the save-side enum from re-diverging. It runs in the secret-free Phase-1a lane of
+   `.github/workflows/http-parity.yml`. It builds on `py_client`/`rs_client` and **not** on
+   `authed_clients`, which skips whenever `/api/v1/auth/*` is missing — always true for the OSS
+   Rust build, so using it would silently void the gate. Authentication is asymmetric instead: the
+   Rust server answers unauthenticated (`require_authentication` defaults to false and
+   `start_servers.sh` does not set `REQUIRE_AUTHENTICATION`), while upstream Python's
+   `get_authenticated_user` computes `REQUIRE_AUTHENTICATION` as *true* when both
+   `REQUIRE_AUTHENTICATION` and `ENABLE_BACKEND_ACCESS_CONTROL` are unset — which is the harness's
+   configuration — so it answers `401`. A module-local `py_settings_client` fixture registers and
+   logs in on the Python side only, and asserts (rather than skips) if that login fails. Six cases:
+   - `test_settings_bedrock_provider_choice_matches` — the `bedrock` entry of `llm.providers` is
+     equal on both sides, `value` and `label`. (Rust's label was `"AWS Bedrock"` against Python's
+     `"Bedrock"`; the Rust literal was corrected to Python's, which is the parity source of truth.)
+   - `test_settings_bedrock_model_list_matches` — `llm.models["bedrock"]` equal element-for-element
+     and in order.
+   - `test_settings_llm_provider_value_set_matches` — `llm.providers[*].value` identical, same order.
+   - `test_settings_get_full_body_parity` — the whole GET body, ignoring the environment-dependent
+     scalars (`llm.provider`/`model`/`endpoint`/`apiVersion`/`apiKey`, `vectorDb.provider`/`url`/
+     `apiKey` — the two servers run from separate `/py` and `/rs` workspaces). Note the wire keys
+     are camelCase on **both** sides (Rust's `#[serde(rename_all = "camelCase")]`; Python's `OutDTO`
+     `alias_generator=to_camel` plus FastAPI's default `response_model_by_alias=True`), so the
+     `strip_paths` patterns must spell them that way — `$..api_key` would match nothing.
+     `xfail(strict=False)`
+     for now: the non-bedrock `llm.models.{openai,anthropic,gemini,mistral}` and
+     `vector_db.providers` lists diverged long before this plan and are out of its scope; the marker
+     comes off when they are aligned.
+   - `test_settings_post_bedrock_accepted_by_rust` — `POST provider: "bedrock"` → `200`, reflected on
+     the next `GET`.
+   - `test_settings_post_bedrock_accepted_by_python` — the same POST against Python,
+     `xfail(strict=True)`: upstream returns a 4xx until plan §5 P1 lands and the
+     `topoteretes/cognee` pin (`b9014c16`) in `.github/workflows/http-parity.yml` is bumped, at
+     which point the case XPASSes loudly and the marker should be deleted.
 
 ## 6. Open questions
 
 1. **Vector-DB key empty-handling** — Python's [`get_settings.py` L184-L187](https://github.com/topoteretes/cognee/blob/main/cognee/modules/settings/get_settings.py#L184-L187) does *not* short-circuit on empty `vector_config.vector_db_key`, which would crash on `len("") - 10 = -10` followed by `"*" * -10 == ""`. Python coincidentally gets away with returning the empty string + zero stars; Rust matches (returns empty string rather than `null`) to avoid divergence.
 2. **Atomicity across sub-saves** — `save_llm_config` and `save_vector_db_config` are independent; a failure on the second leaves a half-applied state in the process-singleton. Python has the same behavior; Rust matches. No fix proposed.
 3. **`endpoint` and `api_version` fields are read-only** — surfaced on `GET` but not in the input DTO. Match Python exactly: input DTO does not accept these fields.
-4. **`bedrock` asymmetry** — *Resolved on the Rust side during R7 (commit b76a216d)*: the original answer ("replicate Python's asymmetry verbatim; the frontend treats `bedrock` as read-only") is retired. `LlmProvider` now carries a `Bedrock` variant and the router's save arm maps it to `"bedrock"`, so Rust accepts the provider it advertises. The gap that remains is one-way and upstream: Python's `LLMConfigInputDTO.provider` `Literal` still omits `bedrock`, so its POST answers `400`. Adding it there is the edit tracked as [`bedrock-provider-plan.md` §5 P1](../../roadmap/bedrock-provider-plan.md), which cannot land from this repository. The guard against the two sides drifting again is the cross-SDK parity test in §5 item 8 (plan §5 P4, not yet written).
-5. **No admin gate** — Python lets any authenticated user rewrite the global LLM / vector-DB config. Rust matches. The cross-SDK parity test confirms a non-superuser can save without 403.
+4. **`bedrock` asymmetry** — *Resolved on the Rust side during R7 (commit b76a216d)*: the original answer ("replicate Python's asymmetry verbatim; the frontend treats `bedrock` as read-only") is retired. `LlmProvider` now carries a `Bedrock` variant and the router's save arm maps it to `"bedrock"`, so Rust accepts the provider it advertises. The gap that remains is one-way and upstream: Python's `LLMConfigInputDTO.provider` `Literal` still omits `bedrock`, so its POST answers `400`. Adding it there is the edit tracked as [`bedrock-provider-plan.md` §5 P1](../../roadmap/bedrock-provider-plan.md), which cannot land from this repository. The guard against the two sides drifting again is the cross-SDK parity test in §5 item 8 (plan §5 P4), now written as `e2e-cross-sdk/harness/test_http_settings.py`; its `test_settings_post_bedrock_accepted_by_python` case is `xfail(strict=True)` and turns red the moment upstream accepts the value.
+5. **No admin gate** — Python lets any authenticated user rewrite the global LLM / vector-DB config. Rust matches. **No test asserts this.** The §5 item 8 parity test saves as an ordinary registered user on the Python side and as the synthetic default user on the Rust side, but its only POST assertion is the status code — and its Python leg is `xfail` today for an unrelated reason (the `bedrock` `Literal` gap). Confirming "a non-superuser can save without 403" would need a dedicated case that logs in as both a superuser and a non-superuser on Python.
 6. **Settings-singleton placement** — *Resolved during P5 (commit 2652aea)*: the spec called for a `cognee::settings` façade that the router thinly wraps, but `cognee`'s `server` feature already gates `cognee-http-server`, so a back-edge from `cognee::settings` to the router would create a feature cycle. The process-singleton `SettingsStore` therefore lives directly in `crates/http-server/src/routers/settings.rs`. Wire shape, redaction policy, and provider/model lists still match Python verbatim. If a non-HTTP consumer ever needs these settings, lift the singleton into a sibling `cognee-settings` crate without churning HTTP code.
 
 ## 7. References

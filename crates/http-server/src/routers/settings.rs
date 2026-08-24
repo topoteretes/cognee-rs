@@ -57,7 +57,9 @@ fn llm_providers() -> Vec<ConfigChoice> {
         },
         ConfigChoice {
             value: "bedrock".into(),
-            label: "AWS Bedrock".into(),
+            // Python's label is exactly "Bedrock" (`get_settings.py` L79-L82);
+            // the cross-SDK settings parity test compares this entry verbatim.
+            label: "Bedrock".into(),
         },
     ]
 }

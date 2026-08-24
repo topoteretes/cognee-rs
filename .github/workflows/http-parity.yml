@@ -239,13 +239,13 @@ jobs:
       # the forget/search tests that seed via add) need a key — they run in
       # Phase-1b. Running datasets without add in the same session also keeps
       # the dataset-list assertions free of add-created pollution.
-      - name: Phase-1a — health, auth, datasets, openapi, errors (no LLM)
+      - name: Phase-1a — health, auth, datasets, openapi, errors, settings (no LLM)
         run: >-
           docker compose
           -f cognee-rust/e2e-cross-sdk/docker-compose.yml
           run --rm e2e-http-tests
           pytest -vs /harness/
-          -k "test_http_health or test_http_auth or test_http_datasets or test_http_openapi or test_http_errors or test_http_self"
+          -k "test_http_health or test_http_auth or test_http_datasets or test_http_openapi or test_http_errors or test_http_self or test_http_settings"
           --tb=short
 
       # ── Phase-1b: add + forget + search (needs a key — Python /add does) ───
