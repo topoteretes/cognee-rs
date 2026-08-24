@@ -830,3 +830,42 @@ fn close_reaps_a_connection_stranded_after_the_pool_was_closed() {
     assert!(!wal_left, "-wal must be gone when close returns");
     assert!(!shm_left, "-shm must be gone when close returns");
 }
+
+/// Closing in the same task that just used the pool — with no await in between —
+/// must still release the sidecars.
+///
+/// This is the near-miss in `close`: sqlx's close only closes connections it can
+/// pop from the idle queue, and a connection whose `return_to_pool` task has not
+/// run yet is not in that queue. It is then closed by its own task, concurrently
+/// with the close we are driving, and two concurrent closes are exactly what makes
+/// SQLite skip the checkpoint-and-unlink (issue #132).
+///
+/// `initialize` + `close` back to back is the realistic shape — it is what
+/// `ComponentManager::close` does after a warm — and it left both sidecars on disk
+/// until `close` learned to let the returns land first.
+#[tokio::test(flavor = "multi_thread")]
+async fn close_right_after_a_query_still_releases_the_sidecars() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("busy.db");
+    let wal = path.with_file_name("busy.db-wal");
+    let shm = path.with_file_name("busy.db-shm");
+    let url = format!("sqlite://{}?mode=rwc", path.display());
+
+    let db = connect(&url).await.expect("connect");
+    // Migrations leave a connection mid-return: they finish their last statement
+    // and drop the connection, whose return is a spawned task that has not been
+    // scheduled by the time the next line runs.
+    cognee_database::initialize(&db).await.expect("initialize");
+
+    // No yield, no sleep, no second query: close immediately.
+    cognee_database::close(&db).await.expect("close");
+
+    assert!(
+        !wal.exists(),
+        "-wal survived a close issued right after a query"
+    );
+    assert!(
+        !shm.exists(),
+        "-shm survived a close issued right after a query"
+    );
+}

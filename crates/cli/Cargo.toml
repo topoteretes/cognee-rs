@@ -109,6 +109,10 @@ pprof = { version = "0.14", default-features = false, features = ["flamegraph"],
 
 [dev-dependencies]
 assert_cmd.workspace = true
+# `teardown_flushes_telemetry.rs` drives the teardown helper directly and needs a
+# runtime plus serialisation (it sets telemetry env vars, which are process-global).
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+serial_test.workspace = true
 md-5.workspace = true
 mockito = "1"
 predicates.workspace = true

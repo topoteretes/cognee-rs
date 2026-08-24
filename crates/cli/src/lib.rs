@@ -13,3 +13,4 @@ pub mod cli;
 pub mod commands;
 pub mod config_store;
 pub mod error;
+pub mod teardown;

@@ -54,6 +54,8 @@ uuid       = { workspace = true }
 tokio      = { workspace = true }
 async-trait = { workspace = true }
 base64      = { workspace = true }
+# Teardown diagnostics only (the telemetry-flush timeout note in `HandleState`).
+tracing     = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

@@ -17,51 +17,6 @@ use commands::{
 };
 use tracing::error;
 
-/// How long to wait for the relational pool to close on exit. See
-/// [`close_components`].
-const CLOSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-
-/// Close the relational connection pool before the process exits.
-///
-/// Exiting without closing leaves a SQLite database's `-wal`/`-shm` sidecars
-/// behind: dropping the pool only flags it closed and lets its connections tear
-/// down concurrently, and SQLite unlinks the sidecars only when the *last*
-/// connection closes (issue #132). The next `cognee` invocation recovers them, so
-/// nothing is corrupt, but the files linger next to the database and a caller
-/// that wraps the CLI in a temporary directory cannot clean up after it.
-///
-/// Each command owns (and drops) its own runtime, so this builds a small
-/// current-thread one purely to drive the close — a pool drain, not I/O.
-///
-/// Bounded by [`CLOSE_TIMEOUT`] because the close waits for connections to come
-/// back: if a command's runtime was dropped while one was still checked out, its
-/// pool permit is never released and the wait would never finish. Timing out
-/// costs only the sidecars we were trying to remove, whereas hanging would cost
-/// the caller their exit code, so this is deliberately best-effort.
-fn close_components(cm: &ComponentManager) {
-    let rt = match tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-    {
-        Ok(rt) => rt,
-        Err(error) => {
-            tracing::debug!(%error, "could not build a runtime to close the database");
-            return;
-        }
-    };
-    rt.block_on(async {
-        if tokio::time::timeout(CLOSE_TIMEOUT, cm.close())
-            .await
-            .is_err()
-        {
-            tracing::debug!(
-                "closing the relational database timed out after {CLOSE_TIMEOUT:?}; \
-                 its WAL sidecars may be left for the next run to recover"
-            );
-        }
-    });
-}
-
 fn run(settings: Settings) -> Result<(), CliError> {
     let cli = Cli::parse();
 
@@ -71,9 +26,13 @@ fn run(settings: Settings) -> Result<(), CliError> {
 
     let result = dispatch(cli.command, &cm);
 
-    // Release the database before returning, whether the command succeeded or
-    // not — a failed run has usually opened it too.
-    close_components(&cm);
+    // Fallback release. A command that ran through `teardown::run_command` has
+    // already released on its own runtime — the one that owns the connections, and
+    // therefore the only one that can settle their in-flight returns — so this is
+    // then a cheap no-op. It exists for the paths that have not: a command with no
+    // async work (`config`), and `run-sequence`, which defers the teardown so its
+    // steps share one warm manager.
+    cognee_cli::teardown::release_blocking(&cm);
 
     result
 }

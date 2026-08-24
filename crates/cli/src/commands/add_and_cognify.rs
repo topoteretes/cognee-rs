@@ -37,12 +37,7 @@ pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), Cli
         }
     }
 
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .map_err(|error| CliError::Runtime(format!("Failed to create async runtime: {error}")))?;
-
-    runtime.block_on(async {
+    crate::teardown::run_command(Arc::clone(&cm), async {
         let database = cm
             .database()
             .await

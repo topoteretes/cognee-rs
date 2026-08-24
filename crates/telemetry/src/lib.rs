@@ -229,6 +229,39 @@ pub fn send_telemetry<'a>(
     let _ = try_send_telemetry(event_name, user_id, additional_properties);
 }
 
+/// Wait for the telemetry events already dispatched to actually leave the
+/// process, up to `timeout`. Returns `true` if the queue drained.
+///
+/// [`send_telemetry`] is fire-and-forget: it spawns a detached task and returns.
+/// That is the right default for a hot path, but it means an immediate process
+/// exit — or an immediate runtime shutdown — **discards** whatever has not been
+/// sent yet. Measured against a local stub collector: `send_telemetry` followed
+/// straight away by dropping the runtime delivered **0 of 1** POSTs; with a short
+/// grace period, 1 of 1. The lost event is usually the most interesting one, since
+/// the last thing a process reports is what it was doing when it stopped.
+///
+/// Call this from **explicit** teardown paths only (the CLI's exit, the HTTP
+/// server's shutdown hook, a binding's handle close). It is deliberately not
+/// wired into `Drop`: a finalizer running on an arbitrary thread is the wrong
+/// place to block.
+///
+/// **Hard-bounded and infallible by construction.** A blackholed collector must
+/// never hang an exit and telemetry must never fail one, so the timeout is
+/// honoured and the boolean is advisory — log it, do not branch on it. A `false`
+/// means "some events were still in flight", not that anything is broken.
+///
+/// No-op returning `true` when the `telemetry` cargo feature is disabled.
+pub async fn flush(timeout: std::time::Duration) -> bool {
+    #[cfg(feature = "telemetry")]
+    {
+        real::flush_impl(timeout).await
+    }
+    #[cfg(not(feature = "telemetry"))]
+    {
+        noop::flush_impl(timeout).await
+    }
+}
+
 /// Same as [`send_telemetry`] but returns
 /// `Result<(), TelemetryError>` for callers that want to know whether
 /// dispatch was attempted.

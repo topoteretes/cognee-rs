@@ -141,7 +141,21 @@ fn sanitize_json_control_chars(s: &str) -> Cow<'_, str> {
 /// ```
 pub struct LadybugAdapter {
     db_path: String,
-    db: Arc<Database>,
+    /// The embedded database handle, `None` once [`LadybugAdapter::close`] has
+    /// taken it.
+    ///
+    /// The slot sits around the inner `Arc<Database>` rather than around the
+    /// outer `Arc<dyn GraphDBTrait>` on purpose: `close` must work while a
+    /// pipeline still holds a trait-object clone, which is only possible if the
+    /// closed state lives *inside* the shared handle. This is the same reason
+    /// sqlx puts its closed flag inside `PoolInner` instead of relying on the
+    /// `Pool` wrapper being dropped.
+    ///
+    /// `std::sync::RwLock`, not `tokio::sync::RwLock`: the guard is never held
+    /// across an `.await` (every accessor clones the `Arc` out and releases it
+    /// immediately), and a tokio lock would force the accessor to be `async` and
+    /// churn all ten query sites for no gain.
+    db: std::sync::RwLock<Option<Arc<Database>>>,
     // Single-process assumption: this lock serializes overlapping writes
     // within one process. Cross-process locking is intentionally out of scope.
     write_lock: Arc<Mutex<()>>,
@@ -173,7 +187,7 @@ impl LadybugAdapter {
 
         Ok(Self {
             db_path: db_path.to_string(),
-            db: Arc::new(db),
+            db: std::sync::RwLock::new(Some(Arc::new(db))),
             write_lock: Arc::new(Mutex::new(())),
         })
     }
@@ -181,6 +195,99 @@ impl LadybugAdapter {
     /// Get the database path.
     pub fn db_path(&self) -> &str {
         &self.db_path
+    }
+
+    /// Clone out the live database handle, or fail if the adapter is closed.
+    ///
+    /// Returning an owned `Arc` (rather than a guard) is what keeps the lock off
+    /// the query path: the handle stays alive for the whole query via the clone,
+    /// while the `RwLock` is released before `Connection::new` is even called.
+    fn db(&self) -> GraphDBResult<Arc<Database>> {
+        // Poison means a previous holder panicked mid-query; there is nothing to
+        // recover, so surface it the same way the adjacent `write_lock` does
+        // rather than panicking a second time.
+        let guard = self.db.read().map_err(|_| {
+            GraphDBError::ConnectionError("Ladybug database lock poisoned".to_string())
+        })?;
+        guard
+            .as_ref()
+            .map(Arc::clone)
+            .ok_or_else(|| GraphDBError::ConnectionError("graph database is closed".to_string()))
+    }
+
+    /// Stop serving queries and checkpoint the `.wal` into the main database
+    /// file.
+    ///
+    /// **A `Drop` is not a close, and a `Drop` at an unspecified time is worse.**
+    /// lbug runs its checkpoint in `Database`'s destructor and swallows every
+    /// failure (`lbug-src/src/main/database.cpp` wraps it in `catch (...) {}`),
+    /// so relying on the destructor means (a) the `.wal` — measured at 660 KB
+    /// after a 500-node/490-edge write — sits on disk until the last `Arc`
+    /// happens to go away, and (b) the checkpoint lands on whatever thread drops
+    /// the last clone, which inside an `async fn` is a runtime worker blocked for
+    /// up to ~1.5 s. Closing explicitly makes both deterministic.
+    ///
+    /// The checkpoint **and** the drop run together on
+    /// [`tokio::task::spawn_blocking`], and the join is awaited: both are
+    /// synchronous and file-bound, so running either inline would block the
+    /// calling worker — and on a current-thread runtime it would also stall the
+    /// timer, which is how a caller's `tokio::time::timeout` around this close
+    /// stops being able to fire at all (the CLI's teardown does exactly that).
+    /// Awaiting the join is what makes a subsequent `warm()` on the same path
+    /// safe: it must not race this checkpoint, or it hits lbug's file lock.
+    ///
+    /// # What is and is not released when this returns
+    ///
+    /// Guaranteed: the slot is empty, so no *new* query can start — every clone
+    /// of this adapter fails with `graph database is closed` rather than silently
+    /// reopening the file — and a checkpoint has been attempted.
+    ///
+    /// **Not** guaranteed: that the file descriptor and lbug's write lock are
+    /// gone. [`Self::db`] hands out owned `Arc<Database>` clones that a query
+    /// holds for its duration, so if one is in flight this drops a reference
+    /// rather than the last one, and the descriptor closes when that query
+    /// finishes. `Ok(())` therefore means "closed to new work and checkpointed",
+    /// not "the file is free"; a caller that needs the file free (to reopen it,
+    /// or to delete its directory) must first stop issuing queries.
+    ///
+    /// Idempotent.
+    pub async fn close(&self) -> GraphDBResult<()> {
+        // Take the handle out under the lock, then release the lock before the
+        // (potentially slow) checkpoint, so a concurrent accessor observes
+        // "closed" immediately instead of blocking on it.
+        let taken = {
+            let mut guard = self.db.write().map_err(|_| {
+                GraphDBError::ConnectionError("Ladybug database lock poisoned".to_string())
+            })?;
+            guard.take()
+        };
+        let Some(db) = taken else {
+            // Already closed — idempotent no-op.
+            return Ok(());
+        };
+
+        let path = self.db_path.clone();
+        let checkpoint_path = path.clone();
+        tokio::task::spawn_blocking(move || {
+            // Best-effort explicit checkpoint before the drop. lbug's destructor
+            // swallows checkpoint failures, so doing it here is the only way the
+            // outcome is observable at all. It must never propagate: an explicit
+            // CHECKPOINT legitimately fails on a read-only or in-memory database,
+            // and it must never skip the drop below, which is what releases this
+            // reference to the descriptor.
+            if let Ok(conn) = Connection::new(&db)
+                && let Err(e) = conn.query("CHECKPOINT")
+            {
+                tracing::debug!(error = %e, path = %checkpoint_path, "ladybug CHECKPOINT before close failed; the destructor will retry");
+            }
+            drop(db);
+        })
+        .await
+        .map_err(|e| {
+            GraphDBError::ConnectionError(format!(
+                "failed to join the ladybug close for {path}: {e}"
+            ))
+        })
     }
 
     /// Execute a query and convert results to JSON values.
@@ -216,7 +323,8 @@ impl LadybugAdapter {
         };
         Span::current().record(COGNEE_DB_QUERY, redact(truncated).as_ref());
 
-        let conn = Connection::new(&self.db).map_err(|e| {
+        let db = self.db()?;
+        let conn = Connection::new(&db).map_err(|e| {
             GraphDBError::ConnectionError(format!("Failed to create connection: {e}"))
         })?;
 
@@ -583,7 +691,8 @@ struct NodeProperties {
 #[async_trait]
 impl GraphDBTrait for LadybugAdapter {
     async fn initialize(&self) -> GraphDBResult<()> {
-        let conn = Connection::new(&self.db).map_err(|e| {
+        let db = self.db()?;
+        let conn = Connection::new(&db).map_err(|e| {
             GraphDBError::ConnectionError(format!("Failed to create connection: {e}"))
         })?;
 
@@ -641,6 +750,14 @@ impl GraphDBTrait for LadybugAdapter {
         Ok(())
     }
 
+    /// Delegates to the inherent [`LadybugAdapter::close`], so a caller holding
+    /// an `Arc<dyn GraphDBTrait>` (which is what `ComponentManager` and the HTTP
+    /// server's `AppState` hold) can release the WAL and the file lock without
+    /// downcasting.
+    async fn close(&self) -> GraphDBResult<()> {
+        LadybugAdapter::close(self).await
+    }
+
     async fn is_empty(&self) -> GraphDBResult<bool> {
         let results = self.execute_query("MATCH (n:Node) RETURN COUNT(n) AS count")?;
 
@@ -671,7 +788,8 @@ impl GraphDBTrait for LadybugAdapter {
     }
 
     async fn delete_graph(&self) -> GraphDBResult<()> {
-        let conn = Connection::new(&self.db).map_err(|e| {
+        let db = self.db()?;
+        let conn = Connection::new(&db).map_err(|e| {
             GraphDBError::ConnectionError(format!("Failed to create connection: {e}"))
         })?;
 
@@ -710,7 +828,8 @@ impl GraphDBTrait for LadybugAdapter {
         let _write_guard = self.write_lock.lock().map_err(|_| {
             GraphDBError::ConnectionError("Ladybug write lock poisoned".to_string())
         })?;
-        let conn = Connection::new(&self.db).map_err(|e| {
+        let db = self.db()?;
+        let conn = Connection::new(&db).map_err(|e| {
             GraphDBError::ConnectionError(format!("Failed to create connection: {e}"))
         })?;
 
@@ -730,7 +849,8 @@ impl GraphDBTrait for LadybugAdapter {
             GraphDBError::ConnectionError("Ladybug write lock poisoned".to_string())
         })?;
 
-        let conn = Connection::new(&self.db).map_err(|e| {
+        let db = self.db()?;
+        let conn = Connection::new(&db).map_err(|e| {
             GraphDBError::ConnectionError(format!("Failed to create connection: {e}"))
         })?;
 
@@ -774,7 +894,8 @@ impl GraphDBTrait for LadybugAdapter {
     }
 
     async fn delete_node(&self, node_id: &str) -> GraphDBResult<()> {
-        let conn = Connection::new(&self.db).map_err(|e| {
+        let db = self.db()?;
+        let conn = Connection::new(&db).map_err(|e| {
             GraphDBError::ConnectionError(format!("Failed to create connection: {e}"))
         })?;
 
@@ -883,7 +1004,8 @@ impl GraphDBTrait for LadybugAdapter {
         let _write_guard = self.write_lock.lock().map_err(|_| {
             GraphDBError::ConnectionError("Ladybug write lock poisoned".to_string())
         })?;
-        let conn = Connection::new(&self.db).map_err(|e| {
+        let db = self.db()?;
+        let conn = Connection::new(&db).map_err(|e| {
             GraphDBError::ConnectionError(format!("Failed to create connection: {e}"))
         })?;
 
@@ -908,7 +1030,8 @@ impl GraphDBTrait for LadybugAdapter {
         let _write_guard = self.write_lock.lock().map_err(|_| {
             GraphDBError::ConnectionError("Ladybug write lock poisoned".to_string())
         })?;
-        let conn = Connection::new(&self.db).map_err(|e| {
+        let db = self.db()?;
+        let conn = Connection::new(&db).map_err(|e| {
             GraphDBError::ConnectionError(format!("Failed to create connection: {e}"))
         })?;
 
@@ -1587,7 +1710,8 @@ impl GraphDBTrait for LadybugAdapter {
 
         let now = Utc::now();
         let ts = now.format("%Y-%m-%d %H:%M:%S%.6f").to_string();
-        let conn = Connection::new(&self.db).map_err(|e| {
+        let db = self.db()?;
+        let conn = Connection::new(&db).map_err(|e| {
             GraphDBError::ConnectionError(format!("Failed to create connection: {e}"))
         })?;
         let set_query = format!(
@@ -1635,7 +1759,8 @@ impl GraphDBTrait for LadybugAdapter {
 
         let now = Utc::now();
         let ts = now.format("%Y-%m-%d %H:%M:%S%.6f").to_string();
-        let conn = Connection::new(&self.db).map_err(|e| {
+        let db = self.db()?;
+        let conn = Connection::new(&db).map_err(|e| {
             GraphDBError::ConnectionError(format!("Failed to create connection: {e}"))
         })?;
         let set_query = format!(

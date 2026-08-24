@@ -49,10 +49,18 @@ use std::net::SocketAddr;
 
 /// Waits for SIGTERM or SIGINT (Ctrl-C).
 ///
+/// **Signal only.** The teardown deliberately does *not* live here: axum starts
+/// draining in-flight requests only once this future **completes**, so anything
+/// done inside it runs while the listener is still live and handlers are still
+/// executing. Closing the stores here meant an in-flight request could hit
+/// `graph database is closed` and return 500 for a shutdown that was supposed to
+/// be graceful. The teardown belongs after `serve(...)` returns — see
+/// [`serve_with_shutdown`].
+///
 /// Only compiled when the `bin` feature is enabled so the library does not
 /// require `tokio/signal`.
 #[cfg(feature = "bin")]
-async fn shutdown_signal(state: AppState) {
+async fn shutdown_signal() {
     use tokio::signal;
 
     let ctrl_c = async {
@@ -76,8 +84,43 @@ async fn shutdown_signal(state: AppState) {
         () = ctrl_c => {}
         () = terminate => {}
     }
+}
 
+/// Serve until `shutdown` resolves, let axum drain the in-flight requests, and
+/// **then** release the server's resources.
+///
+/// The ordering is the point. `with_graceful_shutdown` treats the future it is
+/// given as "stop accepting" — draining begins when that future completes — so a
+/// teardown placed inside it runs *before* the drain, against handlers that are
+/// still running. Running it after `serve(...)` returns is what makes the drain
+/// and the teardown sequential: every handler has finished by then, so nothing can
+/// observe a closed store.
+///
+/// The teardown runs whether or not `serve` succeeded: an accept-loop error still
+/// leaves the pools and the embedded graph open, and dropping them is not closing
+/// them (topoteretes/cognee-rs#132).
+///
+/// Taking the shutdown trigger as a parameter is also what makes this testable
+/// without raising a process signal — the binary passes [`shutdown_signal`], a
+/// test passes a channel.
+pub async fn serve_with_shutdown<F>(
+    listener: tokio::net::TcpListener,
+    app: axum::Router,
+    shutdown: F,
+    state: AppState,
+) -> Result<(), ServerError>
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    let served = axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown)
+        .await;
+
+    // Draining is complete here — or the accept loop failed. Either way the
+    // resources are still open, so tear down before propagating.
     lifecycle::on_shutdown(&state).await;
+
+    served.map_err(|e| ServerError::Other(anyhow::anyhow!(e)))
 }
 
 // ─── run ──────────────────────────────────────────────────────────────────────
@@ -94,10 +137,7 @@ pub async fn run(addr: SocketAddr, state: AppState) -> Result<(), ServerError> {
 
     #[cfg(feature = "bin")]
     {
-        axum::serve(listener, app)
-            .with_graceful_shutdown(shutdown_signal(state))
-            .await
-            .map_err(|e| ServerError::Other(anyhow::anyhow!(e)))?;
+        serve_with_shutdown(listener, app, shutdown_signal(), state).await?;
     }
 
     #[cfg(not(feature = "bin"))]

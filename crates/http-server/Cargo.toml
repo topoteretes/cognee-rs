@@ -195,6 +195,11 @@ libc = "0.2"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
+# A real listener + a real client, so `shutdown_releases_stores.rs` can prove that
+# a request in flight when the shutdown fires still completes — which is a
+# statement about axum's drain, and cannot be made with a router-only test.
+axum = { version = "0.8" }
+reqwest = { workspace = true }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros"] }
 serde_json = { workspace = true }
 serial_test = { workspace = true }

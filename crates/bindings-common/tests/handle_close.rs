@@ -349,3 +349,197 @@ fn close_blocking_waits_for_a_straggling_connection() {
     assert!(!shm_left, "-shm must be gone when close_blocking returns");
     assert!(state.is_closed());
 }
+
+/// Every `*.wal` under `root` — the embedded graph's sidecar (SQLite's is
+/// `<db>-wal`, matched by [`sidecars`] instead).
+fn graph_wal_files(root: &Path) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.extension().and_then(|e| e.to_str()) == Some("wal") {
+                found.push(path.to_string_lossy().into_owned());
+            }
+        }
+    }
+    found
+}
+
+/// The relational pool was never the only OS resource a warm handle holds: the
+/// embedded graph keeps its own un-checkpointed `.wal` under the system root, and
+/// a write lock on the graph file behind it.
+///
+/// Both were leaked by the #135 teardown, which closed the relational connection
+/// and left every other slot in the manager's cache — i.e. never dropped, so
+/// never released. This test is the binding-surface half of that fix: it fails
+/// before it with `sys/graph.wal` still on disk after `close()` returned.
+///
+/// The re-open at the end is the other half: `close()` must not leave the graph
+/// file locked, or the next handle on the same path (a binding test suite that
+/// reuses its temp dir, a CLI invoked twice) fails to warm.
+#[tokio::test(flavor = "multi_thread")]
+async fn close_releases_the_embedded_graph_wal_and_unlocks_the_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, _db_path) = handle_under(dir.path());
+    let sys = dir.path().join("sys");
+
+    {
+        let services = state.services().await.expect("warm");
+        let nodes: Vec<_> = (0..500)
+            .map(|i| {
+                serde_json::json!({
+                    "id": format!("n{i}"),
+                    "name": format!("Node {i}"),
+                    "type": "TestNode",
+                    "properties": {"idx": i, "pad": "x".repeat(64)},
+                })
+            })
+            .collect();
+        services
+            .graph_db
+            .add_nodes_raw(nodes)
+            .await
+            .expect("write to the embedded graph");
+        assert!(
+            !graph_wal_files(&sys).is_empty(),
+            "precondition: the writes must leave an un-checkpointed graph WAL under {}",
+            sys.display(),
+        );
+    }
+
+    state.close().await;
+
+    let leftover = graph_wal_files(&sys);
+    assert!(
+        leftover.is_empty(),
+        "close() must release the embedded graph's WAL too, found: {leftover:?}",
+    );
+
+    // A second handle on the same graph path must warm — the lock is gone.
+    let (second, _) = handle_under(dir.path());
+    let services = second.services().await.expect("re-warm on the same path");
+    assert!(
+        services
+            .graph_db
+            .has_node("n1")
+            .await
+            .expect("query the reopened graph"),
+        "the checkpointed nodes must be readable by the second handle",
+    );
+    second.close().await;
+    assert!(graph_wal_files(&sys).is_empty());
+}
+
+/// A warm that fails part-way still leaves resources open, and the finalizer's
+/// probe has to say so.
+///
+/// `CogneeServices::build` warms slot by slot and resolves the LLM near the end,
+/// so an empty `llm_api_key` fails **after** the SQLite pool (and the graph) are
+/// cached. The services slot is then `None` — and a probe that only looked there
+/// reported "nothing to release", so `Drop for PyCognee` / neon's `Finalize`
+/// skipped the teardown and the open database survived until process exit.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failed_warm_still_reports_open_resources_and_releases_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("cognee.db");
+    let (wal, shm) = sidecars(&db_path);
+
+    // Everything valid except the LLM key, which is resolved strictly and last.
+    let settings = Settings {
+        llm_api_key: String::new(),
+        embedding_provider: "mock".to_owned(),
+        data_root_directory: dir.path().join("data").to_string_lossy().into_owned(),
+        system_root_directory: dir.path().join("sys").to_string_lossy().into_owned(),
+        relational_db_url: format!("sqlite://{}?mode=rwc", db_path.display()),
+        ..Settings::default()
+    };
+    let state = std::sync::Arc::new(HandleState::from_settings(settings));
+
+    let err = match state.services().await {
+        Ok(_) => panic!("warm must fail without an LLM key"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("llm_api_key"),
+        "expected the LLM key to be what failed, got: {err}"
+    );
+
+    // The pool is open even though the bundle was never cached.
+    assert!(
+        wal.exists() && shm.exists(),
+        "precondition: the relational pool was opened before the warm failed"
+    );
+    assert!(
+        state.has_open_resources(),
+        "a partly warmed handle has resources to release; reporting otherwise is \
+         what made the finalizer skip the teardown"
+    );
+
+    // And the finalizer's teardown does release them.
+    state.release().await;
+    assert!(
+        !wal.exists() && !shm.exists(),
+        "release must free the sidecars"
+    );
+}
+
+/// `release()` — the implicit tier — must not break a component that an operation
+/// still in flight is holding.
+///
+/// A store's `close()` mutates state behind the shared `Arc`, so it is visible to
+/// every clone. The explicit `close()` is entitled to that; a garbage collector is
+/// not, and the two-tier split exists precisely so a finalizer cannot fail
+/// somebody's in-flight query.
+#[tokio::test(flavor = "multi_thread")]
+async fn release_does_not_break_an_operation_still_holding_the_services() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, _db_path) = handle_under(dir.path());
+
+    // Exactly what an in-flight op holds for its duration.
+    let in_flight = state.services().await.expect("warm");
+
+    state.release().await;
+
+    in_flight
+        .database
+        .ping()
+        .await
+        .expect("release() must leave an in-flight op's connection usable");
+    in_flight
+        .graph_db
+        .is_empty()
+        .await
+        .expect("release() must leave an in-flight op's graph usable");
+
+    // The handle itself is still usable too, and re-warms cold.
+    assert!(!state.is_closed());
+    state.services().await.expect("re-warm after release");
+}
+
+/// The explicit `close()` is the opposite contract, and that difference is the
+/// point: it closes the components even out from under an in-flight operation,
+/// because the caller said they were done.
+#[tokio::test(flavor = "multi_thread")]
+async fn close_closes_even_what_an_operation_is_holding() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, db_path) = handle_under(dir.path());
+    let (wal, _shm) = sidecars(&db_path);
+
+    let in_flight = state.services().await.expect("warm");
+    state.close().await;
+
+    assert!(
+        !wal.exists(),
+        "close() must release the sidecars regardless"
+    );
+    assert!(
+        in_flight.database.ping().await.is_err(),
+        "close() closes the pool an in-flight op holds — that is the contract"
+    );
+}

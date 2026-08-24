@@ -1,9 +1,9 @@
 //! `cognee-cli bench` — the performance orchestrator driver.
 //!
 //! Ports Python's `bench_cognee.py`: runs the full
-//! `prune → setup → add → cognify → search → dataset delete` pipeline once,
-//! times each phase, and writes a result JSON with the exact Python schema so
-//! the shared orchestrator/reporter can drive either SDK unchanged.
+//! `prune → setup → add → cognify → search` pipeline once, times each phase,
+//! and writes a result JSON with the exact Python schema so the shared
+//! orchestrator/reporter can drive either SDK unchanged.
 //!
 //! Exit-code policy (Python parity): once the run completes and the result
 //! file is written, exit `0` even if individual phases failed (failures are
@@ -15,7 +15,6 @@ use std::time::Instant;
 
 use cognee::add::AddPipeline;
 use cognee::api::prune::{PruneTarget, prune_data, prune_system};
-use cognee::api::{DatasetDb, DatasetManager};
 use cognee::cognify::{ChunkStrategy, CognifyConfig, TokenCounterKind, cognify};
 use cognee::core::RayonThreadPool;
 use cognee::database::{IngestDb, PipelineRunRepository, SeaOrmPipelineRunRepository, ops};
@@ -66,7 +65,6 @@ struct BenchResult {
     prune_time_s: f64,
     db_setup_time_s: f64,
     search_time: f64,
-    dataset_delete_time_s: f64,
     status: BenchStatus,
     success: bool,
     config: BenchConfig,
@@ -83,7 +81,6 @@ struct BenchStatus {
     add: String,
     cognify: String,
     search: String,
-    dataset_delete: String,
 }
 
 const PHASE_OK: &str = "success";
@@ -178,9 +175,8 @@ fn finish_phase_telemetry(_profile_dir: Option<&str>, _phase: &str) {}
 /// workload. The timer starts *after* the profiler/telemetry are armed and
 /// stops *before* the flamegraph/telemetry artifacts are written, so the
 /// returned elapsed is workload-only — not inflated by profiler startup or
-/// report generation. Centralizes the bracketing so the measured phases (add /
-/// cognify / search / dataset delete) cannot drift out of sync. Returns
-/// `(elapsed_secs, result)`.
+/// report generation. Centralizes the bracketing so the three phases (add /
+/// cognify / search) cannot drift out of sync. Returns `(elapsed_secs, result)`.
 async fn timed_phase(
     profile_dir: Option<&str>,
     phase: &str,
@@ -378,26 +374,27 @@ pub fn run(args: BenchArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
         )
     };
 
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .map_err(|error| CliError::Runtime(format!("Failed to create async runtime: {error}")))?;
-
-    let result = runtime.block_on(run_phases(
-        &cm,
-        owner_id,
-        &args.dataset_name,
-        &memories,
-        args.profile_dir.as_deref(),
-        args.min_graph_nodes,
-        BenchConfig {
-            llm_model,
-            embedding_model,
-            embedding_dimensions,
-            dataset_name: args.dataset_name.clone(),
-            mock_llm: args.mock_llm,
-        },
-    ));
+    // Through the shared helper so the bench pays the same teardown as every other
+    // command: the components are closed and telemetry flushed on the runtime that
+    // owns them, before it goes away.
+    let result = crate::teardown::run_command(Arc::clone(&cm), async {
+        Ok(run_phases(
+            &cm,
+            owner_id,
+            &args.dataset_name,
+            &memories,
+            args.profile_dir.as_deref(),
+            args.min_graph_nodes,
+            BenchConfig {
+                llm_model,
+                embedding_model,
+                embedding_dimensions,
+                dataset_name: args.dataset_name.clone(),
+                mock_llm: args.mock_llm,
+            },
+        )
+        .await)
+    })?;
 
     // ── Serialize & write (catastrophic on failure — exit nonzero) ───────
     let json = serde_json::to_string_pretty(&result)
@@ -433,7 +430,6 @@ async fn run_phases(
         add: PHASE_OK.to_string(),
         cognify: PHASE_OK.to_string(),
         search: PHASE_OK.to_string(),
-        dataset_delete: PHASE_OK.to_string(),
     };
 
     // ── Prune ────────────────────────────────────────────────────────────
@@ -538,49 +534,11 @@ async fn run_phases(
         status.search = format!("failed: {msg}");
     }
 
-    // ── Extra retrievers (profiling only, untimed) ───────────────────────
-    // Not part of the reported contract — see `phase_search_retrievers`. A
-    // failure here is warned about but deliberately does NOT touch `status`:
-    // these queries do not exist in the Python bench, so letting them fail the
-    // run would make `success` mean different things across the two SDKs.
-    // `cfg!` rather than `#[cfg]` so both configurations stay type-checked; the
-    // branch const-folds away in a non-profiling build, where `--profile-dir`
-    // is documented as ignored and no flamegraph would be written anyway.
-    if cfg!(feature = "profiling") && profile_dir.is_some() {
-        eprintln!("Profiling: running the extra no-LLM retrievers...");
-        let (t_retrievers, retriever_res) = timed_phase(
-            profile_dir,
-            "search_retrievers",
-            phase_search_retrievers(cm, owner_id, dataset_name),
-        )
-        .await;
-        match retriever_res {
-            Ok(()) => info!("search_retrievers took {t_retrievers:.3}s (not reported)"),
-            Err(msg) => warn!("Extra retrievers FAILED (not reported): {msg}"),
-        }
-    }
-
-    // ── Dataset delete (populated) ───────────────────────────────────────
-    // Runs last, so it measures deletion with nodes, edges and vectors all
-    // present — the meaningful case, and what Python's Phase 4 measures.
-    eprintln!("Phase 4: Deleting the populated dataset...");
-    let (t_dataset_delete, dataset_delete_res) = timed_phase(
-        profile_dir,
-        "dataset_delete",
-        phase_dataset_delete(cm, owner_id, dataset_name),
-    )
-    .await;
-    if let Err(msg) = dataset_delete_res {
-        warn!("Dataset delete FAILED: {msg}");
-        status.dataset_delete = format!("failed: {msg}");
-    }
-
     let success = status.prune == PHASE_OK
         && status.db_setup == PHASE_OK
         && status.add == PHASE_OK
         && status.cognify == PHASE_OK
-        && status.search == PHASE_OK
-        && status.dataset_delete == PHASE_OK;
+        && status.search == PHASE_OK;
 
     BenchResult {
         memories_count: n,
@@ -590,7 +548,6 @@ async fn run_phases(
         prune_time_s: round3(t_prune),
         db_setup_time_s: round3(t_db_setup),
         search_time: t_search,
-        dataset_delete_time_s: round3(t_dataset_delete),
         status,
         success,
         config,
@@ -782,13 +739,19 @@ fn bench_search_request(
     }
 }
 
-/// The query text both SDKs benchmark against.
-const BENCH_QUERY: &str = "What is in the document";
-
-/// Build the search orchestrator used by the search phases.
-async fn bench_search_orchestrator(
+/// Exercise retrieval across representative query types so the search phase is
+/// actually profiled, not just the one graph-completion path.
+///
+/// Runs the no-LLM retrievers (`Chunks`, `Summaries`, pure vector fetch) and the
+/// LLM one (`GraphCompletion`). Under the mocked LLM the completion call is
+/// near-free, so the no-LLM retrievers are what surface the real retrieval cost
+/// (vector KNN plus chunk/summary materialization) in `search.svg`. Per-query
+/// wall times are logged. The phase aggregate is what `search_time` reports.
+async fn phase_search(
     cm: &Arc<ComponentManager>,
-) -> Result<cognee::search::SearchOrchestrator, String> {
+    owner_id: Uuid,
+    dataset_name: &str,
+) -> Result<(), String> {
     let vector_db = cm.vector_db().await.map_err(|e| e.to_string())?;
     let embedding_engine = cm.embedding_engine().await.map_err(|e| e.to_string())?;
     let graph_db = cm.graph_db().await.map_err(|e| e.to_string())?;
@@ -800,7 +763,7 @@ async fn bench_search_orchestrator(
         .map_err(|e| e.to_string())?;
     let session_manager = Arc::new(SessionManager::new(Arc::new(session_store)));
     let search_history_db = Arc::clone(&database) as Arc<dyn cognee::database::SearchHistoryDb>;
-    Ok(SearchBuilder::new(
+    let orchestrator = SearchBuilder::new(
         vector_db,
         embedding_engine,
         graph_db,
@@ -809,56 +772,19 @@ async fn bench_search_orchestrator(
     )
     .with_session_manager(session_manager)
     .with_dataset_resolver(Arc::clone(&database) as Arc<dyn IngestDb>)
-    .build())
-}
+    .build();
 
-/// The measured search phase: the single graph-completion query Python times.
-///
-/// Python's `bench_cognee.py` Phase 3 is one
-/// `cognee.search(query_text=..., only_context=True)` call, so this is one
-/// `GraphCompletion` request with `only_context`. Keep it that way — the whole
-/// point of `search_time` is that the Python and Rust nightly arms report the
-/// same unit of work. Extra retrievers belong in `phase_search_retrievers`.
-async fn phase_search(
-    cm: &Arc<ComponentManager>,
-    owner_id: Uuid,
-    dataset_name: &str,
-) -> Result<(), String> {
-    let orchestrator = bench_search_orchestrator(cm).await?;
-    let request = bench_search_request(
-        BENCH_QUERY,
-        SearchType::GraphCompletion,
-        dataset_name,
-        owner_id,
-    );
-    orchestrator
-        .search(&request)
-        .await
-        .map_err(|e| format!("graph_completion: {e}"))?;
-    Ok(())
-}
-
-/// Extra retrieval paths, run only under `--profile-dir` and never reported.
-///
-/// The no-LLM retrievers (`Chunks`, `Summaries`) surface the real retrieval
-/// cost — vector KNN plus chunk/summary materialization — that the completion
-/// path hides, especially under a mocked LLM where the completion call is
-/// near-free. That makes them worth a flamegraph, but folding them into
-/// `search_time` would make it incomparable with Python's single query, so they
-/// get their own `search_retrievers.svg` and their elapsed is discarded.
-async fn phase_search_retrievers(
-    cm: &Arc<ComponentManager>,
-    owner_id: Uuid,
-    dataset_name: &str,
-) -> Result<(), String> {
-    let orchestrator = bench_search_orchestrator(cm).await?;
+    let query_text = "What is in the document";
+    // No-LLM retrievers first (Chunks/Summaries) so retrieval cost is visible,
+    // then the LLM path (GraphCompletion). Labels feed the per-query log lines.
     let queries = [
         ("chunks", SearchType::Chunks),
         ("summaries", SearchType::Summaries),
+        ("graph_completion", SearchType::GraphCompletion),
     ];
 
     for (label, search_type) in queries {
-        let request = bench_search_request(BENCH_QUERY, search_type, dataset_name, owner_id);
+        let request = bench_search_request(query_text, search_type, dataset_name, owner_id);
         let t = Instant::now();
         orchestrator
             .search(&request)
@@ -866,54 +792,6 @@ async fn phase_search_retrievers(
             .map_err(|e| format!("{label}: {e}"))?;
         info!("search[{label}] took {:.3}s", t.elapsed().as_secs_f64());
     }
-    Ok(())
-}
-
-/// `datasets.empty_dataset(dataset)` — delete the populated dataset.
-///
-/// Mirrors Python's Phase 4, which resolves the dataset by name and calls
-/// `datasets_api.empty_dataset(dataset.id, user)`. Both sides delete the
-/// dataset's relational rows, graph nodes/edges and vectors.
-///
-/// They are NOT byte-for-byte the same unit of work, so do not read a small
-/// `dataset_delete_time_s` gap as an SDK difference. Rust's
-/// `DatasetManager::empty_dataset` hardcodes `DeleteMode::Hard`, which makes
-/// `DeleteService::execute` additionally run `sweep_orphan_nodes` /
-/// `sweep_orphan_edge_types`; Python's `empty_dataset` has no equivalent (its
-/// degree-one sweep lives in `legacy_delete`, off the `delete_data` path). The
-/// sweep runs after this dataset's own nodes are already deleted, so on a
-/// single-dataset bench it scans a near-empty graph and costs a small
-/// near-constant amount rather than scaling with the corpus — but it is
-/// Rust-side-only overhead, so compare the two series by trend, not level.
-async fn phase_dataset_delete(
-    cm: &Arc<ComponentManager>,
-    owner_id: Uuid,
-    dataset_name: &str,
-) -> Result<(), String> {
-    let database = cm.database().await.map_err(|e| e.to_string())?;
-
-    // Python guards this with `if found:` — a failed add leaves nothing to
-    // delete, and the phase still reports its (near-zero) elapsed rather than
-    // failing a run that has already recorded the real failure in `add`.
-    let Some(dataset) = ops::datasets::get_dataset_by_name(&database, dataset_name, owner_id, None)
-        .await
-        .map_err(|e| e.to_string())?
-    else {
-        warn!("dataset '{dataset_name}' not found — nothing to delete");
-        return Ok(());
-    };
-
-    // Shared with `cognee-cli delete` / `forget` so the benchmark cannot drift
-    // into measuring a differently-wired deletion than the commands it mirrors.
-    let delete_service = super::build_delete_service(cm)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    let datasets = DatasetManager::new(Arc::clone(&database) as Arc<dyn DatasetDb>);
-    datasets
-        .empty_dataset(dataset.id, owner_id, &delete_service)
-        .await
-        .map_err(|e| e.to_string())?;
     Ok(())
 }
 

@@ -275,6 +275,30 @@ pub trait VectorDB: Send + Sync {
         Ok(())
     }
 
+    /// Release the OS resources this store owns, instead of waiting for `Drop`.
+    ///
+    /// The vector-store twin of `cognee_graph::GraphDBTrait::close`; see that
+    /// method for the full mechanism. In short: a `Drop` is not a close. The
+    /// pgvector adapter owns its **own** sqlx pool, and dropping a pool only
+    /// flags it closed and lets each connection tear down on an arbitrary
+    /// thread, so the server-side backends stay open long after the last `Arc`
+    /// is gone.
+    ///
+    /// Contract:
+    /// - **Idempotent.** Calling it twice is a no-op the second time.
+    /// - **Safe to call while other `Arc` clones are alive.** Surviving clones
+    ///   fail their next operation with a "closed" error rather than silently
+    ///   reconnecting.
+    /// - **Post-close operations fail.** Deliberate and user-visible.
+    /// - The **default body is a no-op**, meaning "this backend owns nothing
+    ///   closable beyond memory". That is the *measured* truth for the in-memory
+    ///   brute-force store and for LanceDB (which holds no descriptor open
+    ///   between calls), so neither overrides it. An adapter that does own OS
+    ///   resources must override it, or it will leak invisibly.
+    async fn close(&self) -> VectorDBResult<()> {
+        Ok(())
+    }
+
     /// Perform multiple vector similarity searches in sequence.
     ///
     /// Default implementation loops over [`search_similar`]. Backends may override
@@ -306,6 +330,18 @@ mod tests {
     )]
     use super::*;
     use crate::mock_vector_db::MockVectorDB;
+
+    /// The defaulted `close()` is a no-op and idempotent for a store that owns
+    /// nothing closable — the measured case for the in-memory brute-force store
+    /// and for LanceDB, and what keeps every existing impl compiling.
+    #[tokio::test]
+    async fn default_close_is_a_noop_and_idempotent() {
+        let db = MockVectorDB::new();
+        db.create_collection("TestType", "field", 3).await.unwrap();
+        assert!(db.close().await.is_ok());
+        assert!(db.close().await.is_ok());
+        assert!(db.has_collection("TestType", "field").await.unwrap());
+    }
 
     #[tokio::test]
     async fn batch_search_similar_returns_one_result_per_query() {
