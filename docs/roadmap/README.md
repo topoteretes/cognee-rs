@@ -24,6 +24,12 @@ Each plan has an index doc plus one sub-document per remaining work item.
 | [cognify-compatibility-plan.md](cognify-compatibility-plan.md) | Index + decision log. Items 1, 2, 4, 5 have landed; only **Item 3** remains. |
 | [pghybrid-full-adapter.md](pghybrid-full-adapter.md) | Item 3 — full `PgHybridAdapter` + unified-engine wiring (the one remaining milestone). |
 
+### AWS Bedrock provider (issue #17)
+
+| Doc | Role |
+|-----|------|
+| [bedrock-provider-plan.md](bedrock-provider-plan.md) | The remaining tier of issue #17 (Tier 2 Anthropic and Tier 3 Azure shipped). Wire spec read out of Python + litellm, the Rust work breakdown, and the Python-side edits needed for two-way parity. |
+
 ## Conventions
 
 - When a planned item lands, delete its sub-document (the code is the record) and
