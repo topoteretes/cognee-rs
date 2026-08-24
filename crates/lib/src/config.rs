@@ -845,6 +845,7 @@ impl Settings {
                 onnx_dimensions: self.embedding_dimensions as usize,
                 onnx_max_sequence_length: self.embedding_max_sequence_length as usize,
                 onnx_batch_size: self.embedding_onnx_batch_size as usize,
+                aws: cognee_components::aws_inputs_from_env(),
             },
             llm: cognee_components::LlmInputs {
                 provider: self.llm_provider.to_lowercase(),
@@ -862,6 +863,7 @@ impl Settings {
                 mock: self.llm_mock,
                 cassette: self.llm_cassette.clone(),
                 record_path: self.llm_record_path.clone(),
+                aws: cognee_components::aws_inputs_from_env(),
             },
         }
     }

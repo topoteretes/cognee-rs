@@ -36,8 +36,8 @@ mod traits;
 pub use builtins::embedding::{OnnxAssetDefaults, onnx_asset_defaults};
 pub use builtins::{build_database, build_embedding_config, build_storage};
 pub use context::{
-    BackendBuildContext, EmbeddingInputs, LlmInputs, anthropic_base_url_from_env,
-    parse_reasoning_override,
+    AwsInputs, BackendBuildContext, EmbeddingInputs, LlmInputs, anthropic_base_url_from_env,
+    aws_inputs_from_env, parse_reasoning_override,
 };
 pub use error::ComponentError;
 pub use registry::ComponentRegistry;

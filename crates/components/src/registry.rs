@@ -423,6 +423,7 @@ mod tests {
                 onnx_dimensions: 384,
                 onnx_max_sequence_length: 512,
                 onnx_batch_size: 32,
+                aws: crate::context::AwsInputs::default(),
             },
             llm: crate::context::LlmInputs {
                 provider: "openai".to_string(),
@@ -438,6 +439,7 @@ mod tests {
                 mock: false,
                 cassette: String::new(),
                 record_path: String::new(),
+                aws: crate::context::AwsInputs::default(),
             },
         }
     }

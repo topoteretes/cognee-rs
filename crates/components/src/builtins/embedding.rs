@@ -210,6 +210,7 @@ mod tests {
             onnx_dimensions: 384,
             onnx_max_sequence_length: 512,
             onnx_batch_size: 32,
+            aws: crate::context::AwsInputs::default(),
         }
     }
 

@@ -696,6 +696,7 @@ impl HttpServerConfig {
                 onnx_dimensions: self.embedding_dimensions as usize,
                 onnx_max_sequence_length,
                 onnx_batch_size,
+                aws: cognee_components::aws_inputs_from_env(),
             },
             llm: cognee_components::LlmInputs {
                 provider: self.llm_provider.to_ascii_lowercase(),
@@ -720,6 +721,7 @@ impl HttpServerConfig {
                 mock: false,
                 cassette: String::new(),
                 record_path: String::new(),
+                aws: cognee_components::aws_inputs_from_env(),
             },
         }
     }
