@@ -112,7 +112,8 @@ pub trait GraphDBTrait: Send + Sync {
     ///
     /// Mirrors `cognee_database::close` for the relational pool: a `Drop` is
     /// not a close. An embedded file-backed graph (ladybug) holds a write lock
-    /// on its main database file plus an un-checkpointed `-wal`, and a Postgres
+    /// on its main database file plus an un-checkpointed `.wal` (ladybug's own
+    /// suffix — not SQLite's `-wal`, which the relational pool leaves), and a Postgres
     /// adapter holds its **own** sqlx pool whose destructor only flags the pool
     /// closed and lets each connection tear down on an arbitrary thread. Both
     /// outlive the last `Arc` by an unbounded amount of time, which is
@@ -125,8 +126,12 @@ pub trait GraphDBTrait: Send + Sync {
     ///   lives *inside* the shared inner handle (as sqlx puts its closed flag
     ///   inside `PoolInner`), so surviving clones fail their next operation with
     ///   a "closed" error rather than silently reconnecting or reopening.
-    /// - **Post-close operations fail.** This is a deliberate, user-visible
-    ///   extension of the relational contract, not a bug.
+    /// - **Post-close operations fail — for backends that actually close
+    ///   something.** This is a deliberate, user-visible extension of the
+    ///   relational contract, not a bug. It does *not* bind an implementor whose
+    ///   `close` is the no-op default below: with nothing to release there is
+    ///   nothing to invalidate, so such a backend keeps serving, and the unit
+    ///   test for the default asserts exactly that.
     /// - The **default body is a no-op**, meaning "this backend owns nothing
     ///   closable beyond memory". An adapter that does own OS resources must
     ///   override it, or it will leak invisibly.

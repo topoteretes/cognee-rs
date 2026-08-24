@@ -373,13 +373,23 @@ impl ComponentManager {
     async fn teardown(&self, shared: CloseSharedStores) {
         // Take each slot out sequentially. Never two guards at once, never a
         // guard across an `.await`.
+        //
+        // The **database slot goes first**, and the order is load-bearing rather
+        // than cosmetic. Every `write().await` here can block on a concurrent
+        // accessor, so acquiring the other six before it meant a caller that
+        // bounds this teardown with a timeout (the CLI does) could spend its whole
+        // budget waiting for, say, the graph lock and never reach the relational
+        // close at all — leaving exactly the SQLite `-wal`/`-shm` sidecars the
+        // bound exists to remove (topoteretes/cognee-rs#132). Taking it first
+        // means the one teardown with an on-disk consequence is never queued
+        // behind another slot's contention.
+        let database = self.database.write().await.take();
         let graph = self.graph_db.write().await.take();
         let vector = self.vector_db.write().await.take();
         let embedding = self.embedding_engine.write().await.take();
         let llm = self.llm.write().await.take();
         let transcriber = self.transcriber.write().await.take();
         let storage = self.storage.write().await.take();
-        let database = self.database.write().await.take();
         // The lowered build context holds no OS resource, but a stale one would
         // outlive the config version it was built for; clear it with the rest.
         let _ = self.context.write().await.take();

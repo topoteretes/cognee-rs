@@ -289,7 +289,11 @@ pub trait VectorDB: Send + Sync {
     /// - **Safe to call while other `Arc` clones are alive.** Surviving clones
     ///   fail their next operation with a "closed" error rather than silently
     ///   reconnecting.
-    /// - **Post-close operations fail.** Deliberate and user-visible.
+    /// - **Post-close operations fail — for backends that actually close
+    ///   something.** Deliberate and user-visible. It does *not* bind an
+    ///   implementor whose `close` is the no-op default below (brute-force, mock,
+    ///   LanceDB): with nothing to release there is nothing to invalidate, so such
+    ///   a backend keeps serving — which is what the unit test below asserts.
     /// - The **default body is a no-op**, meaning "this backend owns nothing
     ///   closable beyond memory". That is the *measured* truth for the in-memory
     ///   brute-force store and for LanceDB (which holds no descriptor open
