@@ -136,8 +136,19 @@ where
         // never-torn-down case this module exists to remove. Today's only caller
         // (`run_sequence`) holds its guard across the whole dispatch, so the two
         // readings agree — this is about not depending on that.
+        // Only the *close* is deferrable. The flush is not, and conflating the
+        // two silently discarded telemetry: `run-sequence` (the sole caller of
+        // `defer_teardown`) would skip `release` entirely per step, so each
+        // step's detached POSTs were still on this runtime when
+        // `shutdown_timeout` below cancelled them — and `main`'s fallback
+        // `release_blocking` then flushed a *fresh* runtime with nothing left to
+        // wait for. A 50-step sequence delivered zero events, which is exactly
+        // the defect this module's header claims to have fixed. Whatever
+        // dispatched a POST has to be the runtime that waits for it.
         if DEFERRED.load(Ordering::Acquire) == 0 {
             release(&cm).await;
+        } else {
+            flush_telemetry().await;
         }
         outcome
     });
@@ -162,6 +173,17 @@ async fn release(cm: &ComponentManager) {
         );
     }
 
+    flush_telemetry().await;
+}
+
+/// Wait for the telemetry this runtime dispatched, bounded.
+///
+/// Split out of [`release`] because the two halves have different deferrability:
+/// a caller replaying several commands against one warm manager can postpone the
+/// *close* (see [`defer_teardown`]) but must never postpone the *flush* — the
+/// POSTs are detached on the runtime that is about to be shut down, so nothing
+/// else can wait for them.
+async fn flush_telemetry() {
     if !cognee::cognee_telemetry::flush(TELEMETRY_FLUSH_TIMEOUT).await {
         tracing::debug!(
             "telemetry still in flight after {TELEMETRY_FLUSH_TIMEOUT:?}; \

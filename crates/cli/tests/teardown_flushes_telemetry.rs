@@ -219,3 +219,54 @@ fn a_flush_after_the_runtime_is_gone_delivers_nothing() {
         "nothing can be delivered once the runtime that owned the POST is gone"
     );
 }
+
+/// A deferred teardown must still flush.
+///
+/// `defer_teardown` exists so `run-sequence` can replay many commands against one
+/// warm manager without paying a re-warm per step. It postpones the *close* — but
+/// the flush is not postponable: each step's POSTs are detached on that step's
+/// runtime, which `run_command` shuts down on the way out, so anything not waited
+/// for there is cancelled and no later flush can recover it.
+///
+/// Conflating the two meant a whole sequence file delivered **zero** events while
+/// this module's header claimed the defect was fixed. The bug was invisible to the
+/// test above, which only covers the non-deferred path.
+#[test]
+#[serial]
+fn a_deferred_teardown_still_flushes_the_step_it_dispatched() {
+    let collector = Collector::start();
+    configure(&collector.url);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let cm = cold_manager(dir.path());
+
+    // Warm the client outside the measured window — see the note in the first
+    // test: the first POST in a process pays connector start-up, and
+    // TELEMETRY_FLUSH_TIMEOUT is deliberately 500ms.
+    {
+        let warm = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("warm-up runtime");
+        warm.block_on(async {
+            cognee::cognee_telemetry::send_telemetry("cognee.test.warmup", "test-user", None);
+            cognee::cognee_telemetry::flush(Duration::from_secs(5)).await;
+        });
+    }
+    let baseline = collector.arrived_settled();
+
+    // Exactly the `run-sequence` shape: a guard held across the step dispatch.
+    let deferred = cognee_cli::teardown::defer_teardown();
+    let outcome: Result<(), _> = cognee_cli::teardown::run_command(Arc::clone(&cm), async {
+        cognee::cognee_telemetry::send_telemetry("cognee.test.deferred_step", "test-user", None);
+        Ok(())
+    });
+    outcome.expect("the step itself succeeds");
+    drop(deferred);
+
+    assert_eq!(
+        collector.arrived_settled() - baseline,
+        1,
+        "a deferred step must still flush its own telemetry: the close is \
+         postponable, the POSTs are not — they die with the step's runtime"
+    );
+}

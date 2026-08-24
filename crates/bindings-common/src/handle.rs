@@ -308,6 +308,16 @@ impl HandleState {
             self.cm.release().await;
         }
 
+        // Release the services lock before the flush. Holding it across
+        // `cm.close()` is deliberate — it stops a concurrent `services()` from
+        // caching a freshly built pool that is about to be closed underneath it —
+        // but the flush touches nothing the guard protects, and keeping it would
+        // block any other thread's `services()` for up to the flush timeout. That
+        // is a real stall for a binding: Python `Cognee.close()` on one thread
+        // while another calls `cognee.datasets.list()` would make the second wait
+        // on an analytics POST.
+        drop(guard);
+
         // Finally, let the analytics POSTs already in flight finish. `send_telemetry`
         // is fire-and-forget, so a binding whose embedder exits (or drops its
         // runtime) right after closing otherwise discards its last event —

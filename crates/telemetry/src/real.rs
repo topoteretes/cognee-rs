@@ -89,10 +89,22 @@ pub(crate) async fn flush_impl(timeout: Duration) -> bool {
     let inflight = inflight();
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
-        // Register interest *before* reading the counter: the reverse
-        // order can miss the notification of the last completing POST
-        // and then wait out the whole timeout for nothing.
+        // Register interest *before* reading the counter: the reverse order can
+        // miss the notification of the last completing POST and then wait out the
+        // whole timeout for nothing.
+        //
+        // `notified()` alone does NOT register — it only builds the future, which
+        // enqueues on its first poll. Since the first poll here happens inside
+        // the `timeout` below, a POST finishing between the counter load and that
+        // poll would call `notify_waiters()` with nobody enqueued (it stores no
+        // permit, by design — see `InflightGuard`), and the flush would sleep out
+        // its entire budget before returning `true`. That is up to 500 ms added
+        // to every CLI exit, every binding `close()`, and the SIGTERM handler.
+        // `enable()` performs the registration up front, which is what makes the
+        // comment above true.
         let idle = inflight.idle.notified();
+        tokio::pin!(idle);
+        idle.as_mut().enable();
         if inflight.count.load(Ordering::Acquire) == 0 {
             return true;
         }

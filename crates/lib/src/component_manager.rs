@@ -383,7 +383,35 @@ impl ComponentManager {
         // bound exists to remove (topoteretes/cognee-rs#132). Taking it first
         // means the one teardown with an on-disk consequence is never queued
         // behind another slot's contention.
-        let database = self.database.write().await.take();
+        // Take the relational slot AND close it before touching any other lock.
+        //
+        // Taking it first is not enough, and getting that wrong is worse than the
+        // original order: `versioned_accessor!` holds a slot's write lock across
+        // the whole `init_*().await`, so a concurrent warm (a cold ONNX session
+        // load, a Postgres connect burning its timeout) can block the *next*
+        // acquisition for seconds. With the close deferred until after all seven
+        // takes, a caller that bounds this teardown — `cognee_cli::teardown` wraps
+        // it in a 5 s timeout — can have its budget expire while blocked on, say,
+        // the embedding lock. The future is dropped, `cognee_database::close`
+        // never runs, and the SQLite `-wal`/`-shm` sidecars survive: the #132 leak
+        // this method exists to fix. And because the slot was already emptied, no
+        // later `close()` can reach that pool either — it is orphaned for the life
+        // of the process.
+        //
+        // So the relational close is fully sequenced here, before any other lock
+        // is requested, and cancellation past this point can only cost the
+        // components that have no on-disk consequence.
+        if let Some((_, db)) = self.database.write().await.take() {
+            if shared.may_close(&db)
+                && let Err(e) = cognee_database::close(&db).await
+            {
+                tracing::warn!(error = %e, "failed to close the relational connection pool");
+            }
+            // The connection has no blocking destructor of its own, so dropping
+            // it inline is fine.
+            drop(db);
+        }
+
         let graph = self.graph_db.write().await.take();
         let vector = self.vector_db.write().await.take();
         let embedding = self.embedding_engine.write().await.take();
@@ -393,22 +421,6 @@ impl ComponentManager {
         // The lowered build context holds no OS resource, but a stale one would
         // outlive the config version it was built for; clear it with the rest.
         let _ = self.context.write().await.take();
-
-        // Relational FIRST: the caller may be bounding this whole teardown with a
-        // timeout, and the SQLite sidecars are the leak the bound exists to fix,
-        // so they must not be queued behind a graph checkpoint or an ONNX thread
-        // join. See the ordering note in this method's docs.
-        if let Some((_, db)) = database {
-            if shared.may_close(&db)
-                && let Err(e) = cognee_database::close(&db).await
-            {
-                tracing::warn!(error = %e, "failed to close the relational connection pool");
-            }
-            // The connection has no blocking destructor of its own; dropping it
-            // inline is fine, and doing so here (rather than at the end of the
-            // function) keeps the "take, close, release" shape uniform.
-            drop(db);
-        }
 
         if let Some((_, graph)) = graph {
             if shared.may_close(&graph)
