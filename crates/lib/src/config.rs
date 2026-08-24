@@ -1166,7 +1166,12 @@ impl Default for Settings {
             llm_max_completion_tokens: cognee_llm::OpenAIAdapter::DEFAULT_MAX_COMPLETION_TOKENS,
             llm_max_retries: 2,
             llm_min_retry_seconds: 240,
-            llm_max_parallel_requests: 128,
+            // Non-binding by default so cognify's LLM stages behave like Python's
+            // unbounded `asyncio.gather` (see `PYTHON_CHUNKS_PER_BATCH`). Still a
+            // real ceiling: `LLM_MAX_PARALLEL_REQUESTS=1` remains the documented
+            // way to serialise calls on a rate-limited key or when recording
+            // replay cassettes.
+            llm_max_parallel_requests: cognee_cognify::config::PYTHON_CHUNKS_PER_BATCH as u32,
             llm_args: serde_json::Map::new(),
             llm_mock: false,
             llm_cassette: String::new(),

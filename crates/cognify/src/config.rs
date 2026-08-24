@@ -13,6 +13,19 @@ use cognee_llm::{Llm, Transcriber};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+/// Chunks handed to the graph-extraction stage in one batch, and — because
+/// Python imposes no in-batch concurrency ceiling — the default in-flight cap
+/// as well.
+///
+/// This is the literal Python falls back to in
+/// `cognee/api/v1/cognify/cognify.py:367-370` when neither the `chunks_per_batch`
+/// argument nor `CognifyConfig.chunks_per_batch` is set (both default to `None`;
+/// see `cognee/api/v1/cognify/cognify.py:60` and
+/// `cognee/modules/cognify/config.py:12`). It is exported so the CLI/bindings
+/// default for `LLM_MAX_PARALLEL_REQUESTS` and `SummaryExtractor`'s own default
+/// stay single-sourced with it.
+pub const PYTHON_CHUNKS_PER_BATCH: usize = 2000;
+
 /// Configuration for the cognify pipeline.
 ///
 /// Design Principles:
@@ -55,13 +68,28 @@ pub struct CognifyConfig {
     pub chunk_strategy: ChunkStrategy,
 
     /// Number of chunks to process in a single batch during graph extraction.
-    /// Python default: 100 (cognify parameter)
-    /// Controls memory usage vs parallelism tradeoff
+    ///
+    /// This is the direct analogue of Python's pipeline batch size — the
+    /// `task_config={"batch_size": chunks_per_batch}` attached to the
+    /// `extract_graph_and_summarize` task in `cognee/api/v1/cognify/cognify.py:388`.
+    /// Python resolves it to **2000** by default (`cognify.py:367-370` falls back
+    /// to a 2000 literal because `CognifyConfig.chunks_per_batch` is `None` in
+    /// `cognee/modules/cognify/config.py:12`), so any document under 2000 chunks
+    /// reaches the extraction stage as a single batch with no barrier in the
+    /// middle. We match that literal.
     pub chunks_per_batch: usize,
 
-    /// Maximum number of parallel tasks for graph extraction within a batch.
-    /// Python default: No explicit limit (uses asyncio.gather)
-    /// Rust: Prevents spawning too many tokio tasks
+    /// Maximum number of parallel extraction calls in flight within a batch.
+    ///
+    /// Python has no equivalent ceiling: `extract_graph_from_data.py:191` and
+    /// `summarize_text.py:58` both `asyncio.gather` over every chunk in the
+    /// batch, and `llm_rate_limit_enabled` is `False` by default
+    /// (`cognee/infrastructure/llm/config.py:151`). Defaulting this to the same
+    /// value as `chunks_per_batch` therefore makes it non-binding — identical
+    /// behaviour to Python's unbounded gather — while keeping a real, reachable
+    /// bound for operators on rate-limited keys (`LLM_MAX_PARALLEL_REQUESTS=1`
+    /// is the documented way to record replay cassettes; see
+    /// `scripts/perf/README.md`).
     pub max_parallel_extractions: usize,
 
     /// Custom prompt for entity/relationship extraction.
@@ -211,8 +239,8 @@ impl Default for CognifyConfig {
             chunk_overlap: 10,
             chunk_strategy: ChunkStrategy::Paragraph,
 
-            chunks_per_batch: 100,
-            max_parallel_extractions: 20,
+            chunks_per_batch: PYTHON_CHUNKS_PER_BATCH,
+            max_parallel_extractions: PYTHON_CHUNKS_PER_BATCH,
             custom_extraction_prompt: None,
 
             enable_summarization: true,
@@ -631,9 +659,12 @@ mod tests {
         assert_eq!(config.chunk_overlap, 10);
         assert_eq!(config.chunk_strategy, ChunkStrategy::Paragraph);
 
-        // Graph extraction defaults
-        assert_eq!(config.chunks_per_batch, 100);
-        assert_eq!(config.max_parallel_extractions, 20);
+        // Graph extraction defaults. Both track Python's resolved pipeline batch
+        // size (2000); max_parallel_extractions matching it makes the in-flight
+        // cap non-binding at the default batch size, i.e. equivalent to Python's
+        // unbounded `asyncio.gather`.
+        assert_eq!(config.chunks_per_batch, PYTHON_CHUNKS_PER_BATCH);
+        assert_eq!(config.max_parallel_extractions, PYTHON_CHUNKS_PER_BATCH);
         assert!(config.custom_extraction_prompt.is_none());
 
         // Summarization defaults
@@ -904,6 +935,6 @@ mod tests {
         assert_eq!(config.max_chunk_size, Some(512));
         // Other fields should remain at defaults
         assert_eq!(config.chunk_overlap, 10);
-        assert_eq!(config.chunks_per_batch, 100);
+        assert_eq!(config.chunks_per_batch, PYTHON_CHUNKS_PER_BATCH);
     }
 }
