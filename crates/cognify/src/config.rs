@@ -937,4 +937,28 @@ mod tests {
         assert_eq!(config.chunk_overlap, 10);
         assert_eq!(config.chunks_per_batch, PYTHON_CHUNKS_PER_BATCH);
     }
+
+    /// The in-flight ceiling must stay *reachable*. `scripts/perf/README.md`
+    /// documents `LLM_MAX_PARALLEL_REQUESTS=1` as the way to record cassettes on
+    /// a rate-limited key, and operators on low-TPM keys depend on it. Raising
+    /// the default to a non-binding value must not turn the knob into a no-op.
+    #[test]
+    fn max_parallel_extractions_can_still_be_lowered() {
+        let config = CognifyConfig::default().with_max_parallel_extractions(1);
+        assert_eq!(config.max_parallel_extractions, 1);
+        assert!(config.validate().is_ok());
+
+        // The batch size stays independent of the concurrency cap.
+        assert_eq!(config.chunks_per_batch, PYTHON_CHUNKS_PER_BATCH);
+    }
+
+    /// Both LLM stages must share one in-flight ceiling. If these drift, a
+    /// document would be extracted at one width and summarised at another.
+    #[test]
+    fn summarization_default_parallelism_matches_extraction() {
+        assert_eq!(
+            crate::summarization::SummaryExtractor::DEFAULT_MAX_PARALLEL,
+            CognifyConfig::default().max_parallel_extractions,
+        );
+    }
 }
