@@ -99,6 +99,11 @@ impl ComponentRegistry {
         reg.register_llm(Arc::new(llm::AnthropicLlmFactory));
         // Azure OpenAI: OpenAI-compatible wire, but api-key auth + api-version.
         reg.register_llm(Arc::new(llm::AzureLlmFactory));
+        // AWS Bedrock Converse. Feature-gated because the AWS stack (aws-config
+        // + aws-sigv4) is not free; this registration is the point at which
+        // `LLM_PROVIDER=bedrock` works end to end.
+        #[cfg(feature = "bedrock")]
+        reg.register_llm(Arc::new(llm::BedrockLlmFactory));
 
         reg
     }
@@ -273,6 +278,14 @@ fn unsupported_msg(field: &str, provider: &str, supported: &[String]) -> String 
             "mock" => " Rebuild with the `testing` crate feature to enable it.",
             _ => "",
         },
+        "llm_provider" => match p.as_str() {
+            // The only feature-gated built-in LLM provider: without `bedrock`
+            // the factory is not registered at all, so LLM_PROVIDER=bedrock
+            // lands here and must read as a build-configuration problem rather
+            // than an unknown provider.
+            "bedrock" => " Rebuild with the `bedrock` crate feature to enable it.",
+            _ => "",
+        },
         _ => "",
     };
     format!(
@@ -304,10 +317,17 @@ mod tests {
         // is the hint an operator of a build without it actually sees.
         assert!(v("lancedb").contains("`lancedb` crate feature"));
         assert!(v("mock").contains("`testing` crate feature"));
+        // `bedrock` is the only feature-gated built-in LLM provider, so a build
+        // without the feature must point at it rather than read as an unknown
+        // provider.
+        let l = |p: &str| unsupported_msg("llm_provider", p, &[]);
+        assert!(l("bedrock").contains("`bedrock` crate feature"));
+        assert!(!l("openai").contains("crate feature"));
         // No cross-kind hint: a graph provider in a vector error (and vice-versa)
         // gets no feature hint at all.
         assert!(!v("postgres").contains("crate feature"));
         assert!(!g("pgvector").contains("crate feature"));
+        assert!(!v("bedrock").contains("crate feature"));
     }
 
     // Drift-guard: `with_builtins()` must register the documented provider set
@@ -372,6 +392,152 @@ mod tests {
                 reg.llm_providers()
             );
         }
+        // Bedrock follows its feature, like lancedb above: on means the factory
+        // is registered and `LLM_PROVIDER=bedrock` resolves; off means the
+        // provider must be absent so the operator gets the unsupported-provider
+        // message instead of a build without the AWS stack.
+        #[cfg(feature = "bedrock")]
+        assert!(
+            reg.llm_providers().iter().any(|p| p == "bedrock"),
+            "the `bedrock` feature must register the `bedrock` llm provider; have {:?}",
+            reg.llm_providers()
+        );
+        #[cfg(not(feature = "bedrock"))]
+        assert!(
+            !reg.llm_providers().iter().any(|p| p == "bedrock"),
+            "without the `bedrock` feature the provider must NOT be registered; have {:?}",
+            reg.llm_providers()
+        );
+    }
+
+    // `LLM_PROVIDER=bedrock` must resolve through the *registry lookup*, not
+    // just exist as a type: `build_llm` keys on the lowercased provider id, so
+    // this is the assertion that ties the factory's `provider()` string to the
+    // env value operators actually set.
+    #[cfg(feature = "bedrock")]
+    #[test]
+    fn with_builtins_registers_bedrock_llm_provider() {
+        let reg = ComponentRegistry::with_builtins();
+        assert!(
+            reg.llm_providers().iter().any(|p| p == "bedrock"),
+            "with_builtins() must register the `bedrock` llm provider; have {:?}",
+            reg.llm_providers()
+        );
+        assert_eq!(crate::builtins::llm::BEDROCK_PROVIDER, "bedrock");
+    }
+
+    // Parity guard (plan §1.1 / §4 R5): Bedrock is absent from Python's
+    // `_API_KEY_REQUIRED_PROVIDERS` and listed in `_NO_API_KEY_PROVIDERS`, so an
+    // empty `LLM_API_KEY` is the normal IAM configuration and must NOT be
+    // rejected the way the Anthropic factory rejects it.
+    //
+    // Kept strictly offline: the bearer token short-circuits `resolve_auth`
+    // before any credential lookup (`aws/credentials.rs` — that early return is
+    // documented as behaviour, not an optimisation), and the explicit region
+    // short-circuits the ambient region chain, so nothing here touches IMDS,
+    // SSO or the profile files.
+    #[cfg(feature = "bedrock")]
+    #[tokio::test]
+    async fn bedrock_builds_without_an_api_key() {
+        let reg = ComponentRegistry::with_builtins();
+        let mut ctx = test_ctx();
+        ctx.llm.provider = "bedrock".to_string();
+        // A converse-routed id cognee ships; an invoke-routed id fails by design.
+        ctx.llm.model = "eu.anthropic.claude-haiku-4-5-20251001-v1:0".to_string();
+        ctx.llm.api_key = String::new();
+        ctx.llm.aws.bearer_token = Some("test-token".to_string());
+        ctx.llm.aws.region = Some("us-east-1".to_string());
+
+        let built = reg.build_llm(&ctx).await;
+        let adapter = match built {
+            Ok(adapter) => adapter,
+            Err(e) => panic!(
+                "an empty LLM_API_KEY must fall through to the credential ladder, not error: {e:?}"
+            ),
+        };
+        // `is_ok()` alone would also pass if the factory built some other
+        // adapter entirely; the model id is the cheapest proof that the
+        // configured Bedrock model is what came back.
+        assert_eq!(
+            adapter.model(),
+            "eu.anthropic.claude-haiku-4-5-20251001-v1:0"
+        );
+
+        // §6.4: Bedrock has no Whisper equivalent, so audio degrades to None
+        // rather than erroring or wiring an adapter that 404s at runtime.
+        match reg.build_transcriber(&ctx).await {
+            Ok(None) => {}
+            Ok(Some(_)) => panic!("bedrock must not advertise a transcriber (plan §6.4)"),
+            Err(e) => {
+                panic!("build_transcriber must return Ok(None) for bedrock, not error: {e:?}")
+            }
+        }
+    }
+
+    // The LLM-side twin of `aws_inputs_are_carried_into_the_embedding_config`
+    // (`builtins::embedding`): without the `(&ctx.llm.aws).into()` carry-across
+    // the factory would hand `BedrockAdapter::new` a defaulted `AwsInputs` and
+    // every explicitly supplied credential/region/endpoint would be silently
+    // replaced by the ambient environment.
+    //
+    // A syntactically invalid region is the discriminator: it is rejected at the
+    // *first* rung of the §1.3 chain (`aws::region::validate`), before any
+    // ambient lookup and before the credential ladder, so the error naming it
+    // can only come from `ctx.llm.aws` having reached the adapter. Offline for
+    // the same reason.
+    #[cfg(feature = "bedrock")]
+    #[tokio::test]
+    async fn bedrock_carries_the_aws_inputs_into_the_adapter() {
+        let reg = ComponentRegistry::with_builtins();
+        let mut ctx = test_ctx();
+        ctx.llm.provider = "bedrock".to_string();
+        ctx.llm.model = "eu.anthropic.claude-haiku-4-5-20251001-v1:0".to_string();
+        ctx.llm.api_key = String::new();
+        ctx.llm.aws.bearer_token = Some("test-token".to_string());
+        ctx.llm.aws.region = Some("Not A Region".to_string());
+
+        let err = match reg.build_llm(&ctx).await {
+            Ok(_) => panic!(
+                "the caller-supplied region never reached the adapter: an invalid region must \
+                 fail the §1.3 chain instead of falling through to the ambient one"
+            ),
+            Err(e) => e,
+        };
+        assert!(
+            matches!(&err, ComponentError::Llm(msg) if msg.contains("Not A Region")),
+            "expected the region validation error naming the supplied region, got: {err:?}"
+        );
+    }
+
+    // The companion to `bedrock_builds_without_an_api_key`: proves the factory
+    // reaches `BedrockAdapter::new` with an empty key rather than rejecting it
+    // first. An invoke-routed id is refused *inside* the adapter constructor
+    // before any region/credential resolution (plan §6.7), so the error shape
+    // distinguishes the two: `ComponentError::Llm` = the key was passed through;
+    // a `ComponentError::Config` naming an API key = an Anthropic-style
+    // key-required check crept in. Offline for the same reason — the route check
+    // is the first statement in `new`.
+    #[cfg(feature = "bedrock")]
+    #[tokio::test]
+    async fn bedrock_empty_api_key_is_never_a_config_rejection() {
+        let reg = ComponentRegistry::with_builtins();
+        let mut ctx = test_ctx();
+        ctx.llm.provider = "bedrock".to_string();
+        ctx.llm.model = "invoke/amazon.titan-text-express-v1".to_string();
+        ctx.llm.api_key = String::new();
+
+        let err = match reg.build_llm(&ctx).await {
+            Ok(_) => panic!("an invoke-routed chat model must be rejected by the adapter"),
+            Err(e) => e,
+        };
+        assert!(
+            !matches!(&err, ComponentError::Config(msg) if msg.contains("API key")),
+            "bedrock must not require an API key (plan §1.1): {err:?}"
+        );
+        assert!(
+            matches!(&err, ComponentError::Llm(msg) if msg.contains("Converse")),
+            "expected the adapter's route rejection, got: {err:?}"
+        );
     }
 
     #[tokio::test]

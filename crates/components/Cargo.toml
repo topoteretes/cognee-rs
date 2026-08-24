@@ -19,7 +19,7 @@ workspace = true
 # (cognee, cognee-http-server) depend with `default-features = false` and
 # forward exactly the features they want, so `--no-default-features` builds
 # stay precise.
-default = ["onnx", "ladybug", "lancedb", "pgvector", "pggraph", "mock-llm"]
+default = ["onnx", "ladybug", "lancedb", "pgvector", "pggraph", "mock-llm", "bedrock"]
 
 onnx         = ["cognee-embedding/onnx"]
 onnx-dynamic = ["onnx", "cognee-embedding/onnx-dynamic"]
@@ -35,11 +35,12 @@ pgvector     = ["cognee-vector/pgvector", "dep:url"]
 pggraph      = ["cognee-graph/postgres", "dep:url"]
 # Record/replay cassette-based mock LLM (MOCK_LLM / COGNEE_RECORD_LLM).
 mock-llm     = ["cognee-llm/mock"]
-# AWS Bedrock provider. Non-default for now: R5 adds the LLM factory, its
-# registration and the default-on wiring (plan §2.3, §6.8). Turning it on here
-# only makes the embedding side reachable — the `aws` carry-across in
-# `builtins::embedding::build_embedding_config` and `cognee-embedding`'s
-# Bedrock engine.
+# AWS Bedrock provider. Default-on (plan §2.3, §6.2): it registers the
+# `bedrock` LLM factory in `with_builtins()` (`builtins::llm::BedrockLlmFactory`,
+# the Converse adapter) *and* the embedding side — the `aws` carry-across in
+# `builtins::embedding::build_embedding_config` plus `cognee-embedding`'s
+# Bedrock engine. Drop it with `--no-default-features` the same way `lancedb` is
+# dropped; `LLM_PROVIDER=bedrock` then reports an unsupported provider.
 bedrock      = ["cognee-embedding/bedrock", "cognee-llm/bedrock"]
 # Enables the in-memory `mock` vector and graph providers in `with_builtins()`.
 testing      = ["cognee-vector/testing", "cognee-graph/testing"]

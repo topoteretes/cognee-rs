@@ -196,6 +196,69 @@ impl LlmFactory for AzureLlmFactory {
     }
 }
 
+/// Provider id served by [`BedrockLlmFactory`].
+#[cfg(feature = "bedrock")]
+pub const BEDROCK_PROVIDER: &str = "bedrock";
+
+/// Built-in factory for the native AWS Bedrock **Converse** adapter (plan §4 R5).
+///
+/// Bedrock is neither OpenAI-compatible nor Anthropic-Messages-compatible: it
+/// carries its own request shape, its own auth (SigV4 or a Bedrock API key) and
+/// its own region/endpoint resolution, all of which live in
+/// [`cognee_llm::adapters::BedrockAdapter`] behind the `bedrock` feature.
+#[cfg(feature = "bedrock")]
+pub struct BedrockLlmFactory;
+
+#[cfg(feature = "bedrock")]
+#[async_trait]
+impl LlmFactory for BedrockLlmFactory {
+    fn provider(&self) -> &str {
+        BEDROCK_PROVIDER
+    }
+
+    async fn build(&self, ctx: &BackendBuildContext) -> Result<Arc<dyn Llm>, ComponentError> {
+        // Deliberately NO API-key requirement, unlike the Anthropic factory
+        // above. Bedrock is absent from Python's `_API_KEY_REQUIRED_PROVIDERS`
+        // (`get_llm_client.py:98`) and listed in `_NO_API_KEY_PROVIDERS`
+        // (`get_native_client.py:20`) — the exemption holds on both framework
+        // paths (plan §1.1). An empty `LLM_API_KEY` is the *normal* IAM
+        // configuration: it must fall through to the SigV4 credential ladder
+        // rather than error.
+        let api_key = Some(ctx.llm.api_key.trim()).filter(|key| !key.is_empty());
+
+        // The single crossing point to the adapter-side struct; see
+        // `crate::context::AwsInputs`.
+        let aws: cognee_llm::adapters::bedrock::aws::env::AwsInputs = (&ctx.llm.aws).into();
+
+        // `api_base = None` on purpose: never pass `ctx.llm.endpoint`, which
+        // aliases OPENAI_URL (the same trap `anthropic_base_url` exists to
+        // avoid — see the Anthropic factory above). The Bedrock runtime
+        // endpoint travels via `AWS_BEDROCK_RUNTIME_ENDPOINT` on
+        // `ctx.llm.aws.bedrock_runtime_endpoint` and the plan's §1.3 chain
+        // inside the adapter.
+        let adapter =
+            cognee_llm::adapters::BedrockAdapter::new(ctx.llm.model.clone(), api_key, None, &aws)
+                .await
+                .map_err(|e| ComponentError::Llm(e.to_string()))?
+                .with_structured_output_retries(ctx.llm.max_retries)
+                .with_network_retries(ctx.llm.max_retries)
+                .with_max_completion_tokens(ctx.llm.max_completion_tokens)
+                .with_extra_args(ctx.llm.llm_args.clone());
+        Ok(Arc::new(adapter))
+    }
+
+    async fn build_transcriber(
+        &self,
+        _ctx: &BackendBuildContext,
+    ) -> Result<Option<Arc<dyn Transcriber>>, ComponentError> {
+        // Bedrock has no Whisper equivalent (plan §6.4): Python's
+        // `BedrockAdapter.create_transcript` raises NotImplementedError, so
+        // audio degrades gracefully to None here, matching the
+        // anthropic/ollama/gemini/mistral factories.
+        Ok(None)
+    }
+}
+
 // ── Cross-cutting mock / record helpers ───────────────────────────────────
 //
 // These are applied uniformly by `ComponentRegistry::build_llm` regardless of
