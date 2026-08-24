@@ -229,6 +229,49 @@ impl fmt::Debug for AwsInputs {
     }
 }
 
+/// The field-for-field conversion to the adapter-side struct.
+///
+/// The two declarations are a deliberately mirrored pair (see [`AwsInputs`]):
+/// this module stays feature-free so every consumer can carry the inputs, while
+/// `cognee_llm::adapters::bedrock::aws::env::AwsInputs` — the one the
+/// credential/region/endpoint chains actually resolve — lives behind the
+/// `bedrock` feature. This impl is the single crossing point between them, and
+/// it is exhaustive on purpose: adding a field on either side without the other
+/// breaks the build here rather than silently dropping a credential.
+#[cfg(feature = "bedrock")]
+impl From<&AwsInputs> for cognee_llm::adapters::bedrock::aws::env::AwsInputs {
+    fn from(inputs: &AwsInputs) -> Self {
+        let AwsInputs {
+            region,
+            access_key_id,
+            secret_access_key,
+            session_token,
+            profile_name,
+            role_name,
+            session_name,
+            web_identity_token,
+            sts_endpoint,
+            external_id,
+            bedrock_runtime_endpoint,
+            bearer_token,
+        } = inputs;
+        Self {
+            region: region.clone(),
+            access_key_id: access_key_id.clone(),
+            secret_access_key: secret_access_key.clone(),
+            session_token: session_token.clone(),
+            profile_name: profile_name.clone(),
+            role_name: role_name.clone(),
+            session_name: session_name.clone(),
+            web_identity_token: web_identity_token.clone(),
+            sts_endpoint: sts_endpoint.clone(),
+            external_id: external_id.clone(),
+            bedrock_runtime_endpoint: bedrock_runtime_endpoint.clone(),
+            bearer_token: bearer_token.clone(),
+        }
+    }
+}
+
 /// `"set"` / `"unset"`, so a secret's presence can be debugged without the
 /// secret itself reaching a log line.
 fn shown(value: &Option<String>) -> &'static str {

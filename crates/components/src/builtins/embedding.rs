@@ -66,6 +66,11 @@ fn parse_embedding_provider(provider: &str) -> Option<EmbeddingProvider> {
         "openai" => Some(EmbeddingProvider::OpenAi),
         "openai_compatible" => Some(EmbeddingProvider::OpenAiCompatible),
         "ollama" => Some(EmbeddingProvider::Ollama),
+        // Ungated on purpose: the id is a recognised backend regardless of the
+        // build's features, so `EMBEDDING_PROVIDER=bedrock` is never rejected
+        // here as a typo. A build without `cognee-embedding/bedrock` gives the
+        // honest error later, from `create_engine`'s `NotImplemented` arm.
+        "bedrock" => Some(EmbeddingProvider::Bedrock),
         "mock" => Some(EmbeddingProvider::Mock),
         _ => None,
     }
@@ -116,6 +121,16 @@ pub fn build_embedding_config(inputs: &EmbeddingInputs) -> EmbeddingConfig {
     config.mock = inputs.mock;
     config.mock_mode = mock_mode;
     config.huggingface_tokenizer = inputs.huggingface_tokenizer.clone();
+    // Same feature-unification caveat as `onnx` above, with a benign
+    // degradation: when `cognee-embedding/bedrock` is unified on while *this*
+    // crate's `bedrock` feature is off, the field exists but stays `Default` —
+    // which resolves region, credentials and endpoint entirely from the ambient
+    // environment. That is exactly Python's embedding-path behaviour (plan
+    // §1.5), so the only thing lost is an explicitly caller-supplied override.
+    #[cfg(feature = "bedrock")]
+    {
+        config.aws = (&inputs.aws).into();
+    }
     #[cfg(feature = "onnx")]
     {
         config.onnx = cognee_embedding::OnnxEmbeddingConfig {
@@ -151,7 +166,7 @@ impl EmbeddingFactory for DefaultEmbeddingFactory {
         {
             return Err(ComponentError::EmbeddingEngine(format!(
                 "unknown embedding provider '{provider}'. Supported: onnx, fastembed, \
-                 openai, openai_compatible, ollama, mock."
+                 openai, openai_compatible, ollama, bedrock, mock."
             )));
         }
         let config = build_embedding_config(&ctx.embedding);
@@ -173,10 +188,16 @@ mod tests {
             "openai",
             "openai_compatible",
             "ollama",
+            "bedrock",
             "mock",
         ] {
             assert!(parse_embedding_provider(id).is_some(), "'{id}' must parse");
         }
+        assert_eq!(
+            parse_embedding_provider("  BEDROCK "),
+            Some(EmbeddingProvider::Bedrock),
+            "trimmed and case-insensitive, like every other id",
+        );
         assert!(
             parse_embedding_provider("OpenAI").is_some(),
             "case-insensitive"
@@ -230,5 +251,40 @@ mod tests {
             build_embedding_config(&inputs("ollama", false)).provider,
             EmbeddingProvider::Ollama
         );
+        assert_eq!(
+            build_embedding_config(&inputs("bedrock", false)).provider,
+            EmbeddingProvider::Bedrock
+        );
+    }
+
+    /// The carry-across in `build_embedding_config`: without it the Bedrock
+    /// engine silently resolves everything from the ambient environment and an
+    /// explicitly supplied credential is dropped.
+    #[test]
+    #[cfg(feature = "bedrock")]
+    fn aws_inputs_are_carried_into_the_embedding_config() {
+        let mut inputs = inputs("bedrock", false);
+        inputs.aws = crate::context::AwsInputs {
+            region: Some("eu-central-1".to_string()),
+            access_key_id: Some("AKIDEXAMPLE".to_string()),
+            secret_access_key: Some("secret".to_string()),
+            profile_name: Some("cognee".to_string()),
+            bedrock_runtime_endpoint: Some("https://vpce.example".to_string()),
+            bearer_token: Some("bedrock-api-key".to_string()),
+            ..Default::default()
+        };
+
+        let config = build_embedding_config(&inputs);
+
+        let expected: cognee_llm::adapters::bedrock::aws::env::AwsInputs = (&inputs.aws).into();
+        assert_eq!(config.aws, expected);
+        assert_eq!(config.aws.region.as_deref(), Some("eu-central-1"));
+        assert_eq!(config.aws.access_key_id.as_deref(), Some("AKIDEXAMPLE"));
+        assert_eq!(config.aws.profile_name.as_deref(), Some("cognee"));
+        assert_eq!(
+            config.aws.bedrock_runtime_endpoint.as_deref(),
+            Some("https://vpce.example")
+        );
+        assert_eq!(config.aws.bearer_token.as_deref(), Some("bedrock-api-key"));
     }
 }

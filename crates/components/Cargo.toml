@@ -35,6 +35,12 @@ pgvector     = ["cognee-vector/pgvector", "dep:url"]
 pggraph      = ["cognee-graph/postgres", "dep:url"]
 # Record/replay cassette-based mock LLM (MOCK_LLM / COGNEE_RECORD_LLM).
 mock-llm     = ["cognee-llm/mock"]
+# AWS Bedrock provider. Non-default for now: R5 adds the LLM factory, its
+# registration and the default-on wiring (plan §2.3, §6.8). Turning it on here
+# only makes the embedding side reachable — the `aws` carry-across in
+# `builtins::embedding::build_embedding_config` and `cognee-embedding`'s
+# Bedrock engine.
+bedrock      = ["cognee-embedding/bedrock", "cognee-llm/bedrock"]
 # Enables the in-memory `mock` vector and graph providers in `with_builtins()`.
 testing      = ["cognee-vector/testing", "cognee-graph/testing"]
 

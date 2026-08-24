@@ -7,9 +7,14 @@
 //! byte that leaves the process for Bedrock goes through
 //! [`BedrockTransport::post_json`].
 //!
-//! Kept crate-internal on purpose: it is an implementation seam, not API. The
-//! adapter ([`crate::adapters::bedrock::BedrockAdapter`]) and the embedding
-//! engine (R4) consume it; nothing is re-exported from `lib.rs`.
+//! Shared with `cognee-embedding`, not crate-internal: the adapter
+//! ([`crate::adapters::bedrock::BedrockAdapter`]) and the Bedrock embedding
+//! engine (`cognee_embedding::bedrock`, plan §4 R4) both POST through it, and
+//! the engine lives in another crate — so [`BedrockTransport`],
+//! [`ReqwestBedrockTransport`] and [`BedrockHttpResponse`] are `pub`. It is
+//! still an implementation seam rather than headline API: nothing is
+//! re-exported from `lib.rs`, and the adapter's own `transport` field stays
+//! `pub(crate)` so the seam never appears in a public signature.
 
 use std::time::SystemTime;
 
@@ -26,7 +31,7 @@ use crate::error::{LlmError, LlmResult};
 /// [`LlmError`] taxonomy (e.g. `ThrottlingException` → `RateLimitExceeded`) is
 /// the adapter's job, not the transport's.
 #[derive(Clone, Debug)]
-pub(crate) struct BedrockHttpResponse {
+pub struct BedrockHttpResponse {
     /// HTTP status code.
     pub status: reqwest::StatusCode,
     /// Raw response body.
@@ -42,14 +47,14 @@ impl BedrockHttpResponse {
 
 /// POST a JSON body to a Bedrock runtime URL.
 #[async_trait]
-pub(crate) trait BedrockTransport: Send + Sync {
+pub trait BedrockTransport: Send + Sync {
     /// Send `body` to the absolute `url`, applying the §1.2 auth this
     /// transport was built with.
     async fn post_json(&self, url: &str, body: Vec<u8>) -> LlmResult<BedrockHttpResponse>;
 }
 
 /// [`BedrockTransport`] over the crate's existing `reqwest` client.
-pub(crate) struct ReqwestBedrockTransport {
+pub struct ReqwestBedrockTransport {
     client: reqwest::Client,
     auth: BedrockAuth,
     region: String,
@@ -61,11 +66,7 @@ impl ReqwestBedrockTransport {
     /// `auth` is resolved once by the caller
     /// ([`super::credentials::resolve_auth`]); credential refresh policy is the
     /// adapter's decision, not the transport's.
-    pub(crate) fn new(
-        client: reqwest::Client,
-        auth: BedrockAuth,
-        region: impl Into<String>,
-    ) -> Self {
+    pub fn new(client: reqwest::Client, auth: BedrockAuth, region: impl Into<String>) -> Self {
         Self {
             client,
             auth,

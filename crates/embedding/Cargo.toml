@@ -32,10 +32,18 @@ onnx-dynamic = ["onnx", "ort/load-dynamic"]
 # Enable ort-cuda or ort-tensorrt when building for a machine with NVIDIA hardware.
 ort-cuda     = ["ort/cuda"]
 ort-tensorrt = ["ort/tensorrt"]
+# AWS Bedrock embedding engine (InvokeModel). Pulls in `cognee-llm`'s `bedrock`
+# feature for the shared AWS plumbing — the credential/region/endpoint chains,
+# the SigV4 signer and the transport seam all live in
+# `cognee_llm::adapters::bedrock::aws` (see that module's docs for why it is
+# homed there and not in `cognee-utils`). Non-default: the AWS stack is not free.
+bedrock      = ["dep:cognee-llm", "cognee-llm/bedrock"]
 
 [dependencies]
 async-trait = { workspace = true }
 cognee-utils = { path = "../utils", version = "0.2.0" }
+# Only for the Bedrock engine's shared AWS plumbing (feature `bedrock`).
+cognee-llm  = { path = "../llm", version = "0.2.0", optional = true }
 futures     = { workspace = true }
 tokio       = { workspace = true }
 serde       = { workspace = true }

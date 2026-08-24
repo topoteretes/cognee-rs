@@ -25,6 +25,11 @@ pub enum EmbeddingProvider {
     OpenAiCompatible,
     /// Ollama /api/embed endpoint (not OpenAI-compatible format).
     Ollama,
+    /// AWS Bedrock InvokeModel (`amazon.titan-embed-*`, `cohere.embed-*`).
+    /// In Python, EMBEDDING_PROVIDER=bedrock routes through LiteLLMEmbeddingEngine to
+    /// litellm's Bedrock embedding handler; in Rust we use a direct-HTTP engine over the
+    /// same wire shapes. Requires the `bedrock` crate feature.
+    Bedrock,
     /// Zero vectors; for testing. Activated by EMBEDDING_PROVIDER=mock or MOCK_EMBEDDING=true.
     Mock,
 }

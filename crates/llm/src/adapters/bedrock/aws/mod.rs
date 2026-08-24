@@ -33,4 +33,4 @@ pub mod endpoint;
 pub mod env;
 pub mod region;
 pub mod signer;
-pub(crate) mod transport;
+pub mod transport;
