@@ -1,9 +1,35 @@
 # AWS Bedrock provider — implementation plan
 
-Status: proposed · Scope: **OSS `cognee-rs`**, plus a small set of Python-side
-edits for two-way parity · Tracking: issue **#17** (the remaining tier —
-`docs/configuration.md:114` "Native Bedrock adapters are tracked separately in
-issue #17"; Tier 2 = Anthropic, Tier 3 = Azure, both shipped).
+Status: **landed in this repository; one upstream item outstanding** · Scope:
+**OSS `cognee-rs`**, plus a small set of Python-side edits for two-way parity ·
+Tracking: issue **#17** (the remaining tier; Tier 2 = Anthropic, Tier 3 = Azure,
+both shipped earlier).
+
+| Item | State |
+|---|---|
+| R1 — `aws/` module (env, region, endpoint, credentials, signer, transport) + the `bedrock` feature and pinned AWS deps | ✅ `b8755114` |
+| R2 — `AwsInputs` on `BackendBuildContext`, both lowering sites | ✅ `c81a049f` |
+| R3 — `BedrockAdapter` over Converse | ✅ `950d9827` |
+| R4 — `BedrockEmbeddingEngine` + provider plumbing | ✅ `ea4d47f0` |
+| R5 — `BedrockLlmFactory` + registry registration and drift guard | ✅ `287208d0` |
+| R6 — feature-wiring verification | ✅ folded into R1/R5 (§6.8) |
+| R7 / P2 — `/settings` `Bedrock` DTO variant, router arm, refreshed model list | ✅ `b76a216d` |
+| R8 — test suites (`crates/llm/tests/bedrock_*.rs`, embedding + `caps`/`route` unit tests) | ✅ landed inside `b8755114` / `950d9827` |
+| P3 — `docs/http-server/routers/settings.md` asymmetry retired | ✅ `8a89ed43` |
+| P4 — `e2e-cross-sdk/harness/test_http_settings.py` | ✅ `28afb533` |
+| §8 — docs landing (`configuration.md`, `not-implemented.md`, crate READMEs, `architecture.md`) | ✅ this pass |
+| **P1 — Python `Literal["bedrock"]` on `LLMConfigInputDTO.provider`** | ⬜ **open — upstream `topoteretes/cognee`, cannot land from this repo** |
+| P6 — raise Python's `transcribe_image` to match Rust (§6.5) | ⬜ optional, not required for parity |
+
+**Why this doc stays in the roadmap folder.** P1 is still outstanding upstream,
+and it is the tracker that `docs/http-server/routers/settings.md` §6.4 and the
+`xfail(strict=True)` case `test_settings_post_bedrock_accepted_by_python` in
+`e2e-cross-sdk/harness/test_http_settings.py` both point at. Several source files
+also cite this path — including a user-visible `LlmError` message in
+`crates/llm/src/adapters/bedrock/mod.rs` (§6.7) — so §1 (the wire spec) and §6
+(decisions and caveats) are load-bearing references, not historical notes. Delete
+the doc only once P1 has landed upstream **and** those references have been
+re-pointed.
 
 Parity baseline: Python `cognee` and the `litellm` it depends on, read directly
 rather than assumed. §1 is the wire spec; everything after implements it.
@@ -469,7 +495,7 @@ explicitly — verify it is not in the default set before relying on §1.2's
 
 ## 4. Work breakdown — Rust
 
-### R1 — `aws/` module: env, region, endpoint, credentials, signer, transport
+### R1 — ✅ landed (`b8755114`) — `aws/` module: env, region, endpoint, credentials, signer, transport
 Testable standalone against `httpmock` plus SigV4 golden vectors. Decide the
 `cognee-llm` vs `cognee-utils` home for the shared module here. **The `bedrock`
 cargo feature and its optional deps must land with this step**, not at R6 — the
@@ -481,7 +507,7 @@ reason R8 has a dedicated `credentials.rs`: the uppercase-env expansion loop
 (`base_aws_llm.py:222-247`) and "skip `AssumeRole` when already running as that
 role" (`base_aws_llm.py:1076+`).
 
-### R2 — `AwsInputs` on the context, populated at both lowering sites
+### R2 — ✅ landed (`c81a049f`) — `AwsInputs` on the context, populated at both lowering sites
 `crates/components/src/context.rs` (struct + `aws_inputs_from_env()`),
 `crates/lib/src/config.rs:850`, `crates/http-server/src/config.rs:700`.
 Additive in behaviour but **not** free to compile: `LlmInputs` /
@@ -490,7 +516,7 @@ places (§2.1) — expect `E0063` at each and fix them in this step. Adding
 `#[derive(Default)]` to both input structs is the cheaper alternative and worth
 taking.
 
-### R3 — `BedrockAdapter` (`impl Llm`)
+### R3 — ✅ landed (`950d9827`) — `BedrockAdapter` (`impl Llm`)
 
 **This is the riskiest step in the plan** — it is where silent non-parity is
 easiest to ship, and the first draft of this section was wrong on two counts
@@ -543,7 +569,7 @@ easiest to ship, and the first draft of this section was wrong on two counts
    `ModelNotReadyException`/`ServiceUnavailableException`.
 8. `supports_streaming() = false`, `supports_function_calling() = true`.
 
-### R4 — `BedrockEmbeddingEngine` (`impl EmbeddingEngine`)
+### R4 — ✅ landed (`ea4d47f0`) — `BedrockEmbeddingEngine` (`impl EmbeddingEngine`)
 InvokeModel per §1.5. Titan loops one text per request under bounded
 concurrency; Cohere batches. `dimension()` from `EmbeddingConfig.dimensions`.
 The OSS trait contract says embeddings are L2-normalised: Titan v2 normalises
@@ -555,7 +581,7 @@ Plumbing, per §2.2: `EmbeddingProvider::Bedrock`, the `create_engine` arm, a
 rejected before `create_engine` is ever reached), and an `aws` field on
 `EmbeddingConfig` carried across by `build_embedding_config`.
 
-### R5 — `BedrockLlmFactory` + registration
+### R5 — ✅ landed (`287208d0`) — `BedrockLlmFactory` + registration
 `crates/components/src/builtins/llm.rs` alongside `AnthropicLlmFactory` /
 `AzureLlmFactory`; registered in `with_builtins()` under
 `#[cfg(feature = "bedrock")]`. `build_transcriber()` returns `Ok(None)` (§6.5),
@@ -567,17 +593,17 @@ Anthropic factory does.
 Also add the bedrock assertion to `builtins_register_documented_providers`
 (`registry.rs:318-374`), the drift guard over the registered provider set.
 
-### R6 — ~~Feature wiring~~ — folded into R1 and R5 (§6.8)
+### R6 — ✅ ~~Feature wiring~~ — folded into R1 and R5 (§6.8)
 Retained as a checklist item only: confirm §2.3's table matches what R1 and R5
 actually added, and that `default = [..., "bedrock"]` is present on `cognee`,
 `cognee-http-server` and `cognee-cli`.
 
-### R7 — HTTP `/settings` (see §5 for the parity ordering)
+### R7 — ✅ landed (`b76a216d`) — HTTP `/settings` (see §5 for the parity ordering)
 `dto/settings.rs:62` gains `Bedrock`; `routers/settings.rs:~294` gains the
 match arm (the match is exhaustive, so this is a compile error until done);
 `routers/settings.rs:162` model list refreshed to Python's current three.
 
-### R8 — Tests
+### R8 — ✅ landed (inside `b8755114` / `950d9827` / `ea4d47f0`) — Tests
 * `model_id.rs` — §1.4.1 normalisation: ARN unwrap, each cross-region prefix,
   throughput and `[1m]` suffixes. **Must include the three `eu.`-prefixed ids
   cognee actually ships**, asserting they route to converse — that is the
@@ -609,27 +635,27 @@ match arm (the match is exhaustive, so this is a compile error until done);
 Two-way parity is part of this plan, not a follow-up. Three of these are
 divergences that exist **today**, independent of the adapter work.
 
-### P1 — Python: accept `bedrock` on settings save
+### P1 — ⬜ **open, upstream** — Python: accept `bedrock` on settings save
 `cognee/api/v1/settings/routers/get_settings_router.py:25-29` — add
 `Literal["bedrock"]` to `LLMConfigInputDTO.provider`. `save_llm_config.py`
 already takes `provider: str`, so this is the only gate. **Land this before
 R7**, or Rust starts accepting a payload Python rejects and the documented
 replication inverts.
 
-### P2 — Rust: refresh the bedrock model list (existing divergence)
+### P2 — ✅ landed (`b76a216d`) — Rust: refresh the bedrock model list (existing divergence)
 `routers/settings.rs:162` offers a single stale
 `anthropic.claude-3-5-sonnet-20240620-v1:0`. Python's `get_settings.py:165-178`
 now lists three: `eu.anthropic.claude-sonnet-4-5-20250929-v1:0`,
 `eu.anthropic.claude-haiku-4-5-20251001-v1:0`, `eu.amazon.nova-lite-v1:0`. The
 two GET responses have already drifted apart.
 
-### P3 — Rust: retire the replicated asymmetry from the spec
+### P3 — ✅ landed (`8a89ed43`) — Rust: retire the replicated asymmetry from the spec
 `docs/http-server/routers/settings.md` — validation rule §2 ("we replicate this
 asymmetry; the frontend treats `bedrock` as read-only in v1"), the DTO doc
 comment at :163, open question §6.4, and the planned
 `POST provider: "bedrock" → 400` case in test plan §5.7.
 
-### P4 — Write the settings parity test the spec promised
+### P4 — ✅ landed (`28afb533`) — Write the settings parity test the spec promised
 `e2e-cross-sdk/harness/test_http_settings.py` is referenced by
 `settings.md` §5.8 but **was never written**. Add it: GET byte-equality modulo
 the API-key mask, and `POST provider: "bedrock"` accepted on both SDKs. This is
@@ -639,7 +665,7 @@ what keeps P1/P2/P3 from re-diverging.
 security-scheme, and `components.schemas` **key sets** only — per-schema field
 diff is explicitly deferred there — so an enum-value change does not trip it.)*
 
-### P5 — Behavioural parity checklist for the adapter
+### P5 — ✅ satisfied by R3/R4 — Behavioural parity checklist for the adapter
 The acceptance criteria for R3/R4, each traceable to §1:
 
 | Behaviour | Source of truth |
@@ -660,7 +686,7 @@ The acceptance criteria for R3/R4, each traceable to §1:
 Read these against §1.2/§1.4 rather than `get_s3_config()` — per §1.0 the
 default Python path never touches the latter.
 
-### P6 — Optional: raise Python to meet Rust on vision
+### P6 — ⬜ optional, open — raise Python to meet Rust on vision
 See §6.5. If strict two-way parity is wanted, implement `transcribe_image` in
 Python's `BedrockAdapter` using Converse image blocks rather than dropping it
 from the Rust side.
@@ -691,10 +717,9 @@ accept image content blocks, so implementing it in R3 costs ~40 lines (a base64
 *exceeding* parity, with P6 as the optional path to closing the gap from the
 Python side instead.
 
-**6.6 `not-implemented.md` needs updating on landing.** Its provider-breadth
-entry (`docs/roadmap/not-implemented.md:52-55`) lists Bedrock as missing for
-both LLM and embeddings — remove both mentions when R3/R4 land, per this
-folder's conventions.
+**6.6 `not-implemented.md` needed updating on landing — ✅ done.** Its
+provider-breadth entry listed Bedrock as missing for both LLM and embeddings;
+both mentions were removed in the §8 docs pass, per this folder's conventions.
 
 **6.7 The Anthropic repair loop is a pattern, not shared code — and `/invoke`
 chat is out of scope.** `structured_output_impl` is a private method on
@@ -749,6 +774,14 @@ can go first. R7's exhaustive match does work as a compile-time forcing function
 — the DTO variant will not build without the router arm — so that pairing is
 correctly sequenced.
 
+> **As executed**, P1 could not go first: it lives in `topoteretes/cognee` and is
+> not landable from this repository. R7 shipped ahead of it, which inverts the
+> documented replication in exactly the direction §5 P1 warned about — Rust now
+> accepts a payload Python rejects. That inversion is documented in
+> `docs/http-server/routers/settings.md` §6.4 and guarded by the
+> `xfail(strict=True)` case in P4's test, which turns red the moment upstream
+> accepts the value.
+
 **Riskiest item: R3**, specifically steps 1 and 2 (normalisation + capability
 table). Both were wrong in the first draft, both fail *silently* into
 plausible-looking wrong behaviour, and both are exercised by the models cognee
@@ -758,17 +791,31 @@ landing, **plus** an auth stack this workspace has never carried.
 
 ---
 
-## 8. Docs to update
+## 8. Docs to update — ✅ landed
 
-* `docs/configuration.md:114` — replace "Native Bedrock adapters are tracked
-  separately in issue #17" with the real provider section: the env-var table,
-  the auth ladder of §1.2, the region/endpoint chains of §1.3, and the
-  converse/invoke note.
-* `docs/roadmap/not-implemented.md:52-55` — drop Bedrock from the LLM and
-  embedding provider-breadth entries.
-* `docs/http-server/routers/settings.md` — P3.
-* `crates/llm/README.md` / `crates/embedding/README.md` — adapter + engine rows.
-* This doc — delete on completion, per `docs/roadmap/README.md` conventions.
+* ✅ `docs/configuration.md` — the "Native Bedrock adapters are tracked
+  separately in issue #17" line is gone, replaced by a
+  **Bedrock (`LLM_PROVIDER=bedrock`)** section carrying the env-var table, the
+  §1.2 auth ladder, the §1.3 region/endpoint chains, the converse/invoke note and
+  the capability/feature-gating notes. Three neighbouring claims were corrected
+  at the same time: the "`LLM_API_KEY` is required for every provider" sentence
+  now carries the Bedrock carve-out (§1.1), the audio-transcription note lists
+  `bedrock` under graceful no-audio (§6.4), and the Embedding section documents
+  `EMBEDDING_PROVIDER=bedrock` (§1.5).
+* ✅ `docs/roadmap/not-implemented.md` — Bedrock dropped from the LLM and
+  embedding provider-breadth entries (§6.6).
+* ✅ `docs/http-server/routers/settings.md` — P3.
+* ✅ `crates/llm/README.md` / `crates/embedding/README.md` — `BedrockAdapter` and
+  `BedrockEmbeddingEngine` bullets (and the stale "Planned: Anthropic adapter"
+  line retired).
+* ✅ `docs/architecture.md` — crate-tree comments, the `cognee-embedding` /
+  `cognee-llm` impl lists, the rustdoc entry-point table, and a key-dependency
+  row for the pinned AWS crate line.
+* **This doc — kept, not deleted.** The `docs/roadmap/README.md` convention says
+  a completed plan leaves the folder; this one has not completed (P1 is open
+  upstream), and a dozen in-repo references cite its path — source comments, two
+  Cargo manifests, `settings.md`, the cross-SDK parity test, and one runtime
+  `LlmError` message. See the note under the status table at the top.
 
 ---
 

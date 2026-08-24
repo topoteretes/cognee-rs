@@ -13,6 +13,13 @@ Selected via `EmbeddingProvider` (or the `EMBEDDING_PROVIDER` env var):
 - **`OpenAICompatibleEmbeddingEngine`** — OpenAI/Azure/vLLM/llama.cpp/TEI via HTTP
   (retry + input sanitization)
 - **`OllamaEmbeddingEngine`** — Ollama `/api/embed`
+- **`BedrockEmbeddingEngine`** (`bedrock` feature) — AWS Bedrock **InvokeModel**
+  (`POST {endpoint}/model/{modelId}/invoke`, never Converse). Covers the Titan
+  families (`amazon.titan-embed-text-v1`, `amazon.titan-embed-text-v2:0`,
+  `amazon.titan-embed-image-v1`; one request per text) and Cohere
+  (`cohere.embed-*`; batched). Output is always L2-normalised — Titan v2
+  server-side, the rest client-side. Shares the AWS plumbing (region/endpoint
+  chains, credential ladder, SigV4) with `cognee-llm`'s Bedrock adapter
 - **`MockEmbeddingEngine`** — zero vectors for testing (`MOCK_EMBEDDING=true`)
 
 The default provider is **OpenAI `text-embedding-3-small`** (1536-d) on host
@@ -21,6 +28,7 @@ platforms and local **ONNX** on Android (when the `onnx` feature is enabled).
 ## Features
 
 - **ONNX Runtime:** Efficient local inference via `ort` crate (behind the `onnx` feature)
+- **AWS Bedrock:** InvokeModel embeddings for the Titan and Cohere families (behind the `bedrock` feature)
 - **HuggingFace Tokenizers:** Proper BPE/WordPiece tokenization matching Python fastembed
 - **Batch Processing:** Process multiple texts in single inference call
 - **L2 Normalization:** Unit vectors for cosine similarity

@@ -54,10 +54,14 @@ benchmark — see [performance/mock-benchmark.md](performance/mock-benchmark.md)
 
 Several providers are OpenAI-compatible HTTP endpoints, so they route through the
 same adapter — differing only in base URL and litellm-style model-prefix stripping.
-`LLM_API_KEY` is required for every provider (matching the Python SDK's
-`_API_KEY_REQUIRED_PROVIDERS`; for a local Ollama any non-empty value works). The
-OpenAI-only request quirks are gated on the `api.openai.com` host, so they never
-fire against another endpoint.
+`LLM_API_KEY` is required for every provider **except `bedrock`** (matching the
+Python SDK, whose `_API_KEY_REQUIRED_PROVIDERS` omits Bedrock and lists it under
+`_NO_API_KEY_PROVIDERS` instead; for a local Ollama any non-empty value works).
+On `bedrock` an unset or empty `LLM_API_KEY` is a supported configuration — it
+falls through to SigV4 signing rather than erroring (see
+[Bedrock](#bedrock-llm_providerbedrock) below). The OpenAI-only request quirks
+are gated on the `api.openai.com` host, so they never fire against another
+endpoint.
 
 | `LLM_PROVIDER` | `LLM_API_KEY` | `LLM_ENDPOINT` default | Model prefix stripped |
 |---|---|---|---|
@@ -70,7 +74,8 @@ fire against another endpoint.
 
 `LLM_ENDPOINT` always overrides the default when set. Audio transcription
 (Whisper) is wired only for `openai` and `custom`/`openai_compatible` (which may
-expose `/audio/transcriptions`); `ollama`/`mistral`/`gemini` get graceful no-audio.
+expose `/audio/transcriptions`); `ollama`/`mistral`/`gemini`/`bedrock` get
+graceful no-audio.
 
 `anthropic` uses a **native Messages-API adapter** (not the OpenAI-compatible
 factory): it authenticates with `x-api-key`, hoists the system prompt into the
@@ -96,6 +101,95 @@ selects the parameter shape, so for an o-series/`gpt-5` deployment set `LLM_MODE
 to the underlying model name (the adapter also treats a `.../deployments/o3` style
 deployment segment as reasoning), or pin it explicitly with `LLM_REASONING`.
 
+### Bedrock (`LLM_PROVIDER=bedrock`)
+
+`bedrock` is a **native adapter over Amazon Bedrock's Converse API**
+(`POST {endpoint}/model/{modelId}/converse`), not an OpenAI-compatible endpoint.
+Everything it needs beyond `LLM_MODEL` comes from the ambient `AWS_*`
+environment — deliberately, so AWS configuration never has to travel through
+`Settings` or the language bindings. The names mirror the ones litellm reads, and
+several of them are *not* the boto3-standard spellings:
+
+| Env var | Purpose |
+|---|---|
+| `AWS_ACCESS_KEY_ID` | Static access key |
+| `AWS_SECRET_ACCESS_KEY` | Static secret key |
+| `AWS_SESSION_TOKEN` | Session token accompanying temporary static credentials |
+| `AWS_REGION_NAME` | Region — the first env rung of the region chain below |
+| `AWS_REGION` | Region — one rung below `AWS_REGION_NAME` |
+| `AWS_DEFAULT_REGION` | Not part of the region chain; read only when resolving the STS signing region |
+| `AWS_PROFILE_NAME` | Shared-config profile. **Not** the boto3-standard `AWS_PROFILE`, which this path ignores |
+| `AWS_ROLE_NAME` | Role ARN to assume via STS |
+| `AWS_ROLE_ARN` | Ambient role ARN published by an IRSA / EKS pod identity |
+| `AWS_SESSION_NAME` | STS session name |
+| `AWS_WEB_IDENTITY_TOKEN` | OIDC web-identity token (inline) |
+| `AWS_WEB_IDENTITY_TOKEN_FILE` | Ambient web-identity token file published by an IRSA / EKS pod identity |
+| `AWS_STS_ENDPOINT` | Override the STS endpoint |
+| `AWS_EXTERNAL_ID` | `ExternalId` passed to `AssumeRole` |
+| `AWS_BEDROCK_RUNTIME_ENDPOINT` | Override the Bedrock runtime host |
+| `AWS_BEARER_TOKEN_BEDROCK` | Bedrock API key, used as a bearer token |
+
+**Auth ladder.** `LLM_API_KEY`, when set, is sent verbatim as
+`Authorization: Bearer <key>` and the request is **not** signed — no credential
+lookup runs at all, so a bearer-only deployment needs no AWS credentials
+present. Otherwise `AWS_BEARER_TOKEN_BEDROCK` takes the same short-circuit. Only
+when both are absent does the request fall through to SigV4 (signing service
+`bedrock`), whose credentials resolve in this order:
+
+1. web-identity token + role + session name → STS `AssumeRoleWithWebIdentity`;
+2. role ARN → STS `AssumeRole` — **skipped when the process is already running
+   as that role**, so an IRSA pod that already holds it does not assume itself;
+3. profile name → the shared-config profile;
+4. static access key + secret (plus session token when present);
+5. otherwise the default chain (env / shared config / SSO / ECS / IMDS).
+
+**Region and endpoint.** The region resolves as: an explicitly configured
+region → a region embedded in a model ARN → `AWS_REGION_NAME` → `AWS_REGION` →
+the profile / default chain → the hard default **`us-west-2`**. The ARN rung
+outranks the env vars, matching litellm. The endpoint resolves as: an explicit
+API base → `AWS_BEDROCK_RUNTIME_ENDPOINT` →
+`https://bedrock-runtime.{region}.amazonaws.com`.
+
+`LLM_ENDPOINT` is **not** that API base: like the Anthropic path above, the
+Bedrock factory deliberately passes no base URL, so a stray `LLM_ENDPOINT` (which
+aliases `OPENAI_URL`) cannot misroute Bedrock traffic to an OpenAI host. Point a
+Bedrock deployment at a custom runtime host with `AWS_BEDROCK_RUNTIME_ENDPOINT`
+instead.
+
+**Converse only.** Every model cognee ships routes to Converse — but only after
+the model id is normalised (an ARN wrapper is unwrapped, a cross-region
+inference prefix such as `eu.`/`us.`/`apac.` is stripped, as are provisioned-
+throughput and context-window suffixes). Normalisation feeds the routing and
+capability decisions only; the request URL always carries the model id exactly as
+configured. A model that routes to Bedrock's legacy `invoke` API for **chat** is
+unsupported by design: construction fails with a clear
+`LlmError::FeatureNotSupported` rather than posting a Converse body to an
+endpoint that cannot serve it. (Embeddings are a separate path and *do* go over
+InvokeModel — see [Embedding](#embedding).)
+
+**Capabilities.** No streaming. No audio transcription (Bedrock has no Whisper
+equivalent, so the transcriber is simply absent). Image description (vision)
+**is** implemented, over Converse image blocks — this deliberately *exceeds*
+Python parity, where `BedrockAdapter.transcribe_image` raises
+`NotImplementedError`. It is gated on a per-model capability table, though: a
+model the table does not list is treated conservatively as text-only, and asking
+it for image description returns `LlmError::FeatureNotSupported` rather than a
+request the model would reject. Structured output is capability-gated per model
+from the same table: models
+that advertise native structured output get Converse's `outputConfig.textFormat`
+carrying the JSON schema, and the rest get a synthetic `json_tool_call` tool
+whose input schema is the response schema (with `toolChoice` forced only for
+models that support tool choice).
+
+**Feature gating.** The adapter and the embedding engine live behind the
+`bedrock` Cargo feature. It is **non-default** on the two leaf crates that carry
+the code, `cognee-llm` and `cognee-embedding` — the AWS crate stack is not free —
+but it **is** in the `default` feature list of `cognee-components`, `cognee`,
+`cognee-http-server` and `cognee-cli`, so every shipped binary has Bedrock
+available. Building any of those with `--no-default-features` (or without
+`bedrock` in the feature list) drops the whole AWS stack, and
+`LLM_PROVIDER=bedrock` then reports an unsupported provider.
+
 ### Reasoning-model parameters (`LLM_REASONING`)
 
 OpenAI reasoning families (`o1*`, `o3*`, `o4*`, `gpt-5*`) require a different
@@ -110,8 +204,6 @@ shape). `LLM_REASONING` overrides that detection:
 - `never` — force the legacy `max_tokens`+`temperature` shape (e.g. a remote
   OpenAI-compatible gateway serving a reasoning-*named* model that only accepts
   the legacy parameters).
-
-Native Bedrock adapters are tracked separately in issue #17.
 
 > **Ollama embeddings:** set `EMBEDDING_ENDPOINT` explicitly when using
 > `EMBEDDING_PROVIDER=ollama`. The Ollama embedder needs the `/api/embed` route, and
@@ -137,7 +229,32 @@ Read by `EmbeddingConfig::from_env()` ([`crates/embedding/src/config.rs`](../cra
 | `EMBEDDING_ONNX_BATCH_SIZE` | `embedding_onnx_batch_size` | `32` (ONNX inference batch size; independent of `EMBEDDING_BATCH_SIZE`. Lower it under memory pressure on edge devices) |
 | `MOCK_EMBEDDING` | _(provider override)_ | `false` (also accepts `deterministic`) |
 
-Provider values: `onnx`, `fastembed`, `openai`, `openai_compatible`, `ollama`, `mock`.
+Provider values: `onnx`, `fastembed`, `openai`, `openai_compatible`, `ollama`,
+`bedrock`, `mock`.
+
+`EMBEDDING_PROVIDER=bedrock` uses Amazon Bedrock's **InvokeModel** API
+(`POST {endpoint}/model/{modelId}/invoke`) — Converse is the chat API and is
+never used here. Two model families are supported, selected from the normalised
+model id: **Titan** (`amazon.titan-embed-text-v1`,
+`amazon.titan-embed-text-v2:0`, `amazon.titan-embed-image-v1`), which takes one
+text per request, and **Cohere** (`cohere.embed-*`), which batches. Set
+`EMBEDDING_MODEL` to the Bedrock model id; `EMBEDDING_DIMENSIONS` drives the
+engine's reported `dimension()` and is sent as `dimensions` on Titan v2, so it
+must match what the model actually returns. AWS configuration comes from the
+same `AWS_*` environment variables as the LLM path
+(see [Bedrock](#bedrock-llm_providerbedrock)) — the engine and the chat adapter
+share one AWS implementation — and `EMBEDDING_API_KEY` (falling back to
+`LLM_API_KEY`) is the Bedrock API key, which short-circuits to a bearer header
+with no SigV4; leaving it unset is supported and runs the ambient credential
+ladder. Returned vectors are always L2-normalised: Titan v2 normalises
+server-side (the engine sends `normalize: true`), and the families that do not
+are normalised client-side.
+
+> **Bedrock embeddings and `EMBEDDING_ENDPOINT`:** `EMBEDDING_ENDPOINT` defaults
+> to the OpenAI base URL and nothing clears it when the provider changes, so the
+> Bedrock engine ignores an endpoint that still points at OpenAI rather than
+> POSTing Bedrock bodies there. Set it only to a real Bedrock runtime host (or
+> use `AWS_BEDROCK_RUNTIME_ENDPOINT`).
 
 ## Vector database
 

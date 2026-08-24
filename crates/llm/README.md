@@ -211,10 +211,21 @@ Tests will automatically skip if environment variables are not set.
 
 Implemented:
 - **`OpenAIAdapter`** — OpenAI-compatible APIs (also works with Ollama/vLLM/LocalAI)
+- **`AnthropicAdapter`** — native Anthropic Messages API (`x-api-key`, hoisted
+  `system` field, structured output via a forced `tool_use`)
+- **`BedrockAdapter`** (`bedrock` feature) — AWS Bedrock over the **Converse**
+  API. Authenticates with a bearer token (`LLM_API_KEY` or
+  `AWS_BEARER_TOKEN_BEDROCK`, no signing) or falls through to SigV4 with the
+  full AWS credential ladder. Structured output is capability-gated per model:
+  native `outputConfig.textFormat` where the model supports it, otherwise a
+  synthetic `json_tool_call` tool. No streaming; `/invoke`-routed chat models are
+  rejected at construction. Image description (vision) is implemented over
+  Converse image blocks for models whose capability-table entry advertises it,
+  and therefore **exceeds** Python parity, where
+  `BedrockAdapter.transcribe_image` raises `NotImplementedError`.
 
 On-device LiteRT inference (Android) ships in the closed companion crate
 `cognee-llm-litert`.
 
 Planned:
-- Anthropic adapter (Claude with tool use)
 - Streaming support: real-time token streaming for all adapters

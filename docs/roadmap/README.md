@@ -28,7 +28,7 @@ Each plan has an index doc plus one sub-document per remaining work item.
 
 | Doc | Role |
 |-----|------|
-| [bedrock-provider-plan.md](bedrock-provider-plan.md) | The remaining tier of issue #17 (Tier 2 Anthropic and Tier 3 Azure shipped). Wire spec read out of Python + litellm, the Rust work breakdown, and the Python-side edits needed for two-way parity. |
+| [bedrock-provider-plan.md](bedrock-provider-plan.md) | The last tier of issue #17. **All of the Rust work (R1–R8) and the in-repo parity work (P2, P3, P4) have landed**; the doc stays for the one item that has not — **§5 P1**, adding `Literal["bedrock"]` to Python's `LLMConfigInputDTO.provider` in `topoteretes/cognee`, which cannot land from this repository — plus the optional **§5 P6**. Its §1 (wire spec) and §6 (decisions/caveats) remain the reference that the Bedrock source comments, `docs/http-server/routers/settings.md` and the cross-SDK parity test link into, so it is not deleted until P1 lands and those references are re-pointed. |
 
 ## Conventions
 
