@@ -123,13 +123,20 @@ where
         .build()
         .map_err(|error| CliError::Runtime(format!("Failed to create async runtime: {error}")))?;
 
-    let deferred = DEFERRED.load(Ordering::Acquire) > 0;
     let outcome = runtime.block_on(async move {
         let outcome = future.await;
         // Release whether the command succeeded or not: a failed run has usually
         // opened the database too. Unless a caller deferred it — see
         // `defer_teardown`.
-        if !deferred {
+        //
+        // Read `DEFERRED` *here*, after the command has finished, not before it
+        // starts. A snapshot taken up front is stale the moment a `DeferGuard`
+        // outlives the load but not the command: the decision would then skip a
+        // release that is no longer deferred, which is the silent
+        // never-torn-down case this module exists to remove. Today's only caller
+        // (`run_sequence`) holds its guard across the whole dispatch, so the two
+        // readings agree — this is about not depending on that.
+        if DEFERRED.load(Ordering::Acquire) == 0 {
             release(&cm).await;
         }
         outcome
