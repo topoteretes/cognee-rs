@@ -14,8 +14,12 @@
 //! Every adapter here is built with `with_min_retry_elapsed(Duration::ZERO)`, so
 //! the time floor is satisfied immediately and the tests assert on *request
 //! counts* rather than waiting out a 240s budget. The 8s→128s backoff would
-//! otherwise make even a two-retry test take half a minute; `Retry-After: 0`
-//! collapses the sleep where a retry is expected.
+//! otherwise make even a two-retry test take half a minute, so the mocks send
+//! `Retry-After: 1`, which the adapters honour in place of the ladder — that
+//! keeps the suite quick *and* exercises the header path rather than bypassing
+//! it. (`Retry-After: 0` would not work: a zero hint is deliberately ignored,
+//! since "retry immediately" from a provider that just rate-limited us is how a
+//! wide burst becomes a tight loop.)
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -83,7 +87,7 @@ async fn a_rate_limit_is_retried_and_opens_an_overload_episode() {
         .mock_async(|when, then| {
             when.method(POST).path("/chat/completions");
             then.status(429)
-                .header("retry-after", "0")
+                .header("retry-after", "1")
                 .body("{\"error\":{\"message\":\"Rate limit reached\"}}");
         })
         .await;
@@ -111,7 +115,7 @@ async fn a_503_opens_an_episode_too() {
     server
         .mock_async(|when, then| {
             when.method(POST).path("/chat/completions");
-            then.status(503).header("retry-after", "0").body("busy");
+            then.status(503).header("retry-after", "1").body("busy");
         })
         .await;
 
@@ -212,7 +216,7 @@ async fn a_429_that_is_a_genuine_rate_limit_is_not_treated_as_quota() {
         .mock_async(|when, then| {
             when.method(POST).path("/chat/completions");
             then.status(429)
-                .header("retry-after", "0")
+                .header("retry-after", "1")
                 // Deliberately the Gemini free-tier wording, which Python
                 // excludes from its terminal patterns for exactly this reason.
                 .body("You exceeded your current quota, please retry shortly");
@@ -239,7 +243,7 @@ async fn anthropic_retries_a_rate_limit_and_records_evidence() {
         .mock_async(|when, then| {
             when.method(POST).path("/messages");
             then.status(429)
-                .header("retry-after", "0")
+                .header("retry-after", "1")
                 .body("slow down");
         })
         .await;
@@ -286,7 +290,7 @@ async fn evidence_is_ignored_when_auto_rate_limit_is_off() {
         .mock_async(|when, then| {
             when.method(POST).path("/chat/completions");
             then.status(429)
-                .header("retry-after", "0")
+                .header("retry-after", "1")
                 .body("slow down");
         })
         .await;
@@ -320,7 +324,7 @@ async fn an_exhausted_transport_budget_is_not_restarted_by_the_legacy_fallback()
     let failing = server
         .mock_async(|when, then| {
             when.method(POST).path("/chat/completions");
-            then.status(500).header("retry-after", "0").body("boom");
+            then.status(500).header("retry-after", "1").body("boom");
         })
         .await;
 

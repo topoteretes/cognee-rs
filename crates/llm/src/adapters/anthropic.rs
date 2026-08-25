@@ -322,7 +322,9 @@ impl AnthropicAdapter {
                 // concurrent requests that all 429 at once must not retry in
                 // lockstep and re-trip the limit. Same helper the OpenAI adapter uses.
                 let backoff = crate::retry::retry_backoff(attempt);
-                let delay = retry_after.take().map_or(backoff, |hint| hint.max(backoff));
+                // A usable hint replaces the backoff outright, including when it
+                // asks for less: the provider knows when its window resets.
+                let delay = retry_after.take().unwrap_or(backoff);
                 warn!(
                     attempt,
                     delay_ms = delay.as_millis() as u64,

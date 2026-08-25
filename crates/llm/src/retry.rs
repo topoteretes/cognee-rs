@@ -19,9 +19,11 @@ use reqwest::header::HeaderMap;
 const INITIAL_BACKOFF_MS: u64 = 8_000;
 /// Backoff ceiling, matching Python's `wait_exponential_jitter(..., 128)`.
 const MAX_BACKOFF_MS: u64 = 128_000;
-/// Upper bound honoured for a provider `Retry-After`, matching the OpenAI SDK's
-/// own cap (`openai/_base_client.py`). A provider asking us to sleep for an hour
-/// should not wedge a pipeline.
+/// Upper bound on a `Retry-After` we will act on. A hint above this is ignored
+/// rather than clamped, matching the OpenAI SDK's `0 < retry_after <= 60` guard
+/// (`openai/_base_client.py:764`): a provider asking us to sleep for an hour is
+/// not giving usable guidance, and clamping it to a minute would obey neither
+/// the provider nor our own ladder.
 const MAX_RETRY_AFTER: Duration = Duration::from_secs(60);
 
 /// Capped exponential base (8s, 16s, 32s, … capped at 128s) for a 1-indexed
@@ -133,12 +135,21 @@ pub(crate) fn overload_reason(status: u16) -> Option<&'static str> {
     }
 }
 
-/// Parse a provider `Retry-After` hint, capped at [`MAX_RETRY_AFTER`].
+/// Parse a provider `Retry-After` hint into the delay to actually use.
 ///
-/// Checks `retry-after-ms` before `retry-after`, matching the OpenAI SDK's
-/// precedence. Only the integer-seconds form of `Retry-After` is understood; the
-/// HTTP-date form returns `None` and the caller falls back to its backoff, which
-/// is the safe direction to be wrong in.
+/// When present and usable the hint **replaces** the computed backoff outright,
+/// including when it asks for less — the provider knows when its window resets
+/// and we do not. That is the OpenAI SDK's rule (`_base_client.py:764`), and by
+/// extension Python cognee's effective behaviour, since litellm inherits it.
+///
+/// `None` means "no usable guidance, use the backoff". That covers an absent or
+/// unparseable header, the HTTP-date form (deliberately unsupported), a hint
+/// above [`MAX_RETRY_AFTER`], and a zero/negative hint. Zero is excluded on
+/// purpose: "retry immediately" from a provider that just rate-limited us is
+/// how a 128-wide burst becomes a tight loop, and the exponential ladder with
+/// its jitter is the better answer there.
+///
+/// Checks `retry-after-ms` before `retry-after`, matching the same precedence.
 pub(crate) fn retry_after_hint(headers: &HeaderMap) -> Option<Duration> {
     let parse = |name: &str, to_duration: fn(u64) -> Duration| -> Option<Duration> {
         headers
@@ -153,7 +164,7 @@ pub(crate) fn retry_after_hint(headers: &HeaderMap) -> Option<Duration> {
 
     parse("retry-after-ms", Duration::from_millis)
         .or_else(|| parse("retry-after", Duration::from_secs))
-        .map(|hint| hint.min(MAX_RETRY_AFTER))
+        .filter(|hint| !hint.is_zero() && *hint <= MAX_RETRY_AFTER)
 }
 
 #[cfg(test)]
@@ -265,10 +276,34 @@ mod tests {
     }
 
     #[test]
-    fn retry_after_is_capped() {
+    fn an_out_of_range_retry_after_falls_back_to_the_backoff() {
+        // Not clamped to 60s — ignored, so the caller uses its own ladder.
+        assert_eq!(retry_after_hint(&headers_with("retry-after", "3600")), None);
         assert_eq!(
-            retry_after_hint(&headers_with("retry-after", "3600")),
-            Some(MAX_RETRY_AFTER)
+            retry_after_hint(&headers_with("retry-after", "60")),
+            Some(Duration::from_secs(60)),
+            "exactly at the bound is still usable"
+        );
+    }
+
+    #[test]
+    fn a_zero_retry_after_is_ignored_rather_than_retrying_instantly() {
+        // "Retry immediately" from a provider that just rate-limited us is how a
+        // wide burst becomes a tight loop; fall back to the jittered ladder.
+        assert_eq!(retry_after_hint(&headers_with("retry-after", "0")), None);
+        assert_eq!(retry_after_hint(&headers_with("retry-after-ms", "0")), None);
+    }
+
+    #[test]
+    fn a_short_retry_after_wins_over_a_longer_backoff() {
+        // The regression Copilot caught: the hint must replace the backoff, not
+        // lose a max() against it.
+        let hint =
+            retry_after_hint(&headers_with("retry-after", "1")).expect("1s is a usable hint");
+        assert!(
+            hint < retry_backoff(1),
+            "a 1s hint must be shorter than the 8s first backoff, else this \
+             test proves nothing"
         );
     }
 
