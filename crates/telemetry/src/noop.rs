@@ -9,6 +9,13 @@
 //! the `telemetry` feature). Identity helpers in [`crate::ids`]
 //! return empty strings.
 
+/// No-op twin of the real flush, so the non-`telemetry` build compiles
+/// the same call sites. Nothing was ever dispatched, so the queue is
+/// always drained.
+pub(crate) async fn flush_impl(_timeout: std::time::Duration) -> bool {
+    true
+}
+
 pub(crate) fn send_telemetry_impl() {
     tracing::debug!(
         target: "cognee.telemetry",

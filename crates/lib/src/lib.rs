@@ -217,5 +217,10 @@ pub use cognee_models;
 pub use cognee_ontology;
 pub use cognee_session;
 pub use cognee_storage;
+/// Re-exported so teardown paths outside this crate (the CLI, the bindings'
+/// handle) can call [`cognee_telemetry::flush`] without taking their own
+/// dependency on the telemetry crate. `send_telemetry` is fire-and-forget, so an
+/// explicit teardown has to flush or the last event is dropped on the floor.
+pub use cognee_telemetry;
 pub use cognee_vector;
 pub use uuid;

@@ -275,13 +275,25 @@ jobs:
             --lib --success-output immediate --color never \
             2>&1 | tee pggraph-lib.log
 
+      # Pool-teardown regression tests (topoteretes/cognee-rs#132). This lane
+      # invokes individual `--test` targets, so a new file is otherwise compiled
+      # by nobody and run nowhere — which for a leak test means the leak comes
+      # back silently.
+      - name: Run PgGraphAdapter pool-close tests
+        run: |
+          set -o pipefail
+          cargo test -p cognee-graph --features postgres,testing \
+            --test pg_graph_close -- --nocapture 2>&1 | tee pggraph-close.log
+
       - name: Assert the suite really executed
         run: |
           bash scripts/ci/assert_pg_suite_ran.sh --label PgGraph \
             --log pggraph-integration.log --min-tests 30 \
             --log pggraph-lib.log         --min-tests 1 \
+            --log pggraph-close.log --min-tests 3 \
             --require-test pggraph_coexists_with_relational_migrator_in_shared_db \
-            --require-test pggraph_purges_legacy_row_from_default_table_on_upgrade
+            --require-test pggraph_purges_legacy_row_from_default_table_on_upgrade \
+            --require-test close_releases_the_pool_while_the_adapter_is_still_held
 
   # ── pgvector adapter tests (mirror of ci.yml's `pgvector-postgres`) ──
   # Keyless for the same reason as the graph lane above: a pgvector service
@@ -381,17 +393,27 @@ jobs:
       # `--min-tests 1` — enough to catch compiles-to-zero — because every case
       # that matters in them is named below, and 32 of the `--lib` target's 34
       # tests are unrelated unit tests. See the ci.yml twin for the full reasoning.
+      # Pool-teardown regression tests (topoteretes/cognee-rs#132) — see the
+      # PgGraph lane for why a named `--test` invocation is required.
+      - name: Run PgVectorAdapter pool-close tests
+        run: |
+          set -o pipefail
+          cargo test -p cognee-vector --features pgvector,testing \
+            --test pgvector_close -- --nocapture 2>&1 | tee pgvector-close.log
+
       - name: Assert the suite really executed
         run: |
           bash scripts/ci/assert_pg_suite_ran.sh --label PgVector \
             --log pgvector-integration.log --min-tests 20 \
             --log pgvector-lib.log         --min-tests 1 \
             --log pgvector-spans.log       --min-tests 1 \
+            --log pgvector-close.log --min-tests 2 \
             --require-test pgvector_coexists_with_relational_migrator_in_shared_db \
             --require-test pgvector_purges_legacy_row_from_default_table_on_upgrade \
             --require-test upsert_emits_pgvector_span \
             --require-test search_emits_pgvector_span \
-            --require-test delete_emits_pgvector_span
+            --require-test delete_emits_pgvector_span \
+            --require-test close_releases_the_pool_while_the_adapter_is_still_held
 
   # ── Single-database Postgres stack (mirror of ci.yml's `pg-single-db-postgres`) ──
   # Two of the three suites in the keyed twin; `pg_full_stack_e2e` is deliberately

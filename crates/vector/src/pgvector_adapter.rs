@@ -108,6 +108,14 @@ async fn cleanup_legacy_seaql_migrations(db: &DatabaseConnection) -> VectorDBRes
 pub struct PgVectorAdapter {
     db: DatabaseConnection,
     dimension: usize,
+    /// Whether this adapter opened `db` itself and may therefore close it.
+    ///
+    /// Load-bearing, not defensive: [`Self::from_connection`] wraps a connection
+    /// the *caller* owns, and in the single-shared-Postgres layout that caller is
+    /// the relational store. Closing it from a vector teardown would turn a leak
+    /// fix into an outage. Neither in-tree factory takes that path today, but
+    /// both constructors are public API.
+    owns_pool: bool,
 }
 
 impl PgVectorAdapter {
@@ -131,7 +139,11 @@ impl PgVectorAdapter {
             .map_err(|e| VectorDBError::StorageError(format!("PGVector migration failed: {e}")))?;
 
         debug!("PgVectorAdapter initialised (dimension={dimension})");
-        Ok(Self { db, dimension })
+        Ok(Self {
+            db,
+            dimension,
+            owns_pool: true,
+        })
     }
 
     /// Wrap an existing SeaORM `DatabaseConnection` (must be Postgres).
@@ -145,7 +157,38 @@ impl PgVectorAdapter {
             .await
             .map_err(|e| VectorDBError::StorageError(format!("PGVector migration failed: {e}")))?;
 
-        Ok(Self { db, dimension })
+        Ok(Self {
+            db,
+            dimension,
+            owns_pool: false,
+        })
+    }
+
+    /// Close this adapter's **own** Postgres pool, so its server-side backends go
+    /// away now rather than whenever the last `Arc` happens to be dropped.
+    ///
+    /// The vector twin of `PgGraphAdapter::close`; that method carries the full
+    /// measurement table. The short version: a drop of an *idle* pool does drain
+    /// (in ~4 ms), so the leak is not "drop never works" — it is that (a) a
+    /// retained `Arc` never gets dropped at all, which is exactly the HTTP
+    /// server's `AppState` shape and leaves 10 backends open for the life of the
+    /// process, and (b) with one query in flight a drop pins the entire pool until
+    /// that query finishes, where `close_by_ref` reclaims the idle connections
+    /// immediately. This adapter's pool is separate from both the relational pool
+    /// and the graph adapter's — a warm `ComponentManager` on Postgres holds
+    /// three.
+    ///
+    /// A **no-op when the connection came from [`Self::from_connection`]**, and
+    /// idempotent.
+    pub async fn close(&self) -> VectorDBResult<()> {
+        if !self.owns_pool {
+            debug!("PgVectorAdapter::close is a no-op for a caller-owned connection");
+            return Ok(());
+        }
+        self.db
+            .close_by_ref()
+            .await
+            .map_err(|e| VectorDBError::StorageError(format!("PGVector pool close failed: {e}")))
     }
 
     /// Returns the default vector dimension this adapter was configured with.
@@ -153,6 +196,16 @@ impl PgVectorAdapter {
         self.dimension
     }
 
+    /// The sea-orm connection (and therefore the pool) this adapter runs on.
+    ///
+    /// Exposed for diagnostics and for the teardown regression tests, which have
+    /// to observe the pool's own `is_closed()` flag and check a connection out of
+    /// *this* pool to exercise the in-flight case. Not an escape hatch for
+    /// issuing graph queries — use the typed adapter methods for that.
+    #[doc(hidden)]
+    pub fn connection(&self) -> &DatabaseConnection {
+        &self.db
+    }
     // -- helpers ----------------------------------------------------------
 
     /// Build a SeaORM [`Statement`] from a `sea_query` query.
@@ -337,6 +390,12 @@ impl PgVectorAdapter {
 
 #[async_trait]
 impl VectorDB for PgVectorAdapter {
+    /// Delegates to the inherent [`PgVectorAdapter::close`], so a holder of an
+    /// `Arc<dyn VectorDB>` can release the pool without downcasting.
+    async fn close(&self) -> VectorDBResult<()> {
+        PgVectorAdapter::close(self).await
+    }
+
     async fn create_collection(
         &self,
         data_type: &str,

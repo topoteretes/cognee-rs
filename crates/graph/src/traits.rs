@@ -108,6 +108,37 @@ pub trait GraphDBTrait: Send + Sync {
     ///
     async fn initialize(&self) -> GraphDBResult<()>;
 
+    /// Release the OS resources this store owns, instead of waiting for `Drop`.
+    ///
+    /// Mirrors `cognee_database::close` for the relational pool: a `Drop` is
+    /// not a close. An embedded file-backed graph (ladybug) holds a write lock
+    /// on its main database file plus an un-checkpointed `.wal` (ladybug's own
+    /// suffix — not SQLite's `-wal`, which the relational pool leaves), and a Postgres
+    /// adapter holds its **own** sqlx pool whose destructor only flags the pool
+    /// closed and lets each connection tear down on an arbitrary thread. Both
+    /// outlive the last `Arc` by an unbounded amount of time, which is
+    /// observable as orphaned sidecar files and as server-side backends that
+    /// stay open until the process exits (topoteretes/cognee-rs#132).
+    ///
+    /// Contract:
+    /// - **Idempotent.** Calling it twice is a no-op the second time.
+    /// - **Safe to call while other `Arc` clones are alive.** The closed state
+    ///   lives *inside* the shared inner handle (as sqlx puts its closed flag
+    ///   inside `PoolInner`), so surviving clones fail their next operation with
+    ///   a "closed" error rather than silently reconnecting or reopening.
+    /// - **Post-close operations fail — for backends that actually close
+    ///   something.** This is a deliberate, user-visible extension of the
+    ///   relational contract, not a bug. It does *not* bind an implementor whose
+    ///   `close` is the no-op default below: with nothing to release there is
+    ///   nothing to invalidate, so such a backend keeps serving, and the unit
+    ///   test for the default asserts exactly that.
+    /// - The **default body is a no-op**, meaning "this backend owns nothing
+    ///   closable beyond memory". An adapter that does own OS resources must
+    ///   override it, or it will leak invisibly.
+    async fn close(&self) -> GraphDBResult<()> {
+        Ok(())
+    }
+
     /// Check if the database is empty (no nodes).
     ///
     async fn is_empty(&self) -> GraphDBResult<bool>;
@@ -867,6 +898,21 @@ mod tests {
                 .get_nodeset_subgraph(node_type, node_names, node_name_filter_operator)
                 .await
         }
+    }
+
+    /// The defaulted `close()` must be a no-op *and* idempotent for a backend
+    /// that owns nothing closable — that is what lets all in-tree impls (and
+    /// out-of-tree adapters) keep compiling untouched after the hook is added.
+    #[tokio::test]
+    async fn default_close_is_a_noop_and_idempotent() {
+        let db = DefaultImplDb::default();
+        assert!(db.close().await.is_ok());
+        assert!(db.close().await.is_ok());
+        // A no-op close must not disturb the store.
+        db.add_node_raw(serde_json::json!({"id": "c1", "name": "C1", "type": "T"}))
+            .await
+            .unwrap();
+        assert!(db.has_node("c1").await.unwrap());
     }
 
     #[tokio::test]

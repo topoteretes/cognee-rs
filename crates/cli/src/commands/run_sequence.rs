@@ -170,6 +170,11 @@ fn run_single_file(file_path: &str, cm: &Arc<ComponentManager>) -> Result<(), Cl
 }
 
 pub fn run(args: RunSequenceArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
+    // One warm manager for the whole file: a per-step teardown would make every
+    // step pay a re-warm, and that cost would land inside the timing the sequence
+    // file is describing. `main` releases once after dispatch returns.
+    let _deferred = crate::teardown::defer_teardown();
+
     let file_count = args.sequence_files.len();
 
     for (file_index, file_path) in args.sequence_files.iter().enumerate() {

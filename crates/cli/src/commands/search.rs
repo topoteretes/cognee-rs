@@ -51,12 +51,7 @@ pub fn run(args: SearchArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
         (None, Some(path))
     };
 
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .map_err(|error| CliError::Runtime(format!("Failed to create async runtime: {error}")))?;
-
-    runtime.block_on(async {
+    crate::teardown::run_command(Arc::clone(&cm), async {
         let vector_db = cm
             .vector_db()
             .await

@@ -28,6 +28,11 @@ pub struct MockGraphDB {
     call_log: Arc<Mutex<Vec<String>>>,
     /// Optional injected error returned from `get_node_truth_state` calls.
     truth_state_error: Arc<Mutex<Option<String>>>,
+    /// When set, [`GraphDBTrait::close`] never returns. Lets a test stand in for
+    /// a slot whose teardown outlives the caller's patience — a large embedded
+    /// checkpoint, or a pool waiting on a connection that will not come back —
+    /// which is what makes a bounded teardown's *ordering* observable.
+    hang_on_close: bool,
 }
 
 impl MockGraphDB {
@@ -38,6 +43,20 @@ impl MockGraphDB {
             edges: Arc::new(Mutex::new(Vec::new())),
             call_log: Arc::new(Mutex::new(Vec::new())),
             truth_state_error: Arc::new(Mutex::new(None)),
+            hang_on_close: false,
+        }
+    }
+
+    /// A mock whose `close()` never completes.
+    ///
+    /// For tests that assert what a *bounded* teardown gets through before its
+    /// budget runs out: with a store that hangs, the timeout is guaranteed to
+    /// fire, so the assertion is about ordering rather than about how slow the
+    /// machine is.
+    pub fn hanging_on_close() -> Self {
+        Self {
+            hang_on_close: true,
+            ..Self::new()
         }
     }
 
@@ -85,6 +104,19 @@ impl Default for MockGraphDB {
 #[async_trait]
 impl GraphDBTrait for MockGraphDB {
     async fn initialize(&self) -> GraphDBResult<()> {
+        Ok(())
+    }
+
+    /// A no-op close, unless the mock was built by
+    /// [`MockGraphDB::hanging_on_close`], in which case it never returns.
+    async fn close(&self) -> GraphDBResult<()> {
+        self.call_log
+            .lock()
+            .unwrap() // lock poison is unrecoverable
+            .push("close".to_string());
+        if self.hang_on_close {
+            std::future::pending::<()>().await;
+        }
         Ok(())
     }
 

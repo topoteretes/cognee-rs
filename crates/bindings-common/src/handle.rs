@@ -26,6 +26,11 @@ use cognee::models::User;
 use crate::SdkError;
 use crate::services::CogneeServices;
 
+/// How long a teardown waits for already-dispatched telemetry POSTs to leave the
+/// process. Small on purpose: a binding's `close()` must never block on an
+/// analytics collector.
+const TELEMETRY_FLUSH_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
+
 /// Optional bootstrap seam for resolving (and persisting) the default user.
 ///
 /// OSS has no `users`-table writer, so the default binding behaviour is
@@ -202,10 +207,17 @@ impl HandleState {
     /// it) for a handle that never warmed. A contended lock reports `true`: the
     /// safe direction is to attempt the release rather than skip a real one.
     pub fn has_open_resources(&self) -> bool {
-        match self.services.try_lock() {
+        let bundle_cached = match self.services.try_lock() {
             Ok(guard) => guard.is_some(),
             Err(_) => true,
-        }
+        };
+        // The bundle alone is not the answer. `CogneeServices::build` warms the
+        // engines one at a time and can fail part-way — a bad `llm_api_key` fails
+        // *after* the SQLite pool and the embedded graph are cached — leaving the
+        // bundle `None` while real resources are open. Asking only about the
+        // bundle reported "nothing to release" for exactly that handle, and the
+        // finalizer skipped the teardown.
+        bundle_cached || self.cm.has_cached_components()
     }
 
     /// Release the resources this handle opened, leaving it usable.
@@ -220,21 +232,32 @@ impl HandleState {
     /// - `release` is for the **implicit** paths — a GC finalizer (`Drop for
     ///   PyCognee`, neon's `Finalize`) reclaiming a handle the program dropped on
     ///   the floor. The user never said "close", so this only gives the resources
-    ///   back: the handle stays warm-able, and anything still holding a clone of
-    ///   the state (a sub-handle like `cognee.datasets`, an in-flight op) keeps
-    ///   working — it just re-warms against a fresh connection.
+    ///   back, and only the ones nobody else is using: the handle stays warm-able,
+    ///   a sub-handle like `cognee.datasets` that outlived its parent keeps
+    ///   working (it re-warms against a fresh connection), and an operation still
+    ///   in flight keeps the components it holds — those are released when it
+    ///   finishes. See [`ComponentManager::release`](cognee::ComponentManager::release)
+    ///   for how "nobody else is using it" is decided.
     /// - [`close`](Self::close) is for the **explicit** paths (`Cognee.close()`,
-    ///   `cg_sdk_close`). It additionally marks the handle closed, so later ops
-    ///   fail with a clear error instead of silently reopening the database.
+    ///   `cg_sdk_close`). It marks the handle closed, so later ops fail with a
+    ///   clear error instead of silently reopening the database, and it closes the
+    ///   components **unconditionally** — including ones an in-flight operation is
+    ///   still holding, which will then fail on its next query. That is the point:
+    ///   the caller said they were done, and a resource that outlives an explicit
+    ///   close is the bug this exists to prevent.
     ///
     /// Both are idempotent. Neither waits for concurrent operations to *finish*: an
     /// op that is mid-flight holds its own `Arc<CogneeServices>` and will see a
-    /// closed pool on its next query, so a binding should only tear down when its
-    /// own contract says the handle is done. What the teardown does wait for — and
-    /// has to, or the SQLite sidecars outlive it — is the pool's connections coming
-    /// back and closing. That is normally microseconds; a connection genuinely held
-    /// by an in-flight op bounds it at `cognee_database`'s drain timeout, after
-    /// which the teardown gives up on that connection and logs rather than hanging.
+    /// closed pool on its next query. So a binding should only call `close` when its
+    /// own contract says the handle is done, and use `release` where it cannot know
+    /// — which is exactly the split between an explicit `close()` call and a
+    /// garbage collector.
+    ///
+    /// What the teardown *does* wait for — and has to, or the SQLite sidecars
+    /// outlive it — is the pool's connections coming back and closing. That is
+    /// normally microseconds; a connection genuinely held by an in-flight op bounds
+    /// it at `cognee_database`'s drain timeout, after which the teardown gives up on
+    /// that connection and logs rather than hanging.
     pub async fn release(&self) {
         self.teardown(false).await;
     }
@@ -262,10 +285,51 @@ impl HandleState {
         // in between and have it closed underneath it. Lock order (services →
         // owner id → the manager's caches) is the same one `services()` takes, so
         // this cannot deadlock.
+        //
+        // **This ordering is load-bearing and must not be reversed.** The bundle
+        // holds an `Arc` clone of *every* engine, not just the connection, so
+        // dropping it first is what leaves the manager's own cache as the last
+        // strong reference — which is the reference `cm.close()` releases, and
+        // therefore the only reason the engines' destructors run at all (measured:
+        // exactly one live relational connection at this point, and the embedded
+        // graph's `.wal` released by the `cm.close()` below rather than at process
+        // exit). Calling `cm.close()` while the bundle is still cached would close
+        // the stores underneath a live bundle and leak the rest.
         let mut guard = self.services.lock().await;
         drop(guard.take());
         *self.owner_id.lock().await = None;
-        self.cm.close().await;
+        // Which teardown tier the manager runs is the whole difference between
+        // `release` and `close`: a store's `close()` mutates state behind the
+        // shared `Arc` and would break an operation still holding a clone, so the
+        // implicit tier closes only components nobody else is using.
+        if mark_closed {
+            self.cm.close().await;
+        } else {
+            self.cm.release().await;
+        }
+
+        // Release the services lock before the flush. Holding it across
+        // `cm.close()` is deliberate — it stops a concurrent `services()` from
+        // caching a freshly built pool that is about to be closed underneath it —
+        // but the flush touches nothing the guard protects, and keeping it would
+        // block any other thread's `services()` for up to the flush timeout. That
+        // is a real stall for a binding: Python `Cognee.close()` on one thread
+        // while another calls `cognee.datasets.list()` would make the second wait
+        // on an analytics POST.
+        drop(guard);
+
+        // Finally, let the analytics POSTs already in flight finish. `send_telemetry`
+        // is fire-and-forget, so a binding whose embedder exits (or drops its
+        // runtime) right after closing otherwise discards its last event —
+        // measured 0 of 1 delivered without a flush, 1 of 1 with one. Hard-bounded
+        // and ignored on timeout: a slow collector must never make a `close()` hang,
+        // and telemetry must never make one fail.
+        if !cognee::cognee_telemetry::flush(TELEMETRY_FLUSH_TIMEOUT).await {
+            tracing::debug!(
+                "telemetry still in flight after {TELEMETRY_FLUSH_TIMEOUT:?}; \
+                 dropping the remainder rather than delaying teardown"
+            );
+        }
     }
 
     /// Blocking [`close`](Self::close), for a synchronous binding teardown hook

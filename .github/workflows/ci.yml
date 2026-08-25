@@ -773,17 +773,27 @@ jobs:
       # same conclusion ("the lib target holds 20-odd unrelated unit tests, so a
       # count floor would not notice these two disappearing") and the
       # `pggraph-postgres` lane below still passes `--min-tests 1` for it.
+      # Pool-teardown regression tests (topoteretes/cognee-rs#132) — see the
+      # PgGraph lane for why a named `--test` invocation is required.
+      - name: Run PgVectorAdapter pool-close tests
+        run: |
+          set -o pipefail
+          cargo test -p cognee-vector --features pgvector,testing \
+            --test pgvector_close -- --nocapture 2>&1 | tee pgvector-close.log
+
       - name: Assert the suite really executed
         run: |
           bash scripts/ci/assert_pg_suite_ran.sh --label PgVector \
             --log pgvector-integration.log --min-tests 20 \
             --log pgvector-lib.log         --min-tests 1 \
             --log pgvector-spans.log       --min-tests 1 \
+            --log pgvector-close.log --min-tests 2 \
             --require-test pgvector_coexists_with_relational_migrator_in_shared_db \
             --require-test pgvector_purges_legacy_row_from_default_table_on_upgrade \
             --require-test upsert_emits_pgvector_span \
             --require-test search_emits_pgvector_span \
-            --require-test delete_emits_pgvector_span
+            --require-test delete_emits_pgvector_span \
+            --require-test close_releases_the_pool_while_the_adapter_is_still_held
 
   # ── Stage 2.5: single-database Postgres stack (depends on lint, parallel with `test`) ──
   # The `TEST_POSTGRES_URL` suites, which no CI job ever supplied that variable
@@ -1060,13 +1070,25 @@ jobs:
       # this lane reporting green while every case inside it skips. The logic
       # lives in a script rather than inline so this lane and its community.yml
       # mirror cannot drift, and so it can be tested against captured logs.
+      # Pool-teardown regression tests (topoteretes/cognee-rs#132). This lane
+      # invokes individual `--test` targets, so a new file is otherwise compiled
+      # by nobody and run nowhere — which for a leak test means the leak comes
+      # back silently.
+      - name: Run PgGraphAdapter pool-close tests
+        run: |
+          set -o pipefail
+          cargo test -p cognee-graph --features postgres,testing \
+            --test pg_graph_close -- --nocapture 2>&1 | tee pggraph-close.log
+
       - name: Assert the suite really executed
         run: |
           bash scripts/ci/assert_pg_suite_ran.sh --label PgGraph \
             --log pggraph-integration.log --min-tests 30 \
             --log pggraph-lib.log         --min-tests 1 \
+            --log pggraph-close.log --min-tests 3 \
             --require-test pggraph_coexists_with_relational_migrator_in_shared_db \
-            --require-test pggraph_purges_legacy_row_from_default_table_on_upgrade
+            --require-test pggraph_purges_legacy_row_from_default_table_on_upgrade \
+            --require-test close_releases_the_pool_while_the_adapter_is_still_held
 
   # ── Stage 3: Language binding checks (depend on lint, parallel with `test`) ──
   # Gated on `lint` (not `test`) so the binding builds run concurrently with the

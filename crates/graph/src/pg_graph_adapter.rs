@@ -173,6 +173,15 @@ async fn cleanup_legacy_seaql_migrations(db: &DatabaseConnection) -> GraphDBResu
 /// promoted to dedicated columns for indexing; everything else goes into `properties`.
 pub struct PgGraphAdapter {
     db: DatabaseConnection,
+    /// Whether this adapter opened `db` itself and may therefore close it.
+    ///
+    /// Load-bearing, not defensive: [`Self::from_connection`] wraps a connection
+    /// the *caller* owns, and in the single-shared-Postgres layout that caller is
+    /// the relational store. Closing it from a graph teardown would turn a leak
+    /// fix into an outage — every relational query on the process would start
+    /// failing with a closed pool. Neither in-tree factory takes that path today,
+    /// but both constructors are public API.
+    owns_pool: bool,
 }
 
 impl PgGraphAdapter {
@@ -191,7 +200,10 @@ impl PgGraphAdapter {
         })?;
 
         debug!("PgGraphAdapter initialised");
-        Ok(Self { db })
+        Ok(Self {
+            db,
+            owns_pool: true,
+        })
     }
 
     /// Wrap an existing SeaORM `DatabaseConnection` (must be Postgres).
@@ -203,9 +215,76 @@ impl PgGraphAdapter {
             GraphDBError::InitializationError(format!("PgGraph migration failed: {e}"))
         })?;
 
-        Ok(Self { db })
+        Ok(Self {
+            db,
+            owns_pool: false,
+        })
     }
 
+    /// Close this adapter's **own** Postgres pool, so its server-side backends go
+    /// away now rather than whenever the last `Arc` happens to be dropped.
+    ///
+    /// This adapter opens a pool entirely separate from the relational one (see
+    /// the pool-sizing note in `cognee_database::connection`), so a warm
+    /// `ComponentManager` on Postgres holds three pools of ten and the relational
+    /// close in topoteretes/cognee-rs#135 reached only one of them.
+    ///
+    /// Measured against a live `pgvector/pg16` with `max_connections = 100`, and
+    /// worth stating precisely because the obvious framing of this bug is wrong:
+    ///
+    /// | teardown | backends afterwards |
+    /// |---|---|
+    /// | `drop`, pool idle | drained in **4 ms** — a drop is enough here |
+    /// | `close`, pool idle | drained in **1 ms**, the call returning in 67 µs |
+    /// | `drop`, one `pg_sleep` in flight | **all 10 pinned** for the query's full duration |
+    /// | `close`, one `pg_sleep` in flight | **9 of 10 reclaimed** within 500 ms, query unaffected |
+    /// | `Arc` retained, never closed | **10 open at 5 s**; `close()` on that same `Arc` drains them in 2 ms |
+    ///
+    /// So the two things this method buys are the last two rows:
+    /// - **A retained `Arc` has no drop to wait for.** The HTTP server keeps
+    ///   `lib.graph_db` as an `Arc` clone in `AppState` and an in-flight pipeline
+    ///   holds its own, so there is no owner to drop; closing through `&self` is
+    ///   the only teardown available, and without it the backends stay for the
+    ///   lifetime of the process. Against `max_connections = 100`, a handful of
+    ///   long-lived closed handles exhausts the server.
+    /// - **Under contention a drop is far worse.** A checked-out `PoolConnection`
+    ///   holds an `Arc<PoolInner>` (sqlx-core `pool/connection.rs`), so one slow
+    ///   query keeps the whole pool alive; [`sea_orm::DatabaseConnection::close_by_ref`]
+    ///   reclaims the idle connections immediately and lets the running query
+    ///   finish normally.
+    ///
+    /// A third difference is read from sqlx's source rather than measured:
+    /// `close_by_ref` sends the protocol `Terminate` message
+    /// (sqlx-postgres `connection/mod.rs`), where the drop path just closes the
+    /// socket — which is what makes a server log `unexpected EOF on client
+    /// connection with an open transaction`. The behaviour behind a connection
+    /// pooler (pgbouncer, RDS Proxy) follows from that, but has not been measured.
+    ///
+    /// A **no-op when the connection came from [`Self::from_connection`]**, and
+    /// idempotent (a closed pool closes again harmlessly). Surviving clones of
+    /// this adapter fail their next query against the closed pool rather than
+    /// reconnecting.
+    pub async fn close(&self) -> GraphDBResult<()> {
+        if !self.owns_pool {
+            debug!("PgGraphAdapter::close is a no-op for a caller-owned connection");
+            return Ok(());
+        }
+        self.db
+            .close_by_ref()
+            .await
+            .map_err(|e| GraphDBError::ConnectionError(format!("PgGraph pool close failed: {e}")))
+    }
+
+    /// The sea-orm connection (and therefore the pool) this adapter runs on.
+    ///
+    /// Exposed for diagnostics and for the teardown regression tests, which have
+    /// to observe the pool's own `is_closed()` flag and check a connection out of
+    /// *this* pool to exercise the in-flight case. Not an escape hatch for
+    /// issuing graph queries — use the typed adapter methods for that.
+    #[doc(hidden)]
+    pub fn connection(&self) -> &DatabaseConnection {
+        &self.db
+    }
     // -- helpers -------------------------------------------------------------
 
     /// Build a SeaORM [`Statement`] from a `sea_query` query.
@@ -339,6 +418,12 @@ impl GraphDBTrait for PgGraphAdapter {
             GraphDBError::InitializationError(format!("PgGraph migration failed: {e}"))
         })?;
         Ok(())
+    }
+
+    /// Delegates to the inherent [`PgGraphAdapter::close`], so a holder of an
+    /// `Arc<dyn GraphDBTrait>` can release the pool without downcasting.
+    async fn close(&self) -> GraphDBResult<()> {
+        PgGraphAdapter::close(self).await
     }
 
     async fn is_empty(&self) -> GraphDBResult<bool> {

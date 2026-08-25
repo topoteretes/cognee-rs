@@ -44,12 +44,7 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
 
     let requested_datasets = args.datasets.clone();
 
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .map_err(|error| CliError::Runtime(format!("Failed to create async runtime: {error}")))?;
-
-    runtime.block_on(async {
+    crate::teardown::run_command(Arc::clone(&cm), async {
         // Resolve datasets first (cheap) — fail early before initializing heavy components
         let database = cm
             .database()

@@ -8,12 +8,7 @@ use crate::cli::VisualizeArgs;
 use crate::error::CliError;
 
 pub fn run(args: VisualizeArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .map_err(|error| CliError::Runtime(format!("Failed to create async runtime: {error}")))?;
-
-    runtime.block_on(async {
+    crate::teardown::run_command(Arc::clone(&cm), async {
         let graph_db = cm
             .graph_db()
             .await
