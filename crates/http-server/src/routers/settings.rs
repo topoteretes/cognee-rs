@@ -57,7 +57,9 @@ fn llm_providers() -> Vec<ConfigChoice> {
         },
         ConfigChoice {
             value: "bedrock".into(),
-            label: "AWS Bedrock".into(),
+            // Python's label is exactly "Bedrock" (`get_settings.py` L79-L82);
+            // the cross-SDK settings parity test compares this entry verbatim.
+            label: "Bedrock".into(),
         },
     ]
 }
@@ -160,10 +162,20 @@ fn llm_models() -> BTreeMap<String, Vec<ConfigChoice>> {
     );
     m.insert(
         "bedrock".into(),
-        vec![ConfigChoice {
-            value: "anthropic.claude-3-5-sonnet-20240620-v1:0".into(),
-            label: "anthropic.claude-3-5-sonnet-20240620-v1:0".into(),
-        }],
+        vec![
+            ConfigChoice {
+                value: "eu.anthropic.claude-sonnet-4-5-20250929-v1:0".into(),
+                label: "Claude 4.5 Sonnet".into(),
+            },
+            ConfigChoice {
+                value: "eu.anthropic.claude-haiku-4-5-20251001-v1:0".into(),
+                label: "Claude 4.5 Haiku".into(),
+            },
+            ConfigChoice {
+                value: "eu.amazon.nova-lite-v1:0".into(),
+                label: "Amazon Nova Lite".into(),
+            },
+        ],
     );
     m
 }
@@ -294,6 +306,7 @@ pub async fn save_settings(
             crate::dto::settings::LlmProvider::Anthropic => "anthropic".into(),
             crate::dto::settings::LlmProvider::Gemini => "gemini".into(),
             crate::dto::settings::LlmProvider::Mistral => "mistral".into(),
+            crate::dto::settings::LlmProvider::Bedrock => "bedrock".into(),
         };
         current.model = model;
         if should_persist_api_key(&api_key) {

@@ -27,10 +27,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Rust toolchain (1.91 + iOS targets)
+      - name: Install Rust toolchain (1.91.1 + iOS targets)
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.91"
+          toolchain: "1.91.1"
           targets: aarch64-apple-ios,aarch64-apple-ios-sim
           components: rustfmt,clippy
 

@@ -27,8 +27,8 @@ cognee-rs/
 │   ├── cognify/                # Full cognify pipeline + memify enrichment pipeline
 │   ├── search/                 # Search pipeline with multiple retrieval strategies
 │   ├── session/                # Session management and session store
-│   ├── embedding/              # Multi-provider embedding engine (ONNX, OpenAI, Ollama, Mock)
-│   ├── llm/                    # LLM provider abstraction (OpenAI-compatible API adapter)
+│   ├── embedding/              # Multi-provider embedding engine (ONNX, OpenAI, Ollama, Bedrock, Mock)
+│   ├── llm/                    # LLM provider abstraction (OpenAI-compatible, Anthropic, Bedrock adapters)
 │   ├── graph/                  # Graph DB abstraction (Ladybug embedded graph)
 │   ├── vector/                 # Vector DB abstraction (LanceDB default; brute-force on Android; pgvector feature-gated)
 │   ├── ontology/               # Ontology resolution (RDF/JSON-LD loader, NoOp resolver)
@@ -78,9 +78,9 @@ cognee-rs/
 
 **cognee-session** — Session management and QA-history storage. Trait: `SessionStore`. Impls: `FsSessionStore`, `RedisSessionStore`, `SeaOrmSessionStore`.
 
-**cognee-embedding** — Text vectorization engine. Trait: `EmbeddingEngine`. Impls: `OnnxEmbeddingEngine` (local ONNX Runtime, BGE-Small-v1.5), `OpenAICompatibleEmbeddingEngine` (OpenAI/Azure/vLLM/llama.cpp/TEI via HTTP), `OllamaEmbeddingEngine`, `MockEmbeddingEngine`. `EmbeddingConfig::from_env()` + `create_engine()` factory select the provider. See [configuration.md](configuration.md#embedding).
+**cognee-embedding** — Text vectorization engine. Trait: `EmbeddingEngine`. Impls: `OnnxEmbeddingEngine` (local ONNX Runtime, BGE-Small-v1.5), `OpenAICompatibleEmbeddingEngine` (OpenAI/Azure/vLLM/llama.cpp/TEI via HTTP), `OllamaEmbeddingEngine`, `BedrockEmbeddingEngine` (AWS Bedrock InvokeModel — Titan + Cohere families, `bedrock` feature), `MockEmbeddingEngine`. `EmbeddingConfig::from_env()` + `create_engine()` factory select the provider. See [configuration.md](configuration.md#embedding).
 
-**cognee-llm** — Async LLM abstraction with structured JSON output. Trait: `Llm` (+ auto-implemented `LlmExt`). Impls: `OpenAIAdapter` (OpenAI-compatible APIs, works with Ollama/vLLM), `MockLlm` (cassette-backed, `testing` feature). The on-device LiteRT adapter lives in the closed `cognee-llm-litert` crate shipped as part of `cognee-cloud-rs` and is not part of OSS.
+**cognee-llm** — Async LLM abstraction with structured JSON output. Trait: `Llm` (+ auto-implemented `LlmExt`). Impls: `OpenAIAdapter` (OpenAI-compatible APIs, works with Ollama/vLLM/Azure), `AnthropicAdapter` (native Messages API), `BedrockAdapter` (AWS Bedrock Converse, `bedrock` feature), `MockLlm` (cassette-backed, `testing` feature). The on-device LiteRT adapter lives in the closed `cognee-llm-litert` crate shipped as part of `cognee-cloud-rs` and is not part of OSS.
 
 **cognee-graph** — Graph database abstraction for knowledge-graph storage and traversal. Trait: `GraphDBTrait` (+ `GraphDBTraitExt`), including the batched `get_neighborhood(ids, depth) -> (nodes, edges)` method that expands a set of seed nodes and returns the **true stored edge direction** (unlike `get_connections`, whose Ladybug impl reports the queried node as the source regardless of stored direction — see `crates/graph/src/traits.rs` and the `get_neighborhood_preserves_edge_direction` test in `crates/graph/src/mock.rs`). Impls: `LadybugAdapter` (embedded Ladybug), `PgGraphAdapter` (feature `postgres`), `MockGraphDB`. Concurrency: Rust matches Python's default single-owning-process model for file-backed Ladybug; cross-process locking is intentionally out of scope (see [roadmap/](roadmap/README.md)).
 
@@ -141,6 +141,7 @@ cognee-rs/
 | `ort` (ONNX Runtime) | Local model inference (embeddings) |
 | `lbug` | Embedded graph database (Ladybug) |
 | `reqwest` (rustls-tls) | HTTP client (URL crawling, LLM/embedding APIs) |
+| `aws-config` / `aws-sigv4` / `aws-credential-types` / `aws-smithy-*` | AWS credential resolution + SigV4 request signing for Bedrock (`bedrock` feature; versions pinned exactly — see the note in the workspace `Cargo.toml`) |
 | `scraper` | HTML parsing for URL ingestion |
 | `sophia` / `sophia_turtle` / `sophia_jsonld` | RDF/OWL ontology parsing |
 | `uuid` (v4, v5) / `sha2` | ID generation / content hashing |
@@ -177,7 +178,7 @@ from `cognee` (the facade) and follow the re-exports.
 | Cognify / memify | `cognee-cognify` | `cognify`, `memify`, `CognifyConfig` |
 | Search | `cognee-search` | `SearchBuilder`, `SearchType`, `HybridRetriever` |
 | Embedding | `cognee-embedding` | `EmbeddingEngine`, `EmbeddingConfig` |
-| LLM | `cognee-llm` | `Llm`, `OpenAIAdapter` |
+| LLM | `cognee-llm` | `Llm`, `OpenAIAdapter`, `AnthropicAdapter`, `BedrockAdapter` |
 | Graph | `cognee-graph` | `GraphDBTrait`, `LadybugAdapter` |
 | Vector | `cognee-vector` | `VectorDB`, `BruteForceVectorDB`, `PgVectorAdapter` |
 | Delete | `cognee-delete` | `DeleteService` |

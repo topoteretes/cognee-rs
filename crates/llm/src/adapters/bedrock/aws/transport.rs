@@ -1,0 +1,393 @@
+//! The transport seam.
+//!
+//! Plan §3 chose `aws-config` + `aws-sigv4` + the existing `reqwest` client
+//! over `aws-sdk-bedrockruntime`, and promised the decision would be cheap to
+//! reverse: "transport sits behind one internal trait, so swapping in
+//! `aws-sdk-bedrockruntime` later touches one file". This is that file — every
+//! byte that leaves the process for Bedrock goes through
+//! [`BedrockTransport::post_json`].
+//!
+//! Shared with `cognee-embedding`, not crate-internal: the adapter
+//! ([`crate::adapters::bedrock::BedrockAdapter`]) and the Bedrock embedding
+//! engine (`cognee_embedding::bedrock`, plan §4 R4) both POST through it, and
+//! the engine lives in another crate — so [`BedrockTransport`],
+//! [`ReqwestBedrockTransport`] and [`BedrockHttpResponse`] are `pub`. It is
+//! still an implementation seam rather than headline API: nothing is
+//! re-exported from `lib.rs`, and the adapter's own `transport` field stays
+//! `pub(crate)` so the seam never appears in a public signature.
+
+use std::time::SystemTime;
+
+use async_trait::async_trait;
+use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderValue};
+
+use std::sync::Arc;
+
+use super::credentials::{BedrockAuth, BedrockAuthProvider};
+use super::signer::sign_request;
+use crate::error::{LlmError, LlmResult};
+
+/// A Bedrock HTTP response, before any route-specific interpretation.
+///
+/// Status and body are handed back raw: mapping a Bedrock error body onto the
+/// [`LlmError`] taxonomy (e.g. `ThrottlingException` → `RateLimitExceeded`) is
+/// the adapter's job, not the transport's.
+#[derive(Clone, Debug)]
+pub struct BedrockHttpResponse {
+    /// HTTP status code.
+    pub status: reqwest::StatusCode,
+    /// Raw response body.
+    pub body: Vec<u8>,
+}
+
+impl BedrockHttpResponse {
+    /// Body as UTF-8, lossily — for error messages only.
+    pub fn body_lossy(&self) -> std::borrow::Cow<'_, str> {
+        String::from_utf8_lossy(&self.body)
+    }
+}
+
+/// POST a JSON body to a Bedrock runtime URL.
+#[async_trait]
+pub trait BedrockTransport: Send + Sync {
+    /// Send `body` to the absolute `url`, applying the §1.2 auth this
+    /// transport was built with.
+    async fn post_json(&self, url: &str, body: Vec<u8>) -> LlmResult<BedrockHttpResponse>;
+}
+
+/// [`BedrockTransport`] over the crate's existing `reqwest` client.
+pub struct ReqwestBedrockTransport {
+    client: reqwest::Client,
+    auth: Arc<BedrockAuthProvider>,
+    region: String,
+}
+
+impl ReqwestBedrockTransport {
+    /// Build a transport around a fixed `auth` that is never re-resolved.
+    ///
+    /// Correct only for auth that cannot expire — a bearer token or static
+    /// keys. Anything resolved through the §1.2 ladder should come in via
+    /// [`Self::with_auth_provider`], because temporary credentials that age out
+    /// mid-process turn into a terminal `AuthenticationError`.
+    pub fn new(client: reqwest::Client, auth: BedrockAuth, region: impl Into<String>) -> Self {
+        let region = region.into();
+        Self::with_auth_provider(
+            client,
+            Arc::new(BedrockAuthProvider::fixed(auth, region.clone())),
+            region,
+        )
+    }
+
+    /// Build a transport that asks `auth` for credentials on every request, so
+    /// temporary credentials are refreshed before they expire.
+    pub fn with_auth_provider(
+        client: reqwest::Client,
+        auth: Arc<BedrockAuthProvider>,
+        region: impl Into<String>,
+    ) -> Self {
+        Self {
+            client,
+            auth,
+            region: region.into(),
+        }
+    }
+}
+
+#[async_trait]
+impl BedrockTransport for ReqwestBedrockTransport {
+    async fn post_json(&self, url: &str, body: Vec<u8>) -> LlmResult<BedrockHttpResponse> {
+        let mut request = self
+            .client
+            .post(url)
+            .header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
+            .body(body.clone())
+            .build()
+            .map_err(|error| {
+                LlmError::ConfigError(format!("could not build Bedrock request: {error}"))
+            })?;
+
+        // Resolved per request: for a bearer token or static keys this is a
+        // cached clone, and for temporary credentials it refreshes near expiry.
+        let auth = self.auth.auth().await?;
+
+        match &auth {
+            BedrockAuth::Bearer(token) => {
+                let mut value = HeaderValue::from_str(&format!("Bearer {token}")).map_err(|_| {
+                    LlmError::ConfigError(
+                        "Bedrock bearer token contains characters that are not valid in an HTTP header"
+                            .to_string(),
+                    )
+                })?;
+                value.set_sensitive(true);
+                request.headers_mut().insert(AUTHORIZATION, value);
+            }
+            BedrockAuth::SigV4(credentials) => {
+                sign_request(
+                    &mut request,
+                    &body,
+                    credentials,
+                    &self.region,
+                    SystemTime::now(),
+                )?;
+            }
+        }
+
+        let response = self.client.execute(request).await.map_err(|error| {
+            if error.is_timeout() {
+                LlmError::Timeout(format!("Bedrock request timed out: {error}"))
+            } else {
+                LlmError::NetworkError(format!("Bedrock request failed: {error}"))
+            }
+        })?;
+
+        let status = response.status();
+        let body = response
+            .bytes()
+            .await
+            .map_err(|error| {
+                LlmError::NetworkError(format!("could not read the Bedrock response body: {error}"))
+            })?
+            .to_vec();
+
+        Ok(BedrockHttpResponse { status, body })
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
+mod tests {
+    use super::*;
+    use crate::adapters::bedrock::aws::credentials::AwsCredentials;
+    use crate::adapters::bedrock::aws::signer::SIGV4_AUTHORIZATION_PREFIX;
+    use httpmock::prelude::*;
+
+    fn test_credentials() -> AwsCredentials {
+        AwsCredentials::new(
+            "AKIDEXAMPLE",
+            "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+            None,
+            None,
+            "test",
+        )
+    }
+
+    /// Hands out a different access key on every resolution, so a signature can
+    /// be traced back to which one produced it.
+    struct RotatingLookup {
+        calls: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait]
+    impl crate::adapters::bedrock::aws::credentials::CredentialLookup for RotatingLookup {
+        async fn lookup(
+            &self,
+            _strategy: crate::adapters::bedrock::aws::credentials::CredentialStrategy<'_>,
+            _settings: &crate::adapters::bedrock::aws::env::AwsSettings,
+            _region: &str,
+        ) -> LlmResult<AwsCredentials> {
+            let n = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(AwsCredentials::new(
+                format!("AKIDGEN{n}"),
+                "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+                None,
+                // Already expired, so the next request must re-resolve.
+                Some(SystemTime::now()),
+                "rotating",
+            ))
+        }
+    }
+
+    /// The transport must ask the provider on **every** request, not once at
+    /// construction — otherwise the refresh added alongside `BedrockAuthProvider`
+    /// is inert. Reverting the per-request `auth()` call must fail this test.
+    #[tokio::test]
+    async fn each_request_re_resolves_expired_credentials() {
+        let server = MockServer::start_async().await;
+        let mock = server
+            .mock_async(|when, then| {
+                // Only a *generated* key satisfies this: if the transport signed
+                // with the construction-time snapshot the mock would not match,
+                // the server would answer 404, and the status assertion below
+                // would fail.
+                when.method(POST)
+                    .path("/model/test-model/converse")
+                    .header_prefix("authorization", SIGV4_AUTHORIZATION_PREFIX)
+                    .header_includes("authorization", "AKIDGEN");
+                then.status(200).body("{}");
+            })
+            .await;
+
+        let lookup = Arc::new(RotatingLookup {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let initial = AwsCredentials::new(
+            "AKIDINITIAL",
+            "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+            None,
+            Some(SystemTime::now()),
+            "initial",
+        );
+        let provider = Arc::new(BedrockAuthProvider::new(
+            None,
+            crate::adapters::bedrock::aws::env::AwsSettings::default(),
+            "us-east-1",
+            crate::adapters::bedrock::aws::credentials::AmbientRoleIdentity::default(),
+            lookup.clone(),
+            BedrockAuth::SigV4(Box::new(initial)),
+        ));
+        let transport = ReqwestBedrockTransport::with_auth_provider(
+            reqwest::Client::new(),
+            provider,
+            "us-east-1",
+        );
+
+        let url = format!("{}/model/test-model/converse", server.base_url());
+        for request in 0..3 {
+            let response = transport
+                .post_json(&url, b"{}".to_vec())
+                .await
+                .expect("round trip");
+            assert_eq!(
+                response.status,
+                reqwest::StatusCode::OK,
+                "request {request} was signed with the construction-time snapshot \
+                 instead of freshly resolved credentials",
+            );
+        }
+
+        mock.assert_calls_async(3).await;
+        assert_eq!(
+            lookup.calls.load(std::sync::atomic::Ordering::SeqCst),
+            3,
+            "each request must re-resolve, since every credential set is expired",
+        );
+    }
+
+    /// `fixed` carries no ladder inputs, so it must hand back what it was given
+    /// even when that value is expired — never silently resolve a new identity.
+    #[tokio::test]
+    async fn a_fixed_provider_never_re_resolves() {
+        let expired = AwsCredentials::new(
+            "AKIDFIXED",
+            "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+            None,
+            Some(SystemTime::now()),
+            "fixed",
+        );
+        let provider =
+            BedrockAuthProvider::fixed(BedrockAuth::SigV4(Box::new(expired)), "us-east-1");
+
+        for _ in 0..3 {
+            match provider.auth().await.expect("fixed auth") {
+                BedrockAuth::SigV4(credentials) => {
+                    assert_eq!(credentials.access_key_id(), "AKIDFIXED");
+                }
+                BedrockAuth::Bearer(_) => panic!("expected SigV4"),
+            }
+        }
+    }
+
+    /// The mock only answers 200 when every matcher holds, so a wrong header
+    /// shape shows up as a 404 here, not as a silently passing assertion.
+    #[tokio::test]
+    async fn sigv4_round_trip_signs_the_request_and_returns_the_body() {
+        let server = MockServer::start_async().await;
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/model/test-model/converse")
+                    .header_exists("x-amz-date")
+                    .header_prefix("authorization", SIGV4_AUTHORIZATION_PREFIX)
+                    .header_includes("authorization", "/us-east-1/bedrock/aws4_request")
+                    .header("content-type", "application/json")
+                    .body(r#"{"ping":true}"#);
+                then.status(200)
+                    .header("content-type", "application/json")
+                    .body(r#"{"pong":true}"#);
+            })
+            .await;
+
+        let transport = ReqwestBedrockTransport::new(
+            reqwest::Client::new(),
+            BedrockAuth::SigV4(Box::new(test_credentials())),
+            "us-east-1",
+        );
+
+        let response = transport
+            .post_json(
+                &format!("{}/model/test-model/converse", server.base_url()),
+                br#"{"ping":true}"#.to_vec(),
+            )
+            .await
+            .expect("transport round trip");
+
+        assert_eq!(response.status, reqwest::StatusCode::OK);
+        assert_eq!(response.body_lossy(), r#"{"pong":true}"#);
+        mock.assert_calls_async(1).await;
+    }
+
+    #[tokio::test]
+    async fn bearer_round_trip_sends_a_plain_bearer_header_and_no_signature() {
+        let server = MockServer::start_async().await;
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/model/test-model/converse")
+                    .header("authorization", "Bearer bedrock-api-key")
+                    .header_missing("x-amz-date")
+                    .header_missing("x-amz-security-token");
+                then.status(200).body("{}");
+            })
+            .await;
+
+        let transport = ReqwestBedrockTransport::new(
+            reqwest::Client::new(),
+            BedrockAuth::Bearer("bedrock-api-key".to_string()),
+            "us-east-1",
+        );
+
+        let response = transport
+            .post_json(
+                &format!("{}/model/test-model/converse", server.base_url()),
+                b"{}".to_vec(),
+            )
+            .await
+            .expect("transport round trip");
+
+        assert_eq!(response.status, reqwest::StatusCode::OK);
+        mock.assert_calls_async(1).await;
+    }
+
+    #[tokio::test]
+    async fn transport_reports_a_non_success_status_instead_of_erroring() {
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(POST).path("/model/test-model/converse");
+                then.status(429)
+                    .body(r#"{"message":"ThrottlingException"}"#);
+            })
+            .await;
+
+        let transport = ReqwestBedrockTransport::new(
+            reqwest::Client::new(),
+            BedrockAuth::Bearer("bedrock-api-key".to_string()),
+            "us-east-1",
+        );
+
+        let response = transport
+            .post_json(
+                &format!("{}/model/test-model/converse", server.base_url()),
+                b"{}".to_vec(),
+            )
+            .await
+            .expect("a 429 is a response, not a transport failure");
+
+        assert_eq!(response.status, reqwest::StatusCode::TOO_MANY_REQUESTS);
+        assert!(response.body_lossy().contains("ThrottlingException"));
+    }
+}

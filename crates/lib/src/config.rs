@@ -783,14 +783,36 @@ impl Settings {
 
         // Embedding endpoint/key fall back to the LLM provider's when no
         // embedding-specific values are set (shared OpenAI-compatible account).
-        let endpoint = [&self.embedding_endpoint, &self.llm_endpoint]
+        //
+        // That sharing only makes sense when both sides speak the same protocol.
+        // Bedrock does not: it takes AWS-signed InvokeModel bodies at a regional
+        // host, and its `api_key` is a *bearer token*. Inheriting an
+        // OpenAI-compatible `LLM_ENDPOINT` would POST InvokeModel at that host,
+        // and inheriting `LLM_API_KEY` would hand that provider's credential to
+        // AWS. `EMBEDDING_PROVIDER=bedrock` with a custom `LLM_ENDPOINT` /
+        // `OPENAI_URL` is an ordinary configuration, so this is reachable — the
+        // `api.openai.com` guard in the Bedrock engine only catches the default.
+        //
+        // Inherit only when the LLM side is Bedrock too, which is the case the
+        // "shared account" rationale actually covers.
+        let embedding_is_bedrock = self
+            .embedding_provider
+            .trim()
+            .eq_ignore_ascii_case("bedrock");
+        let inherit_from_llm =
+            !embedding_is_bedrock || self.llm_provider.trim().eq_ignore_ascii_case("bedrock");
+
+        let mut endpoint_sources = vec![&self.embedding_endpoint];
+        let mut api_key_sources = vec![&self.embedding_api_key];
+        if inherit_from_llm {
+            endpoint_sources.push(&self.llm_endpoint);
+            api_key_sources.push(&self.llm_api_key);
+        }
+        let endpoint = endpoint_sources
             .into_iter()
             .find(|v| !v.is_empty())
             .cloned();
-        let api_key = [&self.embedding_api_key, &self.llm_api_key]
-            .into_iter()
-            .find(|v| !v.is_empty())
-            .cloned();
+        let api_key = api_key_sources.into_iter().find(|v| !v.is_empty()).cloned();
 
         // MOCK_EMBEDDING: `deterministic`/`hash` selects SHA-256-derived
         // vectors; other truthy values keep the legacy zero-vector mode.
@@ -845,6 +867,7 @@ impl Settings {
                 onnx_dimensions: self.embedding_dimensions as usize,
                 onnx_max_sequence_length: self.embedding_max_sequence_length as usize,
                 onnx_batch_size: self.embedding_onnx_batch_size as usize,
+                aws: cognee_components::aws_inputs_from_env(),
             },
             llm: cognee_components::LlmInputs {
                 provider: self.llm_provider.to_lowercase(),
@@ -862,6 +885,7 @@ impl Settings {
                 mock: self.llm_mock,
                 cassette: self.llm_cassette.clone(),
                 record_path: self.llm_record_path.clone(),
+                aws: cognee_components::aws_inputs_from_env(),
             },
         }
     }
@@ -2982,6 +3006,55 @@ mod tests {
         assert_eq!(s.llm_args.get("top_p"), Some(&serde_json::json!(0.9)));
         // The lowered backend context carries the same map through to the factory.
         assert_eq!(s.backend_context().llm.llm_args, s.llm_args);
+    }
+
+    /// A Bedrock embedding provider must not inherit an OpenAI-compatible
+    /// `LLM_ENDPOINT` / `LLM_API_KEY`.
+    ///
+    /// The endpoint would receive AWS `InvokeModel` bodies, and the key would be
+    /// sent to AWS as a bearer token — the Bedrock engine's own guard only
+    /// rejects the `api.openai.com` default, so a custom proxy passed straight
+    /// through.
+    #[test]
+    fn bedrock_embeddings_do_not_inherit_a_foreign_llm_endpoint_or_key() {
+        let mut s = Settings {
+            embedding_provider: "bedrock".to_string(),
+            llm_provider: "openai".to_string(),
+            llm_endpoint: "https://llm-proxy.example.com/v1".to_string(),
+            llm_api_key: "sk-openai-key".to_string(),
+            embedding_endpoint: String::new(),
+            embedding_api_key: String::new(),
+            ..Default::default()
+        };
+
+        let ctx = s.backend_context();
+        assert_eq!(
+            ctx.embedding.endpoint, None,
+            "a non-Bedrock LLM endpoint must not become the Bedrock api_base",
+        );
+        assert_eq!(
+            ctx.embedding.api_key, None,
+            "a non-Bedrock LLM key must not become the Bedrock bearer token",
+        );
+
+        // The sharing rationale still applies when both sides are Bedrock.
+        s.llm_provider = "bedrock".to_string();
+        let shared = s.backend_context();
+        assert_eq!(
+            shared.embedding.api_key.as_deref(),
+            Some("sk-openai-key"),
+            "a Bedrock LLM key is still shared with Bedrock embeddings",
+        );
+
+        // And a non-Bedrock embedding provider keeps the original fallback.
+        s.embedding_provider = "openai".to_string();
+        s.llm_provider = "openai".to_string();
+        let inherited = s.backend_context();
+        assert_eq!(
+            inherited.embedding.endpoint.as_deref(),
+            Some("https://llm-proxy.example.com/v1"),
+            "the shared-account fallback must survive for OpenAI-compatible pairs",
+        );
     }
 
     #[test]

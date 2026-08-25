@@ -48,7 +48,33 @@ pub fn known_model_dimensions(provider: EmbeddingProvider, model: &str) -> Optio
     // rsplit('/').next() is infallible for any &str (always yields ≥ 1 element).
     let bare = model.rsplit('/').next().unwrap_or(model);
     let key = bare.to_ascii_lowercase();
-    let dim = match key.as_str() {
+    // Bedrock ids may carry a cross-region inference prefix (`eu.`, `us.`, …)
+    // that is part of the id but not of the model family. The Bedrock engine's
+    // own family selector normalises it away, so this table has to as well —
+    // otherwise `eu.amazon.titan-embed-text-v2:0` misses, falls back to 384, and
+    // Titan v2 (which accepts only 1024/512/256) rejects every request.
+    let dim =
+        dimensions_for_key(&key).or_else(|| dimensions_for_key(strip_cross_region_prefix(&key)))?;
+    let _ = provider; // provider currently unused; kept for future provider-scoped dims
+    Some(dim)
+}
+
+/// Cross-region inference prefixes, mirroring the Bedrock adapter's
+/// `model_id::CROSS_REGION_PREFIXES` (plan §1.4.1). Duplicated rather than
+/// imported so the table works with the `bedrock` feature off.
+const CROSS_REGION_PREFIXES: [&str; 7] = ["global", "us", "eu", "apac", "jp", "au", "us-gov"];
+
+/// Drop a leading cross-region segment: `eu.amazon.titan-…` → `amazon.titan-…`.
+fn strip_cross_region_prefix(key: &str) -> &str {
+    match key.split_once('.') {
+        Some((head, rest)) if CROSS_REGION_PREFIXES.contains(&head) => rest,
+        _ => key,
+    }
+}
+
+/// The dimension table itself, keyed on an already-lowercased bare id.
+fn dimensions_for_key(key: &str) -> Option<usize> {
+    let dim = match key {
         // --- OpenAI models (verified via litellm registry) ---
         "text-embedding-3-large" => 3072,
         "text-embedding-3-small" => 1536,
@@ -62,9 +88,19 @@ pub fn known_model_dimensions(provider: EmbeddingProvider, model: &str) -> Optio
         // --- Common Ollama models ---
         "nomic-embed-text" => 768,
         "mxbai-embed-large" => 1024,
+        // --- AWS Bedrock (InvokeModel) ---
+        // Keyed on the bare id: the `rsplit('/')` above already strips a
+        // `bedrock/` prefix. Without these entries a Bedrock model would fall
+        // back to FALLBACK_DIMENSIONS with a warning and the first vector write
+        // would fail on a shape mismatch.
+        "amazon.titan-embed-text-v1" => 1536,
+        // v2's default; a request may narrow it via the `dimensions` field
+        // (512 / 256), in which case EMBEDDING_DIMENSIONS must say so.
+        "amazon.titan-embed-text-v2:0" => 1024,
+        "amazon.titan-embed-image-v1" => 1024,
+        "cohere.embed-english-v3" | "cohere.embed-multilingual-v3" => 1024,
         _ => return None,
     };
-    let _ = provider; // provider currently unused; kept for future provider-scoped dims
     Some(dim)
 }
 
@@ -202,6 +238,19 @@ pub struct EmbeddingConfig {
     /// HuggingFace tokenizer identifier for chunking token counting.
     /// When set, used by `HuggingFaceTokenCounter` in the chunking crate.
     pub huggingface_tokenizer: Option<String>,
+
+    /// AWS inputs for the Bedrock engine — the region/credential/endpoint
+    /// parameters litellm's `base_aws_llm` reads, before its uppercase-env
+    /// fallback loop runs. Only consulted when the provider is
+    /// [`EmbeddingProvider::Bedrock`]; `Default` means "resolve everything from
+    /// the ambient environment", which is Python's embedding-path behaviour.
+    ///
+    /// `#[serde(skip)]` is load-bearing twice over: the upstream type carries
+    /// no serde impls, and these are credentials that must never be serialised
+    /// into a persisted or logged config. Its `Debug` redacts every secret.
+    #[cfg(feature = "bedrock")]
+    #[serde(skip)]
+    pub aws: cognee_llm::adapters::bedrock::aws::env::AwsInputs,
 }
 
 impl Default for EmbeddingConfig {
@@ -259,6 +308,8 @@ impl Default for EmbeddingConfig {
             #[cfg(feature = "onnx")]
             onnx: OnnxEmbeddingConfig::default(),
             huggingface_tokenizer: None,
+            #[cfg(feature = "bedrock")]
+            aws: cognee_llm::adapters::bedrock::aws::env::AwsInputs::default(),
         }
     }
 }
@@ -299,6 +350,14 @@ impl EmbeddingConfig {
                 "openai" => config.provider = EmbeddingProvider::OpenAi,
                 "openai_compatible" => config.provider = EmbeddingProvider::OpenAiCompatible,
                 "ollama" => config.provider = EmbeddingProvider::Ollama,
+                // Ungated, for the same reason as `parse_embedding_provider`'s
+                // arm in cognee-components: the id must be recognised whatever
+                // the build's features are. Falling through to the `_` arm here
+                // would silently leave the platform default (OpenAI) selected
+                // and POST Titan bodies at api.openai.com; `create_engine`'s
+                // `NotImplemented` arm gives the honest error in a build
+                // without the `bedrock` feature.
+                "bedrock" => config.provider = EmbeddingProvider::Bedrock,
                 "mock" => {
                     config.mock = true;
                     config.provider = EmbeddingProvider::Mock;
@@ -486,6 +545,15 @@ impl EmbeddingConfig {
                 let engine = OllamaEmbeddingEngine::new(self)?;
                 Ok(Arc::new(engine))
             }
+            #[cfg(feature = "bedrock")]
+            EmbeddingProvider::Bedrock => {
+                let engine = crate::bedrock::BedrockEmbeddingEngine::new(self).await?;
+                Ok(Arc::new(engine))
+            }
+            #[cfg(not(feature = "bedrock"))]
+            EmbeddingProvider::Bedrock => Err(crate::error::EmbeddingError::NotImplemented(
+                "Bedrock embedding engine requires the `bedrock` crate feature".to_string(),
+            )),
             EmbeddingProvider::Mock => Ok(Arc::new(
                 MockEmbeddingEngine::new(self.dimensions).with_mode(self.mock_mode),
             )),
@@ -494,6 +562,11 @@ impl EmbeddingConfig {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
     use serial_test::serial;
@@ -809,5 +882,95 @@ mod tests {
             std::env::remove_var("EMBEDDING_MODEL");
         }
         assert_eq!(config.dimensions, FALLBACK_DIMENSIONS);
+    }
+
+    // ── Bedrock ──────────────────────────────────────────────────────────────
+
+    /// Without these entries a Bedrock model resolves to FALLBACK_DIMENSIONS
+    /// (384) and the first vector write fails on a shape mismatch.
+    #[test]
+    fn bedrock_models_resolve_their_dimensions() {
+        for (model, expected) in [
+            ("amazon.titan-embed-text-v1", 1536),
+            ("amazon.titan-embed-text-v2:0", 1024),
+            ("amazon.titan-embed-image-v1", 1024),
+            ("cohere.embed-english-v3", 1024),
+            ("cohere.embed-multilingual-v3", 1024),
+            // The `provider/` prefix is stripped by the shared rsplit.
+            ("bedrock/amazon.titan-embed-text-v2:0", 1024),
+            // Cross-region inference prefixes are part of the id but not of the
+            // model family, and the Bedrock engine's family selector accepts
+            // them — so this table must too. Missing them fell back to 384, and
+            // Titan v2 accepts only 1024/512/256, so every embed call 400ed.
+            ("eu.amazon.titan-embed-text-v2:0", 1024),
+            ("us.amazon.titan-embed-text-v1", 1536),
+            ("apac.cohere.embed-english-v3", 1024),
+            ("bedrock/eu.amazon.titan-embed-image-v1", 1024),
+        ] {
+            assert_eq!(
+                known_model_dimensions(EmbeddingProvider::Ollama, model),
+                Some(expected),
+                "model {model}",
+            );
+        }
+    }
+
+    /// `EMBEDDING_PROVIDER=bedrock` must survive the *other* provider
+    /// allowlist — the one inside `from_env`. Falling through its `_` arm
+    /// leaves the platform default (OpenAI) selected, which is silently wrong
+    /// rather than an error.
+    #[test]
+    #[serial]
+    fn from_env_recognises_the_bedrock_provider() {
+        // SAFETY: see test_from_env_mock_embedding_true
+        unsafe { std::env::set_var("EMBEDDING_PROVIDER", "bedrock") };
+        let config = EmbeddingConfig::from_env();
+        unsafe { std::env::remove_var("EMBEDDING_PROVIDER") };
+        assert_eq!(config.provider, EmbeddingProvider::Bedrock);
+        assert_eq!(config.effective_provider(), EmbeddingProvider::Bedrock);
+    }
+
+    /// A bedrock-provider config really does build an engine. The bearer key
+    /// keeps the credential ladder out of it and the pinned region keeps the
+    /// ambient region chain out of it, so the test needs no AWS access.
+    #[cfg(feature = "bedrock")]
+    #[tokio::test]
+    async fn create_engine_builds_the_bedrock_engine() {
+        let mut config = EmbeddingConfig {
+            provider: EmbeddingProvider::Bedrock,
+            model: "amazon.titan-embed-text-v2:0".to_string(),
+            dimensions: 1024,
+            api_key: Some("bedrock-api-key".to_string()),
+            ..EmbeddingConfig::default()
+        };
+        config.aws.region = Some("us-east-1".to_string());
+
+        let engine = config
+            .create_engine()
+            .await
+            .expect("bedrock engine should build");
+        assert_eq!(engine.dimension(), 1024);
+    }
+
+    /// The `#[cfg(not(feature = "bedrock"))]` arm: the provider id stays
+    /// recognised, and the error names the missing feature instead of falling
+    /// back to another engine.
+    #[cfg(not(feature = "bedrock"))]
+    #[tokio::test]
+    async fn create_engine_without_the_bedrock_feature_is_not_implemented() {
+        let config = EmbeddingConfig {
+            provider: EmbeddingProvider::Bedrock,
+            model: "amazon.titan-embed-text-v2:0".to_string(),
+            ..EmbeddingConfig::default()
+        };
+
+        match config.create_engine().await {
+            Err(crate::error::EmbeddingError::NotImplemented(message)) => assert!(
+                message.contains("bedrock"),
+                "the error must name the missing feature: {message}"
+            ),
+            Err(other) => panic!("expected NotImplemented, got {other:?}"),
+            Ok(_) => panic!("no bedrock feature, no engine"),
+        }
     }
 }

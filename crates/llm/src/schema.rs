@@ -215,6 +215,45 @@ pub fn schema_required_validator(schema: &Value) -> impl Fn(&Value) -> Result<()
     }
 }
 
+/// The corrective-retry instruction text, without touching any request body.
+///
+/// Split out of [`append_corrective_instruction`] so providers whose message
+/// content is **not** a plain string can reuse the exact wording while applying
+/// their own append semantics — Bedrock Converse carries
+/// `content: [{"text": …}]` blocks, so the string-content append below would
+/// corrupt its body (plan §6.7: the Anthropic repair loop is a pattern, and only
+/// this helper and [`schema_required_validator`] are genuinely reusable).
+///
+/// `tool_name` / `tool_kind` name the forced extractor as the provider addresses
+/// it — e.g. `"extract_structured_data"` + `"tool"` for Anthropic,
+/// `"json_tool_call"` + `"tool"` for Bedrock Converse, or `+ "function"` for
+/// OpenAI.
+pub fn corrective_instruction(reason: Option<&str>, tool_name: &str, tool_kind: &str) -> String {
+    let detail = corrective_reason_detail(reason);
+    format!(
+        "{detail}Call the `{tool_name}` {tool_kind} again and return ONE complete object that \
+         fills in every required field, strictly matching the schema. No extra text."
+    )
+}
+
+/// The "why the previous attempt failed" preamble shared by every corrective
+/// re-ask, ending in a trailing space so a directive can be appended to it.
+///
+/// Exists so a provider whose structured output does **not** travel through a
+/// tool can state its own directive without re-inventing (or drifting from) this
+/// wording: Bedrock Converse's native `outputConfig.textFormat` branch has no
+/// tool to call, so telling the model to call one would be actively misleading
+/// on the branch both shipped Anthropic models take
+/// (`adapters::bedrock::converse::append_corrective_instruction`).
+pub fn corrective_reason_detail(reason: Option<&str>) -> String {
+    match reason {
+        Some(r) => format!("Your previous response failed validation: {r}. "),
+        None => {
+            "Your previous response could not be parsed into the required structure. ".to_string()
+        }
+    }
+}
+
 /// Append a corrective instruction to a chat request's `messages` array so the
 /// next structured-output attempt carries the failure reason, the way instructor
 /// reasks with the validation error. When `reason` is `Some`, it is surfaced
@@ -236,16 +275,7 @@ pub fn append_corrective_instruction(
     tool_name: &str,
     tool_kind: &str,
 ) {
-    let detail = match reason {
-        Some(r) => format!("Your previous response failed validation: {r}. "),
-        None => {
-            "Your previous response could not be parsed into the required structure. ".to_string()
-        }
-    };
-    let instruction = format!(
-        "{detail}Call the `{tool_name}` {tool_kind} again and return ONE complete object that \
-         fills in every required field, strictly matching the schema. No extra text."
-    );
+    let instruction = corrective_instruction(reason, tool_name, tool_kind);
     let Some(messages) = request["messages"].as_array_mut() else {
         return;
     };

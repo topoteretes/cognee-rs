@@ -11,7 +11,7 @@ resolver = "3"
 [workspace.package]
 edition = "2024"
 version = "0.2.0"
-rust-version = "1.91"
+rust-version = "1.91.1"
 license = "MIT OR Apache-2.0"
 authors = ["Topoteretes <support@cognee.ai>"]
 description = "C API bindings for the cognee Rust SDK — AI memory pipeline (add → cognify → search)."

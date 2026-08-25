@@ -466,6 +466,8 @@ mod tests {
             #[cfg(feature = "onnx")]
             onnx: Default::default(),
             huggingface_tokenizer: None,
+            #[cfg(feature = "bedrock")]
+            aws: Default::default(),
         }
     }
 

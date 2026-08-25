@@ -39,6 +39,7 @@ default = [
     "unstructured",
     "visualization",
     "mock-llm",
+    "bedrock",
     "bench",
     # decision 1: telemetry is ON by default in cognee-cli. Disable with
     # --no-default-features for compile-time opt-out.
@@ -69,6 +70,10 @@ hf-tokenizer  = ["cognee/hf-tokenizer"]
 tiktoken      = ["cognee/tiktoken"]
 telemetry     = ["cognee/telemetry"]
 visualization = ["cognee/visualization"]
+# AWS Bedrock LLM adapter + embedding engine (plan §2.3, §6.2). Default-on. This
+# crate declares its own `default` list and reaches every backend through the
+# `cognee` facade, so a single forward is enough.
+bedrock       = ["cognee/bedrock"]
 
 # Document format loaders (forwarded through cognee)
 pdf-pdfium        = ["cognee/pdf-pdfium"]

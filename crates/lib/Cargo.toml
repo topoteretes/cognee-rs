@@ -66,6 +66,7 @@ default = [
     "unstructured",
     "visualization",
     "mock-llm",
+    "bedrock",
     # decision 1: telemetry is ON by default in cognee. Disable with
     # --no-default-features for compile-time opt-out.
     "telemetry",
@@ -88,6 +89,11 @@ sqlite         = ["cognee-database/sqlite"]
 postgres       = ["cognee-database/postgres"]
 hf-tokenizer   = ["cognee-chunking/hf-tokenizer"]
 tiktoken       = ["cognee-chunking/tiktoken"]
+# AWS Bedrock LLM adapter + embedding engine (plan §2.3, §6.2). Default-on, like
+# the other shipped surfaces; `--no-default-features` drops the whole AWS stack
+# (aws-config + aws-sigv4). `cognee-components` is depended on with
+# `default-features = false`, so all three forwards are required.
+bedrock        = ["cognee-components/bedrock", "cognee-llm/bedrock", "cognee-embedding/bedrock"]
 
 # External telemetry event export (opt-in). When enabled, the high-level API
 # functions emit `tracing` events on the `cognee.telemetry` target so

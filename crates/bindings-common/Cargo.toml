@@ -31,6 +31,7 @@ default = [
     "ladybug",
     "lancedb",
     "onnx",
+    "bedrock",
     "hf-tokenizer",
     "tiktoken",
     "sqlite",
@@ -40,6 +41,7 @@ visualization = ["cognee/visualization"]
 ladybug       = ["cognee/ladybug"]
 lancedb       = ["cognee/lancedb"]
 onnx          = ["cognee/onnx"]
+bedrock       = ["cognee/bedrock"]
 hf-tokenizer  = ["cognee/hf-tokenizer"]
 tiktoken      = ["cognee/tiktoken"]
 sqlite        = ["cognee/sqlite"]

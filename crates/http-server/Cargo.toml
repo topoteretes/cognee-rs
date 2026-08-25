@@ -41,7 +41,7 @@ required-features = ["bin"]
 # --no-default-features for compile-time opt-out.
 # html-loader is on by default so the server binary supports URL ingestion and
 # HTML documents out of the box (parity with the Python `/add` URL path).
-default = ["telemetry", "html-loader", "onnx", "ladybug", "lancedb", "pgvector"]
+default = ["telemetry", "html-loader", "onnx", "ladybug", "lancedb", "pgvector", "bedrock"]
 # Embedded LanceDB vector store, forwarded to cognee-components + cognee-vector.
 # Default-on, so a plain build of this crate is unchanged; a consumer whose vector
 # backend is pgvector (or a closed adapter) can now drop the Arrow + lance native
@@ -58,6 +58,11 @@ pgvector = ["cognee-components/pgvector", "cognee-vector/pgvector"]
 # `graph_postgres_url: None`, so the standalone server does not use it — it is
 # here for consumers that build their own BackendBuildContext.
 pggraph = ["cognee-components/pggraph", "cognee-graph/postgres"]
+# AWS Bedrock LLM adapter + embedding engine (plan §2.3, §6.2). Default-on;
+# `--no-default-features` drops the whole AWS stack (aws-config + aws-sigv4).
+# `cognee-components` is depended on with `default-features = false`, so all
+# three forwards are required.
+bedrock = ["cognee-components/bedrock", "cognee-llm/bedrock", "cognee-embedding/bedrock"]
 # Enables the standalone-binary entry point and its arg-parsing deps.
 bin = [
     "dep:clap",
