@@ -25,7 +25,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use cognee_llm::{AnthropicAdapter, Llm, Message, MessageRole, OpenAIAdapter};
+use cognee_llm::{AnthropicAdapter, Llm, LlmExt, Message, MessageRole, OpenAIAdapter};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 /// A minimal one-message prompt; the content is irrelevant to every assertion
 /// here, which is about status handling rather than payloads.
@@ -295,5 +297,48 @@ async fn evidence_is_ignored_when_auto_rate_limit_is_off() {
     assert!(
         !pacer.is_paced(),
         "AUTO_RATE_LIMIT=false must leave dispatch unpaced even under 429s"
+    );
+}
+
+// ── The transport budget must not compound across request modes ─────────────
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+struct Person {
+    name: String,
+}
+
+#[tokio::test]
+async fn an_exhausted_transport_budget_is_not_restarted_by_the_legacy_fallback() {
+    // `generate_structured` tries tool calling, then legacy function calling,
+    // then JSON mode. Each mode calls `send_chat_request`, which now carries a
+    // time floor — so a persistently failing endpoint could burn the whole
+    // budget once per mode. It must be spent once: MaxRetriesExceeded from the
+    // transport layer is terminal, not a reason to try a different request shape.
+    let server = MockServer::start_async().await;
+    let pacer = test_pacer();
+
+    let failing = server
+        .mock_async(|when, then| {
+            when.method(POST).path("/chat/completions");
+            then.status(500).header("retry-after", "0").body("boom");
+        })
+        .await;
+
+    let adapter = OpenAIAdapter::new("gpt-4o-mini", "sk-test", Some(server.base_url()))
+        .expect("adapter builds")
+        .with_network_retries(2)
+        .with_structured_output_retries(2)
+        .with_min_retry_elapsed(Duration::ZERO)
+        .with_pacer(Arc::clone(&pacer));
+
+    let result: Result<Person, _> = adapter
+        .create_structured_output("extract", "you are a helper", None)
+        .await;
+
+    assert!(result.is_err(), "a persistent 500 must fail");
+    assert_eq!(
+        failing.calls_async().await,
+        2,
+        "the transport budget is spent once, not once per request mode"
     );
 }

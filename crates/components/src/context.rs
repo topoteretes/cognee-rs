@@ -73,6 +73,14 @@ pub struct EmbeddingInputs {
     /// Resolved API key (embedding-specific, falling back to the LLM key).
     pub api_key: Option<String>,
     pub batch_size: usize,
+    /// Pace embedding dispatch (`EMBEDDING_RATE_LIMIT_ENABLED`). Flag-gated
+    /// only: unlike the LLM path, provider overload never switches this on by
+    /// itself, matching Python's embedding limiter.
+    pub rate_limit_enabled: bool,
+    /// Requests admitted per `rate_limit_interval` once pacing is active.
+    pub rate_limit_requests: u32,
+    /// Pacing window in seconds.
+    pub rate_limit_interval: u32,
     /// `MOCK_EMBEDDING` opt-in — overrides `provider` to the mock engine.
     pub mock: bool,
     /// When `mock` is set, selects SHA-256-derived vectors instead of zeros.

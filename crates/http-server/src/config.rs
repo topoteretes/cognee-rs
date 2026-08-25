@@ -722,6 +722,11 @@ impl HttpServerConfig {
                 endpoint,
                 api_key,
                 batch_size: emb_defaults.batch_size,
+                // The HTTP server does not expose EMBEDDING_RATE_LIMIT_* yet;
+                // default to unpaced, which is the pre-existing behaviour.
+                rate_limit_enabled: false,
+                rate_limit_requests: 60,
+                rate_limit_interval: 60,
                 mock: false,
                 mock_deterministic: false,
                 api_version: None,

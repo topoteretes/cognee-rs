@@ -1310,6 +1310,16 @@ impl OpenAIAdapter {
                         }
                     }
                 }
+                // Terminal: `send_chat_request` has already exhausted its own
+                // transport budget when it returns MaxRetriesExceeded, and that
+                // budget now has a *time* floor (LLM_MIN_RETRY_SECONDS, 240s by
+                // default). Falling through would restart it from attempt 0 in
+                // the legacy loop, doubling the wall-clock cost of a persistently
+                // failing endpoint — 8 minutes per structured extraction, times
+                // every concurrent chunk in a cognify. A server that cannot
+                // answer the transport layer will not answer a different request
+                // *mode* either. Mirrors the Anthropic adapter's guard.
+                Err(e @ LlmError::MaxRetriesExceeded(_)) => return Err(e),
                 Err(e) => {
                     // The tool-calling request itself errored (tool calling
                     // unsupported, schema rejected, transient API/network error).
