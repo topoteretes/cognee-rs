@@ -50,9 +50,6 @@ pub fn onnx_asset_defaults() -> OnnxAssetDefaults {
             tokenizer_path: PathBuf::new(),
             max_sequence_length: 0,
             batch_size: 0,
-            rate_limit_enabled: false,
-            rate_limit_requests: 60,
-            rate_limit_interval: 60,
         }
     }
 }
