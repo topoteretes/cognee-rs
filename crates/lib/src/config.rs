@@ -3017,13 +3017,15 @@ mod tests {
     /// through.
     #[test]
     fn bedrock_embeddings_do_not_inherit_a_foreign_llm_endpoint_or_key() {
-        let mut s = Settings::default();
-        s.embedding_provider = "bedrock".to_string();
-        s.llm_provider = "openai".to_string();
-        s.llm_endpoint = "https://llm-proxy.example.com/v1".to_string();
-        s.llm_api_key = "sk-openai-key".to_string();
-        s.embedding_endpoint = String::new();
-        s.embedding_api_key = String::new();
+        let mut s = Settings {
+            embedding_provider: "bedrock".to_string(),
+            llm_provider: "openai".to_string(),
+            llm_endpoint: "https://llm-proxy.example.com/v1".to_string(),
+            llm_api_key: "sk-openai-key".to_string(),
+            embedding_endpoint: String::new(),
+            embedding_api_key: String::new(),
+            ..Default::default()
+        };
 
         let ctx = s.backend_context();
         assert_eq!(
