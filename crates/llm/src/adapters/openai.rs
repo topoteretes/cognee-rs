@@ -5,7 +5,11 @@
 //! outputs based on JSON schemas derived from Rust types, falling back to legacy
 //! function calling and JSON mode for older OpenAI-compatible servers.
 
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
 use async_trait::async_trait;
+use cognee_utils::pacing::{Pacer, llm_pacer};
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -55,8 +59,16 @@ pub struct OpenAIAdapter {
     api_version: Option<String>,
     client: Client,
     structured_output_retries: usize,
-    /// Number of times to retry the HTTP request on transient network/server errors.
+    /// Minimum number of HTTP attempts before the request is allowed to fail.
+    ///
+    /// This is a *floor*, not a cap — see [`Self::retry_budget`].
     network_retries: usize,
+    /// Minimum elapsed time before the request is allowed to fail. Paired with
+    /// `network_retries` to form Python's dual-floor stop condition.
+    retry_min_elapsed: Duration,
+    /// Dispatch pacer. `None` leaves the adapter unpaced, which is what a plain
+    /// library user without a component factory gets.
+    pacer: Option<Arc<Pacer>>,
     /// Model name for audio transcription (e.g. `"whisper-1"`).
     transcription_model: String,
     /// Extra request parameters merged into every chat-completion request body,
@@ -233,6 +245,14 @@ impl OpenAIAdapter {
     pub const DEFAULT_STRUCTURED_OUTPUT_RETRIES: usize = 5;
     /// Default retry attempts for transient network/server errors.
     pub const DEFAULT_NETWORK_RETRIES: usize = 3;
+    /// Default minimum time a transient failure is retried for before the call
+    /// is allowed to fail.
+    ///
+    /// Python parity: `LLM_MIN_RETRY_SECONDS = 240` in `retry_config.py`. The
+    /// attempt count alone gives up in seconds, long before a provider's
+    /// rate-limit window resets; the time floor is what actually carries a call
+    /// through an overload episode.
+    pub const DEFAULT_MIN_RETRY_ELAPSED: Duration = Duration::from_secs(240);
     /// Default output-token cap applied to option-less calls, mirroring the
     /// historical [`GenerationOptions::default`] cap and Python cognee's
     /// `llm_max_completion_tokens` default (`config.py`). Overridden per-adapter
@@ -289,6 +309,8 @@ impl OpenAIAdapter {
             client,
             structured_output_retries: Self::DEFAULT_STRUCTURED_OUTPUT_RETRIES,
             network_retries: Self::DEFAULT_NETWORK_RETRIES,
+            retry_min_elapsed: Self::DEFAULT_MIN_RETRY_ELAPSED,
+            pacer: None,
             transcription_model,
             extra_args: serde_json::Map::new(),
             default_max_tokens: Some(Self::DEFAULT_MAX_COMPLETION_TOKENS),
@@ -409,12 +431,43 @@ impl OpenAIAdapter {
         self
     }
 
-    /// Configure retry attempts for transient network and server errors (HTTP 429, 5xx).
+    /// Configure the minimum attempts for transient network and server errors
+    /// (HTTP 429, 5xx).
     ///
-    /// Each retry uses exponential backoff starting at 1 s, doubling up to 30 s.
+    /// Each retry uses exponential backoff starting at 8 s, doubling up to
+    /// 128 s. Note this is a floor: the call also keeps retrying until
+    /// [`with_min_retry_elapsed`](Self::with_min_retry_elapsed) is satisfied.
     pub fn with_network_retries(mut self, retries: u32) -> Self {
         self.network_retries = usize::try_from(retries).unwrap_or(usize::MAX);
         self
+    }
+
+    /// Configure the minimum time transient failures are retried for.
+    ///
+    /// [`Duration::ZERO`] reduces the stop condition to a plain attempt cap.
+    pub fn with_min_retry_elapsed(mut self, min_elapsed: Duration) -> Self {
+        self.retry_min_elapsed = min_elapsed;
+        self
+    }
+
+    /// Attach a dispatch pacer, overriding the process-wide one.
+    pub fn with_pacer(mut self, pacer: Arc<Pacer>) -> Self {
+        self.pacer = Some(pacer);
+        self
+    }
+
+    /// The stop condition for this adapter's transient-failure retries.
+    fn retry_budget(&self) -> crate::retry::RetryBudget {
+        crate::retry::RetryBudget::new(
+            u32::try_from(self.network_retries).unwrap_or(u32::MAX),
+            self.retry_min_elapsed,
+        )
+    }
+
+    /// The pacer governing this adapter: an explicitly attached one, else the
+    /// process-wide one if a factory installed it, else unpaced.
+    fn pacer(&self) -> Option<Arc<Pacer>> {
+        self.pacer.clone().or_else(llm_pacer)
     }
 
     /// Configure the model used for audio transcription (default: `"whisper-1"`).
@@ -594,20 +647,38 @@ impl OpenAIAdapter {
         }
 
         let mut last_error = LlmError::NetworkError("No attempt made".to_string());
+        let budget = self.retry_budget();
+        let pacer = self.pacer();
+        let started = Instant::now();
+        // `Retry-After` from the previous attempt, honoured in place of the
+        // computed backoff when the provider asked for longer.
+        let mut retry_after: Option<Duration> = None;
+        let mut attempt: u32 = 0;
 
-        for attempt in 0..=self.network_retries {
+        loop {
             debug!(attempt, "LLM API attempt");
             if attempt > 0 {
-                let delay = crate::retry::retry_backoff(attempt as u32);
+                let backoff = crate::retry::retry_backoff(attempt);
+                let delay = retry_after.take().map_or(backoff, |hint| hint.max(backoff));
                 warn!(
                     attempt,
-                    network_retries = self.network_retries,
                     delay_ms = delay.as_millis() as u64,
+                    elapsed_ms = started.elapsed().as_millis() as u64,
                     error = %last_error,
                     "LLM request failed, retrying",
                 );
                 tokio::time::sleep(delay).await;
             }
+
+            // Admission sits INSIDE the retry loop, immediately before the send,
+            // so an overload episode opened by any concurrent request throttles
+            // the remaining attempts of calls already in flight. This mirrors
+            // Python entering the limiter context manager inside tenacity.
+            if let Some(pacer) = pacer.as_deref() {
+                pacer.admit().await;
+            }
+
+            attempt += 1;
 
             let response = match self
                 .apply_auth(self.client.post(&url))
@@ -618,7 +689,15 @@ impl OpenAIAdapter {
             {
                 Ok(r) => r,
                 Err(e) => {
+                    if e.is_timeout()
+                        && let Some(pacer) = pacer.as_deref()
+                    {
+                        pacer.record_overload("timeout");
+                    }
                     last_error = LlmError::NetworkError(e.to_string());
+                    if budget.is_exhausted(attempt, started.elapsed()) {
+                        break;
+                    }
                     continue;
                 }
             };
@@ -626,27 +705,49 @@ impl OpenAIAdapter {
             let status = response.status();
 
             if !status.is_success() {
+                let code = status.as_u16();
+                // Read the hint before the body is consumed.
+                let hint = crate::retry::retry_after_hint(response.headers());
+                if let Some(reason) = crate::retry::overload_reason(code)
+                    && let Some(pacer) = pacer.as_deref()
+                {
+                    pacer.record_overload(reason);
+                }
+
                 let error_body = response
                     .text()
                     .await
                     .unwrap_or_else(|_| "Unknown error".to_string());
 
-                let err = match status.as_u16() {
+                // A 429 carrying quota/billing wording is terminal, not a rate
+                // limit: no wait makes an exhausted balance succeed. Python
+                // classifies these the same way via `is_quota_or_billing_error`.
+                let quota_exhausted =
+                    code == 429 && crate::retry::is_quota_or_billing_error(&error_body);
+
+                let err = match code {
                     401 => LlmError::AuthenticationError(error_body),
                     402 => LlmError::PaymentRequired(error_body),
+                    404 => LlmError::ModelNotFound(error_body),
+                    429 if quota_exhausted => LlmError::PaymentRequired(error_body),
                     429 => LlmError::RateLimitExceeded(error_body),
                     400 => LlmError::InvalidResponse(format!("Bad request: {error_body}")),
                     _ => LlmError::ApiError(format!("HTTP {status}: {error_body}")),
                 };
 
-                // Non-retryable: bad request, auth, or billing (402). 402 mirrors
-                // Python, whose retry policy excludes LLMPaymentRequiredError: a
-                // billing failure can never succeed, so retrying just burns budget.
-                if matches!(status.as_u16(), 400..=402) {
+                // Non-retryable: bad request, auth, billing (402), unknown model
+                // (404), and quota exhaustion. All mirror Python's terminal set
+                // in `should_retry_llm_exception`; retrying any of them only
+                // burns the budget a recoverable error will need.
+                if matches!(code, 400..=402 | 404) || quota_exhausted {
                     return Err(err);
                 }
 
+                retry_after = hint;
                 last_error = err;
+                if budget.is_exhausted(attempt, started.elapsed()) {
+                    break;
+                }
                 continue;
             }
 
@@ -666,8 +767,9 @@ impl OpenAIAdapter {
         }
 
         Err(LlmError::MaxRetriesExceeded(format!(
-            "LLM request failed after {} attempt(s): {}",
-            self.network_retries + 1,
+            "LLM request failed after {} attempt(s) over {:.1}s: {}",
+            attempt,
+            started.elapsed().as_secs_f64(),
             last_error
         )))
     }

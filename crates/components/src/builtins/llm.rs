@@ -7,6 +7,26 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use cognee_llm::{AnthropicAdapter, Llm, Transcriber, build_openai_compatible_adapter};
 
+/// Install the process-wide LLM pacer from config.
+///
+/// Idempotent (first call wins), so every factory can call it without caring
+/// which provider is built first — mirroring Python's lazily-built module-level
+/// limiter in `shared/rate_limiting.py`. Adapters then discover it through
+/// `cognee_utils::pacing::llm_pacer()`, so no adapter needs it passed in.
+fn install_pacer(ctx: &BackendBuildContext) {
+    cognee_utils::pacing::init_llm_pacer(
+        ctx.llm.rate_limit_requests,
+        std::time::Duration::from_secs(u64::from(ctx.llm.rate_limit_interval)),
+        ctx.llm.rate_limit_enabled,
+        ctx.llm.auto_rate_limit,
+    );
+}
+
+/// The configured minimum retry window, as a duration.
+fn min_retry_elapsed(ctx: &BackendBuildContext) -> std::time::Duration {
+    std::time::Duration::from_secs(u64::from(ctx.llm.min_retry_seconds))
+}
+
 use crate::context::BackendBuildContext;
 use crate::error::ComponentError;
 use crate::traits::LlmFactory;
@@ -41,6 +61,7 @@ impl LlmFactory for OpenAiCompatibleLlmFactory {
     }
 
     async fn build(&self, ctx: &BackendBuildContext) -> Result<Arc<dyn Llm>, ComponentError> {
+        install_pacer(ctx);
         let adapter = build_openai_compatible_adapter(
             &ctx.llm.provider,
             &ctx.llm.model,
@@ -49,6 +70,7 @@ impl LlmFactory for OpenAiCompatibleLlmFactory {
             ctx.llm.max_retries,
         )
         .map_err(|e| ComponentError::Llm(e.to_string()))?
+        .with_min_retry_elapsed(min_retry_elapsed(ctx))
         .with_extra_args(ctx.llm.llm_args.clone())
         .with_default_max_tokens(Some(ctx.llm.max_completion_tokens))
         .with_reasoning_override(ctx.llm.reasoning_override);
@@ -110,6 +132,7 @@ impl LlmFactory for AnthropicLlmFactory {
         // traffic). `None` (the default) uses the public Anthropic API, matching
         // Python; the override exists for proxy / gateway / Bedrock-compatible
         // endpoints.
+        install_pacer(ctx);
         let adapter = AnthropicAdapter::new(
             ctx.llm.model.clone(),
             ctx.llm.api_key.clone(),
@@ -118,6 +141,7 @@ impl LlmFactory for AnthropicLlmFactory {
         .map_err(|e| ComponentError::Llm(e.to_string()))?
         .with_structured_output_retries(ctx.llm.max_retries)
         .with_network_retries(ctx.llm.max_retries)
+        .with_min_retry_elapsed(min_retry_elapsed(ctx))
         .with_max_completion_tokens(ctx.llm.max_completion_tokens)
         .with_extra_args(ctx.llm.llm_args.clone());
         Ok(Arc::new(adapter))
@@ -167,6 +191,7 @@ impl LlmFactory for AzureLlmFactory {
         // Azure's endpoint is the deployment URL, so build it as a "custom"
         // explicit-endpoint OpenAI adapter (which enforces endpoint + key), then
         // switch to api-key auth and the api-version query.
+        install_pacer(ctx);
         let adapter = build_openai_compatible_adapter(
             "custom",
             &ctx.llm.model,
@@ -175,6 +200,7 @@ impl LlmFactory for AzureLlmFactory {
             ctx.llm.max_retries,
         )
         .map_err(|e| ComponentError::Llm(e.to_string()))?
+        .with_min_retry_elapsed(min_retry_elapsed(ctx))
         .with_api_version(api_version)
         .with_extra_args(ctx.llm.llm_args.clone())
         // Honour the operator's completion ceiling on Azure too, matching the

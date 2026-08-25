@@ -131,6 +131,14 @@ impl OpenAICompatibleEmbeddingEngine {
             encoding_format: "float",
         };
 
+        // Flag-gated admission only. Python's embedding limiter
+        // (`embedding_rate_limiter_context_manager`) is likewise gated purely on
+        // EMBEDDING_RATE_LIMIT_ENABLED and neither feeds nor consults the
+        // overload policy — reactive pacing is an LLM-path behaviour.
+        if let Some(pacer) = cognee_utils::pacing::embedding_pacer() {
+            pacer.admit().await;
+        }
+
         let response = self
             .client
             .post(self.embeddings_url())

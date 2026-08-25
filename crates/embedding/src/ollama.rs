@@ -150,6 +150,11 @@ impl OllamaEmbeddingEngine {
             },
         };
 
+        // Flag-gated admission only, matching Python's embedding limiter.
+        if let Some(pacer) = cognee_utils::pacing::embedding_pacer() {
+            pacer.admit().await;
+        }
+
         let response = self
             .client
             .post(&self.endpoint)
@@ -217,6 +222,11 @@ impl OllamaEmbeddingEngine {
                 None
             },
         };
+
+        // Flag-gated admission only, matching Python's embedding limiter.
+        if let Some(pacer) = cognee_utils::pacing::embedding_pacer() {
+            pacer.admit().await;
+        }
 
         let response = self
             .client

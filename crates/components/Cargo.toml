@@ -44,6 +44,8 @@ cognee-embedding = { path = "../embedding", version = "0.2.0" }
 cognee-graph = { path = "../graph", version = "0.2.0" }
 cognee-llm = { path = "../llm", version = "0.2.0" }
 cognee-storage = { path = "../storage", version = "0.2.0" }
+# Dispatch pacing primitives shared with the LLM/embedding adapters.
+cognee-utils = { path = "../utils", version = "0.2.0" }
 cognee-vector = { path = "../vector", version = "0.2.0" }
 async-trait.workspace = true
 serde_json.workspace = true
