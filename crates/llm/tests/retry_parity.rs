@@ -81,8 +81,9 @@ async fn a_rate_limit_is_retried_and_opens_an_overload_episode() {
     let server = MockServer::start_async().await;
     let pacer = test_pacer();
 
-    // `Retry-After: 0` keeps the test fast without disabling the code path that
-    // reads the header.
+    // `Retry-After: 1` is a usable hint, so it replaces the 8s first backoff:
+    // the test stays fast *and* exercises the header path rather than skipping
+    // it. A `0` here would be ignored by design — see the module docs.
     let limited = server
         .mock_async(|when, then| {
             when.method(POST).path("/chat/completions");

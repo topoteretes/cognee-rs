@@ -191,6 +191,19 @@ pub struct Pacer {
     auto_react: bool,
     bucket: TokenBucket,
     policy: OverloadPolicy,
+    /// The settings this pacer was built from, kept solely so a later
+    /// `init_*_pacer` call with *different* settings can be reported rather
+    /// than silently dropped. See [`init_llm_pacer`].
+    settings: PacerSettings,
+}
+
+/// The knobs a pacer is constructed from, compared to detect an ignored re-init.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PacerSettings {
+    requests: u32,
+    interval: Duration,
+    enabled_by_config: bool,
+    auto_react: bool,
 }
 
 impl Pacer {
@@ -226,6 +239,12 @@ impl Pacer {
             auto_react,
             bucket: TokenBucket::new(requests, interval),
             policy: OverloadPolicy::new(cooldown),
+            settings: PacerSettings {
+                requests,
+                interval,
+                enabled_by_config,
+                auto_react,
+            },
         }
     }
 
@@ -261,23 +280,70 @@ impl Pacer {
 static LLM_PACER: OnceLock<Arc<Pacer>> = OnceLock::new();
 static EMBEDDING_PACER: OnceLock<Arc<Pacer>> = OnceLock::new();
 
+/// Install a pacer into `slot`, first call wins, warning if a later call asks
+/// for something different.
+///
+/// Repeated construction with the *same* settings is the normal case — every
+/// component factory calls this — and is silent. A call with *different*
+/// settings is not applied, because the bucket and any in-flight episode live
+/// in the existing instance; that case is worth saying out loud, since a
+/// runtime config change to `LLM_RATE_LIMIT_*` / `AUTO_RATE_LIMIT` will appear
+/// to succeed while pacing keeps its original behaviour until the process
+/// restarts.
+fn init_pacer(
+    slot: &'static OnceLock<Arc<Pacer>>,
+    label: &str,
+    requested: PacerSettings,
+    cooldown: Duration,
+) -> Arc<Pacer> {
+    let pacer = Arc::clone(slot.get_or_init(|| {
+        Arc::new(Pacer::with_cooldown(
+            requested.requests,
+            requested.interval,
+            requested.enabled_by_config,
+            requested.auto_react,
+            cooldown,
+        ))
+    }));
+    if pacer.settings != requested {
+        tracing::warn!(
+            pacer = label,
+            active_requests = pacer.settings.requests,
+            active_interval_secs = pacer.settings.interval.as_secs(),
+            active_enabled = pacer.settings.enabled_by_config,
+            active_auto = pacer.settings.auto_react,
+            requested_requests = requested.requests,
+            requested_interval_secs = requested.interval.as_secs(),
+            requested_enabled = requested.enabled_by_config,
+            requested_auto = requested.auto_react,
+            "pacer already initialised with different settings; the new values \
+             are ignored for the lifetime of the process. Restart to apply them."
+        );
+    }
+    pacer
+}
+
 /// Install the process-wide LLM pacer. First call wins, mirroring Python's lazy
 /// module-level limiter; later calls return the existing instance so repeated
-/// component construction is harmless.
+/// component construction is harmless. A later call with *different* settings
+/// is ignored and warns — see [`init_pacer`].
 pub fn init_llm_pacer(
     requests: u32,
     interval: Duration,
     enabled_by_config: bool,
     auto_react: bool,
 ) -> Arc<Pacer> {
-    Arc::clone(LLM_PACER.get_or_init(|| {
-        Arc::new(Pacer::new(
+    init_pacer(
+        &LLM_PACER,
+        "llm",
+        PacerSettings {
             requests,
             interval,
             enabled_by_config,
             auto_react,
-        ))
-    }))
+        },
+        OVERLOAD_COOLDOWN,
+    )
 }
 
 /// The process-wide LLM pacer, if one has been installed.
@@ -467,6 +533,35 @@ mod tests {
     fn enabled_by_config_paces_from_the_start() {
         let pacer = Pacer::new(60, Duration::from_secs(60), true, false);
         assert!(pacer.should_pace_at(Instant::now()));
+    }
+
+    #[test]
+    fn a_pacer_reports_the_settings_it_was_built_from() {
+        // The comparison that drives the ignored-re-init warning: identical
+        // settings must compare equal so the common case (every factory calling
+        // init) stays silent, and a differing one must not.
+        let a = Pacer::new(60, Duration::from_secs(60), false, true);
+        let same = PacerSettings {
+            requests: 60,
+            interval: Duration::from_secs(60),
+            enabled_by_config: false,
+            auto_react: true,
+        };
+        assert_eq!(a.settings, same);
+        assert_ne!(
+            a.settings,
+            PacerSettings {
+                requests: 10,
+                ..same
+            }
+        );
+        assert_ne!(
+            a.settings,
+            PacerSettings {
+                auto_react: false,
+                ..same
+            }
+        );
     }
 
     #[tokio::test]

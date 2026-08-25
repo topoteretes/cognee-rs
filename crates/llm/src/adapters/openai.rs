@@ -650,8 +650,10 @@ impl OpenAIAdapter {
         let budget = self.retry_budget();
         let pacer = self.pacer();
         let started = Instant::now();
-        // `Retry-After` from the previous attempt, honoured in place of the
-        // computed backoff when the provider asked for longer.
+        // `Retry-After` from the previous attempt. A usable hint replaces the
+        // computed backoff outright — including when it asks for less, since the
+        // provider knows when its own window resets. See `retry::retry_after_hint`
+        // for which hints count as usable.
         let mut retry_after: Option<Duration> = None;
         let mut attempt: u32 = 0;
 

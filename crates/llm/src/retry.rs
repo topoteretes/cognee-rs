@@ -168,6 +168,10 @@ pub(crate) fn retry_after_hint(headers: &HeaderMap) -> Option<Duration> {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::expect_used,
+    reason = "test code: a panic on a malformed fixture is an acceptable failure"
+)]
 mod tests {
     use super::*;
 
