@@ -580,8 +580,12 @@ impl CredentialLookup for AwsConfigCredentials {
 
 /// How close to expiry a credential set may get before it is re-resolved.
 ///
-/// Mirrors the headroom `aws-config`'s lazy identity cache uses, so a request
-/// never starts with credentials that will expire while it is in flight.
+/// Chosen here rather than mirrored from anything: smithy's lazy identity cache
+/// uses a 10s buffer (`lazy.rs`, `DEFAULT_BUFFER_TIME`), which is tight for a
+/// path that may run an STS round trip. 60s does not guarantee a request outlives
+/// its credentials — SigV4 is validated when Bedrock receives the request, not
+/// for the life of the response — but it keeps re-resolution well clear of the
+/// expiry cliff.
 const REFRESH_MARGIN: Duration = Duration::from_secs(60);
 
 /// A [`BedrockAuth`] that re-resolves itself before its credentials expire.
@@ -605,6 +609,11 @@ pub struct BedrockAuthProvider {
     ambient: AmbientRoleIdentity,
     lookup: Arc<dyn CredentialLookup>,
     cached: RwLock<BedrockAuth>,
+    /// `false` for [`Self::fixed`], which must hand back exactly what it was
+    /// given. Without this the ladder inputs of a `fixed` provider are all
+    /// defaults, so a refresh would resolve the *ambient* default chain and
+    /// silently swap the caller's credentials for a different identity.
+    refreshable: bool,
 }
 
 impl std::fmt::Debug for BedrockAuthProvider {
@@ -636,11 +645,16 @@ impl BedrockAuthProvider {
             ambient,
             lookup,
             cached: RwLock::new(auth),
+            refreshable: true,
         }
     }
 
-    /// A provider that never refreshes — for tests and for callers that hold a
-    /// value with no expiry of its own.
+    /// A provider that hands back `auth` unchanged, forever.
+    ///
+    /// It carries none of the ladder inputs, so it must never re-resolve: doing
+    /// so would run the *ambient* default chain and return a different identity
+    /// than the caller asked for. Correct for a bearer token or static keys;
+    /// passing expiring credentials here means they are used until they fail.
     pub fn fixed(auth: BedrockAuth, region: impl Into<String>) -> Self {
         Self {
             api_key: None,
@@ -649,12 +663,17 @@ impl BedrockAuthProvider {
             ambient: AmbientRoleIdentity::default(),
             lookup: Arc::new(AwsConfigCredentials),
             cached: RwLock::new(auth),
+            refreshable: false,
         }
     }
 
     /// The auth to sign the next request with, re-resolved if it is at or near
     /// expiry.
     pub async fn auth(&self) -> LlmResult<BedrockAuth> {
+        if !self.refreshable {
+            return Ok(self.cached.read().await.clone());
+        }
+
         if let Some(fresh) = Self::still_fresh(&*self.cached.read().await) {
             return Ok(fresh);
         }

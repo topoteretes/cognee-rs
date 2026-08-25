@@ -175,6 +175,122 @@ mod tests {
         )
     }
 
+    /// Hands out a different access key on every resolution, so a signature can
+    /// be traced back to which one produced it.
+    struct RotatingLookup {
+        calls: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait]
+    impl crate::adapters::bedrock::aws::credentials::CredentialLookup for RotatingLookup {
+        async fn lookup(
+            &self,
+            _strategy: crate::adapters::bedrock::aws::credentials::CredentialStrategy<'_>,
+            _settings: &crate::adapters::bedrock::aws::env::AwsSettings,
+            _region: &str,
+        ) -> LlmResult<AwsCredentials> {
+            let n = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(AwsCredentials::new(
+                format!("AKIDGEN{n}"),
+                "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+                None,
+                // Already expired, so the next request must re-resolve.
+                Some(SystemTime::now()),
+                "rotating",
+            ))
+        }
+    }
+
+    /// The transport must ask the provider on **every** request, not once at
+    /// construction — otherwise the refresh added alongside `BedrockAuthProvider`
+    /// is inert. Reverting the per-request `auth()` call must fail this test.
+    #[tokio::test]
+    async fn each_request_re_resolves_expired_credentials() {
+        let server = MockServer::start_async().await;
+        let mock = server
+            .mock_async(|when, then| {
+                // Only a *generated* key satisfies this: if the transport signed
+                // with the construction-time snapshot the mock would not match,
+                // the server would answer 404, and the status assertion below
+                // would fail.
+                when.method(POST)
+                    .path("/model/test-model/converse")
+                    .header_prefix("authorization", SIGV4_AUTHORIZATION_PREFIX)
+                    .header_includes("authorization", "AKIDGEN");
+                then.status(200).body("{}");
+            })
+            .await;
+
+        let lookup = Arc::new(RotatingLookup {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let initial = AwsCredentials::new(
+            "AKIDINITIAL",
+            "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+            None,
+            Some(SystemTime::now()),
+            "initial",
+        );
+        let provider = Arc::new(BedrockAuthProvider::new(
+            None,
+            crate::adapters::bedrock::aws::env::AwsSettings::default(),
+            "us-east-1",
+            crate::adapters::bedrock::aws::credentials::AmbientRoleIdentity::default(),
+            lookup.clone(),
+            BedrockAuth::SigV4(Box::new(initial)),
+        ));
+        let transport = ReqwestBedrockTransport::with_auth_provider(
+            reqwest::Client::new(),
+            provider,
+            "us-east-1",
+        );
+
+        let url = format!("{}/model/test-model/converse", server.base_url());
+        for request in 0..3 {
+            let response = transport
+                .post_json(&url, b"{}".to_vec())
+                .await
+                .expect("round trip");
+            assert_eq!(
+                response.status,
+                reqwest::StatusCode::OK,
+                "request {request} was signed with the construction-time snapshot \
+                 instead of freshly resolved credentials",
+            );
+        }
+
+        mock.assert_calls_async(3).await;
+        assert_eq!(
+            lookup.calls.load(std::sync::atomic::Ordering::SeqCst),
+            3,
+            "each request must re-resolve, since every credential set is expired",
+        );
+    }
+
+    /// `fixed` carries no ladder inputs, so it must hand back what it was given
+    /// even when that value is expired — never silently resolve a new identity.
+    #[tokio::test]
+    async fn a_fixed_provider_never_re_resolves() {
+        let expired = AwsCredentials::new(
+            "AKIDFIXED",
+            "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+            None,
+            Some(SystemTime::now()),
+            "fixed",
+        );
+        let provider =
+            BedrockAuthProvider::fixed(BedrockAuth::SigV4(Box::new(expired)), "us-east-1");
+
+        for _ in 0..3 {
+            match provider.auth().await.expect("fixed auth") {
+                BedrockAuth::SigV4(credentials) => {
+                    assert_eq!(credentials.access_key_id(), "AKIDFIXED");
+                }
+                BedrockAuth::Bearer(_) => panic!("expected SigV4"),
+            }
+        }
+    }
+
     /// The mock only answers 200 when every matcher holds, so a wrong header
     /// shape shows up as a 404 here, not as a silently passing assertion.
     #[tokio::test]
