@@ -71,6 +71,32 @@ pub fn strip_routing_prefix(model: &str) -> &str {
     model
 }
 
+/// Routing tokens that must never reach the wire.
+///
+/// A strict subset of [`ROUTING_PREFIXES`]: `nova/` and `nova-2/` are
+/// custom-model *spec* prefixes that identify the deployed model, and `openai/`
+/// selects a different handler entirely, so none of the three are stripped here.
+const WIRE_STRIPPED_PREFIXES: [&str; 3] = ["bedrock/", "converse/", "invoke/"];
+
+/// The model id as it must appear in a Bedrock request path.
+///
+/// litellm strips its own routing tokens before building the URL
+/// (`converse_handler.py:279-297`), and only those: a cross-region prefix
+/// (`eu.`, `us.`, …) and an ARN are part of the real Bedrock identifier and
+/// **must** survive. This is the §1.4.1 counterpart to [`base_model`] — that one
+/// normalises for the routing *decision*, this one for the request *path*.
+///
+/// Sequential like [`strip_routing_prefix`], so `bedrock/converse/x` loses both.
+pub fn wire_model_id(model: &str) -> &str {
+    let mut model = model;
+    for prefix in WIRE_STRIPPED_PREFIXES {
+        if let Some(rest) = model.strip_prefix(prefix) {
+            model = rest;
+        }
+    }
+    model
+}
+
 /// Unwrap a Bedrock ARN to the bare model id: everything after the last `/`.
 ///
 /// Faithful to `extract_model_name_from_bedrock_arn`, which triggers on the

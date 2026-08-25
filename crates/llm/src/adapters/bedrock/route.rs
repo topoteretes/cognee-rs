@@ -146,6 +146,65 @@ pub const BEDROCK_CONVERSE_MODELS: &[&str] = &[
     "moonshotai.kimi-k2.5",
 ];
 
+/// litellm's *derived* half of the converse set.
+///
+/// `litellm/__init__.py` does not stop at the static constant above: at import
+/// time it adds every `model_prices_and_context_window.json` entry whose
+/// `litellm_provider` is `bedrock_converse` (`__init__.py:604`, `800-801`).
+/// [`BEDROCK_CONVERSE_MODELS`] alone is therefore only half the set litellm
+/// actually routes to Converse, and a model missing from both tables fails
+/// [`super::BedrockAdapter::new`] with a message claiming it is invoke-only.
+///
+/// Regenerate with the derivation rule that produced it — every
+/// `bedrock_converse` key, minus those carrying a `/` (provider-qualified), with
+/// any cross-region prefix stripped so the entries are **bare** ids like the
+/// table above:
+///
+/// ```text
+/// jq -r 'to_entries[] | select(.value.litellm_provider == "bedrock_converse") | .key' \
+///   model_prices_and_context_window.json
+/// ```
+pub const BEDROCK_CONVERSE_PRICING_MODELS: &[&str] = &[
+    "amazon.nova-micro-v1:0",
+    "amazon.nova-premier-v1:0",
+    "anthropic.claude-haiku-4-5@20251001",
+    "anthropic.claude-opus-4-5-20251101-v1:0",
+    "deepseek.r1-v1:0",
+    "google.gemma-3-12b-it",
+    "google.gemma-3-27b-it",
+    "google.gemma-3-4b-it",
+    "meta.llama3-3-70b-instruct-v1:0",
+    "meta.llama4-maverick-17b-instruct-v1:0",
+    "meta.llama4-scout-17b-instruct-v1:0",
+    "minimax.minimax-m2",
+    "minimax.minimax-m2.5",
+    "mistral.devstral-2-123b",
+    "mistral.magistral-small-2509",
+    "mistral.ministral-3-14b-instruct",
+    "mistral.ministral-3-3b-instruct",
+    "mistral.ministral-3-8b-instruct",
+    "mistral.mistral-large-3-675b-instruct",
+    "mistral.pixtral-large-2502-v1:0",
+    "mistral.voxtral-mini-3b-2507",
+    "mistral.voxtral-small-24b-2507",
+    "moonshot.kimi-k2-thinking",
+    "nvidia.nemotron-nano-12b-v2",
+    "nvidia.nemotron-nano-3-30b",
+    "nvidia.nemotron-nano-9b-v2",
+    "nvidia.nemotron-super-3-120b",
+    "openai.gpt-5.6-luna",
+    "openai.gpt-5.6-sol",
+    "openai.gpt-5.6-terra",
+    "openai.gpt-oss-safeguard-120b",
+    "openai.gpt-oss-safeguard-20b",
+    "qwen.qwen3-next-80b-a3b",
+    "qwen.qwen3-vl-235b-a22b",
+    "xai.grok-4.6",
+    "zai.glm-4.7",
+    "zai.glm-4.7-flash",
+    "zai.glm-5",
+];
+
 /// Whether a route token appears as a leading path segment of `model`.
 ///
 /// Port of `_model_has_route_prefix`: a plain `contains` would match the
@@ -164,7 +223,9 @@ pub fn is_application_inference_profile_arn(model: &str) -> bool {
 pub fn is_converse_model(model: &str) -> bool {
     let base = super::model_id::base_model(model);
     let alt = super::model_id::strip_routing_prefix(model);
-    BEDROCK_CONVERSE_MODELS.contains(&base.as_str()) || BEDROCK_CONVERSE_MODELS.contains(&alt)
+    [BEDROCK_CONVERSE_MODELS, BEDROCK_CONVERSE_PRICING_MODELS]
+        .iter()
+        .any(|table| table.contains(&base.as_str()) || table.contains(&alt))
 }
 
 /// Select the Bedrock route for `model` (§1.4.2).

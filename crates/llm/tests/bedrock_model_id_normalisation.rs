@@ -13,11 +13,12 @@
     reason = "integration test code: panics are acceptable"
 )]
 
+use cognee_llm::adapters::bedrock::caps::MODEL_CAPS;
 use cognee_llm::adapters::bedrock::converse::converse_url;
 use cognee_llm::adapters::bedrock::model_id::{
     CROSS_REGION_PREFIXES, NOVA_2_CUSTOM_BASE_MODEL, NOVA_CUSTOM_BASE_MODEL, base_model,
     extract_model_name_from_arn, strip_context_window_suffix, strip_cross_region_prefix,
-    strip_routing_prefix, strip_throughput_suffix,
+    strip_routing_prefix, strip_throughput_suffix, wire_model_id,
 };
 use cognee_llm::adapters::bedrock::route::{BEDROCK_CONVERSE_MODELS, BedrockRoute, select_route};
 
@@ -274,5 +275,90 @@ fn the_request_url_keeps_the_un_normalised_id() {
              %3Aapplication-inference-profile%2Fab12cd34/converse"
         ),
         "{arn_url}",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Table drift and wire-id stripping — the two model-id defects found in review.
+// ---------------------------------------------------------------------------
+
+/// Every model with a capability row must be routable to Converse.
+///
+/// The defect this catches: `MODEL_CAPS` gained rows for models missing from
+/// the converse tables, so `BedrockAdapter::new` rejected them at construction
+/// with a message asserting they were invoke-only — while litellm routed them
+/// to Converse. The caps rows were simultaneously dead code.
+#[test]
+fn every_capability_row_routes_to_converse() {
+    for (model, _caps) in MODEL_CAPS {
+        assert_eq!(
+            select_route(model),
+            BedrockRoute::Converse,
+            "`{model}` has a MODEL_CAPS row but does not route to Converse — \
+             either add it to a converse table or drop the caps row",
+        );
+    }
+}
+
+/// litellm extends its static constant with the pricing file at import time, so
+/// the static table alone is only half the set. Both halves must be consulted.
+#[test]
+fn the_derived_converse_table_covers_the_pricing_file_models() {
+    for model in [
+        "amazon.nova-micro-v1:0",
+        "anthropic.claude-opus-4-5-20251101-v1:0",
+        "meta.llama3-3-70b-instruct-v1:0",
+        "zai.glm-5",
+    ] {
+        assert!(
+            !BEDROCK_CONVERSE_MODELS.contains(&model),
+            "`{model}` is expected to come from the derived table, not the \
+             verbatim constant — this test is asserting the wrong thing",
+        );
+        assert_eq!(
+            select_route(model),
+            BedrockRoute::Converse,
+            "`{model}` is bedrock_converse in the pricing file and must route \
+             to Converse",
+        );
+        // The cross-region form must work too — that is §1.4.1's whole point.
+        assert_eq!(select_route(&format!("eu.{model}")), BedrockRoute::Converse);
+    }
+}
+
+/// Routing tokens are configuration syntax and must not reach the wire.
+///
+/// The defect this catches: `bedrock/…` routed and constructed fine, then 400ed
+/// on every request against `/model/bedrock%2F…/converse`.
+#[test]
+fn routing_tokens_are_stripped_from_the_url_but_real_id_parts_survive() {
+    let endpoint = "https://bedrock-runtime.eu-central-1.amazonaws.com";
+
+    for configured in [
+        "bedrock/eu.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "converse/eu.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "bedrock/converse/eu.anthropic.claude-sonnet-4-5-20250929-v1:0",
+    ] {
+        let url = converse_url(endpoint, configured);
+        assert!(
+            !url.contains("bedrock%2F") && !url.contains("converse%2F"),
+            "routing token leaked into the URL for `{configured}`: {url}",
+        );
+        assert!(
+            url.contains("/model/eu.anthropic.claude-sonnet-4-5-20250929-v1%3A0/converse"),
+            "the real id must survive intact for `{configured}`: {url}",
+        );
+    }
+
+    // `nova/` is a custom-model spec, not a routing token: it stays.
+    assert!(
+        converse_url(endpoint, "nova/my-custom-model").contains("/model/nova%2Fmy-custom-model/"),
+        "the nova/ spec prefix must survive into the URL",
+    );
+
+    // A cross-region prefix and an ARN are part of the identifier: unchanged.
+    assert_eq!(
+        wire_model_id("eu.amazon.nova-lite-v1:0"),
+        "eu.amazon.nova-lite-v1:0",
     );
 }

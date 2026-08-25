@@ -248,7 +248,7 @@ impl BedrockEmbeddingEngine {
         format!(
             "{}/model/{}/invoke",
             self.endpoint.trim_end_matches('/'),
-            converse::encode_model_id(&self.model)
+            converse::encode_model_id(model_id::wire_model_id(&self.model))
         )
     }
 

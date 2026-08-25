@@ -57,11 +57,17 @@ pub fn encode_model_id(model_id: &str) -> String {
 /// **`model` is the ORIGINAL, un-normalised id** — the cross-region prefix, ARN
 /// wrapper and any suffix all stay (plan §1.4.2). Normalisation feeds routing
 /// and the capability lookup only, never this path.
+///
+/// The one exception is litellm's own routing tokens — `bedrock/`, `converse/`,
+/// `invoke/` — which are configuration syntax rather than part of the Bedrock
+/// identifier. litellm strips them before building the URL and so does
+/// [`super::model_id::wire_model_id`]; leaving them on produces a 400 against
+/// `/model/bedrock%2F…/converse`.
 pub fn converse_url(endpoint: &str, model: &str) -> String {
     format!(
         "{}/model/{}/converse",
         endpoint.trim_end_matches('/'),
-        encode_model_id(model)
+        encode_model_id(super::model_id::wire_model_id(model))
     )
 }
 
