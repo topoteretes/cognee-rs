@@ -239,13 +239,43 @@ jobs:
       # the forget/search tests that seed via add) need a key — they run in
       # Phase-1b. Running datasets without add in the same session also keeps
       # the dataset-list assertions free of add-created pollution.
-      - name: Phase-1a — health, auth, datasets, openapi, errors, settings (no LLM)
+      - name: Phase-1a — health, auth, datasets, openapi, errors (no LLM)
         run: >-
           docker compose
           -f cognee-rust/e2e-cross-sdk/docker-compose.yml
           run --rm e2e-http-tests
           pytest -vs /harness/
-          -k "test_http_health or test_http_auth or test_http_datasets or test_http_openapi or test_http_errors or test_http_self or test_http_settings"
+          -k "test_http_health or test_http_auth or test_http_datasets or test_http_openapi or test_http_errors or test_http_self"
+          --tb=short
+
+      # ── Phase-1a-settings: /settings parity, needs a NON-EMPTY key ─────────
+      # Still unconditional (no secrets), so it keeps gating fork PRs — but it
+      # cannot share the step above, because Python's GET /api/v1/settings 500s
+      # outright when no LLM key is configured. At the pinned SHA,
+      # `LLMConfig.api_key` is a required `str` while the masking expression
+      # yields `None` for a falsy key, so `SettingsDict.model_validate` raises:
+      #
+      #   pydantic_core.ValidationError: 1 validation error for SettingsDict
+      #   llm.api_key  Input should be a valid string [input_value=None]
+      #
+      # (Fixed upstream after the pin — `api_key` is `Optional[str]` on `dev` —
+      # so this step can fold back into Phase-1a when the SHA is next bumped.)
+      #
+      # The key only has to be non-empty: these tests read server-rendered
+      # provider/model lists and never call an LLM. A deliberately fake value is
+      # used so nothing can mistake it for a live credential; both SDKs mask it
+      # in the response, and `apiKey` is in the test's ignore set regardless.
+      # Servers start fresh per `docker compose run`, so this cannot perturb the
+      # keyless assertions in the step above.
+      - name: Phase-1a — settings parity (fake key, no LLM calls)
+        env:
+          LLM_API_KEY: sk-parity-fake-key-never-used-for-calls
+        run: >-
+          docker compose
+          -f cognee-rust/e2e-cross-sdk/docker-compose.yml
+          run --rm e2e-http-tests
+          pytest -vs /harness/
+          -k "test_http_settings"
           --tb=short
 
       # ── Phase-1b: add + forget + search (needs a key — Python /add does) ───

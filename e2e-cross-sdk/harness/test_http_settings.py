@@ -7,6 +7,21 @@ re-diverging between the two SDKs.  `test_http_openapi.py` does not cover this
 — it compares path/method/security-scheme/``components.schemas`` **key sets**
 only, so an enum value or a model-list entry can drift without tripping it.
 
+A **non-empty ``LLM_API_KEY`` is required** to run this file, which is why
+``http-parity.yml`` gives it its own step rather than folding it into the main
+keyless Phase-1a.  No test here calls an LLM — the requirement is entirely an
+upstream defect at the pinned SHA: ``LLMConfig.api_key`` is a required ``str``
+while ``get_settings`` renders ``None`` for a falsy key, so
+``SettingsDict.model_validate`` raises and ``GET /api/v1/settings`` answers 500
+before any comparison can happen::
+
+    pydantic_core.ValidationError: 1 validation error for SettingsDict
+    llm.api_key  Input should be a valid string [input_value=None]
+
+Upstream ``dev`` has since widened the field to ``Optional[str]``, so the
+dedicated step can fold back into Phase-1a once the SHA in
+``.github/workflows/http-parity.yml`` is bumped past that fix.
+
 Authentication is asymmetric here, and deliberately so.  The Rust server serves
 ``/settings`` unauthenticated: ``require_authentication`` defaults to false
 (``crates/http-server/src/config.rs``) and ``bin/start_servers.sh`` does not set
@@ -141,7 +156,12 @@ def py_settings_client(py_client):
 def _get_settings(client, side: str) -> dict:
     """GET /api/v1/settings, assert 200, return the parsed body."""
     r = client.get(SETTINGS_PATH)
-    assert r.status_code == 200, f"{side}: GET {SETTINGS_PATH} -> {r.status_code}: {r.text[:300]}"
+    assert r.status_code == 200, (
+        f"{side}: GET {SETTINGS_PATH} -> {r.status_code}: {r.text[:300]}. "
+        "A 500 from the Python side with a `llm.api_key` validation error means "
+        "LLM_API_KEY is empty — see the module docstring; this file needs a "
+        "non-empty (not necessarily valid) key."
+    )
     return r.json()
 
 
