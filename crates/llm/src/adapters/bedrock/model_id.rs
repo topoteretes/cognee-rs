@@ -73,18 +73,30 @@ pub fn strip_routing_prefix(model: &str) -> &str {
 
 /// Routing tokens that must never reach the wire.
 ///
-/// A strict subset of [`ROUTING_PREFIXES`]: `nova/` and `nova-2/` are
-/// custom-model *spec* prefixes that identify the deployed model, and `openai/`
-/// selects a different handler entirely, so none of the three are stripped here.
-const WIRE_STRIPPED_PREFIXES: [&str; 3] = ["bedrock/", "converse/", "invoke/"];
+/// A strict subset of [`ROUTING_PREFIXES`]. `openai/` is excluded because it
+/// selects a different handler entirely (those ids are rejected in
+/// `BedrockAdapter::new`, so they never reach a URL).
+///
+/// `nova/` and `nova-2/` **are** stripped: they name a custom-model spec, and
+/// `converse_handler.py:293-296` removes them from the id it encodes into the
+/// path, exactly as it removes the route tokens.
+const WIRE_STRIPPED_PREFIXES: [&str; 5] = ["bedrock/", "converse/", "invoke/", "nova-2/", "nova/"];
 
 /// The model id as it must appear in a Bedrock request path.
 ///
-/// litellm strips its own routing tokens before building the URL
-/// (`converse_handler.py:279-297`), and only those: a cross-region prefix
-/// (`eu.`, `us.`, …) and an ARN are part of the real Bedrock identifier and
-/// **must** survive. This is the §1.4.1 counterpart to [`base_model`] — that one
-/// normalises for the routing *decision*, this one for the request *path*.
+/// litellm strips its own routing tokens and the nova custom-model spec prefix
+/// before building the URL (`converse_handler.py:278-296`), and only those: a
+/// cross-region prefix (`eu.`, `us.`, …) and an ARN are part of the real Bedrock
+/// identifier and **must** survive. This is the §1.4.1 counterpart to
+/// [`base_model`] — that one normalises for the routing *decision*, this one for
+/// the request *path*.
+///
+/// litellm applies the route tokens and the nova prefix in two separate passes
+/// over two different variables, which leaves `bedrock/` on the wire for the
+/// combined `bedrock/nova/x` spelling. That quirk is not reproduced: litellm's
+/// own router strips the provider prefix upstream, so the case never arises
+/// there in practice, and reproducing it here would put a token on the wire that
+/// Bedrock rejects.
 ///
 /// Sequential like [`strip_routing_prefix`], so `bedrock/converse/x` loses both.
 pub fn wire_model_id(model: &str) -> &str {

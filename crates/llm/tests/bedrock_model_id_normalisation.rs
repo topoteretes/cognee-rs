@@ -350,13 +350,25 @@ fn routing_tokens_are_stripped_from_the_url_but_real_id_parts_survive() {
         );
     }
 
-    // `nova/` is a custom-model spec, not a routing token: it stays.
-    assert!(
-        converse_url(endpoint, "nova/my-custom-model").contains("/model/nova%2Fmy-custom-model/"),
-        "the nova/ spec prefix must survive into the URL",
-    );
+    // The `nova/` custom-model spec prefix comes off too: litellm removes it
+    // from the id it encodes into the path (`converse_handler.py:293-296`).
+    for (configured, expected) in [
+        ("nova/my-custom-model", "/model/my-custom-model/converse"),
+        ("nova-2/my-custom-model", "/model/my-custom-model/converse"),
+        (
+            "bedrock/nova/my-custom-model",
+            "/model/my-custom-model/converse",
+        ),
+    ] {
+        let url = converse_url(endpoint, configured);
+        assert!(
+            url.ends_with(expected),
+            "the nova spec prefix must be stripped for `{configured}`: {url}",
+        );
+    }
 
     // A cross-region prefix and an ARN are part of the identifier: unchanged.
+    // `nova-lite` only *contains* "nova"; nothing is stripped from it.
     assert_eq!(
         wire_model_id("eu.amazon.nova-lite-v1:0"),
         "eu.amazon.nova-lite-v1:0",

@@ -59,10 +59,10 @@ pub fn encode_model_id(model_id: &str) -> String {
 /// and the capability lookup only, never this path.
 ///
 /// The one exception is litellm's own routing tokens — `bedrock/`, `converse/`,
-/// `invoke/` — which are configuration syntax rather than part of the Bedrock
-/// identifier. litellm strips them before building the URL and so does
-/// [`super::model_id::wire_model_id`]; leaving them on produces a 400 against
-/// `/model/bedrock%2F…/converse`.
+/// `invoke/` — plus the `nova/` / `nova-2/` custom-model spec prefix, none of
+/// which are part of the Bedrock identifier. litellm strips them before building
+/// the URL and so does [`super::model_id::wire_model_id`]; leaving them on
+/// produces a 400 against `/model/bedrock%2F…/converse`.
 pub fn converse_url(endpoint: &str, model: &str) -> String {
     format!(
         "{}/model/{}/converse",
