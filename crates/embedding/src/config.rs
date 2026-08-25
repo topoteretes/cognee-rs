@@ -48,7 +48,33 @@ pub fn known_model_dimensions(provider: EmbeddingProvider, model: &str) -> Optio
     // rsplit('/').next() is infallible for any &str (always yields ≥ 1 element).
     let bare = model.rsplit('/').next().unwrap_or(model);
     let key = bare.to_ascii_lowercase();
-    let dim = match key.as_str() {
+    // Bedrock ids may carry a cross-region inference prefix (`eu.`, `us.`, …)
+    // that is part of the id but not of the model family. The Bedrock engine's
+    // own family selector normalises it away, so this table has to as well —
+    // otherwise `eu.amazon.titan-embed-text-v2:0` misses, falls back to 384, and
+    // Titan v2 (which accepts only 1024/512/256) rejects every request.
+    let dim =
+        dimensions_for_key(&key).or_else(|| dimensions_for_key(strip_cross_region_prefix(&key)))?;
+    let _ = provider; // provider currently unused; kept for future provider-scoped dims
+    Some(dim)
+}
+
+/// Cross-region inference prefixes, mirroring the Bedrock adapter's
+/// `model_id::CROSS_REGION_PREFIXES` (plan §1.4.1). Duplicated rather than
+/// imported so the table works with the `bedrock` feature off.
+const CROSS_REGION_PREFIXES: [&str; 7] = ["global", "us", "eu", "apac", "jp", "au", "us-gov"];
+
+/// Drop a leading cross-region segment: `eu.amazon.titan-…` → `amazon.titan-…`.
+fn strip_cross_region_prefix(key: &str) -> &str {
+    match key.split_once('.') {
+        Some((head, rest)) if CROSS_REGION_PREFIXES.contains(&head) => rest,
+        _ => key,
+    }
+}
+
+/// The dimension table itself, keyed on an already-lowercased bare id.
+fn dimensions_for_key(key: &str) -> Option<usize> {
+    let dim = match key {
         // --- OpenAI models (verified via litellm registry) ---
         "text-embedding-3-large" => 3072,
         "text-embedding-3-small" => 1536,
@@ -75,7 +101,6 @@ pub fn known_model_dimensions(provider: EmbeddingProvider, model: &str) -> Optio
         "cohere.embed-english-v3" | "cohere.embed-multilingual-v3" => 1024,
         _ => return None,
     };
-    let _ = provider; // provider currently unused; kept for future provider-scoped dims
     Some(dim)
 }
 
@@ -873,6 +898,14 @@ mod tests {
             ("cohere.embed-multilingual-v3", 1024),
             // The `provider/` prefix is stripped by the shared rsplit.
             ("bedrock/amazon.titan-embed-text-v2:0", 1024),
+            // Cross-region inference prefixes are part of the id but not of the
+            // model family, and the Bedrock engine's family selector accepts
+            // them — so this table must too. Missing them fell back to 384, and
+            // Titan v2 accepts only 1024/512/256, so every embed call 400ed.
+            ("eu.amazon.titan-embed-text-v2:0", 1024),
+            ("us.amazon.titan-embed-text-v1", 1536),
+            ("apac.cohere.embed-english-v3", 1024),
+            ("bedrock/eu.amazon.titan-embed-image-v1", 1024),
         ] {
             assert_eq!(
                 known_model_dimensions(EmbeddingProvider::Ollama, model),
