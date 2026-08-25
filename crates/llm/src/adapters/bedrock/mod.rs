@@ -608,7 +608,11 @@ impl Llm for BedrockAdapter {
     ) -> LlmResult<String> {
         use base64::Engine as _;
 
-        if !mime_type.starts_with("image/") {
+        // Normalised the same way `image_format_for_mime` normalises, so a
+        // valid-but-oddly-cased `IMAGE/PNG` is not rejected here before the
+        // helper below ever gets to map it.
+        let normalised_mime = mime_type.trim().to_ascii_lowercase();
+        if !normalised_mime.starts_with("image/") {
             return Err(LlmError::InvalidResponse(format!(
                 "Expected image/* MIME type, got: {mime_type}"
             )));
