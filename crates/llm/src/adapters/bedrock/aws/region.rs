@@ -23,6 +23,13 @@ use crate::error::{LlmError, LlmResult};
 pub const DEFAULT_AWS_REGION: &str = "us-west-2";
 
 /// The ARN prefix a Bedrock model ARN must contain for rung 2 to apply.
+///
+/// Commercial partition only, matching litellm's substring test verbatim
+/// (`base_aws_llm.py:351` — `if "arn:aws:bedrock" not in model: return None`).
+/// A GovCloud (`arn:aws-us-gov:bedrock:…`) or China (`arn:aws-cn:bedrock:…`) ARN
+/// therefore skips this rung and falls through to the env/profile/default
+/// region, on **both** SDKs. Widening it here would be a parity divergence, not
+/// a fix: do that only alongside the same change upstream.
 const BEDROCK_ARN_MARKER: &str = "arn:aws:bedrock";
 
 /// litellm's `_VALID_AWS_REGION_PATTERN` (`\A[a-z0-9-]+\Z`), hand-rolled

@@ -122,7 +122,7 @@ several of them are *not* the boto3-standard spellings:
 | `AWS_ROLE_NAME` | Role ARN to assume via STS |
 | `AWS_ROLE_ARN` | Ambient role ARN published by an IRSA / EKS pod identity |
 | `AWS_SESSION_NAME` | STS session name |
-| `AWS_WEB_IDENTITY_TOKEN` | OIDC web-identity token (inline) |
+| `AWS_WEB_IDENTITY_TOKEN` | **Path to** a readable OIDC web-identity token file. A literal token value is rejected with a config error — a documented divergence from litellm, which resolves this through `get_secret()` and passes the token *value* to `sts:AssumeRoleWithWebIdentity`. See `aws/credentials.rs` for why |
 | `AWS_WEB_IDENTITY_TOKEN_FILE` | Ambient web-identity token file published by an IRSA / EKS pod identity |
 | `AWS_STS_ENDPOINT` | Override the STS endpoint |
 | `AWS_EXTERNAL_ID` | `ExternalId` passed to `AssumeRole` |
