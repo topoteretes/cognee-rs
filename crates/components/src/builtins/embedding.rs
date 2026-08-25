@@ -159,6 +159,16 @@ impl EmbeddingFactory for DefaultEmbeddingFactory {
         // unsupported backend): surface it instead of silently falling back to
         // ONNX. Empty means "use the default" and is allowed. `mock` short-
         // circuits provider selection, so skip the check when mocking.
+        // Install the process-wide embedding pacer before any engine is built,
+        // so the adapters' `embedding_pacer()` lookups resolve. Without this the
+        // admission points are dead and EMBEDDING_RATE_LIMIT_ENABLED does
+        // nothing. Idempotent (first call wins), like the LLM pacer.
+        cognee_utils::pacing::init_embedding_pacer(
+            ctx.embedding.rate_limit_requests,
+            std::time::Duration::from_secs(u64::from(ctx.embedding.rate_limit_interval)),
+            ctx.embedding.rate_limit_enabled,
+        );
+
         let provider = ctx.embedding.provider.trim();
         if !ctx.embedding.mock
             && !provider.is_empty()
@@ -220,6 +230,9 @@ mod tests {
             endpoint: None,
             api_key: None,
             batch_size: 36,
+            rate_limit_enabled: false,
+            rate_limit_requests: 60,
+            rate_limit_interval: 60,
             mock,
             mock_deterministic: false,
             api_version: None,

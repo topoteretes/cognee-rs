@@ -41,6 +41,7 @@ for retries and the `cognee-llm` rustdoc for the adapter.
 | `LLM_STREAMING` | `llm_streaming` | `false` |
 | `LLM_MAX_COMPLETION_TOKENS` / `LLM_MAX_TOKENS` | `llm_max_completion_tokens` | `16384` |
 | `LLM_MAX_RETRIES` | `llm_max_retries` | `2` |
+| `LLM_MIN_RETRY_SECONDS` | `llm_min_retry_seconds` | `240` |
 | `LLM_MAX_PARALLEL_REQUESTS` | `llm_max_parallel_requests` | `128` |
 | `MOCK_LLM` | `llm_mock` | `false` |
 | `MOCK_LLM_CASSETTE` | `llm_cassette` | _(empty)_ |
@@ -409,6 +410,32 @@ Setting `system_root_directory` cascades to the default `graph_file_path` and
 | `CACHING` | `enable_caching` | `true` |
 | `LLM_RATE_LIMIT_ENABLED` / `_REQUESTS` / `_INTERVAL` | … | `false` / `60` / `60` |
 | `EMBEDDING_RATE_LIMIT_ENABLED` / `_REQUESTS` / `_INTERVAL` | … | `false` / `60` / `60` |
+| `AUTO_RATE_LIMIT` | `auto_rate_limit` | `true` |
+
+### How retries and pacing interact
+
+These knobs form one resilience stack, matching Python cognee's:
+
+- **Retrying stops only once BOTH floors are met** — at least `LLM_MAX_RETRIES`
+  attempts *and* at least `LLM_MIN_RETRY_SECONDS` elapsed. The time floor is the
+  one that matters: an attempt count alone gives up in seconds, long before a
+  provider's rate-limit window resets. Backoff is exponential with jitter,
+  8s doubling to a 128s ceiling, and a `Retry-After` header is honoured (capped
+  at 60s) when the provider sends one. Set `LLM_MIN_RETRY_SECONDS=0` to fail
+  fast on attempts alone.
+- **Pacing is off until it is needed.** With `LLM_RATE_LIMIT_ENABLED=false`
+  (the default) requests dispatch unbounded. When the provider reports overload
+  — HTTP 429, 503, 529, or a timeout — `AUTO_RATE_LIMIT` (default on) opens an
+  *episode*: for the next 15 minutes dispatch is paced at
+  `LLM_RATE_LIMIT_REQUESTS` per `LLM_RATE_LIMIT_INTERVAL` seconds. Fresh
+  overload extends the episode; it lapses on quiet. Set `LLM_RATE_LIMIT_ENABLED=true`
+  to pace from the start, or `AUTO_RATE_LIMIT=false` to never pace automatically.
+- **Some failures are never retried,** because no wait can fix them: bad request,
+  authentication, unknown model, payment required, and a 429 whose body reports
+  exhausted quota or billing rather than a per-minute limit.
+
+Embedding requests have their own `EMBEDDING_RATE_LIMIT_*` bucket, which is
+flag-gated only — provider overload does not switch it on automatically.
 
 ## Logging
 

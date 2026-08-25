@@ -14,7 +14,11 @@
 //! transient-retry shape of [`crate::adapters::OpenAIAdapter`]. See issue #17
 //! (Tier 2).
 
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
 use async_trait::async_trait;
+use cognee_utils::pacing::{Pacer, llm_pacer};
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -35,7 +39,13 @@ pub struct AnthropicAdapter {
     anthropic_version: String,
     client: Client,
     structured_output_retries: usize,
+    /// Minimum HTTP attempts before the request may fail (a floor, not a cap).
     network_retries: usize,
+    /// Minimum elapsed time before the request may fail — the other half of
+    /// Python's dual-floor stop condition.
+    retry_min_elapsed: Duration,
+    /// Dispatch pacer; `None` leaves the adapter unpaced.
+    pacer: Option<Arc<Pacer>>,
     /// Output-token ceiling (Python's `llm_max_completion_tokens`). The per-request
     /// `max_tokens` sent to Anthropic is `min(this, the model's documented cap)`.
     max_completion_tokens: u32,
@@ -54,6 +64,9 @@ impl AnthropicAdapter {
     pub const DEFAULT_STRUCTURED_OUTPUT_RETRIES: usize = 5;
     /// Default transient-network retries.
     pub const DEFAULT_NETWORK_RETRIES: usize = 3;
+    /// Default minimum retry window for transient failures — Python's
+    /// `LLM_MIN_RETRY_SECONDS = 240` (`retry_config.py`).
+    pub const DEFAULT_MIN_RETRY_ELAPSED: Duration = Duration::from_secs(240);
     /// Default output-token ceiling, matching Python's `llm_max_completion_tokens`.
     /// The per-request value is clamped to the model's documented cap. Aliases the
     /// crate-wide [`crate::DEFAULT_MAX_COMPLETION_TOKENS`] so it moves in lockstep
@@ -91,6 +104,8 @@ impl AnthropicAdapter {
             client,
             structured_output_retries: Self::DEFAULT_STRUCTURED_OUTPUT_RETRIES,
             network_retries: Self::DEFAULT_NETWORK_RETRIES,
+            retry_min_elapsed: Self::DEFAULT_MIN_RETRY_ELAPSED,
+            pacer: None,
             max_completion_tokens: Self::DEFAULT_MAX_COMPLETION_TOKENS,
             extra_args: serde_json::Map::new(),
         })
@@ -106,6 +121,32 @@ impl AnthropicAdapter {
     pub fn with_network_retries(mut self, retries: u32) -> Self {
         self.network_retries = usize::try_from(retries).unwrap_or(usize::MAX);
         self
+    }
+
+    /// Configure the minimum time transient failures are retried for.
+    /// [`Duration::ZERO`] reduces the stop condition to a plain attempt cap.
+    pub fn with_min_retry_elapsed(mut self, min_elapsed: Duration) -> Self {
+        self.retry_min_elapsed = min_elapsed;
+        self
+    }
+
+    /// Attach a dispatch pacer, overriding the process-wide one.
+    pub fn with_pacer(mut self, pacer: Arc<Pacer>) -> Self {
+        self.pacer = Some(pacer);
+        self
+    }
+
+    /// The stop condition for this adapter's transient-failure retries.
+    fn retry_budget(&self) -> crate::retry::RetryBudget {
+        crate::retry::RetryBudget::new(
+            u32::try_from(self.network_retries).unwrap_or(u32::MAX),
+            self.retry_min_elapsed,
+        )
+    }
+
+    /// The pacer governing this adapter, falling back to the process-wide one.
+    fn pacer(&self) -> Option<Arc<Pacer>> {
+        self.pacer.clone().or_else(llm_pacer)
     }
 
     /// Set the output-token ceiling (wire from `llm_max_completion_tokens`). The
@@ -268,22 +309,39 @@ impl AnthropicAdapter {
 
         let mut last_error = LlmError::NetworkError("No attempt made".to_string());
 
-        for attempt in 0..=self.network_retries {
+        let budget = self.retry_budget();
+        let pacer = self.pacer();
+        let started = Instant::now();
+        let mut retry_after: Option<Duration> = None;
+        let mut attempt: u32 = 0;
+
+        loop {
             debug!(attempt, "Anthropic API attempt");
             if attempt > 0 {
                 // Shared jittered backoff (equal jitter, issue #19): a batch of
                 // concurrent requests that all 429 at once must not retry in
                 // lockstep and re-trip the limit. Same helper the OpenAI adapter uses.
-                let delay = crate::retry::retry_backoff(attempt as u32);
+                let backoff = crate::retry::retry_backoff(attempt);
+                // A usable hint replaces the backoff outright, including when it
+                // asks for less: the provider knows when its window resets.
+                let delay = retry_after.take().unwrap_or(backoff);
                 warn!(
                     attempt,
-                    network_retries = self.network_retries,
                     delay_ms = delay.as_millis() as u64,
+                    elapsed_ms = started.elapsed().as_millis() as u64,
                     error = %last_error,
                     "Anthropic request failed, retrying",
                 );
                 tokio::time::sleep(delay).await;
             }
+
+            // Inside the loop, immediately before the send — see the OpenAI
+            // adapter and `cognee_utils::pacing` for why admission is per attempt.
+            if let Some(pacer) = pacer.as_deref() {
+                pacer.admit().await;
+            }
+
+            attempt += 1;
 
             let response = match self
                 .client
@@ -297,33 +355,61 @@ impl AnthropicAdapter {
             {
                 Ok(r) => r,
                 Err(e) => {
+                    if e.is_timeout()
+                        && let Some(pacer) = pacer.as_deref()
+                    {
+                        pacer.record_overload("timeout");
+                    }
                     last_error = LlmError::NetworkError(e.to_string());
+                    if budget.is_exhausted(attempt, started.elapsed()) {
+                        break;
+                    }
                     continue;
                 }
             };
 
             let status = response.status();
             if !status.is_success() {
+                let code = status.as_u16();
+                let hint = crate::retry::retry_after_hint(response.headers());
+                if let Some(reason) = crate::retry::overload_reason(code)
+                    && let Some(pacer) = pacer.as_deref()
+                {
+                    pacer.record_overload(reason);
+                }
+
                 let error_body = response
                     .text()
                     .await
                     .unwrap_or_else(|_| "Unknown error".to_string());
-                let err = match status.as_u16() {
+
+                // Anthropic reports an exhausted prepaid balance as a 429; no
+                // wait can fix it. Same classification as Python's terminal
+                // quota patterns.
+                let quota_exhausted =
+                    code == 429 && crate::retry::is_quota_or_billing_error(&error_body);
+
+                let err = match code {
                     401 => LlmError::AuthenticationError(error_body),
                     402 => LlmError::PaymentRequired(error_body),
+                    429 if quota_exhausted => LlmError::PaymentRequired(error_body),
                     429 => LlmError::RateLimitExceeded(error_body),
                     400 => LlmError::InvalidResponse(format!("Bad request: {error_body}")),
                     404 => LlmError::ModelNotFound(error_body),
                     _ => LlmError::ApiError(format!("HTTP {status}: {error_body}")),
                 };
-                // Non-retryable: bad request, auth, billing, or unknown model.
-                // 402 mirrors Python, whose retry policy also excludes
-                // LLMPaymentRequiredError: retrying a billing failure can never
-                // succeed, it just burns the budget.
-                if matches!(status.as_u16(), 400..=402 | 404) {
+                // Non-retryable: bad request, auth, billing, unknown model, or
+                // quota exhaustion. 402 mirrors Python, whose retry policy also
+                // excludes LLMPaymentRequiredError: retrying a billing failure
+                // can never succeed, it just burns the budget.
+                if matches!(code, 400..=402 | 404) || quota_exhausted {
                     return Err(err);
                 }
+                retry_after = hint;
                 last_error = err;
+                if budget.is_exhausted(attempt, started.elapsed()) {
+                    break;
+                }
                 continue;
             }
 
@@ -341,8 +427,9 @@ impl AnthropicAdapter {
         }
 
         Err(LlmError::MaxRetriesExceeded(format!(
-            "Anthropic request failed after {} attempt(s): {}",
-            self.network_retries + 1,
+            "Anthropic request failed after {} attempt(s) over {:.1}s: {}",
+            attempt,
+            started.elapsed().as_secs_f64(),
             last_error
         )))
     }

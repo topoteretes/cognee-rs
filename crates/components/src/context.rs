@@ -74,6 +74,14 @@ pub struct EmbeddingInputs {
     /// Resolved API key (embedding-specific, falling back to the LLM key).
     pub api_key: Option<String>,
     pub batch_size: usize,
+    /// Pace embedding dispatch (`EMBEDDING_RATE_LIMIT_ENABLED`). Flag-gated
+    /// only: unlike the LLM path, provider overload never switches this on by
+    /// itself, matching Python's embedding limiter.
+    pub rate_limit_enabled: bool,
+    /// Requests admitted per `rate_limit_interval` once pacing is active.
+    pub rate_limit_requests: u32,
+    /// Pacing window in seconds.
+    pub rate_limit_interval: u32,
     /// `MOCK_EMBEDDING` opt-in — overrides `provider` to the mock engine.
     pub mock: bool,
     /// When `mock` is set, selects SHA-256-derived vectors instead of zeros.
@@ -114,6 +122,18 @@ pub struct LlmInputs {
     /// Anthropic factory consumes it; other providers ignore it.
     pub anthropic_base_url: Option<String>,
     pub max_retries: u32,
+    /// Minimum seconds a transient failure is retried for. Together with
+    /// `max_retries` this is Python's dual-floor stop condition; `0` reduces it
+    /// to a plain attempt cap. See `Settings::llm_min_retry_seconds`.
+    pub min_retry_seconds: u32,
+    /// Pace dispatch unconditionally (`LLM_RATE_LIMIT_ENABLED`).
+    pub rate_limit_enabled: bool,
+    /// Requests admitted per `rate_limit_interval` once pacing is active.
+    pub rate_limit_requests: u32,
+    /// Pacing window in seconds.
+    pub rate_limit_interval: u32,
+    /// Let provider overload switch pacing on by itself (`AUTO_RATE_LIMIT`).
+    pub auto_rate_limit: bool,
     /// Output-token ceiling (Python's `llm_max_completion_tokens`), lowered from
     /// `Settings.llm_max_completion_tokens` (`setLlmMaxCompletionTokens`). Applied
     /// to LLM calls that pass no per-call generation options (the search/completion

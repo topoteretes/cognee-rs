@@ -142,6 +142,15 @@ pub struct Settings {
     pub llm_streaming: bool,
     pub llm_max_completion_tokens: u32,
     pub llm_max_retries: u32,
+    /// Minimum seconds a transient LLM failure is retried for before the call is
+    /// allowed to fail. Paired with `llm_max_retries` this forms Python's
+    /// dual-floor stop condition (`stop_after_attempt & stop_after_delay`,
+    /// `retry_config.py`): retrying continues until BOTH floors are satisfied.
+    ///
+    /// Python hard-codes 240. It is configurable here so `LLM_MAX_RETRIES` keeps
+    /// a fail-fast escape hatch: set this to `0` and the stop condition reduces
+    /// to a plain attempt cap, as it behaved before.
+    pub llm_min_retry_seconds: u32,
     pub llm_max_parallel_requests: u32,
 
     /// Extra parameters merged into every LLM chat-completion request, parsed
@@ -281,6 +290,11 @@ pub struct Settings {
     pub log_level: String,
 
     // -- Rate limiting -----------------------------------------------------------
+    /// Let provider overload (HTTP 429/503/529 or a timeout) switch pacing on by
+    /// itself for a cooldown window. Python's `auto_rate_limit`
+    /// (`infrastructure/llm/config.py`), default on. Set `AUTO_RATE_LIMIT=false`
+    /// to leave dispatch unpaced no matter what the provider reports.
+    pub auto_rate_limit: bool,
     pub llm_rate_limit_enabled: bool,
     pub llm_rate_limit_requests: u32,
     pub llm_rate_limit_interval: u32,
@@ -413,6 +427,11 @@ impl Settings {
             && let Ok(n) = v.parse::<u32>()
         {
             self.llm_max_retries = n;
+        }
+        if let Some(v) = str_var("LLM_MIN_RETRY_SECONDS")
+            && let Ok(n) = v.parse::<u32>()
+        {
+            self.llm_min_retry_seconds = n;
         }
         if let Some(v) = str_var("LLM_MAX_PARALLEL_REQUESTS")
             && let Ok(n) = v.parse::<u32>()
@@ -650,6 +669,9 @@ impl Settings {
         }
 
         // -- Rate limiting -------------------------------------------------------
+        if let Some(v) = str_var("AUTO_RATE_LIMIT") {
+            self.auto_rate_limit = cognee_utils::parse_env_bool(&v);
+        }
         if let Some(v) = str_var("LLM_RATE_LIMIT_ENABLED") {
             self.llm_rate_limit_enabled = cognee_utils::parse_env_bool(&v);
         }
@@ -856,6 +878,9 @@ impl Settings {
                 endpoint,
                 api_key,
                 batch_size: self.embedding_batch_size as usize,
+                rate_limit_enabled: self.embedding_rate_limit_enabled,
+                rate_limit_requests: self.embedding_rate_limit_requests,
+                rate_limit_interval: self.embedding_rate_limit_interval,
                 mock,
                 mock_deterministic,
                 api_version,
@@ -876,6 +901,11 @@ impl Settings {
                 endpoint: self.llm_endpoint.clone(),
                 anthropic_base_url: cognee_components::anthropic_base_url_from_env(),
                 max_retries: self.llm_max_retries,
+                min_retry_seconds: self.llm_min_retry_seconds,
+                rate_limit_enabled: self.llm_rate_limit_enabled,
+                rate_limit_requests: self.llm_rate_limit_requests,
+                rate_limit_interval: self.llm_rate_limit_interval,
+                auto_rate_limit: self.auto_rate_limit,
                 max_completion_tokens: self.llm_max_completion_tokens,
                 llm_args: self.llm_args.clone(),
                 api_version: self.llm_api_version.clone(),
@@ -1116,6 +1146,7 @@ impl Default for Settings {
             // the global completion ceiling in one place applies everywhere.
             llm_max_completion_tokens: cognee_llm::OpenAIAdapter::DEFAULT_MAX_COMPLETION_TOKENS,
             llm_max_retries: 2,
+            llm_min_retry_seconds: 240,
             llm_max_parallel_requests: 128,
             llm_args: serde_json::Map::new(),
             llm_mock: false,
@@ -1221,6 +1252,7 @@ impl Default for Settings {
             log_level: "info".to_string(),
 
             // Rate limiting
+            auto_rate_limit: true,
             llm_rate_limit_enabled: false,
             llm_rate_limit_requests: 60,
             llm_rate_limit_interval: 60,
@@ -2057,6 +2089,8 @@ impl ConfigManager {
                 "llm_max_completion_tokens" => s.llm_max_completion_tokens = as_u32(key, value)?,
                 "llm_streaming" => s.llm_streaming = as_bool(key, value)?,
                 "llm_max_retries" => s.llm_max_retries = as_u32(key, value)?,
+                "llm_min_retry_seconds" => s.llm_min_retry_seconds = as_u32(key, value)?,
+                "auto_rate_limit" => s.auto_rate_limit = as_bool(key, value)?,
                 "llm_max_parallel_requests" => {
                     s.llm_max_parallel_requests = as_u32(key, value)?;
                 }

@@ -209,6 +209,17 @@ pub struct HttpServerConfig {
     /// LLM retry count for both structured-output and network retries.
     /// Env: `LLM_MAX_RETRIES`.
     pub llm_max_retries: u32,
+    /// Minimum seconds a transient LLM failure is retried for (`0` = attempt cap
+    /// only). Mirrors `Settings::llm_min_retry_seconds`.
+    pub llm_min_retry_seconds: u32,
+    /// Pace dispatch unconditionally (`LLM_RATE_LIMIT_ENABLED`).
+    pub llm_rate_limit_enabled: bool,
+    /// Requests per interval once pacing is active.
+    pub llm_rate_limit_requests: u32,
+    /// Pacing window, seconds.
+    pub llm_rate_limit_interval: u32,
+    /// Let provider overload switch pacing on by itself (`AUTO_RATE_LIMIT`).
+    pub auto_rate_limit: bool,
 
     /// Output-token cap for the option-less completion (`recall`/`search`
     /// answer) LLM call. Env: `LLM_MAX_COMPLETION_TOKENS`. Mirrors
@@ -362,6 +373,11 @@ impl Default for HttpServerConfig {
             llm_api_version: String::new(),
             llm_reasoning: "auto".to_string(),
             llm_max_retries: 3,
+            llm_min_retry_seconds: 240,
+            llm_rate_limit_enabled: false,
+            llm_rate_limit_requests: 60,
+            llm_rate_limit_interval: 60,
+            auto_rate_limit: true,
             llm_max_completion_tokens: cognee_llm::OpenAIAdapter::DEFAULT_MAX_COMPLETION_TOKENS,
             session_store_backend: "seaorm".to_string(),
             session_root_directory: default_session_root_directory(&system_root),
@@ -560,6 +576,27 @@ impl HttpServerConfig {
                 .parse::<u32>()
                 .map_err(|e| ServerError::Other(anyhow::anyhow!("LLM_MAX_RETRIES: {e}")))?;
         }
+        if let Ok(v) = std::env::var("LLM_MIN_RETRY_SECONDS") {
+            cfg.llm_min_retry_seconds = v
+                .parse::<u32>()
+                .map_err(|e| ServerError::Other(anyhow::anyhow!("LLM_MIN_RETRY_SECONDS: {e}")))?;
+        }
+        if let Ok(v) = std::env::var("LLM_RATE_LIMIT_ENABLED") {
+            cfg.llm_rate_limit_enabled = cognee_utils::parse_env_bool(&v);
+        }
+        if let Ok(v) = std::env::var("LLM_RATE_LIMIT_REQUESTS") {
+            cfg.llm_rate_limit_requests = v
+                .parse::<u32>()
+                .map_err(|e| ServerError::Other(anyhow::anyhow!("LLM_RATE_LIMIT_REQUESTS: {e}")))?;
+        }
+        if let Ok(v) = std::env::var("LLM_RATE_LIMIT_INTERVAL") {
+            cfg.llm_rate_limit_interval = v
+                .parse::<u32>()
+                .map_err(|e| ServerError::Other(anyhow::anyhow!("LLM_RATE_LIMIT_INTERVAL: {e}")))?;
+        }
+        if let Ok(v) = std::env::var("AUTO_RATE_LIMIT") {
+            cfg.auto_rate_limit = cognee_utils::parse_env_bool(&v);
+        }
         // Honor the `LLM_MAX_TOKENS` alias too, matching the CLI/Settings path
         // (`str_alias("LLM_MAX_COMPLETION_TOKENS", "LLM_MAX_TOKENS")`).
         if let Some(v) = first_non_empty_env(&["LLM_MAX_COMPLETION_TOKENS", "LLM_MAX_TOKENS"]) {
@@ -685,6 +722,11 @@ impl HttpServerConfig {
                 endpoint,
                 api_key,
                 batch_size: emb_defaults.batch_size,
+                // The HTTP server does not expose EMBEDDING_RATE_LIMIT_* yet;
+                // default to unpaced, which is the pre-existing behaviour.
+                rate_limit_enabled: false,
+                rate_limit_requests: 60,
+                rate_limit_interval: 60,
                 mock: false,
                 mock_deterministic: false,
                 api_version: None,
@@ -705,6 +747,11 @@ impl HttpServerConfig {
                 endpoint: self.llm_endpoint.clone(),
                 anthropic_base_url: cognee_components::anthropic_base_url_from_env(),
                 max_retries: self.llm_max_retries,
+                min_retry_seconds: self.llm_min_retry_seconds,
+                rate_limit_enabled: self.llm_rate_limit_enabled,
+                rate_limit_requests: self.llm_rate_limit_requests,
+                rate_limit_interval: self.llm_rate_limit_interval,
+                auto_rate_limit: self.auto_rate_limit,
                 // Env-configurable via `LLM_MAX_COMPLETION_TOKENS`, mirroring
                 // `Settings.llm_max_completion_tokens` on the CLI/SDK path so
                 // `recall`/`search` is capped consistently across surfaces.

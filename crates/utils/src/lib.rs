@@ -5,6 +5,11 @@
 
 pub mod env;
 pub mod id_generation;
+// Reactive dispatch pacing. Gated off wasm32: it reads the monotonic clock via
+// `std::time::Instant::now()`, which panics on `wasm32-unknown-unknown`. The
+// providers it paces are reached over reqwest, which is native-only anyway.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod pacing;
 pub mod redact;
 pub mod retry;
 pub mod tracing_keys;

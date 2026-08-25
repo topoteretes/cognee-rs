@@ -11,7 +11,11 @@
 //! a JSON `Value`-shaped response with `id`, `output`, and `usage`, plus a
 //! best-effort polling hook for stored / async responses.
 
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
 use async_trait::async_trait;
+use cognee_utils::pacing::{Pacer, llm_pacer};
 use reqwest::Client;
 use serde_json::{Value, json};
 use tracing::{debug, instrument, warn};
@@ -140,7 +144,12 @@ pub struct OpenAIResponsesClient {
     api_key: String,
     base_url: String,
     client: Client,
+    /// Minimum HTTP attempts before the request may fail (a floor, not a cap).
     network_retries: usize,
+    /// Minimum elapsed time before the request may fail.
+    retry_min_elapsed: Duration,
+    /// Dispatch pacer; `None` leaves the client unpaced.
+    pacer: Option<Arc<Pacer>>,
 }
 
 impl OpenAIResponsesClient {
@@ -148,6 +157,8 @@ impl OpenAIResponsesClient {
     pub const DEFAULT_BASE_URL: &'static str = "https://api.openai.com/v1";
     /// Default retry attempts for transient network/server errors.
     pub const DEFAULT_NETWORK_RETRIES: usize = 3;
+    /// Default minimum retry window — Python's `LLM_MIN_RETRY_SECONDS = 240`.
+    pub const DEFAULT_MIN_RETRY_ELAPSED: Duration = Duration::from_secs(240);
 
     /// Construct a new client.
     pub fn new(api_key: impl Into<String>, base_url: Option<String>) -> LlmResult<Self> {
@@ -160,12 +171,27 @@ impl OpenAIResponsesClient {
             base_url: base_url.unwrap_or_else(|| Self::DEFAULT_BASE_URL.to_string()),
             client,
             network_retries: Self::DEFAULT_NETWORK_RETRIES,
+            retry_min_elapsed: Self::DEFAULT_MIN_RETRY_ELAPSED,
+            pacer: None,
         })
     }
 
-    /// Configure retry attempts for transient network/server errors.
+    /// Configure the minimum attempts for transient network/server errors.
     pub fn with_network_retries(mut self, retries: u32) -> Self {
         self.network_retries = usize::try_from(retries).unwrap_or(usize::MAX);
+        self
+    }
+
+    /// Configure the minimum time transient failures are retried for.
+    /// [`Duration::ZERO`] reduces the stop condition to a plain attempt cap.
+    pub fn with_min_retry_elapsed(mut self, min_elapsed: Duration) -> Self {
+        self.retry_min_elapsed = min_elapsed;
+        self
+    }
+
+    /// Attach a dispatch pacer, overriding the process-wide one.
+    pub fn with_pacer(mut self, pacer: Arc<Pacer>) -> Self {
+        self.pacer = Some(pacer);
         self
     }
 
@@ -209,18 +235,37 @@ impl OpenAIResponsesClient {
         body: Option<Value>,
     ) -> LlmResult<Value> {
         let mut last_error = LlmError::NetworkError("No attempt made".to_string());
-        for attempt in 0..=self.network_retries {
+        let budget = crate::retry::RetryBudget::new(
+            u32::try_from(self.network_retries).unwrap_or(u32::MAX),
+            self.retry_min_elapsed,
+        );
+        let pacer = self.pacer.clone().or_else(llm_pacer);
+        let started = Instant::now();
+        let mut retry_after: Option<Duration> = None;
+        let mut attempt: u32 = 0;
+
+        loop {
             debug!(attempt, "Responses API attempt");
             if attempt > 0 {
-                let delay = crate::retry::retry_backoff(attempt as u32);
+                let backoff = crate::retry::retry_backoff(attempt);
+                // A usable hint replaces the backoff outright, including when it
+                // asks for less: the provider knows when its window resets.
+                let delay = retry_after.take().unwrap_or(backoff);
                 warn!(
                     attempt,
                     delay_ms = delay.as_millis() as u64,
+                    elapsed_ms = started.elapsed().as_millis() as u64,
                     error = %last_error,
                     "Responses API request failed, retrying",
                 );
                 tokio::time::sleep(delay).await;
             }
+
+            if let Some(pacer) = pacer.as_deref() {
+                pacer.admit().await;
+            }
+
+            attempt += 1;
 
             let mut builder = self
                 .client
@@ -234,28 +279,56 @@ impl OpenAIResponsesClient {
             let response = match builder.send().await {
                 Ok(r) => r,
                 Err(e) => {
+                    if e.is_timeout()
+                        && let Some(pacer) = pacer.as_deref()
+                    {
+                        pacer.record_overload("timeout");
+                    }
                     last_error = LlmError::NetworkError(e.to_string());
+                    if budget.is_exhausted(attempt, started.elapsed()) {
+                        break;
+                    }
                     continue;
                 }
             };
 
             let status = response.status();
             if !status.is_success() {
+                let code = status.as_u16();
+                let hint = crate::retry::retry_after_hint(response.headers());
+                if let Some(reason) = crate::retry::overload_reason(code)
+                    && let Some(pacer) = pacer.as_deref()
+                {
+                    pacer.record_overload(reason);
+                }
+
                 let error_body = response
                     .text()
                     .await
                     .unwrap_or_else(|_| "Unknown error".to_string());
-                let err = match status.as_u16() {
+
+                let quota_exhausted =
+                    code == 429 && crate::retry::is_quota_or_billing_error(&error_body);
+
+                let err = match code {
                     401 => LlmError::AuthenticationError(error_body),
+                    // 402 was previously mapped to a retryable ApiError, unlike
+                    // the other two adapters. Billing failures are terminal.
+                    402 => LlmError::PaymentRequired(error_body),
+                    429 if quota_exhausted => LlmError::PaymentRequired(error_body),
                     429 => LlmError::RateLimitExceeded(error_body),
                     400 => LlmError::InvalidResponse(format!("Bad request: {error_body}")),
                     404 => LlmError::ModelNotFound(error_body),
                     _ => LlmError::ApiError(format!("HTTP {status}: {error_body}")),
                 };
-                if matches!(status.as_u16(), 400 | 401 | 404) {
+                if matches!(code, 400..=402 | 404) || quota_exhausted {
                     return Err(err);
                 }
+                retry_after = hint;
                 last_error = err;
+                if budget.is_exhausted(attempt, started.elapsed()) {
+                    break;
+                }
                 continue;
             }
 
@@ -270,8 +343,9 @@ impl OpenAIResponsesClient {
         }
 
         Err(LlmError::MaxRetriesExceeded(format!(
-            "Responses API request failed after {} attempt(s): {}",
-            self.network_retries + 1,
+            "Responses API request failed after {} attempt(s) over {:.1}s: {}",
+            attempt,
+            started.elapsed().as_secs_f64(),
             last_error
         )))
     }
