@@ -28,7 +28,12 @@
 //! ([`CredentialLookup`]) is a trait so the bearer path can prove it performs
 //! no lookup.
 
+use std::sync::Arc;
+use std::time::{Duration, SystemTime};
+
 use async_trait::async_trait;
+use tokio::sync::RwLock;
+use tracing::debug;
 
 use super::env::{
     AwsSettings, ENV_DEFAULT_REGION, ENV_REGION, ENV_ROLE_ARN, ENV_WEB_IDENTITY_TOKEN_FILE,
@@ -573,6 +578,126 @@ impl CredentialLookup for AwsConfigCredentials {
     }
 }
 
+/// How close to expiry a credential set may get before it is re-resolved.
+///
+/// Mirrors the headroom `aws-config`'s lazy identity cache uses, so a request
+/// never starts with credentials that will expire while it is in flight.
+const REFRESH_MARGIN: Duration = Duration::from_secs(60);
+
+/// A [`BedrockAuth`] that re-resolves itself before its credentials expire.
+///
+/// Every non-static rung of the §1.2 ladder yields *temporary* credentials —
+/// `AssumeRole` and `AssumeRoleWithWebIdentity` default to an hour, and the
+/// default chain over IMDS/ECS/SSO is comparable. Resolving once at construction
+/// and signing every later request with that snapshot works until the lifetime
+/// runs out, at which point Bedrock answers 403 `ExpiredTokenException`, which
+/// classifies as a terminal [`LlmError::AuthenticationError`]. Because the built
+/// adapter is cached for the process lifetime, that is a permanent failure in
+/// any long-running host — while Python litellm keeps working, since boto3 hands
+/// it refreshable credentials.
+///
+/// The bearer rungs and static keys never expire; for them this is a clone of a
+/// cached value and no lookup ever runs again.
+pub struct BedrockAuthProvider {
+    api_key: Option<String>,
+    settings: AwsSettings,
+    region: String,
+    ambient: AmbientRoleIdentity,
+    lookup: Arc<dyn CredentialLookup>,
+    cached: RwLock<BedrockAuth>,
+}
+
+impl std::fmt::Debug for BedrockAuthProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BedrockAuthProvider")
+            .field("region", &self.region)
+            .finish_non_exhaustive()
+    }
+}
+
+impl BedrockAuthProvider {
+    /// Build a provider around an already-resolved `auth`.
+    ///
+    /// The inputs are kept so the ladder can be re-run on expiry; re-running it
+    /// reaches the same rung, because the rung is chosen from `settings` and
+    /// `ambient`, neither of which changes over the process lifetime.
+    pub fn new(
+        api_key: Option<&str>,
+        settings: AwsSettings,
+        region: impl Into<String>,
+        ambient: AmbientRoleIdentity,
+        lookup: Arc<dyn CredentialLookup>,
+        auth: BedrockAuth,
+    ) -> Self {
+        Self {
+            api_key: api_key.map(str::to_string),
+            settings,
+            region: region.into(),
+            ambient,
+            lookup,
+            cached: RwLock::new(auth),
+        }
+    }
+
+    /// A provider that never refreshes — for tests and for callers that hold a
+    /// value with no expiry of its own.
+    pub fn fixed(auth: BedrockAuth, region: impl Into<String>) -> Self {
+        Self {
+            api_key: None,
+            settings: AwsSettings::default(),
+            region: region.into(),
+            ambient: AmbientRoleIdentity::default(),
+            lookup: Arc::new(AwsConfigCredentials),
+            cached: RwLock::new(auth),
+        }
+    }
+
+    /// The auth to sign the next request with, re-resolved if it is at or near
+    /// expiry.
+    pub async fn auth(&self) -> LlmResult<BedrockAuth> {
+        if let Some(fresh) = Self::still_fresh(&*self.cached.read().await) {
+            return Ok(fresh);
+        }
+
+        // Re-check under the write lock: several in-flight requests can observe
+        // the same expiry, and only the first should pay for the lookup.
+        let mut cached = self.cached.write().await;
+        if let Some(fresh) = Self::still_fresh(&cached) {
+            return Ok(fresh);
+        }
+
+        debug!(
+            region = self.region.as_str(),
+            "Bedrock credentials expired or near expiry — re-resolving the §1.2 ladder"
+        );
+        let refreshed = resolve_auth_with(
+            self.api_key.as_deref(),
+            &self.settings,
+            &self.region,
+            &self.ambient,
+            self.lookup.as_ref(),
+        )
+        .await?;
+        *cached = refreshed.clone();
+        Ok(refreshed)
+    }
+
+    /// `Some(clone)` while `auth` is safe to sign with, `None` when it must be
+    /// re-resolved. Bearer tokens and credentials without an expiry never age.
+    fn still_fresh(auth: &BedrockAuth) -> Option<BedrockAuth> {
+        match auth {
+            BedrockAuth::Bearer(_) => Some(auth.clone()),
+            BedrockAuth::SigV4(credentials) => match credentials.expiry() {
+                None => Some(auth.clone()),
+                Some(expiry) => (expiry
+                    .duration_since(SystemTime::now())
+                    .is_ok_and(|left| left > REFRESH_MARGIN))
+                .then(|| auth.clone()),
+            },
+        }
+    }
+}
+
 /// Resolve auth against the process environment and `aws-config`.
 ///
 /// `api_key` is the request-level Bedrock API key (rung 1); the
@@ -584,6 +709,28 @@ pub async fn resolve_auth(
 ) -> LlmResult<BedrockAuth> {
     let ambient = AmbientRoleIdentity::from_env(&ProcessEnv);
     resolve_auth_with(api_key, settings, region, &ambient, &AwsConfigCredentials).await
+}
+
+/// Resolve auth and wrap it in a provider that re-resolves before expiry.
+///
+/// This is what adapters should call: [`resolve_auth`] alone hands back a
+/// snapshot that silently stops working once temporary credentials age out.
+pub async fn resolve_auth_provider(
+    api_key: Option<&str>,
+    settings: &AwsSettings,
+    region: &str,
+) -> LlmResult<BedrockAuthProvider> {
+    let ambient = AmbientRoleIdentity::from_env(&ProcessEnv);
+    let lookup: Arc<dyn CredentialLookup> = Arc::new(AwsConfigCredentials);
+    let auth = resolve_auth_with(api_key, settings, region, &ambient, lookup.as_ref()).await?;
+    Ok(BedrockAuthProvider::new(
+        api_key,
+        settings.clone(),
+        region,
+        ambient,
+        lookup,
+        auth,
+    ))
 }
 
 /// Resolve auth with the ambient identity and the credential lookup injected.

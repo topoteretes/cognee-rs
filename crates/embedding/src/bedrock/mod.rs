@@ -183,9 +183,10 @@ impl BedrockEmbeddingEngine {
             .map_err(embedding_error_from_llm)?;
         let endpoint =
             aws::endpoint::resolve_endpoint(bedrock_api_base(config), &settings, &region);
-        let auth = aws::credentials::resolve_auth(config.api_key.as_deref(), &settings, &region)
-            .await
-            .map_err(embedding_error_from_llm)?;
+        let auth =
+            aws::credentials::resolve_auth_provider(config.api_key.as_deref(), &settings, &region)
+                .await
+                .map_err(embedding_error_from_llm)?;
 
         let client = reqwest::Client::builder()
             .timeout(REQUEST_TIMEOUT)
@@ -193,7 +194,11 @@ impl BedrockEmbeddingEngine {
             .map_err(|e| {
                 EmbeddingError::ConfigError(format!("Failed to build HTTP client: {e}"))
             })?;
-        let transport = Arc::new(ReqwestBedrockTransport::new(client, auth, region.clone()));
+        let transport = Arc::new(ReqwestBedrockTransport::with_auth_provider(
+            client,
+            Arc::new(auth),
+            region.clone(),
+        ));
 
         debug!(
             model = model.as_str(),

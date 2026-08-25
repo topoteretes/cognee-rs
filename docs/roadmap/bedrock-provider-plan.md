@@ -745,6 +745,20 @@ against; the `cognee-components` feature must exist at R5 for the `#[cfg]`'d
 registration. R6 as an independent late step was a paper step — intermediate
 commits would not build. Folded into R1/R5, kept as a verification checklist.
 
+**6.10 Credentials are refreshed, not snapshotted.** §1.2 specifies how a
+credential set is *resolved* and says nothing about how long it lives — an
+omission that shipped as a real defect: the ladder ran once at construction and
+every later request was signed with that snapshot. Every non-static rung yields
+temporary credentials (`AssumeRole` ~1h, the default chain over IMDS/ECS/SSO
+comparable), and because the built adapter is cached for the process lifetime, a
+long-running host started returning terminal 403 `ExpiredTokenException` and
+never recovered. Python does not have this problem: boto3 hands litellm
+`RefreshableCredentials`. `BedrockAuthProvider` closes it — it keeps the ladder
+inputs, re-runs the resolution when the cached credentials are within 60s of
+expiry, and is a no-op clone for bearer tokens and static keys. Re-running
+reaches the same rung, because the rung is chosen from `AwsSettings` and the
+ambient identity, neither of which changes over the process lifetime.
+
 **6.9 The AWS crate line is pinned by the toolchain.** §3 — 1.8.x/1.4.x until
 rustc moves past 1.91. Revisit on the next toolchain bump.
 

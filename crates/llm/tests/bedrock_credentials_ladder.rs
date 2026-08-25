@@ -11,12 +11,14 @@
     reason = "integration test code: panics are acceptable"
 )]
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
 use cognee_llm::adapters::bedrock::aws::credentials::{
-    AmbientRoleIdentity, AwsCredentials, BedrockAuth, CredentialLookup, CredentialStrategy,
-    resolve_auth_with, select_strategy,
+    AmbientRoleIdentity, AwsCredentials, BedrockAuth, BedrockAuthProvider, CredentialLookup,
+    CredentialStrategy, resolve_auth_with, select_strategy,
 };
 use cognee_llm::adapters::bedrock::aws::env::{AwsInputs, AwsSettings, EnvSource};
 use cognee_llm::error::LlmResult;
@@ -480,4 +482,129 @@ fn the_process_environment_is_read_under_the_documented_names() {
 
     assert_eq!(settings.profile_name.as_deref(), Some("from-real-env"));
     assert_eq!(settings.role_name.as_deref(), Some(ROLE_ARN));
+}
+
+// ---------------------------------------------------------------------------
+// Credential lifetime — `BedrockAuthProvider` (review finding 1).
+// ---------------------------------------------------------------------------
+
+/// Hands out credentials that expire `ttl` from now, counting resolutions.
+struct ExpiringLookup {
+    calls: AtomicUsize,
+    ttl: Duration,
+}
+
+impl ExpiringLookup {
+    fn new(ttl: Duration) -> Self {
+        Self {
+            calls: AtomicUsize::new(0),
+            ttl,
+        }
+    }
+
+    fn calls(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait]
+impl CredentialLookup for ExpiringLookup {
+    async fn lookup(
+        &self,
+        _strategy: CredentialStrategy<'_>,
+        _settings: &AwsSettings,
+        _region: &str,
+    ) -> LlmResult<AwsCredentials> {
+        let n = self.calls.fetch_add(1, Ordering::SeqCst);
+        Ok(AwsCredentials::new(
+            format!("AKIA_GENERATION_{n}"),
+            "secret",
+            Some("session-token".to_string()),
+            Some(SystemTime::now() + self.ttl),
+            "expiring-lookup",
+        ))
+    }
+}
+
+fn access_key_of(auth: &BedrockAuth) -> String {
+    match auth {
+        BedrockAuth::SigV4(credentials) => credentials.access_key_id().to_string(),
+        BedrockAuth::Bearer(_) => panic!("expected SigV4 auth"),
+    }
+}
+
+/// Credentials that are already past their expiry are re-resolved.
+///
+/// The defect this covers: the ladder ran once at construction and every later
+/// request was signed with that snapshot, so an `AssumeRole`/IMDS deployment
+/// started returning a terminal 403 `ExpiredTokenException` about an hour in and
+/// never recovered — the built adapter is cached for the process lifetime.
+#[tokio::test]
+async fn expired_credentials_are_re_resolved() {
+    let settings = AwsSettings::default();
+    let ambient = AmbientRoleIdentity::default();
+    // Already expired: one second in the past.
+    let lookup = Arc::new(ExpiringLookup::new(Duration::from_secs(0)));
+
+    let initial = resolve_auth_with(None, &settings, REGION, &ambient, lookup.as_ref())
+        .await
+        .expect("initial resolution");
+    assert_eq!(lookup.calls(), 1);
+    assert_eq!(access_key_of(&initial), "AKIA_GENERATION_0");
+
+    let provider =
+        BedrockAuthProvider::new(None, settings, REGION, ambient, lookup.clone(), initial);
+
+    let refreshed = provider.auth().await.expect("refresh");
+    assert_eq!(
+        lookup.calls(),
+        2,
+        "expired credentials must trigger exactly one re-resolution",
+    );
+    assert_eq!(
+        access_key_of(&refreshed),
+        "AKIA_GENERATION_1",
+        "the refreshed credentials must be the new ones, not the cached snapshot",
+    );
+}
+
+/// Long-lived credentials are reused: refreshing is expiry-driven, not
+/// per-request.
+#[tokio::test]
+async fn unexpired_credentials_are_reused_without_a_lookup() {
+    let settings = AwsSettings::default();
+    let ambient = AmbientRoleIdentity::default();
+    let lookup = Arc::new(ExpiringLookup::new(Duration::from_secs(3600)));
+
+    let initial = resolve_auth_with(None, &settings, REGION, &ambient, lookup.as_ref())
+        .await
+        .expect("initial resolution");
+    let provider =
+        BedrockAuthProvider::new(None, settings, REGION, ambient, lookup.clone(), initial);
+
+    for _ in 0..5 {
+        let auth = provider.auth().await.expect("cached auth");
+        assert_eq!(access_key_of(&auth), "AKIA_GENERATION_0");
+    }
+    assert_eq!(lookup.calls(), 1, "no extra lookups for fresh credentials");
+}
+
+/// A bearer token has no expiry and must never trigger a credential lookup —
+/// the §1.2 early return still holds through the provider.
+#[tokio::test]
+async fn a_bearer_token_never_triggers_a_lookup() {
+    let lookup = Arc::new(ExpiringLookup::new(Duration::from_secs(0)));
+    let provider = BedrockAuthProvider::new(
+        Some("bedrock-api-key"),
+        AwsSettings::default(),
+        REGION,
+        AmbientRoleIdentity::default(),
+        lookup.clone(),
+        BedrockAuth::Bearer("bedrock-api-key".to_string()),
+    );
+
+    for _ in 0..3 {
+        assert!(provider.auth().await.expect("bearer").is_bearer());
+    }
+    assert_eq!(lookup.calls(), 0);
 }

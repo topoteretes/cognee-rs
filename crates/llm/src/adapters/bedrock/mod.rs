@@ -140,13 +140,17 @@ impl BedrockAdapter {
         let settings = aws.resolve();
         let region = aws::region::resolve_region(&settings, Some(&model)).await?;
         let endpoint = aws::endpoint::resolve_endpoint(api_base, &settings, &region);
-        let auth = aws::credentials::resolve_auth(api_key, &settings, &region).await?;
+        let auth = aws::credentials::resolve_auth_provider(api_key, &settings, &region).await?;
 
         let client = reqwest::Client::builder()
             .timeout(Self::REQUEST_TIMEOUT)
             .build()
             .map_err(|e| LlmError::ConfigError(format!("Failed to create HTTP client: {e}")))?;
-        let transport = Arc::new(ReqwestBedrockTransport::new(client, auth, region.clone()));
+        let transport = Arc::new(ReqwestBedrockTransport::with_auth_provider(
+            client,
+            Arc::new(auth),
+            region.clone(),
+        ));
 
         let base_model = model_id::base_model(&model);
         let caps = caps::caps_for_base_model(&base_model);

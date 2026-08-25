@@ -21,7 +21,9 @@ use std::time::SystemTime;
 use async_trait::async_trait;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderValue};
 
-use super::credentials::BedrockAuth;
+use std::sync::Arc;
+
+use super::credentials::{BedrockAuth, BedrockAuthProvider};
 use super::signer::sign_request;
 use crate::error::{LlmError, LlmResult};
 
@@ -56,17 +58,33 @@ pub trait BedrockTransport: Send + Sync {
 /// [`BedrockTransport`] over the crate's existing `reqwest` client.
 pub struct ReqwestBedrockTransport {
     client: reqwest::Client,
-    auth: BedrockAuth,
+    auth: Arc<BedrockAuthProvider>,
     region: String,
 }
 
 impl ReqwestBedrockTransport {
-    /// Build a transport that authenticates every request with `auth`.
+    /// Build a transport around a fixed `auth` that is never re-resolved.
     ///
-    /// `auth` is resolved once by the caller
-    /// ([`super::credentials::resolve_auth`]); credential refresh policy is the
-    /// adapter's decision, not the transport's.
+    /// Correct only for auth that cannot expire — a bearer token or static
+    /// keys. Anything resolved through the §1.2 ladder should come in via
+    /// [`Self::with_auth_provider`], because temporary credentials that age out
+    /// mid-process turn into a terminal `AuthenticationError`.
     pub fn new(client: reqwest::Client, auth: BedrockAuth, region: impl Into<String>) -> Self {
+        let region = region.into();
+        Self::with_auth_provider(
+            client,
+            Arc::new(BedrockAuthProvider::fixed(auth, region.clone())),
+            region,
+        )
+    }
+
+    /// Build a transport that asks `auth` for credentials on every request, so
+    /// temporary credentials are refreshed before they expire.
+    pub fn with_auth_provider(
+        client: reqwest::Client,
+        auth: Arc<BedrockAuthProvider>,
+        region: impl Into<String>,
+    ) -> Self {
         Self {
             client,
             auth,
@@ -88,7 +106,11 @@ impl BedrockTransport for ReqwestBedrockTransport {
                 LlmError::ConfigError(format!("could not build Bedrock request: {error}"))
             })?;
 
-        match &self.auth {
+        // Resolved per request: for a bearer token or static keys this is a
+        // cached clone, and for temporary credentials it refreshes near expiry.
+        let auth = self.auth.auth().await?;
+
+        match &auth {
             BedrockAuth::Bearer(token) => {
                 let mut value = HeaderValue::from_str(&format!("Bearer {token}")).map_err(|_| {
                     LlmError::ConfigError(
