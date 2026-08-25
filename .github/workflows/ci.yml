@@ -22,8 +22,8 @@ on:
   #
   #   1. Toolchain churn. The jobs here install `dtolnay/rust-toolchain@stable`,
   #      which sets RUSTUP_TOOLCHAIN and so overrides rust-toolchain.toml's
-  #      `channel = "1.91"` pin (CI really runs current stable; the MSRV job is
-  #      what covers 1.91). Every stable release therefore rotates the rustc
+  #      `channel = "1.91.1"` pin (CI really runs current stable; the MSRV job is
+  #      what covers 1.91.1). Every stable release therefore rotates the rustc
   #      component of every rust-cache key at once — observed going
   #      adf1a63c -> b33fdd40 while the dependency hash held at c4307474.
   #   2. The 7-day idle eviction. GitHub deletes any cache not *read* for a
@@ -256,7 +256,7 @@ jobs:
   # ── MSRV floor: build against the declared rust-version (T2.3) ─────────
   # rust-toolchain.toml pins the toolchain repo-wide (it takes precedence over
   # @stable), so every lane already builds on the floor; this lane additionally
-  # installs 1.91.0 explicitly so a newer-than-MSRV API is caught before release
+  # installs 1.91.1 explicitly so a newer-than-MSRV API is caught before release
   # even if the pin moves.
   # Note: 1.89 is the real floor on x86_64 — the embedded qdrant `quantization`
   # crate uses AVX-512 target features/intrinsics (avx512vl, avx512vpopcntdq,
@@ -265,7 +265,7 @@ jobs:
   # would allow 1.85 in principle. The aarch64 build never compiles the AVX-512
   # path, so this only manifests on x86_64.
   msrv:
-    name: MSRV (1.91)
+    name: MSRV (1.91.1)
     runs-on: ubuntu-latest
     # In-repo only (no `needs`, so it carries its own gate). See `lint`.
     if: >-
@@ -275,8 +275,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Rust 1.91
-        uses: dtolnay/rust-toolchain@1.91.0
+      - name: Install Rust 1.91.1
+        uses: dtolnay/rust-toolchain@1.91.1
 
       - name: Install mold linker
         uses: rui314/setup-mold@v1
@@ -319,7 +319,7 @@ jobs:
           key: ort-v2.0.0-rc.12-cpu-linux-x86_64
 
       - name: Check (MSRV)
-        run: cargo +1.91.0 check --all-targets
+        run: cargo +1.91.1 check --all-targets
 
   # ── wasm32 Config-1 lane: logic crates compile + run on wasm32 ────────
   # The wasm smoke-test files are #![cfg(target_arch = "wasm32")], so the native
@@ -345,9 +345,9 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      # rust-toolchain.toml pins the repo to 1.91, and that pin takes precedence
+      # rust-toolchain.toml pins the repo to 1.91.1, and that pin takes precedence
       # over @stable — so `cargo build --target wasm32-unknown-unknown` runs under
-      # 1.91, not stable. The wasm32 std component must be on the *pinned*
+      # 1.91.1, not stable. The wasm32 std component must be on the *pinned*
       # toolchain. `rustup target add` honors the rust-toolchain.toml override
       # (exactly as scripts/check_all.sh does locally); the action's `targets:`
       # input adds it to @stable instead, which is why CI hit

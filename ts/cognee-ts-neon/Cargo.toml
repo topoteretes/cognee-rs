@@ -2,7 +2,7 @@
 name = "cognee-ts-neon"
 version = "0.2.0"
 edition = "2024"
-rust-version = "1.91"
+rust-version = "1.91.1"
 license = "MIT OR Apache-2.0"
 description = "Neon (Node.js) native binding for the cognee Rust SDK."
 repository = "https://github.com/topoteretes/cognee-rs"

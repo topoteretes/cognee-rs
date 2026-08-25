@@ -81,7 +81,7 @@ Plain unit tests that don't touch the LLM run with `cargo test`.
 
 ### MSRV & lockfiles
 
-The MSRV is **1.91**, declared via `rust-version` and pinned for local builds by
+The MSRV is **1.91.1**, declared via `rust-version` and pinned for local builds by
 `rust-toolchain.toml`. It must be stated in **every** workspace, because the three of
 them resolve independently: `[workspace.package]` in `Cargo.toml` and `capi/Cargo.toml`,
 and the `[package]` sections of `ts/cognee-ts-neon/Cargo.toml` and
@@ -92,7 +92,7 @@ below.
 (The hard floor from dependencies is lower: on x86_64 the embedded qdrant `quantization`
 crate uses AVX-512 intrinsics stabilized in Rust 1.89, and edition 2024 + resolver 3 would
 allow 1.85 in principle. The aarch64 build never compiles the AVX-512 path, so a Mac may
-build on an older toolchain while CI on x86_64 will not. 1.91 is the declared floor
+build on an older toolchain while CI on x86_64 will not. 1.91.1 is the declared floor
 regardless, and the `msrv` CI lane builds against it.)
 
 `Cargo.lock` is intentionally **not committed** (see `.gitignore`); the edition-2024
@@ -110,11 +110,11 @@ second full build of the bundled Ladybug C++ tree
 If `scripts/check_all.sh` fails with an error like
 `roaring@x.y.z requires rustc 1.92.0` (or any other "requires rustc > 1.91"), you have a
 **stale local lockfile** that pinned a version published with a higher MSRV — it is not a
-real breakage (a fresh resolve under the pinned toolchain selects a 1.91-compatible version).
+real breakage (a fresh resolve under the pinned toolchain selects a 1.91.1-compatible version).
 Recover by regenerating the lock or pinning the offending crate down, e.g.:
 
 ```bash
-# Regenerate fresh (uses the 1.91-aware resolver), or pin the specific crate:
+# Regenerate fresh (uses the 1.91.1-aware resolver), or pin the specific crate:
 cargo update                                            # whole workspace
 cargo update -p roaring@0.11.4 --precise 0.11.3         # one transitive dep
 # capi/ and bindings/ are their own workspaces — run the same from inside

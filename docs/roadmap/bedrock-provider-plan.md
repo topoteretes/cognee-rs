@@ -477,15 +477,21 @@ in the lock today. (The closed `cognee-cloud-rust` workspace also carries a
 `hyper 0.14` qdrant fork under `[patch.crates-io]`; the two already coexist
 there, so this does not disturb the closed build either.)
 
-**MSRV ceiling — [R1].** The workspace pins rustc **1.91**
-(`rust-toolchain.toml:2`, `Cargo.toml:55` `rust-version = "1.91"`), but
-`aws-config` ≥ 1.9.0 and `aws-sigv4` 1.5.x require **1.94.1**. The newest
-compatible line is `aws-config 1.8.18` / `aws-sigv4 1.4.5` /
-`aws-credential-types 1.2.14` (MSRV 1.91.1). `resolver = "3"` selects these
-automatically, so the build works — but the adapter is **frozen on a mid-2026
-AWS release line until the toolchain moves**. Pin those versions explicitly with
-a comment pointing here, so the next `cargo update` doesn't produce a confusing
-MSRV failure.
+**MSRV ceiling — [R1].** `aws-config` ≥ 1.9.0 and `aws-sigv4` 1.5.x require
+rustc **1.94.1**. The newest compatible line is `aws-config 1.8.18` /
+`aws-sigv4 1.4.5` / `aws-credential-types 1.2.14`, whose MSRV is **1.91.1**.
+Pin those versions explicitly with a comment pointing here, so the next
+`cargo update` doesn't produce a confusing MSRV failure — `resolver = "3"` does
+**not** rescue this on its own, as the workspace manifest records. The adapter is
+**frozen on that AWS release line until the toolchain reaches 1.94.1**.
+
+> The workspace pinned `1.91`, which resolves to **1.91.0** — one patch below
+> what these crates require. The first draft of this note read "1.91" as
+> satisfying "1.91.1" and called the pin compatible; CI's `MSRV` lane caught it
+> with `rustc 1.91.0 is not supported by ... aws-config@1.8.18 requires rustc
+> 1.91.1`. The pin is now `1.91.1` everywhere (`rust-toolchain.toml`, all four
+> `rust-version` declarations, the `msrv` CI lane, `ios.yml`). When comparing an
+> MSRV against a pin, compare all three components.
 
 Also: the SigV4 fallback's SSO leg needs `aws-config`'s `sso` feature turned on
 explicitly — verify it is not in the default set before relying on §1.2's

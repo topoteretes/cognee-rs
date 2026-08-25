@@ -43,8 +43,8 @@ feedback, **`forget`** what's stale.
 ### Prerequisites
 
 - **Rust toolchain** — install [rustup](https://rustup.rs); the repo's pinned
-  toolchain (Rust 1.91, declared in `rust-toolchain.toml`) is selected
-  automatically. The workspace is edition 2024 / resolver 3; MSRV is 1.91.
+  toolchain (Rust 1.91.1, declared in `rust-toolchain.toml`) is selected
+  automatically. The workspace is edition 2024 / resolver 3; MSRV is 1.91.1.
 - An **LLM API key** (OpenAI-compatible). 
 
 Build the CLI from source with Cargo. 

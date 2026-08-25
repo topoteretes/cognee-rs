@@ -65,7 +65,7 @@ cognee-utils = { path = "../utils", version = "0.2.0" }
 sha2 = { workspace = true, optional = true }
 
 # AWS Bedrock stack (feature-gated). Versions are pinned in the workspace
-# manifest against the 1.91 MSRV — see the comment there before bumping.
+# manifest against the 1.91.1 MSRV — see the comment there before bumping.
 aws-config = { workspace = true, optional = true }
 aws-credential-types = { workspace = true, optional = true }
 aws-sigv4 = { workspace = true, optional = true }

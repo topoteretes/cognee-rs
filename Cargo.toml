@@ -52,7 +52,7 @@ resolver = "3"
 [workspace.package]
 edition = "2024"
 version = "0.2.0"
-rust-version = "1.91"
+rust-version = "1.91.1"
 license = "MIT OR Apache-2.0"
 authors = ["Topoteretes <support@cognee.ai>"]
 description = "Rust port of cognee — an AI memory pipeline that turns raw data into queryable knowledge graphs."
@@ -69,7 +69,7 @@ assert_cmd = "2.0"
 async-trait = "0.1.89"
 # AWS Bedrock provider stack (cognee-llm `bedrock` feature, non-default).
 #
-# EXACT pins on purpose: the workspace pins rustc 1.91 (`rust-toolchain.toml`,
+# EXACT pins on purpose: the workspace pins rustc 1.91.1 (`rust-toolchain.toml`,
 # `rust-version` above) and every newer AWS release line requires 1.94.1. These
 # are the newest lines whose MSRV is <= 1.91.1. Do not assume `resolver = "3"`
 # handles this on its own — measured on this graph it does not (see the note on
