@@ -54,6 +54,7 @@ signatures.
 - **[performance/cpu-profiling.md](performance/cpu-profiling.md)** — CPU profiling findings: where the pipeline spends CPU + prioritised optimisations.
 
 ### Build & release
+- **[build/prerequisites.md](build/prerequisites.md)** — native build tools (`cmake`, `protoc`, compiler floors), which feature sets need them, and the GCC 11 workaround.
 - **[build/lbug-rebuilds.md](build/lbug-rebuilds.md)** — Ladybug rebuild troubleshooting.
 - **Reclaiming disk space** — `bash scripts/clean_all.sh` cleans all four Cargo workspaces (a root `cargo clean` misses the binding workspaces); see [CONTRIBUTING.md § Cleaning build artifacts](../CONTRIBUTING.md#cleaning-build-artifacts).
 - **[RELEASE.md](RELEASE.md)** — release runbook.

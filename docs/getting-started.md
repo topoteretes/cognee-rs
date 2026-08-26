@@ -16,6 +16,9 @@ cargo build --release
 This produces the binary at `target/release/cognee-cli`. Everything below uses
 that binary (add it to your `PATH` or call it by path).
 
+Besides the Rust toolchain this needs a C/C++ compiler, `cmake` and `protoc` —
+see [build/prerequisites.md](build/prerequisites.md).
+
 ## 2. Configure an LLM
 
 cognee-rust needs an OpenAI-compatible chat endpoint. Set three env vars (a
