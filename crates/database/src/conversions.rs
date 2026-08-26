@@ -17,6 +17,7 @@ use crate::uuid_hex;
 /// Shared SeaORM ↔ domain-type conversions and error helpers used across ops modules.
 use chrono::Utc;
 use cognee_models::{Data, Dataset};
+use cognee_utils::sanitize::{sanitize_json, sanitize_str, sanitize_string};
 use sea_orm::ActiveValue::Set;
 
 // ---------------------------------------------------------------------------
@@ -223,16 +224,20 @@ impl From<node::Model> for GraphNode {
 
 impl From<&GraphNode> for node::ActiveModel {
     fn from(n: &GraphNode) -> Self {
+        // `attributes` carries the serialized DataPoint, chunk text included, so
+        // NUL bytes must be stripped before this reaches Postgres — the whole
+        // provenance batch shares one transaction, so a single bad chunk would
+        // abort every row in it. See `cognee_utils::sanitize`.
         Self {
             id: Set(uuid_hex::to_hex(n.id)),
             slug: Set(uuid_hex::to_hex(n.slug)),
             user_id: Set(uuid_hex::to_hex(n.user_id)),
             data_id: Set(uuid_hex::to_hex(n.data_id)),
             dataset_id: Set(uuid_hex::to_hex(n.dataset_id)),
-            label: Set(n.label.clone()),
-            node_type: Set(n.node_type.clone()),
-            indexed_fields: Set(n.indexed_fields.clone()),
-            attributes: Set(n.attributes.clone()),
+            label: Set(n.label.clone().map(sanitize_string)),
+            node_type: Set(sanitize_str(&n.node_type).into_owned()),
+            indexed_fields: Set(sanitize_json(n.indexed_fields.clone())),
+            attributes: Set(n.attributes.clone().map(sanitize_json)),
             created_at: Set(n.created_at),
         }
     }
@@ -266,9 +271,9 @@ impl From<&GraphEdge> for edge::ActiveModel {
             dataset_id: Set(uuid_hex::to_hex(e.dataset_id)),
             source_node_id: Set(uuid_hex::to_hex(e.source_node_id)),
             destination_node_id: Set(uuid_hex::to_hex(e.destination_node_id)),
-            relationship_name: Set(e.relationship_name.clone()),
-            label: Set(e.label.clone()),
-            attributes: Set(e.attributes.clone()),
+            relationship_name: Set(sanitize_str(&e.relationship_name).into_owned()),
+            label: Set(e.label.clone().map(sanitize_string)),
+            attributes: Set(e.attributes.clone().map(sanitize_json)),
             created_at: Set(e.created_at),
         }
     }
@@ -321,7 +326,11 @@ impl From<&PipelineRun> for pipeline_run::ActiveModel {
             pipeline_name: Set(r.pipeline_name.clone()),
             pipeline_id: Set(uuid_hex::to_hex(r.pipeline_id)),
             dataset_id: Set(uuid_hex::to_hex_opt(r.dataset_id)),
-            run_info: Set(r.run_info.clone()),
+            // `run_info_for_errored` embeds an arbitrary error string, which can
+            // quote offending source text. A NUL here fails the Errored-status
+            // write, and that failure is logged-and-ignored by the run watcher —
+            // leaving the run recorded as `Started` with the error never stored.
+            run_info: Set(r.run_info.clone().map(sanitize_json)),
         }
     }
 }
@@ -349,7 +358,11 @@ impl From<&TaskRun> for task_run::ActiveModel {
             task_name: Set(r.task_name.clone()),
             created_at: Set(r.created_at),
             status: Set(r.status.clone()),
-            run_info: Set(r.run_info.clone()),
+            // `run_info_for_errored` embeds an arbitrary error string, which can
+            // quote offending source text. A NUL here fails the Errored-status
+            // write, and that failure is logged-and-ignored by the run watcher —
+            // leaving the run recorded as `Started` with the error never stored.
+            run_info: Set(r.run_info.clone().map(sanitize_json)),
         }
     }
 }
@@ -397,5 +410,132 @@ impl From<&GraphMetrics> for graph_metrics::ActiveModel {
             created_at: Set(gm.created_at),
             updated_at: Set(gm.updated_at),
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// NUL-byte sanitization (no database required)
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
+mod sanitize_tests {
+    use super::*;
+    use chrono::Utc;
+    use sea_orm::ActiveValue;
+    use serde_json::json;
+    use uuid::Uuid;
+
+    fn unwrap_set<T>(v: ActiveValue<T>) -> T
+    where
+        T: Into<sea_orm::Value>,
+    {
+        match v {
+            ActiveValue::Set(inner) => inner,
+            _ => panic!("conversion must produce ActiveValue::Set"),
+        }
+    }
+
+    /// Provenance rows carry the serialized DataPoint — chunk text included —
+    /// and the whole batch shares one transaction, so a single NUL would abort
+    /// every row in it, not just its own.
+    #[test]
+    fn graph_node_active_model_strips_nul_bytes() {
+        let node = GraphNode {
+            id: Uuid::new_v4(),
+            slug: Uuid::new_v4(),
+            user_id: Uuid::new_v4(),
+            data_id: Uuid::new_v4(),
+            dataset_id: Uuid::new_v4(),
+            label: Some("Nikola\u{0} Tesla".to_string()),
+            node_type: "Doc\u{0}Chunk".to_string(),
+            indexed_fields: json!(["te\u{0}xt"]),
+            // Mirrors Python's `test_upsert_nodes_sanitizes_strings_before_insert`
+            // (`cognee/tests/unit/modules/graph/test_relational_upserts.py:65`),
+            // whose `details` carries both a dirty nested key and a nested list.
+            attributes: Some(json!({
+                "text": "page 1\u{0}page 2",
+                "details": {"summa\u{0}ry": "Nested\u{0} value", "items": ["A\u{0}", "B"]},
+                "count": 7,
+            })),
+            created_at: Utc::now(),
+        };
+
+        let model: node::ActiveModel = (&node).into();
+
+        assert_eq!(unwrap_set(model.label), Some("Nikola Tesla".to_string()));
+        assert_eq!(unwrap_set(model.node_type), "DocChunk");
+        assert_eq!(unwrap_set(model.indexed_fields), json!(["text"]));
+        assert_eq!(
+            unwrap_set(model.attributes),
+            Some(json!({
+                "text": "page 1page 2",
+                "details": {"summary": "Nested value", "items": ["A", "B"]},
+                "count": 7,
+            }))
+        );
+    }
+
+    #[test]
+    fn graph_edge_active_model_strips_nul_bytes() {
+        let edge = GraphEdge {
+            id: Uuid::new_v4(),
+            slug: Uuid::new_v4(),
+            user_id: Uuid::new_v4(),
+            data_id: Uuid::new_v4(),
+            dataset_id: Uuid::new_v4(),
+            source_node_id: Uuid::new_v4(),
+            destination_node_id: Uuid::new_v4(),
+            relationship_name: "is\u{0}_a".to_string(),
+            label: Some("la\u{0}bel".to_string()),
+            // Mirrors Python's `test_upsert_edges_sanitizes_strings_before_insert`
+            // (`test_relational_upserts.py:100`), which pins that dirty keys
+            // nested inside `attributes` are rewritten too, not just values.
+            attributes: Some(json!({
+                "edge_text": "described\u{0}relationship",
+                "no\u{0}te": "nul\u{0} byte",
+                "nested": {"va\u{0}lue": "still\u{0} here"},
+            })),
+            created_at: Utc::now(),
+        };
+
+        let model: edge::ActiveModel = (&edge).into();
+
+        assert_eq!(unwrap_set(model.relationship_name), "is_a");
+        assert_eq!(unwrap_set(model.label), Some("label".to_string()));
+        assert_eq!(
+            unwrap_set(model.attributes),
+            Some(json!({
+                "edge_text": "describedrelationship",
+                "note": "nul byte",
+                "nested": {"value": "still here"},
+            }))
+        );
+    }
+
+    #[test]
+    fn clean_provenance_rows_are_unchanged() {
+        let attrs = json!({"text": "no nulls — just an em dash", "n": 1});
+        let node = GraphNode {
+            id: Uuid::new_v4(),
+            slug: Uuid::new_v4(),
+            user_id: Uuid::new_v4(),
+            data_id: Uuid::new_v4(),
+            dataset_id: Uuid::new_v4(),
+            label: Some("Ada Lovelace".to_string()),
+            node_type: "Person".to_string(),
+            indexed_fields: json!(["text"]),
+            attributes: Some(attrs.clone()),
+            created_at: Utc::now(),
+        };
+
+        let model: node::ActiveModel = (&node).into();
+
+        assert_eq!(unwrap_set(model.label), Some("Ada Lovelace".to_string()));
+        assert_eq!(unwrap_set(model.node_type), "Person");
+        assert_eq!(unwrap_set(model.attributes), Some(attrs));
     }
 }

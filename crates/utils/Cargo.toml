@@ -34,6 +34,9 @@ uuid = { workspace = true, features = ["v4", "v5"] }
 # Secret redaction (cognee_utils::redact)
 regex = { workspace = true }
 
+# JSON payload walking (cognee_utils::sanitize)
+serde_json = { workspace = true }
+
 # WebAssembly (browser) spike — Config 1. The only getrandom in our wasm tree is
 # 0.2, pulled transitively by rand 0.8 (the jitter in retry.rs). On wasm32 it has
 # no default backend, so the `js` feature routes it through the browser crypto

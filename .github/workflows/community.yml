@@ -288,7 +288,7 @@ jobs:
       - name: Assert the suite really executed
         run: |
           bash scripts/ci/assert_pg_suite_ran.sh --label PgGraph \
-            --log pggraph-integration.log --min-tests 30 \
+            --log pggraph-integration.log --min-tests 31 \
             --log pggraph-lib.log         --min-tests 1 \
             --log pggraph-close.log --min-tests 3 \
             --require-test pggraph_coexists_with_relational_migrator_in_shared_db \
@@ -404,7 +404,7 @@ jobs:
       - name: Assert the suite really executed
         run: |
           bash scripts/ci/assert_pg_suite_ran.sh --label PgVector \
-            --log pgvector-integration.log --min-tests 20 \
+            --log pgvector-integration.log --min-tests 21 \
             --log pgvector-lib.log         --min-tests 1 \
             --log pgvector-spans.log       --min-tests 1 \
             --log pgvector-close.log --min-tests 2 \

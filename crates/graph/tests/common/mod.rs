@@ -888,3 +888,88 @@ pub async fn test_get_neighborhood_empty_seeds(db: &dyn GraphDBTrait) {
     assert!(nodes.is_empty());
     assert!(edges.is_empty());
 }
+
+// -- NUL bytes ---------------------------------------------------------------
+
+/// A NUL byte in node or edge text must never break persistence.
+///
+/// PDF-extracted chunk text routinely contains a literal `0x00`. Postgres
+/// cannot store it in `varchar` and its `jsonb` parser rejects the escape
+/// `serde_json` emits for it, so before `cognee_utils::sanitize` the very first
+/// `add_nodes` of a cognify run died — after both LLM stages had been paid for.
+///
+/// Backends differ in what they *store*: the Postgres adapters strip the NUL,
+/// Ladybug keeps it. Both are acceptable, so this asserts the contract they do
+/// share — the write succeeds, the row is retrievable, and every non-NUL
+/// character survives in order.
+pub async fn test_nul_bytes_in_text_are_persistable(db: &dyn GraphDBTrait) {
+    db.delete_graph().await.unwrap();
+
+    let dirty_name = "Nikola\0 Tesla";
+    let dirty_body = "page 1\0page 2";
+    let node = json!({
+        "id": "nul1",
+        "name": dirty_name,
+        "type": "Person",
+        "text": dirty_body,
+        "nested": {"inner": ["a\0b"]},
+    });
+    db.add_node_raw(node).await.unwrap();
+
+    let other = json!({"id": "nul2", "name": "Clean", "type": "Person"});
+    db.add_node_raw(other).await.unwrap();
+
+    let edge: EdgeData = (
+        "nul1".to_string(),
+        "nul2".to_string(),
+        "knows".to_string(),
+        HashMap::from([(Cow::Borrowed("edge_text"), json!("described\0relationship"))]),
+    );
+    db.add_edges(&[edge]).await.unwrap();
+
+    let fetched = db
+        .get_node("nul1")
+        .await
+        .unwrap()
+        .expect("the node must be retrievable after a write carrying NUL bytes");
+
+    let strip = |s: &str| s.replace('\0', "");
+    assert_eq!(
+        strip(fetched.get("name").unwrap().as_str().unwrap()),
+        strip(dirty_name),
+        "every non-NUL character of `name` must survive"
+    );
+    assert_eq!(
+        strip(fetched.get("text").unwrap().as_str().unwrap()),
+        strip(dirty_body),
+        "every non-NUL character of a JSON property must survive"
+    );
+
+    assert!(
+        db.has_edge("nul1", "nul2", "knows").await.unwrap(),
+        "an edge whose properties carry NUL bytes must still be written"
+    );
+
+    // Two edges whose relationship names differ *only* by an embedded NUL
+    // collapse to one row once sanitized. They must be deduplicated before the
+    // insert is built: on Postgres both would otherwise reach a single
+    // `INSERT ... ON CONFLICT DO UPDATE`, which fails with `21000: ON CONFLICT
+    // DO UPDATE command cannot affect row a second time` and aborts the batch.
+    let colliding: Vec<EdgeData> = vec![
+        (
+            "nul1".to_string(),
+            "nul2".to_string(),
+            "cite\0s".to_string(),
+            HashMap::from([(Cow::Borrowed("edge_text"), json!("first"))]),
+        ),
+        (
+            "nul1".to_string(),
+            "nul2".to_string(),
+            "cites".to_string(),
+            HashMap::from([(Cow::Borrowed("edge_text"), json!("second"))]),
+        ),
+    ];
+    db.add_edges(&colliding)
+        .await
+        .expect("edges colliding only after NUL removal must not abort the batch");
+}

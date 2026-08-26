@@ -46,6 +46,7 @@ use cognee_models::{
 };
 use cognee_ontology::OntologyResolver;
 use cognee_storage::StorageTrait;
+use cognee_utils::sanitize::sanitize_string;
 use cognee_vector::{VectorDB, VectorPoint};
 use serde::Serialize;
 use serde_json::json;
@@ -2695,6 +2696,14 @@ async fn upsert_provenance(
         } else {
             edge_pair.relationship_name.clone()
         };
+        // Strip NUL bytes *before* deriving the id and slug, not after. Python's
+        // `upsert_edges` (`cognee/modules/graph/methods/upsert_edges.py:41-66`)
+        // feeds `sanitized_edge_text` into both its uuid5 and `generate_edge_id`,
+        // so deriving from the raw text here would hand a NUL-bearing edge a
+        // different deterministic id than the Python SDK produces for the same
+        // input. The relational conversion sanitizes again on the way out; this
+        // is about what the hash sees.
+        let edge_text = sanitize_string(edge_text);
 
         let source_data_id = entity_data_map.get(&edge_pair.source_entity_id).copied();
         let target_data_id = entity_data_map.get(&edge_pair.target_entity_id).copied();
@@ -4083,6 +4092,62 @@ mod tests {
     use super::*;
     use cognee_models::DataPoint;
     use cognee_storage::MockStorage;
+
+    /// Provenance edge ids must be derived from *sanitized* edge text.
+    ///
+    /// Python's `upsert_edges`
+    /// (`cognee/modules/graph/methods/upsert_edges.py:41-66`) derives its uuid5
+    /// id from `sanitized_edge_text`. If the Rust side hashed the raw text
+    /// instead, a `contains` edge whose `edge_text` carried a NUL would land in
+    /// Postgres with a *different* deterministic id than the Python SDK
+    /// produces for the same input — a silent cross-SDK divergence that only
+    /// shows up on NUL-bearing corpora.
+    ///
+    /// The slug is a weaker claim and is asserted as such. Rust uses
+    /// `triplet_slug(source, edge_text, target)` while Python uses
+    /// `generate_edge_id(sanitized_edge_text)`, which takes no node ids at all —
+    /// a pre-existing formula divergence this change neither introduces nor
+    /// fixes. All that is pinned below is that Rust's slug reads the same
+    /// sanitized text as Rust's id, so the two cannot disagree with each other.
+    ///
+    /// The second assertion is the load-bearing one: it proves the strip
+    /// actually changes the hash, so removing the `sanitize_string` call in
+    /// `upsert_provenance` cannot be a no-op that slips through review.
+    #[test]
+    fn provenance_edge_ids_derive_from_sanitized_text() {
+        let tenant = Some(Uuid::new_v4());
+        let user = Uuid::new_v4();
+        let dataset = Uuid::new_v4();
+        let source = Uuid::new_v4();
+        let target = Uuid::new_v4();
+
+        let dirty = "Document chunk mentions Ali\u{0}ce";
+        let clean = "Document chunk mentions Alice";
+
+        assert_eq!(
+            provenance_edge_id(
+                tenant,
+                user,
+                dataset,
+                source,
+                &sanitize_string(dirty.to_string()),
+                target
+            ),
+            provenance_edge_id(tenant, user, dataset, source, clean, target),
+            "sanitizing before hashing must reproduce the id Python derives"
+        );
+        assert_eq!(
+            triplet_slug(source, &sanitize_string(dirty.to_string()), target),
+            triplet_slug(source, clean, target),
+            "Rust's slug must read the same sanitized text as its id"
+        );
+
+        assert_ne!(
+            provenance_edge_id(tenant, user, dataset, source, dirty, target),
+            provenance_edge_id(tenant, user, dataset, source, clean, target),
+            "hashing raw text must differ — otherwise this guard proves nothing"
+        );
+    }
 
     #[test]
     fn test_classify_documents_empty() {

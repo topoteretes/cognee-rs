@@ -25,6 +25,8 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use tracing::debug;
 
+use cognee_utils::sanitize::{sanitize_json, sanitize_str, sanitize_string};
+
 use crate::error::{GraphDBError, GraphDBResult};
 use crate::traits::GraphDBTrait;
 use crate::types::{EdgeData, GraphNode, NodeData, parse_audit_timestamp};
@@ -337,11 +339,25 @@ impl PgGraphAdapter {
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
 
+        // Strip NUL bytes before they reach `varchar` columns and the `jsonb`
+        // blob. PDF-extracted chunk text routinely carries literal `0x00`, which
+        // Postgres rejects outright — see `cognee_utils::sanitize`. This is the
+        // single choke point for every node write on this adapter.
+        //
+        // `id` is sanitized here but *not* on the read and delete paths
+        // (`get_node`, `has_node`, `get_nodes`, `delete_node`, `delete_nodes`),
+        // so a node written under a NUL-bearing id is not retrievable by that
+        // raw id. That asymmetry is deliberate: Python does exactly the same
+        // thing — `postgres_demo/adapter.py:56` sanitizes the id on write while
+        // every read there passes `node_id` through untouched — and diverging
+        // would make the two SDKs disagree about whether such a lookup hits.
+        // Node ids are UUIDs or normalized identifiers in practice, so the
+        // corner is unreachable from the real pipeline.
         Ok(NodeRow {
-            id,
-            name,
-            node_type,
-            properties: Value::Object(extra),
+            id: sanitize_string(id),
+            name: sanitize_string(name),
+            node_type: sanitize_string(node_type),
+            properties: sanitize_json(Value::Object(extra)),
             created_at,
             updated_at,
         })
@@ -800,12 +816,28 @@ impl GraphDBTrait for PgGraphAdapter {
 
         let now = Utc::now();
 
-        // Deduplicate by composite key (last wins).
-        let mut seen: HashMap<(String, String, String), &EdgeData> = HashMap::new();
+        // Sanitize *before* deduplicating, not after. The `ON CONFLICT` target
+        // below is the sanitized triple, so two edges differing only by an
+        // embedded NUL must collapse into one entry here. Keying the dedup map
+        // on the raw triple would let both survive into a single
+        // `INSERT ... ON CONFLICT DO UPDATE`, which Postgres rejects with
+        // `21000: ON CONFLICT DO UPDATE command cannot affect row a second
+        // time` — aborting the whole chunk. `add_nodes_raw` gets this right by
+        // construction because it dedups on the already-sanitized `row.id`.
+        let mut seen: HashMap<(String, String, String), Value> = HashMap::new();
         for edge in edges {
-            seen.insert((edge.0.clone(), edge.1.clone(), edge.2.clone()), edge);
+            let props_json =
+                serde_json::to_value(&edge.3).map_err(GraphDBError::SerializationError)?;
+            let key = (
+                sanitize_str(&edge.0).into_owned(),
+                sanitize_str(&edge.1).into_owned(),
+                sanitize_str(&edge.2).into_owned(),
+            );
+            // Edge properties carry LLM-authored descriptions and, through
+            // them, source text — same NUL exposure as node properties.
+            seen.insert(key, sanitize_json(props_json));
         }
-        let deduped: Vec<&EdgeData> = seen.into_values().collect();
+        let deduped: Vec<((String, String, String), Value)> = seen.into_iter().collect();
 
         for chunk in deduped.chunks(BATCH_SIZE) {
             let mut insert = Query::insert()
@@ -820,14 +852,12 @@ impl GraphDBTrait for PgGraphAdapter {
                 ])
                 .to_owned();
 
-            for edge in chunk {
-                let props_json =
-                    serde_json::to_value(&edge.3).map_err(GraphDBError::SerializationError)?;
+            for ((source, target, relationship_name), props_json) in chunk {
                 insert.values_panic([
-                    edge.0.clone().into(),
-                    edge.1.clone().into(),
-                    edge.2.clone().into(),
-                    props_json.into(),
+                    source.clone().into(),
+                    target.clone().into(),
+                    relationship_name.clone().into(),
+                    props_json.clone().into(),
                     now.into(),
                     now.into(),
                 ]);
@@ -1810,5 +1840,73 @@ mod shared_db_migration_tests {
                 .expect("core migrator must not choke after legacy row is purged");
         })
         .await;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// NUL-byte sanitization (no database required)
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
+mod sanitize_tests {
+    use super::PgGraphAdapter;
+    use serde_json::json;
+
+    /// `serialize_node_to_row` is the single choke point for every node write on
+    /// this adapter, so the strip has to happen there or not at all.
+    ///
+    /// Before this, a chunk carrying a literal `0x00` — 42.5% of one real corpus
+    /// of PDF-extracted papers — made Postgres reject the first `add_nodes` of
+    /// the run with `unsupported Unicode escape sequence`, discarding every
+    /// chunk, summary and embedding the two LLM stages had just produced.
+    #[test]
+    fn serialize_node_to_row_strips_nul_bytes() {
+        let node = json!({
+            "id": "chunk\u{0}1",
+            "name": "Nikola\u{0} Tesla",
+            "type": "Doc\u{0}Chunk",
+            "text": "page 1\u{0}page 2",
+            "nested": {"inner": ["a\u{0}b"]},
+            "count": 7,
+        });
+
+        let row = PgGraphAdapter::serialize_node_to_row(&node).unwrap();
+
+        assert_eq!(row.id, "chunk1");
+        assert_eq!(row.name, "Nikola Tesla");
+        assert_eq!(row.node_type, "DocChunk");
+
+        let props = serde_json::to_string(&row.properties).unwrap();
+        assert!(
+            !props.contains("\\u0000"),
+            "properties must carry no NUL escape, got: {props}"
+        );
+        assert_eq!(row.properties["text"], json!("page 1page 2"));
+        assert_eq!(row.properties["nested"]["inner"][0], json!("ab"));
+        // Non-string values are untouched.
+        assert_eq!(row.properties["count"], json!(7));
+    }
+
+    #[test]
+    fn serialize_node_to_row_leaves_clean_text_alone() {
+        let node = json!({
+            "id": "n1",
+            "name": "Ada Lovelace",
+            "type": "Person",
+            "text": "no nulls — just an em dash and 日本語",
+        });
+
+        let row = PgGraphAdapter::serialize_node_to_row(&node).unwrap();
+
+        assert_eq!(row.id, "n1");
+        assert_eq!(row.name, "Ada Lovelace");
+        assert_eq!(
+            row.properties["text"],
+            json!("no nulls — just an em dash and 日本語")
+        );
     }
 }

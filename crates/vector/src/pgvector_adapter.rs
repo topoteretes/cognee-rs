@@ -15,6 +15,7 @@ use std::fmt;
 use tracing::{Span, debug, instrument};
 use uuid::Uuid;
 
+use cognee_utils::sanitize::sanitize_json;
 use cognee_utils::tracing_keys::{
     COGNEE_DB_ROW_COUNT, COGNEE_VECTOR_COLLECTION, COGNEE_VECTOR_RESULT_COUNT,
 };
@@ -556,13 +557,16 @@ impl VectorDB for PgVectorAdapter {
 
                 values.push(pt.id.into());
                 values.push(Self::format_vector(&pt.vector).into());
-                let metadata_obj: serde_json::Value = serde_json::Value::Object(
+                // Chunk and summary text is injected into point metadata, so
+                // this `jsonb` cast has the same NUL exposure as the graph
+                // tables — see `cognee_utils::sanitize`.
+                let metadata_obj: serde_json::Value = sanitize_json(serde_json::Value::Object(
                     merged
                         .metadata
                         .iter()
                         .map(|(k, v)| (k.clone(), v.clone()))
                         .collect(),
-                );
+                ));
                 values.push(metadata_obj.into());
             }
 
@@ -651,12 +655,12 @@ impl VectorDB for PgVectorAdapter {
 
                 values.push(pt.id.into());
                 values.push(Self::format_vector(&pt.vector).into());
-                let metadata_obj: serde_json::Value = serde_json::Value::Object(
+                let metadata_obj: serde_json::Value = sanitize_json(serde_json::Value::Object(
                     pt.metadata
                         .iter()
                         .map(|(k, v)| (k.clone(), v.clone()))
                         .collect(),
-                );
+                ));
                 values.push(metadata_obj.into());
             }
 
