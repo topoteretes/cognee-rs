@@ -1212,6 +1212,13 @@ impl Default for Settings {
             // there keeps that behaviour and stops a stock Android build from
             // erroring on a provider whose factory was never registered. Every
             // other slim consumer keeps the loud failure described above.
+            //
+            // This default covers only a *default* `Settings`. An explicit
+            // "lancedb" still reaches the registry from a persisted config.json
+            // (the CLI serializes the whole struct, so any `config set` writes
+            // the provider back) or from `VECTOR_DB_PROVIDER`; those are
+            // absorbed by `ANDROID_LANCEDB_FALLBACK` in
+            // `ComponentRegistry::resolve_vector_key`. Keep the two in step.
             #[cfg(all(target_os = "android", not(feature = "lancedb")))]
             vector_db_provider: "brute-force".to_string(),
             #[cfg(not(all(target_os = "android", not(feature = "lancedb"))))]
