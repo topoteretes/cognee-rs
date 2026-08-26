@@ -47,6 +47,19 @@ for retries and the `cognee-llm` rustdoc for the adapter.
 | `MOCK_LLM_CASSETTE` | `llm_cassette` | _(empty)_ |
 | `COGNEE_RECORD_LLM` | `llm_record_path` | _(empty)_ |
 
+`LLM_MAX_COMPLETION_TOKENS` is a *completion*-token budget, and it does double
+duty: besides capping the option-less `generate` call, it is the LLM term in
+cognify's chunk-size auto-calculation
+(`min(embedding_max_sequence_length, llm_max_completion_tokens / 2)` — Python's
+`get_max_chunk_tokens()`). Lowering it for a small-context endpoint therefore
+shrinks the prompts cognify sends. On adapters that know their model's documented
+output cap (Anthropic, Bedrock) the configured value is clamped to it first, as
+Python does via litellm's `model_cost`.
+
+> **Note:** structured-output calls do **not** apply this ceiling — option-less
+> ones send the built-in `16384` default. Cognify's extraction calls send no cap
+> at all (Python parity). See TOP-8 for the open policy question.
+
 A fallback LLM (`llm_fallback_provider/_model/_endpoint/_api_key`) is configurable
 programmatically (no env binding). `MOCK_LLM` + cassettes power the offline
 benchmark — see [performance/mock-benchmark.md](performance/mock-benchmark.md).
@@ -313,10 +326,29 @@ config (see [roadmap/cognify-compatibility-plan.md](roadmap/cognify-compatibilit
 
 ## Chunking & tokenizer
 
-Read by [`crates/chunking/src/config.rs`](../crates/chunking/src/config.rs). Most
-chunking knobs (`chunk_strategy` default `PARAGRAPH`, `chunk_size` `1500`,
-`chunk_overlap` `10`, `chunk_engine`) are `Settings`/`CognifyConfig` fields without
-env bindings. The token counter is env-selected:
+Read by [`crates/chunking/src/config.rs`](../crates/chunking/src/config.rs).
+`chunk_strategy` (default `PARAGRAPH`) and `chunk_engine` are `Settings` /
+`CognifyConfig` fields without env bindings. Chunk size and overlap are
+env-bindable:
+
+| Env var | `Settings` field | Default |
+|---|---|---|
+| `COGNEE_CHUNK_SIZE` / `CHUNK_SIZE` | `chunk_size` | _(unset — auto)_ |
+| `COGNEE_CHUNK_OVERLAP` / `CHUNK_OVERLAP` | `chunk_overlap` | `10` |
+
+`chunk_size` unset means "auto-calculate at pipeline time", mirroring Python's
+`chunk_size=None`: `min(embedding_max_sequence_length,
+llm_max_completion_tokens / 2)`. With OpenAI-compatible embeddings at their
+defaults that is `min(8191, 8192) = 8191` tokens; with the local ONNX/BGE engine
+it is its 512-token sequence limit. Set it explicitly (env, `cognee config set
+chunk_size`, `--chunk-size`, or the HTTP `chunkSize` field) to override — an
+explicit value is always honoured, including `1500`. `cognee config set
+chunk_size null` restores the auto-calculation.
+
+Precedence on the HTTP server: per-request `chunkSize` on the cognify/remember
+payload > `COGNEE_CHUNK_SIZE` > auto.
+
+The token counter is env-selected:
 
 | Env var | Purpose | Default |
 |---|---|---|

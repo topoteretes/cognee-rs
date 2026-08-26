@@ -7,7 +7,20 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-const CURRENT_VERSION: u32 = 1;
+/// Bumped to 2 when `Settings::chunk_size` became `Option<u32>`.
+///
+/// Version-1 documents encode "auto-calculate" as the literal `1500` (the old
+/// sentinel), and `save_config` writes the whole `Settings` struct, so every
+/// config.json written by a prior version carries `"chunk_size": 1500` — even
+/// for a user who only ever set an API key. Deserialising that as `Some(1500)`
+/// would turn "auto" into an explicit override on upgrade: 8191 -> 1500 tokens
+/// per chunk on OpenAI-compatible embeddings (~5x the extraction calls), or
+/// 512 -> 1500 on the local ONNX/BGE engine, where every chunk then exceeds the
+/// model's sequence limit. `migrate_document` rewrites it on load.
+const CURRENT_VERSION: u32 = 2;
+
+/// The version-1 sentinel for "auto-calculate the chunk size".
+const LEGACY_AUTO_CHUNK_SIZE: u32 = 1500;
 
 pub use cognee::config::DEFAULT_SYSTEM_PROMPT_PATH;
 
@@ -70,8 +83,28 @@ pub fn load_config() -> Result<ConfigDocument, CliError> {
     let content = fs::read_to_string(&path)
         .map_err(|error| CliError::Runtime(format!("Failed to read config file: {error}")))?;
 
-    serde_json::from_str::<ConfigDocument>(&content)
-        .map_err(|error| CliError::Runtime(format!("Failed to parse config file: {error}")))
+    let mut document = serde_json::from_str::<ConfigDocument>(&content)
+        .map_err(|error| CliError::Runtime(format!("Failed to parse config file: {error}")))?;
+    migrate_document(&mut document);
+    Ok(document)
+}
+
+/// Bring a config document loaded from disk up to [`CURRENT_VERSION`].
+///
+/// In-memory only — the upgraded document is written back on the next
+/// `save_config`, so a read-only command never rewrites the user's file.
+fn migrate_document(document: &mut ConfigDocument) {
+    if document.version < 2 {
+        // v1 -> v2: `chunk_size` moved from a `1500`-means-auto sentinel to
+        // `Option<u32>`. Map the sentinel back to "auto" so an upgrade preserves
+        // the chunk size the user was actually getting. A user who explicitly
+        // chose 1500 under v1 was already being auto-resolved, so this loses
+        // nothing they had.
+        if document.settings.chunk_size == Some(LEGACY_AUTO_CHUNK_SIZE) {
+            document.settings.chunk_size = None;
+        }
+        document.version = 2;
+    }
 }
 
 pub fn save_config(config: &ConfigDocument) -> Result<(), CliError> {
@@ -384,7 +417,9 @@ pub fn set_value(settings: &mut Settings, key: &str, value: Value) -> Result<(),
         "vector_db_key" => settings.vector_db_key = expect_string(key, value)?,
         "chunk_strategy" => settings.chunk_strategy = expect_string(key, value)?,
         "chunk_engine" => settings.chunk_engine = expect_string(key, value)?,
-        "chunk_size" => settings.chunk_size = expect_u32(key, value)?,
+        // `null` restores the auto-calculation (Python `chunk_size=None`).
+        "chunk_size" if value.is_null() => settings.chunk_size = None,
+        "chunk_size" => settings.chunk_size = Some(expect_u32(key, value)?),
         "chunk_overlap" => settings.chunk_overlap = expect_u32(key, value)?,
         "relational_db_url" => settings.relational_db_url = expect_string(key, value)?,
         "migration_db_url" => settings.migration_db_url = expect_string(key, value)?,
@@ -548,4 +583,69 @@ fn expect_bool(key: &str, value: Value) -> Result<bool, CliError> {
     value
         .as_bool()
         .ok_or_else(|| CliError::Validation(format!("Config key '{key}' expects true/false")))
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
+mod tests {
+    use super::*;
+
+    /// TOP-8 upgrade hazard: every config.json written before `chunk_size`
+    /// became an `Option` carries the literal `1500`, which meant "auto" under
+    /// the old sentinel encoding. Reading it as an explicit override would drop
+    /// a user from 8191 (or 512) to 1500 tokens per chunk on upgrade.
+    #[test]
+    fn v1_document_maps_the_legacy_sentinel_back_to_auto() {
+        let mut document = ConfigDocument {
+            version: 1,
+            settings: Settings {
+                chunk_size: Some(LEGACY_AUTO_CHUNK_SIZE),
+                ..Settings::default()
+            },
+        };
+        migrate_document(&mut document);
+        assert_eq!(
+            document.settings.chunk_size, None,
+            "the v1 sentinel must restore auto-calculation"
+        );
+        assert_eq!(document.version, CURRENT_VERSION);
+    }
+
+    /// A v1 user who chose a real size keeps it — only the sentinel is remapped.
+    #[test]
+    fn v1_document_keeps_a_genuinely_explicit_chunk_size() {
+        let mut document = ConfigDocument {
+            version: 1,
+            settings: Settings {
+                chunk_size: Some(4096),
+                ..Settings::default()
+            },
+        };
+        migrate_document(&mut document);
+        assert_eq!(document.settings.chunk_size, Some(4096));
+        assert_eq!(document.version, CURRENT_VERSION);
+    }
+
+    /// At the current version `1500` is a legitimate explicit choice and must
+    /// survive — that is the whole point of dropping the sentinel.
+    #[test]
+    fn current_version_document_is_left_alone() {
+        let mut document = ConfigDocument {
+            version: CURRENT_VERSION,
+            settings: Settings {
+                chunk_size: Some(LEGACY_AUTO_CHUNK_SIZE),
+                ..Settings::default()
+            },
+        };
+        migrate_document(&mut document);
+        assert_eq!(
+            document.settings.chunk_size,
+            Some(LEGACY_AUTO_CHUNK_SIZE),
+            "an explicit 1500 chosen under v2 must not be reinterpreted as auto"
+        );
+    }
 }

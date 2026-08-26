@@ -708,7 +708,7 @@ async fn phase_cognify(
     let cognify_config = {
         let s = cm.settings();
         CognifyConfig::default()
-            .with_chunk_size(s.chunk_size as usize)
+            .with_chunk_size_opt(s.chunk_size.map(|n| n as usize))
             .with_chunk_overlap(s.chunk_overlap as usize)
             .with_chunk_strategy(chunk_strategy)
             .with_max_parallel_extractions(s.llm_max_parallel_requests.max(1) as usize)

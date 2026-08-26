@@ -4,7 +4,7 @@
 //!
 //! The endpoint accepts a multipart form body with optional file parts (`data`)
 //! and optional text fields (`datasetName`, `datasetId`, `node_set`,
-//! `run_in_background`, `custom_prompt`, `chunks_per_batch`).
+//! `run_in_background`, `custom_prompt`, `chunks_per_batch`, `chunk_size`).
 
 use axum::{
     Json, Router,
@@ -122,6 +122,19 @@ async fn parse_remember_multipart(
         && let Ok(n) = v.trim().parse::<u32>()
     {
         form.chunks_per_batch = Some(n);
+    }
+
+    // This DTO is populated by hand (not via serde), so a new field is inert
+    // until it is parsed here. Accept both spellings: the rest of the HTTP
+    // surface is camelCase, while this form has historically been snake_case.
+    if let Some(vals) = parsed
+        .fields
+        .get("chunk_size")
+        .or_else(|| parsed.fields.get("chunkSize"))
+        && let Some(v) = vals.first()
+        && let Ok(n) = v.trim().parse::<u32>()
+    {
+        form.chunk_size = Some(n);
     }
 
     // ── file parts ────────────────────────────────────────────────────────────
@@ -308,6 +321,21 @@ pub async fn post_remember(
     let mut cognify_cfg = CognifyConfig::default().with_chunk_strategy(ChunkStrategy::Paragraph);
     if let Some(batch) = form.chunks_per_batch {
         cognify_cfg = cognify_cfg.with_chunks_per_batch(batch.max(1) as usize);
+    }
+    // Per-request `chunk_size` wins over the server-wide default; neither set
+    // leaves `CognifyConfig::max_chunk_size` at `None` (auto-calculated).
+    // `0` is rejected rather than clamped: one-token chunks fan out into an
+    // unbounded number of extraction calls, and `COGNEE_CHUNK_SIZE=0` is already
+    // a hard config error, so the request path must not reinterpret it.
+    if let Some(size) = form.chunk_size {
+        if size == 0 {
+            return Err(ApiError::BadRequest(
+                "chunkSize must be greater than 0".to_string(),
+            ));
+        }
+        cognify_cfg = cognify_cfg.with_chunk_size(size as usize);
+    } else if let Some(size) = state.config.chunk_size {
+        cognify_cfg = cognify_cfg.with_chunk_size(size as usize);
     }
     if let Some(ref prompt) = form.custom_prompt {
         cognify_cfg = cognify_cfg.with_custom_prompt(prompt.clone());

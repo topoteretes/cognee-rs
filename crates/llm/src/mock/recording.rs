@@ -229,6 +229,14 @@ impl Llm for RecordingLlm {
         self.inner.max_context_length()
     }
 
+    /// Must forward: cognify's chunk-size auto-calculation reads this, so a
+    /// wrapped adapter would otherwise chunk against the trait default (16384)
+    /// instead of the operator's configured ceiling — recording mode wraps the
+    /// live adapter, so a recorded run would chunk differently from a plain one.
+    fn max_completion_tokens(&self) -> u32 {
+        self.inner.max_completion_tokens()
+    }
+
     fn supports_vision(&self) -> bool {
         self.inner.supports_vision()
     }

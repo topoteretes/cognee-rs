@@ -147,6 +147,7 @@ pub async fn patch_update(
     let data_id_for_run = query.data_id;
     let dataset_id_for_run = dataset_id;
     let components_for_run = components_arc.clone();
+    let server_chunk_size = state.config.chunk_size;
 
     let work = box_pipeline_future(async move {
         run_update_pipeline(
@@ -156,6 +157,7 @@ pub async fn patch_update(
             dataset_id_for_run,
             &dataset_name_for_run,
             inputs,
+            server_chunk_size,
         )
         .await
     });
@@ -242,6 +244,9 @@ async fn run_update_pipeline(
     dataset_id: Uuid,
     dataset_name: &str,
     inputs: Vec<DataInput>,
+    // Server-wide `COGNEE_CHUNK_SIZE`, threaded in because this runs detached
+    // from `AppState`.
+    server_chunk_size: Option<u32>,
 ) -> Result<(), UpdateDispatchError> {
     // ── Step 1: soft-delete the old item ─────────────────────────────────────
     let scope = DeleteScope::Data {
@@ -317,6 +322,12 @@ async fn run_update_pipeline(
     let user_email: Option<String> = None;
 
     let mut cognify_config = CognifyConfig::default().with_chunk_strategy(ChunkStrategy::Paragraph);
+    // `COGNEE_CHUNK_SIZE` is server-wide, so it must reach every cognify entry
+    // point — otherwise the endpoint an operator capped for a small-context LLM
+    // can still be overrun through this one.
+    if let Some(size) = server_chunk_size {
+        cognify_config = cognify_config.with_chunk_size(size as usize);
+    }
     if let Some(ref t) = components.transcriber {
         cognify_config = cognify_config.with_transcriber(Arc::clone(t));
     }

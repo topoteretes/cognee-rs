@@ -590,6 +590,13 @@ impl Llm for BedrockAdapter {
         self.caps.max_input_tokens
     }
 
+    /// The configured ceiling clamped by the model's documented output cap —
+    /// the same `min` [`effective_max_tokens`](Self::effective_max_tokens)
+    /// applies per request.
+    fn max_completion_tokens(&self) -> u32 {
+        self.max_completion_tokens.min(self.caps.max_output_tokens)
+    }
+
     fn supports_vision(&self) -> bool {
         self.caps.supports_vision
     }

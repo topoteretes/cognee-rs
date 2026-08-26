@@ -127,6 +127,7 @@ pub async fn post_improve(
     // ── Dispatch ────────────────────────────────────────────────────────────────
     let payload_for_run = payload.clone();
     let components = state.lib.clone();
+    let server_chunk_size = state.config.chunk_size;
     let user_for_run = user.clone();
     let dataset_name_for_run = dataset_name.clone();
 
@@ -140,6 +141,7 @@ pub async fn post_improve(
             dataset_id,
             &dataset_name_for_run,
             &payload_for_run,
+            server_chunk_size,
         )
         .await
     });
@@ -228,6 +230,9 @@ async fn run_real_improve(
     dataset_id: Uuid,
     dataset_name: &str,
     payload: &ImprovePayloadDTO,
+    // Server-wide `COGNEE_CHUNK_SIZE`, threaded in because this runs detached
+    // from `AppState`.
+    server_chunk_size: Option<u32>,
 ) -> Result<(), ImproveDispatchError> {
     let graph_db = components
         .graph_db
@@ -301,6 +306,10 @@ async fn run_real_improve(
 
                 let mut cognify_config =
                     CognifyConfig::default().with_chunk_strategy(ChunkStrategy::Paragraph);
+                // Server-wide `COGNEE_CHUNK_SIZE` applies here too — see update.rs.
+                if let Some(size) = server_chunk_size {
+                    cognify_config = cognify_config.with_chunk_size(size as usize);
+                }
                 if let Some(ref t) = components.transcriber {
                     cognify_config = cognify_config.with_transcriber(Arc::clone(t));
                 }
@@ -356,6 +365,10 @@ async fn run_real_improve(
 
                 let mut cognify_config =
                     CognifyConfig::default().with_chunk_strategy(ChunkStrategy::Paragraph);
+                // Server-wide `COGNEE_CHUNK_SIZE` applies here too — see update.rs.
+                if let Some(size) = server_chunk_size {
+                    cognify_config = cognify_config.with_chunk_size(size as usize);
+                }
                 if let Some(ref t) = components.transcriber {
                     cognify_config = cognify_config.with_transcriber(Arc::clone(t));
                 }

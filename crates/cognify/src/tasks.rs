@@ -2164,11 +2164,18 @@ pub async fn cognify(
     // `cognee/infrastructure/llm/utils.py`. Locked Decision 6: this mutation
     // happens **before** `pipeline::execute` so the executor sees a frozen
     // config in `build_cognify_pipeline`.
-    let effective_config = if config.max_chunk_size == CognifyConfig::default().max_chunk_size {
+    let effective_config = if config.max_chunk_size.is_none() {
         let cfg = config
             .clone()
             .with_auto_chunk_size(embedding_engine.as_ref(), llm.as_ref());
-        info!("Auto-calculated max_chunk_size: {}", cfg.max_chunk_size);
+        info!("Auto-calculated max_chunk_size: {}", cfg.chunk_size());
+        // Re-validate: the first `validate()` above runs while the size is still
+        // unset, so the `chunk_overlap < max_chunk_size` rule is only checkable
+        // once the auto value is known. A large overlap against a small
+        // engine-derived size (512 on the local ONNX/BGE engine) must fail here
+        // rather than reach the chunkers.
+        cfg.validate()
+            .map_err(|e| CognifyError::ConfigError(e.to_string()))?;
         cfg
     } else {
         config.clone()
@@ -2176,7 +2183,8 @@ pub async fn cognify(
 
     info!(
         "Starting cognify pipeline with config: chunks_per_batch={}, max_chunk_size={}",
-        effective_config.chunks_per_batch, effective_config.max_chunk_size
+        effective_config.chunks_per_batch,
+        effective_config.chunk_size()
     );
 
     // ── Qualification gate (gap 08-08, locked decision 3) ───────────────────
@@ -3966,7 +3974,7 @@ pub fn build_cognify_pipeline(
         .add_task_named(
             make_extract_chunks_task(
                 storage,
-                config.max_chunk_size,
+                config.chunk_size(),
                 config.token_counter_kind.clone(),
                 db.clone(),
                 loader_registry,
@@ -4054,7 +4062,7 @@ pub fn build_temporal_cognify_pipeline(
         .add_task_named(
             make_extract_chunks_task(
                 storage,
-                config.max_chunk_size,
+                config.chunk_size(),
                 config.token_counter_kind.clone(),
                 db,
                 loader_registry,
