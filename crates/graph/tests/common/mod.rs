@@ -492,6 +492,17 @@ struct LabelledTestNode {
     kind: String,
 }
 
+/// Node carrying prose in a `text` property, like a real `DocumentChunk`. Its
+/// body mentions the needle, but none of its *labels* do.
+#[derive(Debug, Clone, Serialize)]
+struct ProseTestNode {
+    id: String,
+    name: String,
+    #[serde(rename = "type")]
+    node_type: String,
+    text: String,
+}
+
 pub async fn test_get_candidate_nodes_by_label(db: &dyn GraphDBTrait) {
     db.delete_graph().await.unwrap();
 
@@ -503,6 +514,14 @@ pub async fn test_get_candidate_nodes_by_label(db: &dyn GraphDBTrait) {
         name: "Prefer explicit errors".to_string(),
         node_type: "Node".to_string(),
         kind: "CodingRule".to_string(),
+    })
+    .await
+    .unwrap();
+    db.add_node(&ProseTestNode {
+        id: "cl_prose".to_string(),
+        name: "Chunk 7".to_string(),
+        node_type: "DocumentChunk".to_string(),
+        text: "The coding rules below apply to every interaction with the agent.".to_string(),
     })
     .await
     .unwrap();
@@ -539,6 +558,37 @@ pub async fn test_get_candidate_nodes_by_label(db: &dyn GraphDBTrait) {
     assert!(
         !rules.contains(&"cl_n".to_string()),
         "an unrelated node must not be returned: {rules:?}"
+    );
+
+    // The needle is an ordinary English word, so a filter that matches the whole
+    // serialised property blob sweeps in every chunk of prose that happens to
+    // use it. On a large corpus that is thousands of full-text rows fetched for
+    // the caller's post-filter to discard — which is the cost this method exists
+    // to avoid, so it is part of the contract, not an implementation detail.
+    assert!(
+        !rules.contains(&"cl_prose".to_string()),
+        "a node that merely mentions the needle in its text must not be a \
+         candidate — the filter is on labels, not on content: {rules:?}"
+    );
+    assert!(
+        !ids(db
+            .get_candidate_nodes_by_label("interaction")
+            .await
+            .unwrap())
+        .contains(&"cl_prose".to_string()),
+        "likewise for the interaction needle"
+    );
+
+    // The needle's case is normalised by the implementation, not required of the
+    // caller: `PgGraphAdapter` lowercases it for its SQL, so a mixed-case needle
+    // used to return rows there and an empty vec from Ladybug.
+    assert_eq!(
+        ids(db
+            .get_candidate_nodes_by_label("InterAction")
+            .await
+            .unwrap()),
+        interactions,
+        "a mixed-case needle must behave exactly like its lowercase form"
     );
 }
 

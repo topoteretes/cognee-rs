@@ -152,9 +152,8 @@ const DEFAULT_FEEDBACK_LAST_K: usize = 5;
 const DEFAULT_RULE_NODE_SET: &str = "coding_agent_rules";
 
 /// Substrings a node's type-ish label must contain to be an interaction / a
-/// coding rule. Must stay lowercase: `cognee_graph::node_label_contains`
-/// lowercases only the *stored* side of the comparison, and the same constant
-/// is what gets pushed into the store's own query.
+/// coding rule. The same constant is both pushed into the store's own query and
+/// re-applied to the rows that come back, so the two cannot disagree.
 const INTERACTION_LABEL_NEEDLE: &str = "interaction";
 const RULE_LABEL_NEEDLE: &str = "rule";
 
@@ -334,8 +333,10 @@ impl FeedbackRetriever {
         // Ask the store for interaction-labelled node rows instead of the whole
         // graph. The result is only a candidate set (see
         // `get_candidate_nodes_by_label`), so `is_interaction_node` still has
-        // the last word — but the edge half, which this method never looked at,
-        // is no longer read at all.
+        // the last word. On the adapters that override that method the edge
+        // half — which this function never looked at — is not read at all; on
+        // the trait default it still is, and this is then no worse than the
+        // `get_graph_data()` call it replaced.
         let nodes = self
             .graph_db
             .get_candidate_nodes_by_label(INTERACTION_LABEL_NEEDLE)
@@ -476,8 +477,8 @@ impl CodingRulesRetriever {
 
         let requested_sets = self.parse_rule_sets(query);
         // Same narrowing as `FeedbackRetriever::recent_interaction_ids`: rule
-        // rows only, no edges, and `is_rule_node` re-checked below because the
-        // store is allowed to hand back a superset.
+        // rows only on the overriding adapters, and `is_rule_node` re-checked
+        // below because the store is allowed to hand back a superset.
         let nodes = self
             .graph_db
             .get_candidate_nodes_by_label(RULE_LABEL_NEEDLE)

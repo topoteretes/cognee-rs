@@ -77,14 +77,23 @@ pub const NODE_LABEL_KEYS: [&str; 5] = ["type", "node_type", "kind", "label", "l
 /// compared ASCII-case-insensitively.
 ///
 /// A key holding a JSON string matches on substring; a key holding a JSON array
-/// matches if any string element does (Neo4j-style multi-`labels`). `needle`
-/// must already be lowercase — the constants callers pass are.
+/// matches if any string element does (Neo4j-style multi-`labels`).
+///
+/// `needle` is normalised here rather than required to arrive lowercase. The
+/// precondition version of this was a footgun: `PgGraphAdapter` lowercases the
+/// needle for its own SQL, so an uppercase `"Rule"` would return candidate rows
+/// from Postgres and then lose every one of them to this post-filter, while
+/// Ladybug returned an empty vec outright — a silent empty result rather than a
+/// failure. The one extra `to_ascii_lowercase` per call is noise next to the one
+/// already paid per candidate *value*.
 ///
 /// This is the exact predicate that
 /// [`GraphDBTrait::get_candidate_nodes_by_label`] narrows towards, factored out
 /// so that the needle a caller pushes into the query cannot drift from the one
 /// it re-applies to the rows that come back.
 pub fn node_label_contains(node_data: &NodeData, needle: &str) -> bool {
+    let needle = needle.to_ascii_lowercase();
+    let needle = needle.as_str();
     NODE_LABEL_KEYS.iter().any(|key| {
         node_data
             .get(*key)
@@ -700,13 +709,16 @@ pub trait GraphDBTrait: Send + Sync {
     /// So this method is deliberately specified as a *narrowing* read:
     /// implementations may return a **superset** of the exact predicate, and
     /// callers MUST re-apply [`node_label_contains`] to the rows that come
-    /// back. What every implementation does guarantee is that no node matching
-    /// the exact predicate is missing, and that no edge row is read at all.
+    /// back. The one guarantee every implementation owes is that no node
+    /// matching the exact predicate is missing from the result.
     ///
-    /// Default implementation falls back to the full graph load and returns its
-    /// node half — no worse than what a caller would have done by hand, and it
-    /// keeps out-of-tree backends compiling. `PgGraphAdapter` and
-    /// `LadybugAdapter` override it.
+    /// Avoiding the edge half is the *point* of the method, but it is a property
+    /// of the overrides, not of the trait: the default below falls back to
+    /// [`get_graph_data`](GraphDBTrait::get_graph_data) and takes its node half,
+    /// so a backend that does not override this still reads every edge row —
+    /// no worse than what the callers did by hand before, and it keeps
+    /// out-of-tree backends compiling. `PgGraphAdapter` and `LadybugAdapter`
+    /// override it and read nodes only.
     async fn get_candidate_nodes_by_label(&self, needle: &str) -> GraphDBResult<Vec<GraphNode>> {
         let _ = needle;
         Ok(self.get_graph_data().await?.0)
@@ -735,20 +747,28 @@ pub trait GraphDBTrait: Send + Sync {
     ///
     /// Backends should still override this with a single batched query: the
     /// default costs one `get_edges` round trip per resolved node plus one
-    /// batched [`get_nodes`](GraphDBTrait::get_nodes), and Ladybug must
-    /// override to return direction-correct edges (its
-    /// `get_connections`/`get_edges` report the queried node as the source
-    /// regardless of the stored direction, so the induced-subgraph filter here
-    /// would still select the right edges but the emitted direction would be
-    /// wrong).
+    /// batched [`get_nodes`](GraphDBTrait::get_nodes).
+    ///
+    /// **A backend whose `get_edges` reports the queried node as the source
+    /// regardless of the stored direction MUST override this method.** Ladybug
+    /// is such a backend, and does. Phase 2 reads the incident edges of *both*
+    /// endpoints of every internal edge, so on such a backend one stored edge
+    /// arrives twice with opposite directions — `(a, b, rel)` from `a` and
+    /// `(b, a, rel)` from `b` — and the `EdgeKey` dedup cannot collapse them,
+    /// because for a well-behaved backend those two tuples are two genuinely
+    /// different edges that both have to survive. The frontier-only walk this
+    /// replaced emitted such an edge once, with one arbitrary direction; the
+    /// failure is now a duplicate *and* a fabricated reverse, which a consumer
+    /// like graph search would double-count. That is a louder version of the
+    /// same underlying defect, not a new one, and it is not repairable here:
+    /// direction is information only the backend has.
     ///
     /// What the default guarantees, given a `get_edges` that reports edges
     /// verbatim: the node set, the edge set, `relationship_name` and edge
     /// properties all match the overrides, including seed-to-seed edges at
     /// `depth == 0` (the previous frontier-only version returned no edges at
-    /// all for that case). What it cannot repair is a backend whose
-    /// `get_edges` itself rewrites direction — the tuples are passed through
-    /// untouched.
+    /// all for that case). Edge tuples are passed through untouched, which is
+    /// both why that holds and why the direction caveat above does.
     async fn get_neighborhood(
         &self,
         node_ids: &[String],
@@ -1164,6 +1184,32 @@ mod tests {
         let mut other = NodeData::new();
         other.insert(Cow::Borrowed("text"), json!("a rule about rules"));
         assert!(!node_label_contains(&other, "rule"));
+    }
+
+    /// The needle's case is normalised by the function, not demanded of the
+    /// caller. When it was a precondition, `PgGraphAdapter` (which lowercases
+    /// the needle for its own SQL) returned candidate rows that this post-filter
+    /// then discarded every one of — a silently empty result on a public method.
+    #[test]
+    fn node_label_contains_normalises_the_needles_own_case() {
+        use serde_json::json;
+
+        let mut data = NodeData::new();
+        data.insert(Cow::Borrowed("kind"), json!("UserInteraction"));
+        for needle in ["interaction", "Interaction", "INTERACTION", "InterAction"] {
+            assert!(
+                node_label_contains(&data, needle),
+                "needle {needle:?} must match regardless of case"
+            );
+        }
+
+        let mut arr = NodeData::new();
+        arr.insert(Cow::Borrowed("labels"), json!(["Node", "CodingRule"]));
+        assert!(node_label_contains(&arr, "RULE"));
+
+        // Normalising the needle must not start matching things that do not
+        // contain it at all.
+        assert!(!node_label_contains(&arr, "INTERACTION"));
     }
 
     /// The default `get_candidate_nodes_by_label` is a documented fallback to
