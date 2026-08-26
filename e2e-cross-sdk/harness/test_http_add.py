@@ -179,7 +179,9 @@ def test_add_deduplication(authed_clients, unique_dataset_name):
         "side. (Python's lenient behaviour is also what makes its dataset count "
         "higher in forget_everything.)"
     ),
-    strict=False,
+    # Deterministic divergence, so an XPASS means one side changed its
+    # validation behaviour — worth a CI failure rather than a silent pass.
+    strict=True,
 )
 def test_add_validation_error_on_missing_file(authed_clients, unique_dataset_name):
     """POST /api/v1/add with no file and no URL returns a 4xx error on both."""

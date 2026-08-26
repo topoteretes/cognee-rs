@@ -81,7 +81,8 @@ def test_datasets_get_by_id(authed_clients, unique_dataset_name):
         "correctly reject the bad input, but the error envelopes are not "
         "byte-comparable and matching Pydantic's exact JSON shape is out of scope."
     ),
-    strict=False,
+    # Deterministic envelope-shape divergence; convergence is a real event.
+    strict=True,
 )
 def test_datasets_status_by_name(authed_clients, unique_dataset_name):
     """GET /api/v1/datasets/status?dataset=<name> returns processing status."""
@@ -123,7 +124,8 @@ def test_datasets_delete(authed_clients, unique_dataset_name):
         "correct here — matching would mean removing Rust's route. Tracked as a "
         "known divergence rather than a regression."
     ),
-    strict=False,
+    # Convergence here means someone added or removed a route. Fail loudly.
+    strict=True,
 )
 def test_datasets_get_deleted_returns_404(authed_clients, unique_dataset_name):
     """GET /api/v1/datasets/{id} returns 404 after deletion on both servers."""
