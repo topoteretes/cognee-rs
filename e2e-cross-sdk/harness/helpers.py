@@ -487,8 +487,49 @@ def query_datasets(conn: sqlite3.Connection) -> list[dict]:
     return query_rows(conn, "SELECT * FROM datasets ORDER BY name")
 
 
-def query_dataset_data(conn: sqlite3.Connection) -> list[dict]:
-    return query_rows(conn, "SELECT * FROM dataset_data")
+def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?", (name,)
+    ).fetchone()
+    return row is not None
+
+
+def query_dataset_membership(conn: sqlite3.Connection) -> list[dict]:
+    """Dataset membership as ``[{"dataset_id": ..., "data_id": ...}]``.
+
+    The two SDKs model membership differently, so this cannot be one query:
+
+    * **Rust** keeps the ``dataset_data`` junction table, so a ``data`` row is
+      dataset-agnostic and may be linked to several datasets.
+    * **Python** retired that table (alembic
+      ``d6e8f0a2b4c6_backfill_dataset_scoped_data_drop_dataset_data``) and moved
+      membership onto a ``data.dataset_id`` column, so a ``data`` row belongs to
+      exactly one dataset.
+
+    Selecting from ``dataset_data`` unconditionally — which is what this helper
+    did — raises ``sqlite3.OperationalError: no such table: dataset_data``
+    against any current Python database. Its three callers therefore errored out
+    before reaching an assertion, and reported no parity verdict at all.
+
+    Detecting the schema rather than the SDK keeps this correct for the
+    cross-read tests, where one SDK opens a database the other one wrote.
+
+    Note that the row *counts* legitimately differ once the same bytes are added
+    to two datasets: Python yields two ``data`` rows and Rust one row with two
+    junction links. That divergence is real (see
+    ``docs/roadmap/python-parity-audit.md`` §1.1); this helper only makes it
+    observable instead of masking it behind an error.
+    """
+    if _table_exists(conn, "dataset_data"):
+        return query_rows(conn, "SELECT dataset_id, data_id FROM dataset_data")
+    return query_rows(
+        conn,
+        "SELECT dataset_id, id AS data_id FROM data WHERE dataset_id IS NOT NULL",
+    )
+
+
+# Retained so the existing call sites keep working; prefer the explicit name.
+query_dataset_data = query_dataset_membership
 
 
 def query_nodes(conn: sqlite3.Connection) -> list[dict]:
