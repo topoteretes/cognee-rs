@@ -179,7 +179,28 @@ async fn unfiltered_path_loads_the_neighborhood_not_the_whole_graph() {
 /// `get_id_filtered_graph_data` (which requires *both* endpoints in the seed set).
 #[tokio::test]
 async fn scoped_load_returns_exactly_the_edges_the_full_scan_did() {
-    let (vector_db, graph, _fx) = seed().await;
+    let (vector_db, graph, fx) = seed().await;
+
+    // Pin the precondition this test depends on: the scoped load really does
+    // hand back c_to_d, whose endpoints are both non-seed. Without this the
+    // assertion below would pass even if the load had never produced the edge,
+    // and the filter — the thing that makes the swap result-identical — would
+    // go untested.
+    let (_, loaded) = graph
+        .get_neighborhood(&[fx.a.to_string(), fx.b.to_string()], 1)
+        .await
+        .unwrap();
+    let loaded_rels: Vec<&str> = loaded.iter().map(|(_, _, rel, _)| rel.as_str()).collect();
+    assert!(
+        loaded_rels.contains(&"c_to_d"),
+        "precondition: the depth-1 neighborhood of {{a, b}} must include the \
+         neighbor-to-neighbor edge c_to_d, so that the ranking filter is what \
+         removes it. Loaded: {loaded_rels:?}"
+    );
+    assert!(
+        !loaded_rels.contains(&"e_to_f"),
+        "the disconnected component must not be loaded at all. Loaded: {loaded_rels:?}"
+    );
 
     let ranked = brute_force_triplet_search(
         "any query",

@@ -268,7 +268,16 @@ pub async fn brute_force_triplet_search(
         // drop every edge with one non-seed endpoint and change ranking. Python's
         // Neo4j implementation uses OR semantics, which `get_neighborhood`
         // reproduces.
-        let seed_ids: Vec<String> = candidate_node_ids.iter().cloned().collect();
+        // Sorted, not just collected: `candidate_node_ids` is a `HashSet`, so its
+        // iteration order varies per process. Backends whose output order tracks
+        // the seed order (the trait's default BFS walks the frontier in order;
+        // Ladybug inlines the list into the query text) would then return edges
+        // in a different order each run, and `sort_by` below is a *stable* sort
+        // over scores that tie constantly — every non-seed endpoint takes the
+        // same penalty — so `take(top_k)` could hand the LLM a different context
+        // for the same query. `get_graph_data()` had a stable backend order.
+        let mut seed_ids: Vec<String> = candidate_node_ids.iter().cloned().collect();
+        seed_ids.sort_unstable();
         graph_db
             .get_neighborhood(&seed_ids, NEIGHBORHOOD_DEPTH)
             .await?
