@@ -81,6 +81,28 @@ def local_url_fixture():
         server.server_close()
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "The pinned Python build returns a nested {run_info: PipelineRunInfo} "
+        "from /add with no content_hash, while Rust returns it flat. This test "
+        "is expected to fail. When it XPASSes, Python has started returning "
+        "content_hash: drop this test and make the comparison in "
+        "seed.py::seed_both unconditional, since that is the HTTP lane's only "
+        "content-addressed equality oracle."
+    ),
+)
+def test_python_add_omits_content_hash(authed_clients, unique_dataset_name):
+    """Tripwire for the asymmetry that disabled seed_both's hash comparison."""
+    from seed import seed_dataset_with_text
+
+    py = seed_dataset_with_text(
+        authed_clients["py"], name=unique_dataset_name, text="content hash probe"
+    )
+    assert py.get("content_hash") is not None
+
+
+
 def test_add_text_upload(authed_clients, unique_dataset_name):
     """POST /api/v1/add with a single text/plain file returns 200 on both servers."""
     py = authed_clients["py"].post(

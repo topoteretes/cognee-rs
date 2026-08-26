@@ -114,10 +114,29 @@ def seed_both(
     for side, client in both_clients.items():
         results[side] = seed_dataset_with_text(client, name=name, text=text)
 
-    # content_hash is deterministic (MD5 of content); both sides must agree.
+    # content_hash is deterministic (MD5 of content), so where both sides
+    # present it they must agree.
+    #
+    # The `is not None` guard this check used to carry made it a no-op in
+    # practice: the pinned Python build returns a nested
+    # `{run_info: PipelineRunInfo}` with no content_hash at all (documented at
+    # test_http_add.py:22-29), so py_hash was always None and the only
+    # content-addressed equality assertion in the HTTP lane never executed.
+    #
+    # Rust's flat `{content_hash, name, extension, mime_type}` IS a documented
+    # contract, so that half is asserted unconditionally — losing it would be a
+    # real regression, and silently skipping is how the original check died.
+    # The Python-side absence is tracked by a strict xfail in
+    # test_http_add.py::test_python_add_omits_content_hash, which flips to a
+    # failure the moment Python starts returning the field, at which point the
+    # comparison below can be made unconditional.
     py_hash = results["py"].get("content_hash")
     rs_hash = results["rs"].get("content_hash")
-    if py_hash is not None and rs_hash is not None:
+    assert rs_hash is not None, (
+        "seed_both: Rust /add did not return content_hash, which is its "
+        f"documented response contract. rs response: {results['rs']}"
+    )
+    if py_hash is not None:
         assert py_hash == rs_hash, (
             f"seed_both: content_hash mismatch — py={py_hash!r} rs={rs_hash!r}\n"
             f"py response: {results['py']}\n"
