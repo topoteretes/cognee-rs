@@ -1202,6 +1202,19 @@ impl Default for Settings {
             // `cognee-http-server` and every binding). A consumer that drops that
             // feature MUST set `vector_db_provider` explicitly; the registry's
             // unsupported-provider error names the feature to rebuild with.
+            //
+            // Android is the one first-party profile that does drop it:
+            // `cognee/android-default` omits `lancedb` because the Arrow + lance
+            // native stack does not cross-compile. Its effective backend has
+            // always been in-memory brute-force anyway — when the feature IS
+            // present, `LanceDbFactory::build` falls back to brute-force on
+            // Android rather than opening a store. Naming brute-force directly
+            // there keeps that behaviour and stops a stock Android build from
+            // erroring on a provider whose factory was never registered. Every
+            // other slim consumer keeps the loud failure described above.
+            #[cfg(all(target_os = "android", not(feature = "lancedb")))]
+            vector_db_provider: "brute-force".to_string(),
+            #[cfg(not(all(target_os = "android", not(feature = "lancedb"))))]
             vector_db_provider: "lancedb".to_string(),
             vector_db_url: String::new(),
             vector_db_port: 1234,

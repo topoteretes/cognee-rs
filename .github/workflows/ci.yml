@@ -238,10 +238,53 @@ jobs:
           cargo check -p cognee-http-server --no-default-features \
             --features telemetry,html-loader,pgvector,pggraph
 
-      # crates/vector declares no default features, so `cargo test -p cognee-vector`
-      # runs none of the inline LanceDB adapter tests; only the workspace-wide
-      # nextest run reaches them, via unification from `cognee`. Spell the lane out
-      # so the adapter keeps its own coverage.
+      # crates/cli reaches `cognee` with `default-features = false`, so its own
+      # feature list can actually subtract. Guard both ends of that seam: the
+      # bare slim build, and `android-default` -- the composite that
+      # deliberately drops pdfium, postgres, tiktoken and lancedb, and which
+      # silently built the full desktop stack for as long as the CLI manifest
+      # was missing the flag. Mirrors the slim-CLI lane in scripts/check_all.sh.
+      - name: Compilation check (slim CLI facade)
+        env:
+          CARGO_TARGET_DIR: target/no-default
+        run: |
+          cargo check -p cognee-cli --no-default-features
+          cargo check -p cognee-cli --no-default-features \
+            --features cognee-cli/android-default
+
+      # A compile check alone cannot tell a slim tree from a fat one, so assert
+      # the profile's actual contract: android-default excludes pdfium,
+      # postgres, tiktoken and lancedb. Marker crates beat a package-count
+      # ceiling -- a count is host-dependent: the pre-fix fat tree measured 690
+      # packages on the Linux runner but only 523 for aarch64-linux-android,
+      # where lancedb is already target-gated away. A ceiling loose enough for
+      # one is blind for the other -- 520 would have missed the real Android
+      # regression by 3 packages. `lbug` and `ort` are sentinels: android-default
+      # genuinely pulls both, so their absence means the measurement broke
+      # rather than the profile being clean. Mirrors scripts/check_all.sh.
+      - name: Feature-subtraction contract (android-default CLI profile)
+        env:
+          CARGO_TARGET_DIR: target/no-default
+        shell: bash
+        run: |
+          set -euo pipefail
+          tree=$(cargo tree -p cognee-cli --no-default-features \
+              --features cognee-cli/android-default -e normal --prefix none \
+              --format '{p}' | sed 's/ (\*)//' | awk '{print $1}' | sort -u)
+          for sentinel in lbug ort; do
+            if ! grep -qx "$sentinel" <<<"$tree"; then
+              echo "::error::'$sentinel' missing from the android-default tree. Expected it to be present, so this measurement is broken -- not a clean profile."
+              exit 1
+            fi
+          done
+          for forbidden in lancedb pdfium-render tiktoken-rs aws-config; do
+            if grep -qx "$forbidden" <<<"$tree"; then
+              echo "::error::'$forbidden' leaked into cognee-cli/android-default, which is defined to exclude it. A feature forward has stopped subtracting -- check that crates/cli/Cargo.toml still declares 'default-features = false' on the cognee dependency."
+              exit 1
+            fi
+          done
+          echo "android-default excludes lancedb/pdfium/tiktoken/aws (sentinels lbug, ort present)"
+
       - name: Test (cognee-vector lancedb lane)
         run: cargo test -p cognee-vector --features lancedb
 

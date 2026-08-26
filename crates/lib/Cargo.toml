@@ -76,7 +76,14 @@ default = [
 mock-llm       = ["cognee-llm/mock", "cognee-components/mock-llm"]
 visualization  = ["dep:cognee-visualization"]
 onnx           = ["cognee-embedding/onnx", "cognee-components/onnx"]
-onnx-dynamic   = ["cognee-embedding/onnx-dynamic", "cognee-components/onnx-dynamic"]
+# Self-implies `onnx`, matching cognee-components and cognee-embedding, whose
+# `onnx-dynamic` both do the same. Without it, a consumer that reaches this
+# crate with `default-features = false` and enables only `onnx-dynamic` (e.g.
+# via `android-default`) flips ort into dlopen mode but compiles out the
+# `#[cfg(feature = "onnx")]` re-exports below. The docs.rs metadata blocks here
+# and in crates/cognee-lib still list `onnx` alongside `onnx-dynamic`; that is
+# now redundant rather than load-bearing, and harmless to leave in place.
+onnx-dynamic   = ["onnx", "cognee-embedding/onnx-dynamic", "cognee-components/onnx-dynamic"]
 ort-cuda       = ["cognee-embedding/ort-cuda", "cognee-components/ort-cuda"]
 ort-tensorrt   = ["cognee-embedding/ort-tensorrt", "cognee-components/ort-tensorrt"]
 ladybug        = ["cognee-graph/ladybug", "cognee-components/ladybug"]

@@ -25,6 +25,10 @@ path = "src/main.rs"
 default = [
     "onnx",
     "ladybug",
+    # Default-on because the runtime default `vector_db_provider` is "lancedb"
+    # (crates/lib/src/config.rs). Dropping it from `default` would turn a
+    # compile-time choice into a runtime failure on a stock build.
+    "lancedb",
     "pgvector",
     "pggraph",
     "sqlite",
@@ -62,6 +66,7 @@ ort-cuda      = ["cognee/ort-cuda"]
 ort-tensorrt  = ["cognee/ort-tensorrt"]
 onnx-dynamic  = ["cognee/onnx-dynamic"]
 ladybug       = ["cognee/ladybug"]
+lancedb       = ["cognee/lancedb"]
 pgvector      = ["cognee/pgvector"]
 pggraph       = ["cognee/pggraph"]
 sqlite        = ["cognee/sqlite"]
@@ -96,7 +101,12 @@ android-default = ["cognee/android-default"]
 
 [dependencies]
 clap = { workspace = true, features = ["derive"] }
-cognee = { path = "../lib", version = "0.2.0" }
+# `default-features = false` is load-bearing: without it the feature list below
+# is purely additive (it can add but never subtract) and `--no-default-features`
+# is inert for the whole backend stack. Every other consumer of `cognee` in this
+# repo already does this; the CLI was missed when the lancedb/onnx/ladybug gates
+# landed. Guarded by the slim-CLI lanes in scripts/check_all.sh and ci.yml.
+cognee = { path = "../lib", version = "0.2.0", default-features = false }
 cognee-logging = { path = "../logging", version = "0.2.0" }
 dirs.workspace = true
 serde.workspace = true
