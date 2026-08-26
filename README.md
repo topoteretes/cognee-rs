@@ -45,6 +45,23 @@ feedback, **`forget`** what's stale.
 - **Rust toolchain** — install [rustup](https://rustup.rs); the repo's pinned
   toolchain (Rust 1.91.1, declared in `rust-toolchain.toml`) is selected
   automatically. The workspace is edition 2024 / resolver 3; MSRV is 1.91.1.
+- **Native build tools** — the default features compile two bundled C++ trees,
+  so you also need a C/C++ compiler, `cmake` and `protoc`:
+
+  ```bash
+  # Debian / Ubuntu
+  sudo apt-get install -y build-essential cmake protobuf-compiler
+  # macOS
+  brew install cmake protobuf
+  # Windows
+  choco install cmake protoc --no-progress
+  ```
+
+  On x86-64 Linux the compiler must be GCC ≥ 12 or Clang ≥ 16. Both tools are
+  feature-gated — builds that drop LanceDB need no `protoc`, and dropping
+  Ladybug and Bedrock too sheds `cmake`. See
+  [docs/build/prerequisites.md](docs/build/prerequisites.md) for the full
+  breakdown, per-feature requirements, and the GCC 11 workaround.
 - An **LLM API key** (OpenAI-compatible). 
 
 Build the CLI from source with Cargo. 

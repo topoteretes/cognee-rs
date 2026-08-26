@@ -254,7 +254,10 @@ jobs:
 
       # A compile check alone cannot tell a slim tree from a fat one, so assert
       # the profile's actual contract: android-default excludes pdfium,
-      # postgres, tiktoken and lancedb. Marker crates beat a package-count
+      # tiktoken, lancedb and the AWS stack. It also excludes `postgres`, but
+      # that one is NOT asserted below and no marker can assert it:
+      # `sqlx-postgres` is in the android tree unconditionally, pulled by
+      # sea-orm via cognee-search. Marker crates beat a package-count
       # ceiling -- a count is host-dependent: the pre-fix fat tree measured 690
       # packages on the Linux runner but only 523 for aarch64-linux-android,
       # where lancedb is already target-gated away. A ceiling loose enough for
@@ -577,7 +580,10 @@ jobs:
         with:
           make-default: true
 
-      # cmake + protoc are needed by lbug's bundled C++ build (via cognee).
+      # cmake drives lbug's (and aws-lc-sys') bundled C++ builds; protoc is
+      # unrelated to lbug -- it comes from lancedb's Protobuf schemas. Both
+      # reach here via cognee's default features. See
+      # docs/build/prerequisites.md.
       - name: Install build deps
         run: sudo apt-get update && sudo apt-get install -y cmake protobuf-compiler
 

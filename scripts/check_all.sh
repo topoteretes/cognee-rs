@@ -29,6 +29,29 @@ if command -v sccache > /dev/null 2>&1; then
     export RUSTC_WRAPPER="${RUSTC_WRAPPER:-sccache}"
 fi
 
+# Native build tools. Unlike the sccache probe above -- which degrades
+# gracefully -- these are hard requirements for the default feature set this
+# script checks: `cmake` drives Ladybug's and AWS-LC's bundled C++ builds, and
+# `protoc` compiles LanceDB's Protobuf schemas. Without them the run dies
+# minutes later inside a dependency's build script with an error that names
+# neither this repo nor the missing package, so fail here instead.
+# Docs: docs/build/prerequisites.md
+missing_tools=()
+for tool in cmake protoc; do
+    command -v "$tool" > /dev/null 2>&1 || missing_tools+=("$tool")
+done
+if [ ${#missing_tools[@]} -gt 0 ]; then
+    echo "ERROR: missing native build tools: ${missing_tools[*]}" >&2
+    echo "" >&2
+    echo "  Debian/Ubuntu: sudo apt-get install -y build-essential cmake protobuf-compiler" >&2
+    echo "  Fedora/RHEL:   sudo dnf install -y gcc-c++ cmake protobuf-compiler" >&2
+    echo "  macOS:         brew install cmake protobuf" >&2
+    echo "  Windows:       choco install cmake protoc --no-progress" >&2
+    echo "" >&2
+    echo "  See docs/build/prerequisites.md (incl. the GCC 11 workaround)." >&2
+    exit 1
+fi
+
 echo "================================================================"
 echo "=== Rust: Checking formatting ==="
 echo "================================================================"
@@ -106,7 +129,11 @@ cargo check -p cognee-cli --no-default-features
 cargo check -p cognee-cli --no-default-features --features cognee-cli/android-default
 
 # Assert the profile's actual contract: android-default excludes pdfium,
-# postgres, tiktoken and lancedb. Marker crates beat a package count -- a count is
+# tiktoken, lancedb and the AWS stack. It also excludes `postgres`, but that one
+# is NOT asserted here and no marker can assert it: `sqlx-postgres` is in the
+# android tree unconditionally, pulled by sea-orm via cognee-search, so its
+# presence says nothing about whether cognee/postgres is on.
+# Marker crates beat a package count -- a count is
 # host-dependent: the pre-fix fat tree measured 690 packages on this host but
 # only 523 for aarch64-linux-android, where lancedb is already target-gated
 # away. A ceiling loose enough for one is blind for the other -- 520 would have
