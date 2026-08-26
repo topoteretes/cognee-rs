@@ -436,7 +436,8 @@ The library function (the `work` future) does not see the flag. It just runs aga
 ```
 Pending ──► Running ──► Completed
                     └─► Errored
-        └─► AlreadyCompleted    (idempotent re-cognify; no work performed)
+        └─► AlreadyCompleted    (opt-in pipeline cache only; no work performed —
+                                 no production caller emits this today)
         └─► Aborted (shutdown)  (writes Errored to durable + channel; matches "shutdown_grace" error)
 ```
 

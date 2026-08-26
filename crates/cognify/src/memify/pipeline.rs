@@ -191,10 +191,18 @@ pub async fn memify(
     config.validate()?;
 
     // 1b. Qualification gate (gap 08-08, locked decision 3) ────────────────
-    // Skip when `dataset_id` is `None` — Python's gate only applies per
-    // dataset, and ad-hoc memify runs without a dataset cannot be looked up
-    // via `get_pipeline_run_by_dataset`. The pipeline name used here matches
-    // what the executor-routed pipeline persists
+    // `AlreadyCompleted` short-circuits ONLY when the caller opted into the
+    // pipeline cache, mirroring Python's `if use_pipeline_cache:` guard in
+    // `run_pipeline_per_dataset` (`memify()` passes `use_pipeline_cache=False`).
+    // Short-circuiting unconditionally made every memify after the first a
+    // silent no-op. `AlreadyRunning` still rejects either way — see the longer
+    // note in `tasks::cognify`: Python relies on a per-dataset lock Rust does
+    // not have, so this row check is our only run serialization.
+    //
+    // Skipped entirely when `dataset_id` is `None` — Python's gate only applies
+    // per dataset, and ad-hoc memify runs without a dataset cannot be looked
+    // up via `get_pipeline_run_by_dataset`. The pipeline name used here
+    // matches what the executor-routed pipeline persists
     // (`build_memify_index_only_pipeline` sets
     // `with_name(MEMIFY_PIPELINE_STAMP_NAME)`).
     let pipeline_name = MEMIFY_PIPELINE_STAMP_NAME;
@@ -203,14 +211,16 @@ pub async fn memify(
             .await
             .map_err(|e| MemifyError::Database(e.to_string()))?
         {
-            Qualification::AlreadyCompleted(prior) => {
+            Qualification::AlreadyCompleted(prior) if config.use_pipeline_cache => {
                 info!(
                     dataset_id = %ds_id,
                     pipeline_run_id = %prior.pipeline_run_id,
-                    "memify: dataset already completed; short-circuiting (Python parity)"
+                    "memify: dataset already completed; short-circuiting (pipeline cache hit)"
                 );
                 return Ok(MemifyResult::already_completed(prior.pipeline_run_id));
             }
+            // Cache off (the default): a completed prior run does not stop this one.
+            Qualification::AlreadyCompleted(_) => {}
             Qualification::AlreadyRunning(_prior) => {
                 return Err(MemifyError::PipelineAlreadyRunning {
                     pipeline_name: pipeline_name.to_string(),

@@ -72,6 +72,17 @@ pub struct MemifyConfig {
     /// Python: memify(data=...)
     #[serde(skip)]
     pub custom_data: Option<Vec<serde_json::Value>>,
+
+    /// Opt in to the pipeline-run cache: when `true`, a memify run whose
+    /// dataset already has a COMPLETED `memify_pipeline` row short-circuits
+    /// instead of re-running.
+    ///
+    /// Default `false`, matching Python — `memify()` hard-codes
+    /// `use_pipeline_cache=False`, and `run_pipeline_per_dataset` only consults
+    /// `check_pipeline_run_qualification` when the flag is set. Mirrors
+    /// [`crate::CognifyConfig::use_pipeline_cache`].
+    #[serde(default)]
+    pub use_pipeline_cache: bool,
 }
 
 impl Default for MemifyConfig {
@@ -84,6 +95,7 @@ impl Default for MemifyConfig {
             extraction_tasks: None,
             enrichment_tasks: None,
             custom_data: None,
+            use_pipeline_cache: false,
         }
     }
 }
@@ -91,6 +103,13 @@ impl Default for MemifyConfig {
 impl MemifyConfig {
     pub fn with_triplet_batch_size(mut self, size: usize) -> Self {
         self.triplet_batch_size = size;
+        self
+    }
+
+    /// Opt in to the pipeline-run cache (see
+    /// [`use_pipeline_cache`](Self::use_pipeline_cache)). Off by default.
+    pub fn with_pipeline_cache(mut self, enable: bool) -> Self {
+        self.use_pipeline_cache = enable;
         self
     }
 

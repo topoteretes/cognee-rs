@@ -2181,11 +2181,28 @@ pub async fn cognify(
 
     // ── Qualification gate (gap 08-08, locked decision 3) ───────────────────
     // Python-parity `check_pipeline_run_qualification`: read the latest
-    // `pipeline_runs` row for `(dataset_id, pipeline_name)` and decide
-    // whether to proceed, short-circuit, or reject. The pipeline name used
-    // here MUST match what `DbPipelineWatcher` will persist on the next
-    // `pipeline::execute` call — that is the `Pipeline.name` set below
-    // ([`COGNIFY_PIPELINE_STAMP_NAME`] or `"temporal-cognify"`).
+    // `pipeline_runs` row for `(dataset_id, pipeline_name)` and decide whether
+    // to proceed, short-circuit, or reject.
+    //
+    // The two verdicts are gated differently, on purpose:
+    //
+    // * `AlreadyCompleted` short-circuits ONLY when the caller opted into the
+    //   pipeline cache. Python guards this layer behind `if use_pipeline_cache:`
+    //   in `run_pipeline_per_dataset` (`modules/pipelines/operations/pipeline.py`)
+    //   and every public entry point passes `use_pipeline_cache=False`, so
+    //   upstream a repeat cognify always re-runs. Short-circuiting
+    //   unconditionally made every cognify after the first a silent no-op, so a
+    //   dataset could never take a second wave of data. `dataset_resolver`
+    //   already gates its own dataset-level skip on this same flag.
+    //
+    // * `AlreadyRunning` still rejects regardless of the flag. Python can put
+    //   this behind the flag because `run_pipeline_per_dataset` serializes on
+    //   `get_dataset_lock(dataset.id)` — its own comment reads "concurrent runs
+    //   are kept safe by the per-dataset lock, not by this check". Rust has no
+    //   such lock, so this row check is the only thing keeping two concurrent
+    //   cognify runs off one dataset (double LLM spend, interleaved graph and
+    //   `pipeline_runs` writes). Deliberate deviation from Python's structure in
+    //   order to preserve Python's actual guarantee.
     let pipeline_name: &str = if effective_config.temporal_cognify {
         "temporal-cognify"
     } else {
@@ -2195,14 +2212,16 @@ pub async fn cognify(
         .await
         .map_err(|e| CognifyError::DatabaseError(e.to_string()))?
     {
-        Qualification::AlreadyCompleted(prior) => {
+        Qualification::AlreadyCompleted(prior) if effective_config.use_pipeline_cache => {
             info!(
                 dataset_id = %dataset_id,
                 pipeline_run_id = %prior.pipeline_run_id,
-                "cognify: dataset already completed; short-circuiting (Python parity)"
+                "cognify: dataset already completed; short-circuiting (pipeline cache hit)"
             );
             return Ok(CognifyResult::already_completed(prior.pipeline_run_id));
         }
+        // Cache off (the default): a completed prior run does not stop this one.
+        Qualification::AlreadyCompleted(_) => {}
         Qualification::AlreadyRunning(_prior) => {
             return Err(CognifyError::PipelineAlreadyRunning {
                 pipeline_name: pipeline_name.to_string(),
