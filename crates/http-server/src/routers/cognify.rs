@@ -164,8 +164,18 @@ pub async fn post_cognify(
     }
     // Per-request `chunk_size` wins over the server-wide default; neither set
     // leaves `CognifyConfig::max_chunk_size` at `None` (auto-calculated).
-    if let Some(size) = payload.chunk_size.or(state.config.chunk_size) {
-        cognify_config = cognify_config.with_chunk_size(size.max(1) as usize);
+    // `0` is rejected rather than clamped: one-token chunks fan out into an
+    // unbounded number of extraction calls, and `COGNEE_CHUNK_SIZE=0` is already
+    // a hard config error, so the request path must not reinterpret it.
+    if let Some(size) = payload.chunk_size {
+        if size == 0 {
+            return Err(ApiError::BadRequest(
+                "chunkSize must be greater than 0".to_string(),
+            ));
+        }
+        cognify_config = cognify_config.with_chunk_size(size as usize);
+    } else if let Some(size) = state.config.chunk_size {
+        cognify_config = cognify_config.with_chunk_size(size as usize);
     }
     if let Some(ref prompt) = payload.custom_prompt {
         cognify_config = cognify_config.with_custom_prompt(prompt.clone());

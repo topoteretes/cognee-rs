@@ -2169,6 +2169,13 @@ pub async fn cognify(
             .clone()
             .with_auto_chunk_size(embedding_engine.as_ref(), llm.as_ref());
         info!("Auto-calculated max_chunk_size: {}", cfg.chunk_size());
+        // Re-validate: the first `validate()` above runs while the size is still
+        // unset, so the `chunk_overlap < max_chunk_size` rule is only checkable
+        // once the auto value is known. A large overlap against a small
+        // engine-derived size (512 on the local ONNX/BGE engine) must fail here
+        // rather than reach the chunkers.
+        cfg.validate()
+            .map_err(|e| CognifyError::ConfigError(e.to_string()))?;
         cfg
     } else {
         config.clone()

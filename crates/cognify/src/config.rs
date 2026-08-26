@@ -840,6 +840,25 @@ mod tests {
         assert!(config.validate().is_ok());
     }
 
+    /// ...but once resolved it must be enforced, which is why `cognify()`
+    /// re-validates after auto-calculation rather than only before.
+    #[test]
+    fn validation_catches_a_too_large_overlap_once_the_size_is_resolved() {
+        let embed = MockEmbedding { max_seq: 512 };
+        let llm = MockLlm::with_ctx(4096);
+        let resolved = CognifyConfig {
+            max_chunk_size: None,
+            chunk_overlap: 100_000,
+            ..Default::default()
+        }
+        .with_auto_chunk_size(&embed, &llm);
+        assert_eq!(resolved.max_chunk_size, Some(512));
+        assert!(matches!(
+            resolved.validate(),
+            Err(ConfigError::InvalidParameter(_))
+        ));
+    }
+
     #[test]
     fn test_auto_chunk_size_large_embedding() {
         // embed_max=10000 > llm_cutoff (8192) → result=8192 (LLM constant dominates).
