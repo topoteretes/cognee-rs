@@ -546,55 +546,35 @@ impl GraphDBTrait for MockGraphDB {
         let nodes_guard = self.nodes.lock().unwrap(); // lock poison is unrecoverable
         let edges_guard = self.edges.lock().unwrap(); // lock poison is unrecoverable
 
-        // Hand-rolled BFS directly against the internal edge store. We must NOT
-        // delegate to `get_connections`, which drops `relationship_name`. Edges
-        // are pushed as their unmodified `(src, tgt, rel, props)` tuples, so the
-        // true stored direction is preserved by construction.
-        let mut nodes_by_id: HashMap<String, NodeData> = HashMap::new();
-        let mut visited: HashSet<String> = HashSet::new();
-        let mut frontier: Vec<String> = Vec::new();
-
-        for id in node_ids {
-            if visited.insert(id.clone()) {
-                frontier.push(id.clone());
-                // Seed lookup so isolated seeds still appear in the output.
-                if let Some(data) = nodes_guard.get(id) {
-                    nodes_by_id.insert(id.clone(), data.clone());
-                }
-            }
-        }
-
-        let mut edges: Vec<EdgeData> = Vec::new();
-        let mut edge_keys: HashSet<(String, String, String)> = HashSet::new();
+        // Two phases, mirroring the real adapters (`PgGraphAdapter`'s recursive
+        // CTE and `LadybugAdapter`'s traversal): first resolve the id set by
+        // undirected BFS out to `depth`, then return the **induced subgraph** over
+        // it — every edge with both endpoints resolved, per the contract on
+        // `GraphDBTrait::get_neighborhood`.
+        //
+        // Collecting edges during the walk instead (only those incident to the
+        // current frontier) silently omits edges between two nodes discovered at
+        // the same depth, so a caller that partitions the result itself — graph
+        // search keeps edges with at least one *seed* endpoint — would see a
+        // different set here than in production.
+        //
+        // Read straight from the internal edge store rather than delegating to
+        // `get_connections`, which drops `relationship_name`. Edge tuples are
+        // cloned unmodified, so the true stored direction is preserved.
+        let mut resolved: HashSet<String> = node_ids.iter().cloned().collect();
+        let mut frontier: Vec<String> = resolved.iter().cloned().collect();
 
         for _ in 0..depth {
             let frontier_set: HashSet<&String> = frontier.iter().collect();
             let mut next_frontier: Vec<String> = Vec::new();
 
-            for (src, tgt, rel, props) in edges_guard.iter() {
+            for (src, tgt, _, _) in edges_guard.iter() {
                 let src_in = frontier_set.contains(src);
                 let tgt_in = frontier_set.contains(tgt);
-                if !src_in && !tgt_in {
-                    continue;
-                }
-
-                let key = (src.clone(), tgt.clone(), rel.clone());
-                if edge_keys.insert(key) {
-                    edges.push((src.clone(), tgt.clone(), rel.clone(), props.clone()));
-                }
-
-                if let Some(data) = nodes_guard.get(src) {
-                    nodes_by_id.insert(src.clone(), data.clone());
-                }
-                if let Some(data) = nodes_guard.get(tgt) {
-                    nodes_by_id.insert(tgt.clone(), data.clone());
-                }
-
-                // Enqueue the endpoint that isn't in the current frontier.
-                if src_in && visited.insert(tgt.clone()) {
+                if src_in && resolved.insert(tgt.clone()) {
                     next_frontier.push(tgt.clone());
                 }
-                if tgt_in && visited.insert(src.clone()) {
+                if tgt_in && resolved.insert(src.clone()) {
                     next_frontier.push(src.clone());
                 }
             }
@@ -605,7 +585,24 @@ impl GraphDBTrait for MockGraphDB {
             frontier = next_frontier;
         }
 
-        Ok((nodes_by_id.into_iter().collect(), edges))
+        // An isolated seed still appears, because it is in `resolved`. A seed with
+        // no row in the node store is dropped here — same as the previous
+        // behaviour, and same as the real adapters, whose node halves select from
+        // `graph_node`/`(n:Node)` and so cannot invent a row either.
+        let nodes: Vec<(String, NodeData)> = resolved
+            .iter()
+            .filter_map(|id| nodes_guard.get(id).map(|data| (id.clone(), data.clone())))
+            .collect();
+
+        let mut edge_keys: HashSet<(String, String, String)> = HashSet::new();
+        let edges: Vec<EdgeData> = edges_guard
+            .iter()
+            .filter(|(src, tgt, _, _)| resolved.contains(src) && resolved.contains(tgt))
+            .filter(|(src, tgt, rel, _)| edge_keys.insert((src.clone(), tgt.clone(), rel.clone())))
+            .cloned()
+            .collect();
+
+        Ok((nodes, edges))
     }
 
     async fn get_node_truth_state(

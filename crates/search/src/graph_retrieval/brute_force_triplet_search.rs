@@ -10,6 +10,23 @@ use crate::types::SearchError;
 
 const DEFAULT_WIDE_SEARCH_TOP_K: usize = 100;
 
+/// Hop radius used to scope the graph load around the vector-search seed set.
+///
+/// Must stay at 1 for the scoped load to be **result-identical** to loading the
+/// whole graph. The edge ranking below keeps an edge when *at least one*
+/// endpoint is a seed. `get_neighborhood(seeds, 1)` returns every edge whose
+/// endpoints both lie in `seeds ∪ N(seeds)`, which is a superset of that set:
+/// if `src` is a seed then `tgt ∈ N(seeds)` by adjacency, so the edge is
+/// returned; extra edges between two non-seed neighbors are then dropped by the
+/// same filter that already ran against the full graph. Node property lookups
+/// are unaffected because every endpoint of a kept edge is in the resolved set.
+///
+/// Raising this would pull in edges the filter discards anyway — more IO for
+/// identical output. Lowering it to 0 is backend-dependent (the trait's default
+/// BFS returns no edges at depth 0, while the Postgres and Ladybug overrides
+/// return seed-to-seed edges) and would drop edges with one non-seed endpoint.
+const NEIGHBORHOOD_DEPTH: usize = 1;
+
 /// Default cosine distance assigned to graph elements (nodes or edges) that have no
 /// vector match for the current query. Matches Python's `triplet_distance_penalty`
 /// default of 6.5 in
@@ -58,7 +75,7 @@ pub struct GraphRetrievalConfig {
     pub feedback_influence: f32,
     /// Filter graph to nodes of this type before scoring.
     /// When combined with `node_name`, calls `get_nodeset_subgraph` instead of
-    /// `get_graph_data`.
+    /// the seed-scoped `get_neighborhood` load.
     pub node_type: Option<String>,
     /// Filter graph to nodes with these names (paired with `node_type`).
     pub node_name: Option<Vec<String>>,
@@ -234,7 +251,36 @@ pub async fn brute_force_triplet_search(
             .get_nodeset_subgraph(node_type, node_names, &config.node_name_filter_operator)
             .await?
     } else {
-        graph_db.get_graph_data().await?
+        // Scope the load to the seed set's neighborhood instead of pulling the
+        // whole graph. This is result-identical to `get_graph_data()`, not merely
+        // narrower — see `NEIGHBORHOOD_DEPTH` for the argument.
+        //
+        // Python scopes here unconditionally: its `relevant_node_ids` is only
+        // `None` when `wide_search_limit is None`, but `wide_search_top_k`
+        // defaults to 100, so the id filter is always populated and
+        // `CogneeGraph._get_full_or_id_filtered_graph` always takes the scoped
+        // branch (brute_force_triplet_search.py:156-160, CogneeGraph.py:123-151).
+        // The full-graph branch is dead code there.
+        //
+        // Deliberately NOT `get_id_filtered_graph_data`, despite the name match
+        // with Python's method: this trait's version keeps an edge only when
+        // *both* endpoints are in the id set (traits.rs), which would silently
+        // drop every edge with one non-seed endpoint and change ranking. Python's
+        // Neo4j implementation uses OR semantics, which `get_neighborhood`
+        // reproduces.
+        // Sorted, not just collected: `candidate_node_ids` is a `HashSet`, so its
+        // iteration order varies per process, and the trait's default BFS walks
+        // the frontier in seed order — so an unsorted seed list makes that
+        // backend's edge order vary run to run. Cheap insurance; the ranking
+        // sort's tie-break below is what actually guarantees a stable top-k,
+        // since neither real adapter's row order tracks the seed order (Ladybug
+        // re-collects into its own `HashSet` and returns storage order; the
+        // Postgres CTE has no ORDER BY).
+        let mut seed_ids: Vec<String> = candidate_node_ids.iter().cloned().collect();
+        seed_ids.sort_unstable();
+        graph_db
+            .get_neighborhood(&seed_ids, NEIGHBORHOOD_DEPTH)
+            .await?
     };
 
     // Extract name, text, description, and (optionally) feedback_weight from each node.
@@ -345,11 +391,25 @@ pub async fn brute_force_triplet_search(
         })
         .collect::<Vec<_>>();
 
-    // Sort ascending: lowest total distance = best match (matches Python heapq.nsmallest)
+    // Sort ascending: lowest total distance = best match (matches Python heapq.nsmallest).
+    //
+    // Ties break on the edge triple, not on arrival order. `sort_by` is stable, so
+    // without an explicit tie-break the winners of a tie are decided by whatever
+    // order the graph backend returned its rows in — which no backend guarantees
+    // (the Postgres neighborhood CTE has no ORDER BY; Ladybug is storage-ordered)
+    // and which `take(top_k)` below then makes user-visible. Ties are the common
+    // case rather than a rarity: every endpoint absent from the vector results
+    // takes the same `triplet_distance_penalty`, so an `is_a` fan-out around one
+    // EntityType hub yields hundreds of exactly-equal scores. Comparing the ids
+    // makes the top-k context handed to the LLM identical across runs and across
+    // backends.
     ranked_edges.sort_by(|left, right| {
         left.score
             .partial_cmp(&right.score)
             .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| left.source_id.cmp(&right.source_id))
+            .then_with(|| left.target_id.cmp(&right.target_id))
+            .then_with(|| left.relationship_name.cmp(&right.relationship_name))
     });
 
     let ranked_edges: Vec<_> = ranked_edges.into_iter().take(config.top_k).collect();
