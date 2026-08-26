@@ -9,6 +9,9 @@ use predicates::prelude::*;
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
+// Only used by the `ladybug`-gated case below, so the import carries the same
+// gate — otherwise a slim build (`--no-default-features`) trips `unused_imports`.
+#[cfg(feature = "ladybug")]
 use uuid::Uuid;
 
 fn make_cmd(config_home: &TempDir) -> Command {
@@ -737,16 +740,18 @@ fn top_level_help_flag_prints_usage() {
 }
 
 #[test]
-fn top_level_version_flag_exits_gracefully() {
-    // The CLI does not currently declare a --version flag, so this should
-    // exit with a non-zero code but must not panic or crash.
+fn top_level_version_flag_prints_version() {
+    // clap 4's derive only synthesises --version/-V when `version` is set on the
+    // root command, so this is a regression guard for that attribute: without it
+    // both spellings are rejected as unknown arguments (exit 2).
     let config_home = TempDir::new().expect("temp dir should be created");
-    let output = make_cmd(&config_home)
-        .args(["--version"])
-        .output()
-        .expect("command should run without crashing");
-    // Either success (if version is added in future) or clean failure is acceptable.
-    let _ = output.status;
+    for flag in ["--version", "-V"] {
+        make_cmd(&config_home)
+            .args([flag])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains(env!("CARGO_PKG_VERSION")));
+    }
 }
 
 // ---------------------------------------------------------------------------

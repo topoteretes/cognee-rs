@@ -1,7 +1,7 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
 #[derive(Debug, Parser)]
-#[command(name = "cognee-cli")]
+#[command(name = "cognee-cli", version)]
 #[command(about = "Cognee CLI - Manage your knowledge graphs and cognitive processing pipelines.")]
 pub struct Cli {
     #[arg(long)]
