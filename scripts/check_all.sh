@@ -91,6 +91,54 @@ cargo check -p cognee-http-server --no-default-features \
 
 echo ""
 echo "================================================================"
+echo "=== Rust: Compilation check (slim CLI facade) ==="
+echo "================================================================"
+# crates/cli reaches `cognee` with `default-features = false`, so its own
+# feature list can actually subtract. Guard both ends of that seam:
+#   1. the bare slim build (no backend at all), and
+#   2. `android-default`, the composite that deliberately drops pdfium,
+#      postgres, tiktoken and lancedb — and which silently built the full
+#      desktop stack for as long as the CLI manifest was missing the flag.
+# A plain compile check is not enough on its own: it passes just as happily
+# with the fat tree as with the slim one, which is how the original break went
+# unnoticed. So the android lane also asserts a package-count ceiling.
+cargo check -p cognee-cli --no-default-features
+cargo check -p cognee-cli --no-default-features --features cognee-cli/android-default
+
+# A compile check alone cannot tell a slim tree from a fat one, so assert the
+# profile's actual contract: android-default excludes pdfium, postgres, tiktoken
+# and lancedb. Marker crates beat a package-count ceiling here -- a count is
+# host-dependent: the pre-fix fat tree measured 690 packages on this host but
+# only 523 for aarch64-linux-android, where lancedb is already target-gated
+# away. A ceiling loose enough for one is blind for the other -- 520 would have
+# missed the real Android regression by 3 packages. `lbug` and `ort` are
+# sentinels: android-default genuinely pulls both, so their absence means the
+# measurement itself broke rather than the profile being clean.
+android_tree=$(cargo tree -p cognee-cli --no-default-features \
+    --features cognee-cli/android-default -e normal --prefix none --format '{p}' \
+    | sed 's/ (\*)//' | awk '{print $1}' | sort -u)
+
+for sentinel in lbug ort; do
+    if ! grep -qx "${sentinel}" <<<"${android_tree}"; then
+        echo "ERROR: '${sentinel}' missing from the android-default tree. Expected it to" >&2
+        echo "       be present, so this measurement is broken -- not a clean profile." >&2
+        exit 1
+    fi
+done
+
+for forbidden in lancedb pdfium-render tiktoken-rs aws-config; do
+    if grep -qx "${forbidden}" <<<"${android_tree}"; then
+        echo "ERROR: '${forbidden}' leaked into cognee-cli/android-default, which is" >&2
+        echo "       defined to exclude it. A feature forward has stopped subtracting --" >&2
+        echo "       check that crates/cli/Cargo.toml still declares" >&2
+        echo "       'default-features = false' on the cognee dependency." >&2
+        exit 1
+    fi
+done
+echo "android-default excludes lancedb/pdfium/tiktoken/aws (sentinels lbug, ort present)"
+
+echo ""
+echo "================================================================"
 echo "=== Rust: wasm32 Config-1 (logic crates + wasm test drift guard) ==="
 echo "================================================================"
 # The wasm smoke-test files are #![cfg(target_arch = "wasm32")], so the native
