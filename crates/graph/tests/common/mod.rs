@@ -480,6 +480,68 @@ pub async fn test_get_filtered_graph_data(db: &dyn GraphDBTrait) {
     assert_eq!(edges.len(), 1);
 }
 
+/// Node whose type-ish label sits in a *property* (`kind`) rather than in the
+/// backend's `type` column — the case `get_filtered_graph_data` cannot express
+/// and `get_candidate_nodes_by_label` exists for.
+#[derive(Debug, Clone, Serialize)]
+struct LabelledTestNode {
+    id: String,
+    name: String,
+    #[serde(rename = "type")]
+    node_type: String,
+    kind: String,
+}
+
+pub async fn test_get_candidate_nodes_by_label(db: &dyn GraphDBTrait) {
+    db.delete_graph().await.unwrap();
+
+    let interaction = TestNode::new("cl_i", "Chat 1", "UserInteraction", 0);
+    let noise = TestNode::new("cl_n", "Zulu", "Widget", 0);
+    db.add_nodes(&[&interaction, &noise]).await.unwrap();
+    db.add_node(&LabelledTestNode {
+        id: "cl_r".to_string(),
+        name: "Prefer explicit errors".to_string(),
+        node_type: "Node".to_string(),
+        kind: "CodingRule".to_string(),
+    })
+    .await
+    .unwrap();
+    db.add_edge("cl_i", "cl_n", "r", None).await.unwrap();
+
+    // The contract is a *superset* of the exact predicate, so only membership
+    // and the exclusion of a row with no trace of the needle are asserted.
+    let ids = |nodes: Vec<(String, cognee_graph::NodeData)>| {
+        let mut ids: Vec<String> = nodes.into_iter().map(|(id, _)| id).collect();
+        ids.sort();
+        ids
+    };
+
+    let interactions = ids(db
+        .get_candidate_nodes_by_label("interaction")
+        .await
+        .unwrap());
+    assert!(
+        interactions.contains(&"cl_i".to_string()),
+        "a node whose `type` column carries the label must be a candidate: {interactions:?}"
+    );
+    assert!(
+        !interactions.contains(&"cl_n".to_string()),
+        "an unrelated node must not be returned: {interactions:?}"
+    );
+
+    // `kind` lives inside the serialised properties, which is the half a
+    // column-only filter would miss.
+    let rules = ids(db.get_candidate_nodes_by_label("rule").await.unwrap());
+    assert!(
+        rules.contains(&"cl_r".to_string()),
+        "a node whose label sits in a property must be a candidate: {rules:?}"
+    );
+    assert!(
+        !rules.contains(&"cl_n".to_string()),
+        "an unrelated node must not be returned: {rules:?}"
+    );
+}
+
 pub async fn test_get_nodeset_subgraph_or(db: &dyn GraphDBTrait) {
     db.delete_graph().await.unwrap();
 

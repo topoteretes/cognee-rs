@@ -63,6 +63,43 @@ pub(crate) fn extract_truth_epoch(value: Option<&Value>) -> i64 {
     }
 }
 
+/// The node properties that can carry a node's type-ish label.
+///
+/// cognee's graph rows reach Rust from several writers — the Rust pipeline, the
+/// Python SDK, and hand-written imports — which disagree on where they put a
+/// node's kind. Postgres and ladybug both have a first-class `type` column, but
+/// anything the writer put under `node_type`, `kind`, `label` or `labels` lands
+/// in the JSON `properties` blob and is merged back into the flat [`NodeData`]
+/// map on read, so a reader that only looks at `type` misses those rows.
+pub const NODE_LABEL_KEYS: [&str; 5] = ["type", "node_type", "kind", "label", "labels"];
+
+/// Whether any of [`NODE_LABEL_KEYS`] on `node_data` contains `needle`,
+/// compared ASCII-case-insensitively.
+///
+/// A key holding a JSON string matches on substring; a key holding a JSON array
+/// matches if any string element does (Neo4j-style multi-`labels`). `needle`
+/// must already be lowercase — the constants callers pass are.
+///
+/// This is the exact predicate that
+/// [`GraphDBTrait::get_candidate_nodes_by_label`] narrows towards, factored out
+/// so that the needle a caller pushes into the query cannot drift from the one
+/// it re-applies to the rows that come back.
+pub fn node_label_contains(node_data: &NodeData, needle: &str) -> bool {
+    NODE_LABEL_KEYS.iter().any(|key| {
+        node_data
+            .get(*key)
+            .map(|value| match value {
+                Value::String(text) => text.to_ascii_lowercase().contains(needle),
+                Value::Array(values) => values.iter().any(|item| {
+                    item.as_str()
+                        .is_some_and(|text| text.to_ascii_lowercase().contains(needle))
+                }),
+                _ => false,
+            })
+            .unwrap_or(false)
+    })
+}
+
 /// Graph database interface trait.
 ///
 /// This trait defines the complete set of operations for graph database interaction,
@@ -100,6 +137,7 @@ pub(crate) fn extract_truth_epoch(value: Option<&Value>) -> i64 {
 /// - `get_filtered_graph_data()` - Get filtered subgraph
 /// - `get_nodeset_subgraph()` - Get subgraph for specific nodes
 /// - `get_neighborhood()` - Get k-hop subgraph around a set of seed nodes
+/// - `get_candidate_nodes_by_label()` - Get nodes-only candidates by type-ish label
 #[async_trait]
 pub trait GraphDBTrait: Send + Sync {
     /// Initialize the database schema.
@@ -647,24 +685,70 @@ pub trait GraphDBTrait: Send + Sync {
         Ok((filtered_nodes, filtered_edges))
     }
 
+    /// Fetch **candidate** nodes whose type-ish label contains `needle`,
+    /// without materialising the edge half of the graph.
+    ///
+    /// The predicate callers actually want is [`node_label_contains`]: any of
+    /// [`NODE_LABEL_KEYS`] containing `needle` ASCII-case-insensitively, over
+    /// both string and string-array values. That is a substring test across
+    /// five keys, four of which live inside the JSON `properties` blob, so it
+    /// is **not** expressible through
+    /// [`get_filtered_graph_data`](GraphDBTrait::get_filtered_graph_data), whose
+    /// contract is an exact `IN (…)` match on the `id`/`name`/`type` columns
+    /// (`PgGraphAdapter` even rejects any other attribute name outright).
+    ///
+    /// So this method is deliberately specified as a *narrowing* read:
+    /// implementations may return a **superset** of the exact predicate, and
+    /// callers MUST re-apply [`node_label_contains`] to the rows that come
+    /// back. What every implementation does guarantee is that no node matching
+    /// the exact predicate is missing, and that no edge row is read at all.
+    ///
+    /// Default implementation falls back to the full graph load and returns its
+    /// node half — no worse than what a caller would have done by hand, and it
+    /// keeps out-of-tree backends compiling. `PgGraphAdapter` and
+    /// `LadybugAdapter` override it.
+    async fn get_candidate_nodes_by_label(&self, needle: &str) -> GraphDBResult<Vec<GraphNode>> {
+        let _ = needle;
+        Ok(self.get_graph_data().await?.0)
+    }
+
     /// Fetch the raw k-hop neighborhood subgraph around a set of seed node ids.
     ///
     /// Returns every node reachable within `depth` hops of any seed, together
     /// with every edge whose endpoints are both in that resolved set, in the
-    /// same `(nodes, edges)` shape as [`get_graph_data`]. Edges preserve their
+    /// same `(nodes, edges)` shape as
+    /// [`get_graph_data`](GraphDBTrait::get_graph_data). Edges preserve their
     /// **true stored** `(source_id, target_id)` direction; the caller is
     /// responsible for any partitioning (e.g. keeping only edges incident to a
     /// seed).
     ///
-    /// Default implementation performs a layered BFS over [`get_connections`].
-    /// Backends should override with a single batched query for efficiency and,
-    /// in Ladybug's case, to return direction-correct edges (its
-    /// `get_connections`/`get_edges` report the queried node as the source
-    /// regardless of the stored direction).
+    /// Default implementation runs the same two phases as the real adapters
+    /// (`PgGraphAdapter`'s recursive CTE, `LadybugAdapter`'s traversal), only
+    /// through the per-node trait surface: an undirected BFS over
+    /// [`get_edges`](GraphDBTrait::get_edges) resolves the id set out to
+    /// `depth`, then a second pass re-reads the edges incident to every
+    /// resolved node and keeps the ones whose **both** endpoints are resolved —
+    /// the induced subgraph the contract above promises. Collecting edges
+    /// during the walk instead (only the ones incident to the current frontier)
+    /// silently omits edges between two nodes discovered at the same depth,
+    /// which is exactly the outermost layer of every result.
     ///
-    /// Note: at `depth == 0` this default path returns only the seed nodes with
-    /// no edges, whereas the real-backend overrides include seed-to-seed edges.
-    /// Phase 1 only ever calls with `depth == 1`.
+    /// Backends should still override this with a single batched query: the
+    /// default costs one `get_edges` round trip per resolved node plus one
+    /// batched [`get_nodes`](GraphDBTrait::get_nodes), and Ladybug must
+    /// override to return direction-correct edges (its
+    /// `get_connections`/`get_edges` report the queried node as the source
+    /// regardless of the stored direction, so the induced-subgraph filter here
+    /// would still select the right edges but the emitted direction would be
+    /// wrong).
+    ///
+    /// What the default guarantees, given a `get_edges` that reports edges
+    /// verbatim: the node set, the edge set, `relationship_name` and edge
+    /// properties all match the overrides, including seed-to-seed edges at
+    /// `depth == 0` (the previous frontier-only version returned no edges at
+    /// all for that case). What it cannot repair is a backend whose
+    /// `get_edges` itself rewrites direction — the tuples are passed through
+    /// untouched.
     async fn get_neighborhood(
         &self,
         node_ids: &[String],
@@ -674,70 +758,35 @@ pub trait GraphDBTrait: Send + Sync {
             return Ok((vec![], vec![]));
         }
 
-        let mut nodes_by_id: HashMap<String, NodeData> = HashMap::new();
-        let mut visited: HashSet<String> = HashSet::new();
+        // Phase 1: resolve the id set by undirected BFS out to `depth`. The
+        // edges read here only serve to find the next layer; keeping *them* as
+        // the result is what dropped the same-depth edges.
+        let mut resolved: HashSet<String> = HashSet::new();
         let mut frontier: Vec<String> = Vec::new();
-
         for id in node_ids {
-            if visited.insert(id.clone()) {
+            if resolved.insert(id.clone()) {
                 frontier.push(id.clone());
-                // Seed node lookup so isolated seeds still appear in the output.
-                if let Some(node) = self.get_node(id).await? {
-                    nodes_by_id.insert(id.clone(), node);
-                }
             }
         }
 
-        let mut edges: Vec<EdgeData> = Vec::new();
-        let mut edge_keys: HashSet<EdgeKey> = HashSet::new();
+        // Edges already fetched, keyed by the node they were fetched for, so
+        // phase 2 only pays for the layer the BFS never expanded.
+        let mut fetched: HashMap<String, Vec<EdgeData>> = HashMap::new();
 
         for _ in 0..depth {
             let mut next_frontier: Vec<String> = Vec::new();
             for id in &frontier {
-                for (source_node, edge_props, target_node) in self.get_connections(id).await? {
-                    let source_id = source_node
-                        .get("id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default()
-                        .to_string();
-                    let target_id = target_node
-                        .get("id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default()
-                        .to_string();
-                    let relationship_name = edge_props
-                        .get("relationship_name")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default()
-                        .to_string();
-
-                    let key: EdgeKey = (
-                        source_id.clone(),
-                        target_id.clone(),
-                        relationship_name.clone(),
-                    );
-                    if edge_keys.insert(key) {
-                        edges.push((
-                            source_id.clone(),
-                            target_id.clone(),
-                            relationship_name,
-                            edge_props,
-                        ));
-                    }
-
-                    // The endpoint that isn't the queried node is a candidate
-                    // neighbor for the next layer.
-                    let neighbor_id = if source_id == *id {
-                        target_id.clone()
-                    } else {
-                        source_id.clone()
-                    };
-                    nodes_by_id.insert(source_id, source_node);
-                    nodes_by_id.insert(target_id, target_node);
-                    if visited.insert(neighbor_id.clone()) {
-                        next_frontier.push(neighbor_id);
+                let incident = self.get_edges(id).await?;
+                for (src, tgt, _, _) in &incident {
+                    // Undirected step: whichever endpoint is not the queried
+                    // node is a candidate for the next layer. A self-loop
+                    // yields `id` itself, which is already resolved.
+                    let neighbor = if src == id { tgt } else { src };
+                    if resolved.insert(neighbor.clone()) {
+                        next_frontier.push(neighbor.clone());
                     }
                 }
+                fetched.insert(id.clone(), incident);
             }
             if next_frontier.is_empty() {
                 break;
@@ -745,7 +794,50 @@ pub trait GraphDBTrait: Send + Sync {
             frontier = next_frontier;
         }
 
-        Ok((nodes_by_id.into_iter().collect(), edges))
+        // Phase 2: the induced subgraph over `resolved`. Every edge of that set
+        // is incident to at least one of its nodes, so reading the incident
+        // edges of all of them and dropping the ones with an unresolved
+        // endpoint yields exactly the induced edge set. Each surviving edge is
+        // seen twice (once per endpoint), hence the `EdgeKey` dedup.
+        //
+        // Sorted ids keep the output order deterministic across runs, which a
+        // `HashSet` iteration would not.
+        let mut resolved_ids: Vec<String> = resolved.iter().cloned().collect();
+        resolved_ids.sort();
+
+        let mut edges: Vec<EdgeData> = Vec::new();
+        let mut edge_keys: HashSet<EdgeKey> = HashSet::new();
+
+        for id in &resolved_ids {
+            let incident = match fetched.remove(id) {
+                Some(incident) => incident,
+                None => self.get_edges(id).await?,
+            };
+            for edge in incident {
+                let (src, tgt, rel, _) = &edge;
+                if !resolved.contains(src.as_str()) || !resolved.contains(tgt.as_str()) {
+                    continue;
+                }
+                if edge_keys.insert((src.clone(), tgt.clone(), rel.clone())) {
+                    edges.push(edge);
+                }
+            }
+        }
+
+        // One batched read for the node half. A resolved id with no row in the
+        // node store is dropped, matching the overrides — their node halves
+        // select from `graph_node`/`(n:Node)` and cannot invent a row either.
+        let nodes: Vec<GraphNode> = self
+            .get_nodes(&resolved_ids)
+            .await?
+            .into_iter()
+            .filter_map(|data| {
+                let id = data.get("id").and_then(|v| v.as_str())?.to_string();
+                Some((id, data))
+            })
+            .collect();
+
+        Ok((nodes, edges))
     }
 }
 
@@ -898,6 +990,195 @@ mod tests {
                 .get_nodeset_subgraph(node_type, node_names, node_name_filter_operator)
                 .await
         }
+    }
+
+    /// Seed a small graph on `db`: nodes `ids`, edges `edges`.
+    async fn seed(db: &DefaultImplDb, ids: &[&str], edges: &[(&str, &str, &str)]) {
+        for id in ids {
+            db.add_node_raw(serde_json::json!({"id": *id, "name": *id, "type": "T"}))
+                .await
+                .unwrap();
+        }
+        for (src, tgt, rel) in edges {
+            db.add_edge(src, tgt, rel, None).await.unwrap();
+        }
+    }
+
+    fn edge_keys(edges: &[EdgeData]) -> Vec<EdgeKey> {
+        let mut keys: Vec<EdgeKey> = edges
+            .iter()
+            .map(|(s, t, r, _)| (s.clone(), t.clone(), r.clone()))
+            .collect();
+        keys.sort();
+        keys
+    }
+
+    fn node_ids(nodes: &[GraphNode]) -> Vec<String> {
+        let mut ids: Vec<String> = nodes.iter().map(|(id, _)| id.clone()).collect();
+        ids.sort();
+        ids
+    }
+
+    /// The contract says "every edge whose endpoints are both in that resolved
+    /// set". The frontier-only walk this replaced never queried the outermost
+    /// layer, so `b -> c` — both ends at depth 1 — went missing.
+    #[tokio::test]
+    async fn default_neighborhood_returns_the_induced_subgraph() {
+        let db = DefaultImplDb::default();
+        seed(
+            &db,
+            &["a", "b", "c"],
+            &[("a", "b", "r1"), ("a", "c", "r2"), ("b", "c", "r3")],
+        )
+        .await;
+
+        let (nodes, edges) = db
+            .get_neighborhood(&["a".to_string()], 1)
+            .await
+            .expect("neighborhood");
+
+        assert_eq!(node_ids(&nodes), vec!["a", "b", "c"]);
+        assert_eq!(
+            edge_keys(&edges),
+            vec![
+                ("a".to_string(), "b".to_string(), "r1".to_string()),
+                ("a".to_string(), "c".to_string(), "r2".to_string()),
+                ("b".to_string(), "c".to_string(), "r3".to_string()),
+            ],
+            "the edge between the two depth-1 nodes must be included"
+        );
+    }
+
+    /// `depth == 0` used to return the seeds with no edges at all, which is not
+    /// what `PgGraphAdapter`/`LadybugAdapter`/`MockGraphDB` do — they return the
+    /// seed-to-seed edges. The default now agrees with them.
+    #[tokio::test]
+    async fn default_neighborhood_includes_seed_to_seed_edges_at_depth_zero() {
+        let db = DefaultImplDb::default();
+        seed(&db, &["a", "b", "c"], &[("a", "b", "r1"), ("b", "c", "r2")]).await;
+
+        let (nodes, edges) = db
+            .get_neighborhood(&["a".to_string(), "b".to_string()], 0)
+            .await
+            .expect("neighborhood");
+
+        assert_eq!(node_ids(&nodes), vec!["a", "b"]);
+        assert_eq!(
+            edge_keys(&edges),
+            vec![("a".to_string(), "b".to_string(), "r1".to_string())],
+        );
+    }
+
+    /// Edges are read through `get_edges`, which carries the relationship name;
+    /// the previous walk read them through `get_connections`, which does not, so
+    /// every edge came back with an empty `relationship_name` and two parallel
+    /// edges collapsed into one.
+    #[tokio::test]
+    async fn default_neighborhood_preserves_relationship_names_and_direction() {
+        let db = DefaultImplDb::default();
+        seed(
+            &db,
+            &["a", "b"],
+            &[("b", "a", "authored"), ("b", "a", "reviewed")],
+        )
+        .await;
+
+        let (_, edges) = db
+            .get_neighborhood(&["a".to_string()], 1)
+            .await
+            .expect("neighborhood");
+
+        assert_eq!(
+            edge_keys(&edges),
+            vec![
+                ("b".to_string(), "a".to_string(), "authored".to_string()),
+                ("b".to_string(), "a".to_string(), "reviewed".to_string()),
+            ],
+            "both parallel edges survive, with the stored b -> a direction"
+        );
+    }
+
+    /// The depth boundary itself is an equivalence pin — the frontier-only walk
+    /// stopped at `depth` too, and dropped the edge leaving the set rather than
+    /// dragging its far endpoint in. The `relationship_name` in the expectation
+    /// is not: that half fails before the fix.
+    #[tokio::test]
+    async fn default_neighborhood_stops_at_depth_and_drops_dangling_edges() {
+        let db = DefaultImplDb::default();
+        seed(&db, &["a", "b", "c"], &[("a", "b", "r1"), ("b", "c", "r2")]).await;
+
+        let (nodes, edges) = db
+            .get_neighborhood(&["a".to_string()], 1)
+            .await
+            .expect("neighborhood");
+
+        assert_eq!(node_ids(&nodes), vec!["a", "b"]);
+        assert_eq!(
+            edge_keys(&edges),
+            vec![("a".to_string(), "b".to_string(), "r1".to_string())],
+        );
+    }
+
+    /// Equivalence pin (passes before and after the fix): an isolated seed still
+    /// appears as a node, and a seed with no row in the store is still dropped,
+    /// matching every override. The seed half moved from a per-seed `get_node`
+    /// to one batched `get_nodes`, so it is worth holding in place.
+    #[tokio::test]
+    async fn default_neighborhood_keeps_isolated_seeds_and_drops_unknown_ids() {
+        let db = DefaultImplDb::default();
+        seed(&db, &["lonely"], &[]).await;
+
+        let (nodes, edges) = db
+            .get_neighborhood(&["lonely".to_string(), "ghost".to_string()], 1)
+            .await
+            .expect("neighborhood");
+
+        assert_eq!(node_ids(&nodes), vec!["lonely"]);
+        assert!(edges.is_empty());
+    }
+
+    #[test]
+    fn node_label_contains_scans_every_label_key_case_insensitively() {
+        use serde_json::json;
+
+        let mut data = NodeData::new();
+        data.insert(Cow::Borrowed("type"), json!("DocumentChunk"));
+        assert!(!node_label_contains(&data, "interaction"));
+
+        // A key that only exists inside the JSON properties blob still counts.
+        data.insert(Cow::Borrowed("kind"), json!("UserINTERACTION"));
+        assert!(node_label_contains(&data, "interaction"));
+
+        // Array-valued labels (Neo4j-style multi-label) match element-wise.
+        let mut arr = NodeData::new();
+        arr.insert(Cow::Borrowed("labels"), json!(["Node", "CodingRule"]));
+        assert!(node_label_contains(&arr, "rule"));
+        assert!(!node_label_contains(&arr, "interaction"));
+
+        // Non-string values are ignored rather than stringified.
+        let mut num = NodeData::new();
+        num.insert(Cow::Borrowed("kind"), json!(42));
+        assert!(!node_label_contains(&num, "4"));
+
+        // Keys outside NODE_LABEL_KEYS are not consulted.
+        let mut other = NodeData::new();
+        other.insert(Cow::Borrowed("text"), json!("a rule about rules"));
+        assert!(!node_label_contains(&other, "rule"));
+    }
+
+    /// The default `get_candidate_nodes_by_label` is a documented fallback to
+    /// the full graph load, so it must return the node half *unfiltered* — the
+    /// caller's own predicate is what narrows it.
+    #[tokio::test]
+    async fn default_candidate_nodes_by_label_returns_the_whole_node_half() {
+        let db = DefaultImplDb::default();
+        seed(&db, &["a", "b"], &[("a", "b", "r1")]).await;
+
+        let nodes = db
+            .get_candidate_nodes_by_label("interaction")
+            .await
+            .expect("candidates");
+        assert_eq!(node_ids(&nodes), vec!["a", "b"]);
     }
 
     /// The defaulted `close()` must be a no-op *and* idempotent for a backend

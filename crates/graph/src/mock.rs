@@ -87,7 +87,8 @@ impl MockGraphDB {
     /// Get a snapshot of the call log — the names of methods invoked on
     /// this mock in invocation order.
     ///
-    /// Currently records `"get_graph_data"`, `"get_nodeset_subgraph"`,
+    /// Currently records `"get_graph_data"`, `"get_filtered_graph_data"`,
+    /// `"get_candidate_nodes_by_label"`, `"get_nodeset_subgraph"`,
     /// `"get_neighborhood"`, `"get_node_truth_state"`, and
     /// `"set_node_truth_state"`.
     pub fn get_call_log(&self) -> Vec<String> {
@@ -421,10 +422,37 @@ impl GraphDBTrait for MockGraphDB {
             .collect())
     }
 
+    /// Stands in for the best case a real backend can manage: the exact
+    /// predicate, node rows only, no edge scan. Recorded in the call log so a
+    /// test can assert a caller stopped reaching for `get_graph_data`.
+    async fn get_candidate_nodes_by_label(
+        &self,
+        needle: &str,
+    ) -> GraphDBResult<Vec<(String, NodeData)>> {
+        self.call_log
+            .lock()
+            .unwrap() // lock poison is unrecoverable
+            .push("get_candidate_nodes_by_label".to_string());
+
+        let nodes = self.nodes.lock().unwrap(); // lock poison is unrecoverable
+        Ok(nodes
+            .iter()
+            .filter(|(_, data)| crate::node_label_contains(data, needle))
+            .map(|(id, data)| (id.clone(), data.clone()))
+            .collect())
+    }
+
+    /// Ignores the filters entirely and returns the whole graph, so a caller
+    /// that pushes a predicate down here is NOT narrowed by the mock — the
+    /// call is logged under its own name to make that visible.
     async fn get_filtered_graph_data(
         &self,
         _attribute_filters: &HashMap<Cow<'static, str>, Vec<serde_json::Value>>,
     ) -> GraphDBResult<(Vec<(String, NodeData)>, Vec<EdgeData>)> {
+        self.call_log
+            .lock()
+            .unwrap() // lock poison is unrecoverable
+            .push("get_filtered_graph_data".to_string());
         self.get_graph_data().await
     }
 

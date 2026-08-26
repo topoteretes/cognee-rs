@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use cognee_graph::{GraphDBTrait, GraphDBTraitExt};
+use cognee_graph::{GraphDBTrait, GraphDBTraitExt, node_label_contains};
 use cognee_llm::{GenerationOptions, Llm, LlmExt, Message};
 use cognee_session::SessionContext;
 use schemars::JsonSchema;
@@ -150,6 +150,13 @@ const DEFAULT_FEEDBACK_EDGE_REL: &str = "HAS_FEEDBACK";
 const DEFAULT_FEEDBACK_LAST_K: usize = 5;
 
 const DEFAULT_RULE_NODE_SET: &str = "coding_agent_rules";
+
+/// Substrings a node's type-ish label must contain to be an interaction / a
+/// coding rule. Must stay lowercase: `cognee_graph::node_label_contains`
+/// lowercases only the *stored* side of the comparison, and the same constant
+/// is what gets pushed into the store's own query.
+const INTERACTION_LABEL_NEEDLE: &str = "interaction";
+const RULE_LABEL_NEEDLE: &str = "rule";
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 struct FeedbackAnalysis {
@@ -310,22 +317,7 @@ impl FeedbackRetriever {
     }
 
     fn is_interaction_node(node_data: &HashMap<Cow<'static, str>, Value>) -> bool {
-        ["type", "node_type", "kind", "label", "labels"]
-            .iter()
-            .any(|key| {
-                node_data
-                    .get(*key)
-                    .map(|value| match value {
-                        Value::String(text) => text.to_ascii_lowercase().contains("interaction"),
-                        Value::Array(values) => values.iter().any(|item| {
-                            item.as_str()
-                                .map(|text| text.to_ascii_lowercase().contains("interaction"))
-                                .unwrap_or(false)
-                        }),
-                        _ => false,
-                    })
-                    .unwrap_or(false)
-            })
+        node_label_contains(node_data, INTERACTION_LABEL_NEEDLE)
     }
 
     fn parse_node_timestamp(
@@ -339,7 +331,15 @@ impl FeedbackRetriever {
     }
 
     async fn recent_interaction_ids(&self) -> Result<Vec<String>, SearchError> {
-        let (nodes, _) = self.graph_db.get_graph_data().await?;
+        // Ask the store for interaction-labelled node rows instead of the whole
+        // graph. The result is only a candidate set (see
+        // `get_candidate_nodes_by_label`), so `is_interaction_node` still has
+        // the last word — but the edge half, which this method never looked at,
+        // is no longer read at all.
+        let nodes = self
+            .graph_db
+            .get_candidate_nodes_by_label(INTERACTION_LABEL_NEEDLE)
+            .await?;
 
         let mut interactions = nodes
             .into_iter()
@@ -466,22 +466,7 @@ impl CodingRulesRetriever {
     }
 
     fn is_rule_node(node_data: &HashMap<Cow<'static, str>, Value>) -> bool {
-        ["type", "node_type", "kind", "label", "labels"]
-            .iter()
-            .any(|key| {
-                node_data
-                    .get(*key)
-                    .map(|value| match value {
-                        Value::String(text) => text.to_ascii_lowercase().contains("rule"),
-                        Value::Array(values) => values.iter().any(|item| {
-                            item.as_str()
-                                .map(|text| text.to_ascii_lowercase().contains("rule"))
-                                .unwrap_or(false)
-                        }),
-                        _ => false,
-                    })
-                    .unwrap_or(false)
-            })
+        node_label_contains(node_data, RULE_LABEL_NEEDLE)
     }
 
     async fn load_rules(&self, query: &str) -> Result<Vec<Rule>, SearchError> {
@@ -490,7 +475,13 @@ impl CodingRulesRetriever {
         }
 
         let requested_sets = self.parse_rule_sets(query);
-        let (nodes, _) = self.graph_db.get_graph_data().await?;
+        // Same narrowing as `FeedbackRetriever::recent_interaction_ids`: rule
+        // rows only, no edges, and `is_rule_node` re-checked below because the
+        // store is allowed to hand back a superset.
+        let nodes = self
+            .graph_db
+            .get_candidate_nodes_by_label(RULE_LABEL_NEEDLE)
+            .await?;
 
         let mut rules = nodes
             .into_iter()
@@ -698,6 +689,221 @@ mod tests {
         node_set: Option<String>,
         text: Option<String>,
         created_at: Option<String>,
+    }
+
+    /// A node whose label lives under a key other than `type`, to prove the
+    /// narrowed read still finds it. `MockGraphDB` stores whatever the writer
+    /// serialised, so `kind`/`labels` land in the flat node map exactly as they
+    /// would after `PgGraphAdapter` merges the `properties` jsonb back in.
+    #[derive(Serialize)]
+    struct LabelledNode {
+        id: String,
+        kind: Option<String>,
+        labels: Option<Vec<String>>,
+        node_set: Option<String>,
+        text: Option<String>,
+        created_at: Option<String>,
+    }
+
+    /// Fill the graph with rows neither retriever wants, so a full scan is
+    /// visibly more expensive than a narrowed read.
+    async fn add_noise(graph_db: &MockGraphDB) {
+        for i in 0..20 {
+            graph_db
+                .add_node(&TestNode {
+                    id: format!("chunk-{i}"),
+                    kind: "DocumentChunk".to_string(),
+                    node_set: None,
+                    text: Some(format!("body {i}")),
+                    created_at: None,
+                })
+                .await
+                .unwrap();
+        }
+        for i in 0..19 {
+            graph_db
+                .add_edge(
+                    &format!("chunk-{i}"),
+                    &format!("chunk-{}", i + 1),
+                    "NEXT",
+                    None,
+                )
+                .await
+                .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn coding_rules_retriever_does_not_scan_the_whole_graph() {
+        let graph_db = Arc::new(MockGraphDB::new());
+        add_noise(&graph_db).await;
+        graph_db
+            .add_node(&TestNode {
+                id: Uuid::new_v4().to_string(),
+                kind: "Rule".to_string(),
+                node_set: Some("coding_agent_rules".to_string()),
+                text: Some("Prefer explicit error handling".to_string()),
+                created_at: None,
+            })
+            .await
+            .unwrap();
+
+        let retriever = CodingRulesRetriever::new(graph_db.clone(), None);
+        let output = retriever
+            .get_completion(
+                "coding_agent_rules",
+                None,
+                &SessionContext::default(),
+                &SearchParams::default(),
+            )
+            .await
+            .unwrap();
+
+        match output {
+            SearchOutput::Rules(rules) => assert_eq!(rules.len(), 1),
+            _ => panic!("expected rules output"),
+        }
+
+        let log = graph_db.get_call_log();
+        assert!(
+            log.contains(&"get_candidate_nodes_by_label".to_string()),
+            "rule loading must go through the narrowed read, got {log:?}"
+        );
+        assert!(
+            !log.contains(&"get_graph_data".to_string())
+                && !log.contains(&"get_filtered_graph_data".to_string()),
+            "rule loading must not materialise the whole graph, got {log:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn feedback_retriever_does_not_scan_the_whole_graph() {
+        let graph_db = Arc::new(MockGraphDB::new());
+        add_noise(&graph_db).await;
+        graph_db
+            .add_node(&TestNode {
+                id: Uuid::new_v4().to_string(),
+                kind: "Interaction".to_string(),
+                node_set: None,
+                text: Some("Q/A interaction".to_string()),
+                created_at: Some(Utc::now().to_rfc3339()),
+            })
+            .await
+            .unwrap();
+
+        let llm = Arc::new(TestLlm {
+            plain_responses: Mutex::new(VecDeque::new()),
+            feedback_response: Some(FeedbackAnalysis {
+                sentiment: "positive".to_string(),
+                score: 0.5,
+            }),
+        });
+
+        let retriever = FeedbackRetriever::new(graph_db.clone(), llm, Some(3), None);
+        retriever
+            .get_completion(
+                "Great answer",
+                None,
+                &SessionContext::default(),
+                &SearchParams::default(),
+            )
+            .await
+            .unwrap();
+
+        // Snapshot before asserting on the graph itself — `get_graph_data` is
+        // logged, so reading it first would poison the assertion below.
+        let log = graph_db.get_call_log();
+        assert!(
+            log.contains(&"get_candidate_nodes_by_label".to_string()),
+            "interaction lookup must go through the narrowed read, got {log:?}"
+        );
+        assert!(
+            !log.contains(&"get_graph_data".to_string())
+                && !log.contains(&"get_filtered_graph_data".to_string()),
+            "interaction lookup must not materialise the whole graph, got {log:?}"
+        );
+
+        let (_nodes, edges) = graph_db.get_graph_data().await.unwrap();
+        assert!(
+            edges
+                .iter()
+                .any(|(_, _, relationship, _)| relationship == "HAS_FEEDBACK"),
+            "the feedback edge to the interaction node must still be written"
+        );
+    }
+
+    /// Equivalence pin (passes before and after the narrowing): the label may
+    /// sit under `kind` or `labels` rather than the `type` column, so the
+    /// narrowed read must not degenerate into an exact match on `type` — which
+    /// is all `get_filtered_graph_data` can express.
+    #[tokio::test]
+    async fn narrowed_read_still_finds_labels_outside_the_type_column() {
+        let graph_db = Arc::new(MockGraphDB::new());
+        add_noise(&graph_db).await;
+        graph_db
+            .add_node(&LabelledNode {
+                id: "rule-in-labels".to_string(),
+                kind: None,
+                labels: Some(vec!["Node".to_string(), "CodingRule".to_string()]),
+                node_set: Some("coding_agent_rules".to_string()),
+                text: Some("Labels-only rule".to_string()),
+                created_at: None,
+            })
+            .await
+            .unwrap();
+        graph_db
+            .add_node(&LabelledNode {
+                id: "interaction-in-kind".to_string(),
+                kind: Some("UserInteraction".to_string()),
+                labels: None,
+                node_set: None,
+                text: Some("kind-only interaction".to_string()),
+                created_at: Some(Utc::now().to_rfc3339()),
+            })
+            .await
+            .unwrap();
+
+        let rules = CodingRulesRetriever::new(graph_db.clone(), None)
+            .get_completion(
+                "coding_agent_rules",
+                None,
+                &SessionContext::default(),
+                &SearchParams::default(),
+            )
+            .await
+            .unwrap();
+        match rules {
+            SearchOutput::Rules(rules) => {
+                assert_eq!(rules.len(), 1);
+                assert_eq!(rules[0].text, "Labels-only rule");
+            }
+            _ => panic!("expected rules output"),
+        }
+
+        let llm = Arc::new(TestLlm {
+            plain_responses: Mutex::new(VecDeque::new()),
+            feedback_response: Some(FeedbackAnalysis {
+                sentiment: "positive".to_string(),
+                score: 1.0,
+            }),
+        });
+        FeedbackRetriever::new(graph_db.clone(), llm, Some(3), None)
+            .get_completion(
+                "Nice",
+                None,
+                &SessionContext::default(),
+                &SearchParams::default(),
+            )
+            .await
+            .unwrap();
+
+        let (_nodes, edges) = graph_db.get_graph_data().await.unwrap();
+        assert!(
+            edges.iter().any(|(_, target, relationship, _)| {
+                relationship == "HAS_FEEDBACK" && target == "interaction-in-kind"
+            }),
+            "the kind-only interaction node must still be linked to the feedback"
+        );
     }
 
     #[tokio::test]

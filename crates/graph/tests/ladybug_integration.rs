@@ -60,6 +60,7 @@ ladybug_test!(test_get_graph_data);
 ladybug_test!(test_get_graph_data_surfaces_created_at);
 ladybug_test!(test_get_graph_metrics);
 ladybug_test!(test_get_filtered_graph_data);
+ladybug_test!(test_get_candidate_nodes_by_label);
 ladybug_test!(test_get_nodeset_subgraph_or);
 ladybug_test!(test_get_nodeset_subgraph_and);
 ladybug_test!(test_get_id_filtered_graph_data);

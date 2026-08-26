@@ -38,7 +38,9 @@ pub mod mock;
 
 pub use error::{GraphDBError, GraphDBResult};
 pub use formatted::get_formatted_graph_data;
-pub use traits::{EdgeKey, GraphDBTrait, GraphDBTraitExt, NodeTruthState};
+pub use traits::{
+    EdgeKey, GraphDBTrait, GraphDBTraitExt, NODE_LABEL_KEYS, NodeTruthState, node_label_contains,
+};
 pub use types::{EdgeData, GraphEdge, GraphNode, NodeData};
 
 #[cfg(feature = "ladybug")]

@@ -1256,6 +1256,52 @@ impl GraphDBTrait for PgGraphAdapter {
         Ok((nodes, edges))
     }
 
+    /// Narrow the node scan to rows that could carry `needle` as a type-ish
+    /// label, and read no edge rows at all.
+    ///
+    /// The SQL predicate is a deliberate **superset** of
+    /// [`node_label_contains`](crate::node_label_contains): `type` is a real
+    /// column, while `node_type`/`kind`/`label`/`labels` live inside the
+    /// `properties` jsonb, so the second clause matches the whole serialised
+    /// blob — keys and values alike. A JSON string value that contains
+    /// `needle` survives verbatim in `properties::text` (jsonb only escapes
+    /// quotes, backslashes and control characters, none of which appear in the
+    /// needles callers pass), so nothing that satisfies the exact predicate is
+    /// filtered out here; false positives are the caller's post-filter to
+    /// remove. Postgres' `lower()` is Unicode-aware where Rust's
+    /// `to_ascii_lowercase` is not, which again only widens the match.
+    ///
+    /// This is a sequential scan — there is no index on `lower(properties::text)`
+    /// — but it returns a handful of rows instead of the whole `graph_node`
+    /// table plus the whole `graph_edge` table.
+    async fn get_candidate_nodes_by_label(&self, needle: &str) -> GraphDBResult<Vec<GraphNode>> {
+        let sql = "SELECT id, name, type, properties FROM graph_node \
+                   WHERE position($1 IN lower(type)) > 0 \
+                      OR position($1 IN lower(coalesce(properties::text, ''))) > 0";
+
+        let rows = self
+            .db
+            .query_all(Statement::from_sql_and_values(
+                DatabaseBackend::Postgres,
+                sql,
+                [sea_orm::Value::from(needle.to_lowercase())],
+            ))
+            .await
+            .map_err(|e| GraphDBError::QueryError(e.to_string()))?;
+
+        let mut nodes = Vec::with_capacity(rows.len());
+        for row in &rows {
+            let data = Self::parse_node_row(row)?;
+            let id = data
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            nodes.push((id, data));
+        }
+        Ok(nodes)
+    }
+
     async fn get_nodeset_subgraph(
         &self,
         node_type: &str,
