@@ -909,3 +909,161 @@ async fn run_info_initiated_shape_is_empty_object() {
 // are part of the `cognee` public API and adding `cognee` as a
 // dev-dependency of `cognee-database` would create a build cycle.
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Exclusive-run claims (`try_claim_pipeline_run` / `release_pipeline_run_claim`)
+//
+// These cover the atomicity the `pipeline_runs` status read cannot provide:
+// that read and the executor's later `Started` write are separate operations,
+// so two callers entering between them both see the pre-run state. The claim
+// insert is the contended operation instead.
+// ---------------------------------------------------------------------------
+
+/// A staleness window no real claim can exceed during a test.
+const NEVER_STALE: std::time::Duration = std::time::Duration::from_secs(3600);
+
+#[tokio::test]
+async fn claim_is_granted_once_and_blocks_the_second_caller() {
+    let db = make_db().await;
+    let repo = make_repo(Arc::clone(&db));
+    let dataset_id = Uuid::new_v4();
+    create_dataset(&db, dataset_id).await;
+
+    let first = Uuid::new_v4();
+    let second = Uuid::new_v4();
+
+    assert!(
+        repo.try_claim_pipeline_run(dataset_id, "cognify_pipeline", first, NEVER_STALE)
+            .await
+            .expect("first claim"),
+        "the first caller must take the claim"
+    );
+    assert!(
+        !repo
+            .try_claim_pipeline_run(dataset_id, "cognify_pipeline", second, NEVER_STALE)
+            .await
+            .expect("second claim"),
+        "a second caller must be refused while the claim is held"
+    );
+
+    repo.release_pipeline_run_claim(dataset_id, "cognify_pipeline", first)
+        .await
+        .expect("release");
+
+    assert!(
+        repo.try_claim_pipeline_run(dataset_id, "cognify_pipeline", second, NEVER_STALE)
+            .await
+            .expect("claim after release"),
+        "the claim must be available again once released"
+    );
+}
+
+#[tokio::test]
+async fn claims_are_scoped_per_pipeline_name() {
+    let db = make_db().await;
+    let repo = make_repo(Arc::clone(&db));
+    let dataset_id = Uuid::new_v4();
+    create_dataset(&db, dataset_id).await;
+
+    assert!(
+        repo.try_claim_pipeline_run(dataset_id, "cognify_pipeline", Uuid::new_v4(), NEVER_STALE)
+            .await
+            .expect("cognify claim")
+    );
+    assert!(
+        repo.try_claim_pipeline_run(dataset_id, "memify_pipeline", Uuid::new_v4(), NEVER_STALE)
+            .await
+            .expect("memify claim"),
+        "cognify and memify on one dataset must not exclude each other"
+    );
+}
+
+#[tokio::test]
+async fn release_only_removes_the_holders_own_claim() {
+    let db = make_db().await;
+    let repo = make_repo(Arc::clone(&db));
+    let dataset_id = Uuid::new_v4();
+    create_dataset(&db, dataset_id).await;
+
+    let holder = Uuid::new_v4();
+    assert!(
+        repo.try_claim_pipeline_run(dataset_id, "cognify_pipeline", holder, NEVER_STALE)
+            .await
+            .expect("claim")
+    );
+
+    // A release from someone else must not free the holder's claim — otherwise
+    // a run reclaimed as stale could later drop its successor's claim.
+    repo.release_pipeline_run_claim(dataset_id, "cognify_pipeline", Uuid::new_v4())
+        .await
+        .expect("foreign release is a no-op, not an error");
+
+    assert!(
+        !repo
+            .try_claim_pipeline_run(dataset_id, "cognify_pipeline", Uuid::new_v4(), NEVER_STALE)
+            .await
+            .expect("claim attempt"),
+        "the holder's claim must survive a foreign release"
+    );
+}
+
+#[tokio::test]
+async fn a_stale_claim_is_reclaimed() {
+    let db = make_db().await;
+    let repo = make_repo(Arc::clone(&db));
+    let dataset_id = Uuid::new_v4();
+    create_dataset(&db, dataset_id).await;
+
+    // Stands in for a claim left behind by a killed process: nothing will ever
+    // release it, so without reclamation the dataset would wedge forever.
+    let abandoned = Uuid::new_v4();
+    assert!(
+        repo.try_claim_pipeline_run(dataset_id, "cognify_pipeline", abandoned, NEVER_STALE)
+            .await
+            .expect("abandoned claim")
+    );
+
+    // A zero window makes any existing claim stale immediately.
+    assert!(
+        repo.try_claim_pipeline_run(
+            dataset_id,
+            "cognify_pipeline",
+            Uuid::new_v4(),
+            std::time::Duration::ZERO
+        )
+        .await
+        .expect("reclaim"),
+        "a claim older than the staleness window must be reclaimable"
+    );
+}
+
+#[tokio::test]
+async fn concurrent_claims_grant_exactly_one() {
+    let db = make_db().await;
+    let dataset_id = Uuid::new_v4();
+    create_dataset(&db, dataset_id).await;
+
+    // Eight tasks contend for the same pair at once. Whatever the interleaving,
+    // the composite primary key admits exactly one — this is the property the
+    // status read could not provide.
+    let mut handles = Vec::new();
+    for _ in 0..8 {
+        let repo = make_repo(Arc::clone(&db));
+        handles.push(tokio::spawn(async move {
+            repo.try_claim_pipeline_run(dataset_id, "cognify_pipeline", Uuid::new_v4(), NEVER_STALE)
+                .await
+                .expect("claim attempt")
+        }));
+    }
+
+    let mut granted = 0;
+    for h in handles {
+        if h.await.expect("task join") {
+            granted += 1;
+        }
+    }
+    assert_eq!(
+        granted, 1,
+        "exactly one concurrent caller may hold the claim"
+    );
+}

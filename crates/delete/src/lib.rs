@@ -199,6 +199,10 @@ impl DeleteService {
     /// re-cognify is not short-circuited by
     /// `check_pipeline_run_qualification` (task 08-08).
     ///
+    /// Since the pipeline cache became opt-in, that short-circuit only applies
+    /// to callers that set `CognifyConfig::use_pipeline_cache`; the fresh row
+    /// is still written for parity and for those callers.
+    ///
     /// When unset (default for back-compat / mock paths) the reset is a
     /// no-op.
     pub fn with_pipeline_run_repo(mut self, repo: Arc<dyn PipelineRunRepository>) -> Self {
@@ -334,7 +338,9 @@ impl DeleteService {
             // Python parity: writing a fresh `INITIATED` row for every
             // pipeline registered against this dataset invalidates any prior
             // `COMPLETED` row so a future re-cognify is not short-circuited
-            // by `check_pipeline_run_qualification` (task 08-08). The rows
+            // by `check_pipeline_run_qualification` (task 08-08) — which since
+            // the cache became opt-in only affects callers that set
+            // `CognifyConfig::use_pipeline_cache`. The rows
             // outlive the dataset itself — once the FK is dropped (gap 08-01)
             // the orphans are harmless and surface in
             // `list_recent_with_attribution` with `dataset_name = None`.

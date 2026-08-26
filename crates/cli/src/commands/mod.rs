@@ -35,8 +35,9 @@ use crate::error::CliError;
 ///   rows only, which for the benchmark would turn a populated-dataset delete
 ///   into a metadata-row delete;
 /// - the pipeline-runs repository — without it a deletion writes no fresh
-///   `INITIATED` row, so a later re-cognify is short-circuited by
-///   `check_pipeline_run_qualification`.
+///   `INITIATED` row. That only changes behaviour for a caller that enabled
+///   `CognifyConfig::use_pipeline_cache`: since the cache became opt-in, a
+///   `COMPLETED` row no longer short-circuits the default re-cognify path.
 pub(crate) async fn build_delete_service(
     cm: &Arc<ComponentManager>,
 ) -> Result<DeleteService, CliError> {

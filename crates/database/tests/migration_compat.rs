@@ -253,15 +253,36 @@ async fn baseline_creates_full_table_set_sqlite() {
 }
 
 // ---------------------------------------------------------------------------
-// D1.5 — Single-migration invariant
+// D1.5 — Migration-chain shape
 // ---------------------------------------------------------------------------
 
+/// The chain is one squashed baseline followed by additive migrations, and this
+/// pins the count so re-splitting the baseline — or adding a migration without
+/// meaning to — fails loudly.
+///
+/// D1.5 originally required *exactly* one migration, because the baseline
+/// squashed 14 predecessors for 0.1.0 when "there is no deployed schema to
+/// upgrade from" (see the baseline's module docs). That premise expired once
+/// 0.2.0 databases existed: editing the baseline to add a table leaves every
+/// already-migrated database without it, and the first query against that
+/// table then fails at runtime. Additive migrations after the baseline are the
+/// only way to change the schema without breaking existing deployments.
+///
+/// Bump this deliberately, with the same reasoning, when a migration is added.
 #[test]
-fn relational_chain_has_one_migration() {
+fn relational_chain_is_baseline_plus_additive_migrations() {
     use sea_orm_migration::MigratorTrait;
+    let names: Vec<String> = Migrator::migrations()
+        .iter()
+        .map(|m| m.name().to_string())
+        .collect();
     assert_eq!(
-        Migrator::migrations().len(),
-        1,
-        "relational chain must have exactly one baseline migration"
+        names.len(),
+        2,
+        "unexpected migration-chain length — chain: {names:?}"
+    );
+    assert!(
+        names[0].contains("baseline"),
+        "the squashed baseline must stay first in the chain — chain: {names:?}"
     );
 }

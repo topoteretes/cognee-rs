@@ -16,7 +16,7 @@ use cognee_embedding::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
 use cognee_models::{Entity, Triplet};
 use cognee_vector::VectorDB;
-use tracing::info;
+use tracing::{info, warn};
 use uuid::Uuid;
 
 use super::config::MemifyConfig;
@@ -24,6 +24,7 @@ use super::error::MemifyError;
 use super::extract_triplets::extract_triplets_from_graph_db;
 use super::index_triplets::{IndexResult, index_triplets};
 use crate::qualification::{Qualification, check_pipeline_run_qualification};
+use crate::tasks::CLAIM_STALE_AFTER;
 
 /// Pipeline name for memify runs, matching Python's
 /// `pipeline_name="memify_pipeline"` argument to `run_tasks`
@@ -191,10 +192,18 @@ pub async fn memify(
     config.validate()?;
 
     // 1b. Qualification gate (gap 08-08, locked decision 3) ────────────────
-    // Skip when `dataset_id` is `None` — Python's gate only applies per
-    // dataset, and ad-hoc memify runs without a dataset cannot be looked up
-    // via `get_pipeline_run_by_dataset`. The pipeline name used here matches
-    // what the executor-routed pipeline persists
+    // `AlreadyCompleted` short-circuits ONLY when the caller opted into the
+    // pipeline cache, mirroring Python's `if use_pipeline_cache:` guard in
+    // `run_pipeline_per_dataset` (`memify()` passes `use_pipeline_cache=False`).
+    // Short-circuiting unconditionally made every memify after the first a
+    // silent no-op. `AlreadyRunning` still rejects either way — see the longer
+    // note in `tasks::cognify` for why, including why this check alone is not
+    // serialization (the exclusive-run claim below is what provides that).
+    //
+    // Skipped entirely when `dataset_id` is `None` — Python's gate only applies
+    // per dataset, and ad-hoc memify runs without a dataset cannot be looked
+    // up via `get_pipeline_run_by_dataset`. The pipeline name used here
+    // matches what the executor-routed pipeline persists
     // (`build_memify_index_only_pipeline` sets
     // `with_name(MEMIFY_PIPELINE_STAMP_NAME)`).
     let pipeline_name = MEMIFY_PIPELINE_STAMP_NAME;
@@ -203,14 +212,16 @@ pub async fn memify(
             .await
             .map_err(|e| MemifyError::Database(e.to_string()))?
         {
-            Qualification::AlreadyCompleted(prior) => {
+            Qualification::AlreadyCompleted(prior) if config.use_pipeline_cache => {
                 info!(
                     dataset_id = %ds_id,
                     pipeline_run_id = %prior.pipeline_run_id,
-                    "memify: dataset already completed; short-circuiting (Python parity)"
+                    "memify: dataset already completed; short-circuiting (pipeline cache hit)"
                 );
                 return Ok(MemifyResult::already_completed(prior.pipeline_run_id));
             }
+            // Cache off (the default): a completed prior run does not stop this one.
+            Qualification::AlreadyCompleted(_) => {}
             Qualification::AlreadyRunning(_prior) => {
                 return Err(MemifyError::PipelineAlreadyRunning {
                     pipeline_name: pipeline_name.to_string(),
@@ -221,118 +232,164 @@ pub async fn memify(
         }
     }
 
-    // 2. Pre-flight: extract triplets from the graph database (or use custom data).
-    let triplets = if let Some(ref custom_data) = config.custom_data {
-        // When custom data is provided, convert JSON values to Triplet objects.
-        // Each value should be a JSON object with "source_node", "relationship_name",
-        // and "target_node" fields. UUIDs are generated deterministically from the
-        // text values.
-        let mut custom_triplets = Vec::new();
-        for value in custom_data {
-            let source = value
-                .get("source_node")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown")
-                .to_string();
-            let relationship = value
-                .get("relationship_name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("related_to")
-                .to_string();
-            let target = value
-                .get("target_node")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown")
-                .to_string();
-            // Custom-triplet endpoints use the same `Entity::id_for` scheme as
-            // graph entities, so a custom node connects to an existing entity
-            // when its name matches that entity's LLM node id (which
-            // `Entity::from_node` hashes). When the graph entity's node id
-            // differs from its display name, the ids won't coincide — but this
-            // is still strictly better than the previous bare `to_lowercase`
-            // hash, which shared no id space with entities at all.
-            let source_id = Entity::id_for(&source);
-            let target_id = Entity::id_for(&target);
-            let text = format!("{source}-\u{203A}{relationship}-\u{203A}{target}");
-            custom_triplets.push(
-                Triplet::new(source_id, target_id, relationship, text).with_names(source, target),
-            );
+    // ── Exclusive-run claim ─────────────────────────────────────────────────
+    // Same reasoning as `tasks::cognify`: the `AlreadyRunning` verdict above
+    // only catches a run that already wrote its `Started` row, so the claim is
+    // what actually serializes concurrent runs. Scoped to a known dataset for
+    // the same reason the gate is — an ad-hoc run without one has nothing to
+    // claim, and cannot collide on `(dataset_id, pipeline_name)`.
+    let claim_repo = Arc::clone(&pipeline_run_repo);
+    let claim = if let Some(ds_id) = dataset_id {
+        let claim_id = Uuid::new_v4();
+        if !claim_repo
+            .try_claim_pipeline_run(ds_id, pipeline_name, claim_id, CLAIM_STALE_AFTER)
+            .await
+            .map_err(|e| MemifyError::Database(e.to_string()))?
+        {
+            return Err(MemifyError::PipelineAlreadyRunning {
+                pipeline_name: pipeline_name.to_string(),
+                dataset_id: Some(ds_id),
+            });
         }
-        info!(
-            "Using {} custom triplets instead of graph extraction",
-            custom_triplets.len()
-        );
-        custom_triplets
+        Some((ds_id, claim_id))
     } else {
-        extract_triplets_from_graph_db(&*graph_db, config).await?
+        None
     };
 
-    let triplet_count = triplets.len();
+    // Wrapped so the release below is reached on every exit path, `?`
+    // included. `Drop` cannot await, so an RAII guard is not an option.
+    let outcome: Result<MemifyResult, MemifyError> = async {
+        // 2. Pre-flight: extract triplets from the graph database (or use custom data).
+        let triplets = if let Some(ref custom_data) = config.custom_data {
+            // When custom data is provided, convert JSON values to Triplet objects.
+            // Each value should be a JSON object with "source_node", "relationship_name",
+            // and "target_node" fields. UUIDs are generated deterministically from the
+            // text values.
+            let mut custom_triplets = Vec::new();
+            for value in custom_data {
+                let source = value
+                    .get("source_node")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+                let relationship = value
+                    .get("relationship_name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("related_to")
+                    .to_string();
+                let target = value
+                    .get("target_node")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+                // Custom-triplet endpoints use the same `Entity::id_for` scheme as
+                // graph entities, so a custom node connects to an existing entity
+                // when its name matches that entity's LLM node id (which
+                // `Entity::from_node` hashes). When the graph entity's node id
+                // differs from its display name, the ids won't coincide — but this
+                // is still strictly better than the previous bare `to_lowercase`
+                // hash, which shared no id space with entities at all.
+                let source_id = Entity::id_for(&source);
+                let target_id = Entity::id_for(&target);
+                let text = format!("{source}-\u{203A}{relationship}-\u{203A}{target}");
+                custom_triplets.push(
+                    Triplet::new(source_id, target_id, relationship, text)
+                        .with_names(source, target),
+                );
+            }
+            info!(
+                "Using {} custom triplets instead of graph extraction",
+                custom_triplets.len()
+            );
+            custom_triplets
+        } else {
+            extract_triplets_from_graph_db(&*graph_db, config).await?
+        };
 
-    // 3. If empty, return early with zeros — skip the executor entirely.
-    if triplets.is_empty() {
-        info!("No triplets extracted from graph; nothing to index");
-        return Ok(MemifyResult::empty());
+        let triplet_count = triplets.len();
+
+        // 3. If empty, return early with zeros — skip the executor entirely.
+        if triplets.is_empty() {
+            info!("No triplets extracted from graph; nothing to index");
+            return Ok(MemifyResult::empty());
+        }
+
+        // 4. Build the one-task index-only pipeline and run it through
+        //    `pipeline::execute` (Decision 8 / 11).
+        let pipeline = build_memify_index_only_pipeline(
+            Arc::clone(&vector_db),
+            Arc::clone(&embedding_engine),
+            dataset_id,
+            user_id,
+            tenant_id,
+        );
+
+        // The executor re-derives `PipelineRunInfo.pipeline_id` from
+        // `(pipeline.name, user_id, dataset_id)`; we still carry `pipeline.id`
+        // through `PipelineContext` as the placeholder.
+        let pipeline_ctx = PipelineContext {
+            pipeline_id: pipeline.id,
+            pipeline_name: pipeline.name.clone().unwrap_or_default(),
+            user_id,
+            tenant_id,
+            dataset_id,
+            current_data: None,
+            run_id: None,
+            user_email: None,
+            provenance_visited: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        };
+
+        let (_cancel_handle, ctx) = TaskContextBuilder::new()
+            .thread_pool(thread_pool)
+            .database(database)
+            .graph_db(Arc::clone(&graph_db))
+            .vector_db(Arc::clone(&vector_db))
+            .pipeline_context(pipeline_ctx)
+            .build()
+            .map_err(|e| MemifyError::Context(e.to_string()))?;
+        let ctx = Arc::new(ctx);
+
+        let inputs: Vec<Arc<dyn Value>> = vec![Arc::new(triplets) as Arc<dyn Value>];
+
+        // Decision 11 (gap 08-07): persist the four-state `pipeline_runs` trail
+        // through the caller-supplied repository.
+        let watcher = DbPipelineWatcher::new(pipeline_run_repo);
+        let outputs = cognee_core::pipeline::execute(&pipeline, inputs, ctx, &watcher)
+            .await
+            .map_err(|e| MemifyError::Execute(e.to_string()))?;
+
+        let index_result = extract_memify_outputs(outputs)?;
+
+        // 5. Log summary and return.
+        info!(
+            "Memify complete: {} triplets extracted, {} indexed",
+            triplet_count, index_result.indexed_count
+        );
+
+        Ok(MemifyResult {
+            triplet_count,
+            index_result,
+            already_completed: false,
+            prior_pipeline_run_id: None,
+        })
+    }
+    .await;
+
+    if let Some((ds_id, claim_id)) = claim
+        && let Err(e) = claim_repo
+            .release_pipeline_run_claim(ds_id, pipeline_name, claim_id)
+            .await
+    {
+        // The run is over either way, and an unreleased claim ages out rather
+        // than being lost, so this must not mask the outcome.
+        warn!(
+            dataset_id = %ds_id,
+            pipeline_name = %pipeline_name,
+            "failed to release the pipeline-run claim (it will age out): {e}"
+        );
     }
 
-    // 4. Build the one-task index-only pipeline and run it through
-    //    `pipeline::execute` (Decision 8 / 11).
-    let pipeline = build_memify_index_only_pipeline(
-        Arc::clone(&vector_db),
-        Arc::clone(&embedding_engine),
-        dataset_id,
-        user_id,
-        tenant_id,
-    );
-
-    // The executor re-derives `PipelineRunInfo.pipeline_id` from
-    // `(pipeline.name, user_id, dataset_id)`; we still carry `pipeline.id`
-    // through `PipelineContext` as the placeholder.
-    let pipeline_ctx = PipelineContext {
-        pipeline_id: pipeline.id,
-        pipeline_name: pipeline.name.clone().unwrap_or_default(),
-        user_id,
-        tenant_id,
-        dataset_id,
-        current_data: None,
-        run_id: None,
-        user_email: None,
-        provenance_visited: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
-    };
-
-    let (_cancel_handle, ctx) = TaskContextBuilder::new()
-        .thread_pool(thread_pool)
-        .database(database)
-        .graph_db(Arc::clone(&graph_db))
-        .vector_db(Arc::clone(&vector_db))
-        .pipeline_context(pipeline_ctx)
-        .build()
-        .map_err(|e| MemifyError::Context(e.to_string()))?;
-    let ctx = Arc::new(ctx);
-
-    let inputs: Vec<Arc<dyn Value>> = vec![Arc::new(triplets) as Arc<dyn Value>];
-
-    // Decision 11 (gap 08-07): persist the four-state `pipeline_runs` trail
-    // through the caller-supplied repository.
-    let watcher = DbPipelineWatcher::new(pipeline_run_repo);
-    let outputs = cognee_core::pipeline::execute(&pipeline, inputs, ctx, &watcher)
-        .await
-        .map_err(|e| MemifyError::Execute(e.to_string()))?;
-
-    let index_result = extract_memify_outputs(outputs)?;
-
-    // 5. Log summary and return.
-    info!(
-        "Memify complete: {} triplets extracted, {} indexed",
-        triplet_count, index_result.indexed_count
-    );
-
-    Ok(MemifyResult {
-        triplet_count,
-        index_result,
-        already_completed: false,
-        prior_pipeline_run_id: None,
-    })
+    outcome
 }
 
 // ---------------------------------------------------------------------------

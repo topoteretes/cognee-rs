@@ -2181,11 +2181,43 @@ pub async fn cognify(
 
     // ── Qualification gate (gap 08-08, locked decision 3) ───────────────────
     // Python-parity `check_pipeline_run_qualification`: read the latest
-    // `pipeline_runs` row for `(dataset_id, pipeline_name)` and decide
-    // whether to proceed, short-circuit, or reject. The pipeline name used
-    // here MUST match what `DbPipelineWatcher` will persist on the next
-    // `pipeline::execute` call — that is the `Pipeline.name` set below
-    // ([`COGNIFY_PIPELINE_STAMP_NAME`] or `"temporal-cognify"`).
+    // `pipeline_runs` row for `(dataset_id, pipeline_name)` and decide whether
+    // to proceed, short-circuit, or reject.
+    //
+    // The two verdicts are gated differently, on purpose:
+    //
+    // * `AlreadyCompleted` short-circuits ONLY when the caller opted into the
+    //   pipeline cache. Python guards this layer behind `if use_pipeline_cache:`
+    //   in `run_pipeline_per_dataset` (`modules/pipelines/operations/pipeline.py`)
+    //   and every public entry point passes `use_pipeline_cache=False`, so
+    //   upstream a repeat cognify always re-runs. Short-circuiting
+    //   unconditionally made every cognify after the first a silent no-op, so a
+    //   dataset could never take a second wave of data. `dataset_resolver`
+    //   already gates its own dataset-level skip on this same flag.
+    //
+    // * `AlreadyRunning` still rejects regardless of the flag. Python can put
+    //   this behind the flag because `run_pipeline_per_dataset` serializes on
+    //   `get_dataset_lock(dataset.id)` — its own comment reads "concurrent runs
+    //   are kept safe by the per-dataset lock, not by this check". Rust has no
+    //   such lock, so this row check is the closest equivalent available: it
+    //   rejects a run that has already reached `Started`, which covers the
+    //   common case of re-invoking cognify while a long run is in flight, and
+    //   keeps a stale `Started` row from being silently ignored.
+    //
+    //   By itself this row check is NOT serialization: it and the `Started`
+    //   write in `pipeline::execute` (`crates/core/src/pipeline.rs:916-923`)
+    //   are separate operations, so two callers entering between them would
+    //   both observe the pre-run state and both proceed. What actually
+    //   serializes runs is the exclusive-run claim taken below; this check
+    //   stays because it is the cheaper path (no write) for the common case of
+    //   a run already visibly in flight, and because it is what reports a
+    //   stale `Started` row rather than silently ignoring it.
+    //
+    //   For calibration against the reference: Python's lock is an
+    //   `asyncio.Lock` held in a module-level dict
+    //   (`infrastructure/locks/dataset_lock.py`), so it serializes within a
+    //   single process only. The claim below is a database row, so it also
+    //   excludes concurrent runs across processes.
     let pipeline_name: &str = if effective_config.temporal_cognify {
         "temporal-cognify"
     } else {
@@ -2195,14 +2227,16 @@ pub async fn cognify(
         .await
         .map_err(|e| CognifyError::DatabaseError(e.to_string()))?
     {
-        Qualification::AlreadyCompleted(prior) => {
+        Qualification::AlreadyCompleted(prior) if effective_config.use_pipeline_cache => {
             info!(
                 dataset_id = %dataset_id,
                 pipeline_run_id = %prior.pipeline_run_id,
-                "cognify: dataset already completed; short-circuiting (Python parity)"
+                "cognify: dataset already completed; short-circuiting (pipeline cache hit)"
             );
             return Ok(CognifyResult::already_completed(prior.pipeline_run_id));
         }
+        // Cache off (the default): a completed prior run does not stop this one.
+        Qualification::AlreadyCompleted(_) => {}
         Qualification::AlreadyRunning(_prior) => {
             return Err(CognifyError::PipelineAlreadyRunning {
                 pipeline_name: pipeline_name.to_string(),
@@ -2212,112 +2246,160 @@ pub async fn cognify(
         Qualification::Proceed => {}
     }
 
-    // ── Empty-document short-circuit ────────────────────────────────────────
-    // Preserved from the pre-executor path: a caller passing zero documents
-    // gets back an empty result without paying for pipeline / context
-    // construction or a no-op LLM round-trip.
-    if data_items.is_empty() {
-        return Ok(CognifyResult::empty());
-    }
-
-    // ── Branch: temporal vs. standard pipeline ──────────────────────────────
-    // LIB-06-04: both branches now route through `pipeline::execute`. The
-    // selection happens *before* `execute()` per locked Decision 2 — temporal
-    // is a distinct `Pipeline` with its own task DAG. Per locked option (a)
-    // (user decision 2026-05-15), the shared tasks
-    // (`make_classify_documents_task`, `make_extract_chunks_task`) stamp
-    // `Document` / `DocumentChunk` DataPoints with
-    // `source_pipeline = COGNIFY_PIPELINE_STAMP_NAME` on both
-    // branches; the temporal pipeline keeps its distinct identity at the
-    // `pipeline_runs` row level via `build_temporal_cognify_pipeline`'s
-    // `with_name("temporal-cognify")`.
-    let is_temporal = effective_config.temporal_cognify;
-    let pipeline = if is_temporal {
-        build_temporal_cognify_pipeline(
-            Arc::clone(&storage),
-            Arc::clone(&graph_db),
-            Arc::clone(&vector_db),
-            Arc::clone(&embedding_engine),
-            Arc::clone(&llm),
-            Some(Arc::clone(&database)),
-            effective_config.clone(),
-        )
-    } else {
-        build_cognify_pipeline(
-            Arc::clone(&storage),
-            Arc::clone(&graph_db),
-            Arc::clone(&vector_db),
-            Arc::clone(&embedding_engine),
-            Arc::clone(&llm),
-            Some(Arc::clone(&database)),
-            Arc::clone(&ontology_resolver),
-            effective_config.clone(),
-        )
-    };
-
-    // The executor re-derives `PipelineRunInfo.pipeline_id` from
-    // `(pipeline.name, user_id, dataset_id)`; we still carry `pipeline.id`
-    // through `PipelineContext` as the placeholder.
-    let pipeline_ctx = PipelineContext {
-        pipeline_id: pipeline.id,
-        pipeline_name: pipeline.name.clone().unwrap_or_default(),
-        user_id,
-        tenant_id,
-        dataset_id: Some(dataset_id),
-        current_data: None,
-        run_id: None,
-        user_email: user_email.clone(),
-        provenance_visited: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
-    };
-
-    let (_cancel_handle, ctx) = TaskContextBuilder::new()
-        .thread_pool(thread_pool)
-        .database(Arc::clone(&database))
-        .graph_db(Arc::clone(&graph_db))
-        .vector_db(Arc::clone(&vector_db))
-        .pipeline_context(pipeline_ctx)
-        .build()
-        .map_err(|e| CognifyError::ContextBuild(e.to_string()))?;
-    let ctx = Arc::new(ctx);
-
-    let input = CognifyInput {
-        data_items,
-        dataset_id,
-        user_id,
-        tenant_id,
-    };
-    let inputs: Vec<Arc<dyn Value>> = vec![Arc::new(input) as Arc<dyn Value>];
-
-    // Decision 11 (gap 08-07): `DbPipelineWatcher` persists the four-state
-    // `pipeline_runs` trail through the caller-supplied repository.
-    // Embedded callers pass `NoopPipelineRunRepository`; CLI / HTTP callers
-    // pass a `SeaOrmPipelineRunRepository` to surface rows in the
-    // `/api/v1/activity/pipeline-runs` endpoint.
-    let watcher = DbPipelineWatcher::new(pipeline_run_repo);
-    let outputs = cognee_core::pipeline::execute(&pipeline, inputs, ctx, &watcher)
-        .await
-        .map_err(|e| CognifyError::Execute(e.to_string()))?;
-
-    let result = extract_cognify_outputs(outputs)?;
-
-    // Decision 5: post-pipeline teardown — `extract_dlt_fk_edges` stays
-    // outside the executor. The pipeline_runs row is already marked
-    // COMPLETED by the watcher at this point; teardown failure surfaces as
-    // `Err(...)` to the caller but does not roll back the run state.
+    // ── Exclusive-run claim ─────────────────────────────────────────────────
+    // The `AlreadyRunning` verdict above only catches a run that already wrote
+    // its `Started` row; that write and the read above are separate
+    // operations, so two callers entering within the window between them would
+    // both observe the pre-run state and both proceed. This claim closes the
+    // window — the insert *is* the contended operation, so exactly one caller
+    // holds `(dataset_id, pipeline_name)` at a time. It also excludes
+    // concurrent runs across processes, which Python's in-process
+    // `asyncio.Lock` (`infrastructure/locks/dataset_lock.py`) does not.
     //
-    // LIB-06-04: skip DLT FK extraction on the temporal branch — temporal
-    // does not propagate `documents_for_dlt` (and Python's temporal cognify
-    // does not run DLT teardown either).
-    if !is_temporal {
-        extract_dlt_fk_edges(
-            &result.chunks,
-            &result.documents_for_dlt,
-            Arc::clone(&graph_db),
-        )
-        .await?;
+    // Deliberately NOT cleared by the server's startup orphan sweep: claims
+    // are cross-process, so one instance restarting must not drop another
+    // live instance's claim. A claim a killed process left behind is recovered
+    // by the staleness window below, or by an explicit reset.
+    let claim_repo = Arc::clone(&pipeline_run_repo);
+    let claim_id = Uuid::new_v4();
+    if !claim_repo
+        .try_claim_pipeline_run(dataset_id, pipeline_name, claim_id, CLAIM_STALE_AFTER)
+        .await
+        .map_err(|e| CognifyError::DatabaseError(e.to_string()))?
+    {
+        return Err(CognifyError::PipelineAlreadyRunning {
+            pipeline_name: pipeline_name.to_string(),
+            dataset_id,
+        });
     }
 
-    Ok(result)
+    // Everything past the claim runs inside this block so the release below is
+    // reached on every exit path, `?` included. `Drop` cannot await, so an RAII
+    // guard is not an option.
+    let outcome: Result<CognifyResult, CognifyError> = async {
+        // ── Empty-document short-circuit ────────────────────────────────────────
+        // Preserved from the pre-executor path: a caller passing zero documents
+        // gets back an empty result without paying for pipeline / context
+        // construction or a no-op LLM round-trip.
+        if data_items.is_empty() {
+            return Ok(CognifyResult::empty());
+        }
+
+        // ── Branch: temporal vs. standard pipeline ──────────────────────────────
+        // LIB-06-04: both branches now route through `pipeline::execute`. The
+        // selection happens *before* `execute()` per locked Decision 2 — temporal
+        // is a distinct `Pipeline` with its own task DAG. Per locked option (a)
+        // (user decision 2026-05-15), the shared tasks
+        // (`make_classify_documents_task`, `make_extract_chunks_task`) stamp
+        // `Document` / `DocumentChunk` DataPoints with
+        // `source_pipeline = COGNIFY_PIPELINE_STAMP_NAME` on both
+        // branches; the temporal pipeline keeps its distinct identity at the
+        // `pipeline_runs` row level via `build_temporal_cognify_pipeline`'s
+        // `with_name("temporal-cognify")`.
+        let is_temporal = effective_config.temporal_cognify;
+        let pipeline = if is_temporal {
+            build_temporal_cognify_pipeline(
+                Arc::clone(&storage),
+                Arc::clone(&graph_db),
+                Arc::clone(&vector_db),
+                Arc::clone(&embedding_engine),
+                Arc::clone(&llm),
+                Some(Arc::clone(&database)),
+                effective_config.clone(),
+            )
+        } else {
+            build_cognify_pipeline(
+                Arc::clone(&storage),
+                Arc::clone(&graph_db),
+                Arc::clone(&vector_db),
+                Arc::clone(&embedding_engine),
+                Arc::clone(&llm),
+                Some(Arc::clone(&database)),
+                Arc::clone(&ontology_resolver),
+                effective_config.clone(),
+            )
+        };
+
+        // The executor re-derives `PipelineRunInfo.pipeline_id` from
+        // `(pipeline.name, user_id, dataset_id)`; we still carry `pipeline.id`
+        // through `PipelineContext` as the placeholder.
+        let pipeline_ctx = PipelineContext {
+            pipeline_id: pipeline.id,
+            pipeline_name: pipeline.name.clone().unwrap_or_default(),
+            user_id,
+            tenant_id,
+            dataset_id: Some(dataset_id),
+            current_data: None,
+            run_id: None,
+            user_email: user_email.clone(),
+            provenance_visited: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        };
+
+        let (_cancel_handle, ctx) = TaskContextBuilder::new()
+            .thread_pool(thread_pool)
+            .database(Arc::clone(&database))
+            .graph_db(Arc::clone(&graph_db))
+            .vector_db(Arc::clone(&vector_db))
+            .pipeline_context(pipeline_ctx)
+            .build()
+            .map_err(|e| CognifyError::ContextBuild(e.to_string()))?;
+        let ctx = Arc::new(ctx);
+
+        let input = CognifyInput {
+            data_items,
+            dataset_id,
+            user_id,
+            tenant_id,
+        };
+        let inputs: Vec<Arc<dyn Value>> = vec![Arc::new(input) as Arc<dyn Value>];
+
+        // Decision 11 (gap 08-07): `DbPipelineWatcher` persists the four-state
+        // `pipeline_runs` trail through the caller-supplied repository.
+        // Embedded callers pass `NoopPipelineRunRepository`; CLI / HTTP callers
+        // pass a `SeaOrmPipelineRunRepository` to surface rows in the
+        // `/api/v1/activity/pipeline-runs` endpoint.
+        let watcher = DbPipelineWatcher::new(pipeline_run_repo);
+        let outputs = cognee_core::pipeline::execute(&pipeline, inputs, ctx, &watcher)
+            .await
+            .map_err(|e| CognifyError::Execute(e.to_string()))?;
+
+        let result = extract_cognify_outputs(outputs)?;
+
+        // Decision 5: post-pipeline teardown — `extract_dlt_fk_edges` stays
+        // outside the executor. The pipeline_runs row is already marked
+        // COMPLETED by the watcher at this point; teardown failure surfaces as
+        // `Err(...)` to the caller but does not roll back the run state.
+        //
+        // LIB-06-04: skip DLT FK extraction on the temporal branch — temporal
+        // does not propagate `documents_for_dlt` (and Python's temporal cognify
+        // does not run DLT teardown either).
+        if !is_temporal {
+            extract_dlt_fk_edges(
+                &result.chunks,
+                &result.documents_for_dlt,
+                Arc::clone(&graph_db),
+            )
+            .await?;
+        }
+
+        Ok(result)
+    }
+    .await;
+
+    if let Err(e) = claim_repo
+        .release_pipeline_run_claim(dataset_id, pipeline_name, claim_id)
+        .await
+    {
+        // The run is over either way, and an unreleased claim is reclaimed as
+        // stale rather than lost, so this must not mask the outcome.
+        warn!(
+            dataset_id = %dataset_id,
+            pipeline_name = %pipeline_name,
+            "failed to release the pipeline-run claim (it will age out): {e}"
+        );
+    }
+
+    outcome
 }
 
 // ---------------------------------------------------------------------------
@@ -3385,6 +3467,19 @@ pub const ADD_DATA_POINTS_TASK_RANK: i32 = 4;
 /// by [`build_cognify_pipeline`], and the value the visualization's
 /// operations catalog matches on to mark a stage as observed.
 pub const COGNIFY_PIPELINE_STAMP_NAME: &str = "cognify_pipeline";
+
+/// How long an exclusive-run claim stays valid without being released, after
+/// which another run may reclaim it — see
+/// [`PipelineRunRepository::try_claim_pipeline_run`].
+///
+/// Deliberately generous. Reclaiming too eagerly is the worse failure: it
+/// re-admits a concurrent run into a legitimately long one (a multi-gigabyte
+/// cognify runs for hours), which is exactly what the claim exists to prevent.
+/// The cost of being generous is that a claim left by a killed process blocks
+/// that dataset until it ages out — recoverable by resetting the dataset's
+/// pipeline-run state, and no worse than the stale `Started` row such a crash
+/// already leaves behind.
+pub const CLAIM_STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
 
 /// Resolve the user label for in-body stamping from a [`TaskContext`].
 ///

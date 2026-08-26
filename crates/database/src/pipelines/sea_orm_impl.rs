@@ -3,15 +3,16 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::Utc;
+use sea_orm::sea_query::OnConflict;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter, QueryOrder,
     QuerySelect, RelationTrait,
 };
 use serde_json::json;
 use uuid::Uuid;
 
 use crate::conversions::{domain_status_to_entity, entity_status_to_domain};
-use crate::entities::{dataset, pipeline_run, pipeline_run_payload_field};
+use crate::entities::{dataset, pipeline_run, pipeline_run_claim, pipeline_run_payload_field};
 use crate::types::{DatabaseError, PipelineRun, PipelineRunStatus};
 use crate::uuid_hex;
 
@@ -28,6 +29,45 @@ pub struct SeaOrmPipelineRunRepository {
 }
 
 impl SeaOrmPipelineRunRepository {
+    /// `INSERT ... ON CONFLICT DO NOTHING`, returning whether the row was
+    /// written. `false` means a claim already exists for the pair.
+    ///
+    /// SeaORM signals a do-nothing conflict either as `Ok(0)` rows affected or
+    /// as `DbErr::RecordNotInserted` depending on backend and version; both
+    /// mean the same thing here.
+    async fn insert_claim(
+        &self,
+        dataset_hex: &str,
+        pipeline_name: &str,
+        claim_id: Uuid,
+    ) -> Result<bool, DatabaseError> {
+        let row = pipeline_run_claim::ActiveModel {
+            dataset_id: sea_orm::ActiveValue::Set(dataset_hex.to_string()),
+            pipeline_name: sea_orm::ActiveValue::Set(pipeline_name.to_string()),
+            claim_id: sea_orm::ActiveValue::Set(uuid_hex::to_hex(claim_id)),
+            claimed_at: sea_orm::ActiveValue::Set(Utc::now()),
+        };
+
+        match pipeline_run_claim::Entity::insert(row)
+            .on_conflict(
+                OnConflict::columns([
+                    pipeline_run_claim::Column::DatasetId,
+                    pipeline_run_claim::Column::PipelineName,
+                ])
+                .do_nothing()
+                .to_owned(),
+            )
+            .exec_without_returning(self.db.as_ref())
+            .await
+        {
+            Ok(rows) => Ok(rows > 0),
+            Err(DbErr::RecordNotInserted) => Ok(false),
+            Err(e) => Err(DatabaseError::QueryError(format!(
+                "insert pipeline_run_claim failed: {e}"
+            ))),
+        }
+    }
+
     /// Create a new repository backed by the given database connection.
     pub fn new(db: Arc<DatabaseConnection>) -> Self {
         Self { db }
@@ -415,5 +455,94 @@ impl PipelineRunRepository for SeaOrmPipelineRunRepository {
             }
         }
         Ok(out)
+    }
+
+    /// Take the claim by inserting the `(dataset_id, pipeline_name)` row. The
+    /// composite primary key is the mutual exclusion: concurrent inserts race
+    /// in the database and exactly one commits, so `ON CONFLICT DO NOTHING`
+    /// reporting zero rows written *is* the "someone else holds it" signal.
+    /// Portable across SQLite and Postgres.
+    async fn try_claim_pipeline_run(
+        &self,
+        dataset_id: Uuid,
+        pipeline_name: &str,
+        claim_id: Uuid,
+        stale_after: std::time::Duration,
+    ) -> Result<bool, DatabaseError> {
+        let dataset_hex = uuid_hex::to_hex(dataset_id);
+
+        if self
+            .insert_claim(&dataset_hex, pipeline_name, claim_id)
+            .await?
+        {
+            return Ok(true);
+        }
+
+        // Someone holds it. Reclaim only if their claim has aged out — a
+        // killed process cannot release, and a release is scoped to its own
+        // `claim_id`, so without this the pair would wedge permanently.
+        let Some(existing) = pipeline_run_claim::Entity::find_by_id((
+            dataset_hex.clone(),
+            pipeline_name.to_string(),
+        ))
+        .one(self.db.as_ref())
+        .await
+        .map_err(|e| DatabaseError::QueryError(format!("find pipeline_run_claim failed: {e}")))?
+        else {
+            // Released between our insert and this read — retry once.
+            return self
+                .insert_claim(&dataset_hex, pipeline_name, claim_id)
+                .await;
+        };
+
+        let age = Utc::now().signed_duration_since(existing.claimed_at);
+        let stale_after = chrono::Duration::from_std(stale_after)
+            .map_err(|e| DatabaseError::QueryError(format!("stale_after out of range: {e}")))?;
+        if age < stale_after {
+            return Ok(false);
+        }
+
+        // Delete scoped to the `claim_id` we observed, so we lose the race
+        // rather than stomping a claim taken since the read.
+        let deleted = pipeline_run_claim::Entity::delete_many()
+            .filter(pipeline_run_claim::Column::DatasetId.eq(dataset_hex.clone()))
+            .filter(pipeline_run_claim::Column::PipelineName.eq(pipeline_name.to_string()))
+            .filter(pipeline_run_claim::Column::ClaimId.eq(existing.claim_id.clone()))
+            .exec(self.db.as_ref())
+            .await
+            .map_err(|e| {
+                DatabaseError::QueryError(format!("delete stale pipeline_run_claim failed: {e}"))
+            })?;
+        if deleted.rows_affected == 0 {
+            return Ok(false);
+        }
+
+        tracing::warn!(
+            dataset_id = %dataset_id,
+            pipeline_name = %pipeline_name,
+            stale_claim_id = %existing.claim_id,
+            age_seconds = age.num_seconds(),
+            "reclaimed a stale pipeline-run claim; the previous holder never released it"
+        );
+        self.insert_claim(&dataset_hex, pipeline_name, claim_id)
+            .await
+    }
+
+    async fn release_pipeline_run_claim(
+        &self,
+        dataset_id: Uuid,
+        pipeline_name: &str,
+        claim_id: Uuid,
+    ) -> Result<(), DatabaseError> {
+        pipeline_run_claim::Entity::delete_many()
+            .filter(pipeline_run_claim::Column::DatasetId.eq(uuid_hex::to_hex(dataset_id)))
+            .filter(pipeline_run_claim::Column::PipelineName.eq(pipeline_name.to_string()))
+            .filter(pipeline_run_claim::Column::ClaimId.eq(uuid_hex::to_hex(claim_id)))
+            .exec(self.db.as_ref())
+            .await
+            .map_err(|e| {
+                DatabaseError::QueryError(format!("release pipeline_run_claim failed: {e}"))
+            })?;
+        Ok(())
     }
 }

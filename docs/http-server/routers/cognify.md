@@ -243,10 +243,14 @@ When `run_in_background=true` and one dataset's dispatch errors during *startup*
 
 The POST handler returns the deterministic `pipeline_run_id` for each dataset; clients use it directly in the WS path. There is no opaque session token — `pipeline_run_id` is itself the subscription handle. Because the id is deterministic in `(user, dataset, pipeline_name)`, two clients running cognify on the same dataset see the same id and either:
 
-1. The first run is still in flight — the second client's POST handler observes the existing handle, does *not* spawn a new run, and emits `PipelineRunAlreadyCompleted` once the first finishes.
-2. The first run already completed — the second POST emits `PipelineRunAlreadyCompleted` immediately.
+1. The first run is still in flight — the second POST **spawns another run anyway**. `dispatch_pipeline` always calls `register_*` with the deterministic id, and `DefaultPipelineRunRegistry::create_slot` does not de-duplicate: on a hit it only reuses the existing slot's channels (so early subscribers keep their events), updates the metadata and resets the phase to `Pending`. Dispatch is *not* idempotent.
+2. The first run already completed — the second POST **runs the pipeline again**.
 
-Both cases match Python's idempotent-re-cognify semantics. The WS subscription protocol works identically: any client with the id can attach.
+The status the response carries in both cases depends on the dispatch mode, not on any prior run: blocking mode maps `RunPhase::Completed | Pending` to `PipelineRunCompleted`, while `run_in_background=true` returns `PipelineRunStarted` immediately.
+
+Neither case is a cache hit. `run_real_cognify` hands `cognify()` a `NoopPipelineRunRepository` (`routers/cognify.rs`), so the `check_pipeline_run_qualification` gate reads nothing on this path, and that gate short-circuits only for callers that set `CognifyConfig::use_pipeline_cache` — which the cognify payload DTO does not expose. This matches Python, where `use_pipeline_cache=False` means a repeat cognify always re-runs. `PipelineRunAlreadyCompleted` has no production emitter at all (`publish_already_completed` is uncalled), so no client observes that status today.
+
+The WS subscription protocol works identically: any client with the id can attach.
 
 ## 4. DTO definitions
 
