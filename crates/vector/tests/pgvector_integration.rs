@@ -91,3 +91,4 @@ pgvector_test!(test_search_similar_filtered_filter_then_limit);
 pgvector_test!(test_search_similar_filtered_semantics);
 pgvector_test!(test_search_similar_filtered_and_vs_or);
 pgvector_test!(test_search_similar_filtered_none_matches_all);
+pgvector_test!(test_nul_bytes_in_metadata_are_persistable);

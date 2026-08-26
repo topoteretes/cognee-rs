@@ -585,3 +585,41 @@ pub async fn test_batch_search(db: &dyn VectorDB) {
         "query 1 should rank its exact-match point first"
     );
 }
+
+// -- NUL bytes ---------------------------------------------------------------
+
+/// A NUL byte in point metadata must never break persistence.
+///
+/// Cognify injects the full chunk and summary text into point metadata, so the
+/// `::jsonb` cast in the pgvector upsert has the same exposure to PDF-extracted
+/// `0x00` as the graph tables do. See `cognee_utils::sanitize`.
+///
+/// Backends differ in what they store — pgvector strips the NUL, the in-memory
+/// and LanceDB adapters keep it — so this asserts the shared contract: the
+/// upsert succeeds, the point comes back, and every non-NUL character survives.
+pub async fn test_nul_bytes_in_metadata_are_persistable(db: &dyn VectorDB) {
+    db.create_collection("NulChunk", "text", 3).await.unwrap();
+
+    let dirty = "page 1\0page 2";
+    let id = Uuid::new_v4();
+    let point = VectorPoint::new(id, vec![1.0, 0.0, 0.0])
+        .with_metadata("text", json!(dirty))
+        .with_metadata("nested", json!({"inner": ["a\0b"]}));
+
+    db.index_points("NulChunk", "text", &[point]).await.unwrap();
+
+    let fetched = db.retrieve("NulChunk", "text", &[id]).await.unwrap();
+    assert_eq!(fetched.len(), 1, "the point must be retrievable");
+
+    let strip = |s: &str| s.replace('\0', "");
+    let text = fetched[0]
+        .metadata
+        .get("text")
+        .and_then(|v| v.as_str())
+        .expect("the `text` metadata key must survive the round trip");
+    assert_eq!(
+        strip(text),
+        strip(dirty),
+        "every non-NUL character of the chunk text must survive"
+    );
+}

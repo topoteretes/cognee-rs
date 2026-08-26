@@ -12,6 +12,7 @@ pub mod id_generation;
 pub mod pacing;
 pub mod redact;
 pub mod retry;
+pub mod sanitize;
 pub mod tracing_keys;
 
 pub use env::parse_env_bool;
@@ -21,3 +22,4 @@ pub use id_generation::{
 };
 pub use redact::redact;
 pub use retry::{RetryConfig, RetryDecision, retry_with_backoff};
+pub use sanitize::{sanitize_json, sanitize_json_in_place, sanitize_str, sanitize_string};

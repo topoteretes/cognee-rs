@@ -1,4 +1,5 @@
 use chrono::Utc;
+use cognee_utils::sanitize::sanitize_str;
 use cognee_utils::tracing_keys::{COGNEE_DB_ROW_COUNT, COGNEE_DB_SYSTEM};
 use sea_orm::PaginatorTrait;
 use sea_orm::{
@@ -30,7 +31,10 @@ pub async fn log_query(
     let id = Uuid::new_v4();
     let model = query::ActiveModel {
         id: Set(uuid_hex::to_hex(id)),
-        query_text: Set(query_text.to_string()),
+        // The caller discards a `log_query` error (`search_orchestrator.rs`
+        // pattern-matches `if let Ok(..)`), so an unsanitized NUL here drops the
+        // query *and* its result from search history with no diagnostic.
+        query_text: Set(sanitize_str(query_text).into_owned()),
         query_type: Set(query_type.to_string()),
         user_id: Set(uuid_hex::to_hex_opt(user_id)),
         created_at: Set(Utc::now()),
@@ -57,7 +61,10 @@ pub async fn log_result(
     let model = result_log::ActiveModel {
         id: Set(uuid_hex::to_hex(id)),
         query_id: Set(uuid_hex::to_hex(query_id)),
-        serialized_result: Set(serialized_result.to_string()),
+        // Search results echo back chunk text, so a NUL that survived into the
+        // graph or vector store reaches this `text` column too. See
+        // `cognee_utils::sanitize`.
+        serialized_result: Set(sanitize_str(serialized_result).into_owned()),
         user_id: Set(uuid_hex::to_hex_opt(user_id)),
         created_at: Set(Utc::now()),
     };

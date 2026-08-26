@@ -72,3 +72,4 @@ ladybug_test!(test_get_neighborhood_empty_seeds);
 ladybug_test!(test_node_truth_state_round_trip);
 ladybug_test!(test_node_truth_state_missing_and_invalid);
 ladybug_test!(test_node_truth_state_preserves_other_properties);
+ladybug_test!(test_nul_bytes_in_text_are_persistable);

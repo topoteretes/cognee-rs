@@ -172,3 +172,8 @@ async fn brute_force_upsert_raw_vectors_round_trip() {
 async fn brute_force_upsert_raw_vectors_empty_noop() {
     common::test_upsert_raw_vectors_empty_noop(&BruteForceVectorDB::new()).await;
 }
+
+#[tokio::test]
+async fn brute_force_nul_bytes_in_metadata_are_persistable() {
+    common::test_nul_bytes_in_metadata_are_persistable(&BruteForceVectorDB::new()).await;
+}
