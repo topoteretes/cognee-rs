@@ -5,6 +5,7 @@ LLM-based graph extraction is non-deterministic, so we compare structural
 properties (counts, type sets) rather than exact values.
 """
 
+import os
 import pytest
 
 from helpers import (
@@ -19,6 +20,18 @@ from conftest import requires_openai
 
 
 # ── Tests ────────────────────────────────────────────────────────────────────
+
+
+# Maximum accepted relative divergence in node/edge counts between the two SDKs,
+# as |py - rust| / mean. Overridable so a genuinely noisy signal can be widened
+# deliberately, in one place, with the new value visible in CI config.
+#
+# This used to be enforced by `warnings.warn`, which meant the two
+# "within_tolerance" tests below could only fail if a side produced literally
+# zero — they asserted nothing about tolerance despite their names. If real-LLM
+# runs prove this bound too tight, raise it here or mock the LLM
+# (crates/llm/src/mock/ + COGNEE_TEST_REPLAY); do not return to warning.
+COUNT_TOLERANCE = float(os.environ.get("COGNEE_PARITY_COUNT_TOLERANCE", "0.5"))
 
 
 @requires_openai
@@ -65,12 +78,10 @@ def test_cognify_node_count_within_tolerance(both_cognified):
 
     assert py_count > 0, "Python produced zero nodes"
     assert rust_count > 0, "Rust produced zero nodes"
-    if ratio > 0.5:
-        import warnings
-        warnings.warn(
-            f"Node count divergence is large ({ratio:.0%}): "
-            f"Python={py_count}, Rust={rust_count}"
-        )
+    assert ratio <= COUNT_TOLERANCE, (
+        f"Node count divergence {ratio:.0%} exceeds the "
+        f"{COUNT_TOLERANCE:.0%} tolerance: Python={py_count}, Rust={rust_count}"
+    )
 
 
 @requires_openai
@@ -86,17 +97,15 @@ def test_cognify_edge_count_within_tolerance(both_cognified):
     diff = abs(py_count - rust_count)
     ratio = diff / avg if avg > 0 else 0
 
-    # LLM extraction is highly non-deterministic for edges (different
-    # relationship phrasing, merging, etc.).  Only assert both produced
-    # some edges; log the ratio for monitoring.
+    # LLM extraction is more non-deterministic for edges than for nodes
+    # (relationship phrasing, merging). If COUNT_TOLERANCE proves too tight
+    # here specifically, widen it there rather than dropping the assertion.
     assert py_count > 0, "Python produced zero edges"
     assert rust_count > 0, "Rust produced zero edges"
-    if ratio > 0.5:
-        import warnings
-        warnings.warn(
-            f"Edge count divergence is large ({ratio:.0%}): "
-            f"Python={py_count}, Rust={rust_count}"
-        )
+    assert ratio <= COUNT_TOLERANCE, (
+        f"Edge count divergence {ratio:.0%} exceeds the "
+        f"{COUNT_TOLERANCE:.0%} tolerance: Python={py_count}, Rust={rust_count}"
+    )
 
 
 @requires_openai
