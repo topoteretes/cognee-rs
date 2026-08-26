@@ -162,6 +162,11 @@ pub async fn post_cognify(
     if let Some(batch) = payload.chunks_per_batch {
         cognify_config = cognify_config.with_chunks_per_batch(batch.max(1) as usize);
     }
+    // Per-request `chunk_size` wins over the server-wide default; neither set
+    // leaves `CognifyConfig::max_chunk_size` at `None` (auto-calculated).
+    if let Some(size) = payload.chunk_size.or(state.config.chunk_size) {
+        cognify_config = cognify_config.with_chunk_size(size.max(1) as usize);
+    }
     if let Some(ref prompt) = payload.custom_prompt {
         cognify_config = cognify_config.with_custom_prompt(prompt.clone());
     }

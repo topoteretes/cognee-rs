@@ -209,7 +209,11 @@ pub struct Settings {
 
     pub chunk_strategy: String,
     pub chunk_engine: String,
-    pub chunk_size: u32,
+    /// Maximum chunk size in tokens. `None` (the default) means "auto-calculate
+    /// from the active embedding engine and the configured LLM ceiling" —
+    /// Python's `chunk_size=None`. Set explicitly via `CHUNK_SIZE` /
+    /// `COGNEE_CHUNK_SIZE`, `cognee config set chunk_size`, or `--chunk-size`.
+    pub chunk_size: Option<u32>,
     pub chunk_overlap: u32,
 
     pub relational_db_url: String,
@@ -437,6 +441,21 @@ impl Settings {
             && let Ok(n) = v.parse::<u32>()
         {
             self.llm_max_parallel_requests = n;
+        }
+        // -- Chunking ------------------------------------------------------------
+        // Rust extension, no Python counterpart: upstream takes `chunk_size` as a
+        // per-call argument, which the HTTP server path has no way to reach. Left
+        // unset, the size is auto-calculated from the embedding engine and the LLM
+        // ceiling (see `CognifyConfig::auto_chunk_size`).
+        if let Some(v) = str_alias("COGNEE_CHUNK_SIZE", "CHUNK_SIZE")
+            && let Ok(n) = v.parse::<u32>()
+        {
+            self.chunk_size = Some(n);
+        }
+        if let Some(v) = str_alias("COGNEE_CHUNK_OVERLAP", "CHUNK_OVERLAP")
+            && let Ok(n) = v.parse::<u32>()
+        {
+            self.chunk_overlap = n;
         }
         // Mirror MOCK_EMBEDDING parsing (accept true/1/yes, case-insensitive).
         if let Some(v) = str_var("MOCK_LLM") {
@@ -1194,7 +1213,7 @@ impl Default for Settings {
 
             chunk_strategy: "PARAGRAPH".to_string(),
             chunk_engine: "DEFAULT_ENGINE".to_string(),
-            chunk_size: 1500,
+            chunk_size: None,
             chunk_overlap: 10,
 
             relational_db_url: "sqlite:./cognee.db?mode=rwc".to_string(),
@@ -1588,7 +1607,15 @@ impl ConfigManager {
 
     pub fn set_chunk_size(&self, size: u32) {
         let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
-        s.chunk_size = size;
+        s.chunk_size = Some(size);
+        drop(s);
+        self.bump_version();
+    }
+
+    /// Restore the auto-calculated chunk size (Python's `chunk_size=None`).
+    pub fn clear_chunk_size(&self) {
+        let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+        s.chunk_size = None;
         drop(s);
         self.bump_version();
     }
@@ -2009,7 +2036,12 @@ impl ConfigManager {
             "chunk_strategy".into(),
             Value::String(s.chunk_strategy.clone()),
         );
-        m.insert("chunk_size".into(), Value::Number(s.chunk_size.into()));
+        m.insert(
+            "chunk_size".into(),
+            // `null` = auto-calculated at pipeline time (Python `chunk_size=None`).
+            s.chunk_size
+                .map_or(Value::Null, |v| Value::Number(v.into())),
+        );
         m.insert(
             "chunk_overlap".into(),
             Value::Number(s.chunk_overlap.into()),
@@ -2237,6 +2269,8 @@ impl ConfigManager {
             // Chunking
             "chunk_strategy" => self.set_chunk_strategy(as_string(key, &value)?.as_str()),
             "chunk_engine" => self.set_chunk_engine(as_string(key, &value)?.as_str()),
+            // `null` restores the auto-calculation (Python `chunk_size=None`).
+            "chunk_size" if value.is_null() => self.clear_chunk_size(),
             "chunk_size" => self.set_chunk_size(as_u32(key, &value)?),
             "chunk_overlap" => self.set_chunk_overlap(as_u32(key, &value)?),
             // System paths
@@ -2414,6 +2448,35 @@ mod tests {
 
     #[test]
     #[serial_test::serial]
+    fn overlay_chunk_size_primary_and_alias() {
+        // SAFETY: test is serial — no other thread reads/writes env concurrently.
+        for var in ["COGNEE_CHUNK_SIZE", "CHUNK_SIZE"] {
+            unsafe { std::env::remove_var("COGNEE_CHUNK_SIZE") };
+            unsafe { std::env::remove_var("CHUNK_SIZE") };
+            unsafe { std::env::set_var(var, "2048") };
+            let mut s = Settings::default();
+            s.overlay_from_env();
+            unsafe { std::env::remove_var(var) };
+            assert_eq!(s.chunk_size, Some(2048), "{var} was not honoured");
+        }
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn chunk_size_defaults_to_auto() {
+        // SAFETY: test is serial — no other thread reads/writes env concurrently.
+        unsafe { std::env::remove_var("COGNEE_CHUNK_SIZE") };
+        unsafe { std::env::remove_var("CHUNK_SIZE") };
+        let mut s = Settings::default();
+        s.overlay_from_env();
+        assert_eq!(
+            s.chunk_size, None,
+            "unset must stay None so the pipeline auto-calculates (Python chunk_size=None)"
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
     fn overlay_llm_max_completion_tokens_alias_fallback() {
         // When the primary is unset, the legacy alias is used.
         // SAFETY: test is serial — no other thread reads/writes env concurrently.
@@ -2543,7 +2606,7 @@ mod tests {
         let cm = ConfigManager::new(Settings::default());
         cm.set("chunk_size", serde_json::json!(2048))
             .expect("set should succeed");
-        assert_eq!(cm.read().chunk_size, 2048);
+        assert_eq!(cm.read().chunk_size, Some(2048));
     }
 
     #[test]

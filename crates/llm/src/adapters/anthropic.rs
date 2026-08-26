@@ -689,6 +689,15 @@ impl Llm for AnthropicAdapter {
         200_000
     }
 
+    /// The configured ceiling clamped by the model's documented output cap —
+    /// the same `min` [`effective_max_tokens`](Self::effective_max_tokens)
+    /// applies per request, and Python's `min(model_max, user_max)` in
+    /// `get_max_chunk_tokens()`.
+    fn max_completion_tokens(&self) -> u32 {
+        self.max_completion_tokens
+            .min(Self::model_max_output_tokens(&self.model))
+    }
+
     /// Describe an image via the Messages API. Claude 3+/4 are vision-capable, so
     /// (unlike ollama/mistral/gemini) this is a real override rather than the
     /// trait's `FeatureNotSupported` default — otherwise a dataset containing an

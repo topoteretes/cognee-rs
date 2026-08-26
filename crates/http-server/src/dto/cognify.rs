@@ -46,6 +46,14 @@ pub struct CognifyPayloadDTO {
     /// Overrides `CognifyConfig::chunks_per_batch` for this run.
     #[serde(default, alias = "chunks_per_batch")]
     pub chunks_per_batch: Option<u32>,
+
+    /// Maximum tokens per chunk for this run. `null` (the default) leaves the
+    /// automatic model-based sizing in place — Python parity with
+    /// `CognifyPayloadDTO.chunk_size` in `get_cognify_router.py`.
+    ///
+    /// Falls back to the server-wide `COGNEE_CHUNK_SIZE` when omitted.
+    #[serde(default, alias = "chunk_size")]
+    pub chunk_size: Option<u32>,
 }
 
 // ─── Response aliases ─────────────────────────────────────────────────────────
@@ -88,7 +96,8 @@ mod tests {
             "graphModel": {"x": 1},
             "customPrompt": "go",
             "ontologyKey": ["k"],
-            "chunksPerBatch": 4
+            "chunksPerBatch": 4,
+            "chunkSize": 2048
         }"#;
         let parsed: CognifyPayloadDTO = serde_json::from_str(json).expect("parse camelCase");
         assert_eq!(parsed.dataset_ids.as_ref().map(|v| v.len()), Some(1));
@@ -97,6 +106,7 @@ mod tests {
         assert_eq!(parsed.custom_prompt.as_deref(), Some("go"));
         assert_eq!(parsed.ontology_key.as_ref().map(|v| v.len()), Some(1));
         assert_eq!(parsed.chunks_per_batch, Some(4));
+        assert_eq!(parsed.chunk_size, Some(2048));
     }
 
     #[test]
@@ -107,7 +117,8 @@ mod tests {
             "graph_model": {"x": 1},
             "custom_prompt": "go",
             "ontology_key": ["k"],
-            "chunks_per_batch": 4
+            "chunks_per_batch": 4,
+            "chunk_size": 2048
         }"#;
         let parsed: CognifyPayloadDTO = serde_json::from_str(json).expect("parse snake_case");
         assert_eq!(parsed.dataset_ids.as_ref().map(|v| v.len()), Some(1));
@@ -116,6 +127,7 @@ mod tests {
         assert_eq!(parsed.custom_prompt.as_deref(), Some("go"));
         assert_eq!(parsed.ontology_key.as_ref().map(|v| v.len()), Some(1));
         assert_eq!(parsed.chunks_per_batch, Some(4));
+        assert_eq!(parsed.chunk_size, Some(2048));
     }
 
     #[test]
@@ -128,6 +140,7 @@ mod tests {
             custom_prompt: Some("p".into()),
             ontology_key: Some(vec!["k".into()]),
             chunks_per_batch: Some(2),
+            chunk_size: Some(4096),
         };
         let s = serde_json::to_string(&dto).expect("serialize");
         assert!(s.contains("\"datasetIds\""), "missing datasetIds: {s}");
@@ -142,6 +155,7 @@ mod tests {
             s.contains("\"chunksPerBatch\""),
             "missing chunksPerBatch: {s}"
         );
+        assert!(s.contains("\"chunkSize\""), "missing chunkSize: {s}");
         // Negative — no underscores in property names.
         for forbidden in [
             "\"dataset_ids\"",
@@ -150,6 +164,7 @@ mod tests {
             "\"custom_prompt\"",
             "\"ontology_key\"",
             "\"chunks_per_batch\"",
+            "\"chunk_size\"",
         ] {
             assert!(
                 !s.contains(forbidden),

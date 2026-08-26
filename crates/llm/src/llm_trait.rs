@@ -117,6 +117,24 @@ pub trait Llm: Send + Sync {
         4096
     }
 
+    /// The effective output-token ceiling for this adapter — Python's
+    /// `llm_max_completion_tokens`, already clamped by the model's documented
+    /// cap on adapters that know it (Anthropic, Bedrock).
+    ///
+    /// This is a *completion*-token budget, not a context window (that is
+    /// [`max_context_length`](Self::max_context_length)). Cognify's chunk-size
+    /// auto-calculation reads it to mirror Python's `get_max_chunk_tokens()`
+    /// (`min(embedding_max, llm_max_completion_tokens / 2)`), so lowering the
+    /// configured ceiling for a small-context endpoint actually shrinks the
+    /// prompts cognify sends.
+    ///
+    /// The default matches [`DEFAULT_MAX_COMPLETION_TOKENS`] so an adapter that
+    /// does not track a ceiling (mocks, test doubles) keeps the historical
+    /// 8192-token chunk cutoff.
+    fn max_completion_tokens(&self) -> u32 {
+        crate::types::DEFAULT_MAX_COMPLETION_TOKENS
+    }
+
     /// Describe the contents of an image using vision capabilities.
     ///
     /// Returns a text description of the image. The default implementation

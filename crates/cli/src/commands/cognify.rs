@@ -14,7 +14,8 @@ use crate::error::CliError;
 
 pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
     let settings = cm.settings();
-    let effective_chunk_size = args.chunk_size.unwrap_or(settings.chunk_size);
+    // `None` all the way down selects the auto-calculation (Python `chunk_size=None`).
+    let effective_chunk_size = args.chunk_size.or(settings.chunk_size);
     let effective_max_parallel = args
         .llm_max_parallel_requests
         .unwrap_or(settings.llm_max_parallel_requests)
@@ -94,7 +95,7 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
         };
 
         let mut cognify_config = CognifyConfig::default()
-            .with_chunk_size(effective_chunk_size as usize)
+            .with_chunk_size_opt(effective_chunk_size.map(|n| n as usize))
             .with_chunk_overlap(cm.settings().chunk_overlap as usize)
             .with_chunk_strategy(chunk_strategy)
             .with_max_parallel_extractions(effective_max_parallel)

@@ -309,6 +309,11 @@ pub async fn post_remember(
     if let Some(batch) = form.chunks_per_batch {
         cognify_cfg = cognify_cfg.with_chunks_per_batch(batch.max(1) as usize);
     }
+    // Per-request `chunk_size` wins over the server-wide default; neither set
+    // leaves `CognifyConfig::max_chunk_size` at `None` (auto-calculated).
+    if let Some(size) = form.chunk_size.or(state.config.chunk_size) {
+        cognify_cfg = cognify_cfg.with_chunk_size(size.max(1) as usize);
+    }
     if let Some(ref prompt) = form.custom_prompt {
         cognify_cfg = cognify_cfg.with_custom_prompt(prompt.clone());
     }

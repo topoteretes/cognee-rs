@@ -227,6 +227,12 @@ pub struct HttpServerConfig {
     /// HTTP-server surface too (issue #67).
     pub llm_max_completion_tokens: u32,
 
+    /// Server-wide maximum tokens per chunk. `None` (the default) leaves the
+    /// automatic model-based sizing in place (`CognifyConfig::auto_chunk_size`).
+    /// Env: `COGNEE_CHUNK_SIZE`, alias `CHUNK_SIZE`. A per-request
+    /// `chunk_size` on the cognify payload overrides it.
+    pub chunk_size: Option<u32>,
+
     /// Session store backend selector.
     /// Env: `COGNEE_SESSION_STORE`.
     pub session_store_backend: String,
@@ -379,6 +385,7 @@ impl Default for HttpServerConfig {
             llm_rate_limit_interval: 60,
             auto_rate_limit: true,
             llm_max_completion_tokens: cognee_llm::OpenAIAdapter::DEFAULT_MAX_COMPLETION_TOKENS,
+            chunk_size: None,
             session_store_backend: "seaorm".to_string(),
             session_root_directory: default_session_root_directory(&system_root),
             notebook_runner_enabled: false,
@@ -605,6 +612,22 @@ impl HttpServerConfig {
             })?;
         }
 
+        // Rust extension (no Python counterpart — upstream takes `chunk_size` as a
+        // per-call argument only). Lets a server deployment cap chunk size for a
+        // small-context LLM endpoint, which is otherwise unreachable over HTTP
+        // except per request.
+        if let Some(v) = first_non_empty_env(&["COGNEE_CHUNK_SIZE", "CHUNK_SIZE"]) {
+            let n = v
+                .parse::<u32>()
+                .map_err(|e| ServerError::Other(anyhow::anyhow!("COGNEE_CHUNK_SIZE: {e}")))?;
+            if n == 0 {
+                return Err(ServerError::Other(anyhow::anyhow!(
+                    "COGNEE_CHUNK_SIZE must be greater than 0"
+                )));
+            }
+            cfg.chunk_size = Some(n);
+        }
+
         if let Ok(v) = std::env::var("COGNEE_SESSION_STORE") {
             cfg.session_store_backend = v;
         }
@@ -797,6 +820,38 @@ mod tests {
     use super::*;
     use secrecy::ExposeSecret;
 
+    /// TOP-8: the server path had no chunk-size lever at all — the routers build
+    /// `CognifyConfig::default()` and the DTO had no field — so an operator with a
+    /// small-context LLM endpoint could not cap the prompts cognify sends.
+    #[test]
+    #[serial_test::serial]
+    fn from_env_reads_chunk_size_primary_and_alias() {
+        for var in ["COGNEE_CHUNK_SIZE", "CHUNK_SIZE"] {
+            // SAFETY: test is serial — no other thread reads/writes env concurrently.
+            unsafe { std::env::remove_var("COGNEE_CHUNK_SIZE") };
+            unsafe { std::env::remove_var("CHUNK_SIZE") };
+            unsafe { std::env::set_var(var, "2048") };
+            let cfg = HttpServerConfig::from_env().expect("config builds");
+            unsafe { std::env::remove_var(var) };
+            assert_eq!(cfg.chunk_size, Some(2048), "{var} was not honoured");
+        }
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn from_env_rejects_a_zero_chunk_size() {
+        // SAFETY: test is serial — no other thread reads/writes env concurrently.
+        unsafe { std::env::set_var("COGNEE_CHUNK_SIZE", "0") };
+        let result = HttpServerConfig::from_env();
+        unsafe { std::env::remove_var("COGNEE_CHUNK_SIZE") };
+        assert!(result.is_err(), "0 is not a usable chunk size");
+    }
+
+    #[test]
+    fn chunk_size_defaults_to_auto() {
+        assert_eq!(HttpServerConfig::default().chunk_size, None);
+    }
+
     #[test]
     fn test_defaults() {
         let cfg = HttpServerConfig::default();
@@ -814,6 +869,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_env_override_port() {
         // SAFETY: test-only; no concurrent threads modify this env var.
         unsafe {
@@ -828,6 +884,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_env_cors_origins() {
         // SAFETY: test-only; no concurrent threads modify this env var.
         unsafe {
@@ -856,6 +913,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_bool_backend_flags_from_env() {
         // SAFETY: test-only; no concurrent threads modify these env vars.
         unsafe {
@@ -877,6 +935,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_llm_fallback_env_aliases() {
         // SAFETY: test-only; no concurrent threads modify these env vars.
         unsafe {
@@ -901,6 +960,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_system_root_directory_rebases_dependent_defaults() {
         let temp = tempfile::tempdir().expect("tempdir");
         let new_root = temp.path().join("custom-system-root");

@@ -1041,6 +1041,16 @@ impl Llm for OpenAIAdapter {
         }
     }
 
+    /// The configured completion ceiling
+    /// ([`default_max_tokens`](Self::default_max_tokens), lowered from
+    /// `Settings.llm_max_completion_tokens`). `None` there means "send no default
+    /// cap", which carries no size information for chunk sizing, so it falls back
+    /// to the shared default.
+    fn max_completion_tokens(&self) -> u32 {
+        self.default_max_tokens
+            .unwrap_or(Self::DEFAULT_MAX_COMPLETION_TOKENS)
+    }
+
     async fn transcribe_image(
         &self,
         image_bytes: &[u8],
@@ -2243,6 +2253,29 @@ mod tests {
         reasoning.write_max_tokens(&mut body, None);
         assert!(body.get("max_tokens").is_none());
         assert!(body.get("max_completion_tokens").is_none());
+    }
+
+    /// TOP-8: cognify's chunk-size auto-calculation reads the adapter's ceiling,
+    /// so it must reflect the configured `LLM_MAX_COMPLETION_TOKENS`.
+    #[test]
+    fn max_completion_tokens_reports_the_configured_ceiling() {
+        let adapter = OpenAIAdapter::new("gpt-4o-mini", "k", None)
+            .expect("adapter builds")
+            .with_default_max_tokens(Some(4096));
+        assert_eq!(adapter.max_completion_tokens(), 4096);
+    }
+
+    #[test]
+    fn max_completion_tokens_falls_back_when_no_cap_is_configured() {
+        // `None` ("send no default cap") carries no size information, so chunk
+        // sizing uses the shared default rather than treating it as zero.
+        let adapter = OpenAIAdapter::new("gpt-4o-mini", "k", None)
+            .expect("adapter builds")
+            .with_default_max_tokens(None);
+        assert_eq!(
+            adapter.max_completion_tokens(),
+            OpenAIAdapter::DEFAULT_MAX_COMPLETION_TOKENS
+        );
     }
 
     #[test]
