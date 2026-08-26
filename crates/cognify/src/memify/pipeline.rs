@@ -196,8 +196,9 @@ pub async fn memify(
     // `run_pipeline_per_dataset` (`memify()` passes `use_pipeline_cache=False`).
     // Short-circuiting unconditionally made every memify after the first a
     // silent no-op. `AlreadyRunning` still rejects either way — see the longer
-    // note in `tasks::cognify`: Python relies on a per-dataset lock Rust does
-    // not have, so this row check is our only run serialization.
+    // note in `tasks::cognify` for why, including the residual race it does
+    // *not* close (the qualification read and the `Started` write are separate
+    // operations, so two callers entering within that window both proceed).
     //
     // Skipped entirely when `dataset_id` is `None` — Python's gate only applies
     // per dataset, and ad-hoc memify runs without a dataset cannot be looked

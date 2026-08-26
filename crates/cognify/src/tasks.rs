@@ -2199,10 +2199,23 @@ pub async fn cognify(
     //   this behind the flag because `run_pipeline_per_dataset` serializes on
     //   `get_dataset_lock(dataset.id)` — its own comment reads "concurrent runs
     //   are kept safe by the per-dataset lock, not by this check". Rust has no
-    //   such lock, so this row check is the only thing keeping two concurrent
-    //   cognify runs off one dataset (double LLM spend, interleaved graph and
-    //   `pipeline_runs` writes). Deliberate deviation from Python's structure in
-    //   order to preserve Python's actual guarantee.
+    //   such lock, so this row check is the closest equivalent available: it
+    //   rejects a run that has already reached `Started`, which covers the
+    //   common case of re-invoking cognify while a long run is in flight, and
+    //   keeps a stale `Started` row from being silently ignored.
+    //
+    //   It is NOT full serialization and must not be mistaken for it. The read
+    //   here and the `Started` write in `pipeline::execute`
+    //   (`crates/core/src/pipeline.rs:916-923`) are separate operations, so two
+    //   callers entering within that window both observe the pre-run state and
+    //   both proceed — duplicate LLM work and interleaved graph/`pipeline_runs`
+    //   writes. Closing it needs an atomic claim on
+    //   `(dataset_id, pipeline_name)`, or an in-process per-dataset lock
+    //   mirroring Python's; tracked separately. For calibration: Python's lock
+    //   is an `asyncio.Lock` held in a module-level dict
+    //   (`infrastructure/locks/dataset_lock.py`), so it serializes within a
+    //   single process only — neither implementation serializes across
+    //   processes.
     let pipeline_name: &str = if effective_config.temporal_cognify {
         "temporal-cognify"
     } else {
