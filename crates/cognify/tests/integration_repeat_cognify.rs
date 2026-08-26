@@ -25,6 +25,7 @@
 
 use std::sync::Arc;
 
+use cognee_cognify::tasks::CLAIM_STALE_AFTER;
 use cognee_cognify::{CognifyConfig, CognifyError, CognifyResult, cognify};
 use cognee_database::{
     DatabaseConnection, IngestDb, PipelineRunRepository, PipelineRunStatus,
@@ -404,5 +405,83 @@ async fn a_started_run_still_rejects_a_concurrent_run_with_the_cache_off() {
     assert!(
         matches!(err, CognifyError::PipelineAlreadyRunning { .. }),
         "expected PipelineAlreadyRunning, got {err:?}"
+    );
+}
+
+/// A claim held by someone else blocks a run, and the run succeeds again once
+/// that claim is released.
+///
+/// This is the "two simultaneous starts" case in deterministic form. The state
+/// that matters is *a claim being held while a second caller enters the run*,
+/// and pre-taking the claim reproduces exactly that without depending on task
+/// interleaving — a timing-based race would be flaky in both directions (both
+/// callers could serialize in time and legitimately succeed). The atomicity of
+/// the claim itself is covered by `concurrent_claims_grant_exactly_one` in
+/// `cognee-database`, which contends on the real primary key.
+#[tokio::test]
+async fn a_claim_held_elsewhere_blocks_the_run() {
+    let h = Harness::new().await;
+    let dataset_name = "repeat_cognify_claimed";
+    let config = base_config();
+
+    let items = h.add(dataset_name, WAVE_1_TEXT).await;
+    let dataset_id = h.dataset_id(dataset_name).await;
+
+    // Stand in for a run already in flight elsewhere — in another process, or
+    // in the window before it has written its `Started` row.
+    let elsewhere = Uuid::new_v4();
+    assert!(
+        h.pipeline_run_repo
+            .try_claim_pipeline_run(dataset_id, COGNIFY_PIPELINE, elsewhere, CLAIM_STALE_AFTER)
+            .await
+            .expect("foreign claim"),
+        "the foreign claim must be granted first"
+    );
+
+    let err = h
+        .try_cognify(dataset_id, items.clone(), &config)
+        .await
+        .expect_err("a claimed dataset must not be cognified concurrently");
+    assert!(
+        matches!(err, CognifyError::PipelineAlreadyRunning { .. }),
+        "expected PipelineAlreadyRunning, got {err:?}"
+    );
+
+    h.pipeline_run_repo
+        .release_pipeline_run_claim(dataset_id, COGNIFY_PIPELINE, elsewhere)
+        .await
+        .expect("release foreign claim");
+
+    let result = h.cognify(dataset_id, items, &config).await;
+    assert!(
+        !result.already_completed && !result.entities.is_empty(),
+        "the run must proceed once the claim is free"
+    );
+}
+
+/// A completed run must not leave its claim behind — otherwise the very next
+/// wave would be rejected instead of processed.
+#[tokio::test]
+async fn a_finished_run_releases_its_claim() {
+    let h = Harness::new().await;
+    let dataset_name = "repeat_cognify_release";
+    let config = base_config();
+
+    let items = h.add(dataset_name, WAVE_1_TEXT).await;
+    let dataset_id = h.dataset_id(dataset_name).await;
+    h.cognify(dataset_id, items, &config).await;
+
+    // If the run leaked its claim, this could not be granted.
+    assert!(
+        h.pipeline_run_repo
+            .try_claim_pipeline_run(
+                dataset_id,
+                COGNIFY_PIPELINE,
+                Uuid::new_v4(),
+                CLAIM_STALE_AFTER
+            )
+            .await
+            .expect("claim after run"),
+        "the claim must be free once the run has finished"
     );
 }

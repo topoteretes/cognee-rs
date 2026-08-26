@@ -163,4 +163,51 @@ pub trait PipelineRunRepository: Send + Sync {
         &self,
         dataset_id: Uuid,
     ) -> Result<Vec<PipelineRun>, DbError>;
+
+    /// Atomically claim exclusive-run rights for `(dataset_id,
+    /// pipeline_name)`, returning `true` iff the claim was taken.
+    ///
+    /// This exists because reading the latest `pipeline_runs` status is *not*
+    /// mutual exclusion: that read and the `Started` row the executor writes
+    /// later are separate operations, so two callers entering within that
+    /// window both observe the pre-run state and both proceed. A claim closes
+    /// the window because the insert itself is the contended operation.
+    ///
+    /// A claim whose `claimed_at` is older than `stale_after` is reclaimed —
+    /// otherwise a killed process would wedge the pair forever, since a
+    /// release can only come from the holder. Pick `stale_after` above the
+    /// longest run you expect; too low re-admits a concurrent run into a
+    /// legitimately long one.
+    ///
+    /// Callers MUST pair a `true` with [`Self::release_pipeline_run_claim`] on
+    /// every exit path, including errors.
+    ///
+    /// The default implementation always grants the claim, so repositories
+    /// with no durable storage (and existing external implementors) keep
+    /// compiling and behaving as before — with **no** serialization. Only
+    /// override it where the insert can actually contend.
+    async fn try_claim_pipeline_run(
+        &self,
+        _dataset_id: Uuid,
+        _pipeline_name: &str,
+        _claim_id: Uuid,
+        _stale_after: std::time::Duration,
+    ) -> Result<bool, DbError> {
+        Ok(true)
+    }
+
+    /// Release a claim taken with `claim_id`. Idempotent, and scoped to
+    /// `claim_id` so it can never drop a claim another run has since taken
+    /// over (e.g. after this one was reclaimed as stale).
+    ///
+    /// The default implementation does nothing — see
+    /// [`Self::try_claim_pipeline_run`].
+    async fn release_pipeline_run_claim(
+        &self,
+        _dataset_id: Uuid,
+        _pipeline_name: &str,
+        _claim_id: Uuid,
+    ) -> Result<(), DbError> {
+        Ok(())
+    }
 }
