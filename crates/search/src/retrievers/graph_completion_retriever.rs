@@ -217,6 +217,8 @@ mod tests {
     use cognee_llm::{
         GenerationOptions, GenerationResponse, Llm, LlmError, LlmResult, Message, TokenUsage,
     };
+
+    use crate::test_support::neighborhood_of;
     use cognee_vector::{SearchResult, VectorDB, VectorDBResult, VectorPoint};
 
     use serde_json::json;
@@ -489,6 +491,18 @@ mod tests {
 
         async fn get_graph_data(&self) -> GraphDBResult<(Vec<GraphNode>, Vec<EdgeData>)> {
             Ok((self.nodes.clone(), self.edges.clone()))
+        }
+
+        /// Mirrors the real adapters' scoped load, which graph search uses instead
+        /// of `get_graph_data`. The trait's default implementation walks
+        /// `get_connections`, which this stub returns empty, so without this
+        /// override every graph search here would see an empty graph.
+        async fn get_neighborhood(
+            &self,
+            node_ids: &[String],
+            depth: usize,
+        ) -> GraphDBResult<(Vec<GraphNode>, Vec<EdgeData>)> {
+            Ok(neighborhood_of(&self.nodes, &self.edges, node_ids, depth))
         }
 
         async fn get_graph_metrics(

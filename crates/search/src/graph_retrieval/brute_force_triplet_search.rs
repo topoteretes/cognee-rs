@@ -10,6 +10,23 @@ use crate::types::SearchError;
 
 const DEFAULT_WIDE_SEARCH_TOP_K: usize = 100;
 
+/// Hop radius used to scope the graph load around the vector-search seed set.
+///
+/// Must stay at 1 for the scoped load to be **result-identical** to loading the
+/// whole graph. The edge ranking below keeps an edge when *at least one*
+/// endpoint is a seed. `get_neighborhood(seeds, 1)` returns every edge whose
+/// endpoints both lie in `seeds ∪ N(seeds)`, which is a superset of that set:
+/// if `src` is a seed then `tgt ∈ N(seeds)` by adjacency, so the edge is
+/// returned; extra edges between two non-seed neighbors are then dropped by the
+/// same filter that already ran against the full graph. Node property lookups
+/// are unaffected because every endpoint of a kept edge is in the resolved set.
+///
+/// Raising this would pull in edges the filter discards anyway — more IO for
+/// identical output. Lowering it to 0 is backend-dependent (the trait's default
+/// BFS returns no edges at depth 0, while the Postgres and Ladybug overrides
+/// return seed-to-seed edges) and would drop edges with one non-seed endpoint.
+const NEIGHBORHOOD_DEPTH: usize = 1;
+
 /// Default cosine distance assigned to graph elements (nodes or edges) that have no
 /// vector match for the current query. Matches Python's `triplet_distance_penalty`
 /// default of 6.5 in
@@ -58,7 +75,7 @@ pub struct GraphRetrievalConfig {
     pub feedback_influence: f32,
     /// Filter graph to nodes of this type before scoring.
     /// When combined with `node_name`, calls `get_nodeset_subgraph` instead of
-    /// `get_graph_data`.
+    /// the seed-scoped `get_neighborhood` load.
     pub node_type: Option<String>,
     /// Filter graph to nodes with these names (paired with `node_type`).
     pub node_name: Option<Vec<String>>,
@@ -234,7 +251,27 @@ pub async fn brute_force_triplet_search(
             .get_nodeset_subgraph(node_type, node_names, &config.node_name_filter_operator)
             .await?
     } else {
-        graph_db.get_graph_data().await?
+        // Scope the load to the seed set's neighborhood instead of pulling the
+        // whole graph. This is result-identical to `get_graph_data()`, not merely
+        // narrower — see `NEIGHBORHOOD_DEPTH` for the argument.
+        //
+        // Python scopes here unconditionally: its `relevant_node_ids` is only
+        // `None` when `wide_search_limit is None`, but `wide_search_top_k`
+        // defaults to 100, so the id filter is always populated and
+        // `CogneeGraph._get_full_or_id_filtered_graph` always takes the scoped
+        // branch (brute_force_triplet_search.py:156-160, CogneeGraph.py:123-151).
+        // The full-graph branch is dead code there.
+        //
+        // Deliberately NOT `get_id_filtered_graph_data`, despite the name match
+        // with Python's method: this trait's version keeps an edge only when
+        // *both* endpoints are in the id set (traits.rs), which would silently
+        // drop every edge with one non-seed endpoint and change ranking. Python's
+        // Neo4j implementation uses OR semantics, which `get_neighborhood`
+        // reproduces.
+        let seed_ids: Vec<String> = candidate_node_ids.iter().cloned().collect();
+        graph_db
+            .get_neighborhood(&seed_ids, NEIGHBORHOOD_DEPTH)
+            .await?
     };
 
     // Extract name, text, description, and (optionally) feedback_weight from each node.

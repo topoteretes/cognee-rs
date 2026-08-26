@@ -14,6 +14,8 @@ pub mod query_router_stats;
 pub mod recall_scope;
 /// Individual retriever implementations for each `SearchType`.
 pub mod retrievers;
+#[cfg(test)]
+mod test_support;
 /// Core search types: `SearchType`, `SearchParams`, `SearchResult`, etc.
 pub mod types;
 /// Shared search utilities (completion helpers, etc.).

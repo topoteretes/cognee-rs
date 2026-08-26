@@ -562,6 +562,8 @@ mod tests {
     };
     use cognee_vector::{SearchResult, VectorDB, VectorDBResult, VectorPoint};
 
+    use crate::test_support::neighborhood_of;
+
     use chrono::{TimeZone, Utc};
     use serde_json::{Value, json};
     use uuid::Uuid;
@@ -796,6 +798,18 @@ mod tests {
 
         async fn get_graph_data(&self) -> GraphDBResult<(Vec<GraphNode>, Vec<EdgeData>)> {
             Ok((self.nodes.clone(), self.edges.clone()))
+        }
+
+        /// Mirrors the real adapters' scoped load, which the graph-context
+        /// fallback uses instead of `get_graph_data`. Without it the trait's
+        /// default BFS would walk this stub's empty `get_connections` and the
+        /// fallback would find no triplets.
+        async fn get_neighborhood(
+            &self,
+            node_ids: &[String],
+            depth: usize,
+        ) -> GraphDBResult<(Vec<GraphNode>, Vec<EdgeData>)> {
+            Ok(neighborhood_of(&self.nodes, &self.edges, node_ids, depth))
         }
 
         async fn get_graph_metrics(
