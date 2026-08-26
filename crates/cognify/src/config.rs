@@ -254,8 +254,13 @@ impl CognifyConfig {
     }
 
     /// Set the chunk size from an optional source (a CLI flag, a settings entry,
-    /// an HTTP payload field). `None` selects the auto-calculation, so a caller
-    /// can thread "unset" through without inventing a sentinel.
+    /// an HTTP payload field), so a caller can thread "unset" through without
+    /// inventing a sentinel.
+    ///
+    /// `None` means "unresolved", not "auto-calculated": only [`crate::cognify`]
+    /// turns it into the auto-calculated value. A caller that builds a pipeline
+    /// directly leaves it unresolved, and [`Self::chunk_size`] then yields
+    /// [`Self::DEFAULT_MAX_CHUNK_SIZE`].
     pub fn with_chunk_size_opt(mut self, size: Option<usize>) -> Self {
         self.max_chunk_size = size;
         self

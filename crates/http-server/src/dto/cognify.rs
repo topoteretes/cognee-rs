@@ -47,11 +47,13 @@ pub struct CognifyPayloadDTO {
     #[serde(default, alias = "chunks_per_batch")]
     pub chunks_per_batch: Option<u32>,
 
-    /// Maximum tokens per chunk for this run. `null` (the default) leaves the
-    /// automatic model-based sizing in place — Python parity with
+    /// Maximum tokens per chunk for this run. Python parity with
     /// `CognifyPayloadDTO.chunk_size` in `get_cognify_router.py`.
     ///
-    /// Falls back to the server-wide `COGNEE_CHUNK_SIZE` when omitted.
+    /// Omitted and an explicit `null` are indistinguishable here (both
+    /// deserialize to `None`) and behave identically: the run falls back to the
+    /// server-wide `COGNEE_CHUNK_SIZE`, and only if that is also unset does it
+    /// use the automatic model-based sizing. A value of `0` is rejected.
     #[serde(default, alias = "chunk_size")]
     pub chunk_size: Option<u32>,
 }

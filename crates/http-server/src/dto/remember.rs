@@ -24,8 +24,9 @@ pub struct RememberFormDTO {
     pub run_in_background: Option<bool>,
     pub custom_prompt: Option<String>,
     pub chunks_per_batch: Option<u32>,
-    /// Maximum tokens per chunk. Absent leaves the automatic model-based sizing
-    /// in place, falling back to the server-wide `COGNEE_CHUNK_SIZE`.
+    /// Maximum tokens per chunk. Absent falls back to the server-wide
+    /// `COGNEE_CHUNK_SIZE`, and only if that is also unset to the automatic
+    /// model-based sizing. A value of `0` is rejected.
     pub chunk_size: Option<u32>,
     /// Optional session id forwarded to `cognee.remember(session_id=...)` per
     /// Python (`get_remember_router.py:34` / `:84`). Empty string is treated
