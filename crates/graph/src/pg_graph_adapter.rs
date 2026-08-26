@@ -1256,6 +1256,76 @@ impl GraphDBTrait for PgGraphAdapter {
         Ok((nodes, edges))
     }
 
+    /// Narrow the node scan to rows that could carry `needle` as a type-ish
+    /// label, and read no edge rows at all.
+    ///
+    /// The SQL predicate is a deliberate **superset** of
+    /// [`node_label_contains`](crate::node_label_contains), but a *narrow* one:
+    /// it tests exactly the [`NODE_LABEL_KEYS`](crate::NODE_LABEL_KEYS), never
+    /// the whole serialised blob.
+    ///
+    /// Matching `properties::text` wholesale would also be a superset, and it
+    /// was the first version of this, but it is a bad one: the needles callers
+    /// pass are ordinary English words. `"rule"` matches every `DocumentChunk`
+    /// whose `text` property mentions "rule" or "rules", so on a large corpus
+    /// the query drags thousands of full-text rows over the wire for
+    /// `is_rule_node` to throw away — the opposite of the point. Testing the
+    /// five label keys is orders of magnitude tighter and still cannot lose a
+    /// row that satisfies the exact predicate.
+    ///
+    /// Both `type` the column and `type` the JSON key are tested because
+    /// [`Self::parse_node_row`] merges `properties` *over* the columns, so a
+    /// writer that put `type` in the blob is what the Rust predicate will see.
+    /// For the other four keys the blob is the only home. `->>` renders an
+    /// array-valued `labels` as its serialised text, which contains each
+    /// element verbatim — jsonb escapes only quotes, backslashes and control
+    /// characters, none of which appear in a label — so the array case survives
+    /// too. Postgres' `lower()` is Unicode-aware where Rust's
+    /// `to_ascii_lowercase` is not, which again only widens the match.
+    ///
+    /// This is still a sequential scan — there is no index on the extracted
+    /// label keys — but it returns a handful of rows instead of the whole
+    /// `graph_node` table plus the whole `graph_edge` table.
+    async fn get_candidate_nodes_by_label(&self, needle: &str) -> GraphDBResult<Vec<GraphNode>> {
+        // Built from `NODE_LABEL_KEYS` rather than spelled out, so the
+        // pushed-down predicate cannot drift from the Rust one. These are
+        // compile-time constants from this crate, not caller input, so the
+        // interpolation needs no `ALLOWED_FILTER_ATTRS`-style whitelist — and
+        // they land in a jsonb key literal, not an identifier position.
+        let mut clauses = vec!["position($1 IN lower(type)) > 0".to_string()];
+        clauses.extend(
+            crate::NODE_LABEL_KEYS.iter().map(|key| {
+                format!("position($1 IN lower(coalesce(properties->>'{key}', ''))) > 0")
+            }),
+        );
+        let sql = format!(
+            "SELECT id, name, type, properties FROM graph_node WHERE {}",
+            clauses.join(" OR ")
+        );
+
+        let rows = self
+            .db
+            .query_all(Statement::from_sql_and_values(
+                DatabaseBackend::Postgres,
+                &sql,
+                [sea_orm::Value::from(needle.to_lowercase())],
+            ))
+            .await
+            .map_err(|e| GraphDBError::QueryError(e.to_string()))?;
+
+        let mut nodes = Vec::with_capacity(rows.len());
+        for row in &rows {
+            let data = Self::parse_node_row(row)?;
+            let id = data
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            nodes.push((id, data));
+        }
+        Ok(nodes)
+    }
+
     async fn get_nodeset_subgraph(
         &self,
         node_type: &str,

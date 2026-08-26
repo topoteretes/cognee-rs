@@ -134,6 +134,7 @@ pggraph_test!(test_get_graph_data);
 pggraph_test!(test_get_graph_data_surfaces_created_at);
 pggraph_test!(test_get_graph_metrics);
 pggraph_test!(test_get_filtered_graph_data);
+pggraph_test!(test_get_candidate_nodes_by_label);
 pggraph_test!(test_get_nodeset_subgraph_or);
 pggraph_test!(test_get_nodeset_subgraph_and);
 pggraph_test!(test_get_id_filtered_graph_data);

@@ -1302,6 +1302,48 @@ impl GraphDBTrait for LadybugAdapter {
         Ok(metrics)
     }
 
+    /// Read only the node half of the store and apply
+    /// [`node_label_contains`](crate::node_label_contains) in Rust.
+    ///
+    /// Ladybug keeps a node's extra properties as a serialised JSON *string*
+    /// column, so the four non-`type` label keys are not addressable from
+    /// Cypher here the way they are from Postgres' jsonb. The win over the
+    /// default is therefore narrower but still real: `MATCH (a:Node)-[r:EDGE]->(b:Node)`
+    /// is never run, so the whole edge table stays unread. Because the filter
+    /// runs on fully parsed rows it is the exact predicate, not a superset —
+    /// callers re-applying it is harmless either way.
+    async fn get_candidate_nodes_by_label(&self, needle: &str) -> GraphDBResult<Vec<GraphNode>> {
+        let nodes_query = "MATCH (n:Node) RETURN n.id AS id, n.name AS name, n.type AS type, n.properties AS properties";
+        let node_results = self.execute_query(nodes_query)?;
+
+        let mut nodes = Vec::new();
+        for row in node_results {
+            if row.len() >= Self::NODE_QUERY_COLUMN_COUNT {
+                let mut node_data = NodeData::new();
+                if let Some(id_str) = row[0].as_str() {
+                    node_data.insert(Cow::Borrowed("id"), json!(id_str));
+                }
+                if let Some(name_str) = row[1].as_str() {
+                    node_data.insert(Cow::Borrowed("name"), json!(name_str));
+                }
+                if let Some(type_str) = row[2].as_str() {
+                    node_data.insert(Cow::Borrowed("type"), json!(type_str));
+                }
+                if let Some(props_str) = row[3].as_str() {
+                    node_data.insert(Cow::Borrowed("properties"), json!(props_str));
+                }
+                let parsed_node = self.parse_node_data(node_data)?;
+                if !crate::node_label_contains(&parsed_node, needle) {
+                    continue;
+                }
+                if let Some(id_str) = parsed_node.get("id").and_then(|v| v.as_str()) {
+                    nodes.push((id_str.to_string(), parsed_node));
+                }
+            }
+        }
+        Ok(nodes)
+    }
+
     async fn get_filtered_graph_data(
         &self,
         attribute_filters: &HashMap<Cow<'static, str>, Vec<serde_json::Value>>,
