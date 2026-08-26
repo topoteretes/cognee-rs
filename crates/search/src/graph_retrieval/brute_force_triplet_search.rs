@@ -269,13 +269,13 @@ pub async fn brute_force_triplet_search(
         // Neo4j implementation uses OR semantics, which `get_neighborhood`
         // reproduces.
         // Sorted, not just collected: `candidate_node_ids` is a `HashSet`, so its
-        // iteration order varies per process. Backends whose output order tracks
-        // the seed order (the trait's default BFS walks the frontier in order;
-        // Ladybug inlines the list into the query text) would then return edges
-        // in a different order each run, and `sort_by` below is a *stable* sort
-        // over scores that tie constantly — every non-seed endpoint takes the
-        // same penalty — so `take(top_k)` could hand the LLM a different context
-        // for the same query. `get_graph_data()` had a stable backend order.
+        // iteration order varies per process, and the trait's default BFS walks
+        // the frontier in seed order — so an unsorted seed list makes that
+        // backend's edge order vary run to run. Cheap insurance; the ranking
+        // sort's tie-break below is what actually guarantees a stable top-k,
+        // since neither real adapter's row order tracks the seed order (Ladybug
+        // re-collects into its own `HashSet` and returns storage order; the
+        // Postgres CTE has no ORDER BY).
         let mut seed_ids: Vec<String> = candidate_node_ids.iter().cloned().collect();
         seed_ids.sort_unstable();
         graph_db
@@ -391,11 +391,25 @@ pub async fn brute_force_triplet_search(
         })
         .collect::<Vec<_>>();
 
-    // Sort ascending: lowest total distance = best match (matches Python heapq.nsmallest)
+    // Sort ascending: lowest total distance = best match (matches Python heapq.nsmallest).
+    //
+    // Ties break on the edge triple, not on arrival order. `sort_by` is stable, so
+    // without an explicit tie-break the winners of a tie are decided by whatever
+    // order the graph backend returned its rows in — which no backend guarantees
+    // (the Postgres neighborhood CTE has no ORDER BY; Ladybug is storage-ordered)
+    // and which `take(top_k)` below then makes user-visible. Ties are the common
+    // case rather than a rarity: every endpoint absent from the vector results
+    // takes the same `triplet_distance_penalty`, so an `is_a` fan-out around one
+    // EntityType hub yields hundreds of exactly-equal scores. Comparing the ids
+    // makes the top-k context handed to the LLM identical across runs and across
+    // backends.
     ranked_edges.sort_by(|left, right| {
         left.score
             .partial_cmp(&right.score)
             .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| left.source_id.cmp(&right.source_id))
+            .then_with(|| left.target_id.cmp(&right.target_id))
+            .then_with(|| left.relationship_name.cmp(&right.relationship_name))
     });
 
     let ranked_edges: Vec<_> = ranked_edges.into_iter().take(config.top_k).collect();

@@ -143,6 +143,86 @@ fn config() -> GraphRetrievalConfig {
     }
 }
 
+/// Exactly-tied edges rank by their `(source, target, relationship)` triple, not
+/// by the order the backend happened to return rows in.
+///
+/// This is what makes the top-k context stable across runs and across backends.
+/// No backend guarantees row order — the Postgres neighborhood CTE has no
+/// `ORDER BY` and Ladybug returns storage order — and `sort_by` is a stable sort,
+/// so before the tie-break the surviving members of a tie were whatever arrived
+/// first. Ties are routine here, not a corner case: every endpoint missing from
+/// the vector results takes the same `triplet_distance_penalty`, so all three
+/// edges below score identically (0 for the seed + 6.5 + 6.5).
+#[tokio::test]
+async fn exactly_tied_edges_rank_by_id_not_by_arrival_order() {
+    // Fixed, ordered uuids so the expected order is exact. Edges are inserted in
+    // an order that does not match the sorted one, so passing means the tie-break
+    // reordered them rather than the store happening to agree.
+    let hub = Uuid::from_u128(0xF0);
+    let n1 = Uuid::from_u128(0x01);
+    let n2 = Uuid::from_u128(0x02);
+    let n3 = Uuid::from_u128(0x03);
+
+    let vector_db = MockVectorDB::new();
+    vector_db
+        .create_collection("Entity", "name", 2)
+        .await
+        .unwrap();
+    // Only the hub is a seed, so each spoke endpoint takes the penalty and all
+    // three edges tie exactly.
+    vector_db
+        .index_points(
+            "Entity",
+            "name",
+            &[VectorPoint::new(hub, vec![1.0, 0.0])
+                .with_metadata("id", json!(hub.to_string()))
+                .with_metadata("name", json!("Hub"))],
+        )
+        .await
+        .unwrap();
+
+    let graph = MockGraphDB::new();
+    for (id, name) in [(hub, "Hub"), (n1, "N1"), (n2, "N2"), (n3, "N3")] {
+        graph
+            .add_node_raw(json!({ "id": id.to_string(), "name": name }))
+            .await
+            .unwrap();
+    }
+    for target in [n3, n1, n2] {
+        graph
+            .add_edge(&hub.to_string(), &target.to_string(), "spoke", None)
+            .await
+            .unwrap();
+    }
+
+    let ranked = brute_force_triplet_search(
+        "any query",
+        &vector_db,
+        &AlignedEmbedding,
+        &graph,
+        &config(),
+    )
+    .await
+    .unwrap();
+
+    let scores: Vec<f32> = ranked.iter().map(|edge| edge.score).collect();
+    assert_eq!(scores.len(), 3, "all three spokes have a seed endpoint");
+    assert!(
+        scores.windows(2).all(|pair| pair[0] == pair[1]),
+        "precondition: the three edges must tie exactly, otherwise the score \
+         comparison decides the order and the tie-break goes untested. Scores: \
+         {scores:?}"
+    );
+
+    let targets: Vec<String> = ranked.iter().map(|edge| edge.target_id.clone()).collect();
+    assert_eq!(
+        targets,
+        vec![n1.to_string(), n2.to_string(), n3.to_string()],
+        "tied edges must come back ordered by target id, not in insertion order \
+         (which was n3, n1, n2)"
+    );
+}
+
 /// The scoped adapter method is the one called — the full-graph scan is gone.
 #[tokio::test]
 async fn unfiltered_path_loads_the_neighborhood_not_the_whole_graph() {

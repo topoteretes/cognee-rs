@@ -585,8 +585,10 @@ impl GraphDBTrait for MockGraphDB {
             frontier = next_frontier;
         }
 
-        // Seeds are included even when isolated or absent from the node store,
-        // matching the previous behaviour.
+        // An isolated seed still appears, because it is in `resolved`. A seed with
+        // no row in the node store is dropped here — same as the previous
+        // behaviour, and same as the real adapters, whose node halves select from
+        // `graph_node`/`(n:Node)` and so cannot invent a row either.
         let nodes: Vec<(String, NodeData)> = resolved
             .iter()
             .filter_map(|id| nodes_guard.get(id).map(|data| (id.clone(), data.clone())))
