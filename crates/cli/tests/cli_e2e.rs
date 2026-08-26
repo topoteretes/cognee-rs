@@ -754,6 +754,48 @@ fn top_level_version_flag_prints_version() {
     }
 }
 
+#[test]
+fn top_level_version_and_help_survive_an_unreadable_config() {
+    // --version is the canonical probe of an installed binary, so it must not
+    // depend on config state: argv is answered before `load_settings()` runs.
+    // Guards against a regression where both flags parsed only after the config
+    // was read, making a corrupt file exit 1 with no version printed.
+    let config_home = TempDir::new().expect("temp dir should be created");
+    let config_dir = config_home.path().join("cognee-rust");
+    std::fs::create_dir_all(&config_dir).expect("config dir should be created");
+    std::fs::write(config_dir.join("config.json"), "{ this is not json")
+        .expect("corrupt config should be written");
+
+    make_cmd(&config_home)
+        .args(["--version"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(env!("CARGO_PKG_VERSION")));
+
+    make_cmd(&config_home)
+        .args(["--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("cognee"));
+}
+
+#[test]
+fn top_level_version_output_is_machine_readable() {
+    // Logging init used to run first and put `Logging initialized ...` on stdout
+    // ahead of the version, so a naive `cognee-cli --version` comparison failed.
+    let config_home = TempDir::new().expect("temp dir should be created");
+    let output = make_cmd(&config_home)
+        .args(["--version"])
+        .output()
+        .expect("command should run");
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf-8");
+    assert_eq!(
+        stdout.trim(),
+        format!("cognee-cli {}", env!("CARGO_PKG_VERSION")),
+        "--version must print exactly one line with no log preamble"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Gap 2 — Per-command --help flags
 // ---------------------------------------------------------------------------
