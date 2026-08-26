@@ -99,15 +99,14 @@ echo "================================================================"
 #   2. `android-default`, the composite that deliberately drops pdfium,
 #      postgres, tiktoken and lancedb — and which silently built the full
 #      desktop stack for as long as the CLI manifest was missing the flag.
-# A plain compile check is not enough on its own: it passes just as happily
-# with the fat tree as with the slim one, which is how the original break went
-# unnoticed. So the android lane also asserts a package-count ceiling.
+# A compile check alone cannot tell a slim tree from a fat one -- it passes just
+# as happily with either, which is how the original break went unnoticed -- so
+# the contract check below asserts the android profile's exclusions directly.
 cargo check -p cognee-cli --no-default-features
 cargo check -p cognee-cli --no-default-features --features cognee-cli/android-default
 
-# A compile check alone cannot tell a slim tree from a fat one, so assert the
-# profile's actual contract: android-default excludes pdfium, postgres, tiktoken
-# and lancedb. Marker crates beat a package-count ceiling here -- a count is
+# Assert the profile's actual contract: android-default excludes pdfium,
+# postgres, tiktoken and lancedb. Marker crates beat a package count -- a count is
 # host-dependent: the pre-fix fat tree measured 690 packages on this host but
 # only 523 for aarch64-linux-android, where lancedb is already target-gated
 # away. A ceiling loose enough for one is blind for the other -- 520 would have
