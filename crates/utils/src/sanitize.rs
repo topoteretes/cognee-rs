@@ -66,6 +66,12 @@ pub fn sanitize_string(mut value: String) -> String {
 /// Walks strings, arrays and object values, and rewrites object *keys* too. Two
 /// keys that collapse to the same text after stripping merge, last one wins —
 /// the same outcome as Python's dict comprehension.
+///
+/// "Last" means last in `serde_json::Map` iteration order, so that parity claim
+/// holds only because this crate enables serde_json's `preserve_order`, which
+/// backs `Map` with an insertion-ordered `IndexMap`. Under the default
+/// `BTreeMap` the winner would instead be whichever raw key sorts last, which
+/// is not Python's rule. See the dependency comment in `Cargo.toml`.
 pub fn sanitize_json_in_place(value: &mut Value) {
     match value {
         Value::String(s) => {
@@ -205,6 +211,28 @@ mod tests {
     fn python_parity_replacement_char_is_not_a_nul() {
         assert_eq!(sanitize_str("\u{fffd}"), "\u{fffd}");
         assert_eq!(sanitize_str("a\u{fffd}\u{0}b"), "a\u{fffd}b");
+    }
+
+    /// Pins the collision rule the module doc claims, which is only meaningful
+    /// with `preserve_order` enabled: `"ab"` is inserted first and `"a\u{0}b"`
+    /// second, so the *second* insertion wins the collapse — matching Python,
+    /// where the dict comprehension iterates in insertion order. Under a default
+    /// `BTreeMap` build the raw keys iterate sorted (`"a\u{0}b"` before `"ab"`,
+    /// since 0x00 < 0x62) and the other value would survive instead.
+    #[test]
+    fn colliding_keys_resolve_in_insertion_order() {
+        let mut input = Map::new();
+        input.insert("ab".to_string(), json!("inserted_first"));
+        input.insert("a\u{0}b".to_string(), json!("inserted_second"));
+        assert_eq!(
+            input.keys().collect::<Vec<_>>(),
+            vec!["ab", "a\u{0}b"],
+            "preserve_order must keep the map insertion-ordered"
+        );
+
+        let out = sanitize_json(Value::Object(input));
+
+        assert_eq!(out, json!({"ab": "inserted_second"}));
     }
 
     #[test]

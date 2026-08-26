@@ -34,8 +34,15 @@ uuid = { workspace = true, features = ["v4", "v5"] }
 # Secret redaction (cognee_utils::redact)
 regex = { workspace = true }
 
-# JSON payload walking (cognee_utils::sanitize)
-serde_json = { workspace = true }
+# JSON payload walking (cognee_utils::sanitize). `preserve_order` keeps
+# `serde_json::Map` insertion-ordered, which is what makes the sanitizer's
+# key-collision rule ("last one wins") actually match Python's dict
+# comprehension. Without it `Map` is a `BTreeMap` and the surviving value is
+# decided by raw-key sort order instead — a divergence that only shows up when
+# this crate is built in isolation (`cargo test -p cognee-utils`, the wasm32
+# lane), because `cognee-database` and `cognee-visualization` already turn the
+# feature on for every build that includes them.
+serde_json = { workspace = true, features = ["preserve_order"] }
 
 # WebAssembly (browser) spike — Config 1. The only getrandom in our wasm tree is
 # 0.2, pulled transitively by rand 0.8 (the jitter in retry.rs). On wasm32 it has
