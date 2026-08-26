@@ -57,9 +57,17 @@ RUN uv venv --relocatable /build/.venv
 # Copy dependency files first for layer caching
 COPY cognee/pyproject.toml cognee/uv.lock cognee/README.md ./
 
-# Install deps without the project itself
+# Install deps without the project itself.
+#
+# `--extra dlt` matters for parity, not just coverage: cognee registers
+# `dlt_csv_loader` only when the optional `dlt` extra is installed
+# (pyproject.toml:176). Without it, Python falls back to the same
+# `csv_loader` Rust uses, the two sides agree, and a real routing
+# divergence — Python routes CSV through the DLT_SOURCE cognify route,
+# Rust has no route concept at all — is masked by the harness's own
+# environment rather than by the code under test.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-install-project --no-dev --no-editable
+    uv sync --frozen --no-install-project --no-dev --no-editable --extra dlt
 
 # Copy project source and install. At the pinned SHA cognee declares
 # `[tool.hatch.build.targets.wheel] packages = ["cognee", "cognee_db_workers", "kuzu"]`
@@ -77,7 +85,7 @@ COPY cognee/cognee /build/cognee
 COPY cognee/cognee_db_workers /build/cognee_db_workers
 COPY cognee/distributed /build/distributed
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --no-editable
+    uv sync --frozen --no-dev --no-editable --extra dlt
 
 # kuzu is an optional cognee backend not pulled in by the default `uv sync`,
 # but cognee's alembic migration `b9274c27a25a_kuzu_11_migration.py` does a
