@@ -13,18 +13,25 @@ use cognee_llm::{Llm, Transcriber};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-/// Chunks handed to the graph-extraction stage in one batch, and — because
-/// Python imposes no in-batch concurrency ceiling — the default in-flight cap
-/// as well.
+/// Chunks handed to the graph-extraction stage in one batch.
 ///
-/// This is the literal Python falls back to in
-/// `cognee/api/v1/cognify/cognify.py:367-370` when neither the `chunks_per_batch`
-/// argument nor `CognifyConfig.chunks_per_batch` is set (both default to `None`;
-/// see `cognee/api/v1/cognify/cognify.py:60` and
-/// `cognee/modules/cognify/config.py:12`). It is exported so the CLI/bindings
-/// default for `LLM_MAX_PARALLEL_REQUESTS` and `SummaryExtractor`'s own default
+/// Also the default in-flight ceiling for the LLM stages: setting a concurrency
+/// cap equal to the batch size makes it non-binding, so a batch drains at
+/// whatever rate the provider sustains rather than in serialised waves. The cap
+/// stays real and reachable — `LLM_MAX_PARALLEL_REQUESTS=1` is the documented
+/// way to serialise calls on a rate-limited key or when recording replay
+/// cassettes.
+///
+/// Exported so the CLI/bindings default for `LLM_MAX_PARALLEL_REQUESTS` and
+/// [`SummaryExtractor::DEFAULT_MAX_PARALLEL`](crate::summarization::SummaryExtractor::DEFAULT_MAX_PARALLEL)
 /// stay single-sourced with it.
-pub const PYTHON_CHUNKS_PER_BATCH: usize = 2000;
+///
+/// The value matches Python, which imposes no in-batch concurrency ceiling at
+/// all: 2000 is the literal it falls back to in
+/// `cognee/api/v1/cognify/cognify.py:367-370` when neither the
+/// `chunks_per_batch` argument nor `CognifyConfig.chunks_per_batch` is set (both
+/// default to `None` — `cognify.py:60`, `modules/cognify/config.py:12`).
+pub const DEFAULT_CHUNKS_PER_BATCH: usize = 2000;
 
 /// Configuration for the cognify pipeline.
 ///
@@ -239,8 +246,8 @@ impl Default for CognifyConfig {
             chunk_overlap: 10,
             chunk_strategy: ChunkStrategy::Paragraph,
 
-            chunks_per_batch: PYTHON_CHUNKS_PER_BATCH,
-            max_parallel_extractions: PYTHON_CHUNKS_PER_BATCH,
+            chunks_per_batch: DEFAULT_CHUNKS_PER_BATCH,
+            max_parallel_extractions: DEFAULT_CHUNKS_PER_BATCH,
             custom_extraction_prompt: None,
 
             enable_summarization: true,
@@ -663,8 +670,8 @@ mod tests {
         // size (2000); max_parallel_extractions matching it makes the in-flight
         // cap non-binding at the default batch size, i.e. equivalent to Python's
         // unbounded `asyncio.gather`.
-        assert_eq!(config.chunks_per_batch, PYTHON_CHUNKS_PER_BATCH);
-        assert_eq!(config.max_parallel_extractions, PYTHON_CHUNKS_PER_BATCH);
+        assert_eq!(config.chunks_per_batch, DEFAULT_CHUNKS_PER_BATCH);
+        assert_eq!(config.max_parallel_extractions, DEFAULT_CHUNKS_PER_BATCH);
         assert!(config.custom_extraction_prompt.is_none());
 
         // Summarization defaults
@@ -935,7 +942,7 @@ mod tests {
         assert_eq!(config.max_chunk_size, Some(512));
         // Other fields should remain at defaults
         assert_eq!(config.chunk_overlap, 10);
-        assert_eq!(config.chunks_per_batch, PYTHON_CHUNKS_PER_BATCH);
+        assert_eq!(config.chunks_per_batch, DEFAULT_CHUNKS_PER_BATCH);
     }
 
     /// The in-flight ceiling must stay *reachable*. `scripts/perf/README.md`
@@ -949,7 +956,7 @@ mod tests {
         assert!(config.validate().is_ok());
 
         // The batch size stays independent of the concurrency cap.
-        assert_eq!(config.chunks_per_batch, PYTHON_CHUNKS_PER_BATCH);
+        assert_eq!(config.chunks_per_batch, DEFAULT_CHUNKS_PER_BATCH);
     }
 
     /// Both LLM stages must share one in-flight ceiling. If these drift, a

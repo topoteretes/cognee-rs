@@ -105,7 +105,7 @@ impl SummaryExtractor {
     /// (`cognee/tasks/summarization/summarize_text.py:58`) gathers the whole
     /// batch unbounded, so this is deliberately non-binding at the default batch
     /// size while remaining a real, lowerable ceiling.
-    pub const DEFAULT_MAX_PARALLEL: usize = crate::config::PYTHON_CHUNKS_PER_BATCH;
+    pub const DEFAULT_MAX_PARALLEL: usize = crate::config::DEFAULT_CHUNKS_PER_BATCH;
 
     /// Create a new summary extractor using the built-in `SummarizedContent` schema.
     pub fn new(llm: Arc<dyn Llm>) -> Self {
