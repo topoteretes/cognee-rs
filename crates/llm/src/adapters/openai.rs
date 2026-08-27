@@ -599,6 +599,134 @@ impl OpenAIAdapter {
         }
     }
 
+    /// `finish_reason` values meaning the answer was cut off at the output budget
+    /// rather than finishing on its own.
+    ///
+    /// OpenAI and vLLM report `length`. Some OpenAI-compatible gateways front an
+    /// Anthropic backend and echo its `max_tokens` spelling instead, so both are
+    /// treated as truncation.
+    fn is_length_truncated(choice: &OpenAIChoice) -> bool {
+        matches!(
+            choice.finish_reason.as_deref(),
+            Some("length") | Some("max_tokens")
+        )
+    }
+
+    /// The output budget that will actually reach the provider, or `0` when the
+    /// request carries no cap and none can be inferred.
+    ///
+    /// Reading the body alone is not enough. [`apply_extra_args`](Self::apply_extra_args)
+    /// merges `LLM_ARGS` inside `call_api`, *after* this request is built, and it
+    /// only fills keys that are absent — so a body with no cap is not uncapped, it
+    /// may still carry an `LLM_ARGS` budget on the wire. Writing a key here would
+    /// suppress that value; a raise computed from the body alone could therefore
+    /// *lower* the budget that just truncated, and re-truncate at a smaller one.
+    ///
+    /// `0` means genuinely unknown — the provider's own default applies. That is
+    /// the common case on the structured-output path, because the cognify call
+    /// sites deliberately pass `max_tokens: None` for Python parity (Baseten then
+    /// defaults to 4096). Reporting it as `0` is what lets the first truncation
+    /// replace that silent default with an explicit ceiling.
+    fn effective_output_budget(&self, body: &Value) -> u32 {
+        let key = if self.is_reasoning_model() {
+            "max_completion_tokens"
+        } else {
+            "max_tokens"
+        };
+        if let Some(explicit) = body[key].as_u64() {
+            return explicit as u32;
+        }
+        // Absent from the body: `apply_extra_args` may still supply one. It folds
+        // a bare `max_tokens` into `max_completion_tokens` for reasoning models,
+        // so accept either spelling there.
+        let from_extra_args = if self.is_reasoning_model() {
+            self.extra_args
+                .get("max_completion_tokens")
+                .or_else(|| self.extra_args.get("max_tokens"))
+        } else {
+            self.extra_args.get(key)
+        };
+        from_extra_args.and_then(|v| v.as_u64()).unwrap_or(0) as u32
+    }
+
+    /// React to a length-truncated structured-output attempt by raising the
+    /// request's output budget, or fail terminally when it cannot be raised.
+    ///
+    /// Re-asking at the budget that just truncated would truncate at the same
+    /// point, so the next attempt is sent at the configured
+    /// `llm_max_completion_tokens` ceiling. Returns the reason to carry into the
+    /// corrective instruction, and the new budget so later cascade modes inherit
+    /// it (they rebuild their bodies from `opts` and would otherwise drop back to
+    /// the budget that already failed).
+    ///
+    /// Two cases are terminal rather than raised:
+    ///
+    /// - **The caller set `max_tokens` itself.** Overriding it would silently bill
+    ///   a much larger completion than was asked for — the HTTP `custom-prompt`
+    ///   route forwards client-supplied budgets straight into structured output,
+    ///   so a client requesting 200 tokens could be re-issued at the ceiling.
+    ///   A deliberate budget is treated as a constraint, not a suggestion.
+    /// - **The budget is already at or above the ceiling.** Raising is impossible
+    ///   and falling through to another request *mode* cannot help, because the
+    ///   legacy and JSON-mode requests carry the same budget and truncate
+    ///   identically.
+    ///
+    /// Mirrors the Anthropic adapter, which has rejected a `stop_reason ==
+    /// "max_tokens"` response since it shipped, with one deliberate difference:
+    /// Anthropic raises over a caller-supplied budget, this does not.
+    fn raise_budget_after_truncation(
+        &self,
+        body: &mut Value,
+        mode: &str,
+        caller_requested: Option<u32>,
+    ) -> LlmResult<(String, u32)> {
+        let current = self.effective_output_budget(body);
+        let ceiling = self.max_completion_tokens().max(1);
+
+        if let Some(requested) = caller_requested {
+            return Err(LlmError::InvalidResponse(format!(
+                "{mode} structured output was truncated at the caller-requested \
+                 {requested}-token output budget before the JSON object was complete. An \
+                 explicit max_tokens is not raised automatically; request a larger one"
+            )));
+        }
+
+        if current >= ceiling {
+            // Name the budget that actually truncated, not the ceiling — they
+            // differ whenever an option-less call sends the GenerationOptions
+            // default while a lower ceiling is configured, and pointing at the
+            // ceiling there sends the operator to raise a setting that changes
+            // nothing.
+            let what = if current == 0 {
+                "its output budget".to_string()
+            } else {
+                format!("its {current}-token output budget")
+            };
+            return Err(LlmError::InvalidResponse(format!(
+                "{mode} structured output was truncated at {what} before the JSON object was \
+                 complete, and the configured ceiling (llm_max_completion_tokens = {ceiling}) \
+                 is no higher, so the budget cannot be raised automatically. Raise \
+                 LLM_MAX_COMPLETION_TOKENS above {current}, or set a larger cap with \
+                 LLM_ARGS='{{\"max_tokens\": N}}' (CLI and SDK only — the HTTP server does not \
+                 read LLM_ARGS)"
+            )));
+        }
+
+        self.write_max_tokens(body, Some(ceiling));
+        let previous = if current == 0 {
+            "provider-default".to_string()
+        } else {
+            format!("{current}-token")
+        };
+        Ok((
+            format!(
+                "the previous answer was cut off at the {previous} output budget before the \
+                 JSON object was complete; the budget has been raised to {ceiling}"
+            ),
+            ceiling,
+        ))
+    }
+
     /// Call the OpenAI chat completions API, retrying on transient network/server errors.
     ///
     /// Retries up to `self.network_retries` times with exponential backoff (1 s, 2 s, 4 s …
@@ -649,6 +777,14 @@ impl OpenAIAdapter {
         let mut last_error = LlmError::NetworkError("No attempt made".to_string());
         let budget = self.retry_budget();
         let pacer = self.pacer();
+        // Transport-level concurrency ceiling, the analogue of the connection-pool
+        // bound every Python HTTP client sets (see `crate::in_flight`). Acquired
+        // outside the retry loop and held for the whole call, so a request that
+        // backs off keeps its slot rather than releasing it to a competitor and
+        // re-queueing behind it. Taken before the pacer's admission below: a
+        // permit held across a pacing sleep would idle the pool during exactly
+        // the overload episode the pacer is draining.
+        let _in_flight = crate::in_flight::acquire_in_flight().await;
         let started = Instant::now();
         // `Retry-After` from the previous attempt. A usable hint replaces the
         // computed backoff outright — including when it asks for less, since the
@@ -1158,6 +1294,12 @@ impl OpenAIAdapter {
         // lowering the answer ceiling never silently breaks internal structured
         // calls (e.g. feedback detection). Callers that want NO cap at all pass
         // explicit `max_tokens: None` (as cognify's extraction paths do).
+        // A budget the caller *chose*, as distinct from the one
+        // `GenerationOptions::default()` supplies when no options were passed at
+        // all. Only the former is a deliberate constraint that must not be raised
+        // on truncation; the default's 16384 is a library value and carries no
+        // caller intent.
+        let caller_max_tokens = options.as_ref().and_then(|o| o.max_tokens);
         let opts = options.unwrap_or_default();
         // Align the advertised `required` array with what instructor sends on its
         // default TOOLS path (every non-default property is required). See
@@ -1236,6 +1378,17 @@ impl OpenAIAdapter {
             ParseFailure,
         }
         let mut outcome = ToolOutcome::NoUsableOutput;
+        // A budget raised after a truncation, carried into the legacy and
+        // JSON-mode requests below. Without this the later modes rebuild their
+        // bodies from `opts` and drop straight back to the budget that already
+        // truncated — which, with `LLM_MAX_RETRIES=1`, turns this fix back into
+        // the three-mode cascade it exists to prevent.
+        let mut raised_budget: Option<u32> = None;
+        // Set whenever a truncation was detected and the budget raised. If every
+        // mode still runs out of attempts afterwards, this is what the caller
+        // hears about — the generic "retries exhausted" message would otherwise
+        // bury the one fact that explains the failure and says how to fix it.
+        let mut truncation_seen: Option<String> = None;
         // Most recent failure reason, threaded into the next corrective retry.
         let mut last_reason: Option<String> = None;
         for attempt in 0..self.structured_output_retries {
@@ -1255,6 +1408,32 @@ impl OpenAIAdapter {
                     let choice = tools_response.choices.first().ok_or_else(|| {
                         LlmError::InvalidResponse("No choices in tool-call response".to_string())
                     })?;
+
+                    // Truncation is checked before the payload is inspected,
+                    // because a cut-off answer arrives in one of two disguises and
+                    // neither is self-describing: usually non-blank but
+                    // unparseable (which would be recorded as `ParseFailure` and
+                    // fall through the *whole* cascade, re-truncating identically
+                    // in legacy and JSON mode and surfacing as a bare "EOF while
+                    // parsing a string"), or entirely blank when the budget was
+                    // consumed by reasoning tokens.
+                    if Self::is_length_truncated(choice) {
+                        let (reason, budget) = self.raise_budget_after_truncation(
+                            &mut tools_request,
+                            "Tool-call",
+                            caller_max_tokens,
+                        )?;
+                        raised_budget = Some(budget);
+                        truncation_seen = Some(reason.clone());
+                        debug!(
+                            attempt,
+                            %reason,
+                            "tool-call response truncated at the output budget; re-asking with a raised budget",
+                        );
+                        last_reason = Some(reason);
+                        outcome = ToolOutcome::NoUsableOutput;
+                        continue;
+                    }
 
                     // Prefer a modern `tool_calls[0]`, then a legacy
                     // `function_call`, then raw `content` (some servers echo the
@@ -1381,6 +1560,9 @@ impl OpenAIAdapter {
             request_body["temperature"] = json!(temp);
         }
         self.write_max_tokens(&mut request_body, opts.max_tokens);
+        // A truncation in tool-calling mode already established that `opts` is too
+        // small; inherit the raised budget rather than repeating the failure.
+        self.write_max_tokens(&mut request_body, raised_budget);
         if self.should_disable_thinking() {
             request_body["think"] = json!(false);
             request_body["reasoning"] = json!({"effort": "none"});
@@ -1409,6 +1591,19 @@ impl OpenAIAdapter {
                 .choices
                 .first()
                 .ok_or_else(|| LlmError::InvalidResponse("No choices in response".to_string()))?;
+
+            if Self::is_length_truncated(choice) {
+                let (reason, budget) = self.raise_budget_after_truncation(
+                    &mut request_body,
+                    "Function-call",
+                    caller_max_tokens,
+                )?;
+                raised_budget = Some(budget);
+                truncation_seen = Some(reason.clone());
+                debug!(attempt, %reason, "function-call response truncated at the output budget");
+                legacy_last_reason = Some(reason);
+                continue;
+            }
 
             if let Some(function_call) = &choice.message.function_call {
                 let last_attempt = attempt + 1 >= self.structured_output_retries;
@@ -1486,6 +1681,7 @@ impl OpenAIAdapter {
             json_request["temperature"] = json!(temp);
         }
         self.write_max_tokens(&mut json_request, opts.max_tokens);
+        self.write_max_tokens(&mut json_request, raised_budget);
         if self.should_disable_thinking() {
             json_request["think"] = json!(false);
             json_request["reasoning"] = json!({"effort": "none"});
@@ -1516,6 +1712,22 @@ impl OpenAIAdapter {
             let json_choice = json_response.choices.first().ok_or_else(|| {
                 LlmError::InvalidResponse("No choices in JSON mode response".to_string())
             })?;
+
+            // Checked before `content` is unwrapped: a truncation that spent the
+            // whole budget on reasoning tokens leaves content absent, which would
+            // otherwise surface as the misleading "No content in JSON mode
+            // response".
+            if Self::is_length_truncated(json_choice) {
+                let (reason, budget) = self.raise_budget_after_truncation(
+                    &mut json_request,
+                    "JSON-mode",
+                    caller_max_tokens,
+                )?;
+                let _ = budget; // JSON mode is last; nothing downstream inherits it.
+                truncation_seen = Some(reason.clone());
+                debug!(attempt, %reason, "JSON-mode response truncated at the output budget");
+                continue;
+            }
 
             let content = json_choice.message.content.as_ref().ok_or_else(|| {
                 LlmError::InvalidResponse("No content in JSON mode response".to_string())
@@ -1554,6 +1766,12 @@ impl OpenAIAdapter {
             }
         }
 
+        if let Some(reason) = truncation_seen {
+            return Err(LlmError::InvalidResponse(format!(
+                "Structured output retries exhausted after a truncated response: {reason}. The \
+                 answer does not fit the available output budget"
+            )));
+        }
         Err(LlmError::InvalidResponse(
             "Structured output retries exhausted without a parseable response".to_string(),
         ))

@@ -13,6 +13,64 @@ use cognee_llm::{Llm, Transcriber};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+/// Chunks handed to the graph-extraction stage in one batch.
+///
+/// Sized so that a batch boundary is rare rather than routine: the stage awaits
+/// each batch before starting the next, so a small batch turns one document into
+/// a series of serialised waves, each paying the latency of its slowest call.
+///
+/// Matches Python, which resolves its extraction `task_config` batch size to
+/// this same 2000 literal in `cognee/api/v1/cognify/cognify.py:367-370` when
+/// neither the `chunks_per_batch` argument nor `CognifyConfig.chunks_per_batch`
+/// is set (both default to `None` — `cognify.py:60`,
+/// `modules/cognify/config.py:12`). Any document under 2000 chunks therefore
+/// reaches extraction as a single batch, in both SDKs.
+pub const DEFAULT_CHUNKS_PER_BATCH: usize = 2000;
+
+/// Default ceiling on LLM calls in flight within one extraction batch.
+///
+/// Matches Python's *effective* ceiling, which is not the absent one its
+/// `asyncio.gather` suggests. `extract_graph_from_data.py:191` and
+/// `summarize_text.py:58` do gather over every chunk in the batch with no
+/// semaphore, and `llm_rate_limit_enabled` is `False` by default
+/// (`cognee/infrastructure/llm/config.py:136`) — but the coroutines then contend
+/// for an HTTP connection pool that admits a bounded number at a time:
+///
+/// | layer | `max_connections` |
+/// |---|---|
+/// | bare `httpx` | 100 (`httpx._config.DEFAULT_LIMITS`) |
+/// | `openai-python` | 1000 (`openai._constants.DEFAULT_CONNECTION_LIMITS`) |
+/// | `litellm` | 1000 (`HTTPHandler(concurrent_limit=1000)`) |
+///
+/// So Python never issues more than ~1000 concurrent LLM requests, whatever the
+/// batch size. Rust has no equivalent transport default — `reqwest`/`hyper` bound
+/// idle pooling, not in-flight requests — which is why
+/// [`cognee_llm::in_flight`] exists to reproduce that ceiling, and why this
+/// stage-level semaphore is set to the same number rather than to
+/// [`DEFAULT_CHUNKS_PER_BATCH`]. Setting it to the batch size would let Rust do
+/// something Python cannot.
+///
+/// Exported so
+/// [`SummaryExtractor::DEFAULT_MAX_PARALLEL`](crate::summarization::SummaryExtractor::DEFAULT_MAX_PARALLEL)
+/// stays single-sourced with it.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub const DEFAULT_MAX_PARALLEL_EXTRACTIONS: usize = 1000;
+
+/// Mobile default ceiling on in-flight LLM calls — see the desktop constant of
+/// the same name for the parity argument.
+///
+/// Lowered to 128 on Android and iOS because 1000 concurrent sockets is not a
+/// safe default on a mobile process: the typical descriptor budget is 1024, and
+/// the graph, vector and relational stores plus open files draw from the same
+/// pool, so a full-width extraction wave can exhaust it. An `EMFILE` is also the
+/// one overload the retry path cannot absorb — `cognee-utils`' policy keys on
+/// 429/503/529 and request timeouts, and a local descriptor failure is none of
+/// those, so it surfaces as a hard error rather than backpressure.
+///
+/// Python does not face this: cognee's Python SDK does not target mobile.
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub const DEFAULT_MAX_PARALLEL_EXTRACTIONS: usize = 128;
+
 /// Configuration for the cognify pipeline.
 ///
 /// Design Principles:
@@ -55,13 +113,34 @@ pub struct CognifyConfig {
     pub chunk_strategy: ChunkStrategy,
 
     /// Number of chunks to process in a single batch during graph extraction.
-    /// Python default: 100 (cognify parameter)
-    /// Controls memory usage vs parallelism tradeoff
+    ///
+    /// This is the direct analogue of Python's pipeline batch size — the
+    /// `task_config={"batch_size": chunks_per_batch}` attached to the
+    /// `extract_graph_and_summarize` task in `cognee/api/v1/cognify/cognify.py:388`.
+    /// Python resolves it to **2000** by default (`cognify.py:367-370` falls back
+    /// to a 2000 literal because `CognifyConfig.chunks_per_batch` is `None` in
+    /// `cognee/modules/cognify/config.py:12`), so any document under 2000 chunks
+    /// reaches the extraction stage as a single batch with no barrier in the
+    /// middle. We match that literal.
     pub chunks_per_batch: usize,
 
-    /// Maximum number of parallel tasks for graph extraction within a batch.
-    /// Python default: No explicit limit (uses asyncio.gather)
-    /// Rust: Prevents spawning too many tokio tasks
+    /// Maximum number of parallel extraction calls in flight within a batch.
+    ///
+    /// Independent of [`Self::chunks_per_batch`]: the batch size decides how
+    /// often the stage hits a barrier, this decides how fast one batch drains.
+    /// Setting it *below* the batch size is the supported way to pace a
+    /// rate-limited key or record replay cassettes
+    /// (`LLM_MAX_PARALLEL_REQUESTS=1`; see `scripts/perf/README.md`).
+    ///
+    /// This is the *stage-level* bound and only binds where a caller threads the
+    /// setting in — the CLI and bindings do. It is not the last line of defence:
+    /// `cognee_llm::in_flight` applies the same ceiling inside the LLM transport,
+    /// so a caller that never reads this field (the HTTP cognify routers build
+    /// `CognifyConfig::default()`) is still bounded, and an operator's
+    /// `LLM_MAX_PARALLEL_REQUESTS` still takes effect there.
+    ///
+    /// Defaults to [`DEFAULT_MAX_PARALLEL_EXTRACTIONS`], which documents why that
+    /// number tracks Python's connection-pool ceiling rather than its batch size.
     pub max_parallel_extractions: usize,
 
     /// Custom prompt for entity/relationship extraction.
@@ -211,8 +290,8 @@ impl Default for CognifyConfig {
             chunk_overlap: 10,
             chunk_strategy: ChunkStrategy::Paragraph,
 
-            chunks_per_batch: 100,
-            max_parallel_extractions: 20,
+            chunks_per_batch: DEFAULT_CHUNKS_PER_BATCH,
+            max_parallel_extractions: DEFAULT_MAX_PARALLEL_EXTRACTIONS,
             custom_extraction_prompt: None,
 
             enable_summarization: true,
@@ -631,9 +710,15 @@ mod tests {
         assert_eq!(config.chunk_overlap, 10);
         assert_eq!(config.chunk_strategy, ChunkStrategy::Paragraph);
 
-        // Graph extraction defaults
-        assert_eq!(config.chunks_per_batch, 100);
-        assert_eq!(config.max_parallel_extractions, 20);
+        // Graph extraction defaults. Both track Python's resolved pipeline batch
+        // size (2000); max_parallel_extractions matching it makes the in-flight
+        // cap non-binding at the default batch size, i.e. equivalent to Python's
+        // unbounded `asyncio.gather`.
+        assert_eq!(config.chunks_per_batch, DEFAULT_CHUNKS_PER_BATCH);
+        assert_eq!(
+            config.max_parallel_extractions,
+            DEFAULT_MAX_PARALLEL_EXTRACTIONS
+        );
         assert!(config.custom_extraction_prompt.is_none());
 
         // Summarization defaults
@@ -904,6 +989,30 @@ mod tests {
         assert_eq!(config.max_chunk_size, Some(512));
         // Other fields should remain at defaults
         assert_eq!(config.chunk_overlap, 10);
-        assert_eq!(config.chunks_per_batch, 100);
+        assert_eq!(config.chunks_per_batch, DEFAULT_CHUNKS_PER_BATCH);
+    }
+
+    /// The in-flight ceiling must stay *reachable*. `scripts/perf/README.md`
+    /// documents `LLM_MAX_PARALLEL_REQUESTS=1` as the way to record cassettes on
+    /// a rate-limited key, and operators on low-TPM keys depend on it. Raising
+    /// the default to a non-binding value must not turn the knob into a no-op.
+    #[test]
+    fn max_parallel_extractions_can_still_be_lowered() {
+        let config = CognifyConfig::default().with_max_parallel_extractions(1);
+        assert_eq!(config.max_parallel_extractions, 1);
+        assert!(config.validate().is_ok());
+
+        // The batch size stays independent of the concurrency cap.
+        assert_eq!(config.chunks_per_batch, DEFAULT_CHUNKS_PER_BATCH);
+    }
+
+    /// Both LLM stages must share one in-flight ceiling. If these drift, a
+    /// document would be extracted at one width and summarised at another.
+    #[test]
+    fn summarization_default_parallelism_matches_extraction() {
+        assert_eq!(
+            crate::summarization::SummaryExtractor::DEFAULT_MAX_PARALLEL,
+            CognifyConfig::default().max_parallel_extractions,
+        );
     }
 }
