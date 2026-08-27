@@ -355,6 +355,72 @@ The token counter is env-selected:
 | `COGNEE_TOKEN_COUNTER` | `tiktoken` / `word` / `huggingface`(`hf`) | auto from embedding provider |
 | `HUGGINGFACE_TOKENIZER` | model id when counter = `huggingface` | _(empty)_ |
 
+## Cognify failure handling
+
+Read by [`crates/cognify/src/failure.rs`](../crates/cognify/src/failure.rs).
+When a stage cannot process one chunk or one file it now *records* the failure
+— which stage, which file, which chunk, and why — instead of aborting the batch
+by propagating. The report rides every stage output to `CognifyResult.failures`
+(on success) or to `CognifyError::RunFailed` (when the run failed). Whether the
+run fails is decided once, at the end, from two independent axes.
+
+These are `CognifyConfig` builders with **no env var, CLI flag or HTTP field
+yet** — they are selectable by a library caller.
+
+| Builder | Field | Default |
+|---|---|---|
+| `with_failure_stop` | `failure_stop` | `FailFast` |
+| `with_rollback_scope` | `rollback_scope` | `WholeRun` |
+| `with_summarization_failure_tolerance` | `tolerate_summarization_failures` | `false` |
+| `with_chunk_failure_ratio_threshold` | `chunk_failure_ratio_threshold` | `0.05` |
+| `with_failure_report_cap` | `failure_report_cap` | `100` |
+
+**Axis 1 — when to stop.** `FailFast` stops the failing stage's own loop at the
+first failure; the files that already completed still travel down the rest of
+the pipeline. `RunToEnd` continues past failures, collecting them, and decides
+at the end — a full run's worth of LLM cost for the complete failure list.
+
+**Axis 2 — what to sweep.** `WholeRun` removes everything the run created;
+`FailedItems` removes only the failed files' contributions and keeps the rest;
+`Nothing` removes nothing. The default pair `FailFast` + `WholeRun` is Python's
+default behaviour in both execution and end state.
+
+> The sweep itself is not implemented yet. At this commit `FailedItems` behaves
+> as *tolerate and record*. Under `FailFast` the extraction stage's abort-time
+> partition never persists an incomplete file, but an untolerated summarization
+> failure still persists its item — extraction has already committed that
+> file's entities, so the summarization stage cannot drop it — leaving that item
+> partial and unswept. Under `RunToEnd` a failed file's artifacts are likewise
+> persisted and left in place.
+
+**Per-stage policy.** Failure policy is a property of the stage, not a user
+choice — with one exception.
+
+| Stage | Failure unit | Behaviour |
+|---|---|---|
+| Chunking | data item | Collected; the item fails and contributes neither chunks nor a `Document` |
+| Graph extraction | chunk | Collected; the item fails. Ratio-checked under `FailedItems` |
+| Summarization | chunk | **Configurable.** Default: the item fails (Python parity). With tolerance on: recorded separately, never fails the item or the run, never counts toward the ratio |
+| Persistence — graph, vector or ledger writes, and embeddings | run | Always fatal, under every combination |
+
+`tolerate_summarization_failures` governs **fatality only**. Either way the
+summarization stage collects rather than propagates: the whole stream is drained
+so already-completed summaries are kept and the reported list is complete.
+
+**The failure ratio** is counted in chunks, evaluated per run, excludes
+summarization failures, and applies only under `FailedItems`. It is backstopped
+by an explicit rule: if no item survived, the run failed regardless of the
+ratio — a file that failed at the chunk stage produced no chunks, so it
+contributes to neither side of the ratio.
+
+**The report cap** bounds the individual entries the report lists (and therefore
+the error message); the total count, the failed-file set and every counter are
+never capped.
+
+Note that a run that dies in a persistence stage loses the report of the
+failures collected earlier: persistence errors keep their own `CognifyError`
+variants, because they are already run-fatal under every configuration.
+
 ## Search — hybrid retriever knobs
 
 The `HYBRID_COMPLETION` search type (`SearchType::HybridCompletion`) accepts a

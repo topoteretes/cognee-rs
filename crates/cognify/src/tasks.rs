@@ -58,6 +58,9 @@ use uuid::Uuid;
 use crate::config::CognifyConfig;
 use crate::error::CognifyError;
 use crate::fact_extraction::{FactExtractor, KnowledgeGraph};
+use crate::failure::{
+    FailurePolicy, FailureReport, FailureStage, FailureStop, RollbackScope, StageFailure,
+};
 use crate::graph_integration::{
     ArtifactProducers, GraphEdgePair, GraphNodePair, deduplicate_nodes_and_edges,
     expand_with_nodes_and_edges, retrieve_existing_edges,
@@ -105,6 +108,12 @@ pub struct ExtractedChunks {
     pub dataset_id: Uuid,
     pub user_id: Option<Uuid>,
     pub tenant_id: Option<Uuid>,
+    /// Everything that went wrong so far, collected rather than propagated.
+    ///
+    /// Written by the chunking stage and forwarded verbatim by every stage
+    /// after it, so the run result carries the complete list. See
+    /// [`crate::failure`].
+    pub failures: FailureReport,
 }
 
 /// Output of [`extract_graph_from_data`]: chunks plus extracted entities and edges
@@ -124,6 +133,9 @@ pub struct ExtractedGraphData {
     pub dataset_id: Uuid,
     pub user_id: Option<Uuid>,
     pub tenant_id: Option<Uuid>,
+    /// Forwarded from [`ExtractedChunks::failures`], plus this stage's own
+    /// graph-extraction failures.
+    pub failures: FailureReport,
 }
 
 /// Output of [`summarize_text`]: graph data plus generated summaries.
@@ -140,6 +152,9 @@ pub struct SummarizedData {
     pub dataset_id: Uuid,
     pub user_id: Option<Uuid>,
     pub tenant_id: Option<Uuid>,
+    /// Forwarded from [`ExtractedGraphData::failures`], plus this stage's own
+    /// summarization failures.
+    pub failures: FailureReport,
 }
 
 /// Output of [`extract_temporal_events`]: temporal events extracted from chunks
@@ -152,6 +167,10 @@ pub struct ExtractedTemporalEvents {
     pub dataset_id: Uuid,
     pub user_id: Option<Uuid>,
     pub tenant_id: Option<Uuid>,
+    /// Forwarded from [`ExtractedChunks::failures`]. The temporal extraction
+    /// loop does not collect its own failures yet — that is a later commit's
+    /// work — so at this point the report only carries the chunking stage's.
+    pub failures: FailureReport,
 }
 
 // ---------------------------------------------------------------------------
@@ -246,6 +265,131 @@ pub fn classify_documents(input: &CognifyInput) -> Result<ClassifiedDocuments, C
 // Task 2: extract_chunks_from_documents
 // ---------------------------------------------------------------------------
 
+/// Chunk one classified document.
+///
+/// Split out of [`extract_chunks_from_documents`] so the per-document work has
+/// exactly one fallible boundary: everything that can go wrong for a single
+/// file — storage `retrieve`, UTF-8 decode, an unregistered document type, the
+/// loader's own `extract` — surfaces here as one `Err` the caller records
+/// against the file rather than propagating out of the batch.
+async fn chunk_one_document(
+    document: &Document,
+    storage: &dyn StorageTrait,
+    max_chunk_size: usize,
+    counter: &(dyn cognee_chunking::TokenCounter + Send + Sync),
+    db: Option<&DatabaseConnection>,
+    loader_registry: &LoaderRegistry,
+) -> Result<Vec<DocumentChunk>, CognifyError> {
+    let content_bytes = storage
+        .retrieve(&document.raw_data_location)
+        .await
+        .map_err(|e| CognifyError::ChunkingError(e.to_string()))?;
+
+    // ---- DLT short-circuit ----
+    // DLT documents emit exactly one chunk with cut_type="dlt_row".
+    // No word/sentence/paragraph chunking. Mirrors Python DltRowDocument.read().
+    if document.document_type == "dlt_row" {
+        let text = String::from_utf8(content_bytes)
+            .map_err(|e| CognifyError::ChunkingError(e.to_string()))?;
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return Ok(vec![]);
+        }
+        let chunk_id = Uuid::new_v5(&NAMESPACE_OID, format!("{}-0", document.base.id).as_bytes());
+        let word_count = counter.count_tokens(trimmed);
+        let mut chunk = DocumentChunk::new(
+            chunk_id,
+            trimmed.to_string(),
+            word_count,
+            0, // chunk_index
+            CutType::DltRow.to_string(),
+            document.base.id,
+        );
+        if document.base.belongs_to_set.is_some() {
+            chunk.base.belongs_to_set = document.base.belongs_to_set.clone();
+        }
+        // Propagate importance_weight (always Some after classify) — unconditional.
+        chunk.base.importance_weight = document.base.importance_weight;
+        // Token count write-back
+        if let Some(db) = db
+            && let Err(e) = cognee_database::ops::data::update_data_token_count(
+                db,
+                document.data_id,
+                word_count as i64,
+            )
+            .await
+        {
+            warn!(data_id = %document.data_id, "Failed to update token count: {e}");
+        }
+        return Ok(vec![chunk]);
+    }
+
+    // ---- Loader dispatch ----
+    let loader = loader_registry
+        .get(&document.document_type)
+        .ok_or_else(|| CognifyError::UnsupportedDocumentType(document.document_type.clone()))?;
+
+    let output = loader
+        .extract(&content_bytes, document)
+        .await
+        .map_err(|e| CognifyError::ChunkingError(e.to_string()))?;
+
+    let mut chunks = match output {
+        LoaderOutput::Text(text) => chunk_text(document.base.id, &text, max_chunk_size, &counter),
+        LoaderOutput::Rows(rows) => {
+            let joined = rows.join("\n\n");
+            chunk_by_row(document.base.id, &joined, max_chunk_size, &counter)
+        }
+        LoaderOutput::SingleChunk { text, cut_type } => {
+            let chunk_id =
+                Uuid::new_v5(&NAMESPACE_OID, format!("{}-0", document.base.id).as_bytes());
+            let word_count = counter.count_tokens(&text);
+            vec![DocumentChunk::new(
+                chunk_id,
+                text,
+                word_count,
+                0,
+                cut_type.to_string(),
+                document.base.id,
+            )]
+        }
+    };
+
+    // Propagate belongs_to_set from Document to each DocumentChunk
+    // Mirrors Python: document_chunk.belongs_to_set = document.belongs_to_set
+    if document.base.belongs_to_set.is_some() {
+        for chunk in &mut chunks {
+            chunk.base.belongs_to_set = document.base.belongs_to_set.clone();
+        }
+    }
+
+    // Propagate importance_weight from Document to each DocumentChunk
+    // (always Some after classify) — unconditional, unlike belongs_to_set.
+    for chunk in &mut chunks {
+        chunk.base.importance_weight = document.base.importance_weight;
+    }
+
+    // Accumulate token count and write back to the Data record.
+    // Mirrors Python: update_document_token_count(document.id, document_token_count)
+    if let Some(db) = db {
+        let document_token_count: i64 = chunks.iter().map(|c| c.chunk_size as i64).sum();
+        if let Err(e) = cognee_database::ops::data::update_data_token_count(
+            db,
+            document.data_id,
+            document_token_count,
+        )
+        .await
+        {
+            warn!(
+                data_id = %document.data_id,
+                "Failed to update token count: {e}"
+            );
+        }
+    }
+
+    Ok(chunks)
+}
+
 /// Extract text chunks from classified documents (Task 2).
 ///
 /// For each document, reads content from storage and applies the
@@ -254,6 +398,28 @@ pub fn classify_documents(input: &CognifyInput) -> Result<ClassifiedDocuments, C
 /// When `db` is `Some`, the accumulated token count for each document
 /// is written back to the corresponding `Data` record, mirroring
 /// Python's `update_document_token_count()`.
+///
+/// This is the only stage whose failure unit is the *file*. A document that
+/// cannot be read or chunked is recorded in the returned
+/// [`ExtractedChunks::failures`] and contributes neither chunks nor a
+/// `Document` to the output — dropping the `Document` matters, because
+/// [`add_data_points`] writes `Document` nodes to the graph, so a failed file
+/// that kept its `Document` would leave an artifact behind and break invariant
+/// I2. What happens next is `failure_policy`'s call:
+///
+/// * `FailFast` with any scope but `FailedItems` — the remaining documents are
+///   marked unreached and the stage returns [`CognifyError::RunFailed`].
+///   Nothing has been persisted, so there is nothing to preserve.
+/// * `FailFast` + `FailedItems` — the remaining documents are marked unreached
+///   and the stage returns `Ok` with the documents it already chunked, so the
+///   files that completed can still travel down the rest of the pipeline and be
+///   persisted.
+/// * `RunToEnd` — keep going and collect every failing document.
+///
+/// Items `model_classify_documents` silently skipped (an unrecognised
+/// extension) are *not* recorded: Python skips them silently too, and recording
+/// them would fail every dataset containing a `.png` under the default policy.
+#[allow(clippy::too_many_arguments)]
 pub async fn extract_chunks_from_documents(
     input: &ClassifiedDocuments,
     storage: &dyn StorageTrait,
@@ -261,133 +427,82 @@ pub async fn extract_chunks_from_documents(
     token_counter_kind: TokenCounterKind,
     db: Option<&DatabaseConnection>,
     loader_registry: &LoaderRegistry,
+    failure_policy: FailurePolicy,
 ) -> Result<ExtractedChunks, CognifyError> {
     let counter = token_counter_kind
         .build()
         .map_err(|e| CognifyError::ChunkingError(e.to_string()))?;
     let mut all_chunks = Vec::new();
+    let mut kept_documents: Vec<Document> = Vec::new();
+    let mut failures = FailureReport::with_policy(&failure_policy);
 
-    for document in &input.documents {
-        let content_bytes = storage
-            .retrieve(&document.raw_data_location)
-            .await
-            .map_err(|e| CognifyError::ChunkingError(e.to_string()))?;
+    for (index, document) in input.documents.iter().enumerate() {
+        let outcome = chunk_one_document(
+            document,
+            storage,
+            max_chunk_size,
+            counter.as_ref(),
+            db,
+            loader_registry,
+        )
+        .await;
 
-        // ---- DLT short-circuit ----
-        // DLT documents emit exactly one chunk with cut_type="dlt_row".
-        // No word/sentence/paragraph chunking. Mirrors Python DltRowDocument.read().
-        if document.document_type == "dlt_row" {
-            let text = String::from_utf8(content_bytes)
-                .map_err(|e| CognifyError::ChunkingError(e.to_string()))?;
-            let trimmed = text.trim();
-            if !trimmed.is_empty() {
-                let chunk_id =
-                    Uuid::new_v5(&NAMESPACE_OID, format!("{}-0", document.base.id).as_bytes());
-                let word_count = counter.count_tokens(trimmed);
-                let mut chunk = DocumentChunk::new(
-                    chunk_id,
-                    trimmed.to_string(),
-                    word_count,
-                    0, // chunk_index
-                    CutType::DltRow.to_string(),
-                    document.base.id,
+        let chunks = match outcome {
+            Ok(chunks) => chunks,
+            Err(e) => {
+                warn!(
+                    data_id = %document.data_id,
+                    "chunking failed for document: {e}"
                 );
-                if document.base.belongs_to_set.is_some() {
-                    chunk.base.belongs_to_set = document.base.belongs_to_set.clone();
+                failures.record(StageFailure {
+                    stage: FailureStage::Chunking,
+                    data_id: document.data_id,
+                    chunk_id: None,
+                    error: e.to_string(),
+                    fails_item: true,
+                });
+
+                if failure_policy.stop == FailureStop::FailFast {
+                    for later in &input.documents[index + 1..] {
+                        failures.mark_unreached(later.data_id);
+                    }
+                    // The denominators are set on every exit path, so the ratio
+                    // and the "nothing survived" backstop can be evaluated on
+                    // the report whatever happens next.
+                    failures.note_totals(input.documents.len(), all_chunks.len());
+                    if failure_policy.scope != RollbackScope::FailedItems {
+                        return Err(CognifyError::RunFailed {
+                            report: Box::new(failures),
+                        });
+                    }
+                    // `FailedItems` keeps what has already been chunked so the
+                    // complete files can still be persisted and marked.
+                    return Ok(ExtractedChunks {
+                        chunks: all_chunks,
+                        documents: kept_documents,
+                        dataset_id: input.dataset_id,
+                        user_id: input.user_id,
+                        tenant_id: input.tenant_id,
+                        failures,
+                    });
                 }
-                // Propagate importance_weight (always Some after classify) — unconditional.
-                chunk.base.importance_weight = document.base.importance_weight;
-                // Token count write-back
-                if let Some(db) = db
-                    && let Err(e) = cognee_database::ops::data::update_data_token_count(
-                        db,
-                        document.data_id,
-                        word_count as i64,
-                    )
-                    .await
-                {
-                    warn!(data_id = %document.data_id, "Failed to update token count: {e}");
-                }
-                all_chunks.push(chunk);
-            }
-            continue;
-        }
-
-        // ---- Loader dispatch ----
-        let loader = loader_registry
-            .get(&document.document_type)
-            .ok_or_else(|| CognifyError::UnsupportedDocumentType(document.document_type.clone()))?;
-
-        let output = loader
-            .extract(&content_bytes, document)
-            .await
-            .map_err(|e| CognifyError::ChunkingError(e.to_string()))?;
-
-        let mut chunks = match output {
-            LoaderOutput::Text(text) => {
-                chunk_text(document.base.id, &text, max_chunk_size, &counter)
-            }
-            LoaderOutput::Rows(rows) => {
-                let joined = rows.join("\n\n");
-                chunk_by_row(document.base.id, &joined, max_chunk_size, &counter)
-            }
-            LoaderOutput::SingleChunk { text, cut_type } => {
-                let chunk_id =
-                    Uuid::new_v5(&NAMESPACE_OID, format!("{}-0", document.base.id).as_bytes());
-                let word_count = counter.count_tokens(&text);
-                vec![DocumentChunk::new(
-                    chunk_id,
-                    text,
-                    word_count,
-                    0,
-                    cut_type.to_string(),
-                    document.base.id,
-                )]
+                continue;
             }
         };
 
-        // Propagate belongs_to_set from Document to each DocumentChunk
-        // Mirrors Python: document_chunk.belongs_to_set = document.belongs_to_set
-        if document.base.belongs_to_set.is_some() {
-            for chunk in &mut chunks {
-                chunk.base.belongs_to_set = document.base.belongs_to_set.clone();
-            }
-        }
-
-        // Propagate importance_weight from Document to each DocumentChunk
-        // (always Some after classify) — unconditional, unlike belongs_to_set.
-        for chunk in &mut chunks {
-            chunk.base.importance_weight = document.base.importance_weight;
-        }
-
-        // Accumulate token count and write back to the Data record.
-        // Mirrors Python: update_document_token_count(document.id, document_token_count)
-        if let Some(db) = db {
-            let document_token_count: i64 = chunks.iter().map(|c| c.chunk_size as i64).sum();
-            if let Err(e) = cognee_database::ops::data::update_data_token_count(
-                db,
-                document.data_id,
-                document_token_count,
-            )
-            .await
-            {
-                warn!(
-                    data_id = %document.data_id,
-                    "Failed to update token count: {e}"
-                );
-            }
-        }
-
         all_chunks.extend(chunks);
+        kept_documents.push(document.clone());
     }
 
+    failures.note_totals(input.documents.len(), all_chunks.len());
     info!(total_chunks = all_chunks.len(), "chunking complete");
     Ok(ExtractedChunks {
         chunks: all_chunks,
-        documents: input.documents.clone(),
+        documents: kept_documents,
         dataset_id: input.dataset_id,
         user_id: input.user_id,
         tenant_id: input.tenant_id,
+        failures,
     })
 }
 
@@ -491,6 +606,7 @@ pub async fn extract_graph_from_data(
             dataset_id: input.dataset_id,
             user_id: input.user_id,
             tenant_id: input.tenant_id,
+            failures: input.failures.clone(),
         });
     }
 
@@ -528,6 +644,7 @@ pub async fn extract_graph_from_data(
             dataset_id: input.dataset_id,
             user_id: input.user_id,
             tenant_id: input.tenant_id,
+            failures: input.failures.clone(),
         });
     }
 
@@ -535,13 +652,19 @@ pub async fn extract_graph_from_data(
     let chunks_for_extraction: Vec<DocumentChunk> = non_dlt_chunks.into_iter().cloned().collect();
 
     let batch_size = config.chunks_per_batch;
+    let failure_policy = config.failure_policy();
+    let mut failures = input.failures.clone();
     let mut all_graphs: Vec<(Uuid, KnowledgeGraph)> = Vec::new();
     let semaphore = Arc::new(Semaphore::new(config.max_parallel_extractions));
+    // `Some(n)` once a FailFast abort has fired, naming the first chunk index
+    // (into `chunks_for_extraction`) that was never dispatched.
+    let mut aborted_at: Option<usize> = None;
 
     for (batch_idx, batch) in chunks_for_extraction.chunks(batch_size).enumerate() {
         let fact_extractor = FactExtractor::new(Arc::clone(&llm));
         let mut extract_tasks = Vec::new();
         let mut chunk_ids = Vec::new();
+        let mut chunk_documents = Vec::new();
 
         for chunk in batch {
             let extractor = fact_extractor.clone();
@@ -550,6 +673,7 @@ pub async fn extract_graph_from_data(
             let prompt = config.custom_extraction_prompt.clone();
 
             chunk_ids.push(chunk.base.id);
+            chunk_documents.push(chunk.document_id);
             extract_tasks.push(tokio::spawn(async move {
                 #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
                 let _permit = sem
@@ -560,10 +684,37 @@ pub async fn extract_graph_from_data(
             }));
         }
 
+        // The whole batch is dispatched before any result is inspected, so a
+        // FailFast abort reports every failure in the batch that tripped it —
+        // not only the first one to come back.
         let batch_results = futures::future::join_all(extract_tasks).await;
-        for (result, chunk_id) in batch_results.into_iter().zip(chunk_ids) {
-            let graph = result.map_err(|e| CognifyError::FactExtractionError(e.to_string()))??;
-            all_graphs.push((chunk_id, graph));
+        let mut batch_failed = false;
+        for ((result, chunk_id), document_id) in batch_results
+            .into_iter()
+            .zip(chunk_ids)
+            .zip(chunk_documents)
+        {
+            let outcome = result
+                .map_err(|e| CognifyError::FactExtractionError(e.to_string()))
+                .and_then(|inner| inner);
+            match outcome {
+                Ok(graph) => all_graphs.push((chunk_id, graph)),
+                Err(e) => {
+                    warn!(
+                        data_id = %document_id,
+                        chunk_id = %chunk_id,
+                        "graph extraction failed for chunk: {e}"
+                    );
+                    failures.record(StageFailure {
+                        stage: FailureStage::GraphExtraction,
+                        data_id: document_id,
+                        chunk_id: Some(chunk_id),
+                        error: e.to_string(),
+                        fails_item: true,
+                    });
+                    batch_failed = true;
+                }
+            }
         }
 
         info!(
@@ -572,7 +723,106 @@ pub async fn extract_graph_from_data(
             chunks_for_extraction.len().div_ceil(batch_size),
             batch.len()
         );
+
+        if batch_failed && failure_policy.stop == FailureStop::FailFast {
+            aborted_at = Some((batch_idx + 1) * batch_size);
+            break;
+        }
     }
+
+    // ── The abort-time partition ────────────────────────────────────────────
+    // At the moment of a FailFast abort nothing has been persisted — the loop
+    // above accumulates every chunk's graph in memory and the first write of
+    // any kind happens below. So "keep the results for the other files" is not
+    // a matter of not-deleting; it takes deliberately persisting the finished
+    // work before stopping. Files partition three ways:
+    //
+    //   complete  — every one of its non-DLT chunks was attempted and none
+    //               failed. Persisted below and (from a later commit) marked.
+    //   failed    — at least one chunk failed. Not persisted, left unmarked.
+    //   unreached — chunks never dispatched. Not persisted, left unmarked.
+    //
+    // Only complete files are persisted, which is what keeps items
+    // all-or-nothing. Failed and unreached files are indistinguishable to the
+    // next run and both are simply redone.
+    //
+    // Under `RunToEnd` there is no partition and no filtering: the run persists
+    // normally and a later commit's sweep removes the failed files'
+    // contributions, so one deletion path serves both cases.
+    let mut complete_documents: Option<HashSet<Uuid>> = None;
+    if let Some(first_unreached) = aborted_at {
+        for chunk in chunks_for_extraction.iter().skip(first_unreached) {
+            failures.mark_unreached(chunk.document_id);
+        }
+
+        if failure_policy.scope != RollbackScope::FailedItems {
+            return Err(CognifyError::RunFailed {
+                report: Box::new(failures),
+            });
+        }
+
+        // A file is complete when it owns no failed chunk and no unreached one.
+        // DLT-only files are trivially complete: their chunks never reach the
+        // LLM at all.
+        let excluded: HashSet<Uuid> = failures
+            .failed_items()
+            .iter()
+            .chain(failures.unreached_items().iter())
+            .copied()
+            .collect();
+        complete_documents = Some(
+            input
+                .documents
+                .iter()
+                .map(|d| d.base.id)
+                .filter(|id| !excluded.contains(id))
+                .collect(),
+        );
+    }
+
+    // Reduce every downstream collection to the complete files. Everything
+    // after this point — expansion, deduplication, the ownership rows, the
+    // graph writes — then runs unchanged over exactly the artifacts that are
+    // allowed to survive the abort.
+    let (chunks_for_extraction, all_graphs, surviving_chunks, surviving_documents) =
+        match &complete_documents {
+            None => (
+                chunks_for_extraction,
+                all_graphs,
+                input.chunks.clone(),
+                input.documents.clone(),
+            ),
+            Some(complete) => {
+                let kept_chunk_ids: HashSet<Uuid> = input
+                    .chunks
+                    .iter()
+                    .filter(|c| complete.contains(&c.document_id))
+                    .map(|c| c.base.id)
+                    .collect();
+                (
+                    chunks_for_extraction
+                        .into_iter()
+                        .filter(|c| complete.contains(&c.document_id))
+                        .collect::<Vec<_>>(),
+                    all_graphs
+                        .into_iter()
+                        .filter(|(chunk_id, _)| kept_chunk_ids.contains(chunk_id))
+                        .collect::<Vec<_>>(),
+                    input
+                        .chunks
+                        .iter()
+                        .filter(|c| complete.contains(&c.document_id))
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                    input
+                        .documents
+                        .iter()
+                        .filter(|d| complete.contains(&d.base.id))
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                )
+            }
+        };
 
     // Database deduplication — query for existing edges
     let graphs_only: Vec<KnowledgeGraph> = all_graphs.iter().map(|(_, g)| g.clone()).collect();
@@ -637,7 +887,7 @@ pub async fn extract_graph_from_data(
     let chunk_entity_map = chunk_entity_links(&dedup_result.unique_nodes, &producers);
 
     // Populate DocumentChunk.contains with extracted entity IDs
-    let mut updated_chunks = input.chunks.clone();
+    let mut updated_chunks = surviving_chunks;
     for chunk in &mut updated_chunks {
         if let Some(entity_ids) = chunk_entity_map.get(&chunk.base.id) {
             chunk.contains = entity_ids.clone();
@@ -707,13 +957,14 @@ pub async fn extract_graph_from_data(
 
     Ok(ExtractedGraphData {
         chunks: updated_chunks,
-        documents: input.documents.clone(),
+        documents: surviving_documents,
         entities: dedup_result.unique_nodes,
         edges: dedup_result.unique_edges,
         producers,
         dataset_id: input.dataset_id,
         user_id: input.user_id,
         tenant_id: input.tenant_id,
+        failures,
     })
 }
 
@@ -1062,6 +1313,7 @@ pub async fn extract_custom_graph_from_data<M: crate::fact_extraction::GraphMode
             dataset_id: input.dataset_id,
             user_id: input.user_id,
             tenant_id: input.tenant_id,
+            failures: input.failures.clone(),
         });
     }
 
@@ -1096,10 +1348,16 @@ pub async fn extract_custom_graph_from_data<M: crate::fact_extraction::GraphMode
             dataset_id: input.dataset_id,
             user_id: input.user_id,
             tenant_id: input.tenant_id,
+            failures: input.failures.clone(),
         });
     }
 
     let total_batches = non_dlt_indices.len().div_ceil(batch_size);
+    let failure_policy = config.failure_policy();
+    let mut failures = input.failures.clone();
+    // Set once a `FailFast` abort has fired; the failed and unreached files are
+    // dropped from the output below.
+    let mut aborted = false;
 
     for (batch_idx, batch_indices) in non_dlt_indices.chunks(batch_size).enumerate() {
         let mut extract_tasks = Vec::new();
@@ -1122,13 +1380,37 @@ pub async fn extract_custom_graph_from_data<M: crate::fact_extraction::GraphMode
 
         let batch_results = futures::future::join_all(extract_tasks).await;
         let batch_len = batch_indices.len();
+        let mut batch_failed = false;
 
         for (i, result) in batch_results.into_iter().enumerate() {
-            let model: M =
-                result.map_err(|e| CognifyError::FactExtractionError(e.to_string()))??;
-            let value = serde_json::to_value(&model)
-                .map_err(|e| CognifyError::SerializationError(e.to_string()))?;
-            updated_chunks[batch_indices[i]].contains = vec![value];
+            let chunk = &updated_chunks[batch_indices[i]];
+            let chunk_id = chunk.base.id;
+            let document_id = chunk.document_id;
+            let outcome = result
+                .map_err(|e| CognifyError::FactExtractionError(e.to_string()))
+                .and_then(|inner| inner)
+                .and_then(|model: M| {
+                    serde_json::to_value(&model)
+                        .map_err(|e| CognifyError::SerializationError(e.to_string()))
+                });
+            match outcome {
+                Ok(value) => updated_chunks[batch_indices[i]].contains = vec![value],
+                Err(e) => {
+                    warn!(
+                        data_id = %document_id,
+                        chunk_id = %chunk_id,
+                        "custom graph extraction failed for chunk: {e}"
+                    );
+                    failures.record(StageFailure {
+                        stage: FailureStage::GraphExtraction,
+                        data_id: document_id,
+                        chunk_id: Some(chunk_id),
+                        error: e.to_string(),
+                        fails_item: true,
+                    });
+                    batch_failed = true;
+                }
+            }
         }
 
         info!(
@@ -1137,17 +1419,56 @@ pub async fn extract_custom_graph_from_data<M: crate::fact_extraction::GraphMode
             total_batches,
             batch_len
         );
+
+        if batch_failed && failure_policy.stop == FailureStop::FailFast {
+            for &idx in non_dlt_indices.iter().skip((batch_idx + 1) * batch_size) {
+                failures.mark_unreached(updated_chunks[idx].document_id);
+            }
+            aborted = true;
+            break;
+        }
+    }
+
+    // This function persists nothing, so there is no partition to compute —
+    // only, on a `FailFast` abort, the failed and unreached files to drop from
+    // the output, which is what keeps a partially-extracted file from reaching a
+    // later persisting stage. Under `RunToEnd` the output is left whole, which
+    // is the same choice `extract_graph_from_data` makes, so both extraction
+    // functions mean the same thing by `RunToEnd`.
+    if aborted && failure_policy.scope != RollbackScope::FailedItems {
+        return Err(CognifyError::RunFailed {
+            report: Box::new(failures),
+        });
+    }
+    let excluded: HashSet<Uuid> = if aborted {
+        failures
+            .failed_items()
+            .iter()
+            .chain(failures.unreached_items().iter())
+            .copied()
+            .collect()
+    } else {
+        HashSet::new()
+    };
+    if !excluded.is_empty() {
+        updated_chunks.retain(|c| !excluded.contains(&c.document_id));
     }
 
     Ok(ExtractedGraphData {
         chunks: updated_chunks,
-        documents: input.documents.clone(),
+        documents: input
+            .documents
+            .iter()
+            .filter(|d| !excluded.contains(&d.base.id))
+            .cloned()
+            .collect(),
         entities: vec![],
         edges: vec![],
         producers: ArtifactProducers::default(),
         dataset_id: input.dataset_id,
         user_id: input.user_id,
         tenant_id: input.tenant_id,
+        failures,
     })
 }
 
@@ -1188,6 +1509,8 @@ pub async fn summarize_text(
         );
     }
 
+    let mut failures = input.failures.clone();
+
     let summaries = if config.enable_summarization && !non_dlt_chunks.is_empty() {
         let summary_extractor =
             SummaryExtractor::new_with_schema(llm, config.summary_schema.clone())
@@ -1197,12 +1520,50 @@ pub async fn summarize_text(
         // already caps in-flight requests at `max_parallel_extractions` internally
         // (issue #19), so an outer batch loop would only insert a sequential
         // barrier between batches without lowering peak concurrency.
-        let all_summaries = summary_extractor
+        //
+        // The stream is drained whatever happens: a failing chunk is data, not
+        // a reason to abandon the summaries already paid for. Whether the
+        // failure ends the run is `tolerate_summarization_failures`' call, and
+        // it is made at the end of the run, not here.
+        let outcome = summary_extractor
             .summarize_chunks(&non_dlt_chunks, None)
-            .await?;
+            .await;
 
-        info!("Generated {} summaries", all_summaries.len());
-        all_summaries
+        if !outcome.failures.is_empty() {
+            let chunk_documents: HashMap<Uuid, Uuid> = non_dlt_chunks
+                .iter()
+                .map(|c| (c.base.id, c.document_id))
+                .collect();
+            for (chunk_id, error) in &outcome.failures {
+                // A nil `data_id` here would be inserted into the report's
+                // failed-item set — the exact set a later commit's sweep selects
+                // by — so the impossible case is made loud rather than silent.
+                #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
+                let data_id = chunk_documents.get(chunk_id).copied().expect(
+                    "chunk_documents is built from the same slice that was summarized, \
+                     so every returned chunk_id is present",
+                );
+                warn!(
+                    data_id = %data_id,
+                    chunk_id = %chunk_id,
+                    "summarization failed for chunk: {error}"
+                );
+                // `fails_item` is the entire meaning of the config flag: with
+                // tolerance on the failure is still listed and still counted in
+                // the total, but it stays out of `failed_items`, out of the
+                // chunk-failure ratio, and out of every fatality decision.
+                failures.record(StageFailure {
+                    stage: FailureStage::Summarization,
+                    data_id,
+                    chunk_id: Some(*chunk_id),
+                    error: error.to_string(),
+                    fails_item: !config.tolerate_summarization_failures,
+                });
+            }
+        }
+
+        info!("Generated {} summaries", outcome.summaries.len());
+        outcome.summaries
     } else {
         if !config.enable_summarization {
             info!("Summarization disabled in config");
@@ -1212,6 +1573,11 @@ pub async fn summarize_text(
         Vec::new()
     };
 
+    // This stage never drops a chunk or a document, under any policy: by the
+    // time it runs, the extraction stage has already committed those files'
+    // entities and edges to the graph, so dropping them here would manufacture
+    // exactly the partial file invariant I2 exists to prevent. The failed item
+    // is recorded and a later commit's sweep removes it.
     Ok(SummarizedData {
         chunks: input.chunks.clone(),
         documents: input.documents.clone(),
@@ -1222,6 +1588,7 @@ pub async fn summarize_text(
         dataset_id: input.dataset_id,
         user_id: input.user_id,
         tenant_id: input.tenant_id,
+        failures,
     })
 }
 
@@ -1465,6 +1832,10 @@ pub async fn add_data_points(
         already_completed: false,
         prior_pipeline_run_id: None,
         pipeline_run_id,
+        // Forwarded verbatim: this stage collects nothing of its own — every
+        // failure it could hit is a persistence failure, which is run-fatal
+        // under every configuration and propagates as its own error variant.
+        failures: input.failures.clone(),
     })
 }
 
@@ -1496,6 +1867,7 @@ pub async fn extract_temporal_events(
             dataset_id: input.dataset_id,
             user_id: input.user_id,
             tenant_id: input.tenant_id,
+            failures: input.failures.clone(),
         });
     }
 
@@ -1519,6 +1891,7 @@ pub async fn extract_temporal_events(
             dataset_id: input.dataset_id,
             user_id: input.user_id,
             tenant_id: input.tenant_id,
+            failures: input.failures.clone(),
         });
     }
 
@@ -1575,6 +1948,10 @@ pub async fn extract_temporal_events(
         dataset_id: input.dataset_id,
         user_id: input.user_id,
         tenant_id: input.tenant_id,
+        // Forwarded from the chunking stage. The temporal extraction loop
+        // still propagates its own failures on the first one — collecting them
+        // is a later commit's work.
+        failures: input.failures.clone(),
     })
 }
 
@@ -1602,7 +1979,10 @@ pub async fn add_temporal_data_points(
 ) -> Result<CognifyResult, CognifyError> {
     if events.events.is_empty() {
         info!("No temporal events to persist.");
-        return Ok(CognifyResult::empty());
+        return Ok(CognifyResult {
+            failures: events.failures.clone(),
+            ..CognifyResult::empty()
+        });
     }
 
     let mut graph_nodes: Vec<serde_json::Value> = Vec::new();
@@ -1886,6 +2266,7 @@ pub async fn add_temporal_data_points(
         // temporal pipeline writes no ownership rows at all yet, so this
         // carries the run id and claims nothing else.
         pipeline_run_id: None,
+        failures: events.failures.clone(),
     })
 }
 
@@ -2729,7 +3110,7 @@ pub async fn cognify(
         let watcher = DbPipelineWatcher::new(pipeline_run_repo);
         let outputs = cognee_core::pipeline::execute(&pipeline, inputs, ctx, &watcher)
             .await
-            .map_err(|e| CognifyError::Execute(e.to_string()))?;
+            .map_err(unwrap_execution_error)?;
 
         let result = extract_cognify_outputs(outputs)?;
 
@@ -2775,6 +3156,26 @@ pub async fn cognify(
     }
 
     outcome
+}
+
+/// Recover the typed [`CognifyError`] a failing task returned.
+///
+/// [`cognee_core::pipeline::ExecutionError::TaskFailed`] keeps the task's error
+/// boxed rather than stringified, so the structured
+/// [`CognifyError::RunFailed`] a stage produced — with its failure report —
+/// survives the trip through the executor. Flattening it to
+/// [`CognifyError::Execute`] the way this call used to is what made a collected
+/// failure indistinguishable from any other error string.
+fn unwrap_execution_error(e: cognee_core::pipeline::ExecutionError) -> CognifyError {
+    match e {
+        cognee_core::pipeline::ExecutionError::TaskFailed { source, .. } => {
+            match source.downcast::<CognifyError>() {
+                Ok(typed) => *typed,
+                Err(other) => CognifyError::Execute(other.to_string()),
+            }
+        }
+        other => CognifyError::Execute(other.to_string()),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -4133,7 +4534,11 @@ pub fn make_classify_documents_task_with_rank(
     rank: i32,
 ) -> TypedTask<CognifyInput, ClassifiedDocuments> {
     TypedTask::sync(move |input: &CognifyInput, ctx| {
-        let mut classified = classify_documents(input).map_err(|e| format!("{e}"))?;
+        // `?` boxes the `CognifyError` rather than stringifying it, so
+        // `cognify()` can downcast the executor's `TaskFailed` back to the
+        // typed error — which is what turns a failure that is "merely thrown"
+        // into one that is reported.
+        let mut classified = classify_documents(input)?;
         let user_label = user_label_from_ctx(&ctx);
         for doc in &mut classified.documents {
             stamp_provenance(
@@ -4160,6 +4565,7 @@ pub fn make_extract_chunks_task(
     token_counter_kind: TokenCounterKind,
     db: Option<Arc<DatabaseConnection>>,
     loader_registry: Arc<LoaderRegistry>,
+    failure_policy: FailurePolicy,
 ) -> TypedTask<ClassifiedDocuments, ExtractedChunks> {
     make_extract_chunks_task_with_rank(
         storage,
@@ -4167,6 +4573,7 @@ pub fn make_extract_chunks_task(
         token_counter_kind,
         db,
         loader_registry,
+        failure_policy,
         EXTRACT_CHUNKS_TASK_RANK,
     )
 }
@@ -4179,6 +4586,7 @@ pub fn make_extract_chunks_task_with_rank(
     token_counter_kind: TokenCounterKind,
     db: Option<Arc<DatabaseConnection>>,
     loader_registry: Arc<LoaderRegistry>,
+    failure_policy: FailurePolicy,
     rank: i32,
 ) -> TypedTask<ClassifiedDocuments, ExtractedChunks> {
     TypedTask::async_fn(move |input: &ClassifiedDocuments, ctx| {
@@ -4196,9 +4604,9 @@ pub fn make_extract_chunks_task_with_rank(
                 token_counter_kind,
                 db.as_deref(),
                 &loader_registry,
+                failure_policy,
             )
-            .await
-            .map_err(|e| format!("{e}"))?;
+            .await?;
             for chunk in &mut extracted.chunks {
                 stamp_provenance(
                     &mut chunk.base,
@@ -4284,8 +4692,7 @@ pub fn make_extract_graph_task_with_rank(
                 user_label.as_deref(),
                 (rank > 0).then_some(rank),
             )
-            .await
-            .map_err(|e| format!("{e}"))?;
+            .await?;
             if config.create_web_page_nodes {
                 create_web_page_nodes(
                     &graph_data.documents,
@@ -4299,8 +4706,7 @@ pub fn make_extract_graph_task_with_rank(
                         pipeline_run_id,
                     ),
                 )
-                .await
-                .map_err(|e| format!("{e}"))?;
+                .await?;
             }
             for pair in &mut graph_data.entities {
                 stamp_provenance(
@@ -4367,9 +4773,7 @@ pub fn make_summarize_text_task_with_rank(
         let config = config.clone();
         let user_label = user_label_from_ctx(&ctx);
         Box::pin(async move {
-            let mut summarized = summarize_text(&input, llm, &config)
-                .await
-                .map_err(|e| format!("{e}"))?;
+            let mut summarized = summarize_text(&input, llm, &config).await?;
             for summary in &mut summarized.summaries {
                 stamp_provenance(
                     &mut summary.base,
@@ -4479,8 +4883,7 @@ pub fn make_add_data_points_task_with_rank(
                 pipeline_run_id,
                 &config,
             )
-            .await
-            .map_err(|e| format!("{e}"))?;
+            .await?;
             for chunk in &mut result.chunks {
                 stamp_provenance(
                     &mut chunk.base,
@@ -4538,6 +4941,16 @@ pub fn make_add_data_points_task_with_rank(
                     user_label.as_deref(),
                     rank,
                 );
+            }
+            // The end-of-run gate. It lives here rather than in `cognify()`
+            // because the `Err` has to originate *inside* the executor for the
+            // run to be written ERRORED — a failure the caller only learns
+            // about after `execute` returned would leave a COMPLETED row
+            // behind.
+            if result.failures.is_fatal(&config.failure_policy()) {
+                return Err(Box::new(CognifyError::RunFailed {
+                    report: Box::new(result.failures),
+                }) as cognee_core::TaskError);
             }
             Ok(Box::new(result))
         })
@@ -4610,6 +5023,7 @@ pub fn build_cognify_pipeline(
                 // so it is not part of this invariant.
                 Some(Arc::clone(&db)),
                 loader_registry,
+                config.failure_policy(),
             ),
             EXTRACT_CHUNKS_TASK_NAME,
         )
@@ -4648,7 +5062,7 @@ pub fn make_extract_temporal_events_task(
             extract_temporal_events(&input, llm, &config)
                 .await
                 .map(Box::new)
-                .map_err(|e| format!("{e}").into())
+                .map_err(Into::into)
         })
     })
 }
@@ -4658,6 +5072,7 @@ pub fn make_add_temporal_data_points_task(
     graph_db: Arc<dyn GraphDBTrait>,
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
+    failure_policy: FailurePolicy,
 ) -> TypedTask<ExtractedTemporalEvents, CognifyResult> {
     TypedTask::async_fn(move |input: &ExtractedTemporalEvents, ctx| {
         let input = input.clone();
@@ -4667,12 +5082,17 @@ pub fn make_add_temporal_data_points_task(
         let pipeline_run_id = pipeline_run_id_from_ctx(&ctx);
         Box::pin(async move {
             let mut result =
-                add_temporal_data_points(&input, graph_db, vector_db, embedding_engine)
-                    .await
-                    .map_err(|e| format!("{e}"))?;
+                add_temporal_data_points(&input, graph_db, vector_db, embedding_engine).await?;
             // Carries the run id, nothing more: the temporal pipeline still
-            // writes no ownership rows (that is step 7's work).
+            // writes no ownership rows (that is a later commit's work).
             result.pipeline_run_id = pipeline_run_id;
+            // The same end-of-run gate as the standard branch, over the
+            // failures the chunking stage handed down.
+            if result.failures.is_fatal(&failure_policy) {
+                return Err(Box::new(CognifyError::RunFailed {
+                    report: Box::new(result.failures),
+                }) as cognee_core::TaskError);
+            }
             Ok(Box::new(result))
         })
     })
@@ -4704,15 +5124,21 @@ pub fn build_temporal_cognify_pipeline(
                 config.token_counter_kind.clone(),
                 Some(db),
                 loader_registry,
+                config.failure_policy(),
             ),
             EXTRACT_CHUNKS_TASK_NAME,
         )
         .add_task_named(
-            make_extract_temporal_events_task(llm, config),
+            make_extract_temporal_events_task(llm, config.clone()),
             "extract_temporal_events",
         )
         .add_task_named(
-            make_add_temporal_data_points_task(graph_db, vector_db, embedding_engine),
+            make_add_temporal_data_points_task(
+                graph_db,
+                vector_db,
+                embedding_engine,
+                config.failure_policy(),
+            ),
             "add_temporal_data_points",
         )
         .with_name("temporal-cognify")
@@ -4888,6 +5314,7 @@ mod tests {
             TokenCounterKind::Word,
             None,
             &registry,
+            CognifyConfig::default().failure_policy(),
         )
         .await
         .unwrap();
@@ -5550,6 +5977,7 @@ mod tests {
             TokenCounterKind::Word,
             None,
             &registry,
+            CognifyConfig::default().failure_policy(),
         )
         .await
         .unwrap();
@@ -5595,6 +6023,7 @@ mod tests {
             TokenCounterKind::Word,
             None,
             &registry,
+            CognifyConfig::default().failure_policy(),
         )
         .await
         .unwrap();
@@ -5609,56 +6038,225 @@ mod tests {
         assert_eq!(chunk.base.importance_weight, Some(0.7));
     }
 
-    #[tokio::test]
-    async fn test_unsupported_document_type() {
-        // Use a document_type that is intentionally never registered in
-        // LoaderRegistry::default(). The previous fixture used "pdf", but the
-        // PDF loader added in phase2/task1 made that type supported, causing
-        // this test to invoke the real PDFium loader on garbage bytes.
-        const UNSUPPORTED: &str = "no_such_loader_type_for_test";
+    // ── Chunk-stage failure collection ─────────────────────────────────
+    //
+    // The chunk stage is the only producer of file-unit failures: storage
+    // `retrieve`, UTF-8 decode, an unregistered document type, and the loader's
+    // own `extract` all surface here. `classify_documents` itself is infallible,
+    // and `model_classify_documents` silently skips items with an unrecognised
+    // extension, exactly as Python does.
 
-        let storage = Arc::new(MockStorage::new());
-        let location = storage.store(b"some content", "test.bin").await.unwrap();
+    /// A document type intentionally never registered in
+    /// `LoaderRegistry::default()`. The fixture used to say "pdf", but the PDF
+    /// loader made that type supported, so this test started invoking the real
+    /// PDFium loader on garbage bytes.
+    const UNSUPPORTED_DOC_TYPE: &str = "no_such_loader_type_for_test";
 
-        let doc_id = Uuid::new_v4();
-        let mut base = DataPoint::new("UnknownDocument", None);
-        base.id = doc_id;
-        base.set_metadata("index_fields", serde_json::json!(["text"]));
-        let doc = Document {
-            base,
-            document_type: UNSUPPORTED.to_string(),
-            name: "test.bin".to_string(),
-            raw_data_location: location,
-            mime_type: "application/octet-stream".to_string(),
-            extension: "bin".to_string(),
-            data_id: doc_id,
-            external_metadata: None,
-        };
+    /// Three text documents A, B, C, of which B has an unregistered
+    /// `document_type` and therefore fails at the loader dispatch.
+    async fn three_documents_with_a_bad_middle(
+        storage: &MockStorage,
+    ) -> (ClassifiedDocuments, Uuid, Uuid, Uuid) {
+        let mut documents = Vec::new();
+        let mut ids = Vec::new();
+        for (name, doc_type) in [
+            ("a.txt", "text"),
+            ("b.bin", UNSUPPORTED_DOC_TYPE),
+            ("c.txt", "text"),
+        ] {
+            let location = storage
+                .store(b"Alice works at Acme.", name)
+                .await
+                .expect("MockStorage::store");
+            let doc_id = Uuid::new_v4();
+            let mut base = DataPoint::new("TextDocument", None);
+            base.id = doc_id;
+            base.set_metadata("index_fields", serde_json::json!(["text"]));
+            documents.push(Document {
+                base,
+                document_type: doc_type.to_string(),
+                name: name.to_string(),
+                raw_data_location: location,
+                mime_type: "text/plain".to_string(),
+                extension: "txt".to_string(),
+                data_id: doc_id,
+                external_metadata: None,
+            });
+            ids.push(doc_id);
+        }
 
-        let input = ClassifiedDocuments {
-            documents: vec![doc],
-            dataset_id: Uuid::new_v4(),
-            user_id: None,
-            tenant_id: None,
-        };
+        (
+            ClassifiedDocuments {
+                documents,
+                dataset_id: Uuid::new_v4(),
+                user_id: None,
+                tenant_id: None,
+            },
+            ids[0],
+            ids[1],
+            ids[2],
+        )
+    }
 
+    async fn run_chunking(
+        input: &ClassifiedDocuments,
+        storage: &MockStorage,
+        config: &CognifyConfig,
+    ) -> Result<ExtractedChunks, CognifyError> {
         let registry = LoaderRegistry::default();
-        let result = extract_chunks_from_documents(
-            &input,
-            &*storage,
+        extract_chunks_from_documents(
+            input,
+            storage,
             100,
             TokenCounterKind::Word,
             None,
             &registry,
+            config.failure_policy(),
         )
-        .await;
+        .await
+    }
 
-        assert!(result.is_err());
-        let err = result.unwrap_err();
+    /// Replaces the old `test_unsupported_document_type`, which asserted the
+    /// raw `UnsupportedDocumentType` error. Under the default policy the stage
+    /// still aborts at the first failure — but the failure is now *reported*:
+    /// the error carries which file failed, with the original message intact,
+    /// and names the file that was never reached.
+    #[tokio::test]
+    async fn chunking_failure_aborts_and_reports_under_the_default_policy() {
+        let storage = MockStorage::new();
+        let (input, _a, b, c) = three_documents_with_a_bad_middle(&storage).await;
+
+        let err = run_chunking(&input, &storage, &CognifyConfig::default())
+            .await
+            .expect_err("the default policy still aborts");
+
+        let CognifyError::RunFailed { report } = err else {
+            panic!("expected RunFailed, got: {err:?}");
+        };
+        assert_eq!(report.entries().len(), 1);
+        let entry = &report.entries()[0];
+        assert_eq!(entry.stage, FailureStage::Chunking);
+        assert_eq!(entry.data_id, b);
+        assert!(entry.chunk_id.is_none(), "chunking fails whole files");
         assert!(
-            matches!(err, CognifyError::UnsupportedDocumentType(ref t) if t == UNSUPPORTED),
-            "expected UnsupportedDocumentType({UNSUPPORTED:?}), got: {err:?}"
+            entry.error.contains("Unsupported document type"),
+            "the original message must survive: {}",
+            entry.error
         );
+        assert_eq!(
+            report.failed_items().iter().copied().collect::<Vec<_>>(),
+            [b]
+        );
+        assert_eq!(
+            report.unreached_items().iter().copied().collect::<Vec<_>>(),
+            [c],
+            "C was never attempted"
+        );
+    }
+
+    /// `RunToEnd` collects the failure and keeps going, so the run learns about
+    /// every bad file in one pass.
+    #[tokio::test]
+    async fn chunking_failure_is_collected_under_run_to_end() {
+        let storage = MockStorage::new();
+        let (input, a, b, c) = three_documents_with_a_bad_middle(&storage).await;
+
+        let result = run_chunking(
+            &input,
+            &storage,
+            &CognifyConfig::default().with_failure_stop(FailureStop::RunToEnd),
+        )
+        .await
+        .expect("RunToEnd collects rather than propagates");
+
+        let doc_ids: Vec<Uuid> = result.documents.iter().map(|d| d.base.id).collect();
+        assert_eq!(
+            doc_ids,
+            vec![a, c],
+            "the failed file contributes no Document"
+        );
+        assert!(
+            result.chunks.iter().all(|c| c.document_id != b),
+            "…and no chunks either"
+        );
+        assert_eq!(result.failures.total(), 1);
+        assert_eq!(
+            result
+                .failures
+                .failed_items()
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
+            [b]
+        );
+        assert!(
+            result.failures.unreached_items().is_empty(),
+            "nothing was left unattempted"
+        );
+    }
+
+    /// `FailFast` + `FailedItems` stops spending immediately but hands back
+    /// what already completed, so the complete files can still be persisted.
+    #[tokio::test]
+    async fn chunking_failure_keeps_earlier_files_under_fail_fast_failed_items() {
+        let storage = MockStorage::new();
+        let (input, a, b, c) = three_documents_with_a_bad_middle(&storage).await;
+
+        let result = run_chunking(
+            &input,
+            &storage,
+            &CognifyConfig::default().with_rollback_scope(RollbackScope::FailedItems),
+        )
+        .await
+        .expect("FailedItems keeps the completed work");
+
+        let doc_ids: Vec<Uuid> = result.documents.iter().map(|d| d.base.id).collect();
+        assert_eq!(doc_ids, vec![a], "only the file that fully completed");
+        assert!(result.chunks.iter().all(|chunk| chunk.document_id == a));
+        assert_eq!(
+            result
+                .failures
+                .failed_items()
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
+            [b]
+        );
+        assert_eq!(
+            result
+                .failures
+                .unreached_items()
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
+            [c]
+        );
+    }
+
+    /// The ratio denominators are set exactly once per run, by the only stage
+    /// that knows both counts — including on the abort paths.
+    #[tokio::test]
+    async fn chunking_totals_are_recorded_once() {
+        let storage = MockStorage::new();
+        let (input, _a, _b, _c) = three_documents_with_a_bad_middle(&storage).await;
+
+        let result = run_chunking(
+            &input,
+            &storage,
+            &CognifyConfig::default().with_failure_stop(FailureStop::RunToEnd),
+        )
+        .await
+        .expect("RunToEnd");
+        assert_eq!(result.failures.total_items(), 3);
+        assert_eq!(result.failures.total_chunks(), result.chunks.len());
+
+        let err = run_chunking(&input, &storage, &CognifyConfig::default())
+            .await
+            .expect_err("default aborts");
+        let CognifyError::RunFailed { report } = err else {
+            panic!("expected RunFailed");
+        };
+        assert_eq!(report.total_items(), 3, "even on the fatal path");
     }
 
     #[test]
@@ -6155,6 +6753,7 @@ mod tests {
             dataset_id,
             user_id: None,
             tenant_id: None,
+            failures: FailureReport::default(),
         };
 
         let config = CognifyConfig::default();
@@ -6446,6 +7045,7 @@ mod tests {
             dataset_id: Uuid::new_v4(),
             user_id: None,
             tenant_id: None,
+            failures: FailureReport::default(),
         };
 
         let graph = Arc::new(cognee_graph::MockGraphDB::new());
@@ -6541,6 +7141,7 @@ mod tests {
             dataset_id: Uuid::new_v4(),
             user_id: None,
             tenant_id: None,
+            failures: FailureReport::default(),
         };
 
         // With summarization disabled, verify we get zero summaries and no panic.
@@ -6605,6 +7206,7 @@ mod tests {
             TokenCounterKind::Word,
             None,
             &registry,
+            CognifyConfig::default().failure_policy(),
         )
         .await;
 
@@ -6677,6 +7279,7 @@ mod tests {
             TokenCounterKind::Word,
             None,
             &registry,
+            CognifyConfig::default().failure_policy(),
         )
         .await;
 
@@ -6793,6 +7396,7 @@ mod tests {
             TokenCounterKind::Word,
             None,
             &registry,
+            CognifyConfig::default().failure_policy(),
         )
         .await;
 
@@ -6861,6 +7465,7 @@ mod tests {
             TokenCounterKind::Word,
             None,
             &registry,
+            CognifyConfig::default().failure_policy(),
         )
         .await;
 
@@ -6962,6 +7567,7 @@ mod tests {
             dataset_id,
             user_id,
             tenant_id: None,
+            failures: FailureReport::default(),
         }
     }
 
@@ -7132,6 +7738,7 @@ mod tests {
             dataset_id,
             user_id: Some(Uuid::new_v4()),
             tenant_id: None,
+            failures: FailureReport::default(),
         };
 
         let result = add_data_points(
@@ -7203,6 +7810,7 @@ mod tests {
             dataset_id,
             user_id: input.user_id,
             tenant_id: None,
+            failures: FailureReport::default(),
         };
 
         add_data_points(
@@ -7231,6 +7839,599 @@ mod tests {
                 .iter()
                 .any(|row| row.pipeline_run_id == Some(later_run)),
             "the chunk / document / EntityType rows name the later run"
+        );
+    }
+
+    // ── Extraction-stage failure collection and the abort partition ──────
+
+    /// Three single-chunk files A, B, C, of which B's chunk text carries the
+    /// marker that makes the mock LLM fail.
+    fn three_chunk_files(dataset_id: Uuid) -> (ExtractedChunks, Uuid, Uuid, Uuid) {
+        let ids: Vec<Uuid> = (0..3).map(|_| Uuid::new_v4()).collect();
+        let texts = ["Alice works at Acme.", "Bob FAILMARKER.", "Carol at Acme."];
+        let chunks = ids
+            .iter()
+            .zip(texts)
+            .map(|(doc_id, text)| test_chunk(Uuid::new_v4(), *doc_id, text))
+            .collect();
+        let documents = ids
+            .iter()
+            .map(|doc_id| test_document_with_metadata(*doc_id, None))
+            .collect();
+        (
+            ExtractedChunks {
+                chunks,
+                documents,
+                dataset_id,
+                user_id: Some(Uuid::new_v4()),
+                tenant_id: None,
+                failures: FailureReport::default(),
+            },
+            ids[0],
+            ids[1],
+            ids[2],
+        )
+    }
+
+    /// One chunk per batch, so the batches run in file order and the abort
+    /// boundary is exactly between files.
+    fn one_chunk_per_batch(config: CognifyConfig) -> CognifyConfig {
+        config.with_chunks_per_batch(1)
+    }
+
+    async fn run_extraction_with_config(
+        input: &ExtractedChunks,
+        graph: Arc<dyn GraphDBTrait>,
+        db: &DatabaseConnection,
+        config: &CognifyConfig,
+    ) -> Result<ExtractedGraphData, CognifyError> {
+        use cognee_ontology::NoOpOntologyResolver;
+        use cognee_test_utils::MockLlm;
+
+        extract_graph_from_data(
+            input,
+            Arc::new(
+                MockLlm::new(vec![ownership_canned_graph(); 8])
+                    .with_failing_markers(vec!["FAILMARKER".to_string()]),
+            ),
+            graph,
+            Arc::new(NoOpOntologyResolver::new()),
+            db,
+            Some(Uuid::new_v4()),
+            config,
+            None,
+            None,
+        )
+        .await
+    }
+
+    /// `RunToEnd` records the failing chunk and extracts the rest.
+    #[tokio::test]
+    async fn extraction_failure_is_collected_under_run_to_end() {
+        let dataset_id = Uuid::new_v4();
+        let db = ledger_db(dataset_id).await;
+        let graph: Arc<dyn GraphDBTrait> = Arc::new(cognee_graph::MockGraphDB::new());
+        let (input, _a, b, _c) = three_chunk_files(dataset_id);
+
+        let config =
+            one_chunk_per_batch(CognifyConfig::default().with_failure_stop(FailureStop::RunToEnd));
+        let result = run_extraction_with_config(&input, graph, &db, &config)
+            .await
+            .expect("RunToEnd collects rather than propagates");
+
+        assert!(
+            !result.entities.is_empty(),
+            "A and C still produced entities"
+        );
+        assert_eq!(result.failures.entries().len(), 1);
+        let entry = &result.failures.entries()[0];
+        assert_eq!(entry.stage, FailureStage::GraphExtraction);
+        assert_eq!(entry.data_id, b);
+        assert!(
+            entry.chunk_id.is_some(),
+            "graph extraction fails at chunk granularity"
+        );
+        assert_eq!(
+            result
+                .failures
+                .failed_items()
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
+            [b]
+        );
+    }
+
+    /// The headline test for the abort-time partition: at the moment of the
+    /// first failure *nothing* has been persisted, so keeping the other files'
+    /// results is not a matter of not-deleting — the stage has to deliberately
+    /// persist the finished work before it stops. Only the complete file's
+    /// artifacts and ownership rows exist afterwards.
+    /// `FailFast` must stop *scheduling* work, not merely stop reporting it.
+    ///
+    /// The abort partition is computed from an index set before the loop
+    /// breaks, so deleting the `break` changes no other assertion in the
+    /// suite — the axis's whole promise (stop spending) would go unpinned.
+    /// This counts LLM calls instead of outcomes.
+    #[tokio::test]
+    async fn failfast_stops_dispatching_after_the_failing_batch() {
+        use cognee_ontology::NoOpOntologyResolver;
+        use cognee_test_utils::MockLlm;
+
+        let dataset_id = Uuid::new_v4();
+        let db = ledger_db(dataset_id).await;
+        let graph = Arc::new(cognee_graph::MockGraphDB::new());
+        // Three one-chunk files, one batch each; the SECOND one poisons.
+        let (input, _a, _b, _c) = three_chunk_files(dataset_id);
+
+        let llm = Arc::new(
+            MockLlm::new(vec![ownership_canned_graph(); 8])
+                .with_failing_markers(vec!["FAILMARKER".to_string()]),
+        );
+        let config = one_chunk_per_batch(
+            CognifyConfig::default().with_rollback_scope(RollbackScope::FailedItems),
+        );
+
+        let _ = extract_graph_from_data(
+            &input,
+            llm.clone(),
+            graph,
+            Arc::new(NoOpOntologyResolver::new()),
+            &db,
+            Some(Uuid::new_v4()),
+            &config,
+            None,
+            None,
+        )
+        .await;
+
+        assert_eq!(
+            llm.structured_calls(),
+            2,
+            "FailFast must dispatch the failing batch and then stop: file C's \
+             chunk should never reach the LLM. Seeing 3 means the loop ran on \
+             and only the bookkeeping stopped."
+        );
+    }
+
+    #[tokio::test]
+    async fn extraction_abort_persists_only_complete_files() {
+        use cognee_database::ops::graph_storage::{get_edges_by_dataset, get_nodes_by_dataset};
+
+        let dataset_id = Uuid::new_v4();
+        let db = ledger_db(dataset_id).await;
+        let graph = Arc::new(cognee_graph::MockGraphDB::new());
+        let (input, a, b, c) = three_chunk_files(dataset_id);
+
+        let config = one_chunk_per_batch(
+            CognifyConfig::default().with_rollback_scope(RollbackScope::FailedItems),
+        );
+        let result = run_extraction_with_config(&input, graph.clone(), &db, &config)
+            .await
+            .expect("FailedItems keeps the complete files");
+
+        assert_eq!(
+            result
+                .documents
+                .iter()
+                .map(|d| d.base.id)
+                .collect::<Vec<_>>(),
+            [a],
+            "only A is complete"
+        );
+        assert!(result.chunks.iter().all(|chunk| chunk.document_id == a));
+        assert_eq!(
+            result
+                .failures
+                .failed_items()
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
+            [b]
+        );
+        assert_eq!(
+            result
+                .failures
+                .unreached_items()
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
+            [c],
+            "C's chunk was never dispatched"
+        );
+
+        // I1 still holds for what was written: every artifact has a row.
+        let nodes = get_nodes_by_dataset(&db, dataset_id).await.expect("query");
+        assert!(!nodes.is_empty(), "A's artifacts were persisted");
+        let edges = get_edges_by_dataset(&db, dataset_id).await.expect("query");
+        assert!(!edges.is_empty());
+        // …and nothing of B or C reached either store.
+        for row in &nodes {
+            assert_ne!(row.data_id, b, "B owns no artifact");
+            assert_ne!(row.data_id, c, "C owns no artifact");
+        }
+        for row in &edges {
+            assert_ne!(row.data_id, b);
+            assert_ne!(row.data_id, c);
+        }
+    }
+
+    /// The same abort under the default `WholeRun` scope persists *nothing* —
+    /// the partition must not run on the fatal path.
+    #[tokio::test]
+    async fn extraction_abort_persists_nothing_under_whole_run() {
+        use cognee_database::ops::graph_storage::get_nodes_by_dataset;
+
+        let dataset_id = Uuid::new_v4();
+        let db = ledger_db(dataset_id).await;
+        let graph = Arc::new(cognee_graph::MockGraphDB::new());
+        let (input, _a, b, c) = three_chunk_files(dataset_id);
+
+        let config = one_chunk_per_batch(CognifyConfig::default());
+        let err = run_extraction_with_config(&input, graph.clone(), &db, &config)
+            .await
+            .expect_err("the default scope still aborts the run");
+
+        let CognifyError::RunFailed { report } = err else {
+            panic!("expected RunFailed, got: {err:?}");
+        };
+        assert_eq!(
+            report.failed_items().iter().copied().collect::<Vec<_>>(),
+            [b]
+        );
+        assert_eq!(
+            report.unreached_items().iter().copied().collect::<Vec<_>>(),
+            [c]
+        );
+
+        assert_eq!(graph.node_count(), 0, "no artifact reached the graph");
+        let nodes = get_nodes_by_dataset(&db, dataset_id).await.expect("query");
+        assert!(nodes.is_empty(), "and no ownership row was written");
+    }
+
+    /// A whole batch is dispatched before any result is inspected, so a
+    /// FailFast abort reports every failure in the batch that tripped it.
+    #[tokio::test]
+    async fn extraction_reports_every_failure_in_the_batch_that_tripped_it() {
+        let dataset_id = Uuid::new_v4();
+        let db = ledger_db(dataset_id).await;
+        let graph: Arc<dyn GraphDBTrait> = Arc::new(cognee_graph::MockGraphDB::new());
+
+        let doc_ids: Vec<Uuid> = (0..4).map(|_| Uuid::new_v4()).collect();
+        let texts = [
+            "Alice works at Acme.",
+            "Bob FAILMARKER.",
+            "Carol at Acme.",
+            "Dave FAILMARKER.",
+        ];
+        let input = ExtractedChunks {
+            chunks: doc_ids
+                .iter()
+                .zip(texts)
+                .map(|(doc_id, text)| test_chunk(Uuid::new_v4(), *doc_id, text))
+                .collect(),
+            documents: doc_ids
+                .iter()
+                .map(|doc_id| test_document_with_metadata(*doc_id, None))
+                .collect(),
+            dataset_id,
+            user_id: Some(Uuid::new_v4()),
+            tenant_id: None,
+            failures: FailureReport::default(),
+        };
+
+        // All four chunks in one batch.
+        let config = CognifyConfig::default().with_chunks_per_batch(4);
+        let err = run_extraction_with_config(&input, graph, &db, &config)
+            .await
+            .expect_err("default scope aborts");
+        let CognifyError::RunFailed { report } = err else {
+            panic!("expected RunFailed");
+        };
+        assert_eq!(
+            report.entries().len(),
+            2,
+            "both failing chunks in the batch are reported, not just the first"
+        );
+        assert_eq!(report.failed_items().len(), 2);
+    }
+
+    /// The documented step-pending state: under `RunToEnd` the extraction
+    /// stage does not filter, so the failed file's chunk and `Document` are
+    /// persisted with ownership rows and stay there until the sweep lands.
+    /// Asserted explicitly rather than pretended away.
+    #[tokio::test]
+    async fn extraction_persists_everything_under_run_to_end() {
+        let dataset_id = Uuid::new_v4();
+        let db = ledger_db(dataset_id).await;
+        let graph: Arc<dyn GraphDBTrait> = Arc::new(cognee_graph::MockGraphDB::new());
+        let (input, _a, b, c) = three_chunk_files(dataset_id);
+
+        let config = one_chunk_per_batch(
+            CognifyConfig::default()
+                .with_failure_stop(FailureStop::RunToEnd)
+                .with_rollback_scope(RollbackScope::FailedItems),
+        );
+        let result = run_extraction_with_config(&input, graph, &db, &config)
+            .await
+            .expect("RunToEnd below the ratio still returns Ok from this stage");
+
+        assert_eq!(
+            result.documents.len(),
+            3,
+            "the failed file's Document is still carried forward"
+        );
+        assert!(
+            result.chunks.iter().any(|chunk| chunk.document_id == b),
+            "and so is its chunk — the sweep is what removes them"
+        );
+        assert!(result.chunks.iter().any(|chunk| chunk.document_id == c));
+    }
+
+    /// The end-of-run gate reads the policy, not the report alone: the same
+    /// failures error the run under `WholeRun` and complete it under
+    /// `FailedItems` below the threshold.
+    #[tokio::test]
+    async fn fatality_gate_defers_to_the_policy() {
+        use cognee_core::TypedTask;
+        use cognee_embedding::MockEmbeddingEngine;
+        use cognee_test_utils::test_task_context;
+        use cognee_vector::MockVectorDB;
+
+        let (_, ctx, db) = test_task_context().await;
+        let dataset_id = Uuid::new_v4();
+        seed_dataset(&db, dataset_id).await;
+
+        let doc_id = Uuid::new_v4();
+        // One failed chunk out of 60 — under the 5 % default threshold — with
+        // three other items surviving.
+        let mut failures = FailureReport::default();
+        failures.note_totals(4, 60);
+        failures.record(StageFailure {
+            stage: FailureStage::GraphExtraction,
+            data_id: Uuid::new_v4(),
+            chunk_id: Some(Uuid::new_v4()),
+            error: "boom".to_string(),
+            fails_item: true,
+        });
+
+        let input = SummarizedData {
+            chunks: vec![test_chunk(Uuid::new_v4(), doc_id, "Hello world")],
+            documents: vec![test_document_with_metadata(doc_id, None)],
+            entities: vec![],
+            edges: vec![],
+            producers: ArtifactProducers::default(),
+            summaries: vec![],
+            dataset_id,
+            user_id: Some(Uuid::new_v4()),
+            tenant_id: None,
+            failures,
+        };
+
+        for (config, should_fail) in [
+            (CognifyConfig::default(), true),
+            (
+                CognifyConfig::default().with_rollback_scope(RollbackScope::FailedItems),
+                false,
+            ),
+        ] {
+            let task = make_add_data_points_task(
+                Arc::new(cognee_graph::MockGraphDB::new()),
+                Arc::new(MockVectorDB::new()),
+                Arc::new(MockEmbeddingEngine::new(8)),
+                Arc::clone(&db),
+                config.clone(),
+            );
+            let TypedTask::Async(run) = task else {
+                panic!("add_data_points task should be async");
+            };
+            let outcome = run(&input, ctx.clone()).await;
+            assert_eq!(
+                outcome.is_err(),
+                should_fail,
+                "scope {:?} must {} the run",
+                config.rollback_scope,
+                if should_fail { "fail" } else { "complete" }
+            );
+            if let Err(e) = outcome {
+                assert!(
+                    e.downcast_ref::<CognifyError>()
+                        .is_some_and(|e| matches!(e, CognifyError::RunFailed { .. })),
+                    "the task must return the typed error so cognify() can recover it"
+                );
+            }
+        }
+    }
+
+    /// The temporal branch carries its own copy of the end-of-run gate, over
+    /// the report the chunking stage handed down. Same fixture as
+    /// `fatality_gate_defers_to_the_policy`, so the two branches stay honest
+    /// about meaning the same thing by "fatal".
+    #[tokio::test]
+    async fn temporal_fatality_gate_defers_to_the_policy() {
+        use cognee_core::TypedTask;
+        use cognee_embedding::MockEmbeddingEngine;
+        use cognee_models::TemporalEvent;
+        use cognee_test_utils::test_task_context;
+        use cognee_vector::MockVectorDB;
+
+        let (_, ctx, _db) = test_task_context().await;
+
+        // One failed item out of four, one failed chunk out of 60 — under the
+        // 5 % default threshold.
+        let mut failures = FailureReport::default();
+        failures.note_totals(4, 60);
+        failures.record(StageFailure {
+            stage: FailureStage::Chunking,
+            data_id: Uuid::new_v4(),
+            chunk_id: None,
+            error: "boom".to_string(),
+            fails_item: true,
+        });
+
+        let input = ExtractedTemporalEvents {
+            events: vec![TemporalEvent {
+                name: "Acme was founded".to_string(),
+                description: None,
+                location: None,
+                at: None,
+                during: None,
+                attributes: vec![],
+            }],
+            dataset_id: Uuid::new_v4(),
+            user_id: Some(Uuid::new_v4()),
+            tenant_id: None,
+            failures,
+        };
+
+        for (config, should_fail) in [
+            (CognifyConfig::default(), true),
+            (
+                CognifyConfig::default().with_rollback_scope(RollbackScope::FailedItems),
+                false,
+            ),
+        ] {
+            let task = make_add_temporal_data_points_task(
+                Arc::new(cognee_graph::MockGraphDB::new()),
+                Arc::new(MockVectorDB::new()),
+                Arc::new(MockEmbeddingEngine::new(8)),
+                config.failure_policy(),
+            );
+            let TypedTask::Async(run) = task else {
+                panic!("add_temporal_data_points task should be async");
+            };
+            let outcome = run(&input, ctx.clone()).await;
+            assert_eq!(
+                outcome.is_err(),
+                should_fail,
+                "scope {:?} must {} the temporal run",
+                config.rollback_scope,
+                if should_fail { "fail" } else { "complete" }
+            );
+            match outcome {
+                Err(e) => assert!(
+                    e.downcast_ref::<CognifyError>()
+                        .is_some_and(|e| matches!(e, CognifyError::RunFailed { .. })),
+                    "the task must return the typed error so cognify() can recover it"
+                ),
+                // The report has to be the chunking stage's, not a fresh
+                // default: a forwarding regression would surface as an empty
+                // one here while every other assertion still passed.
+                Ok(result) => assert_eq!(
+                    result.failures.entries().len(),
+                    1,
+                    "the chunk stage's report reaches the result"
+                ),
+            }
+        }
+    }
+
+    /// The custom-model extraction path collects its chunk failures like its
+    /// sibling, and — like its sibling — leaves the output whole under
+    /// `RunToEnd`, where a later commit's sweep is what removes the failed
+    /// file's contributions.
+    #[tokio::test]
+    async fn custom_extraction_collects_failures_under_run_to_end() {
+        use crate::fact_extraction::KnowledgeGraph;
+        use cognee_test_utils::MockLlm;
+
+        let (input, a, b, c) = three_chunk_files(Uuid::new_v4());
+        let config =
+            one_chunk_per_batch(CognifyConfig::default().with_failure_stop(FailureStop::RunToEnd));
+
+        let result = extract_custom_graph_from_data::<KnowledgeGraph>(
+            &input,
+            Arc::new(
+                MockLlm::new(vec![ownership_canned_graph(); 8])
+                    .with_failing_markers(vec!["FAILMARKER".to_string()]),
+            ),
+            &config,
+        )
+        .await
+        .expect("RunToEnd collects rather than propagates");
+
+        assert_eq!(
+            result
+                .failures
+                .failed_items()
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
+            [b]
+        );
+        assert!(
+            result.failures.unreached_items().is_empty(),
+            "RunToEnd reaches every chunk"
+        );
+        assert_eq!(
+            result
+                .documents
+                .iter()
+                .map(|d| d.base.id)
+                .collect::<Vec<_>>(),
+            [a, b, c],
+            "no partition under RunToEnd"
+        );
+        for chunk in &result.chunks {
+            assert_eq!(
+                chunk.contains.is_empty(),
+                chunk.document_id == b,
+                "only the failed chunk carries no extracted model"
+            );
+        }
+    }
+
+    /// Under a `FailFast` abort the failed and unreached files are dropped from
+    /// the output, so a partially-extracted file cannot reach a later
+    /// persisting stage.
+    #[tokio::test]
+    async fn custom_extraction_abort_drops_failed_and_unreached_files() {
+        use crate::fact_extraction::KnowledgeGraph;
+        use cognee_test_utils::MockLlm;
+
+        let (input, a, b, c) = three_chunk_files(Uuid::new_v4());
+        let config = one_chunk_per_batch(
+            CognifyConfig::default().with_rollback_scope(RollbackScope::FailedItems),
+        );
+
+        let result = extract_custom_graph_from_data::<KnowledgeGraph>(
+            &input,
+            Arc::new(
+                MockLlm::new(vec![ownership_canned_graph(); 8])
+                    .with_failing_markers(vec!["FAILMARKER".to_string()]),
+            ),
+            &config,
+        )
+        .await
+        .expect("FailedItems keeps the complete files");
+
+        assert_eq!(
+            result
+                .documents
+                .iter()
+                .map(|d| d.base.id)
+                .collect::<Vec<_>>(),
+            [a],
+            "only A is complete"
+        );
+        assert!(result.chunks.iter().all(|chunk| chunk.document_id == a));
+        assert_eq!(
+            result
+                .failures
+                .failed_items()
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
+            [b]
+        );
+        assert_eq!(
+            result
+                .failures
+                .unreached_items()
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
+            [c]
         );
     }
 

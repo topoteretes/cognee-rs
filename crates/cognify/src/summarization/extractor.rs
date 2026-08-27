@@ -68,6 +68,28 @@ async fn summarize_one(
     }
 }
 
+/// What one [`SummaryExtractor::summarize_chunks`] pass produced.
+///
+/// Both halves are complete and in input order: the successes are every chunk
+/// that summarized, the failures every chunk that did not. Deliberately not a
+/// `Result` — a per-chunk failure is data the caller records against a policy,
+/// not a reason to throw away the summaries that succeeded.
+#[derive(Debug, Default)]
+pub struct SummarizeOutcome {
+    /// Summaries for the chunks that succeeded, in input order.
+    pub summaries: Vec<TextSummary>,
+
+    /// `(chunk_id, error)` for the chunks that failed, in input order.
+    pub failures: Vec<(uuid::Uuid, CognifyError)>,
+}
+
+impl SummarizeOutcome {
+    /// `true` when every chunk summarized.
+    pub fn is_complete(&self) -> bool {
+        self.failures.is_empty()
+    }
+}
+
 /// Summary extractor for text chunks.
 ///
 /// Uses an LLM (via the Llm trait) to generate hierarchical summaries from text chunks.
@@ -153,20 +175,27 @@ impl SummaryExtractor {
     /// * `custom_prompt` - Optional custom system prompt
     ///
     /// # Returns
-    /// A vector of TextSummary objects, one per input chunk
+    /// A [`SummarizeOutcome`] holding the summaries that succeeded and the
+    /// chunks that failed, both in input order.
     ///
-    /// # Errors
-    /// Returns CognifyError::LlmError if any LLM call fails
+    /// The stream is *always* drained to completion. It used to `try_collect`,
+    /// which drops the stream on the first `Err` — discarding summaries that
+    /// had already been paid for and cancelling in-flight requests, so the
+    /// reported failure list could never be complete. The return type has no
+    /// `Err` channel at all, which is what keeps that from coming back: there
+    /// is no failure mode of this function that is not per-chunk, and whether
+    /// a per-chunk failure ends the run is the caller's policy decision, not
+    /// this function's.
     pub async fn summarize_chunks(
         &self,
         chunks: &[DocumentChunk],
         custom_prompt: Option<String>,
-    ) -> Result<Vec<TextSummary>, CognifyError> {
+    ) -> SummarizeOutcome {
         if chunks.is_empty() {
-            return Ok(vec![]);
+            return SummarizeOutcome::default();
         }
 
-        use futures::stream::{self, StreamExt, TryStreamExt};
+        use futures::stream::{self, StreamExt};
 
         let model_name = self.llm.model().to_string();
 
@@ -202,34 +231,67 @@ impl SummaryExtractor {
         // keeps the global cap while pipelining across chunks; results arrive out
         // of order, so each future carries its chunk index and we re-sort to
         // preserve the input order the callers expect.
-        let mut indexed: Vec<(usize, TextSummary)> = stream::iter(inputs)
-            .map(
-                |(index, text, chunk_id, importance_weight, belongs_to_set)| {
-                    let llm = Arc::clone(&self.llm);
-                    let summary_schema = self.summary_schema.clone();
-                    let model_name = model_name.clone();
-                    let prompt = custom_prompt.clone();
-                    async move {
-                        let summarized =
-                            summarize_one(&llm, &summary_schema, &text, prompt.as_deref()).await?;
-                        let mut summary =
-                            TextSummary::from_summarized_content(chunk_id, summarized, model_name);
-                        // Port of summarize_text.py:81 — carry importance_weight from source chunk.
-                        summary.base.importance_weight = importance_weight;
-                        // Port of summarize_text.py:79 — inherit the source chunk's
-                        // belongs_to_set (NodeSet objects + dataset id) so each
-                        // TextSummary is scoped exactly like its chunk.
-                        summary.base.belongs_to_set = belongs_to_set;
-                        Ok::<(usize, TextSummary), CognifyError>((index, summary))
-                    }
-                },
-            )
-            .buffer_unordered(self.max_parallel)
-            .try_collect()
-            .await?;
+        #[allow(clippy::type_complexity)]
+        let results: Vec<Result<(usize, TextSummary), (usize, uuid::Uuid, CognifyError)>> =
+            stream::iter(inputs)
+                .map(
+                    |(index, text, chunk_id, importance_weight, belongs_to_set)| {
+                        let llm = Arc::clone(&self.llm);
+                        let summary_schema = self.summary_schema.clone();
+                        let model_name = model_name.clone();
+                        let prompt = custom_prompt.clone();
+                        async move {
+                            // The per-chunk error is carried in the `Err` half of
+                            // the item rather than `?`-ed out of the stream, so
+                            // `collect` keeps draining.
+                            let summarized = match summarize_one(
+                                &llm,
+                                &summary_schema,
+                                &text,
+                                prompt.as_deref(),
+                            )
+                            .await
+                            {
+                                Ok(summarized) => summarized,
+                                Err(e) => return Err((index, chunk_id, e)),
+                            };
+                            let mut summary = TextSummary::from_summarized_content(
+                                chunk_id, summarized, model_name,
+                            );
+                            // Port of summarize_text.py:81 — carry importance_weight from source chunk.
+                            summary.base.importance_weight = importance_weight;
+                            // Port of summarize_text.py:79 — inherit the source chunk's
+                            // belongs_to_set (NodeSet objects + dataset id) so each
+                            // TextSummary is scoped exactly like its chunk.
+                            summary.base.belongs_to_set = belongs_to_set;
+                            Ok((index, summary))
+                        }
+                    },
+                )
+                .buffer_unordered(self.max_parallel)
+                .collect()
+                .await;
 
+        // `buffer_unordered` yields out of order; both halves are re-sorted by
+        // the carried index so callers see input order on either side.
+        let mut indexed: Vec<(usize, TextSummary)> = Vec::new();
+        let mut failures: Vec<(usize, uuid::Uuid, CognifyError)> = Vec::new();
+        for result in results {
+            match result {
+                Ok(pair) => indexed.push(pair),
+                Err(failure) => failures.push(failure),
+            }
+        }
         indexed.sort_by_key(|(index, _)| *index);
-        Ok(indexed.into_iter().map(|(_, summary)| summary).collect())
+        failures.sort_by_key(|(index, _, _)| *index);
+
+        SummarizeOutcome {
+            summaries: indexed.into_iter().map(|(_, summary)| summary).collect(),
+            failures: failures
+                .into_iter()
+                .map(|(_, chunk_id, error)| (chunk_id, error))
+                .collect(),
+        }
     }
 
     /// Get a reference to the underlying LLM.
@@ -333,7 +395,9 @@ mod tests {
             chunks.iter().map(|c| c.base.importance_weight).collect();
 
         let extractor = SummaryExtractor::new(llm).with_max_parallel(3);
-        let summaries = extractor.summarize_chunks(&chunks, None).await.unwrap();
+        let outcome = extractor.summarize_chunks(&chunks, None).await;
+        assert!(outcome.is_complete(), "no chunk should have failed");
+        let summaries = outcome.summaries;
 
         // Every chunk produced one summary, in the original input order.
         assert_eq!(summaries.len(), 10);
@@ -353,6 +417,142 @@ mod tests {
         let peak = tracker.max_seen.load(Ordering::SeqCst);
         assert!(peak >= 2, "expected overlapping calls, peak was {peak}");
         assert!(peak <= 3, "concurrency cap exceeded: peak {peak} > 3");
+    }
+
+    /// A mock LLM that fails any call whose user message contains one of the
+    /// markers and counts every call it saw.
+    struct MarkerFailingLlm {
+        markers: Vec<String>,
+        calls: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl Llm for MarkerFailingLlm {
+        async fn generate(
+            &self,
+            _messages: Vec<cognee_llm::Message>,
+            _options: Option<GenerationOptions>,
+        ) -> cognee_llm::LlmResult<cognee_llm::GenerationResponse> {
+            unreachable!("summarization uses structured output, not generate")
+        }
+
+        async fn create_structured_output_with_messages_raw(
+            &self,
+            messages: Vec<cognee_llm::Message>,
+            _json_schema: &serde_json::Value,
+            _options: Option<GenerationOptions>,
+        ) -> cognee_llm::LlmResult<serde_json::Value> {
+            use std::sync::atomic::Ordering;
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            // Let every call overlap so a cancelled sibling would be observable
+            // as a missing call.
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            let text: String = messages.iter().map(|m| m.content.clone()).collect();
+            if self.markers.iter().any(|marker| text.contains(marker)) {
+                return Err(cognee_llm::LlmError::ApiError("simulated 429".to_string()));
+            }
+            Ok(serde_json::json!({ "summary": "s", "description": "d" }))
+        }
+
+        fn model(&self) -> &str {
+            "mock-marker"
+        }
+    }
+
+    fn marker_chunks(count: usize, failing: &[usize]) -> Vec<DocumentChunk> {
+        let doc_id = uuid::Uuid::new_v4();
+        (0..count)
+            .map(|i| {
+                let text = if failing.contains(&i) {
+                    format!("chunk {i} FAILMARKER")
+                } else {
+                    format!("chunk {i} fine")
+                };
+                DocumentChunk::new(
+                    uuid::Uuid::new_v4(),
+                    text,
+                    3,
+                    i,
+                    "paragraph_end".to_string(),
+                    doc_id,
+                )
+            })
+            .collect()
+    }
+
+    /// The regression test for the summarization defect: one failing chunk used
+    /// to abandon the whole stream, throwing away the summaries already
+    /// produced and cancelling the requests still in flight. The call count is
+    /// the assertion that catches a return to `try_collect` — it cancels the
+    /// futures that had not started, so fewer than ten calls reach the LLM.
+    #[tokio::test]
+    async fn summarize_chunks_keeps_completed_work_when_one_chunk_fails() {
+        use std::sync::atomic::Ordering;
+
+        let llm = Arc::new(MarkerFailingLlm {
+            markers: vec!["FAILMARKER".to_string()],
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let chunks = marker_chunks(10, &[4]);
+        let failing_chunk_id = chunks[4].base.id;
+        let expected_ids: Vec<uuid::Uuid> = chunks
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != 4)
+            .map(|(_, c)| c.base.id)
+            .collect();
+
+        let extractor = SummaryExtractor::new(llm.clone() as Arc<dyn Llm>).with_max_parallel(3);
+        let outcome = extractor.summarize_chunks(&chunks, None).await;
+
+        assert_eq!(outcome.summaries.len(), 9, "the completed work is kept");
+        let got: Vec<uuid::Uuid> = outcome
+            .summaries
+            .iter()
+            .filter_map(|s| s.made_from)
+            .collect();
+        assert_eq!(got, expected_ids, "summaries stay in input order");
+
+        assert_eq!(outcome.failures.len(), 1);
+        assert_eq!(outcome.failures[0].0, failing_chunk_id);
+
+        assert_eq!(
+            llm.calls.load(Ordering::SeqCst),
+            10,
+            "every chunk was attempted — nothing in flight was cancelled"
+        );
+    }
+
+    /// Every failing chunk is reported, not just the first one to come back.
+    #[tokio::test]
+    async fn summarize_chunks_reports_every_failure() {
+        use std::sync::atomic::Ordering;
+
+        let llm = Arc::new(MarkerFailingLlm {
+            markers: vec!["FAILMARKER".to_string()],
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let chunks = marker_chunks(10, &[1, 5, 9]);
+        let mut expected_failures: Vec<uuid::Uuid> =
+            vec![chunks[1].base.id, chunks[5].base.id, chunks[9].base.id];
+
+        let extractor = SummaryExtractor::new(llm.clone() as Arc<dyn Llm>).with_max_parallel(4);
+        let outcome = extractor.summarize_chunks(&chunks, None).await;
+
+        assert_eq!(outcome.summaries.len(), 7);
+        let mut got: Vec<uuid::Uuid> = outcome.failures.iter().map(|(id, _)| *id).collect();
+        got.sort();
+        expected_failures.sort();
+        assert_eq!(got, expected_failures);
+        assert_eq!(llm.calls.load(Ordering::SeqCst), 10);
+    }
+
+    #[tokio::test]
+    async fn summarize_chunks_on_no_chunks_is_an_empty_outcome() {
+        let llm: Arc<dyn Llm> = Arc::new(NoopLlm);
+        let outcome = SummaryExtractor::new(llm).summarize_chunks(&[], None).await;
+        assert!(outcome.summaries.is_empty());
+        assert!(outcome.is_complete());
     }
 
     #[test]
@@ -425,7 +625,9 @@ mod tests {
         chunk.base.belongs_to_set = Some(belongs_to_set.clone());
 
         let extractor = SummaryExtractor::new(llm);
-        let summaries = extractor.summarize_chunks(&[chunk], None).await.unwrap();
+        let outcome = extractor.summarize_chunks(&[chunk], None).await;
+        assert!(outcome.failures.is_empty());
+        let summaries = outcome.summaries;
 
         assert_eq!(summaries.len(), 1);
         assert_eq!(

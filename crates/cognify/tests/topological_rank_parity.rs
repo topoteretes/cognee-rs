@@ -296,6 +296,7 @@ async fn extract_graph_rank_is_overridable_for_custom_pipelines() {
         dataset_id: Uuid::new_v4(),
         user_id: None,
         tenant_id: None,
+        failures: Default::default(),
     };
 
     let (_handle, ctx, db) = cognee_test_utils::test_task_context().await;

@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use cognee_models::{Document, DocumentChunk, EdgeType, Embedding};
 use uuid::Uuid;
 
+use crate::failure::FailureReport;
 use crate::graph_integration::{GraphEdgePair, GraphNodePair};
 use crate::summarization::TextSummary;
 
@@ -67,6 +68,15 @@ pub struct CognifyResult {
     /// [`crate::tasks::extract_dlt_fk_edges`] teardown runs outside the
     /// executor and reads the run id from here.
     pub pipeline_run_id: Option<Uuid>,
+
+    /// Everything that went wrong during the run: which chunk, which file,
+    /// which stage, and why — plus a total count when the list was capped.
+    ///
+    /// A non-empty report on an `Ok` result means the run completed with
+    /// failures the configured policy tolerated. When the policy judged them
+    /// fatal the caller gets [`crate::CognifyError::RunFailed`] carrying the
+    /// same report instead. See [`crate::failure`].
+    pub failures: FailureReport,
 }
 
 impl CognifyResult {
@@ -84,6 +94,7 @@ impl CognifyResult {
             already_completed: false,
             prior_pipeline_run_id: None,
             pipeline_run_id: None,
+            failures: FailureReport::default(),
         }
     }
 

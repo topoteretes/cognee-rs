@@ -3,6 +3,8 @@
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::failure::FailureReport;
+
 #[derive(Debug, Error)]
 pub enum CognifyError {
     #[error("Configuration error: {0}")]
@@ -55,6 +57,15 @@ pub enum CognifyError {
 
     #[error("Pipeline execution failed: {0}")]
     Execute(String),
+
+    /// The run collected one or more stage failures and the configured
+    /// failure policy judged them fatal. The report carries which chunks and
+    /// which files failed, which stage produced each failure, and the error
+    /// text — plus a total count when the entry list was capped.
+    ///
+    /// Boxed to keep [`CognifyError`] small (clippy's `result_large_err`).
+    #[error("cognify run failed: {report}")]
+    RunFailed { report: Box<FailureReport> },
 
     #[error("Output type mismatch: expected {expected}, got {actual}")]
     OutputTypeMismatch {

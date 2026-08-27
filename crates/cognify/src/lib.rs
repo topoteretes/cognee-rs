@@ -8,6 +8,8 @@ pub mod dataset_resolver;
 pub mod error;
 /// Fact extraction module.
 pub mod fact_extraction;
+/// Failure-handling vocabulary (the two axes, the failure report).
+pub mod failure;
 /// Graph extraction module.
 pub mod graph_extraction;
 /// Graph integration module.
@@ -33,6 +35,9 @@ pub use config::{ChunkStrategy, CognifyConfig, ConfigError, CustomChunker};
 pub use dataset_resolver::{DatasetRef, DatasetResolver, cognify_dataset_refs, cognify_datasets};
 pub use error::CognifyError;
 pub use fact_extraction::{Edge, FactExtractor, GraphModel, KnowledgeGraph, Node};
+pub use failure::{
+    FailurePolicy, FailureReport, FailureStage, FailureStop, RollbackScope, StageFailure,
+};
 pub use graph_extraction::{GraphExtractable, Relationship, get_graph_from_model};
 pub use graph_integration::{
     DeduplicationResult, GraphEdgePair, GraphNodePair, deduplicate_nodes_and_edges,
@@ -54,7 +59,7 @@ pub use memify::{
 pub use cognee_truth_subspace::DEFAULT_K;
 pub use pipeline::{CognifyResult, IndexedFieldsStats};
 pub use qualification::{Qualification, check_pipeline_run_qualification};
-pub use summarization::{SummarizedContent, SummaryExtractor, TextSummary};
+pub use summarization::{SummarizeOutcome, SummarizedContent, SummaryExtractor, TextSummary};
 pub use tasks::{
     ClassifiedDocuments, CognifyInput, DEFAULT_LEDGER_USER_ID, ExtractedChunks, ExtractedGraphData,
     ExtractedTemporalEvents, LedgerIdentity, SummarizedData, add_data_points,

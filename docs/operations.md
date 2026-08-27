@@ -83,6 +83,17 @@ relational DB) → **extract DLT FK edges**. Configurable via `CognifyConfig`
 (chunk strategy, custom prompts/schemas, temporal mode). Pipeline:
 [`cognee-cognify`](../crates/cognify/) (`cognify()` / `cognify_datasets()`).
 
+A chunk or a file the pipeline cannot process is no longer a bare error: the
+chunking, graph-extraction and summarization stages *collect* their failures,
+and the run result carries a report naming which file, which chunk, which stage
+and what went wrong. `CognifyResult.failures` carries it on success;
+`CognifyError::RunFailed` carries the same report when the run failed. Under the
+default settings the run still aborts at the first failure and is still recorded
+`ERRORED` — the difference is that the failure is now reported rather than
+merely thrown. See
+[Cognify failure handling](configuration.md#cognify-failure-handling) for the
+two axes that control it.
+
 ### memify (graph enrichment)
 
 Standalone, idempotent enrichment: reads the existing graph, builds `Triplet`
