@@ -212,12 +212,34 @@ mod tests {
             properties,
         };
 
+        let source_id = entity1.entity.base.id;
+        let target_id = entity2.entity.base.id;
         let triplets = create_triplets_from_graph(&[entity1, entity2], &[edge]);
 
         assert_eq!(triplets.len(), 1);
         // Should use "works at" from edge_text, not "employed_by"
         assert!(triplets[0].text.contains("works at"));
         assert!(!triplets[0].text.contains("employed_by"));
+
+        // The description must stay out of the *id*: `Triplet::new` hashes
+        // `source + relationship_name + target` and nothing else. The delete
+        // path relies on this — `cognee-delete`'s `triplet_vector_id`
+        // recomputes the point id from the ledger row's `relationship_name`,
+        // which is `relationship_name` (not `edge_text`) for every
+        // non-`contains` edge — so a described edge and an undescribed one
+        // between the same endpoints must key identically. Pinned here, on the
+        // writing side, so the two crates cannot drift apart silently.
+        assert_eq!(
+            triplets[0].id,
+            Triplet::new(
+                source_id,
+                target_id,
+                "employed_by".to_string(),
+                String::new()
+            )
+            .id,
+            "edge_text must not enter the Triplet id the delete path recomputes"
+        );
     }
 
     #[test]

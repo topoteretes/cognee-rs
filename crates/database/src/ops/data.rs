@@ -174,9 +174,44 @@ pub async fn update_last_accessed(
     Ok(())
 }
 
+/// The dataset key a `Data.pipeline_status` entry is written under.
+///
+/// Python writes `str(dataset.id)` — the dashed 36-character form
+/// (`run_tasks_data_item.py:171-172`) — and clears the same
+/// (`rollback.py:88`). Every other id Rust stores is `uuid_hex::to_hex`, so
+/// this is the one place the two SDKs disagree on encoding, and the one place
+/// that disagreement is spelled out. Writers must use this helper, never
+/// `to_hex`, or a Python run will not see the marker Rust wrote and will
+/// re-process data Rust already cognified.
+///
+/// Rust has no `pipeline_status` writer today — only the two clearers below
+/// read the column — so this helper currently has no production caller. It is
+/// deliberately landed with them: the completion-marker writer that arrives
+/// with run orchestration is the caller, and encoding the key in one place
+/// keeps the clearers and that future writer from drifting apart again.
+pub fn pipeline_status_dataset_key(dataset_id: Uuid) -> String {
+    dataset_id.to_string()
+}
+
+/// Both encodings a dataset key may appear under in a database Rust and Python
+/// share: Python's dashed form, and the dashless hex form Rust wrote before
+/// [`pipeline_status_dataset_key`] existed. Clearing must tolerate both —
+/// otherwise Rust's cleanup silently misses every Python-written marker and
+/// Python goes on skipping data whose artifacts Rust just deleted. Nothing may
+/// write the second form.
+fn pipeline_status_dataset_key_variants(dataset_id: Uuid) -> [String; 2] {
+    [
+        pipeline_status_dataset_key(dataset_id),
+        uuid_hex::to_hex(dataset_id),
+    ]
+}
+
 /// Clear `pipeline_status` JSON entries keyed by the given `dataset_id`
 /// from all `Data` records linked to that dataset via the `dataset_data`
 /// junction table.
+///
+/// Tolerates both key encodings — see
+/// [`pipeline_status_dataset_key_variants`].
 ///
 /// This mirrors the Python cleanup in `delete_dataset.py` lines 33-54.
 /// Must be called **before** the junction rows are removed (before
@@ -212,7 +247,7 @@ pub async fn clear_pipeline_status_for_dataset(
         return Ok(0);
     }
 
-    let dataset_id_str = uuid_hex::to_hex(dataset_id);
+    let dataset_keys = pipeline_status_dataset_key_variants(dataset_id);
     let mut updated_count = 0usize;
 
     // Read the linked Data rows in chunks instead of one find per id (N reads).
@@ -247,10 +282,10 @@ pub async fn clear_pipeline_status_for_dataset(
 
         let mut modified = false;
         for (_pipeline_name, inner) in top_map.iter_mut() {
-            if let serde_json::Value::Object(inner_map) = inner
-                && inner_map.remove(&dataset_id_str).is_some()
-            {
-                modified = true;
+            if let serde_json::Value::Object(inner_map) = inner {
+                for key in &dataset_keys {
+                    modified |= inner_map.remove(key).is_some();
+                }
             }
         }
 
@@ -283,7 +318,8 @@ pub async fn clear_pipeline_status_for_dataset(
 /// Clear only the `cognify_pipeline` entry for `dataset_id` from a single
 /// Data record's `pipeline_status` JSON. All other entries are preserved.
 ///
-/// Mirrors Python `_forget_data_memory` lines 343-348.
+/// Mirrors Python `_forget_data_memory` lines 343-348. Tolerates both key
+/// encodings — see [`pipeline_status_dataset_key_variants`].
 #[instrument(
     name = "cognee.db.relational.data.clear_cognify_pipeline_status_for_data",
     level = "info",
@@ -319,15 +355,16 @@ pub async fn clear_cognify_pipeline_status_for_data(
         return Ok(());
     };
 
-    let dataset_id_str = uuid_hex::to_hex(dataset_id);
+    let dataset_keys = pipeline_status_dataset_key_variants(dataset_id);
     let Some(inner) = top_map.get_mut("cognify_pipeline") else {
         return Ok(());
     };
-    let modified = if let serde_json::Value::Object(inner_map) = inner {
-        inner_map.remove(&dataset_id_str).is_some()
-    } else {
-        false
-    };
+    let mut modified = false;
+    if let serde_json::Value::Object(inner_map) = inner {
+        for key in &dataset_keys {
+            modified |= inner_map.remove(key).is_some();
+        }
+    }
 
     if !modified {
         return Ok(());

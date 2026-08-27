@@ -59,8 +59,8 @@ use crate::config::CognifyConfig;
 use crate::error::CognifyError;
 use crate::fact_extraction::{FactExtractor, KnowledgeGraph};
 use crate::graph_integration::{
-    GraphEdgePair, GraphNodePair, deduplicate_nodes_and_edges, expand_with_nodes_and_edges,
-    retrieve_existing_edges,
+    ArtifactProducers, GraphEdgePair, GraphNodePair, deduplicate_nodes_and_edges,
+    expand_with_nodes_and_edges, retrieve_existing_edges,
 };
 use crate::pipeline::{CognifyResult, IndexedFieldsStats};
 use crate::qualification::{Qualification, check_pipeline_run_qualification};
@@ -116,6 +116,11 @@ pub struct ExtractedGraphData {
     pub documents: Vec<Document>,
     pub entities: Vec<GraphNodePair>,
     pub edges: Vec<GraphEdgePair>,
+    /// Every chunk that produced each merged entity and edge. Carried through
+    /// to [`upsert_provenance`], which turns it into one ownership row per
+    /// (artifact, data item). Not serialized anywhere — see
+    /// [`ArtifactProducers`].
+    pub producers: ArtifactProducers,
     pub dataset_id: Uuid,
     pub user_id: Option<Uuid>,
     pub tenant_id: Option<Uuid>,
@@ -129,6 +134,8 @@ pub struct SummarizedData {
     pub documents: Vec<Document>,
     pub entities: Vec<GraphNodePair>,
     pub edges: Vec<GraphEdgePair>,
+    /// Forwarded verbatim from [`ExtractedGraphData::producers`].
+    pub producers: ArtifactProducers,
     pub summaries: Vec<TextSummary>,
     pub dataset_id: Uuid,
     pub user_id: Option<Uuid>,
@@ -319,6 +326,54 @@ pub async fn extract_chunks_from_documents(
 // Task 3: extract_graph_from_data
 // ---------------------------------------------------------------------------
 
+/// Which entities each chunk should list in its `contains` field.
+///
+/// Every chunk that *produced* an entity links to it, not only the chunk that
+/// created it: merging keeps a single `metadata["chunk_id"]`, so keying off
+/// that alone drops the `contains` edge from every later producing chunk and
+/// leaves the merged entity at degree one — where `sweep_orphan_nodes`'
+/// `get_degree_one_nodes("Entity")` reaps it out from under the files that
+/// still reference it. Python's `_link_chunk_to_entity`
+/// (`expand_with_nodes_and_edges.py:107-127`) runs for every (chunk, node)
+/// pair and links them all.
+///
+/// Entities with no producer — ontology-derived nodes, and any caller that did
+/// not build a producer set — fall back to the `metadata["chunk_id"]` stamp so
+/// they behave exactly as before.
+fn chunk_entity_links(
+    nodes: &[GraphNodePair],
+    producers: &ArtifactProducers,
+) -> HashMap<Uuid, Vec<serde_json::Value>> {
+    let mut chunk_entity_map: HashMap<Uuid, Vec<serde_json::Value>> = HashMap::new();
+
+    for node_pair in nodes {
+        let entity_ref = json!(node_pair.entity.base.id.to_string());
+        let producing_chunks = producers.entity_chunks(node_pair.entity.base.id);
+
+        if producing_chunks.is_empty() {
+            if let Some(chunk_id_val) = node_pair.entity.base.get_metadata("chunk_id")
+                && let Some(chunk_id_str) = chunk_id_val.as_str()
+                && let Ok(chunk_id) = Uuid::parse_str(chunk_id_str)
+            {
+                chunk_entity_map
+                    .entry(chunk_id)
+                    .or_default()
+                    .push(entity_ref);
+            }
+            continue;
+        }
+
+        for chunk_id in producing_chunks {
+            chunk_entity_map
+                .entry(*chunk_id)
+                .or_default()
+                .push(entity_ref.clone());
+        }
+    }
+
+    chunk_entity_map
+}
+
 /// Extract knowledge graphs from chunks via LLM, then integrate (Task 3).
 ///
 /// For each chunk batch, calls the LLM to extract entities and relationships.
@@ -355,6 +410,7 @@ pub async fn extract_graph_from_data(
             documents: input.documents.clone(),
             entities: vec![],
             edges: vec![],
+            producers: ArtifactProducers::default(),
             dataset_id: input.dataset_id,
             user_id: input.user_id,
             tenant_id: input.tenant_id,
@@ -391,6 +447,7 @@ pub async fn extract_graph_from_data(
             documents: input.documents.clone(),
             entities: vec![],
             edges: vec![],
+            producers: ArtifactProducers::default(),
             dataset_id: input.dataset_id,
             user_id: input.user_id,
             tenant_id: input.tenant_id,
@@ -484,7 +541,7 @@ pub async fn extract_graph_from_data(
         .map(|chunk| (chunk.base.id, chunk.base.importance_weight.unwrap_or(0.5)))
         .collect();
 
-    let (nodes, edges) = expand_with_nodes_and_edges(
+    let (nodes, edges, producers) = expand_with_nodes_and_edges(
         all_graphs,
         input.dataset_id,
         &chunk_node_sets,
@@ -500,19 +557,7 @@ pub async fn extract_graph_from_data(
     let dedup_result = deduplicate_nodes_and_edges(nodes, edges);
 
     // Build chunk_id → entity IDs mapping from the deduplicated nodes.
-    // Each entity stores the chunk_id it was extracted from in its metadata.
-    let mut chunk_entity_map: HashMap<Uuid, Vec<serde_json::Value>> = HashMap::new();
-    for node_pair in &dedup_result.unique_nodes {
-        if let Some(chunk_id_val) = node_pair.entity.base.get_metadata("chunk_id")
-            && let Some(chunk_id_str) = chunk_id_val.as_str()
-            && let Ok(chunk_id) = Uuid::parse_str(chunk_id_str)
-        {
-            chunk_entity_map
-                .entry(chunk_id)
-                .or_default()
-                .push(json!(node_pair.entity.base.id.to_string()));
-        }
-    }
+    let chunk_entity_map = chunk_entity_links(&dedup_result.unique_nodes, &producers);
 
     // Populate DocumentChunk.contains with extracted entity IDs
     let mut updated_chunks = input.chunks.clone();
@@ -566,6 +611,7 @@ pub async fn extract_graph_from_data(
         documents: input.documents.clone(),
         entities: dedup_result.unique_nodes,
         edges: dedup_result.unique_edges,
+        producers,
         dataset_id: input.dataset_id,
         user_id: input.user_id,
         tenant_id: input.tenant_id,
@@ -800,6 +846,7 @@ pub async fn extract_custom_graph_from_data<M: crate::fact_extraction::GraphMode
             documents: input.documents.clone(),
             entities: vec![],
             edges: vec![],
+            producers: ArtifactProducers::default(),
             dataset_id: input.dataset_id,
             user_id: input.user_id,
             tenant_id: input.tenant_id,
@@ -833,6 +880,7 @@ pub async fn extract_custom_graph_from_data<M: crate::fact_extraction::GraphMode
             documents: input.documents.clone(),
             entities: vec![],
             edges: vec![],
+            producers: ArtifactProducers::default(),
             dataset_id: input.dataset_id,
             user_id: input.user_id,
             tenant_id: input.tenant_id,
@@ -884,6 +932,7 @@ pub async fn extract_custom_graph_from_data<M: crate::fact_extraction::GraphMode
         documents: input.documents.clone(),
         entities: vec![],
         edges: vec![],
+        producers: ArtifactProducers::default(),
         dataset_id: input.dataset_id,
         user_id: input.user_id,
         tenant_id: input.tenant_id,
@@ -956,6 +1005,7 @@ pub async fn summarize_text(
         documents: input.documents.clone(),
         entities: input.entities.clone(),
         edges: input.edges.clone(),
+        producers: input.producers.clone(),
         summaries,
         dataset_id: input.dataset_id,
         user_id: input.user_id,
@@ -1207,6 +1257,7 @@ pub async fn add_data_points(
             &input.summaries,
             &input.documents,
             &structural_edges,
+            &input.producers,
         )
         .await?;
     } else {
@@ -2466,19 +2517,67 @@ fn provenance_node_id(
     Uuid::new_v5(&Uuid::NAMESPACE_OID, raw.as_bytes())
 }
 
-/// Deterministic provenance edge ID, matching Python's:
-/// `uuid5(NAMESPACE_OID, str(tenant_id) + str(user_id) + str(dataset_id) + str(source_id) + str(edge_text) + str(target_id))`
+/// Deterministic provenance edge ID:
+/// `uuid5(NAMESPACE_OID, str(tenant_id) + str(user_id) + str(dataset_id) + str(data_id) + str(source_id) + str(edge_text) + str(target_id))`
+///
+/// **Deliberate divergence from Python.** `upsert_edges.py:47-56` omits
+/// `data_id`, so one edge has exactly one row there and
+/// `on_conflict_do_nothing` lets the first writer keep it — an edge produced by
+/// two files is attributed to one of them. Folding `data_id` in, the way
+/// [`provenance_node_id`] already does, lets several rows for one edge coexist
+/// instead of colliding on the primary key, which is what makes an edge
+/// removable only when its *last* owning file goes. Two consequences, both
+/// accepted:
+///
+/// - On a database the two SDKs share, Rust's ids stop colliding with
+///   Python's. The old formula *was* Python's, byte for byte, so both SDKs
+///   wrote the same primary key for one edge and whichever ran last silently
+///   took ownership; with `data_id` folded in the two sets of rows coexist and
+///   each side keeps its own ownership record. What that does not buy is
+///   mutual protection: the exclusivity check correlates on `slug`, and the
+///   slug formulas differ — Rust hashes [`triplet_slug`]'s
+///   `source + edge_text + target`, Python's `generate_edge_id` hashes the
+///   sanitized edge text alone, with no node ids — so a Python row is
+///   invisible to Rust's `NOT EXISTS` and vice versa. That gap predates this
+///   change and is issue #156's territory; nothing here widens it.
+/// - Re-cognifying a dataset processed before this change writes new rows
+///   rather than updating the old ones, which keep their `data_id` and go on
+///   protecting the artifact until the dataset is deleted. Over-protection, not
+///   loss; rewriting the historical ids would need every past run's producer
+///   set, which nothing records.
+///
+/// When `tenant_id` is `None`, Python's `str(None)` produces `"None"`.
 fn provenance_edge_id(
     tenant_id: Option<Uuid>,
     user_id: Uuid,
     dataset_id: Uuid,
+    data_id: Uuid,
     source_id: Uuid,
     edge_text: &str,
     target_id: Uuid,
 ) -> Uuid {
     let tid = tenant_id.map_or("None".to_string(), |t| t.to_string());
-    let raw = format!("{tid}{user_id}{dataset_id}{source_id}{edge_text}{target_id}");
+    let raw = format!("{tid}{user_id}{dataset_id}{data_id}{source_id}{edge_text}{target_id}");
     Uuid::new_v5(&Uuid::NAMESPACE_OID, raw.as_bytes())
+}
+
+/// The data items behind a set of producing chunks, in first-seen order.
+///
+/// Deduplicated: two chunks of the same file are two producers but one data
+/// item, and the row id formulas would then mint the same primary key twice in
+/// one batch. `upsert_nodes_on` / `upsert_edges_on` only collapse duplicates
+/// *within* a `PROVENANCE_INSERT_BATCH` chunk, so relying on them would be a
+/// latent bug at scale.
+fn producing_data_ids(chunk_ids: &[Uuid], chunk_data_map: &HashMap<Uuid, Uuid>) -> Vec<Uuid> {
+    let mut data_ids: Vec<Uuid> = Vec::new();
+    for chunk_id in chunk_ids {
+        if let Some(data_id) = chunk_data_map.get(chunk_id).copied()
+            && !data_ids.contains(&data_id)
+        {
+            data_ids.push(data_id);
+        }
+    }
+    data_ids
 }
 
 /// Deterministic edge slug, matching Python's `generate_edge_id`:
@@ -2502,6 +2601,13 @@ fn triplet_slug(source_id: Uuid, relationship_name: &str, target_id: Uuid) -> Uu
 ///
 /// Provenance records link graph nodes/edges back to the user, tenant,
 /// dataset, and data item they originated from.
+///
+/// `producers` names every chunk that produced each merged entity and edge.
+/// It is what turns a merged entity — and a merged edge — into one ownership
+/// row per producing data item, so the artifact is removed only when its last
+/// owning file is deleted. An empty set is a valid input: callers that build a
+/// `SummarizedData` themselves get the previous single-`chunk_id` (entities)
+/// and both-endpoints-agree (edges) attribution.
 #[allow(clippy::too_many_arguments)]
 async fn upsert_provenance(
     db: &DatabaseConnection,
@@ -2514,6 +2620,7 @@ async fn upsert_provenance(
     summaries: &[TextSummary],
     documents: &[Document],
     structural_edges: &[EdgeData],
+    producers: &ArtifactProducers,
 ) -> Result<(), CognifyError> {
     use cognee_database::ops::graph_storage;
     use cognee_database::{GraphEdge, GraphNode};
@@ -2542,14 +2649,30 @@ async fn upsert_provenance(
     for pair in entities {
         let entity = &pair.entity;
 
-        // Resolve data_id by tracing entity → chunk_id → document_id
-        let data_id = entity
-            .base
-            .get_metadata("chunk_id")
-            .and_then(|v| v.as_str())
-            .and_then(|s| Uuid::parse_str(s).ok())
-            .and_then(|chunk_id| chunk_data_map.get(&chunk_id).copied())
-            .unwrap_or(Uuid::nil());
+        // One ownership row per data item that produced this entity. A merged
+        // entity is created once but claimed by every file whose chunks
+        // yielded it, and `get_unique_nodes_for_data` only spares a slug that
+        // another `data_id` in the dataset claims — so a single row lets
+        // deleting one file sweep an entity the others still reference.
+        // Deduplicated because two chunks of the same file are two producers
+        // but one `data_id`, and `provenance_node_id` would then mint the same
+        // primary key twice in one batch.
+        let mut data_ids =
+            producing_data_ids(producers.entity_chunks(entity.base.id), &chunk_data_map);
+        if data_ids.is_empty() {
+            // Ontology-derived entities, and callers that hand us a
+            // `SummarizedData` they built themselves, carry no producer set:
+            // fall back to the single `chunk_id` stamp, then to nil.
+            data_ids.push(
+                entity
+                    .base
+                    .get_metadata("chunk_id")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| Uuid::parse_str(s).ok())
+                    .and_then(|chunk_id| chunk_data_map.get(&chunk_id).copied())
+                    .unwrap_or(Uuid::nil()),
+            );
+        }
 
         let indexed_fields = entity
             .base
@@ -2563,22 +2686,24 @@ async fn upsert_provenance(
             entity.name.clone()
         };
 
-        prov_nodes.push(GraphNode {
-            id: provenance_node_id(tenant_id, user_id, dataset_id, data_id, entity.base.id),
-            slug: entity.base.id,
-            user_id,
-            data_id,
-            dataset_id,
-            // Always `None` for now: nothing writes run ownership yet. The
-            // real run id starts flowing from the pipeline context once
-            // ownership is recorded before the artifacts it names.
-            pipeline_run_id: None,
-            label: Some(label),
-            node_type: entity.base.data_type.clone(),
-            indexed_fields,
-            attributes: serde_json::to_value(entity).ok(),
-            created_at: Utc::now(),
-        });
+        for data_id in data_ids {
+            prov_nodes.push(GraphNode {
+                id: provenance_node_id(tenant_id, user_id, dataset_id, data_id, entity.base.id),
+                slug: entity.base.id,
+                user_id,
+                data_id,
+                dataset_id,
+                // Always `None` for now: nothing writes run ownership yet. The
+                // real run id starts flowing from the pipeline context once
+                // ownership is recorded before the artifacts it names.
+                pipeline_run_id: None,
+                label: Some(label.clone()),
+                node_type: entity.base.data_type.clone(),
+                indexed_fields: indexed_fields.clone(),
+                attributes: serde_json::to_value(entity).ok(),
+                created_at: Utc::now(),
+            });
+        }
     }
 
     // DocumentChunks
@@ -2637,7 +2762,13 @@ async fn upsert_provenance(
     // EntityTypes
     for pair in entities {
         let et = &pair.entity_type;
-        // EntityType is shared across entities; use nil data_id as in Python
+        // EntityType rows carry a nil `data_id`: one type is shared by every
+        // entity of that type, so there is no single producing file. Note this
+        // is *not* Python's shape — `upsert_nodes` stamps the ctx `data_id` on
+        // every node it is handed, EntityTypes included — which means a
+        // data-scoped delete never selects these rows. Correcting that flips a
+        // class of artifacts from never-deleted to deleted and belongs in its
+        // own change.
         prov_nodes.push(GraphNode {
             id: provenance_node_id(tenant_id, user_id, dataset_id, Uuid::nil(), et.base.id),
             slug: et.base.id,
@@ -2721,38 +2852,67 @@ async fn upsert_provenance(
         // is about what the hash sees.
         let edge_text = sanitize_string(edge_text);
 
-        let source_data_id = entity_data_map.get(&edge_pair.source_entity_id).copied();
-        let target_data_id = entity_data_map.get(&edge_pair.target_entity_id).copied();
-        let data_id = match (source_data_id, target_data_id) {
-            (Some(source), Some(target)) if source == target => source,
-            _ => Uuid::nil(),
-        };
+        // One ownership row per data item that produced this edge — the same
+        // one-to-many relation the entity rows above carry, so an edge is swept
+        // only when its LAST owning file goes. The row *identity* carries
+        // `data_id` (`provenance_edge_id`), which is what lets several rows for
+        // one edge coexist instead of colliding on the primary key; the rows
+        // share a `slug` (`triplet_slug`), which is what
+        // `get_unique_edges_for_data` compares, so each row claims the edge on
+        // behalf of its own file. Without this, an edge between entities merged
+        // from two different files resolved to nil — and
+        // `get_unique_edges_for_data` never selects a nil row, so the edge's
+        // EdgeType/Triplet vectors outlived every file that produced them.
+        //
+        // Divergence from Python, deliberate: `upsert_edges.py` omits `data_id`
+        // from the row id and keeps exactly one row per edge, letting the last
+        // writer take ownership. See the note on `provenance_edge_id`.
+        let mut data_ids = producing_data_ids(
+            producers.edge_chunks(&edge_pair.dedup_key()),
+            &chunk_data_map,
+        );
+        if data_ids.is_empty() {
+            // No producer set (a hand-built `SummarizedData`): fall back to the
+            // old both-endpoints-agree heuristic, then to nil, so those callers
+            // keep exactly the rows they got before.
+            let source_data_id = entity_data_map.get(&edge_pair.source_entity_id).copied();
+            let target_data_id = entity_data_map.get(&edge_pair.target_entity_id).copied();
+            data_ids.push(match (source_data_id, target_data_id) {
+                (Some(source), Some(target)) if source == target => source,
+                _ => Uuid::nil(),
+            });
+        }
 
-        prov_edges.push(GraphEdge {
-            id: provenance_edge_id(
-                tenant_id,
+        // `slug`, endpoints, `relationship_name`, `label` and `attributes` are
+        // identical across the group; only `id` and `data_id` differ.
+        for data_id in data_ids {
+            prov_edges.push(GraphEdge {
+                id: provenance_edge_id(
+                    tenant_id,
+                    user_id,
+                    dataset_id,
+                    data_id,
+                    edge_pair.source_entity_id,
+                    &edge_text,
+                    edge_pair.target_entity_id,
+                ),
+                slug: triplet_slug(
+                    edge_pair.source_entity_id,
+                    &edge_text,
+                    edge_pair.target_entity_id,
+                ),
                 user_id,
+                data_id,
                 dataset_id,
-                edge_pair.source_entity_id,
-                &edge_text,
-                edge_pair.target_entity_id,
-            ),
-            slug: triplet_slug(
-                edge_pair.source_entity_id,
-                &edge_text,
-                edge_pair.target_entity_id,
-            ),
-            user_id,
-            data_id,
-            dataset_id,
-            pipeline_run_id: None,
-            source_node_id: edge_pair.source_entity_id,
-            destination_node_id: edge_pair.target_entity_id,
-            relationship_name: edge_text,
-            label: Some(edge_pair.relationship_name.clone()),
-            attributes: serde_json::to_value(&edge_pair.properties).ok(),
-            created_at: Utc::now(),
-        });
+                pipeline_run_id: None,
+                source_node_id: edge_pair.source_entity_id,
+                destination_node_id: edge_pair.target_entity_id,
+                relationship_name: edge_text.clone(),
+                label: Some(edge_pair.relationship_name.clone()),
+                attributes: serde_json::to_value(&edge_pair.properties).ok(),
+                created_at: Utc::now(),
+            });
+        }
     }
 
     // Structural edges from get_graph_from_model (contains, is_a, made_from, etc.)
@@ -2772,8 +2932,16 @@ async fn upsert_provenance(
         };
 
         prov_edges.push(GraphEdge {
+            // The nil `data_id` is folded into the id like every other edge's,
+            // so the structural rows need no special case in the formula.
             id: provenance_edge_id(
-                tenant_id, user_id, dataset_id, source_id, rel_name, target_id,
+                tenant_id,
+                user_id,
+                dataset_id,
+                Uuid::nil(),
+                source_id,
+                rel_name,
+                target_id,
             ),
             slug: edge_slug(rel_name),
             user_id,
@@ -4108,18 +4276,18 @@ pub fn build_temporal_cognify_pipeline(
 )]
 mod tests {
     use super::*;
-    use cognee_models::DataPoint;
+    use cognee_models::{DataPoint, Entity, EntityType};
     use cognee_storage::MockStorage;
 
     /// Provenance edge ids must be derived from *sanitized* edge text.
     ///
     /// Python's `upsert_edges`
     /// (`cognee/modules/graph/methods/upsert_edges.py:41-66`) derives its uuid5
-    /// id from `sanitized_edge_text`. If the Rust side hashed the raw text
-    /// instead, a `contains` edge whose `edge_text` carried a NUL would land in
-    /// Postgres with a *different* deterministic id than the Python SDK
-    /// produces for the same input — a silent cross-SDK divergence that only
-    /// shows up on NUL-bearing corpora.
+    /// id from `sanitized_edge_text`, and so must Rust: a `contains` edge whose
+    /// `edge_text` carried a NUL would otherwise hash under text no store ever
+    /// holds, so re-running the same corpus would not land on the same row.
+    /// (The Rust id also folds in `data_id` and therefore never equals Python's
+    /// — see [`provenance_edge_id`]. What is shared is *which text* is hashed.)
     ///
     /// The slug is a weaker claim and is asserted as such. Rust uses
     /// `triplet_slug(source, edge_text, target)` while Python uses
@@ -4139,6 +4307,8 @@ mod tests {
         let source = Uuid::new_v4();
         let target = Uuid::new_v4();
 
+        let data = Uuid::new_v4();
+
         let dirty = "Document chunk mentions Ali\u{0}ce";
         let clean = "Document chunk mentions Alice";
 
@@ -4147,11 +4317,12 @@ mod tests {
                 tenant,
                 user,
                 dataset,
+                data,
                 source,
                 &sanitize_string(dirty.to_string()),
                 target
             ),
-            provenance_edge_id(tenant, user, dataset, source, clean, target),
+            provenance_edge_id(tenant, user, dataset, data, source, clean, target),
             "sanitizing before hashing must reproduce the id Python derives"
         );
         assert_eq!(
@@ -4161,8 +4332,8 @@ mod tests {
         );
 
         assert_ne!(
-            provenance_edge_id(tenant, user, dataset, source, dirty, target),
-            provenance_edge_id(tenant, user, dataset, source, clean, target),
+            provenance_edge_id(tenant, user, dataset, data, source, dirty, target),
+            provenance_edge_id(tenant, user, dataset, data, source, clean, target),
             "hashing raw text must differ — otherwise this guard proves nothing"
         );
     }
@@ -4362,6 +4533,7 @@ mod tests {
             &[],    // summaries
             &[doc], // documents
             &[],    // structural_edges
+            &ArtifactProducers::default(),
         )
         .await
         .expect("wrapper provenance upsert must succeed");
@@ -4375,6 +4547,585 @@ mod tests {
         assert_eq!(
             nodes[0].slug, doc_id,
             "provenance node slug is the document id",
+        );
+    }
+
+    /// A merged entity must appear in the `contains` list of *every* chunk that
+    /// produced it, not just the first-seen one.
+    ///
+    /// `extract_graph_from_data` needs a live fact extractor, so the map
+    /// construction is tested through its own helper. The two-producer
+    /// assertion is what fails against the previous single-`metadata["chunk_id"]`
+    /// keying: the second chunk got no `contains` link, leaving the shared
+    /// entity at degree one for `sweep_orphan_nodes` to reap.
+    #[test]
+    fn chunk_entity_links_lists_a_merged_entity_under_every_producer() {
+        let dataset_id = Uuid::new_v4();
+        let (chunk_a, chunk_b) = (Uuid::new_v4(), Uuid::new_v4());
+
+        let entity_type = EntityType::from_node_type("Person", Some(dataset_id));
+        let mut entity = Entity::from_node("alice_1", "Alice", "", entity_type.base.id, None);
+        // Merging stamps only the first-seen chunk, which is exactly what the
+        // old keying read — so chunk_b is the assertion that regresses.
+        entity
+            .base
+            .set_metadata("chunk_id", json!(chunk_a.to_string()));
+        let entity_id = entity.base.id;
+        let nodes = vec![GraphNodePair {
+            entity,
+            entity_type,
+        }];
+
+        let mut producers = ArtifactProducers::default();
+        producers.record_entity(entity_id, chunk_a);
+        producers.record_entity(entity_id, chunk_b);
+
+        let links = chunk_entity_links(&nodes, &producers);
+
+        let expected = vec![json!(entity_id.to_string())];
+        assert_eq!(
+            links.get(&chunk_a),
+            Some(&expected),
+            "the first-seen chunk keeps its link"
+        );
+        assert_eq!(
+            links.get(&chunk_b),
+            Some(&expected),
+            "the second producing chunk must link the merged entity too"
+        );
+    }
+
+    /// Entities with no producer set — ontology-derived nodes, and callers that
+    /// build their own node list — keep the old `metadata["chunk_id"]` keying.
+    #[test]
+    fn chunk_entity_links_falls_back_to_the_chunk_id_stamp() {
+        let dataset_id = Uuid::new_v4();
+        let chunk_id = Uuid::new_v4();
+
+        let entity_type = EntityType::from_node_type("Person", Some(dataset_id));
+        let mut entity = Entity::from_node("bob_1", "Bob", "", entity_type.base.id, None);
+        entity
+            .base
+            .set_metadata("chunk_id", json!(chunk_id.to_string()));
+        let entity_id = entity.base.id;
+        let nodes = vec![GraphNodePair {
+            entity,
+            entity_type,
+        }];
+
+        let links = chunk_entity_links(&nodes, &ArtifactProducers::default());
+
+        assert_eq!(links.len(), 1);
+        assert_eq!(
+            links.get(&chunk_id),
+            Some(&vec![json!(entity_id.to_string())])
+        );
+    }
+
+    /// Seed a dataset and return the in-memory connection plus its ids.
+    async fn provenance_fixture() -> (cognee_database::DatabaseConnection, Uuid, Uuid) {
+        use cognee_database::ops::datasets::create_dataset;
+        use cognee_database::{connect, initialize};
+        use cognee_models::Dataset;
+
+        let db = connect("sqlite::memory:").await.expect("connect");
+        initialize(&db).await.expect("migrate");
+
+        let user_id = Uuid::new_v4();
+        let dataset_id = Uuid::new_v4();
+        create_dataset(
+            &db,
+            Dataset::new("prov-producers".into(), user_id, None, dataset_id),
+        )
+        .await
+        .expect("seed dataset");
+
+        (db, user_id, dataset_id)
+    }
+
+    fn provenance_chunk(chunk_id: Uuid, document_id: Uuid) -> DocumentChunk {
+        DocumentChunk::new(
+            chunk_id,
+            "chunk text".to_string(),
+            2,
+            0,
+            "sentence_end".to_string(),
+            document_id,
+        )
+    }
+
+    /// A merged entity claimed by two files must own one row per file: the
+    /// exclusivity check spares a slug only when another `data_id` in the
+    /// dataset claims it, so a single row lets deleting one file sweep an
+    /// entity the other still references.
+    #[tokio::test]
+    async fn upsert_provenance_writes_one_entity_row_per_producing_data_item() {
+        use cognee_database::ops::graph_storage::get_nodes_by_dataset;
+
+        let (db, user_id, dataset_id) = provenance_fixture().await;
+
+        let (doc_a, doc_b) = (Uuid::new_v4(), Uuid::new_v4());
+        let (chunk_a, chunk_b) = (Uuid::new_v4(), Uuid::new_v4());
+        let chunks = vec![
+            provenance_chunk(chunk_a, doc_a),
+            provenance_chunk(chunk_b, doc_b),
+        ];
+
+        let entity_type = EntityType::from_node_type("Person", Some(dataset_id));
+        let entity = Entity::from_node("alice_1", "Alice", "", entity_type.base.id, None);
+        let entity_id = entity.base.id;
+        let entities = vec![GraphNodePair {
+            entity,
+            entity_type,
+        }];
+
+        let mut producers = ArtifactProducers::default();
+        producers.record_entity(entity_id, chunk_a);
+        producers.record_entity(entity_id, chunk_b);
+
+        upsert_provenance(
+            &db,
+            None,
+            user_id,
+            dataset_id,
+            &chunks,
+            &entities,
+            &[],
+            &[],
+            &[],
+            &[],
+            &producers,
+        )
+        .await
+        .expect("provenance upsert must succeed");
+
+        let rows: Vec<_> = get_nodes_by_dataset(&db, dataset_id)
+            .await
+            .expect("query")
+            .into_iter()
+            .filter(|n| n.slug == entity_id)
+            .collect();
+
+        assert_eq!(rows.len(), 2, "one ownership row per producing data item");
+
+        let mut owners: Vec<Uuid> = rows.iter().map(|n| n.data_id).collect();
+        owners.sort();
+        let mut expected = vec![doc_a, doc_b];
+        expected.sort();
+        assert_eq!(owners, expected);
+
+        for row in &rows {
+            assert_eq!(
+                row.id,
+                provenance_node_id(None, user_id, dataset_id, row.data_id, entity_id),
+                "the row id keeps the shared-DB scheme, which already carries data_id",
+            );
+        }
+    }
+
+    /// Two chunks of the *same* file are two producers but one data item.
+    /// Without deduplication `provenance_node_id` would mint the same primary
+    /// key twice in one batch.
+    #[tokio::test]
+    async fn upsert_provenance_collapses_two_chunks_of_one_file_to_one_row() {
+        use cognee_database::ops::graph_storage::get_nodes_by_dataset;
+
+        let (db, user_id, dataset_id) = provenance_fixture().await;
+
+        let doc_a = Uuid::new_v4();
+        let (chunk_1, chunk_2) = (Uuid::new_v4(), Uuid::new_v4());
+        let chunks = vec![
+            provenance_chunk(chunk_1, doc_a),
+            provenance_chunk(chunk_2, doc_a),
+        ];
+
+        let entity_type = EntityType::from_node_type("Person", Some(dataset_id));
+        let entity = Entity::from_node("alice_1", "Alice", "", entity_type.base.id, None);
+        let entity_id = entity.base.id;
+        let entities = vec![GraphNodePair {
+            entity,
+            entity_type,
+        }];
+
+        let mut producers = ArtifactProducers::default();
+        producers.record_entity(entity_id, chunk_1);
+        producers.record_entity(entity_id, chunk_2);
+
+        upsert_provenance(
+            &db,
+            None,
+            user_id,
+            dataset_id,
+            &chunks,
+            &entities,
+            &[],
+            &[],
+            &[],
+            &[],
+            &producers,
+        )
+        .await
+        .expect("provenance upsert must succeed");
+
+        let rows: Vec<_> = get_nodes_by_dataset(&db, dataset_id)
+            .await
+            .expect("query")
+            .into_iter()
+            .filter(|n| n.slug == entity_id)
+            .collect();
+
+        assert_eq!(rows.len(), 1, "one data item owns the entity once");
+        assert_eq!(rows[0].data_id, doc_a);
+    }
+
+    /// Callers that build a `SummarizedData` themselves hand over no producer
+    /// set; those entities keep the old single-`chunk_id` attribution.
+    #[tokio::test]
+    async fn upsert_provenance_falls_back_to_chunk_metadata_without_producers() {
+        use cognee_database::ops::graph_storage::get_nodes_by_dataset;
+
+        let (db, user_id, dataset_id) = provenance_fixture().await;
+
+        let doc_a = Uuid::new_v4();
+        let chunk_a = Uuid::new_v4();
+        let chunks = vec![provenance_chunk(chunk_a, doc_a)];
+
+        let entity_type = EntityType::from_node_type("Person", Some(dataset_id));
+        let mut entity = Entity::from_node("alice_1", "Alice", "", entity_type.base.id, None);
+        entity
+            .base
+            .set_metadata("chunk_id", json!(chunk_a.to_string()));
+        let entity_id = entity.base.id;
+        let entities = vec![GraphNodePair {
+            entity,
+            entity_type,
+        }];
+
+        upsert_provenance(
+            &db,
+            None,
+            user_id,
+            dataset_id,
+            &chunks,
+            &entities,
+            &[],
+            &[],
+            &[],
+            &[],
+            &ArtifactProducers::default(),
+        )
+        .await
+        .expect("provenance upsert must succeed");
+
+        let rows: Vec<_> = get_nodes_by_dataset(&db, dataset_id)
+            .await
+            .expect("query")
+            .into_iter()
+            .filter(|n| n.slug == entity_id)
+            .collect();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].data_id, doc_a);
+    }
+
+    /// An edge produced by two files must own one row per file: the rows share
+    /// a `slug`, and `get_unique_edges_for_data` spares a slug only when
+    /// another `data_id` in the dataset claims it — so a single row lets
+    /// deleting one file sweep an edge (and its EdgeType/Triplet vectors) the
+    /// other still references.
+    ///
+    /// Before per-producer rows existed the edge resolved to a nil `data_id`,
+    /// which the exclusivity query never selects at all, so its vectors
+    /// outlived every file that produced them.
+    #[tokio::test]
+    async fn upsert_provenance_writes_one_edge_row_per_producing_data_item() {
+        use cognee_database::ops::graph_storage::get_edges_by_dataset;
+
+        let (db, user_id, dataset_id) = provenance_fixture().await;
+
+        let (doc_a, doc_b) = (Uuid::new_v4(), Uuid::new_v4());
+        let (chunk_a, chunk_b) = (Uuid::new_v4(), Uuid::new_v4());
+        let chunks = vec![
+            provenance_chunk(chunk_a, doc_a),
+            provenance_chunk(chunk_b, doc_b),
+        ];
+
+        // Two entities, each stamped with a *different* file's chunk, so the
+        // no-producer fallback would have yielded nil.
+        let entity_type = EntityType::from_node_type("Person", Some(dataset_id));
+        let mut alice = Entity::from_node("alice_1", "Alice", "", entity_type.base.id, None);
+        alice
+            .base
+            .set_metadata("chunk_id", json!(chunk_a.to_string()));
+        let mut bob = Entity::from_node("bob_1", "Bob", "", entity_type.base.id, None);
+        bob.base
+            .set_metadata("chunk_id", json!(chunk_b.to_string()));
+        let (alice_id, bob_id) = (alice.base.id, bob.base.id);
+        let entities = vec![
+            GraphNodePair {
+                entity: alice,
+                entity_type: entity_type.clone(),
+            },
+            GraphNodePair {
+                entity: bob,
+                entity_type,
+            },
+        ];
+
+        let mut edge = GraphEdgePair::new(alice_id, bob_id, "knows");
+        edge.add_property("edge_text", "Alice knows Bob");
+        let mut producers = ArtifactProducers::default();
+        producers.record_edge(edge.dedup_key(), chunk_a);
+        producers.record_edge(edge.dedup_key(), chunk_b);
+
+        upsert_provenance(
+            &db,
+            None,
+            user_id,
+            dataset_id,
+            &chunks,
+            &entities,
+            std::slice::from_ref(&edge),
+            &[],
+            &[],
+            &[],
+            &producers,
+        )
+        .await
+        .expect("provenance upsert must succeed");
+
+        let rows: Vec<_> = get_edges_by_dataset(&db, dataset_id)
+            .await
+            .expect("query")
+            .into_iter()
+            .filter(|e| e.source_node_id == alice_id && e.destination_node_id == bob_id)
+            .collect();
+
+        assert_eq!(rows.len(), 2, "one ownership row per producing data item");
+
+        let mut owners: Vec<Uuid> = rows.iter().map(|e| e.data_id).collect();
+        owners.sort();
+        let mut expected = vec![doc_a, doc_b];
+        expected.sort();
+        assert_eq!(owners, expected);
+
+        for row in &rows {
+            assert_eq!(
+                row.id,
+                provenance_edge_id(
+                    None,
+                    user_id,
+                    dataset_id,
+                    row.data_id,
+                    alice_id,
+                    "knows",
+                    bob_id
+                ),
+                "the row id folds in data_id, which is what lets the rows coexist",
+            );
+        }
+        assert_ne!(rows[0].id, rows[1].id, "the two rows must not collide");
+
+        // The load-bearing assertion: the exclusivity query compares `slug`,
+        // so both rows must claim the *same* edge.
+        assert_eq!(
+            rows[0].slug,
+            triplet_slug(alice_id, "knows", bob_id),
+            "the slug identifies the edge itself, independent of its owner"
+        );
+        assert_eq!(rows[0].slug, rows[1].slug);
+    }
+
+    /// Two chunks of the *same* file are two producers but one data item — the
+    /// edge twin of the entity case above. Without deduplication
+    /// `provenance_edge_id` would mint the same primary key twice in one batch.
+    #[tokio::test]
+    async fn upsert_provenance_collapses_two_chunks_of_one_file_to_one_edge_row() {
+        use cognee_database::ops::graph_storage::get_edges_by_dataset;
+
+        let (db, user_id, dataset_id) = provenance_fixture().await;
+
+        let doc_a = Uuid::new_v4();
+        let (chunk_1, chunk_2) = (Uuid::new_v4(), Uuid::new_v4());
+        let chunks = vec![
+            provenance_chunk(chunk_1, doc_a),
+            provenance_chunk(chunk_2, doc_a),
+        ];
+
+        let entity_type = EntityType::from_node_type("Person", Some(dataset_id));
+        let alice = Entity::from_node("alice_1", "Alice", "", entity_type.base.id, None);
+        let bob = Entity::from_node("bob_1", "Bob", "", entity_type.base.id, None);
+        let (alice_id, bob_id) = (alice.base.id, bob.base.id);
+        let entities = vec![
+            GraphNodePair {
+                entity: alice,
+                entity_type: entity_type.clone(),
+            },
+            GraphNodePair {
+                entity: bob,
+                entity_type,
+            },
+        ];
+
+        let edge = GraphEdgePair::new(alice_id, bob_id, "knows");
+        let mut producers = ArtifactProducers::default();
+        producers.record_edge(edge.dedup_key(), chunk_1);
+        producers.record_edge(edge.dedup_key(), chunk_2);
+
+        upsert_provenance(
+            &db,
+            None,
+            user_id,
+            dataset_id,
+            &chunks,
+            &entities,
+            std::slice::from_ref(&edge),
+            &[],
+            &[],
+            &[],
+            &producers,
+        )
+        .await
+        .expect("provenance upsert must succeed");
+
+        let rows: Vec<_> = get_edges_by_dataset(&db, dataset_id)
+            .await
+            .expect("query")
+            .into_iter()
+            .filter(|e| e.source_node_id == alice_id && e.destination_node_id == bob_id)
+            .collect();
+
+        assert_eq!(rows.len(), 1, "one data item owns the edge once");
+        assert_eq!(rows[0].data_id, doc_a);
+    }
+
+    /// Callers that build a `SummarizedData` themselves hand over no producer
+    /// set; those edges keep the old both-endpoints-agree attribution.
+    #[tokio::test]
+    async fn upsert_provenance_falls_back_to_endpoint_agreement_without_edge_producers() {
+        use cognee_database::ops::graph_storage::get_edges_by_dataset;
+
+        /// Stamp both endpoints with the given chunks and upsert one edge with
+        /// an empty producer set, returning the rows written for it.
+        async fn rows_for(
+            source_chunk: Uuid,
+            target_chunk: Uuid,
+            chunk_docs: &[(Uuid, Uuid)],
+        ) -> Vec<cognee_database::GraphEdge> {
+            let (db, user_id, dataset_id) = provenance_fixture().await;
+            let chunks: Vec<DocumentChunk> = chunk_docs
+                .iter()
+                .map(|(chunk_id, doc_id)| provenance_chunk(*chunk_id, *doc_id))
+                .collect();
+
+            let entity_type = EntityType::from_node_type("Person", Some(dataset_id));
+            let mut alice = Entity::from_node("alice_1", "Alice", "", entity_type.base.id, None);
+            alice
+                .base
+                .set_metadata("chunk_id", json!(source_chunk.to_string()));
+            let mut bob = Entity::from_node("bob_1", "Bob", "", entity_type.base.id, None);
+            bob.base
+                .set_metadata("chunk_id", json!(target_chunk.to_string()));
+            let (alice_id, bob_id) = (alice.base.id, bob.base.id);
+            let entities = vec![
+                GraphNodePair {
+                    entity: alice,
+                    entity_type: entity_type.clone(),
+                },
+                GraphNodePair {
+                    entity: bob,
+                    entity_type,
+                },
+            ];
+
+            let edge = GraphEdgePair::new(alice_id, bob_id, "knows");
+
+            upsert_provenance(
+                &db,
+                None,
+                user_id,
+                dataset_id,
+                &chunks,
+                &entities,
+                std::slice::from_ref(&edge),
+                &[],
+                &[],
+                &[],
+                &ArtifactProducers::default(),
+            )
+            .await
+            .expect("provenance upsert must succeed");
+
+            get_edges_by_dataset(&db, dataset_id)
+                .await
+                .expect("query")
+                .into_iter()
+                .filter(|e| e.source_node_id == alice_id && e.destination_node_id == bob_id)
+                .collect()
+        }
+
+        // Both endpoints from one file: that file owns the single row.
+        let doc_a = Uuid::new_v4();
+        let (chunk_1, chunk_2) = (Uuid::new_v4(), Uuid::new_v4());
+        let rows = rows_for(chunk_1, chunk_2, &[(chunk_1, doc_a), (chunk_2, doc_a)]).await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].data_id, doc_a);
+
+        // Endpoints from different files: nil, exactly as before.
+        let doc_b = Uuid::new_v4();
+        let rows = rows_for(chunk_1, chunk_2, &[(chunk_1, doc_a), (chunk_2, doc_b)]).await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].data_id, Uuid::nil());
+    }
+
+    /// Structural edges span several DataPoints and keep their nil `data_id`;
+    /// the nil is now folded into the row id like every other edge's.
+    #[tokio::test]
+    async fn structural_edge_rows_keep_a_nil_data_id() {
+        use cognee_database::ops::graph_storage::get_edges_by_dataset;
+
+        let (db, user_id, dataset_id) = provenance_fixture().await;
+
+        let source_id = Uuid::new_v4();
+        let target_id = Uuid::new_v4();
+        let structural = vec![(
+            source_id.to_string(),
+            target_id.to_string(),
+            "is_a".to_string(),
+            HashMap::new(),
+        )];
+
+        upsert_provenance(
+            &db,
+            None,
+            user_id,
+            dataset_id,
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &structural,
+            &ArtifactProducers::default(),
+        )
+        .await
+        .expect("provenance upsert must succeed");
+
+        let rows = get_edges_by_dataset(&db, dataset_id).await.expect("query");
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].data_id, Uuid::nil());
+        assert_eq!(
+            rows[0].id,
+            provenance_edge_id(
+                None,
+                user_id,
+                dataset_id,
+                Uuid::nil(),
+                source_id,
+                "is_a",
+                target_id
+            ),
         );
     }
 
@@ -4551,10 +5302,18 @@ mod tests {
         assert_ne!(id_none, id_real);
     }
 
+    /// Pins the edge id formula, which now carries `data_id` between the
+    /// dataset and the source — a deliberate divergence from Python, whose
+    /// `upsert_edges` omits it (see [`provenance_edge_id`]).
+    ///
+    /// The second assertion is the one the whole per-producer design rests on:
+    /// two data items must yield two different ids, or the rows would collide
+    /// on the primary key and only one owner would survive.
     #[test]
     fn provenance_edge_id_works_with_none_tenant() {
         let user_id = Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap();
         let dataset_id = Uuid::parse_str("00000000-0000-0000-0000-000000000002").unwrap();
+        let data_id = Uuid::parse_str("00000000-0000-0000-0000-000000000005").unwrap();
         let source_id = Uuid::parse_str("00000000-0000-0000-0000-000000000003").unwrap();
         let target_id = Uuid::parse_str("00000000-0000-0000-0000-000000000004").unwrap();
 
@@ -4562,14 +5321,31 @@ mod tests {
             None,
             user_id,
             dataset_id,
+            data_id,
             source_id,
             "relates_to",
             target_id,
         );
 
-        let expected_input = format!("None{user_id}{dataset_id}{source_id}relates_to{target_id}");
+        let expected_input =
+            format!("None{user_id}{dataset_id}{data_id}{source_id}relates_to{target_id}");
         let expected = Uuid::new_v5(&Uuid::NAMESPACE_OID, expected_input.as_bytes());
         assert_eq!(id, expected);
+
+        let other_data_id = Uuid::parse_str("00000000-0000-0000-0000-000000000006").unwrap();
+        assert_ne!(
+            id,
+            provenance_edge_id(
+                None,
+                user_id,
+                dataset_id,
+                other_data_id,
+                source_id,
+                "relates_to",
+                target_id,
+            ),
+            "two owners of one edge must get two rows, not one collision"
+        );
     }
 
     /// The provenance guard must fire when db + user_id are present,
@@ -4941,6 +5717,7 @@ mod tests {
             documents: vec![document],
             entities: vec![],
             edges: vec![],
+            producers: ArtifactProducers::default(),
             summaries: vec![],
             dataset_id: Uuid::new_v4(),
             user_id: None,
@@ -5015,7 +5792,7 @@ mod tests {
         let dataset_id = Uuid::new_v4();
         let resolver = NoOpOntologyResolver::new();
 
-        let (_nodes, edges) = expand_with_nodes_and_edges(
+        let (_nodes, edges, _producers) = expand_with_nodes_and_edges(
             vec![(chunk_id, graph)],
             dataset_id,
             &HashMap::new(),
@@ -5300,6 +6077,7 @@ mod tests {
             documents: vec![text_doc, dlt_doc],
             entities: vec![],
             edges: vec![],
+            producers: ArtifactProducers::default(),
             dataset_id: Uuid::new_v4(),
             user_id: None,
             tenant_id: None,

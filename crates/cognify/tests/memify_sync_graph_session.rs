@@ -162,6 +162,96 @@ async fn sync_first_run_merges_all_edges() {
     assert!(parsed["target"]["label"].is_string());
 }
 
+/// Per-producer edge ownership rows must not multiply a session's graph
+/// context.
+///
+/// `upsert_provenance` now writes one ledger row per data item that produced an
+/// edge, so `get_edges_since` returns N rows for one logical edge. Emitting one
+/// line per row would consume the `max_lines` cap — which is enforced by
+/// dropping the *oldest* lines — and evict older, distinct edges.
+#[tokio::test]
+async fn sync_collapses_per_producer_rows_for_one_edge() {
+    let (_db_dir, db) = setup_db().await;
+    let (_sess_dir, mgr, _store) = make_session_manager();
+    let owner = Uuid::new_v4();
+    let user_id = owner.to_string();
+    let session_id = "sess-dedup";
+    let dataset_id = Uuid::new_v4();
+    datasets::create_dataset(
+        &db,
+        Dataset::new("ds-dedup".to_string(), owner, None, dataset_id),
+    )
+    .await
+    .unwrap();
+
+    let alice = make_node(dataset_id, owner, "Alice", "Person");
+    let bob = make_node(dataset_id, owner, "Bob", "Person");
+    graph_storage::upsert_nodes(&db, &[alice.clone(), bob.clone()])
+        .await
+        .unwrap();
+
+    let now = Utc::now();
+    // Three ledger rows: two producers of one logical edge, plus a distinct
+    // edge between the same endpoints.
+    let mut first_producer = make_edge(
+        dataset_id,
+        owner,
+        alice.id,
+        bob.id,
+        "knows",
+        now - Duration::minutes(3),
+    );
+    let mut second_producer = first_producer.clone();
+    // Distinct `id`/`data_id`, shared `slug` and endpoints — the exact shape
+    // `upsert_provenance` emits for an edge two files produced.
+    second_producer.id = Uuid::new_v4();
+    second_producer.data_id = Uuid::new_v4();
+    second_producer.created_at = now - Duration::minutes(2);
+    first_producer.slug = second_producer.slug;
+
+    let other = make_edge(
+        dataset_id,
+        owner,
+        alice.id,
+        bob.id,
+        "works_with",
+        now - Duration::minutes(1),
+    );
+
+    graph_storage::upsert_edges(&db, &[first_producer, second_producer, other])
+        .await
+        .unwrap();
+
+    let ckstore = SeaOrmCheckpointStore::new(Arc::clone(&db));
+    let result = sync_graph_to_session(
+        &user_id,
+        session_id,
+        dataset_id,
+        db.as_ref(),
+        mgr.as_ref(),
+        &ckstore,
+        DEFAULT_MAX_LINES,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(result.synced, 2, "the two producer rows are one edge");
+    assert_eq!(result.total, 2);
+
+    let ctx = mgr
+        .get_graph_context(Some(session_id), Some(&user_id))
+        .await
+        .unwrap()
+        .unwrap();
+    let lines: Vec<&str> = ctx.split('\n').filter(|l| !l.is_empty()).collect();
+    assert_eq!(lines.len(), 2);
+    assert_eq!(
+        lines.iter().filter(|l| l.contains("knows")).count(),
+        1,
+        "the multi-owner edge appears exactly once"
+    );
+}
+
 #[tokio::test]
 async fn sync_second_run_picks_up_new_edges_only() {
     let (_db_dir, db) = setup_db().await;

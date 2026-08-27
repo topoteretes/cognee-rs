@@ -14,7 +14,7 @@ use cognee_utils::{generate_edge_name, normalize_identifier};
 use tracing::warn;
 
 use crate::fact_extraction::{KnowledgeGraph, Node};
-use crate::graph_integration::types::{GraphEdgePair, GraphNodePair};
+use crate::graph_integration::types::{ArtifactProducers, GraphEdgePair, GraphNodePair};
 
 /// Stamp a freshly-constructed `Entity` / `EntityType` / `EdgeType` at
 /// emission time so the pipeline executor's recursion finds
@@ -115,7 +115,10 @@ pub(crate) fn pre_stamp_extraction(
 ///   `None` to leave the rank unstamped.
 ///
 /// # Returns
-/// Tuple of (graph_nodes, graph_edges) for storage.
+/// Tuple of (graph_nodes, graph_edges, producers) for storage. The
+/// [`ArtifactProducers`] set names every chunk that produced each merged
+/// entity and edge, not just the one that created it — merging keeps only
+/// the first, and one ownership row per producing file needs all of them.
 #[allow(clippy::too_many_arguments)]
 pub async fn expand_with_nodes_and_edges(
     graphs: Vec<(Uuid, KnowledgeGraph)>,
@@ -126,7 +129,7 @@ pub async fn expand_with_nodes_and_edges(
     ontology_resolver: &dyn OntologyResolver,
     user_label: Option<&str>,
     task_rank: Option<i32>,
-) -> (Vec<GraphNodePair>, Vec<GraphEdgePair>) {
+) -> (Vec<GraphNodePair>, Vec<GraphEdgePair>, ArtifactProducers) {
     // Function-local visited set for the pre-stamp pass. The executor's
     // per-run set sees the same DataPoints during its own walk and
     // short-circuits via the `if dp.source_pipeline.is_none()` guard
@@ -138,6 +141,10 @@ pub async fn expand_with_nodes_and_edges(
     let mut node_map = HashMap::new();
     let mut edge_map = HashMap::new();
     let mut type_map = HashMap::new();
+
+    // Every chunk that produced each merged artifact, not only the one that
+    // created it (see the `# Returns` note above).
+    let mut producers = ArtifactProducers::default();
 
     // Map from node_id to entity_id for edge resolution
     let mut node_id_to_entity_id: HashMap<String, Uuid> = HashMap::new();
@@ -346,6 +353,15 @@ pub async fn expand_with_nodes_and_edges(
                     &mut ontology_edges_out,
                 );
             }
+
+            // Record this chunk as a producer whether or not it was the chunk
+            // that created the entity. Read back out of `node_id_to_entity_id`
+            // rather than from the vacant branch so the id is the canonical one
+            // after an ontology individual rewrote `entity.base.id`, and so the
+            // occupied branch is covered by the same two lines.
+            if let Some(entity_id) = node_id_to_entity_id.get(&normalize_identifier(&node.id)) {
+                producers.record_entity(*entity_id, chunk_id);
+            }
         }
 
         // Step 3: Create Edges (skip if already in database)
@@ -387,6 +403,13 @@ pub async fn expand_with_nodes_and_edges(
                 *target_entity_id,
                 edge.relationship_name.clone(),
             );
+
+            // Same reasoning as for entities: every chunk that yielded this
+            // edge is a producer, not only the one that created it. Edges the
+            // `existing_edges_set` skip dropped are deliberately *not* recorded
+            // — an earlier run created them and this run writes no ownership
+            // row for them either.
+            producers.record_edge(edge_key.clone(), chunk_id);
 
             if let std::collections::hash_map::Entry::Vacant(e) = edge_map.entry(edge_key) {
                 // Mirror Python's `_process_graph_edges` edge property map
@@ -445,7 +468,10 @@ pub async fn expand_with_nodes_and_edges(
     let mut graph_edges: Vec<GraphEdgePair> = edge_map.into_values().collect();
     graph_edges.extend(ontology_edges_out);
 
-    (graph_nodes, graph_edges)
+    // Ontology-derived nodes and edges appended above have no producing chunk
+    // and therefore no producer entry; callers fall back to today's behavior
+    // for them.
+    (graph_nodes, graph_edges, producers)
 }
 
 /// Helper: Create Entity from Node.
@@ -690,7 +716,7 @@ mod tests {
         let chunk_id = Uuid::new_v4();
         let dataset_id = Uuid::new_v4();
 
-        let (nodes, edges) = expand_with_nodes_and_edges(
+        let (nodes, edges, _producers) = expand_with_nodes_and_edges(
             vec![(chunk_id, graph)],
             dataset_id,
             &HashMap::new(),
@@ -723,7 +749,7 @@ mod tests {
         let chunk_id = Uuid::new_v4();
         let dataset_id = Uuid::new_v4();
 
-        let (nodes, edges) = expand_with_nodes_and_edges(
+        let (nodes, edges, _producers) = expand_with_nodes_and_edges(
             vec![(chunk_id, graph1), (chunk_id, graph2)],
             dataset_id,
             &HashMap::new(),
@@ -743,12 +769,101 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn expand_records_every_producing_chunk_for_a_merged_entity() {
+        let (chunk_a, chunk_b) = (Uuid::new_v4(), Uuid::new_v4());
+        let dataset_id = Uuid::new_v4();
+
+        let (nodes, _edges, producers) = expand_with_nodes_and_edges(
+            vec![
+                (chunk_a, create_test_graph()),
+                (chunk_b, create_test_graph()),
+            ],
+            dataset_id,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            &noop(),
+            None,
+            None,
+        )
+        .await;
+
+        // The merge still yields one entity per node id …
+        assert_eq!(nodes.len(), 2);
+
+        // … but both chunks are recorded as its producers, in first-seen order.
+        let alice_id = Entity::id_for("alice_1");
+        assert_eq!(producers.entity_chunks(alice_id), [chunk_a, chunk_b]);
+    }
+
+    #[tokio::test]
+    async fn expand_records_every_producing_chunk_for_a_merged_edge() {
+        let (chunk_a, chunk_b) = (Uuid::new_v4(), Uuid::new_v4());
+        let dataset_id = Uuid::new_v4();
+
+        let (_nodes, edges, producers) = expand_with_nodes_and_edges(
+            vec![
+                (chunk_a, create_test_graph()),
+                (chunk_b, create_test_graph()),
+            ],
+            dataset_id,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            &noop(),
+            None,
+            None,
+        )
+        .await;
+
+        assert_eq!(edges.len(), 1);
+        assert_eq!(
+            producers.edge_chunks(&edges[0].dedup_key()),
+            [chunk_a, chunk_b]
+        );
+    }
+
+    #[tokio::test]
+    async fn expand_records_no_producers_for_ontology_derived_entities() {
+        let chunk_id = Uuid::new_v4();
+        let dataset_id = Uuid::new_v4();
+        let resolver = MockOntologyResolver;
+
+        let (nodes, _edges, producers) = expand_with_nodes_and_edges(
+            vec![(chunk_id, create_test_graph())],
+            dataset_id,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            &resolver,
+            None,
+            None,
+        )
+        .await;
+
+        // The ontology ancestor class is appended with no producing chunk, so
+        // the ownership row falls back to the metadata stamp.
+        let ancestor_id = Entity::id_for("legalentity");
+        assert!(
+            nodes.iter().any(|n| n.entity.base.id == ancestor_id),
+            "expected the ontology-derived ancestor node to be present"
+        );
+        assert!(producers.entity_chunks(ancestor_id).is_empty());
+
+        // An LLM entity canonicalised by the ontology is still recorded, under
+        // its rewritten id — this is why recording reads `node_id_to_entity_id`
+        // rather than the id the vacant branch constructed.
+        let alice_id = Entity::id_for("alice_canonical");
+        assert_eq!(producers.entity_chunks(alice_id), [chunk_id]);
+    }
+
+    #[tokio::test]
     async fn test_expand_creates_entity_types() {
         let graph = create_test_graph();
         let chunk_id = Uuid::new_v4();
         let dataset_id = Uuid::new_v4();
 
-        let (nodes, _) = expand_with_nodes_and_edges(
+        let (nodes, _, _producers) = expand_with_nodes_and_edges(
             vec![(chunk_id, graph)],
             dataset_id,
             &HashMap::new(),
@@ -778,7 +893,7 @@ mod tests {
         let chunk_id = Uuid::new_v4();
         let dataset_id = Uuid::new_v4();
 
-        let (nodes, _) = expand_with_nodes_and_edges(
+        let (nodes, _, _producers) = expand_with_nodes_and_edges(
             vec![(chunk_id, graph)],
             dataset_id,
             &HashMap::new(),
@@ -802,7 +917,7 @@ mod tests {
         let chunk_id = Uuid::new_v4();
         let dataset_id = Uuid::new_v4();
 
-        let (nodes, _) = expand_with_nodes_and_edges(
+        let (nodes, _, _producers) = expand_with_nodes_and_edges(
             vec![(chunk_id, graph)],
             dataset_id,
             &HashMap::new(),
@@ -841,7 +956,7 @@ mod tests {
         let mut chunk_node_sets: HashMap<Uuid, Vec<serde_json::Value>> = HashMap::new();
         chunk_node_sets.insert(chunk_id, vec![node_set.clone()]);
 
-        let (nodes, _edges) = expand_with_nodes_and_edges(
+        let (nodes, _edges, _producers) = expand_with_nodes_and_edges(
             vec![(chunk_id, graph)],
             dataset_id,
             &chunk_node_sets,
@@ -893,7 +1008,7 @@ mod tests {
         let mut chunk_importance_weights: HashMap<Uuid, f64> = HashMap::new();
         chunk_importance_weights.insert(chunk_id, 0.9);
 
-        let (nodes, _edges) = expand_with_nodes_and_edges(
+        let (nodes, _edges, _producers) = expand_with_nodes_and_edges(
             vec![(chunk_id, graph)],
             dataset_id,
             &HashMap::new(),
@@ -930,7 +1045,7 @@ mod tests {
         let chunk_id = Uuid::new_v4();
         let dataset_id = Uuid::new_v4();
 
-        let (nodes, _edges) = expand_with_nodes_and_edges(
+        let (nodes, _edges, _producers) = expand_with_nodes_and_edges(
             vec![(chunk_id, graph)],
             dataset_id,
             &HashMap::new(),
@@ -970,7 +1085,7 @@ mod tests {
         let mut chunk_importance_weights: HashMap<Uuid, f64> = HashMap::new();
         chunk_importance_weights.insert(chunk_id, 0.9);
 
-        let (nodes, _edges) = expand_with_nodes_and_edges(
+        let (nodes, _edges, _producers) = expand_with_nodes_and_edges(
             vec![(chunk_id, graph)],
             dataset_id,
             &HashMap::new(),
@@ -1015,7 +1130,7 @@ mod tests {
         let chunk_id = Uuid::new_v4();
         let dataset_id = Uuid::new_v4();
 
-        let (nodes, edges) = expand_with_nodes_and_edges(
+        let (nodes, edges, _producers) = expand_with_nodes_and_edges(
             vec![(chunk_id, graph)],
             dataset_id,
             &HashMap::new(),
@@ -1036,7 +1151,7 @@ mod tests {
     async fn test_expand_empty_graphs() {
         let dataset_id = Uuid::new_v4();
 
-        let (nodes, edges) = expand_with_nodes_and_edges(
+        let (nodes, edges, _producers) = expand_with_nodes_and_edges(
             vec![],
             dataset_id,
             &HashMap::new(),
@@ -1088,7 +1203,7 @@ mod tests {
         let chunk_id = Uuid::new_v4();
         let dataset_id = Uuid::new_v4();
 
-        let (nodes, edges) = expand_with_nodes_and_edges(
+        let (nodes, edges, _producers) = expand_with_nodes_and_edges(
             vec![(chunk_id, graph)],
             dataset_id,
             &HashMap::new(),
@@ -1138,7 +1253,7 @@ mod tests {
             edges: vec![],
         };
 
-        let (nodes, _edges) = expand_with_nodes_and_edges(
+        let (nodes, _edges, _producers) = expand_with_nodes_and_edges(
             vec![(chunk_id_a, graph_a), (chunk_id_b, graph_b)],
             dataset_id,
             &HashMap::new(),
@@ -1264,7 +1379,7 @@ mod tests {
         let dataset_id = Uuid::new_v4();
         let resolver = MockOntologyResolver;
 
-        let (nodes, _edges) = expand_with_nodes_and_edges(
+        let (nodes, _edges, _producers) = expand_with_nodes_and_edges(
             vec![(chunk_id, graph)],
             dataset_id,
             &HashMap::new(),
@@ -1330,7 +1445,7 @@ mod tests {
         let chunk_id = Uuid::new_v4();
         let dataset_id = Uuid::new_v4();
 
-        let (nodes, _edges) = expand_with_nodes_and_edges(
+        let (nodes, _edges, _producers) = expand_with_nodes_and_edges(
             vec![(chunk_id, graph)],
             dataset_id,
             &HashMap::new(),
@@ -1626,7 +1741,7 @@ mod tests {
         let dataset_id = Uuid::new_v4();
         let resolver = MockOntologyResolver;
 
-        let (nodes, _edges) = expand_with_nodes_and_edges(
+        let (nodes, _edges, _producers) = expand_with_nodes_and_edges(
             vec![(chunk_id, graph)],
             dataset_id,
             &HashMap::new(),
@@ -1677,7 +1792,7 @@ mod tests {
         let dataset_id = Uuid::new_v4();
         let resolver = MockOntologyResolver;
 
-        let (_nodes, edges) = expand_with_nodes_and_edges(
+        let (_nodes, edges, _producers) = expand_with_nodes_and_edges(
             vec![(chunk_id, graph)],
             dataset_id,
             &HashMap::new(),
@@ -1726,7 +1841,7 @@ mod tests {
         let dataset_id = Uuid::new_v4();
         let resolver = MockOntologyResolver;
 
-        let (nodes, edges) = expand_with_nodes_and_edges(
+        let (nodes, edges, _producers) = expand_with_nodes_and_edges(
             vec![(chunk_id, graph)],
             dataset_id,
             &HashMap::new(),
@@ -1792,7 +1907,7 @@ mod tests {
         let dataset_id = Uuid::new_v4();
         let resolver = MockOntologyResolver;
 
-        let (nodes, edges) = expand_with_nodes_and_edges(
+        let (nodes, edges, _producers) = expand_with_nodes_and_edges(
             vec![(chunk_id, graph)],
             dataset_id,
             &HashMap::new(),
@@ -1856,7 +1971,7 @@ mod tests {
         let dataset_id = Uuid::new_v4();
         let resolver = MockOntologyResolver;
 
-        let (nodes, _edges) = expand_with_nodes_and_edges(
+        let (nodes, _edges, _producers) = expand_with_nodes_and_edges(
             vec![(chunk_id, graph)],
             dataset_id,
             &HashMap::new(),
@@ -1900,7 +2015,7 @@ mod tests {
         let chunk_id = Uuid::new_v4();
         let graph = create_test_graph();
 
-        let (nodes, _edges) = expand_with_nodes_and_edges(
+        let (nodes, _edges, _producers) = expand_with_nodes_and_edges(
             vec![(chunk_id, graph)],
             dataset_id,
             &HashMap::new(),
