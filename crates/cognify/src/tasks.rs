@@ -421,10 +421,14 @@ pub async fn extract_graph_from_data(
         // are in flight at once. `buffered` (not `buffer_unordered`) yields
         // results in input order, which `all_graphs` relies on — downstream
         // dedup in `retrieve_existing_edges` is order-sensitive. The
-        // `tokio::spawn` inside the mapped future keeps calls on the multi-threaded
-        // runtime, and because `buffered` only polls up to `max_parallel` futures,
-        // the per-chunk text clone and the task itself are created lazily rather
-        // than all up front.
+        // `tokio::spawn` inside the mapped future keeps calls on the
+        // multi-threaded runtime, and `buffered` only polls up to `max_parallel`
+        // futures, so at most that many extraction tasks exist at once.
+        //
+        // Peak duplicated text is still O(`chunks_per_batch`), not
+        // O(`max_parallel`): `inputs` above clones every chunk's text up front.
+        // Making that lazy would mean borrowing `&chunk` across the stream, which
+        // is the higher-ranked-lifetime case the comment there describes.
         let batch_results: Vec<_> = futures::stream::iter(inputs)
             .map(|(_, text)| {
                 let extractor = fact_extractor.clone();

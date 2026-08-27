@@ -602,6 +602,7 @@ mod tests {
                 anthropic_base_url: None,
                 max_retries: 3,
                 min_retry_seconds: 0,
+                max_parallel_requests: cognee_llm::in_flight::DEFAULT_MAX_IN_FLIGHT as u32,
                 rate_limit_enabled: false,
                 rate_limit_requests: 60,
                 rate_limit_interval: 60,

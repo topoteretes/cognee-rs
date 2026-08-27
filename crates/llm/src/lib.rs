@@ -55,6 +55,7 @@ pub mod config;
 pub mod dynamic_model;
 pub mod error;
 pub mod factory;
+pub mod in_flight;
 pub mod llm_trait;
 #[cfg(feature = "mock")]
 pub mod mock;
