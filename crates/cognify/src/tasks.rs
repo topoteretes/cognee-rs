@@ -51,7 +51,7 @@ use cognee_vector::{VectorDB, VectorPoint};
 use serde::Serialize;
 use serde_json::json;
 use tokio::sync::Semaphore;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 use url::Url;
 use uuid::Uuid;
 
@@ -152,6 +152,75 @@ pub struct ExtractedTemporalEvents {
     pub dataset_id: Uuid,
     pub user_id: Option<Uuid>,
     pub tenant_id: Option<Uuid>,
+}
+
+// ---------------------------------------------------------------------------
+// Ownership-ledger identity
+// ---------------------------------------------------------------------------
+
+/// The owner recorded on ownership rows when the caller identified no user.
+///
+/// Python resolves the same case one layer up — `run_pipeline.py:75` and
+/// `run_tasks.py:62` both do `user = await get_default_user()` before any task
+/// sees the context — so `add_data_points`'s `if user and …` guard never fires
+/// on a real run there. Rust's entry points resolve a user too (every CLI
+/// command reads `settings.default_user_id`), so this fallback is reached only
+/// by a library caller that passed `user_id: None` directly.
+///
+/// The value is `settings.default_user_id`'s own default. `cognee-cognify`
+/// cannot read `Settings` — `cognee-lib` depends on this crate, not the other
+/// way round — so the constant is duplicated here and pinned by
+/// `crates/lib/tests/default_ledger_user.rs`, which fails if the setting's
+/// default ever moves.
+pub const DEFAULT_LEDGER_USER_ID: Uuid = Uuid::nil();
+
+/// Who and what an ownership row is attributed to.
+///
+/// Constructed once per persistence site from the stage input and the pipeline
+/// context, so the sites that write ownership rows cannot drift apart and the
+/// default-user resolution happens in exactly one place. `pub` because it
+/// appears in the signatures of the `pub` tasks [`create_web_page_nodes`] and
+/// [`extract_dlt_fk_edges`].
+#[derive(Debug, Clone, Copy)]
+pub struct LedgerIdentity {
+    tenant_id: Option<Uuid>,
+    user_id: Uuid,
+    dataset_id: Uuid,
+    /// The run that created the artifacts these rows name. `None` only when the
+    /// task is driven outside a pipeline executor — a NULL run id means
+    /// "predates ownership tracking, permanently exempt from sweeping", which
+    /// is the honest value for an artifact no run created.
+    pipeline_run_id: Option<Uuid>,
+}
+
+impl LedgerIdentity {
+    /// Resolve the identity every ownership row written by one persistence site
+    /// carries.
+    ///
+    /// An absent `user_id` resolves to [`DEFAULT_LEDGER_USER_ID`] rather than
+    /// suppressing the write: the ledger is what makes an artifact reachable,
+    /// so it is always written.
+    pub fn new(
+        tenant_id: Option<Uuid>,
+        user_id: Option<Uuid>,
+        dataset_id: Uuid,
+        pipeline_run_id: Option<Uuid>,
+    ) -> Self {
+        if pipeline_run_id.is_none() {
+            warn!(
+                dataset_id = %dataset_id,
+                "recording artifact ownership with no pipeline run id — the rows are \
+                 permanently exempt from run-scoped queries. Expected only when a task \
+                 is driven outside a pipeline executor."
+            );
+        }
+        Self {
+            tenant_id,
+            user_id: user_id.unwrap_or(DEFAULT_LEDGER_USER_ID),
+            dataset_id,
+            pipeline_run_id,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -379,11 +448,19 @@ fn chunk_entity_links(
 /// For each chunk batch, calls the LLM to extract entities and relationships.
 /// Then integrates: expands to storage-layer types, deduplicates against
 /// existing DB entries and in-memory, and stores nodes/edges in graph DB.
+///
+/// Ownership of the entities and semantic edges is recorded in `db` *before*
+/// they reach the graph — see [`record_extraction_ownership`].
+#[allow(clippy::too_many_arguments)]
 pub async fn extract_graph_from_data(
     input: &ExtractedChunks,
     llm: Arc<dyn Llm>,
     graph_db: Arc<dyn GraphDBTrait>,
     ontology_resolver: Arc<dyn OntologyResolver>,
+    db: &DatabaseConnection,
+    // The run whose ownership rows these artifacts get. `None` when the stage
+    // is driven outside a pipeline executor.
+    pipeline_run_id: Option<Uuid>,
     config: &CognifyConfig,
     // Optional caller-supplied provenance user label. When `Some`, used
     // verbatim for the entity / EntityType / EdgeType pre-stamps inside
@@ -567,6 +644,28 @@ pub async fn extract_graph_from_data(
         }
     }
 
+    // I1 — the ledger row must exist before the artifact does. Rust persists
+    // entities and edges here, two stages before `add_data_points`; Python does
+    // not (its `extract_graph_from_data` returns chunks and lets
+    // `add_data_points` do every write), so this ledger write has no Python
+    // counterpart. Without it a run that dies between here and
+    // `add_data_points` leaves entities and edges in the graph that nothing can
+    // find, and the extraction dedup filter then hides them from every retry.
+    record_extraction_ownership(
+        db,
+        LedgerIdentity::new(
+            input.tenant_id,
+            input.user_id,
+            input.dataset_id,
+            pipeline_run_id,
+        ),
+        &updated_chunks,
+        &dedup_result.unique_nodes,
+        &dedup_result.unique_edges,
+        &producers,
+    )
+    .await?;
+
     // Store graph data (nodes and edges) in graph database
     let entity_refs: Vec<&cognee_models::Entity> = dedup_result
         .unique_nodes
@@ -696,10 +795,18 @@ fn empty_edge_props() -> HashMap<Cow<'static, str>, serde_json::Value> {
 /// Uses only URL metadata carried on [`Document::external_metadata`], produced
 /// by ingestion for URL inputs. Invalid JSON, non-URL metadata, unparsable URLs,
 /// and non-HTTP(S) URLs are skipped.
+///
+/// Ownership of the nodes and edges is recorded in `db` before any of them
+/// reaches the graph (I1). These artifacts had no ownership row at all before —
+/// they are `add_nodes_raw` JSON blobs rather than DataPoints, so
+/// [`upsert_provenance`] never saw them — which also made them survive every
+/// delete.
 pub async fn create_web_page_nodes(
     documents: &[Document],
     chunks: &[DocumentChunk],
     graph_db: Arc<dyn GraphDBTrait>,
+    db: &DatabaseConnection,
+    id: LedgerIdentity,
 ) -> Result<(), CognifyError> {
     if documents.is_empty() || chunks.is_empty() {
         return Ok(());
@@ -708,6 +815,8 @@ pub async fn create_web_page_nodes(
     let mut nodes_by_id: HashMap<String, serde_json::Value> = HashMap::new();
     let mut candidate_edges: Vec<EdgeData> = Vec::new();
     let mut seen_edges: HashSet<(String, String, String)> = HashSet::new();
+    let mut prov_nodes: Vec<cognee_database::GraphNode> = Vec::new();
+    let mut prov_edges: Vec<cognee_database::GraphEdge> = Vec::new();
 
     for document in documents {
         let Some(metadata) = parse_web_page_metadata(document) else {
@@ -719,24 +828,46 @@ pub async fn create_web_page_nodes(
         let page_id_str = page_id.to_string();
         let site_id_str = site_id.to_string();
 
-        nodes_by_id.insert(
-            page_id_str.clone(),
-            json!({
-                "id": page_id_str,
-                "type": "WebPage",
-                "url": metadata.url,
-                "title": metadata.title,
-                "content": document_content_preview(document.base.id, chunks),
-            }),
-        );
-        nodes_by_id.insert(
-            site_id_str.clone(),
-            json!({
-                "id": site_id_str,
-                "type": "WebSite",
-                "domain": metadata.domain,
-            }),
-        );
+        let page_node = json!({
+            "id": page_id_str,
+            "type": "WebPage",
+            "url": metadata.url,
+            "title": metadata.title,
+            "content": document_content_preview(document.base.id, chunks),
+        });
+        let site_node = json!({
+            "id": site_id_str,
+            "type": "WebSite",
+            "domain": metadata.domain,
+        });
+
+        // One row per producing document, for the WebSite node as much as for
+        // the WebPage: two URL documents on one domain share a single physical
+        // WebSite node, so a single row would let deleting the first take a
+        // node the second still references — the merged-entity rule applied to
+        // a second artifact class.
+        prov_nodes.push(web_page_provenance_row(
+            id,
+            document.base.id,
+            page_id,
+            "WebPage",
+            metadata
+                .title
+                .clone()
+                .unwrap_or_else(|| metadata.url.clone()),
+            &page_node,
+        ));
+        prov_nodes.push(web_page_provenance_row(
+            id,
+            document.base.id,
+            site_id,
+            "WebSite",
+            metadata.domain.clone(),
+            &site_node,
+        ));
+
+        nodes_by_id.insert(page_id_str.clone(), page_node);
+        nodes_by_id.insert(site_id_str.clone(), site_node);
 
         push_unique_edge(
             &mut candidate_edges,
@@ -745,6 +876,13 @@ pub async fn create_web_page_nodes(
             site_id_str,
             "PART_OF",
         );
+        prov_edges.push(web_page_provenance_edge_row(
+            id,
+            document.base.id,
+            page_id,
+            "PART_OF",
+            site_id,
+        ));
 
         for chunk in chunks
             .iter()
@@ -757,8 +895,22 @@ pub async fn create_web_page_nodes(
                 page_id_str.clone(),
                 "SOURCED_FROM",
             );
+            prov_edges.push(web_page_provenance_edge_row(
+                id,
+                document.base.id,
+                chunk.base.id,
+                "SOURCED_FROM",
+                page_id,
+            ));
         }
     }
+
+    // Every candidate edge is claimed, including the ones the `has_edges`
+    // filter below stops the graph write from re-issuing: an edge an earlier
+    // run already created is still produced by this document, and a surplus
+    // claimant only ever *prevents* a deletion.
+    cognee_database::ops::graph_storage::upsert_provenance_graph(db, &prov_nodes, &prov_edges)
+        .await?;
 
     if !nodes_by_id.is_empty() {
         graph_db
@@ -806,6 +958,66 @@ fn push_unique_edge(
     let key = (source.clone(), target.clone(), relationship.to_string());
     if seen.insert(key) {
         edges.push((source, target, relationship.to_string(), empty_edge_props()));
+    }
+}
+
+/// One ownership row for a WebPage / WebSite graph node.
+///
+/// `indexed_fields` is deliberately empty: these nodes go in through
+/// `add_nodes_raw` and are never vector-indexed, so an empty field list is what
+/// keeps the delete path from issuing vector-point ids that never existed.
+fn web_page_provenance_row(
+    id: LedgerIdentity,
+    data_id: Uuid,
+    node_id: Uuid,
+    node_type: &str,
+    label: String,
+    attributes: &serde_json::Value,
+) -> cognee_database::GraphNode {
+    cognee_database::GraphNode {
+        id: provenance_node_id(id.tenant_id, id.user_id, id.dataset_id, data_id, node_id),
+        slug: node_id,
+        user_id: id.user_id,
+        data_id,
+        dataset_id: id.dataset_id,
+        pipeline_run_id: id.pipeline_run_id,
+        label: Some(label),
+        node_type: node_type.to_string(),
+        indexed_fields: json!([]),
+        attributes: Some(attributes.clone()),
+        created_at: Utc::now(),
+    }
+}
+
+/// One ownership row for a PART_OF / SOURCED_FROM graph edge.
+fn web_page_provenance_edge_row(
+    id: LedgerIdentity,
+    data_id: Uuid,
+    source_id: Uuid,
+    relationship_name: &str,
+    target_id: Uuid,
+) -> cognee_database::GraphEdge {
+    cognee_database::GraphEdge {
+        id: provenance_edge_id(
+            id.tenant_id,
+            id.user_id,
+            id.dataset_id,
+            data_id,
+            source_id,
+            relationship_name,
+            target_id,
+        ),
+        slug: triplet_slug(source_id, relationship_name, target_id),
+        user_id: id.user_id,
+        data_id,
+        dataset_id: id.dataset_id,
+        pipeline_run_id: id.pipeline_run_id,
+        source_node_id: source_id,
+        destination_node_id: target_id,
+        relationship_name: relationship_name.to_string(),
+        label: None,
+        attributes: None,
+        created_at: Utc::now(),
     }
 }
 
@@ -1017,51 +1229,66 @@ pub async fn summarize_text(
 // Task 5: add_data_points
 // ---------------------------------------------------------------------------
 
-/// Why a provenance-ledger write was skipped, and hence how loudly to say so.
-///
-/// Extracted from the logging call so the level choice is directly testable:
-/// getting it wrong is not a compile error and shows up only as log noise (or
-/// silence) in someone else's deployment.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LedgerSkip {
-    /// Both a database and a `user_id` are present — nothing was skipped.
-    NotSkipped,
-    /// A relational backend is configured, so the row *could* have been written;
-    /// the absent `user_id` is a genuine config inconsistency. Warn.
-    Inconsistent,
-    /// No relational backend at all — the ledger does not apply to this
-    /// deployment (embedded / unauthenticated use, where both are legitimately
-    /// `None` in the public `cognify()` signature). Must not warn: it would fire
-    /// once per data item and flag every normal ingest as data loss.
-    NotApplicable,
-}
-
-impl LedgerSkip {
-    fn classify(has_db: bool, has_user: bool) -> Self {
-        match (has_db, has_user) {
-            (true, true) => Self::NotSkipped,
-            (true, false) => Self::Inconsistent,
-            (false, _) => Self::NotApplicable,
-        }
-    }
-}
-
 /// Generate embeddings and index all data points in vector DB (Task 5).
 ///
 /// Generates embeddings for chunks, entities (name + description), summaries,
 /// and optionally triplets. Creates vector collections and indexes points.
 ///
-/// When `db` is `Some`, also writes provenance records (nodes/edges) to the
-/// relational database, matching Python's `upsert_nodes` / `upsert_edges`
-/// calls guarded by `if user and dataset and data:`.
+/// Writes the provenance records (nodes/edges) to the relational database
+/// *before* the first graph or vector write, mirroring Python's
+/// `add_data_points.py:138-141` ("the rollback ledger is written BEFORE the
+/// graph/vector writes so a failed write can always be swept"). Python's
+/// `if user and dataset and data:` guard has no Rust counterpart any more: the
+/// database is non-optional and an absent `user_id` resolves to
+/// [`DEFAULT_LEDGER_USER_ID`], so the ledger is always written.
 pub async fn add_data_points(
     input: &SummarizedData,
     graph_db: Arc<dyn GraphDBTrait>,
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
-    db: Option<Arc<DatabaseConnection>>,
+    db: &DatabaseConnection,
+    // The run whose ownership rows these artifacts get. `None` when the stage
+    // is driven outside a pipeline executor.
+    pipeline_run_id: Option<Uuid>,
     config: &CognifyConfig,
 ) -> Result<CognifyResult, CognifyError> {
+    // ── Ownership before artifacts (I1) ─────────────────────────────────────
+    // Discovering the structural edges is pure computation over the input
+    // (`get_graph_from_model`, no I/O), so it can happen up here and let the
+    // ledger name every artifact this stage is about to write before the first
+    // of them exists.
+    let mut extractable_items: Vec<&dyn crate::graph_extraction::GraphExtractable> = Vec::new();
+    for chunk in &input.chunks {
+        extractable_items.push(chunk as &dyn crate::graph_extraction::GraphExtractable);
+    }
+    for summary in &input.summaries {
+        extractable_items.push(summary as &dyn crate::graph_extraction::GraphExtractable);
+    }
+    for pair in &input.entities {
+        extractable_items.push(&pair.entity as &dyn crate::graph_extraction::GraphExtractable);
+        extractable_items.push(&pair.entity_type as &dyn crate::graph_extraction::GraphExtractable);
+    }
+
+    let structural_edges = crate::graph_extraction::get_graph_from_model(&extractable_items);
+
+    upsert_provenance(
+        db,
+        LedgerIdentity::new(
+            input.tenant_id,
+            input.user_id,
+            input.dataset_id,
+            pipeline_run_id,
+        ),
+        &input.chunks,
+        &input.entities,
+        &input.edges,
+        &input.summaries,
+        &input.documents,
+        &structural_edges,
+        &input.producers,
+    )
+    .await?;
+
     // Store all DataPoint types as graph nodes (matches Python's add_data_points behavior).
     // Python stores DocumentChunks, TextSummaries, and EntityTypes as graph nodes.
 
@@ -1191,22 +1418,8 @@ pub async fn add_data_points(
         }
     }
 
-    // Discover structural edges via GraphExtractable trait
-    // (port of Python's get_graph_from_model() relationship discovery)
-    let mut extractable_items: Vec<&dyn crate::graph_extraction::GraphExtractable> = Vec::new();
-    for chunk in &input.chunks {
-        extractable_items.push(chunk as &dyn crate::graph_extraction::GraphExtractable);
-    }
-    for summary in &input.summaries {
-        extractable_items.push(summary as &dyn crate::graph_extraction::GraphExtractable);
-    }
-    for pair in &input.entities {
-        extractable_items.push(&pair.entity as &dyn crate::graph_extraction::GraphExtractable);
-        extractable_items.push(&pair.entity_type as &dyn crate::graph_extraction::GraphExtractable);
-    }
-
-    let structural_edges = crate::graph_extraction::get_graph_from_model(&extractable_items);
-
+    // Persist the structural edges discovered above (port of Python's
+    // get_graph_from_model() relationship discovery).
     if !structural_edges.is_empty() {
         graph_db
             .add_edges(&structural_edges)
@@ -1240,46 +1453,6 @@ pub async fn add_data_points(
     )
     .await?;
 
-    // ── Provenance upsert (mirrors Python's `if user and dataset and data:`) ──
-    #[allow(
-        clippy::single_match_else,
-        reason = "the match is the tested decision; collapsing it hides the classification"
-    )]
-    if let (Some(db), Some(user_id)) = (&db, input.user_id) {
-        upsert_provenance(
-            db,
-            input.tenant_id,
-            user_id,
-            input.dataset_id,
-            &input.chunks,
-            &input.entities,
-            &input.edges,
-            &input.summaries,
-            &input.documents,
-            &structural_edges,
-            &input.producers,
-        )
-        .await?;
-    } else {
-        match LedgerSkip::classify(db.is_some(), input.user_id.is_some()) {
-            LedgerSkip::Inconsistent => warn!(
-                dataset_id = %input.dataset_id,
-                "Skipping provenance ledger write: a relational database is configured but \
-                 user_id is None. Nodes and edges were written to the graph without a \
-                 rollback/ownership record, so rollback and ownership tracking will not \
-                 cover them."
-            ),
-            LedgerSkip::NotApplicable => debug!(
-                dataset_id = %input.dataset_id,
-                "No relational database configured; provenance ledger write not applicable. \
-                 Nodes and edges are in the graph with no rollback/ownership record."
-            ),
-            // Unreachable from here: the `if let` above matched both, so we only
-            // reach this arm if one of them is absent.
-            LedgerSkip::NotSkipped => {}
-        }
-    }
-
     Ok(CognifyResult {
         chunks: input.chunks.clone(),
         entities: input.entities.clone(),
@@ -1291,6 +1464,7 @@ pub async fn add_data_points(
         documents_for_dlt: input.documents.clone(),
         already_completed: false,
         prior_pipeline_run_id: None,
+        pipeline_run_id,
     })
 }
 
@@ -1708,6 +1882,10 @@ pub async fn add_temporal_data_points(
         documents_for_dlt: vec![],
         already_completed: false,
         prior_pipeline_run_id: None,
+        // Set by `make_add_temporal_data_points_task` from its context. The
+        // temporal pipeline writes no ownership rows at all yet, so this
+        // carries the run id and claims nothing else.
+        pipeline_run_id: None,
     })
 }
 
@@ -1759,10 +1937,18 @@ fn build_edge_props(
 /// 4. Creates FK-based edges between documents of related rows
 ///
 /// If no DLT documents are present, this is a no-op.
+///
+/// Ownership of the schema nodes and FK edges is recorded in `db` before any of
+/// them reaches the graph (I1). The teardown deliberately stays outside the
+/// executor — the `pipeline_runs` row is already COMPLETED by the time it runs
+/// — but its artifacts still need to be *reachable* by a sweep, so they are
+/// stamped with the run id like everything else the run wrote.
 pub async fn extract_dlt_fk_edges(
     _chunks: &[DocumentChunk],
     documents: &[Document],
     graph_db: Arc<dyn GraphDBTrait>,
+    db: &DatabaseConnection,
+    id: LedgerIdentity,
 ) -> Result<(), CognifyError> {
     // Collect DLT documents
     let dlt_docs: Vec<&Document> = documents
@@ -2064,6 +2250,13 @@ pub async fn extract_dlt_fk_edges(
         }
     }
 
+    // I1: claim every schema node and FK edge before a single one of them
+    // reaches the graph.
+    let row_doc_ids: HashSet<Uuid> = dlt_doc_meta.keys().copied().collect();
+    let (prov_nodes, prov_edges) = dlt_provenance_rows(id, &schema_nodes, &all_edges, &row_doc_ids);
+    cognee_database::ops::graph_storage::upsert_provenance_graph(db, &prov_nodes, &prov_edges)
+        .await?;
+
     // Persist schema nodes to graph DB (SchemaTable + SchemaRelationship)
     // NOTE: Python also calls `index_data_points(schema_nodes)` to embed these
     // into vector DB. That is out of scope for Phase 0; Rust's `add_data_points`
@@ -2092,6 +2285,121 @@ pub async fn extract_dlt_fk_edges(
     }
 
     Ok(())
+}
+
+/// Ownership rows for the DLT teardown's schema nodes and FK edges.
+///
+/// Attribution follows the two precedents already in the ledger rather than a
+/// third rule of its own:
+///
+/// - `Uuid::nil()` where an artifact genuinely spans data items — a SchemaTable
+///   node is shared by every row-document of that table, and the table→
+///   relationship→table edges belong to the schema, not to a row. This is the
+///   same shape the structural edges and EntityType rows already use.
+/// - the producing document's id for the row-level edges (`is_row_of` and the
+///   FK row references), whose source node *is* that document.
+///
+/// `indexed_fields` is empty because Rust does not vector-index these nodes
+/// (Python does; see the note at the `add_nodes_raw` call).
+fn dlt_provenance_rows(
+    id: LedgerIdentity,
+    schema_nodes: &[serde_json::Value],
+    edges: &[cognee_graph::EdgeData],
+    row_doc_ids: &HashSet<Uuid>,
+) -> (
+    Vec<cognee_database::GraphNode>,
+    Vec<cognee_database::GraphEdge>,
+) {
+    use cognee_database::{GraphEdge, GraphNode};
+
+    let mut prov_nodes: Vec<GraphNode> = Vec::new();
+    for node in schema_nodes {
+        let Some(node_id) = node
+            .get("id")
+            .and_then(|v| v.as_str())
+            .and_then(|s| Uuid::parse_str(s).ok())
+        else {
+            continue;
+        };
+        let node_type = node
+            .get("data_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("SchemaTable")
+            .to_string();
+        let label = node
+            .get("name")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+
+        prov_nodes.push(GraphNode {
+            id: provenance_node_id(
+                id.tenant_id,
+                id.user_id,
+                id.dataset_id,
+                Uuid::nil(),
+                node_id,
+            ),
+            slug: node_id,
+            user_id: id.user_id,
+            data_id: Uuid::nil(),
+            dataset_id: id.dataset_id,
+            pipeline_run_id: id.pipeline_run_id,
+            label,
+            node_type,
+            indexed_fields: json!([]),
+            attributes: Some(node.clone()),
+            created_at: Utc::now(),
+        });
+    }
+
+    let mut prov_edges: Vec<GraphEdge> = Vec::new();
+    for (source, target, relationship_name, properties) in edges {
+        let source_id = Uuid::parse_str(source).unwrap_or(Uuid::nil());
+        let target_id = Uuid::parse_str(target).unwrap_or(Uuid::nil());
+        // A row-level edge leaves the DLT document node it was built from; a
+        // schema-level one leaves a SchemaTable / SchemaRelationship node.
+        let data_id = if row_doc_ids.contains(&source_id) {
+            source_id
+        } else {
+            Uuid::nil()
+        };
+
+        let attributes = if properties.is_empty() {
+            None
+        } else {
+            Some(serde_json::Value::Object(
+                properties
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.clone()))
+                    .collect(),
+            ))
+        };
+
+        prov_edges.push(GraphEdge {
+            id: provenance_edge_id(
+                id.tenant_id,
+                id.user_id,
+                id.dataset_id,
+                data_id,
+                source_id,
+                relationship_name,
+                target_id,
+            ),
+            slug: triplet_slug(source_id, relationship_name, target_id),
+            user_id: id.user_id,
+            data_id,
+            dataset_id: id.dataset_id,
+            pipeline_run_id: id.pipeline_run_id,
+            source_node_id: source_id,
+            destination_node_id: target_id,
+            relationship_name: relationship_name.clone(),
+            label: None,
+            attributes,
+            created_at: Utc::now(),
+        });
+    }
+
+    (prov_nodes, prov_edges)
 }
 
 /// Graph node representing a DLT-ingested relational table.
@@ -2364,7 +2672,7 @@ pub async fn cognify(
                 Arc::clone(&vector_db),
                 Arc::clone(&embedding_engine),
                 Arc::clone(&llm),
-                Some(Arc::clone(&database)),
+                Arc::clone(&database),
                 effective_config.clone(),
             )
         } else {
@@ -2374,7 +2682,7 @@ pub async fn cognify(
                 Arc::clone(&vector_db),
                 Arc::clone(&embedding_engine),
                 Arc::clone(&llm),
-                Some(Arc::clone(&database)),
+                Arc::clone(&database),
                 Arc::clone(&ontology_resolver),
                 effective_config.clone(),
             )
@@ -2433,11 +2741,18 @@ pub async fn cognify(
         // LIB-06-04: skip DLT FK extraction on the temporal branch — temporal
         // does not propagate `documents_for_dlt` (and Python's temporal cognify
         // does not run DLT teardown either).
+        //
+        // The teardown's own artifacts get ownership rows like everything else
+        // the run wrote, so a sweep can reach them. It takes the run id from
+        // the result because it runs outside the executor and never sees a
+        // `TaskContext`.
         if !is_temporal {
             extract_dlt_fk_edges(
                 &result.chunks,
                 &result.documents_for_dlt,
                 Arc::clone(&graph_db),
+                &database,
+                LedgerIdentity::new(tenant_id, user_id, dataset_id, result.pipeline_run_id),
             )
             .await?;
         }
@@ -2594,42 +2909,20 @@ fn triplet_slug(source_id: Uuid, relationship_name: &str, target_id: Uuid) -> Uu
     Uuid::new_v5(&Uuid::NAMESPACE_OID, normalized.as_bytes())
 }
 
-/// Write provenance node and edge records to the relational database.
-///
-/// Mirrors the Python `upsert_nodes()` / `upsert_edges()` calls in
-/// `add_data_points` (guarded by `if user and dataset and data:`).
-///
-/// Provenance records link graph nodes/edges back to the user, tenant,
-/// dataset, and data item they originated from.
-///
-/// `producers` names every chunk that produced each merged entity and edge.
-/// It is what turns a merged entity — and a merged edge — into one ownership
-/// row per producing data item, so the artifact is removed only when its last
-/// owning file is deleted. An empty set is a valid input: callers that build a
-/// `SummarizedData` themselves get the previous single-`chunk_id` (entities)
-/// and both-endpoints-agree (edges) attribution.
-#[allow(clippy::too_many_arguments)]
-async fn upsert_provenance(
-    db: &DatabaseConnection,
-    tenant_id: Option<Uuid>,
-    user_id: Uuid,
-    dataset_id: Uuid,
-    chunks: &[DocumentChunk],
-    entities: &[GraphNodePair],
-    edges: &[GraphEdgePair],
-    summaries: &[TextSummary],
-    documents: &[Document],
-    structural_edges: &[EdgeData],
-    producers: &ArtifactProducers,
-) -> Result<(), CognifyError> {
-    use cognee_database::ops::graph_storage;
-    use cognee_database::{GraphEdge, GraphNode};
+/// Map each chunk to the data item it came from, for tracing an artifact's
+/// provenance back to the originating `Data` record.
+fn chunk_document_map(chunks: &[DocumentChunk]) -> HashMap<Uuid, Uuid> {
+    chunks.iter().map(|c| (c.base.id, c.document_id)).collect()
+}
 
-    // Build chunk_id → document_id map for tracing entity provenance back
-    // to the originating Data item.
-    let chunk_data_map: HashMap<Uuid, Uuid> =
-        chunks.iter().map(|c| (c.base.id, c.document_id)).collect();
-    let entity_data_map: HashMap<Uuid, Uuid> = entities
+/// Map each entity to the data item of the chunk stamped on its metadata.
+///
+/// Only used as the fallback attribution for edges whose producer set is empty.
+fn entity_document_map(
+    entities: &[GraphNodePair],
+    chunk_data_map: &HashMap<Uuid, Uuid>,
+) -> HashMap<Uuid, Uuid> {
+    entities
         .iter()
         .filter_map(|pair| {
             pair.entity
@@ -2640,25 +2933,31 @@ async fn upsert_provenance(
                 .and_then(|chunk_id| chunk_data_map.get(&chunk_id).copied())
                 .map(|data_id| (pair.entity.base.id, data_id))
         })
-        .collect();
+        .collect()
+}
 
-    // ── Provenance nodes ────────────────────────────────────────────────
-    let mut prov_nodes: Vec<GraphNode> = Vec::new();
+/// Ownership rows for the extracted entities.
+///
+/// One row per data item that produced this entity. A merged entity is created
+/// once but claimed by every file whose chunks yielded it, and
+/// `get_unique_nodes_for_data` only spares a slug that another `data_id` in the
+/// dataset claims — so a single row lets deleting one file sweep an entity the
+/// others still reference. Deduplicated because two chunks of the same file are
+/// two producers but one `data_id`, and [`provenance_node_id`] would then mint
+/// the same primary key twice in one batch.
+fn entity_provenance_rows(
+    id: LedgerIdentity,
+    entities: &[GraphNodePair],
+    chunk_data_map: &HashMap<Uuid, Uuid>,
+    producers: &ArtifactProducers,
+) -> Vec<cognee_database::GraphNode> {
+    let mut rows = Vec::new();
 
-    // Entities
     for pair in entities {
         let entity = &pair.entity;
 
-        // One ownership row per data item that produced this entity. A merged
-        // entity is created once but claimed by every file whose chunks
-        // yielded it, and `get_unique_nodes_for_data` only spares a slug that
-        // another `data_id` in the dataset claims — so a single row lets
-        // deleting one file sweep an entity the others still reference.
-        // Deduplicated because two chunks of the same file are two producers
-        // but one `data_id`, and `provenance_node_id` would then mint the same
-        // primary key twice in one batch.
         let mut data_ids =
-            producing_data_ids(producers.entity_chunks(entity.base.id), &chunk_data_map);
+            producing_data_ids(producers.entity_chunks(entity.base.id), chunk_data_map);
         if data_ids.is_empty() {
             // Ontology-derived entities, and callers that hand us a
             // `SummarizedData` they built themselves, carry no producer set:
@@ -2687,16 +2986,19 @@ async fn upsert_provenance(
         };
 
         for data_id in data_ids {
-            prov_nodes.push(GraphNode {
-                id: provenance_node_id(tenant_id, user_id, dataset_id, data_id, entity.base.id),
+            rows.push(cognee_database::GraphNode {
+                id: provenance_node_id(
+                    id.tenant_id,
+                    id.user_id,
+                    id.dataset_id,
+                    data_id,
+                    entity.base.id,
+                ),
                 slug: entity.base.id,
-                user_id,
+                user_id: id.user_id,
                 data_id,
-                dataset_id,
-                // Always `None` for now: nothing writes run ownership yet. The
-                // real run id starts flowing from the pipeline context once
-                // ownership is recorded before the artifacts it names.
-                pipeline_run_id: None,
+                dataset_id: id.dataset_id,
+                pipeline_run_id: id.pipeline_run_id,
                 label: Some(label.clone()),
                 node_type: entity.base.data_type.clone(),
                 indexed_fields: indexed_fields.clone(),
@@ -2705,6 +3007,187 @@ async fn upsert_provenance(
             });
         }
     }
+
+    rows
+}
+
+/// Ownership rows for the semantic edges produced by graph extraction.
+///
+/// One row per data item that produced the edge — the same one-to-many relation
+/// the entity rows carry, so an edge is swept only when its LAST owning file
+/// goes. The row *identity* carries `data_id` ([`provenance_edge_id`]), which is
+/// what lets several rows for one edge coexist instead of colliding on the
+/// primary key; the rows share a `slug` ([`triplet_slug`]), which is what
+/// `get_unique_edges_for_data` compares, so each row claims the edge on behalf
+/// of its own file. Without this, an edge between entities merged from two
+/// different files resolved to nil — and `get_unique_edges_for_data` never
+/// selects a nil row, so the edge's EdgeType/Triplet vectors outlived every file
+/// that produced them.
+///
+/// Divergence from Python, deliberate: `upsert_edges.py` omits `data_id` from
+/// the row id and keeps exactly one row per edge, letting the last writer take
+/// ownership. See the note on [`provenance_edge_id`].
+fn semantic_edge_provenance_rows(
+    id: LedgerIdentity,
+    edges: &[GraphEdgePair],
+    chunk_data_map: &HashMap<Uuid, Uuid>,
+    entity_data_map: &HashMap<Uuid, Uuid>,
+    producers: &ArtifactProducers,
+) -> Vec<cognee_database::GraphEdge> {
+    let mut rows = Vec::new();
+
+    for edge_pair in edges {
+        let edge_text = if edge_pair.relationship_name == "contains" {
+            edge_pair
+                .properties
+                .get("edge_text")
+                .cloned()
+                .unwrap_or_else(|| edge_pair.relationship_name.clone())
+        } else {
+            edge_pair.relationship_name.clone()
+        };
+        // Strip NUL bytes *before* deriving the id and slug, not after. Python's
+        // `upsert_edges` (`cognee/modules/graph/methods/upsert_edges.py:41-66`)
+        // feeds `sanitized_edge_text` into both its uuid5 and `generate_edge_id`,
+        // so deriving from the raw text here would hand a NUL-bearing edge a
+        // different deterministic id than the Python SDK produces for the same
+        // input. The relational conversion sanitizes again on the way out; this
+        // is about what the hash sees.
+        let edge_text = sanitize_string(edge_text);
+
+        let mut data_ids = producing_data_ids(
+            producers.edge_chunks(&edge_pair.dedup_key()),
+            chunk_data_map,
+        );
+        if data_ids.is_empty() {
+            // No producer set (a hand-built `SummarizedData`): fall back to the
+            // old both-endpoints-agree heuristic, then to nil, so those callers
+            // keep exactly the rows they got before.
+            let source_data_id = entity_data_map.get(&edge_pair.source_entity_id).copied();
+            let target_data_id = entity_data_map.get(&edge_pair.target_entity_id).copied();
+            data_ids.push(match (source_data_id, target_data_id) {
+                (Some(source), Some(target)) if source == target => source,
+                _ => Uuid::nil(),
+            });
+        }
+
+        // `slug`, endpoints, `relationship_name`, `label` and `attributes` are
+        // identical across the group; only `id` and `data_id` differ.
+        for data_id in data_ids {
+            rows.push(cognee_database::GraphEdge {
+                id: provenance_edge_id(
+                    id.tenant_id,
+                    id.user_id,
+                    id.dataset_id,
+                    data_id,
+                    edge_pair.source_entity_id,
+                    &edge_text,
+                    edge_pair.target_entity_id,
+                ),
+                slug: triplet_slug(
+                    edge_pair.source_entity_id,
+                    &edge_text,
+                    edge_pair.target_entity_id,
+                ),
+                user_id: id.user_id,
+                data_id,
+                dataset_id: id.dataset_id,
+                pipeline_run_id: id.pipeline_run_id,
+                source_node_id: edge_pair.source_entity_id,
+                destination_node_id: edge_pair.target_entity_id,
+                relationship_name: edge_text.clone(),
+                label: Some(edge_pair.relationship_name.clone()),
+                attributes: serde_json::to_value(&edge_pair.properties).ok(),
+                created_at: Utc::now(),
+            });
+        }
+    }
+
+    rows
+}
+
+/// Record ownership of the entities and semantic edges a run is about to write
+/// to the graph, in one transaction, before the graph sees them.
+///
+/// The rows this writes are a subset of the ones [`upsert_provenance`] writes
+/// two stages later, and they carry the same deterministic ids — the second
+/// write is an idempotent upsert that leaves `pipeline_run_id` alone (it is
+/// deliberately absent from the `ON CONFLICT` update list, so the first run to
+/// claim an artifact keeps it).
+async fn record_extraction_ownership(
+    db: &DatabaseConnection,
+    id: LedgerIdentity,
+    chunks: &[DocumentChunk],
+    entities: &[GraphNodePair],
+    edges: &[GraphEdgePair],
+    producers: &ArtifactProducers,
+) -> Result<(), CognifyError> {
+    let chunk_data_map = chunk_document_map(chunks);
+    let entity_data_map = entity_document_map(entities, &chunk_data_map);
+
+    let prov_nodes = entity_provenance_rows(id, entities, &chunk_data_map, producers);
+    let prov_edges =
+        semantic_edge_provenance_rows(id, edges, &chunk_data_map, &entity_data_map, producers);
+
+    cognee_database::ops::graph_storage::upsert_provenance_graph(db, &prov_nodes, &prov_edges)
+        .await?;
+    if !prov_nodes.is_empty() || !prov_edges.is_empty() {
+        info!(
+            "Recorded ownership of {} entities and {} semantic edges before writing them",
+            prov_nodes.len(),
+            prov_edges.len()
+        );
+    }
+    Ok(())
+}
+
+/// Write provenance node and edge records to the relational database.
+///
+/// Mirrors the Python `upsert_nodes()` / `upsert_edges()` calls in
+/// `add_data_points` (guarded by `if user and dataset and data:`).
+///
+/// Provenance records link graph nodes/edges back to the user, tenant,
+/// dataset, and data item they originated from.
+///
+/// `producers` names every chunk that produced each merged entity and edge.
+/// It is what turns a merged entity — and a merged edge — into one ownership
+/// row per producing data item, so the artifact is removed only when its last
+/// owning file is deleted. An empty set is a valid input: callers that build a
+/// `SummarizedData` themselves get the previous single-`chunk_id` (entities)
+/// and both-endpoints-agree (edges) attribution.
+#[allow(clippy::too_many_arguments)]
+async fn upsert_provenance(
+    db: &DatabaseConnection,
+    id: LedgerIdentity,
+    chunks: &[DocumentChunk],
+    entities: &[GraphNodePair],
+    edges: &[GraphEdgePair],
+    summaries: &[TextSummary],
+    documents: &[Document],
+    structural_edges: &[EdgeData],
+    producers: &ArtifactProducers,
+) -> Result<(), CognifyError> {
+    use cognee_database::ops::graph_storage;
+    use cognee_database::{GraphEdge, GraphNode};
+
+    let LedgerIdentity {
+        tenant_id,
+        user_id,
+        dataset_id,
+        pipeline_run_id,
+    } = id;
+
+    // Build chunk_id → document_id map for tracing entity provenance back
+    // to the originating Data item.
+    let chunk_data_map = chunk_document_map(chunks);
+    let entity_data_map = entity_document_map(entities, &chunk_data_map);
+
+    // ── Provenance nodes ────────────────────────────────────────────────
+    // Entities. Shared with the extraction stage, which wrote the same rows
+    // before it put the entities in the graph; this pass is the idempotent
+    // second write.
+    let mut prov_nodes: Vec<GraphNode> =
+        entity_provenance_rows(id, entities, &chunk_data_map, producers);
 
     // DocumentChunks
     for chunk in chunks {
@@ -2722,7 +3205,7 @@ async fn upsert_provenance(
             user_id,
             data_id,
             dataset_id,
-            pipeline_run_id: None,
+            pipeline_run_id,
             label: Some(format!("chunk_{}", chunk.chunk_index)),
             node_type: chunk.base.data_type.clone(),
             indexed_fields,
@@ -2750,7 +3233,7 @@ async fn upsert_provenance(
             user_id,
             data_id,
             dataset_id,
-            pipeline_run_id: None,
+            pipeline_run_id,
             label: Some(format!("summary_{}", summary.base.id)),
             node_type: summary.base.data_type.clone(),
             indexed_fields,
@@ -2775,7 +3258,7 @@ async fn upsert_provenance(
             user_id,
             data_id: Uuid::nil(),
             dataset_id,
-            pipeline_run_id: None,
+            pipeline_run_id,
             label: Some(et.name.clone()),
             node_type: et.base.data_type.clone(),
             indexed_fields: et
@@ -2817,7 +3300,7 @@ async fn upsert_provenance(
             user_id,
             data_id,
             dataset_id,
-            pipeline_run_id: None,
+            pipeline_run_id,
             label: Some(label),
             node_type: document.base.data_type.clone(),
             indexed_fields,
@@ -2830,90 +3313,10 @@ async fn upsert_provenance(
     // transaction, so a mid-way failure cannot leave nodes without their edges.
 
     // ── Provenance edges ────────────────────────────────────────────────
-    let mut prov_edges: Vec<GraphEdge> = Vec::new();
-
-    // Semantic edges from graph extraction
-    for edge_pair in edges {
-        let edge_text = if edge_pair.relationship_name == "contains" {
-            edge_pair
-                .properties
-                .get("edge_text")
-                .cloned()
-                .unwrap_or_else(|| edge_pair.relationship_name.clone())
-        } else {
-            edge_pair.relationship_name.clone()
-        };
-        // Strip NUL bytes *before* deriving the id and slug, not after. Python's
-        // `upsert_edges` (`cognee/modules/graph/methods/upsert_edges.py:41-66`)
-        // feeds `sanitized_edge_text` into both its uuid5 and `generate_edge_id`,
-        // so deriving from the raw text here would hand a NUL-bearing edge a
-        // different deterministic id than the Python SDK produces for the same
-        // input. The relational conversion sanitizes again on the way out; this
-        // is about what the hash sees.
-        let edge_text = sanitize_string(edge_text);
-
-        // One ownership row per data item that produced this edge — the same
-        // one-to-many relation the entity rows above carry, so an edge is swept
-        // only when its LAST owning file goes. The row *identity* carries
-        // `data_id` (`provenance_edge_id`), which is what lets several rows for
-        // one edge coexist instead of colliding on the primary key; the rows
-        // share a `slug` (`triplet_slug`), which is what
-        // `get_unique_edges_for_data` compares, so each row claims the edge on
-        // behalf of its own file. Without this, an edge between entities merged
-        // from two different files resolved to nil — and
-        // `get_unique_edges_for_data` never selects a nil row, so the edge's
-        // EdgeType/Triplet vectors outlived every file that produced them.
-        //
-        // Divergence from Python, deliberate: `upsert_edges.py` omits `data_id`
-        // from the row id and keeps exactly one row per edge, letting the last
-        // writer take ownership. See the note on `provenance_edge_id`.
-        let mut data_ids = producing_data_ids(
-            producers.edge_chunks(&edge_pair.dedup_key()),
-            &chunk_data_map,
-        );
-        if data_ids.is_empty() {
-            // No producer set (a hand-built `SummarizedData`): fall back to the
-            // old both-endpoints-agree heuristic, then to nil, so those callers
-            // keep exactly the rows they got before.
-            let source_data_id = entity_data_map.get(&edge_pair.source_entity_id).copied();
-            let target_data_id = entity_data_map.get(&edge_pair.target_entity_id).copied();
-            data_ids.push(match (source_data_id, target_data_id) {
-                (Some(source), Some(target)) if source == target => source,
-                _ => Uuid::nil(),
-            });
-        }
-
-        // `slug`, endpoints, `relationship_name`, `label` and `attributes` are
-        // identical across the group; only `id` and `data_id` differ.
-        for data_id in data_ids {
-            prov_edges.push(GraphEdge {
-                id: provenance_edge_id(
-                    tenant_id,
-                    user_id,
-                    dataset_id,
-                    data_id,
-                    edge_pair.source_entity_id,
-                    &edge_text,
-                    edge_pair.target_entity_id,
-                ),
-                slug: triplet_slug(
-                    edge_pair.source_entity_id,
-                    &edge_text,
-                    edge_pair.target_entity_id,
-                ),
-                user_id,
-                data_id,
-                dataset_id,
-                pipeline_run_id: None,
-                source_node_id: edge_pair.source_entity_id,
-                destination_node_id: edge_pair.target_entity_id,
-                relationship_name: edge_text.clone(),
-                label: Some(edge_pair.relationship_name.clone()),
-                attributes: serde_json::to_value(&edge_pair.properties).ok(),
-                created_at: Utc::now(),
-            });
-        }
-    }
+    // Semantic edges from graph extraction — again the same rows the
+    // extraction stage already wrote before persisting them.
+    let mut prov_edges: Vec<GraphEdge> =
+        semantic_edge_provenance_rows(id, edges, &chunk_data_map, &entity_data_map, producers);
 
     // Structural edges from get_graph_from_model (contains, is_a, made_from, etc.)
     // Python writes these to SQLite via upsert_edges() — Rust must match.
@@ -2947,7 +3350,7 @@ async fn upsert_provenance(
             user_id,
             data_id: Uuid::nil(), // structural edges span multiple DataPoints
             dataset_id,
-            pipeline_run_id: None,
+            pipeline_run_id,
             source_node_id: source_id,
             destination_node_id: target_id,
             relationship_name: rel_name.clone(),
@@ -3684,6 +4087,15 @@ fn user_label_from_ctx(ctx: &Arc<cognee_core::TaskContext>) -> Option<String> {
     ctx.pipeline_ctx.as_ref().and_then(|p| p.user_label())
 }
 
+/// The run every ownership row written by this task is attributed to.
+///
+/// The executor sets it on the context before any task runs, and it is the same
+/// value it writes to `pipeline_runs.pipeline_run_id`. `None` only when the
+/// task is driven outside a pipeline executor.
+fn pipeline_run_id_from_ctx(ctx: &Arc<cognee_core::TaskContext>) -> Option<Uuid> {
+    ctx.pipeline_ctx.as_ref().and_then(|p| p.run_id)
+}
+
 // ── Rank-overriding factory variants ───────────────────────────────────────
 //
 // Every `make_*_task` factory below is public API, so an embedder can compose
@@ -3823,12 +4235,14 @@ pub fn make_extract_graph_task(
     llm: Arc<dyn Llm>,
     graph_db: Arc<dyn GraphDBTrait>,
     ontology_resolver: Arc<dyn OntologyResolver>,
+    db: Arc<DatabaseConnection>,
     config: CognifyConfig,
 ) -> TypedTask<ExtractedChunks, ExtractedGraphData> {
     make_extract_graph_task_with_rank(
         llm,
         graph_db,
         ontology_resolver,
+        db,
         config,
         EXTRACT_GRAPH_TASK_RANK,
     )
@@ -3845,6 +4259,7 @@ pub fn make_extract_graph_task_with_rank(
     llm: Arc<dyn Llm>,
     graph_db: Arc<dyn GraphDBTrait>,
     ontology_resolver: Arc<dyn OntologyResolver>,
+    db: Arc<DatabaseConnection>,
     config: CognifyConfig,
     rank: i32,
 ) -> TypedTask<ExtractedChunks, ExtractedGraphData> {
@@ -3853,14 +4268,18 @@ pub fn make_extract_graph_task_with_rank(
         let llm = Arc::clone(&llm);
         let graph_db = Arc::clone(&graph_db);
         let ontology_resolver = Arc::clone(&ontology_resolver);
+        let db = Arc::clone(&db);
         let config = config.clone();
         let user_label = user_label_from_ctx(&ctx);
+        let pipeline_run_id = pipeline_run_id_from_ctx(&ctx);
         Box::pin(async move {
             let mut graph_data = extract_graph_from_data(
                 &input,
                 llm,
                 Arc::clone(&graph_db),
                 ontology_resolver,
+                &db,
+                pipeline_run_id,
                 &config,
                 user_label.as_deref(),
                 (rank > 0).then_some(rank),
@@ -3868,9 +4287,20 @@ pub fn make_extract_graph_task_with_rank(
             .await
             .map_err(|e| format!("{e}"))?;
             if config.create_web_page_nodes {
-                create_web_page_nodes(&graph_data.documents, &graph_data.chunks, graph_db)
-                    .await
-                    .map_err(|e| format!("{e}"))?;
+                create_web_page_nodes(
+                    &graph_data.documents,
+                    &graph_data.chunks,
+                    graph_db,
+                    &db,
+                    LedgerIdentity::new(
+                        input.tenant_id,
+                        input.user_id,
+                        input.dataset_id,
+                        pipeline_run_id,
+                    ),
+                )
+                .await
+                .map_err(|e| format!("{e}"))?;
             }
             for pair in &mut graph_data.entities {
                 stamp_provenance(
@@ -4002,7 +4432,7 @@ pub fn make_add_data_points_task(
     graph_db: Arc<dyn GraphDBTrait>,
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
-    db: Option<Arc<DatabaseConnection>>,
+    db: Arc<DatabaseConnection>,
     config: CognifyConfig,
 ) -> TypedTask<SummarizedData, CognifyResult> {
     make_add_data_points_task_with_rank(
@@ -4026,7 +4456,7 @@ pub fn make_add_data_points_task_with_rank(
     graph_db: Arc<dyn GraphDBTrait>,
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
-    db: Option<Arc<DatabaseConnection>>,
+    db: Arc<DatabaseConnection>,
     config: CognifyConfig,
     rank: i32,
 ) -> TypedTask<SummarizedData, CognifyResult> {
@@ -4035,14 +4465,22 @@ pub fn make_add_data_points_task_with_rank(
         let graph_db = Arc::clone(&graph_db);
         let vector_db = Arc::clone(&vector_db);
         let embedding_engine = Arc::clone(&embedding_engine);
-        let db = db.clone();
+        let db = Arc::clone(&db);
         let config = config.clone();
         let user_label = user_label_from_ctx(&ctx);
+        let pipeline_run_id = pipeline_run_id_from_ctx(&ctx);
         Box::pin(async move {
-            let mut result =
-                add_data_points(&input, graph_db, vector_db, embedding_engine, db, &config)
-                    .await
-                    .map_err(|e| format!("{e}"))?;
+            let mut result = add_data_points(
+                &input,
+                graph_db,
+                vector_db,
+                embedding_engine,
+                &db,
+                pipeline_run_id,
+                &config,
+            )
+            .await
+            .map_err(|e| format!("{e}"))?;
             for chunk in &mut result.chunks {
                 stamp_provenance(
                     &mut chunk.base,
@@ -4151,7 +4589,11 @@ pub fn build_cognify_pipeline(
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
     llm: Arc<dyn Llm>,
-    db: Option<Arc<DatabaseConnection>>,
+    // Non-optional: every stage that puts an artifact in the graph or vector
+    // store records its ownership first, so a databaseless persistence stage is
+    // a shape the pipeline cannot be built in. `cognify()` already requires a
+    // connection, and every binding routes through it.
+    db: Arc<DatabaseConnection>,
     ontology_resolver: Arc<dyn OntologyResolver>,
     config: CognifyConfig,
 ) -> Pipeline {
@@ -4163,7 +4605,10 @@ pub fn build_cognify_pipeline(
                 storage,
                 config.chunk_size(),
                 config.token_counter_kind.clone(),
-                db.clone(),
+                // Still `Option`: the chunk stage uses the connection for
+                // incremental-loading bookkeeping, not for writing artifacts,
+                // so it is not part of this invariant.
+                Some(Arc::clone(&db)),
                 loader_registry,
             ),
             EXTRACT_CHUNKS_TASK_NAME,
@@ -4173,6 +4618,7 @@ pub fn build_cognify_pipeline(
                 Arc::clone(&llm),
                 Arc::clone(&graph_db),
                 ontology_resolver,
+                Arc::clone(&db),
                 config.clone(),
             ),
             EXTRACT_GRAPH_TASK_NAME,
@@ -4213,16 +4659,21 @@ pub fn make_add_temporal_data_points_task(
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
 ) -> TypedTask<ExtractedTemporalEvents, CognifyResult> {
-    TypedTask::async_fn(move |input: &ExtractedTemporalEvents, _ctx| {
+    TypedTask::async_fn(move |input: &ExtractedTemporalEvents, ctx| {
         let input = input.clone();
         let graph_db = Arc::clone(&graph_db);
         let vector_db = Arc::clone(&vector_db);
         let embedding_engine = Arc::clone(&embedding_engine);
+        let pipeline_run_id = pipeline_run_id_from_ctx(&ctx);
         Box::pin(async move {
-            add_temporal_data_points(&input, graph_db, vector_db, embedding_engine)
-                .await
-                .map(Box::new)
-                .map_err(|e| format!("{e}").into())
+            let mut result =
+                add_temporal_data_points(&input, graph_db, vector_db, embedding_engine)
+                    .await
+                    .map_err(|e| format!("{e}"))?;
+            // Carries the run id, nothing more: the temporal pipeline still
+            // writes no ownership rows (that is step 7's work).
+            result.pipeline_run_id = pipeline_run_id;
+            Ok(Box::new(result))
         })
     })
 }
@@ -4240,7 +4691,7 @@ pub fn build_temporal_cognify_pipeline(
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
     llm: Arc<dyn Llm>,
-    db: Option<Arc<DatabaseConnection>>,
+    db: Arc<DatabaseConnection>,
     config: CognifyConfig,
 ) -> Pipeline {
     let loader_registry = Arc::new(build_loader_registry(&llm, &config));
@@ -4251,7 +4702,7 @@ pub fn build_temporal_cognify_pipeline(
                 storage,
                 config.chunk_size(),
                 config.token_counter_kind.clone(),
-                db,
+                Some(db),
                 loader_registry,
             ),
             EXTRACT_CHUNKS_TASK_NAME,
@@ -4451,43 +4902,11 @@ mod tests {
         );
     }
 
-    /// The ledger-skip classification decides a *log level*, which no type check
-    /// protects: getting it wrong is silent locally and shows up as either noise
-    /// or silence in someone else's deployment. `NotApplicable` must never be
-    /// `Inconsistent`, because a WARN there fires once per data item and flags
-    /// every normal embedded ingest as data loss — the regression this split
-    /// exists to prevent.
-    #[test]
-    fn ledger_skip_classification_matches_config_shape() {
-        assert_eq!(
-            LedgerSkip::classify(true, true),
-            LedgerSkip::NotSkipped,
-            "both present: the ledger row is written, nothing to report"
-        );
-        assert_eq!(
-            LedgerSkip::classify(true, false),
-            LedgerSkip::Inconsistent,
-            "a database is configured, so the row could have been written — the \
-             absent user_id is a real inconsistency and must warn"
-        );
-        // Both `db: None` shapes are supported configurations, not defects.
-        assert_eq!(
-            LedgerSkip::classify(false, false),
-            LedgerSkip::NotApplicable,
-            "no relational backend: the ledger does not apply, must not warn"
-        );
-        assert_eq!(
-            LedgerSkip::classify(false, true),
-            LedgerSkip::NotApplicable,
-            "a user_id without a backend is still nothing to warn about"
-        );
-    }
-
     /// Drives the cognify-level provenance wrapper (`upsert_provenance`) and its
-    /// guard, not just the DB seam (`upsert_provenance_graph`): one document
+    /// wiring, not just the DB seam (`upsert_provenance_graph`): one document
     /// must produce exactly one provenance node written through the wrapper, so
-    /// a regression in the wrapper's own wiring (dropped call, broken guard) is
-    /// caught deterministically without an LLM.
+    /// a regression in the wrapper's own wiring (a dropped call) is caught
+    /// deterministically without an LLM.
     #[tokio::test]
     async fn upsert_provenance_writes_document_node_through_wrapper() {
         use cognee_database::ops::datasets::create_dataset;
@@ -4524,9 +4943,7 @@ mod tests {
 
         upsert_provenance(
             &db,
-            None,
-            user_id,
-            dataset_id,
+            LedgerIdentity::new(None, Some(user_id), dataset_id, None),
             &[],    // chunks
             &[],    // entities
             &[],    // edges
@@ -4685,9 +5102,7 @@ mod tests {
 
         upsert_provenance(
             &db,
-            None,
-            user_id,
-            dataset_id,
+            LedgerIdentity::new(None, Some(user_id), dataset_id, None),
             &chunks,
             &entities,
             &[],
@@ -4753,9 +5168,7 @@ mod tests {
 
         upsert_provenance(
             &db,
-            None,
-            user_id,
-            dataset_id,
+            LedgerIdentity::new(None, Some(user_id), dataset_id, None),
             &chunks,
             &entities,
             &[],
@@ -4803,9 +5216,7 @@ mod tests {
 
         upsert_provenance(
             &db,
-            None,
-            user_id,
-            dataset_id,
+            LedgerIdentity::new(None, Some(user_id), dataset_id, None),
             &chunks,
             &entities,
             &[],
@@ -4880,9 +5291,7 @@ mod tests {
 
         upsert_provenance(
             &db,
-            None,
-            user_id,
-            dataset_id,
+            LedgerIdentity::new(None, Some(user_id), dataset_id, None),
             &chunks,
             &entities,
             std::slice::from_ref(&edge),
@@ -4974,9 +5383,7 @@ mod tests {
 
         upsert_provenance(
             &db,
-            None,
-            user_id,
-            dataset_id,
+            LedgerIdentity::new(None, Some(user_id), dataset_id, None),
             &chunks,
             &entities,
             std::slice::from_ref(&edge),
@@ -5042,9 +5449,7 @@ mod tests {
 
             upsert_provenance(
                 &db,
-                None,
-                user_id,
-                dataset_id,
+                LedgerIdentity::new(None, Some(user_id), dataset_id, None),
                 &chunks,
                 &entities,
                 std::slice::from_ref(&edge),
@@ -5097,9 +5502,7 @@ mod tests {
 
         upsert_provenance(
             &db,
-            None,
-            user_id,
-            dataset_id,
+            LedgerIdentity::new(None, Some(user_id), dataset_id, None),
             &[],
             &[],
             &[],
@@ -5687,6 +6090,33 @@ mod tests {
         assert_eq!(before_texts - after_texts, overlap);
     }
 
+    /// An in-memory relational database with `dataset_id` already registered.
+    ///
+    /// Every ownership row carries an FK to `datasets`, and the ledger is now
+    /// always written, so a stage under test needs the dataset row to exist —
+    /// which every real path (`add` → `cognify`) guarantees.
+    async fn ledger_db(dataset_id: Uuid) -> DatabaseConnection {
+        use cognee_database::{connect, initialize};
+
+        let db = connect("sqlite::memory:").await.expect("connect");
+        initialize(&db).await.expect("migrate");
+        seed_dataset(&db, dataset_id).await;
+        db
+    }
+
+    /// Register `dataset_id` in an existing database, for the same reason.
+    async fn seed_dataset(db: &DatabaseConnection, dataset_id: Uuid) {
+        use cognee_database::ops::datasets::create_dataset;
+        use cognee_models::Dataset;
+
+        create_dataset(
+            db,
+            Dataset::new("ledger-test".into(), Uuid::new_v4(), None, dataset_id),
+        )
+        .await
+        .expect("seed dataset");
+    }
+
     fn url_metadata(url: &str, final_url: &str, title: &str) -> String {
         json!({
             "source": "url",
@@ -5712,6 +6142,9 @@ mod tests {
         let document = test_document_with_metadata(doc_id, None);
         let chunk = test_chunk(chunk_id, doc_id, "Hello world");
 
+        let dataset_id = Uuid::new_v4();
+        let db = ledger_db(dataset_id).await;
+
         let input = SummarizedData {
             chunks: vec![chunk],
             documents: vec![document],
@@ -5719,7 +6152,7 @@ mod tests {
             edges: vec![],
             producers: ArtifactProducers::default(),
             summaries: vec![],
-            dataset_id: Uuid::new_v4(),
+            dataset_id,
             user_id: None,
             tenant_id: None,
         };
@@ -5730,6 +6163,7 @@ mod tests {
             Arc::clone(&graph),
             Arc::clone(&vector),
             Arc::clone(&engine),
+            &db,
             None,
             &config,
         )
@@ -5839,9 +6273,17 @@ mod tests {
         )];
         let chunks = vec![test_chunk(chunk_id, doc_id, "Visible page content")];
 
-        create_web_page_nodes(&documents, &chunks, graph.clone())
-            .await
-            .unwrap();
+        let dataset_id = Uuid::new_v4();
+        let db = ledger_db(dataset_id).await;
+        create_web_page_nodes(
+            &documents,
+            &chunks,
+            graph.clone(),
+            &db,
+            LedgerIdentity::new(None, None, dataset_id, None),
+        )
+        .await
+        .unwrap();
 
         let page_id = web_page_id("https://example.com/path?q=1").to_string();
         let site_id = web_site_id("example.com").to_string();
@@ -5898,9 +6340,17 @@ mod tests {
         )];
         let chunks = vec![test_chunk(Uuid::new_v4(), doc_id, &long_text)];
 
-        create_web_page_nodes(&documents, &chunks, graph.clone())
-            .await
-            .unwrap();
+        let dataset_id = Uuid::new_v4();
+        let db = ledger_db(dataset_id).await;
+        create_web_page_nodes(
+            &documents,
+            &chunks,
+            graph.clone(),
+            &db,
+            LedgerIdentity::new(None, None, dataset_id, None),
+        )
+        .await
+        .unwrap();
 
         let page_id = web_page_id("https://example.com/long").to_string();
         let page = graph.get_node(&page_id).await.unwrap().unwrap();
@@ -5933,10 +6383,14 @@ mod tests {
             test_chunk(Uuid::new_v4(), bad_url_doc.base.id, "c"),
         ];
 
+        let dataset_id = Uuid::new_v4();
+        let db = ledger_db(dataset_id).await;
         create_web_page_nodes(
             &[doc_with_invalid_json, non_url_doc, bad_url_doc],
             &chunks,
             graph.clone(),
+            &db,
+            LedgerIdentity::new(None, None, dataset_id, None),
         )
         .await
         .unwrap();
@@ -5959,10 +6413,13 @@ mod tests {
         )];
         let chunks = vec![test_chunk(Uuid::new_v4(), doc_id, "content")];
 
-        create_web_page_nodes(&documents, &chunks, graph.clone())
+        let dataset_id = Uuid::new_v4();
+        let db = ledger_db(dataset_id).await;
+        let id = LedgerIdentity::new(None, None, dataset_id, None);
+        create_web_page_nodes(&documents, &chunks, graph.clone(), &db, id)
             .await
             .unwrap();
-        create_web_page_nodes(&documents, &chunks, graph.clone())
+        create_web_page_nodes(&documents, &chunks, graph.clone(), &db, id)
             .await
             .unwrap();
 
@@ -5992,11 +6449,13 @@ mod tests {
         };
 
         let graph = Arc::new(cognee_graph::MockGraphDB::new());
-        let (_, ctx, _) = test_task_context().await;
+        let (_, ctx, db) = test_task_context().await;
+        seed_dataset(&db, input.dataset_id).await;
         let task = make_extract_graph_task(
             Arc::new(MockLlm::empty()),
             graph.clone(),
             Arc::new(NoOpOntologyResolver::new()),
+            Arc::clone(&db),
             CognifyConfig::default(),
         );
         let TypedTask::Async(run) = task else {
@@ -6011,6 +6470,7 @@ mod tests {
             Arc::new(MockLlm::empty()),
             graph.clone(),
             Arc::new(NoOpOntologyResolver::new()),
+            Arc::clone(&db),
             CognifyConfig::default().with_web_page_nodes(false),
         );
         let TypedTask::Async(run) = task else {
@@ -6474,6 +6934,468 @@ mod tests {
         assert!(
             registry.get("audio").is_none(),
             "build_loader_registry must NOT include \"audio\" loader when transcriber is None"
+        );
+    }
+
+    // ── Ownership is recorded before artifacts exist (I1) ────────────────
+
+    fn ownership_canned_graph() -> String {
+        json!({
+            "nodes": [
+                {"id": "alice", "name": "Alice", "type": "PERSON", "description": "A person."},
+                {"id": "acme", "name": "Acme", "type": "ORGANIZATION", "description": "A company."}
+            ],
+            "edges": [{
+                "source_node_id": "alice",
+                "target_node_id": "acme",
+                "relationship_name": "works_at",
+                "description": "Alice works at Acme."
+            }]
+        })
+        .to_string()
+    }
+
+    fn ownership_input(dataset_id: Uuid, doc_id: Uuid, user_id: Option<Uuid>) -> ExtractedChunks {
+        ExtractedChunks {
+            chunks: vec![test_chunk(Uuid::new_v4(), doc_id, "Alice works at Acme.")],
+            documents: vec![test_document_with_metadata(doc_id, None)],
+            dataset_id,
+            user_id,
+            tenant_id: None,
+        }
+    }
+
+    async fn run_extraction(
+        input: &ExtractedChunks,
+        graph: Arc<dyn GraphDBTrait>,
+        db: &DatabaseConnection,
+        run_id: Option<Uuid>,
+    ) -> Result<ExtractedGraphData, CognifyError> {
+        use cognee_ontology::NoOpOntologyResolver;
+        use cognee_test_utils::MockLlm;
+
+        extract_graph_from_data(
+            input,
+            Arc::new(MockLlm::new(vec![ownership_canned_graph()])),
+            graph,
+            Arc::new(NoOpOntologyResolver::new()),
+            db,
+            run_id,
+            &CognifyConfig::default(),
+            None,
+            None,
+        )
+        .await
+    }
+
+    /// The extraction stage claims the entities and edges it is about to write
+    /// *before* the graph sees them: with the graph write failing, the stage
+    /// returns `Err` and the ownership rows are there anyway.
+    ///
+    /// This is the test that fails against the previous ordering, where the
+    /// stage wrote to the graph and never touched the relational database at
+    /// all — so a run that died here left entities nothing could find, and the
+    /// extraction dedup filter then hid their edges from every retry.
+    #[tokio::test]
+    async fn extract_graph_records_ownership_before_the_graph_write() {
+        use cognee_database::ops::graph_storage::{get_edges_by_dataset, get_nodes_by_dataset};
+
+        let dataset_id = Uuid::new_v4();
+        let db = ledger_db(dataset_id).await;
+        let graph = Arc::new(cognee_graph::MockGraphDB::new());
+        graph.set_add_nodes_error("graph is down");
+
+        let input = ownership_input(dataset_id, Uuid::new_v4(), Some(Uuid::new_v4()));
+        let result = run_extraction(&input, graph.clone(), &db, Some(Uuid::new_v4())).await;
+
+        assert!(result.is_err(), "the failing graph write must surface");
+        assert_eq!(graph.node_count(), 0, "no entity reached the graph");
+
+        let nodes = get_nodes_by_dataset(&db, dataset_id).await.expect("query");
+        assert_eq!(
+            nodes.len(),
+            2,
+            "both extracted entities are claimed even though the write failed"
+        );
+        let edges = get_edges_by_dataset(&db, dataset_id).await.expect("query");
+        assert_eq!(edges.len(), 1, "the semantic edge is claimed too");
+    }
+
+    /// Every ownership row the extraction stage writes names the run that
+    /// created the artifact.
+    #[tokio::test]
+    async fn extract_graph_stamps_the_run_id_on_entity_and_edge_rows() {
+        use cognee_database::ops::graph_storage::{get_edges_by_dataset, get_nodes_by_dataset};
+
+        let dataset_id = Uuid::new_v4();
+        let db = ledger_db(dataset_id).await;
+        let graph: Arc<dyn GraphDBTrait> = Arc::new(cognee_graph::MockGraphDB::new());
+        let run_id = Uuid::new_v4();
+
+        let input = ownership_input(dataset_id, Uuid::new_v4(), Some(Uuid::new_v4()));
+        run_extraction(&input, graph, &db, Some(run_id))
+            .await
+            .expect("extraction must succeed");
+
+        let nodes = get_nodes_by_dataset(&db, dataset_id).await.expect("query");
+        assert!(!nodes.is_empty());
+        assert!(
+            nodes.iter().all(|row| row.pipeline_run_id == Some(run_id)),
+            "every entity row names the run that created it"
+        );
+        let edges = get_edges_by_dataset(&db, dataset_id).await.expect("query");
+        assert!(!edges.is_empty());
+        assert!(
+            edges.iter().all(|row| row.pipeline_run_id == Some(run_id)),
+            "every semantic-edge row names the run that created it"
+        );
+    }
+
+    /// A task driven outside a pipeline executor has no run to name. Those rows
+    /// are written with a NULL run id — permanently exempt from every
+    /// run-scoped query — rather than the stage refusing to run.
+    #[tokio::test]
+    async fn ownership_rows_carry_a_null_run_id_outside_a_pipeline_run() {
+        use cognee_database::ops::graph_storage::get_nodes_by_dataset;
+
+        let dataset_id = Uuid::new_v4();
+        let db = ledger_db(dataset_id).await;
+        let graph: Arc<dyn GraphDBTrait> = Arc::new(cognee_graph::MockGraphDB::new());
+
+        let input = ownership_input(dataset_id, Uuid::new_v4(), Some(Uuid::new_v4()));
+        run_extraction(&input, graph, &db, None)
+            .await
+            .expect("a missing run id is not an error");
+
+        let nodes = get_nodes_by_dataset(&db, dataset_id).await.expect("query");
+        assert!(!nodes.is_empty(), "the rows are still written");
+        assert!(nodes.iter().all(|row| row.pipeline_run_id.is_none()));
+    }
+
+    /// A run that identified no user still writes the ledger, owned by the
+    /// configured default user. Before this the whole write was skipped, so
+    /// those deployments had no ownership records at all.
+    #[tokio::test]
+    async fn ownership_rows_use_the_default_user_when_none_is_identified() {
+        use cognee_database::ops::graph_storage::get_nodes_by_dataset;
+
+        let dataset_id = Uuid::new_v4();
+        let doc_id = Uuid::new_v4();
+        let db = ledger_db(dataset_id).await;
+        let graph: Arc<dyn GraphDBTrait> = Arc::new(cognee_graph::MockGraphDB::new());
+
+        let input = ownership_input(dataset_id, doc_id, None);
+        run_extraction(&input, graph, &db, None)
+            .await
+            .expect("extraction must succeed");
+
+        let nodes = get_nodes_by_dataset(&db, dataset_id).await.expect("query");
+        assert!(!nodes.is_empty());
+        assert!(
+            nodes
+                .iter()
+                .all(|row| row.user_id == DEFAULT_LEDGER_USER_ID),
+            "the rows resolve to the default ledger user"
+        );
+        // And the row id is derived from that resolved user, not from a
+        // placeholder the delete path would never reproduce.
+        let row = &nodes[0];
+        assert_eq!(
+            row.id,
+            provenance_node_id(None, DEFAULT_LEDGER_USER_ID, dataset_id, doc_id, row.slug)
+        );
+    }
+
+    /// `add_data_points` claims every artifact it is about to write before the
+    /// first of them exists — asserted at the vector seam, the last store it
+    /// touches and the one the ledger write used to run after.
+    #[tokio::test]
+    async fn add_data_points_records_ownership_before_the_vector_write() {
+        use cognee_database::ops::graph_storage::{get_edges_by_dataset, get_nodes_by_dataset};
+        use cognee_embedding::MockEmbeddingEngine;
+        use cognee_vector::MockVectorDB;
+
+        let dataset_id = Uuid::new_v4();
+        let doc_id = Uuid::new_v4();
+        let db = ledger_db(dataset_id).await;
+
+        let vector = Arc::new(MockVectorDB::new());
+        vector.set_index_error("vector store is down");
+
+        let input = SummarizedData {
+            chunks: vec![test_chunk(Uuid::new_v4(), doc_id, "Hello world")],
+            documents: vec![test_document_with_metadata(doc_id, None)],
+            entities: vec![],
+            edges: vec![],
+            producers: ArtifactProducers::default(),
+            summaries: vec![],
+            dataset_id,
+            user_id: Some(Uuid::new_v4()),
+            tenant_id: None,
+        };
+
+        let result = add_data_points(
+            &input,
+            Arc::new(cognee_graph::MockGraphDB::new()),
+            vector,
+            Arc::new(MockEmbeddingEngine::new(8)),
+            &db,
+            Some(Uuid::new_v4()),
+            &CognifyConfig::default(),
+        )
+        .await;
+
+        assert!(result.is_err(), "the failing vector write must surface");
+
+        let nodes = get_nodes_by_dataset(&db, dataset_id).await.expect("query");
+        assert_eq!(
+            nodes.len(),
+            2,
+            "the chunk and document rows survive the failed run"
+        );
+        let edges = get_edges_by_dataset(&db, dataset_id).await.expect("query");
+        assert!(
+            !edges.is_empty(),
+            "the structural edges are claimed before they are written"
+        );
+        assert!(
+            nodes.iter().all(|row| row.pipeline_run_id.is_some())
+                && edges.iter().all(|row| row.pipeline_run_id.is_some()),
+            "every row names the run that was writing it"
+        );
+    }
+
+    /// The extraction stage and `add_data_points` write overlapping rows. The
+    /// second write must not re-attribute an artifact the first already
+    /// claimed — `pipeline_run_id` is deliberately absent from the upsert's
+    /// `ON CONFLICT` update list, and this is where that matters.
+    #[tokio::test]
+    async fn add_data_points_does_not_steal_the_extraction_stages_run_id() {
+        use cognee_database::ops::graph_storage::get_nodes_by_dataset;
+        use cognee_embedding::MockEmbeddingEngine;
+        use cognee_vector::MockVectorDB;
+
+        let dataset_id = Uuid::new_v4();
+        let db = ledger_db(dataset_id).await;
+        let graph: Arc<dyn GraphDBTrait> = Arc::new(cognee_graph::MockGraphDB::new());
+        let extraction_run = Uuid::new_v4();
+        let later_run = Uuid::new_v4();
+
+        let input = ownership_input(dataset_id, Uuid::new_v4(), Some(Uuid::new_v4()));
+        let graph_data = run_extraction(&input, Arc::clone(&graph), &db, Some(extraction_run))
+            .await
+            .expect("extraction must succeed");
+
+        let entity_ids: Vec<Uuid> = graph_data
+            .entities
+            .iter()
+            .map(|pair| pair.entity.base.id)
+            .collect();
+        assert!(!entity_ids.is_empty());
+
+        let summarized = SummarizedData {
+            chunks: graph_data.chunks,
+            documents: graph_data.documents,
+            entities: graph_data.entities,
+            edges: graph_data.edges,
+            producers: graph_data.producers,
+            summaries: vec![],
+            dataset_id,
+            user_id: input.user_id,
+            tenant_id: None,
+        };
+
+        add_data_points(
+            &summarized,
+            graph,
+            Arc::new(MockVectorDB::new()),
+            Arc::new(MockEmbeddingEngine::new(8)),
+            &db,
+            Some(later_run),
+            &CognifyConfig::default(),
+        )
+        .await
+        .expect("add_data_points must succeed");
+
+        let nodes = get_nodes_by_dataset(&db, dataset_id).await.expect("query");
+        for row in nodes.iter().filter(|row| entity_ids.contains(&row.slug)) {
+            assert_eq!(
+                row.pipeline_run_id,
+                Some(extraction_run),
+                "the entity keeps the run that created it, not the one that rewrote its row"
+            );
+        }
+        // The rows only `add_data_points` writes carry its own run.
+        assert!(
+            nodes
+                .iter()
+                .any(|row| row.pipeline_run_id == Some(later_run)),
+            "the chunk / document / EntityType rows name the later run"
+        );
+    }
+
+    /// WebPage and WebSite nodes are claimed before they are written, and the
+    /// shared WebSite node gets one row per producing document — two URL
+    /// documents on one domain share a physical node, so a single row would let
+    /// deleting the first take a node the second still references.
+    #[tokio::test]
+    async fn web_page_nodes_are_recorded_before_they_are_written() {
+        use cognee_database::ops::graph_storage::get_nodes_by_dataset;
+
+        let dataset_id = Uuid::new_v4();
+        let db = ledger_db(dataset_id).await;
+        let doc_a = Uuid::new_v4();
+        let doc_b = Uuid::new_v4();
+        let documents = vec![
+            test_document_with_metadata(
+                doc_a,
+                Some(url_metadata(
+                    "https://example.com/a",
+                    "https://example.com/a",
+                    "A",
+                )),
+            ),
+            test_document_with_metadata(
+                doc_b,
+                Some(url_metadata(
+                    "https://example.com/b",
+                    "https://example.com/b",
+                    "B",
+                )),
+            ),
+        ];
+        let chunks = vec![
+            test_chunk(Uuid::new_v4(), doc_a, "first"),
+            test_chunk(Uuid::new_v4(), doc_b, "second"),
+        ];
+        let id = LedgerIdentity::new(None, Some(Uuid::new_v4()), dataset_id, None);
+
+        // (a) A failing graph write still leaves the claims behind.
+        let failing = Arc::new(cognee_graph::MockGraphDB::new());
+        failing.set_add_nodes_error("graph is down");
+        assert!(
+            create_web_page_nodes(&documents, &chunks, failing.clone(), &db, id)
+                .await
+                .is_err()
+        );
+        assert_eq!(failing.node_count(), 0);
+        assert!(
+            !get_nodes_by_dataset(&db, dataset_id)
+                .await
+                .expect("query")
+                .is_empty(),
+            "the WebPage / WebSite nodes are claimed before the graph write"
+        );
+
+        // (b) The shared WebSite node is claimed once per producing document.
+        create_web_page_nodes(
+            &documents,
+            &chunks,
+            Arc::new(cognee_graph::MockGraphDB::new()),
+            &db,
+            id,
+        )
+        .await
+        .expect("web page nodes must be written");
+
+        let nodes = get_nodes_by_dataset(&db, dataset_id).await.expect("query");
+        let site_slug = web_site_id("example.com");
+        let site_rows: Vec<_> = nodes.iter().filter(|row| row.slug == site_slug).collect();
+        assert_eq!(
+            site_rows.len(),
+            2,
+            "one WebSite row per producing document, so the last owner takes it"
+        );
+        let mut owners: Vec<Uuid> = site_rows.iter().map(|row| row.data_id).collect();
+        owners.sort();
+        let mut expected = vec![doc_a, doc_b];
+        expected.sort();
+        assert_eq!(owners, expected);
+    }
+
+    /// The DLT teardown's schema nodes and FK edges are claimed before they are
+    /// written, with the attribution the ledger already uses elsewhere: nil for
+    /// an artifact that spans data items, the producing document for a
+    /// row-level edge.
+    #[tokio::test]
+    async fn dlt_fk_edges_are_recorded_before_they_are_written() {
+        use cognee_database::ops::graph_storage::{get_edges_by_dataset, get_nodes_by_dataset};
+
+        let dataset_id = Uuid::new_v4();
+        let db = ledger_db(dataset_id).await;
+        let doc_id = Uuid::new_v4();
+        let run_id = Uuid::new_v4();
+
+        let mut base = DataPoint::new("DltRowDocument", None);
+        base.id = doc_id;
+        let document = Document {
+            base,
+            document_type: "dlt_row".to_string(),
+            name: "orders.json".to_string(),
+            raw_data_location: "file:///tmp/orders.json".to_string(),
+            mime_type: "application/json".to_string(),
+            extension: "json".to_string(),
+            data_id: doc_id,
+            external_metadata: Some(
+                json!({
+                    "source": "dlt",
+                    "table_name": "orders",
+                    "dlt_db_name": "shop",
+                    "schema_info": [{"name": "id"}],
+                    "foreign_keys": [
+                        {"column": "customer_id", "ref_table": "customers", "ref_column": "id"}
+                    ],
+                })
+                .to_string(),
+            ),
+        };
+        let id = LedgerIdentity::new(None, Some(Uuid::new_v4()), dataset_id, Some(run_id));
+
+        // (a) A failing graph write still leaves the claims behind.
+        let failing = Arc::new(cognee_graph::MockGraphDB::new());
+        failing.set_add_nodes_error("graph is down");
+        assert!(
+            extract_dlt_fk_edges(
+                &[],
+                std::slice::from_ref(&document),
+                failing.clone(),
+                &db,
+                id
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(failing.node_count(), 0);
+
+        let nodes = get_nodes_by_dataset(&db, dataset_id).await.expect("query");
+        let table_slug = Uuid::new_v5(&Uuid::NAMESPACE_OID, b"dlt:orders");
+        let table_row = nodes
+            .iter()
+            .find(|row| row.slug == table_slug)
+            .expect("the SchemaTable node must be claimed");
+        assert_eq!(table_row.node_type, "SchemaTable");
+        assert_eq!(
+            table_row.data_id,
+            Uuid::nil(),
+            "one table node is shared by every row-document of that table"
+        );
+        assert_eq!(table_row.pipeline_run_id, Some(run_id));
+
+        let edges = get_edges_by_dataset(&db, dataset_id).await.expect("query");
+        let is_row_of = edges
+            .iter()
+            .find(|row| row.relationship_name == "is_row_of")
+            .expect("the is_row_of edge must be claimed");
+        assert_eq!(
+            is_row_of.data_id, doc_id,
+            "a row-level edge belongs to the document that produced it"
+        );
+        assert!(
+            edges
+                .iter()
+                .any(|row| row.relationship_name == "has_foreign_key"
+                    && row.data_id == Uuid::nil()),
+            "the schema-level FK edge spans data items"
         );
     }
 }

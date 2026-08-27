@@ -28,6 +28,13 @@ pub struct MockGraphDB {
     call_log: Arc<Mutex<Vec<String>>>,
     /// Optional injected error returned from `get_node_truth_state` calls.
     truth_state_error: Arc<Mutex<Option<String>>>,
+    /// Optional injected error returned from node writes, before any node is
+    /// stored. Lets a test make the graph write fail while everything that was
+    /// supposed to happen *before* it still ran.
+    add_nodes_error: Arc<Mutex<Option<String>>>,
+    /// Optional injected error returned from `add_edges`, before any edge is
+    /// stored.
+    add_edges_error: Arc<Mutex<Option<String>>>,
     /// When set, [`GraphDBTrait::close`] never returns. Lets a test stand in for
     /// a slot whose teardown outlives the caller's patience — a large embedded
     /// checkpoint, or a pool waiting on a connection that will not come back —
@@ -43,6 +50,8 @@ impl MockGraphDB {
             edges: Arc::new(Mutex::new(Vec::new())),
             call_log: Arc::new(Mutex::new(Vec::new())),
             truth_state_error: Arc::new(Mutex::new(None)),
+            add_nodes_error: Arc::new(Mutex::new(None)),
+            add_edges_error: Arc::new(Mutex::new(None)),
             hang_on_close: false,
         }
     }
@@ -64,6 +73,21 @@ impl MockGraphDB {
     /// `get_node_truth_state` calls as `GraphDBError::QueryError`.
     pub fn set_truth_state_error(&self, msg: impl Into<String>) {
         let mut slot = self.truth_state_error.lock().unwrap(); // lock poison is unrecoverable
+        *slot = Some(msg.into());
+    }
+
+    /// Inject an error returned from every subsequent node write
+    /// (`add_node_raw` / `add_nodes_raw` / `add_nodes`) as
+    /// `GraphDBError::NodeError`, before anything is stored.
+    pub fn set_add_nodes_error(&self, msg: impl Into<String>) {
+        let mut slot = self.add_nodes_error.lock().unwrap(); // lock poison is unrecoverable
+        *slot = Some(msg.into());
+    }
+
+    /// Inject an error returned from every subsequent `add_edges` call as
+    /// `GraphDBError::EdgeError`, before anything is stored.
+    pub fn set_add_edges_error(&self, msg: impl Into<String>) {
+        let mut slot = self.add_edges_error.lock().unwrap(); // lock poison is unrecoverable
         *slot = Some(msg.into());
     }
 
@@ -145,6 +169,14 @@ impl GraphDBTrait for MockGraphDB {
     }
 
     async fn add_node_raw(&self, node: Value) -> GraphDBResult<()> {
+        // Error-injection hook for tests: fail before any node is stored.
+        {
+            let slot = self.add_nodes_error.lock().unwrap(); // lock poison is unrecoverable
+            if let Some(msg) = slot.as_ref() {
+                return Err(GraphDBError::NodeError(msg.clone()));
+            }
+        }
+
         let mut node_data = HashMap::new();
         if let Value::Object(map) = node {
             for (k, v) in map {
@@ -240,6 +272,14 @@ impl GraphDBTrait for MockGraphDB {
     }
 
     async fn add_edges(&self, edges: &[EdgeData]) -> GraphDBResult<()> {
+        // Error-injection hook for tests: fail before any edge is stored.
+        {
+            let slot = self.add_edges_error.lock().unwrap(); // lock poison is unrecoverable
+            if let Some(msg) = slot.as_ref() {
+                return Err(GraphDBError::EdgeError(msg.clone()));
+            }
+        }
+
         let mut stored_edges = self.edges.lock().unwrap(); // lock poison is unrecoverable
         for edge in edges {
             stored_edges.push(edge.clone());

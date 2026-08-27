@@ -15,11 +15,12 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use cognee_cognify::{CognifyConfig, cognify};
+use cognee_database::ops::datasets::create_dataset;
 use cognee_database::{DatabaseConnection, connect, initialize};
 use cognee_embedding::{EmbeddingEngine, error::EmbeddingError};
 use cognee_graph::MockGraphDB;
 use cognee_llm::{GenerationOptions, GenerationResponse, Llm, LlmError, Message};
-use cognee_models::Data;
+use cognee_models::{Data, Dataset};
 use cognee_ontology::NoOpOntologyResolver;
 use cognee_storage::{MockStorage, StorageTrait};
 use cognee_vector::MockVectorDB;
@@ -138,6 +139,14 @@ async fn run_pipeline_with_incremental_flag(
     let db: Arc<DatabaseConnection> = {
         let conn = connect("sqlite::memory:").await?;
         initialize(&conn).await?;
+        // Ownership rows carry an FK to `datasets`, and the ledger is written
+        // on every run — so the dataset has to exist even for a run with no
+        // user.
+        create_dataset(
+            &conn,
+            Dataset::new("incremental".into(), owner_id, None, dataset_id),
+        )
+        .await?;
         Arc::new(conn)
     };
     let thread_pool: Arc<dyn cognee_core::CpuPool> = Arc::new(

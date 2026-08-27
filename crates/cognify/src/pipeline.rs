@@ -57,6 +57,16 @@ pub struct CognifyResult {
     /// The `pipeline_run_id` of the prior completed run that triggered the
     /// short-circuit. `None` on normal (non-short-circuit) results.
     pub prior_pipeline_run_id: Option<Uuid>,
+
+    /// The `pipeline_runs.pipeline_run_id` of the run that produced this
+    /// result — the same value stamped on every ownership row the run wrote.
+    ///
+    /// Set by the final task from its `PipelineContext`; `None` for
+    /// [`Self::empty`] / [`Self::already_completed`] and for a result produced
+    /// outside a pipeline executor. The post-pipeline
+    /// [`crate::tasks::extract_dlt_fk_edges`] teardown runs outside the
+    /// executor and reads the run id from here.
+    pub pipeline_run_id: Option<Uuid>,
 }
 
 impl CognifyResult {
@@ -73,6 +83,7 @@ impl CognifyResult {
             documents_for_dlt: vec![],
             already_completed: false,
             prior_pipeline_run_id: None,
+            pipeline_run_id: None,
         }
     }
 
