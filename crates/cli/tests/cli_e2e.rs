@@ -783,16 +783,35 @@ fn top_level_version_and_help_survive_an_unreadable_config() {
 fn top_level_version_output_is_machine_readable() {
     // Logging init used to run first and put `Logging initialized ...` on stdout
     // ahead of the version, so a naive `cognee-cli --version` comparison failed.
+    //
+    // Both halves of "no logging I/O" are asserted: the stdout shape, and that
+    // the subscriber never ran at all. Checking stdout alone would still pass if
+    // logging were reintroduced ahead of version handling in a file-only
+    // configuration, so the log directory is isolated and required to stay empty.
     let config_home = TempDir::new().expect("temp dir should be created");
+    let logs_dir = TempDir::new().expect("temp dir should be created");
+
     let output = make_cmd(&config_home)
+        .env("COGNEE_LOGS_DIR", logs_dir.path())
         .args(["--version"])
         .output()
         .expect("command should run");
+
     let stdout = String::from_utf8(output.stdout).expect("stdout should be utf-8");
     assert_eq!(
         stdout.trim(),
         format!("cognee-cli {}", env!("CARGO_PKG_VERSION")),
         "--version must print exactly one line with no log preamble"
+    );
+
+    let log_entries: Vec<_> = std::fs::read_dir(logs_dir.path())
+        .expect("logs dir should be readable")
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name())
+        .collect();
+    assert!(
+        log_entries.is_empty(),
+        "--version must not initialise logging; found {log_entries:?}"
     );
 }
 

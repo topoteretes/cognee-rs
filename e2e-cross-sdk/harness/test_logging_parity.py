@@ -112,11 +112,23 @@ def _python_setup_script(logs_dir: Path) -> str:
     )
 
 
-def _rust_env(logs_dir: Path) -> dict[str, str]:
+def _rust_env(logs_dir: Path, config_home: Path) -> dict[str, str]:
     """Env for the Rust CLI invocation. Strips any inherited
     ``LOG_FILE_NAME`` so the child picks its own timestamped filename
-    under the shared logs dir."""
-    env = {**os.environ, "COGNEE_LOGS_DIR": str(logs_dir)}
+    under the shared logs dir.
+
+    ``COGNEE_CONFIG_HOME`` is pinned to an isolated absolute directory so
+    :data:`RUST_LOG_TRIGGER` reads a pristine config instead of the runner's
+    own: an unrelated invalid ``config.json`` would otherwise fail the CLI
+    before the subscriber is installed, turning an ambient condition into a
+    logging-parity failure. This mirrors ``make_cmd`` in
+    ``crates/cli/tests/cli_e2e.rs``.
+    """
+    env = {
+        **os.environ,
+        "COGNEE_LOGS_DIR": str(logs_dir),
+        "COGNEE_CONFIG_HOME": str(config_home),
+    }
     env.pop("LOG_FILE_NAME", None)
     env.pop("RUST_LOG", None)
     env.pop("LOG_LEVEL", None)
@@ -129,8 +141,10 @@ def _rust_env(logs_dir: Path) -> dict[str, str]:
 def test_both_sdks_create_log_files(tmp_path: Path) -> None:
     py_logs = tmp_path / "py_logs"
     rs_logs = tmp_path / "rs_logs"
+    rs_config = tmp_path / "rs_config"
     py_logs.mkdir()
     rs_logs.mkdir()
+    rs_config.mkdir()
 
     # --- Python side --------------------------------------------------
     py_result = subprocess.run(
@@ -148,7 +162,7 @@ def test_both_sdks_create_log_files(tmp_path: Path) -> None:
     # --- Rust side ----------------------------------------------------
     rs_result = subprocess.run(
         [RUST_CLI, *RUST_LOG_TRIGGER],
-        env=_rust_env(rs_logs),
+        env=_rust_env(rs_logs, rs_config),
         capture_output=True,
         text=True,
         timeout=60,
@@ -168,8 +182,10 @@ def test_both_sdks_create_log_files(tmp_path: Path) -> None:
 def test_anchor_message_matches_after_normalization(tmp_path: Path) -> None:
     py_logs = tmp_path / "py_logs"
     rs_logs = tmp_path / "rs_logs"
+    rs_config = tmp_path / "rs_config"
     py_logs.mkdir()
     rs_logs.mkdir()
+    rs_config.mkdir()
 
     py_result = subprocess.run(
         [PYTHON_RUNNER, "-c", _python_setup_script(py_logs)],
@@ -185,7 +201,7 @@ def test_anchor_message_matches_after_normalization(tmp_path: Path) -> None:
 
     rs_result = subprocess.run(
         [RUST_CLI, *RUST_LOG_TRIGGER],
-        env=_rust_env(rs_logs),
+        env=_rust_env(rs_logs, rs_config),
         capture_output=True,
         text=True,
         timeout=60,
