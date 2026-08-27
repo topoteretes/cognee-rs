@@ -35,6 +35,11 @@ pub struct MockGraphDB {
     /// Optional injected error returned from `add_edges`, before any edge is
     /// stored.
     add_edges_error: Arc<Mutex<Option<String>>>,
+    /// Optional injected error returned from `delete_nodes`, before any node is
+    /// removed. Lets a test make artifact deletion fail while everything that
+    /// was supposed to survive it — ownership rows, completion markers — is
+    /// still there to assert on.
+    delete_nodes_error: Arc<Mutex<Option<String>>>,
     /// When set, [`GraphDBTrait::close`] never returns. Lets a test stand in for
     /// a slot whose teardown outlives the caller's patience — a large embedded
     /// checkpoint, or a pool waiting on a connection that will not come back —
@@ -52,6 +57,7 @@ impl MockGraphDB {
             truth_state_error: Arc::new(Mutex::new(None)),
             add_nodes_error: Arc::new(Mutex::new(None)),
             add_edges_error: Arc::new(Mutex::new(None)),
+            delete_nodes_error: Arc::new(Mutex::new(None)),
             hang_on_close: false,
         }
     }
@@ -91,6 +97,20 @@ impl MockGraphDB {
         *slot = Some(msg.into());
     }
 
+    /// Inject an error returned from every subsequent `delete_nodes` call as
+    /// `GraphDBError::NodeError`, before any node is removed.
+    pub fn set_delete_nodes_error(&self, msg: impl Into<String>) {
+        let mut slot = self.delete_nodes_error.lock().unwrap(); // lock poison is unrecoverable
+        *slot = Some(msg.into());
+    }
+
+    /// Clear an error previously armed by [`MockGraphDB::set_delete_nodes_error`],
+    /// so a test can assert that re-running a failed operation converges.
+    pub fn clear_delete_nodes_error(&self) {
+        let mut slot = self.delete_nodes_error.lock().unwrap(); // lock poison is unrecoverable
+        *slot = None;
+    }
+
     /// Get the current node count (for testing).
     pub fn node_count(&self) -> usize {
         self.nodes.lock().unwrap().len() // lock poison is unrecoverable
@@ -113,8 +133,8 @@ impl MockGraphDB {
     ///
     /// Currently records `"get_graph_data"`, `"get_filtered_graph_data"`,
     /// `"get_candidate_nodes_by_label"`, `"get_nodeset_subgraph"`,
-    /// `"get_neighborhood"`, `"get_node_truth_state"`, and
-    /// `"set_node_truth_state"`.
+    /// `"get_neighborhood"`, `"get_node_truth_state"`,
+    /// `"set_node_truth_state"`, `"delete_nodes"`, and `"close"`.
     pub fn get_call_log(&self) -> Vec<String> {
         self.call_log.lock().unwrap().clone() // lock poison is unrecoverable
     }
@@ -207,6 +227,19 @@ impl GraphDBTrait for MockGraphDB {
     }
 
     async fn delete_nodes(&self, node_ids: &[String]) -> GraphDBResult<()> {
+        // Error-injection hook for tests: fail before any node is removed.
+        {
+            let slot = self.delete_nodes_error.lock().unwrap(); // lock poison is unrecoverable
+            if let Some(msg) = slot.as_ref() {
+                return Err(GraphDBError::NodeError(msg.clone()));
+            }
+        }
+
+        self.call_log
+            .lock()
+            .unwrap() // lock poison is unrecoverable
+            .push("delete_nodes".to_string());
+
         let mut nodes = self.nodes.lock().unwrap(); // lock poison is unrecoverable
         for node_id in node_ids {
             nodes.remove(node_id);

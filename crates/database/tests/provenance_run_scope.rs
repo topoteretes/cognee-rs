@@ -17,8 +17,9 @@
 use chrono::Utc;
 use cognee_database::ops::datasets::create_dataset;
 use cognee_database::ops::graph_storage::{
-    RunScope, delete_edges_for_run, delete_nodes_for_run, get_edges_for_run, get_nodes_for_run,
-    get_unique_edges_for_run, get_unique_nodes_for_run, upsert_edges, upsert_nodes,
+    RunScope, delete_edges_for_run, delete_nodes_for_run, get_data_ids_for_run, get_edges_for_run,
+    get_nodes_for_run, get_relationship_names_claimed_outside_run, get_unique_edges_for_run,
+    get_unique_nodes_for_run, upsert_edges, upsert_nodes,
 };
 use cognee_database::{DatabaseConnection, GraphEdge, GraphNode, connect, initialize};
 use cognee_models::Dataset;
@@ -283,6 +284,55 @@ async fn exclusive_rows_are_returned_when_nothing_else_claims_the_slug() {
 /// test that fails if the `pipeline_run_id IS NULL` disjunct is "simplified"
 /// away: `NULL <> :run` evaluates to NULL, not TRUE, so without it the sweep
 /// would delete an artifact that predates every run.
+/// The second exclusivity axis. An `EdgeType` vector point is keyed on the
+/// edge's retrieval text, not its slug, so a sweep also has to ask which
+/// relation names rows *outside* the scope still claim. Every kind of outsider
+/// counts — another run, a legacy NULL-run row, another dataset — and, once the
+/// scope is narrowed, a surviving file of the sweep's own run.
+#[tokio::test]
+async fn claimed_relationship_names_cover_every_kind_of_outsider() {
+    let f = Fixture::new().await;
+    let named = |dataset: Uuid, data: Uuid, run: Option<Uuid>, name: &str| GraphEdge {
+        relationship_name: name.to_string(),
+        ..f.edge(dataset, data, run, Uuid::new_v4())
+    };
+    f.seed_edges(&[
+        named(f.dataset_d, f.data_a, Some(f.run_1), "mine"),
+        named(f.dataset_d, f.data_b, Some(f.run_1), "sibling_file"),
+        named(f.dataset_d, f.data_b, Some(f.run_2), "another_run"),
+        named(f.dataset_d, f.data_b, None, "legacy"),
+        named(f.dataset_e, f.data_a, Some(f.run_1), "another_dataset"),
+    ])
+    .await;
+
+    let mut whole_run = get_relationship_names_claimed_outside_run(
+        &f.db,
+        &RunScope::whole_run(f.run_1, f.dataset_d),
+    )
+    .await
+    .expect("names");
+    whole_run.sort();
+    assert_eq!(
+        whole_run,
+        ["another_dataset", "another_run", "legacy"],
+        "the run's own rows — both files' — are inside the scope",
+    );
+
+    let data_ids = [f.data_a];
+    let mut narrowed = get_relationship_names_claimed_outside_run(
+        &f.db,
+        &RunScope::for_data(f.run_1, f.dataset_d, &data_ids),
+    )
+    .await
+    .expect("names");
+    narrowed.sort();
+    assert_eq!(
+        narrowed,
+        ["another_dataset", "another_run", "legacy", "sibling_file"],
+        "a surviving file of the same run claims its names too",
+    );
+}
+
 #[tokio::test]
 async fn exclusivity_is_defeated_by_a_null_run_row() {
     let f = Fixture::new().await;
@@ -617,4 +667,108 @@ async fn edge_exists(db: &DatabaseConnection, id: Uuid) -> bool {
         .await
         .expect("find edge")
         .is_some()
+}
+
+// ---------------------------------------------------------------------------
+// Affected data items — the set whose completion markers a sweep must clear
+// ---------------------------------------------------------------------------
+
+/// Exclusivity must not leak into this query. An item whose every artifact is
+/// shared still had its work rolled back, so it still has to be unmarked.
+#[tokio::test]
+async fn data_ids_for_run_reports_every_touched_item_not_just_the_exclusive_ones() {
+    let f = Fixture::new().await;
+    let shared = Uuid::new_v4();
+    f.seed_nodes(&[
+        // data_a's only slug is claimed by another run, so it is not exclusive.
+        f.node(f.dataset_d, f.data_a, Some(f.run_1), shared),
+        f.node(f.dataset_d, f.data_a, Some(f.run_2), shared),
+        f.node(f.dataset_d, f.data_b, Some(f.run_1), Uuid::new_v4()),
+    ])
+    .await;
+
+    let scope = RunScope::whole_run(f.run_1, f.dataset_d);
+    assert_eq!(
+        get_unique_nodes_for_run(&f.db, &scope)
+            .await
+            .expect("n")
+            .len(),
+        1,
+        "only data_b's slug is exclusive",
+    );
+
+    let mut ids = get_data_ids_for_run(&f.db, &scope).await.expect("ids");
+    ids.sort();
+    let mut expected = vec![f.data_a, f.data_b];
+    expected.sort();
+    assert_eq!(ids, expected, "both items were touched by run 1");
+}
+
+/// An item that owns only an *edge* row is still one the run touched.
+#[tokio::test]
+async fn data_ids_for_run_unions_nodes_and_edges() {
+    let f = Fixture::new().await;
+    f.seed_nodes(&[f.node(f.dataset_d, f.data_a, Some(f.run_1), Uuid::new_v4())])
+        .await;
+    f.seed_edges(&[f.edge(f.dataset_d, f.data_b, Some(f.run_1), Uuid::new_v4())])
+        .await;
+
+    let mut ids = get_data_ids_for_run(&f.db, &RunScope::whole_run(f.run_1, f.dataset_d))
+        .await
+        .expect("ids");
+    ids.sort();
+    let mut expected = vec![f.data_a, f.data_b];
+    expected.sort();
+    assert_eq!(ids, expected);
+}
+
+/// The selection predicate is the same one the deletes use: another run,
+/// another dataset and a pre-ownership NULL-run row contribute nothing.
+#[tokio::test]
+async fn data_ids_for_run_excludes_other_runs_datasets_and_legacy_rows() {
+    let f = Fixture::new().await;
+    f.seed_nodes(&[
+        f.node(f.dataset_d, f.data_a, Some(f.run_1), Uuid::new_v4()),
+        f.node(f.dataset_d, f.data_b, Some(f.run_2), Uuid::new_v4()),
+        f.node(f.dataset_e, f.data_b, Some(f.run_1), Uuid::new_v4()),
+        f.node(f.dataset_d, f.data_b, None, Uuid::new_v4()),
+    ])
+    .await;
+    f.seed_edges(&[
+        f.edge(f.dataset_d, f.data_b, Some(f.run_2), Uuid::new_v4()),
+        f.edge(f.dataset_d, f.data_b, None, Uuid::new_v4()),
+    ])
+    .await;
+
+    let ids = get_data_ids_for_run(&f.db, &RunScope::whole_run(f.run_1, f.dataset_d))
+        .await
+        .expect("ids");
+    assert_eq!(ids, vec![f.data_a]);
+}
+
+/// Narrowing reaches this query too, and `Some(&[])` still means "nothing".
+#[tokio::test]
+async fn data_ids_for_run_honours_the_narrowing_and_the_empty_set() {
+    let f = Fixture::new().await;
+    f.seed_nodes(&[
+        f.node(f.dataset_d, f.data_a, Some(f.run_1), Uuid::new_v4()),
+        f.node(f.dataset_d, f.data_b, Some(f.run_1), Uuid::new_v4()),
+    ])
+    .await;
+
+    let only_a = [f.data_a];
+    assert_eq!(
+        get_data_ids_for_run(&f.db, &RunScope::for_data(f.run_1, f.dataset_d, &only_a))
+            .await
+            .expect("ids"),
+        vec![f.data_a],
+    );
+
+    assert!(
+        get_data_ids_for_run(&f.db, &RunScope::for_data(f.run_1, f.dataset_d, &[]))
+            .await
+            .expect("ids")
+            .is_empty(),
+        "an empty narrowing selects nothing, unlike `None`",
+    );
 }

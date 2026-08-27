@@ -4,11 +4,15 @@
 //! file storage — so no orphaned references remain. Supports dry-run previews.
 //!
 //! Main types: [`DeleteService`] and [`AuthorizedDeleteService`] (the
-//! permission-checked wrapper).
+//! permission-checked wrapper), plus [`RunSweeper`] — the same artifact
+//! deletion path selected by *pipeline run* rather than by dataset, which is
+//! how a failed cognify run is rolled back.
 
 mod authorized;
+mod sweep;
 
 pub use authorized::AuthorizedDeleteService;
+pub use sweep::{RunSweeper, SweepOutcome, SweepScope};
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -992,12 +996,18 @@ impl DeleteService {
         }
 
         // --- Graph cleanup ---
-        let (gn, gw) = self.delete_graph_artifacts(&nodes).await?;
+        let (gn, gw) = delete_graph_artifacts(self.graph_db.as_ref(), &nodes).await?;
         graph_node_count += gn;
         warnings.extend(gw);
 
         // --- Vector cleanup ---
-        let (vp, vw) = self.delete_vector_artifacts(&nodes, &edges).await?;
+        let (vp, vw) = delete_vector_artifacts(
+            self.vector_db.as_ref(),
+            &nodes,
+            &edges,
+            &unchecked_edge_type_vector_ids(&edges),
+        )
+        .await?;
         vector_point_count += vp;
         warnings.extend(vw);
 
@@ -1094,12 +1104,18 @@ impl DeleteService {
         }
 
         // --- Graph cleanup ---
-        let (gn, gw) = self.delete_graph_artifacts(&nodes).await?;
+        let (gn, gw) = delete_graph_artifacts(self.graph_db.as_ref(), &nodes).await?;
         graph_node_count += gn;
         warnings.extend(gw);
 
         // --- Vector cleanup ---
-        let (vp, vw) = self.delete_vector_artifacts(&nodes, &edges).await?;
+        let (vp, vw) = delete_vector_artifacts(
+            self.vector_db.as_ref(),
+            &nodes,
+            &edges,
+            &unchecked_edge_type_vector_ids(&edges),
+        )
+        .await?;
         vector_point_count += vp;
         warnings.extend(vw);
 
@@ -1128,119 +1144,6 @@ impl DeleteService {
             all_prov_edges,
             warnings,
         ))
-    }
-
-    /// Delete nodes from the graph DB based on provenance node slugs.
-    /// Returns `(count, warnings)`.
-    async fn delete_graph_artifacts(
-        &self,
-        nodes: &[GraphNode],
-    ) -> Result<(usize, Vec<String>), DeleteError> {
-        let mut warnings = Vec::new();
-
-        if let Some(graph_db) = &self.graph_db {
-            let node_ids: Vec<String> = nodes
-                .iter()
-                .map(|n| n.slug.to_string())
-                .collect::<HashSet<_>>()
-                .into_iter()
-                .collect();
-
-            if !node_ids.is_empty() {
-                graph_db.delete_nodes(&node_ids).await.map_err(|e| {
-                    DeleteError::GraphCleanup(format!(
-                        "Failed to delete {} graph nodes: {e}",
-                        node_ids.len()
-                    ))
-                })?;
-            }
-
-            Ok((node_ids.len(), warnings))
-        } else {
-            if !nodes.is_empty() {
-                warnings.push(
-                    "Graph DB not configured; graph artifacts were not cleaned up.".to_string(),
-                );
-            }
-            Ok((0, warnings))
-        }
-    }
-
-    /// Delete vector points based on provenance nodes and edges.
-    /// Returns `(count, warnings)`.
-    async fn delete_vector_artifacts(
-        &self,
-        nodes: &[GraphNode],
-        edges: &[GraphEdge],
-    ) -> Result<(usize, Vec<String>), DeleteError> {
-        let mut warnings = Vec::new();
-        let mut total_deleted = 0usize;
-
-        if let Some(vector_db) = &self.vector_db {
-            // Group nodes by (node_type, field_name) for batched deletion
-            let mut by_collection: HashMap<(String, String), Vec<Uuid>> = HashMap::new();
-
-            for node in nodes {
-                let fields = parse_indexed_fields(&node.indexed_fields);
-                for field_name in fields {
-                    by_collection
-                        .entry((node.node_type.clone(), field_name))
-                        .or_default()
-                        .push(node.slug);
-                }
-            }
-
-            // Edges contribute to EdgeType_relationship_name and Triplet_text.
-            for edge in edges {
-                if let Some(edge_type_id) = edge_type_vector_id(edge) {
-                    by_collection
-                        .entry(("EdgeType".to_string(), "relationship_name".to_string()))
-                        .or_default()
-                        .push(edge_type_id);
-                }
-
-                by_collection
-                    .entry(("Triplet".to_string(), "text".to_string()))
-                    .or_default()
-                    .push(triplet_vector_id(edge));
-            }
-
-            for ((data_type, field_name), ids) in &by_collection {
-                if ids.is_empty() {
-                    continue;
-                }
-
-                let exists = vector_db
-                    .has_collection(data_type, field_name)
-                    .await
-                    .map_err(|e| {
-                        DeleteError::VectorCleanup(format!(
-                            "Failed to check vector collection {data_type}_{field_name}: {e}"
-                        ))
-                    })?;
-
-                if exists {
-                    vector_db
-                        .delete_points(data_type, field_name, ids)
-                        .await
-                        .map_err(|e| {
-                            DeleteError::VectorCleanup(format!(
-                                "Failed to delete vector points from {data_type}_{field_name}: {e}"
-                            ))
-                        })?;
-                    total_deleted += ids.len();
-                }
-            }
-
-            Ok((total_deleted, warnings))
-        } else {
-            if !nodes.is_empty() || !edges.is_empty() {
-                warnings.push(
-                    "Vector DB not configured; vector artifacts were not cleaned up.".to_string(),
-                );
-            }
-            Ok((0, warnings))
-        }
     }
 
     /// Hard-mode orphan sweep: find and delete degree-one Entity/EntityType
@@ -1783,6 +1686,129 @@ impl DeleteService {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Artifact deletion, shared by the dataset/data delete paths and the run sweep
+// ---------------------------------------------------------------------------
+
+/// Delete nodes from the graph DB based on provenance node slugs.
+/// Returns `(count, warnings)`.
+pub(crate) async fn delete_graph_artifacts(
+    graph_db: Option<&Arc<dyn GraphDBTrait>>,
+    nodes: &[GraphNode],
+) -> Result<(usize, Vec<String>), DeleteError> {
+    let mut warnings = Vec::new();
+
+    if let Some(graph_db) = graph_db {
+        let node_ids: Vec<String> = nodes
+            .iter()
+            .map(|n| n.slug.to_string())
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+
+        if !node_ids.is_empty() {
+            graph_db.delete_nodes(&node_ids).await.map_err(|e| {
+                DeleteError::GraphCleanup(format!(
+                    "Failed to delete {} graph nodes: {e}",
+                    node_ids.len()
+                ))
+            })?;
+        }
+
+        Ok((node_ids.len(), warnings))
+    } else {
+        if !nodes.is_empty() {
+            warnings
+                .push("Graph DB not configured; graph artifacts were not cleaned up.".to_string());
+        }
+        Ok((0, warnings))
+    }
+}
+
+/// Delete vector points based on provenance nodes and edges.
+/// Returns `(count, warnings)`.
+///
+/// `edges` drives the `Triplet_text` points, whose id is one-to-one with the
+/// edge (source, text, target). The `EdgeType_relationship_name` points are
+/// passed in separately as `edge_type_ids`, because their id is *many*-to-one
+/// over edges: deciding which of them a caller may delete needs an exclusivity
+/// check over the retrieval text, which is the caller's to make.
+pub(crate) async fn delete_vector_artifacts(
+    vector_db: Option<&Arc<dyn VectorDB>>,
+    nodes: &[GraphNode],
+    edges: &[GraphEdge],
+    edge_type_ids: &[Uuid],
+) -> Result<(usize, Vec<String>), DeleteError> {
+    let mut warnings = Vec::new();
+    let mut total_deleted = 0usize;
+
+    if let Some(vector_db) = vector_db {
+        // Group nodes by (node_type, field_name) for batched deletion
+        let mut by_collection: HashMap<(String, String), Vec<Uuid>> = HashMap::new();
+
+        for node in nodes {
+            let fields = parse_indexed_fields(&node.indexed_fields);
+            for field_name in fields {
+                by_collection
+                    .entry((node.node_type.clone(), field_name))
+                    .or_default()
+                    .push(node.slug);
+            }
+        }
+
+        // Edges contribute to EdgeType_relationship_name and Triplet_text.
+        for edge_type_id in edge_type_ids {
+            by_collection
+                .entry(("EdgeType".to_string(), "relationship_name".to_string()))
+                .or_default()
+                .push(*edge_type_id);
+        }
+
+        for edge in edges {
+            by_collection
+                .entry(("Triplet".to_string(), "text".to_string()))
+                .or_default()
+                .push(triplet_vector_id(edge));
+        }
+
+        for ((data_type, field_name), ids) in &by_collection {
+            if ids.is_empty() {
+                continue;
+            }
+
+            let exists = vector_db
+                .has_collection(data_type, field_name)
+                .await
+                .map_err(|e| {
+                    DeleteError::VectorCleanup(format!(
+                        "Failed to check vector collection {data_type}_{field_name}: {e}"
+                    ))
+                })?;
+
+            if exists {
+                vector_db
+                    .delete_points(data_type, field_name, ids)
+                    .await
+                    .map_err(|e| {
+                        DeleteError::VectorCleanup(format!(
+                            "Failed to delete vector points from {data_type}_{field_name}: {e}"
+                        ))
+                    })?;
+                total_deleted += ids.len();
+            }
+        }
+
+        Ok((total_deleted, warnings))
+    } else {
+        if !nodes.is_empty() || !edges.is_empty() {
+            warnings.push(
+                "Vector DB not configured; vector artifacts were not cleaned up.".to_string(),
+            );
+        }
+        Ok((0, warnings))
+    }
+}
+
 /// Parse the `indexed_fields` JSON value into a list of field names.
 ///
 /// The `indexed_fields` column is a JSON array of field names (e.g., `["text"]`,
@@ -1803,6 +1829,18 @@ fn parse_indexed_fields(value: &serde_json::Value) -> Vec<String> {
     }
 }
 
+/// Every selected edge's `EdgeType` point id, with no exclusivity check over
+/// the retrieval text — the dataset and data delete paths' long-standing
+/// behavior, kept as it was.
+///
+/// Because that id is many-to-one over edges, this can name a point a surviving
+/// edge of another dataset still needs. The run sweep narrows the set with
+/// `get_relationship_names_claimed_outside_run`; doing the same here changes
+/// dataset deletion and belongs with that path's own tests, not this commit's.
+fn unchecked_edge_type_vector_ids(edges: &[GraphEdge]) -> Vec<Uuid> {
+    edges.iter().filter_map(edge_type_vector_id).collect()
+}
+
 /// The `EdgeType` vector point id cognify actually wrote for this edge.
 ///
 /// Cognify keys `EdgeType` DataPoints on the edge's *retrieval text* — the
@@ -1817,15 +1855,28 @@ fn parse_indexed_fields(value: &serde_json::Value) -> Vec<String> {
 /// (`delete_from_graph_and_vector.py:18-20`). `None` when the text is empty,
 /// which is Python's `if edge_text:` guard at `:96` — cognify writes no
 /// `EdgeType` for such an edge either.
-fn edge_type_vector_id(edge: &GraphEdge) -> Option<Uuid> {
+///
+/// Note the id is many-to-one over edges: every edge sharing a retrieval text
+/// (every `is_a`, say) resolves to one point. Whoever deletes it is
+/// responsible for establishing that no surviving edge still needs it —
+/// per-edge exclusivity does not establish that, because it is computed over
+/// the edge's slug.
+pub(crate) fn edge_type_vector_id(edge: &GraphEdge) -> Option<Uuid> {
+    let text = edge_retrieval_text(edge);
+    (!text.is_empty()).then(|| EdgeType::deterministic_id(&text))
+}
+
+/// The text cognify keyed this edge's `EdgeType` DataPoint on: the nonblank
+/// `edge_text` attribute, else the nonblank relationship name. Empty when the
+/// edge has neither, in which case no `EdgeType` was written.
+pub(crate) fn edge_retrieval_text(edge: &GraphEdge) -> String {
     let edge_text = edge
         .attributes
         .as_ref()
         .and_then(|attributes| attributes.get("edge_text"))
         .and_then(serde_json::Value::as_str);
 
-    let text = EdgeType::retrieval_text(edge_text, &edge.relationship_name);
-    (!text.is_empty()).then(|| EdgeType::deterministic_id(&text))
+    EdgeType::retrieval_text(edge_text, &edge.relationship_name)
 }
 
 fn triplet_vector_id(edge: &GraphEdge) -> Uuid {
