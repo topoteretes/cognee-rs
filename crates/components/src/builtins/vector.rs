@@ -43,6 +43,9 @@ impl VectorDbFactory for PgVectorFactory {
 /// Requires the `lancedb` feature. The provider id is target-invariant: on
 /// Android (where the LanceDB + Arrow native stack does not cross-compile)
 /// `build` transparently falls back to the in-memory brute-force backend.
+/// Without the feature this factory is not registered at all, and the same
+/// invariance is preserved one layer up by `ANDROID_LANCEDB_FALLBACK` in
+/// `ComponentRegistry::resolve_vector_key`.
 /// `vector_db_url = ":memory:"` is honored as an explicit brute-force opt-in for
 /// ephemeral / test workloads on all targets.
 #[cfg(feature = "lancedb")]

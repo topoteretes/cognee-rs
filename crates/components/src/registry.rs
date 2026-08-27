@@ -52,16 +52,20 @@ impl ComponentRegistry {
 
         // ── vector ────────────────────────────────────────────────────────
         // brute-force is always available. Its spelling variants (brute_force,
-        // bruteforce) are canonicalized at lookup time (see `build_vector`), so
-        // it registers under the single canonical key — this keeps a
-        // `register_vector` override consistent across all spellings.
+        // bruteforce) are canonicalized at lookup time (see
+        // `resolve_vector_key`), so it registers under the single canonical key
+        // — this keeps a `register_vector` override consistent across all
+        // spellings. Registering it unconditionally is also what
+        // ANDROID_LANCEDB_FALLBACK degrades to; keep it that way.
         reg.register_vector(Arc::new(crate::builtins::vector::BruteForceFactory));
         // lancedb is behind its own feature (the Arrow/lance native stack is a
         // large build, and not every consumer uses it). When enabled it registers
         // on every target — the Android fallback lives inside its build(), which
         // keeps the provider id target-invariant. NOTE: `lancedb` is also the
         // default `vector_db_provider`, so a build that drops the feature must set
-        // VECTOR_DB_PROVIDER explicitly; unsupported_msg() hints at that.
+        // VECTOR_DB_PROVIDER explicitly; unsupported_msg() hints at that. Android
+        // is the exception: there `resolve_vector_key` degrades the id rather
+        // than erroring, because no rebuild can satisfy it on that target.
         #[cfg(feature = "lancedb")]
         reg.register_vector(Arc::new(crate::builtins::vector::LanceDbFactory));
         #[cfg(feature = "pgvector")]
@@ -160,7 +164,10 @@ impl ComponentRegistry {
         &self,
         ctx: &BackendBuildContext,
     ) -> Result<Arc<dyn VectorDB>, ComponentError> {
-        let key = canonical_vector_provider(&ctx.vector_provider);
+        let key = self.resolve_vector_key(&ctx.vector_provider, ANDROID_LANCEDB_FALLBACK)?;
+        // `resolve_vector_key` only returns keys it found in `self.vector`, so
+        // this lookup cannot miss -- but re-using the same error keeps that an
+        // invariant rather than a panic.
         let factory = self.vector.get(&key).ok_or_else(|| {
             ComponentError::Config(unsupported_msg(
                 "vector_db_provider",
@@ -169,6 +176,45 @@ impl ComponentRegistry {
             ))
         })?;
         factory.build(ctx).await
+    }
+
+    /// Resolve a vector-provider id to a key that is actually registered.
+    ///
+    /// Canonicalizes spelling variants, then applies the Android LanceDB
+    /// fallback when `android_lancedb_fallback` is set and nothing is
+    /// registered under `lancedb`. The flag is a parameter rather than a direct
+    /// `cfg!` read so the behaviour is testable on the host.
+    fn resolve_vector_key(
+        &self,
+        provider: &str,
+        android_lancedb_fallback: bool,
+    ) -> Result<String, ComponentError> {
+        let key = canonical_vector_provider(provider);
+        if self.vector.contains_key(&key) {
+            return Ok(key);
+        }
+        // Only degrade the one id that is unbuildable on this platform by
+        // construction, and only after a real lookup miss -- so a closed
+        // `lancedb` adapter registered via `register_vector` still wins, and
+        // every other unregistered provider keeps the loud error.
+        if android_lancedb_fallback
+            && key == "lancedb"
+            && self.vector.contains_key(ANDROID_LANCEDB_FALLBACK_KEY)
+        {
+            tracing::warn!(
+                "vector_db_provider='{provider}' has no registered factory on this Android \
+                 build (the `lancedb` feature is off because the Arrow + lance native stack \
+                 does not cross-compile); falling back to in-memory brute-force -- the same \
+                 backend a lancedb-enabled Android build resolves to. Set \
+                 vector_db_provider='pgvector' for durable storage."
+            );
+            return Ok(ANDROID_LANCEDB_FALLBACK_KEY.to_string());
+        }
+        Err(ComponentError::Config(unsupported_msg(
+            "vector_db_provider",
+            provider,
+            &self.vector_providers(),
+        )))
     }
 
     /// Build the graph backend selected by `ctx.graph_provider`.
@@ -247,6 +293,26 @@ impl Default for ComponentRegistry {
     }
 }
 
+/// Whether an unregistered `lancedb` provider degrades to brute-force instead
+/// of erroring.
+///
+/// True only on Android builds compiled without the `lancedb` feature — the one
+/// first-party profile (`cognee/android-default`) that drops it, because the
+/// Arrow + lance native stack does not cross-compile. A lancedb-*enabled*
+/// Android build already resolves `lancedb` to brute-force inside
+/// `LanceDbFactory::build`, so this keeps the provider id target-invariant
+/// across both, which is what `Settings` values persisted before the feature
+/// gate landed (and `VECTOR_DB_PROVIDER=lancedb`) depend on.
+///
+/// Every other slim consumer keeps the loud unsupported-provider error: on a
+/// desktop build the missing feature is a build-configuration mistake the
+/// operator can actually fix by rebuilding.
+const ANDROID_LANCEDB_FALLBACK: bool = cfg!(all(target_os = "android", not(feature = "lancedb")));
+
+/// The provider the Android LanceDB fallback degrades to. Registered
+/// unconditionally by [`ComponentRegistry::with_builtins`].
+const ANDROID_LANCEDB_FALLBACK_KEY: &str = "brute-force";
+
 /// Canonicalize a vector-provider string, collapsing the historical
 /// brute-force spelling variants (`brute_force`, `bruteforce`) onto the single
 /// registered key `brute-force`. All other providers pass through lowercased.
@@ -299,6 +365,91 @@ fn unsupported_msg(field: &str, provider: &str, supported: &[String]) -> String 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // A build that drops `lancedb` on Android must not hard-error on a provider
+    // id it can never satisfy. `Settings::default()` names brute-force there,
+    // but that only covers defaults: the CLI persists the whole `Settings` to
+    // config.json (so any `config set` writes back whatever provider was in
+    // effect), and `VECTOR_DB_PROVIDER` sets it too. Both bypass the default and
+    // arrive here as an explicit "lancedb", which is how an Android install that
+    // predates the feature gate breaks on upgrade. Resolution -- not the default
+    // -- is the layer that has to absorb it.
+    //
+    // The `android_lancedb_fallback` flag is passed explicitly so both sides are
+    // reachable from a host test; production callers pass
+    // `ANDROID_LANCEDB_FALLBACK`.
+    #[test]
+    #[allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        reason = "test module: a failed resolution should fail the test loudly"
+    )]
+    fn android_lancedb_falls_back_to_brute_force_when_unregistered() {
+        let mut reg = ComponentRegistry::empty();
+        reg.register_vector(Arc::new(crate::builtins::vector::BruteForceFactory));
+        assert!(!reg.vector_providers().iter().any(|p| p == "lancedb"));
+
+        // On Android-without-lancedb the explicit id degrades instead of failing.
+        assert_eq!(
+            reg.resolve_vector_key("lancedb", true).unwrap(),
+            "brute-force"
+        );
+        // Case and the historical spellings reach the same place.
+        assert_eq!(
+            reg.resolve_vector_key("LanceDB", true).unwrap(),
+            "brute-force"
+        );
+
+        // Everywhere else the same input keeps the loud, actionable error.
+        let err = reg
+            .resolve_vector_key("lancedb", false)
+            .expect_err("without the Android fallback this must stay an error");
+        assert!(matches!(err, ComponentError::Config(_)));
+        assert!(err.to_string().contains("`lancedb` crate feature"));
+
+        // The fallback is scoped to `lancedb` alone: it must not swallow other
+        // unregistered providers, on Android or anywhere else.
+        assert!(reg.resolve_vector_key("pgvector", true).is_err());
+        assert!(reg.resolve_vector_key("nonsense", true).is_err());
+    }
+
+    // The fallback fires only on a real lookup miss, so a closed `lancedb`
+    // adapter registered at the binary entry point still wins on Android --
+    // `register_vector` stays the documented override.
+    #[test]
+    #[allow(
+        clippy::unwrap_used,
+        reason = "test module: a failed resolution should fail the test loudly"
+    )]
+    fn registered_lancedb_wins_over_the_android_fallback() {
+        struct StubLanceDb;
+        #[async_trait::async_trait]
+        impl VectorDbFactory for StubLanceDb {
+            fn provider(&self) -> &str {
+                "lancedb"
+            }
+            async fn build(
+                &self,
+                _ctx: &BackendBuildContext,
+            ) -> Result<Arc<dyn VectorDB>, ComponentError> {
+                unreachable!("resolution-only test")
+            }
+        }
+
+        let mut reg = ComponentRegistry::empty();
+        reg.register_vector(Arc::new(crate::builtins::vector::BruteForceFactory));
+        reg.register_vector(Arc::new(StubLanceDb));
+
+        assert_eq!(reg.resolve_vector_key("lancedb", true).unwrap(), "lancedb");
+    }
+
+    // The fallback must stay off on every non-Android build, so a desktop
+    // consumer that drops the feature still gets told to rebuild.
+    #[test]
+    #[cfg(not(target_os = "android"))]
+    fn android_fallback_constant_is_off_on_non_android_targets() {
+        assert!(!ANDROID_LANCEDB_FALLBACK);
+    }
 
     // The unsupported-provider feature hint must be keyed on BOTH the component
     // kind and the provider: a graph feature must never be suggested for a
