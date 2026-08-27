@@ -58,7 +58,43 @@ fn dispatch(command: Commands, cm: &Arc<ComponentManager>) -> Result<(), CliErro
     }
 }
 
+/// Answer `--version`/`--help` before any config or logging I/O.
+///
+/// `run()` parses argv only after `load_settings()` and the subscriber install,
+/// so without this both flags depend on a readable `config.json` and print a
+/// `Logging initialized` line (plus create a log file) ahead of their own
+/// output. That defeats their main use — a cheap probe of an installed binary.
+///
+/// Returns `Some(exit)` only for the two display kinds, which clap prints to
+/// stdout. Every other outcome yields `None` so the real parse in `run()`
+/// produces the diagnostics unchanged — a bare `cognee-cli` still reports a
+/// missing subcommand exactly as before. Decision 11's ordering is untouched:
+/// this returns before either step rather than reordering them.
+fn short_circuit_version_or_help() -> Option<StdExitCode> {
+    use clap::CommandFactory as _;
+    use clap::error::ErrorKind;
+
+    match Cli::command().try_get_matches_from(std::env::args_os()) {
+        Err(err)
+            if matches!(
+                err.kind(),
+                ErrorKind::DisplayVersion | ErrorKind::DisplayHelp
+            ) =>
+        {
+            // Ignoring the write error is deliberate: a closed stdout leaves
+            // nothing to report it on, and the exit code still carries.
+            let _ = err.print();
+            Some(StdExitCode::from(ExitCode::Success as u8))
+        }
+        _ => None,
+    }
+}
+
 fn main() -> StdExitCode {
+    if let Some(exit) = short_circuit_version_or_help() {
+        return exit;
+    }
+
     // Settings load runs before subscriber install so init_telemetry sees the
     // correct configuration on the first span (decision 11). No subscriber is
     // installed yet, so failures must go to stderr directly.
