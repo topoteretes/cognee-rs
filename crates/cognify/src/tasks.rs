@@ -577,6 +577,12 @@ pub async fn extract_graph_from_data(
         .add_edges(&edge_data)
         .await
         .map_err(CognifyError::from)?;
+    if !edge_data.is_empty() {
+        info!(
+            "Upserted {} extracted graph edges (LLM and ontology)",
+            edge_data.len()
+        );
+    }
 
     Ok(ExtractedGraphData {
         chunks: updated_chunks,
@@ -762,6 +768,7 @@ pub async fn create_web_page_nodes(
             .add_edges(&missing_edges)
             .await
             .map_err(CognifyError::from)?;
+        info!("Upserted {} web page edges", missing_edges.len());
     }
 
     Ok(())
@@ -1184,7 +1191,7 @@ pub async fn add_data_points(
             .add_edges(&structural_edges)
             .await
             .map_err(CognifyError::from)?;
-        info!("Created {} structural edges", structural_edges.len());
+        info!("Upserted {} structural edges", structural_edges.len());
     }
 
     let embeddings = generate_embeddings(
