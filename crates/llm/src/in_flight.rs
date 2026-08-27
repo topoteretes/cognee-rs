@@ -50,11 +50,24 @@ static LLM_IN_FLIGHT: OnceLock<Arc<Semaphore>> = OnceLock::new();
 /// under-count and let the ceiling be exceeded during the changeover. Same
 /// tradeoff, and same reason, as [`cognee_utils::pacing::init_llm_pacer`].
 ///
-/// `0` is treated as 1 rather than as "closed" — a zero-permit semaphore would
-/// deadlock every request instead of serialising them, which is never what a
-/// misconfigured `0` is asking for.
+/// `0` is treated as 1 rather than as "closed" — see [`permits_for`].
 pub fn init_llm_in_flight(max_in_flight: usize) -> Arc<Semaphore> {
-    Arc::clone(LLM_IN_FLIGHT.get_or_init(|| Arc::new(Semaphore::new(max_in_flight.max(1)))))
+    Arc::clone(LLM_IN_FLIGHT.get_or_init(|| Arc::new(Semaphore::new(permits_for(max_in_flight)))))
+}
+
+/// Permits to open the semaphore with, for a configured ceiling.
+///
+/// Clamps `0` up to 1 rather than honouring it: a zero-permit semaphore parks
+/// every request forever, so a misconfigured `LLM_MAX_PARALLEL_REQUESTS=0` would
+/// hang the pipeline rather than slow it. Serialising is the nearest useful
+/// reading of "as few as possible", and it is what the CLI already does with the
+/// same setting (`commands/cognify.rs` applies `.max(1)`).
+///
+/// A named function rather than an inline `.max(1)` so the clamp is reachable
+/// from tests — the semaphore itself lives behind a `OnceLock` that only the
+/// first caller in a process can set.
+fn permits_for(max_in_flight: usize) -> usize {
+    max_in_flight.max(1)
 }
 
 /// The process-wide in-flight semaphore, if one has been installed.
@@ -107,14 +120,25 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_zero_ceiling_serialises_rather_than_deadlocks() {
+        // 0 must not reach the semaphore: `Semaphore::new(0)` parks every
+        // acquirer forever, turning a misconfigured ceiling into a hang.
+        assert_eq!(permits_for(0), 1);
+        // Everything else passes through untouched.
+        assert_eq!(permits_for(1), 1);
+        assert_eq!(permits_for(DEFAULT_MAX_IN_FLIGHT), DEFAULT_MAX_IN_FLIGHT);
+    }
+
     #[tokio::test]
-    async fn a_zero_ceiling_serialises_rather_than_deadlocks() {
-        // Not via the process-global — these tests share one process, so the
-        // clamp is asserted on a locally constructed semaphore instead.
-        let semaphore = Arc::new(Semaphore::new(0usize.max(1)));
-        let first = Arc::clone(&semaphore).acquire_owned().await.unwrap();
+    async fn a_single_permit_serialises_acquirers() {
+        // The behaviour the clamp above buys: one at a time, and the slot comes
+        // back. Asserted on a local semaphore because the process-global one is
+        // a `OnceLock` shared with every other test in this binary.
+        let semaphore = Arc::new(Semaphore::new(permits_for(0)));
+        let held = Arc::clone(&semaphore).acquire_owned().await.unwrap();
         assert_eq!(semaphore.available_permits(), 0);
-        drop(first);
+        drop(held);
         assert_eq!(semaphore.available_permits(), 1);
     }
 }
