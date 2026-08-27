@@ -269,6 +269,9 @@ async fn baseline_creates_full_table_set_sqlite() {
 /// only way to change the schema without breaking existing deployments.
 ///
 /// Bump this deliberately, with the same reasoning, when a migration is added.
+/// Bumped to 3 for `m20260916_000001_provenance_pipeline_run_id`: `nodes` and
+/// `edges` gain the nullable run-ownership column, which existing 0.2.0
+/// databases must acquire without their baseline being rewritten.
 #[test]
 fn relational_chain_is_baseline_plus_additive_migrations() {
     use sea_orm_migration::MigratorTrait;
@@ -278,11 +281,90 @@ fn relational_chain_is_baseline_plus_additive_migrations() {
         .collect();
     assert_eq!(
         names.len(),
-        2,
+        3,
         "unexpected migration-chain length — chain: {names:?}"
     );
     assert!(
         names[0].contains("baseline"),
         "the squashed baseline must stay first in the chain — chain: {names:?}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Cross-SDK: Python may add `pipeline_run_id` first
+// ---------------------------------------------------------------------------
+
+/// Rust and Python migrate the same SQLite file and either SDK can go first.
+/// Python's alembic revision `aa753a730673` adds `nodes.pipeline_run_id` /
+/// `edges.pipeline_run_id` and their indexes under exactly the names Rust's
+/// migration uses, so when Python wins the race Rust must skip what is already
+/// there instead of failing with "duplicate column name".
+///
+/// `migration_is_idempotent_sqlite` does not cover this: it re-runs a
+/// *recorded* migration, which sea-orm skips before the guard is reached.
+#[tokio::test]
+async fn migration_tolerates_pipeline_run_id_added_by_python_first() {
+    use sea_orm_migration::MigratorTrait;
+
+    let tmp = tempfile::TempDir::new().expect("create temp dir");
+    let db_path = tmp.path().join("python_first.db");
+    let url = format!("sqlite://{}?mode=rwc", db_path.display());
+    let db = connect(&url).await.expect("connect");
+
+    // Everything up to, but excluding, the run-ownership migration.
+    Migrator::up(&db, Some(2))
+        .await
+        .expect("baseline + pipeline_run_claims");
+
+    // Stand in for alembic `aa753a730673` having run first.
+    for sql in [
+        "ALTER TABLE nodes ADD COLUMN pipeline_run_id CHAR(32)",
+        "CREATE INDEX ix_nodes_pipeline_run_id ON nodes (pipeline_run_id)",
+        "ALTER TABLE edges ADD COLUMN pipeline_run_id CHAR(32)",
+        "CREATE INDEX ix_edges_pipeline_run_id ON edges (pipeline_run_id)",
+    ] {
+        db.execute(sea_orm::Statement::from_string(
+            sea_orm::DatabaseBackend::Sqlite,
+            sql.to_string(),
+        ))
+        .await
+        .unwrap_or_else(|e| panic!("simulated alembic statement failed ({sql}): {e}"));
+    }
+
+    initialize(&db)
+        .await
+        .expect("initialize must skip what Python already created");
+
+    // Exactly one column and one index per table — nothing duplicated.
+    for (table, index) in [
+        ("nodes", "ix_nodes_pipeline_run_id"),
+        ("edges", "ix_edges_pipeline_run_id"),
+    ] {
+        let columns = db
+            .query_all(sea_orm::Statement::from_string(
+                sea_orm::DatabaseBackend::Sqlite,
+                format!(
+                    "SELECT name FROM pragma_table_info('{table}') WHERE name = 'pipeline_run_id'"
+                ),
+            ))
+            .await
+            .expect("column probe");
+        assert_eq!(
+            columns.len(),
+            1,
+            "{table}.pipeline_run_id must exist exactly once"
+        );
+
+        let indexes = db
+            .query_all(sea_orm::Statement::from_string(
+                sea_orm::DatabaseBackend::Sqlite,
+                format!(
+                    "SELECT name FROM sqlite_master \
+                     WHERE type = 'index' AND tbl_name = '{table}' AND name = '{index}'"
+                ),
+            ))
+            .await
+            .expect("index probe");
+        assert_eq!(indexes.len(), 1, "index {index} must exist exactly once");
+    }
 }

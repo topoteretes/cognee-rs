@@ -2569,6 +2569,10 @@ async fn upsert_provenance(
             user_id,
             data_id,
             dataset_id,
+            // Always `None` for now: nothing writes run ownership yet. The
+            // real run id starts flowing from the pipeline context once
+            // ownership is recorded before the artifacts it names.
+            pipeline_run_id: None,
             label: Some(label),
             node_type: entity.base.data_type.clone(),
             indexed_fields,
@@ -2593,6 +2597,7 @@ async fn upsert_provenance(
             user_id,
             data_id,
             dataset_id,
+            pipeline_run_id: None,
             label: Some(format!("chunk_{}", chunk.chunk_index)),
             node_type: chunk.base.data_type.clone(),
             indexed_fields,
@@ -2620,6 +2625,7 @@ async fn upsert_provenance(
             user_id,
             data_id,
             dataset_id,
+            pipeline_run_id: None,
             label: Some(format!("summary_{}", summary.base.id)),
             node_type: summary.base.data_type.clone(),
             indexed_fields,
@@ -2638,6 +2644,7 @@ async fn upsert_provenance(
             user_id,
             data_id: Uuid::nil(),
             dataset_id,
+            pipeline_run_id: None,
             label: Some(et.name.clone()),
             node_type: et.base.data_type.clone(),
             indexed_fields: et
@@ -2679,6 +2686,7 @@ async fn upsert_provenance(
             user_id,
             data_id,
             dataset_id,
+            pipeline_run_id: None,
             label: Some(label),
             node_type: document.base.data_type.clone(),
             indexed_fields,
@@ -2737,6 +2745,7 @@ async fn upsert_provenance(
             user_id,
             data_id,
             dataset_id,
+            pipeline_run_id: None,
             source_node_id: edge_pair.source_entity_id,
             destination_node_id: edge_pair.target_entity_id,
             relationship_name: edge_text,
@@ -2770,6 +2779,7 @@ async fn upsert_provenance(
             user_id,
             data_id: Uuid::nil(), // structural edges span multiple DataPoints
             dataset_id,
+            pipeline_run_id: None,
             source_node_id: source_id,
             destination_node_id: target_id,
             relationship_name: rel_name.clone(),

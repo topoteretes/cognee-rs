@@ -56,6 +56,7 @@ fn prov_node(
         user_id,
         data_id,
         dataset_id,
+        pipeline_run_id: None,
         label: Some(node_type.to_string()),
         node_type: node_type.to_string(),
         indexed_fields,

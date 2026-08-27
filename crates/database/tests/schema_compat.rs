@@ -192,3 +192,66 @@ async fn uuids_stored_as_32_char_hex() {
     assert!(!raw_owner.contains('-'));
     assert_eq!(raw_owner, "660e8400e29b41d4a716446655440001");
 }
+
+/// The run-ownership column must be NULLABLE on both provenance tables: rows
+/// written before it existed carry no run and must stay permanently exempt
+/// from every run-scoped sweep rather than being ambiguously owned.
+#[tokio::test]
+async fn nodes_and_edges_have_nullable_pipeline_run_id() {
+    use sea_orm::ConnectionTrait;
+
+    let db = connect("sqlite::memory:").await.expect("connect");
+    initialize(&db).await.expect("initialize");
+
+    for table in ["nodes", "edges"] {
+        let rows = db
+            .query_all(sea_orm::Statement::from_string(
+                sea_orm::DatabaseBackend::Sqlite,
+                format!("PRAGMA table_info({table})"),
+            ))
+            .await
+            .unwrap_or_else(|e| panic!("PRAGMA table_info({table}) failed: {e}"));
+
+        let notnull = rows
+            .iter()
+            .find(|row| {
+                row.try_get::<String>("", "name")
+                    .is_ok_and(|n| n == "pipeline_run_id")
+            })
+            .unwrap_or_else(|| panic!("{table} table is missing column 'pipeline_run_id'"))
+            .try_get::<i32>("", "notnull")
+            .expect("notnull flag");
+        assert_eq!(notnull, 0, "{table}.pipeline_run_id must be nullable");
+    }
+}
+
+/// Index names are copied verbatim from Python's alembic revision
+/// `aa753a730673` so that whichever SDK migrates a shared file first, the
+/// other skips instead of creating a second index on the same column.
+#[tokio::test]
+async fn pipeline_run_id_indexes_exist() {
+    use sea_orm::ConnectionTrait;
+
+    let db = connect("sqlite::memory:").await.expect("connect");
+    initialize(&db).await.expect("initialize");
+
+    for (table, index) in [
+        ("nodes", "ix_nodes_pipeline_run_id"),
+        ("edges", "ix_edges_pipeline_run_id"),
+    ] {
+        let rows = db
+            .query_all(sea_orm::Statement::from_string(
+                sea_orm::DatabaseBackend::Sqlite,
+                format!(
+                    "SELECT name FROM sqlite_master \
+                     WHERE type='index' AND tbl_name='{table}' AND name='{index}'"
+                ),
+            ))
+            .await
+            .unwrap_or_else(|e| panic!("index query failed: {e}"));
+        assert!(
+            !rows.is_empty(),
+            "expected index '{index}' on table '{table}' to exist"
+        );
+    }
+}
