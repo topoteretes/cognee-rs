@@ -560,10 +560,12 @@ pub async fn extract_graph_from_data(
         .add_edges(&edge_data)
         .await
         .map_err(CognifyError::from)?;
-    info!(
-        "Upserted {} extracted graph edges (LLM and ontology)",
-        edge_data.len()
-    );
+    if !edge_data.is_empty() {
+        info!(
+            "Upserted {} extracted graph edges (LLM and ontology)",
+            edge_data.len()
+        );
+    }
 
     Ok(ExtractedGraphData {
         chunks: updated_chunks,
