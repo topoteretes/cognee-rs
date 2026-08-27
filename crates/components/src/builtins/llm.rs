@@ -20,6 +20,14 @@ fn install_pacer(ctx: &BackendBuildContext) {
         ctx.llm.rate_limit_enabled,
         ctx.llm.auto_rate_limit,
     );
+    // The concurrency half of the same contract, installed alongside so no
+    // factory can wire one without the other. The pacer bounds how *often*
+    // requests start; this bounds how many are in flight at once — the ceiling
+    // Python gets for free from its HTTP client's connection pool and `reqwest`
+    // does not provide. Applying it here rather than per-adapter is what makes
+    // `LLM_MAX_PARALLEL_REQUESTS` bind on paths that never thread config into a
+    // stage-level semaphore, such as the HTTP cognify routers.
+    cognee_llm::in_flight::init_llm_in_flight(ctx.llm.max_parallel_requests as usize);
 }
 
 /// The configured minimum retry window, as a duration.

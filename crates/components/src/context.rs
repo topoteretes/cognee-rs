@@ -126,6 +126,15 @@ pub struct LlmInputs {
     /// `max_retries` this is Python's dual-floor stop condition; `0` reduces it
     /// to a plain attempt cap. See `Settings::llm_min_retry_seconds`.
     pub min_retry_seconds: u32,
+    /// Ceiling on LLM requests in flight process-wide (`LLM_MAX_PARALLEL_REQUESTS`).
+    ///
+    /// Enforced at the transport layer by `cognee_llm::in_flight`, which is what
+    /// makes this setting a real bound on *every* path rather than only where a
+    /// caller happens to thread it into its own semaphore — the HTTP routers
+    /// build `CognifyConfig::default()` and never do. Distinct from
+    /// `rate_limit_requests`: that bounds starts per interval, this bounds
+    /// simultaneous requests.
+    pub max_parallel_requests: u32,
     /// Pace dispatch unconditionally (`LLM_RATE_LIMIT_ENABLED`).
     pub rate_limit_enabled: bool,
     /// Requests admitted per `rate_limit_interval` once pacing is active.

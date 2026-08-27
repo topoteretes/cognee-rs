@@ -649,6 +649,14 @@ impl OpenAIAdapter {
         let mut last_error = LlmError::NetworkError("No attempt made".to_string());
         let budget = self.retry_budget();
         let pacer = self.pacer();
+        // Transport-level concurrency ceiling, the analogue of the connection-pool
+        // bound every Python HTTP client sets (see `crate::in_flight`). Acquired
+        // outside the retry loop and held for the whole call, so a request that
+        // backs off keeps its slot rather than releasing it to a competitor and
+        // re-queueing behind it. Taken before the pacer's admission below: a
+        // permit held across a pacing sleep would idle the pool during exactly
+        // the overload episode the pacer is draining.
+        let _in_flight = crate::in_flight::acquire_in_flight().await;
         let started = Instant::now();
         // `Retry-After` from the previous attempt. A usable hint replaces the
         // computed backoff outright — including when it asks for less, since the

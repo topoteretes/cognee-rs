@@ -42,7 +42,7 @@ for retries and the `cognee-llm` rustdoc for the adapter.
 | `LLM_MAX_COMPLETION_TOKENS` / `LLM_MAX_TOKENS` | `llm_max_completion_tokens` | `16384` |
 | `LLM_MAX_RETRIES` | `llm_max_retries` | `2` |
 | `LLM_MIN_RETRY_SECONDS` | `llm_min_retry_seconds` | `240` |
-| `LLM_MAX_PARALLEL_REQUESTS` | `llm_max_parallel_requests` | `128` |
+| `LLM_MAX_PARALLEL_REQUESTS` | `llm_max_parallel_requests` | `1000` (`128` on Android/iOS) |
 | `MOCK_LLM` | `llm_mock` | `false` |
 | `MOCK_LLM_CASSETTE` | `llm_cassette` | _(empty)_ |
 | `COGNEE_RECORD_LLM` | `llm_record_path` | _(empty)_ |
@@ -455,8 +455,18 @@ These knobs form one resilience stack, matching Python cognee's:
   8s doubling to a 128s ceiling, and a `Retry-After` header is honoured (capped
   at 60s) when the provider sends one. Set `LLM_MIN_RETRY_SECONDS=0` to fail
   fast on attempts alone.
+- **Concurrency and rate are separate ceilings.** `LLM_MAX_PARALLEL_REQUESTS`
+  bounds how many LLM requests are in flight at once; the `LLM_RATE_LIMIT_*`
+  bucket below bounds how often they *start*. Neither substitutes for the other —
+  a rate limit cannot stop a thousand simultaneous sockets, and a semaphore
+  cannot stop a steady stream that exceeds a quota. The concurrency ceiling is
+  enforced inside the LLM transport, so it applies on every surface including
+  the HTTP server, whose cognify routes have no per-request knob of their own.
+  It defaults to 1000, matching the connection-pool limit `openai-python` and
+  `litellm` set, and to 128 on Android/iOS where a 1024-descriptor budget is
+  shared with the graph, vector and relational stores.
 - **Pacing is off until it is needed.** With `LLM_RATE_LIMIT_ENABLED=false`
-  (the default) requests dispatch unbounded. When the provider reports overload
+  (the default) requests dispatch unbounded up to that concurrency ceiling. When the provider reports overload
   — HTTP 429, 503, 529, or a timeout — `AUTO_RATE_LIMIT` (default on) opens an
   *episode*: for the next 15 minutes dispatch is paced at
   `LLM_RATE_LIMIT_REQUESTS` per `LLM_RATE_LIMIT_INTERVAL` seconds. Fresh
