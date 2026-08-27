@@ -2,7 +2,8 @@
 
 Asserts:
   1. Both Python and Rust SDKs create at least one ``*.log`` file under
-     a shared ``COGNEE_LOGS_DIR`` after invoking a known no-op command.
+     a shared ``COGNEE_LOGS_DIR`` after invoking a known read-only command
+     (see :data:`RUST_LOG_TRIGGER` for why it is not ``--help``).
   2. The shared anchor message ``"Logging initialized"`` appears at the
      start of the body of at least one formatted line in each SDK's log
      output, with the body extracted between the timestamp and the
@@ -51,6 +52,14 @@ LINE_RE = re.compile(
 )
 
 ANCHOR = "Logging initialized"
+
+# Read-only subcommand used purely to boot the Rust CLI far enough to install
+# its logging subscriber. Deliberately NOT ``--help``/``--version``: those are
+# answered before any config or logging I/O (see
+# ``short_circuit_version_or_help`` in ``crates/cli/src/main.rs``), so they
+# create no log file. The Python side calls ``setup_logging()`` directly, so a
+# real subcommand is also the closer analogue of what it does.
+RUST_LOG_TRIGGER = ["config", "get"]
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -138,15 +147,15 @@ def test_both_sdks_create_log_files(tmp_path: Path) -> None:
 
     # --- Rust side ----------------------------------------------------
     rs_result = subprocess.run(
-        [RUST_CLI, "--help"],
+        [RUST_CLI, *RUST_LOG_TRIGGER],
         env=_rust_env(rs_logs),
         capture_output=True,
         text=True,
         timeout=60,
     )
     assert rs_result.returncode == 0, (
-        f"Rust CLI --help failed (exit {rs_result.returncode}); "
-        f"stderr=\n{rs_result.stderr}"
+        f"Rust CLI {' '.join(RUST_LOG_TRIGGER)} failed "
+        f"(exit {rs_result.returncode}); stderr=\n{rs_result.stderr}"
     )
 
     # (1) Both SDKs created at least one .log file in their shared dir.
@@ -175,14 +184,15 @@ def test_anchor_message_matches_after_normalization(tmp_path: Path) -> None:
         )
 
     rs_result = subprocess.run(
-        [RUST_CLI, "--help"],
+        [RUST_CLI, *RUST_LOG_TRIGGER],
         env=_rust_env(rs_logs),
         capture_output=True,
         text=True,
         timeout=60,
     )
     assert rs_result.returncode == 0, (
-        f"Rust CLI --help failed: stderr=\n{rs_result.stderr}"
+        f"Rust CLI {' '.join(RUST_LOG_TRIGGER)} failed: "
+        f"stderr=\n{rs_result.stderr}"
     )
 
     py_anchor = _anchor_prefix(_read_logs(py_logs))
