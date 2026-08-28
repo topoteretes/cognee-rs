@@ -47,9 +47,9 @@ use cognee_ontology::OntologyResolver;
 use cognee_storage::StorageTrait;
 use cognee_utils::sanitize::sanitize_string;
 use cognee_vector::{VectorDB, VectorPoint};
+use futures::StreamExt;
 use serde::Serialize;
 use serde_json::json;
-use tokio::sync::Semaphore;
 use tracing::{info, warn};
 use url::Url;
 use uuid::Uuid;
@@ -712,40 +712,58 @@ pub async fn extract_graph_from_data(
     let batch_size = config.chunks_per_batch;
     let failure_policy = config.failure_policy();
     let mut failures = input.failures.clone();
+    let max_parallel = config.max_parallel_extractions.max(1);
     let mut all_graphs: Vec<(Uuid, KnowledgeGraph)> = Vec::new();
-    let semaphore = Arc::new(Semaphore::new(config.max_parallel_extractions));
     // `Some(n)` once a FailFast abort has fired, naming the first chunk index
     // (into `chunks_for_extraction`) that was never dispatched.
     let mut aborted_at: Option<usize> = None;
 
     for (batch_idx, batch) in chunks_for_extraction.chunks(batch_size).enumerate() {
         let fact_extractor = FactExtractor::new(Arc::clone(&llm));
-        let mut extract_tasks = Vec::new();
-        let mut chunk_ids = Vec::new();
-        let mut chunk_documents = Vec::new();
 
-        for chunk in batch {
-            let extractor = fact_extractor.clone();
-            let text = chunk.text.clone();
-            let sem = Arc::clone(&semaphore);
-            let prompt = config.custom_extraction_prompt.clone();
+        // Pre-extract owned per-chunk inputs so the stream yields owned items.
+        // Mapping a stream over borrowed `&chunk` references trips a
+        // higher-ranked-lifetime inference bug when the surrounding future is
+        // boxed (same workaround as `SummaryExtractor::summarize_chunks`).
+        let inputs: Vec<(Uuid, String)> = batch
+            .iter()
+            .map(|chunk| (chunk.base.id, chunk.text.clone()))
+            .collect();
+        let chunk_ids: Vec<Uuid> = inputs.iter().map(|(id, _)| *id).collect();
+        // Parallel to `chunk_ids`: a failure is attributed to its file, and the
+        // stream items carry only the chunk id and text.
+        let chunk_documents: Vec<Uuid> = batch.iter().map(|chunk| chunk.document_id).collect();
 
-            chunk_ids.push(chunk.base.id);
-            chunk_documents.push(chunk.document_id);
-            extract_tasks.push(tokio::spawn(async move {
-                #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
-                let _permit = sem
-                    .acquire()
+        // Bounded-concurrency pipeline: at most `max_parallel` extraction calls
+        // are in flight at once. `buffered` (not `buffer_unordered`) yields
+        // results in input order, which `all_graphs` relies on — downstream
+        // dedup in `retrieve_existing_edges` is order-sensitive. The
+        // `tokio::spawn` inside the mapped future keeps calls on the
+        // multi-threaded runtime, and `buffered` only polls up to `max_parallel`
+        // futures, so at most that many extraction tasks exist at once.
+        //
+        // Peak duplicated text is still O(`chunks_per_batch`), not
+        // O(`max_parallel`): `inputs` above clones every chunk's text up front.
+        // Making that lazy would mean borrowing `&chunk` across the stream, which
+        // is the higher-ranked-lifetime case the comment there describes.
+        let batch_results: Vec<_> = futures::stream::iter(inputs)
+            .map(|(_, text)| {
+                let extractor = fact_extractor.clone();
+                let prompt = config.custom_extraction_prompt.clone();
+                async move {
+                    tokio::spawn(
+                        async move { extractor.extract_facts(&text, prompt.as_deref()).await },
+                    )
                     .await
-                    .expect("semaphore is never closed; created locally in this function");
-                extractor.extract_facts(&text, prompt.as_deref()).await
-            }));
-        }
+                }
+            })
+            .buffered(max_parallel)
+            .collect()
+            .await;
 
-        // The whole batch is dispatched before any result is inspected, so a
+        // The whole batch is collected before any result is inspected, so a
         // FailFast abort reports every failure in the batch that tripped it —
         // not only the first one to come back.
-        let batch_results = futures::future::join_all(extract_tasks).await;
         let mut batch_failed = false;
         for ((result, chunk_id), document_id) in batch_results
             .into_iter()
@@ -1013,6 +1031,12 @@ pub async fn extract_graph_from_data(
         .add_edges(&edge_data)
         .await
         .map_err(CognifyError::from)?;
+    if !edge_data.is_empty() {
+        info!(
+            "Upserted {} extracted graph edges (LLM and ontology)",
+            edge_data.len()
+        );
+    }
 
     Ok(ExtractedGraphData {
         chunks: updated_chunks,
@@ -1253,6 +1277,7 @@ pub async fn create_web_page_nodes(
             .add_edges(&missing_edges)
             .await
             .map_err(CognifyError::from)?;
+        info!("Upserted {} web page edges", missing_edges.len());
     }
 
     Ok(())
@@ -1385,7 +1410,7 @@ pub async fn extract_custom_graph_from_data<M: crate::fact_extraction::GraphMode
         .collect();
 
     let batch_size = config.chunks_per_batch;
-    let semaphore = Arc::new(Semaphore::new(config.max_parallel_extractions));
+    let max_parallel = config.max_parallel_extractions.max(1);
 
     let mut updated_chunks = input.chunks.clone();
 
@@ -1419,25 +1444,30 @@ pub async fn extract_custom_graph_from_data<M: crate::fact_extraction::GraphMode
     let mut aborted = false;
 
     for (batch_idx, batch_indices) in non_dlt_indices.chunks(batch_size).enumerate() {
-        let mut extract_tasks = Vec::new();
+        // Owned per-chunk inputs, for the same higher-ranked-lifetime reason as
+        // `extract_graph_from_data`.
+        let inputs: Vec<String> = batch_indices
+            .iter()
+            .map(|&idx| updated_chunks[idx].text.clone())
+            .collect();
 
-        for &idx in batch_indices {
-            let extractor = FactExtractor::new(Arc::clone(&llm));
-            let text = updated_chunks[idx].text.clone();
-            let sem = Arc::clone(&semaphore);
-            let prompt = config.custom_extraction_prompt.clone();
-
-            extract_tasks.push(tokio::spawn(async move {
-                #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
-                let _permit = sem
-                    .acquire()
+        // Bounded-concurrency pipeline, order-preserving (`buffered`) because the
+        // results below are zipped positionally back onto `batch_indices`.
+        let batch_results: Vec<_> = futures::stream::iter(inputs)
+            .map(|text| {
+                let extractor = FactExtractor::new(Arc::clone(&llm));
+                let prompt = config.custom_extraction_prompt.clone();
+                async move {
+                    tokio::spawn(
+                        async move { extractor.extract::<M>(&text, prompt.as_deref()).await },
+                    )
                     .await
-                    .expect("semaphore is never closed; created locally in this function");
-                extractor.extract::<M>(&text, prompt.as_deref()).await
-            }));
-        }
+                }
+            })
+            .buffered(max_parallel)
+            .collect()
+            .await;
 
-        let batch_results = futures::future::join_all(extract_tasks).await;
         let batch_len = batch_indices.len();
         let mut batch_failed = false;
 
@@ -1851,7 +1881,7 @@ pub async fn add_data_points(
             .add_edges(&structural_edges)
             .await
             .map_err(CognifyError::from)?;
-        info!("Created {} structural edges", structural_edges.len());
+        info!("Upserted {} structural edges", structural_edges.len());
     }
 
     let embeddings = generate_embeddings(
@@ -1960,9 +1990,12 @@ pub async fn extract_temporal_events(
         });
     }
 
+    // NOTE: unlike the graph-extraction stages, the batch loop here is
+    // structural, not a throttle: `enricher.enrich` runs one aggregate LLM pass
+    // per batch, so the barrier is a real data dependency and is kept.
     let batch_size = config.data_per_batch;
     let failure_policy = config.failure_policy();
-    let semaphore = Arc::new(Semaphore::new(config.max_parallel_extractions));
+    let max_parallel = config.max_parallel_extractions.max(1);
     let extractor = Arc::new(TemporalEventExtractor::new(Arc::clone(&llm)));
     let enricher = TemporalEntityEnricher::new(Arc::clone(&llm));
 
@@ -1973,30 +2006,26 @@ pub async fn extract_temporal_events(
     let mut aborted_at: Option<usize> = None;
 
     for (batch_idx, batch) in non_dlt_chunks.chunks(batch_size).enumerate() {
-        let mut extract_tasks = Vec::new();
-        let mut chunk_ids = Vec::new();
-        let mut chunk_documents = Vec::new();
+        // Owned inputs; `buffered` keeps the per-chunk event order stable so
+        // `all_events` is deterministic for a given input. `chunk_ids` and
+        // `chunk_documents` run parallel to them: a failure is attributed to
+        // its chunk and its file, neither of which the stream items carry.
+        let inputs: Vec<String> = batch.iter().map(|chunk| chunk.text.clone()).collect();
+        let chunk_ids: Vec<Uuid> = batch.iter().map(|chunk| chunk.base.id).collect();
+        let chunk_documents: Vec<Uuid> = batch.iter().map(|chunk| chunk.document_id).collect();
 
-        for chunk in batch {
-            let ext = Arc::clone(&extractor);
-            let text = chunk.text.clone();
-            let sem = Arc::clone(&semaphore);
-            chunk_ids.push(chunk.base.id);
-            chunk_documents.push(chunk.document_id);
-            extract_tasks.push(tokio::spawn(async move {
-                #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
-                let _permit = sem
-                    .acquire()
-                    .await
-                    .expect("semaphore is never closed; created locally in this function");
-                ext.extract_events(&text).await
-            }));
-        }
-
-        // The whole batch is dispatched before any result is inspected, so a
+        // The whole batch is collected before any result is inspected, so a
         // FailFast abort reports every failure in the batch that tripped it —
         // not only the first one to come back.
-        let batch_results = futures::future::join_all(extract_tasks).await;
+        let batch_results: Vec<_> = futures::stream::iter(inputs)
+            .map(|text| {
+                let ext = Arc::clone(&extractor);
+                async move { tokio::spawn(async move { ext.extract_events(&text).await }).await }
+            })
+            .buffered(max_parallel)
+            .collect()
+            .await;
+
         let mut batch_events: Vec<TemporalEvent> = Vec::new();
         let mut batch_data_ids: Vec<Uuid> = Vec::new();
         let mut extraction_failed_chunks: HashSet<Uuid> = HashSet::new();
@@ -5835,11 +5864,6 @@ mod tests {
     }
 
     /// Markdown is cognified as text, exactly as Python does it.
-    ///
-    /// Python maps `md`/`json`/`xml`/`yaml` to TextDocument explicitly
-    /// (classify_documents.py:26-29). Dropping them meant the item reached
-    /// neither the graph nor the report, and once completion markers went live
-    /// a run marked it done and skipped it forever.
     #[test]
     fn markdown_is_classified_as_text_like_python() {
         let markdown = Data::builder(
@@ -5872,9 +5896,6 @@ mod tests {
     }
 
     /// A genuinely unsupported extension is skipped but never silently lost.
-    ///
-    /// Recorded as unreached rather than failed: failing it would make one
-    /// `.py` in a dataset error and sweep every run under the default scope.
     #[test]
     fn unsupported_extension_is_recorded_as_unreached() {
         let source = Data::builder(

@@ -240,6 +240,9 @@ impl OpenAIResponsesClient {
             self.retry_min_elapsed,
         );
         let pacer = self.pacer.clone().or_else(llm_pacer);
+        // See the identical acquisition in the OpenAI adapter: transport-level
+        // concurrency ceiling, held across retries, taken before pacing.
+        let _in_flight = crate::in_flight::acquire_in_flight().await;
         let started = Instant::now();
         let mut retry_after: Option<Duration> = None;
         let mut attempt: u32 = 0;

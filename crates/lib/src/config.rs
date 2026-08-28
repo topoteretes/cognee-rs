@@ -921,6 +921,7 @@ impl Settings {
                 anthropic_base_url: cognee_components::anthropic_base_url_from_env(),
                 max_retries: self.llm_max_retries,
                 min_retry_seconds: self.llm_min_retry_seconds,
+                max_parallel_requests: self.llm_max_parallel_requests,
                 rate_limit_enabled: self.llm_rate_limit_enabled,
                 rate_limit_requests: self.llm_rate_limit_requests,
                 rate_limit_interval: self.llm_rate_limit_interval,
@@ -1166,7 +1167,15 @@ impl Default for Settings {
             llm_max_completion_tokens: cognee_llm::OpenAIAdapter::DEFAULT_MAX_COMPLETION_TOKENS,
             llm_max_retries: 2,
             llm_min_retry_seconds: 240,
-            llm_max_parallel_requests: 128,
+            // Single-sourced with cognify's own in-flight default so the two
+            // cannot drift: this setting is what the CLI and bindings push into
+            // `CognifyConfig::max_parallel_extractions`, and a mismatch would
+            // mean the configured value silently disagreed with the value used
+            // by any consumer that does not thread it through (the HTTP routers
+            // do not). See `DEFAULT_MAX_PARALLEL_EXTRACTIONS` for why this is
+            // 128 rather than Python's effectively-unbounded gather.
+            llm_max_parallel_requests: cognee_cognify::config::DEFAULT_MAX_PARALLEL_EXTRACTIONS
+                as u32,
             llm_args: serde_json::Map::new(),
             llm_mock: false,
             llm_cassette: String::new(),

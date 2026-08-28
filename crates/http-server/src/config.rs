@@ -212,6 +212,14 @@ pub struct HttpServerConfig {
     /// Minimum seconds a transient LLM failure is retried for (`0` = attempt cap
     /// only). Mirrors `Settings::llm_min_retry_seconds`.
     pub llm_min_retry_seconds: u32,
+    /// Ceiling on LLM requests in flight process-wide (`LLM_MAX_PARALLEL_REQUESTS`).
+    ///
+    /// The server has no per-request concurrency knob and its cognify routers
+    /// build `CognifyConfig::default()`, so before this existed the effective
+    /// ceiling on that path was whatever cognify's default happened to be, with
+    /// no way for an operator to lower it. `cognee_llm::in_flight` applies this
+    /// at the transport layer, which binds regardless of the route taken.
+    pub llm_max_parallel_requests: u32,
     /// Pace dispatch unconditionally (`LLM_RATE_LIMIT_ENABLED`).
     pub llm_rate_limit_enabled: bool,
     /// Requests per interval once pacing is active.
@@ -380,6 +388,10 @@ impl Default for HttpServerConfig {
             llm_reasoning: "auto".to_string(),
             llm_max_retries: 3,
             llm_min_retry_seconds: 240,
+            // Single-sourced with the CLI/SDK default so the same env-free
+            // deployment gets the same ceiling on either surface.
+            llm_max_parallel_requests: cognee_cognify::config::DEFAULT_MAX_PARALLEL_EXTRACTIONS
+                as u32,
             llm_rate_limit_enabled: false,
             llm_rate_limit_requests: 60,
             llm_rate_limit_interval: 60,
@@ -588,6 +600,11 @@ impl HttpServerConfig {
                 .parse::<u32>()
                 .map_err(|e| ServerError::Other(anyhow::anyhow!("LLM_MIN_RETRY_SECONDS: {e}")))?;
         }
+        if let Ok(v) = std::env::var("LLM_MAX_PARALLEL_REQUESTS") {
+            cfg.llm_max_parallel_requests = v.parse::<u32>().map_err(|e| {
+                ServerError::Other(anyhow::anyhow!("LLM_MAX_PARALLEL_REQUESTS: {e}"))
+            })?;
+        }
         if let Ok(v) = std::env::var("LLM_RATE_LIMIT_ENABLED") {
             cfg.llm_rate_limit_enabled = cognee_utils::parse_env_bool(&v);
         }
@@ -771,6 +788,7 @@ impl HttpServerConfig {
                 anthropic_base_url: cognee_components::anthropic_base_url_from_env(),
                 max_retries: self.llm_max_retries,
                 min_retry_seconds: self.llm_min_retry_seconds,
+                max_parallel_requests: self.llm_max_parallel_requests,
                 rate_limit_enabled: self.llm_rate_limit_enabled,
                 rate_limit_requests: self.llm_rate_limit_requests,
                 rate_limit_interval: self.llm_rate_limit_interval,

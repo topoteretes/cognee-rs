@@ -123,8 +123,11 @@ pub struct SummaryExtractor {
 impl SummaryExtractor {
     /// Default cap on concurrent summarization LLM calls. Matches the graph
     /// extractor's default `max_parallel_extractions` so both stages share the
-    /// same in-flight ceiling.
-    pub const DEFAULT_MAX_PARALLEL: usize = 20;
+    /// same in-flight ceiling. Python's summarization stage
+    /// (`cognee/tasks/summarization/summarize_text.py:58`) gathers the whole
+    /// batch unbounded, so this is deliberately non-binding at the default batch
+    /// size while remaining a real, lowerable ceiling.
+    pub const DEFAULT_MAX_PARALLEL: usize = crate::config::DEFAULT_MAX_PARALLEL_EXTRACTIONS;
 
     /// Create a new summary extractor using the built-in `SummarizedContent` schema.
     pub fn new(llm: Arc<dyn Llm>) -> Self {

@@ -9,6 +9,9 @@ use predicates::prelude::*;
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
+// Only used by the `ladybug`-gated case below, so the import carries the same
+// gate — otherwise a slim build (`--no-default-features`) trips `unused_imports`.
+#[cfg(feature = "ladybug")]
 use uuid::Uuid;
 
 fn make_cmd(config_home: &TempDir) -> Command {
@@ -737,16 +740,79 @@ fn top_level_help_flag_prints_usage() {
 }
 
 #[test]
-fn top_level_version_flag_exits_gracefully() {
-    // The CLI does not currently declare a --version flag, so this should
-    // exit with a non-zero code but must not panic or crash.
+fn top_level_version_flag_prints_version() {
+    // clap 4's derive only synthesises --version/-V when `version` is set on the
+    // root command, so this is a regression guard for that attribute: without it
+    // both spellings are rejected as unknown arguments (exit 2).
     let config_home = TempDir::new().expect("temp dir should be created");
+    for flag in ["--version", "-V"] {
+        make_cmd(&config_home)
+            .args([flag])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains(env!("CARGO_PKG_VERSION")));
+    }
+}
+
+#[test]
+fn top_level_version_and_help_survive_an_unreadable_config() {
+    // --version is the canonical probe of an installed binary, so it must not
+    // depend on config state: argv is answered before `load_settings()` runs.
+    // Guards against a regression where both flags parsed only after the config
+    // was read, making a corrupt file exit 1 with no version printed.
+    let config_home = TempDir::new().expect("temp dir should be created");
+    let config_dir = config_home.path().join("cognee-rust");
+    std::fs::create_dir_all(&config_dir).expect("config dir should be created");
+    std::fs::write(config_dir.join("config.json"), "{ this is not json")
+        .expect("corrupt config should be written");
+
+    make_cmd(&config_home)
+        .args(["--version"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(env!("CARGO_PKG_VERSION")));
+
+    make_cmd(&config_home)
+        .args(["--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("cognee"));
+}
+
+#[test]
+fn top_level_version_output_is_machine_readable() {
+    // Logging init used to run first and put `Logging initialized ...` on stdout
+    // ahead of the version, so a naive `cognee-cli --version` comparison failed.
+    //
+    // Both halves of "no logging I/O" are asserted: the stdout shape, and that
+    // the subscriber never ran at all. Checking stdout alone would still pass if
+    // logging were reintroduced ahead of version handling in a file-only
+    // configuration, so the log directory is isolated and required to stay empty.
+    let config_home = TempDir::new().expect("temp dir should be created");
+    let logs_dir = TempDir::new().expect("temp dir should be created");
+
     let output = make_cmd(&config_home)
+        .env("COGNEE_LOGS_DIR", logs_dir.path())
         .args(["--version"])
         .output()
-        .expect("command should run without crashing");
-    // Either success (if version is added in future) or clean failure is acceptable.
-    let _ = output.status;
+        .expect("command should run");
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf-8");
+    assert_eq!(
+        stdout.trim(),
+        format!("cognee-cli {}", env!("CARGO_PKG_VERSION")),
+        "--version must print exactly one line with no log preamble"
+    );
+
+    let log_entries: Vec<_> = std::fs::read_dir(logs_dir.path())
+        .expect("logs dir should be readable")
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name())
+        .collect();
+    assert!(
+        log_entries.is_empty(),
+        "--version must not initialise logging; found {log_entries:?}"
+    );
 }
 
 // ---------------------------------------------------------------------------
