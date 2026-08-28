@@ -12,7 +12,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::Utc;
 use cognee_core::CpuPool;
-use cognee_database::ops::pipeline_runs::{create_pipeline_run, get_latest_pipeline_status};
+use cognee_database::ops::pipeline_runs::{create_pipeline_run, get_latest_pipeline_run};
 use cognee_database::{DatabaseConnection, PipelineRun, PipelineRunRepository, PipelineRunStatus};
 use cognee_embedding::engine::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
@@ -27,6 +27,7 @@ use uuid::Uuid;
 use crate::config::CognifyConfig;
 use crate::error::CognifyError;
 use crate::pipeline::CognifyResult;
+use crate::rollback;
 use crate::tasks::cognify;
 
 /// Pipeline name used for cognify pipeline run records (matches Python
@@ -90,6 +91,81 @@ pub trait DatasetResolver: Send + Sync {
 }
 
 // ---------------------------------------------------------------------------
+// Shared per-dataset helpers
+// ---------------------------------------------------------------------------
+
+/// Whether the pipeline cache may skip `dataset_id` entirely.
+///
+/// Reads the whole latest row rather than its status alone: a run that
+/// completed with files still outstanding is *not* a cache hit — the next run
+/// has exactly those files to redo — and reading the status and the `run_info`
+/// with two queries would let the two answers come from different rows.
+async fn dataset_is_cached(
+    database: &DatabaseConnection,
+    dataset_id: Uuid,
+) -> Result<bool, CognifyError> {
+    let latest = get_latest_pipeline_run(database, COGNIFY_PIPELINE_NAME, dataset_id).await?;
+    Ok(latest.is_some_and(|run| {
+        matches!(run.status, PipelineRunStatus::Completed)
+            && !rollback::run_info_has_outstanding_failures(run.run_info.as_ref())
+    }))
+}
+
+/// Append the dataset-level `COMPLETED` row this loop writes after a run.
+///
+/// Carries the run's *real* `pipeline_run_id` whenever the run reported one.
+/// This row is the latest one for the dataset, so a cache check reads it
+/// rather than the executor's; with a fabricated id it named a run no
+/// ownership row belongs to, and its `run_info` said nothing at all about the
+/// run's failures. Both now match what the run actually did.
+///
+/// Two edges to that claim, stated rather than papered over:
+///
+/// - **A result flagged `already_completed` is not a run**, so nothing is
+///   appended. Either the pipeline cache short-circuited it or the completion
+///   markers covered every item; in both cases the run that did the work
+///   already has its own rows, and appending one here would put a fabricated
+///   id at the head of the dataset's trail — exactly what carrying the real id
+///   exists to avoid.
+/// - **The temporal branch reports no run id yet** (it writes no ownership
+///   rows at all until step 7), so its row still falls back to a fresh UUID.
+///
+/// `data_ids` is the dataset's items as this loop found them, which is what it
+/// has to hand before the run. When completion markers skip part of the
+/// dataset it is a superset of what the run actually processed; the executor's
+/// own rows, written from the filtered input, carry the exact set.
+async fn record_dataset_run(
+    database: &DatabaseConnection,
+    dataset_id: Uuid,
+    data_ids: &[Uuid],
+    result: &CognifyResult,
+) -> Result<(), CognifyError> {
+    if result.already_completed {
+        return Ok(());
+    }
+    let pipeline_run_id = result.pipeline_run_id.unwrap_or_else(Uuid::new_v4);
+    let run_info = if result.failures.is_empty() {
+        // A clean run's row keeps exactly the shape it had before this
+        // change.
+        None
+    } else {
+        Some(rollback::run_info_with_failures(data_ids, &result.failures))
+    };
+    let run = PipelineRun {
+        id: Uuid::new_v4(),
+        created_at: Utc::now(),
+        status: PipelineRunStatus::Completed,
+        pipeline_run_id,
+        pipeline_name: COGNIFY_PIPELINE_NAME.to_string(),
+        pipeline_id: pipeline_run_id,
+        dataset_id: Some(dataset_id),
+        run_info,
+    };
+    create_pipeline_run(database, run).await?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // cognify_datasets
 // ---------------------------------------------------------------------------
 
@@ -133,17 +209,13 @@ pub async fn cognify_datasets(
 
     for dataset in &datasets {
         // --- Pipeline cache check ---
-        if config.use_pipeline_cache {
-            let status =
-                get_latest_pipeline_status(&database, COGNIFY_PIPELINE_NAME, dataset.id).await?;
-            if matches!(status, Some(PipelineRunStatus::Completed)) {
-                info!(
-                    dataset_name = %dataset.name,
-                    dataset_id = %dataset.id,
-                    "Skipping already-processed dataset (pipeline cache hit)"
-                );
-                continue;
-            }
+        if config.use_pipeline_cache && dataset_is_cached(&database, dataset.id).await? {
+            info!(
+                dataset_name = %dataset.name,
+                dataset_id = %dataset.id,
+                "Skipping already-processed dataset (pipeline cache hit)"
+            );
+            continue;
         }
 
         let data_items = resolver.get_dataset_data(dataset.id).await?;
@@ -163,6 +235,10 @@ pub async fn cognify_datasets(
             data_items = data_items.len(),
             "Running cognify for dataset"
         );
+
+        // Captured before the items move into the run: the row appended below
+        // names them, the way the executor's own rows do.
+        let data_ids: Vec<Uuid> = data_items.iter().map(|item| item.id).collect();
 
         let result = cognify(
             data_items,
@@ -184,18 +260,7 @@ pub async fn cognify_datasets(
         .await?;
 
         // --- Record successful pipeline run ---
-        let pipeline_run_id = Uuid::new_v4();
-        let run = PipelineRun {
-            id: Uuid::new_v4(),
-            created_at: Utc::now(),
-            status: PipelineRunStatus::Completed,
-            pipeline_run_id,
-            pipeline_name: COGNIFY_PIPELINE_NAME.to_string(),
-            pipeline_id: pipeline_run_id,
-            dataset_id: Some(dataset.id),
-            run_info: None,
-        };
-        create_pipeline_run(&database, run).await?;
+        record_dataset_run(&database, dataset.id, &data_ids, &result).await?;
 
         results.push(result);
     }
@@ -267,17 +332,13 @@ pub async fn cognify_dataset_refs(
 
     let mut results = Vec::new();
     for dataset in &all_datasets {
-        if config.use_pipeline_cache {
-            let status =
-                get_latest_pipeline_status(&database, COGNIFY_PIPELINE_NAME, dataset.id).await?;
-            if matches!(status, Some(PipelineRunStatus::Completed)) {
-                info!(
-                    dataset_name = %dataset.name,
-                    dataset_id = %dataset.id,
-                    "Skipping already-processed dataset (pipeline cache hit)"
-                );
-                continue;
-            }
+        if config.use_pipeline_cache && dataset_is_cached(&database, dataset.id).await? {
+            info!(
+                dataset_name = %dataset.name,
+                dataset_id = %dataset.id,
+                "Skipping already-processed dataset (pipeline cache hit)"
+            );
+            continue;
         }
 
         let data_items = resolver.get_dataset_data(dataset.id).await?;
@@ -296,6 +357,10 @@ pub async fn cognify_dataset_refs(
             data_items = data_items.len(),
             "Running cognify for dataset"
         );
+
+        // Captured before the items move into the run: the row appended below
+        // names them, the way the executor's own rows do.
+        let data_ids: Vec<Uuid> = data_items.iter().map(|item| item.id).collect();
 
         let result = cognify(
             data_items,
@@ -316,18 +381,7 @@ pub async fn cognify_dataset_refs(
         )
         .await?;
 
-        let pipeline_run_id = Uuid::new_v4();
-        let run = PipelineRun {
-            id: Uuid::new_v4(),
-            created_at: Utc::now(),
-            status: PipelineRunStatus::Completed,
-            pipeline_run_id,
-            pipeline_name: COGNIFY_PIPELINE_NAME.to_string(),
-            pipeline_id: pipeline_run_id,
-            dataset_id: Some(dataset.id),
-            run_info: None,
-        };
-        create_pipeline_run(&database, run).await?;
+        record_dataset_run(&database, dataset.id, &data_ids, &result).await?;
 
         results.push(result);
     }

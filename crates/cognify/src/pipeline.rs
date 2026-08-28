@@ -46,17 +46,24 @@ pub struct CognifyResult {
     /// result shape.
     pub documents_for_dlt: Vec<Document>,
 
-    /// `true` when this result was synthesised by the
-    /// `check_pipeline_run_qualification` short-circuit (latest
-    /// `pipeline_runs` row was `COMPLETED`). All other fields are empty.
+    /// `true` when this run had nothing left to do. All other fields are
+    /// empty.
+    ///
+    /// Two paths set it: the `check_pipeline_run_qualification`
+    /// short-circuit (latest `pipeline_runs` row `COMPLETED` and the pipeline
+    /// cache opted in), and — since completion markers went live — a run whose
+    /// every data item an earlier run had already cognified. Both mean the same
+    /// thing to a caller, which is why they share the flag.
     ///
     /// CLI prints "already complete" when set; HTTP-server returns
     /// `200 OK` with `status = "PipelineRunAlreadyCompleted"`. See doc 08-08
     /// §4.3 and locked decision 13.
     pub already_completed: bool,
 
-    /// The `pipeline_run_id` of the prior completed run that triggered the
-    /// short-circuit. `None` on normal (non-short-circuit) results.
+    /// The `pipeline_run_id` of the prior completed run this result deferred
+    /// to. `None` when no prior completed run was found — including on the
+    /// marker path, where every item may have been completed by several
+    /// different earlier runs.
     pub prior_pipeline_run_id: Option<Uuid>,
 
     /// The `pipeline_runs.pipeline_run_id` of the run that produced this

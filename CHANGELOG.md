@@ -121,6 +121,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   semver-visible, though every caller in this workspace and in the C/Python/TS/
   Java bindings is internal to `cognee-cognify`.
 
+- **`cognee-cognify`: `cognify()` now honours `incremental_loading`, which
+  defaults to on.** After a successful run every data item the run finished is
+  marked complete on its `Data` row —
+  `pipeline_status["cognify_pipeline"][<dataset id>] =
+  "DATA_ITEM_PROCESSING_COMPLETED"`, Python's format byte for byte. The next run
+  reads those markers before it builds a pipeline and skips the items that
+  already carry one: they are not classified, not chunked, and never sent to an
+  LLM.
+
+  **Re-cognifying an already-complete dataset is therefore a no-op.** The call
+  returns `Ok` with `already_completed = true`, empty payloads and no LLM spend,
+  where it previously re-processed everything. `CognifyConfig` has advertised
+  `incremental_loading = true` since the field was introduced; this release is
+  where the claim becomes true, so **every existing deployment sees the change
+  without editing its configuration** — and to anyone relying on the old
+  behaviour it will look like "cognify stopped doing anything".
+
+  Nothing is skipped that was not genuinely finished: a failed run marks nothing,
+  and a sweep clears the markers of every item it rolled back, so the next run
+  redoes exactly the work that was lost. A run that completed with failures still
+  outstanding is likewise not a pipeline-cache hit.
+
+  To restore the previous behaviour, build the config with
+  `with_incremental_loading(false)`; every run then reprocesses every item.
+  Markers are neither written nor read for temporal runs. `docs/configuration.md`
+  § "Completion markers and incremental loading" has the full rules.
+
 ### Added
 
 - **`cognee-visualization`: the Python multi-view frontend is now what Rust

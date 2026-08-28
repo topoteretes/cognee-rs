@@ -13,16 +13,21 @@
 //! deleted.
 //!
 //! Rust now clears both forms, and `pipeline_status_dataset_key` is the single
-//! place that says which form a future writer must use. Nothing in `crates/`
-//! writes the column yet — the completion-marker writer arrives with run
-//! orchestration.
+//! place that says which form a writer must use.
+//! `mark_cognify_pipeline_status_complete` is that writer — run orchestration
+//! calls it for every data item a successful run finished — and
+//! `get_cognify_completed_data_ids` is the reader that makes the next run skip
+//! them. Writer, reader and both clearers are pinned together here, because a
+//! disagreement between any two of them silently either over-skips or
+//! over-redoes.
 //!
 //! Runs on in-memory SQLite.
 #![cfg(feature = "sqlite")]
 
 use cognee_database::ops::data::{
-    clear_cognify_pipeline_status_for_data, clear_pipeline_status_for_dataset, create_data,
-    get_data, pipeline_status_dataset_key, update_data,
+    DATA_ITEM_PROCESSING_COMPLETED, clear_cognify_pipeline_status_for_data,
+    clear_pipeline_status_for_dataset, create_data, get_cognify_completed_data_ids, get_data,
+    mark_cognify_pipeline_status_complete, pipeline_status_dataset_key, update_data,
 };
 use cognee_database::ops::datasets::{attach_data_to_dataset, create_dataset};
 use cognee_database::{DatabaseConnection, connect, initialize, uuid_hex};
@@ -242,4 +247,221 @@ async fn clear_cognify_pipeline_status_for_data_clears_both_forms_in_one_pass() 
         pipeline_status(&db, data_id).await.is_none(),
         "a row carrying both encodings is fully cleared in one pass",
     );
+}
+
+// ---------------------------------------------------------------------------
+// The completion-marker writer and reader
+// ---------------------------------------------------------------------------
+
+/// Create one more `Data` row attached to `dataset_id`, so the reader tests
+/// can tell a marked item from an unmarked one.
+async fn add_item(db: &DatabaseConnection, dataset_id: Uuid, name: &str) -> Uuid {
+    let data_id = Uuid::new_v4();
+    create_data(
+        db,
+        Data::builder(
+            data_id,
+            name,
+            format!("file://{name}"),
+            format!("file://{name}"),
+            "txt",
+            "text/plain",
+            format!("hash_{name}"),
+            Uuid::new_v4(),
+        )
+        .build(),
+    )
+    .await
+    .unwrap();
+    attach_data_to_dataset(db, dataset_id, data_id)
+        .await
+        .unwrap();
+    data_id
+}
+
+#[tokio::test]
+async fn marker_writer_uses_pythons_dashed_key_and_value() {
+    let (db, dataset_id, data_id) = fixture().await;
+
+    mark_cognify_pipeline_status_complete(&db, data_id, dataset_id)
+        .await
+        .unwrap();
+
+    // The whole cross-SDK contract in one assertion: pipeline key, dataset key
+    // encoding and status value all have to match Python byte for byte, or
+    // each SDK re-processes what the other finished.
+    assert_eq!(
+        pipeline_status(&db, data_id).await.unwrap(),
+        serde_json::json!({
+            "cognify_pipeline": {
+                dataset_id.to_string(): "DATA_ITEM_PROCESSING_COMPLETED"
+            }
+        }),
+    );
+}
+
+#[tokio::test]
+async fn marker_writer_preserves_other_pipelines_and_datasets() {
+    let (db, dataset_id, data_id) = fixture().await;
+    let other_dataset_id = Uuid::new_v4();
+    set_pipeline_status(
+        &db,
+        data_id,
+        serde_json::json!({
+            "add_pipeline": { dataset_id.to_string(): DATA_ITEM_PROCESSING_COMPLETED },
+            "cognify_pipeline": { other_dataset_id.to_string(): DATA_ITEM_PROCESSING_COMPLETED },
+        }),
+    )
+    .await;
+
+    mark_cognify_pipeline_status_complete(&db, data_id, dataset_id)
+        .await
+        .unwrap();
+
+    let status = pipeline_status(&db, data_id).await.unwrap();
+    assert_eq!(
+        status["add_pipeline"][dataset_id.to_string()],
+        serde_json::json!(DATA_ITEM_PROCESSING_COMPLETED),
+        "another pipeline's entry is untouched",
+    );
+    assert_eq!(
+        status["cognify_pipeline"][other_dataset_id.to_string()],
+        serde_json::json!(DATA_ITEM_PROCESSING_COMPLETED),
+        "another dataset's cognify entry is untouched",
+    );
+    assert_eq!(
+        status["cognify_pipeline"][dataset_id.to_string()],
+        serde_json::json!(DATA_ITEM_PROCESSING_COMPLETED),
+    );
+}
+
+#[tokio::test]
+async fn marker_writer_is_idempotent_and_tolerates_a_missing_row() {
+    let (db, dataset_id, data_id) = fixture().await;
+
+    mark_cognify_pipeline_status_complete(&db, data_id, dataset_id)
+        .await
+        .unwrap();
+    mark_cognify_pipeline_status_complete(&db, data_id, dataset_id)
+        .await
+        .unwrap();
+
+    let status = pipeline_status(&db, data_id).await.unwrap();
+    assert_eq!(
+        status["cognify_pipeline"].as_object().unwrap().len(),
+        1,
+        "marking twice leaves one entry",
+    );
+
+    // A caller may hand us items that were never persisted — a document the
+    // ingestion stage synthesised, say. Matching the clearers, that is a no-op
+    // rather than an error.
+    mark_cognify_pipeline_status_complete(&db, Uuid::new_v4(), dataset_id)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn marker_reader_returns_only_the_completed_ids() {
+    let (db, dataset_id, marked) = fixture().await;
+    let other_dataset_id = Uuid::new_v4();
+    let marked_elsewhere = add_item(&db, dataset_id, "elsewhere.txt").await;
+    let unmarked = add_item(&db, dataset_id, "unmarked.txt").await;
+
+    mark_cognify_pipeline_status_complete(&db, marked, dataset_id)
+        .await
+        .unwrap();
+    mark_cognify_pipeline_status_complete(&db, marked_elsewhere, other_dataset_id)
+        .await
+        .unwrap();
+
+    let completed =
+        get_cognify_completed_data_ids(&db, dataset_id, &[marked, marked_elsewhere, unmarked])
+            .await
+            .unwrap();
+
+    assert_eq!(
+        completed.into_iter().collect::<Vec<_>>(),
+        vec![marked],
+        "a marker for another dataset does not make this dataset's run skip the item",
+    );
+    assert!(
+        get_cognify_completed_data_ids(&db, dataset_id, &[])
+            .await
+            .unwrap()
+            .is_empty(),
+        "an empty request short-circuits",
+    );
+}
+
+#[tokio::test]
+async fn marker_reader_accepts_the_legacy_hex_key() {
+    let (db, dataset_id, data_id) = fixture().await;
+    set_pipeline_status(
+        &db,
+        data_id,
+        serde_json::json!({
+            "cognify_pipeline": {
+                uuid_hex::to_hex(dataset_id): DATA_ITEM_PROCESSING_COMPLETED
+            }
+        }),
+    )
+    .await;
+
+    // Read tolerance, write purity: a shared database may still carry hex-form
+    // markers Rust wrote before `pipeline_status_dataset_key` existed, and
+    // re-cognifying them would be over-redo at best and a duplicate graph at
+    // worst.
+    assert_eq!(
+        get_cognify_completed_data_ids(&db, dataset_id, &[data_id])
+            .await
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>(),
+        vec![data_id],
+    );
+}
+
+#[tokio::test]
+async fn marker_reader_ignores_a_non_completed_value() {
+    let (db, dataset_id, data_id) = fixture().await;
+    set_pipeline_status(
+        &db,
+        data_id,
+        serde_json::json!({
+            "cognify_pipeline": { dataset_id.to_string(): "DATA_ITEM_PROCESSING_STARTED" }
+        }),
+    )
+    .await;
+
+    assert!(
+        get_cognify_completed_data_ids(&db, dataset_id, &[data_id])
+            .await
+            .unwrap()
+            .is_empty(),
+        "only the completed status skips an item",
+    );
+}
+
+#[tokio::test]
+async fn a_written_marker_is_cleared_by_the_clearer() {
+    let (db, dataset_id, data_id) = fixture().await;
+
+    // The round trip the sweep depends on: it clears the markers of every item
+    // whose artifacts it removed, and the next run must then see them as
+    // unfinished.
+    mark_cognify_pipeline_status_complete(&db, data_id, dataset_id)
+        .await
+        .unwrap();
+    clear_cognify_pipeline_status_for_data(&db, data_id, dataset_id)
+        .await
+        .unwrap();
+
+    assert!(
+        get_cognify_completed_data_ids(&db, dataset_id, &[data_id])
+            .await
+            .unwrap()
+            .is_empty(),
+    );
+    assert!(pipeline_status(&db, data_id).await.is_none());
 }

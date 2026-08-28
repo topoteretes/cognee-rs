@@ -133,8 +133,10 @@ pub struct CognifyConfig {
 
     /// Axis 2 of failure handling — what a failed run removes.
     ///
-    /// Default [`RollbackScope::WholeRun`]. The sweep itself lands in a later
-    /// commit; today the scope is read for its execution consequences only.
+    /// Default [`RollbackScope::WholeRun`]. Read at the end of the run by
+    /// [`crate::rollback`], which turns it into a sweep scope — and, under
+    /// [`RollbackScope::FailedItems`], during the run for the abort-time
+    /// partition.
     #[serde(default)]
     pub rollback_scope: RollbackScope,
 

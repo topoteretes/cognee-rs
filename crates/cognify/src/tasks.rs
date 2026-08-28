@@ -27,7 +27,6 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use cognee_chunking::{CutType, NAMESPACE_OID, TokenCounterKind, chunk_by_row, chunk_text};
-use cognee_core::pipeline_run_registry::DbPipelineWatcher;
 use cognee_core::{
     CpuPool, Pipeline, PipelineBuilder, PipelineContext, TaskContextBuilder, TypedTask, Value,
 };
@@ -67,6 +66,7 @@ use crate::graph_integration::{
 };
 use crate::pipeline::{CognifyResult, IndexedFieldsStats};
 use crate::qualification::{Qualification, check_pipeline_run_qualification};
+use crate::rollback;
 use crate::summarization::{SummaryExtractor, TextSummary};
 use crate::temporal_extraction::{TemporalEntityEnricher, TemporalEventExtractor};
 use cognee_models::DataPoint;
@@ -738,7 +738,8 @@ pub async fn extract_graph_from_data(
     // work before stopping. Files partition three ways:
     //
     //   complete  — every one of its non-DLT chunks was attempted and none
-    //               failed. Persisted below and (from a later commit) marked.
+    //               failed. Persisted below, and marked complete when the
+    //               run ends.
     //   failed    — at least one chunk failed. Not persisted, left unmarked.
     //   unreached — chunks never dispatched. Not persisted, left unmarked.
     //
@@ -747,8 +748,8 @@ pub async fn extract_graph_from_data(
     // next run and both are simply redone.
     //
     // Under `RunToEnd` there is no partition and no filtering: the run persists
-    // normally and a later commit's sweep removes the failed files'
-    // contributions, so one deletion path serves both cases.
+    // normally and the item-scoped sweep removes the failed files'
+    // contributions afterwards, so one deletion path serves both cases.
     let mut complete_documents: Option<HashSet<Uuid>> = None;
     if let Some(first_unreached) = aborted_at {
         for chunk in chunks_for_extraction.iter().skip(first_unreached) {
@@ -1536,8 +1537,8 @@ pub async fn summarize_text(
                 .collect();
             for (chunk_id, error) in &outcome.failures {
                 // A nil `data_id` here would be inserted into the report's
-                // failed-item set — the exact set a later commit's sweep selects
-                // by — so the impossible case is made loud rather than silent.
+                // failed-item set — the exact set the sweep selects by — so the
+                // impossible case is made loud rather than silent.
                 #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
                 let data_id = chunk_documents.get(chunk_id).copied().expect(
                     "chunk_documents is built from the same slice that was summarized, \
@@ -1577,7 +1578,7 @@ pub async fn summarize_text(
     // time it runs, the extraction stage has already committed those files'
     // entities and edges to the graph, so dropping them here would manufacture
     // exactly the partial file invariant I2 exists to prevent. The failed item
-    // is recorded and a later commit's sweep removes it.
+    // is recorded and the sweep removes it.
     Ok(SummarizedData {
         chunks: input.chunks.clone(),
         documents: input.documents.clone(),
@@ -2972,11 +2973,18 @@ pub async fn cognify(
     } else {
         COGNIFY_PIPELINE_STAMP_NAME
     };
+    // The prior completed run, kept whichever way the gate goes: when the
+    // completion markers below turn out to cover every data item, the no-op
+    // result reports that run's id exactly as a cache hit would.
+    let mut prior_completed: Option<Uuid> = None;
     match check_pipeline_run_qualification(pipeline_run_repo.as_ref(), dataset_id, pipeline_name)
         .await
         .map_err(|e| CognifyError::DatabaseError(e.to_string()))?
     {
-        Qualification::AlreadyCompleted(prior) if effective_config.use_pipeline_cache => {
+        Qualification::AlreadyCompleted(prior)
+            if effective_config.use_pipeline_cache
+                && !rollback::run_info_has_outstanding_failures(prior.run_info.as_ref()) =>
+        {
             info!(
                 dataset_id = %dataset_id,
                 pipeline_run_id = %prior.pipeline_run_id,
@@ -2984,8 +2992,13 @@ pub async fn cognify(
             );
             return Ok(CognifyResult::already_completed(prior.pipeline_run_id));
         }
-        // Cache off (the default): a completed prior run does not stop this one.
-        Qualification::AlreadyCompleted(_) => {}
+        // Cache off (the default), or a run that completed with files still
+        // outstanding: neither stops this one. A tolerant run that swept and
+        // listed its failed files is not a cache hit — the next run has work to
+        // do, and the completion markers tell it exactly which files.
+        Qualification::AlreadyCompleted(prior) => {
+            prior_completed = Some(prior.pipeline_run_id);
+        }
         Qualification::AlreadyRunning(_prior) => {
             return Err(CognifyError::PipelineAlreadyRunning {
                 pipeline_name: pipeline_name.to_string(),
@@ -3034,6 +3047,40 @@ pub async fn cognify(
             return Ok(CognifyResult::empty());
         }
 
+        // The temporal branch is selected below, but the marker filter needs to
+        // know about it first: temporal writes no completion markers (see
+        // `rollback::RunContext::mark_complete`), so it must not read them
+        // either — a dataset a standard run completed would otherwise make
+        // every temporal run a no-op.
+        let is_temporal = effective_config.temporal_cognify;
+
+        // ── Completion markers: skip what an earlier run finished ───────────
+        // `incremental_loading` (default on) finally means something here.
+        // Python skips per item inside `run_tasks_data_item_incremental`; Rust
+        // skips for the dataset, before the pipeline is built, so a skipped
+        // item is never classified, never chunked and never sent to an LLM.
+        let data_items = if effective_config.incremental_loading && !is_temporal {
+            rollback::drop_already_complete(&database, dataset_id, data_items).await?
+        } else {
+            data_items
+        };
+        if data_items.is_empty() {
+            // Everything this dataset holds was cognified by an earlier run.
+            // Re-cognifying a complete dataset is a no-op — the behaviour
+            // change `incremental_loading` has been promising all along.
+            info!(
+                dataset_id = %dataset_id,
+                "cognify: every data item is already cognified; nothing to do"
+            );
+            let mut result = CognifyResult::empty();
+            result.already_completed = true;
+            result.prior_pipeline_run_id = prior_completed;
+            return Ok(result);
+        }
+        // The items this run is responsible for: what it marks complete on
+        // success, and what its run record names.
+        let processed_ids: Vec<Uuid> = data_items.iter().map(|item| item.id).collect();
+
         // ── Branch: temporal vs. standard pipeline ──────────────────────────────
         // LIB-06-04: both branches now route through `pipeline::execute`. The
         // selection happens *before* `execute()` per locked Decision 2 — temporal
@@ -3045,7 +3092,6 @@ pub async fn cognify(
         // branches; the temporal pipeline keeps its distinct identity at the
         // `pipeline_runs` row level via `build_temporal_cognify_pipeline`'s
         // `with_name("temporal-cognify")`.
-        let is_temporal = effective_config.temporal_cognify;
         let pipeline = if is_temporal {
             build_temporal_cognify_pipeline(
                 Arc::clone(&storage),
@@ -3107,17 +3153,45 @@ pub async fn cognify(
         // Embedded callers pass `NoopPipelineRunRepository`; CLI / HTTP callers
         // pass a `SeaOrmPipelineRunRepository` to surface rows in the
         // `/api/v1/activity/pipeline-runs` endpoint.
-        let watcher = DbPipelineWatcher::new(pipeline_run_repo);
-        let outputs = cognee_core::pipeline::execute(&pipeline, inputs, ctx, &watcher)
+        //
+        // Wrapped in `RunIdCapturingWatcher` so the run id is in hand on every
+        // exit path. The executor mints it internally and hands it to tasks
+        // through a cloned context, so a run that *fails* leaves no result to
+        // read it from — and a sweep with no run to select on would silently
+        // remove nothing.
+        let watcher = rollback::RunIdCapturingWatcher::new(Arc::clone(&pipeline_run_repo));
+        let executed = cognee_core::pipeline::execute(&pipeline, inputs, ctx, &watcher)
             .await
-            .map_err(unwrap_execution_error)?;
+            .map_err(unwrap_execution_error);
 
-        let result = extract_cognify_outputs(outputs)?;
+        // ── The policy layer ────────────────────────────────────────────────
+        // Everything from here on is `rollback`'s decision: which scope to
+        // sweep, which items to mark complete, and what the run record says.
+        let run_ctx = rollback::RunContext {
+            database: Arc::clone(&database),
+            graph_db: Arc::clone(&graph_db),
+            vector_db: Arc::clone(&vector_db),
+            repo: Arc::clone(&pipeline_run_repo),
+            dataset_id,
+            pipeline_run_id: watcher.run_id(),
+            pipeline_id: watcher.pipeline_id(),
+            pipeline_name,
+            is_temporal,
+            processed: processed_ids,
+            config: &effective_config,
+        };
+
+        let outputs = match executed {
+            Ok(outputs) => outputs,
+            Err(e) => {
+                // The executor already wrote the `ERRORED` row on its way out.
+                rollback::on_run_failed(&run_ctx, &e, true).await;
+                return Err(e);
+            }
+        };
 
         // Decision 5: post-pipeline teardown — `extract_dlt_fk_edges` stays
-        // outside the executor. The pipeline_runs row is already marked
-        // COMPLETED by the watcher at this point; teardown failure surfaces as
-        // `Err(...)` to the caller but does not roll back the run state.
+        // outside the executor.
         //
         // LIB-06-04: skip DLT FK extraction on the temporal branch — temporal
         // does not propagate `documents_for_dlt` (and Python's temporal cognify
@@ -3127,18 +3201,38 @@ pub async fn cognify(
         // the run wrote, so a sweep can reach them. It takes the run id from
         // the result because it runs outside the executor and never sees a
         // `TaskContext`.
-        if !is_temporal {
-            extract_dlt_fk_edges(
-                &result.chunks,
-                &result.documents_for_dlt,
-                Arc::clone(&graph_db),
-                &database,
-                LedgerIdentity::new(tenant_id, user_id, dataset_id, result.pipeline_run_id),
-            )
-            .await?;
+        //
+        // The watcher has already written `COMPLETED` by now, so a failure
+        // here needs a further `ERRORED` row of its own — `on_run_failed`
+        // appends one. Without it a swept run would be left looking complete,
+        // and would then be a pipeline-cache hit for a dataset whose artifacts
+        // are gone.
+        let after_completion = async {
+            let result = extract_cognify_outputs(outputs)?;
+            if !is_temporal {
+                extract_dlt_fk_edges(
+                    &result.chunks,
+                    &result.documents_for_dlt,
+                    Arc::clone(&graph_db),
+                    &database,
+                    LedgerIdentity::new(tenant_id, user_id, dataset_id, result.pipeline_run_id),
+                )
+                .await?;
+            }
+            Ok::<CognifyResult, CognifyError>(result)
         }
+        .await;
 
-        Ok(result)
+        match after_completion {
+            Ok(result) => {
+                rollback::on_run_completed(&run_ctx, &result.failures).await;
+                Ok(result)
+            }
+            Err(e) => {
+                rollback::on_run_failed(&run_ctx, &e, false).await;
+                Err(e)
+            }
+        }
     }
     .await;
 
@@ -3166,7 +3260,13 @@ pub async fn cognify(
 /// survives the trip through the executor. Flattening it to
 /// [`CognifyError::Execute`] the way this call used to is what made a collected
 /// failure indistinguishable from any other error string.
-fn unwrap_execution_error(e: cognee_core::pipeline::ExecutionError) -> CognifyError {
+///
+/// Every other variant — [`cognee_core::pipeline::ExecutionError::Cancelled`]
+/// included — flattens to [`CognifyError::Execute`] on purpose. The policy
+/// layer is then handed an error with no shape to branch on, which is what
+/// makes a cancelled run sweep like any other failed one (the deliberate
+/// divergence from Python documented in [`crate::rollback`]).
+pub(crate) fn unwrap_execution_error(e: cognee_core::pipeline::ExecutionError) -> CognifyError {
     match e {
         cognee_core::pipeline::ExecutionError::TaskFailed { source, .. } => {
             match source.downcast::<CognifyError>() {
@@ -8328,7 +8428,7 @@ mod tests {
 
     /// The custom-model extraction path collects its chunk failures like its
     /// sibling, and — like its sibling — leaves the output whole under
-    /// `RunToEnd`, where a later commit's sweep is what removes the failed
+    /// `RunToEnd`, where the item-scoped sweep is what removes the failed
     /// file's contributions.
     #[tokio::test]
     async fn custom_extraction_collects_failures_under_run_to_end() {

@@ -72,7 +72,7 @@ cognee-rs/
 
 **cognee-chunking** — Text chunking strategies ported from the Python chunking hierarchy (word → sentence → paragraph). Main entry point: `ExtractTextChunksPipeline`. Trait: `TokenCounter`. Impls: `WordCounter` (whitespace fallback), `HuggingFaceTokenCounter` (BPE/WordPiece, behind `hf-tokenizer`), `TikTokenCounter` (cl100k_base BPE, behind `tiktoken`). `TokenCounterKind::from_env()` auto-selects the counter based on `EMBEDDING_PROVIDER` and `COGNEE_TOKEN_COUNTER`.
 
-**cognee-cognify** — Knowledge-graph extraction pipeline: classify documents, chunk text, extract entities/relationships via LLM, summarize, store to graph and vector DBs. Entry points: `cognify()` / `cognify_datasets()`; main types: `CognifyConfig`, `CognifyInput`, `CognifyResult`, `FactExtractor`, `SummaryExtractor`. Also houses the **memify** sub-module (`MemifyConfig`, `MemifyResult`, `memify()`): reads the existing graph, creates triplet embeddings, indexes them for `SearchType::TripletCompletion`.
+**cognee-cognify** — Knowledge-graph extraction pipeline: classify documents, chunk text, extract entities/relationships via LLM, summarize, store to graph and vector DBs. Entry points: `cognify()` / `cognify_datasets()`; main types: `CognifyConfig`, `CognifyInput`, `CognifyResult`, `FactExtractor`, `SummaryExtractor`. Run orchestration's failure policy — which scope a finished run sweeps, which items it marks complete, and what its run record says — lives in the `rollback` module and calls into `cognee-delete`'s `RunSweeper`. Also houses the **memify** sub-module (`MemifyConfig`, `MemifyResult`, `memify()`): reads the existing graph, creates triplet embeddings, indexes them for `SearchType::TripletCompletion`.
 
 **cognee-search** — Unified search orchestration across multiple retrieval strategies. Main types: `SearchBuilder`, `SearchOrchestrator`. `SearchType` enum defines 16 search modes with corresponding retriever implementations; the newest, `HybridCompletion`, blends a per-query BM25 lexical pass, vector search over chunks/entities/edge-facts, and 1-hop graph-neighborhood expansion, then answers via LLM completion.
 
@@ -88,7 +88,7 @@ cognee-rs/
 
 **cognee-ontology** — RDF/OWL ontology integration for entity validation. Trait: `OntologyResolver`. Impls: `RdfLibOntologyResolver`, `NoOpOntologyResolver` (pass-through).
 
-**cognee-delete** — Cascading deletion of data/datasets across all backends (relational → graph → vector → file storage). Main types: `DeleteService`, `AuthorizedDeleteService`.
+**cognee-delete** — Cascading deletion of data/datasets across all backends (relational → graph → vector → file storage), plus the run-scoped rollback sweep `cognee-cognify` calls when a run fails. Main types: `DeleteService`, `AuthorizedDeleteService`, `RunSweeper`.
 
 **cognee-core** — Async runtime, task scheduling, and pipeline-execution primitives. Traits: `PipelineWatcher`, `ExecStatusManager`. Impls: `NoopWatcher`, `RayonThreadPool`, `NoopExecStatusManager`.
 

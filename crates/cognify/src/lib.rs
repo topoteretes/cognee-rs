@@ -20,6 +20,8 @@ pub mod memify;
 pub mod pipeline;
 /// Qualification module.
 pub mod qualification;
+/// Run-orchestration policy: what a finished run sweeps, marks and records.
+pub mod rollback;
 /// Summarization module.
 pub mod summarization;
 /// Pipeline tasks module.

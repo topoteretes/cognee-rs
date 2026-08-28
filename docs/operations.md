@@ -83,16 +83,67 @@ relational DB) → **extract DLT FK edges**. Configurable via `CognifyConfig`
 (chunk strategy, custom prompts/schemas, temporal mode). Pipeline:
 [`cognee-cognify`](../crates/cognify/) (`cognify()` / `cognify_datasets()`).
 
-A chunk or a file the pipeline cannot process is no longer a bare error: the
-chunking, graph-extraction and summarization stages *collect* their failures,
-and the run result carries a report naming which file, which chunk, which stage
-and what went wrong. `CognifyResult.failures` carries it on success;
-`CognifyError::RunFailed` carries the same report when the run failed. Under the
-default settings the run still aborts at the first failure and is still recorded
-`ERRORED` — the difference is that the failure is now reported rather than
-merely thrown. See
-[Cognify failure handling](configuration.md#cognify-failure-handling) for the
-two axes that control it.
+#### When a cognify run fails
+
+A chunk or a file the pipeline cannot process is not a bare error: the chunking,
+graph-extraction and summarization stages *collect* their failures, and the run
+result carries a report naming which file, which chunk, which stage and what
+went wrong. `CognifyResult.failures` carries it on success;
+`CognifyError::RunFailed` carries the same report when the run failed.
+
+What happens to what the run already wrote is decided at the end, from two
+independent settings — *when to stop* (`FailFast`, the default, or `RunToEnd`)
+and *what to sweep* (`WholeRun`, the default, `FailedItems`, or `Nothing`). The
+full matrix is in
+[Cognify failure handling](configuration.md#cognify-failure-handling); the end
+states are:
+
+- **Default (`FailFast` + `WholeRun`).** The run aborts at the first failed
+  file, everything it created is removed, the run is recorded `ERRORED` and the
+  call returns `Err`. The store converges to its pre-run state — what earlier
+  runs completed is untouched, because the sweep selects only rows naming *this*
+  run. Python's default, in execution and in end state.
+- **`FailedItems` below the failure ratio.** The run *completes*. Only the
+  failed files' contributions are removed; the files that finished are kept,
+  indexed and marked complete; and the call returns `Ok` with the failed-file
+  list in the report, so the next run knows exactly what to redo.
+- **`FailedItems` over the ratio** escalates to a whole-run sweep and an errored
+  run — a large enough share of failed chunks means something systemic, not one
+  bad file.
+- **`Nothing`** removes nothing. The escape hatch.
+
+Under `FailFast` a run partitions its files three ways at the abort point:
+*complete* (every chunk extracted — persisted and marked), *failed* (at least
+one chunk failed) and *unreached* (never attempted). Only complete files are
+persisted, which is what keeps a data item all-or-nothing; failed and unreached
+files are indistinguishable to the next run and are simply redone.
+
+A sweep deliberately keeps anything still claimed from outside its scope: an
+entity a surviving file also produced, an artifact another run or another
+dataset also names, or a row written before ownership tracking existed. The
+worst case is a surplus artifact that keeps an owner, never an artifact with no
+owner at all.
+
+Two caveats. **Cancellation is swept**, unlike Python — though there is no
+caller-facing cancel handle on `cognify()` today, and simply dropping the future
+runs no sweep at all. And **a failed temporal run is not swept**: temporal
+persistence writes no ownership records yet, so a sweep would report success
+while removing nothing; the run logs a warning and leaves its artifacts in
+place.
+
+#### Re-cognifying is now incremental — a behaviour change
+
+`incremental_loading` is on by default and now does what it says. A successful
+run marks each data item it finished, in Python's own `pipeline_status` format,
+and the next run skips the marked items before it builds a pipeline — no
+classification, no chunking, no LLM calls.
+
+**Re-cognifying an already-complete dataset is therefore a no-op**, returning
+`Ok` with `already_completed = true`. Deployments that relied on cognify
+re-processing everything on every call will see it "stop doing anything"; set
+`with_incremental_loading(false)` to restore the previous behaviour. A failed
+run marks nothing, and a sweep clears the markers of whatever it rolled back, so
+the next run redoes exactly the work that was lost.
 
 ### memify (graph enrichment)
 

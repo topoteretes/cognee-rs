@@ -364,8 +364,12 @@ by propagating. The report rides every stage output to `CognifyResult.failures`
 (on success) or to `CognifyError::RunFailed` (when the run failed). Whether the
 run fails is decided once, at the end, from two independent axes.
 
-These are `CognifyConfig` builders with **no env var, CLI flag or HTTP field
-yet** — they are selectable by a library caller.
+These are `CognifyConfig` builders with **no env var, CLI flag or HTTP field**
+— they are selectable by a library caller only. That is deliberate: Python has
+no counterpart knobs, and the settings-parity suite compares Rust's
+`GET /api/v1/settings` shape against Python's, so giving them env vars means
+adding `Settings` fields with nothing on the other side to match. Exposing them
+is a separate, opt-in change.
 
 | Builder | Field | Default |
 |---|---|---|
@@ -385,13 +389,37 @@ at the end — a full run's worth of LLM cost for the complete failure list.
 `Nothing` removes nothing. The default pair `FailFast` + `WholeRun` is Python's
 default behaviour in both execution and end state.
 
-> The sweep itself is not implemented yet. At this commit `FailedItems` behaves
-> as *tolerate and record*. Under `FailFast` the extraction stage's abort-time
-> partition never persists an incomplete file, but an untolerated summarization
-> failure still persists its item — extraction has already committed that
-> file's entities, so the summarization stage cannot drop it — leaving that item
-> partial and unswept. Under `RunToEnd` a failed file's artifacts are likewise
-> persisted and left in place.
+**What each combination now does at the end of a run.**
+
+| Combination | End state |
+|---|---|
+| `FailFast` + `WholeRun` *(default)* | Aborts at the first failed file, removes everything the run created, marks the run `ERRORED`, returns `Err`. Everything earlier runs completed is untouched. Python's default |
+| `FailFast` + `FailedItems` | Aborts at the first failed file; the files that fully completed are kept, indexed and marked; the failed and never-reached ones are removed and left unmarked |
+| `RunToEnd` + `WholeRun` | Pays for the whole run to produce the complete failure list, then removes everything the run created |
+| `RunToEnd` + `FailedItems` | Every good file is cognified and marked; only the failed files are removed, and they come back to the caller in the report |
+| _either_ + `Nothing` | Nothing is removed. The escape hatch: with `RunToEnd` it knowingly leaves partially-cognified files in place |
+
+**What the SDK call returns.** Any combination that sweeps and ends with the
+run `ERRORED` returns `Err`, matching Python, which re-raises after rolling
+back. A `FailedItems` combination that completes below the ratio returns `Ok`
+carrying the failed-file list in `CognifyResult.failures` — the run genuinely
+completed. `Nothing` propagates whatever the pipeline produced.
+
+**What a sweep keeps.** An artifact is removed only when nothing outside the
+swept scope still claims it — another run, another dataset, a row predating
+ownership tracking, or, for an item-scoped sweep, a *surviving* file in the same
+run. So an entity a failed file shared with a good one stays.
+
+**Cancellation is swept**, a deliberate divergence: Python's rollback handler
+catches `Exception`, which excludes `CancelledError`, so a cancelled Python run
+keeps its partial graph. There is currently no caller-facing cancel handle on
+`cognify()`, so this is reachable only from inside the library; dropping the
+`cognify()` future runs no sweep at all (crash recovery is out of scope).
+
+> **Temporal runs are not swept.** The temporal persistence stage writes no
+> ownership records, so a temporal sweep would delete nothing while reporting
+> success — worse than an honest refusal. A failed temporal run logs a warning
+> and leaves its artifacts in place. This is temporary.
 
 **Per-stage policy.** Failure policy is a property of the stage, not a user
 choice — with one exception.
@@ -420,6 +448,43 @@ never capped.
 Note that a run that dies in a persistence stage loses the report of the
 failures collected earlier: persistence errors keep their own `CognifyError`
 variants, because they are already run-fatal under every configuration.
+
+## Completion markers and incremental loading
+
+`incremental_loading` (default **on**) is now live. After a successful run,
+every data item the run finished is marked complete on its `Data` row, under
+`pipeline_status["cognify_pipeline"][<dataset id>] =
+"DATA_ITEM_PROCESSING_COMPLETED"` — Python's format byte for byte, dashed
+dataset id and all, so the two SDKs can share a database. The next run reads
+those markers before it builds a pipeline and skips the items already carrying
+one: they are not classified, not chunked, and never sent to an LLM.
+
+Three consequences worth stating plainly:
+
+- **Re-cognifying an already-complete dataset is a no-op.** The call returns
+  `Ok` with `already_completed = true` and empty payloads. This is a behaviour
+  change: before this, every cognify re-processed everything.
+- **A failed run marks nothing**, and a sweep clears the markers of every item
+  it rolled back, so the next run redoes exactly the work that was lost.
+- **A run that completed with failures outstanding is not a pipeline-cache
+  hit**, even with `use_pipeline_cache` on — the next run has the failed files
+  to redo.
+
+**A divergence from Python worth knowing on a shared database.** A fully
+skipped Rust run writes no `pipeline_runs` rows at all: the marker check runs
+before the pipeline is built, so there is no `INITIATED` / `STARTED` /
+`COMPLETED` trail for that call, and nothing appears under
+`GET /api/v1/activity/pipeline-runs`. Python reaches the same end state by a
+different route — `run_tasks` logs the run start before it looks at any item
+(`operations/run_tasks.py`), and each item then yields
+`PipelineRunAlreadyCompleted` from inside the open run
+(`operations/run_tasks_data_item.py`) — so a repeat cognify leaves a complete
+run trail there. The two SDKs agree on what a repeat run *did* (nothing) and
+disagree on whether it is visible as a run.
+
+Set `with_incremental_loading(false)` to restore the previous behaviour and
+reprocess everything on every run. Markers are neither written nor read for
+temporal runs.
 
 ## Search — hybrid retriever knobs
 

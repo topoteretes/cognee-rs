@@ -35,6 +35,7 @@ cognee-ontology = { path = "../ontology", version = "0.2.0" }
 cognee-database = { path = "../database", version = "0.2.0" }
 cognee-session = { path = "../session", version = "0.2.0" }
 cognee-truth-subspace = { path = "../truth-subspace", version = "0.2.0" }
+cognee-delete = { path = "../delete", version = "0.2.0" }
 
 chrono.workspace = true
 uuid = { workspace = true, features = ["v4"] }
@@ -55,7 +56,6 @@ cognee-graph      = { path = "../graph", features = ["testing", "ladybug"] }
 cognee-vector     = { path = "../vector", features = ["testing"] }
 cognee-database   = { path = "../database", features = ["sqlite"] }
 cognee-search     = { path = "../search" }
-cognee-delete     = { path = "../delete" }
 cognee-test-utils = { path = "../test-utils" }
 # `mock` enables the cassette record/replay clients (ReplayLlm/RecordingLlm) the
 # integration tests use to run offline against committed cassettes. Cargo unifies

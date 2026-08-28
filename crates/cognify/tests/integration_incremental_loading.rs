@@ -5,11 +5,15 @@
 )]
 //! Integration tests for incremental loading configuration behavior.
 //!
-//! The data-processing history layer is not wired into the current Rust `cognify()` API.
 //! These tests validate that:
 //! 1. The incremental_loading config flag is configurable.
 //! 2. The pipeline executes successfully with incremental loading enabled.
 //! 3. The pipeline executes successfully with incremental loading disabled.
+//!
+//! What the flag *does* — skip data items an earlier run already marked
+//! complete — is covered end to end in `completion_markers.rs`. These items
+//! are never persisted as `Data` rows, so there is no marker to read and both
+//! settings behave alike here.
 
 use std::sync::Arc;
 

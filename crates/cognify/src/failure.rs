@@ -48,10 +48,10 @@ pub enum FailureStop {
 
 /// Axis 2 — what a failed run removes.
 ///
-/// The sweep itself does not exist yet (it lands in a later commit); at this
-/// commit the scope is read for its execution consequences only — most visibly
+/// Read twice: during the run for its execution consequences — most visibly
 /// the abort-time partition of [`FailureStop::FailFast`] +
-/// [`RollbackScope::FailedItems`].
+/// [`RollbackScope::FailedItems`] — and at the end by [`crate::rollback`],
+/// which turns it into the scope handed to the sweep.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum RollbackScope {
     /// Remove everything this run created.
