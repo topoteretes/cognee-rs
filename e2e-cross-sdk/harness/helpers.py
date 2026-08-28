@@ -97,6 +97,20 @@ def python_runtime_env(
         # Skip LLM connection test — add doesn't need an LLM, and we may
         # not have a valid API key for add-only tests.
         "COGNEE_SKIP_CONNECTION_TEST": "true",
+        # cognee 1.5+ turns multi-user access control ON by default, and its
+        # gate rejects this combination outright:
+        #
+        #   OSError: The selected vector dataset to database handler does not
+        #   work with the configured vector database provider. ...
+        #   Selected vector database provider: brute-force
+        #   Selected vector dataset to database handler: lancedb
+        #
+        # Every write path runs that check (import_memory_source ->
+        # run_migrations -> backend_access_control_enabled), so it fails before
+        # any work happens. These helpers drive a single default user anyway —
+        # the fixtures extract one owner_id and hand it to the Rust CLI — so
+        # single-user mode is what the harness actually models.
+        "ENABLE_BACKEND_ACCESS_CONTROL": "false",
     }
     if env:
         run_env.update(env)
