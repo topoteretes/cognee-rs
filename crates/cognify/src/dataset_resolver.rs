@@ -119,16 +119,12 @@ async fn dataset_is_cached(
 /// ownership row belongs to, and its `run_info` said nothing at all about the
 /// run's failures. Both now match what the run actually did.
 ///
-/// Two edges to that claim, stated rather than papered over:
-///
-/// - **A result flagged `already_completed` is not a run**, so nothing is
-///   appended. Either the pipeline cache short-circuited it or the completion
-///   markers covered every item; in both cases the run that did the work
-///   already has its own rows, and appending one here would put a fabricated
-///   id at the head of the dataset's trail — exactly what carrying the real id
-///   exists to avoid.
-/// - **The temporal branch reports no run id yet** (it writes no ownership
-///   rows at all until step 7), so its row still falls back to a fresh UUID.
+/// One edge to that claim, stated rather than papered over: **a result flagged
+/// `already_completed` is not a run**, so nothing is appended. Either the
+/// pipeline cache short-circuited it or the completion markers covered every
+/// item; in both cases the run that did the work already has its own rows, and
+/// appending one here would put a fabricated id at the head of the dataset's
+/// trail — exactly what carrying the real id exists to avoid.
 ///
 /// `data_ids` is the dataset's items as this loop found them, which is what it
 /// has to hand before the run. When completion markers skip part of the

@@ -145,10 +145,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   To restore the previous behaviour, build the config with
   `with_incremental_loading(false)`; every run then reprocesses every item.
-  Markers are neither written nor read for temporal runs. `docs/configuration.md`
-  § "Completion markers and incremental loading" has the full rules.
+  `docs/configuration.md` § "Completion markers and incremental loading" has the
+  full rules.
+
+- **`cognee-cognify`: the temporal pipeline joins the `cognify_pipeline` marker
+  namespace, so a standard and a temporal cognify over one dataset are now
+  no-ops for each other.** Python's temporal cognify runs under
+  `pipeline_name="cognify_pipeline"` — the same string as its standard branch —
+  and therefore writes and reads the same markers on both; Rust now matches.
+  That is also what makes a temporal sweep's marker-clearing phase meaningful
+  instead of a guaranteed no-op. Callers who want both a semantic and a temporal
+  graph over the same dataset must set `with_incremental_loading(false)`.
+
+- **`cognee-cognify`: `ExtractedTemporalEvents::events` is now
+  `Vec<AttributedEvent>`, and `add_temporal_data_points` /
+  `make_add_temporal_data_points_task` each take two more arguments.** Ownership
+  rows are keyed per (artifact, producing data item), and the temporal stage
+  previously flattened its events with no attribution at all, so there was
+  nothing to key on; `AttributedEvent` carries the producing `data_id` alongside
+  the event. `add_temporal_data_points` gains a `&DatabaseConnection` and an
+  `Option<Uuid>` run id, and the task builder a `Arc<DatabaseConnection>`, for
+  the ledger write. All are `pub` and therefore semver-visible; every caller in
+  this workspace and in the C/Python/TS/Java bindings is internal to
+  `cognee-cognify`.
 
 ### Added
+
+- **`cognee-cognify`: the temporal pipeline records artifact ownership, and is
+  therefore rollback-able.** `add_temporal_data_points` wrote `Event`,
+  `Timestamp`, `Interval` and entity nodes, their edges, and `Event_name` vector
+  points, and never touched the relational database — so nothing could name what
+  a temporal run had created, and a sweep of one would have removed nothing
+  while reporting success. It now claims every one of those artifacts in the
+  ownership ledger, in one transaction, *before* the first store write, with one
+  row per producing data item so a shared event is removed only when its last
+  owning file goes. A failed temporal run now converges to its pre-run state
+  exactly as a standard one does. (Python has no equivalent gap: its temporal
+  task list reuses the same `add_data_points` as the standard one.)
 
 - **`cognee-visualization`: the Python multi-view frontend is now what Rust
   renders.** `crates/visualization` previously shipped a fork of Python's
@@ -175,6 +208,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `make_*_task_with_rank` builders let a custom pipeline supply its own values.
 
 ### Fixed
+
+- **`cognee-cognify`: temporal LLM failures are no longer silent.** Both temporal
+  passes caught their own errors and returned `Ok`:
+  `TemporalEventExtractor::extract_events` warned and returned an empty `Vec`,
+  and `TemporalEntityEnricher::enrich` warned and returned the events unenriched
+  — that is, stripped of every entity node and edge the pass exists to produce.
+  A temporal run in which every LLM call rate-limited therefore *succeeded*, with
+  zero events, no error and no failure report; the only trace was one `warn!` per
+  chunk. Both now return their errors, and the extraction stage collects them the
+  way the standard stage does: per chunk for extraction, and — because one
+  enrichment call covers a whole batch — against every chunk that fed the batch
+  for enrichment, so the failure ratio stays meaningful. The two new
+  `FailureStage` variants (`TemporalExtraction`, `TemporalEnrichment`) name the
+  stage honestly in the report. Python propagates at both sites, so this was a
+  Rust-only divergence independent of rollback. **This is a behaviour change for
+  anyone relying on the old silence**: a temporal run whose LLM is failing now
+  errors instead of quietly producing nothing.
 
 - **`cognee-core`: batch-dispatched tasks now observe cancellation.** A run
   cancelled while its *terminal* task was a `*Batch` variant used to drain the

@@ -416,11 +416,6 @@ keeps its partial graph. There is currently no caller-facing cancel handle on
 `cognify()`, so this is reachable only from inside the library; dropping the
 `cognify()` future runs no sweep at all (crash recovery is out of scope).
 
-> **Temporal runs are not swept.** The temporal persistence stage writes no
-> ownership records, so a temporal sweep would delete nothing while reporting
-> success — worse than an honest refusal. A failed temporal run logs a warning
-> and leaves its artifacts in place. This is temporary.
-
 **Per-stage policy.** Failure policy is a property of the stage, not a user
 choice — with one exception.
 
@@ -429,6 +424,8 @@ choice — with one exception.
 | Chunking | data item | Collected; the item fails and contributes neither chunks nor a `Document` |
 | Graph extraction | chunk | Collected; the item fails. Ratio-checked under `FailedItems` |
 | Summarization | chunk | **Configurable.** Default: the item fails (Python parity). With tolerance on: recorded separately, never fails the item or the run, never counts toward the ratio |
+| Temporal event extraction | chunk | Collected; the item fails. Ratio-checked under `FailedItems` |
+| Temporal entity enrichment | chunk | Collected. One LLM call covers a whole batch, so the failure is recorded against **every chunk that fed the batch** and the batch's events are dropped — an event with no attributes carries none of the entity graph the pass exists to produce |
 | Persistence — graph, vector or ledger writes, and embeddings | run | Always fatal, under every combination |
 
 `tolerate_summarization_failures` governs **fatality only**. Either way the
@@ -482,9 +479,15 @@ different route — `run_tasks` logs the run start before it looks at any item
 run trail there. The two SDKs agree on what a repeat run *did* (nothing) and
 disagree on whether it is visible as a run.
 
+**Temporal runs share the markers.** Both branches write and read the one
+`cognify_pipeline` key, which is what Python does — its temporal cognify runs
+under the same `pipeline_name`. The consequence is user-visible: a `cognify()`
+followed by a temporal `cognify()` over the same dataset is a **no-op**, and the
+other way round. Callers who want both graphs over one dataset must set
+`with_incremental_loading(false)`.
+
 Set `with_incremental_loading(false)` to restore the previous behaviour and
-reprocess everything on every run. Markers are neither written nor read for
-temporal runs.
+reprocess everything on every run.
 
 ## Search — hybrid retriever knobs
 

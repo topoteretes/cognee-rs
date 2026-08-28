@@ -362,10 +362,97 @@ impl cognee_llm::Llm for SummarizationFailingLlm {
     }
 }
 
-/// The narrowest LLM that satisfies the temporal pipeline: one event, one
-/// entity attribute. Dispatches on the system prompt the way
+/// Which temporal pass a [`TemporalFixtureLlm`] fails.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TemporalFailingPass {
+    /// Nothing fails.
+    None,
+    /// The per-chunk event extraction call.
+    Extraction,
+    /// The per-batch entity enrichment call — the second unguarded site, whose
+    /// failure unit is a whole batch rather than one chunk.
+    Enrichment,
+}
+
+/// The narrowest LLM that satisfies the temporal pipeline, with a switch for
+/// failing either of its two passes. Dispatches on the system prompt the way
 /// `temporal_cognify.rs`'s fixture does.
-pub struct TemporalFixtureLlm;
+///
+/// Every chunk yields two events: one named after the chunk's first word, so a
+/// file's own artifacts are identifiable, and one named
+/// [`SHARED_EVENT_NAME`] that *every* file produces — the temporal analogue of
+/// the shared entity `canned_graph_response` gives the standard pipeline, and
+/// the case an item-scoped sweep has to get right.
+///
+/// The per-file event carries the chunk text as its description, which is what
+/// puts a [`FAIL_MARKER`] into the enrichment prompt as well as the extraction
+/// one: the two passes can therefore be failed with the same marker vocabulary.
+pub struct TemporalFixtureLlm {
+    markers: Vec<String>,
+    failing_pass: TemporalFailingPass,
+    calls: AtomicUsize,
+}
+
+/// The event every file produces.
+pub const SHARED_EVENT_NAME: &str = "Shared milestone";
+
+impl Default for TemporalFixtureLlm {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TemporalFixtureLlm {
+    /// Answers every temporal prompt.
+    pub fn new() -> Self {
+        Self {
+            markers: Vec::new(),
+            failing_pass: TemporalFailingPass::None,
+            calls: AtomicUsize::new(0),
+        }
+    }
+
+    /// Fails the event-extraction call for any chunk whose text carries one of
+    /// `markers`.
+    pub fn failing_extraction(markers: Vec<String>) -> Self {
+        Self {
+            markers,
+            failing_pass: TemporalFailingPass::Extraction,
+            calls: AtomicUsize::new(0),
+        }
+    }
+
+    /// Fails the entity-enrichment call for any batch whose events carry one of
+    /// `markers` in their description.
+    pub fn failing_enrichment(markers: Vec<String>) -> Self {
+        Self {
+            markers,
+            failing_pass: TemporalFailingPass::Enrichment,
+            calls: AtomicUsize::new(0),
+        }
+    }
+
+    pub fn call_count(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+
+    /// The graph node id `add_temporal_data_points` gives an event named
+    /// `name` — `uuid5(NAMESPACE_OID, "event:{name}")`.
+    pub fn event_node_id(name: &str) -> Uuid {
+        Uuid::new_v5(&Uuid::NAMESPACE_OID, format!("event:{name}").as_bytes())
+    }
+
+    /// The per-file event's name: the chunk's first word, so two files never
+    /// collide on it.
+    fn per_file_event_name(chunk_text: &str) -> String {
+        let head = chunk_text.split_whitespace().next().unwrap_or("Unnamed");
+        format!("{head} event")
+    }
+
+    fn fails(&self, pass: TemporalFailingPass, prompt: &str) -> bool {
+        self.failing_pass == pass && self.markers.iter().any(|m| prompt.contains(m.as_str()))
+    }
+}
 
 #[async_trait::async_trait]
 impl cognee_llm::Llm for TemporalFixtureLlm {
@@ -383,32 +470,74 @@ impl cognee_llm::Llm for TemporalFixtureLlm {
         _json_schema: &serde_json::Value,
         _options: Option<cognee_llm::GenerationOptions>,
     ) -> cognee_llm::LlmResult<serde_json::Value> {
-        let system_prompt = messages
-            .iter()
-            .find(|message| matches!(message.role, cognee_llm::MessageRole::System))
-            .map(|message| message.content.as_str())
-            .unwrap_or_default();
+        self.calls.fetch_add(1, Ordering::SeqCst);
+
+        let role_content = |role: cognee_llm::MessageRole| -> String {
+            messages
+                .iter()
+                .filter(|message| message.role == role)
+                .map(|message| message.content.as_str())
+                .collect()
+        };
+        let system_prompt = role_content(cognee_llm::MessageRole::System);
+        let user_prompt = role_content(cognee_llm::MessageRole::User);
 
         if system_prompt.contains("extracting highly granular stream events") {
+            if self.fails(TemporalFailingPass::Extraction, &user_prompt) {
+                return Err(cognee_llm::LlmError::RateLimitExceeded(
+                    "simulated 429 on temporal event extraction".to_string(),
+                ));
+            }
             return Ok(json!({
-                "events": [{
-                    "name": "Alice joins Acme",
-                    "description": "Alice started at Acme in 2020.",
-                    "time_from": { "year": 2020 },
-                    "time_to": null,
-                    "location": null
-                }]
+                "events": [
+                    {
+                        "name": Self::per_file_event_name(&user_prompt),
+                        "description": user_prompt,
+                        "time_from": { "year": 2020 },
+                        "time_to": null,
+                        "location": null
+                    },
+                    {
+                        "name": SHARED_EVENT_NAME,
+                        "description": "Something both files describe.",
+                        "time_from": { "year": 2021 },
+                        "time_to": null,
+                        "location": null
+                    }
+                ]
             }));
         }
         if system_prompt.contains("extracting highly granular entities from events") {
-            return Ok(json!({
-                "events": [{
-                    "event_name": "Alice joins Acme",
-                    "attributes": [
-                        { "entity": "Alice", "entity_type": "person", "relationship": "subject" }
-                    ]
-                }]
-            }));
+            if self.fails(TemporalFailingPass::Enrichment, &user_prompt) {
+                return Err(cognee_llm::LlmError::RateLimitExceeded(
+                    "simulated 429 on temporal entity enrichment".to_string(),
+                ));
+            }
+            // Echo the batch back, so every event the caller sent is enriched.
+            let names: Vec<String> = serde_json::from_str::<serde_json::Value>(&user_prompt)
+                .ok()
+                .and_then(|value| value.as_array().cloned())
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|entry| {
+                    entry
+                        .get("event_name")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string)
+                })
+                .collect();
+            let events: Vec<serde_json::Value> = names
+                .into_iter()
+                .map(|name| {
+                    json!({
+                        "event_name": name,
+                        "attributes": [
+                            { "entity": "Alice", "entity_type": "person", "relationship": "subject" }
+                        ]
+                    })
+                })
+                .collect();
+            return Ok(json!({ "events": events }));
         }
         Ok(json!({"summary": "Alice and Acme.", "description": "A description."}))
     }
@@ -416,4 +545,15 @@ impl cognee_llm::Llm for TemporalFixtureLlm {
     fn model(&self) -> &str {
         "temporal-fixture"
     }
+}
+
+/// One chunk per file and one chunk per *temporal* batch — the temporal stage
+/// batches on `data_per_batch`, not `chunks_per_batch` — so both the abort
+/// boundary and the enrichment call's scope fall exactly between files.
+pub fn temporal_config() -> CognifyConfig {
+    CognifyConfig::default()
+        .with_chunk_size(1500)
+        .with_chunks_per_batch(1)
+        .with_data_per_batch(1)
+        .with_temporal_cognify(true)
 }

@@ -308,7 +308,6 @@ pub(crate) struct RunContext<'a> {
     pub(crate) pipeline_run_id: Option<Uuid>,
     pub(crate) pipeline_id: Option<Uuid>,
     pub(crate) pipeline_name: &'a str,
-    pub(crate) is_temporal: bool,
     /// The data items this run actually processed — the dataset's items minus
     /// the ones an earlier run had already marked complete.
     pub(crate) processed: Vec<Uuid>,
@@ -342,21 +341,10 @@ impl RunContext<'_> {
 
     /// The run id to sweep on, or `None` with an explanation logged.
     ///
-    /// Temporal is the deliberate exception: the temporal persistence stage
-    /// writes no ownership rows at all, so a temporal sweep would delete
-    /// nothing while reporting success — worse than an honest refusal.
-    /// Refusing outright is not an option either, because the default scope is
-    /// `WholeRun` and every temporal run would fail. Step 7 removes the
-    /// exception by giving temporal a ledger.
+    /// Both pipelines are swept the same way: the temporal persistence stage
+    /// records ownership of everything it writes, so a temporal sweep selects
+    /// real rows.
     fn sweepable_run_id(&self) -> Option<Uuid> {
-        if self.is_temporal {
-            warn!(
-                dataset_id = %self.dataset_id,
-                "cognify: temporal runs write no ownership records, so this run was not swept; \
-                 its artifacts stay in the graph and vector stores"
-            );
-            return None;
-        }
         match self.pipeline_run_id {
             Some(run_id) => Some(run_id),
             None => {
@@ -371,16 +359,18 @@ impl RunContext<'_> {
 
     /// Mark `data_ids` complete for this dataset's cognify pipeline.
     ///
-    /// Gated on `incremental_loading` and skipped for temporal runs: the
-    /// clearer the sweep and the delete path call is hard-coded to the
-    /// `cognify_pipeline` key, so a temporal marker would either be unclearable
-    /// under its own key or make a later *standard* cognify skip files temporal
-    /// produced. Step 7 settles it.
+    /// Gated on `incremental_loading` only. Both branches write under the one
+    /// `cognify_pipeline` key the sweep's clearer and the delete path already
+    /// use, matching Python, whose temporal cognify runs under that same
+    /// pipeline name. The consequence is user-visible and deliberate: a dataset
+    /// a standard run completed is a no-op for a later temporal run, and the
+    /// other way round. Callers who want both graphs over one dataset set
+    /// `with_incremental_loading(false)`.
     ///
     /// A write failure is a warning, never an error. The run completed; a
     /// missing marker only costs a redo, which is always the safe direction.
     async fn mark_complete(&self, data_ids: &[Uuid]) {
-        if !self.config.incremental_loading || self.is_temporal || data_ids.is_empty() {
+        if !self.config.incremental_loading || data_ids.is_empty() {
             return;
         }
         for data_id in data_ids {
@@ -769,7 +759,6 @@ mod tests {
             pipeline_run_id: Some(ctx_parts.3),
             pipeline_id: Some(ctx_parts.4),
             pipeline_name: "cognify_pipeline",
-            is_temporal: false,
             processed: processed.clone(),
             config: &config,
         };
@@ -829,7 +818,6 @@ mod tests {
             pipeline_run_id: Some(ctx_parts.3),
             pipeline_id: Some(ctx_parts.4),
             pipeline_name: "cognify_pipeline",
-            is_temporal: false,
             processed: Vec::new(),
             config: &config,
         };
@@ -852,31 +840,28 @@ mod tests {
         );
     }
 
-    /// A temporal run is not swept, and says so rather than silently removing
-    /// nothing. Step 7 gives temporal a ledger and removes the exception.
+    /// A temporal run is swept like any other. It writes its own ownership
+    /// rows now, so there is no branch left that selects nothing while
+    /// reporting success.
     #[tokio::test]
-    async fn a_temporal_run_is_not_swept() {
+    async fn a_temporal_run_is_swept_like_a_standard_one() {
         let (db, dataset_id, ctx_parts) = run_context_fixture().await;
         let config = CognifyConfig::default();
+        let run_id = ctx_parts.3;
         let ctx = RunContext {
             database: db,
             graph_db: ctx_parts.0,
             vector_db: ctx_parts.1,
             repo: ctx_parts.2,
             dataset_id,
-            pipeline_run_id: Some(ctx_parts.3),
+            pipeline_run_id: Some(run_id),
             pipeline_id: Some(ctx_parts.4),
             pipeline_name: "temporal-cognify",
-            is_temporal: true,
             processed: Vec::new(),
             config: &config,
         };
 
-        assert!(
-            ctx.sweepable_run_id().is_none(),
-            "temporal writes no ownership rows, so a sweep would report success while \
-             removing nothing"
-        );
+        assert_eq!(ctx.sweepable_run_id(), Some(run_id));
     }
 
     /// A run that never started has nothing to select a sweep on.
@@ -893,7 +878,6 @@ mod tests {
             pipeline_run_id: None,
             pipeline_id: None,
             pipeline_name: "cognify_pipeline",
-            is_temporal: false,
             processed: Vec::new(),
             config: &config,
         };

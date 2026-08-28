@@ -43,8 +43,16 @@ impl TemporalEntityEnricher {
     }
 
     /// Enrich a batch of events with typed entity attributes.
-    /// Returns the same events with `.attributes` populated.
-    /// On LLM or parse failure: returns the original events unchanged (warns, does not error).
+    ///
+    /// Returns the same events, in the same order, with `.attributes`
+    /// populated. Callers rely on that order to keep each event next to the
+    /// data item that produced it.
+    ///
+    /// An LLM or parse failure is *returned*, not swallowed. Handing the events
+    /// back unenriched looked like graceful degradation but produced a
+    /// half-cognified item — every event stripped of its entity edges — that no
+    /// retry could tell from a complete one. Python propagates here too
+    /// (`extract_knowledge_graph_from_events` awaits `enrich_events` bare).
     pub async fn enrich(
         &self,
         mut events: Vec<TemporalEvent>,
@@ -76,7 +84,9 @@ impl TemporalEntityEnricher {
             ..Default::default()
         };
 
-        let enriched: RawEnrichedEventsOutput = match self
+        // The `warn!` this used to emit lives at the call site now, next to the
+        // `failures.record(...)` that names the batch's chunks.
+        let enriched: RawEnrichedEventsOutput = self
             .llm
             .create_structured_output::<RawEnrichedEventsOutput>(
                 &user_prompt,
@@ -84,15 +94,7 @@ impl TemporalEntityEnricher {
                 Some(options),
             )
             .await
-        {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!(
-                    "Entity enrichment failed: {e}. Events returned without attributes."
-                );
-                return Ok(events);
-            }
-        };
+            .map_err(|e| CognifyError::FactExtractionError(e.to_string()))?;
 
         // Match enriched entries back to events by name (same approach as Python).
         let enriched_map: HashMap<String, Vec<EventAttribute>> = enriched
@@ -224,19 +226,24 @@ mod tests {
         assert_eq!(result[0].attributes[1].relationship, "organizer");
     }
 
+    /// Returning the events unenriched read as a deliberate softening, but an
+    /// event with no attributes has none of the entity nodes or edges the
+    /// enrichment pass exists to produce — a partially-cognified item that no
+    /// later run can distinguish from a finished one. The failure surfaces now
+    /// and the caller decides how tolerant to be.
     #[tokio::test]
-    async fn enrich_returns_original_on_llm_error() {
+    async fn enrich_surfaces_the_llm_error() {
         let llm = Arc::new(MockLlm::with_error("service unavailable"));
         let enricher = TemporalEntityEnricher::new(llm);
 
         let events = vec![make_event("Moon Landing")];
-        let result = enricher.enrich(events).await.unwrap();
-
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].name, "Moon Landing");
+        let error = enricher
+            .enrich(events)
+            .await
+            .expect_err("an LLM failure must reach the caller");
         assert!(
-            result[0].attributes.is_empty(),
-            "On LLM error, attributes should remain empty"
+            matches!(error, CognifyError::FactExtractionError(ref msg) if msg.contains("service unavailable")),
+            "the error names what actually went wrong: {error}"
         );
     }
 

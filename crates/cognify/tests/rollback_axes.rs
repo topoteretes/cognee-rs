@@ -23,7 +23,9 @@ mod rollback_harness;
 use std::sync::Arc;
 
 use cognee_cognify::{CognifyError, RollbackScope};
-use rollback_harness::{Harness, extraction_config};
+use rollback_harness::{
+    FAIL_MARKER, Harness, SHARED_EVENT_NAME, TemporalFixtureLlm, extraction_config, temporal_config,
+};
 
 use cognee_database::PipelineRunStatus;
 use cognee_vector::VectorDB;
@@ -381,4 +383,134 @@ async fn an_untolerated_summarization_failure_is_swept_item_scoped() {
     );
     assert!(harness.is_marked(first).await && harness.is_marked(last).await);
     assert!(!harness.is_marked(bad).await);
+}
+
+// ── Temporal converges like standard ─────────────────────────────────────
+
+/// A failed temporal run gives the stores back exactly as it found them.
+///
+/// `RunToEnd` + `WholeRun` is what makes this a real sweep rather than a
+/// no-op: the extraction stage collects the failure and carries the survivors
+/// on, so the persistence stage writes their nodes, edges, `Event_name` points
+/// and ownership rows before the end-of-run gate errors the run. Before this
+/// commit temporal wrote no ownership rows at all, so a sweep here removed
+/// nothing while reporting success — and the artifacts stayed, unreachable.
+#[tokio::test]
+async fn a_failed_temporal_run_converges_to_its_pre_run_state() {
+    let mut harness = Harness::new().await;
+    let good = harness.add_file("Alice works at Acme.").await;
+    let bad = harness.add_file("Bob FAILMARKER breaks here.").await;
+    let last = harness.add_file("Carol also works at Acme.").await;
+
+    let config = temporal_config().with_failure_stop(cognee_cognify::FailureStop::RunToEnd);
+    let result = harness
+        .run_over(
+            &config,
+            &[good, bad, last],
+            Arc::new(TemporalFixtureLlm::failing_extraction(vec![
+                FAIL_MARKER.to_string(),
+            ])),
+        )
+        .await;
+
+    assert!(
+        matches!(result, Err(CognifyError::RunFailed { .. })),
+        "a sweeping scope that ends errored returns Err: {result:?}"
+    );
+    assert!(
+        harness.graph_node_ids().await.is_empty(),
+        "every temporal node this run wrote is gone: {:?}",
+        harness.graph_node_ids().await
+    );
+    assert_eq!(
+        harness.vector_point_count().await,
+        0,
+        "and so is every Event_name point"
+    );
+    assert!(
+        harness.ledger_nodes().await.is_empty(),
+        "the ownership rows go last, but they do go"
+    );
+    assert!(harness.ledger_edges().await.is_empty());
+
+    for data_id in [good, bad, last] {
+        assert!(
+            !harness.is_marked(data_id).await,
+            "no item may be marked complete after a failed run"
+        );
+    }
+    assert_eq!(harness.latest_status().await, PipelineRunStatus::Errored);
+}
+
+/// The tolerant temporal combination: the run completes, the failed file's
+/// contributions go, the survivor's stay and it is marked — and the event
+/// *both* files produced survives, because a surviving row still claims it.
+///
+/// The failed file is deliberately two chunks long, only the second of which
+/// fails: that is the shape in which a temporal file owns artifacts at all
+/// (a file whose only chunk failed produced nothing to sweep), so it is the
+/// shape that exercises the item-scoped selection.
+#[tokio::test]
+async fn a_tolerant_temporal_run_sweeps_only_the_failed_file() {
+    let mut harness = Harness::new().await;
+    let good = harness.add_file("Alice works at Acme.").await;
+    let bad = harness
+        .add_file("Bob works at Acme. Carol FAILMARKER breaks here.")
+        .await;
+
+    // Six tokens per chunk and no overlap, so the second file splits in two
+    // and its first chunk is extracted and persisted before its second one
+    // fails.
+    let config = temporal_config()
+        .with_chunk_size(6)
+        .with_chunk_overlap(0)
+        .with_failure_stop(cognee_cognify::FailureStop::RunToEnd)
+        .with_rollback_scope(RollbackScope::FailedItems)
+        .with_chunk_failure_ratio_threshold(0.6);
+    let result = harness
+        .run_over(
+            &config,
+            &[good, bad],
+            Arc::new(TemporalFixtureLlm::failing_extraction(vec![
+                FAIL_MARKER.to_string(),
+            ])),
+        )
+        .await
+        .expect("a tolerated failure below the ratio completes the run, and returns Ok");
+
+    assert_eq!(result.failures.failed_items().len(), 1);
+    assert!(result.failures.failed_items().contains(&bad));
+
+    let ledger = harness.ledger_nodes().await;
+    assert!(
+        ledger.iter().any(|row| row.data_id == good),
+        "the surviving file keeps its ownership rows"
+    );
+    assert!(
+        !ledger.iter().any(|row| row.data_id == bad),
+        "and the failed file's are gone: {ledger:?}"
+    );
+
+    let nodes = harness.graph_node_ids().await;
+    // The failed file's own event — the one nothing else claims — is gone.
+    assert!(
+        !nodes.contains(&TemporalFixtureLlm::event_node_id("Bob event").to_string()),
+        "the failed file's own Event node goes, ledger row and all: {nodes:?}"
+    );
+    assert!(
+        nodes.contains(&TemporalFixtureLlm::event_node_id("Alice event").to_string()),
+        "the survivor's does not: {nodes:?}"
+    );
+    // …and the event both files produced is still there, because the
+    // surviving file still claims it.
+    assert!(
+        nodes.contains(&TemporalFixtureLlm::event_node_id(SHARED_EVENT_NAME).to_string()),
+        "a shared event survives while one of its producers is swept: {nodes:?}"
+    );
+
+    assert!(harness.is_marked(good).await);
+    assert!(
+        !harness.is_marked(bad).await,
+        "the swept file is left for the next run to redo"
+    );
 }

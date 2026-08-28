@@ -3,9 +3,9 @@
     clippy::expect_used,
     reason = "test code — panics are acceptable failures"
 )]
-//! End-to-end proof of invariant I1 for the standard pipeline: **an artifact
-//! never exists in the graph or vector store without an ownership record naming
-//! the run that created it.**
+//! End-to-end proof of invariant I1, for **both** pipelines: an artifact never
+//! exists in the graph or vector store without an ownership record naming the
+//! run that created it.
 //!
 //! The per-stage tests in `tasks.rs` pin the ordering at each seam. What they
 //! cannot show is that the run id the stages stamp is the *same* value a sweep
@@ -13,10 +13,14 @@
 //! executor → `PipelineContext::run_id` → task → ownership row, and separately
 //! executor → `DbPipelineWatcher` → `pipeline_runs.pipeline_run_id`. This file
 //! runs a real `cognify()` against mock stores and a real
-//! `SeaOrmPipelineRunRepository` and asserts the two ends agree.
+//! `SeaOrmPipelineRunRepository` and asserts the two ends agree — once on the
+//! standard branch and once on the temporal one, which has its own persistence
+//! stage and therefore its own chain of plumbing to get wrong.
 //!
 //! Offline: `MockLlm` / `MockStorage` / `MockGraphDB` / `MockVectorDB` /
 //! `MockEmbeddingEngine`. No network, no LLM key, no skip path.
+
+mod rollback_harness;
 
 use std::sync::Arc;
 
@@ -201,4 +205,69 @@ async fn cognify_result_carries_the_pipeline_run_id() {
         CognifyResult::already_completed(Uuid::new_v4()).pipeline_run_id,
         None
     );
+}
+
+/// The same two-ended agreement on the temporal branch.
+///
+/// Temporal used to write no ownership records at all: nodes, edges and
+/// `Event_name` points went straight to the stores, so nothing could name what
+/// a temporal run had created and a temporal sweep removed nothing while
+/// reporting success. This is the end-to-end proof that the run id the temporal
+/// persistence stage stamps is the one a sweep selects on.
+#[tokio::test]
+async fn temporal_cognify_stamps_every_ownership_row_with_the_runs_id() {
+    use rollback_harness::{Harness, TemporalFixtureLlm, temporal_config};
+
+    let mut harness = Harness::new().await;
+    let only = harness.add_file("Alice joined Acme in 2020.").await;
+
+    harness
+        .run_over(
+            &temporal_config(),
+            &[only],
+            Arc::new(TemporalFixtureLlm::new()),
+        )
+        .await
+        .expect("the temporal run must succeed against the mock backends");
+
+    let runs = harness
+        .repo
+        .list_recent(Some(harness.dataset_id), 50)
+        .await
+        .expect("list pipeline runs");
+    assert!(
+        !runs.is_empty(),
+        "the executor must have written the run's status trail"
+    );
+    let run_id = runs[0].pipeline_run_id;
+    assert!(
+        runs.iter().all(|row| row.pipeline_run_id == run_id),
+        "one cognify is one pipeline run"
+    );
+
+    let nodes = harness.ledger_nodes().await;
+    assert!(
+        !nodes.is_empty(),
+        "the temporal run must have written ownership rows"
+    );
+    for row in &nodes {
+        assert_eq!(
+            row.pipeline_run_id,
+            Some(run_id),
+            "node row {} ({}) must name the run that created it",
+            row.slug,
+            row.node_type
+        );
+        assert_eq!(
+            row.data_id, only,
+            "and the data item that produced it — a nil id would be a phantom item to unmark"
+        );
+    }
+
+    let edges = harness.ledger_edges().await;
+    assert!(!edges.is_empty(), "the temporal edges are claimed too");
+    for row in &edges {
+        assert_eq!(row.pipeline_run_id, Some(run_id));
+        assert_eq!(row.data_id, only);
+    }
 }

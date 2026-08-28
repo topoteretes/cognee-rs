@@ -124,12 +124,14 @@ dataset also names, or a row written before ownership tracking existed. The
 worst case is a surplus artifact that keeps an owner, never an artifact with no
 owner at all.
 
-Two caveats. **Cancellation is swept**, unlike Python — though there is no
+One caveat. **Cancellation is swept**, unlike Python — though there is no
 caller-facing cancel handle on `cognify()` today, and simply dropping the future
-runs no sweep at all. And **a failed temporal run is not swept**: temporal
-persistence writes no ownership records yet, so a sweep would report success
-while removing nothing; the run logs a warning and leaves its artifacts in
-place.
+runs no sweep at all.
+
+All of the above applies to the **temporal** pipeline too: it records ownership
+of its events, timestamps, intervals and entity nodes before it writes them, its
+two LLM passes collect failures rather than swallowing them, and a failed
+temporal run converges the same way.
 
 #### Re-cognifying is now incremental — a behaviour change
 
@@ -144,6 +146,10 @@ re-processing everything on every call will see it "stop doing anything"; set
 `with_incremental_loading(false)` to restore the previous behaviour. A failed
 run marks nothing, and a sweep clears the markers of whatever it rolled back, so
 the next run redoes exactly the work that was lost.
+
+Both branches share one marker key, matching Python, so **a `cognify()` and a
+temporal `cognify()` over the same dataset are no-ops for each other**. Turn
+incremental loading off to build both graphs over one dataset.
 
 ### memify (graph enrichment)
 

@@ -30,11 +30,23 @@ mod test_utils;
 
 const BIOGRAPHY_TEXT: &str = include_str!("test_data/biography.txt");
 
-async fn make_in_memory_db() -> Arc<DatabaseConnection> {
+/// An in-memory relational database with `dataset_id` already registered.
+///
+/// The dataset row is not optional: the temporal persistence stage records
+/// ownership of every artifact before it writes one, and every ownership row
+/// carries a foreign key to `datasets`. Every real path (`add` → `cognify`)
+/// creates the dataset first.
+async fn make_in_memory_db(dataset_id: Uuid, owner_id: Uuid) -> Arc<DatabaseConnection> {
     let conn = connect("sqlite::memory:")
         .await
         .expect("connect in-memory sqlite");
     initialize(&conn).await.expect("initialize");
+    cognee_database::ops::datasets::create_dataset(
+        &conn,
+        cognee_models::Dataset::new("temporal".into(), owner_id, None, dataset_id),
+    )
+    .await
+    .expect("seed dataset");
     Arc::new(conn)
 }
 
@@ -216,10 +228,14 @@ async fn temporal_cognify_creates_event_and_timestamp_nodes() {
     let data_item = ingest_text(BIOGRAPHY_TEXT, &storage, owner_id).await;
 
     let config = CognifyConfig::default().with_temporal_cognify(true);
+    let dataset_id = Uuid::new_v4();
 
-    match cognify(
+    // Every dependency here is a fixture or an in-process store, so a failure
+    // is a real one. Swallowing it into a skip is what let this file report
+    // green while the pipeline errored on every run.
+    cognify(
         vec![data_item],
-        Uuid::new_v4(),
+        dataset_id,
         None,
         None,
         None,
@@ -228,7 +244,7 @@ async fn temporal_cognify_creates_event_and_timestamp_nodes() {
         Arc::clone(&graph_db),
         vector_db,
         embedding_engine,
-        make_in_memory_db().await,
+        make_in_memory_db(dataset_id, owner_id).await,
         Arc::new(cognee_database::NoopPipelineRunRepository::new())
             as Arc<dyn cognee_database::PipelineRunRepository>,
         make_thread_pool(),
@@ -236,13 +252,7 @@ async fn temporal_cognify_creates_event_and_timestamp_nodes() {
         &config,
     )
     .await
-    {
-        Ok(_) => {}
-        Err(e) => {
-            eprintln!("Skipping: temporal cognify pipeline error: {e}");
-            return;
-        }
-    };
+    .expect("the temporal pipeline must complete against the fixtures");
 
     // Inspect the graph
     let (nodes, edges) = graph_db
@@ -336,10 +346,15 @@ async fn temporal_cognify_populates_event_name_vector_collection() {
     let data_item = ingest_text(BIOGRAPHY_TEXT, &storage, owner_id).await;
 
     let config = CognifyConfig::default().with_temporal_cognify(true);
+    let dataset_id = Uuid::new_v4();
 
+    // Unlike test 1 this one embeds for real, so the embedding engine is the
+    // single external dependency and the only error worth skipping on. Every
+    // other failure is a genuine one and fails the test — a blanket skip is
+    // what let this file report green while the pipeline errored on every run.
     match cognify(
         vec![data_item],
-        Uuid::new_v4(),
+        dataset_id,
         None,
         None,
         None,
@@ -348,7 +363,7 @@ async fn temporal_cognify_populates_event_name_vector_collection() {
         graph_db,
         Arc::clone(&vector_db) as Arc<dyn VectorDB>,
         embedding_engine,
-        make_in_memory_db().await,
+        make_in_memory_db(dataset_id, owner_id).await,
         Arc::new(cognee_database::NoopPipelineRunRepository::new())
             as Arc<dyn cognee_database::PipelineRunRepository>,
         make_thread_pool(),
@@ -357,13 +372,12 @@ async fn temporal_cognify_populates_event_name_vector_collection() {
     )
     .await
     {
-        Ok(_) => {
-            println!("Temporal cognify succeeded");
-        }
-        Err(e) => {
-            eprintln!("Skipping: temporal cognify pipeline error: {e}");
+        Ok(_) => println!("Temporal cognify succeeded"),
+        Err(cognee_cognify::CognifyError::EmbeddingError(e)) => {
+            eprintln!("Skipping: no reachable embedding engine: {e}");
             return;
         }
+        Err(e) => panic!("temporal cognify failed: {e}"),
     }
 
     let count = vector_db

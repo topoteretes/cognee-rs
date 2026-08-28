@@ -10,19 +10,19 @@
 //! Temporal pipeline variant:
 //! 1. [`classify_documents`] — same
 //! 2. [`extract_chunks_from_documents`] — same
-//! 3. [`extract_temporal_events`] — Chunks → TemporalEvents (via two LLM passes)
+//! 3. [`extract_temporal_events`] — Chunks → [`AttributedEvent`]s (via two LLM passes)
 //! 4. [`add_temporal_data_points`] — persists events, timestamps, intervals, entities → graph+vector
 //!
 //! Public surface:
 //! - Intermediate types: [`CognifyInput`], [`ClassifiedDocuments`],
 //!   [`ExtractedChunks`], [`ExtractedGraphData`], [`SummarizedData`],
-//!   [`ExtractedTemporalEvents`]
+//!   [`ExtractedTemporalEvents`], [`AttributedEvent`]
 //! - Task implementations (free functions)
 //! - [`TypedTask`] factories: [`make_classify_documents_task`], etc.
 //! - Pipeline builders: [`build_cognify_pipeline`], [`build_temporal_cognify_pipeline`]
 
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use chrono::Utc;
@@ -157,19 +157,32 @@ pub struct SummarizedData {
     pub failures: FailureReport,
 }
 
+/// One extracted event and the data item whose chunk produced it.
+///
+/// Temporal events are content-addressed by name (`uuid5("event:{name}")`), so
+/// two files describing the same event land on one graph node with two
+/// producers — the same many-to-one shape merged entities have. The producing
+/// `data_id` travels *with* the event rather than in a side map, because the
+/// abort-time partition below filters the event list in place and a parallel
+/// `Vec<Uuid>` would be one `retain` away from silent misattribution.
+#[derive(Debug, Clone)]
+pub struct AttributedEvent {
+    pub event: TemporalEvent,
+    pub data_id: Uuid,
+}
+
 /// Output of [`extract_temporal_events`]: temporal events extracted from chunks
 /// via two LLM passes (event extraction + entity enrichment).
 ///
 /// Used as the intermediate type between Task 3 and Task 4 in the temporal pipeline.
 #[derive(Debug, Clone)]
 pub struct ExtractedTemporalEvents {
-    pub events: Vec<TemporalEvent>,
+    pub events: Vec<AttributedEvent>,
     pub dataset_id: Uuid,
     pub user_id: Option<Uuid>,
     pub tenant_id: Option<Uuid>,
-    /// Forwarded from [`ExtractedChunks::failures`]. The temporal extraction
-    /// loop does not collect its own failures yet — that is a later commit's
-    /// work — so at this point the report only carries the chunking stage's.
+    /// Forwarded from [`ExtractedChunks::failures`], plus the extraction and
+    /// enrichment failures this stage collected itself.
     pub failures: FailureReport,
 }
 
@@ -1856,7 +1869,13 @@ pub async fn add_data_points(
 ///    in parallel (bounded by `config.max_parallel_extractions`).
 /// 4. Flattens per-chunk results and enriches each batch with entity attributes
 ///    via [`TemporalEntityEnricher::enrich`].
-/// 5. Returns all events as [`ExtractedTemporalEvents`].
+/// 5. Returns all events as [`ExtractedTemporalEvents`], each attributed to the
+///    data item whose chunk produced it.
+///
+/// Neither LLM pass propagates on failure. Both *collect* — the extraction pass
+/// per chunk, the enrichment pass per chunk of the batch it covered — and the
+/// configured [`FailureStop`] then decides whether to keep going, exactly as
+/// the standard [`extract_graph_from_data`] loop does.
 pub async fn extract_temporal_events(
     input: &ExtractedChunks,
     llm: Arc<dyn Llm>,
@@ -1897,19 +1916,28 @@ pub async fn extract_temporal_events(
     }
 
     let batch_size = config.data_per_batch;
+    let failure_policy = config.failure_policy();
     let semaphore = Arc::new(Semaphore::new(config.max_parallel_extractions));
     let extractor = Arc::new(TemporalEventExtractor::new(Arc::clone(&llm)));
     let enricher = TemporalEntityEnricher::new(Arc::clone(&llm));
 
-    let mut all_events: Vec<TemporalEvent> = Vec::new();
+    let mut failures = input.failures.clone();
+    let mut all_events: Vec<AttributedEvent> = Vec::new();
+    // `Some(n)` once a FailFast abort has fired, naming the first chunk index
+    // (into `non_dlt_chunks`) that was never dispatched.
+    let mut aborted_at: Option<usize> = None;
 
     for (batch_idx, batch) in non_dlt_chunks.chunks(batch_size).enumerate() {
         let mut extract_tasks = Vec::new();
+        let mut chunk_ids = Vec::new();
+        let mut chunk_documents = Vec::new();
 
         for chunk in batch {
             let ext = Arc::clone(&extractor);
             let text = chunk.text.clone();
             let sem = Arc::clone(&semaphore);
+            chunk_ids.push(chunk.base.id);
+            chunk_documents.push(chunk.document_id);
             extract_tasks.push(tokio::spawn(async move {
                 #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
                 let _permit = sem
@@ -1920,11 +1948,44 @@ pub async fn extract_temporal_events(
             }));
         }
 
+        // The whole batch is dispatched before any result is inspected, so a
+        // FailFast abort reports every failure in the batch that tripped it —
+        // not only the first one to come back.
         let batch_results = futures::future::join_all(extract_tasks).await;
         let mut batch_events: Vec<TemporalEvent> = Vec::new();
-        for result in batch_results {
-            let events = result.map_err(|e| CognifyError::FactExtractionError(e.to_string()))??;
-            batch_events.extend(events);
+        let mut batch_data_ids: Vec<Uuid> = Vec::new();
+        let mut extraction_failed_chunks: HashSet<Uuid> = HashSet::new();
+        let mut batch_failed = false;
+        for ((result, chunk_id), document_id) in batch_results
+            .into_iter()
+            .zip(chunk_ids.iter().copied())
+            .zip(chunk_documents.iter().copied())
+        {
+            let outcome = result
+                .map_err(|e| CognifyError::FactExtractionError(e.to_string()))
+                .and_then(|inner| inner);
+            match outcome {
+                Ok(events) => {
+                    batch_data_ids.extend(std::iter::repeat_n(document_id, events.len()));
+                    batch_events.extend(events);
+                }
+                Err(e) => {
+                    warn!(
+                        data_id = %document_id,
+                        chunk_id = %chunk_id,
+                        "temporal event extraction failed for chunk: {e}"
+                    );
+                    failures.record(StageFailure {
+                        stage: FailureStage::TemporalExtraction,
+                        data_id: document_id,
+                        chunk_id: Some(chunk_id),
+                        error: e.to_string(),
+                        fails_item: true,
+                    });
+                    extraction_failed_chunks.insert(chunk_id);
+                    batch_failed = true;
+                }
+            }
         }
 
         info!(
@@ -1934,9 +1995,108 @@ pub async fn extract_temporal_events(
             batch_events.len()
         );
 
-        // Entity enrichment pass for the whole batch.
-        let enriched = enricher.enrich(batch_events).await?;
-        all_events.extend(enriched);
+        // ── Entity enrichment pass for the whole batch ──────────────────────
+        // One LLM call covers every event the batch produced, across many
+        // chunks and possibly many files, so a failure here is recorded
+        // against *each* chunk that fed it rather than once for the batch. The
+        // chunk failure ratio counts chunks; a batch-shaped failure recorded
+        // once would contribute almost nothing to it, and a `FailedItems` run
+        // could then "complete" having swept most of the dataset. A chunk whose
+        // *extraction* already failed is skipped — it is one failed chunk, not
+        // two.
+        match enricher.enrich(batch_events).await {
+            Ok(enriched) => {
+                // `enrich` preserves input order, which is what lets the data
+                // ids collected above be zipped straight back on. A change
+                // there is the one way ownership could be silently
+                // misattributed.
+                debug_assert_eq!(
+                    enriched.len(),
+                    batch_data_ids.len(),
+                    "enrich must return its input events, in order"
+                );
+                all_events.extend(
+                    enriched
+                        .into_iter()
+                        .zip(batch_data_ids)
+                        .map(|(event, data_id)| AttributedEvent { event, data_id }),
+                );
+            }
+            Err(e) => {
+                // The batch's events are dropped: unenriched events carry none
+                // of the entity nodes and edges this pass exists to produce, so
+                // persisting them would leave a half-cognified item behind.
+                for (chunk_id, document_id) in chunk_ids
+                    .iter()
+                    .zip(chunk_documents.iter())
+                    .filter(|(chunk_id, _)| !extraction_failed_chunks.contains(chunk_id))
+                {
+                    warn!(
+                        data_id = %document_id,
+                        chunk_id = %chunk_id,
+                        "temporal entity enrichment failed for the batch this chunk fed: {e}"
+                    );
+                    failures.record(StageFailure {
+                        stage: FailureStage::TemporalEnrichment,
+                        data_id: *document_id,
+                        chunk_id: Some(*chunk_id),
+                        error: e.to_string(),
+                        fails_item: true,
+                    });
+                }
+                batch_failed = true;
+            }
+        }
+
+        if batch_failed && failure_policy.stop == FailureStop::FailFast {
+            aborted_at = Some((batch_idx + 1) * batch_size);
+            break;
+        }
+    }
+
+    // ── The abort-time partition ────────────────────────────────────────────
+    // At the moment of a FailFast abort nothing has been persisted — the loop
+    // above accumulates every batch's events in memory and the first write of
+    // any kind happens in `add_temporal_data_points`. So "keep the results for
+    // the other files" is not a matter of not-deleting; it takes deliberately
+    // persisting the finished work before stopping. Files partition three ways:
+    //
+    //   complete  — every one of its chunks was attempted, none failed
+    //               extraction, and every batch it fed was enriched.
+    //               Persisted below, and marked complete when the run ends.
+    //   failed    — at least one of its chunks failed either pass. Not
+    //               persisted, left unmarked.
+    //   unreached — chunks never dispatched. Not persisted, left unmarked.
+    //
+    // Only complete files are persisted, which is what keeps items
+    // all-or-nothing. Failed and unreached files are indistinguishable to the
+    // next run and both are simply redone.
+    //
+    // Under `RunToEnd` there is no partition and no filtering: the run persists
+    // normally and the item-scoped sweep removes the failed files'
+    // contributions afterwards, so one deletion path serves both cases.
+    //
+    // Temporal needs no `complete_documents` set of its own: events are the
+    // only thing this stage produces, and every one of them names its file, so
+    // dropping the excluded files' events *is* the partition.
+    if let Some(first_unreached) = aborted_at {
+        for chunk in non_dlt_chunks.iter().skip(first_unreached) {
+            failures.mark_unreached(chunk.document_id);
+        }
+
+        if failure_policy.scope != RollbackScope::FailedItems {
+            return Err(CognifyError::RunFailed {
+                report: Box::new(failures),
+            });
+        }
+
+        let excluded: HashSet<Uuid> = failures
+            .failed_items()
+            .iter()
+            .chain(failures.unreached_items().iter())
+            .copied()
+            .collect();
+        all_events.retain(|attributed| !excluded.contains(&attributed.data_id));
     }
 
     info!(
@@ -1949,10 +2109,7 @@ pub async fn extract_temporal_events(
         dataset_id: input.dataset_id,
         user_id: input.user_id,
         tenant_id: input.tenant_id,
-        // Forwarded from the chunking stage. The temporal extraction loop
-        // still propagates its own failures on the first one — collecting them
-        // is a later commit's work.
-        failures: input.failures.clone(),
+        failures,
     })
 }
 
@@ -1960,11 +2117,184 @@ pub async fn extract_temporal_events(
 // Temporal Task 4: add_temporal_data_points
 // ---------------------------------------------------------------------------
 
+/// One temporal artifact and the data items that produced it.
+///
+/// Temporal nodes are content-addressed — an event by its name, a timestamp by
+/// its instant, an entity by [`Entity::id_for`] — so one physical node routinely
+/// has several producers. Ownership is one row per (artifact, producing data
+/// item), which is what makes the node removable only when its *last* owning
+/// file goes.
+struct TemporalNodeOwner {
+    node_type: String,
+    label: Option<String>,
+    /// The node payload, exactly as the graph store received it.
+    attributes: serde_json::Value,
+    /// The vector collections a sweep must clear for this node. Only `Event`
+    /// has one: temporal indexes `Event.name` and nothing else, so claiming
+    /// `["name"]` on an entity node would make a temporal sweep delete an
+    /// `Entity_name` point a *standard* run wrote.
+    indexed_fields: &'static [&'static str],
+    /// Insertion-ordered and deduplicated.
+    data_ids: Vec<Uuid>,
+}
+
+/// One temporal edge and the data items that produced it. Same shape, same
+/// reason, as [`TemporalNodeOwner`].
+struct TemporalEdgeOwner {
+    properties: HashMap<std::borrow::Cow<'static, str>, serde_json::Value>,
+    data_ids: Vec<Uuid>,
+}
+
+/// Note that `data_id` produced the node `node_id`, creating the owner record
+/// on first sight and appending the producer on every later one.
+fn record_temporal_node_owner(
+    owners: &mut BTreeMap<Uuid, TemporalNodeOwner>,
+    node_id: Uuid,
+    node_type: &str,
+    label: Option<String>,
+    attributes: serde_json::Value,
+    indexed_fields: &'static [&'static str],
+    data_id: Uuid,
+) {
+    let owner = owners.entry(node_id).or_insert_with(|| TemporalNodeOwner {
+        node_type: node_type.to_string(),
+        label,
+        attributes,
+        indexed_fields,
+        data_ids: Vec::new(),
+    });
+    if !owner.data_ids.contains(&data_id) {
+        owner.data_ids.push(data_id);
+    }
+}
+
+/// The same, for an edge keyed on its sanitized triplet.
+fn record_temporal_edge_owner(
+    owners: &mut BTreeMap<(Uuid, String, Uuid), TemporalEdgeOwner>,
+    source_id: Uuid,
+    relationship_name: &str,
+    target_id: Uuid,
+    properties: &HashMap<std::borrow::Cow<'static, str>, serde_json::Value>,
+    data_id: Uuid,
+) {
+    let owner = owners
+        .entry((source_id, relationship_name.to_string(), target_id))
+        .or_insert_with(|| TemporalEdgeOwner {
+            properties: properties.clone(),
+            data_ids: Vec::new(),
+        });
+    if !owner.data_ids.contains(&data_id) {
+        owner.data_ids.push(data_id);
+    }
+}
+
+/// Turn the accumulated owner maps into ownership rows — one per (artifact,
+/// producing data item).
+///
+/// Modelled on [`dlt_provenance_rows`], the other site that builds rows from
+/// raw `serde_json` node payloads rather than from `DataPoint`s. The one thing
+/// it does differently: the relationship name is sanitized before it is hashed,
+/// because a temporal relationship comes straight from the LLM and NUL bytes
+/// are stripped on the way into Postgres. Hashing the raw text would key the
+/// ledger on text no store holds, and the sweep would then miss the edge.
+fn temporal_provenance_rows(
+    id: LedgerIdentity,
+    node_owners: &BTreeMap<Uuid, TemporalNodeOwner>,
+    edge_owners: &BTreeMap<(Uuid, String, Uuid), TemporalEdgeOwner>,
+) -> (
+    Vec<cognee_database::GraphNode>,
+    Vec<cognee_database::GraphEdge>,
+) {
+    use cognee_database::{GraphEdge, GraphNode};
+
+    let mut prov_nodes: Vec<GraphNode> = Vec::new();
+    for (node_id, owner) in node_owners {
+        for data_id in &owner.data_ids {
+            prov_nodes.push(GraphNode {
+                id: provenance_node_id(id.tenant_id, id.user_id, id.dataset_id, *data_id, *node_id),
+                slug: *node_id,
+                user_id: id.user_id,
+                data_id: *data_id,
+                dataset_id: id.dataset_id,
+                pipeline_run_id: id.pipeline_run_id,
+                label: owner.label.clone(),
+                node_type: owner.node_type.clone(),
+                indexed_fields: json!(owner.indexed_fields),
+                attributes: Some(owner.attributes.clone()),
+                created_at: Utc::now(),
+            });
+        }
+    }
+
+    let mut prov_edges: Vec<GraphEdge> = Vec::new();
+    for ((source_id, relationship_name, target_id), owner) in edge_owners {
+        let edge_text = sanitize_string(relationship_name.clone());
+        let attributes = if owner.properties.is_empty() {
+            None
+        } else {
+            Some(serde_json::Value::Object(
+                owner
+                    .properties
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.clone()))
+                    .collect(),
+            ))
+        };
+        for data_id in &owner.data_ids {
+            prov_edges.push(GraphEdge {
+                id: provenance_edge_id(
+                    id.tenant_id,
+                    id.user_id,
+                    id.dataset_id,
+                    *data_id,
+                    *source_id,
+                    &edge_text,
+                    *target_id,
+                ),
+                slug: triplet_slug(*source_id, &edge_text, *target_id),
+                user_id: id.user_id,
+                data_id: *data_id,
+                dataset_id: id.dataset_id,
+                pipeline_run_id: id.pipeline_run_id,
+                source_node_id: *source_id,
+                destination_node_id: *target_id,
+                relationship_name: edge_text.clone(),
+                label: None,
+                attributes: attributes.clone(),
+                created_at: Utc::now(),
+            });
+        }
+    }
+
+    (prov_nodes, prov_edges)
+}
+
+/// Record ownership of the temporal artifacts a run is about to write, in one
+/// transaction, before the graph or the vector store sees any of them.
+async fn record_temporal_ownership(
+    db: &DatabaseConnection,
+    id: LedgerIdentity,
+    node_owners: &BTreeMap<Uuid, TemporalNodeOwner>,
+    edge_owners: &BTreeMap<(Uuid, String, Uuid), TemporalEdgeOwner>,
+) -> Result<(), CognifyError> {
+    let (prov_nodes, prov_edges) = temporal_provenance_rows(id, node_owners, edge_owners);
+    cognee_database::ops::graph_storage::upsert_provenance_graph(db, &prov_nodes, &prov_edges)
+        .await?;
+    if !prov_nodes.is_empty() || !prov_edges.is_empty() {
+        info!(
+            "Recorded ownership of {} temporal nodes and {} temporal edges before writing them",
+            prov_nodes.len(),
+            prov_edges.len()
+        );
+    }
+    Ok(())
+}
+
 /// Persist temporal events to graph and vector databases (Temporal Task 4).
 ///
 /// Mirrors the Python `add_data_points` stage in the temporal pipeline.
 ///
-/// For each [`TemporalEvent`]:
+/// For each [`AttributedEvent`]:
 /// 1. Creates an `Event` graph node with a deterministic UUID5 ID.
 /// 2. For `event.at` — creates a `Timestamp` graph node and an `at` edge.
 /// 3. For `event.during` — creates `Timestamp` nodes for from/to, an `Interval`
@@ -1972,16 +2302,26 @@ pub async fn extract_temporal_events(
 /// 4. For each [`EventAttribute`] — creates or looks up an entity graph node
 ///    and adds a typed edge from the `Event` to the entity.
 /// 5. Embeds `event.name` and indexes to the `Event_name` vector collection.
+///
+/// Every one of those artifacts is claimed in the ownership ledger *before* the
+/// first store write, so a failure part-way through leaves rows a sweep can
+/// find rather than artifacts nothing can name. Discovering what the run is
+/// about to write is pure computation — the loop below builds the entire
+/// payload in memory — so the ledger write drops in between the build and the
+/// first `add_nodes_raw` with no restructuring.
 pub async fn add_temporal_data_points(
     events: &ExtractedTemporalEvents,
     graph_db: Arc<dyn GraphDBTrait>,
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
+    db: &DatabaseConnection,
+    pipeline_run_id: Option<Uuid>,
 ) -> Result<CognifyResult, CognifyError> {
     if events.events.is_empty() {
         info!("No temporal events to persist.");
         return Ok(CognifyResult {
             failures: events.failures.clone(),
+            pipeline_run_id,
             ..CognifyResult::empty()
         });
     }
@@ -1989,6 +2329,12 @@ pub async fn add_temporal_data_points(
     let mut graph_nodes: Vec<serde_json::Value> = Vec::new();
     let mut graph_edges: Vec<EdgeData> = Vec::new();
 
+    // Deduplicate event nodes across producers: two files describing the same
+    // event address the same node id, and pushing it twice would embed and
+    // index the same `Event_name` point twice. The ownership rows below
+    // deduplicate the artifact and keep both producers, so the payload has to
+    // agree.
+    let mut seen_event_ids: HashSet<Uuid> = HashSet::new();
     // Deduplicate entity nodes across events to avoid redundant graph inserts.
     let mut seen_entity_ids: HashSet<Uuid> = HashSet::new();
     // Deduplicate edges: (source_id, target_id, relationship_name)
@@ -1997,14 +2343,22 @@ pub async fn add_temporal_data_points(
     let mut event_ids: Vec<Uuid> = Vec::new();
     let mut event_names: Vec<String> = Vec::new();
 
-    for event in &events.events {
+    // The producer sets the ledger is written from. Recorded *outside* the
+    // `seen_*` guards above: a second occurrence of an artifact is precisely a
+    // second producer, and the guards exist only to keep the graph payload from
+    // repeating itself.
+    let mut node_owners: BTreeMap<Uuid, TemporalNodeOwner> = BTreeMap::new();
+    let mut edge_owners: BTreeMap<(Uuid, String, Uuid), TemporalEdgeOwner> = BTreeMap::new();
+
+    for attributed in &events.events {
+        let event = &attributed.event;
+        let data_id = attributed.data_id;
+
         // ── Event node ──────────────────────────────────────────────────────
         let event_id = Uuid::new_v5(
             &Uuid::NAMESPACE_OID,
             format!("event:{}", event.name).as_bytes(),
         );
-        event_ids.push(event_id);
-        event_names.push(event.name.clone());
 
         let mut event_node = json!({
             "id": event_id.to_string(),
@@ -2017,7 +2371,20 @@ pub async fn add_temporal_data_points(
         if let Some(loc) = &event.location {
             event_node["location"] = json!(loc);
         }
-        graph_nodes.push(event_node);
+        record_temporal_node_owner(
+            &mut node_owners,
+            event_id,
+            "Event",
+            Some(event.name.clone()),
+            event_node.clone(),
+            &["name"],
+            data_id,
+        );
+        if seen_event_ids.insert(event_id) {
+            event_ids.push(event_id);
+            event_names.push(event.name.clone());
+            graph_nodes.push(event_node);
+        }
 
         // ── Timestamp for event.at ──────────────────────────────────────────
         if let Some(ts) = &event.at {
@@ -2025,7 +2392,7 @@ pub async fn add_temporal_data_points(
                 &Uuid::NAMESPACE_OID,
                 format!("timestamp:{}", ts.time_at).as_bytes(),
             );
-            graph_nodes.push(json!({
+            let ts_node = json!({
                 "id": ts_id.to_string(),
                 "data_type": "Timestamp",
                 "time_at": ts.time_at,
@@ -2036,15 +2403,27 @@ pub async fn add_temporal_data_points(
                 "hour": ts.hour,
                 "minute": ts.minute,
                 "second": ts.second,
-            }));
+            });
+            record_temporal_node_owner(
+                &mut node_owners,
+                ts_id,
+                "Timestamp",
+                None,
+                ts_node.clone(),
+                &[],
+                data_id,
+            );
+            graph_nodes.push(ts_node);
 
+            let props = build_edge_props(&event_id.to_string(), &ts_id.to_string(), "at");
+            record_temporal_edge_owner(&mut edge_owners, event_id, "at", ts_id, &props, data_id);
             let edge_key = (event_id.to_string(), ts_id.to_string(), "at".to_string());
             if seen_edge_keys.insert(edge_key) {
                 graph_edges.push((
                     event_id.to_string(),
                     ts_id.to_string(),
                     "at".to_string(),
-                    build_edge_props(&event_id.to_string(), &ts_id.to_string(), "at"),
+                    props,
                 ));
             }
         }
@@ -2067,7 +2446,7 @@ pub async fn add_temporal_data_points(
                 format!("interval:{}:{}", ts_from.time_at, ts_to.time_at).as_bytes(),
             );
 
-            graph_nodes.push(json!({
+            let ts_from_node = json!({
                 "id": ts_from_id.to_string(),
                 "data_type": "Timestamp",
                 "time_at": ts_from.time_at,
@@ -2078,8 +2457,8 @@ pub async fn add_temporal_data_points(
                 "hour": ts_from.hour,
                 "minute": ts_from.minute,
                 "second": ts_from.second,
-            }));
-            graph_nodes.push(json!({
+            });
+            let ts_to_node = json!({
                 "id": ts_to_id.to_string(),
                 "data_type": "Timestamp",
                 "time_at": ts_to.time_at,
@@ -2090,59 +2469,62 @@ pub async fn add_temporal_data_points(
                 "hour": ts_to.hour,
                 "minute": ts_to.minute,
                 "second": ts_to.second,
-            }));
-            graph_nodes.push(json!({
+            });
+            let interval_node = json!({
                 "id": interval_id.to_string(),
                 "data_type": "Interval",
-            }));
-
-            // Event -[during]-> Interval
-            let during_key = (
-                event_id.to_string(),
-                interval_id.to_string(),
-                "during".to_string(),
-            );
-            if seen_edge_keys.insert(during_key) {
-                graph_edges.push((
-                    event_id.to_string(),
-                    interval_id.to_string(),
-                    "during".to_string(),
-                    build_edge_props(&event_id.to_string(), &interval_id.to_string(), "during"),
-                ));
+            });
+            for (node_id, node_type, node) in [
+                (ts_from_id, "Timestamp", &ts_from_node),
+                (ts_to_id, "Timestamp", &ts_to_node),
+                (interval_id, "Interval", &interval_node),
+            ] {
+                record_temporal_node_owner(
+                    &mut node_owners,
+                    node_id,
+                    node_type,
+                    None,
+                    node.clone(),
+                    &[],
+                    data_id,
+                );
             }
+            graph_nodes.push(ts_from_node);
+            graph_nodes.push(ts_to_node);
+            graph_nodes.push(interval_node);
 
-            // Interval -[time_from]-> Timestamp(from)
-            let from_key = (
-                interval_id.to_string(),
-                ts_from_id.to_string(),
-                "time_from".to_string(),
-            );
-            if seen_edge_keys.insert(from_key) {
-                graph_edges.push((
-                    interval_id.to_string(),
-                    ts_from_id.to_string(),
-                    "time_from".to_string(),
-                    build_edge_props(
-                        &interval_id.to_string(),
-                        &ts_from_id.to_string(),
-                        "time_from",
-                    ),
-                ));
-            }
-
-            // Interval -[time_to]-> Timestamp(to)
-            let to_key = (
-                interval_id.to_string(),
-                ts_to_id.to_string(),
-                "time_to".to_string(),
-            );
-            if seen_edge_keys.insert(to_key) {
-                graph_edges.push((
-                    interval_id.to_string(),
-                    ts_to_id.to_string(),
-                    "time_to".to_string(),
-                    build_edge_props(&interval_id.to_string(), &ts_to_id.to_string(), "time_to"),
-                ));
+            // Event -[during]-> Interval, Interval -[time_from|time_to]-> Timestamp
+            for (source_id, relationship_name, target_id) in [
+                (event_id, "during", interval_id),
+                (interval_id, "time_from", ts_from_id),
+                (interval_id, "time_to", ts_to_id),
+            ] {
+                let props = build_edge_props(
+                    &source_id.to_string(),
+                    &target_id.to_string(),
+                    relationship_name,
+                );
+                record_temporal_edge_owner(
+                    &mut edge_owners,
+                    source_id,
+                    relationship_name,
+                    target_id,
+                    &props,
+                    data_id,
+                );
+                let edge_key = (
+                    source_id.to_string(),
+                    target_id.to_string(),
+                    relationship_name.to_string(),
+                );
+                if seen_edge_keys.insert(edge_key) {
+                    graph_edges.push((
+                        source_id.to_string(),
+                        target_id.to_string(),
+                        relationship_name.to_string(),
+                        props,
+                    ));
+                }
             }
         }
 
@@ -2153,14 +2535,37 @@ pub async fn add_temporal_data_points(
             // no normalization and no class prefix.
             let entity_id = Entity::id_for(&attr.entity);
 
+            let entity_node = json!({
+                "id": entity_id.to_string(),
+                "data_type": attr.entity_type,
+                "name": attr.entity,
+            });
+            record_temporal_node_owner(
+                &mut node_owners,
+                entity_id,
+                &attr.entity_type,
+                Some(attr.entity.clone()),
+                entity_node.clone(),
+                &[],
+                data_id,
+            );
             if seen_entity_ids.insert(entity_id) {
-                graph_nodes.push(json!({
-                    "id": entity_id.to_string(),
-                    "data_type": attr.entity_type,
-                    "name": attr.entity,
-                }));
+                graph_nodes.push(entity_node);
             }
 
+            let props = build_edge_props(
+                &event_id.to_string(),
+                &entity_id.to_string(),
+                &attr.relationship,
+            );
+            record_temporal_edge_owner(
+                &mut edge_owners,
+                event_id,
+                &attr.relationship,
+                entity_id,
+                &props,
+                data_id,
+            );
             let rel_key = (
                 event_id.to_string(),
                 entity_id.to_string(),
@@ -2171,15 +2576,28 @@ pub async fn add_temporal_data_points(
                     event_id.to_string(),
                     entity_id.to_string(),
                     attr.relationship.clone(),
-                    build_edge_props(
-                        &event_id.to_string(),
-                        &entity_id.to_string(),
-                        &attr.relationship,
-                    ),
+                    props,
                 ));
             }
         }
     }
+
+    // ── Ownership first ─────────────────────────────────────────────────────
+    // Everything above is pure computation; nothing has left this function yet.
+    // The ledger goes in before the graph and vector writes so that no temporal
+    // artifact can exist without a row naming the run that created it.
+    record_temporal_ownership(
+        db,
+        LedgerIdentity::new(
+            events.tenant_id,
+            events.user_id,
+            events.dataset_id,
+            pipeline_run_id,
+        ),
+        &node_owners,
+        &edge_owners,
+    )
+    .await?;
 
     // Persist nodes and edges to graph DB.
     if !graph_nodes.is_empty() {
@@ -2263,10 +2681,7 @@ pub async fn add_temporal_data_points(
         documents_for_dlt: vec![],
         already_completed: false,
         prior_pipeline_run_id: None,
-        // Set by `make_add_temporal_data_points_task` from its context. The
-        // temporal pipeline writes no ownership rows at all yet, so this
-        // carries the run id and claims nothing else.
-        pipeline_run_id: None,
+        pipeline_run_id,
         failures: events.failures.clone(),
     })
 }
@@ -3047,11 +3462,11 @@ pub async fn cognify(
             return Ok(CognifyResult::empty());
         }
 
-        // The temporal branch is selected below, but the marker filter needs to
-        // know about it first: temporal writes no completion markers (see
-        // `rollback::RunContext::mark_complete`), so it must not read them
-        // either — a dataset a standard run completed would otherwise make
-        // every temporal run a no-op.
+        // Selects the pipeline below, and skips the DLT teardown. It no longer
+        // gates the marker filter: both branches run under Python's one
+        // `cognify_pipeline` marker key, so a dataset either branch completed
+        // is a no-op for the other — which is exactly what Python does, since
+        // its temporal cognify runs under the same pipeline name.
         let is_temporal = effective_config.temporal_cognify;
 
         // ── Completion markers: skip what an earlier run finished ───────────
@@ -3059,7 +3474,7 @@ pub async fn cognify(
         // Python skips per item inside `run_tasks_data_item_incremental`; Rust
         // skips for the dataset, before the pipeline is built, so a skipped
         // item is never classified, never chunked and never sent to an LLM.
-        let data_items = if effective_config.incremental_loading && !is_temporal {
+        let data_items = if effective_config.incremental_loading {
             rollback::drop_already_complete(&database, dataset_id, data_items).await?
         } else {
             data_items
@@ -3176,7 +3591,6 @@ pub async fn cognify(
             pipeline_run_id: watcher.run_id(),
             pipeline_id: watcher.pipeline_id(),
             pipeline_name,
-            is_temporal,
             processed: processed_ids,
             config: &effective_config,
         };
@@ -5168,10 +5582,15 @@ pub fn make_extract_temporal_events_task(
 }
 
 /// Build a [`TypedTask`] that persists temporal events to graph and vector DBs.
+///
+/// `db` is non-optional: the stage records ownership of every artifact before
+/// it writes one, and the run id comes from the task context so those rows name
+/// the run a sweep would select on.
 pub fn make_add_temporal_data_points_task(
     graph_db: Arc<dyn GraphDBTrait>,
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
+    db: Arc<DatabaseConnection>,
     failure_policy: FailurePolicy,
 ) -> TypedTask<ExtractedTemporalEvents, CognifyResult> {
     TypedTask::async_fn(move |input: &ExtractedTemporalEvents, ctx| {
@@ -5179,15 +5598,20 @@ pub fn make_add_temporal_data_points_task(
         let graph_db = Arc::clone(&graph_db);
         let vector_db = Arc::clone(&vector_db);
         let embedding_engine = Arc::clone(&embedding_engine);
+        let db = Arc::clone(&db);
         let pipeline_run_id = pipeline_run_id_from_ctx(&ctx);
         Box::pin(async move {
-            let mut result =
-                add_temporal_data_points(&input, graph_db, vector_db, embedding_engine).await?;
-            // Carries the run id, nothing more: the temporal pipeline still
-            // writes no ownership rows (that is a later commit's work).
-            result.pipeline_run_id = pipeline_run_id;
+            let result = add_temporal_data_points(
+                &input,
+                graph_db,
+                vector_db,
+                embedding_engine,
+                &db,
+                pipeline_run_id,
+            )
+            .await?;
             // The same end-of-run gate as the standard branch, over the
-            // failures the chunking stage handed down.
+            // failures the chunking and temporal extraction stages handed down.
             if result.failures.is_fatal(&failure_policy) {
                 return Err(Box::new(CognifyError::RunFailed {
                     report: Box::new(result.failures),
@@ -5211,6 +5635,10 @@ pub fn build_temporal_cognify_pipeline(
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
     llm: Arc<dyn Llm>,
+    // Non-optional for the same reason [`build_cognify_pipeline`]'s is: the
+    // temporal persistence stage records ownership of every artifact before it
+    // writes one, so a databaseless temporal pipeline is a shape that cannot be
+    // built.
     db: Arc<DatabaseConnection>,
     config: CognifyConfig,
 ) -> Pipeline {
@@ -5222,7 +5650,7 @@ pub fn build_temporal_cognify_pipeline(
                 storage,
                 config.chunk_size(),
                 config.token_counter_kind.clone(),
-                Some(db),
+                Some(Arc::clone(&db)),
                 loader_registry,
                 config.failure_policy(),
             ),
@@ -5237,6 +5665,7 @@ pub fn build_temporal_cognify_pipeline(
                 graph_db,
                 vector_db,
                 embedding_engine,
+                db,
                 config.failure_policy(),
             ),
             "add_temporal_data_points",
@@ -8268,6 +8697,729 @@ mod tests {
         assert!(result.chunks.iter().any(|chunk| chunk.document_id == c));
     }
 
+    // ── Temporal: ownership rows, collected failures, the partition ──────
+
+    /// The narrowest LLM the temporal stage is satisfied by, with a switch for
+    /// failing either pass. Dispatches on the system prompt, the way the
+    /// integration fixtures do.
+    ///
+    /// Each chunk yields one event named after the chunk's first word and
+    /// described by the chunk text itself — which is what puts a failure marker
+    /// into the *enrichment* prompt as well as the extraction one, so both
+    /// passes can be failed from the same fixture text.
+    struct TemporalTestLlm {
+        fail_extraction: Vec<String>,
+        fail_enrichment: Vec<String>,
+    }
+
+    impl TemporalTestLlm {
+        fn failing_extraction(markers: &[&str]) -> Self {
+            Self {
+                fail_extraction: markers.iter().map(|m| (*m).to_string()).collect(),
+                fail_enrichment: Vec::new(),
+            }
+        }
+
+        fn failing_enrichment(markers: &[&str]) -> Self {
+            Self {
+                fail_extraction: Vec::new(),
+                fail_enrichment: markers.iter().map(|m| (*m).to_string()).collect(),
+            }
+        }
+
+        fn failing_both(extraction: &[&str], enrichment: &[&str]) -> Self {
+            Self {
+                fail_extraction: extraction.iter().map(|m| (*m).to_string()).collect(),
+                fail_enrichment: enrichment.iter().map(|m| (*m).to_string()).collect(),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Llm for TemporalTestLlm {
+        async fn generate(
+            &self,
+            _messages: Vec<cognee_llm::Message>,
+            _options: Option<cognee_llm::GenerationOptions>,
+        ) -> cognee_llm::LlmResult<cognee_llm::GenerationResponse> {
+            unreachable!("the temporal stage only uses structured output")
+        }
+
+        async fn create_structured_output_with_messages_raw(
+            &self,
+            messages: Vec<cognee_llm::Message>,
+            _json_schema: &serde_json::Value,
+            _options: Option<cognee_llm::GenerationOptions>,
+        ) -> cognee_llm::LlmResult<serde_json::Value> {
+            let content = |role: cognee_llm::MessageRole| -> String {
+                messages
+                    .iter()
+                    .filter(|message| message.role == role)
+                    .map(|message| message.content.as_str())
+                    .collect()
+            };
+            let system_prompt = content(cognee_llm::MessageRole::System);
+            let user_prompt = content(cognee_llm::MessageRole::User);
+            let hits =
+                |markers: &[String]| markers.iter().any(|m| user_prompt.contains(m.as_str()));
+
+            if system_prompt.contains("extracting highly granular stream events") {
+                if hits(&self.fail_extraction) {
+                    return Err(cognee_llm::LlmError::RateLimitExceeded(
+                        "simulated 429 on temporal extraction".to_string(),
+                    ));
+                }
+                let head = user_prompt.split_whitespace().next().unwrap_or("Unnamed");
+                return Ok(json!({
+                    "events": [{
+                        "name": format!("{head} event"),
+                        "description": user_prompt,
+                        "time_from": { "year": 2020 },
+                        "time_to": null,
+                        "location": null
+                    }]
+                }));
+            }
+            if system_prompt.contains("extracting highly granular entities from events") {
+                if hits(&self.fail_enrichment) {
+                    return Err(cognee_llm::LlmError::RateLimitExceeded(
+                        "simulated 429 on temporal enrichment".to_string(),
+                    ));
+                }
+                let names: Vec<String> = serde_json::from_str::<serde_json::Value>(&user_prompt)
+                    .ok()
+                    .and_then(|value| value.as_array().cloned())
+                    .unwrap_or_default()
+                    .iter()
+                    .filter_map(|entry| {
+                        entry
+                            .get("event_name")
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_string)
+                    })
+                    .collect();
+                return Ok(json!({
+                    "events": names
+                        .into_iter()
+                        .map(|name| json!({
+                            "event_name": name,
+                            "attributes": [
+                                { "entity": "Alice", "entity_type": "person", "relationship": "subject" }
+                            ]
+                        }))
+                        .collect::<Vec<_>>()
+                }));
+            }
+            unreachable!("the temporal stage issues no other prompt")
+        }
+
+        fn model(&self) -> &str {
+            "temporal-test-llm"
+        }
+    }
+
+    /// One event with a single entity attribute, attributed to `data_id`.
+    fn attributed_event(name: &str, relationship: &str, data_id: Uuid) -> AttributedEvent {
+        AttributedEvent {
+            event: TemporalEvent {
+                name: name.to_string(),
+                description: Some(format!("Description of {name}")),
+                location: None,
+                at: Some(cognee_models::CognifyTimestamp {
+                    time_at: 1_577_836_800_000,
+                    timestamp_str: "2020-01-01T00:00:00".to_string(),
+                    year: 2020,
+                    month: 1,
+                    day: 1,
+                    hour: 0,
+                    minute: 0,
+                    second: 0,
+                }),
+                during: None,
+                attributes: vec![cognee_models::EventAttribute {
+                    entity: "Alice".to_string(),
+                    entity_type: "person".to_string(),
+                    relationship: relationship.to_string(),
+                }],
+            },
+            data_id,
+        }
+    }
+
+    fn temporal_input(
+        dataset_id: Uuid,
+        user_id: Option<Uuid>,
+        events: Vec<AttributedEvent>,
+    ) -> ExtractedTemporalEvents {
+        ExtractedTemporalEvents {
+            events,
+            dataset_id,
+            user_id,
+            tenant_id: None,
+            failures: FailureReport::default(),
+        }
+    }
+
+    /// `n` single-chunk files, the *i*-th carrying `texts[i]`.
+    fn temporal_files(dataset_id: Uuid, texts: &[&str]) -> (ExtractedChunks, Vec<Uuid>) {
+        let doc_ids: Vec<Uuid> = texts.iter().map(|_| Uuid::new_v4()).collect();
+        let chunks = doc_ids
+            .iter()
+            .zip(texts)
+            .map(|(doc_id, text)| test_chunk(Uuid::new_v4(), *doc_id, text))
+            .collect();
+        let documents = doc_ids
+            .iter()
+            .map(|doc_id| test_document_with_metadata(*doc_id, None))
+            .collect();
+        (
+            ExtractedChunks {
+                chunks,
+                documents,
+                dataset_id,
+                user_id: Some(Uuid::new_v4()),
+                tenant_id: None,
+                failures: FailureReport::default(),
+            },
+            doc_ids,
+        )
+    }
+
+    /// The temporal persistence stage claims everything it is about to write
+    /// *before* the graph sees any of it: with the graph write failing, the
+    /// stage returns `Err` and the ownership rows are there anyway.
+    ///
+    /// This is the test that fails against the previous ordering, where
+    /// temporal wrote nodes, edges and `Event_name` points and never touched
+    /// the relational database at all — so a failed temporal run left artifacts
+    /// nothing could find and a temporal sweep removed nothing while reporting
+    /// success.
+    #[tokio::test]
+    async fn add_temporal_data_points_records_ownership_before_the_graph_write() {
+        use cognee_database::ops::graph_storage::{get_edges_by_dataset, get_nodes_by_dataset};
+        use cognee_embedding::MockEmbeddingEngine;
+        use cognee_vector::MockVectorDB;
+
+        let dataset_id = Uuid::new_v4();
+        let db = ledger_db(dataset_id).await;
+        let graph = Arc::new(cognee_graph::MockGraphDB::new());
+        graph.set_add_nodes_error("graph is down");
+
+        let data_id = Uuid::new_v4();
+        let input = temporal_input(
+            dataset_id,
+            Some(Uuid::new_v4()),
+            vec![attributed_event("Alice joins Acme", "subject", data_id)],
+        );
+
+        let result = add_temporal_data_points(
+            &input,
+            graph.clone(),
+            Arc::new(MockVectorDB::new()),
+            Arc::new(MockEmbeddingEngine::new(8)),
+            &db,
+            Some(Uuid::new_v4()),
+        )
+        .await;
+
+        assert!(result.is_err(), "the failing graph write must surface");
+        assert_eq!(graph.node_count(), 0, "no artifact reached the graph");
+
+        let nodes = get_nodes_by_dataset(&db, dataset_id).await.expect("query");
+        // Event + Timestamp + the attribute's entity.
+        assert_eq!(
+            nodes.len(),
+            3,
+            "every temporal node is claimed even though the write failed: {nodes:?}"
+        );
+        let event_row = nodes
+            .iter()
+            .find(|row| row.node_type == "Event")
+            .expect("the Event node is claimed");
+        assert_eq!(
+            event_row.indexed_fields,
+            json!(["name"]),
+            "the Event row names the one vector collection temporal writes, so a sweep clears it"
+        );
+        for row in nodes.iter().filter(|row| row.node_type != "Event") {
+            assert_eq!(
+                row.indexed_fields,
+                json!([]),
+                "temporal indexes no vectors for {}, so its sweep must not delete any",
+                row.node_type
+            );
+        }
+
+        let edges = get_edges_by_dataset(&db, dataset_id).await.expect("query");
+        // `at` to the timestamp, and `subject` to the entity.
+        assert_eq!(edges.len(), 2, "both temporal edges are claimed: {edges:?}");
+    }
+
+    /// Every temporal ownership row names the run that created the artifact,
+    /// which is what a sweep selects on.
+    #[tokio::test]
+    async fn temporal_ownership_rows_carry_the_run_id() {
+        use cognee_database::ops::graph_storage::{get_edges_by_dataset, get_nodes_by_dataset};
+        use cognee_embedding::MockEmbeddingEngine;
+        use cognee_vector::MockVectorDB;
+
+        let dataset_id = Uuid::new_v4();
+        let db = ledger_db(dataset_id).await;
+        let run_id = Uuid::new_v4();
+        let input = temporal_input(
+            dataset_id,
+            Some(Uuid::new_v4()),
+            vec![attributed_event(
+                "Alice joins Acme",
+                "subject",
+                Uuid::new_v4(),
+            )],
+        );
+
+        add_temporal_data_points(
+            &input,
+            Arc::new(cognee_graph::MockGraphDB::new()),
+            Arc::new(MockVectorDB::new()),
+            Arc::new(MockEmbeddingEngine::new(8)),
+            &db,
+            Some(run_id),
+        )
+        .await
+        .expect("temporal persistence must succeed");
+
+        let nodes = get_nodes_by_dataset(&db, dataset_id).await.expect("query");
+        assert!(!nodes.is_empty());
+        assert!(nodes.iter().all(|row| row.pipeline_run_id == Some(run_id)));
+        let edges = get_edges_by_dataset(&db, dataset_id).await.expect("query");
+        assert!(!edges.is_empty());
+        assert!(edges.iter().all(|row| row.pipeline_run_id == Some(run_id)));
+    }
+
+    /// A temporal run that identified no user still writes the ledger, owned by
+    /// the configured default user — and the row id is derived from that
+    /// resolved user, not from a placeholder the delete path could never
+    /// reproduce.
+    #[tokio::test]
+    async fn temporal_ownership_rows_use_the_default_user_when_none_is_identified() {
+        use cognee_database::ops::graph_storage::get_nodes_by_dataset;
+        use cognee_embedding::MockEmbeddingEngine;
+        use cognee_vector::MockVectorDB;
+
+        let dataset_id = Uuid::new_v4();
+        let data_id = Uuid::new_v4();
+        let db = ledger_db(dataset_id).await;
+        let input = temporal_input(
+            dataset_id,
+            None,
+            vec![attributed_event("Alice joins Acme", "subject", data_id)],
+        );
+
+        add_temporal_data_points(
+            &input,
+            Arc::new(cognee_graph::MockGraphDB::new()),
+            Arc::new(MockVectorDB::new()),
+            Arc::new(MockEmbeddingEngine::new(8)),
+            &db,
+            None,
+        )
+        .await
+        .expect("a missing user is not an error");
+
+        let nodes = get_nodes_by_dataset(&db, dataset_id).await.expect("query");
+        assert!(!nodes.is_empty());
+        assert!(
+            nodes
+                .iter()
+                .all(|row| row.user_id == DEFAULT_LEDGER_USER_ID),
+            "the rows resolve to the default ledger user"
+        );
+        let row = &nodes[0];
+        assert_eq!(
+            row.id,
+            provenance_node_id(None, DEFAULT_LEDGER_USER_ID, dataset_id, data_id, row.slug)
+        );
+    }
+
+    /// Temporal events are content-addressed by name, so two files describing
+    /// the same event share one graph node — and that node needs one ownership
+    /// row per producing file, or sweeping the first file would delete a node
+    /// the second still references.
+    #[tokio::test]
+    async fn an_event_two_files_produced_gets_one_row_per_file() {
+        use cognee_database::ops::graph_storage::get_nodes_by_dataset;
+        use cognee_embedding::MockEmbeddingEngine;
+        use cognee_vector::MockVectorDB;
+
+        let dataset_id = Uuid::new_v4();
+        let db = ledger_db(dataset_id).await;
+        let first = Uuid::new_v4();
+        let second = Uuid::new_v4();
+        let input = temporal_input(
+            dataset_id,
+            Some(Uuid::new_v4()),
+            vec![
+                attributed_event("Alice joins Acme", "subject", first),
+                attributed_event("Alice joins Acme", "subject", second),
+            ],
+        );
+
+        let vector = Arc::new(MockVectorDB::new());
+        add_temporal_data_points(
+            &input,
+            Arc::new(cognee_graph::MockGraphDB::new()),
+            Arc::clone(&vector) as Arc<dyn VectorDB>,
+            Arc::new(MockEmbeddingEngine::new(8)),
+            &db,
+            Some(Uuid::new_v4()),
+        )
+        .await
+        .expect("temporal persistence must succeed");
+
+        let nodes = get_nodes_by_dataset(&db, dataset_id).await.expect("query");
+        let event_rows: Vec<_> = nodes
+            .iter()
+            .filter(|row| row.node_type == "Event")
+            .collect();
+        assert_eq!(event_rows.len(), 2, "one row per producing file");
+        assert_eq!(
+            event_rows[0].slug, event_rows[1].slug,
+            "and both name the same physical node"
+        );
+        assert_eq!(
+            event_rows
+                .iter()
+                .map(|row| row.data_id)
+                .collect::<std::collections::BTreeSet<_>>(),
+            [first, second].into_iter().collect()
+        );
+
+        // The payload agrees with the ledger: one artifact, one vector point.
+        assert_eq!(
+            vector
+                .collection_size("Event", "name")
+                .await
+                .expect("collection size"),
+            1,
+            "the shared event is embedded and indexed once, not once per producer"
+        );
+    }
+
+    /// A temporal relationship name comes straight from the LLM, and NUL bytes
+    /// are stripped on the way into Postgres. The row id and slug must be
+    /// derived from the sanitized text, or the ledger would key the edge on
+    /// text no store holds and the sweep would miss it. The standard path's
+    /// `provenance_edge_ids_derive_from_sanitized_text` pins the same rule.
+    #[tokio::test]
+    async fn temporal_edge_rows_hash_sanitized_relationship_names() {
+        use cognee_database::ops::graph_storage::get_edges_by_dataset;
+        use cognee_embedding::MockEmbeddingEngine;
+        use cognee_vector::MockVectorDB;
+
+        let dataset_id = Uuid::new_v4();
+        let db = ledger_db(dataset_id).await;
+        let data_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let dirty = "sub\u{0}ject";
+        let clean = "subject";
+
+        let input = temporal_input(
+            dataset_id,
+            Some(user_id),
+            vec![attributed_event("Alice joins Acme", dirty, data_id)],
+        );
+        add_temporal_data_points(
+            &input,
+            Arc::new(cognee_graph::MockGraphDB::new()),
+            Arc::new(MockVectorDB::new()),
+            Arc::new(MockEmbeddingEngine::new(8)),
+            &db,
+            None,
+        )
+        .await
+        .expect("temporal persistence must succeed");
+
+        let edges = get_edges_by_dataset(&db, dataset_id).await.expect("query");
+        let row = edges
+            .iter()
+            .find(|row| row.relationship_name == clean)
+            .expect("the relationship is stored sanitized");
+        assert_eq!(
+            row.id,
+            provenance_edge_id(
+                None,
+                user_id,
+                dataset_id,
+                data_id,
+                row.source_node_id,
+                clean,
+                row.destination_node_id,
+            )
+        );
+        assert_eq!(
+            row.slug,
+            triplet_slug(row.source_node_id, clean, row.destination_node_id)
+        );
+        // The load-bearing half: stripping the NUL actually changes the hash,
+        // so hashing the raw text could not slip through as a no-op.
+        assert_ne!(
+            row.id,
+            provenance_edge_id(
+                None,
+                user_id,
+                dataset_id,
+                data_id,
+                row.source_node_id,
+                dirty,
+                row.destination_node_id,
+            )
+        );
+    }
+
+    /// `RunToEnd` records the failing chunk and keeps the rest. Before this the
+    /// temporal extractor warned and returned an empty `Vec`, so a run whose
+    /// every call 429'd returned `Ok` with no events and no report at all.
+    #[tokio::test]
+    async fn temporal_extraction_collects_a_chunk_failure_instead_of_propagating() {
+        let dataset_id = Uuid::new_v4();
+        let (input, docs) = temporal_files(
+            dataset_id,
+            &["Alice works at Acme.", "Bob FAILMARKER breaks here."],
+        );
+
+        let config = CognifyConfig::default()
+            .with_data_per_batch(1)
+            .with_failure_stop(FailureStop::RunToEnd);
+        let result = extract_temporal_events(
+            &input,
+            Arc::new(TemporalTestLlm::failing_extraction(&["FAILMARKER"])),
+            &config,
+        )
+        .await
+        .expect("RunToEnd collects rather than propagates");
+
+        assert!(
+            result
+                .events
+                .iter()
+                .all(|attributed| attributed.data_id == docs[0]),
+            "the good file's events survive"
+        );
+        assert!(!result.events.is_empty());
+        assert_eq!(result.failures.entries().len(), 1);
+        let entry = &result.failures.entries()[0];
+        assert_eq!(entry.stage, FailureStage::TemporalExtraction);
+        assert_eq!(entry.data_id, docs[1]);
+        assert!(
+            entry.chunk_id.is_some(),
+            "temporal extraction fails at chunk granularity"
+        );
+    }
+
+    /// The abort-time partition, temporal edition: three single-chunk files,
+    /// the second failing. Under `FailFast` + `FailedItems` only the complete
+    /// file's events are carried forward; the failed and never-reached files
+    /// are left for the next run.
+    #[tokio::test]
+    async fn temporal_extraction_fail_fast_keeps_only_the_complete_file() {
+        let dataset_id = Uuid::new_v4();
+        let (input, docs) = temporal_files(
+            dataset_id,
+            &[
+                "Alice works at Acme.",
+                "Bob FAILMARKER breaks here.",
+                "Carol also works at Acme.",
+            ],
+        );
+
+        let config = CognifyConfig::default()
+            .with_data_per_batch(1)
+            .with_rollback_scope(RollbackScope::FailedItems);
+        let result = extract_temporal_events(
+            &input,
+            Arc::new(TemporalTestLlm::failing_extraction(&["FAILMARKER"])),
+            &config,
+        )
+        .await
+        .expect("FailedItems keeps the complete files");
+
+        assert!(!result.events.is_empty());
+        assert!(
+            result
+                .events
+                .iter()
+                .all(|attributed| attributed.data_id == docs[0]),
+            "only the complete file's events are persisted"
+        );
+        assert_eq!(
+            result
+                .failures
+                .failed_items()
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
+            [docs[1]]
+        );
+        assert_eq!(
+            result
+                .failures
+                .unreached_items()
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
+            [docs[2]],
+            "the third file's chunk was never dispatched"
+        );
+    }
+
+    /// The same abort under the default `WholeRun` scope carries nothing
+    /// forward — the partition must not run on the fatal path.
+    #[tokio::test]
+    async fn temporal_extraction_fail_fast_whole_run_propagates() {
+        let dataset_id = Uuid::new_v4();
+        let (input, docs) = temporal_files(
+            dataset_id,
+            &["Alice works at Acme.", "Bob FAILMARKER breaks here."],
+        );
+
+        let config = CognifyConfig::default().with_data_per_batch(1);
+        let err = extract_temporal_events(
+            &input,
+            Arc::new(TemporalTestLlm::failing_extraction(&["FAILMARKER"])),
+            &config,
+        )
+        .await
+        .expect_err("the default scope still aborts the run");
+
+        let CognifyError::RunFailed { report } = err else {
+            panic!("expected RunFailed, got: {err:?}");
+        };
+        assert_eq!(
+            report.failed_items().iter().copied().collect::<Vec<_>>(),
+            [docs[1]]
+        );
+    }
+
+    /// The second unguarded site. Enrichment runs once per *batch*, so its
+    /// failure is recorded against every chunk that fed the batch — otherwise a
+    /// single call covering most of a run would contribute almost nothing to
+    /// the chunk failure ratio, and a `FailedItems` run could "complete" having
+    /// swept most of the dataset. The batch's events are dropped: an event
+    /// without attributes carries none of the entity graph this pass exists to
+    /// produce.
+    #[tokio::test]
+    async fn temporal_enrichment_failure_fails_its_batchs_items() {
+        let dataset_id = Uuid::new_v4();
+        let (input, docs) = temporal_files(
+            dataset_id,
+            &[
+                "Alice works at Acme.",
+                "Bob FAILMARKER breaks here.",
+                "Carol also works at Acme.",
+            ],
+        );
+
+        // Two chunks per batch: the first batch covers A and B, and B's marker
+        // rides into the enrichment prompt on its event description.
+        let config = CognifyConfig::default()
+            .with_data_per_batch(2)
+            .with_failure_stop(FailureStop::RunToEnd);
+        let result = extract_temporal_events(
+            &input,
+            Arc::new(TemporalTestLlm::failing_enrichment(&["FAILMARKER"])),
+            &config,
+        )
+        .await
+        .expect("RunToEnd collects rather than propagates");
+
+        assert_eq!(
+            result.failures.entries().len(),
+            2,
+            "one failure per chunk in the failed batch, not one for the batch"
+        );
+        assert!(result.failures.entries().iter().all(|entry| entry.stage
+            == FailureStage::TemporalEnrichment
+            && entry.chunk_id.is_some()));
+        assert_eq!(
+            result
+                .failures
+                .failed_items()
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
+            {
+                let mut expected = [docs[0], docs[1]];
+                expected.sort();
+                expected.to_vec()
+            },
+            "both files that fed the batch fail; the third is untouched"
+        );
+        assert!(
+            !result.events.is_empty()
+                && result
+                    .events
+                    .iter()
+                    .all(|attributed| attributed.data_id == docs[2]),
+            "only the surviving batch's events are carried forward"
+        );
+    }
+
+    /// A chunk that already failed extraction is not charged again when the
+    /// enrichment call for its batch fails too. It is one failed chunk, not
+    /// two — and the chunk failure ratio is what the double count would
+    /// distort.
+    #[tokio::test]
+    async fn a_chunk_that_failed_extraction_is_not_charged_twice() {
+        let dataset_id = Uuid::new_v4();
+        let (input, docs) = temporal_files(
+            dataset_id,
+            &["Alice works at Acme.", "Bob EXTFAIL breaks here."],
+        );
+
+        // Both chunks in one batch. B's extraction fails; the enrichment call
+        // over what survives then fails on A's description.
+        let config = CognifyConfig::default()
+            .with_data_per_batch(2)
+            .with_failure_stop(FailureStop::RunToEnd);
+        let result = extract_temporal_events(
+            &input,
+            Arc::new(TemporalTestLlm::failing_both(&["EXTFAIL"], &["Alice"])),
+            &config,
+        )
+        .await
+        .expect("RunToEnd collects rather than propagates");
+
+        assert_eq!(
+            result.failures.total(),
+            2,
+            "one failure per chunk, not one per chunk per pass"
+        );
+        let stages: Vec<FailureStage> = result
+            .failures
+            .entries()
+            .iter()
+            .map(|entry| entry.stage)
+            .collect();
+        assert!(stages.contains(&FailureStage::TemporalExtraction));
+        assert!(stages.contains(&FailureStage::TemporalEnrichment));
+        assert_eq!(
+            result
+                .failures
+                .failed_items()
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
+            {
+                let mut expected = [docs[0], docs[1]];
+                expected.sort();
+                expected.to_vec()
+            }
+        );
+        assert!(
+            result.events.is_empty(),
+            "the failed batch's events are dropped"
+        );
+    }
+
     /// The end-of-run gate reads the policy, not the report alone: the same
     /// failures error the run under `WholeRun` and complete it under
     /// `FailedItems` below the threshold.
@@ -8356,6 +9508,8 @@ mod tests {
         use cognee_vector::MockVectorDB;
 
         let (_, ctx, _db) = test_task_context().await;
+        let dataset_id = Uuid::new_v4();
+        let ledger = Arc::new(ledger_db(dataset_id).await);
 
         // One failed item out of four, one failed chunk out of 60 — under the
         // 5 % default threshold.
@@ -8370,15 +9524,18 @@ mod tests {
         });
 
         let input = ExtractedTemporalEvents {
-            events: vec![TemporalEvent {
-                name: "Acme was founded".to_string(),
-                description: None,
-                location: None,
-                at: None,
-                during: None,
-                attributes: vec![],
+            events: vec![AttributedEvent {
+                event: TemporalEvent {
+                    name: "Acme was founded".to_string(),
+                    description: None,
+                    location: None,
+                    at: None,
+                    during: None,
+                    attributes: vec![],
+                },
+                data_id: Uuid::new_v4(),
             }],
-            dataset_id: Uuid::new_v4(),
+            dataset_id,
             user_id: Some(Uuid::new_v4()),
             tenant_id: None,
             failures,
@@ -8395,6 +9552,7 @@ mod tests {
                 Arc::new(cognee_graph::MockGraphDB::new()),
                 Arc::new(MockVectorDB::new()),
                 Arc::new(MockEmbeddingEngine::new(8)),
+                Arc::clone(&ledger),
                 config.failure_policy(),
             );
             let TypedTask::Async(run) = task else {

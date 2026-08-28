@@ -75,6 +75,14 @@ pub enum FailureStage {
     GraphExtraction,
     /// LLM summarization. Failure unit is the chunk; fatality is configurable.
     Summarization,
+    /// LLM temporal event extraction. Failure unit is the chunk.
+    TemporalExtraction,
+    /// LLM temporal entity enrichment. One call covers a whole batch of
+    /// chunks, so one failure is recorded against every chunk that fed it —
+    /// each of those chunks genuinely did fail to be fully processed, and
+    /// attributing the failure to the batch alone would leave it out of the
+    /// chunk failure ratio entirely.
+    TemporalEnrichment,
 }
 
 impl fmt::Display for FailureStage {
@@ -83,6 +91,8 @@ impl fmt::Display for FailureStage {
             FailureStage::Chunking => "chunking",
             FailureStage::GraphExtraction => "graph extraction",
             FailureStage::Summarization => "summarization",
+            FailureStage::TemporalExtraction => "temporal event extraction",
+            FailureStage::TemporalEnrichment => "temporal entity enrichment",
         };
         f.write_str(name)
     }
@@ -398,6 +408,30 @@ mod tests {
             chunk_id,
             error: "boom".to_string(),
             fails_item: true,
+        }
+    }
+
+    /// Every stage renders as prose, because a `StageFailure` is read by a
+    /// user in an error message. Exhaustive on purpose: a new variant added
+    /// without a `Display` arm would not compile, but one added with a
+    /// copy-pasted arm would, and the report would then mislabel it.
+    #[test]
+    fn every_stage_renders_its_own_name() {
+        let names = [
+            (FailureStage::Chunking, "chunking"),
+            (FailureStage::GraphExtraction, "graph extraction"),
+            (FailureStage::Summarization, "summarization"),
+            (
+                FailureStage::TemporalExtraction,
+                "temporal event extraction",
+            ),
+            (
+                FailureStage::TemporalEnrichment,
+                "temporal entity enrichment",
+            ),
+        ];
+        for (stage, expected) in names {
+            assert_eq!(stage.to_string(), expected);
         }
     }
 
