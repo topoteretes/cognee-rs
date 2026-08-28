@@ -51,6 +51,13 @@ html-loader   = ["cognee/html-loader"]
 # pdf-pdfium needs a per-platform pdfium binary, which rules it out for mobile;
 # `android-default` in cognee/lib makes the same call.
 pdf-pure-rust = ["cognee/pdf-pure-rust"]
+# PDFium extraction, preferred over pdf-pure-rust when both are on (see
+# cognee-ingestion's loaders/pdf/mod.rs). It reads PDFs the pure-Rust extractor
+# silently returns empty text for — e.g. editions with Type3/undecodable font
+# encodings — at the cost of a libpdfium library the consumer must supply
+# (pdfium-auto's PDFIUM_LIB_PATH, or its own download on desktop targets; it has
+# no Android entry, so an Android consumer must ship the .so and set that var).
+pdf-pdfium = ["cognee/pdf-pdfium"]
 unstructured-eml = ["cognee/unstructured-eml"]
 
 [dependencies]
