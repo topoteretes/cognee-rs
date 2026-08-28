@@ -1,6 +1,6 @@
 //! Handle lifecycle: `newHandle(settingsJson) -> long` and `destroy(long)`.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use jni::JNIEnv;
 use jni::objects::{JClass, JString};
@@ -13,6 +13,33 @@ use cognee_bindings_common::{HandleState, SdkError};
 
 use crate::errors::{throw_cognee_exception, throw_sdk_error};
 use crate::{guard_jlong, guard_void};
+
+/// Constructor used for every handle this binding creates.
+///
+/// OSS builds leave this unset and get [`HandleState::from_settings`], i.e. the
+/// built-in component registry. A cloud-flavored binding that links this crate
+/// installs its own constructor via [`set_handle_factory`] so handles are built
+/// with the closed registry (Qdrant vector store, LiteRT LLM on Android) and the
+/// access-control bootstrap — the same wiring the py/ts/c cloud cdylibs get from
+/// `cognee_bindings_cloud::handle_from_settings`.
+pub type HandleFactory = fn(Settings) -> HandleState;
+
+static HANDLE_FACTORY: OnceLock<HandleFactory> = OnceLock::new();
+
+/// Install the handle constructor. Call before the first handle is created; a
+/// second call is ignored and reports `Err`. Intended for a linking cdylib's
+/// module initializer, which runs at `dlopen` time before any native method.
+pub fn set_handle_factory(factory: HandleFactory) -> Result<(), HandleFactory> {
+    HANDLE_FACTORY.set(factory)
+}
+
+/// Build a handle through the installed factory, or the OSS default.
+fn new_handle_state(settings: Settings) -> HandleState {
+    match HANDLE_FACTORY.get() {
+        Some(factory) => factory(settings),
+        None => HandleState::from_settings(settings),
+    }
+}
 
 /// Borrow a `jlong` handle as `&Arc<HandleState>`.
 ///
@@ -106,7 +133,7 @@ pub extern "system" fn Java_ai_cognee_internal_Native_newHandle<'l>(
         };
         match build_settings(&json) {
             Ok(settings) => {
-                let state = Arc::new(HandleState::from_settings(settings));
+                let state = Arc::new(new_handle_state(settings));
                 Box::into_raw(Box::new(state)) as jlong
             }
             Err(e) => {
