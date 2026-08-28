@@ -365,12 +365,16 @@ jobs:
           # the `pgvector-spans` failure mode. Set here so a pin that cannot
           # run these tests fails the lane instead of quietly passing it.
           COGX_REQUIRE_PYTHON_SUPPORT: "1"
-        run: >-
-          docker compose
-          -f cognee-rust/e2e-cross-sdk/docker-compose.yml
-          run --rm e2e-tests
-          pytest -vs /harness/test_cogx_import_contract.py
-          --tb=short
+        # -e per invocation rather than in the service's `environment:`, so
+        # this does not un-skip every other requires_openai test in the
+        # service. See the note on e2e-tests in docker-compose.yml.
+        run: |
+          docker compose \
+            -f cognee-rust/e2e-cross-sdk/docker-compose.yml \
+            run --rm \
+            -e COGX_REQUIRE_PYTHON_SUPPORT="$COGX_REQUIRE_PYTHON_SUPPORT" \
+            e2e-tests \
+            pytest -vs /harness/test_cogx_import_contract.py --tb=short
 
       # ── COGX roundtrip: Rust exports, Python imports (LLM-gated) ─────────
       # The end-to-end path: Rust add + cognify + `export --pack`, then Python
@@ -385,12 +389,20 @@ jobs:
           # No EMBEDDING_* here on purpose: the Rust CLI embeds locally via the
           # image's ONNX model, and overriding that breaks cognify. See the
           # note on the e2e-tests service in docker-compose.yml.
-        run: >-
-          docker compose
-          -f cognee-rust/e2e-cross-sdk/docker-compose.yml
-          run --rm e2e-tests
-          pytest -vs /harness/test_cogx_roundtrip.py
-          --tb=short
+        # -e per invocation rather than in the service's `environment:`, so
+        # this does not un-skip every other requires_openai test in the
+        # service. See the note on e2e-tests in docker-compose.yml.
+        run: |
+          docker compose \
+            -f cognee-rust/e2e-cross-sdk/docker-compose.yml \
+            run --rm \
+            -e OPENAI_TOKEN="$OPENAI_TOKEN" \
+            -e OPENAI_URL="$OPENAI_URL" \
+            -e OPENAI_MODEL="$OPENAI_MODEL" \
+            -e LLM_PROVIDER="$LLM_PROVIDER" \
+            -e COGX_REQUIRE_PYTHON_SUPPORT=1 \
+            e2e-tests \
+            pytest -vs /harness/test_cogx_roundtrip.py --tb=short
 
       # ── Cross-SDK provenance parity (LLM-gated) ─────────────────────────
       # Asserts gap-05 DataPoint provenance parity between Python and
