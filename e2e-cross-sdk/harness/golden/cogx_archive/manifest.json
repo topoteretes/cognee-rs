@@ -1,0 +1,15 @@
+{
+  "cogx_version": "0.1",
+  "source_system": "cognee",
+  "exported_at": "2026-08-28T10:16:40.002621Z",
+  "counts": {
+    "document": 1,
+    "entity": 2,
+    "fact": 7,
+    "raw_node": 4
+  },
+  "embedding_model": "openai/text-embedding-3-small",
+  "notes": [
+    "Exported from Cognee dataset 'e2e_test'."
+  ]
+}

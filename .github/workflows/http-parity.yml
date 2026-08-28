@@ -343,6 +343,46 @@ jobs:
           -k "test_http_cognify or test_http_remember or test_http_recall or test_http_memify or test_http_improve or test_http_llm or test_http_hybrid"
           --tb=short
 
+      # ── COGX import contract (no LLM, unconditional release gate) ────────
+      # Python cognee imports a COGX archive written by the Rust exporter
+      # (harness/golden/cogx_archive/, regenerated and drift-checked by
+      # `cargo test -p cognee-migration --test python_import_contract`).
+      #
+      # Unconditional on purpose. The full roundtrip below needs a key because
+      # producing a graph to export means cognify, so it never runs on a fork
+      # PR — and every way this contract breaks is silent on the Python side:
+      # a wrong manifest `source_system` downgrades id preservation, and a
+      # missing raw node makes the loader skip edges with only a log warning.
+      # Both yield a "successful" import of quietly wrong data.
+      - name: COGX import contract — Python reads a Rust archive (no LLM)
+        run: >-
+          docker compose
+          -f cognee-rust/e2e-cross-sdk/docker-compose.yml
+          run --rm e2e-tests
+          pytest -vs /harness/test_cogx_import_contract.py
+          --tb=short
+
+      # ── COGX roundtrip: Rust exports, Python imports (LLM-gated) ─────────
+      # The end-to-end path: Rust add + cognify + `export --pack`, then Python
+      # imports the archive and must reproduce the same node ids and edges.
+      - name: COGX roundtrip — Rust export to Python import (LLM-gated)
+        if: ${{ env.HAS_OPENAI_KEY == 'true' }}
+        env:
+          OPENAI_TOKEN: ${{ secrets.OPENAI_KEY }}
+          OPENAI_URL: https://api.openai.com/v1
+          OPENAI_MODEL: gpt-4o-mini
+          LLM_PROVIDER: openai
+          EMBEDDING_PROVIDER: openai
+          EMBEDDING_MODEL: openai/text-embedding-3-small
+          EMBEDDING_DIMENSIONS: "1536"
+          EMBEDDING_API_KEY: ${{ secrets.OPENAI_KEY }}
+        run: >-
+          docker compose
+          -f cognee-rust/e2e-cross-sdk/docker-compose.yml
+          run --rm e2e-tests
+          pytest -vs /harness/test_cogx_roundtrip.py
+          --tb=short
+
       # ── Cross-SDK provenance parity (LLM-gated) ─────────────────────────
       # Asserts gap-05 DataPoint provenance parity between Python and
       # Rust SDKs (source_pipeline / source_task / source_user). See

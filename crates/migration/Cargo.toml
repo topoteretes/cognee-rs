@@ -1,0 +1,35 @@
+[package]
+name = "cognee-migration"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "COGX export — portable knowledge-graph archives interchangeable with Python cognee."
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# `.cogx.tar.gz` packing, needed to ship an archive to Python's
+# `POST /api/v1/remember` (`content_type=cogx-archive`) endpoint.
+archive = ["dep:tar", "dep:flate2"]
+
+[dependencies]
+cognee-graph = { path = "../graph", version = "0.2.0" }
+chrono = { workspace = true }
+flate2 = { workspace = true, optional = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tar = { workspace = true, optional = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+tempfile = { workspace = true }

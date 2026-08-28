@@ -1,0 +1,4 @@
+{"id":"0198c1e0-0000-7000-8000-00000000d0c0","created_at":1768164683000,"name":"nlp.txt","type":"TextDocument"}
+{"id":"0198c1e0-0000-7000-8000-00000000c8c8","chunk_index":0,"created_at":1768164683000,"metadata":{"index_fields":["text"]},"text":"Alice knows Bob.","type":"DocumentChunk"}
+{"id":"0198c1e0-0000-7000-8000-000000009e50","description":"Person","name":"Person","type":"EntityType"}
+{"id":"0198c1e0-0000-7000-8000-0000000c0115","name":"e2e_test","type":"NodeSet"}

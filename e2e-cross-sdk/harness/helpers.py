@@ -62,18 +62,15 @@ def run_rust_cli(
     )
 
 
-def run_python_cli(
-    workdir: Path,
-    args: list[str],
-    *,
-    env: Optional[dict] = None,
-    check: bool = True,
-) -> subprocess.CompletedProcess:
-    """Run a Python cognee operation via the API (not the CLI wrapper).
+def python_runtime_env(
+    workdir: Path, env: Optional[dict] = None
+) -> tuple[Path, Path, dict]:
+    """Build the storage dirs and environment a Python cognee process needs.
 
-    Uses a small Python script that calls ``cognee.add()`` / ``cognee.cognify()``
-    directly, avoiding the CLI's generic exception handler that swallows errors.
-    The first element of *args* must be the command (``"add"`` or ``"cognify"``).
+    Returns ``(data_root, system_root, env)``.  Shared by ``run_python_cli``
+    and ``run_python_script`` so both drive Python cognee against the same
+    backends — a snippet that configured a different graph provider would read
+    an empty graph and pass vacuously.
     """
     py_system = workdir / ".cognee_system"
     py_storage = workdir / ".data_storage"
@@ -103,6 +100,61 @@ def run_python_cli(
     }
     if env:
         run_env.update(env)
+
+    return py_storage, py_system, run_env
+
+
+def run_python_script(
+    workdir: Path,
+    script: str,
+    *,
+    env: Optional[dict] = None,
+    check: bool = True,
+    timeout: int = 300,
+) -> subprocess.CompletedProcess:
+    """Run an arbitrary Python cognee snippet in the venv interpreter.
+
+    ``run_python_cli`` only knows the handful of verbs it parses; COGX import
+    has no CLI surface in Python (it is ``cognee.remember(COGXArchiveSource(…))``
+    in-process), so the roundtrip test drives it through here.
+
+    The snippet is prefixed with the same ``config.data_root_directory`` /
+    ``system_root_directory`` calls the other helpers make, so it reads and
+    writes the workspace's own store.
+    """
+    py_storage, py_system, run_env = python_runtime_env(workdir, env)
+
+    preamble = (
+        "import cognee\n"
+        f"cognee.config.data_root_directory({str(py_storage)!r})\n"
+        f"cognee.config.system_root_directory({str(py_system)!r})\n"
+    )
+
+    return subprocess.run(
+        [PYTHON_RUNNER, "-c", preamble + script],
+        cwd=str(workdir),
+        env=run_env,
+        capture_output=True,
+        text=True,
+        check=check,
+        timeout=timeout,
+    )
+
+
+def run_python_cli(
+    workdir: Path,
+    args: list[str],
+    *,
+    env: Optional[dict] = None,
+    check: bool = True,
+) -> subprocess.CompletedProcess:
+    """Run a Python cognee operation via the API (not the CLI wrapper).
+
+    Uses a small Python script that calls ``cognee.add()`` / ``cognee.cognify()``
+    directly, avoiding the CLI's generic exception handler that swallows errors.
+    The first element of *args* must be the command (``"add"`` or ``"cognify"``).
+    """
+    py_storage, py_system, run_env = python_runtime_env(workdir, env)
 
     # Parse the CLI-like args into a Python API call
     command = args[0]  # "add" or "cognify"

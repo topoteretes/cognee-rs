@@ -12,8 +12,8 @@ use crate::error::CliError;
 #[cfg(feature = "visualization")]
 use super::visualize;
 use super::{
-    add, add_and_cognify, cognify, config, delete, forget, improve, memify, recall, remember,
-    search,
+    add, add_and_cognify, cognify, config, delete, export, forget, improve, memify, recall,
+    remember, search,
 };
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -35,6 +35,7 @@ fn dispatch(command: Commands, cm: &Arc<ComponentManager>) -> Result<(), CliErro
         Commands::Forget(args) => forget::run(args, Arc::clone(cm)),
         Commands::Improve(args) => improve::run(args, Arc::clone(cm)),
         Commands::Delete(args) => delete::run(args, Arc::clone(cm)),
+        Commands::Export(args) => export::run(args, Arc::clone(cm)),
         Commands::Config(args) => config::run(args),
         Commands::RunSequence(_) => Err(CliError::Validation(
             "Nested run-sequence is not allowed".to_string(),

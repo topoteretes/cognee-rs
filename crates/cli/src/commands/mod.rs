@@ -7,6 +7,7 @@ pub mod bench_telemetry;
 pub mod cognify;
 pub mod config;
 pub mod delete;
+pub mod export;
 pub mod forget;
 pub mod improve;
 pub mod memify;
