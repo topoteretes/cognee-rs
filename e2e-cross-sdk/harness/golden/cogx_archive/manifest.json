@@ -1,7 +1,7 @@
 {
   "cogx_version": "0.1",
   "source_system": "cognee",
-  "exported_at": "2026-08-28T10:16:40.002621Z",
+  "exported_at": "2026-08-28T11:54:12.516015Z",
   "counts": {
     "document": 1,
     "entity": 2,
@@ -10,6 +10,7 @@
   },
   "embedding_model": "openai/text-embedding-3-small",
   "notes": [
-    "Exported from Cognee dataset 'e2e_test'."
+    "Exported from cognee-rs. Contains the ENTIRE graph store, not a single dataset: cognee-rs has no per-dataset graph partition.",
+    "Requested dataset label: 'e2e_test' (label only)."
   ]
 }

@@ -26,6 +26,7 @@ a key because producing a graph to export at all requires cognify.
 """
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -119,14 +120,27 @@ def rust_cogx_archive(tmp_path):
 
 
 def python_supports_cogx(workdir: Path) -> bool:
-    """Whether the image's Python cognee is new enough to read a COGX archive."""
+    """Whether the image's Python cognee is new enough to read a COGX archive.
+
+    Returns False to let the caller skip — unless ``COGX_REQUIRE_PYTHON_SUPPORT``
+    is set, in which case a missing migration package fails outright. A skip
+    still exits 0, so a lane that can never run these tests would otherwise
+    report green forever.
+    """
     probe = run_python_script(
         workdir,
         "from cognee.modules.migration import COGXArchiveSource, import_memory_source\n"
         "print('HAS_COGX')\n",
         check=False,
     )
-    return probe.returncode == 0 and "HAS_COGX" in probe.stdout
+    supported = probe.returncode == 0 and "HAS_COGX" in probe.stdout
+    if not supported and os.environ.get("COGX_REQUIRE_PYTHON_SUPPORT"):
+        pytest.fail(
+            "the image's Python cognee has no cognee.modules.migration. Bump the "
+            "`topoteretes/cognee` ref in .github/workflows/http-parity.yml.\n"
+            f"probe stderr: {probe.stderr[-600:]}"
+        )
+    return supported
 
 
 # ── Archive shape (no LLM beyond producing the graph) ────────────────────────

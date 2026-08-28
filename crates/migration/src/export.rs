@@ -75,9 +75,19 @@ pub fn write_cogx(
 ) -> MigrationResult<ExportSummary> {
     let mut writer = CogxArchiveWriter::new(destination)?;
     writer.set_embedding_model(options.embedding_model.clone());
-    match &options.dataset_name {
-        Some(name) => writer.add_note(format!("Exported from Cognee dataset '{name}'.")),
-        None => writer.add_note("Exported from cognee-rs."),
+
+    // The note must not claim a dataset scope the archive does not have.
+    // `get_graph_data()` returns the whole store — cognee-rs has no
+    // per-dataset graph partition — so an archive labelled "dataset X" would
+    // in fact carry every other dataset's nodes too. On a tarball shipped to
+    // another party that is a disclosure hazard, not just a stale label.
+    writer.add_note(
+        "Exported from cognee-rs. Contains the ENTIRE graph store, not a single \
+         dataset: cognee-rs has no per-dataset graph partition."
+            .to_string(),
+    );
+    if let Some(name) = &options.dataset_name {
+        writer.add_note(format!("Requested dataset label: '{name}' (label only)."));
     }
 
     let mut summary = ExportSummary {
@@ -481,7 +491,21 @@ mod tests {
             manifest.embedding_model.as_deref(),
             Some("text-embedding-3-small")
         );
-        assert!(manifest.notes[0].contains("main_dataset"));
+        // The first note must state the archive is store-wide; the dataset is
+        // only ever a label, so it must not be presented as a scope.
+        assert!(
+            manifest.notes[0].contains("ENTIRE graph store"),
+            "{:?}",
+            manifest.notes
+        );
+        assert!(
+            manifest
+                .notes
+                .iter()
+                .any(|note| note.contains("main_dataset") && note.contains("label")),
+            "the dataset must be recorded as a label, not a scope: {:?}",
+            manifest.notes
+        );
     }
 
     #[test]

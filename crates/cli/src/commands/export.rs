@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use cognee::migration::{ARCHIVE_SUFFIX, ExportOptions, export_graph, pack_archive};
 use cognee::{ComponentManager, PipelineContext};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::cli::ExportArgs;
 use crate::error::CliError;
@@ -39,6 +39,14 @@ pub fn run(args: ExportArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
             embedding_model: Some(embedding_model),
             dataset_name: dataset,
         };
+
+        if options.dataset_name.is_some() {
+            warn!(
+                "--dataset labels the archive but does not scope it: cognee-rs has \
+                 no per-dataset graph partition, so this export contains the ENTIRE \
+                 graph store. Check the contents before sharing the archive."
+            );
+        }
 
         let summary = export_graph(&*graph_db, &destination, &options)
             .await

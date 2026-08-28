@@ -301,15 +301,34 @@ pub fn parse_timestamp(value: Option<&serde_json::Value>) -> Option<DateTime<Utc
             if let Ok(parsed) = DateTime::parse_from_rfc3339(text) {
                 return Some(parsed.with_timezone(&Utc));
             }
-            // Offset-less forms ("2026-01-01T10:00:00", "2026-01-01") are read
-            // as UTC, matching Python's `fromisoformat` + `replace(tzinfo=utc)`.
-            if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(text, "%Y-%m-%dT%H:%M:%S%.f") {
-                return Some(Utc.from_utc_datetime(&naive));
+            // Offset-less forms are read as UTC, matching Python's
+            // `fromisoformat` + `replace(tzinfo=utc)`. The space-separated
+            // shape is not hypothetical: the Ladybug adapter formats every
+            // node/edge timestamp as `%Y-%m-%d %H:%M:%S%.6f`
+            // (`crates/graph/src/ladybug.rs`), and minute precision is
+            // likewise valid ISO 8601 that `fromisoformat` accepts. Rejecting
+            // either would drop the timestamp from the archive while a
+            // Python-written export of the same graph kept it.
+            for format in [
+                "%Y-%m-%dT%H:%M:%S%.f",
+                "%Y-%m-%d %H:%M:%S%.f",
+                "%Y-%m-%dT%H:%M",
+                "%Y-%m-%d %H:%M",
+            ] {
+                if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(text, format) {
+                    return Some(Utc.from_utc_datetime(&naive));
+                }
             }
-            chrono::NaiveDate::parse_from_str(text, "%Y-%m-%d")
+            if let Some(parsed) = chrono::NaiveDate::parse_from_str(text, "%Y-%m-%d")
                 .ok()
                 .and_then(|date| date.and_hms_opt(0, 0, 0))
                 .map(|naive| Utc.from_utc_datetime(&naive))
+            {
+                return Some(parsed);
+            }
+            // Losing a timestamp silently is the whole hazard here, so say so.
+            tracing::debug!(value = %text, "COGX: dropping unparseable timestamp");
+            None
         }
         _ => None,
     }
@@ -457,6 +476,27 @@ mod tests {
         let without_offset = parse_timestamp(Some(&json!("2026-01-11T20:51:23"))).unwrap();
         assert_eq!(with_offset, without_offset);
         assert_eq!(with_offset.timestamp(), 1_768_164_683);
+    }
+
+    #[test]
+    fn ladybug_space_separated_timestamps_are_accepted() {
+        // The Ladybug adapter writes `%Y-%m-%d %H:%M:%S%.6f`; rejecting that
+        // shape dropped created_at/valid_at from the archive silently.
+        let parsed = parse_timestamp(Some(&json!("2026-01-11 20:51:23.000000"))).unwrap();
+        assert_eq!(parsed.timestamp(), 1_768_164_683);
+    }
+
+    #[test]
+    fn minute_precision_iso_strings_are_accepted() {
+        // Valid ISO 8601, and Python's fromisoformat takes it.
+        let parsed = parse_timestamp(Some(&json!("2026-01-11T20:51"))).unwrap();
+        assert_eq!(parsed.timestamp(), 1_768_164_660);
+    }
+
+    #[test]
+    fn bare_dates_are_read_as_utc_midnight() {
+        let parsed = parse_timestamp(Some(&json!("2026-01-11"))).unwrap();
+        assert_eq!(parsed.to_rfc3339(), "2026-01-11T00:00:00+00:00");
     }
 
     #[test]

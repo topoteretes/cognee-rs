@@ -18,6 +18,7 @@ provider, and the LLM, while still covering the semantics that matter.
 """
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -72,7 +73,17 @@ def imported(tmp_path_factory):
         check=False,
     )
     if probe.returncode != 0 or "HAS_COGX" not in probe.stdout:
-        pytest.skip("image's Python cognee predates COGX migration support")
+        message = (
+            "the image's Python cognee has no cognee.modules.migration, so the "
+            "COGX import contract cannot be checked. Bump the `topoteretes/cognee` "
+            "ref in .github/workflows/http-parity.yml to a SHA that contains it.\n"
+            f"probe stderr: {probe.stderr[-600:]}"
+        )
+        # In CI this must be a failure, not a skip: a skipped suite still exits
+        # 0, which is precisely how a "required" gate ends up asserting nothing.
+        if os.environ.get("COGX_REQUIRE_PYTHON_SUPPORT"):
+            pytest.fail(message)
+        pytest.skip(message)
 
     script = f"""
 import asyncio, json

@@ -59,7 +59,11 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: topoteretes/cognee
-          ref: b9014c1661bff1d1d8bc831f3d31bc5a965bcaa3
+          # Bumped from b9014c1: that commit predates `cognee/modules/migration`
+          # entirely, so the COGX suites below could only ever skip. This SHA
+          # (cognee 1.5.3) is the one the Rust COGX exporter was validated
+          # against — its loader reproduces the archive's node ids and edges.
+          ref: 690c0ec023719a2a277dc893cdecfec1ca8012cc
           path: cognee
 
       # docker-compose.yml declares `env_file: ../.env`; missing files abort
@@ -355,6 +359,12 @@ jobs:
       # missing raw node makes the loader skip edges with only a log warning.
       # Both yield a "successful" import of quietly wrong data.
       - name: COGX import contract — Python reads a Rust archive (no LLM)
+        env:
+          # Without this the suite *skips* when the Python image has no
+          # migration package, and the step exits 0 having asserted nothing —
+          # the `pgvector-spans` failure mode. Set here so a pin that cannot
+          # run these tests fails the lane instead of quietly passing it.
+          COGX_REQUIRE_PYTHON_SUPPORT: "1"
         run: >-
           docker compose
           -f cognee-rust/e2e-cross-sdk/docker-compose.yml

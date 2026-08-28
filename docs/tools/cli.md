@@ -27,6 +27,7 @@ feature-gated).
 | `add-and-cognify <inputs…>` | `add` then `cognify` in one step | union of the above | — |
 | `memify` | Enrich an existing graph with triplet embeddings | `-d/--datasets`, `--node-type`, `--node-name`, `--batch-size` (100) | — |
 | `search <query>` | Query the graph/vectors | `-t/--query-type` (`GRAPH_COMPLETION`), `-d/--datasets`, `-k/--top-k` (10), `--system-prompt` / `--system-prompt-path`, `--session-id`, `-f/--output-format` (`pretty`/`json`), `--llm-max-retries` | — |
+| `export` | Write the graph as a COGX archive that Python cognee can re-import (`cognee.remember(COGXArchiveSource(path))`, or upload the packed tarball to `/api/v1/remember` with `content_type=cogx-archive`) | `-o/--output` (dir; default `<dataset>_cogx`), `-d/--dataset` (**label only — does not scope the export; the whole graph store is written**), `--pack` (also write `<output>.cogx.tar.gz`), `--format` (`cogx`; the only value that round-trips) | — |
 | `delete` | Remove data/datasets across all backends | `-d/--dataset-name` \| `--dataset-id`, `--data-id`, `--all`, `--mode` (`soft`/`hard`), `--dry-run`, `-f/--force` | — |
 | `config get\|set\|unset <key>` | Read/write the persisted JSON config | — | — |
 | `run-sequence` | Run a scripted add/cognify/search sequence | — | — |
