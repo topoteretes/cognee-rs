@@ -27,11 +27,17 @@ services:
       - LLM_API_KEY
       - LLM_API_ENDPOINT
       - LLM_PROVIDER
-      - EMBEDDING_PROVIDER
-      - EMBEDDING_MODEL
-      - EMBEDDING_DIMENSIONS
-      - EMBEDDING_API_KEY
-      - EMBEDDING_ENDPOINT
+      # NOTE: EMBEDDING_* is deliberately NOT forwarded here, unlike in
+      # e2e-http-tests. This service drives the two CLIs directly, and the Rust
+      # CLI embeds locally through the ONNX model baked into the image at
+      # /opt/models (see write_rust_config's embedding_model_path). Exporting
+      # EMBEDDING_PROVIDER/EMBEDDING_MODEL overrides that config and sends the
+      # litellm-style name `openai/text-embedding-3-small` — correct for
+      # Python, which strips the provider prefix — straight to the OpenAI API,
+      # which rejects it with `HTTP 400 invalid model ID` and fails cognify.
+      # Python subprocesses are unaffected either way: python_runtime_env()
+      # sets its own EMBEDDING_* in the child env.
+      #
       # Turns "Python image predates COGX" from a silent skip into a failure.
       - COGX_REQUIRE_PYTHON_SUPPORT
     tmpfs:

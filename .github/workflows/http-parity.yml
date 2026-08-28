@@ -382,10 +382,9 @@ jobs:
           OPENAI_URL: https://api.openai.com/v1
           OPENAI_MODEL: gpt-4o-mini
           LLM_PROVIDER: openai
-          EMBEDDING_PROVIDER: openai
-          EMBEDDING_MODEL: openai/text-embedding-3-small
-          EMBEDDING_DIMENSIONS: "1536"
-          EMBEDDING_API_KEY: ${{ secrets.OPENAI_KEY }}
+          # No EMBEDDING_* here on purpose: the Rust CLI embeds locally via the
+          # image's ONNX model, and overriding that breaks cognify. See the
+          # note on the e2e-tests service in docker-compose.yml.
         run: >-
           docker compose
           -f cognee-rust/e2e-cross-sdk/docker-compose.yml
