@@ -61,10 +61,20 @@ COPY cognee/pyproject.toml cognee/uv.lock cognee/README.md ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-install-project --no-dev --no-editable
 
-# Copy project source and install. cognee declares
-# `[tool.hatch.build.targets.wheel] packages = ["cognee", "distributed"]`
-# in pyproject.toml.
+# Copy project source and install. At the pinned SHA cognee declares
+# `[tool.hatch.build.targets.wheel] packages = ["cognee", "cognee_db_workers", "kuzu"]`
+# in pyproject.toml. Every package that is *imported at runtime* has to be
+# copied here, or `uv sync` builds a wheel without it.
+#
+# `cognee_db_workers` is not optional: the Ladybug adapter does a top-level
+# `import cognee_db_workers`, and cognee/__init__ reaches it through
+# add -> ingest_data -> ... -> graph/config, so omitting it makes `import
+# cognee` itself fail and `start_servers.sh` aborts on create_database().
+# (`kuzu` is listed too but is only a ladybug shim for `import kuzu`, which
+# the PyPI install below already satisfies; `distributed` is copied because
+# older pins packaged it and the directory is harmless when they do not.)
 COPY cognee/cognee /build/cognee
+COPY cognee/cognee_db_workers /build/cognee_db_workers
 COPY cognee/distributed /build/distributed
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-editable
