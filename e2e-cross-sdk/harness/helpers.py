@@ -87,13 +87,27 @@ def python_runtime_env(
         "DB_PROVIDER": "sqlite",
         "DB_NAME": "cognee_db",
         "GRAPH_DATABASE_PROVIDER": "kuzu",
-        "VECTOR_DB_PROVIDER": "brute-force",
+        # lancedb, not brute-force: `brute-force` is a Rust-only backend and
+        # Python cognee rejects it outright —
+        #   EnvironmentError: Unsupported vector database provider:
+        #   brute-force. Supported providers are: LanceDB, PGVector,
+        #   neptune_analytics, Turso
+        # (create_vector_engine.py). Any Python path that builds a vector
+        # engine dies on it; the migration gate that every write runs is one,
+        # so the failure lands before the operation starts. lancedb is Python
+        # cognee's own default and is already in the harness image.
+        "VECTOR_DB_PROVIDER": "lancedb",
         "LLM_API_KEY": openai_key,
         "LLM_MODEL": llm_model,
         "LLM_PROVIDER": "openai",
         "EMBEDDING_PROVIDER": "openai",
         "EMBEDDING_MODEL": "openai/text-embedding-3-small",
         "EMBEDDING_DIMENSIONS": "1536",
+        # The embedding config does not inherit LLM_API_KEY: without this it
+        # resolves to None and litellm falls back to an OPENAI_API_KEY env var
+        # the harness never exports either, so any embedding call 401s. Only
+        # paths that actually embed (cognify, COGX import) notice.
+        "EMBEDDING_API_KEY": openai_key,
         # Skip LLM connection test — add doesn't need an LLM, and we may
         # not have a valid API key for add-only tests.
         "COGNEE_SKIP_CONNECTION_TEST": "true",
