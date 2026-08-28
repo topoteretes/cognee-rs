@@ -5,7 +5,31 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 /** Shared JSON marshalling for the cognee Java SDK (internal). */
 public final class Json {
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final ObjectMapper MAPPER = newMapper();
+
+    /**
+     * The shared mapper.
+     *
+     * <p>On a JVM this is a plain {@code ObjectMapper}, exactly as before — no
+     * module discovery, so host classpath contents cannot alter this binding's
+     * marshalling.
+     *
+     * <p>On Android it additionally registers whatever Jackson modules are on the
+     * classpath. D8 desugars this SDK's result {@code record}s away when minSdk is
+     * below 34, stripping the record metadata Jackson's built-in record support
+     * relies on; deserialization then fails with "no Creators, like default
+     * constructor, exist". With {@code jackson-module-parameter-names} packaged
+     * (and {@code -parameters} at compile time) the canonical constructor is used
+     * as a property-based creator instead.
+     */
+    private static ObjectMapper newMapper() {
+        ObjectMapper mapper = new ObjectMapper();
+        String vm = System.getProperty("java.vm.name", "");
+        if (vm.contains("Dalvik") || vm.contains("ART")) {
+            mapper.findAndRegisterModules();
+        }
+        return mapper;
+    }
 
     private Json() {}
 

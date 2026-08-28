@@ -9,6 +9,8 @@ mod config;
 mod errors;
 mod future;
 mod handle;
+// Re-exported for a cloud-flavored binding that links this crate as an rlib.
+pub use handle::{HandleFactory, set_handle_factory};
 mod runtime;
 mod sdk_admin;
 mod sdk_data;
@@ -25,7 +27,7 @@ use std::ffi::c_void;
 use std::sync::OnceLock;
 
 use jni::objects::JClass;
-use jni::sys::{JNI_VERSION_1_8, jint, jstring};
+use jni::sys::{jint, jstring};
 use jni::{JNIEnv, JavaVM};
 
 /// The process JavaVM, cached at load so tokio worker threads can attach.
@@ -38,6 +40,17 @@ pub(crate) fn java_vm() -> &'static JavaVM {
         .get()
         .expect("JNI_OnLoad ran before any native method could be called")
 }
+
+/// JNI version this binding declares to its host VM.
+///
+/// Android's ART accepts nothing above `JNI_VERSION_1_6` and fails the load with
+/// "Bad JNI version returned from JNI_OnLoad: 65544" (0x10008 = 1.8) otherwise,
+/// while the desktop JVMs keep declaring 1.8. Every JNI entry point here lives
+/// within the 1.6 surface, so the narrower version costs nothing on Android.
+#[cfg(target_os = "android")]
+const DECLARED_JNI_VERSION: jint = jni::sys::JNI_VERSION_1_6;
+#[cfg(not(target_os = "android"))]
+const DECLARED_JNI_VERSION: jint = jni::sys::JNI_VERSION_1_8;
 
 /// Called by the JVM when `System.load`/`System.loadLibrary` maps this library.
 /// Caches the `JavaVM` and declares the supported JNI version.
@@ -55,7 +68,7 @@ pub extern "system" fn JNI_OnLoad(vm: JavaVM, _reserved: *mut c_void) -> jint {
         sdk_static::install_default_subscriber();
         let _ = sdk_static::arm_analytics();
     });
-    JNI_VERSION_1_8
+    DECLARED_JNI_VERSION
 }
 
 // ---------------------------------------------------------------------------
