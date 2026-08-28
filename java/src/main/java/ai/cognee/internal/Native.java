@@ -125,6 +125,9 @@ public final class Native {
             CompletableFuture<String> future);
     public static native void visualizeToFile(long handle, String optsJson,
             CompletableFuture<String> future);
+    // migration
+    public static native void exportCogx(long handle, String destination, String optsJson,
+            CompletableFuture<String> future);
     // module-level statics
     public static native void setupLogging();
     public static native void initOtlp();

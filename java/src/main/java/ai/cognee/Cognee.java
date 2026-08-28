@@ -335,6 +335,33 @@ public final class Cognee implements AutoCloseable {
         return f.thenApply(json -> ai.cognee.internal.Json.fromJson(json, String.class));
     }
 
+    // --- migration ---
+    /**
+     * Export the graph store as a COGX archive and pack it into a
+     * {@code .cogx.tar.gz} tarball beside {@code destination}.
+     *
+     * <p>COGX is the interchange format Python cognee re-imports, so the tarball
+     * can be uploaded to a Cognee instance ({@code POST /api/v1/remember} with
+     * {@code content_type=cogx-archive}).
+     *
+     * <p>The archive carries the <em>entire</em> graph store — cognee-rs has no
+     * per-dataset graph partition — and no vectors, so the importing instance
+     * re-embeds.
+     *
+     * @param destination archive directory to write; the tarball is this path
+     *                    plus {@code .cogx.tar.gz}
+     */
+    public CompletableFuture<ExportResult> exportCogx(String destination, ExportOptions opts) {
+        CompletableFuture<String> f = new CompletableFuture<>();
+        dispatchVoid(h -> Native.exportCogx(h, destination, Options.jsonOf(opts), f));
+        return f.thenApply(json -> ai.cognee.internal.Json.fromJson(json, ExportResult.class));
+    }
+
+    /** Export with default options. */
+    public CompletableFuture<ExportResult> exportCogx(String destination) {
+        return exportCogx(destination, null);
+    }
+
     // --- module-level statics ---
     /** Initialize file logging from env vars (idempotent). */
     public static void setupLogging() {
