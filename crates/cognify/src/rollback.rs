@@ -481,11 +481,10 @@ pub(crate) async fn on_run_completed(ctx: &RunContext<'_>, report: &FailureRepor
             .await;
     }
 
-    // Survivors only. An item dropped at classification — an unrecognised
-    // extension — is neither failed nor unreached, and Python marks it too:
-    // its per-item wrapper completes whatever the task chain produced. Marking
-    // it is what keeps a `.png` in a dataset from making every future run
-    // non-idempotent.
+    // Survivors only — every processed item that neither failed nor went
+    // unreached. An item dropped at classification is recorded as unreached,
+    // so it is excluded here: marking it would claim a file was cognified that
+    // never reached a single stage, and the marker would then skip it forever.
     let survivors: Vec<Uuid> = ctx
         .processed
         .iter()
