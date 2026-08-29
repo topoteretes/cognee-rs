@@ -85,10 +85,15 @@ def exported_triples(archive: Path) -> set[tuple[str, str, str]]:
 # ── Fixtures ─────────────────────────────────────────────────────────────────
 
 
-@pytest.fixture
-def rust_cogx_archive(tmp_path):
-    """Rust add + cognify + ``export --pack``. Returns (archive_dir, tarball)."""
-    rust_ws = tmp_path / "rust"
+@pytest.fixture(scope="module")
+def rust_cogx_archive(tmp_path_factory):
+    """Rust add + cognify + ``export --pack``. Returns (archive_dir, tarball).
+
+    Module-scoped, like the sibling suite's fixture: four tests consume this,
+    and function scope would re-run cognify — an LLM call per test — four times
+    over the same input, four chances to trip run_rust_cli's 120s timeout.
+    """
+    rust_ws = tmp_path_factory.mktemp("cogx_roundtrip") / "rust"
     rust_ws.mkdir()
     write_rust_config(rust_ws)
 

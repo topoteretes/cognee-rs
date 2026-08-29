@@ -32,11 +32,15 @@ pub fn pack_archive(
     let encoder = GzEncoder::new(file, Compression::default());
     let mut builder = tar::Builder::new(encoder);
 
-    // Sorted, so a re-pack of unchanged content produces a stable member order.
-    let mut entries: Vec<PathBuf> = std::fs::read_dir(archive_dir)
-        .map_err(|error| MigrationError::io(archive_dir, error))?
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
+    // Only the writer's own files, never everything in the directory.
+    // `-o` is caller-supplied, so a user pointing it at a populated directory
+    // (`export -o ~/notes --pack`) would otherwise ship the rest of that
+    // directory inside a tarball they hand to someone else. Python's
+    // equivalent rglobs the whole tree, but only ever over a directory
+    // `push()` just created for the purpose.
+    let mut entries: Vec<PathBuf> = crate::cogx::OWNED_FILES
+        .iter()
+        .map(|name| archive_dir.join(name))
         .filter(|path| path.is_file())
         .collect();
     entries.sort();

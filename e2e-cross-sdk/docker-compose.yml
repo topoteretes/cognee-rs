@@ -13,13 +13,6 @@ services:
       - ../.env                                   # cognee-rust/.env (OPENAI_TOKEN, OPENAI_MODEL, etc.)
     environment:
       - LLM_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
-      # Forward LLM/embedding config from the host, exactly as e2e-http-tests
-      # does. `docker compose run` passes ONLY what the service declares, and
-      # CI deliberately stubs ../.env empty ("Stub cognee-rust/.env"), so
-      # without these bare names an LLM-gated step here sees no key: every
-      # `requires_openai` test skips and the step still exits 0. That is how
-      # the COGX roundtrip and provenance-parity lanes can report green while
-      # running nothing.
       # No LLM credentials are declared here on purpose. `docker compose run`
       # passes only what the service declares, and CI stubs ../.env empty, so
       # every `requires_openai` test in this service currently skips — several

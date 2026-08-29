@@ -1,12 +1,12 @@
 {
   "cogx_version": "0.1",
   "source_system": "cognee",
-  "exported_at": "2026-08-28T11:54:12.516015Z",
+  "exported_at": "2026-08-29T06:48:04.205685Z",
   "counts": {
     "document": 1,
     "entity": 2,
     "fact": 7,
-    "raw_node": 4
+    "raw_node": 6
   },
   "embedding_model": "openai/text-embedding-3-small",
   "notes": [

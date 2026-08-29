@@ -200,8 +200,9 @@ fn manifest_carries_the_fields_the_importer_branches_on() {
     assert_eq!(manifest["counts"]["entity"], json!(2));
     assert_eq!(manifest["counts"]["document"], json!(1));
     assert_eq!(manifest["counts"]["fact"], json!(7));
-    // TextDocument, EntityType, NodeSet, plus the DocumentChunk written twice.
-    assert_eq!(manifest["counts"]["raw_node"], json!(4));
+    // Every node, typed or not, is also written verbatim — the typed records
+    // have no slot for most properties, so the raw copy is what preserves them.
+    assert_eq!(manifest["counts"]["raw_node"], json!(6));
 }
 
 #[test]
@@ -302,6 +303,45 @@ fn document_chunks_are_written_both_typed_and_raw() {
         raw_ids.contains(CHUNK_ID),
         "chunk has no raw node; facts pointing at it would be skipped"
     );
+}
+
+#[test]
+fn typed_nodes_are_also_written_verbatim_so_their_properties_survive() {
+    // Regression: entities used to be written ONLY as typed records.
+    // CogxEntity has slots for name/description/timestamps and nothing else,
+    // and Python's _register_entity builds Entity(id, name, description, is_a),
+    // so against cognee 1.5.3 such an entity came back with ontology_uri=None,
+    // version=1, topological_rank=0 and created_at reset to import time.
+    let dir = tempfile::tempdir().unwrap();
+    let archive = export_fixture(dir.path());
+
+    let raw_ids: HashSet<String> = read_jsonl(&archive, "nodes.jsonl")
+        .iter()
+        .map(|record| record["id"].as_str().unwrap().to_string())
+        .collect();
+
+    for (id, label) in [
+        (ALICE_ID, "Entity Alice"),
+        (BOB_ID, "Entity Bob"),
+        (CHUNK_ID, "DocumentChunk"),
+        (DOC_ID, "TextDocument"),
+        (PERSON_TYPE_ID, "EntityType"),
+        (NODE_SET_ID, "NodeSet"),
+    ] {
+        assert!(
+            raw_ids.contains(id),
+            "{label} has no raw node, so every property beyond the typed \
+             record's fields is lost on import"
+        );
+    }
+
+    // And the raw copy really does carry the extras.
+    let alice = read_jsonl(&archive, "nodes.jsonl")
+        .into_iter()
+        .find(|record| record["id"] == json!(ALICE_ID))
+        .unwrap();
+    assert_eq!(alice["created_at"], json!(1_768_164_683_000_i64));
+    assert_eq!(alice["type"], json!("Entity"));
 }
 
 #[test]

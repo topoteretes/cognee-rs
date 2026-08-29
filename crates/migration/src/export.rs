@@ -4,14 +4,15 @@
 //! The mapping is deliberately identical, because the Python importer's
 //! behaviour is keyed off the exact shapes produced here:
 //!
-//! * `Entity` nodes with a name become typed [`CogxEntity`] records. Their
-//!   `external_id` is the node UUID, which Python keeps verbatim as the
+//! * **Every** node is persisted verbatim as a raw node. That is what carries
+//!   full fidelity: the typed records below have no slot for most properties,
+//!   so a node written only as a typed record loses them on import.
+//! * `Entity` nodes with a name *additionally* get a typed [`CogxEntity`].
+//!   Its `external_id` is the node UUID, which Python keeps verbatim as the
 //!   imported node id (see [`SOURCE_SYSTEM`]).
-//! * `DocumentChunk` nodes with text become a [`CogxDocument`] **and** a raw
-//!   node. Both are needed: the raw node preserves graph topology so facts
-//!   pointing at the chunk resolve, while the document carries the text for
-//!   `hybrid`/`re-derive` imports that re-cognify content.
-//! * Everything else is persisted verbatim as a raw node.
+//! * `DocumentChunk` nodes with text *additionally* get a [`CogxDocument`],
+//!   which carries the text for `hybrid`/`re-derive` imports that re-cognify
+//!   content.
 //! * Every edge becomes a [`CogxFact`].
 
 use std::path::{Path, PathBuf};
@@ -105,6 +106,22 @@ pub fn write_cogx(
         let name = non_empty_str(properties.get("name"));
         let text = non_empty_str(properties.get("text"));
 
+        // A typed record where one fits, and ALWAYS the node verbatim.
+        //
+        // The typed records are lossy by construction: `CogxEntity` has slots
+        // for name/description/timestamps and nothing else, and Python's
+        // `_register_entity` builds `Entity(id, name, description, is_a)` —
+        // it does not even carry the timestamps across. Everything else a
+        // cognee-rs node holds (ontology_uri, version, topological_rank,
+        // source_pipeline/task/user, feedback_weight, …) lives only in the
+        // raw node. Measured against Python 1.5.3's loader, an entity without
+        // one comes back with ontology_uri=None, version=1, topological_rank=0
+        // and created_at reset to import time.
+        //
+        // Emitting both is safe: `_build_graph_batches` rehydrates raw nodes
+        // *before* it registers entities, so `_register_entity` finds the node
+        // already in `by_node_id` and takes its merge path, which leaves an
+        // identical description untouched. One node in, one node out.
         match (node_type, name, text) {
             (Some("Entity"), Some(name), _) => {
                 writer.write(&CogxRecord::Entity(CogxEntity {
@@ -137,19 +154,14 @@ pub fn write_cogx(
                     mime_type: None,
                 }))?;
                 summary.num_documents += 1;
-
-                // Also persist the chunk verbatim. Preserve-mode restore
-                // rehydrates it as a graph node, so facts referencing the
-                // chunk (DocumentChunk -contains-> Entity) keep their
-                // topology instead of dangling.
-                writer.write_raw_node(&raw_node_value(node_id, properties))?;
-                summary.num_raw_nodes += 1;
             }
-            _ => {
-                writer.write_raw_node(&raw_node_value(node_id, properties))?;
-                summary.num_raw_nodes += 1;
-            }
+            _ => {}
         }
+
+        // The raw node also preserves topology: facts referencing a node the
+        // archive does not contain are skipped outright by the importer.
+        writer.write_raw_node(&raw_node_value(node_id, properties))?;
+        summary.num_raw_nodes += 1;
     }
 
     for (source, target, relationship, properties) in edges {
@@ -297,9 +309,9 @@ mod tests {
 
         assert_eq!(summary.num_entities, 1);
         assert_eq!(summary.num_documents, 1);
-        // The DocumentChunk is written twice — typed *and* raw — plus the
-        // unmapped TextDocument.
-        assert_eq!(summary.num_raw_nodes, 2);
+        // Every node is written verbatim as well as typed — that raw copy is
+        // what carries the properties the typed records have no slot for.
+        assert_eq!(summary.num_raw_nodes, nodes.len());
         assert_eq!(summary.num_facts, 1);
 
         let entities = read_lines(&out, "entities.jsonl");
@@ -486,7 +498,8 @@ mod tests {
         assert_eq!(manifest.counts.get("entity"), Some(&1));
         assert_eq!(manifest.counts.get("document"), Some(&1));
         assert_eq!(manifest.counts.get("fact"), Some(&1));
-        assert_eq!(manifest.counts.get("raw_node"), Some(&1));
+        // Both nodes, typed or not, are also written verbatim.
+        assert_eq!(manifest.counts.get("raw_node"), Some(&2));
         assert_eq!(
             manifest.embedding_model.as_deref(),
             Some("text-embedding-3-small")

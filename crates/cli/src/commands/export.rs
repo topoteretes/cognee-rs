@@ -40,13 +40,15 @@ pub fn run(args: ExportArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
             dataset_name: dataset,
         };
 
-        if options.dataset_name.is_some() {
-            warn!(
-                "--dataset labels the archive but does not scope it: cognee-rs has \
-                 no per-dataset graph partition, so this export contains the ENTIRE \
-                 graph store. Check the contents before sharing the archive."
-            );
-        }
+        // Unconditional: the export is store-wide whether or not --dataset was
+        // passed, and the plainest invocation (`export -o out --pack`) is the
+        // one that produces a shippable tarball. Warning only on --dataset
+        // would leave that case silent.
+        warn!(
+            "This export contains the ENTIRE graph store: cognee-rs has no \
+             per-dataset graph partition, and --dataset only labels the archive. \
+             Check the contents before sharing it."
+        );
 
         let summary = export_graph(&*graph_db, &destination, &options)
             .await

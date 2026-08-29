@@ -52,7 +52,7 @@ const ENTITIES_FILE: &str = "entities.jsonl";
 const FACTS_FILE: &str = "facts.jsonl";
 
 /// Every file the writer owns and therefore clears on init.
-const OWNED_FILES: &[&str] = &[
+pub(crate) const OWNED_FILES: &[&str] = &[
     DOCUMENTS_FILE,
     ENTITIES_FILE,
     FACTS_FILE,
@@ -290,9 +290,17 @@ pub fn parse_timestamp(value: Option<&serde_json::Value>) -> Option<DateTime<Utc
             while seconds.abs() > 2e10 {
                 seconds /= 1000.0;
             }
-            let whole = seconds.trunc() as i64;
-            let nanos = ((seconds - seconds.trunc()) * 1e9).round() as u32;
-            Utc.timestamp_opt(whole, nanos.min(999_999_999)).single()
+            // `timestamp_opt` wants a non-negative nanosecond part, so a
+            // negative fractional value has to borrow a second rather than
+            // saturate its fraction away to zero.
+            let mut whole = seconds.trunc() as i64;
+            let mut nanos = ((seconds - seconds.trunc()) * 1e9).round() as i64;
+            if nanos < 0 {
+                whole -= 1;
+                nanos += 1_000_000_000;
+            }
+            Utc.timestamp_opt(whole, nanos.clamp(0, 999_999_999) as u32)
+                .single()
         }
         serde_json::Value::String(text) => {
             if text.is_empty() {
@@ -300,6 +308,14 @@ pub fn parse_timestamp(value: Option<&serde_json::Value>) -> Option<DateTime<Utc
             }
             if let Ok(parsed) = DateTime::parse_from_rfc3339(text) {
                 return Some(parsed.with_timezone(&Utc));
+            }
+            // RFC 3339 requires the `T`, but `fromisoformat` accepts a space
+            // before an offset too ("2026-01-11 20:51:23+00:00"), which is the
+            // Ladybug shape plus a zone.
+            for format in ["%Y-%m-%d %H:%M:%S%.f%:z", "%Y-%m-%d %H:%M%:z"] {
+                if let Ok(parsed) = DateTime::parse_from_str(text, format) {
+                    return Some(parsed.with_timezone(&Utc));
+                }
             }
             // Offset-less forms are read as UTC, matching Python's
             // `fromisoformat` + `replace(tzinfo=utc)`. The space-separated
@@ -484,6 +500,22 @@ mod tests {
         // shape dropped created_at/valid_at from the archive silently.
         let parsed = parse_timestamp(Some(&json!("2026-01-11 20:51:23.000000"))).unwrap();
         assert_eq!(parsed.timestamp(), 1_768_164_683);
+    }
+
+    #[test]
+    fn space_separated_strings_with_an_offset_are_accepted() {
+        // RFC 3339 needs the `T`; fromisoformat does not.
+        let parsed = parse_timestamp(Some(&json!("2026-01-11 20:51:23+00:00"))).unwrap();
+        assert_eq!(parsed.timestamp(), 1_768_164_683);
+    }
+
+    #[test]
+    fn negative_fractional_epochs_borrow_a_second_instead_of_truncating() {
+        // -1.5s is 1.5s before the epoch. Saturating the negative nanos to 0
+        // would silently round it to -1s.
+        let parsed = parse_timestamp(Some(&json!(-1.5))).unwrap();
+        assert_eq!(parsed.timestamp(), -2);
+        assert_eq!(parsed.timestamp_subsec_nanos(), 500_000_000);
     }
 
     #[test]
