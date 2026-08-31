@@ -1569,6 +1569,16 @@ pub async fn extract_custom_graph_from_data<M: crate::fact_extraction::GraphMode
 ///
 /// If summarization is enabled in config, generates summaries for each chunk
 /// using batched parallel LLM calls.
+///
+/// Honours axis 1: under [`FailureStop::FailFast`], and only when a
+/// summarization failure would actually fail its item (see
+/// `tolerate_summarization_failures`), the first failed chunk stops further
+/// calls from being *dispatched*. Nothing already in flight is cancelled and no
+/// finished summary is discarded, so the granularity is the in-flight window —
+/// up to `max_parallel_extractions` calls are already outstanding when the
+/// first failure returns. The files whose chunks went undispatched are marked
+/// unreached, which keeps them out of the completion markers and inside the
+/// item-scoped sweep.
 pub async fn summarize_text(
     input: &ExtractedGraphData,
     llm: Arc<dyn Llm>,
@@ -1599,11 +1609,19 @@ pub async fn summarize_text(
     }
 
     let mut failures = input.failures.clone();
+    let failure_policy = config.failure_policy();
 
     let summaries = if config.enable_summarization && !non_dlt_chunks.is_empty() {
+        // Axis 1 reaches this stage here. `FailFast` alone is not enough: with
+        // `tolerate_summarization_failures` on, a failed summary fails nothing,
+        // so there is no failure for the axis to stop on and the run must keep
+        // summarizing. The flag is the conjunction of the two.
+        let stop_on_failure =
+            failure_policy.stop == FailureStop::FailFast && !config.tolerate_summarization_failures;
         let summary_extractor =
             SummaryExtractor::new_with_schema(llm, config.summary_schema.clone())
-                .with_max_parallel(config.max_parallel_extractions);
+                .with_max_parallel(config.max_parallel_extractions)
+                .with_fail_fast(stop_on_failure);
 
         // Stream every chunk through one bounded pipeline. `summarize_chunks`
         // already caps in-flight requests at `max_parallel_extractions` internally
@@ -1611,27 +1629,33 @@ pub async fn summarize_text(
         // barrier between batches without lowering peak concurrency.
         //
         // The stream is drained whatever happens: a failing chunk is data, not
-        // a reason to abandon the summaries already paid for. Whether the
-        // failure ends the run is `tolerate_summarization_failures`' call, and
-        // it is made at the end of the run, not here.
+        // a reason to abandon the summaries already paid for, and no in-flight
+        // call is ever cancelled. Under `stop_on_failure` what stops is
+        // *dispatch* — chunks not yet admitted come back in `outcome.skipped`
+        // instead of being paid for to produce a result the run is about to
+        // sweep. Whether the failure ends the run is still decided at the end
+        // of the run, not here.
         let outcome = summary_extractor
             .summarize_chunks(&non_dlt_chunks, None)
             .await;
 
-        if !outcome.failures.is_empty() {
+        if !outcome.failures.is_empty() || !outcome.skipped.is_empty() {
             let chunk_documents: HashMap<Uuid, Uuid> = non_dlt_chunks
                 .iter()
                 .map(|c| (c.base.id, c.document_id))
                 .collect();
-            for (chunk_id, error) in &outcome.failures {
-                // A nil `data_id` here would be inserted into the report's
-                // failed-item set — the exact set the sweep selects by — so the
-                // impossible case is made loud rather than silent.
-                #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
-                let data_id = chunk_documents.get(chunk_id).copied().expect(
+            // A nil `data_id` here would be inserted into the report's
+            // failed-item set — the exact set the sweep selects by — so the
+            // impossible case is made loud rather than silent.
+            #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
+            let data_id_of = |chunk_id: &Uuid| -> Uuid {
+                chunk_documents.get(chunk_id).copied().expect(
                     "chunk_documents is built from the same slice that was summarized, \
                      so every returned chunk_id is present",
-                );
+                )
+            };
+            for (chunk_id, error) in &outcome.failures {
+                let data_id = data_id_of(chunk_id);
                 warn!(
                     data_id = %data_id,
                     chunk_id = %chunk_id,
@@ -1648,6 +1672,24 @@ pub async fn summarize_text(
                     error: error.to_string(),
                     fails_item: !config.tolerate_summarization_failures,
                 });
+            }
+            // A file whose summaries were never dispatched has not been fully
+            // processed, so it must not end the run marked complete. This is
+            // the same `mark_unreached` the extraction stages use for the
+            // chunks after a `FailFast` abort, and it is what keeps a stopped
+            // summarization from silently producing summary-less files under
+            // `FailedItems`. `mark_unreached` is a no-op for a file already in
+            // `failed_items`, so a file that both failed and was cut short
+            // stays a failure.
+            for chunk_id in &outcome.skipped {
+                failures.mark_unreached(data_id_of(chunk_id));
+            }
+            if !outcome.skipped.is_empty() {
+                warn!(
+                    skipped_chunks = outcome.skipped.len(),
+                    "summarization stopped early under FailFast; the remaining chunks were \
+                     never dispatched"
+                );
             }
         }
 
@@ -7882,6 +7924,175 @@ mod tests {
         assert!(result.summaries.is_empty());
         // All chunks (both DLT and non-DLT) are still passed through.
         assert_eq!(result.chunks.len(), 2);
+    }
+
+    // ── Summarization and axis 1 ────────────────────────────────────────────
+
+    /// Five single-chunk files, the one at `failing_index` carrying the marker
+    /// the mock LLM fails on. Returned alongside the file ids in input order so
+    /// a test can name which file failed and which were never reached.
+    fn summarization_fixture(failing_index: usize) -> (ExtractedGraphData, Vec<Uuid>) {
+        let doc_ids: Vec<Uuid> = (0..5).map(|_| Uuid::new_v4()).collect();
+        let chunks = doc_ids
+            .iter()
+            .enumerate()
+            .map(|(i, doc_id)| {
+                let text = if i == failing_index {
+                    format!("file {i} FAILMARKER")
+                } else {
+                    format!("file {i} summarizes fine")
+                };
+                test_chunk(Uuid::new_v4(), *doc_id, &text)
+            })
+            .collect();
+        let documents = doc_ids
+            .iter()
+            .map(|doc_id| test_document_with_metadata(*doc_id, None))
+            .collect();
+        (
+            ExtractedGraphData {
+                chunks,
+                documents,
+                entities: vec![],
+                edges: vec![],
+                producers: ArtifactProducers::default(),
+                dataset_id: Uuid::new_v4(),
+                user_id: None,
+                tenant_id: None,
+                failures: FailureReport::default(),
+            },
+            doc_ids,
+        )
+    }
+
+    /// A mock that fails the marker chunk and answers every other
+    /// summarization call, with one call in flight at a time so the dispatch
+    /// order is the input order.
+    fn summarization_llm() -> Arc<cognee_test_utils::MockLlm> {
+        Arc::new(
+            cognee_test_utils::MockLlm::empty()
+                .with_failing_markers(vec!["FAILMARKER".to_string()])
+                .with_summary_response(r#"{"summary":"s","description":"d"}"#.to_string()),
+        )
+    }
+
+    fn serial_summarization_config(config: CognifyConfig) -> CognifyConfig {
+        config.with_max_parallel_extractions(1)
+    }
+
+    /// The axis-1 pin for summarization. `summarize_text` referenced
+    /// `FailureStop` nowhere at all: a failing chunk was recorded and the run
+    /// then paid for every remaining summary, which is the opposite of what
+    /// "stop spending immediately" promises. Counting LLM calls is the only
+    /// assertion that catches a silent return to that — every *outcome*
+    /// assertion below (the failure entry, the summaries kept) holds either
+    /// way.
+    #[tokio::test]
+    async fn summarization_stops_dispatching_after_a_failure_under_fail_fast() {
+        let (input, doc_ids) = summarization_fixture(0);
+        let llm = summarization_llm();
+        let config = serial_summarization_config(CognifyConfig::default());
+        assert_eq!(
+            config.failure_stop,
+            FailureStop::FailFast,
+            "the default is the case under test"
+        );
+
+        let result = summarize_text(&input, llm.clone(), &config)
+            .await
+            .expect("summarize_text never propagates a per-chunk failure");
+
+        assert_eq!(
+            llm.structured_calls(),
+            1,
+            "FailFast must stop scheduling once the first chunk failed; seeing 5 \
+             means the run paid for four summaries it is about to sweep"
+        );
+        assert!(
+            result.summaries.is_empty(),
+            "nothing after the failure was dispatched, so nothing was summarized"
+        );
+        assert_eq!(
+            result
+                .failures
+                .failed_items()
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
+            [doc_ids[0]]
+        );
+        // The undispatched files must not end the run marked complete, so they
+        // are unreached rather than silently kept summary-less.
+        assert_eq!(
+            result
+                .failures
+                .unreached_items()
+                .iter()
+                .copied()
+                .collect::<std::collections::BTreeSet<_>>(),
+            doc_ids[1..].iter().copied().collect(),
+        );
+        // Axis 1 changes what is dispatched, never what is carried forward.
+        assert_eq!(result.chunks.len(), 5);
+        assert_eq!(result.documents.len(), 5);
+    }
+
+    /// The other half of the axis: `RunToEnd` still pays for the whole run, and
+    /// keeps every summary it paid for.
+    #[tokio::test]
+    async fn summarization_under_run_to_end_dispatches_every_chunk() {
+        let (input, doc_ids) = summarization_fixture(0);
+        let llm = summarization_llm();
+        let config = serial_summarization_config(
+            CognifyConfig::default().with_failure_stop(FailureStop::RunToEnd),
+        );
+
+        let result = summarize_text(&input, llm.clone(), &config)
+            .await
+            .expect("RunToEnd collects rather than propagates");
+
+        assert_eq!(llm.structured_calls(), 5);
+        assert_eq!(result.summaries.len(), 4, "the completed work is kept");
+        assert_eq!(
+            result
+                .failures
+                .failed_items()
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
+            [doc_ids[0]]
+        );
+        assert!(
+            result.failures.unreached_items().is_empty(),
+            "nothing went undispatched"
+        );
+    }
+
+    /// `FailFast` is not on its own a reason to stop here. With
+    /// `tolerate_summarization_failures` on, a failed summary fails no item, so
+    /// there is no fatal failure for the axis to stop on and the remaining
+    /// summaries are still worth paying for.
+    #[tokio::test]
+    async fn a_tolerated_summarization_failure_does_not_stop_the_run() {
+        let (input, _doc_ids) = summarization_fixture(0);
+        let llm = summarization_llm();
+        let config = serial_summarization_config(
+            CognifyConfig::default().with_summarization_failure_tolerance(true),
+        );
+
+        let result = summarize_text(&input, llm.clone(), &config)
+            .await
+            .expect("a tolerated failure is not an error");
+
+        assert_eq!(
+            llm.structured_calls(),
+            5,
+            "a failure that fails nothing must not stop the stage"
+        );
+        assert_eq!(result.summaries.len(), 4);
+        assert!(result.failures.failed_items().is_empty());
+        assert!(result.failures.unreached_items().is_empty());
+        assert_eq!(result.failures.summarization_failures(), 1);
     }
 
     /// Regression guard: an image document must produce ≥1 chunk and must NOT

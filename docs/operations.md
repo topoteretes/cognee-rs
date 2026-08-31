@@ -98,11 +98,12 @@ full matrix is in
 [Cognify failure handling](configuration.md#cognify-failure-handling); the end
 states are:
 
-- **Default (`FailFast` + `WholeRun`).** The run aborts at the first failed
-  file, everything it created is removed, the run is recorded `ERRORED` and the
-  call returns `Err`. The store converges to its pre-run state — what earlier
-  runs completed is untouched, because the sweep selects only rows naming *this*
-  run. Python's default, in execution and in end state.
+- **Default (`FailFast` + `WholeRun`).** The run stops at the first failed
+  *batch* — not the first failed file, see below — everything it created is
+  removed, the run is recorded `ERRORED` and the call returns `Err`. The store
+  converges to its pre-run state — what earlier runs completed is untouched,
+  because the sweep selects only rows naming *this* run. Python's default, in
+  execution and in end state.
 - **`FailedItems` below the failure ratio.** The run *completes*. Only the
   failed files' contributions are removed; the files that finished are kept,
   indexed and marked complete; and the call returns `Ok` with the failed-file
@@ -117,6 +118,17 @@ Under `FailFast` a run partitions its files three ways at the abort point:
 one chunk failed) and *unreached* (never attempted). Only complete files are
 persisted, which is what keeps a data item all-or-nothing; failed and unreached
 files are indistinguishable to the next run and are simply redone.
+
+The abort point is a *batch* boundary, not a file boundary, and how much work
+`FailFast` actually saves depends on how big that batch is. Graph extraction
+stops after the batch that contained the failure — `chunks_per_batch`, default
+2000, so a dataset under 2000 chunks is one batch and every extraction call is
+dispatched before the failure is noticed. Temporal extraction stops after
+`data_per_batch`, default 20 files. Summarization has no batch loop: it stops
+dispatching as soon as a fatal failure comes back, but the calls already in
+flight (up to `max_parallel_extractions`) are neither cancelled nor discarded.
+`FailFast` is an upper bound on wasted spend, not a promise of none — see
+[Cognify failure handling](configuration.md#cognify-failure-handling).
 
 A sweep deliberately keeps anything still claimed from outside its scope: an
 entity a surviving file also produced, an artifact another run or another

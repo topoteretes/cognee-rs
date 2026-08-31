@@ -420,10 +420,40 @@ Python has no counterpart for any of them. An unset or unparseable value leaves
 the default in place rather than failing the process, and out-of-range values
 (a ratio outside `0..=1`, a zero cap) are ignored the same way.
 
-**Axis 1 — when to stop.** `FailFast` stops the failing stage's own loop at the
-first failure; the files that already completed still travel down the rest of
-the pipeline. `RunToEnd` continues past failures, collecting them, and decides
-at the end — a full run's worth of LLM cost for the complete failure list.
+**Axis 1 — when to stop.** `FailFast` stops the failing stage from scheduling
+further work once a failure has been recorded; the files that already completed
+still travel down the rest of the pipeline. `RunToEnd` continues past failures,
+collecting them, and decides at the end — a full run's worth of LLM cost for the
+complete failure list.
+
+*"Once" is not "immediately", and it is not per file.* Each stage stops at the
+boundary its own loop offers, and only one of them is the first failed file:
+
+| Stage | Stops after | Set by | Default |
+|---|---|---|---|
+| Chunking | the file that failed | — | one file |
+| Graph extraction (standard and custom-graph) | the batch that contained the failure | `chunks_per_batch` | **2000 chunks** |
+| Temporal extraction | the batch that contained the failure | `data_per_batch` | **20 files** |
+| Summarization | the calls already in flight when the failure came back | `max_parallel_extractions` | **1000 calls** (128 on Android/iOS) |
+
+The extraction row is the one to read twice. 2000 is Python's own default
+(`cognify.py:367-370`) and is deliberately large — the stage awaits each batch
+before starting the next, so small batches serialise a run into waves. The
+consequence is that any dataset under 2000 chunks *is* one batch: `FailFast`
+dispatches every extraction call, learns about the failure when the batch is
+collected, and only then stops. On such a dataset it saves nothing; what it
+saves is every batch after the one that failed. Lowering `chunks_per_batch`
+tightens the boundary at the cost of that serialisation.
+
+Summarization has no batch loop at all — one bounded stream covers the whole
+run — so it stops at the granularity of the concurrency window instead. The
+first chunk to fail closes the gate; every chunk not yet dispatched is skipped
+and its file is recorded as unreached, so it is neither marked complete nor
+left half-summarized. Calls already in flight are never cancelled and their
+summaries are never discarded, so a run with fewer chunks than
+`max_parallel_extractions` again saves nothing. A summarization failure that
+`COGNEE_COGNIFY_TOLERATE_SUMMARIZATION_FAILURES` makes non-fatal does not close
+the gate at all: it fails no item, so there is nothing to stop for.
 
 **Axis 2 — what to sweep.** `WholeRun` removes everything the run created;
 `FailedItems` removes only the failed files' contributions and keeps the rest.
@@ -450,8 +480,8 @@ artifacts first; `Nothing` is the only scope that cannot.
 
 | Combination | End state |
 |---|---|
-| `FailFast` + `WholeRun` *(default)* | Aborts at the first failed file, removes everything the run created, marks the run `ERRORED`, returns `Err`. Everything earlier runs completed is untouched. Python's default |
-| `FailFast` + `FailedItems` | Aborts at the first failed file; the files that fully completed are kept, indexed and marked; the failed and never-reached ones are removed and left unmarked |
+| `FailFast` + `WholeRun` *(default)* | Stops at the first failed batch, removes everything the run created, marks the run `ERRORED`, returns `Err`. Everything earlier runs completed is untouched. Python's default |
+| `FailFast` + `FailedItems` | Stops at the first failed batch; the files that fully completed are kept, indexed and marked; the failed and never-reached ones are removed and left unmarked |
 | `RunToEnd` + `WholeRun` | Pays for the whole run to produce the complete failure list, then removes everything the run created |
 | `RunToEnd` + `FailedItems` | Every good file is cognified and marked; only the failed files are removed, and they come back to the caller in the report |
 | _either_ + `Nothing` *(code only)* | Nothing is removed. Knowingly leaves partially-cognified files in place, permanently — see above |

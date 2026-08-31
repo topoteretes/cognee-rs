@@ -205,8 +205,10 @@ pub struct CognifyConfig {
     /// Axis 1 of failure handling — when a run stops scheduling further work.
     ///
     /// Default [`FailureStop::FailFast`], which with the default
-    /// [`Self::rollback_scope`] is Python's behaviour: abort at the first
-    /// failed item.
+    /// [`Self::rollback_scope`] is Python's behaviour: stop at the first failed
+    /// batch, error the run. See [`FailureStop::FailFast`] for what "batch"
+    /// means in each stage — it is [`Self::chunks_per_batch`] for graph
+    /// extraction, and not a single file.
     #[serde(default)]
     pub failure_stop: FailureStop,
 

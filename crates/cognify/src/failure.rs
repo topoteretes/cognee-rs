@@ -16,7 +16,7 @@
 //!   environment — [`RollbackScope::Nothing`].
 //!
 //! The default pair is Python's default behaviour in both execution and end
-//! state: abort at the first failed item, error the run.
+//! state: stop at the first failed batch, error the run.
 //!
 //! Failure policy is a property of the stage, not a user choice — with one
 //! exception. Summarization failures are fatal by default (Python parity) and
@@ -44,10 +44,19 @@ use uuid::Uuid;
 /// SDKs identically.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum FailureStop {
-    /// Stop the failing stage's own loop at the first failure. The survivors
-    /// still travel down the rest of the pipeline — a later stage never aborts
-    /// merely because an earlier one recorded a failure, or the files that did
-    /// complete could never be persisted at all.
+    /// Stop scheduling further work in the failing stage once a failure has
+    /// been recorded. The survivors still travel down the rest of the pipeline
+    /// — a later stage never aborts merely because an earlier one recorded a
+    /// failure, or the files that did complete could never be persisted at all.
+    ///
+    /// The stop is not instantaneous, and it is not per file: each stage stops
+    /// at the boundary its own loop offers — a `chunks_per_batch` batch for
+    /// graph extraction (default 2000 chunks, so a smaller dataset is one
+    /// batch and every call is dispatched before the failure is seen), a
+    /// `data_per_batch` batch for temporal extraction (default 20 files), and
+    /// the in-flight window for summarization, which has no batch loop. This
+    /// is an upper bound on wasted spend, not a promise of none;
+    /// `docs/configuration.md` has the per-stage table.
     #[default]
     FailFast,
 
