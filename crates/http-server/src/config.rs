@@ -401,7 +401,14 @@ impl Default for HttpServerConfig {
             llm_endpoint: String::new(),
             llm_api_version: String::new(),
             llm_reasoning: "auto".to_string(),
-            llm_max_retries: 3,
+            // Matches `Settings::llm_max_retries` and the value
+            // `docs/configuration.md` documents. This was 3 — an undocumented
+            // divergence that nothing here justified, and one that made the
+            // server's *own defaults* trip the deadline guard-rail: the ladder
+            // (3 modes x 3 retries x 240s = 2160s) exceeded the 1800s default
+            // deadline, so every startup warned. Aligning the two makes the
+            // documented default true and the default configuration quiet.
+            llm_max_retries: 2,
             llm_min_retry_seconds: 240,
             llm_request_timeout_seconds: cognee_llm::OpenAIAdapter::DEFAULT_REQUEST_TIMEOUT
                 .as_secs() as u32,

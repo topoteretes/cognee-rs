@@ -135,12 +135,17 @@ pub struct OpenAIAdapter {
     /// designed worst case runs over an hour, which is how a call can burn 45
     /// minutes against an operator's expectation of a 900s cap.
     ///
-    /// Checked at the head of each cascade mode and before each corrective
-    /// re-ask, and used to clamp the re-ask backoff so a sleep cannot overshoot
-    /// it. It is therefore a bound on *starting* new work, not a cancellation:
-    /// one already-dispatched HTTP request can overrun by at most the client
-    /// request timeout. The effective ceiling is
-    /// `request_deadline + request_timeout`, both configurable.
+    /// Enforced in two places, which together cover the whole call: at the head
+    /// of each cascade attempt, and inside the transport retry ladder, which
+    /// refuses to start a further attempt once the budget is spent and clamps its
+    /// backoff sleep to what remains.
+    ///
+    /// It bounds *starting* work rather than cancelling it, so a request already
+    /// on the wire when the budget expires still runs to its own timeout: the
+    /// effective ceiling is `request_deadline + request_timeout`, both
+    /// configurable. Cancelling mid-flight would need the whole call wrapped in
+    /// `tokio::time::timeout`, which would abandon a response the provider has
+    /// already been paid for.
     request_deadline: Option<Duration>,
 }
 
@@ -291,11 +296,16 @@ impl OpenAIAdapter {
     /// Default aggregate ceiling for one logical structured-output call.
     ///
     /// Chosen to sit above the legitimate retry envelope and below the
-    /// pathological one. Three cascade modes each honouring the default 240s
-    /// retry time floor account for ~12 minutes of deliberate waiting, which a
-    /// call surviving a provider rate-limit window genuinely needs; the
-    /// unbounded worst case ran past an hour. 30 minutes preserves the former
-    /// and cuts the latter.
+    /// pathological one. That envelope is
+    /// `CASCADE_MODES x max_retries x min_retry_seconds` — all three factors,
+    /// since each of the three modes is retried `max_retries` times and every
+    /// attempt honours the time floor before it may give up. At the defaults
+    /// (3 x 2 x 240s) that is 24 minutes of *deliberate* waiting, which a call
+    /// surviving a provider rate-limit window genuinely needs; the unbounded
+    /// worst case ran past an hour. 30 minutes preserves the former and cuts the
+    /// latter. Keep this figure in step with the ladder computed in
+    /// `cognee_components::builtins::llm`, which warns when a configured
+    /// deadline does not fit inside it.
     pub const DEFAULT_REQUEST_DEADLINE: Duration = Duration::from_secs(1800);
 
     /// Create a new OpenAI adapter.
@@ -859,7 +869,22 @@ impl OpenAIAdapter {
     /// - HTTP 5xx (server errors)
     ///
     /// Errors on HTTP 400 and 401 are returned immediately without retrying.
-    async fn call_api(&self, mut request_body: Value) -> LlmResult<OpenAIResponse> {
+    async fn call_api(&self, request_body: Value) -> LlmResult<OpenAIResponse> {
+        self.call_api_before(request_body, None).await
+    }
+
+    /// [`call_api`](Self::call_api) with an absolute ceiling on when the
+    /// transport retry ladder may still start another attempt.
+    ///
+    /// Structured output passes its aggregate budget down here so the ladder is
+    /// covered too. Without it the cascade guards bound only the *gaps* between
+    /// attempts, while the ladder inside one attempt kept retrying — with its own
+    /// `min_retry_elapsed` floor and 8-128s backoff — past a spent budget.
+    async fn call_api_before(
+        &self,
+        mut request_body: Value,
+        deadline: Option<Instant>,
+    ) -> LlmResult<OpenAIResponse> {
         // Merge configured `LLM_ARGS` (Python `llm_config.llm_args`) into every
         // chat-completion / structured-output request. Only fills keys the request
         // does not already set, so explicit parameters win — Python's
@@ -868,7 +893,7 @@ impl OpenAIAdapter {
         // graph-extraction `LLM_ARGS` (e.g. a large `max_tokens`) never leaks into
         // an image-description request.
         self.apply_extra_args(&mut request_body);
-        self.send_chat_request(request_body).await
+        self.send_chat_request_before(request_body, deadline).await
     }
 
     /// Perform the actual chat-completions HTTP POST, retrying on transient
@@ -885,6 +910,17 @@ impl OpenAIAdapter {
         ),
     )]
     async fn send_chat_request(&self, request_body: Value) -> LlmResult<OpenAIResponse> {
+        self.send_chat_request_before(request_body, None).await
+    }
+
+    /// [`send_chat_request`](Self::send_chat_request) bounded by an absolute
+    /// deadline: no further attempt is started once it passes, and no backoff
+    /// sleep is allowed to run beyond it.
+    async fn send_chat_request_before(
+        &self,
+        request_body: Value,
+        deadline: Option<Instant>,
+    ) -> LlmResult<OpenAIResponse> {
         let url = self.endpoint_url("chat/completions");
         tracing::Span::current().record("url", url.as_str());
         let debug_enabled = std::env::var("COGNEE_DEBUG_LLM_REQUEST")
@@ -922,7 +958,23 @@ impl OpenAIAdapter {
                 let backoff = crate::retry::retry_backoff(attempt);
                 // A usable hint replaces the backoff outright, including when it
                 // asks for less: the provider knows when its window resets.
-                let delay = retry_after.take().unwrap_or(backoff);
+                let mut delay = retry_after.take().unwrap_or(backoff);
+                // The caller's aggregate budget outranks the retry ladder. Give
+                // up rather than start an attempt that cannot finish inside it,
+                // and never sleep past it — a 128s backoff against 5s of
+                // remaining budget would otherwise blow the ceiling on its own.
+                if let Some(deadline) = deadline {
+                    let remaining = deadline.saturating_duration_since(Instant::now());
+                    if remaining.is_zero() {
+                        return Err(LlmError::Timeout(format!(
+                            "LLM request abandoned after {:.0}s with {attempt} attempt(s): the \
+                             call's aggregate budget (LLM_REQUEST_DEADLINE_SECONDS) was spent \
+                             mid-retry; last error: {last_error}",
+                            started.elapsed().as_secs_f64(),
+                        )));
+                    }
+                    delay = delay.min(remaining);
+                }
                 warn!(
                     attempt,
                     delay_ms = delay.as_millis() as u64,
@@ -1399,6 +1451,10 @@ impl OpenAIAdapter {
         // needs bounding is the *logical* call: no individual HTTP request in a
         // 45-minute extraction was itself slow.
         let call_started = Instant::now();
+        // Absolute form of the budget, threaded into every transport call below
+        // so the retry ladder inside an attempt is bounded by it too, not just
+        // the gaps between attempts.
+        let call_deadline = self.request_deadline.map(|d| call_started + d);
 
         // Blank = empty or whitespace-only. Kept separate from JSON *validity*
         // so a non-empty-but-invalid payload can surface a clear error instead
@@ -1538,7 +1594,10 @@ impl OpenAIAdapter {
                 }
             }
 
-            match self.call_api(request_for_attempt).await {
+            match self
+                .call_api_before(request_for_attempt, call_deadline)
+                .await
+            {
                 Ok(tools_response) => {
                     let choice = tools_response.choices.first().ok_or_else(|| {
                         LlmError::InvalidResponse("No choices in tool-call response".to_string())
@@ -1728,7 +1787,9 @@ impl OpenAIAdapter {
                 }
             }
 
-            let response = self.call_api(request_for_attempt).await?;
+            let response = self
+                .call_api_before(request_for_attempt, call_deadline)
+                .await?;
 
             let choice = response
                 .choices
@@ -1856,7 +1917,9 @@ impl OpenAIAdapter {
                 }
             }
 
-            let json_response = self.call_api(request_for_attempt).await?;
+            let json_response = self
+                .call_api_before(request_for_attempt, call_deadline)
+                .await?;
 
             let json_choice = json_response.choices.first().ok_or_else(|| {
                 LlmError::InvalidResponse("No choices in JSON mode response".to_string())

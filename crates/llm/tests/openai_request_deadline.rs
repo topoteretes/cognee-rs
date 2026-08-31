@@ -24,7 +24,9 @@
 //!    acquire a time limit;
 //! 3. a budget large enough not to bind does not interfere with a call that
 //!    succeeds normally;
-//! 4. a timeout of `0` means "no limit" rather than "fail instantly".
+//! 4. a timeout of `0` means "no limit" rather than "fail instantly";
+//! 5. the budget also bounds the *transport* retry ladder inside one attempt,
+//!    not merely the gaps between attempts.
 //!
 //! Each mock server responds immediately; the elapsed time comes from a
 //! deliberately tiny budget plus a real (short) delay, so these run in
@@ -223,4 +225,59 @@ async fn zero_timeouts_mean_no_limit_not_instant_failure() {
         .expect("a zero timeout must lift the bound, not abort the request");
 
     assert_eq!(value["name"], "ok");
+}
+
+#[tokio::test]
+async fn spent_budget_stops_the_transport_retry_ladder_too() {
+    let server = MockServer::start_async().await;
+
+    // Persistent 500s: the transport ladder's own stop condition is a dual floor
+    // (attempts AND elapsed >= min_retry_elapsed), so with a non-zero floor it
+    // would keep retrying with 8-128s backoff regardless of the caller's budget.
+    // Guarding only the cascade attempt heads left this ladder unbounded, which
+    // is the gap this test closes.
+    let endpoint = server
+        .mock_async(|when, then| {
+            when.method(POST).path("/chat/completions");
+            then.status(500)
+                .header("content-type", "application/json")
+                .delay(Duration::from_millis(80))
+                .body(r#"{"error":{"message":"upstream boom"}}"#);
+        })
+        .await;
+
+    let started = std::time::Instant::now();
+    let err = OpenAIAdapter::new("gpt-4o-mini", "test-key", Some(server.base_url()))
+        .unwrap()
+        .with_structured_output_retries(2)
+        // A real retry time floor, so the ladder wants to keep going. Deliberately
+        // far larger than the budget below.
+        .with_min_retry_elapsed(Duration::from_secs(30))
+        .with_network_retries(10)
+        .with_request_deadline(Some(Duration::from_millis(120)))
+        .create_structured_output_with_messages_raw(user_msg(), &schema(), None)
+        .await
+        .expect_err("a spent budget must stop the retry ladder");
+
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < Duration::from_secs(20),
+        "the ladder must abandon the call near its budget rather than serve its \
+         own 30s time floor; took {elapsed:?}"
+    );
+
+    let msg = err.to_string();
+    assert!(
+        msg.contains("Timeout"),
+        "abandoning mid-ladder must surface as a timeout so it is not mistaken \
+         for an upstream failure; got: {msg}"
+    );
+
+    // Bounded, not merely eventually-terminating: without the ladder guard this
+    // would climb toward network_retries (10) across three cascade modes.
+    let calls = endpoint.calls_async().await;
+    assert!(
+        calls <= 6,
+        "the budget must cap transport attempts; made {calls}"
+    );
 }
