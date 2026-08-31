@@ -684,6 +684,99 @@ async fn a_whole_run_sweep_keeps_an_edge_type_point_an_earlier_run_still_needs()
     );
 }
 
+/// The edges' *own* identity, the one the `EdgeType` check says nothing about:
+/// a `Triplet_text` point is keyed on the edge itself, so it may only go when
+/// no row outside the scope claims that edge's slug. Two runs that both
+/// produced the same edge leave two ownership rows over one slug; sweeping one
+/// of them takes its row and nothing else.
+#[tokio::test]
+async fn an_edge_slug_another_run_still_claims_keeps_its_triplet_point() {
+    let f = Fixture::new().await;
+    let dataset = f.dataset("ds").await;
+    let data_a = f.data(dataset, "a.txt").await;
+    let data_b = f.data(dataset, "b.txt").await;
+    let (run_a, run_b) = (Uuid::new_v4(), Uuid::new_v4());
+
+    // One edge, two ownership rows: same slug and same endpoints — and so one
+    // physical graph edge and one Triplet point — written by two runs.
+    let mine = f.edge(dataset, data_a, Some(run_a), Uuid::new_v4());
+    let theirs = GraphEdge {
+        id: Uuid::new_v4(),
+        data_id: data_b,
+        pipeline_run_id: Some(run_b),
+        ..mine.clone()
+    };
+    f.seed_edges(&[mine.clone(), theirs.clone()]).await;
+    f.seed_edge_artifacts(&mine).await;
+    assert_eq!(
+        edge_vector_ids(&mine),
+        edge_vector_ids(&theirs),
+        "the fixture only tests anything if the two rows name one edge",
+    );
+
+    let outcome = f
+        .sweeper
+        .sweep(&SweepScope::whole_run(run_a, dataset))
+        .await
+        .expect("sweep");
+
+    assert_eq!(
+        f.vector.collection_size("Triplet", "text").await.unwrap(),
+        1,
+        "run B still claims the edge, so its Triplet point must stay",
+    );
+    assert_eq!(
+        outcome.vector_points_deleted, 0,
+        "no artifact was deletable"
+    );
+    assert_eq!(outcome.provenance_edges_deleted, 1, "only run A's row goes");
+    assert_eq!(f.prov_counts(run_a, dataset).await, (0, 0));
+    assert_eq!(f.prov_counts(run_b, dataset).await, (0, 1), "run B's row");
+}
+
+/// The same exclusivity across datasets. One graph store is shared by every
+/// dataset, so an edge two datasets both produced is one physical edge with one
+/// Triplet point; sweeping the run out of one dataset must not strip the point
+/// the other still needs.
+#[tokio::test]
+async fn an_edge_slug_another_dataset_still_claims_keeps_its_triplet_point() {
+    let f = Fixture::new().await;
+    let ds_a = f.dataset("a").await;
+    let ds_b = f.dataset("b").await;
+    let data_a = f.data(ds_a, "a.txt").await;
+    let data_b = f.data(ds_b, "b.txt").await;
+    let run = Uuid::new_v4();
+
+    let mine = f.edge(ds_a, data_a, Some(run), Uuid::new_v4());
+    let theirs = GraphEdge {
+        id: Uuid::new_v4(),
+        data_id: data_b,
+        dataset_id: ds_b,
+        ..mine.clone()
+    };
+    f.seed_edges(&[mine.clone(), theirs.clone()]).await;
+    f.seed_edge_artifacts(&mine).await;
+
+    let outcome = f
+        .sweeper
+        .sweep(&SweepScope::whole_run(run, ds_a))
+        .await
+        .expect("sweep");
+
+    assert_eq!(
+        f.vector.collection_size("Triplet", "text").await.unwrap(),
+        1,
+        "dataset B still claims the edge, so its Triplet point must stay",
+    );
+    assert_eq!(
+        outcome.vector_points_deleted, 0,
+        "no artifact was deletable"
+    );
+    assert_eq!(outcome.provenance_edges_deleted, 1, "only dataset A's row");
+    assert_eq!(f.prov_counts(run, ds_a).await, (0, 0));
+    assert_eq!(f.prov_counts(run, ds_b).await, (0, 1), "dataset B's row");
+}
+
 // ---------------------------------------------------------------------------
 // Markers
 // ---------------------------------------------------------------------------
