@@ -146,6 +146,22 @@ await c.add([
 ], "my-dataset");
 ```
 
+> **`token_count` is `-1` on the returned records.** It is a "not computed yet"
+> sentinel, not a real count — token counting happens during `cognify`, not at
+> ingestion. To read the actual count, run `cognify()` and then re-fetch the
+> record:
+>
+> ```ts
+> const { added } = await c.add({ type: "text", text: "…" }, "my-dataset");
+> added[0].token_count; // -1
+>
+> await c.cognify("my-dataset");
+> const items = await c.datasets.listData(datasetId);
+> items.find(d => d.id === added[0].id)?.token_count; // real count
+> ```
+>
+> See [issue #99](https://github.com/topoteretes/cognee-rs/issues/99).
+
 ### cognify
 
 Extract entities and relationships into the knowledge graph.
@@ -171,6 +187,11 @@ const { add, cognify } = await c.addAndCognify(
   "my-dataset"
 );
 ```
+
+> The `add` half of the result is captured *before* extraction runs, so
+> `add.added[i].token_count` is still `-1` even though cognify has completed in
+> the same call. Re-fetch the record with `datasets.listData()` to read the real
+> count — see the note under [`add`](#add).
 
 ## Search and recall
 

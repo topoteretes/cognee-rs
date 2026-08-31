@@ -514,6 +514,10 @@ export class Cognee {
    * - `{ type: "file", path: "/abs/path" }`
    * - `{ type: "url", url: "https://…" }`
    * - `{ type: "binary", bytes: Buffer, name: "doc.pdf" }`
+   *
+   * The returned records have `token_count === -1`: the count is computed by
+   * {@link cognify}, not at ingestion time. Run `cognify()` and re-fetch the
+   * record with `datasets.listData()` to read the real count. See issue #99.
    */
   async add(
     dataInput: CogneeDataInput | CogneeDataInput[],
@@ -543,6 +547,11 @@ export class Cognee {
 
   /**
    * Ingest data and immediately run knowledge-graph extraction in a single call.
+   *
+   * The `add` half of the result is snapshotted *before* extraction runs, so
+   * its records still carry `token_count === -1` even though cognify completed.
+   * Re-fetch them with `datasets.listData()` to read the real count. See
+   * issue #99.
    */
   async addAndCognify(
     dataInput: CogneeDataInput | CogneeDataInput[],
