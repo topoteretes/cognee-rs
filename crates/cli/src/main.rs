@@ -12,8 +12,8 @@ use commands::bench;
 #[cfg(feature = "visualization")]
 use commands::visualize;
 use commands::{
-    add, add_and_cognify, cognify, config, delete, forget, improve, memify, recall, remember,
-    run_sequence, search,
+    add, add_and_cognify, cognify, config, delete, export, forget, improve, memify, recall,
+    remember, run_sequence, search,
 };
 use tracing::error;
 
@@ -49,6 +49,7 @@ fn dispatch(command: Commands, cm: &Arc<ComponentManager>) -> Result<(), CliErro
         Commands::Forget(args) => forget::run(args, Arc::clone(cm)),
         Commands::Improve(args) => improve::run(args, Arc::clone(cm)),
         Commands::Delete(args) => delete::run(args, Arc::clone(cm)),
+        Commands::Export(args) => export::run(args, Arc::clone(cm)),
         Commands::Config(args) => config::run(args),
         Commands::RunSequence(args) => run_sequence::run(args, Arc::clone(cm)),
         #[cfg(feature = "visualization")]

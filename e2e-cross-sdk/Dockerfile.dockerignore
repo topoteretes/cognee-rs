@@ -49,9 +49,13 @@
 !cognee/pyproject.toml
 !cognee/uv.lock
 !cognee/README.md
-# The two packages cognee's wheel declares:
-#   [tool.hatch.build.targets.wheel] packages = ["cognee", "distributed"]
+# The packages cognee's wheel declares. At the pinned SHA that is
+#   [tool.hatch.build.targets.wheel] packages = ["cognee", "cognee_db_workers", "kuzu"]
+# `distributed` is kept for older pins that packaged it instead.
+# This file is an allowlist (`*` above, `!` re-includes), so a package missing
+# here is absent from the build context entirely and its COPY fails.
 !cognee/cognee
+!cognee/cognee_db_workers
 !cognee/distributed
 
 # ── Re-exclusions inside the allowed trees ───────────────────────────────────

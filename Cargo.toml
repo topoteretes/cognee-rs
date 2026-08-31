@@ -29,6 +29,7 @@ members = [
     "crates/truth-subspace",
     "crates/test-utils",
     "crates/visualization",
+    "crates/migration",
     "crates/http-server",
     # Criterion benchmarks for the Rust HTTP server and pipelines
     "crates/bench",
@@ -137,6 +138,9 @@ scraper = "0.21"
 schemars = "0.8"
 serde = { version = "1", features = ["derive"] }
 serial_test = "3.2"
+# COGX `.cogx.tar.gz` transport packing (cognee-migration `archive` feature).
+tar = "0.4"
+flate2 = "1"
 md-5 = "0.10"
 sha2 = "0.10"
 sophia = "0.8"

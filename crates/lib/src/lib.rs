@@ -132,6 +132,11 @@ pub mod ontology {
     pub use cognee_ontology::*;
 }
 
+/// COGX export — portable archives importable by the Python SDK.
+pub mod migration {
+    pub use cognee_migration::*;
+}
+
 /// Knowledge-graph visualization (requires `visualization` feature).
 #[cfg(feature = "visualization")]
 pub mod visualization {

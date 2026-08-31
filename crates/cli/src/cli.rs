@@ -24,6 +24,7 @@ pub enum Commands {
     Forget(ForgetArgs),
     Improve(ImproveArgs),
     Delete(DeleteArgs),
+    Export(ExportArgs),
     Config(ConfigArgs),
     #[command(name = "run-sequence")]
     RunSequence(RunSequenceArgs),
@@ -98,6 +99,34 @@ pub struct BenchArgs {
     /// the graph is non-empty.
     #[arg(long = "min-graph-nodes", default_value_t = 0)]
     pub min_graph_nodes: u64,
+}
+
+/// Arguments for `cognee-cli export` — write the graph as a COGX archive.
+///
+/// The archive is what Python cognee re-imports, either locally via
+/// `cognee.remember(COGXArchiveSource(path))` or over HTTP by POSTing the
+/// packed tarball to `/api/v1/remember` with `content_type=cogx-archive`.
+#[derive(Debug, Args)]
+pub struct ExportArgs {
+    /// Destination directory for the archive. Defaults to
+    /// `<dataset>_cogx` in the working directory.
+    #[arg(long = "output", short = 'o')]
+    pub output: Option<String>,
+
+    /// Dataset name recorded in the manifest note and used for the default
+    /// output path. Does not filter the graph: cognee-rs has no per-dataset
+    /// graph partition, so the whole store is exported either way.
+    #[arg(long = "dataset", short = 'd')]
+    pub dataset: Option<String>,
+
+    /// Also write `<output>.cogx.tar.gz`, the form Python's remember
+    /// endpoint accepts as an upload.
+    #[arg(long = "pack")]
+    pub pack: bool,
+
+    /// Export format. Only `cogx` round-trips into Python.
+    #[arg(long = "format", default_value = "cogx")]
+    pub format: String,
 }
 
 #[cfg(feature = "visualization")]

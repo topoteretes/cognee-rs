@@ -30,6 +30,21 @@ docker compose -f docker-compose.yml run --rm e2e-http-tests \
   pytest -vs /harness/ -k "test_http_(cognify|remember|recall|memify|improve|llm|hybrid)" --tb=short
 ```
 
+## COGX golden archive
+
+`harness/golden/cogx_archive/` is a COGX archive written by the Rust exporter
+itself. `test_cogx_import_contract.py` runs Python cognee's real migration
+loader over it, which gates the Rust→Python format contract on every PR — the
+full roundtrip needs an LLM (you cannot export a graph you have not cognified)
+and so only runs on key-gated lanes.
+
+Regenerate it whenever the exporter's output changes; the same Rust test fails
+if the committed copy drifts:
+
+```bash
+COGX_REGENERATE_GOLDEN=1 cargo test -p cognee-migration --test python_import_contract
+```
+
 ## DB bootstrap (Option B1 fix)
 
 The Python alembic initial migration (`8057ae7329c2_initial_migration.py`) is a
@@ -55,6 +70,8 @@ push and PR to `main`/`master`.
 |---|---|---|---|
 | Phase-1 (health/auth/datasets/add/search/forget/openapi/errors) | push + PR | no | **required** |
 | Telemetry parity | push + PR | no | **required** |
+| COGX import contract (Python reads a Rust archive) | push + PR | no | **required** |
+| COGX roundtrip (Rust export → Python import) | push + PR when `OPENAI_KEY` set | yes | recommended |
 | Logging parity | push + PR (when `OPENAI_KEY` present) | no | recommended |
 | Phase-2 (cognify/remember/recall/memify/improve/llm/hybrid) | push + PR when `OPENAI_KEY` set | yes | recommended (best-effort on forks) |
 | Provenance parity | push + PR when `OPENAI_KEY` set | yes | recommended |

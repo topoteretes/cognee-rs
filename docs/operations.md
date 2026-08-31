@@ -114,6 +114,7 @@ These live in the [`cognee`](../crates/lib/) `api` module (and `DatasetManager`)
 | **update** | Re-ingest changed data and re-cognify the affected subset. | `api::update` |
 | **prune** | Reset system or all state (`prune_system` / `prune_data`). | `api::prune` |
 | **visualize** | Render the graph to a single-file d3.js HTML page (Graph / Schema / Memory / Semantic tabs + inspector). | [`cognee-visualization`](../crates/visualization/) |
+| **export** | Write the graph as a COGX archive — the portable format Python cognee re-imports, locally or by uploading the packed `.cogx.tar.gz` to its remember endpoint. | [`cognee-migration`](../crates/migration/) |
 
 ## Operation → interface map
 
@@ -131,6 +132,7 @@ These live in the [`cognee`](../crates/lib/) `api` module (and `DatasetManager`)
 | delete | `cognee-cli delete` | `POST /api/v1/delete` | `delete*()` |
 | update | _(via run-sequence)_ | `POST /api/v1/update` | `update()` |
 | visualize | `cognee-cli visualize` | `POST /api/v1/visualize` | `visualize()` |
+| export | `cognee-cli export` | _(none yet)_ | — |
 
 CLI flags and feature gates: [tools/cli.md](tools/cli.md). HTTP request/response
 shapes: [http-server/routers/](http-server/routers/README.md). Binding method

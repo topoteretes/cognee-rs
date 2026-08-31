@@ -13,6 +13,24 @@ services:
       - ../.env                                   # cognee-rust/.env (OPENAI_TOKEN, OPENAI_MODEL, etc.)
     environment:
       - LLM_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      # No LLM credentials are declared here on purpose. `docker compose run`
+      # passes only what the service declares, and CI stubs ../.env empty, so
+      # every `requires_openai` test in this service currently skips — several
+      # lanes (e.g. provenance parity) have never actually executed and do not
+      # pass when they do. Declaring the keys service-wide would un-skip all of
+      # them at once, turning unrelated latent failures into a red board.
+      #
+      # A step that needs credentials passes them per-invocation instead:
+      #   docker compose run --rm -e OPENAI_TOKEN="$OPENAI_TOKEN" e2e-tests ...
+      # See the COGX steps in .github/workflows/http-parity.yml.
+      #
+      # EMBEDDING_* must NOT be forwarded to this service at all, unlike in
+      # e2e-http-tests: this one drives the CLIs, and the Rust CLI embeds
+      # locally through the ONNX model baked into the image at /opt/models
+      # (write_rust_config's embedding_model_path). Overriding it sends the
+      # litellm-style `openai/text-embedding-3-small` — correct for Python,
+      # which strips the provider prefix — straight to the OpenAI API, which
+      # rejects it with `HTTP 400 invalid model ID` and fails cognify.
     tmpfs:
       - /workspace                                # ephemeral workspace per run
     command: ["pytest", "-vs", "/harness/"]

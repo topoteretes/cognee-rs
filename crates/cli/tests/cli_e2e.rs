@@ -860,6 +860,30 @@ fn delete_subcommand_help_flag_prints_usage() {
 }
 
 #[test]
+fn export_subcommand_help_flag_prints_usage() {
+    let config_home = TempDir::new().expect("temp dir should be created");
+    make_cmd(&config_home)
+        .args(["export", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Usage").or(predicate::str::contains("usage")));
+}
+
+#[test]
+fn export_rejects_a_format_python_cannot_reimport() {
+    // Only `cogx` round-trips into Python; the other Python export formats
+    // have no reader, so accepting them would promise a restore we cannot do.
+    let config_home = TempDir::new().expect("temp dir should be created");
+    // The CLI's tracing layer writes to stdout, so the rejection lands there,
+    // not on stderr.
+    make_cmd(&config_home)
+        .args(["export", "--format", "graphml"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("graphml").and(predicate::str::contains("cogx")));
+}
+
+#[test]
 fn config_subcommand_help_flag_prints_usage() {
     let config_home = TempDir::new().expect("temp dir should be created");
     make_cmd(&config_home)

@@ -180,6 +180,10 @@ cognee-storage = { path = "../storage", version = "0.2.0" }
 cognee-telemetry = { path = "../telemetry", version = "0.2.0" }
 cognee-vector = { path = "../vector", version = "0.2.0" }
 cognee-visualization = { path = "../visualization", version = "0.2.0", optional = true }
+# COGX export. Non-optional and always with `archive`: tar+flate2 are tiny, and
+# an export that cannot produce the `.cogx.tar.gz` Python's remember endpoint
+# takes would only be half the feature.
+cognee-migration = { path = "../migration", version = "0.2.0", features = ["archive"] }
 async-trait.workspace = true
 chrono.workspace = true
 dotenv.workspace = true
