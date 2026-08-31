@@ -873,6 +873,19 @@ impl OpenAIAdapter {
         self.call_api_before(request_body, None).await
     }
 
+    /// Send a chat request with no aggregate deadline.
+    ///
+    /// Delegates to the instrumented
+    /// [`send_chat_request_before`](Self::send_chat_request_before) so both entry
+    /// points produce exactly one `llm.api_call` span. The attribute deliberately
+    /// lives on the callee rather than here: the structured-output and chat paths
+    /// reach the transport through `call_api_before`, never through this wrapper,
+    /// so instrumenting the wrapper would drop the span on every call that
+    /// matters.
+    async fn send_chat_request(&self, request_body: Value) -> LlmResult<OpenAIResponse> {
+        self.send_chat_request_before(request_body, None).await
+    }
+
     /// [`call_api`](Self::call_api) with an absolute ceiling on when the
     /// transport retry ladder may still start another attempt.
     ///
@@ -902,20 +915,13 @@ impl OpenAIAdapter {
     #[instrument(
         name = "llm.api_call",
         level = "info",
-        skip(self, request_body),
+        skip(self, request_body, deadline),
         fields(
             url = tracing::field::Empty,
             cognee.llm.model = self.model.as_str(),
             cognee.llm.provider = "openai",
         ),
     )]
-    async fn send_chat_request(&self, request_body: Value) -> LlmResult<OpenAIResponse> {
-        self.send_chat_request_before(request_body, None).await
-    }
-
-    /// [`send_chat_request`](Self::send_chat_request) bounded by an absolute
-    /// deadline: no further attempt is started once it passes, and no backoff
-    /// sleep is allowed to run beyond it.
     async fn send_chat_request_before(
         &self,
         request_body: Value,
