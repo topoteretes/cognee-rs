@@ -1,0 +1,173 @@
+
+=== clean / raise_false ===
+  OK  caller_kind                  py=value    rs=value
+  OK  terminal_status              py=DATASET_PROCESSING_COMPLETED    rs=DATASET_PROCESSING_COMPLETED
+  OK  terminal_run_info_keys       py=('data',)    rs=('data',)
+  OK  terminal_has_error           py=False    rs=False
+  DIFF markers                      py=(('good_a', '<dataset_id:dashed>=DATA_ITEM_PROCESSING_COMPLETED'), ('good_b', '<dataset_id:dashed>=DATA_ITEM_PROCESSING_COMPLETED'), ('poison', '<dataset_id:dashed>=DATA_ITEM_PROCESSING_COMPLETED'))    rs=(('good_a', '<dataset_id:hex>=DATA_ITEM_PROCESSING_COMPLETED'), ('good_b', '<dataset_id:hex>=DATA_ITEM_PROCESSING_COMPLETED'), ('poison', '<dataset_id:hex>=DATA_ITEM_PROCESSING_COMPLETED'))
+  DIFF run_status_sequence          py=('DATASET_PROCESSING_STARTED', 'DATASET_PROCESSING_COMPLETED')    rs=('DATASET_PROCESSING_INITIATED', 'DATASET_PROCESSING_STARTED', 'DATASET_PROCESSING_COMPLETED')
+  DIFF marker_key_format_ok         py=True    rs=False
+  OK  graph_has_nodes              py=True    rs=True
+  OK  graph_has_edges              py=True    rs=True
+  OK  vector_has_points            py=True    rs=True
+  OK  doc_node_present             py=(('good_a', True), ('good_b', True), ('poison', True))    rs=(('good_a', True), ('good_b', True), ('poison', True))
+  --- not compared (architecture): py ownership rows=0/0 (provenance_in_graph=True), rs=17/17; py points=42 rs=14; rs dangling edges=15
+
+=== clean / raise_true ===
+  OK  caller_kind                  py=value    rs=value
+  OK  terminal_status              py=DATASET_PROCESSING_COMPLETED    rs=DATASET_PROCESSING_COMPLETED
+  OK  terminal_run_info_keys       py=('data',)    rs=('data',)
+  OK  terminal_has_error           py=False    rs=False
+  DIFF markers                      py=(('good_a', '<dataset_id:dashed>=DATA_ITEM_PROCESSING_COMPLETED'), ('good_b', '<dataset_id:dashed>=DATA_ITEM_PROCESSING_COMPLETED'), ('poison', '<dataset_id:dashed>=DATA_ITEM_PROCESSING_COMPLETED'))    rs=(('good_a', '<dataset_id:hex>=DATA_ITEM_PROCESSING_COMPLETED'), ('good_b', '<dataset_id:hex>=DATA_ITEM_PROCESSING_COMPLETED'), ('poison', '<dataset_id:hex>=DATA_ITEM_PROCESSING_COMPLETED'))
+  DIFF run_status_sequence          py=('DATASET_PROCESSING_STARTED', 'DATASET_PROCESSING_COMPLETED')    rs=('DATASET_PROCESSING_INITIATED', 'DATASET_PROCESSING_STARTED', 'DATASET_PROCESSING_COMPLETED')
+  DIFF marker_key_format_ok         py=True    rs=False
+  OK  graph_has_nodes              py=True    rs=True
+  OK  graph_has_edges              py=True    rs=True
+  OK  vector_has_points            py=True    rs=True
+  OK  doc_node_present             py=(('good_a', True), ('good_b', True), ('poison', True))    rs=(('good_a', True), ('good_b', True), ('poison', True))
+  --- not compared (architecture): py ownership rows=0/0 (provenance_in_graph=True), rs=17/17; py points=42 rs=14; rs dangling edges=15
+
+=== extraction_failure / raise_false ===
+  DIFF caller_kind                  py=value    rs=exception
+  OK  terminal_status              py=DATASET_PROCESSING_ERRORED    rs=DATASET_PROCESSING_ERRORED
+  OK  terminal_run_info_keys       py=('data', 'error')    rs=('data', 'error')
+  OK  terminal_has_error           py=True    rs=True
+  OK  markers                      py=(('good_a', ''), ('good_b', ''), ('poison', ''))    rs=(('good_a', ''), ('good_b', ''), ('poison', ''))
+  DIFF run_status_sequence          py=('DATASET_PROCESSING_STARTED', 'DATASET_PROCESSING_ERRORED')    rs=('DATASET_PROCESSING_INITIATED', 'DATASET_PROCESSING_STARTED', 'DATASET_PROCESSING_ERRORED')
+  OK  marker_key_format_ok         py=True    rs=True
+  OK  graph_has_nodes              py=False    rs=False
+  OK  graph_has_edges              py=False    rs=False
+  OK  vector_has_points            py=False    rs=False
+  OK  doc_node_present             py=(('good_a', False), ('good_b', False), ('poison', False))    rs=(('good_a', False), ('good_b', False), ('poison', False))
+  --- not compared (architecture): py ownership rows=0/0 (provenance_in_graph=True), rs=0/0; py points=0 rs=0; rs dangling edges=13
+
+=== extraction_failure / raise_true ===
+  OK  caller_kind                  py=exception    rs=exception
+  OK  terminal_status              py=DATASET_PROCESSING_ERRORED    rs=DATASET_PROCESSING_ERRORED
+  OK  terminal_run_info_keys       py=('data', 'error')    rs=('data', 'error')
+  OK  terminal_has_error           py=True    rs=True
+  OK  markers                      py=(('good_a', ''), ('good_b', ''), ('poison', ''))    rs=(('good_a', ''), ('good_b', ''), ('poison', ''))
+  DIFF run_status_sequence          py=('DATASET_PROCESSING_STARTED', 'DATASET_PROCESSING_ERRORED')    rs=('DATASET_PROCESSING_INITIATED', 'DATASET_PROCESSING_STARTED', 'DATASET_PROCESSING_ERRORED')
+  OK  marker_key_format_ok         py=True    rs=True
+  OK * graph_has_nodes              py=False | True    rs=False
+  OK * graph_has_edges              py=False | True    rs=False
+  OK  vector_has_points            py=False    rs=False
+  OK * doc_node_present             py=(('good_a', False), ('good_b', False), ('poison', False)) | (('good_a', False), ('good_b', True), ('poison', False)) | (('good_a', True), ('good_b', True), ('poison', False))    rs=(('good_a', False), ('good_b', False), ('poison', False))
+  --- not compared (architecture): py ownership rows=0/0 (provenance_in_graph=False), rs=0/0; py points=0 rs=0; rs dangling edges=0
+
+=== second_run_after_success / raise_false ===
+  DIFF caller_kind                  py=value    rs=exception
+  OK  terminal_status              py=DATASET_PROCESSING_ERRORED    rs=DATASET_PROCESSING_ERRORED
+  OK  terminal_run_info_keys       py=('data', 'error')    rs=('data', 'error')
+  OK  terminal_has_error           py=True    rs=True
+  DIFF markers                      py=(('good_a', '<dataset_id:dashed>=DATA_ITEM_PROCESSING_COMPLETED'), ('good_b', '<dataset_id:dashed>=DATA_ITEM_PROCESSING_COMPLETED'), ('poison', ''))    rs=(('good_a', '<dataset_id:hex>=DATA_ITEM_PROCESSING_COMPLETED'), ('good_b', '<dataset_id:hex>=DATA_ITEM_PROCESSING_COMPLETED'), ('poison', ''))
+  DIFF run_status_sequence          py=('DATASET_PROCESSING_STARTED', 'DATASET_PROCESSING_COMPLETED', 'DATASET_PROCESSING_INITIATED', 'DATASET_PROCESSING_STARTED', 'DATASET_PROCESSING_ERRORED')    rs=('DATASET_PROCESSING_INITIATED', 'DATASET_PROCESSING_STARTED', 'DATASET_PROCESSING_COMPLETED', 'DATASET_PROCESSING_INITIATED', 'DATASET_PROCESSING_STARTED', 'DATASET_PROCESSING_ERRORED')
+  DIFF marker_key_format_ok         py=True    rs=False
+  OK  graph_has_nodes              py=True    rs=True
+  OK  graph_has_edges              py=True    rs=True
+  OK  vector_has_points            py=True    rs=True
+  OK  doc_node_present             py=(('good_a', True), ('good_b', True), ('poison', False))    rs=(('good_a', True), ('good_b', True), ('poison', False))
+  --- not compared (architecture): py ownership rows=0/0 (provenance_in_graph=True), rs=12/12; py points=28 rs=11; rs dangling edges=13
+
+=== second_run_after_success / raise_true ===
+  OK  caller_kind                  py=exception    rs=exception
+  OK  terminal_status              py=DATASET_PROCESSING_ERRORED    rs=DATASET_PROCESSING_ERRORED
+  OK  terminal_run_info_keys       py=('data', 'error')    rs=('data', 'error')
+  OK  terminal_has_error           py=True    rs=True
+  DIFF markers                      py=(('good_a', '<dataset_id:dashed>=DATA_ITEM_PROCESSING_COMPLETED'), ('good_b', '<dataset_id:dashed>=DATA_ITEM_PROCESSING_COMPLETED'), ('poison', ''))    rs=(('good_a', '<dataset_id:hex>=DATA_ITEM_PROCESSING_COMPLETED'), ('good_b', '<dataset_id:hex>=DATA_ITEM_PROCESSING_COMPLETED'), ('poison', ''))
+  DIFF run_status_sequence          py=('DATASET_PROCESSING_STARTED', 'DATASET_PROCESSING_COMPLETED', 'DATASET_PROCESSING_INITIATED', 'DATASET_PROCESSING_STARTED', 'DATASET_PROCESSING_ERRORED')    rs=('DATASET_PROCESSING_INITIATED', 'DATASET_PROCESSING_STARTED', 'DATASET_PROCESSING_COMPLETED', 'DATASET_PROCESSING_INITIATED', 'DATASET_PROCESSING_STARTED', 'DATASET_PROCESSING_ERRORED')
+  DIFF marker_key_format_ok         py=True    rs=False
+  OK  graph_has_nodes              py=True    rs=True
+  OK  graph_has_edges              py=True    rs=True
+  OK  vector_has_points            py=True    rs=True
+  OK  doc_node_present             py=(('good_a', True), ('good_b', True), ('poison', False))    rs=(('good_a', True), ('good_b', True), ('poison', False))
+  --- not compared (architecture): py ownership rows=0/0 (provenance_in_graph=True), rs=12/12; py points=28 rs=11; rs dangling edges=11
+
+=== summarization_failure / raise_false ===
+  DIFF caller_kind                  py=value    rs=exception
+  OK  terminal_status              py=DATASET_PROCESSING_ERRORED    rs=DATASET_PROCESSING_ERRORED
+  OK  terminal_run_info_keys       py=('data', 'error')    rs=('data', 'error')
+  OK  terminal_has_error           py=True    rs=True
+  OK  markers                      py=(('good_a', ''), ('good_b', ''), ('poison', ''))    rs=(('good_a', ''), ('good_b', ''), ('poison', ''))
+  DIFF run_status_sequence          py=('DATASET_PROCESSING_STARTED', 'DATASET_PROCESSING_ERRORED')    rs=('DATASET_PROCESSING_INITIATED', 'DATASET_PROCESSING_STARTED', 'DATASET_PROCESSING_ERRORED')
+  OK  marker_key_format_ok         py=True    rs=True
+  OK  graph_has_nodes              py=False    rs=False
+  OK  graph_has_edges              py=False    rs=False
+  OK  vector_has_points            py=False    rs=False
+  OK  doc_node_present             py=(('good_a', False), ('good_b', False), ('poison', False))    rs=(('good_a', False), ('good_b', False), ('poison', False))
+  --- not compared (architecture): py ownership rows=0/0 (provenance_in_graph=True), rs=0/0; py points=0 rs=0; rs dangling edges=14
+
+=== summarization_failure / raise_true ===
+  OK  caller_kind                  py=exception    rs=exception
+  OK  terminal_status              py=DATASET_PROCESSING_ERRORED    rs=DATASET_PROCESSING_ERRORED
+  OK  terminal_run_info_keys       py=('data', 'error')    rs=('data', 'error')
+  OK  terminal_has_error           py=True    rs=True
+  OK  markers                      py=(('good_a', ''), ('good_b', ''), ('poison', ''))    rs=(('good_a', ''), ('good_b', ''), ('poison', ''))
+  DIFF run_status_sequence          py=('DATASET_PROCESSING_STARTED', 'DATASET_PROCESSING_ERRORED')    rs=('DATASET_PROCESSING_INITIATED', 'DATASET_PROCESSING_STARTED', 'DATASET_PROCESSING_ERRORED')
+  OK  marker_key_format_ok         py=True    rs=True
+  OK * graph_has_nodes              py=False | True    rs=False
+  OK * graph_has_edges              py=False | True    rs=False
+  OK  vector_has_points            py=False    rs=False
+  OK * doc_node_present             py=(('good_a', False), ('good_b', False), ('poison', False)) | (('good_a', True), ('good_b', True), ('poison', False))    rs=(('good_a', False), ('good_b', False), ('poison', False))
+  --- not compared (architecture): py ownership rows=0/0 (provenance_in_graph=True), rs=0/0; py points=0 rs=0; rs dangling edges=14
+
+=== unreadable_file / raise_false ===
+  DIFF caller_kind                  py=value    rs=exception
+  OK  terminal_status              py=DATASET_PROCESSING_ERRORED    rs=DATASET_PROCESSING_ERRORED
+  OK  terminal_run_info_keys       py=('data', 'error')    rs=('data', 'error')
+  OK  terminal_has_error           py=True    rs=True
+  OK  markers                      py=(('good_a', ''), ('good_b', ''), ('poison', ''))    rs=(('good_a', ''), ('good_b', ''), ('poison', ''))
+  DIFF run_status_sequence          py=('DATASET_PROCESSING_STARTED', 'DATASET_PROCESSING_ERRORED')    rs=('DATASET_PROCESSING_INITIATED', 'DATASET_PROCESSING_STARTED', 'DATASET_PROCESSING_ERRORED')
+  OK  marker_key_format_ok         py=True    rs=True
+  OK  graph_has_nodes              py=False    rs=False
+  OK  graph_has_edges              py=False    rs=False
+  OK  vector_has_points            py=False    rs=False
+  OK  doc_node_present             py=(('good_a', False), ('good_b', False), ('poison', False))    rs=(('good_a', False), ('good_b', False), ('poison', False))
+  --- not compared (architecture): py ownership rows=0/0 (provenance_in_graph=True), rs=0/0; py points=0 rs=0; rs dangling edges=11
+
+=== unreadable_file / raise_true ===
+  OK  caller_kind                  py=exception    rs=exception
+  OK  terminal_status              py=DATASET_PROCESSING_ERRORED    rs=DATASET_PROCESSING_ERRORED
+  OK  terminal_run_info_keys       py=('data', 'error')    rs=('data', 'error')
+  OK  terminal_has_error           py=True    rs=True
+  OK  markers                      py=(('good_a', ''), ('good_b', ''), ('poison', ''))    rs=(('good_a', ''), ('good_b', ''), ('poison', ''))
+  DIFF run_status_sequence          py=('DATASET_PROCESSING_STARTED', 'DATASET_PROCESSING_ERRORED')    rs=('DATASET_PROCESSING_INITIATED', 'DATASET_PROCESSING_STARTED', 'DATASET_PROCESSING_ERRORED')
+  OK  marker_key_format_ok         py=True    rs=True
+  OK  graph_has_nodes              py=False    rs=False
+  OK  graph_has_edges              py=False    rs=False
+  OK  vector_has_points            py=False    rs=False
+  OK  doc_node_present             py=(('good_a', False), ('good_b', False), ('poison', False))    rs=(('good_a', False), ('good_b', False), ('poison', False))
+  --- not compared (architecture): py ownership rows=0/0 (provenance_in_graph=False), rs=0/0; py points=0 rs=0; rs dangling edges=0
+
+========================================================================
+UNSTABLE (python samples disagree across repeats): 6
+  extraction_failure/raise_true  graph_has_nodes: ['False', 'True']
+  extraction_failure/raise_true  graph_has_edges: ['False', 'True']
+  extraction_failure/raise_true  doc_node_present: ["(('good_a', False), ('good_b', False), ('poison', False))", "(('good_a', False), ('good_b', True), ('poison', False))", "(('good_a', True), ('good_b', True), ('poison', False))"]
+  summarization_failure/raise_true  graph_has_nodes: ['False', 'True']
+  summarization_failure/raise_true  graph_has_edges: ['False', 'True']
+  summarization_failure/raise_true  doc_node_present: ["(('good_a', False), ('good_b', False), ('poison', False))", "(('good_a', True), ('good_b', True), ('poison', False))"]
+
+DIVERGENCES: 22
+  clean/raise_false  markers: python=(('good_a', '<dataset_id:dashed>=DATA_ITEM_PROCESSING_COMPLETED'), ('good_b', '<dataset_id:dashed>=DATA_ITEM_PROCESSING_COMPLETED'), ('poison', '<dataset_id:dashed>=DATA_ITEM_PROCESSING_COMPLETED'))  rust=(('good_a', '<dataset_id:hex>=DATA_ITEM_PROCESSING_COMPLETED'), ('good_b', '<dataset_id:hex>=DATA_ITEM_PROCESSING_COMPLETED'), ('poison', '<dataset_id:hex>=DATA_ITEM_PROCESSING_COMPLETED'))
+  clean/raise_false  run_status_sequence: python=('DATASET_PROCESSING_STARTED', 'DATASET_PROCESSING_COMPLETED')  rust=('DATASET_PROCESSING_INITIATED', 'DATASET_PROCESSING_STARTED', 'DATASET_PROCESSING_COMPLETED')
+  clean/raise_false  marker_key_format_ok: python=True  rust=False
+  clean/raise_true  markers: python=(('good_a', '<dataset_id:dashed>=DATA_ITEM_PROCESSING_COMPLETED'), ('good_b', '<dataset_id:dashed>=DATA_ITEM_PROCESSING_COMPLETED'), ('poison', '<dataset_id:dashed>=DATA_ITEM_PROCESSING_COMPLETED'))  rust=(('good_a', '<dataset_id:hex>=DATA_ITEM_PROCESSING_COMPLETED'), ('good_b', '<dataset_id:hex>=DATA_ITEM_PROCESSING_COMPLETED'), ('poison', '<dataset_id:hex>=DATA_ITEM_PROCESSING_COMPLETED'))
+  clean/raise_true  run_status_sequence: python=('DATASET_PROCESSING_STARTED', 'DATASET_PROCESSING_COMPLETED')  rust=('DATASET_PROCESSING_INITIATED', 'DATASET_PROCESSING_STARTED', 'DATASET_PROCESSING_COMPLETED')
+  clean/raise_true  marker_key_format_ok: python=True  rust=False
+  extraction_failure/raise_false  caller_kind: python=value  rust=exception
+  extraction_failure/raise_false  run_status_sequence: python=('DATASET_PROCESSING_STARTED', 'DATASET_PROCESSING_ERRORED')  rust=('DATASET_PROCESSING_INITIATED', 'DATASET_PROCESSING_STARTED', 'DATASET_PROCESSING_ERRORED')
+  extraction_failure/raise_true  run_status_sequence: python=('DATASET_PROCESSING_STARTED', 'DATASET_PROCESSING_ERRORED')  rust=('DATASET_PROCESSING_INITIATED', 'DATASET_PROCESSING_STARTED', 'DATASET_PROCESSING_ERRORED')
+  second_run_after_success/raise_false  caller_kind: python=value  rust=exception
+  second_run_after_success/raise_false  markers: python=(('good_a', '<dataset_id:dashed>=DATA_ITEM_PROCESSING_COMPLETED'), ('good_b', '<dataset_id:dashed>=DATA_ITEM_PROCESSING_COMPLETED'), ('poison', ''))  rust=(('good_a', '<dataset_id:hex>=DATA_ITEM_PROCESSING_COMPLETED'), ('good_b', '<dataset_id:hex>=DATA_ITEM_PROCESSING_COMPLETED'), ('poison', ''))
+  second_run_after_success/raise_false  run_status_sequence: python=('DATASET_PROCESSING_STARTED', 'DATASET_PROCESSING_COMPLETED', 'DATASET_PROCESSING_INITIATED', 'DATASET_PROCESSING_STARTED', 'DATASET_PROCESSING_ERRORED')  rust=('DATASET_PROCESSING_INITIATED', 'DATASET_PROCESSING_STARTED', 'DATASET_PROCESSING_COMPLETED', 'DATASET_PROCESSING_INITIATED', 'DATASET_PROCESSING_STARTED', 'DATASET_PROCESSING_ERRORED')
+  second_run_after_success/raise_false  marker_key_format_ok: python=True  rust=False
+  second_run_after_success/raise_true  markers: python=(('good_a', '<dataset_id:dashed>=DATA_ITEM_PROCESSING_COMPLETED'), ('good_b', '<dataset_id:dashed>=DATA_ITEM_PROCESSING_COMPLETED'), ('poison', ''))  rust=(('good_a', '<dataset_id:hex>=DATA_ITEM_PROCESSING_COMPLETED'), ('good_b', '<dataset_id:hex>=DATA_ITEM_PROCESSING_COMPLETED'), ('poison', ''))
+  second_run_after_success/raise_true  run_status_sequence: python=('DATASET_PROCESSING_STARTED', 'DATASET_PROCESSING_COMPLETED', 'DATASET_PROCESSING_INITIATED', 'DATASET_PROCESSING_STARTED', 'DATASET_PROCESSING_ERRORED')  rust=('DATASET_PROCESSING_INITIATED', 'DATASET_PROCESSING_STARTED', 'DATASET_PROCESSING_COMPLETED', 'DATASET_PROCESSING_INITIATED', 'DATASET_PROCESSING_STARTED', 'DATASET_PROCESSING_ERRORED')
+  second_run_after_success/raise_true  marker_key_format_ok: python=True  rust=False
+  summarization_failure/raise_false  caller_kind: python=value  rust=exception
+  summarization_failure/raise_false  run_status_sequence: python=('DATASET_PROCESSING_STARTED', 'DATASET_PROCESSING_ERRORED')  rust=('DATASET_PROCESSING_INITIATED', 'DATASET_PROCESSING_STARTED', 'DATASET_PROCESSING_ERRORED')
+  summarization_failure/raise_true  run_status_sequence: python=('DATASET_PROCESSING_STARTED', 'DATASET_PROCESSING_ERRORED')  rust=('DATASET_PROCESSING_INITIATED', 'DATASET_PROCESSING_STARTED', 'DATASET_PROCESSING_ERRORED')
+  unreadable_file/raise_false  caller_kind: python=value  rust=exception
+  unreadable_file/raise_false  run_status_sequence: python=('DATASET_PROCESSING_STARTED', 'DATASET_PROCESSING_ERRORED')  rust=('DATASET_PROCESSING_INITIATED', 'DATASET_PROCESSING_STARTED', 'DATASET_PROCESSING_ERRORED')
+  unreadable_file/raise_true  run_status_sequence: python=('DATASET_PROCESSING_STARTED', 'DATASET_PROCESSING_ERRORED')  rust=('DATASET_PROCESSING_INITIATED', 'DATASET_PROCESSING_STARTED', 'DATASET_PROCESSING_ERRORED')
