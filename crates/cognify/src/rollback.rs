@@ -195,6 +195,15 @@ pub(crate) enum SweepDecision {
 /// (persistence, cancellation). In every one of those the run as a whole did
 /// not finish, so the honest end state is the pre-run one.
 ///
+/// Its cost is real and deliberate: the escalation deletes the files that
+/// *completed* — including the ones a `FailFast` abort-time partition just
+/// persisted, and their completion markers — so the next run redoes the whole
+/// dataset. The threshold is precisely how a caller says "above this
+/// proportion, do not trust any of this run", and converging on the pre-run
+/// state is the only answer to that which a retry can build on. A caller who
+/// would rather keep the partial result raises the threshold; below it the run
+/// is not fatal and this arm is never reached.
+///
 /// `unreached` is folded in with `failed` because neither is marked complete
 /// and neither should keep artifacts. Under `FailFast` an unreached item wrote
 /// no ownership rows, so the sweep is a no-op for it; under `RunToEnd` the set
@@ -837,6 +846,191 @@ mod tests {
                 .is_empty(),
             "nothing was appended over the executor's own row"
         );
+    }
+
+    /// The escalation, with its price tag attached: a `FailedItems` run that
+    /// crossed the ratio threshold sweeps the files that **completed**, not
+    /// only the ones that failed.
+    ///
+    /// Both halves of the path are pinned here, because either alone is
+    /// misleading. [`FailureReport::is_fatal`] turns the ratio into a `Failed`
+    /// ending — with a survivor present, so it is the ratio doing it and not
+    /// the no-survivor backstop — and [`decide_sweep`] turns that ending into
+    /// a whole-run sweep. The assertions are on the end state a caller
+    /// actually inherits: the survivor's graph node, its ownership row and its
+    /// completion marker are all gone, so the next run redoes it. Below the
+    /// threshold the same report keeps every one of them, which is what makes
+    /// the deletion an escalation rather than the scope's normal behaviour.
+    #[tokio::test]
+    async fn the_ratio_escalation_sweeps_the_files_that_completed() {
+        use cognee_database::ops::graph_storage;
+        use cognee_database::{GraphNode, RunScope};
+
+        let conn = cognee_database::connect("sqlite::memory:")
+            .await
+            .expect("connect sqlite");
+        cognee_database::initialize(&conn)
+            .await
+            .expect("initialize");
+        let db = Arc::new(conn);
+        let graph = Arc::new(cognee_test_utils::MockGraphDB::new());
+        let vector = Arc::new(cognee_test_utils::MockVectorDB::new());
+        let repo: Arc<dyn PipelineRunRepository> = Arc::new(
+            cognee_database::SeaOrmPipelineRunRepository::new(Arc::clone(&db)),
+        );
+
+        let owner = Uuid::new_v4();
+        let dataset_id = Uuid::new_v4();
+        let run_id = Uuid::new_v4();
+        cognee_database::ops::datasets::create_dataset(
+            &db,
+            cognee_models::Dataset::new("escalation".to_string(), owner, None, dataset_id),
+        )
+        .await
+        .expect("create dataset");
+
+        // One file the run finished and marked complete, one it failed on.
+        let survivor = seed_data_item(&db, owner, "survivor.txt").await;
+        let failed = seed_data_item(&db, owner, "failed.txt").await;
+
+        // The ownership row and the graph node each file's work produced.
+        for data_id in [survivor, failed] {
+            let slug = Uuid::new_v4();
+            graph_storage::upsert_nodes(
+                &db,
+                &[GraphNode {
+                    id: Uuid::new_v4(),
+                    slug,
+                    user_id: owner,
+                    data_id,
+                    dataset_id,
+                    pipeline_run_id: Some(run_id),
+                    label: Some(format!("node-{slug}")),
+                    node_type: "Entity".into(),
+                    indexed_fields: serde_json::json!([]),
+                    attributes: None,
+                    created_at: chrono::Utc::now(),
+                }],
+            )
+            .await
+            .expect("seed the ownership row");
+            graph
+                .add_node_raw(serde_json::json!({ "id": slug.to_string(), "name": "n" }))
+                .await
+                .expect("seed the graph node");
+        }
+
+        // The survivor completed, so the abort-time partition persisted it and
+        // `on_run_completed` would have marked it. This is the state the
+        // escalation discards.
+        data::mark_cognify_pipeline_status_complete(&db, survivor, dataset_id)
+            .await
+            .expect("mark the survivor complete");
+
+        // Two of ten chunks failed, both of them the failed file's: a 0.2 ratio
+        // against the default 0.05 threshold.
+        let config = CognifyConfig::default().with_rollback_scope(RollbackScope::FailedItems);
+        let policy = config.failure_policy();
+        let mut report = FailureReport::with_policy(&policy);
+        report.note_totals(2, 10);
+        for _ in 0..2 {
+            report.record(StageFailure {
+                stage: FailureStage::GraphExtraction,
+                data_id: failed,
+                chunk_id: Some(Uuid::new_v4()),
+                error: "boom".to_string(),
+                fails_item: true,
+            });
+        }
+
+        assert_eq!(
+            report.total_items() - (report.failed_items().len() + report.unreached_items().len()),
+            1,
+            "a file survived, so the no-survivor backstop is not what makes this fatal"
+        );
+        assert!(
+            report.is_fatal(&policy),
+            "0.2 > the default 0.05 threshold, so this FailedItems run failed"
+        );
+
+        // The counterfactual, on the same report: tolerate the ratio and the
+        // survivor is not even in the sweep selection.
+        let tolerant = FailurePolicy {
+            chunk_failure_ratio_threshold: 0.5,
+            ..policy
+        };
+        assert!(!report.is_fatal(&tolerant));
+        assert_eq!(
+            decide_sweep(RollbackScope::FailedItems, &RunEnding::Completed(&report)),
+            SweepDecision::Items(vec![failed]),
+            "below the threshold the run completes and only the failed file goes"
+        );
+
+        let ctx = RunContext {
+            database: Arc::clone(&db),
+            graph_db: Arc::clone(&graph) as Arc<dyn GraphDBTrait>,
+            vector_db: vector as Arc<dyn VectorDB>,
+            repo,
+            dataset_id,
+            pipeline_run_id: Some(run_id),
+            pipeline_id: Some(Uuid::new_v4()),
+            pipeline_name: "cognify_pipeline",
+            processed: vec![survivor, failed],
+            config: &config,
+        };
+        on_run_failed(
+            &ctx,
+            &CognifyError::Execute(report.to_string()),
+            /* executor_recorded_the_error */ true,
+        )
+        .await;
+
+        let scope = RunScope {
+            pipeline_run_id: run_id,
+            dataset_id,
+            data_ids: None,
+        };
+        assert!(
+            graph_storage::get_nodes_for_run(&db, &scope)
+                .await
+                .expect("read the ownership rows")
+                .is_empty(),
+            "the escalation sweeps the whole run, so the survivor's ownership row goes too"
+        );
+        assert_eq!(
+            graph.node_count(),
+            0,
+            "the survivor's graph node is deleted alongside the failed file's"
+        );
+        assert!(
+            data::get_cognify_completed_data_ids(&db, dataset_id, &[survivor, failed])
+                .await
+                .expect("read the completion markers")
+                .is_empty(),
+            "the survivor is unmarked, so the next run redoes the whole dataset"
+        );
+    }
+
+    /// A `Data` row the completion-marker ops can find.
+    async fn seed_data_item(db: &DatabaseConnection, owner: Uuid, name: &str) -> Uuid {
+        let data_id = Uuid::new_v4();
+        data::create_data(
+            db,
+            Data::builder(
+                data_id,
+                name,
+                format!("/tmp/{name}"),
+                format!("file://{name}"),
+                "txt",
+                "text/plain",
+                "hash_placeholder",
+                owner,
+            )
+            .build(),
+        )
+        .await
+        .expect("create data");
+        data_id
     }
 
     /// A temporal run is swept like any other. It writes its own ownership

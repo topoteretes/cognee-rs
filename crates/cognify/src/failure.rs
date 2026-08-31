@@ -109,6 +109,25 @@ pub enum RollbackScope {
 
     /// Remove only the contributions of the files that failed; keep and mark
     /// the rest.
+    ///
+    /// **Only while the run as a whole is still survivable.** The judgement is
+    /// [`FailureReport::is_fatal`]: a run whose chunk failure ratio exceeds
+    /// [`FailurePolicy::chunk_failure_ratio_threshold`], or in which no item
+    /// survived at all, is fatal — and a fatal run under this scope escalates
+    /// to [`Self::WholeRun`] when [`crate::rollback`] decides the sweep. The
+    /// escalation deletes the files that *completed* too, together with their
+    /// completion markers, so the next run redoes the whole dataset rather
+    /// than the failures alone. Selecting this scope is therefore not a
+    /// promise that good files are kept; it is a promise that they are kept
+    /// *below the threshold*.
+    ///
+    /// That is deliberate. The threshold is how a caller says "above this
+    /// proportion, do not trust any of this run", and the honest end state for
+    /// a run nobody trusts is the pre-run one — which is also the only state a
+    /// retry converges from. A caller who would rather keep the partial result
+    /// raises the threshold
+    /// ([`crate::CognifyConfig::with_chunk_failure_ratio_threshold`]); nothing
+    /// keeps it once the run is fatal.
     FailedItems,
 
     /// Remove nothing: whatever the run wrote before it failed stays.

@@ -460,6 +460,18 @@ the gate at all: it fails no item, so there is nothing to stop for.
 The default pair `FailFast` + `WholeRun` is Python's default behaviour in both
 execution and end state.
 
+`FailedItems` keeps the good files **only while the run as a whole is
+survivable** — that is, only below the failure ratio, and only if at least one
+item survived. Once a `FailedItems` run is judged failed it escalates to a
+whole-run sweep, and the escalation deletes the files that *completed* too,
+along with their completion markers, so the next run redoes the entire dataset
+rather than just the failures. That is the intended reading of the threshold:
+above this proportion, do not trust any of this run — and the pre-run state is
+both the honest end state and the only one a retry converges from. A caller who
+would rather keep the partial result raises
+`COGNEE_COGNIFY_MAX_CHUNK_FAILURE_RATIO`; there is no setting that keeps
+completed files once the run is fatal.
+
 A third variant, `Nothing`, removes nothing — and it is **not selectable from
 the environment**. `COGNEE_COGNIFY_ROLLBACK_SCOPE=nothing` (or `none`) is
 rejected like any other unknown value and leaves the default in place; the
@@ -481,9 +493,9 @@ artifacts first; `Nothing` is the only scope that cannot.
 | Combination | End state |
 |---|---|
 | `FailFast` + `WholeRun` *(default)* | Stops at the first failed batch, removes everything the run created, marks the run `ERRORED`, returns `Err`. Everything earlier runs completed is untouched. Python's default |
-| `FailFast` + `FailedItems` | Stops at the first failed batch; the files that fully completed are kept, indexed and marked; the failed and never-reached ones are removed and left unmarked |
+| `FailFast` + `FailedItems` | *Below the ratio:* stops at the first failed batch; the files that fully completed are kept, indexed and marked; the failed and never-reached ones are removed and left unmarked. *Above it, or with no survivor:* the run is fatal and escalates — everything it created goes, completed files included |
 | `RunToEnd` + `WholeRun` | Pays for the whole run to produce the complete failure list, then removes everything the run created |
-| `RunToEnd` + `FailedItems` | Every good file is cognified and marked; only the failed files are removed, and they come back to the caller in the report |
+| `RunToEnd` + `FailedItems` | *Below the ratio:* every good file is cognified and marked; only the failed files are removed, and they come back to the caller in the report. *Above it:* the same escalation — the good files are removed too and the call returns `Err` |
 | _either_ + `Nothing` *(code only)* | Nothing is removed. Knowingly leaves partially-cognified files in place, permanently — see above |
 
 **What the SDK call returns.** Any combination that sweeps and ends with the
@@ -523,7 +535,10 @@ so already-completed summaries are kept and the reported list is complete.
 summarization failures, and applies only under `FailedItems`. It is backstopped
 by an explicit rule: if no item survived, the run failed regardless of the
 ratio — a file that failed at the chunk stage produced no chunks, so it
-contributes to neither side of the ratio.
+contributes to neither side of the ratio. Crossing the ratio (or tripping the
+backstop) is what turns a `FailedItems` run fatal, and therefore what triggers
+the escalation to a whole-run sweep described above: the completed files and
+their markers go too.
 
 **The report cap** bounds the individual entries the report lists (and therefore
 the error message); the total count, the failed-file set and every counter are
