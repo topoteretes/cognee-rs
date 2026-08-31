@@ -11,10 +11,105 @@ use cognee_models::{Entity, EntityType};
 use cognee_ontology::traits::OntologyEdge;
 use cognee_ontology::{AttachedOntologyNode, NodeCategory, OntologyResolver};
 use cognee_utils::{generate_edge_name, normalize_identifier};
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::fact_extraction::{KnowledgeGraph, Node};
 use crate::graph_integration::types::{GraphEdgePair, GraphNodePair};
+
+/// How many distinct unresolved endpoint references to name in the summary log.
+const UNRESOLVED_SAMPLE_LIMIT: usize = 10;
+
+/// Tally of how edge endpoints resolved during one expansion pass.
+///
+/// Endpoint resolution is lossy by design — an LLM routinely emits an edge
+/// referencing a node id it never declared — but until now the only evidence
+/// was one `warn!` line per dropped edge, which at corpus scale is tens of
+/// thousands of lines and no total. These counters make the drop rate a single
+/// number that can be attributed and tracked between runs.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct EdgeResolutionStats {
+    /// Edges considered (before database-existence filtering).
+    pub attempted: usize,
+    /// Endpoints resolved by their declared node id — the common path.
+    pub resolved_by_id: usize,
+    /// Endpoints resolved only via the node-name fallback alias.
+    pub resolved_by_name: usize,
+    /// Edges dropped because the source endpoint matched nothing.
+    pub dropped_source_missing: usize,
+    /// Edges dropped because the target endpoint matched nothing.
+    pub dropped_target_missing: usize,
+    /// Edges dropped because an endpoint matched a name shared by two or more
+    /// distinct entities, so resolving it would have been a coin flip.
+    pub dropped_ambiguous_name: usize,
+}
+
+impl EdgeResolutionStats {
+    /// Total edges dropped for any endpoint-resolution reason.
+    pub fn dropped(&self) -> usize {
+        self.dropped_source_missing + self.dropped_target_missing + self.dropped_ambiguous_name
+    }
+}
+
+/// How one edge endpoint resolved to an entity.
+enum EndpointResolution {
+    /// Matched a declared node id.
+    ById(Uuid),
+    /// Matched a node's human-readable name via the fallback alias.
+    ByName(Uuid),
+    /// The name is shared by two or more distinct entities.
+    Ambiguous,
+    /// Nothing matched.
+    Missing,
+}
+
+/// Register a node's human-readable name as a fallback alias for its entity.
+///
+/// The extraction prompt asks the model for an `id` *and* a separate "most
+/// complete human-readable name", so a model that emits
+/// `{id: "einstein", name: "Albert Einstein"}` and then an edge referencing
+/// `"Albert Einstein"` produces an endpoint that the id-keyed registry cannot
+/// resolve. Aliasing the name closes that gap.
+///
+/// A name claimed by two distinct entities is poisoned to `None` rather than
+/// resolved arbitrarily — dropping such an edge is correct, silently attaching
+/// it to whichever entity happened to be seen first is not.
+fn register_name_alias(
+    aliases: &mut HashMap<String, Option<Uuid>>,
+    raw_name: &str,
+    entity_id: Uuid,
+    id_key: &str,
+) {
+    let key = normalize_identifier(raw_name);
+    if key.is_empty() || key == id_key {
+        return;
+    }
+    aliases
+        .entry(key)
+        .and_modify(|slot| {
+            if *slot != Some(entity_id) {
+                *slot = None;
+            }
+        })
+        .or_insert(Some(entity_id));
+}
+
+/// Resolve one edge endpoint, preferring an exact node-id match and falling
+/// back to the node-name alias only when the id map misses.
+fn resolve_endpoint(
+    by_id: &HashMap<String, Uuid>,
+    by_name: &HashMap<String, Option<Uuid>>,
+    raw: &str,
+) -> EndpointResolution {
+    let key = normalize_identifier(raw);
+    if let Some(id) = by_id.get(&key) {
+        return EndpointResolution::ById(*id);
+    }
+    match by_name.get(&key) {
+        Some(Some(id)) => EndpointResolution::ByName(*id),
+        Some(None) => EndpointResolution::Ambiguous,
+        None => EndpointResolution::Missing,
+    }
+}
 
 /// Stamp a freshly-constructed `Entity` / `EntityType` / `EdgeType` at
 /// emission time so the pipeline executor's recursion finds
@@ -127,6 +222,36 @@ pub async fn expand_with_nodes_and_edges(
     user_label: Option<&str>,
     task_rank: Option<i32>,
 ) -> (Vec<GraphNodePair>, Vec<GraphEdgePair>) {
+    let (nodes, edges, _stats) = expand_with_nodes_and_edges_with_stats(
+        graphs,
+        dataset_id,
+        chunk_node_sets,
+        chunk_importance_weights,
+        existing_edges_set,
+        ontology_resolver,
+        user_label,
+        task_rank,
+    )
+    .await;
+    (nodes, edges)
+}
+
+/// [`expand_with_nodes_and_edges`], additionally returning the endpoint-resolution
+/// tally so a caller can report how many edges the pass dropped and why.
+///
+/// Prefer this from the pipeline; the two-tuple form above exists so the many
+/// call sites that do not care about the tally stay unchanged.
+#[allow(clippy::too_many_arguments)]
+pub async fn expand_with_nodes_and_edges_with_stats(
+    graphs: Vec<(Uuid, KnowledgeGraph)>,
+    dataset_id: Uuid,
+    chunk_node_sets: &HashMap<Uuid, Vec<serde_json::Value>>,
+    chunk_importance_weights: &HashMap<Uuid, f64>,
+    existing_edges_set: &HashSet<String>,
+    ontology_resolver: &dyn OntologyResolver,
+    user_label: Option<&str>,
+    task_rank: Option<i32>,
+) -> (Vec<GraphNodePair>, Vec<GraphEdgePair>, EdgeResolutionStats) {
     // Function-local visited set for the pre-stamp pass. The executor's
     // per-run set sees the same DataPoints during its own walk and
     // short-circuits via the `if dp.source_pipeline.is_none()` guard
@@ -141,6 +266,15 @@ pub async fn expand_with_nodes_and_edges(
 
     // Map from node_id to entity_id for edge resolution
     let mut node_id_to_entity_id: HashMap<String, Uuid> = HashMap::new();
+
+    // Fallback map from a node's human-readable *name* to its entity id, used
+    // only when the id map misses. `None` marks a name claimed by two or more
+    // distinct entities, which must stay unresolvable.
+    let mut name_to_entity_id: HashMap<String, Option<Uuid>> = HashMap::new();
+
+    let mut stats = EdgeResolutionStats::default();
+    // A bounded sample of unresolved endpoint references, for the summary line.
+    let mut unresolved_sample: Vec<String> = Vec::new();
 
     // Ontology-specific collections (populated by get_subgraph expansion)
     let mut key_mapping: HashMap<String, String> = HashMap::new();
@@ -318,8 +452,21 @@ pub async fn expand_with_nodes_and_edges(
                 // same entity with different casing/spacing still resolves — the
                 // way Python's `Entity.id_for` hashing is normalization-insensitive
                 // (expand_with_nodes_and_edges.py:300-304).
-                node_id_to_entity_id
-                    .insert(normalize_identifier(&node.id), entity_pair.entity.base.id);
+                let entity_id = entity_pair.entity.base.id;
+                let id_key = normalize_identifier(&node.id);
+
+                // Alias the name the LLM gave this node, and — when the ontology
+                // canonicalised it — the canonical name too, so an edge that
+                // references either spelling still resolves.
+                register_name_alias(&mut name_to_entity_id, &node.name, entity_id, &id_key);
+                register_name_alias(
+                    &mut name_to_entity_id,
+                    &entity_pair.entity.name,
+                    entity_id,
+                    &id_key,
+                );
+
+                node_id_to_entity_id.insert(id_key, entity_id);
 
                 e.insert(entity_pair);
             }
@@ -352,24 +499,74 @@ pub async fn expand_with_nodes_and_edges(
         for edge in graph.edges {
             // Look up entity IDs from node IDs; skip edges the LLM produced with
             // node IDs that don't match any extracted node (common with local models).
-            let Some(source_entity_id) =
-                node_id_to_entity_id.get(&normalize_identifier(&edge.source_node_id))
-            else {
-                warn!(
-                    "Skipping edge: source node '{}' not found in extracted nodes",
-                    edge.source_node_id
-                );
-                continue;
+            stats.attempted += 1;
+
+            let source_entity_id = match resolve_endpoint(
+                &node_id_to_entity_id,
+                &name_to_entity_id,
+                &edge.source_node_id,
+            ) {
+                EndpointResolution::ById(id) => {
+                    stats.resolved_by_id += 1;
+                    id
+                }
+                EndpointResolution::ByName(id) => {
+                    stats.resolved_by_name += 1;
+                    id
+                }
+                EndpointResolution::Ambiguous => {
+                    stats.dropped_ambiguous_name += 1;
+                    debug!(
+                        "Skipping edge: source '{}' matches a name shared by several entities",
+                        edge.source_node_id
+                    );
+                    continue;
+                }
+                EndpointResolution::Missing => {
+                    stats.dropped_source_missing += 1;
+                    if unresolved_sample.len() < UNRESOLVED_SAMPLE_LIMIT {
+                        unresolved_sample.push(edge.source_node_id.clone());
+                    }
+                    debug!(
+                        "Skipping edge: source node '{}' not found in extracted nodes",
+                        edge.source_node_id
+                    );
+                    continue;
+                }
             };
 
-            let Some(target_entity_id) =
-                node_id_to_entity_id.get(&normalize_identifier(&edge.target_node_id))
-            else {
-                warn!(
-                    "Skipping edge: target node '{}' not found in extracted nodes",
-                    edge.target_node_id
-                );
-                continue;
+            let target_entity_id = match resolve_endpoint(
+                &node_id_to_entity_id,
+                &name_to_entity_id,
+                &edge.target_node_id,
+            ) {
+                EndpointResolution::ById(id) => {
+                    stats.resolved_by_id += 1;
+                    id
+                }
+                EndpointResolution::ByName(id) => {
+                    stats.resolved_by_name += 1;
+                    id
+                }
+                EndpointResolution::Ambiguous => {
+                    stats.dropped_ambiguous_name += 1;
+                    debug!(
+                        "Skipping edge: target '{}' matches a name shared by several entities",
+                        edge.target_node_id
+                    );
+                    continue;
+                }
+                EndpointResolution::Missing => {
+                    stats.dropped_target_missing += 1;
+                    if unresolved_sample.len() < UNRESOLVED_SAMPLE_LIMIT {
+                        unresolved_sample.push(edge.target_node_id.clone());
+                    }
+                    debug!(
+                        "Skipping edge: target node '{}' not found in extracted nodes",
+                        edge.target_node_id
+                    );
+                    continue;
+                }
             };
 
             // Check if edge already exists in database
@@ -383,8 +580,8 @@ pub async fn expand_with_nodes_and_edges(
             }
 
             let edge_key = (
-                *source_entity_id,
-                *target_entity_id,
+                source_entity_id,
+                target_entity_id,
                 edge.relationship_name.clone(),
             );
 
@@ -405,8 +602,8 @@ pub async fn expand_with_nodes_and_edges(
                     .to_string();
 
                 let mut edge_pair = GraphEdgePair::new(
-                    *source_entity_id,
-                    *target_entity_id,
+                    source_entity_id,
+                    target_entity_id,
                     edge.relationship_name.clone(),
                 );
                 edge_pair.add_property("relationship_name", edge.relationship_name);
@@ -445,7 +642,28 @@ pub async fn expand_with_nodes_and_edges(
     let mut graph_edges: Vec<GraphEdgePair> = edge_map.into_values().collect();
     graph_edges.extend(ontology_edges_out);
 
-    (graph_nodes, graph_edges)
+    if stats.dropped() > 0 {
+        warn!(
+            attempted = stats.attempted,
+            dropped = stats.dropped(),
+            source_missing = stats.dropped_source_missing,
+            target_missing = stats.dropped_target_missing,
+            ambiguous_name = stats.dropped_ambiguous_name,
+            recovered_by_name = stats.resolved_by_name,
+            "Dropped {} of {} extracted edges: an endpoint matched no extracted node (sample: {})",
+            stats.dropped(),
+            stats.attempted,
+            unresolved_sample.join(", ")
+        );
+    } else if stats.resolved_by_name > 0 {
+        debug!(
+            recovered_by_name = stats.resolved_by_name,
+            "All extracted edges resolved; {} endpoint(s) needed the node-name fallback",
+            stats.resolved_by_name
+        );
+    }
+
+    (graph_nodes, graph_edges, stats)
 }
 
 /// Helper: Create Entity from Node.
@@ -1027,9 +1245,217 @@ mod tests {
         )
         .await;
 
-        // Node is kept; the unresolvable edge is silently skipped
+        // Node is kept; the unresolvable edge is skipped
         assert_eq!(nodes.len(), 1);
         assert_eq!(edges.len(), 0);
+    }
+
+    /// An edge that references a node by its human-readable *name* rather than
+    /// the id the model declared must still resolve.
+    ///
+    /// The extraction prompt asks for an id and a separate "most complete
+    /// human-readable name", so `{id: "einstein", name: "Albert Einstein"}`
+    /// followed by an edge referencing `"Albert Einstein"` is a shape models
+    /// produce routinely. Before the name alias existed, such edges were dropped.
+    #[tokio::test]
+    async fn test_expand_resolves_edge_endpoint_by_node_name() {
+        let graph = KnowledgeGraph {
+            nodes: vec![
+                Node {
+                    id: "einstein".to_string(),
+                    name: "Albert Einstein".to_string(),
+                    node_type: "Person".to_string(),
+                    description: "A physicist".to_string(),
+                },
+                Node {
+                    id: "princeton".to_string(),
+                    name: "Princeton University".to_string(),
+                    node_type: "Organization".to_string(),
+                    description: "A university".to_string(),
+                },
+            ],
+            edges: vec![Edge {
+                // Both endpoints given as names, not the declared ids.
+                source_node_id: "Albert Einstein".to_string(),
+                target_node_id: "Princeton University".to_string(),
+                relationship_name: "worked_at".to_string(),
+                description: None,
+            }],
+        };
+
+        let (_nodes, edges, stats) = expand_with_nodes_and_edges_with_stats(
+            vec![(Uuid::new_v4(), graph)],
+            Uuid::new_v4(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            &noop(),
+            None,
+            None,
+        )
+        .await;
+
+        assert_eq!(edges.len(), 1, "name-referenced edge should resolve");
+        assert_eq!(stats.attempted, 1);
+        assert_eq!(stats.dropped(), 0);
+        assert_eq!(
+            stats.resolved_by_name, 2,
+            "both endpoints resolved via the name fallback"
+        );
+        assert_eq!(stats.resolved_by_id, 0);
+    }
+
+    /// A declared node id always wins over a name alias, even when another
+    /// node's name normalises to the same key.
+    #[tokio::test]
+    async fn test_expand_node_id_wins_over_name_alias() {
+        let graph = KnowledgeGraph {
+            nodes: vec![
+                Node {
+                    id: "mercury".to_string(),
+                    name: "Mercury the planet".to_string(),
+                    node_type: "Planet".to_string(),
+                    description: "A planet".to_string(),
+                },
+                Node {
+                    id: "hg".to_string(),
+                    // Normalises to "mercury", colliding with the id above.
+                    name: "Mercury".to_string(),
+                    node_type: "Element".to_string(),
+                    description: "An element".to_string(),
+                },
+            ],
+            edges: vec![Edge {
+                source_node_id: "mercury".to_string(),
+                target_node_id: "hg".to_string(),
+                relationship_name: "shares_name_with".to_string(),
+                description: None,
+            }],
+        };
+
+        let (nodes, edges, stats) = expand_with_nodes_and_edges_with_stats(
+            vec![(Uuid::new_v4(), graph)],
+            Uuid::new_v4(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            &noop(),
+            None,
+            None,
+        )
+        .await;
+
+        assert_eq!(edges.len(), 1);
+        assert_eq!(stats.resolved_by_id, 2, "both endpoints matched a real id");
+        assert_eq!(stats.resolved_by_name, 0);
+
+        // The source must be the planet (id "mercury"), not the element whose
+        // name also normalises to "mercury".
+        let planet_id = nodes
+            .iter()
+            .find(|p| p.entity.name == "Mercury the planet")
+            .map(|p| p.entity.base.id)
+            .expect("planet node is present");
+        assert_eq!(edges[0].source_entity_id, planet_id);
+    }
+
+    /// A name claimed by two distinct entities must stay unresolvable — guessing
+    /// which one an edge meant would silently corrupt the graph.
+    #[tokio::test]
+    async fn test_expand_ambiguous_name_alias_is_not_resolved() {
+        let graph = KnowledgeGraph {
+            nodes: vec![
+                Node {
+                    id: "paris_fr".to_string(),
+                    name: "Paris".to_string(),
+                    node_type: "City".to_string(),
+                    description: "Capital of France".to_string(),
+                },
+                Node {
+                    id: "paris_tx".to_string(),
+                    name: "Paris".to_string(),
+                    node_type: "City".to_string(),
+                    description: "A city in Texas".to_string(),
+                },
+                Node {
+                    id: "france".to_string(),
+                    name: "France".to_string(),
+                    node_type: "Country".to_string(),
+                    description: "A country".to_string(),
+                },
+            ],
+            edges: vec![Edge {
+                source_node_id: "Paris".to_string(), // ambiguous
+                target_node_id: "france".to_string(),
+                relationship_name: "capital_of".to_string(),
+                description: None,
+            }],
+        };
+
+        let (_nodes, edges, stats) = expand_with_nodes_and_edges_with_stats(
+            vec![(Uuid::new_v4(), graph)],
+            Uuid::new_v4(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            &noop(),
+            None,
+            None,
+        )
+        .await;
+
+        assert_eq!(edges.len(), 0, "an ambiguous endpoint must not be guessed");
+        assert_eq!(stats.dropped_ambiguous_name, 1);
+        assert_eq!(stats.dropped_source_missing, 0);
+        assert_eq!(stats.resolved_by_name, 0);
+    }
+
+    /// The tally must separate a missing source from a missing target, and count
+    /// every attempted edge — that is the denominator of the drop rate.
+    #[tokio::test]
+    async fn test_edge_resolution_stats_counts_drops_by_reason() {
+        let graph = KnowledgeGraph {
+            nodes: vec![Node {
+                id: "alice_1".to_string(),
+                name: "Alice".to_string(),
+                node_type: "Person".to_string(),
+                description: "A person".to_string(),
+            }],
+            edges: vec![
+                Edge {
+                    source_node_id: "ghost".to_string(),
+                    target_node_id: "alice_1".to_string(),
+                    relationship_name: "knows".to_string(),
+                    description: None,
+                },
+                Edge {
+                    source_node_id: "alice_1".to_string(),
+                    target_node_id: "ghost".to_string(),
+                    relationship_name: "knows".to_string(),
+                    description: None,
+                },
+            ],
+        };
+
+        let (_nodes, edges, stats) = expand_with_nodes_and_edges_with_stats(
+            vec![(Uuid::new_v4(), graph)],
+            Uuid::new_v4(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            &noop(),
+            None,
+            None,
+        )
+        .await;
+
+        assert_eq!(edges.len(), 0);
+        assert_eq!(stats.attempted, 2);
+        assert_eq!(stats.dropped_source_missing, 1);
+        assert_eq!(stats.dropped_target_missing, 1);
+        assert_eq!(stats.dropped(), 2);
+        // The second edge's source resolved before its target failed.
+        assert_eq!(stats.resolved_by_id, 1);
     }
 
     #[tokio::test]
