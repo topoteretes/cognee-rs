@@ -143,6 +143,14 @@ mod tests {
                 max_retries: 3,
                 min_retry_seconds: 0,
                 max_parallel_requests: cognee_llm::in_flight::DEFAULT_MAX_IN_FLIGHT as u32,
+                request_timeout_seconds: cognee_llm::OpenAIAdapter::DEFAULT_REQUEST_TIMEOUT
+                    .as_secs() as u32,
+                connect_timeout_seconds: cognee_llm::OpenAIAdapter::DEFAULT_CONNECT_TIMEOUT
+                    .as_secs() as u32,
+                // No aggregate deadline in this fixture: these helpers build a
+                // context for component wiring assertions, and a time bound would
+                // be an unrelated variable in them.
+                request_deadline_seconds: 0,
                 rate_limit_enabled: false,
                 rate_limit_requests: 60,
                 rate_limit_interval: 60,

@@ -164,6 +164,9 @@ impl OpenAIResponsesClient {
     pub fn new(api_key: impl Into<String>, base_url: Option<String>) -> LlmResult<Self> {
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(600))
+            // See `OpenAIAdapter::DEFAULT_CONNECT_TIMEOUT`: without this a
+            // black-holed connect consumes the whole request timeout.
+            .connect_timeout(std::time::Duration::from_secs(10))
             .build()
             .map_err(|e| LlmError::ConfigError(format!("Failed to create HTTP client: {e}")))?;
         Ok(Self {

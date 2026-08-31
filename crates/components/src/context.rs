@@ -135,6 +135,25 @@ pub struct LlmInputs {
     /// `rate_limit_requests`: that bounds starts per interval, this bounds
     /// simultaneous requests.
     pub max_parallel_requests: u32,
+    /// Per-HTTP-request timeout in seconds (`LLM_REQUEST_TIMEOUT_SECONDS`).
+    ///
+    /// Was hardcoded at 600 in every adapter. Bounds one request; the aggregate
+    /// bound is `request_deadline_seconds`.
+    pub request_timeout_seconds: u32,
+    /// TCP connect timeout in seconds (`LLM_CONNECT_TIMEOUT_SECONDS`).
+    ///
+    /// `reqwest` applies none by default, so a black-holed connect used to
+    /// consume the entire request timeout.
+    pub connect_timeout_seconds: u32,
+    /// Wall-clock ceiling on one logical structured-output call
+    /// (`LLM_REQUEST_DEADLINE_SECONDS`), spanning the whole three-mode cascade
+    /// and every retry inside it. `0` disables it.
+    ///
+    /// Distinct from `request_timeout_seconds`, which bounds a single HTTP
+    /// request and composes into no aggregate: three cascade modes, each
+    /// `max_retries` deep, each honouring the `min_retry_seconds` time floor,
+    /// multiply out to a worst case well over an hour.
+    pub request_deadline_seconds: u32,
     /// Pace dispatch unconditionally (`LLM_RATE_LIMIT_ENABLED`).
     pub rate_limit_enabled: bool,
     /// Requests admitted per `rate_limit_interval` once pacing is active.
