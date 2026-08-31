@@ -85,6 +85,10 @@ impl AnthropicAdapter {
     ) -> LlmResult<Self> {
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(600))
+            // `reqwest` sets no connect timeout, so a black-holed connect would
+            // otherwise burn the full request timeout doing nothing. Matches
+            // `OpenAIAdapter::DEFAULT_CONNECT_TIMEOUT`.
+            .connect_timeout(std::time::Duration::from_secs(10))
             .build()
             .map_err(|e| LlmError::ConfigError(format!("Failed to create HTTP client: {e}")))?;
 

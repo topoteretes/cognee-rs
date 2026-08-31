@@ -35,6 +35,42 @@ fn min_retry_elapsed(ctx: &BackendBuildContext) -> std::time::Duration {
     std::time::Duration::from_secs(u64::from(ctx.llm.min_retry_seconds))
 }
 
+/// The configured per-request and TCP-connect timeouts.
+fn http_timeouts(ctx: &BackendBuildContext) -> (std::time::Duration, std::time::Duration) {
+    (
+        std::time::Duration::from_secs(u64::from(ctx.llm.request_timeout_seconds)),
+        std::time::Duration::from_secs(u64::from(ctx.llm.connect_timeout_seconds)),
+    )
+}
+
+/// The configured aggregate ceiling for one logical structured-output call, or
+/// `None` when disabled with `0`.
+///
+/// Warns when the budget cannot accommodate the retry ladder it has to contain.
+/// The cascade runs three modes, each honouring the `min_retry_seconds` time
+/// floor, so a budget below `3 x min_retry_seconds` will cut calls the retry
+/// design deliberately intends to keep waiting - turning the rate-limit-window
+/// survival of the retry work back off by the side door. Warn rather than clamp:
+/// an operator who deliberately wants a tight ceiling is entitled to one, but
+/// should not get one by accident.
+fn request_deadline(ctx: &BackendBuildContext) -> Option<std::time::Duration> {
+    if ctx.llm.request_deadline_seconds == 0 {
+        return None;
+    }
+    let deadline = u64::from(ctx.llm.request_deadline_seconds);
+    let ladder = u64::from(ctx.llm.min_retry_seconds).saturating_mul(3);
+    if deadline < ladder {
+        tracing::warn!(
+            deadline_seconds = deadline,
+            min_retry_seconds = ctx.llm.min_retry_seconds,
+            "LLM_REQUEST_DEADLINE_SECONDS is below 3x LLM_MIN_RETRY_SECONDS, so the \
+             structured-output cascade will be cut mid-retry; raise the deadline or \
+             lower the retry floor",
+        );
+    }
+    Some(std::time::Duration::from_secs(deadline))
+}
+
 use crate::context::BackendBuildContext;
 use crate::error::ComponentError;
 use crate::traits::LlmFactory;
@@ -81,7 +117,10 @@ impl LlmFactory for OpenAiCompatibleLlmFactory {
         .with_min_retry_elapsed(min_retry_elapsed(ctx))
         .with_extra_args(ctx.llm.llm_args.clone())
         .with_default_max_tokens(Some(ctx.llm.max_completion_tokens))
-        .with_reasoning_override(ctx.llm.reasoning_override);
+        .with_reasoning_override(ctx.llm.reasoning_override)
+        .with_request_deadline(request_deadline(ctx));
+        let (request_timeout, connect_timeout) = http_timeouts(ctx);
+        let adapter = adapter.with_http_timeouts(request_timeout, connect_timeout);
         Ok(Arc::new(adapter))
     }
 
@@ -100,6 +139,13 @@ impl LlmFactory for OpenAiCompatibleLlmFactory {
         ) {
             return Ok(None);
         }
+        // Transcription is an LLM HTTP call like any other, so it must be paced
+        // and in-flight-bounded too. Previously only the chat factories installed
+        // the gates, leaving a transcriber-only process (audio ingestion with no
+        // cognify) entirely unpaced. `install_pacer` is first-call-wins, so this
+        // is a no-op when a chat adapter was built first.
+        install_pacer(ctx);
+        let (request_timeout, connect_timeout) = http_timeouts(ctx);
         let adapter = build_openai_compatible_adapter(
             &ctx.llm.provider,
             &ctx.llm.model,
@@ -107,7 +153,8 @@ impl LlmFactory for OpenAiCompatibleLlmFactory {
             &ctx.llm.endpoint,
             ctx.llm.max_retries,
         )
-        .map_err(|e| ComponentError::Llm(e.to_string()))?;
+        .map_err(|e| ComponentError::Llm(e.to_string()))?
+        .with_http_timeouts(request_timeout, connect_timeout);
         Ok(Some(Arc::new(adapter) as Arc<dyn Transcriber>))
     }
 }
@@ -216,7 +263,10 @@ impl LlmFactory for AzureLlmFactory {
         // (search/recall/feedback) fall back to the adapter's hardcoded 16384 and
         // Azure deployments with a smaller output cap 400 on every such call.
         .with_default_max_tokens(Some(ctx.llm.max_completion_tokens))
-        .with_reasoning_override(ctx.llm.reasoning_override);
+        .with_reasoning_override(ctx.llm.reasoning_override)
+        .with_request_deadline(request_deadline(ctx));
+        let (request_timeout, connect_timeout) = http_timeouts(ctx);
+        let adapter = adapter.with_http_timeouts(request_timeout, connect_timeout);
         Ok(Arc::new(adapter))
     }
 

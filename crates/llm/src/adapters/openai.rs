@@ -122,6 +122,26 @@ pub struct OpenAIAdapter {
     /// does not re-parse `base_url` on every `is_reasoning_model()` call. See
     /// [`compute_reasoning_model`].
     reasoning_model: bool,
+    /// Wall-clock ceiling on **one logical structured-output call** - spanning
+    /// every cascade mode, every corrective re-ask, and every transport retry
+    /// inside them. `None` leaves the call unbounded.
+    ///
+    /// Why a separate bound is needed: the reqwest client timeout is per-**HTTP
+    /// request**, and nothing composed it into an aggregate. A structured
+    /// extraction runs up to three modes (tools, legacy functions, JSON), each
+    /// `structured_output_retries` deep, each attempt carrying its own
+    /// [`RetryBudget`](crate::retry) whose *time floor* keeps retrying for
+    /// `min_retry_elapsed` before it is allowed to give up. Multiplied out, the
+    /// designed worst case runs over an hour, which is how a call can burn 45
+    /// minutes against an operator's expectation of a 900s cap.
+    ///
+    /// Checked at the head of each cascade mode and before each corrective
+    /// re-ask, and used to clamp the re-ask backoff so a sleep cannot overshoot
+    /// it. It is therefore a bound on *starting* new work, not a cancellation:
+    /// one already-dispatched HTTP request can overrun by at most the client
+    /// request timeout. The effective ceiling is
+    /// `request_deadline + request_timeout`, both configurable.
+    request_deadline: Option<Duration>,
 }
 
 /// Whether `model` is an OpenAI reasoning family (`gpt-5*`, `o1*`, `o3*`, `o4*`)
@@ -258,6 +278,25 @@ impl OpenAIAdapter {
     /// `llm_max_completion_tokens` default (`config.py`). Overridden per-adapter
     /// via [`with_default_max_tokens`](Self::with_default_max_tokens).
     pub const DEFAULT_MAX_COMPLETION_TOKENS: u32 = 16384;
+    /// Default per-HTTP-request timeout. Unchanged from the value that used to be
+    /// hardcoded in `new`, so an adapter built without config behaves as before.
+    pub const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
+    /// Default TCP connect timeout.
+    ///
+    /// `reqwest` applies none by default, so before this a black-holed connect -
+    /// a stopped local Ollama, a wedged gateway - consumed the entire
+    /// [request timeout](Self::DEFAULT_REQUEST_TIMEOUT) doing nothing. A connect
+    /// either completes in well under ten seconds or is not going to.
+    pub const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+    /// Default aggregate ceiling for one logical structured-output call.
+    ///
+    /// Chosen to sit above the legitimate retry envelope and below the
+    /// pathological one. Three cascade modes each honouring the default 240s
+    /// retry time floor account for ~12 minutes of deliberate waiting, which a
+    /// call surviving a provider rate-limit window genuinely needs; the
+    /// unbounded worst case ran past an hour. 30 minutes preserves the former
+    /// and cuts the latter.
+    pub const DEFAULT_REQUEST_DEADLINE: Duration = Duration::from_secs(1800);
 
     /// Create a new OpenAI adapter.
     ///
@@ -273,10 +312,8 @@ impl OpenAIAdapter {
         api_key: impl Into<String>,
         base_url: Option<String>,
     ) -> LlmResult<Self> {
-        let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(600))
-            .build()
-            .map_err(|e| LlmError::ConfigError(format!("Failed to create HTTP client: {e}")))?;
+        let client =
+            Self::build_http_client(Self::DEFAULT_REQUEST_TIMEOUT, Self::DEFAULT_CONNECT_TIMEOUT)?;
 
         let transcription_model =
             std::env::var("TRANSCRIPTION_MODEL").unwrap_or_else(|_| "whisper-1".to_string());
@@ -315,6 +352,10 @@ impl OpenAIAdapter {
             extra_args: serde_json::Map::new(),
             default_max_tokens: Some(Self::DEFAULT_MAX_COMPLETION_TOKENS),
             reasoning_model,
+            // Off unless configured, so constructing an adapter directly (tests,
+            // embedders, downstream users of the crate) keeps the historical
+            // unbounded behaviour. The component factory opts in from settings.
+            request_deadline: None,
         })
     }
 
@@ -445,6 +486,76 @@ impl OpenAIAdapter {
     /// Configure the minimum time transient failures are retried for.
     ///
     /// [`Duration::ZERO`] reduces the stop condition to a plain attempt cap.
+    /// Build the HTTP client used for every request.
+    ///
+    /// Kept as one place so `new` and
+    /// [`with_http_timeouts`](Self::with_http_timeouts) cannot drift in which
+    /// timeouts they set.
+    fn build_http_client(
+        request_timeout: Duration,
+        connect_timeout: Duration,
+    ) -> LlmResult<Client> {
+        Client::builder()
+            .timeout(request_timeout)
+            .connect_timeout(connect_timeout)
+            .build()
+            .map_err(|e| LlmError::ConfigError(format!("Failed to create HTTP client: {e}")))
+    }
+
+    /// Override the per-request and TCP-connect timeouts.
+    ///
+    /// Rebuilds the client, which is why this is a builder rather than a setter:
+    /// it is only sound before any request is in flight. On the (TLS-init-only)
+    /// failure path the existing client is kept and a warning logged, so a
+    /// misconfigured timeout degrades to the defaults rather than failing
+    /// component construction.
+    pub fn with_http_timeouts(
+        mut self,
+        request_timeout: Duration,
+        connect_timeout: Duration,
+    ) -> Self {
+        match Self::build_http_client(request_timeout, connect_timeout) {
+            Ok(client) => self.client = client,
+            Err(e) => warn!(
+                error = %e,
+                "failed to rebuild the LLM HTTP client with configured timeouts; keeping defaults",
+            ),
+        }
+        self
+    }
+
+    /// Set the aggregate ceiling for one logical structured-output call.
+    ///
+    /// `None` disables it. See the `request_deadline` field for what it does and
+    /// does not bound.
+    pub fn with_request_deadline(mut self, deadline: Option<Duration>) -> Self {
+        self.request_deadline = deadline;
+        self
+    }
+
+    /// The deadline error for a call that started at `started`, if the budget is
+    /// set and already spent.
+    ///
+    /// Returns the error rather than a bool so the message can name the budget,
+    /// the elapsed time and the stage that was about to be entered - without
+    /// that, an aggregate cut is indistinguishable from a provider timeout in a
+    /// log.
+    fn deadline_exceeded(&self, started: Instant, next_stage: &str) -> Option<LlmError> {
+        let deadline = self.request_deadline?;
+        let elapsed = started.elapsed();
+        if elapsed < deadline {
+            return None;
+        }
+        Some(LlmError::Timeout(format!(
+            "structured output exceeded its {}s aggregate budget \
+             (LLM_REQUEST_DEADLINE_SECONDS) after {:.0}s, before {next_stage}; raise the \
+             budget, or lower LLM_MAX_RETRIES / LLM_MIN_RETRY_SECONDS so the retry \
+             ladder fits inside it",
+            deadline.as_secs(),
+            elapsed.as_secs_f64(),
+        )))
+    }
+
     pub fn with_min_retry_elapsed(mut self, min_elapsed: Duration) -> Self {
         self.retry_min_elapsed = min_elapsed;
         self
@@ -1271,6 +1382,12 @@ impl OpenAIAdapter {
         options: Option<GenerationOptions>,
         validator: Option<StructuredOutputValidator<'_>>,
     ) -> LlmResult<Value> {
+        // Start of the aggregate budget. Every mode, re-ask and transport retry
+        // below is measured against this one instant, because the thing that
+        // needs bounding is the *logical* call: no individual HTTP request in a
+        // 45-minute extraction was itself slow.
+        let call_started = Instant::now();
+
         // Blank = empty or whitespace-only. Kept separate from JSON *validity*
         // so a non-empty-but-invalid payload can surface a clear error instead
         // of being lumped together with "no output" (which should retry / fall
@@ -1392,6 +1509,12 @@ impl OpenAIAdapter {
         // Most recent failure reason, threaded into the next corrective retry.
         let mut last_reason: Option<String> = None;
         for attempt in 0..self.structured_output_retries {
+            // Aggregate budget check. Placed at the head of the attempt rather
+            // than only between modes so a long retry ladder inside one mode
+            // cannot run past the budget either.
+            if let Some(e) = self.deadline_exceeded(call_started, "another tool-call attempt") {
+                return Err(e);
+            }
             let mut request_for_attempt = tools_request.clone();
             if attempt > 0 {
                 Self::append_corrective_instruction(
@@ -1574,6 +1697,14 @@ impl OpenAIAdapter {
         // to 0, exactly like the tool-calling and JSON-mode loops.
         let mut legacy_last_reason: Option<String> = None;
         for attempt in 0..self.structured_output_retries {
+            // Aggregate budget check. Placed at the head of the attempt rather
+            // than only between modes so a long retry ladder inside one mode
+            // cannot run past the budget either.
+            if let Some(e) =
+                self.deadline_exceeded(call_started, "another legacy function-call attempt")
+            {
+                return Err(e);
+            }
             let mut request_for_attempt = request_body.clone();
             if attempt > 0 {
                 Self::append_corrective_instruction(
@@ -1688,6 +1819,12 @@ impl OpenAIAdapter {
         }
 
         for attempt in 0..self.structured_output_retries {
+            // Aggregate budget check. Placed at the head of the attempt rather
+            // than only between modes so a long retry ladder inside one mode
+            // cannot run past the budget either.
+            if let Some(e) = self.deadline_exceeded(call_started, "another JSON-mode attempt") {
+                return Err(e);
+            }
             let mut request_for_attempt = json_request.clone();
 
             if attempt > 0 {

@@ -100,6 +100,8 @@ impl BedrockAdapter {
     pub const DEFAULT_MAX_COMPLETION_TOKENS: u32 = crate::DEFAULT_MAX_COMPLETION_TOKENS;
     /// Request timeout, matching the other adapters.
     const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+    /// TCP connect timeout. `reqwest` applies none by default.
+    const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
     /// Build an adapter for `model`.
     ///
@@ -144,6 +146,9 @@ impl BedrockAdapter {
 
         let client = reqwest::Client::builder()
             .timeout(Self::REQUEST_TIMEOUT)
+            // See `OpenAIAdapter::DEFAULT_CONNECT_TIMEOUT`: without this a
+            // black-holed connect consumes the whole request timeout.
+            .connect_timeout(Self::CONNECT_TIMEOUT)
             .build()
             .map_err(|e| LlmError::ConfigError(format!("Failed to create HTTP client: {e}")))?;
         let transport = Arc::new(ReqwestBedrockTransport::with_auth_provider(
