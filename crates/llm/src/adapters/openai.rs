@@ -495,9 +495,21 @@ impl OpenAIAdapter {
         request_timeout: Duration,
         connect_timeout: Duration,
     ) -> LlmResult<Client> {
-        Client::builder()
-            .timeout(request_timeout)
-            .connect_timeout(connect_timeout)
+        let mut builder = Client::builder();
+        // `0` means "no limit" for both, matching curl and the `0` escape hatch
+        // on the aggregate deadline. Handled explicitly because the alternative
+        // is actively dangerous: `reqwest` given `Duration::ZERO` times every
+        // request out instantly, so an operator generalising "0 disables it"
+        // from `LLM_REQUEST_DEADLINE_SECONDS` to its two neighbours would stop
+        // all LLM traffic rather than lift a bound. The in-flight semaphore
+        // treats its own `0` explicitly for the same class of reason.
+        if !request_timeout.is_zero() {
+            builder = builder.timeout(request_timeout);
+        }
+        if !connect_timeout.is_zero() {
+            builder = builder.connect_timeout(connect_timeout);
+        }
+        builder
             .build()
             .map_err(|e| LlmError::ConfigError(format!("Failed to create HTTP client: {e}")))
     }

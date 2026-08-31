@@ -47,25 +47,40 @@ fn http_timeouts(ctx: &BackendBuildContext) -> (std::time::Duration, std::time::
 /// `None` when disabled with `0`.
 ///
 /// Warns when the budget cannot accommodate the retry ladder it has to contain.
-/// The cascade runs three modes, each honouring the `min_retry_seconds` time
-/// floor, so a budget below `3 x min_retry_seconds` will cut calls the retry
-/// design deliberately intends to keep waiting - turning the rate-limit-window
-/// survival of the retry work back off by the side door. Warn rather than clamp:
-/// an operator who deliberately wants a tight ceiling is entitled to one, but
-/// should not get one by accident.
+/// A budget that cuts calls the retry design deliberately intends to keep
+/// waiting turns the rate-limit-window survival of that design back off by the
+/// side door. Warn rather than clamp: an operator who deliberately wants a tight
+/// ceiling is entitled to one, but should not get one by accident.
+///
+/// The ladder is `CASCADE_MODES x max_retries x min_retry_seconds`. All three
+/// factors matter: the cascade tries three request shapes, each is retried
+/// `max_retries` times (`LLM_MAX_RETRIES` feeds *both* the structured-output and
+/// network retry counts), and every attempt honours the time floor before it is
+/// allowed to give up. Counting the modes but not the attempts under-reports the
+/// ladder by the retry multiplier and lets the misconfiguration this warning
+/// exists to catch pass silently.
 fn request_deadline(ctx: &BackendBuildContext) -> Option<std::time::Duration> {
+    /// Request shapes `structured_output_impl` falls through: tool calls, legacy
+    /// functions, JSON mode.
+    const CASCADE_MODES: u64 = 3;
+
     if ctx.llm.request_deadline_seconds == 0 {
         return None;
     }
     let deadline = u64::from(ctx.llm.request_deadline_seconds);
-    let ladder = u64::from(ctx.llm.min_retry_seconds).saturating_mul(3);
+    let ladder = u64::from(ctx.llm.min_retry_seconds)
+        .saturating_mul(u64::from(ctx.llm.max_retries).max(1))
+        .saturating_mul(CASCADE_MODES);
     if deadline < ladder {
         tracing::warn!(
             deadline_seconds = deadline,
+            ladder_seconds = ladder,
             min_retry_seconds = ctx.llm.min_retry_seconds,
-            "LLM_REQUEST_DEADLINE_SECONDS is below 3x LLM_MIN_RETRY_SECONDS, so the \
-             structured-output cascade will be cut mid-retry; raise the deadline or \
-             lower the retry floor",
+            max_retries = ctx.llm.max_retries,
+            "LLM_REQUEST_DEADLINE_SECONDS is below the retry ladder it has to \
+             contain (3 cascade modes x LLM_MAX_RETRIES x LLM_MIN_RETRY_SECONDS), \
+             so structured extraction will be cut mid-retry; raise the deadline, \
+             or lower LLM_MAX_RETRIES / LLM_MIN_RETRY_SECONDS",
         );
     }
     Some(std::time::Duration::from_secs(deadline))

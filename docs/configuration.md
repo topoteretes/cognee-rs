@@ -488,16 +488,24 @@ These knobs form one resilience stack, matching Python cognee's:
 - **Three timeouts, three scopes.** `LLM_CONNECT_TIMEOUT_SECONDS` bounds the TCP
   handshake (`reqwest` sets none by default, so a black-holed connect used to
   burn the whole request timeout without sending a byte).
-  `LLM_REQUEST_TIMEOUT_SECONDS` bounds one HTTP request.
+  `LLM_REQUEST_TIMEOUT_SECONDS` bounds one HTTP request. `0` means "no limit"
+  for both of those, matching curl — note that this is *not* the same as passing
+  a zero duration to the HTTP client, which would time every request out
+  instantly, so the zero case is handled explicitly. Both currently apply to the
+  OpenAI-compatible adapter (including Azure); the Anthropic, Responses and
+  Bedrock clients still use a fixed 600s request / 10s connect pair.
   `LLM_REQUEST_DEADLINE_SECONDS` bounds one *logical* structured-extraction
   call — and that last one is the only bound on total time. Structured
   extraction cascades through three request shapes (tool calls, legacy
   functions, JSON mode), each `LLM_MAX_RETRIES` deep, each attempt honouring the
   `LLM_MIN_RETRY_SECONDS` floor above; multiplied out, the designed worst case
   runs past an hour while every individual request finishes well inside its
-  timeout. Keep the deadline above `3 x LLM_MIN_RETRY_SECONDS` or it will cut
-  the rate-limit-window waits the floors exist to protect — a warning is logged
-  at startup if it does not fit. The deadline gates *starting* new work rather
+  timeout. Keep the deadline above
+  `3 x LLM_MAX_RETRIES x LLM_MIN_RETRY_SECONDS` — 1440s at the defaults — or it
+  will cut the rate-limit-window waits the floors exist to protect. All three
+  factors count: three request shapes, each retried `LLM_MAX_RETRIES` times,
+  each attempt honouring the floor. A warning naming the computed ladder is
+  logged at startup if the deadline does not fit inside it. The deadline gates *starting* new work rather
   than cancelling in flight, so the true ceiling is
   `LLM_REQUEST_DEADLINE_SECONDS + LLM_REQUEST_TIMEOUT_SECONDS`. Set it to `0` to
   restore the previous unbounded behaviour.

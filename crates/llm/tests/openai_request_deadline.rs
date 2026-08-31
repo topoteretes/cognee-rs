@@ -23,7 +23,8 @@
 //!    unbounded cascade, so constructing an adapter directly does not silently
 //!    acquire a time limit;
 //! 3. a budget large enough not to bind does not interfere with a call that
-//!    succeeds normally.
+//!    succeeds normally;
+//! 4. a timeout of `0` means "no limit" rather than "fail instantly".
 //!
 //! Each mock server responds immediately; the elapsed time comes from a
 //! deliberately tiny budget plus a real (short) delay, so these run in
@@ -186,6 +187,40 @@ async fn a_budget_that_does_not_bind_leaves_a_successful_call_alone() {
         )
         .await
         .expect("a generous budget must not interfere with a normal call");
+
+    assert_eq!(value["name"], "ok");
+}
+
+#[tokio::test]
+async fn zero_timeouts_mean_no_limit_not_instant_failure() {
+    let server = MockServer::start_async().await;
+
+    server
+        .mock_async(|when, then| {
+            when.method(POST).path("/chat/completions");
+            then.status(200)
+                .header("content-type", "application/json")
+                // Long enough that a zero duration handed to the HTTP client as
+                // a real timeout would abort it.
+                .delay(Duration::from_millis(150))
+                .body(complete_tool_call());
+        })
+        .await;
+
+    // `0` is the documented "no limit" escape hatch on all three time knobs, so
+    // it must behave consistently across them. Passing Duration::ZERO through to
+    // reqwest would instead time every request out immediately, which is how an
+    // operator generalising "0 disables it" from LLM_REQUEST_DEADLINE_SECONDS to
+    // its two neighbours would silently stop all LLM traffic.
+    let value = adapter(server.base_url())
+        .with_http_timeouts(Duration::ZERO, Duration::ZERO)
+        .create_structured_output_with_messages_raw(
+            user_msg(),
+            &schema(),
+            Some(GenerationOptions::default()),
+        )
+        .await
+        .expect("a zero timeout must lift the bound, not abort the request");
 
     assert_eq!(value["name"], "ok");
 }
