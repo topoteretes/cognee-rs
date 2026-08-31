@@ -1,6 +1,7 @@
 package ai.cognee;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonProperty;
 
 /**
  * Result of {@link Cognee#exportCogx}: where the COGX archive landed and what
@@ -12,11 +13,11 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record ExportResult(
-        String archive,
-        String directory,
-        int numNodes,
-        int numEdges,
-        int numEntities,
-        int numDocuments,
-        int numFacts,
-        int numRawNodes) {}
+        @JsonProperty("archive") String archive,
+        @JsonProperty("directory") String directory,
+        @JsonProperty("numNodes") int numNodes,
+        @JsonProperty("numEdges") int numEdges,
+        @JsonProperty("numEntities") int numEntities,
+        @JsonProperty("numDocuments") int numDocuments,
+        @JsonProperty("numFacts") int numFacts,
+        @JsonProperty("numRawNodes") int numRawNodes) {}
