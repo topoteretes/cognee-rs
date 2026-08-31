@@ -47,9 +47,11 @@ sqlite        = ["cognee/sqlite",        "cognee-bindings-common/sqlite"]
 testing       = ["cognee/testing",       "cognee-bindings-common/testing"]
 html-loader   = ["cognee/html-loader"]
 # Document loaders, forwarded like html-loader (they have no
-# cognee-bindings-common half). pdf-pure-rust is the portable choice —
-# pdf-pdfium needs a per-platform pdfium binary, which rules it out for mobile;
-# `android-default` in cognee/lib makes the same call.
+# cognee-bindings-common half). pdf-pure-rust needs no native library, which is
+# why `android-default` in cognee/lib picks it; pdf-pdfium below is usable on
+# mobile too, but only by shipping a libpdfium and pointing PDFIUM_LIB_PATH at
+# it. Prefer pdf-pdfium where that is possible — the pure-Rust extractor
+# silently returns empty text for some real PDFs.
 pdf-pure-rust = ["cognee/pdf-pure-rust"]
 # PDFium extraction, preferred over pdf-pure-rust when both are on (see
 # cognee-ingestion's loaders/pdf/mod.rs). It reads PDFs the pure-Rust extractor
