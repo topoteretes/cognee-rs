@@ -5,6 +5,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 /** Shared JSON marshalling for the cognee Java SDK (internal). */
 public final class Json {
+    // A plain mapper on every platform. The SDK's result types are records, and
+    // D8 desugars records away below minSdk 34, which used to leave Jackson
+    // unable to find a creator ("no Creators, like default constructor, exist").
+    // Their components carry @JsonProperty, so the canonical constructor is a
+    // properties-based creator by name alone — no module registration, no
+    // javac -parameters, and no runtime platform check here.
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private Json() {}
