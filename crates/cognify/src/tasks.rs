@@ -5827,6 +5827,53 @@ mod tests {
         );
     }
 
+    /// [`producing_data_ids`] deduplicates on the way *out*, not on the way
+    /// into the database. Two chunks of one file are two producers but one
+    /// data item, and the row id formulas would mint the same primary key
+    /// twice for them.
+    ///
+    /// Asserted on the return value, deliberately. `upsert_nodes_on` /
+    /// `upsert_edges_on` collapse duplicates only *within* one
+    /// `PROVENANCE_INSERT_BATCH` chunk, so a test that reads the rows back
+    /// measures their dedup rather than this function's, and stays green
+    /// against a duplicate pair that straddles a batch boundary — the latent
+    /// bug at scale the doc comment names.
+    #[test]
+    fn producing_data_ids_deduplicates_and_keeps_first_seen_order() {
+        let file_a = Uuid::new_v4();
+        let file_b = Uuid::new_v4();
+        let first_of_a = Uuid::new_v4();
+        let only_of_b = Uuid::new_v4();
+        let second_of_a = Uuid::new_v4();
+        let third_of_a = Uuid::new_v4();
+
+        let chunk_data_map: HashMap<Uuid, Uuid> = [
+            (first_of_a, file_a),
+            (only_of_b, file_b),
+            (second_of_a, file_a),
+            (third_of_a, file_a),
+        ]
+        .into_iter()
+        .collect();
+
+        assert_eq!(
+            producing_data_ids(
+                &[first_of_a, only_of_b, second_of_a, third_of_a],
+                &chunk_data_map,
+            ),
+            vec![file_a, file_b],
+            "one entry per data item, in first-seen order — three chunks of \
+             one file are one owner"
+        );
+
+        // A chunk nobody mapped contributes no owner at all, rather than a nil
+        // placeholder the delete path would never reproduce.
+        assert!(
+            producing_data_ids(&[Uuid::new_v4()], &chunk_data_map).is_empty(),
+            "an unmapped chunk names no data item"
+        );
+    }
+
     #[test]
     fn test_classify_documents_empty() {
         let input = CognifyInput {
@@ -8457,6 +8504,164 @@ mod tests {
             nodes.iter().all(|row| row.pipeline_run_id.is_some())
                 && edges.iter().all(|row| row.pipeline_run_id.is_some()),
             "every row names the run that was writing it"
+        );
+    }
+
+    /// The same claim at the *graph* seam, which the vector-seam test above
+    /// does not reach: `add_data_points` writes chunks, summaries and entity
+    /// types to the graph long before it touches the vector store, so a ledger
+    /// write moved below the first `add_nodes` would still satisfy that test
+    /// while leaving a run that died on the chunk write with nothing to sweep.
+    /// The extraction stage's counterpart is
+    /// `extract_graph_records_ownership_before_the_graph_write`.
+    #[tokio::test]
+    async fn add_data_points_records_ownership_before_the_graph_write() {
+        use cognee_database::ops::graph_storage::{get_edges_by_dataset, get_nodes_by_dataset};
+        use cognee_embedding::MockEmbeddingEngine;
+        use cognee_vector::MockVectorDB;
+
+        let dataset_id = Uuid::new_v4();
+        let doc_id = Uuid::new_v4();
+        let db = ledger_db(dataset_id).await;
+        let run_id = Uuid::new_v4();
+
+        let graph = Arc::new(cognee_graph::MockGraphDB::new());
+        graph.set_add_nodes_error("graph is down");
+
+        let input = SummarizedData {
+            chunks: vec![test_chunk(Uuid::new_v4(), doc_id, "Hello world")],
+            documents: vec![test_document_with_metadata(doc_id, None)],
+            entities: vec![],
+            edges: vec![],
+            producers: ArtifactProducers::default(),
+            summaries: vec![],
+            dataset_id,
+            user_id: Some(Uuid::new_v4()),
+            tenant_id: None,
+            failures: FailureReport::default(),
+        };
+
+        let result = add_data_points(
+            &input,
+            Arc::clone(&graph) as Arc<dyn GraphDBTrait>,
+            Arc::new(MockVectorDB::new()),
+            Arc::new(MockEmbeddingEngine::new(8)),
+            &db,
+            Some(run_id),
+            &CognifyConfig::default(),
+        )
+        .await;
+
+        assert!(result.is_err(), "the failing graph write must surface");
+        assert_eq!(graph.node_count(), 0, "no chunk reached the graph");
+
+        let nodes = get_nodes_by_dataset(&db, dataset_id).await.expect("query");
+        assert_eq!(
+            nodes.len(),
+            2,
+            "the chunk and document rows survive the failed run"
+        );
+        let edges = get_edges_by_dataset(&db, dataset_id).await.expect("query");
+        assert!(
+            !edges.is_empty(),
+            "the structural edges are claimed before they are written"
+        );
+        assert!(
+            nodes.iter().all(|row| row.pipeline_run_id == Some(run_id))
+                && edges.iter().all(|row| row.pipeline_run_id == Some(run_id)),
+            "every row names the run that was writing it, so the sweep can find it"
+        );
+    }
+
+    /// A semantic edge's ledger row must hash the *sanitized* relationship
+    /// text. NUL bytes are stripped on the way into Postgres, so an id derived
+    /// from the raw text would key the edge on text no store holds and the
+    /// sweep would miss it. `provenance_edge_ids_derive_from_sanitized_text`
+    /// pins the formula; this pins the *call site* — that the rows
+    /// `add_data_points` really writes went through `sanitize_string` before
+    /// the hash saw them. The temporal twin is
+    /// `temporal_edge_rows_hash_sanitized_relationship_names`.
+    #[tokio::test]
+    async fn semantic_edge_rows_hash_sanitized_relationship_names() {
+        use cognee_database::ops::graph_storage::get_edges_by_dataset;
+        use cognee_embedding::MockEmbeddingEngine;
+        use cognee_vector::MockVectorDB;
+
+        let dataset_id = Uuid::new_v4();
+        let doc_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let db = ledger_db(dataset_id).await;
+        let dirty = "work\u{0}s_at";
+        let clean = "works_at";
+
+        let source = Uuid::new_v4();
+        let target = Uuid::new_v4();
+
+        let input = SummarizedData {
+            chunks: vec![test_chunk(Uuid::new_v4(), doc_id, "Alice works at Acme.")],
+            documents: vec![test_document_with_metadata(doc_id, None)],
+            entities: vec![],
+            edges: vec![GraphEdgePair::new(source, target, dirty)],
+            producers: ArtifactProducers::default(),
+            summaries: vec![],
+            dataset_id,
+            user_id: Some(user_id),
+            tenant_id: None,
+            failures: FailureReport::default(),
+        };
+
+        add_data_points(
+            &input,
+            Arc::new(cognee_graph::MockGraphDB::new()),
+            Arc::new(MockVectorDB::new()),
+            Arc::new(MockEmbeddingEngine::new(8)),
+            &db,
+            None,
+            &CognifyConfig::default(),
+        )
+        .await
+        .expect("add_data_points must succeed");
+
+        let edges = get_edges_by_dataset(&db, dataset_id).await.expect("query");
+        let row = edges
+            .iter()
+            .find(|row| row.source_node_id == source && row.destination_node_id == target)
+            .expect("the semantic edge is claimed");
+        assert_eq!(
+            row.relationship_name, clean,
+            "the stored text is the sanitized one"
+        );
+        assert_eq!(
+            row.id,
+            provenance_edge_id(
+                None,
+                user_id,
+                dataset_id,
+                row.data_id,
+                source,
+                clean,
+                target,
+            ),
+            "the row id is derived from the sanitized text"
+        );
+        assert_eq!(
+            row.slug,
+            triplet_slug(source, clean, target),
+            "and so is the slug the sweep correlates on"
+        );
+        // The load-bearing half: stripping the NUL actually changes the hash,
+        // so hashing the raw text could not slip through as a no-op.
+        assert_ne!(
+            row.id,
+            provenance_edge_id(
+                None,
+                user_id,
+                dataset_id,
+                row.data_id,
+                source,
+                dirty,
+                target
+            ),
         );
     }
 
