@@ -458,6 +458,71 @@ async fn edges_lose_their_vectors_but_are_never_deleted_from_the_graph_directly(
     );
 }
 
+/// The other half of that claim: cascading is how a swept node's edges *do*
+/// leave the graph. A backend deletes a node with `DETACH DELETE`
+/// (Ladybug) or `ON DELETE CASCADE` (Postgres), so nothing incident to a
+/// deleted node can outlive it — while an edge between two survivors is
+/// nobody's collateral.
+#[tokio::test]
+async fn a_swept_node_takes_its_incident_graph_edges_with_it() {
+    let f = Fixture::new().await;
+    let dataset = f.dataset("ds").await;
+    let data = f.data(dataset, "a.txt").await;
+    let (run, other_run) = (Uuid::new_v4(), Uuid::new_v4());
+
+    // `mine` is this run's alone and goes; `shared` is claimed by another run
+    // and stays.
+    let (mine, shared) = (Uuid::new_v4(), Uuid::new_v4());
+    f.seed_nodes(&[
+        f.node(dataset, data, Some(run), mine),
+        f.node(dataset, data, Some(run), shared),
+        f.node(dataset, data, Some(other_run), shared),
+    ])
+    .await;
+    f.seed_artifacts(&[mine, shared]).await;
+
+    // A third node no provenance row names — an artifact of some earlier run,
+    // there to hold an edge that must not be swept.
+    let bystander = Uuid::new_v4();
+    f.graph
+        .add_node_raw(json!({ "id": bystander.to_string(), "name": "n" }))
+        .await
+        .expect("graph node");
+    f.graph
+        .add_edge(&mine.to_string(), &shared.to_string(), "is_a", None)
+        .await
+        .expect("edge");
+    f.graph
+        .add_edge(&shared.to_string(), &bystander.to_string(), "is_a", None)
+        .await
+        .expect("edge");
+
+    let outcome = f
+        .sweeper
+        .sweep(&SweepScope::whole_run(run, dataset))
+        .await
+        .expect("sweep");
+
+    assert_eq!(outcome.graph_nodes_deleted, 1);
+    assert!(!f.graph_has(mine).await);
+    assert!(f.graph_has(shared).await, "the other run still claims it");
+    assert!(
+        !f.graph
+            .has_edge(&mine.to_string(), &shared.to_string(), "is_a")
+            .await
+            .expect("has_edge"),
+        "an edge incident to a swept node cannot outlive it",
+    );
+    assert!(
+        f.graph
+            .has_edge(&shared.to_string(), &bystander.to_string(), "is_a")
+            .await
+            .expect("has_edge"),
+        "an edge between two survivors is not collateral",
+    );
+    assert_eq!(f.graph.edge_count(), 1);
+}
+
 // ---------------------------------------------------------------------------
 // Item-scoped sweeps
 // ---------------------------------------------------------------------------
