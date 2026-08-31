@@ -12,7 +12,8 @@
 //!   scheduling further work at the first stage-level failure;
 //!   [`FailureStop::RunToEnd`] keeps going and decides at the end.
 //! * [`RollbackScope`] — *what to sweep*: [`RollbackScope::WholeRun`] (default),
-//!   [`RollbackScope::FailedItems`], or [`RollbackScope::Nothing`].
+//!   [`RollbackScope::FailedItems`], or — in code only, never from the
+//!   environment — [`RollbackScope::Nothing`].
 //!
 //! The default pair is Python's default behaviour in both execution and end
 //! state: abort at the first failed item, error the run.
@@ -101,7 +102,21 @@ pub enum RollbackScope {
     /// the rest.
     FailedItems,
 
-    /// Remove nothing. The escape hatch.
+    /// Remove nothing: whatever the run wrote before it failed stays.
+    ///
+    /// A library-level escape hatch, and deliberately **not selectable from
+    /// the environment** — the env parser has no spelling for it — because
+    /// what it leaves behind is permanent. A run that wrote graph edges and
+    /// died before the vector stage leaves those edges with no `Triplet_text`
+    /// and no `EdgeType_relationship_name` point. The retry does not repair
+    /// them: the completion marker is unset, so the item is processed again,
+    /// but [`crate::graph_integration::retrieve_existing_edges`] finds the
+    /// orphaned edges and `expansion.rs` skips every edge already in the
+    /// graph, so no row and no vector is ever written for them again. Setting
+    /// `incremental_loading = false` does not help either — that dedup filter
+    /// is not the incremental one. [`Self::WholeRun`] and
+    /// [`Self::FailedItems`] both converge on a retry, because both remove the
+    /// half-written artifacts first; this is the only scope that cannot.
     Nothing,
 }
 
@@ -111,11 +126,21 @@ impl RollbackScope {
     /// Prefixed and namespaced because this axis has no Python counterpart at
     /// all — Python always sweeps the whole run — so the name should read as a
     /// Rust extension rather than a parity feature.
+    ///
+    /// Only [`Self::WholeRun`] and [`Self::FailedItems`] are reachable this
+    /// way — see [`Self::Nothing`] for why the third variant is not.
     pub fn from_env() -> Option<Self> {
         Self::parse_env_value(&std::env::var("COGNEE_COGNIFY_ROLLBACK_SCOPE").ok()?)
     }
 
     /// See [`FailureStop::parse_env_value`] for why this is split out.
+    ///
+    /// [`Self::Nothing`] has no spelling here on purpose: it is the one scope
+    /// whose leftovers no retry can repair, so no deployment should be able to
+    /// select it by setting a variable. `nothing` / `none` are rejected like
+    /// any other unknown value, leaving the caller's default in place; a
+    /// caller that really wants it asks for it in code, through
+    /// [`crate::CognifyConfig::with_rollback_scope`].
     pub(crate) fn parse_env_value(raw: &str) -> Option<Self> {
         match raw
             .trim()
@@ -125,7 +150,6 @@ impl RollbackScope {
         {
             "whole_run" | "wholerun" | "run" => Some(Self::WholeRun),
             "failed_items" | "faileditems" | "items" => Some(Self::FailedItems),
-            "nothing" | "none" => Some(Self::Nothing),
             _ => None,
         }
     }
@@ -634,11 +658,34 @@ mod tests {
             RollbackScope::parse_env_value("failed-items"),
             Some(RollbackScope::FailedItems)
         );
-        assert_eq!(
-            RollbackScope::parse_env_value("NOTHING"),
-            Some(RollbackScope::Nothing)
-        );
         assert_eq!(RollbackScope::parse_env_value("everything"), None);
+    }
+
+    /// `Nothing` is a code-only escape hatch: the artifacts a run wrote before
+    /// it failed stay in the graph, and the dedup filter hides them from every
+    /// retry, so nothing ever repairs them. No deployment may reach that by
+    /// setting a variable — every spelling of it must fall through to the
+    /// caller's default, exactly like an unknown value.
+    #[test]
+    fn nothing_cannot_be_selected_from_the_environment() {
+        for raw in ["nothing", "NOTHING", "Nothing", "none", "NONE", "no-thing"] {
+            assert_eq!(
+                RollbackScope::parse_env_value(raw),
+                None,
+                "the environment must not be able to select `Nothing`: {raw:?}"
+            );
+        }
+
+        // The other two axis values keep working, so this rejection is not a
+        // blanket break of the variable.
+        assert_eq!(
+            RollbackScope::parse_env_value("whole_run"),
+            Some(RollbackScope::WholeRun)
+        );
+        assert_eq!(
+            RollbackScope::parse_env_value("failed_items"),
+            Some(RollbackScope::FailedItems)
+        );
     }
 
     #[test]

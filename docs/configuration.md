@@ -400,7 +400,7 @@ the environment only, never through `CognifyConfig`.
 | Builder | Field | Env var | Default |
 |---|---|---|---|
 | `with_failure_stop` | `failure_stop` | `RAISE_INCREMENTAL_LOADING_ERRORS` / `COGNEE_RAISE_INCREMENTAL_LOADING_ERRORS` | `FailFast` |
-| `with_rollback_scope` | `rollback_scope` | `COGNEE_COGNIFY_ROLLBACK_SCOPE` | `WholeRun` |
+| `with_rollback_scope` | `rollback_scope` | `COGNEE_COGNIFY_ROLLBACK_SCOPE` (`whole_run` / `failed_items` only) | `WholeRun` |
 | `with_summarization_failure_tolerance` | `tolerate_summarization_failures` | `COGNEE_COGNIFY_TOLERATE_SUMMARIZATION_FAILURES` | `false` |
 | `with_chunk_failure_ratio_threshold` | `chunk_failure_ratio_threshold` | `COGNEE_COGNIFY_MAX_CHUNK_FAILURE_RATIO` | `0.05` |
 | `with_failure_report_cap` | `failure_report_cap` | `COGNEE_COGNIFY_FAILURE_REPORT_CAP` | `100` |
@@ -426,9 +426,25 @@ the pipeline. `RunToEnd` continues past failures, collecting them, and decides
 at the end — a full run's worth of LLM cost for the complete failure list.
 
 **Axis 2 — what to sweep.** `WholeRun` removes everything the run created;
-`FailedItems` removes only the failed files' contributions and keeps the rest;
-`Nothing` removes nothing. The default pair `FailFast` + `WholeRun` is Python's
-default behaviour in both execution and end state.
+`FailedItems` removes only the failed files' contributions and keeps the rest.
+The default pair `FailFast` + `WholeRun` is Python's default behaviour in both
+execution and end state.
+
+A third variant, `Nothing`, removes nothing — and it is **not selectable from
+the environment**. `COGNEE_COGNIFY_ROLLBACK_SCOPE=nothing` (or `none`) is
+rejected like any other unknown value and leaves the default in place; the
+variant is reachable only in code, via
+`CognifyConfig::with_rollback_scope(RollbackScope::Nothing)`. It is off the
+configuration surface because what it leaves behind is permanent. A run that
+wrote graph edges and then died before the vector stage leaves those edges in
+the graph with no `Triplet_text` and no `EdgeType_relationship_name` point. The
+retry does not repair them: the completion marker is unset, so the item is
+processed again, but `retrieve_existing_edges` finds the orphaned edges and
+expansion skips every edge already in the graph — so no row and no vector is
+ever written for them again. Setting `incremental_loading = false` does not
+help; that dedup filter is not the incremental one. `WholeRun` and
+`FailedItems` both converge on a retry, because both remove the half-written
+artifacts first; `Nothing` is the only scope that cannot.
 
 **What each combination now does at the end of a run.**
 
@@ -438,7 +454,7 @@ default behaviour in both execution and end state.
 | `FailFast` + `FailedItems` | Aborts at the first failed file; the files that fully completed are kept, indexed and marked; the failed and never-reached ones are removed and left unmarked |
 | `RunToEnd` + `WholeRun` | Pays for the whole run to produce the complete failure list, then removes everything the run created |
 | `RunToEnd` + `FailedItems` | Every good file is cognified and marked; only the failed files are removed, and they come back to the caller in the report |
-| _either_ + `Nothing` | Nothing is removed. The escape hatch: with `RunToEnd` it knowingly leaves partially-cognified files in place |
+| _either_ + `Nothing` *(code only)* | Nothing is removed. Knowingly leaves partially-cognified files in place, permanently — see above |
 
 **What the SDK call returns.** Any combination that sweeps and ends with the
 run `ERRORED` returns `Err`, matching Python, which re-raises after rolling
