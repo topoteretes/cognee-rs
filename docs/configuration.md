@@ -391,20 +391,34 @@ by propagating. The report rides every stage output to `CognifyResult.failures`
 (on success) or to `CognifyError::RunFailed` (when the run failed). Whether the
 run fails is decided once, at the end, from two independent axes.
 
-These are `CognifyConfig` builders with **no env var, CLI flag or HTTP field**
-— they are selectable by a library caller only. That is deliberate: Python has
-no counterpart knobs, and the settings-parity suite compares Rust's
-`GET /api/v1/settings` shape against Python's, so giving them env vars means
-adding `Settings` fields with nothing on the other side to match. Exposing them
-is a separate, opt-in change.
+Each is a `CognifyConfig` builder, and each is also read from the environment
+at construction time. None of them adds a `Settings` field, so
+`GET /api/v1/settings` keeps the shape the parity suite compares against
+Python's — which is also how Python exposes its own equivalent flag: through
+the environment only, never through `CognifyConfig`.
 
-| Builder | Field | Default |
-|---|---|---|
-| `with_failure_stop` | `failure_stop` | `FailFast` |
-| `with_rollback_scope` | `rollback_scope` | `WholeRun` |
-| `with_summarization_failure_tolerance` | `tolerate_summarization_failures` | `false` |
-| `with_chunk_failure_ratio_threshold` | `chunk_failure_ratio_threshold` | `0.05` |
-| `with_failure_report_cap` | `failure_report_cap` | `100` |
+| Builder | Field | Env var | Default |
+|---|---|---|---|
+| `with_failure_stop` | `failure_stop` | `RAISE_INCREMENTAL_LOADING_ERRORS` / `COGNEE_RAISE_INCREMENTAL_LOADING_ERRORS` | `FailFast` |
+| `with_rollback_scope` | `rollback_scope` | `COGNEE_COGNIFY_ROLLBACK_SCOPE` | `WholeRun` |
+| `with_summarization_failure_tolerance` | `tolerate_summarization_failures` | `COGNEE_COGNIFY_TOLERATE_SUMMARIZATION_FAILURES` | `false` |
+| `with_chunk_failure_ratio_threshold` | `chunk_failure_ratio_threshold` | `COGNEE_COGNIFY_MAX_CHUNK_FAILURE_RATIO` | `0.05` |
+| `with_failure_report_cap` | `failure_report_cap` | `COGNEE_COGNIFY_FAILURE_REPORT_CAP` | `100` |
+
+**Axis 1 shares Python's variable name.** `RAISE_INCREMENTAL_LOADING_ERRORS` is
+Python's own flag (`run_tasks_data_item.py:200`, default `true`), so one `.env`
+configures both SDKs the same way. Its polarity is Python's and is inverted
+relative to the variant names: *raising* on the first error is `FailFast`,
+and `false` is `RunToEnd`. In Python that flag decides whether the first failed
+item aborts the run or every item is attempted first — it never changes what
+survives, because Python sweeps the whole run either way. That is precisely
+what this axis means here. The `COGNEE_`-prefixed alias follows the same
+dual-name convention as `CHUNK_SIZE` / `COGNEE_CHUNK_SIZE`.
+
+**The other four are Rust-only** and say so with a `COGNEE_COGNIFY_` prefix:
+Python has no counterpart for any of them. An unset or unparseable value leaves
+the default in place rather than failing the process, and out-of-range values
+(a ratio outside `0..=1`, a zero cap) are ignored the same way.
 
 **Axis 1 — when to stop.** `FailFast` stops the failing stage's own loop at the
 first failure; the files that already completed still travel down the rest of

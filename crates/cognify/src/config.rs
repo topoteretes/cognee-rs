@@ -330,6 +330,23 @@ fn default_chunk_failure_ratio_threshold() -> f64 {
     FailurePolicy::DEFAULT_CHUNK_FAILURE_RATIO_THRESHOLD
 }
 
+/// Read a boolean environment variable, accepting the spellings the rest of
+/// the workspace accepts (`true`/`1`/`yes`, case-insensitive).
+fn env_bool(name: &str) -> Option<bool> {
+    let raw = std::env::var(name).ok()?;
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "true" | "1" | "yes" => Some(true),
+        "false" | "0" | "no" => Some(false),
+        _ => None,
+    }
+}
+
+/// Read and parse an environment variable, ignoring unparseable values so a
+/// typo falls back to the default rather than failing the process.
+fn env_parsed<T: std::str::FromStr>(name: &str) -> Option<T> {
+    std::env::var(name).ok()?.trim().parse().ok()
+}
+
 /// Serde default for [`CognifyConfig::failure_report_cap`].
 fn default_failure_report_cap() -> usize {
     FailurePolicy::DEFAULT_REPORT_CAP
@@ -362,11 +379,22 @@ impl Default for CognifyConfig {
 
             token_counter_kind: TokenCounterKind::from_env(),
 
-            failure_stop: FailureStop::default(),
-            rollback_scope: RollbackScope::default(),
-            tolerate_summarization_failures: false,
-            chunk_failure_ratio_threshold: default_chunk_failure_ratio_threshold(),
-            failure_report_cap: default_failure_report_cap(),
+            // Read from the environment like `token_counter_kind` above, so
+            // every construction path picks them up. `failure_stop` honours
+            // Python's own variable name; the rest are Rust-only extensions and
+            // say so with a `COGNEE_COGNIFY_` prefix.
+            failure_stop: FailureStop::from_env().unwrap_or_default(),
+            rollback_scope: RollbackScope::from_env().unwrap_or_default(),
+            tolerate_summarization_failures: env_bool(
+                "COGNEE_COGNIFY_TOLERATE_SUMMARIZATION_FAILURES",
+            )
+            .unwrap_or(false),
+            chunk_failure_ratio_threshold: env_parsed("COGNEE_COGNIFY_MAX_CHUNK_FAILURE_RATIO")
+                .filter(|r: &f64| r.is_finite() && *r > 0.0 && *r <= 1.0)
+                .unwrap_or_else(default_chunk_failure_ratio_threshold),
+            failure_report_cap: env_parsed("COGNEE_COGNIFY_FAILURE_REPORT_CAP")
+                .filter(|cap: &usize| *cap > 0)
+                .unwrap_or_else(default_failure_report_cap),
 
             graph_schema: None,
             summary_schema: None,

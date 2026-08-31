@@ -32,6 +32,15 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// Axis 1 — when a run stops scheduling further work.
+///
+/// Python's counterpart is the `RAISE_INCREMENTAL_LOADING_ERRORS` environment
+/// variable (`run_tasks_data_item.py:200`, default `true`): with it set, the
+/// first failed item re-raises out of a bare `asyncio.gather` and the run
+/// stops; unset, every item runs and `run_tasks.py:174-179` raises afterwards
+/// because one errored. Either way Python sweeps the whole run — the flag
+/// chooses *when to stop*, never *what survives*, which is exactly this axis.
+/// [`FailureStop::from_env`] reads that variable so one `.env` configures both
+/// SDKs identically.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum FailureStop {
     /// Stop the failing stage's own loop at the first failure. The survivors
@@ -44,6 +53,36 @@ pub enum FailureStop {
     /// Continue past failures, collecting them, and decide at the end. Costs a
     /// full run's worth of LLM calls but produces the complete failure list.
     RunToEnd,
+}
+
+impl FailureStop {
+    /// Read the Python-compatible environment variable.
+    ///
+    /// Accepts Python's bare `RAISE_INCREMENTAL_LOADING_ERRORS` and the
+    /// `COGNEE_`-prefixed alias, the same dual-name shape this workspace
+    /// already uses for `CHUNK_SIZE` and friends. The boolean is Python's, so
+    /// its polarity is inverted relative to the variant names: raising on the
+    /// first error *is* stopping early.
+    ///
+    /// Returns `None` when unset or unparseable, leaving the caller's default
+    /// in place rather than guessing.
+    pub fn from_env() -> Option<Self> {
+        let raw = std::env::var("RAISE_INCREMENTAL_LOADING_ERRORS")
+            .or_else(|_| std::env::var("COGNEE_RAISE_INCREMENTAL_LOADING_ERRORS"))
+            .ok()?;
+        Self::parse_env_value(&raw)
+    }
+
+    /// The parsing half of [`Self::from_env`], split out so it is testable
+    /// without mutating process-global environment state — which races across
+    /// parallel test binaries.
+    pub(crate) fn parse_env_value(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "true" | "1" | "yes" => Some(Self::FailFast),
+            "false" | "0" | "no" => Some(Self::RunToEnd),
+            _ => None,
+        }
+    }
 }
 
 /// Axis 2 — what a failed run removes.
@@ -64,6 +103,32 @@ pub enum RollbackScope {
 
     /// Remove nothing. The escape hatch.
     Nothing,
+}
+
+impl RollbackScope {
+    /// Read `COGNEE_COGNIFY_ROLLBACK_SCOPE`.
+    ///
+    /// Prefixed and namespaced because this axis has no Python counterpart at
+    /// all — Python always sweeps the whole run — so the name should read as a
+    /// Rust extension rather than a parity feature.
+    pub fn from_env() -> Option<Self> {
+        Self::parse_env_value(&std::env::var("COGNEE_COGNIFY_ROLLBACK_SCOPE").ok()?)
+    }
+
+    /// See [`FailureStop::parse_env_value`] for why this is split out.
+    pub(crate) fn parse_env_value(raw: &str) -> Option<Self> {
+        match raw
+            .trim()
+            .to_ascii_lowercase()
+            .replace(['-', ' '], "_")
+            .as_str()
+        {
+            "whole_run" | "wholerun" | "run" => Some(Self::WholeRun),
+            "failed_items" | "faileditems" | "items" => Some(Self::FailedItems),
+            "nothing" | "none" => Some(Self::Nothing),
+            _ => None,
+        }
+    }
 }
 
 /// Which stage produced a failure.
@@ -521,6 +586,59 @@ mod tests {
             0.0,
             "no chunks means no division"
         );
+    }
+
+    /// Python's flag is a boolean whose `true` means *stop early*, so the
+    /// polarity is inverted relative to our variant names. Getting this
+    /// backwards would silently turn every default run into a run-to-end.
+    #[test]
+    fn python_raise_flag_maps_onto_the_stop_axis() {
+        for raw in ["true", "TRUE", " True ", "1", "yes"] {
+            assert_eq!(
+                FailureStop::parse_env_value(raw),
+                Some(FailureStop::FailFast),
+                "raising on the first error is stopping early: {raw:?}"
+            );
+        }
+        for raw in ["false", "False", "0", "no"] {
+            assert_eq!(
+                FailureStop::parse_env_value(raw),
+                Some(FailureStop::RunToEnd),
+                "not raising means every item still runs: {raw:?}"
+            );
+        }
+        // Unparseable leaves the caller's default alone rather than guessing.
+        for raw in ["", "maybe", "2"] {
+            assert_eq!(FailureStop::parse_env_value(raw), None, "{raw:?}");
+        }
+    }
+
+    /// The default must equal Python's default, or a shared `.env` that sets
+    /// nothing would still behave differently in the two SDKs.
+    #[test]
+    fn the_stop_default_matches_pythons_unset_default() {
+        // Python: `os.getenv("RAISE_INCREMENTAL_LOADING_ERRORS", "true")`.
+        assert_eq!(
+            FailureStop::parse_env_value("true"),
+            Some(FailureStop::default())
+        );
+    }
+
+    #[test]
+    fn rollback_scope_env_values_parse() {
+        assert_eq!(
+            RollbackScope::parse_env_value("whole_run"),
+            Some(RollbackScope::WholeRun)
+        );
+        assert_eq!(
+            RollbackScope::parse_env_value("failed-items"),
+            Some(RollbackScope::FailedItems)
+        );
+        assert_eq!(
+            RollbackScope::parse_env_value("NOTHING"),
+            Some(RollbackScope::Nothing)
+        );
+        assert_eq!(RollbackScope::parse_env_value("everything"), None);
     }
 
     #[test]
