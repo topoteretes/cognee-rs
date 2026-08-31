@@ -116,9 +116,20 @@ fn check_destination(destination: &Path) -> Result<(), SdkError> {
             "destination must be a non-empty path".to_string(),
         ));
     }
-    let Ok(mut entries) = std::fs::read_dir(destination) else {
-        // Absent (or unreadable — the export itself will report that better).
-        return Ok(());
+    let mut entries = match std::fs::read_dir(destination) {
+        Ok(entries) => entries,
+        // Genuinely absent: the export creates it.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        // Anything else means emptiness could not be verified — a file where a
+        // directory was expected, or a directory that cannot be read. A guard
+        // whose purpose is to keep unrelated files out of an uploaded tarball
+        // must not treat "cannot tell" as "nothing there".
+        Err(error) => {
+            return Err(SdkError::Validation(format!(
+                "destination '{}' cannot be checked for emptiness: {error}",
+                destination.display()
+            )));
+        }
     };
     if entries.next().is_some() {
         return Err(SdkError::Validation(format!(
@@ -211,6 +222,24 @@ mod tests {
                 "{path} should be rejected as invalid, got {error:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_destination_whose_emptiness_cannot_be_verified_is_rejected() {
+        // A path that exists but is a *file* cannot be read as a directory. The
+        // guard used to treat any read_dir error as "absent" and wave it
+        // through, which is the opposite of what a guard against packing
+        // unrelated files should do when it cannot tell what is there.
+        let file = std::env::temp_dir().join(format!("cogx-not-a-dir-{}", std::process::id()));
+        std::fs::write(&file, b"x").expect("write");
+
+        let error = check_destination(&file).expect_err("a file is not a usable destination");
+        assert!(
+            matches!(error, SdkError::Validation(_)),
+            "expected a validation error, got {error:?}"
+        );
+
+        let _ = std::fs::remove_file(&file);
     }
 
     #[test]
