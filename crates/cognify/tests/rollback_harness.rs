@@ -557,3 +557,18 @@ pub fn temporal_config() -> CognifyConfig {
         .with_data_per_batch(1)
         .with_temporal_cognify(true)
 }
+
+/// The same extraction fixture as [`extraction_config`], but leaving
+/// `chunks_per_batch` at the shipped
+/// [`DEFAULT_CHUNKS_PER_BATCH`](cognee_cognify::config::DEFAULT_CHUNKS_PER_BATCH)
+/// — the batch size every production run actually uses.
+///
+/// A dataset of a handful of files is then a *single* batch, which is what
+/// makes the abort-time partition look qualitatively different from the
+/// one-chunk-per-batch fixtures: every extraction call is dispatched before
+/// the failure is noticed, so nothing is ever left unreached.
+pub fn default_batch_extraction_config() -> CognifyConfig {
+    CognifyConfig::default()
+        .with_chunk_size(1500)
+        .with_summarization(false)
+}
