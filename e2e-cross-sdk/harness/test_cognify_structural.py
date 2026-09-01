@@ -5,10 +5,10 @@ LLM-based graph extraction is non-deterministic, so we compare structural
 properties (counts, type sets) rather than exact values.
 """
 
-import os
 import pytest
 
 from helpers import (
+    COUNT_TOLERANCE,
     open_db,
     query_data,
     query_nodes,
@@ -20,18 +20,6 @@ from conftest import requires_openai
 
 
 # ── Tests ────────────────────────────────────────────────────────────────────
-
-
-# Maximum accepted relative divergence in node/edge counts between the two SDKs,
-# as |py - rust| / mean. Overridable so a genuinely noisy signal can be widened
-# deliberately, in one place, with the new value visible in CI config.
-#
-# This used to be enforced by `warnings.warn`, which meant the two
-# "within_tolerance" tests below could only fail if a side produced literally
-# zero — they asserted nothing about tolerance despite their names. If real-LLM
-# runs prove this bound too tight, raise it here or mock the LLM
-# (crates/llm/src/mock/ + COGNEE_TEST_REPLAY); do not return to warning.
-COUNT_TOLERANCE = float(os.environ.get("COGNEE_PARITY_COUNT_TOLERANCE", "0.5"))
 
 
 @requires_openai

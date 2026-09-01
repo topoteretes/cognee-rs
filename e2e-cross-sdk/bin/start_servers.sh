@@ -112,16 +112,18 @@ PY_PID=$!
 # servers never share a workspace.
 #
 # Note the env-var asymmetry, which is easy to get wrong: the Rust config reads
-# COGNEE_SYSTEM_ROOT_DIRECTORY and COGNEE_DATA_ROOT_DIRECTORY (prefixed —
-# crates/lib/src/config.rs:589,592) but CACHE_ROOT_DIRECTORY *unprefixed*
-# (:667). Python reads all three unprefixed. Both spellings are therefore set
-# below for the two that differ.
+# COGNEE_SYSTEM_ROOT_DIRECTORY and COGNEE_DATA_ROOT_DIRECTORY (prefixed) but
+# CACHE_ROOT_DIRECTORY *unprefixed* — grep those names in
+# crates/lib/src/config.rs. Python reads all three unprefixed. Both spellings
+# are therefore set below for the two that differ.
 #
 # Until this was fixed, only the `cd "$RS_WORKSPACE"` below kept the servers
 # apart: the two bare *_ROOT_DIRECTORY exports were silently ignored by the Rust
 # binary, which fell back to its relative defaults, which happened to resolve
 # under the workspace we had just cd'd into. Any absolute-path override would
-# have gone nowhere. VECTOR_DB_PROVIDER=mock selects the in-memory vector store (the binary is
+# have gone nowhere.
+#
+# VECTOR_DB_PROVIDER=mock selects the in-memory vector store (the binary is
 # built with --features dev-mock): the harness has no Postgres, and the OSS
 # server's only other option is pgvector. Without this the server derives the
 # pgvector connection string from SYSTEM_ROOT_DIRECTORY (a filesystem path),

@@ -144,8 +144,9 @@ def test_me_after_logout(py_client, rs_client):
         "is a harness architecture change, not an SDK bug."
     ),
     # Deterministic under the harness's isolated-DB architecture. An XPASS
-    # means that architecture changed, which should be noticed. (Moot in the
-    # default config, where the auth fixture skips this module anyway.)
+    # means that architecture changed, which should be noticed. Note this test
+    # takes py_client/rs_client, not authed_clients, so it really does run in
+    # the default config — it xfails because the OSS server has no /auth/login.
     strict=True,
 )
 def test_jwt_cross_compat(py_client, rs_client):

@@ -23,13 +23,12 @@ are what get compared across SDKs — with cognify-style tolerances, since
 LLM extraction is non-deterministic.
 """
 
-import os
 import json
 import re
 
 import pytest
 
-from helpers import NLP_TEXT_FILE
+from helpers import COUNT_TOLERANCE, NLP_TEXT_FILE
 from seed import seed_cognify, seed_dataset_with_text
 from conftest import requires_openai
 
@@ -245,11 +244,6 @@ def test_hybrid_context_structural_parity(authed_clients, hybrid_seeded_dataset)
     assert py_facts > 0, "Python produced zero facts"
     assert rs_facts > 0, "Rust produced zero facts"
     _assert_within_tolerance("Fact", py_facts, rs_facts)
-
-
-# Maximum accepted relative divergence, as |py - rust| / mean. Overridable so a
-# genuinely noisy signal can be widened deliberately rather than silently.
-COUNT_TOLERANCE = float(os.environ.get("COGNEE_PARITY_COUNT_TOLERANCE", "0.5"))
 
 
 def _assert_within_tolerance(label: str, py_count: int, rust_count: int) -> None:
