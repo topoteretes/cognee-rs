@@ -255,3 +255,91 @@ async fn pipeline_run_id_indexes_exist() {
         );
     }
 }
+
+/// The rollback sweep's exclusivity check (`get_unique_nodes_for_run` /
+/// `get_unique_edges_for_run`) correlates a subquery on `slug` alone. Without a
+/// standalone `slug` index on each table SQLite plans that subquery as
+/// `SCAN n2`, making the sweep O(n²) in the run's row count — a 40 000-row run
+/// took 52.8 s in one call. These indexes are what makes it a `SEARCH`, so a
+/// future migration edit must not silently drop them.
+///
+/// `nodes` keeps the baseline's `(dataset_id, slug)` composite alongside: it is
+/// declared on Python's model too, and `slug` is its second column, so it
+/// cannot serve the correlation on its own.
+#[tokio::test]
+async fn slug_indexes_exist() {
+    use sea_orm::ConnectionTrait;
+
+    let db = connect("sqlite::memory:").await.expect("connect");
+    initialize(&db).await.expect("initialize");
+
+    for (table, index) in [
+        ("nodes", "ix_nodes_slug"),
+        ("edges", "ix_edges_slug"),
+        // The composite the standalone index sits next to, not replaces.
+        ("nodes", "idx_nodes_dataset_slug"),
+    ] {
+        let rows = db
+            .query_all(sea_orm::Statement::from_string(
+                sea_orm::DatabaseBackend::Sqlite,
+                format!(
+                    "SELECT name FROM sqlite_master \
+                     WHERE type='index' AND tbl_name='{table}' AND name='{index}'"
+                ),
+            ))
+            .await
+            .unwrap_or_else(|e| panic!("index query failed: {e}"));
+        assert!(
+            !rows.is_empty(),
+            "expected index '{index}' on table '{table}' to exist"
+        );
+    }
+}
+
+/// The standalone `slug` indexes must actually be *used* by the exclusivity
+/// subquery — an index the planner ignores costs write throughput and buys
+/// nothing. Assert on SQLite's plan rather than on the index's existence alone.
+#[tokio::test]
+async fn slug_exclusivity_subquery_uses_the_slug_index() {
+    use sea_orm::ConnectionTrait;
+
+    let db = connect("sqlite::memory:").await.expect("connect");
+    initialize(&db).await.expect("initialize");
+
+    for (table, alias, index) in [
+        ("nodes", "n2", "ix_nodes_slug"),
+        ("edges", "e2", "ix_edges_slug"),
+    ] {
+        let plan = db
+            .query_all(sea_orm::Statement::from_string(
+                sea_orm::DatabaseBackend::Sqlite,
+                format!(
+                    "EXPLAIN QUERY PLAN \
+                     SELECT \"{table}\".\"id\" FROM \"{table}\" \
+                     WHERE \"{table}\".\"pipeline_run_id\" = 'r' \
+                       AND \"{table}\".\"dataset_id\" = 'd' \
+                       AND NOT EXISTS (SELECT 1 FROM \"{table}\" AS \"{alias}\" \
+                         WHERE \"{alias}\".\"slug\" = \"{table}\".\"slug\" \
+                           AND (\"{alias}\".\"pipeline_run_id\" IS NULL \
+                                OR \"{alias}\".\"pipeline_run_id\" <> 'r' \
+                                OR \"{alias}\".\"dataset_id\" <> 'd')) \
+                     ORDER BY \"{table}\".\"created_at\" ASC"
+                ),
+            ))
+            .await
+            .unwrap_or_else(|e| panic!("EXPLAIN QUERY PLAN failed: {e}"))
+            .iter()
+            .map(|row| row.try_get::<String>("", "detail").unwrap_or_default())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(
+            plan.contains(&format!("SEARCH {alias} USING INDEX {index}")),
+            "exclusivity subquery over '{table}' must use '{index}'; plan was:\n{plan}"
+        );
+        assert!(
+            !plan.contains(&format!("SCAN {alias}")),
+            "exclusivity subquery over '{table}' still full-scans; plan was:\n{plan}"
+        );
+    }
+}

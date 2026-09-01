@@ -272,6 +272,10 @@ async fn baseline_creates_full_table_set_sqlite() {
 /// Bumped to 3 for `m20260916_000001_provenance_pipeline_run_id`: `nodes` and
 /// `edges` gain the nullable run-ownership column, which existing 0.2.0
 /// databases must acquire without their baseline being rewritten.
+/// Bumped to 4 for `m20260917_000001_graph_slug_indexes`: the rollback sweep's
+/// exclusivity check correlates on `slug` alone, which neither table could
+/// serve, so both gain a standalone `slug` index — again something existing
+/// databases must acquire without the baseline being rewritten.
 #[test]
 fn relational_chain_is_baseline_plus_additive_migrations() {
     use sea_orm_migration::MigratorTrait;
@@ -281,7 +285,7 @@ fn relational_chain_is_baseline_plus_additive_migrations() {
         .collect();
     assert_eq!(
         names.len(),
-        3,
+        4,
         "unexpected migration-chain length — chain: {names:?}"
     );
     assert!(
