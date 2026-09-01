@@ -1192,10 +1192,20 @@ impl DeleteService {
 
             // Edges contribute to EdgeType_relationship_name and Triplet_text.
             for edge in edges {
-                by_collection
-                    .entry(("EdgeType".to_string(), "relationship_name".to_string()))
-                    .or_default()
-                    .push(EdgeType::deterministic_id(&edge.relationship_name));
+                // The EdgeType point id is derived at write time from the edge's
+                // *retrieval text*, not its relationship name — cognify's
+                // `edge_retrieval_text` prefers the nonblank `edge_text` property
+                // (the trimmed LLM edge description) and only falls back to the
+                // relationship name. Recomputing from the bare relationship name
+                // here targeted a UUID that was never written for any described
+                // edge, leaving its vector behind permanently.
+                let retrieval_text = edge_type_retrieval_text(edge);
+                if !retrieval_text.is_empty() {
+                    by_collection
+                        .entry(("EdgeType".to_string(), "relationship_name".to_string()))
+                        .or_default()
+                        .push(EdgeType::deterministic_id(&retrieval_text));
+                }
 
                 by_collection
                     .entry(("Triplet".to_string(), "text".to_string()))
@@ -1792,6 +1802,29 @@ fn parse_indexed_fields(value: &serde_json::Value) -> Vec<String> {
             vec![]
         }
     }
+}
+
+/// Recompute the text an edge's `EdgeType` vector id was derived from.
+///
+/// Must resolve to the same text cognify's `edge_retrieval_text` produced for the
+/// edge: prefer the nonblank `edge_text` property, else the relationship name,
+/// else empty (cognify writes no vector for an empty text, so the caller must not
+/// try to delete one).
+///
+/// The text has to match byte for byte, not merely in spirit — cognify turns it
+/// into the point id with `EdgeType::new_deterministic(text, dataset_id)`, whose
+/// id half is a uuid5 hash of the text alone, so any difference yields a
+/// different UUID and the delete silently misses.
+///
+/// `EdgeType::retrieval_text` lives in `cognee-models` precisely so the writing
+/// and deleting lanes can share this derivation instead of restating it.
+fn edge_type_retrieval_text(edge: &GraphEdge) -> String {
+    let edge_text = edge
+        .attributes
+        .as_ref()
+        .and_then(|attrs| attrs.get("edge_text"))
+        .and_then(serde_json::Value::as_str);
+    EdgeType::retrieval_text(edge_text, &edge.relationship_name)
 }
 
 fn triplet_vector_id(edge: &GraphEdge) -> Uuid {
@@ -2522,6 +2555,116 @@ mod tests {
                 .unwrap(),
             0,
             "EdgeType vector point should be removed"
+        );
+        assert_eq!(
+            vector_db.collection_size("Triplet", "text").await.unwrap(),
+            0,
+            "Triplet vector point should be removed"
+        );
+    }
+
+    /// An edge carrying a description must have its `EdgeType` vector removed.
+    ///
+    /// Cognify derives that point's id from the edge's retrieval text — the
+    /// `edge_text` property — while the delete path used to derive it from the
+    /// bare relationship name. For any described edge those are different UUIDs,
+    /// so the delete targeted a point that was never written and the real one
+    /// survived. It could never be collected later either: the orphan sweep looks
+    /// for zero-degree `EdgeType` graph nodes, and cognify writes none.
+    #[tokio::test]
+    async fn delete_dataset_cleans_edge_vector_points_for_described_edges() {
+        let (svc, storage, db, _graph_db, vector_db) = make_service_with_graph_vector().await;
+        let owner = Uuid::new_v4();
+        let (dataset_id, data_id) =
+            seed_dataset_with_data(&db, &storage, owner, "described_edge_ds").await;
+
+        let source_id = Uuid::new_v4();
+        let target_id = Uuid::new_v4();
+        let relationship_name = "worked_at";
+        // What the LLM put in `Edge.description`, carried through expansion as
+        // the `edge_text` property. This, not "worked_at", is what the EdgeType
+        // vector id was hashed from.
+        let edge_text = "Einstein worked at Princeton";
+
+        let triplet_id = Triplet::new(
+            source_id,
+            target_id,
+            relationship_name.to_string(),
+            String::new(),
+        )
+        .id;
+
+        ops::graph_storage::upsert_edges(
+            &db,
+            &[GraphEdge {
+                id: Uuid::new_v4(),
+                slug: triplet_id,
+                user_id: owner,
+                data_id,
+                dataset_id,
+                source_node_id: source_id,
+                destination_node_id: target_id,
+                relationship_name: relationship_name.to_string(),
+                label: Some(relationship_name.to_string()),
+                attributes: Some(serde_json::json!({ "edge_text": edge_text })),
+                created_at: chrono::Utc::now(),
+            }],
+        )
+        .await
+        .unwrap();
+
+        vector_db
+            .create_collection("EdgeType", "relationship_name", 3)
+            .await
+            .unwrap();
+        vector_db
+            .create_collection("Triplet", "text", 3)
+            .await
+            .unwrap();
+
+        // Seed the point at the id cognify actually writes: hashed from the
+        // retrieval text. Under the old code the delete looked for
+        // `deterministic_id("worked_at")` and this point was never touched.
+        let et_point = cognee_vector::VectorPoint::new(
+            EdgeType::deterministic_id(edge_text),
+            vec![1.0, 0.0, 0.0],
+        );
+        assert_ne!(
+            EdgeType::deterministic_id(edge_text),
+            EdgeType::deterministic_id(relationship_name),
+            "the two derivations must differ, else this test proves nothing"
+        );
+        vector_db
+            .index_points("EdgeType", "relationship_name", &[et_point])
+            .await
+            .unwrap();
+        let triplet_point = cognee_vector::VectorPoint::new(triplet_id, vec![0.0, 1.0, 0.0]);
+        vector_db
+            .index_points("Triplet", "text", &[triplet_point])
+            .await
+            .unwrap();
+
+        let result = svc
+            .execute(&DeleteRequest {
+                scope: DeleteScope::Dataset {
+                    owner_id: owner,
+                    dataset_name: "described_edge_ds".to_string(),
+                },
+                mode: DeleteMode::Soft,
+                memory_only: false,
+            })
+            .await
+            .expect("execute should succeed");
+
+        assert_eq!(result.deleted_datasets, 1);
+        assert_eq!(result.deleted_vector_points, 2);
+        assert_eq!(
+            vector_db
+                .collection_size("EdgeType", "relationship_name")
+                .await
+                .unwrap(),
+            0,
+            "the described edge's EdgeType vector should be removed"
         );
         assert_eq!(
             vector_db.collection_size("Triplet", "text").await.unwrap(),
