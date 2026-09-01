@@ -11,15 +11,21 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Incremental state is useless on CI (fresh checkout every run) and wastes
-  # 2–5 GB of the macOS runner's ~14 GB disk.
+  # Incremental state is useless on CI (fresh checkout every run), so it is
+  # pure disk cost.
   CARGO_INCREMENTAL: "0"
-  # Debug info inflates .a files by ~40 %; strip it on CI to reduce disk pressure.
+  # Strips debug info from cognee-capi itself. This is *not* what keeps the
+  # build small, despite the obvious reading: capi/Cargo.toml sets
+  # `debug = true` per package for the 24 first-party cognee-* crates, and a
+  # named package override beats `profile.dev.debug` (which is all this env var
+  # maps to), so every one of those still compiles with full DWARF. The size
+  # win comes from [profile.dev.package."*"] debug = 0 on the dependency
+  # closure, which is in the manifest and needs no help from here.
   CARGO_PROFILE_DEV_DEBUG: "0"
 
 jobs:
   ios-check:
-    name: iOS targets (cargo build + Swift typecheck)
+    name: iOS targets (link + Swift typecheck)
     # macos-14 = Apple Silicon (M1).  Required for aarch64-apple-ios targets.
     runs-on: macos-14
 
@@ -50,25 +56,57 @@ jobs:
       - name: Install protoc (required by lance-encoding build script)
         run: brew install protobuf
 
-      # `cargo build` (debug, CARGO_PROFILE_DEV_DEBUG=0) links both iOS targets,
-      # catching linker errors that type-checking alone misses.
-      - name: Build — aarch64-apple-ios (device)
+      # Link — not merely type-check — both iOS targets, so an unresolved or
+      # mismatched symbol anywhere in the Rust closure fails here instead of in
+      # a downstream Xcode build.
+      #
+      # `--crate-type cdylib` overrides the `["cdylib", "staticlib"]` list in
+      # capi/cognee-capi/Cargo.toml for this invocation only (the same trick
+      # build_xcframework.sh uses in the other direction, documented at
+      # capi/cognee-capi/Cargo.toml:20-25). The cdylib is the slice worth
+      # building: rustc emits a staticlib by archiving objects *without*
+      # resolving symbols, so a staticlib build runs no linker at all and would
+      # add nothing this job does not already get from `cargo check`. The
+      # shipped staticlib is built separately, in release, by
+      # capi/scripts/build_xcframework.sh.
+      #
+      # The `test -f` guard is deliberate: rustc treats an unsupported crate
+      # type as a warning, not an error, so without it a future toolchain could
+      # quietly downgrade this step to a compile-only check.
+      - name: Link — aarch64-apple-ios (device)
         run: |
-          cargo build \
+          cargo rustc --crate-type cdylib \
             --target aarch64-apple-ios \
             --manifest-path capi/cognee-capi/Cargo.toml \
             --no-default-features \
             --features sqlite,testing,mock-llm,lancedb
-          df -h /
+          test -f capi/target/aarch64-apple-ios/debug/libcognee_capi.dylib
 
-      - name: Build — aarch64-apple-ios-sim (simulator)
+      - name: Link — aarch64-apple-ios-sim (simulator)
         run: |
-          cargo build \
+          cargo rustc --crate-type cdylib \
             --target aarch64-apple-ios-sim \
             --manifest-path capi/cognee-capi/Cargo.toml \
             --no-default-features \
             --features sqlite,testing,mock-llm,lancedb
-          df -h / && du -sh capi/target
+          test -f capi/target/aarch64-apple-ios-sim/debug/libcognee_capi.dylib
+
+      # Its own step with `if: always()`, both deliberate. ENOSPC aborts the
+      # step it occurs in, so a `df` appended to a build step never runs on the
+      # one failure it exists to diagnose.
+      #
+      # `/System/Volumes/Data` is the writable volume the build lands on. `/` is
+      # the read-only system snapshot: across both builds of run 31305066951 its
+      # `Used` column sat unchanged at 9.6Gi while capi/target grew to 5.8G, so
+      # only the container-shared `Avail` there carried any signal (36Gi ->
+      # 34Gi of a 320Gi disk). Peak usage is nowhere near the runner's limit —
+      # the "full builds do not fit" premise this job was originally written
+      # against no longer holds.
+      - name: Disk usage after linking
+        if: always()
+        run: |
+          df -h /System/Volumes/Data
+          du -sh capi/target || true
 
       # Validate Package.swift parses correctly (does not require the xcframework
       # binary — `dump-package` only reads the manifest).

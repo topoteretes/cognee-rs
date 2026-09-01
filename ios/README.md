@@ -97,15 +97,17 @@ Test Suite 'All tests' passed at …
 
 ## CI
 
-The `ios` workflow (`.github/workflows/ios.yml`) runs on every push and PR on a `macos-14` Apple Silicon runner. Because a full xcframework build exceeds GitHub Actions' available disk, CI uses `cargo check` rather than `cargo build`:
+The `ios` workflow (`.github/workflows/ios.yml`) runs on every push and PR on a `macos-14` Apple Silicon runner. CI **links** both iOS targets rather than only type-checking them:
 
-- `cargo check --target aarch64-apple-ios` — type-checks the Rust C API for the device target
-- `cargo check --target aarch64-apple-ios-sim` — type-checks for the simulator target
+- `cargo rustc --crate-type cdylib --target aarch64-apple-ios` — compiles *and links* the Rust C API for the device target
+- `cargo rustc --crate-type cdylib --target aarch64-apple-ios-sim` — same for the simulator target
 - `swift package dump-package` — validates `Package.swift`
 - `swiftc -typecheck` — type-checks the Swift wrapper against the real C API header via a synthesised Clang module, catching renamed `cg_sdk_*` functions, changed argument counts, and changed `CgErrorCode` values — no xcframework needed
 - `swiftc -parse` — syntax-checks the Swift test sources (`@testable import CogneeSDK` requires a built module, so only parse-checking is possible in CI)
 
-This catches Rust type errors, C API signature drift, and Swift syntax mistakes without needing the ~6.6 GB xcframework on the runner. XCTest behavioral tests run manually via `xcodebuild test` before each push.
+`cdylib` is the crate type that exercises the linker: rustc emits a staticlib by archiving objects without resolving symbols, so building one would catch nothing beyond `cargo check`. The shipped staticlib slices are a separate, release build performed by `capi/scripts/build_xcframework.sh`.
+
+This catches Rust type errors, unresolved symbols, C API signature drift, and Swift syntax mistakes without assembling the ~6.6 GB xcframework on the runner. The two debug link builds together occupy ~5.8 GB of `capi/target` against ~36 GB of free space on the runner, so disk is not the constraint it once was — an earlier revision of this job used `cargo check` on the assumption that a full build would not fit. What CI still cannot do is *run* the tests: XCTest behavioral tests are executed manually via `xcodebuild test` before each push.
 
 ## Architecture
 
