@@ -136,6 +136,15 @@ dataset also names, or a row written before ownership tracking existed. The
 worst case is a surplus artifact that keeps an owner, never an artifact with no
 owner at all.
 
+That claim is recorded even when the artifact is not written. Graph extraction
+filters out edges the graph already holds, so a file cognified in a later run
+adds no second copy of an edge an earlier file created — but it still records
+ownership of it. Without that row the earlier file would be the edge's only
+owner, and deleting it would take the edge's vectors away from a file that still
+references it. Ownership is per (dataset, data item): an edge shared across two
+*datasets* is still governed by each dataset's own exclusivity check, the same
+limitation entity ownership has.
+
 One caveat. **Cancellation is swept**, unlike Python — though there is no
 caller-facing cancel handle on `cognify()` today, and simply dropping the future
 runs no sweep at all.

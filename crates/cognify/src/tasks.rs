@@ -945,7 +945,7 @@ pub async fn extract_graph_from_data(
         .map(|chunk| (chunk.base.id, chunk.base.importance_weight.unwrap_or(0.5)))
         .collect();
 
-    let (nodes, edges, producers) = expand_with_nodes_and_edges(
+    let (nodes, edges, claimed_existing_edges, producers) = expand_with_nodes_and_edges(
         all_graphs,
         input.dataset_id,
         &chunk_node_sets,
@@ -989,6 +989,13 @@ pub async fn extract_graph_from_data(
         &updated_chunks,
         &dedup_result.unique_nodes,
         &dedup_result.unique_edges,
+        // Edges an earlier run already put in the graph, which this run
+        // produced too. They get ownership rows and nothing else — see the
+        // `claimed_existing_edges` note on `expand_with_nodes_and_edges`. The
+        // row is what makes `get_unique_edges_for_data` stop calling the edge
+        // exclusive to the earlier file, so deleting that file no longer takes
+        // the edge away from this one.
+        &claimed_existing_edges,
         &producers,
     )
     .await?;
@@ -4145,20 +4152,37 @@ fn semantic_edge_provenance_rows(
 /// write is an idempotent upsert that leaves `pipeline_run_id` alone (it is
 /// deliberately absent from the `ON CONFLICT` update list, so the first run to
 /// claim an artifact keeps it).
+///
+/// One exception to "subset": `claimed_existing_edges` is written *only* here.
+/// Those edges never reach `add_data_points`, because re-writing them to the
+/// graph is exactly what the extraction dedup filter exists to prevent — but
+/// their ownership rows are what keeps an earlier file's deletion from taking
+/// a still-referenced edge with it.
 async fn record_extraction_ownership(
     db: &DatabaseConnection,
     id: LedgerIdentity,
     chunks: &[DocumentChunk],
     entities: &[GraphNodePair],
     edges: &[GraphEdgePair],
+    // Edges this run produced that the extraction dedup filter kept out of
+    // `edges` because an earlier run had already written them to the graph.
+    // They are ownership-only: rows here, no graph or vector write anywhere.
+    claimed_existing_edges: &[GraphEdgePair],
     producers: &ArtifactProducers,
 ) -> Result<(), CognifyError> {
     let chunk_data_map = chunk_document_map(chunks);
     let entity_data_map = entity_document_map(entities, &chunk_data_map);
 
     let prov_nodes = entity_provenance_rows(id, entities, &chunk_data_map, producers);
-    let prov_edges =
+    let mut prov_edges =
         semantic_edge_provenance_rows(id, edges, &chunk_data_map, &entity_data_map, producers);
+    prov_edges.extend(semantic_edge_provenance_rows(
+        id,
+        claimed_existing_edges,
+        &chunk_data_map,
+        &entity_data_map,
+        producers,
+    ));
 
     cognee_database::ops::graph_storage::upsert_provenance_graph(db, &prov_nodes, &prov_edges)
         .await?;
@@ -7598,7 +7622,7 @@ mod tests {
         let dataset_id = Uuid::new_v4();
         let resolver = NoOpOntologyResolver::new();
 
-        let (_nodes, edges, _producers) = expand_with_nodes_and_edges(
+        let (_nodes, edges, _claimed_edges, _producers) = expand_with_nodes_and_edges(
             vec![(chunk_id, graph)],
             dataset_id,
             &HashMap::new(),
