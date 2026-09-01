@@ -8,6 +8,7 @@ properties (counts, type sets) rather than exact values.
 import pytest
 
 from helpers import (
+    COUNT_TOLERANCE,
     open_db,
     query_data,
     query_nodes,
@@ -65,12 +66,10 @@ def test_cognify_node_count_within_tolerance(both_cognified):
 
     assert py_count > 0, "Python produced zero nodes"
     assert rust_count > 0, "Rust produced zero nodes"
-    if ratio > 0.5:
-        import warnings
-        warnings.warn(
-            f"Node count divergence is large ({ratio:.0%}): "
-            f"Python={py_count}, Rust={rust_count}"
-        )
+    assert ratio <= COUNT_TOLERANCE, (
+        f"Node count divergence {ratio:.0%} exceeds the "
+        f"{COUNT_TOLERANCE:.0%} tolerance: Python={py_count}, Rust={rust_count}"
+    )
 
 
 @requires_openai
@@ -86,17 +85,15 @@ def test_cognify_edge_count_within_tolerance(both_cognified):
     diff = abs(py_count - rust_count)
     ratio = diff / avg if avg > 0 else 0
 
-    # LLM extraction is highly non-deterministic for edges (different
-    # relationship phrasing, merging, etc.).  Only assert both produced
-    # some edges; log the ratio for monitoring.
+    # LLM extraction is more non-deterministic for edges than for nodes
+    # (relationship phrasing, merging). If COUNT_TOLERANCE proves too tight
+    # here specifically, widen it there rather than dropping the assertion.
     assert py_count > 0, "Python produced zero edges"
     assert rust_count > 0, "Rust produced zero edges"
-    if ratio > 0.5:
-        import warnings
-        warnings.warn(
-            f"Edge count divergence is large ({ratio:.0%}): "
-            f"Python={py_count}, Rust={rust_count}"
-        )
+    assert ratio <= COUNT_TOLERANCE, (
+        f"Edge count divergence {ratio:.0%} exceeds the "
+        f"{COUNT_TOLERANCE:.0%} tolerance: Python={py_count}, Rust={rust_count}"
+    )
 
 
 @requires_openai

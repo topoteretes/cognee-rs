@@ -240,6 +240,33 @@ def both_clients(py_client, rs_client):
     return {"py": py_client, "rs": rs_client}
 
 
+# Tests skipped because a server exposes no /api/v1/auth/* surface. Collected so
+# the run can state the count instead of burying it in per-test skip reasons: a
+# suite reporting "120 passed, 40 skipped" reads as healthy, and the reason those
+# 40 did not run is the single most important fact about the run.
+_AUTH_SKIPPED: list[str] = []
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    """State the auth-skip count prominently at the end of the run."""
+    if not _AUTH_SKIPPED:
+        return
+    terminalreporter.write_sep("=", "cross-SDK parity: auth-gated tests skipped")
+    terminalreporter.write_line(
+        f"{len(_AUTH_SKIPPED)} test(s) did not execute because a server exposes "
+        "no /api/v1/auth/* routes."
+    )
+    terminalreporter.write_line(
+        "The OSS cognee-http-server ships no auth router (only the "
+        "AuthenticatedUser extractor), and bin/start_servers.sh launches exactly "
+        "that binary — so these tests never run in the default configuration."
+    )
+    terminalreporter.write_line(
+        "To make them count: boot a closed cognee-http-cloud binary, or set "
+        "COGNEE_PARITY_REQUIRE_AUTH=1 to turn these skips into failures."
+    )
+
+
 @pytest.fixture(scope="session")
 def auth_endpoints_available() -> dict:
     """Probe each server for the closed-cloud ``/api/v1/auth/*`` surface.
@@ -282,12 +309,27 @@ def authed_clients(both_clients, auth_endpoints_available):
     """
     missing = [name for name, ok in auth_endpoints_available.items() if not ok]
     if missing:
-        pytest.skip(
+        _AUTH_SKIPPED.append(", ".join(missing))
+        message = (
             "Cognee server(s) do not expose /api/v1/auth/* "
             f"(missing on: {', '.join(missing)}) — likely an OSS build. "
             "These tests cover the closed cognee-http-cloud auth surface; run them "
             "against a closed cognee-cloud-rust deployment (plan §6.1)."
         )
+        # Opt-in strictness. The default remains a skip, because the OSS server
+        # genuinely has no auth router and failing every one of these on an OSS
+        # build would be noise rather than signal. But a skip is invisible, and
+        # this fixture gates ~20 of the harness's files — the whole of CI phases
+        # 1, 2 and 2b — so a run that believes it is checking auth-gated parity
+        # needs a way to insist. Set COGNEE_PARITY_REQUIRE_AUTH=1 (e.g. in a job
+        # that boots a closed cognee-http-cloud binary) to turn the skip into a
+        # failure.
+        if os.environ.get("COGNEE_PARITY_REQUIRE_AUTH", "").lower() in {"1", "true", "yes"}:
+            pytest.fail(
+                "COGNEE_PARITY_REQUIRE_AUTH is set, but " + message,
+                pytrace=False,
+            )
+        pytest.skip(message)
     creds = {"username": "test@example.com", "password": "test_password_123"}
     for name, c in both_clients.items():
         # Bootstrap user — ignore 409 / 422 "already exists" on re-runs.

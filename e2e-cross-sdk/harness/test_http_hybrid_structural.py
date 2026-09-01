@@ -25,11 +25,10 @@ LLM extraction is non-deterministic.
 
 import json
 import re
-import warnings
 
 import pytest
 
-from helpers import NLP_TEXT_FILE
+from helpers import COUNT_TOLERANCE, NLP_TEXT_FILE
 from seed import seed_cognify, seed_dataset_with_text
 from conftest import requires_openai
 
@@ -236,26 +235,28 @@ def test_hybrid_context_structural_parity(authed_clients, hybrid_seeded_dataset)
         f"  Overlap:         {sorted(intersection)}"
     )
 
-    # Passage-count tolerance: both > 0, warn (not fail) on >50% divergence.
+    # Passage-count tolerance: both > 0, and within COUNT_TOLERANCE.
     assert py_passages > 0, "Python produced zero passages"
     assert rs_passages > 0, "Rust produced zero passages"
-    _warn_if_divergent("Passage", py_passages, rs_passages)
+    _assert_within_tolerance("Passage", py_passages, rs_passages)
 
-    # Fact-count tolerance: both > 0, warn (not fail) on >50% divergence.
+    # Fact-count tolerance: both > 0, and within COUNT_TOLERANCE.
     assert py_facts > 0, "Python produced zero facts"
     assert rs_facts > 0, "Rust produced zero facts"
-    _warn_if_divergent("Fact", py_facts, rs_facts)
+    _assert_within_tolerance("Fact", py_facts, rs_facts)
 
 
-def _warn_if_divergent(label: str, py_count: int, rust_count: int) -> None:
-    """Warn (do not fail) if the two counts diverge by more than 50%.
+def _assert_within_tolerance(label: str, py_count: int, rust_count: int) -> None:
+    """Fail if the two counts diverge by more than COUNT_TOLERANCE.
 
-    Matches the warn-only pattern in test_cognify_structural.py.
+    This previously warned instead of asserting, which made the surrounding
+    checks unfailable except on a literal zero. If the bound proves too tight
+    under real-LLM runs, raise COGNEE_PARITY_COUNT_TOLERANCE or mock the LLM;
+    do not return to warning.
     """
     avg = (py_count + rust_count) / 2
     ratio = abs(py_count - rust_count) / avg if avg > 0 else 0
-    if ratio > 0.5:
-        warnings.warn(
-            f"{label} count divergence is large ({ratio:.0%}): "
-            f"Python={py_count}, Rust={rust_count}"
-        )
+    assert ratio <= COUNT_TOLERANCE, (
+        f"{label} count divergence {ratio:.0%} exceeds the "
+        f"{COUNT_TOLERANCE:.0%} tolerance: Python={py_count}, Rust={rust_count}"
+    )

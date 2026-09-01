@@ -108,10 +108,22 @@ echo "[start_servers] Starting Python uvicorn on :8000..."
 PY_PID=$!
 
 # ── Start Rust HTTP server on :8001 ──────────────────────────────────────────
-# The Rust server gets its OWN roots under $RS_WORKSPACE (/rs) — otherwise it
-# inherits the Python SYSTEM_ROOT_DIRECTORY (/py/...) exported above and both
-# servers would share one workspace, defeating the isolation the harness relies
-# on. VECTOR_DB_PROVIDER=mock selects the in-memory vector store (the binary is
+# The Rust server gets its OWN roots under $RS_WORKSPACE (/rs), so the two
+# servers never share a workspace.
+#
+# Note the env-var asymmetry, which is easy to get wrong: the Rust config reads
+# COGNEE_SYSTEM_ROOT_DIRECTORY and COGNEE_DATA_ROOT_DIRECTORY (prefixed) but
+# CACHE_ROOT_DIRECTORY *unprefixed* — grep those names in
+# crates/lib/src/config.rs. Python reads all three unprefixed. Both spellings
+# are therefore set below for the two that differ.
+#
+# Until this was fixed, only the `cd "$RS_WORKSPACE"` below kept the servers
+# apart: the two bare *_ROOT_DIRECTORY exports were silently ignored by the Rust
+# binary, which fell back to its relative defaults, which happened to resolve
+# under the workspace we had just cd'd into. Any absolute-path override would
+# have gone nowhere.
+#
+# VECTOR_DB_PROVIDER=mock selects the in-memory vector store (the binary is
 # built with --features dev-mock): the harness has no Postgres, and the OSS
 # server's only other option is pgvector. Without this the server derives the
 # pgvector connection string from SYSTEM_ROOT_DIRECTORY (a filesystem path),
@@ -125,6 +137,8 @@ echo "[start_servers] Starting Rust cognee-http-server on :8001..."
  HTTP_API_HOST=127.0.0.1 \
  HTTP_API_PORT=8001 \
  ENV=test \
+ COGNEE_SYSTEM_ROOT_DIRECTORY="$RS_WORKSPACE/.cognee_system" \
+ COGNEE_DATA_ROOT_DIRECTORY="$RS_WORKSPACE/.data_storage" \
  SYSTEM_ROOT_DIRECTORY="$RS_WORKSPACE/.cognee_system" \
  DATA_ROOT_DIRECTORY="$RS_WORKSPACE/.data_storage" \
  CACHE_ROOT_DIRECTORY="$RS_WORKSPACE/.cognee_cache" \
