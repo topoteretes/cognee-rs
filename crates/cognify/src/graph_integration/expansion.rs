@@ -643,6 +643,13 @@ pub async fn expand_with_nodes_and_edges_with_stats(
     graph_edges.extend(ontology_edges_out);
 
     if stats.dropped() > 0 {
+        // The sample lists unmatched references only; an ambiguous endpoint did
+        // match, just not to a single entity, so naming it would not help.
+        let sample = if unresolved_sample.is_empty() {
+            String::new()
+        } else {
+            format!(" (unmatched sample: {})", unresolved_sample.join(", "))
+        };
         warn!(
             attempted = stats.attempted,
             dropped = stats.dropped(),
@@ -650,10 +657,14 @@ pub async fn expand_with_nodes_and_edges_with_stats(
             target_missing = stats.dropped_target_missing,
             ambiguous_name = stats.dropped_ambiguous_name,
             recovered_by_name = stats.resolved_by_name,
-            "Dropped {} of {} extracted edges: an endpoint matched no extracted node (sample: {})",
+            "Dropped {} of {} extracted edges in endpoint resolution: {} unmatched source, \
+             {} unmatched target, {} ambiguous name{}",
             stats.dropped(),
             stats.attempted,
-            unresolved_sample.join(", ")
+            stats.dropped_source_missing,
+            stats.dropped_target_missing,
+            stats.dropped_ambiguous_name,
+            sample
         );
     } else if stats.resolved_by_name > 0 {
         debug!(

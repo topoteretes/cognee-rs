@@ -516,11 +516,15 @@ pub async fn extract_graph_from_data(
     // Endpoint resolution is lossy: the model routinely emits edges referencing
     // node ids it never declared. Report the rate once per run rather than
     // leaving one log line per dropped edge as the only evidence.
+    //
+    // This counts endpoint resolution only. An edge that resolves here can still
+    // be filtered out downstream for already existing in the database, so the
+    // resolved figure is an upper bound on what this pass goes on to emit.
     info!(
         attempted = edge_resolution.attempted,
         dropped = edge_resolution.dropped(),
         recovered_by_name = edge_resolution.resolved_by_name,
-        "Edge endpoint resolution: {} of {} extracted edges kept",
+        "Edge endpoint resolution: both endpoints resolved for {} of {} extracted edges",
         edge_resolution.attempted - edge_resolution.dropped(),
         edge_resolution.attempted
     );
