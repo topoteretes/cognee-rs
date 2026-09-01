@@ -5,7 +5,9 @@ validation error on missing file.
 
 Ignore extension: ``{"$..tenant_id", "$..data_id", "$..dataset_id",
 "$..raw_data_location"}`` — file paths under /py vs /rs differ.
-The ``content_hash`` field is NOT ignored — it must match.
+Note that ``content_hash`` lives only inside ``data_ingestion_info``,
+which ``_ADD_IGNORE`` strips — so the response-diff tests here do NOT
+compare it. ``test_add_content_hash_matches_across_sdks`` is what pins it.
 """
 
 from contextlib import contextmanager
@@ -85,7 +87,8 @@ def local_url_fixture():
     strict=True,
     reason=(
         "The pinned Python build returns a nested {run_info: PipelineRunInfo} "
-        "from /add with no content_hash, while Rust returns it flat. This test "
+        "from /add carrying no content_hash in any position, while Rust returns "
+        "one per item in data_ingestion_info[]. This test "
         "is expected to fail. When it XPASSes, Python has started returning "
         "content_hash: drop this test and make the comparison in "
         "seed.py::seed_both unconditional, since that is the HTTP lane's only "
@@ -94,13 +97,33 @@ def local_url_fixture():
 )
 def test_python_add_omits_content_hash(authed_clients, unique_dataset_name):
     """Tripwire for the asymmetry that disabled seed_both's hash comparison."""
-    from seed import seed_dataset_with_text
+    from seed import extract_content_hash, seed_dataset_with_text
 
     py = seed_dataset_with_text(
         authed_clients["py"], name=unique_dataset_name, text="content hash probe"
     )
-    assert py.get("content_hash") is not None
+    assert extract_content_hash(py) is not None
 
+
+def test_add_content_hash_matches_across_sdks(authed_clients, unique_dataset_name):
+    """Same bytes in, same content_hash out of both SDKs.
+
+    This is the HTTP lane's only content-addressed equality oracle: every other
+    add test runs through ``assert_responses_match`` with ``_ADD_IGNORE``, which
+    strips ``data_ingestion_info`` and with it the hash. ``seed_both`` carries
+    the assertion; calling it here is what makes it run.
+
+    Like the rest of this module it is auth-gated, so it skips on an OSS build
+    (see the run's auth-skip summary). That gating is a known harness limit, not
+    a property of this check.
+    """
+    from seed import seed_both
+
+    seed_both(
+        authed_clients,
+        name=unique_dataset_name,
+        text="cross-SDK content-addressed identity probe",
+    )
 
 
 def test_add_text_upload(authed_clients, unique_dataset_name):
