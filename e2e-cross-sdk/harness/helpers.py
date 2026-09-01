@@ -433,6 +433,19 @@ def write_rust_config(
     return config_path
 
 
+# Maximum accepted relative divergence between the two SDKs' counts, as
+# |py - rust| / mean. Used by the structural parity tests (cognify + hybrid).
+# Overridable so a genuinely noisy signal can be widened deliberately, in one
+# place, with the new value visible in CI config.
+#
+# These bounds used to be enforced by `warnings.warn`, which meant the checks
+# could only fail if a side produced literally zero. If real-LLM runs prove
+# this too tight — edge counts are the likeliest, the two SDKs phrase and merge
+# relationships differently — raise it here or via the env var, or mock the LLM
+# (crates/llm/src/mock/ + COGNEE_TEST_REPLAY). Do not return to warning.
+COUNT_TOLERANCE = float(os.environ.get("COGNEE_PARITY_COUNT_TOLERANCE", "0.5"))
+
+
 # ── SQLite helpers ───────────────────────────────────────────────────────────
 
 
@@ -494,6 +507,12 @@ def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
     return row is not None
 
 
+def _column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
+    if not _table_exists(conn, table):
+        return False
+    return any(r[1] == column for r in conn.execute(f"PRAGMA table_info({table})"))
+
+
 def query_dataset_membership(conn: sqlite3.Connection) -> list[dict]:
     """Dataset membership as ``[{"dataset_id": ..., "data_id": ...}]``.
 
@@ -511,8 +530,16 @@ def query_dataset_membership(conn: sqlite3.Connection) -> list[dict]:
     against any current Python database. Its three callers therefore errored out
     before reaching an assertion, and reported no parity verdict at all.
 
-    Detecting the schema rather than the SDK keeps this correct for the
-    cross-read tests, where one SDK opens a database the other one wrote.
+    Detecting the schema rather than the SDK is what keeps this correct for
+    the cross-read tests, where one SDK opens a database the other one wrote —
+    but detection alone is not enough, because the two shapes are not mutually
+    exclusive. Rust's baseline migration creates ``dataset_data`` with
+    ``.if_not_exists()`` and Rust's ``data`` entity has no ``dataset_id``
+    column, so a Python-written database that Rust has since opened carries
+    **both**: Python's rows in ``data.dataset_id`` and an empty (or partial)
+    ``dataset_data``. Preferring the junction table there would report ``[]``
+    and silently drop Python's membership. Both shapes are therefore read and
+    unioned whenever both are present.
 
     Note that the row *counts* legitimately differ once the same bytes are added
     to two datasets: Python yields two ``data`` rows and Rust one row with two
@@ -520,12 +547,18 @@ def query_dataset_membership(conn: sqlite3.Connection) -> list[dict]:
     ``docs/roadmap/python-parity-audit.md`` §1.1); this helper only makes it
     observable instead of masking it behind an error.
     """
+    rows: list[dict] = []
     if _table_exists(conn, "dataset_data"):
-        return query_rows(conn, "SELECT dataset_id, data_id FROM dataset_data")
-    return query_rows(
-        conn,
-        "SELECT dataset_id, id AS data_id FROM data WHERE dataset_id IS NOT NULL",
-    )
+        rows += query_rows(conn, "SELECT dataset_id, data_id FROM dataset_data")
+    if _column_exists(conn, "data", "dataset_id"):
+        rows += query_rows(
+            conn,
+            "SELECT dataset_id, id AS data_id FROM data WHERE dataset_id IS NOT NULL",
+        )
+    # De-duplicate: a row recorded in both shapes is one membership fact, not
+    # two. Dict insertion order is preserved, so output stays stable.
+    seen = {(r["dataset_id"], r["data_id"]): r for r in rows}
+    return list(seen.values())
 
 
 # Retained so the existing call sites keep working; prefer the explicit name.
