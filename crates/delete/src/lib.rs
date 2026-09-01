@@ -1806,10 +1806,15 @@ fn parse_indexed_fields(value: &serde_json::Value) -> Vec<String> {
 
 /// Recompute the text an edge's `EdgeType` vector id was derived from.
 ///
-/// Must stay byte-identical to cognify's `edge_retrieval_text`, which builds the
-/// id via `EdgeType::new_deterministic(&text)`: prefer the nonblank `edge_text`
-/// property, else the relationship name, else empty (cognify writes no vector for
-/// an empty text, so the caller must not try to delete one).
+/// Must resolve to the same text cognify's `edge_retrieval_text` produced for the
+/// edge: prefer the nonblank `edge_text` property, else the relationship name,
+/// else empty (cognify writes no vector for an empty text, so the caller must not
+/// try to delete one).
+///
+/// The text has to match byte for byte, not merely in spirit — cognify turns it
+/// into the point id with `EdgeType::new_deterministic(text, dataset_id)`, whose
+/// id half is a uuid5 hash of the text alone, so any difference yields a
+/// different UUID and the delete silently misses.
 ///
 /// `EdgeType::retrieval_text` lives in `cognee-models` precisely so the writing
 /// and deleting lanes can share this derivation instead of restating it.
