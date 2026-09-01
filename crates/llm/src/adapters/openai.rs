@@ -942,14 +942,12 @@ impl OpenAIAdapter {
         let mut last_error = LlmError::NetworkError("No attempt made".to_string());
         let budget = self.retry_budget();
         let pacer = self.pacer();
-        // Transport-level concurrency ceiling, the analogue of the connection-pool
-        // bound every Python HTTP client sets (see `crate::in_flight`). Acquired
-        // outside the retry loop and held for the whole call, so a request that
-        // backs off keeps its slot rather than releasing it to a competitor and
-        // re-queueing behind it. Taken before the pacer's admission below: a
-        // permit held across a pacing sleep would idle the pool during exactly
-        // the overload episode the pacer is draining.
-        let _in_flight = crate::in_flight::acquire_in_flight().await;
+        // Started before the loop — and so before both the pacer's admission
+        // wait and the in-flight queue below — so the time a call spends waiting
+        // for its turn counts against the retry budget and the caller's
+        // aggregate deadline. Time queued is time the caller is blocked; hiding
+        // it would let a call overshoot `LLM_REQUEST_DEADLINE_SECONDS` by the
+        // whole queue wait.
         let started = Instant::now();
         // `Retry-After` from the previous attempt. A usable hint replaces the
         // computed backoff outright — including when it asks for less, since the
@@ -991,12 +989,52 @@ impl OpenAIAdapter {
                 tokio::time::sleep(delay).await;
             }
 
+            let dispatch_wait_started = Instant::now();
+
             // Admission sits INSIDE the retry loop, immediately before the send,
             // so an overload episode opened by any concurrent request throttles
             // the remaining attempts of calls already in flight. This mirrors
             // Python entering the limiter context manager inside tenacity.
             if let Some(pacer) = pacer.as_deref() {
                 pacer.admit().await;
+            }
+
+            // Transport-level concurrency ceiling, the analogue of the
+            // connection-pool bound every Python HTTP client sets (see
+            // `crate::in_flight`). Acquired *after* the pacer has admitted this
+            // attempt and dropped at the end of the iteration, so a permit
+            // covers only the window in which a socket actually exists. Taking
+            // it before `admit()` would let requests parked in a 900s cooldown
+            // hold permits they are not using, so the semaphore would count
+            // sleepers as sockets and stall every other caller in the process.
+            // A retry re-queues for a permit, which is correct: it opens a new
+            // socket, so it is a new claim on the ceiling.
+            let _in_flight = crate::in_flight::acquire_in_flight().await;
+
+            // Pacing and the in-flight queue can outlast the caller's aggregate
+            // budget on their own — a 900s overload cooldown dwarfs a 240s
+            // deadline — and the guard at the top of the loop cannot see that:
+            // it runs before the wait, so an overshoot there was only noticed
+            // one turn later, after an attempt the budget could never cover.
+            //
+            // Narrow on purpose. It fires only when budget *remained* when the
+            // wait began and the wait is what spent it, so the guard above keeps
+            // its existing behaviour: that one clamps its backoff to the
+            // remaining budget and deliberately lets the attempt it sleeps for
+            // start, and this must not retract it. Skipped on the first attempt
+            // too — every call makes at least one, as it did before the deadline
+            // existed.
+            if attempt > 0
+                && let Some(deadline) = deadline
+                && dispatch_wait_started < deadline
+                && Instant::now() >= deadline
+            {
+                return Err(LlmError::Timeout(format!(
+                    "LLM request abandoned after {:.0}s with {attempt} attempt(s): the call's \
+                     aggregate budget (LLM_REQUEST_DEADLINE_SECONDS) was spent waiting for \
+                     dispatch (pacing or the in-flight queue); last error: {last_error}",
+                    started.elapsed().as_secs_f64(),
+                )));
             }
 
             attempt += 1;

@@ -725,6 +725,10 @@ These knobs form one resilience stack, matching Python cognee's:
   cannot stop a steady stream that exceeds a quota. The concurrency ceiling is
   enforced inside the LLM transport, so it applies on every surface including
   the HTTP server, whose cognify routes have no per-request knob of their own.
+  A slot is held for the HTTP exchange itself and released while a request waits
+  — for its pacing turn or for a retry backoff — because a waiting request holds
+  no socket; counting waiters would let a 15-minute overload episode stall every
+  other LLM caller in the process behind requests that are merely sleeping.
   It defaults to 1000, matching the connection-pool limit `openai-python` and
   `litellm` set, and to 128 on Android/iOS where a 1024-descriptor budget is
   shared with the graph, vector and relational stores.

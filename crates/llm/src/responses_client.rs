@@ -243,9 +243,9 @@ impl OpenAIResponsesClient {
             self.retry_min_elapsed,
         );
         let pacer = self.pacer.clone().or_else(llm_pacer);
-        // See the identical acquisition in the OpenAI adapter: transport-level
-        // concurrency ceiling, held across retries, taken before pacing.
-        let _in_flight = crate::in_flight::acquire_in_flight().await;
+        // Started before the loop, and so before the pacer's admission wait and
+        // the in-flight queue inside it, so queueing time counts against the
+        // retry budget rather than being invisible to it.
         let started = Instant::now();
         let mut retry_after: Option<Duration> = None;
         let mut attempt: u32 = 0;
@@ -270,6 +270,11 @@ impl OpenAIResponsesClient {
             if let Some(pacer) = pacer.as_deref() {
                 pacer.admit().await;
             }
+
+            // See the identical acquisition in the OpenAI adapter: transport-level
+            // concurrency ceiling, taken *after* admission and released at the end
+            // of the iteration so a permit only ever covers a live socket.
+            let _in_flight = crate::in_flight::acquire_in_flight().await;
 
             attempt += 1;
 
