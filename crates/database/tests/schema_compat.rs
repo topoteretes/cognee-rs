@@ -267,6 +267,37 @@ async fn pipeline_run_id_indexes_exist() {
 /// declared on Python's model too, and `slug` is its second column, so it
 /// cannot serve the correlation on its own.
 #[tokio::test]
+async fn node_composites_carry_pythons_names_only() {
+    use sea_orm::ConnectionTrait;
+
+    // Rust and Python declare the same two composites on `nodes` under
+    // different names, and either SDK may migrate a shared database first.
+    // Before m20260918 a database both had touched carried two byte-identical
+    // indexes over the same columns. Rust adopted Python's names because
+    // Python is the reference and its names already ship.
+    let db = connect("sqlite::memory:").await.expect("connect");
+    initialize(&db).await.expect("initialize");
+
+    for superseded in ["idx_nodes_dataset_slug", "idx_nodes_dataset_data"] {
+        let rows = db
+            .query_all(sea_orm::Statement::from_string(
+                sea_orm::DatabaseBackend::Sqlite,
+                format!(
+                    "SELECT name FROM sqlite_master \
+                     WHERE type='index' AND tbl_name='nodes' AND name='{superseded}'"
+                ),
+            ))
+            .await
+            .unwrap_or_else(|e| panic!("index query failed: {e}"));
+        assert!(
+            rows.is_empty(),
+            "'{superseded}' should have been superseded by Python's name; \
+             leaving both is the duplicate this migration removes"
+        );
+    }
+}
+
+#[tokio::test]
 async fn slug_indexes_exist() {
     use sea_orm::ConnectionTrait;
 
@@ -276,8 +307,11 @@ async fn slug_indexes_exist() {
     for (table, index) in [
         ("nodes", "ix_nodes_slug"),
         ("edges", "ix_edges_slug"),
-        // The composite the standalone index sits next to, not replaces.
-        ("nodes", "idx_nodes_dataset_slug"),
+        // The composite the standalone index sits next to, not replaces. It
+        // carries Python's name since m20260918 — the two SDKs share one
+        // database and were creating the same index twice under two names.
+        ("nodes", "index_node_dataset_slug"),
+        ("nodes", "index_node_dataset_data"),
     ] {
         let rows = db
             .query_all(sea_orm::Statement::from_string(

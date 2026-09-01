@@ -285,7 +285,7 @@ fn relational_chain_is_baseline_plus_additive_migrations() {
         .collect();
     assert_eq!(
         names.len(),
-        4,
+        5,
         "unexpected migration-chain length — chain: {names:?}"
     );
     assert!(
