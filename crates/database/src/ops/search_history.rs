@@ -61,9 +61,14 @@ pub async fn log_result(
     let model = result_log::ActiveModel {
         id: Set(uuid_hex::to_hex(id)),
         query_id: Set(uuid_hex::to_hex(query_id)),
-        // Search results echo back chunk text, so a NUL that survived into the
-        // graph or vector store reaches this `text` column too. See
-        // `cognee_utils::sanitize`.
+        // Defensive only — it cannot fire for today's caller. The single
+        // production caller (`search_orchestrator::log_result_if_enabled`)
+        // passes `serde_json::to_string(&response)`, in which an embedded NUL
+        // has already become the six-character `\u0000` escape: no literal
+        // `0x00` survives for `sanitize_str` to strip, and the `text` column
+        // accepts the escape as ordinary characters either way. The call is
+        // kept because the parameter is a plain `&str` — a future caller
+        // passing raw result text would need it. See `cognee_utils::sanitize`.
         serialized_result: Set(sanitize_str(serialized_result).into_owned()),
         user_id: Set(uuid_hex::to_hex_opt(user_id)),
         created_at: Set(Utc::now()),

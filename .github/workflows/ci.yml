@@ -852,6 +852,10 @@ jobs:
   #   crates/lib/tests/pg_shared_db_single_stack.rs  (1 case)
   #   crates/lib/tests/pg_full_stack_e2e.rs          (1 case, needs an LLM)
   #
+  # `crates/database/tests/pipeline_run_nul_bytes.rs` joined them later: its
+  # SQLite cases run in the workspace `test` lane, but only a real Postgres
+  # rejects a NUL, so the one case that proves the failure mode lives here.
+  #
   # `TEST_POSTGRES_URL` is deliberately distinct from the `DB_*` vars that drive
   # `pg_test_url()`: these suites target one Postgres *server* for the
   # "everything in one database" deployment (relational + pgvector +
@@ -944,6 +948,14 @@ jobs:
           cargo test -p cognee-database --features sqlite,postgres \
             --test provenance_batch -- --nocapture 2>&1 | tee pg-provenance.log
 
+      # Same feature pair and for the same reason: four of this file's five cases
+      # are SQLite round-trips that assert the NUL never reaches the column.
+      - name: Run pipeline-run NUL sanitization tests (Postgres case)
+        run: |
+          set -o pipefail
+          cargo test -p cognee-database --features sqlite,postgres \
+            --test pipeline_run_nul_bytes -- --nocapture 2>&1 | tee pg-nul-bytes.log
+
       - name: Run single-database coexistence test
         run: |
           set -o pipefail
@@ -974,9 +986,11 @@ jobs:
         run: |
           bash scripts/ci/assert_pg_suite_ran.sh --label "Postgres single-database" \
             --log pg-provenance.log   --min-tests 3 \
+            --log pg-nul-bytes.log    --min-tests 5 \
             --log pg-single-stack.log --min-tests 1 \
             --log pg-full-stack.log   --min-tests 1 \
             --require-test upsert_batch_with_duplicate_ids_dedups_keeping_last \
+            --require-test errored_run_info_with_nul_is_written_to_postgres \
             --require-test temp_database_supports_back_to_back_initialize \
             --require-test relational_pgvector_pggraph_coexist_in_one_database \
             --require-test pg_full_stack_add_and_cognify
