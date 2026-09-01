@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use chrono::{DateTime, Utc};
 use cognee_models::{Data, Dataset};
 use cognee_utils::tracing_keys::{COGNEE_DB_ROW_COUNT, COGNEE_DB_SYSTEM};
@@ -5,7 +7,7 @@ use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait,
     IntoActiveModel, PaginatorTrait, QueryFilter, sea_query::Expr,
 };
-use tracing::{Span, instrument};
+use tracing::{Span, instrument, warn};
 use uuid::Uuid;
 
 use crate::conversions::map_sea_err;
@@ -174,9 +176,224 @@ pub async fn update_last_accessed(
     Ok(())
 }
 
+/// The dataset key a `Data.pipeline_status` entry is written under.
+///
+/// Python writes `str(dataset.id)` — the dashed 36-character form
+/// (`run_tasks_data_item.py:171-172`) — and clears the same
+/// (`rollback.py:88`). Every other id Rust stores is `uuid_hex::to_hex`, so
+/// this is the one place the two SDKs disagree on encoding, and the one place
+/// that disagreement is spelled out. Writers must use this helper, never
+/// `to_hex`, or a Python run will not see the marker Rust wrote and will
+/// re-process data Rust already cognified.
+///
+/// [`mark_cognify_pipeline_status_complete`] is the one writer;
+/// [`get_cognify_completed_data_ids`] and the two clearers below are the
+/// readers. They live together on purpose — encoding the key in one place is
+/// what keeps them from drifting apart again.
+pub fn pipeline_status_dataset_key(dataset_id: Uuid) -> String {
+    dataset_id.to_string()
+}
+
+/// The pipeline name completion markers for cognify are written under.
+///
+/// Python's `cognify()` runs its per-item task chain under
+/// `pipeline_name="cognify_pipeline"`, so its markers land here
+/// (`run_tasks_data_item.py`). The clearers below and the run sweep are
+/// hard-coded to the same key.
+const COGNIFY_PIPELINE_STATUS_KEY: &str = "cognify_pipeline";
+
+/// The value Python writes into `pipeline_status[<pipeline>][<dataset>]` for a
+/// data item it finished.
+///
+/// `DataItemStatus.DATA_ITEM_PROCESSING_COMPLETED`
+/// (`cognee/modules/pipelines/models/DataItemStatus.py`) is a `str`-valued
+/// enum, so it serialises as this bare string. A shared database means the two
+/// SDKs must agree on it byte for byte, or each re-processes what the other
+/// finished.
+pub const DATA_ITEM_PROCESSING_COMPLETED: &str = "DATA_ITEM_PROCESSING_COMPLETED";
+
+/// Mark `data_id` complete for `dataset_id`'s cognify pipeline.
+///
+/// Writes under [`pipeline_status_dataset_key`] — Python's dashed form — and
+/// leaves every other pipeline's entry, and every other dataset's entry under
+/// `cognify_pipeline`, untouched. A `Data` row that does not exist is a no-op,
+/// matching the clearers: a caller may hand us items that were never
+/// persisted.
+///
+/// A `pipeline_status` value that is not an object, or a `cognify_pipeline`
+/// entry that is not an object, is replaced rather than refused. The column is
+/// free-form JSON, and declining to write a marker over a corrupt value would
+/// only make the run redo its work forever.
+///
+/// The span reports `cognee.db.row_count` the way the clearers do: `1` when a
+/// row was updated, `0` when the `Data` row was absent and the call no-opped.
+#[instrument(
+    name = "cognee.db.relational.data.mark_cognify_pipeline_status_complete",
+    level = "info",
+    skip_all,
+    fields(
+        cognee.db.system = tracing::field::Empty,
+        cognee.db.row_count = tracing::field::Empty,
+    ),
+    err,
+)]
+pub async fn mark_cognify_pipeline_status_complete(
+    db: &DatabaseConnection,
+    data_id: Uuid,
+    dataset_id: Uuid,
+) -> Result<(), DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
+    let model = data::Entity::find_by_id(uuid_hex::to_hex(data_id))
+        .one(db)
+        .await
+        .map_err(map_sea_err)?;
+
+    let Some(model) = model else {
+        Span::current().record(COGNEE_DB_ROW_COUNT, 0i64);
+        return Ok(());
+    };
+
+    let mut parsed: serde_json::Value = match model.pipeline_status {
+        Some(ref status_json) => serde_json::from_str(status_json)
+            .unwrap_or(serde_json::Value::Object(Default::default())),
+        None => serde_json::Value::Object(Default::default()),
+    };
+
+    if !parsed.is_object() {
+        parsed = serde_json::Value::Object(Default::default());
+    }
+    let serde_json::Value::Object(ref mut top_map) = parsed else {
+        // Unreachable: the line above guarantees an object.
+        Span::current().record(COGNEE_DB_ROW_COUNT, 0i64);
+        return Ok(());
+    };
+
+    let inner = top_map
+        .entry(COGNIFY_PIPELINE_STATUS_KEY.to_string())
+        .or_insert_with(|| serde_json::Value::Object(Default::default()));
+    if !inner.is_object() {
+        *inner = serde_json::Value::Object(Default::default());
+    }
+    if let serde_json::Value::Object(inner_map) = inner {
+        inner_map.insert(
+            pipeline_status_dataset_key(dataset_id),
+            serde_json::Value::String(DATA_ITEM_PROCESSING_COMPLETED.to_string()),
+        );
+    }
+
+    let new_status = serde_json::to_string(&parsed).map_err(|e| {
+        DatabaseError::QueryError(format!("Failed to serialize pipeline_status: {e}"))
+    })?;
+
+    let mut active = model.into_active_model();
+    active.pipeline_status = Set(Some(new_status));
+    active.updated_at = Set(Some(Utc::now()));
+    active.update(db).await.map_err(map_sea_err)?;
+    Span::current().record(COGNEE_DB_ROW_COUNT, 1i64);
+    Ok(())
+}
+
+/// The subset of `data_ids` already marked complete for `dataset_id`'s cognify
+/// pipeline.
+///
+/// Tolerates both key encodings on read for the same reason the clearers do —
+/// a shared database may carry hex-form markers written before
+/// [`pipeline_status_dataset_key`] existed. Only the dashed form is ever
+/// written.
+#[instrument(
+    name = "cognee.db.relational.data.get_cognify_completed_data_ids",
+    level = "info",
+    skip_all,
+    fields(
+        cognee.db.system = tracing::field::Empty,
+        cognee.db.row_count = tracing::field::Empty,
+    ),
+    err,
+)]
+pub async fn get_cognify_completed_data_ids(
+    db: &DatabaseConnection,
+    dataset_id: Uuid,
+    data_ids: &[Uuid],
+) -> Result<BTreeSet<Uuid>, DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
+    let mut completed = BTreeSet::new();
+    if data_ids.is_empty() {
+        Span::current().record(COGNEE_DB_ROW_COUNT, 0i64);
+        return Ok(completed);
+    }
+
+    let dataset_keys = pipeline_status_dataset_key_variants(dataset_id);
+    let hex_ids: Vec<String> = data_ids.iter().map(|id| uuid_hex::to_hex(*id)).collect();
+
+    // Chunked for the same reason `clear_pipeline_status_for_dataset` chunks:
+    // one `IN (...)` per 500 ids keeps the statement under the driver's
+    // bound-variable cap.
+    const READ_CHUNK: usize = 500;
+    for chunk in hex_ids.chunks(READ_CHUNK) {
+        let models = data::Entity::find()
+            .filter(data::Column::Id.is_in(chunk.to_vec()))
+            .all(db)
+            .await
+            .map_err(map_sea_err)?;
+
+        for model in models {
+            let Some(ref status_json) = model.pipeline_status else {
+                continue;
+            };
+            let parsed: serde_json::Value = serde_json::from_str(status_json)
+                .unwrap_or(serde_json::Value::Object(Default::default()));
+            let marked = parsed
+                .get(COGNIFY_PIPELINE_STATUS_KEY)
+                .map(|inner| {
+                    dataset_keys.iter().any(|key| {
+                        inner.get(key).and_then(serde_json::Value::as_str)
+                            == Some(DATA_ITEM_PROCESSING_COMPLETED)
+                    })
+                })
+                .unwrap_or(false);
+            if !marked {
+                continue;
+            }
+            match uuid_hex::from_hex(&model.id) {
+                Ok(id) => {
+                    completed.insert(id);
+                }
+                Err(e) => {
+                    // A row id that does not parse cannot be matched against
+                    // the caller's list; treating it as unmarked only costs a
+                    // redo, which is always the safe direction.
+                    warn!(
+                        data_id = %model.id,
+                        "skipping a completion marker on an unparseable data id: {e}"
+                    );
+                }
+            }
+        }
+    }
+
+    Span::current().record(COGNEE_DB_ROW_COUNT, completed.len() as i64);
+    Ok(completed)
+}
+
+/// Both encodings a dataset key may appear under in a database Rust and Python
+/// share: Python's dashed form, and the dashless hex form Rust wrote before
+/// [`pipeline_status_dataset_key`] existed. Clearing must tolerate both —
+/// otherwise Rust's cleanup silently misses every Python-written marker and
+/// Python goes on skipping data whose artifacts Rust just deleted. Nothing may
+/// write the second form.
+fn pipeline_status_dataset_key_variants(dataset_id: Uuid) -> [String; 2] {
+    [
+        pipeline_status_dataset_key(dataset_id),
+        uuid_hex::to_hex(dataset_id),
+    ]
+}
+
 /// Clear `pipeline_status` JSON entries keyed by the given `dataset_id`
 /// from all `Data` records linked to that dataset via the `dataset_data`
 /// junction table.
+///
+/// Tolerates both key encodings — see
+/// [`pipeline_status_dataset_key_variants`].
 ///
 /// This mirrors the Python cleanup in `delete_dataset.py` lines 33-54.
 /// Must be called **before** the junction rows are removed (before
@@ -212,7 +429,7 @@ pub async fn clear_pipeline_status_for_dataset(
         return Ok(0);
     }
 
-    let dataset_id_str = uuid_hex::to_hex(dataset_id);
+    let dataset_keys = pipeline_status_dataset_key_variants(dataset_id);
     let mut updated_count = 0usize;
 
     // Read the linked Data rows in chunks instead of one find per id (N reads).
@@ -247,10 +464,10 @@ pub async fn clear_pipeline_status_for_dataset(
 
         let mut modified = false;
         for (_pipeline_name, inner) in top_map.iter_mut() {
-            if let serde_json::Value::Object(inner_map) = inner
-                && inner_map.remove(&dataset_id_str).is_some()
-            {
-                modified = true;
+            if let serde_json::Value::Object(inner_map) = inner {
+                for key in &dataset_keys {
+                    modified |= inner_map.remove(key).is_some();
+                }
             }
         }
 
@@ -283,7 +500,8 @@ pub async fn clear_pipeline_status_for_dataset(
 /// Clear only the `cognify_pipeline` entry for `dataset_id` from a single
 /// Data record's `pipeline_status` JSON. All other entries are preserved.
 ///
-/// Mirrors Python `_forget_data_memory` lines 343-348.
+/// Mirrors Python `_forget_data_memory` lines 343-348. Tolerates both key
+/// encodings — see [`pipeline_status_dataset_key_variants`].
 #[instrument(
     name = "cognee.db.relational.data.clear_cognify_pipeline_status_for_data",
     level = "info",
@@ -319,15 +537,16 @@ pub async fn clear_cognify_pipeline_status_for_data(
         return Ok(());
     };
 
-    let dataset_id_str = uuid_hex::to_hex(dataset_id);
-    let Some(inner) = top_map.get_mut("cognify_pipeline") else {
+    let dataset_keys = pipeline_status_dataset_key_variants(dataset_id);
+    let Some(inner) = top_map.get_mut(COGNIFY_PIPELINE_STATUS_KEY) else {
         return Ok(());
     };
-    let modified = if let serde_json::Value::Object(inner_map) = inner {
-        inner_map.remove(&dataset_id_str).is_some()
-    } else {
-        false
-    };
+    let mut modified = false;
+    if let serde_json::Value::Object(inner_map) = inner {
+        for key in &dataset_keys {
+            modified |= inner_map.remove(key).is_some();
+        }
+    }
 
     if !modified {
         return Ok(());
@@ -335,7 +554,8 @@ pub async fn clear_cognify_pipeline_status_for_data(
 
     // Remove `cognify_pipeline` if its inner map is now empty.
     top_map.retain(|k, v| {
-        k != "cognify_pipeline" || !matches!(v, serde_json::Value::Object(m) if m.is_empty())
+        k != COGNIFY_PIPELINE_STATUS_KEY
+            || !matches!(v, serde_json::Value::Object(m) if m.is_empty())
     });
 
     let new_status = if top_map.is_empty() {

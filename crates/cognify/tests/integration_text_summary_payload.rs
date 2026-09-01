@@ -22,9 +22,10 @@ use std::sync::Arc;
 use cognee_ontology::NoOpOntologyResolver;
 
 use cognee_cognify::{CognifyConfig, cognify};
+use cognee_database::ops::datasets::create_dataset;
 use cognee_database::{DatabaseConnection, connect, initialize};
 use cognee_embedding::MockEmbeddingEngine;
-use cognee_models::Data;
+use cognee_models::{Data, Dataset};
 use cognee_storage::{MockStorage, StorageTrait};
 use cognee_test_utils::{MockGraphDB, MockLlm, MockVectorDB};
 use cognee_vector::VectorDB;
@@ -95,6 +96,15 @@ async fn text_summary_payload_contains_text_field() {
             .await
             .expect("connect in-memory sqlite");
         initialize(&conn).await.expect("initialize");
+        // Ownership rows carry an FK to `datasets`, and the ledger is written
+        // on every run — so the dataset has to exist even for a run with no
+        // user.
+        create_dataset(
+            &conn,
+            Dataset::new("text-summary".into(), owner_id, None, dataset_id),
+        )
+        .await
+        .expect("seed dataset");
         Arc::new(conn)
     };
     let thread_pool: Arc<dyn cognee_core::CpuPool> = Arc::new(

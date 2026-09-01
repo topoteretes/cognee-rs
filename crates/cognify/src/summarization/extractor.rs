@@ -4,7 +4,10 @@
 //! - cognee/infrastructure/llm/extraction/extract_summary.py
 //! - cognee/tasks/summarization/summarize_text.py
 
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use cognee_llm::{GenerationOptions, Llm, LlmExt};
 use cognee_models::DocumentChunk;
@@ -68,6 +71,48 @@ async fn summarize_one(
     }
 }
 
+/// What one [`SummaryExtractor::summarize_chunks`] pass produced.
+///
+/// Every chunk lands in exactly one of the three vectors, each in input order:
+/// the successes are every chunk that summarized, the failures every chunk that
+/// was attempted and did not, and [`Self::skipped`] every chunk that was never
+/// attempted at all. Deliberately not a `Result` — a per-chunk failure is data
+/// the caller records against a policy, not a reason to throw away the
+/// summaries that succeeded.
+#[derive(Debug, Default)]
+pub struct SummarizeOutcome {
+    /// Summaries for the chunks that succeeded, in input order.
+    pub summaries: Vec<TextSummary>,
+
+    /// `(chunk_id, error)` for the chunks that failed, in input order.
+    pub failures: Vec<(uuid::Uuid, CognifyError)>,
+
+    /// Chunks that were never sent to the LLM because an earlier chunk failed
+    /// and [`SummaryExtractor::with_fail_fast`] was on, in input order. Always
+    /// empty without that flag, and always empty when nothing failed.
+    pub skipped: Vec<uuid::Uuid>,
+}
+
+impl SummarizeOutcome {
+    /// `true` when every chunk summarized — nothing failed and nothing was
+    /// left undispatched.
+    pub fn is_complete(&self) -> bool {
+        self.failures.is_empty() && self.skipped.is_empty()
+    }
+}
+
+/// One chunk's fate inside the bounded [`SummaryExtractor::summarize_chunks`]
+/// pipeline. Each variant carries the input index so all three groups can be
+/// put back into input order after `buffer_unordered` has shuffled them.
+enum ChunkOutcome {
+    /// Summarized successfully.
+    Summarized(usize, Box<TextSummary>),
+    /// Attempted and failed.
+    Failed(usize, uuid::Uuid, CognifyError),
+    /// Never dispatched — an earlier chunk had already failed under fail-fast.
+    Skipped(usize, uuid::Uuid),
+}
+
 /// Summary extractor for text chunks.
 ///
 /// Uses an LLM (via the Llm trait) to generate hierarchical summaries from text chunks.
@@ -96,6 +141,9 @@ pub struct SummaryExtractor {
     /// Maximum number of concurrent summarization LLM calls. Bounds in-flight
     /// requests on large documents (see issue #19).
     max_parallel: usize,
+    /// When set, stop *scheduling* new summarization calls once a chunk has
+    /// failed. See [`Self::with_fail_fast`].
+    fail_fast: bool,
 }
 
 impl SummaryExtractor {
@@ -113,6 +161,7 @@ impl SummaryExtractor {
             llm,
             summary_schema: None,
             max_parallel: Self::DEFAULT_MAX_PARALLEL,
+            fail_fast: false,
         }
     }
 
@@ -126,6 +175,7 @@ impl SummaryExtractor {
             llm,
             summary_schema: schema,
             max_parallel: Self::DEFAULT_MAX_PARALLEL,
+            fail_fast: false,
         }
     }
 
@@ -133,6 +183,26 @@ impl SummaryExtractor {
     /// below 1 are coerced to 1.
     pub fn with_max_parallel(mut self, max_parallel: usize) -> Self {
         self.max_parallel = max_parallel.max(1);
+        self
+    }
+
+    /// Stop scheduling new summarization calls once a chunk has failed.
+    ///
+    /// This is where axis 1 ([`crate::FailureStop::FailFast`]) reaches this
+    /// stage. Off by default, because a per-chunk failure is ordinarily just
+    /// data; [`crate::tasks::summarize_text`] turns it on only when a
+    /// summarization failure would actually fail its item.
+    ///
+    /// It bounds *dispatch*, never collection: chunks already admitted to the
+    /// pipeline run to completion and their summaries are returned, and the
+    /// chunk that failed is still reported. What it saves is every call that
+    /// had not been issued yet — the ones that would otherwise be paid for to
+    /// produce a result the run is about to throw away. The saving is therefore
+    /// bounded below by the in-flight window: up to [`Self::with_max_parallel`]
+    /// calls are already outstanding when the first failure comes back, and
+    /// those are not cancelled.
+    pub fn with_fail_fast(mut self, fail_fast: bool) -> Self {
+        self.fail_fast = fail_fast;
         self
     }
 
@@ -156,20 +226,34 @@ impl SummaryExtractor {
     /// * `custom_prompt` - Optional custom system prompt
     ///
     /// # Returns
-    /// A vector of TextSummary objects, one per input chunk
+    /// A [`SummarizeOutcome`] holding the summaries that succeeded, the chunks
+    /// that failed, and the chunks that were never dispatched, all in input
+    /// order.
     ///
-    /// # Errors
-    /// Returns CognifyError::LlmError if any LLM call fails
+    /// The stream is *always* drained to completion. It used to `try_collect`,
+    /// which drops the stream on the first `Err` — discarding summaries that
+    /// had already been paid for and cancelling in-flight requests, so the
+    /// reported failure list could never be complete. The return type has no
+    /// `Err` channel at all, which is what keeps that from coming back: there
+    /// is no failure mode of this function that is not per-chunk, and whether
+    /// a per-chunk failure ends the run is the caller's policy decision, not
+    /// this function's.
+    ///
+    /// [`Self::with_fail_fast`] changes what is *dispatched*, never what is
+    /// drained: with it on, a chunk admitted to the pipeline after another has
+    /// already failed is reported in [`SummarizeOutcome::skipped`] instead of
+    /// being sent to the LLM. Everything already in flight still finishes and
+    /// still lands in `summaries` or `failures`.
     pub async fn summarize_chunks(
         &self,
         chunks: &[DocumentChunk],
         custom_prompt: Option<String>,
-    ) -> Result<Vec<TextSummary>, CognifyError> {
+    ) -> SummarizeOutcome {
         if chunks.is_empty() {
-            return Ok(vec![]);
+            return SummarizeOutcome::default();
         }
 
-        use futures::stream::{self, StreamExt, TryStreamExt};
+        use futures::stream::{self, StreamExt};
 
         let model_name = self.llm.model().to_string();
 
@@ -198,6 +282,15 @@ impl SummaryExtractor {
             })
             .collect();
 
+        // Set by the first chunk that fails, and only when `fail_fast` is on.
+        // `stream::iter(...).map(...)` builds each future lazily, and
+        // `buffer_unordered` only builds one when it has room for it, so the
+        // check at the top of the future runs at the moment the call would
+        // otherwise be dispatched — the last point at which it can still be
+        // avoided.
+        let aborted = Arc::new(AtomicBool::new(false));
+        let fail_fast = self.fail_fast;
+
         // Bounded-concurrency pipeline: at most `max_parallel` summarization
         // calls are in flight at once. This replaces the previous unbounded
         // per-chunk `tokio::spawn`, which opened one request per chunk on a large
@@ -205,16 +298,34 @@ impl SummaryExtractor {
         // keeps the global cap while pipelining across chunks; results arrive out
         // of order, so each future carries its chunk index and we re-sort to
         // preserve the input order the callers expect.
-        let mut indexed: Vec<(usize, TextSummary)> = stream::iter(inputs)
+        let results: Vec<ChunkOutcome> = stream::iter(inputs)
             .map(
                 |(index, text, chunk_id, importance_weight, belongs_to_set)| {
                     let llm = Arc::clone(&self.llm);
                     let summary_schema = self.summary_schema.clone();
                     let model_name = model_name.clone();
                     let prompt = custom_prompt.clone();
+                    let aborted = Arc::clone(&aborted);
                     async move {
+                        // Axis 1, `FailureStop::FailFast`: stop *scheduling*. The
+                        // stream itself is still drained to the end — every chunk
+                        // is accounted for, and the calls already in flight are
+                        // left to finish and be collected.
+                        if fail_fast && aborted.load(Ordering::Acquire) {
+                            return ChunkOutcome::Skipped(index, chunk_id);
+                        }
+                        // The per-chunk error is carried in the item rather than
+                        // `?`-ed out of the stream, so `collect` keeps draining.
                         let summarized =
-                            summarize_one(&llm, &summary_schema, &text, prompt.as_deref()).await?;
+                            match summarize_one(&llm, &summary_schema, &text, prompt.as_deref())
+                                .await
+                            {
+                                Ok(summarized) => summarized,
+                                Err(e) => {
+                                    aborted.store(true, Ordering::Release);
+                                    return ChunkOutcome::Failed(index, chunk_id, e);
+                                }
+                            };
                         let mut summary =
                             TextSummary::from_summarized_content(chunk_id, summarized, model_name);
                         // Port of summarize_text.py:81 — carry importance_weight from source chunk.
@@ -223,16 +334,40 @@ impl SummaryExtractor {
                         // belongs_to_set (NodeSet objects + dataset id) so each
                         // TextSummary is scoped exactly like its chunk.
                         summary.base.belongs_to_set = belongs_to_set;
-                        Ok::<(usize, TextSummary), CognifyError>((index, summary))
+                        ChunkOutcome::Summarized(index, Box::new(summary))
                     }
                 },
             )
             .buffer_unordered(self.max_parallel)
-            .try_collect()
-            .await?;
+            .collect()
+            .await;
 
+        // `buffer_unordered` yields out of order; all three groups are re-sorted
+        // by the carried index so callers see input order on every one of them.
+        let mut indexed: Vec<(usize, TextSummary)> = Vec::new();
+        let mut failures: Vec<(usize, uuid::Uuid, CognifyError)> = Vec::new();
+        let mut skipped: Vec<(usize, uuid::Uuid)> = Vec::new();
+        for result in results {
+            match result {
+                ChunkOutcome::Summarized(index, summary) => indexed.push((index, *summary)),
+                ChunkOutcome::Failed(index, chunk_id, error) => {
+                    failures.push((index, chunk_id, error))
+                }
+                ChunkOutcome::Skipped(index, chunk_id) => skipped.push((index, chunk_id)),
+            }
+        }
         indexed.sort_by_key(|(index, _)| *index);
-        Ok(indexed.into_iter().map(|(_, summary)| summary).collect())
+        failures.sort_by_key(|(index, _, _)| *index);
+        skipped.sort_by_key(|(index, _)| *index);
+
+        SummarizeOutcome {
+            summaries: indexed.into_iter().map(|(_, summary)| summary).collect(),
+            failures: failures
+                .into_iter()
+                .map(|(_, chunk_id, error)| (chunk_id, error))
+                .collect(),
+            skipped: skipped.into_iter().map(|(_, chunk_id)| chunk_id).collect(),
+        }
     }
 
     /// Get a reference to the underlying LLM.
@@ -336,7 +471,9 @@ mod tests {
             chunks.iter().map(|c| c.base.importance_weight).collect();
 
         let extractor = SummaryExtractor::new(llm).with_max_parallel(3);
-        let summaries = extractor.summarize_chunks(&chunks, None).await.unwrap();
+        let outcome = extractor.summarize_chunks(&chunks, None).await;
+        assert!(outcome.is_complete(), "no chunk should have failed");
+        let summaries = outcome.summaries;
 
         // Every chunk produced one summary, in the original input order.
         assert_eq!(summaries.len(), 10);
@@ -356,6 +493,239 @@ mod tests {
         let peak = tracker.max_seen.load(Ordering::SeqCst);
         assert!(peak >= 2, "expected overlapping calls, peak was {peak}");
         assert!(peak <= 3, "concurrency cap exceeded: peak {peak} > 3");
+    }
+
+    /// A mock LLM that fails any call whose user message contains one of the
+    /// markers and counts every call it saw.
+    struct MarkerFailingLlm {
+        markers: Vec<String>,
+        calls: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl Llm for MarkerFailingLlm {
+        async fn generate(
+            &self,
+            _messages: Vec<cognee_llm::Message>,
+            _options: Option<GenerationOptions>,
+        ) -> cognee_llm::LlmResult<cognee_llm::GenerationResponse> {
+            unreachable!("summarization uses structured output, not generate")
+        }
+
+        async fn create_structured_output_with_messages_raw(
+            &self,
+            messages: Vec<cognee_llm::Message>,
+            _json_schema: &serde_json::Value,
+            _options: Option<GenerationOptions>,
+        ) -> cognee_llm::LlmResult<serde_json::Value> {
+            use std::sync::atomic::Ordering;
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            // Let every call overlap so a cancelled sibling would be observable
+            // as a missing call.
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            let text: String = messages.iter().map(|m| m.content.clone()).collect();
+            if self.markers.iter().any(|marker| text.contains(marker)) {
+                return Err(cognee_llm::LlmError::ApiError("simulated 429".to_string()));
+            }
+            Ok(serde_json::json!({ "summary": "s", "description": "d" }))
+        }
+
+        fn model(&self) -> &str {
+            "mock-marker"
+        }
+    }
+
+    fn marker_chunks(count: usize, failing: &[usize]) -> Vec<DocumentChunk> {
+        let doc_id = uuid::Uuid::new_v4();
+        (0..count)
+            .map(|i| {
+                let text = if failing.contains(&i) {
+                    format!("chunk {i} FAILMARKER")
+                } else {
+                    format!("chunk {i} fine")
+                };
+                DocumentChunk::new(
+                    uuid::Uuid::new_v4(),
+                    text,
+                    3,
+                    i,
+                    "paragraph_end".to_string(),
+                    doc_id,
+                )
+            })
+            .collect()
+    }
+
+    /// The regression test for the summarization defect: one failing chunk used
+    /// to abandon the whole stream, throwing away the summaries already
+    /// produced and cancelling the requests still in flight. The call count is
+    /// the assertion that catches a return to `try_collect` — it cancels the
+    /// futures that had not started, so fewer than ten calls reach the LLM.
+    #[tokio::test]
+    async fn summarize_chunks_keeps_completed_work_when_one_chunk_fails() {
+        use std::sync::atomic::Ordering;
+
+        let llm = Arc::new(MarkerFailingLlm {
+            markers: vec!["FAILMARKER".to_string()],
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let chunks = marker_chunks(10, &[4]);
+        let failing_chunk_id = chunks[4].base.id;
+        let expected_ids: Vec<uuid::Uuid> = chunks
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != 4)
+            .map(|(_, c)| c.base.id)
+            .collect();
+
+        let extractor = SummaryExtractor::new(llm.clone() as Arc<dyn Llm>).with_max_parallel(3);
+        let outcome = extractor.summarize_chunks(&chunks, None).await;
+
+        assert_eq!(outcome.summaries.len(), 9, "the completed work is kept");
+        let got: Vec<uuid::Uuid> = outcome
+            .summaries
+            .iter()
+            .filter_map(|s| s.made_from)
+            .collect();
+        assert_eq!(got, expected_ids, "summaries stay in input order");
+
+        assert_eq!(outcome.failures.len(), 1);
+        assert_eq!(outcome.failures[0].0, failing_chunk_id);
+
+        assert_eq!(
+            llm.calls.load(Ordering::SeqCst),
+            10,
+            "every chunk was attempted — nothing in flight was cancelled"
+        );
+    }
+
+    /// Fail-fast stops *dispatch*. With one call in flight at a time the
+    /// boundary is exact: the failing chunk is the last one the LLM ever sees,
+    /// and every chunk after it comes back as skipped rather than as a
+    /// fabricated failure or a silent hole.
+    #[tokio::test]
+    async fn fail_fast_stops_dispatching_after_the_first_failure() {
+        use std::sync::atomic::Ordering;
+
+        let llm = Arc::new(MarkerFailingLlm {
+            markers: vec!["FAILMARKER".to_string()],
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let chunks = marker_chunks(6, &[0]);
+        let expected_skipped: Vec<uuid::Uuid> = chunks[1..].iter().map(|c| c.base.id).collect();
+
+        let extractor = SummaryExtractor::new(llm.clone() as Arc<dyn Llm>)
+            .with_max_parallel(1)
+            .with_fail_fast(true);
+        let outcome = extractor.summarize_chunks(&chunks, None).await;
+
+        assert_eq!(
+            llm.calls.load(Ordering::SeqCst),
+            1,
+            "only the failing chunk was ever dispatched"
+        );
+        assert!(outcome.summaries.is_empty());
+        assert_eq!(outcome.failures.len(), 1);
+        assert_eq!(outcome.failures[0].0, chunks[0].base.id);
+        assert_eq!(
+            outcome.skipped, expected_skipped,
+            "skipped chunks are reported, in input order"
+        );
+        assert!(!outcome.is_complete());
+    }
+
+    /// The control: the flag is off by default, and without it the stage still
+    /// pays for every chunk. Without this the test above would also pass on an
+    /// extractor that had simply stopped calling the LLM.
+    #[tokio::test]
+    async fn without_fail_fast_every_chunk_is_still_dispatched() {
+        use std::sync::atomic::Ordering;
+
+        let llm = Arc::new(MarkerFailingLlm {
+            markers: vec!["FAILMARKER".to_string()],
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let chunks = marker_chunks(6, &[0]);
+
+        let extractor = SummaryExtractor::new(llm.clone() as Arc<dyn Llm>).with_max_parallel(1);
+        let outcome = extractor.summarize_chunks(&chunks, None).await;
+
+        assert_eq!(llm.calls.load(Ordering::SeqCst), 6);
+        assert_eq!(outcome.summaries.len(), 5);
+        assert_eq!(outcome.failures.len(), 1);
+        assert!(
+            outcome.skipped.is_empty(),
+            "nothing is skipped without the flag"
+        );
+    }
+
+    /// Fail-fast bounds dispatch without ever cancelling or discarding. The
+    /// calls already admitted to the pipeline when the failure came back all
+    /// finish and all land in the outcome, so every dispatched chunk is
+    /// accounted for and every chunk is in exactly one of the three groups.
+    #[tokio::test]
+    async fn fail_fast_never_cancels_or_discards_in_flight_work() {
+        use std::sync::atomic::Ordering;
+
+        let llm = Arc::new(MarkerFailingLlm {
+            markers: vec!["FAILMARKER".to_string()],
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let chunks = marker_chunks(20, &[0]);
+
+        let extractor = SummaryExtractor::new(llm.clone() as Arc<dyn Llm>)
+            .with_max_parallel(3)
+            .with_fail_fast(true);
+        let outcome = extractor.summarize_chunks(&chunks, None).await;
+
+        let calls = llm.calls.load(Ordering::SeqCst);
+        assert!(
+            (3..20).contains(&calls),
+            "the whole in-flight window is dispatched and then dispatch stops, \
+             got {calls} calls"
+        );
+        assert_eq!(
+            outcome.summaries.len() + outcome.failures.len(),
+            calls,
+            "every dispatched chunk is reported — nothing in flight was dropped"
+        );
+        assert_eq!(
+            outcome.summaries.len() + outcome.failures.len() + outcome.skipped.len(),
+            20,
+            "every chunk lands in exactly one group"
+        );
+    }
+
+    /// Every failing chunk is reported, not just the first one to come back.
+    #[tokio::test]
+    async fn summarize_chunks_reports_every_failure() {
+        use std::sync::atomic::Ordering;
+
+        let llm = Arc::new(MarkerFailingLlm {
+            markers: vec!["FAILMARKER".to_string()],
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let chunks = marker_chunks(10, &[1, 5, 9]);
+        let mut expected_failures: Vec<uuid::Uuid> =
+            vec![chunks[1].base.id, chunks[5].base.id, chunks[9].base.id];
+
+        let extractor = SummaryExtractor::new(llm.clone() as Arc<dyn Llm>).with_max_parallel(4);
+        let outcome = extractor.summarize_chunks(&chunks, None).await;
+
+        assert_eq!(outcome.summaries.len(), 7);
+        let mut got: Vec<uuid::Uuid> = outcome.failures.iter().map(|(id, _)| *id).collect();
+        got.sort();
+        expected_failures.sort();
+        assert_eq!(got, expected_failures);
+        assert_eq!(llm.calls.load(Ordering::SeqCst), 10);
+    }
+
+    #[tokio::test]
+    async fn summarize_chunks_on_no_chunks_is_an_empty_outcome() {
+        let llm: Arc<dyn Llm> = Arc::new(NoopLlm);
+        let outcome = SummaryExtractor::new(llm).summarize_chunks(&[], None).await;
+        assert!(outcome.summaries.is_empty());
+        assert!(outcome.is_complete());
     }
 
     #[test]
@@ -428,7 +798,9 @@ mod tests {
         chunk.base.belongs_to_set = Some(belongs_to_set.clone());
 
         let extractor = SummaryExtractor::new(llm);
-        let summaries = extractor.summarize_chunks(&[chunk], None).await.unwrap();
+        let outcome = extractor.summarize_chunks(&[chunk], None).await;
+        assert!(outcome.failures.is_empty());
+        let summaries = outcome.summaries;
 
         assert_eq!(summaries.len(), 1);
         assert_eq!(

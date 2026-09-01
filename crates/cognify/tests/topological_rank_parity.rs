@@ -43,9 +43,10 @@ use cognee_cognify::tasks::{
 use cognee_cognify::{CognifyConfig, ExtractedChunks, ExtractedGraphData, cognify};
 use cognee_core::Task;
 use cognee_core::task::Value;
+use cognee_database::ops::datasets::create_dataset;
 use cognee_database::{DatabaseConnection, connect, initialize};
 use cognee_embedding::MockEmbeddingEngine;
-use cognee_models::{Data, DocumentChunk};
+use cognee_models::{Data, Dataset, DocumentChunk};
 use cognee_ontology::NoOpOntologyResolver;
 use cognee_storage::{MockStorage, StorageTrait};
 use cognee_test_utils::{MockGraphDB, MockLlm, MockVectorDB};
@@ -144,9 +145,19 @@ async fn cognify_stamps_the_python_topological_ranks() {
     )
     .build();
 
+    let dataset_id = Uuid::new_v4();
     let db: Arc<DatabaseConnection> = {
         let conn = connect("sqlite::memory:").await.expect("connect sqlite");
         initialize(&conn).await.expect("initialize");
+        // The ledger is written on every run now, and its rows carry an FK to
+        // `datasets` — so the dataset must be registered even for a run with no
+        // user. (`data_id` has no FK, so no `data` row is needed.)
+        create_dataset(
+            &conn,
+            Dataset::new("rank-parity".into(), owner_id, None, dataset_id),
+        )
+        .await
+        .expect("seed dataset");
         Arc::new(conn)
     };
     let thread_pool: Arc<dyn cognee_core::CpuPool> =
@@ -154,10 +165,9 @@ async fn cognify_stamps_the_python_topological_ranks() {
 
     let result = cognify(
         vec![data_item],
-        Uuid::new_v4(),
-        // No user / tenant: the provenance ledger writes in `add_data_points`
-        // need real `datasets` / `data` rows, which this in-memory DB has none
-        // of. `source_user` is covered by the LLM-gated E2E test instead; the
+        dataset_id,
+        // No user / tenant: the ownership rows resolve to the default ledger
+        // user. `source_user` is covered by the LLM-gated E2E test instead; the
         // ranks under test here are user-independent.
         None,
         None,
@@ -286,18 +296,31 @@ async fn extract_graph_rank_is_overridable_for_custom_pipelines() {
         dataset_id: Uuid::new_v4(),
         user_id: None,
         tenant_id: None,
+        failures: Default::default(),
     };
+
+    let (_handle, ctx, db) = cognee_test_utils::test_task_context().await;
+    // The stage records ownership of the entities it is about to write, and
+    // those rows carry an FK to `datasets`. `test_task_context()` supplies no
+    // `pipeline_ctx`, so this also covers the out-of-executor case: the rows
+    // land with a NULL run id rather than erroring.
+    create_dataset(
+        &db,
+        Dataset::new("rank-task".into(), Uuid::new_v4(), None, input.dataset_id),
+    )
+    .await
+    .expect("seed dataset");
 
     let task = Task::from(make_extract_graph_task_with_rank(
         llm,
         graph_db,
         Arc::new(NoOpOntologyResolver::new()),
+        Arc::clone(&db),
         // Web-page node creation needs Documents, which this input omits.
         CognifyConfig::default().with_web_page_nodes(false),
         CUSTOM_RANK,
     ));
 
-    let (_handle, ctx, _db) = cognee_test_utils::test_task_context().await;
     let output = match task.call(Arc::new(input) as Arc<dyn Value>, ctx) {
         cognee_core::task::TaskCall::Async(fut) => fut.await.expect("extract_graph task"),
         _ => panic!("make_extract_graph_task must produce an async task"),

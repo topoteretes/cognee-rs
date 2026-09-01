@@ -156,6 +156,7 @@ async fn relational_pgvector_pggraph_coexist_in_one_database() {
         user_id: user,
         data_id: data,
         dataset_id: dataset,
+        pipeline_run_id: None,
         label: Some(label.into()),
         node_type: "Entity".into(),
         indexed_fields: json!({ "index_fields": ["name"] }),

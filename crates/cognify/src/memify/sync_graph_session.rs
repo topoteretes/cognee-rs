@@ -10,8 +10,10 @@
 //!    in batches of [`BATCH_SIZE`]. Stop when a partial batch is returned.
 //! 3. Resolve edge endpoints to node records so each line can include
 //!    `label`/`type`/`description`.
-//! 4. Emit each edge as a JSON-line
-//!    `{"source": ..., "relationship": ..., "target": ...}`.
+//! 4. Emit each *distinct* edge as a JSON-line
+//!    `{"source": ..., "relationship": ..., "target": ...}` — one logical edge
+//!    now has one ledger row per producing data item, and the copies would
+//!    otherwise eat the cap in step 5.
 //! 5. Merge with existing `graph_context` and cap at [`DEFAULT_MAX_LINES`]
 //!    lines (drop oldest when over).
 //! 6. Persist the merged context and advance the checkpoint.
@@ -156,6 +158,14 @@ pub async fn sync_graph_to_session(
 
     let mut new_lines: Vec<String> = Vec::new();
     let mut latest: Option<DateTime<Utc>> = since;
+    // One logical edge carries one ledger row per producing data item (see
+    // `upsert_provenance` in `tasks.rs`), so a multi-owner edge comes back from
+    // `get_edges_since` several times. Collapse it to one line: the copies are
+    // not merely untidy, they consume the `max_lines` cap below, which is
+    // enforced by dropping the *oldest* lines and would therefore evict older,
+    // distinct edges.
+    let mut seen_edges: std::collections::HashSet<(Uuid, String, Uuid)> =
+        std::collections::HashSet::new();
 
     loop {
         let edges = get_edges_since(db, dataset_id, latest, BATCH_SIZE).await?;
@@ -174,7 +184,14 @@ pub async fn sync_graph_to_session(
         let node_map: HashMap<Uuid, GraphNode> = nodes.into_iter().map(|n| (n.id, n)).collect();
 
         for e in &edges {
-            if let Some(line) = edge_to_json_line(e, &node_map) {
+            let dedup_key = (
+                e.source_node_id,
+                e.relationship_name.clone(),
+                e.destination_node_id,
+            );
+            if seen_edges.insert(dedup_key)
+                && let Some(line) = edge_to_json_line(e, &node_map)
+            {
                 new_lines.push(line);
             }
             if latest.map(|t| e.created_at > t).unwrap_or(true) {
@@ -270,6 +287,7 @@ mod tests {
             user_id: Uuid::new_v4(),
             data_id: Uuid::new_v4(),
             dataset_id: Uuid::new_v4(),
+            pipeline_run_id: None,
             source_node_id: src_id,
             destination_node_id: dst_id,
             relationship_name: "knows".to_string(),
@@ -286,6 +304,7 @@ mod tests {
                 user_id: Uuid::new_v4(),
                 data_id: Uuid::new_v4(),
                 dataset_id: Uuid::new_v4(),
+                pipeline_run_id: None,
                 label: Some("Alice".to_string()),
                 node_type: "Person".to_string(),
                 indexed_fields: serde_json::json!({}),
@@ -301,6 +320,7 @@ mod tests {
                 user_id: Uuid::new_v4(),
                 data_id: Uuid::new_v4(),
                 dataset_id: Uuid::new_v4(),
+                pipeline_run_id: None,
                 label: Some("Bob".to_string()),
                 node_type: "Person".to_string(),
                 indexed_fields: serde_json::json!({}),
@@ -332,6 +352,7 @@ mod tests {
             user_id: Uuid::new_v4(),
             data_id: Uuid::new_v4(),
             dataset_id: Uuid::new_v4(),
+            pipeline_run_id: None,
             source_node_id: src_id,
             destination_node_id: dst_id,
             relationship_name: "r".to_string(),

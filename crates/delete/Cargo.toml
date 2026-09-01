@@ -44,5 +44,7 @@ cognee-storage    = { path = "../storage", features = ["testing"] }
 cognee-test-utils = { path = "../test-utils" }
 cognee-vector     = { path = "../vector", features = ["testing"] }
 dotenv.workspace = true
+# Raw SQL, for the one sweep test that has to break a table mid-operation.
+sea-orm = { version = "1.1", default-features = false }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

@@ -4,11 +4,15 @@
 //! file storage — so no orphaned references remain. Supports dry-run previews.
 //!
 //! Main types: [`DeleteService`] and [`AuthorizedDeleteService`] (the
-//! permission-checked wrapper).
+//! permission-checked wrapper), plus [`RunSweeper`] — the same artifact
+//! deletion path selected by *pipeline run* rather than by dataset, which is
+//! how a failed cognify run is rolled back.
 
 mod authorized;
+mod sweep;
 
 pub use authorized::AuthorizedDeleteService;
+pub use sweep::{RunSweeper, SweepOutcome, SweepScope};
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -992,12 +996,18 @@ impl DeleteService {
         }
 
         // --- Graph cleanup ---
-        let (gn, gw) = self.delete_graph_artifacts(&nodes).await?;
+        let (gn, gw) = delete_graph_artifacts(self.graph_db.as_ref(), &nodes).await?;
         graph_node_count += gn;
         warnings.extend(gw);
 
         // --- Vector cleanup ---
-        let (vp, vw) = self.delete_vector_artifacts(&nodes, &edges).await?;
+        let (vp, vw) = delete_vector_artifacts(
+            self.vector_db.as_ref(),
+            &nodes,
+            &edges,
+            &unchecked_edge_type_vector_ids(&edges),
+        )
+        .await?;
         vector_point_count += vp;
         warnings.extend(vw);
 
@@ -1094,12 +1104,18 @@ impl DeleteService {
         }
 
         // --- Graph cleanup ---
-        let (gn, gw) = self.delete_graph_artifacts(&nodes).await?;
+        let (gn, gw) = delete_graph_artifacts(self.graph_db.as_ref(), &nodes).await?;
         graph_node_count += gn;
         warnings.extend(gw);
 
         // --- Vector cleanup ---
-        let (vp, vw) = self.delete_vector_artifacts(&nodes, &edges).await?;
+        let (vp, vw) = delete_vector_artifacts(
+            self.vector_db.as_ref(),
+            &nodes,
+            &edges,
+            &unchecked_edge_type_vector_ids(&edges),
+        )
+        .await?;
         vector_point_count += vp;
         warnings.extend(vw);
 
@@ -1128,127 +1144,6 @@ impl DeleteService {
             all_prov_edges,
             warnings,
         ))
-    }
-
-    /// Delete nodes from the graph DB based on provenance node slugs.
-    /// Returns `(count, warnings)`.
-    async fn delete_graph_artifacts(
-        &self,
-        nodes: &[GraphNode],
-    ) -> Result<(usize, Vec<String>), DeleteError> {
-        let mut warnings = Vec::new();
-
-        if let Some(graph_db) = &self.graph_db {
-            let node_ids: Vec<String> = nodes
-                .iter()
-                .map(|n| n.slug.to_string())
-                .collect::<HashSet<_>>()
-                .into_iter()
-                .collect();
-
-            if !node_ids.is_empty() {
-                graph_db.delete_nodes(&node_ids).await.map_err(|e| {
-                    DeleteError::GraphCleanup(format!(
-                        "Failed to delete {} graph nodes: {e}",
-                        node_ids.len()
-                    ))
-                })?;
-            }
-
-            Ok((node_ids.len(), warnings))
-        } else {
-            if !nodes.is_empty() {
-                warnings.push(
-                    "Graph DB not configured; graph artifacts were not cleaned up.".to_string(),
-                );
-            }
-            Ok((0, warnings))
-        }
-    }
-
-    /// Delete vector points based on provenance nodes and edges.
-    /// Returns `(count, warnings)`.
-    async fn delete_vector_artifacts(
-        &self,
-        nodes: &[GraphNode],
-        edges: &[GraphEdge],
-    ) -> Result<(usize, Vec<String>), DeleteError> {
-        let mut warnings = Vec::new();
-        let mut total_deleted = 0usize;
-
-        if let Some(vector_db) = &self.vector_db {
-            // Group nodes by (node_type, field_name) for batched deletion
-            let mut by_collection: HashMap<(String, String), Vec<Uuid>> = HashMap::new();
-
-            for node in nodes {
-                let fields = parse_indexed_fields(&node.indexed_fields);
-                for field_name in fields {
-                    by_collection
-                        .entry((node.node_type.clone(), field_name))
-                        .or_default()
-                        .push(node.slug);
-                }
-            }
-
-            // Edges contribute to EdgeType_relationship_name and Triplet_text.
-            for edge in edges {
-                // The EdgeType point id is derived at write time from the edge's
-                // *retrieval text*, not its relationship name — cognify's
-                // `edge_retrieval_text` prefers the nonblank `edge_text` property
-                // (the trimmed LLM edge description) and only falls back to the
-                // relationship name. Recomputing from the bare relationship name
-                // here targeted a UUID that was never written for any described
-                // edge, leaving its vector behind permanently.
-                let retrieval_text = edge_type_retrieval_text(edge);
-                if !retrieval_text.is_empty() {
-                    by_collection
-                        .entry(("EdgeType".to_string(), "relationship_name".to_string()))
-                        .or_default()
-                        .push(EdgeType::deterministic_id(&retrieval_text));
-                }
-
-                by_collection
-                    .entry(("Triplet".to_string(), "text".to_string()))
-                    .or_default()
-                    .push(triplet_vector_id(edge));
-            }
-
-            for ((data_type, field_name), ids) in &by_collection {
-                if ids.is_empty() {
-                    continue;
-                }
-
-                let exists = vector_db
-                    .has_collection(data_type, field_name)
-                    .await
-                    .map_err(|e| {
-                        DeleteError::VectorCleanup(format!(
-                            "Failed to check vector collection {data_type}_{field_name}: {e}"
-                        ))
-                    })?;
-
-                if exists {
-                    vector_db
-                        .delete_points(data_type, field_name, ids)
-                        .await
-                        .map_err(|e| {
-                            DeleteError::VectorCleanup(format!(
-                                "Failed to delete vector points from {data_type}_{field_name}: {e}"
-                            ))
-                        })?;
-                    total_deleted += ids.len();
-                }
-            }
-
-            Ok((total_deleted, warnings))
-        } else {
-            if !nodes.is_empty() || !edges.is_empty() {
-                warnings.push(
-                    "Vector DB not configured; vector artifacts were not cleaned up.".to_string(),
-                );
-            }
-            Ok((0, warnings))
-        }
     }
 
     /// Hard-mode orphan sweep: find and delete degree-one Entity/EntityType
@@ -1466,8 +1361,15 @@ impl DeleteService {
                 let fields = parse_indexed_fields(&node.indexed_fields);
                 vector_points += fields.len();
             }
-            // Each edge contributes to EdgeType and Triplet collections
-            vector_points += edges.len() * 2;
+            // Each edge contributes a Triplet point, plus an EdgeType point
+            // only when it has a retrieval text — the same predicate
+            // `delete_vector_artifacts` uses, so the preview cannot promise a
+            // point the execution will not delete.
+            vector_points += edges.len()
+                + edges
+                    .iter()
+                    .filter(|edge| edge_type_vector_id(edge).is_some())
+                    .count();
         }
 
         Ok((graph_nodes, vector_points, prov_nodes, prov_edges))
@@ -1784,6 +1686,129 @@ impl DeleteService {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Artifact deletion, shared by the dataset/data delete paths and the run sweep
+// ---------------------------------------------------------------------------
+
+/// Delete nodes from the graph DB based on provenance node slugs.
+/// Returns `(count, warnings)`.
+pub(crate) async fn delete_graph_artifacts(
+    graph_db: Option<&Arc<dyn GraphDBTrait>>,
+    nodes: &[GraphNode],
+) -> Result<(usize, Vec<String>), DeleteError> {
+    let mut warnings = Vec::new();
+
+    if let Some(graph_db) = graph_db {
+        let node_ids: Vec<String> = nodes
+            .iter()
+            .map(|n| n.slug.to_string())
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+
+        if !node_ids.is_empty() {
+            graph_db.delete_nodes(&node_ids).await.map_err(|e| {
+                DeleteError::GraphCleanup(format!(
+                    "Failed to delete {} graph nodes: {e}",
+                    node_ids.len()
+                ))
+            })?;
+        }
+
+        Ok((node_ids.len(), warnings))
+    } else {
+        if !nodes.is_empty() {
+            warnings
+                .push("Graph DB not configured; graph artifacts were not cleaned up.".to_string());
+        }
+        Ok((0, warnings))
+    }
+}
+
+/// Delete vector points based on provenance nodes and edges.
+/// Returns `(count, warnings)`.
+///
+/// `edges` drives the `Triplet_text` points, whose id is one-to-one with the
+/// edge (source, text, target). The `EdgeType_relationship_name` points are
+/// passed in separately as `edge_type_ids`, because their id is *many*-to-one
+/// over edges: deciding which of them a caller may delete needs an exclusivity
+/// check over the retrieval text, which is the caller's to make.
+pub(crate) async fn delete_vector_artifacts(
+    vector_db: Option<&Arc<dyn VectorDB>>,
+    nodes: &[GraphNode],
+    edges: &[GraphEdge],
+    edge_type_ids: &[Uuid],
+) -> Result<(usize, Vec<String>), DeleteError> {
+    let mut warnings = Vec::new();
+    let mut total_deleted = 0usize;
+
+    if let Some(vector_db) = vector_db {
+        // Group nodes by (node_type, field_name) for batched deletion
+        let mut by_collection: HashMap<(String, String), Vec<Uuid>> = HashMap::new();
+
+        for node in nodes {
+            let fields = parse_indexed_fields(&node.indexed_fields);
+            for field_name in fields {
+                by_collection
+                    .entry((node.node_type.clone(), field_name))
+                    .or_default()
+                    .push(node.slug);
+            }
+        }
+
+        // Edges contribute to EdgeType_relationship_name and Triplet_text.
+        for edge_type_id in edge_type_ids {
+            by_collection
+                .entry(("EdgeType".to_string(), "relationship_name".to_string()))
+                .or_default()
+                .push(*edge_type_id);
+        }
+
+        for edge in edges {
+            by_collection
+                .entry(("Triplet".to_string(), "text".to_string()))
+                .or_default()
+                .push(triplet_vector_id(edge));
+        }
+
+        for ((data_type, field_name), ids) in &by_collection {
+            if ids.is_empty() {
+                continue;
+            }
+
+            let exists = vector_db
+                .has_collection(data_type, field_name)
+                .await
+                .map_err(|e| {
+                    DeleteError::VectorCleanup(format!(
+                        "Failed to check vector collection {data_type}_{field_name}: {e}"
+                    ))
+                })?;
+
+            if exists {
+                vector_db
+                    .delete_points(data_type, field_name, ids)
+                    .await
+                    .map_err(|e| {
+                        DeleteError::VectorCleanup(format!(
+                            "Failed to delete vector points from {data_type}_{field_name}: {e}"
+                        ))
+                    })?;
+                total_deleted += ids.len();
+            }
+        }
+
+        Ok((total_deleted, warnings))
+    } else {
+        if !nodes.is_empty() || !edges.is_empty() {
+            warnings.push(
+                "Vector DB not configured; vector artifacts were not cleaned up.".to_string(),
+            );
+        }
+        Ok((0, warnings))
+    }
+}
+
 /// Parse the `indexed_fields` JSON value into a list of field names.
 ///
 /// The `indexed_fields` column is a JSON array of field names (e.g., `["text"]`,
@@ -1804,26 +1829,62 @@ fn parse_indexed_fields(value: &serde_json::Value) -> Vec<String> {
     }
 }
 
-/// Recompute the text an edge's `EdgeType` vector id was derived from.
+/// Every selected edge's `EdgeType` point id, with no exclusivity check over
+/// the retrieval text — the dataset and data delete paths' long-standing
+/// behavior, kept as it was.
 ///
-/// Must resolve to the same text cognify's `edge_retrieval_text` produced for the
-/// edge: prefer the nonblank `edge_text` property, else the relationship name,
-/// else empty (cognify writes no vector for an empty text, so the caller must not
-/// try to delete one).
+/// Because that id is many-to-one over edges, this can name a point a surviving
+/// edge of another dataset still needs. The run sweep narrows the set with
+/// `get_relationship_names_claimed_outside_run`; doing the same here changes
+/// dataset deletion and belongs with that path's own tests, not this commit's.
+fn unchecked_edge_type_vector_ids(edges: &[GraphEdge]) -> Vec<Uuid> {
+    edges.iter().filter_map(edge_type_vector_id).collect()
+}
+
+/// The `EdgeType` vector point id cognify actually wrote for this edge.
 ///
-/// The text has to match byte for byte, not merely in spirit — cognify turns it
-/// into the point id with `EdgeType::new_deterministic(text, dataset_id)`, whose
-/// id half is a uuid5 hash of the text alone, so any difference yields a
-/// different UUID and the delete silently misses.
+/// Cognify keys `EdgeType` DataPoints on the edge's *retrieval text* — the
+/// nonblank `edge_text` attribute, falling back to the nonblank relationship
+/// name (`cognee_cognify::tasks::edge_retrieval_text`). The ledger row's
+/// `relationship_name` column holds that text only for `"contains"` edges, so
+/// recomputing the id from the column alone misses every edge whose extraction
+/// produced a description: the delete issues a point id that was never written
+/// and the real point survives forever.
+///
+/// Mirrors Python's `_get_deleted_edge_retrieval_text`
+/// (`delete_from_graph_and_vector.py:18-20`). `None` when the text is empty,
+/// which is Python's `if edge_text:` guard at `:96` — cognify writes no
+/// `EdgeType` for such an edge either.
+///
+/// Note the id is many-to-one over edges: every edge sharing a retrieval text
+/// (every `is_a`, say) resolves to one point. Whoever deletes it is
+/// responsible for establishing that no surviving edge still needs it —
+/// per-edge exclusivity does not establish that, because it is computed over
+/// the edge's slug.
+pub(crate) fn edge_type_vector_id(edge: &GraphEdge) -> Option<Uuid> {
+    let text = edge_retrieval_text(edge);
+    (!text.is_empty()).then(|| EdgeType::deterministic_id(&text))
+}
+
+/// The text cognify keyed this edge's `EdgeType` DataPoint on: the nonblank
+/// `edge_text` attribute, else the nonblank relationship name. Empty when the
+/// edge has neither, in which case no `EdgeType` was written.
+///
+/// The produced text has to match cognify's byte for byte, not merely in
+/// spirit — cognify turns it into the point id with
+/// `EdgeType::new_deterministic(text, dataset_id)`, whose id half is a uuid5
+/// hash of the text alone, so any difference yields a different UUID and the
+/// delete silently misses.
 ///
 /// `EdgeType::retrieval_text` lives in `cognee-models` precisely so the writing
 /// and deleting lanes can share this derivation instead of restating it.
-fn edge_type_retrieval_text(edge: &GraphEdge) -> String {
+pub(crate) fn edge_retrieval_text(edge: &GraphEdge) -> String {
     let edge_text = edge
         .attributes
         .as_ref()
-        .and_then(|attrs| attrs.get("edge_text"))
+        .and_then(|attributes| attributes.get("edge_text"))
         .and_then(serde_json::Value::as_str);
+
     EdgeType::retrieval_text(edge_text, &edge.relationship_name)
 }
 
@@ -1944,6 +2005,7 @@ mod tests {
                 user_id: owner_id,
                 data_id,
                 dataset_id,
+                pipeline_run_id: None,
                 label: Some(format!("node-{slug}")),
                 node_type: node_type.to_string(),
                 indexed_fields: indexed_fields.clone(),
@@ -1971,6 +2033,7 @@ mod tests {
                 user_id: owner_id,
                 data_id,
                 dataset_id,
+                pipeline_run_id: None,
                 source_node_id: Uuid::new_v4(),
                 destination_node_id: Uuid::new_v4(),
                 relationship_name: relationship_name.to_string(),
@@ -2472,6 +2535,10 @@ mod tests {
         );
     }
 
+    /// The undescribed-edge case: with no `edge_text` attribute the retrieval
+    /// text falls back to the relationship name, so the swept id is the one the
+    /// pre-fix code computed. Kept explicit so the fallback stays pinned
+    /// alongside `delete_dataset_cleans_described_edge_vector_points`.
     #[tokio::test]
     async fn delete_dataset_cleans_edge_vector_points() {
         let (svc, storage, db, _graph_db, vector_db) = make_service_with_graph_vector().await;
@@ -2497,6 +2564,7 @@ mod tests {
                 user_id: owner,
                 data_id,
                 dataset_id,
+                pipeline_run_id: None,
                 source_node_id: source_id,
                 destination_node_id: target_id,
                 relationship_name: relationship_name.to_string(),
@@ -2563,6 +2631,41 @@ mod tests {
         );
     }
 
+    /// An edge with no retrieval text at all has no `EdgeType` point, and the
+    /// preview must say so.
+    ///
+    /// A malformed extraction can yield an edge with a blank relationship name
+    /// and no `edge_text`; cognify writes no `EdgeType` DataPoint for it, so
+    /// neither side may claim one. The counters are asserted equal *and*
+    /// pinned to 1 — equality alone would also hold if both sides counted 2.
+    #[tokio::test]
+    async fn preview_and_execution_agree_on_an_edge_with_no_retrieval_text() {
+        let (svc, storage, db, _graph_db, _vector_db) = make_service_with_graph_vector().await;
+        let owner = Uuid::new_v4();
+        let (dataset_id, data_id) =
+            seed_dataset_with_data(&db, &storage, owner, "textless_edge_ds").await;
+
+        seed_provenance_edges(&db, dataset_id, data_id, owner, &[Uuid::new_v4()], "").await;
+
+        let request = DeleteRequest {
+            scope: DeleteScope::All,
+            mode: DeleteMode::Soft,
+            memory_only: false,
+        };
+
+        let preview = svc.preview(&request).await.expect("preview should succeed");
+        assert_eq!(
+            preview.vector_points_to_delete, 1,
+            "only the Triplet point exists for a textless edge"
+        );
+
+        let result = svc.execute(&request).await.expect("execute should succeed");
+        assert_eq!(
+            result.deleted_vector_points, preview.vector_points_to_delete,
+            "the preview must not promise an EdgeType point the sweep never issues"
+        );
+    }
+
     /// An edge carrying a description must have its `EdgeType` vector removed.
     ///
     /// Cognify derives that point's id from the edge's retrieval text — the
@@ -2602,6 +2705,7 @@ mod tests {
                 user_id: owner,
                 data_id,
                 dataset_id,
+                pipeline_run_id: None,
                 source_node_id: source_id,
                 destination_node_id: target_id,
                 relationship_name: relationship_name.to_string(),
@@ -2669,7 +2773,292 @@ mod tests {
         assert_eq!(
             vector_db.collection_size("Triplet", "text").await.unwrap(),
             0,
-            "Triplet vector point should be removed"
+            "the Triplet point must be removed"
+        );
+    }
+
+    /// The delete-side proof of per-producer ownership rows: an entity a second
+    /// data item claims survives the first one's deletion — graph node *and*
+    /// vector point — and goes only when the last claimant does.
+    #[tokio::test]
+    async fn data_delete_keeps_an_entity_a_second_data_item_claims() {
+        let (svc, storage, db, graph_db, vector_db) = make_service_with_graph_vector().await;
+        let owner = Uuid::new_v4();
+
+        let dataset = Dataset::new("two_owners_ds".to_string(), owner, None, Uuid::new_v4());
+        let dataset_id = dataset.id;
+        ops::datasets::create_dataset(&db, dataset).await.unwrap();
+
+        let mut data_ids = Vec::new();
+        for (name, content) in [
+            ("one.txt", &b"content one"[..]),
+            ("two.txt", &b"content two"[..]),
+        ] {
+            let location = storage.store(content, name).await.unwrap();
+            let data_id = Uuid::new_v4();
+            ops::data::create_data(
+                &db,
+                Data::builder(
+                    data_id,
+                    name,
+                    location,
+                    format!("file://{name}"),
+                    "txt",
+                    "text/plain",
+                    format!("hash_{name}"),
+                    owner,
+                )
+                .build(),
+            )
+            .await
+            .unwrap();
+            ops::datasets::attach_data_to_dataset(&db, dataset_id, data_id)
+                .await
+                .unwrap();
+            data_ids.push(data_id);
+        }
+
+        // One merged entity, one ownership row per producing data item — the
+        // shape `upsert_provenance` now writes.
+        let entity_slug = Uuid::new_v4();
+        for data_id in &data_ids {
+            seed_provenance_nodes(
+                &db,
+                dataset_id,
+                *data_id,
+                owner,
+                &[entity_slug],
+                "Entity",
+                serde_json::json!(["name"]),
+            )
+            .await;
+        }
+
+        graph_db
+            .add_node_raw(serde_json::json!({"id": entity_slug.to_string(), "name": "Shared"}))
+            .await
+            .unwrap();
+        vector_db
+            .create_collection("Entity", "name", 3)
+            .await
+            .unwrap();
+        vector_db
+            .index_points(
+                "Entity",
+                "name",
+                &[cognee_vector::VectorPoint::new(
+                    entity_slug,
+                    vec![1.0, 0.0, 0.0],
+                )],
+            )
+            .await
+            .unwrap();
+
+        let delete_data = |data_id: Uuid| DeleteRequest {
+            scope: DeleteScope::Data {
+                owner_id: owner,
+                data_id,
+                dataset_name: Some("two_owners_ds".to_string()),
+                delete_dataset_if_empty: false,
+            },
+            mode: DeleteMode::Soft,
+            memory_only: false,
+        };
+
+        svc.execute(&delete_data(data_ids[0]))
+            .await
+            .expect("execute should succeed");
+
+        assert_eq!(
+            graph_db.node_count(),
+            1,
+            "the second data item still claims the entity"
+        );
+        assert_eq!(
+            vector_db.collection_size("Entity", "name").await.unwrap(),
+            1,
+            "its vector point must survive too"
+        );
+
+        svc.execute(&delete_data(data_ids[1]))
+            .await
+            .expect("execute should succeed");
+
+        assert_eq!(
+            graph_db.node_count(),
+            0,
+            "the last claimant's deletion removes the entity"
+        );
+        assert_eq!(
+            vector_db.collection_size("Entity", "name").await.unwrap(),
+            0,
+            "and its vector point"
+        );
+    }
+
+    /// The delete-side proof of per-producer *edge* ownership rows: an edge a
+    /// second data item claims survives the first one's deletion — both its
+    /// `EdgeType` and its `Triplet` vector point — and goes only when the last
+    /// claimant does.
+    ///
+    /// The two rows share a `slug` and differ in `data_id` and `id`, which is
+    /// exactly the shape `upsert_provenance` writes. Rows are built here rather
+    /// than through `seed_provenance_edges`, which randomizes the endpoints on
+    /// every call.
+    #[tokio::test]
+    async fn data_delete_keeps_an_edge_a_second_data_item_claims() {
+        let (svc, storage, db, _graph_db, vector_db) = make_service_with_graph_vector().await;
+        let owner = Uuid::new_v4();
+
+        let dataset = Dataset::new(
+            "two_edge_owners_ds".to_string(),
+            owner,
+            None,
+            Uuid::new_v4(),
+        );
+        let dataset_id = dataset.id;
+        ops::datasets::create_dataset(&db, dataset).await.unwrap();
+
+        let mut data_ids = Vec::new();
+        for (name, content) in [
+            ("one.txt", &b"content one"[..]),
+            ("two.txt", &b"content two"[..]),
+        ] {
+            let location = storage.store(content, name).await.unwrap();
+            let data_id = Uuid::new_v4();
+            ops::data::create_data(
+                &db,
+                Data::builder(
+                    data_id,
+                    name,
+                    location,
+                    format!("file://{name}"),
+                    "txt",
+                    "text/plain",
+                    format!("hash_{name}"),
+                    owner,
+                )
+                .build(),
+            )
+            .await
+            .unwrap();
+            ops::datasets::attach_data_to_dataset(&db, dataset_id, data_id)
+                .await
+                .unwrap();
+            data_ids.push(data_id);
+        }
+
+        let source_id = Uuid::new_v4();
+        let target_id = Uuid::new_v4();
+        let relationship_name = "knows";
+        let edge_text = "Alice knows Bob";
+        let triplet_id = Triplet::new(
+            source_id,
+            target_id,
+            relationship_name.to_string(),
+            String::new(),
+        )
+        .id;
+
+        // One merged edge, one ownership row per producing data item.
+        for data_id in &data_ids {
+            ops::graph_storage::upsert_edges(
+                &db,
+                &[GraphEdge {
+                    id: Uuid::new_v4(),
+                    slug: triplet_id,
+                    user_id: owner,
+                    data_id: *data_id,
+                    dataset_id,
+                    pipeline_run_id: None,
+                    source_node_id: source_id,
+                    destination_node_id: target_id,
+                    relationship_name: relationship_name.to_string(),
+                    label: None,
+                    attributes: Some(serde_json::json!({ "edge_text": edge_text })),
+                    created_at: chrono::Utc::now(),
+                }],
+            )
+            .await
+            .unwrap();
+        }
+
+        vector_db
+            .create_collection("EdgeType", "relationship_name", 3)
+            .await
+            .unwrap();
+        vector_db
+            .create_collection("Triplet", "text", 3)
+            .await
+            .unwrap();
+        vector_db
+            .index_points(
+                "EdgeType",
+                "relationship_name",
+                &[cognee_vector::VectorPoint::new(
+                    EdgeType::deterministic_id(edge_text),
+                    vec![1.0, 0.0, 0.0],
+                )],
+            )
+            .await
+            .unwrap();
+        vector_db
+            .index_points(
+                "Triplet",
+                "text",
+                &[cognee_vector::VectorPoint::new(
+                    triplet_id,
+                    vec![0.0, 1.0, 0.0],
+                )],
+            )
+            .await
+            .unwrap();
+
+        let delete_data = |data_id: Uuid| DeleteRequest {
+            scope: DeleteScope::Data {
+                owner_id: owner,
+                data_id,
+                dataset_name: Some("two_edge_owners_ds".to_string()),
+                delete_dataset_if_empty: false,
+            },
+            mode: DeleteMode::Soft,
+            memory_only: false,
+        };
+
+        svc.execute(&delete_data(data_ids[0]))
+            .await
+            .expect("execute should succeed");
+
+        assert_eq!(
+            vector_db
+                .collection_size("EdgeType", "relationship_name")
+                .await
+                .unwrap(),
+            1,
+            "the second data item still claims the edge"
+        );
+        assert_eq!(
+            vector_db.collection_size("Triplet", "text").await.unwrap(),
+            1,
+            "its Triplet point must survive too"
+        );
+
+        svc.execute(&delete_data(data_ids[1]))
+            .await
+            .expect("execute should succeed");
+
+        assert_eq!(
+            vector_db
+                .collection_size("EdgeType", "relationship_name")
+                .await
+                .unwrap(),
+            0,
+            "the last claimant's deletion removes the edge's EdgeType point"
+        );
+        assert_eq!(
+            vector_db.collection_size("Triplet", "text").await.unwrap(),
+            0,
+            "and its Triplet point"
         );
     }
 
@@ -5130,6 +5519,102 @@ mod tests {
             result.deleted_data <= 1,
             "unexpected large deletion count for a ghost data_id: deleted_data={}",
             result.deleted_data
+        );
+    }
+
+    /// The delete path *recomputes* the `Triplet` point id from the ledger
+    /// row; cognify *wrote* that point from the extracted graph. Nothing but
+    /// this test holds the two formulas together, and a recompute that drifts
+    /// issues a delete for a point that was never written while the real one
+    /// survives forever — the failure mode this corner of the crate exists to
+    /// prevent.
+    ///
+    /// Asserted against a triplet cognify itself builds, not against the
+    /// formula restated here, so the two crates cannot drift apart silently.
+    /// `triplet_creation::test_triplet_with_edge_text_property` pins the same
+    /// identity from the writing side; this is the deleting side of that pair.
+    #[test]
+    fn triplet_vector_id_recomputes_the_point_cognify_wrote() {
+        use cognee_cognify::triplet_creation::create_triplets_from_graph;
+        use cognee_cognify::{GraphEdgePair, GraphNodePair};
+        use cognee_models::{DataPoint, Entity, EntityType};
+
+        fn node(name: &str) -> GraphNodePair {
+            GraphNodePair {
+                entity: Entity {
+                    base: DataPoint::new("Entity", None),
+                    name: name.to_string(),
+                    is_a: None,
+                    description: format!("description of {name}"),
+                },
+                entity_type: EntityType {
+                    base: DataPoint::new("EntityType", None),
+                    name: "Generic".to_string(),
+                    description: "Generic type".to_string(),
+                },
+            }
+        }
+
+        /// The ledger row cognify's `semantic_edge_provenance_rows` writes for
+        /// a non-`contains` edge: `relationship_name` holds the relationship
+        /// name — never the description — and the description rides along in
+        /// `attributes.edge_text`.
+        fn ledger_row(edge: &GraphEdgePair) -> GraphEdge {
+            GraphEdge {
+                id: Uuid::new_v4(),
+                slug: Uuid::new_v4(),
+                user_id: Uuid::new_v4(),
+                data_id: Uuid::new_v4(),
+                dataset_id: Uuid::new_v4(),
+                pipeline_run_id: None,
+                source_node_id: edge.source_entity_id,
+                destination_node_id: edge.target_entity_id,
+                relationship_name: edge.relationship_name.clone(),
+                label: Some(edge.relationship_name.clone()),
+                attributes: serde_json::to_value(&edge.properties).ok(),
+                created_at: chrono::Utc::now(),
+            }
+        }
+
+        let alice = node("Alice");
+        let acme = node("Acme");
+        let nodes = [alice.clone(), acme.clone()];
+
+        let mut described =
+            GraphEdgePair::new(alice.entity.base.id, acme.entity.base.id, "works_at");
+        described.add_property("edge_text", "employed by since 2019");
+
+        let written = create_triplets_from_graph(&nodes, std::slice::from_ref(&described));
+        assert_eq!(written.len(), 1);
+        assert!(
+            written[0].text.contains("employed by since 2019"),
+            "the description reaches the embedded text — otherwise the twin \
+             assertion below proves nothing"
+        );
+        assert_eq!(
+            triplet_vector_id(&ledger_row(&described)),
+            written[0].id,
+            "the delete must name the Triplet point cognify actually wrote for \
+             a described edge"
+        );
+
+        // Twin: the same edge without a description. Cognify keys it on the
+        // relationship name, and the delete path — which only ever sees that
+        // name in the ledger column — must land on the same point for both.
+        let mut bare = GraphEdgePair::new(alice.entity.base.id, acme.entity.base.id, "works_at");
+        bare.add_property("edge_text", "");
+
+        let undescribed = create_triplets_from_graph(&nodes, std::slice::from_ref(&bare));
+        assert_eq!(undescribed.len(), 1);
+        assert_eq!(
+            triplet_vector_id(&ledger_row(&bare)),
+            undescribed[0].id,
+            "and the point cognify wrote for an undescribed edge"
+        );
+        assert_eq!(
+            written[0].id, undescribed[0].id,
+            "a described and an undescribed edge between the same endpoints \
+             key one point: the description stays out of the id on both sides"
         );
     }
 }

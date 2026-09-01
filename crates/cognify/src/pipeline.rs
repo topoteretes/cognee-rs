@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use cognee_models::{Document, DocumentChunk, EdgeType, Embedding};
 use uuid::Uuid;
 
+use crate::failure::FailureReport;
 use crate::graph_integration::{GraphEdgePair, GraphNodePair};
 use crate::summarization::TextSummary;
 
@@ -45,18 +46,44 @@ pub struct CognifyResult {
     /// result shape.
     pub documents_for_dlt: Vec<Document>,
 
-    /// `true` when this result was synthesised by the
-    /// `check_pipeline_run_qualification` short-circuit (latest
-    /// `pipeline_runs` row was `COMPLETED`). All other fields are empty.
+    /// `true` when this run had nothing left to do. All other fields are
+    /// empty.
+    ///
+    /// Two paths set it: the `check_pipeline_run_qualification`
+    /// short-circuit (latest `pipeline_runs` row `COMPLETED` and the pipeline
+    /// cache opted in), and — since completion markers went live — a run whose
+    /// every data item an earlier run had already cognified. Both mean the same
+    /// thing to a caller, which is why they share the flag.
     ///
     /// CLI prints "already complete" when set; HTTP-server returns
     /// `200 OK` with `status = "PipelineRunAlreadyCompleted"`. See doc 08-08
     /// §4.3 and locked decision 13.
     pub already_completed: bool,
 
-    /// The `pipeline_run_id` of the prior completed run that triggered the
-    /// short-circuit. `None` on normal (non-short-circuit) results.
+    /// The `pipeline_run_id` of the prior completed run this result deferred
+    /// to. `None` when no prior completed run was found — including on the
+    /// marker path, where every item may have been completed by several
+    /// different earlier runs.
     pub prior_pipeline_run_id: Option<Uuid>,
+
+    /// The `pipeline_runs.pipeline_run_id` of the run that produced this
+    /// result — the same value stamped on every ownership row the run wrote.
+    ///
+    /// Set by the final task from its `PipelineContext`; `None` for
+    /// [`Self::empty`] / [`Self::already_completed`] and for a result produced
+    /// outside a pipeline executor. The post-pipeline
+    /// [`crate::tasks::extract_dlt_fk_edges`] teardown runs outside the
+    /// executor and reads the run id from here.
+    pub pipeline_run_id: Option<Uuid>,
+
+    /// Everything that went wrong during the run: which chunk, which file,
+    /// which stage, and why — plus a total count when the list was capped.
+    ///
+    /// A non-empty report on an `Ok` result means the run completed with
+    /// failures the configured policy tolerated. When the policy judged them
+    /// fatal the caller gets [`crate::CognifyError::RunFailed`] carrying the
+    /// same report instead. See [`crate::failure`].
+    pub failures: FailureReport,
 }
 
 impl CognifyResult {
@@ -73,6 +100,8 @@ impl CognifyResult {
             documents_for_dlt: vec![],
             already_completed: false,
             prior_pipeline_run_id: None,
+            pipeline_run_id: None,
+            failures: FailureReport::default(),
         }
     }
 

@@ -84,7 +84,7 @@ async fn test_ontology_round_trip_with_real_resolver() {
     let chunk_id = Uuid::new_v4();
     let dataset_id = Uuid::new_v4();
 
-    let (nodes, edges) = expand_with_nodes_and_edges(
+    let (nodes, edges, _claimed_edges, _producers) = expand_with_nodes_and_edges(
         vec![(chunk_id, graph)],
         dataset_id,
         &HashMap::new(),
@@ -171,7 +171,7 @@ async fn test_ontology_unmatched_type_not_validated() {
     let chunk_id = Uuid::new_v4();
     let dataset_id = Uuid::new_v4();
 
-    let (nodes, _edges) = expand_with_nodes_and_edges(
+    let (nodes, _edges, _claimed_edges, _producers) = expand_with_nodes_and_edges(
         vec![(chunk_id, graph)],
         dataset_id,
         &HashMap::new(),
@@ -210,7 +210,7 @@ async fn test_ontology_noop_resolver_leaves_everything_unvalidated() {
     let chunk_id = Uuid::new_v4();
     let dataset_id = Uuid::new_v4();
 
-    let (nodes, _edges) = expand_with_nodes_and_edges(
+    let (nodes, _edges, _claimed_edges, _producers) = expand_with_nodes_and_edges(
         vec![(chunk_id, graph)],
         dataset_id,
         &HashMap::new(),

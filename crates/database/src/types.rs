@@ -25,6 +25,9 @@ pub struct GraphNode {
     pub user_id: Uuid,
     pub data_id: Uuid,
     pub dataset_id: Uuid,
+    /// The pipeline run that created this ownership row, or `None` for rows
+    /// written before run ownership existed.
+    pub pipeline_run_id: Option<Uuid>,
     pub label: Option<String>,
     pub node_type: String,
     pub indexed_fields: serde_json::Value,
@@ -39,6 +42,9 @@ pub struct GraphEdge {
     pub user_id: Uuid,
     pub data_id: Uuid,
     pub dataset_id: Uuid,
+    /// The pipeline run that created this ownership row, or `None` for rows
+    /// written before run ownership existed.
+    pub pipeline_run_id: Option<Uuid>,
     pub source_node_id: Uuid,
     pub destination_node_id: Uuid,
     pub relationship_name: String,

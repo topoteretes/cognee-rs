@@ -83,6 +83,95 @@ relational DB) → **extract DLT FK edges**. Configurable via `CognifyConfig`
 (chunk strategy, custom prompts/schemas, temporal mode). Pipeline:
 [`cognee-cognify`](../crates/cognify/) (`cognify()` / `cognify_datasets()`).
 
+#### When a cognify run fails
+
+A chunk or a file the pipeline cannot process is not a bare error: the chunking,
+graph-extraction and summarization stages *collect* their failures, and the run
+result carries a report naming which file, which chunk, which stage and what
+went wrong. `CognifyResult.failures` carries it on success;
+`CognifyError::RunFailed` carries the same report when the run failed.
+
+What happens to what the run already wrote is decided at the end, from two
+independent settings — *when to stop* (`FailFast`, the default, or `RunToEnd`)
+and *what to sweep* (`WholeRun`, the default, `FailedItems`, or `Nothing`). The
+full matrix is in
+[Cognify failure handling](configuration.md#cognify-failure-handling); the end
+states are:
+
+- **Default (`FailFast` + `WholeRun`).** The run stops at the first failed
+  *batch* — not the first failed file, see below — everything it created is
+  removed, the run is recorded `ERRORED` and the call returns `Err`. The store
+  converges to its pre-run state — what earlier runs completed is untouched,
+  because the sweep selects only rows naming *this* run. Python's default, in
+  execution and in end state.
+- **`FailedItems` below the failure ratio.** The run *completes*. Only the
+  failed files' contributions are removed; the files that finished are kept,
+  indexed and marked complete; and the call returns `Ok` with the failed-file
+  list in the report, so the next run knows exactly what to redo.
+- **`FailedItems` over the ratio** escalates to a whole-run sweep and an errored
+  run — a large enough share of failed chunks means something systemic, not one
+  bad file.
+- **`Nothing`** removes nothing. The escape hatch.
+
+Under `FailFast` a run partitions its files three ways at the abort point:
+*complete* (every chunk extracted — persisted and marked), *failed* (at least
+one chunk failed) and *unreached* (never attempted). Only complete files are
+persisted, which is what keeps a data item all-or-nothing; failed and unreached
+files are indistinguishable to the next run and are simply redone.
+
+The abort point is a *batch* boundary, not a file boundary, and how much work
+`FailFast` actually saves depends on how big that batch is. Graph extraction
+stops after the batch that contained the failure — `chunks_per_batch`, default
+2000, so a dataset under 2000 chunks is one batch and every extraction call is
+dispatched before the failure is noticed. Temporal extraction stops after
+`data_per_batch`, default 20 files. Summarization has no batch loop: it stops
+dispatching as soon as a fatal failure comes back, but the calls already in
+flight (up to `max_parallel_extractions`) are neither cancelled nor discarded.
+`FailFast` is an upper bound on wasted spend, not a promise of none — see
+[Cognify failure handling](configuration.md#cognify-failure-handling).
+
+A sweep deliberately keeps anything still claimed from outside its scope: an
+entity a surviving file also produced, an artifact another run or another
+dataset also names, or a row written before ownership tracking existed. The
+worst case is a surplus artifact that keeps an owner, never an artifact with no
+owner at all.
+
+That claim is recorded even when the artifact is not written. Graph extraction
+filters out edges the graph already holds, so a file cognified in a later run
+adds no second copy of an edge an earlier file created — but it still records
+ownership of it. Without that row the earlier file would be the edge's only
+owner, and deleting it would take the edge's vectors away from a file that still
+references it. Ownership is per (dataset, data item): an edge shared across two
+*datasets* is still governed by each dataset's own exclusivity check, the same
+limitation entity ownership has.
+
+One caveat. **Cancellation is swept**, unlike Python — though there is no
+caller-facing cancel handle on `cognify()` today, and simply dropping the future
+runs no sweep at all.
+
+All of the above applies to the **temporal** pipeline too: it records ownership
+of its events, timestamps, intervals and entity nodes before it writes them, its
+two LLM passes collect failures rather than swallowing them, and a failed
+temporal run converges the same way.
+
+#### Re-cognifying is now incremental — a behaviour change
+
+`incremental_loading` is on by default and now does what it says. A successful
+run marks each data item it finished, in Python's own `pipeline_status` format,
+and the next run skips the marked items before it builds a pipeline — no
+classification, no chunking, no LLM calls.
+
+**Re-cognifying an already-complete dataset is therefore a no-op**, returning
+`Ok` with `already_completed = true`. Deployments that relied on cognify
+re-processing everything on every call will see it "stop doing anything"; set
+`with_incremental_loading(false)` to restore the previous behaviour. A failed
+run marks nothing, and a sweep clears the markers of whatever it rolled back, so
+the next run redoes exactly the work that was lost.
+
+Both branches share one marker key, matching Python, so **a `cognify()` and a
+temporal `cognify()` over the same dataset are no-ops for each other**. Turn
+incremental loading off to build both graphs over one dataset.
+
 ### memify (graph enrichment)
 
 Standalone, idempotent enrichment: reads the existing graph, builds `Triplet`

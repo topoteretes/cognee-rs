@@ -28,6 +28,18 @@ pub struct MockGraphDB {
     call_log: Arc<Mutex<Vec<String>>>,
     /// Optional injected error returned from `get_node_truth_state` calls.
     truth_state_error: Arc<Mutex<Option<String>>>,
+    /// Optional injected error returned from node writes, before any node is
+    /// stored. Lets a test make the graph write fail while everything that was
+    /// supposed to happen *before* it still ran.
+    add_nodes_error: Arc<Mutex<Option<String>>>,
+    /// Optional injected error returned from `add_edges`, before any edge is
+    /// stored.
+    add_edges_error: Arc<Mutex<Option<String>>>,
+    /// Optional injected error returned from `delete_nodes`, before any node is
+    /// removed. Lets a test make artifact deletion fail while everything that
+    /// was supposed to survive it — ownership rows, completion markers — is
+    /// still there to assert on.
+    delete_nodes_error: Arc<Mutex<Option<String>>>,
     /// When set, [`GraphDBTrait::close`] never returns. Lets a test stand in for
     /// a slot whose teardown outlives the caller's patience — a large embedded
     /// checkpoint, or a pool waiting on a connection that will not come back —
@@ -43,6 +55,9 @@ impl MockGraphDB {
             edges: Arc::new(Mutex::new(Vec::new())),
             call_log: Arc::new(Mutex::new(Vec::new())),
             truth_state_error: Arc::new(Mutex::new(None)),
+            add_nodes_error: Arc::new(Mutex::new(None)),
+            add_edges_error: Arc::new(Mutex::new(None)),
+            delete_nodes_error: Arc::new(Mutex::new(None)),
             hang_on_close: false,
         }
     }
@@ -67,6 +82,57 @@ impl MockGraphDB {
         *slot = Some(msg.into());
     }
 
+    /// Inject an error returned from every subsequent node write
+    /// (`add_node_raw` / `add_nodes_raw` / `add_nodes`) as
+    /// `GraphDBError::NodeError`, before anything is stored.
+    pub fn set_add_nodes_error(&self, msg: impl Into<String>) {
+        let mut slot = self.add_nodes_error.lock().unwrap(); // lock poison is unrecoverable
+        *slot = Some(msg.into());
+    }
+
+    /// Inject an error returned from every subsequent `add_edges` call as
+    /// `GraphDBError::EdgeError`, before anything is stored.
+    pub fn set_add_edges_error(&self, msg: impl Into<String>) {
+        let mut slot = self.add_edges_error.lock().unwrap(); // lock poison is unrecoverable
+        *slot = Some(msg.into());
+    }
+
+    /// Inject an error returned from every subsequent `delete_nodes` call as
+    /// `GraphDBError::NodeError`, before any node is removed.
+    pub fn set_delete_nodes_error(&self, msg: impl Into<String>) {
+        let mut slot = self.delete_nodes_error.lock().unwrap(); // lock poison is unrecoverable
+        *slot = Some(msg.into());
+    }
+
+    /// Clear an error previously armed by [`MockGraphDB::set_delete_nodes_error`],
+    /// so a test can assert that re-running a failed operation converges.
+    pub fn clear_delete_nodes_error(&self) {
+        let mut slot = self.delete_nodes_error.lock().unwrap(); // lock poison is unrecoverable
+        *slot = None;
+    }
+
+    /// Remove `node_ids` and every edge incident to one of them.
+    ///
+    /// Mirrors what the real backends do on a node delete — Ladybug issues
+    /// `DETACH DELETE`, the Postgres adapter relies on `ON DELETE CASCADE` —
+    /// so a test driving the mock sees a graph state a live backend could
+    /// actually produce. Edges are dropped by endpoint id whether or not the
+    /// node itself was stored: the mock lets a test add an edge without its
+    /// endpoints, and no real backend can hold such an edge past the delete.
+    fn detach_delete(&self, node_ids: &[String]) {
+        let removed: HashSet<&str> = node_ids.iter().map(String::as_str).collect();
+
+        let mut nodes = self.nodes.lock().unwrap(); // lock poison is unrecoverable
+        for node_id in node_ids {
+            nodes.remove(node_id);
+        }
+
+        let mut edges = self.edges.lock().unwrap(); // lock poison is unrecoverable
+        edges.retain(|(src, tgt, _, _)| {
+            !removed.contains(src.as_str()) && !removed.contains(tgt.as_str())
+        });
+    }
+
     /// Get the current node count (for testing).
     pub fn node_count(&self) -> usize {
         self.nodes.lock().unwrap().len() // lock poison is unrecoverable
@@ -89,8 +155,8 @@ impl MockGraphDB {
     ///
     /// Currently records `"get_graph_data"`, `"get_filtered_graph_data"`,
     /// `"get_candidate_nodes_by_label"`, `"get_nodeset_subgraph"`,
-    /// `"get_neighborhood"`, `"get_node_truth_state"`, and
-    /// `"set_node_truth_state"`.
+    /// `"get_neighborhood"`, `"get_node_truth_state"`,
+    /// `"set_node_truth_state"`, `"delete_nodes"`, and `"close"`.
     pub fn get_call_log(&self) -> Vec<String> {
         self.call_log.lock().unwrap().clone() // lock poison is unrecoverable
     }
@@ -145,6 +211,14 @@ impl GraphDBTrait for MockGraphDB {
     }
 
     async fn add_node_raw(&self, node: Value) -> GraphDBResult<()> {
+        // Error-injection hook for tests: fail before any node is stored.
+        {
+            let slot = self.add_nodes_error.lock().unwrap(); // lock poison is unrecoverable
+            if let Some(msg) = slot.as_ref() {
+                return Err(GraphDBError::NodeError(msg.clone()));
+            }
+        }
+
         let mut node_data = HashMap::new();
         if let Value::Object(map) = node {
             for (k, v) in map {
@@ -170,15 +244,25 @@ impl GraphDBTrait for MockGraphDB {
     }
 
     async fn delete_node(&self, node_id: &str) -> GraphDBResult<()> {
-        self.nodes.lock().unwrap().remove(node_id); // lock poison is unrecoverable
+        self.detach_delete(&[node_id.to_string()]);
         Ok(())
     }
 
     async fn delete_nodes(&self, node_ids: &[String]) -> GraphDBResult<()> {
-        let mut nodes = self.nodes.lock().unwrap(); // lock poison is unrecoverable
-        for node_id in node_ids {
-            nodes.remove(node_id);
+        // Error-injection hook for tests: fail before any node is removed.
+        {
+            let slot = self.delete_nodes_error.lock().unwrap(); // lock poison is unrecoverable
+            if let Some(msg) = slot.as_ref() {
+                return Err(GraphDBError::NodeError(msg.clone()));
+            }
         }
+
+        self.call_log
+            .lock()
+            .unwrap() // lock poison is unrecoverable
+            .push("delete_nodes".to_string());
+
+        self.detach_delete(node_ids);
         Ok(())
     }
 
@@ -240,6 +324,14 @@ impl GraphDBTrait for MockGraphDB {
     }
 
     async fn add_edges(&self, edges: &[EdgeData]) -> GraphDBResult<()> {
+        // Error-injection hook for tests: fail before any edge is stored.
+        {
+            let slot = self.add_edges_error.lock().unwrap(); // lock poison is unrecoverable
+            if let Some(msg) = slot.as_ref() {
+                return Err(GraphDBError::EdgeError(msg.clone()));
+            }
+        }
+
         let mut stored_edges = self.edges.lock().unwrap(); // lock poison is unrecoverable
         for edge in edges {
             stored_edges.push(edge.clone());
@@ -1031,6 +1123,47 @@ mod tests {
         let log = db.get_call_log();
         assert!(log.contains(&"set_node_truth_state".to_string()));
         assert!(log.contains(&"get_node_truth_state".to_string()));
+    }
+
+    #[tokio::test]
+    async fn delete_nodes_detaches_incident_edges() {
+        let db = MockGraphDB::new();
+        for id in ["a", "b", "c"] {
+            db.add_node_raw(serde_json::json!({"id": id, "type": "T"}))
+                .await
+                .unwrap();
+        }
+        // b is the target of one edge and the source of another, so a cascade
+        // that only looked at one endpoint column would leave one behind.
+        db.add_edge("a", "b", "in", None).await.unwrap();
+        db.add_edge("b", "c", "out", None).await.unwrap();
+        db.add_edge("a", "c", "untouched", None).await.unwrap();
+
+        db.delete_nodes(&["b".to_string()]).await.unwrap();
+
+        assert_eq!(db.node_count(), 2);
+        assert!(!db.has_edge("a", "b", "in").await.unwrap());
+        assert!(!db.has_edge("b", "c", "out").await.unwrap());
+        // Edges between surviving nodes stay.
+        assert!(db.has_edge("a", "c", "untouched").await.unwrap());
+        assert_eq!(db.edge_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn delete_node_detaches_incident_edges() {
+        let db = MockGraphDB::new();
+        db.add_node_raw(serde_json::json!({"id": "a", "type": "T"}))
+            .await
+            .unwrap();
+        db.add_node_raw(serde_json::json!({"id": "b", "type": "T"}))
+            .await
+            .unwrap();
+        db.add_edge("a", "b", "r", None).await.unwrap();
+
+        db.delete_node("a").await.unwrap();
+
+        assert!(!db.has_edge("a", "b", "r").await.unwrap());
+        assert_eq!(db.edge_count(), 0);
     }
 
     #[tokio::test]

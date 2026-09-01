@@ -5,9 +5,12 @@
 )]
 use std::sync::Arc;
 
-use cognee_cognify::create_web_page_nodes;
+use cognee_cognify::{LedgerIdentity, create_web_page_nodes};
+use cognee_database::ops::datasets::create_dataset;
+use cognee_database::ops::graph_storage::{get_edges_by_dataset, get_nodes_by_dataset};
+use cognee_database::{connect, initialize};
 use cognee_graph::{GraphDBTrait, MockGraphDB};
-use cognee_models::{DataPoint, Document, DocumentChunk};
+use cognee_models::{DataPoint, Dataset, Document, DocumentChunk};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -59,9 +62,26 @@ async fn url_provenance_creates_page_site_and_chunk_edges_offline() {
         doc_id,
     )];
 
-    create_web_page_nodes(&documents, &chunks, graph.clone())
-        .await
-        .unwrap();
+    let db = connect("sqlite::memory:").await.unwrap();
+    initialize(&db).await.unwrap();
+    let owner_id = Uuid::new_v4();
+    let dataset_id = Uuid::new_v4();
+    create_dataset(
+        &db,
+        Dataset::new("url-provenance".into(), owner_id, None, dataset_id),
+    )
+    .await
+    .unwrap();
+
+    create_web_page_nodes(
+        &documents,
+        &chunks,
+        graph.clone(),
+        &db,
+        LedgerIdentity::new(None, Some(owner_id), dataset_id, None),
+    )
+    .await
+    .unwrap();
 
     let page_id = web_page_id(final_url);
     let site_id = web_site_id("example.test");
@@ -83,4 +103,23 @@ async fn url_provenance_creates_page_site_and_chunk_edges_offline() {
     assert!(edges.iter().any(|(source, target, relationship, _)| {
         source == &chunk_id.to_string() && target == &page_id && relationship == "SOURCED_FROM"
     }));
+
+    // The WebPage / WebSite nodes and their edges are claimed in the ownership
+    // ledger. Before this they were the one artifact class with no row at all,
+    // so they leaked past every delete and no sweep could reach them.
+    let rows = get_nodes_by_dataset(&db, dataset_id).await.unwrap();
+    let slugs: Vec<String> = rows.iter().map(|row| row.slug.to_string()).collect();
+    assert!(slugs.contains(&page_id), "the WebPage node must be claimed");
+    assert!(slugs.contains(&site_id), "the WebSite node must be claimed");
+    assert!(
+        rows.iter().all(|row| row.data_id == doc_id),
+        "each row names the document that produced it"
+    );
+
+    let edge_rows = get_edges_by_dataset(&db, dataset_id).await.unwrap();
+    assert_eq!(
+        edge_rows.len(),
+        2,
+        "PART_OF and SOURCED_FROM are both claimed"
+    );
 }

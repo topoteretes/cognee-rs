@@ -41,6 +41,10 @@ pub fn database_system_label(db: &DatabaseConnection) -> &'static str {
     connection_system_label(db)
 }
 pub use ops::checkpoint::{CheckpointStore, SeaOrmCheckpointStore};
+/// The run-scoped sweep selector. Re-exported because it is the only argument
+/// every run-scoped provenance query takes, and callers outside this crate
+/// should not have to name `ops::graph_storage` to build one.
+pub use ops::graph_storage::RunScope;
 pub use pipelines::sea_orm_impl::SeaOrmPipelineRunRepository;
 pub use pipelines::{
     NoopPipelineRunRepository, PipelineRunRepository, PipelineRunWithAttributionRow,

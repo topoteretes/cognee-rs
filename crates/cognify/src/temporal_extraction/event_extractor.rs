@@ -37,8 +37,14 @@ impl TemporalEventExtractor {
     }
 
     /// Extract events from a single chunk of text.
-    /// Returns an empty Vec (with a warning log) on LLM or parse errors
-    /// — extraction failures must not abort the cognify pipeline.
+    ///
+    /// An LLM or parse failure is *returned*, not swallowed. It used to warn
+    /// and hand back an empty `Vec`, which made a run where every call 429'd
+    /// indistinguishable from a corpus with no events in it: `Ok`, zero events,
+    /// no error and nothing in the failure report. The caller collects this
+    /// error against the chunk's data item, which is what lets a failed item be
+    /// left unmarked and swept. Python propagates here too — its
+    /// `extract_events_and_timestamps` gathers with no `return_exceptions`.
     pub async fn extract_events(
         &self,
         chunk_text: &str,
@@ -52,7 +58,9 @@ impl TemporalEventExtractor {
             ..Default::default()
         };
 
-        let raw: RawEventsOutput = match self
+        // The `warn!` this used to emit lives at the call site now, next to the
+        // `failures.record(...)` that names the chunk and its data item.
+        let raw: RawEventsOutput = self
             .llm
             .create_structured_output::<RawEventsOutput>(
                 chunk_text,
@@ -60,13 +68,7 @@ impl TemporalEventExtractor {
                 Some(options),
             )
             .await
-        {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!("Temporal event extraction failed: {e}");
-                return Ok(vec![]);
-            }
-        };
+            .map_err(|e| CognifyError::FactExtractionError(e.to_string()))?;
 
         let events = raw
             .events
@@ -222,12 +224,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn extract_events_returns_empty_on_llm_error() {
+    /// The swallow this replaces read as a design choice ("extraction failures
+    /// must not abort the pipeline") but bought silence, not tolerance: an
+    /// empty `Ok` is what a chunk with no events in it returns, so a run whose
+    /// every call failed completed successfully having produced nothing — and
+    /// once completion markers cover temporal, marked every file complete on
+    /// the strength of it. Tolerance is the caller's decision now, taken from
+    /// the configured failure policy over a failure it can actually see.
+    async fn extract_events_surfaces_the_llm_error() {
         let llm = Arc::new(MockLlm::with_error("service unavailable"));
         let extractor = TemporalEventExtractor::new(llm);
 
-        let events = extractor.extract_events("some text").await.unwrap();
-        assert!(events.is_empty(), "LLM error should yield empty vec");
+        let error = extractor
+            .extract_events("some text")
+            .await
+            .expect_err("an LLM failure must reach the caller");
+        assert!(
+            matches!(error, CognifyError::FactExtractionError(ref msg) if msg.contains("service unavailable")),
+            "the error names what actually went wrong: {error}"
+        );
     }
 
     #[tokio::test]

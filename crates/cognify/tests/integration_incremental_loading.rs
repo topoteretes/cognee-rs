@@ -5,21 +5,26 @@
 )]
 //! Integration tests for incremental loading configuration behavior.
 //!
-//! The data-processing history layer is not wired into the current Rust `cognify()` API.
 //! These tests validate that:
 //! 1. The incremental_loading config flag is configurable.
 //! 2. The pipeline executes successfully with incremental loading enabled.
 //! 3. The pipeline executes successfully with incremental loading disabled.
+//!
+//! What the flag *does* — skip data items an earlier run already marked
+//! complete — is covered end to end in `completion_markers.rs`. These items
+//! are never persisted as `Data` rows, so there is no marker to read and both
+//! settings behave alike here.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use cognee_cognify::{CognifyConfig, cognify};
+use cognee_database::ops::datasets::create_dataset;
 use cognee_database::{DatabaseConnection, connect, initialize};
 use cognee_embedding::{EmbeddingEngine, error::EmbeddingError};
 use cognee_graph::MockGraphDB;
 use cognee_llm::{GenerationOptions, GenerationResponse, Llm, LlmError, Message};
-use cognee_models::Data;
+use cognee_models::{Data, Dataset};
 use cognee_ontology::NoOpOntologyResolver;
 use cognee_storage::{MockStorage, StorageTrait};
 use cognee_vector::MockVectorDB;
@@ -138,6 +143,14 @@ async fn run_pipeline_with_incremental_flag(
     let db: Arc<DatabaseConnection> = {
         let conn = connect("sqlite::memory:").await?;
         initialize(&conn).await?;
+        // Ownership rows carry an FK to `datasets`, and the ledger is written
+        // on every run — so the dataset has to exist even for a run with no
+        // user.
+        create_dataset(
+            &conn,
+            Dataset::new("incremental".into(), owner_id, None, dataset_id),
+        )
+        .await?;
         Arc::new(conn)
     };
     let thread_pool: Arc<dyn cognee_core::CpuPool> = Arc::new(

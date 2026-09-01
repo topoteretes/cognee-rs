@@ -4,6 +4,9 @@ use sea_orm_migration::prelude::*;
 
 mod m20260914_000001_baseline;
 mod m20260915_000001_pipeline_run_claims;
+mod m20260916_000001_provenance_pipeline_run_id;
+mod m20260917_000001_graph_slug_indexes;
+mod m20260918_000001_align_node_index_names;
 
 pub struct Migrator;
 
@@ -38,6 +41,9 @@ pub fn core_migrations() -> Vec<Box<dyn MigrationTrait>> {
     vec![
         Box::new(m20260914_000001_baseline::Migration),
         Box::new(m20260915_000001_pipeline_run_claims::Migration),
+        Box::new(m20260916_000001_provenance_pipeline_run_id::Migration),
+        Box::new(m20260917_000001_graph_slug_indexes::Migration),
+        Box::new(m20260918_000001_align_node_index_names::Migration),
     ]
 }
 

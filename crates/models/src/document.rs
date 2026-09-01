@@ -48,6 +48,9 @@ fn extension_to_doc_type(ext: &str) -> Option<&'static str> {
     match ext.to_lowercase().as_str() {
         "pdf" => Some("pdf"),
         "txt" => Some("text"),
+        // Python maps these to TextDocument explicitly
+        // (classify_documents.py:26-29).
+        "md" | "json" | "xml" | "yaml" => Some("text"),
         "csv" => Some("csv"),
         "docx" | "doc" | "odt" | "xls" | "xlsx" | "ppt" | "pptx" | "odp" | "ods" => {
             Some("unstructured")
@@ -111,7 +114,10 @@ fn metadata_value_is_dlt_sourced(value: &serde_json::Value) -> bool {
 ///
 /// Mirrors the Python `classify_documents` function. DLT-sourced items are
 /// classified as `DltRowDocument`; all others use the extension-to-document-type
-/// mapping. Items with unrecognised extensions are silently skipped.
+/// mapping. `md`/`json`/`xml`/`yaml` map to text as they do in Python;
+/// unrecognised extensions are skipped, which is how source-code files are
+/// kept out of the prose pipeline. Cognify records what is skipped so an item
+/// dropped here is never marked complete.
 pub fn classify_documents(data_items: &[Data]) -> Vec<Document> {
     data_items
         .iter()
