@@ -153,6 +153,36 @@ pub struct Settings {
     pub llm_min_retry_seconds: u32,
     pub llm_max_parallel_requests: u32,
 
+    /// Per-HTTP-request timeout in seconds (`LLM_REQUEST_TIMEOUT_SECONDS`).
+    ///
+    /// Was hardcoded at 600 inside every adapter, so a deployment behind a slow
+    /// or wedged gateway had no way to fail faster. Bounds one request only; see
+    /// `llm_request_deadline_seconds` for the aggregate.
+    pub llm_request_timeout_seconds: u32,
+
+    /// TCP connect timeout in seconds (`LLM_CONNECT_TIMEOUT_SECONDS`).
+    ///
+    /// `reqwest` applies none by default, so before this a black-holed connect —
+    /// a stopped local Ollama, a wedged proxy — consumed the entire request
+    /// timeout without sending a byte.
+    pub llm_connect_timeout_seconds: u32,
+
+    /// Wall-clock ceiling on one logical structured-output call
+    /// (`LLM_REQUEST_DEADLINE_SECONDS`). `0` disables it.
+    ///
+    /// The per-request timeout above composes into no aggregate: structured
+    /// extraction runs up to three cascade modes (tools, legacy functions, JSON
+    /// mode), each `llm_max_retries` deep, each attempt honouring the
+    /// `llm_min_retry_seconds` time floor. Multiplied out, the designed worst
+    /// case exceeds an hour — which is how a single extraction can run for 45
+    /// minutes while every individual HTTP request completes well inside its
+    /// timeout.
+    ///
+    /// Enforced when *starting* new work (each cascade mode and each corrective
+    /// re-ask), not as a cancellation, so one already-dispatched request can
+    /// overrun by at most `llm_request_timeout_seconds`.
+    pub llm_request_deadline_seconds: u32,
+
     /// Extra parameters merged into every LLM chat-completion request, parsed
     /// from the `LLM_ARGS` env var (a JSON object), mirroring Python cognee's
     /// `llm_config.llm_args`. Python's litellm adapter merges these into each
@@ -441,6 +471,21 @@ impl Settings {
             && let Ok(n) = v.parse::<u32>()
         {
             self.llm_max_parallel_requests = n;
+        }
+        if let Some(v) = str_var("LLM_REQUEST_TIMEOUT_SECONDS")
+            && let Ok(n) = v.parse::<u32>()
+        {
+            self.llm_request_timeout_seconds = n;
+        }
+        if let Some(v) = str_var("LLM_CONNECT_TIMEOUT_SECONDS")
+            && let Ok(n) = v.parse::<u32>()
+        {
+            self.llm_connect_timeout_seconds = n;
+        }
+        if let Some(v) = str_var("LLM_REQUEST_DEADLINE_SECONDS")
+            && let Ok(n) = v.parse::<u32>()
+        {
+            self.llm_request_deadline_seconds = n;
         }
         // -- Chunking ------------------------------------------------------------
         // Rust extension, no Python counterpart: upstream takes `chunk_size` as a
@@ -922,6 +967,9 @@ impl Settings {
                 max_retries: self.llm_max_retries,
                 min_retry_seconds: self.llm_min_retry_seconds,
                 max_parallel_requests: self.llm_max_parallel_requests,
+                request_timeout_seconds: self.llm_request_timeout_seconds,
+                connect_timeout_seconds: self.llm_connect_timeout_seconds,
+                request_deadline_seconds: self.llm_request_deadline_seconds,
                 rate_limit_enabled: self.llm_rate_limit_enabled,
                 rate_limit_requests: self.llm_rate_limit_requests,
                 rate_limit_interval: self.llm_rate_limit_interval,
@@ -1167,6 +1215,14 @@ impl Default for Settings {
             llm_max_completion_tokens: cognee_llm::OpenAIAdapter::DEFAULT_MAX_COMPLETION_TOKENS,
             llm_max_retries: 2,
             llm_min_retry_seconds: 240,
+            // Single-sourced with the adapter constants so the setting and the
+            // adapter default cannot drift.
+            llm_request_timeout_seconds: cognee_llm::OpenAIAdapter::DEFAULT_REQUEST_TIMEOUT
+                .as_secs() as u32,
+            llm_connect_timeout_seconds: cognee_llm::OpenAIAdapter::DEFAULT_CONNECT_TIMEOUT
+                .as_secs() as u32,
+            llm_request_deadline_seconds: cognee_llm::OpenAIAdapter::DEFAULT_REQUEST_DEADLINE
+                .as_secs() as u32,
             // Single-sourced with cognify's own in-flight default so the two
             // cannot drift: this setting is what the CLI and bindings push into
             // `CognifyConfig::max_parallel_extractions`, and a mismatch would
@@ -2151,6 +2207,15 @@ impl ConfigManager {
                 "llm_streaming" => s.llm_streaming = as_bool(key, value)?,
                 "llm_max_retries" => s.llm_max_retries = as_u32(key, value)?,
                 "llm_min_retry_seconds" => s.llm_min_retry_seconds = as_u32(key, value)?,
+                "llm_request_timeout_seconds" => {
+                    s.llm_request_timeout_seconds = as_u32(key, value)?;
+                }
+                "llm_connect_timeout_seconds" => {
+                    s.llm_connect_timeout_seconds = as_u32(key, value)?;
+                }
+                "llm_request_deadline_seconds" => {
+                    s.llm_request_deadline_seconds = as_u32(key, value)?;
+                }
                 "auto_rate_limit" => s.auto_rate_limit = as_bool(key, value)?,
                 "llm_max_parallel_requests" => {
                     s.llm_max_parallel_requests = as_u32(key, value)?;

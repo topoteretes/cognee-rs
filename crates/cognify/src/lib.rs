@@ -42,8 +42,9 @@ pub use failure::{
 };
 pub use graph_extraction::{GraphExtractable, Relationship, get_graph_from_model};
 pub use graph_integration::{
-    DeduplicationResult, GraphEdgePair, GraphNodePair, deduplicate_nodes_and_edges,
-    expand_with_nodes_and_edges,
+    DeduplicationResult, EdgeResolutionStats, GraphEdgePair, GraphNodePair,
+    deduplicate_nodes_and_edges, expand_with_nodes_and_edges,
+    expand_with_nodes_and_edges_with_stats,
 };
 pub use memify::{
     CuratorBatchOutput, DistillError, DistillSessionsResult, DistillationResult,

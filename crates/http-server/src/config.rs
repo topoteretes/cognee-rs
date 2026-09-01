@@ -220,6 +220,21 @@ pub struct HttpServerConfig {
     /// no way for an operator to lower it. `cognee_llm::in_flight` applies this
     /// at the transport layer, which binds regardless of the route taken.
     pub llm_max_parallel_requests: u32,
+    /// Per-HTTP-request timeout in seconds (`LLM_REQUEST_TIMEOUT_SECONDS`).
+    /// Mirrors `Settings::llm_request_timeout_seconds`.
+    pub llm_request_timeout_seconds: u32,
+    /// TCP connect timeout in seconds (`LLM_CONNECT_TIMEOUT_SECONDS`).
+    /// Mirrors `Settings::llm_connect_timeout_seconds`.
+    pub llm_connect_timeout_seconds: u32,
+    /// Wall-clock ceiling on one logical structured-output call
+    /// (`LLM_REQUEST_DEADLINE_SECONDS`); `0` disables it. Mirrors
+    /// `Settings::llm_request_deadline_seconds`.
+    ///
+    /// Carried here rather than left to default for the same reason
+    /// `llm_max_parallel_requests` is: the cognify routers build
+    /// `CognifyConfig::default()`, so a knob the server does not lower itself is
+    /// a knob its operators cannot reach at all.
+    pub llm_request_deadline_seconds: u32,
     /// Pace dispatch unconditionally (`LLM_RATE_LIMIT_ENABLED`).
     pub llm_rate_limit_enabled: bool,
     /// Requests per interval once pacing is active.
@@ -386,8 +401,21 @@ impl Default for HttpServerConfig {
             llm_endpoint: String::new(),
             llm_api_version: String::new(),
             llm_reasoning: "auto".to_string(),
-            llm_max_retries: 3,
+            // Matches `Settings::llm_max_retries` and the value
+            // `docs/configuration.md` documents. This was 3 — an undocumented
+            // divergence that nothing here justified, and one that made the
+            // server's *own defaults* trip the deadline guard-rail: the ladder
+            // (3 modes x 3 retries x 240s = 2160s) exceeded the 1800s default
+            // deadline, so every startup warned. Aligning the two makes the
+            // documented default true and the default configuration quiet.
+            llm_max_retries: 2,
             llm_min_retry_seconds: 240,
+            llm_request_timeout_seconds: cognee_llm::OpenAIAdapter::DEFAULT_REQUEST_TIMEOUT
+                .as_secs() as u32,
+            llm_connect_timeout_seconds: cognee_llm::OpenAIAdapter::DEFAULT_CONNECT_TIMEOUT
+                .as_secs() as u32,
+            llm_request_deadline_seconds: cognee_llm::OpenAIAdapter::DEFAULT_REQUEST_DEADLINE
+                .as_secs() as u32,
             // Single-sourced with the CLI/SDK default so the same env-free
             // deployment gets the same ceiling on either surface.
             llm_max_parallel_requests: cognee_cognify::config::DEFAULT_MAX_PARALLEL_EXTRACTIONS
@@ -605,6 +633,21 @@ impl HttpServerConfig {
                 ServerError::Other(anyhow::anyhow!("LLM_MAX_PARALLEL_REQUESTS: {e}"))
             })?;
         }
+        if let Ok(v) = std::env::var("LLM_REQUEST_TIMEOUT_SECONDS") {
+            cfg.llm_request_timeout_seconds = v.parse::<u32>().map_err(|e| {
+                ServerError::Other(anyhow::anyhow!("LLM_REQUEST_TIMEOUT_SECONDS: {e}"))
+            })?;
+        }
+        if let Ok(v) = std::env::var("LLM_CONNECT_TIMEOUT_SECONDS") {
+            cfg.llm_connect_timeout_seconds = v.parse::<u32>().map_err(|e| {
+                ServerError::Other(anyhow::anyhow!("LLM_CONNECT_TIMEOUT_SECONDS: {e}"))
+            })?;
+        }
+        if let Ok(v) = std::env::var("LLM_REQUEST_DEADLINE_SECONDS") {
+            cfg.llm_request_deadline_seconds = v.parse::<u32>().map_err(|e| {
+                ServerError::Other(anyhow::anyhow!("LLM_REQUEST_DEADLINE_SECONDS: {e}"))
+            })?;
+        }
         if let Ok(v) = std::env::var("LLM_RATE_LIMIT_ENABLED") {
             cfg.llm_rate_limit_enabled = cognee_utils::parse_env_bool(&v);
         }
@@ -789,6 +832,9 @@ impl HttpServerConfig {
                 max_retries: self.llm_max_retries,
                 min_retry_seconds: self.llm_min_retry_seconds,
                 max_parallel_requests: self.llm_max_parallel_requests,
+                request_timeout_seconds: self.llm_request_timeout_seconds,
+                connect_timeout_seconds: self.llm_connect_timeout_seconds,
+                request_deadline_seconds: self.llm_request_deadline_seconds,
                 rate_limit_enabled: self.llm_rate_limit_enabled,
                 rate_limit_requests: self.llm_rate_limit_requests,
                 rate_limit_interval: self.llm_rate_limit_interval,

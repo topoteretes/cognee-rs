@@ -59,7 +59,11 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: topoteretes/cognee
-          ref: b9014c1661bff1d1d8bc831f3d31bc5a965bcaa3
+          # Bumped from b9014c1: that commit predates `cognee/modules/migration`
+          # entirely, so the COGX suites below could only ever skip. This SHA
+          # (cognee 1.5.3) is the one the Rust COGX exporter was validated
+          # against — its loader reproduces the archive's node ids and edges.
+          ref: 690c0ec023719a2a277dc893cdecfec1ca8012cc
           path: cognee
 
       # docker-compose.yml declares `env_file: ../.env`; missing files abort
@@ -351,6 +355,63 @@ jobs:
           pytest -vs /harness/
           -k "test_http_cognify or test_http_remember or test_http_recall or test_http_memify or test_http_improve or test_http_llm or test_http_hybrid"
           --tb=short
+
+      # ── COGX import contract (no LLM, unconditional release gate) ────────
+      # Python cognee imports a COGX archive written by the Rust exporter
+      # (harness/golden/cogx_archive/, regenerated and drift-checked by
+      # `cargo test -p cognee-migration --test python_import_contract`).
+      #
+      # Unconditional on purpose. The full roundtrip below needs a key because
+      # producing a graph to export means cognify, so it never runs on a fork
+      # PR — and every way this contract breaks is silent on the Python side:
+      # a wrong manifest `source_system` downgrades id preservation, and a
+      # missing raw node makes the loader skip edges with only a log warning.
+      # Both yield a "successful" import of quietly wrong data.
+      - name: COGX import contract — Python reads a Rust archive (no LLM)
+        env:
+          # Without this the suite *skips* when the Python image has no
+          # migration package, and the step exits 0 having asserted nothing —
+          # the `pgvector-spans` failure mode. Set here so a pin that cannot
+          # run these tests fails the lane instead of quietly passing it.
+          COGX_REQUIRE_PYTHON_SUPPORT: "1"
+        # -e per invocation rather than in the service's `environment:`, so
+        # this does not un-skip every other requires_openai test in the
+        # service. See the note on e2e-tests in docker-compose.yml.
+        run: |
+          docker compose \
+            -f cognee-rust/e2e-cross-sdk/docker-compose.yml \
+            run --rm \
+            -e COGX_REQUIRE_PYTHON_SUPPORT="$COGX_REQUIRE_PYTHON_SUPPORT" \
+            e2e-tests \
+            pytest -vs /harness/test_cogx_import_contract.py --tb=short
+
+      # ── COGX roundtrip: Rust exports, Python imports (LLM-gated) ─────────
+      # The end-to-end path: Rust add + cognify + `export --pack`, then Python
+      # imports the archive and must reproduce the same node ids and edges.
+      - name: COGX roundtrip — Rust export to Python import (LLM-gated)
+        if: ${{ env.HAS_OPENAI_KEY == 'true' }}
+        env:
+          OPENAI_TOKEN: ${{ secrets.OPENAI_KEY }}
+          OPENAI_URL: https://api.openai.com/v1
+          OPENAI_MODEL: gpt-4o-mini
+          LLM_PROVIDER: openai
+          # No EMBEDDING_* here on purpose: the Rust CLI embeds locally via the
+          # image's ONNX model, and overriding that breaks cognify. See the
+          # note on the e2e-tests service in docker-compose.yml.
+        # -e per invocation rather than in the service's `environment:`, so
+        # this does not un-skip every other requires_openai test in the
+        # service. See the note on e2e-tests in docker-compose.yml.
+        run: |
+          docker compose \
+            -f cognee-rust/e2e-cross-sdk/docker-compose.yml \
+            run --rm \
+            -e OPENAI_TOKEN="$OPENAI_TOKEN" \
+            -e OPENAI_URL="$OPENAI_URL" \
+            -e OPENAI_MODEL="$OPENAI_MODEL" \
+            -e LLM_PROVIDER="$LLM_PROVIDER" \
+            -e COGX_REQUIRE_PYTHON_SUPPORT=1 \
+            e2e-tests \
+            pytest -vs /harness/test_cogx_roundtrip.py --tb=short
 
       # ── Cross-SDK provenance parity (LLM-gated) ─────────────────────────
       # Asserts gap-05 DataPoint provenance parity between Python and

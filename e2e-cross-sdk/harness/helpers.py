@@ -62,18 +62,15 @@ def run_rust_cli(
     )
 
 
-def run_python_cli(
-    workdir: Path,
-    args: list[str],
-    *,
-    env: Optional[dict] = None,
-    check: bool = True,
-) -> subprocess.CompletedProcess:
-    """Run a Python cognee operation via the API (not the CLI wrapper).
+def python_runtime_env(
+    workdir: Path, env: Optional[dict] = None
+) -> tuple[Path, Path, dict]:
+    """Build the storage dirs and environment a Python cognee process needs.
 
-    Uses a small Python script that calls ``cognee.add()`` / ``cognee.cognify()``
-    directly, avoiding the CLI's generic exception handler that swallows errors.
-    The first element of *args* must be the command (``"add"`` or ``"cognify"``).
+    Returns ``(data_root, system_root, env)``.  Shared by ``run_python_cli``
+    and ``run_python_script`` so both drive Python cognee against the same
+    backends — a snippet that configured a different graph provider would read
+    an empty graph and pass vacuously.
     """
     py_system = workdir / ".cognee_system"
     py_storage = workdir / ".data_storage"
@@ -90,19 +87,103 @@ def run_python_cli(
         "DB_PROVIDER": "sqlite",
         "DB_NAME": "cognee_db",
         "GRAPH_DATABASE_PROVIDER": "kuzu",
-        "VECTOR_DB_PROVIDER": "brute-force",
+        # lancedb, not brute-force: `brute-force` is a Rust-only backend and
+        # Python cognee rejects it outright —
+        #   EnvironmentError: Unsupported vector database provider:
+        #   brute-force. Supported providers are: LanceDB, PGVector,
+        #   neptune_analytics, Turso
+        # (create_vector_engine.py). Any Python path that builds a vector
+        # engine dies on it; the migration gate that every write runs is one,
+        # so the failure lands before the operation starts. lancedb is Python
+        # cognee's own default and is already in the harness image.
+        "VECTOR_DB_PROVIDER": "lancedb",
         "LLM_API_KEY": openai_key,
         "LLM_MODEL": llm_model,
         "LLM_PROVIDER": "openai",
         "EMBEDDING_PROVIDER": "openai",
         "EMBEDDING_MODEL": "openai/text-embedding-3-small",
         "EMBEDDING_DIMENSIONS": "1536",
+        # The embedding config does not inherit LLM_API_KEY: without this it
+        # resolves to None and litellm falls back to an OPENAI_API_KEY env var
+        # the harness never exports either, so any embedding call 401s. Only
+        # paths that actually embed (cognify, COGX import) notice.
+        "EMBEDDING_API_KEY": openai_key,
         # Skip LLM connection test — add doesn't need an LLM, and we may
         # not have a valid API key for add-only tests.
         "COGNEE_SKIP_CONNECTION_TEST": "true",
+        # cognee 1.5+ turns multi-user access control ON by default. This
+        # harness models a SINGLE user: the fixtures read one owner_id out of
+        # Python's `cognee_db` and hand it to the Rust CLI so both SDKs derive
+        # the same UUID5 node ids, and helpers like python_db_path() point at
+        # that one global database. Multi-user mode instead gives each dataset
+        # its own database, so the ids the fixtures pass to Rust and the graph
+        # the assertions read would no longer refer to the same store.
+        #
+        # Not a crash guard: with VECTOR_DB_PROVIDER=lancedb above, the gate
+        # (import_memory_source -> run_migrations ->
+        # backend_access_control_enabled) passes either way — measured against
+        # 1.5.3, it simply returns True without this and False with it. It did
+        # raise while the provider was still `brute-force`, which is a
+        # different bug, fixed above.
+        "ENABLE_BACKEND_ACCESS_CONTROL": "false",
     }
     if env:
         run_env.update(env)
+
+    return py_storage, py_system, run_env
+
+
+def run_python_script(
+    workdir: Path,
+    script: str,
+    *,
+    env: Optional[dict] = None,
+    check: bool = True,
+    timeout: int = 300,
+) -> subprocess.CompletedProcess:
+    """Run an arbitrary Python cognee snippet in the venv interpreter.
+
+    ``run_python_cli`` only knows the handful of verbs it parses; COGX import
+    has no CLI surface in Python (it is ``cognee.remember(COGXArchiveSource(…))``
+    in-process), so the roundtrip test drives it through here.
+
+    The snippet is prefixed with the same ``config.data_root_directory`` /
+    ``system_root_directory`` calls the other helpers make, so it reads and
+    writes the workspace's own store.
+    """
+    py_storage, py_system, run_env = python_runtime_env(workdir, env)
+
+    preamble = (
+        "import cognee\n"
+        f"cognee.config.data_root_directory({str(py_storage)!r})\n"
+        f"cognee.config.system_root_directory({str(py_system)!r})\n"
+    )
+
+    return subprocess.run(
+        [PYTHON_RUNNER, "-c", preamble + script],
+        cwd=str(workdir),
+        env=run_env,
+        capture_output=True,
+        text=True,
+        check=check,
+        timeout=timeout,
+    )
+
+
+def run_python_cli(
+    workdir: Path,
+    args: list[str],
+    *,
+    env: Optional[dict] = None,
+    check: bool = True,
+) -> subprocess.CompletedProcess:
+    """Run a Python cognee operation via the API (not the CLI wrapper).
+
+    Uses a small Python script that calls ``cognee.add()`` / ``cognee.cognify()``
+    directly, avoiding the CLI's generic exception handler that swallows errors.
+    The first element of *args* must be the command (``"add"`` or ``"cognify"``).
+    """
+    py_storage, py_system, run_env = python_runtime_env(workdir, env)
 
     # Parse the CLI-like args into a Python API call
     command = args[0]  # "add" or "cognify"

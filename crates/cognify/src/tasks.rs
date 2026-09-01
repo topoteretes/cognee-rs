@@ -62,7 +62,7 @@ use crate::failure::{
 };
 use crate::graph_integration::{
     ArtifactProducers, GraphEdgePair, GraphNodePair, deduplicate_nodes_and_edges,
-    expand_with_nodes_and_edges, retrieve_existing_edges,
+    expand_with_nodes_and_edges_with_stats, retrieve_existing_edges,
 };
 use crate::pipeline::{CognifyResult, IndexedFieldsStats};
 use crate::qualification::{Qualification, check_pipeline_run_qualification};
@@ -945,17 +945,34 @@ pub async fn extract_graph_from_data(
         .map(|chunk| (chunk.base.id, chunk.base.importance_weight.unwrap_or(0.5)))
         .collect();
 
-    let (nodes, edges, claimed_existing_edges, producers) = expand_with_nodes_and_edges(
-        all_graphs,
-        input.dataset_id,
-        &chunk_node_sets,
-        &chunk_importance_weights,
-        &existing_edges_set,
-        ontology_resolver.as_ref(),
-        user_label_owned.as_deref(),
-        task_rank,
-    )
-    .await;
+    let (nodes, edges, claimed_existing_edges, producers, edge_resolution) =
+        expand_with_nodes_and_edges_with_stats(
+            all_graphs,
+            input.dataset_id,
+            &chunk_node_sets,
+            &chunk_importance_weights,
+            &existing_edges_set,
+            ontology_resolver.as_ref(),
+            user_label_owned.as_deref(),
+            task_rank,
+        )
+        .await;
+
+    // Endpoint resolution is lossy: the model routinely emits edges referencing
+    // node ids it never declared. Report the rate once per run rather than
+    // leaving one log line per dropped edge as the only evidence.
+    //
+    // This counts endpoint resolution only. An edge that resolves here can still
+    // be filtered out downstream for already existing in the database, so the
+    // resolved figure is an upper bound on what this pass goes on to emit.
+    info!(
+        attempted = edge_resolution.attempted,
+        dropped = edge_resolution.dropped(),
+        recovered_by_name = edge_resolution.resolved_by_name,
+        "Edge endpoint resolution: both endpoints resolved for {} of {} extracted edges",
+        edge_resolution.attempted - edge_resolution.dropped(),
+        edge_resolution.attempted
+    );
 
     // Final deduplication pass (in-memory only after DB filtering)
     let dedup_result = deduplicate_nodes_and_edges(nodes, edges);
@@ -5831,6 +5848,7 @@ pub fn build_temporal_cognify_pipeline(
 )]
 mod tests {
     use super::*;
+    use crate::graph_integration::expand_with_nodes_and_edges;
     use cognee_models::{DataPoint, Entity, EntityType};
     use cognee_storage::MockStorage;
 
