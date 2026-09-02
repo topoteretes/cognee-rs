@@ -67,11 +67,19 @@ pub fn sanitize_string(mut value: String) -> String {
 /// keys that collapse to the same text after stripping merge, last one wins —
 /// the same outcome as Python's dict comprehension.
 ///
-/// "Last" means last in `serde_json::Map` iteration order, so that parity claim
-/// holds only because this crate enables serde_json's `preserve_order`, which
-/// backs `Map` with an insertion-ordered `IndexMap`. Under the default
-/// `BTreeMap` the winner would instead be whichever raw key sorts last, which
-/// is not Python's rule. See the dependency comment in `Cargo.toml`.
+/// "Last" means last in `serde_json::Map` iteration order, and *which* key that
+/// is depends on the final binary's build graph, not on this crate. With
+/// serde_json's `preserve_order` enabled anywhere in it, `Map` is an
+/// insertion-ordered `IndexMap` and the last *inserted* colliding key wins —
+/// Python's dict-comprehension rule. Without it `Map` is a `BTreeMap` and the
+/// winner is whichever *raw* key sorts last instead.
+///
+/// This crate deliberately does not enable the feature itself, because doing so
+/// would force the `IndexMap` backing on every downstream consumer of
+/// `cognee-utils` (see the dependency comment in `Cargo.toml`). Every cognee
+/// build gets the Python rule regardless, via `cognee-database` and
+/// `cognee-visualization`. The divergence is reachable only when one object
+/// holds two keys differing by nothing but an embedded NUL.
 pub fn sanitize_json_in_place(value: &mut Value) {
     match value {
         Value::String(s) => {
@@ -213,26 +221,44 @@ mod tests {
         assert_eq!(sanitize_str("a\u{fffd}\u{0}b"), "a\u{fffd}b");
     }
 
-    /// Pins the collision rule the module doc claims, which is only meaningful
-    /// with `preserve_order` enabled: `"ab"` is inserted first and `"a\u{0}b"`
-    /// second, so the *second* insertion wins the collapse — matching Python,
-    /// where the dict comprehension iterates in insertion order. Under a default
-    /// `BTreeMap` build the raw keys iterate sorted (`"a\u{0}b"` before `"ab"`,
-    /// since 0x00 < 0x62) and the other value would survive instead.
+    /// Pins the collision rule under *both* `serde_json::Map` backings, since
+    /// which one is in play is a property of the final binary's build graph
+    /// rather than of this crate (see `sanitize_json_in_place`).
+    ///
+    /// `"ab"` is inserted first and `"a\u{0}b"` second. With `preserve_order`
+    /// somewhere in the graph — which is every cognee build, via
+    /// `cognee-database` and `cognee-visualization` — `Map` is insertion-ordered
+    /// and the *second* insertion wins the collapse, matching Python's dict
+    /// comprehension. In a bare `cargo test -p cognee-utils` or the wasm32 lane
+    /// `Map` is a `BTreeMap`, the raw keys iterate sorted (`"a\u{0}b"` before
+    /// `"ab"`, since 0x00 < 0x62) and the first insertion survives instead.
+    ///
+    /// Asserting both keeps the standalone configuration covered too; the old
+    /// version of this test only held in the feature-enabled one.
     #[test]
-    fn colliding_keys_resolve_in_insertion_order() {
+    fn colliding_keys_resolve_to_the_last_in_map_order() {
         let mut input = Map::new();
         input.insert("ab".to_string(), json!("inserted_first"));
         input.insert("a\u{0}b".to_string(), json!("inserted_second"));
-        assert_eq!(
-            input.keys().collect::<Vec<_>>(),
-            vec!["ab", "a\u{0}b"],
-            "preserve_order must keep the map insertion-ordered"
-        );
+
+        let insertion_ordered = input
+            .keys()
+            .map(String::as_str)
+            .eq(["ab", "a\u{0}b"].into_iter());
+        let expected = if insertion_ordered {
+            "inserted_second"
+        } else {
+            "inserted_first"
+        };
 
         let out = sanitize_json(Value::Object(input));
 
-        assert_eq!(out, json!({"ab": "inserted_second"}));
+        assert_eq!(
+            out,
+            json!({ "ab": expected }),
+            "the last colliding key in Map iteration order must win \
+             (insertion_ordered = {insertion_ordered})"
+        );
     }
 
     #[test]
