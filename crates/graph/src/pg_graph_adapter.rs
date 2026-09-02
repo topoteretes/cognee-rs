@@ -858,22 +858,36 @@ impl GraphDBTrait for PgGraphAdapter {
         // `21000: ON CONFLICT DO UPDATE command cannot affect row a second
         // time` — aborting the whole chunk. `add_nodes_raw` gets this right by
         // construction because it dedups on the already-sanitized `row.id`.
-        let mut seen: HashMap<(String, String, String), Value> = HashMap::new();
+        //
+        // The map holds a *borrow* of the properties and serializes only the
+        // survivors: `to_value` + `sanitize_json` on an entry that the next
+        // duplicate immediately overwrites is pure waste.
+        type EdgeProps = HashMap<Cow<'static, str>, Value>;
+        let mut seen: HashMap<(String, String, String), &EdgeProps> = HashMap::new();
         for edge in edges {
-            let props_json =
-                serde_json::to_value(&edge.3).map_err(GraphDBError::SerializationError)?;
             let key = (
                 sanitize_str(&edge.0).into_owned(),
                 sanitize_str(&edge.1).into_owned(),
                 sanitize_str(&edge.2).into_owned(),
             );
-            // Edge properties carry LLM-authored descriptions and, through
-            // them, source text — same NUL exposure as node properties.
-            seen.insert(key, sanitize_json(props_json));
+            seen.insert(key, &edge.3);
         }
-        let deduped: Vec<((String, String, String), Value)> = seen.into_iter().collect();
+        let mut deduped: Vec<((String, String, String), Value)> = seen
+            .into_iter()
+            .map(|(key, props)| {
+                let props_json =
+                    serde_json::to_value(props).map_err(GraphDBError::SerializationError)?;
+                // Edge properties carry LLM-authored descriptions and, through
+                // them, source text — same NUL exposure as node properties.
+                Ok((key, sanitize_json(props_json)))
+            })
+            .collect::<GraphDBResult<_>>()?;
 
-        for chunk in deduped.chunks(BATCH_SIZE) {
+        // `chunks_mut` + `mem::take` so each row's strings and JSON blob are
+        // *moved* into the statement. Cloning here would deep-copy every edge's
+        // property object, which is a measurable cost on a graph with tens of
+        // thousands of edges and buys nothing — `deduped` is not read again.
+        for chunk in deduped.chunks_mut(BATCH_SIZE) {
             let mut insert = Query::insert()
                 .into_table(GEdge::Table)
                 .columns([
@@ -886,12 +900,12 @@ impl GraphDBTrait for PgGraphAdapter {
                 ])
                 .to_owned();
 
-            for ((source, target, relationship_name), props_json) in chunk {
+            for ((source, target, relationship_name), props_json) in chunk.iter_mut() {
                 insert.values_panic([
-                    source.clone().into(),
-                    target.clone().into(),
-                    relationship_name.clone().into(),
-                    props_json.clone().into(),
+                    std::mem::take(source).into(),
+                    std::mem::take(target).into(),
+                    std::mem::take(relationship_name).into(),
+                    std::mem::take(props_json).into(),
                     now.into(),
                     now.into(),
                 ]);
