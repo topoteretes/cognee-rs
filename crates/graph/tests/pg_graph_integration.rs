@@ -147,4 +147,8 @@ pggraph_test!(test_get_neighborhood_empty_seeds);
 pggraph_test!(test_node_truth_state_round_trip);
 pggraph_test!(test_node_truth_state_missing_and_invalid);
 pggraph_test!(test_node_truth_state_preserves_other_properties);
+pggraph_test!(test_update_node_property_preserves_edges_and_siblings);
+pggraph_test!(test_node_feedback_weight_round_trip);
+pggraph_test!(test_node_feedback_weight_preserves_edges_and_siblings);
+pggraph_test!(test_edge_feedback_weight_round_trip);
 pggraph_test!(test_nul_bytes_in_text_are_persistable);

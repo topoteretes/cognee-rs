@@ -698,6 +698,112 @@ impl GraphDBTrait for PgGraphAdapter {
         Ok(out)
     }
 
+    /// In-place property update, replacing the base trait's delete-and-re-add
+    /// default.
+    ///
+    /// The default `GraphDBTrait::update_node_property` fetches the node, saves
+    /// its edges, `delete_node`s it (cascading the edges away), re-adds the
+    /// node and then restores the edges — five statements with no enclosing
+    /// transaction. An interruption between the delete and the re-add loses the
+    /// node *and* its edges, and the edge read is `unwrap_or_default()`, so a
+    /// failed read silently drops every edge on the recreate. This override
+    /// merges the property into the fetched map and upserts through
+    /// `add_nodes_raw` (`INSERT ... ON CONFLICT DO UPDATE`), which never touches
+    /// the edge table — the approach `set_node_truth_state` above already uses.
+    ///
+    /// Going through `add_nodes_raw` rather than a raw `jsonb ||` update keeps
+    /// `serialize_node_to_row`'s split between the core `id`/`name`/`type`
+    /// columns and the `properties` JSONB, so `key` lands exactly where
+    /// `parse_node_row` reads it back from.
+    async fn update_node_property(
+        &self,
+        node_id: &str,
+        key: &str,
+        value: Value,
+    ) -> GraphDBResult<()> {
+        let ids = [node_id.to_string()];
+        let node = self
+            .get_nodes(&ids)
+            .await?
+            .into_iter()
+            .next()
+            .ok_or_else(|| GraphDBError::NodeError(format!("Node not found: {node_id}")))?;
+
+        let mut obj = serde_json::Map::new();
+        for (k, v) in node {
+            obj.insert(k.into_owned(), v);
+        }
+        obj.insert(key.to_string(), value);
+
+        self.add_nodes_raw(vec![Value::Object(obj)]).await
+    }
+
+    /// One round-trip for the whole batch, versus the default's `get_node` per
+    /// id.
+    ///
+    /// Matches the default's contract: only ids that exist *and* carry a
+    /// numeric `feedback_weight` appear in the result.
+    async fn get_node_feedback_weights(
+        &self,
+        node_ids: &[String],
+    ) -> GraphDBResult<HashMap<String, f64>> {
+        if node_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let nodes = self.get_nodes(node_ids).await?;
+        let mut out = HashMap::with_capacity(nodes.len());
+        for node in nodes {
+            let Some(id) = node.get("id").and_then(|v| v.as_str()).map(str::to_string) else {
+                continue;
+            };
+            if let Some(w) = node.get("feedback_weight").and_then(Value::as_f64) {
+                out.insert(id, w);
+            }
+        }
+        Ok(out)
+    }
+
+    /// One fetch plus one upsert for the whole batch, versus the default's
+    /// `update_node_property` (and therefore full delete+re-add) per id.
+    ///
+    /// Mirrors `set_node_truth_state`: every requested id defaults to `false`
+    /// and flips to `true` only if the node was actually present in the fetch
+    /// and thus included in the upsert.
+    async fn set_node_feedback_weights(
+        &self,
+        updates: &HashMap<String, f64>,
+    ) -> GraphDBResult<HashMap<String, bool>> {
+        let ids: Vec<String> = updates.keys().cloned().collect();
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let nodes = self.get_nodes(&ids).await?;
+
+        let mut out: HashMap<String, bool> = ids.iter().map(|id| (id.clone(), false)).collect();
+
+        let mut merged: Vec<Value> = Vec::with_capacity(nodes.len());
+        for node in nodes {
+            let Some(id) = node.get("id").and_then(|v| v.as_str()).map(str::to_string) else {
+                continue;
+            };
+            let Some(weight) = updates.get(&id) else {
+                continue;
+            };
+            let mut obj = serde_json::Map::new();
+            for (k, v) in node {
+                obj.insert(k.into_owned(), v);
+            }
+            obj.insert("feedback_weight".to_string(), json!(weight));
+            merged.push(Value::Object(obj));
+            out.insert(id, true);
+        }
+
+        if !merged.is_empty() {
+            self.add_nodes_raw(merged).await?;
+        }
+        Ok(out)
+    }
+
     // -- edge operations (sea_query) -----------------------------------------
 
     async fn has_edge(
@@ -790,6 +896,171 @@ impl GraphDBTrait for PgGraphAdapter {
             .collect();
 
         Ok(found)
+    }
+
+    /// In-place edge-property update, replacing the base trait's no-op default
+    /// (which only logs a warning and reports success).
+    ///
+    /// Edge properties live wholly in the `properties` JSONB column — unlike
+    /// nodes, there is no core-column split to preserve — so a single
+    /// `jsonb ||` merge is both correct and atomic. Merging (rather than
+    /// overwriting) keeps every other property on the edge intact.
+    ///
+    /// Reports `EdgeError` when no edge matches, so a caller checking `is_ok()`
+    /// is not told an update to a nonexistent edge succeeded.
+    async fn update_edge_property(
+        &self,
+        source_id: &str,
+        target_id: &str,
+        relationship_name: &str,
+        key: &str,
+        value: Value,
+    ) -> GraphDBResult<()> {
+        let patch = json!({ key: value });
+        let result = self
+            .db
+            .execute(Statement::from_sql_and_values(
+                DatabaseBackend::Postgres,
+                "UPDATE graph_edge \
+                 SET properties = COALESCE(properties, '{}'::jsonb) || $4::jsonb, \
+                     updated_at = CURRENT_TIMESTAMP \
+                 WHERE source_id = $1 AND target_id = $2 AND relationship_name = $3",
+                [
+                    source_id.into(),
+                    target_id.into(),
+                    relationship_name.into(),
+                    patch.to_string().into(),
+                ],
+            ))
+            .await
+            .map_err(|e| GraphDBError::EdgeError(e.to_string()))?;
+
+        if result.rows_affected() == 0 {
+            return Err(GraphDBError::EdgeError(format!(
+                "Edge not found: {source_id} -> {target_id} ({relationship_name})"
+            )));
+        }
+        Ok(())
+    }
+
+    /// One round-trip for the whole batch, replacing the base trait's default
+    /// (which returns an empty map and warns, because the generic trait has no
+    /// per-edge property read).
+    ///
+    /// Matches the node-side contract: only edges that exist *and* carry a
+    /// numeric `feedback_weight` appear in the result.
+    async fn get_edge_feedback_weights(
+        &self,
+        edge_keys: &[crate::traits::EdgeKey],
+    ) -> GraphDBResult<HashMap<crate::traits::EdgeKey, f64>> {
+        if edge_keys.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let sources: Vec<String> = edge_keys.iter().map(|k| k.0.clone()).collect();
+        let targets: Vec<String> = edge_keys.iter().map(|k| k.1.clone()).collect();
+        let rels: Vec<String> = edge_keys.iter().map(|k| k.2.clone()).collect();
+
+        let rows = self
+            .db
+            .query_all(Statement::from_sql_and_values(
+                DatabaseBackend::Postgres,
+                "SELECT e.source_id AS s, e.target_id AS t, e.relationship_name AS r, \
+                        e.properties -> 'feedback_weight' AS w \
+                 FROM graph_edge e \
+                 JOIN unnest($1::text[], $2::text[], $3::text[]) AS v(s, t, r) \
+                   ON e.source_id = v.s AND e.target_id = v.t \
+                  AND e.relationship_name = v.r",
+                [sources.into(), targets.into(), rels.into()],
+            ))
+            .await
+            .map_err(|e| GraphDBError::QueryError(e.to_string()))?;
+
+        let mut out = HashMap::with_capacity(rows.len());
+        for row in &rows {
+            let s: String = row
+                .try_get("", "s")
+                .map_err(|e| GraphDBError::QueryError(e.to_string()))?;
+            let t: String = row
+                .try_get("", "t")
+                .map_err(|e| GraphDBError::QueryError(e.to_string()))?;
+            let r: String = row
+                .try_get("", "r")
+                .map_err(|e| GraphDBError::QueryError(e.to_string()))?;
+            // A NULL / absent property decodes to `None`; a non-numeric one
+            // fails `as_f64`. Both are "no weight", matching the node side.
+            let w: Option<Value> = row.try_get("", "w").unwrap_or(None);
+            if let Some(weight) = w.as_ref().and_then(Value::as_f64) {
+                out.insert((s, t, r), weight);
+            }
+        }
+        Ok(out)
+    }
+
+    /// One round-trip for the whole batch, replacing the base trait's default
+    /// (one `update_edge_property` per edge, which on this backend used to be
+    /// the warning-only no-op and so reported success without writing).
+    ///
+    /// Weights travel as `text[]` and are cast to `float8` in SQL — the same
+    /// array-parameter shape `has_edges` uses — then merged into each edge's
+    /// JSONB. `RETURNING` reports which edges actually matched, so the success
+    /// map reflects real writes; every requested key defaults to `false`.
+    async fn set_edge_feedback_weights(
+        &self,
+        updates: &HashMap<crate::traits::EdgeKey, f64>,
+    ) -> GraphDBResult<HashMap<crate::traits::EdgeKey, bool>> {
+        if updates.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let mut sources: Vec<String> = Vec::with_capacity(updates.len());
+        let mut targets: Vec<String> = Vec::with_capacity(updates.len());
+        let mut rels: Vec<String> = Vec::with_capacity(updates.len());
+        let mut weights: Vec<String> = Vec::with_capacity(updates.len());
+        let mut out: HashMap<crate::traits::EdgeKey, bool> = HashMap::with_capacity(updates.len());
+
+        for (key, weight) in updates {
+            sources.push(key.0.clone());
+            targets.push(key.1.clone());
+            rels.push(key.2.clone());
+            // `{:?}` is f64's shortest round-trip representation, so the
+            // float8 cast parses back to exactly this value.
+            weights.push(format!("{weight:?}"));
+            out.insert(key.clone(), false);
+        }
+
+        let rows = self
+            .db
+            .query_all(Statement::from_sql_and_values(
+                DatabaseBackend::Postgres,
+                "UPDATE graph_edge e \
+                 SET properties = COALESCE(e.properties, '{}'::jsonb) \
+                     || jsonb_build_object('feedback_weight', v.w::float8), \
+                     updated_at = CURRENT_TIMESTAMP \
+                 FROM unnest($1::text[], $2::text[], $3::text[], $4::text[]) \
+                      AS v(s, t, r, w) \
+                 WHERE e.source_id = v.s AND e.target_id = v.t \
+                   AND e.relationship_name = v.r \
+                 RETURNING e.source_id AS s, e.target_id AS t, \
+                           e.relationship_name AS r",
+                [sources.into(), targets.into(), rels.into(), weights.into()],
+            ))
+            .await
+            .map_err(|e| GraphDBError::EdgeError(e.to_string()))?;
+
+        for row in &rows {
+            let s: String = row
+                .try_get("", "s")
+                .map_err(|e| GraphDBError::EdgeError(e.to_string()))?;
+            let t: String = row
+                .try_get("", "t")
+                .map_err(|e| GraphDBError::EdgeError(e.to_string()))?;
+            let r: String = row
+                .try_get("", "r")
+                .map_err(|e| GraphDBError::EdgeError(e.to_string()))?;
+            out.insert((s, t, r), true);
+        }
+        Ok(out)
     }
 
     async fn add_edge(
