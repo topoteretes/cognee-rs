@@ -830,6 +830,11 @@ impl GraphDBTrait for LadybugAdapter {
     }
 
     async fn delete_graph(&self) -> GraphDBResult<()> {
+        // Two destructive statements that must not interleave with a concurrent
+        // upsert, and the last write path here that was not taking the lock.
+        let _write_guard = self.write_lock.lock().map_err(|_| {
+            GraphDBError::ConnectionError("Ladybug write lock poisoned".to_string())
+        })?;
         let db = self.db()?;
         let conn = Connection::new(&db).map_err(|e| {
             GraphDBError::ConnectionError(format!("Failed to create connection: {e}"))
