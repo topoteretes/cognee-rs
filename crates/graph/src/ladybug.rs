@@ -1025,9 +1025,14 @@ impl GraphDBTrait for LadybugAdapter {
     /// Batched node fetch: one query per 500 ids instead of one per id.
     ///
     /// Ids absent from storage are simply missing from the result, which is
-    /// the same contract the per-id loop had (it dropped `None`s). Row order
-    /// follows the engine's, not `node_ids` — as before, since the per-id loop
-    /// only preserved order incidentally and no caller relies on it.
+    /// the same contract the per-id loop had (it dropped `None`s).
+    ///
+    /// Two properties the per-id loop happened to have and this does **not**:
+    /// rows come back in engine order rather than `node_ids` order, and a
+    /// repeated id yields one row instead of one per occurrence. Neither is
+    /// promised by [`GraphDBTrait::get_nodes`] — the Postgres adapter has
+    /// always answered with a single set-based `IN` query — so callers must key
+    /// results by each row's own `id` rather than zip them against the input.
     async fn get_nodes(&self, node_ids: &[String]) -> GraphDBResult<Vec<NodeData>> {
         if node_ids.is_empty() {
             return Ok(Vec::new());
@@ -1101,6 +1106,14 @@ impl GraphDBTrait for LadybugAdapter {
     /// edge keeps its properties, which are not part of the lookup key. A
     /// repeated candidate triple is therefore still reported once per
     /// occurrence.
+    ///
+    /// The trade this makes: the superset is the induced subgraph over the
+    /// batch's endpoints, so a chunk drawn from a densely connected region can
+    /// return more rows than it had candidates. That is bounded by the graph's
+    /// actual edge count, not by |sources| × |targets|, and extraction batches
+    /// are sparse in practice (distinct entity pairs, one relation each). If a
+    /// workload ever inverts that assumption, the fix is a smaller chunk size
+    /// rather than a return to per-edge queries.
     async fn has_edges(&self, edges: &[EdgeData]) -> GraphDBResult<Vec<EdgeData>> {
         use std::collections::HashSet;
 
@@ -1906,6 +1919,15 @@ impl GraphDBTrait for LadybugAdapter {
         key: &str,
         value: serde_json::Value,
     ) -> GraphDBResult<()> {
+        // Read-modify-write of the whole `properties` blob, so the lock has to
+        // span both halves: a concurrent `add_nodes_raw` (which holds it and
+        // `SET n.properties = <full blob>`) would otherwise land between the
+        // read and the write and lose this update entirely. Nothing in the body
+        // awaits, so holding the guard across it is safe, and no locked path
+        // calls back into here.
+        let _write_guard = self.write_lock.lock().map_err(|_| {
+            GraphDBError::ConnectionError("Ladybug write lock poisoned".to_string())
+        })?;
         let read_query = format!(
             "MATCH (n:Node) WHERE n.id = '{}' RETURN n.properties AS properties",
             node_id.replace('\\', "\\\\").replace('\'', "\\'")
@@ -1952,6 +1974,12 @@ impl GraphDBTrait for LadybugAdapter {
         key: &str,
         value: serde_json::Value,
     ) -> GraphDBResult<()> {
+        // Same read-modify-write of a whole `properties` blob as
+        // `update_node_property`, against `add_edges`' full-blob `ON MATCH SET`
+        // — so the lock spans both halves here too.
+        let _write_guard = self.write_lock.lock().map_err(|_| {
+            GraphDBError::ConnectionError("Ladybug write lock poisoned".to_string())
+        })?;
         let src_esc = source_id.replace('\\', "\\\\").replace('\'', "\\'");
         let tgt_esc = target_id.replace('\\', "\\\\").replace('\'', "\\'");
         let rel_esc = relationship_name.replace('\\', "\\\\").replace('\'', "\\'");

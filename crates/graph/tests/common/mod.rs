@@ -1115,27 +1115,20 @@ pub async fn test_edge_feedback_weight_round_trip(db: &dyn GraphDBTrait) {
     );
 }
 
-/// NUL bytes must not break the property/feedback write paths.
+/// A NUL byte inside a property *value* must not fail the write.
 ///
-/// The Postgres adapter strips NULs at the write boundary (Postgres rejects
-/// ` ` in a `jsonb` cast), so the stored key differs from a raw id that
-/// contained one. Two things have to hold for a caller that hands over such an
-/// id: the write must not error, and the result must be reported under the key
-/// the *caller* passed, not the stored form — otherwise the caller cannot find
-/// its own entry.
+/// LLM- and PDF-derived text routinely carries a literal `0x00`, and Postgres
+/// rejects one outright in a `jsonb` cast, so the property-update paths have to
+/// strip it the way the bulk node/edge writes already do. The NUL is dropped,
+/// not escaped, so the value reads back without it.
 ///
-/// **Registered for Postgres only.** Ladybug does not strip NULs from ids
-/// (`escape_cypher_string` handles `\` and `'` only), so it fails this today.
-/// That gap is the subject of the separate #149 NUL-handling work rather than
-/// this batching change, and asserting it here would collide with it.
-#[allow(
-    dead_code,
-    reason = "registered by pg_graph_integration only; this module compiles into every backend's test binary"
-)]
-pub async fn test_feedback_weights_tolerate_nul_bytes(db: &dyn GraphDBTrait) {
+/// Only the value is in scope here. Ids and relationship names are deliberately
+/// *not* sanitized on lookup paths — see the write-only-sanitization note in
+/// `PgGraphAdapter::serialize_node_to_row`, which keeps Postgres, ladybug and
+/// Python agreeing on whether a NUL-bearing key hits.
+pub async fn test_property_writes_tolerate_nul_in_value(db: &dyn GraphDBTrait) {
     db.delete_graph().await.unwrap();
 
-    // Seeded with the clean ids, which is what any backend stores.
     for id in ["nul_a", "nul_b"] {
         db.add_node_raw(json!({"id": id, "name": id, "type": "Person", "value": 0}))
             .await
@@ -1143,45 +1136,80 @@ pub async fn test_feedback_weights_tolerate_nul_bytes(db: &dyn GraphDBTrait) {
     }
     db.add_edge("nul_a", "nul_b", "knows", None).await.unwrap();
 
-    // The caller's copies carry embedded NULs.
-    let dirty_a = "nul\0_a".to_string();
-    let dirty_b = "nul\0_b".to_string();
+    db.update_node_property("nul_a", "note", json!("we\0ird"))
+        .await
+        .unwrap();
 
-    let mut node_updates = HashMap::new();
-    node_updates.insert(dirty_a.clone(), 0.4);
-    let set_nodes = db.set_node_feedback_weights(&node_updates).await.unwrap();
+    let node = db.get_node("nul_a").await.unwrap().expect("still exists");
     assert_eq!(
-        set_nodes.get(&dirty_a),
-        Some(&true),
-        "success must be reported under the caller's own key"
+        node.get("note").unwrap().as_str().unwrap(),
+        "weird",
+        "the NUL is stripped, leaving the rest of the value intact"
     );
 
-    let got_nodes = db
-        .get_node_feedback_weights(std::slice::from_ref(&dirty_a))
-        .await
-        .unwrap();
-    assert_eq!(got_nodes.get(&dirty_a), Some(&0.4));
-
-    // A property value carrying a NUL must not fail the write.
-    db.update_node_property(&dirty_a, "note", json!("we\0ird"))
+    db.update_edge_property("nul_a", "nul_b", "knows", "note", json!("ed\0ge"))
         .await
         .unwrap();
 
-    let dirty_key = (dirty_a, dirty_b, "kno\0ws".to_string());
-    let mut edge_updates = HashMap::new();
-    edge_updates.insert(dirty_key.clone(), 0.6);
-    let set_edges = db.set_edge_feedback_weights(&edge_updates).await.unwrap();
+    let edges = db.get_edges("nul_a").await.unwrap();
+    let stored = edges
+        .iter()
+        .find(|e| e.0 == "nul_a" && e.1 == "nul_b" && e.2 == "knows")
+        .expect("edge still present");
     assert_eq!(
-        set_edges.get(&dirty_key),
+        stored.3.get("note").and_then(|v| v.as_str()),
+        Some("edge"),
+        "edge property values are sanitized the same way"
+    );
+}
+
+/// A non-finite weight must not come back as a readable weight, and must not
+/// disturb the rest of the batch.
+///
+/// JSON has no infinity or NaN, and neither backend errors on one — Postgres
+/// stores the *string* `"Infinity"` and ladybug serialises `null` — so the risk
+/// is a junk property that silently reads back as absent while the write
+/// reported success.
+///
+/// The per-key verdict is deliberately not asserted, because it legitimately
+/// differs: the Postgres adapter drops such a key up front and reports `false`,
+/// while ladybug writes JSON `null` and reports `true`. What both must agree on
+/// is that the finite weight in the same batch lands and the non-finite one is
+/// never readable.
+pub async fn test_edge_feedback_weight_rejects_non_finite(db: &dyn GraphDBTrait) {
+    db.delete_graph().await.unwrap();
+
+    for id in ["nf_a", "nf_b"] {
+        db.add_node_raw(json!({"id": id, "name": id, "type": "Person", "value": 0}))
+            .await
+            .unwrap();
+    }
+    db.add_edge("nf_a", "nf_b", "good", None).await.unwrap();
+    db.add_edge("nf_a", "nf_b", "bad", None).await.unwrap();
+
+    let good = ("nf_a".to_string(), "nf_b".to_string(), "good".to_string());
+    let bad = ("nf_a".to_string(), "nf_b".to_string(), "bad".to_string());
+
+    let mut updates = HashMap::new();
+    updates.insert(good.clone(), 0.3);
+    updates.insert(bad.clone(), f64::INFINITY);
+
+    let result = db.set_edge_feedback_weights(&updates).await.unwrap();
+    assert_eq!(
+        result.get(&good),
         Some(&true),
-        "the edge resolves once its key is sanitized"
+        "the finite weight must still be written — one bad key must not fail the batch"
     );
 
-    let got_edges = db
-        .get_edge_feedback_weights(std::slice::from_ref(&dirty_key))
+    let got = db
+        .get_edge_feedback_weights(&[good.clone(), bad.clone()])
         .await
         .unwrap();
-    assert_eq!(got_edges.get(&dirty_key), Some(&0.6));
+    assert_eq!(got.get(&good), Some(&0.3));
+    assert!(
+        !got.contains_key(&bad),
+        "a non-finite weight must not read back as a usable weight"
+    );
 }
 
 // -- get_neighborhood --------------------------------------------------------

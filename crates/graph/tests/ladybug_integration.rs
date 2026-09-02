@@ -77,4 +77,6 @@ ladybug_test!(test_update_node_property_preserves_edges_and_siblings);
 ladybug_test!(test_node_feedback_weight_round_trip);
 ladybug_test!(test_node_feedback_weight_preserves_edges_and_siblings);
 ladybug_test!(test_edge_feedback_weight_round_trip);
+ladybug_test!(test_property_writes_tolerate_nul_in_value);
+ladybug_test!(test_edge_feedback_weight_rejects_non_finite);
 ladybug_test!(test_nul_bytes_in_text_are_persistable);
