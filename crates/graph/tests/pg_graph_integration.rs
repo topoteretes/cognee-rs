@@ -151,4 +151,5 @@ pggraph_test!(test_update_node_property_preserves_edges_and_siblings);
 pggraph_test!(test_node_feedback_weight_round_trip);
 pggraph_test!(test_node_feedback_weight_preserves_edges_and_siblings);
 pggraph_test!(test_edge_feedback_weight_round_trip);
+pggraph_test!(test_feedback_weights_tolerate_nul_bytes);
 pggraph_test!(test_nul_bytes_in_text_are_persistable);

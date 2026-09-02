@@ -936,6 +936,12 @@ impl GraphDBTrait for LadybugAdapter {
     }
 
     async fn delete_node(&self, node_id: &str) -> GraphDBResult<()> {
+        // `DETACH DELETE` is a write, so it serializes on the same lock as the
+        // node/edge upserts. Without it a delete could interleave with a
+        // concurrent upsert despite the adapter's write-serialization intent.
+        let _write_guard = self.write_lock.lock().map_err(|_| {
+            GraphDBError::ConnectionError("Ladybug write lock poisoned".to_string())
+        })?;
         let db = self.db()?;
         let conn = Connection::new(&db).map_err(|e| {
             GraphDBError::ConnectionError(format!("Failed to create connection: {e}"))
@@ -955,10 +961,9 @@ impl GraphDBTrait for LadybugAdapter {
     /// Batched delete: one `DETACH DELETE` per 500 ids instead of one per id.
     ///
     /// Matters on the delete path, which calls this with whole orphan sets
-    /// (`cognee-delete`'s artifact sweep). Takes the write lock once for the
-    /// whole call rather than re-acquiring it per node, and `DETACH DELETE`
-    /// keeps its per-node cascade semantics — the only change is how many
-    /// statements carry them.
+    /// (`cognee-delete`'s artifact sweep). The write lock is taken once for the
+    /// whole call, and `DETACH DELETE` keeps its per-node cascade semantics —
+    /// the only change is how many statements carry them.
     async fn delete_nodes(&self, node_ids: &[String]) -> GraphDBResult<()> {
         if node_ids.is_empty() {
             return Ok(());

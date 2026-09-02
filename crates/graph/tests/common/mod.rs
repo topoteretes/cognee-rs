@@ -1115,6 +1115,75 @@ pub async fn test_edge_feedback_weight_round_trip(db: &dyn GraphDBTrait) {
     );
 }
 
+/// NUL bytes must not break the property/feedback write paths.
+///
+/// The Postgres adapter strips NULs at the write boundary (Postgres rejects
+/// ` ` in a `jsonb` cast), so the stored key differs from a raw id that
+/// contained one. Two things have to hold for a caller that hands over such an
+/// id: the write must not error, and the result must be reported under the key
+/// the *caller* passed, not the stored form — otherwise the caller cannot find
+/// its own entry.
+///
+/// **Registered for Postgres only.** Ladybug does not strip NULs from ids
+/// (`escape_cypher_string` handles `\` and `'` only), so it fails this today.
+/// That gap is the subject of the separate #149 NUL-handling work rather than
+/// this batching change, and asserting it here would collide with it.
+#[allow(
+    dead_code,
+    reason = "registered by pg_graph_integration only; this module compiles into every backend's test binary"
+)]
+pub async fn test_feedback_weights_tolerate_nul_bytes(db: &dyn GraphDBTrait) {
+    db.delete_graph().await.unwrap();
+
+    // Seeded with the clean ids, which is what any backend stores.
+    for id in ["nul_a", "nul_b"] {
+        db.add_node_raw(json!({"id": id, "name": id, "type": "Person", "value": 0}))
+            .await
+            .unwrap();
+    }
+    db.add_edge("nul_a", "nul_b", "knows", None).await.unwrap();
+
+    // The caller's copies carry embedded NULs.
+    let dirty_a = "nul\0_a".to_string();
+    let dirty_b = "nul\0_b".to_string();
+
+    let mut node_updates = HashMap::new();
+    node_updates.insert(dirty_a.clone(), 0.4);
+    let set_nodes = db.set_node_feedback_weights(&node_updates).await.unwrap();
+    assert_eq!(
+        set_nodes.get(&dirty_a),
+        Some(&true),
+        "success must be reported under the caller's own key"
+    );
+
+    let got_nodes = db
+        .get_node_feedback_weights(std::slice::from_ref(&dirty_a))
+        .await
+        .unwrap();
+    assert_eq!(got_nodes.get(&dirty_a), Some(&0.4));
+
+    // A property value carrying a NUL must not fail the write.
+    db.update_node_property(&dirty_a, "note", json!("we\0ird"))
+        .await
+        .unwrap();
+
+    let dirty_key = (dirty_a, dirty_b, "kno\0ws".to_string());
+    let mut edge_updates = HashMap::new();
+    edge_updates.insert(dirty_key.clone(), 0.6);
+    let set_edges = db.set_edge_feedback_weights(&edge_updates).await.unwrap();
+    assert_eq!(
+        set_edges.get(&dirty_key),
+        Some(&true),
+        "the edge resolves once its key is sanitized"
+    );
+
+    let got_edges = db
+        .get_edge_feedback_weights(std::slice::from_ref(&dirty_key))
+        .await
+        .unwrap();
+    assert_eq!(got_edges.get(&dirty_key), Some(&0.6));
+}
+
 // -- get_neighborhood --------------------------------------------------------
 
 pub async fn test_get_neighborhood_depth1(db: &dyn GraphDBTrait) {

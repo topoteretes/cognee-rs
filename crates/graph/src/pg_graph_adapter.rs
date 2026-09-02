@@ -721,7 +721,9 @@ impl GraphDBTrait for PgGraphAdapter {
         key: &str,
         value: Value,
     ) -> GraphDBResult<()> {
-        let ids = [node_id.to_string()];
+        // `serialize_node_to_row` sanitized the id on the way in, so look the
+        // node up by its stored form; the raw id would find nothing.
+        let ids = [sanitize_str(node_id).into_owned()];
         let node = self
             .get_nodes(&ids)
             .await?
@@ -750,14 +752,26 @@ impl GraphDBTrait for PgGraphAdapter {
         if node_ids.is_empty() {
             return Ok(HashMap::new());
         }
-        let nodes = self.get_nodes(node_ids).await?;
+        // Query by the stored (sanitized) ids, then report results under the
+        // caller's own ids so a caller whose id held a NUL can look its entry
+        // up.
+        let by_stored: HashMap<String, &String> = node_ids
+            .iter()
+            .map(|id| (sanitize_str(id).into_owned(), id))
+            .collect();
+        let lookup: Vec<String> = by_stored.keys().cloned().collect();
+
+        let nodes = self.get_nodes(&lookup).await?;
         let mut out = HashMap::with_capacity(nodes.len());
         for node in nodes {
-            let Some(id) = node.get("id").and_then(|v| v.as_str()).map(str::to_string) else {
+            let Some(id) = node.get("id").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let Some(original) = by_stored.get(id) else {
                 continue;
             };
             if let Some(w) = node.get("feedback_weight").and_then(Value::as_f64) {
-                out.insert(id, w);
+                out.insert((*original).clone(), w);
             }
         }
         Ok(out)
@@ -773,20 +787,30 @@ impl GraphDBTrait for PgGraphAdapter {
         &self,
         updates: &HashMap<String, f64>,
     ) -> GraphDBResult<HashMap<String, bool>> {
-        let ids: Vec<String> = updates.keys().cloned().collect();
-        if ids.is_empty() {
+        if updates.is_empty() {
             return Ok(HashMap::new());
         }
-        let nodes = self.get_nodes(&ids).await?;
+        // Fetch by the stored (sanitized) ids and report under the caller's,
+        // for the same reason as `get_node_feedback_weights`.
+        let by_stored: HashMap<String, &String> = updates
+            .keys()
+            .map(|id| (sanitize_str(id).into_owned(), id))
+            .collect();
+        let lookup: Vec<String> = by_stored.keys().cloned().collect();
 
-        let mut out: HashMap<String, bool> = ids.iter().map(|id| (id.clone(), false)).collect();
+        let nodes = self.get_nodes(&lookup).await?;
+
+        let mut out: HashMap<String, bool> = updates.keys().map(|id| (id.clone(), false)).collect();
 
         let mut merged: Vec<Value> = Vec::with_capacity(nodes.len());
         for node in nodes {
-            let Some(id) = node.get("id").and_then(|v| v.as_str()).map(str::to_string) else {
+            let Some(id) = node.get("id").and_then(|v| v.as_str()) else {
                 continue;
             };
-            let Some(weight) = updates.get(&id) else {
+            let Some(original) = by_stored.get(id).map(|id| (*id).clone()) else {
+                continue;
+            };
+            let Some(weight) = updates.get(&original) else {
                 continue;
             };
             let mut obj = serde_json::Map::new();
@@ -795,7 +819,7 @@ impl GraphDBTrait for PgGraphAdapter {
             }
             obj.insert("feedback_weight".to_string(), json!(weight));
             merged.push(Value::Object(obj));
-            out.insert(id, true);
+            out.insert(original, true);
         }
 
         if !merged.is_empty() {
@@ -916,7 +940,13 @@ impl GraphDBTrait for PgGraphAdapter {
         key: &str,
         value: Value,
     ) -> GraphDBResult<()> {
-        let patch = json!({ key: value });
+        // NUL bytes must be stripped for two separate reasons, both of which
+        // `add_edges` already handles via `sanitize_str` / `sanitize_json`:
+        // Postgres rejects ` ` in a `jsonb` cast, so an unsanitized patch
+        // errors at runtime on LLM/PDF-derived text; and the key columns were
+        // *stored* sanitized, so comparing raw input against them would match
+        // zero rows and report the edge as missing.
+        let patch = sanitize_json(json!({ key: value }));
         let result = self
             .db
             .execute(Statement::from_sql_and_values(
@@ -926,9 +956,9 @@ impl GraphDBTrait for PgGraphAdapter {
                      updated_at = CURRENT_TIMESTAMP \
                  WHERE source_id = $1 AND target_id = $2 AND relationship_name = $3",
                 [
-                    source_id.into(),
-                    target_id.into(),
-                    relationship_name.into(),
+                    sanitize_str(source_id).into_owned().into(),
+                    sanitize_str(target_id).into_owned().into(),
+                    sanitize_str(relationship_name).into_owned().into(),
                     patch.to_string().into(),
                 ],
             ))
@@ -957,9 +987,20 @@ impl GraphDBTrait for PgGraphAdapter {
             return Ok(HashMap::new());
         }
 
-        let sources: Vec<String> = edge_keys.iter().map(|k| k.0.clone()).collect();
-        let targets: Vec<String> = edge_keys.iter().map(|k| k.1.clone()).collect();
-        let rels: Vec<String> = edge_keys.iter().map(|k| k.2.clone()).collect();
+        // Sanitized to match how `add_edges` stored these columns; raw input
+        // carrying a NUL would join against nothing.
+        let sources: Vec<String> = edge_keys
+            .iter()
+            .map(|k| sanitize_str(&k.0).into_owned())
+            .collect();
+        let targets: Vec<String> = edge_keys
+            .iter()
+            .map(|k| sanitize_str(&k.1).into_owned())
+            .collect();
+        let rels: Vec<String> = edge_keys
+            .iter()
+            .map(|k| sanitize_str(&k.2).into_owned())
+            .collect();
 
         let rows = self
             .db
@@ -976,6 +1017,25 @@ impl GraphDBTrait for PgGraphAdapter {
             .await
             .map_err(|e| GraphDBError::QueryError(e.to_string()))?;
 
+        // Rows come back carrying the *stored* (sanitized) key, so results are
+        // mapped back onto the caller's own key — the same "filter the input
+        // rather than reconstruct it from the query" rule `has_edges` follows.
+        // Without this a caller whose key held a NUL could never look up its
+        // own entry.
+        let by_stored: HashMap<crate::traits::EdgeKey, &crate::traits::EdgeKey> = edge_keys
+            .iter()
+            .map(|k| {
+                (
+                    (
+                        sanitize_str(&k.0).into_owned(),
+                        sanitize_str(&k.1).into_owned(),
+                        sanitize_str(&k.2).into_owned(),
+                    ),
+                    k,
+                )
+            })
+            .collect();
+
         let mut out = HashMap::with_capacity(rows.len());
         for row in &rows {
             let s: String = row
@@ -990,8 +1050,10 @@ impl GraphDBTrait for PgGraphAdapter {
             // A NULL / absent property decodes to `None`; a non-numeric one
             // fails `as_f64`. Both are "no weight", matching the node side.
             let w: Option<Value> = row.try_get("", "w").unwrap_or(None);
-            if let Some(weight) = w.as_ref().and_then(Value::as_f64) {
-                out.insert((s, t, r), weight);
+            if let Some(weight) = w.as_ref().and_then(Value::as_f64)
+                && let Some(original) = by_stored.get(&(s, t, r))
+            {
+                out.insert((*original).clone(), weight);
             }
         }
         Ok(out)
@@ -1018,14 +1080,26 @@ impl GraphDBTrait for PgGraphAdapter {
         let mut rels: Vec<String> = Vec::with_capacity(updates.len());
         let mut weights: Vec<String> = Vec::with_capacity(updates.len());
         let mut out: HashMap<crate::traits::EdgeKey, bool> = HashMap::with_capacity(updates.len());
+        // Stored (sanitized) key -> the caller's key, so a `RETURNING` row
+        // flips the entry the caller can actually look up instead of adding a
+        // second, sanitized one beside it.
+        let mut by_stored: HashMap<crate::traits::EdgeKey, crate::traits::EdgeKey> =
+            HashMap::with_capacity(updates.len());
 
         for (key, weight) in updates {
-            sources.push(key.0.clone());
-            targets.push(key.1.clone());
-            rels.push(key.2.clone());
+            // Sanitized to match how `add_edges` stored these columns.
+            let stored = (
+                sanitize_str(&key.0).into_owned(),
+                sanitize_str(&key.1).into_owned(),
+                sanitize_str(&key.2).into_owned(),
+            );
+            sources.push(stored.0.clone());
+            targets.push(stored.1.clone());
+            rels.push(stored.2.clone());
             // `{:?}` is f64's shortest round-trip representation, so the
             // float8 cast parses back to exactly this value.
             weights.push(format!("{weight:?}"));
+            by_stored.insert(stored, key.clone());
             out.insert(key.clone(), false);
         }
 
@@ -1058,7 +1132,9 @@ impl GraphDBTrait for PgGraphAdapter {
             let r: String = row
                 .try_get("", "r")
                 .map_err(|e| GraphDBError::EdgeError(e.to_string()))?;
-            out.insert((s, t, r), true);
+            if let Some(original) = by_stored.get(&(s, t, r)) {
+                out.insert(original.clone(), true);
+            }
         }
         Ok(out)
     }
