@@ -22,8 +22,11 @@ use crate::fact_extraction::KnowledgeGraph;
 /// **Edge key format:** `"{source_uuid}_{target_uuid}_{relationship_name}"`
 /// (matches the format used in `expand_with_nodes_and_edges`)
 ///
-/// **Deduplication strategy:** Uses `processed_nodes` set to avoid querying
-/// the same node multiple times within a batch.
+/// **Deduplication strategy:** the candidate `(source, target, relationship)`
+/// triples are de-duplicated before the query. Chunk-level extraction routinely
+/// yields the same relation from several chunks of one document, and the return
+/// value is a set of edge keys, so a repeated triple can only ever cost an
+/// extra lookup — never change the result.
 ///
 /// # Arguments  
 /// * `graph_db` - Graph database trait object
@@ -43,18 +46,17 @@ use crate::fact_extraction::KnowledgeGraph;
 ///     // Create new edge
 /// }
 /// ```
-pub async fn retrieve_existing_edges(
-    graph_db: &dyn GraphDBTrait,
-    graphs: &[KnowledgeGraph],
-) -> Result<HashSet<String>, CognifyError> {
-    if graphs.is_empty() {
-        return Ok(HashSet::new());
-    }
-
-    // Track nodes we've processed to avoid duplicate work
-    let mut processed_nodes: HashSet<String> = HashSet::new();
-
-    // Collect all edges to check
+/// Collect the distinct `(source_uuid, target_uuid, relationship_name)`
+/// candidates to look up, in first-seen order.
+///
+/// Chunk-level extraction routinely re-derives the same relation from several
+/// chunks of one document, and on a backend without a set-based existence
+/// check each repeat used to cost its own round-trip. De-duplicating here can
+/// only remove redundant lookups: the caller folds the results into a
+/// `HashSet` of edge keys, so a repeated candidate could never have changed
+/// the outcome.
+fn collect_distinct_candidate_edges(graphs: &[KnowledgeGraph]) -> Vec<EdgeData> {
+    let mut seen: HashSet<(String, String, String)> = HashSet::new();
     let mut edges_to_check: Vec<EdgeData> = Vec::new();
 
     for graph in graphs {
@@ -65,33 +67,35 @@ pub async fn retrieve_existing_edges(
             // these keys never match the stored (deterministic) entity ids, so
             // edge dedup was a silent no-op (issue #57 corollary). Matches
             // Python `retrieve_existing_edges.py:75-76` (`Entity.id_for`).
-            let source_uuid = Entity::id_for(&edge.source_node_id);
-            let target_uuid = Entity::id_for(&edge.target_node_id);
+            let source_uuid = Entity::id_for(&edge.source_node_id).to_string();
+            let target_uuid = Entity::id_for(&edge.target_node_id).to_string();
 
-            // Only process if we haven't seen both nodes before
-            let source_str = edge.source_node_id.as_str();
-            let target_str = edge.target_node_id.as_str();
-
-            // Mark nodes as processed
-            if !processed_nodes.contains(source_str) {
-                processed_nodes.insert(source_str.to_string());
-            }
-            if !processed_nodes.contains(target_str) {
-                processed_nodes.insert(target_str.to_string());
-            }
-
-            // Create edge tuple for database query
             // Note: relationship_name is already normalized by LLM or should be
-            let edge_tuple = (
-                source_uuid.to_string(),
-                target_uuid.to_string(),
-                edge.relationship_name.clone(),
-                HashMap::new(), // Properties not needed for existence check
-            );
-
-            edges_to_check.push(edge_tuple);
+            let key = (source_uuid, target_uuid, edge.relationship_name.clone());
+            if !seen.contains(&key) {
+                seen.insert(key.clone());
+                edges_to_check.push((
+                    key.0,
+                    key.1,
+                    key.2,
+                    HashMap::new(), // Properties not needed for existence check
+                ));
+            }
         }
     }
+
+    edges_to_check
+}
+
+pub async fn retrieve_existing_edges(
+    graph_db: &dyn GraphDBTrait,
+    graphs: &[KnowledgeGraph],
+) -> Result<HashSet<String>, CognifyError> {
+    if graphs.is_empty() {
+        return Ok(HashSet::new());
+    }
+
+    let edges_to_check = collect_distinct_candidate_edges(graphs);
 
     if edges_to_check.is_empty() {
         return Ok(HashSet::new());
@@ -248,8 +252,81 @@ mod tests {
         assert_eq!(result.len(), 1);
     }
 
+    /// A relation re-extracted from several chunks is looked up once. The
+    /// candidate list is what reaches `has_edges`, so this is what bounds the
+    /// query count on backends without a set-based existence check.
+    #[test]
+    fn collect_distinct_candidate_edges_dedups_repeated_triples() {
+        // The same graph three times: three identical `alice -works_at->
+        // techcorp` edges.
+        let graphs = vec![
+            create_test_graph(),
+            create_test_graph(),
+            create_test_graph(),
+        ];
+        let candidates = collect_distinct_candidate_edges(&graphs);
+        assert_eq!(candidates.len(), 1, "identical triples collapse to one");
+
+        let expected_source = Entity::id_for("alice").to_string();
+        let expected_target = Entity::id_for("techcorp").to_string();
+        assert_eq!(candidates[0].0, expected_source);
+        assert_eq!(candidates[0].1, expected_target);
+        assert_eq!(candidates[0].2, "works_at");
+    }
+
+    /// Dedup keys on the whole triple, so edges sharing only an endpoint or
+    /// only a relationship name are all kept.
+    #[test]
+    fn collect_distinct_candidate_edges_keeps_distinct_triples() {
+        let graph = KnowledgeGraph {
+            nodes: vec![],
+            edges: vec![
+                Edge {
+                    source_node_id: "alice".to_string(),
+                    target_node_id: "techcorp".to_string(),
+                    relationship_name: "works_at".to_string(),
+                    description: None,
+                },
+                // same endpoints, different relationship
+                Edge {
+                    source_node_id: "alice".to_string(),
+                    target_node_id: "techcorp".to_string(),
+                    relationship_name: "founded".to_string(),
+                    description: None,
+                },
+                // same relationship, different target
+                Edge {
+                    source_node_id: "alice".to_string(),
+                    target_node_id: "london".to_string(),
+                    relationship_name: "works_at".to_string(),
+                    description: None,
+                },
+                // exact repeat of the first — the only one that drops
+                Edge {
+                    source_node_id: "alice".to_string(),
+                    target_node_id: "techcorp".to_string(),
+                    relationship_name: "works_at".to_string(),
+                    description: None,
+                },
+            ],
+        };
+
+        let candidates = collect_distinct_candidate_edges(&[graph]);
+        assert_eq!(candidates.len(), 3);
+        // First-seen order is preserved.
+        assert_eq!(candidates[0].2, "works_at");
+        assert_eq!(candidates[1].2, "founded");
+        assert_eq!(candidates[2].2, "works_at");
+        assert_ne!(candidates[0].1, candidates[2].1);
+    }
+
+    #[test]
+    fn collect_distinct_candidate_edges_handles_no_graphs() {
+        assert!(collect_distinct_candidate_edges(&[]).is_empty());
+    }
+
     #[tokio::test]
-    async fn test_processed_nodes_tracking() {
+    async fn test_shared_node_across_multiple_edges() {
         let graph_db = MockGraphDB::new();
 
         // Create graph with same node appearing in multiple edges

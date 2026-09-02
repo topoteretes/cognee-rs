@@ -899,6 +899,319 @@ pub async fn test_node_truth_state_preserves_other_properties(db: &dyn GraphDBTr
     assert_eq!(state.truth_epoch, 9);
 }
 
+// -- node properties & feedback weights (issue #21) --------------------------
+
+/// `update_node_property` must keep the node's edges and unrelated properties.
+///
+/// Note what this does and does not prove. The base-trait default implements
+/// the method as `get_node` → `get_edges` → `delete_node` → `add_node_raw` →
+/// `add_edges`, and on the happy path that sequence *does* restore the edges,
+/// so this case passes against the default too — it pins the contract, not the
+/// improvement. What the default cannot offer is atomicity: the five statements
+/// share no transaction, so an interruption between the delete and the re-add
+/// loses the node and its edges, and `get_edges` is `unwrap_or_default()`, so a
+/// failed read drops every edge on the recreate. Reproducing either needs fault
+/// injection this suite has no seam for; a backend that overrides the method
+/// with an in-place write closes the window by construction.
+pub async fn test_update_node_property_preserves_edges_and_siblings(db: &dyn GraphDBTrait) {
+    db.delete_graph().await.unwrap();
+
+    db.add_node_raw(json!({
+        "id": "prop_a", "name": "A", "type": "Person", "value": 1, "keepme": "yes"
+    }))
+    .await
+    .unwrap();
+    db.add_node_raw(json!({
+        "id": "prop_b", "name": "B", "type": "Person", "value": 2
+    }))
+    .await
+    .unwrap();
+    db.add_edge("prop_a", "prop_b", "knows", None)
+        .await
+        .unwrap();
+
+    db.update_node_property("prop_a", "scratch", json!("written"))
+        .await
+        .unwrap();
+
+    // The edge survived the property write.
+    assert!(
+        db.has_edge("prop_a", "prop_b", "knows").await.unwrap(),
+        "update_node_property must not cascade the node's edges away"
+    );
+
+    let node = db
+        .get_node("prop_a")
+        .await
+        .unwrap()
+        .expect("node still exists");
+    assert_eq!(node.get("scratch").unwrap().as_str().unwrap(), "written");
+    assert_eq!(node.get("name").unwrap().as_str().unwrap(), "A");
+    assert_eq!(node.get("type").unwrap().as_str().unwrap(), "Person");
+    assert_eq!(
+        node.get("keepme").unwrap().as_str().unwrap(),
+        "yes",
+        "unrelated properties must survive"
+    );
+}
+
+/// Round-trip for the batched node feedback-weight accessors.
+///
+/// Ids that do not exist, and ids that exist without a numeric
+/// `feedback_weight`, are absent from the read — the documented contract.
+pub async fn test_node_feedback_weight_round_trip(db: &dyn GraphDBTrait) {
+    db.delete_graph().await.unwrap();
+
+    db.add_node_raw(json!({"id": "fw_a", "name": "A", "type": "Person", "value": 1}))
+        .await
+        .unwrap();
+    db.add_node_raw(json!({"id": "fw_b", "name": "B", "type": "Person", "value": 2}))
+        .await
+        .unwrap();
+    // Exists, but never given a weight.
+    db.add_node_raw(json!({"id": "fw_none", "name": "N", "type": "Person", "value": 3}))
+        .await
+        .unwrap();
+
+    let mut updates = HashMap::new();
+    updates.insert("fw_a".to_string(), 0.25);
+    updates.insert("fw_b".to_string(), -1.5);
+    // A node that is not in the graph at all.
+    updates.insert("fw_ghost".to_string(), 9.0);
+
+    let set_result = db.set_node_feedback_weights(&updates).await.unwrap();
+    assert_eq!(set_result.get("fw_a"), Some(&true));
+    assert_eq!(set_result.get("fw_b"), Some(&true));
+    assert_eq!(
+        set_result.get("fw_ghost"),
+        Some(&false),
+        "a missing node must report failure, not silent success"
+    );
+
+    let got = db
+        .get_node_feedback_weights(&[
+            "fw_a".to_string(),
+            "fw_b".to_string(),
+            "fw_none".to_string(),
+            "fw_ghost".to_string(),
+        ])
+        .await
+        .unwrap();
+
+    assert_eq!(got.get("fw_a"), Some(&0.25));
+    assert_eq!(got.get("fw_b"), Some(&-1.5));
+    assert!(
+        !got.contains_key("fw_none"),
+        "a node with no weight is omitted"
+    );
+    assert!(!got.contains_key("fw_ghost"), "a missing node is omitted");
+
+    assert!(
+        db.get_node_feedback_weights(&[]).await.unwrap().is_empty(),
+        "empty input yields an empty map"
+    );
+}
+
+/// Writing a feedback weight must not clobber siblings or drop edges — the
+/// same hazard as `test_update_node_property_preserves_edges_and_siblings`,
+/// reached through the batched setter that the memify feedback path uses.
+pub async fn test_node_feedback_weight_preserves_edges_and_siblings(db: &dyn GraphDBTrait) {
+    db.delete_graph().await.unwrap();
+
+    db.add_node_raw(json!({
+        "id": "fwp_a", "name": "Keep", "type": "Person", "value": 5, "truth_epoch": 3
+    }))
+    .await
+    .unwrap();
+    db.add_node_raw(json!({"id": "fwp_b", "name": "Other", "type": "Person", "value": 6}))
+        .await
+        .unwrap();
+    db.add_edge("fwp_a", "fwp_b", "knows", None).await.unwrap();
+
+    let mut updates = HashMap::new();
+    updates.insert("fwp_a".to_string(), 0.75);
+    let set_result = db.set_node_feedback_weights(&updates).await.unwrap();
+    assert_eq!(set_result.get("fwp_a"), Some(&true));
+
+    assert!(
+        db.has_edge("fwp_a", "fwp_b", "knows").await.unwrap(),
+        "set_node_feedback_weights must not cascade edges away"
+    );
+
+    let node = db.get_node("fwp_a").await.unwrap().expect("still exists");
+    assert_eq!(node.get("name").unwrap().as_str().unwrap(), "Keep");
+    assert_eq!(node.get("value").unwrap().as_i64().unwrap(), 5);
+    assert_eq!(
+        node.get("truth_epoch").unwrap().as_i64().unwrap(),
+        3,
+        "a sibling property written by another subsystem must survive"
+    );
+    assert_eq!(node.get("feedback_weight").unwrap().as_f64().unwrap(), 0.75);
+}
+
+/// Round-trip for the batched edge feedback-weight accessors, and the
+/// property-merge guarantee: writing a weight keeps the edge's other
+/// properties.
+pub async fn test_edge_feedback_weight_round_trip(db: &dyn GraphDBTrait) {
+    db.delete_graph().await.unwrap();
+
+    for id in ["efw_a", "efw_b"] {
+        db.add_node_raw(json!({"id": id, "name": id, "type": "Person", "value": 0}))
+            .await
+            .unwrap();
+    }
+
+    let mut props: HashMap<Cow<'static, str>, serde_json::Value> = HashMap::new();
+    props.insert(Cow::Borrowed("edge_text"), json!("keep this"));
+    db.add_edge("efw_a", "efw_b", "knows", Some(props))
+        .await
+        .unwrap();
+
+    let key = (
+        "efw_a".to_string(),
+        "efw_b".to_string(),
+        "knows".to_string(),
+    );
+    let ghost = (
+        "efw_a".to_string(),
+        "efw_b".to_string(),
+        "never_stored".to_string(),
+    );
+
+    let mut updates = HashMap::new();
+    updates.insert(key.clone(), 0.5);
+    updates.insert(ghost.clone(), 0.9);
+
+    let set_result = db.set_edge_feedback_weights(&updates).await.unwrap();
+    assert_eq!(set_result.get(&key), Some(&true));
+    assert_eq!(
+        set_result.get(&ghost),
+        Some(&false),
+        "an edge that does not exist must report failure"
+    );
+
+    let got = db
+        .get_edge_feedback_weights(&[key.clone(), ghost.clone()])
+        .await
+        .unwrap();
+    assert_eq!(got.get(&key), Some(&0.5));
+    assert!(!got.contains_key(&ghost));
+
+    // The pre-existing edge property survived the weight write.
+    let edges = db.get_edges("efw_a").await.unwrap();
+    let stored = edges
+        .iter()
+        .find(|e| e.0 == "efw_a" && e.1 == "efw_b" && e.2 == "knows")
+        .expect("edge still present");
+    assert_eq!(
+        stored.3.get("edge_text").map(|v| v.as_str().unwrap()),
+        Some("keep this"),
+        "writing feedback_weight must merge, not replace, edge properties"
+    );
+
+    assert!(
+        db.get_edge_feedback_weights(&[]).await.unwrap().is_empty(),
+        "empty input yields an empty map"
+    );
+}
+
+/// A NUL byte inside a property *value* must not fail the write.
+///
+/// LLM- and PDF-derived text routinely carries a literal `0x00`, and Postgres
+/// rejects one outright in a `jsonb` cast, so the property-update paths have to
+/// strip it the way the bulk node/edge writes already do. The NUL is dropped,
+/// not escaped, so the value reads back without it.
+///
+/// Only the value is in scope here. Ids and relationship names are deliberately
+/// *not* sanitized on lookup paths — see the write-only-sanitization note in
+/// `PgGraphAdapter::serialize_node_to_row`, which keeps Postgres, ladybug and
+/// Python agreeing on whether a NUL-bearing key hits.
+pub async fn test_property_writes_tolerate_nul_in_value(db: &dyn GraphDBTrait) {
+    db.delete_graph().await.unwrap();
+
+    for id in ["nul_a", "nul_b"] {
+        db.add_node_raw(json!({"id": id, "name": id, "type": "Person", "value": 0}))
+            .await
+            .unwrap();
+    }
+    db.add_edge("nul_a", "nul_b", "knows", None).await.unwrap();
+
+    db.update_node_property("nul_a", "note", json!("we\0ird"))
+        .await
+        .unwrap();
+
+    let node = db.get_node("nul_a").await.unwrap().expect("still exists");
+    assert_eq!(
+        node.get("note").unwrap().as_str().unwrap(),
+        "weird",
+        "the NUL is stripped, leaving the rest of the value intact"
+    );
+
+    db.update_edge_property("nul_a", "nul_b", "knows", "note", json!("ed\0ge"))
+        .await
+        .unwrap();
+
+    let edges = db.get_edges("nul_a").await.unwrap();
+    let stored = edges
+        .iter()
+        .find(|e| e.0 == "nul_a" && e.1 == "nul_b" && e.2 == "knows")
+        .expect("edge still present");
+    assert_eq!(
+        stored.3.get("note").and_then(|v| v.as_str()),
+        Some("edge"),
+        "edge property values are sanitized the same way"
+    );
+}
+
+/// A non-finite weight must not come back as a readable weight, and must not
+/// disturb the rest of the batch.
+///
+/// JSON has no infinity or NaN, and neither backend errors on one — Postgres
+/// stores the *string* `"Infinity"` and ladybug serialises `null` — so the risk
+/// is a junk property that silently reads back as absent while the write
+/// reported success.
+///
+/// The per-key verdict is deliberately not asserted, because it legitimately
+/// differs: the Postgres adapter drops such a key up front and reports `false`,
+/// while ladybug writes JSON `null` and reports `true`. What both must agree on
+/// is that the finite weight in the same batch lands and the non-finite one is
+/// never readable.
+pub async fn test_edge_feedback_weight_rejects_non_finite(db: &dyn GraphDBTrait) {
+    db.delete_graph().await.unwrap();
+
+    for id in ["nf_a", "nf_b"] {
+        db.add_node_raw(json!({"id": id, "name": id, "type": "Person", "value": 0}))
+            .await
+            .unwrap();
+    }
+    db.add_edge("nf_a", "nf_b", "good", None).await.unwrap();
+    db.add_edge("nf_a", "nf_b", "bad", None).await.unwrap();
+
+    let good = ("nf_a".to_string(), "nf_b".to_string(), "good".to_string());
+    let bad = ("nf_a".to_string(), "nf_b".to_string(), "bad".to_string());
+
+    let mut updates = HashMap::new();
+    updates.insert(good.clone(), 0.3);
+    updates.insert(bad.clone(), f64::INFINITY);
+
+    let result = db.set_edge_feedback_weights(&updates).await.unwrap();
+    assert_eq!(
+        result.get(&good),
+        Some(&true),
+        "the finite weight must still be written — one bad key must not fail the batch"
+    );
+
+    let got = db
+        .get_edge_feedback_weights(&[good.clone(), bad.clone()])
+        .await
+        .unwrap();
+    assert_eq!(got.get(&good), Some(&0.3));
+    assert!(
+        !got.contains_key(&bad),
+        "a non-finite weight must not read back as a usable weight"
+    );
+}
+
 // -- get_neighborhood --------------------------------------------------------
 
 pub async fn test_get_neighborhood_depth1(db: &dyn GraphDBTrait) {

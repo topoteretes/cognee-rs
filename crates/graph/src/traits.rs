@@ -234,6 +234,16 @@ pub trait GraphDBTrait: Send + Sync {
 
     /// Get multiple nodes by IDs.
     ///
+    /// The result is a *set* lookup, not a positional mapping. Implementations
+    /// answer with a single set-based query, so:
+    ///
+    /// - ids missing from the store are simply absent from the result;
+    /// - rows are in unspecified (storage) order, **not** `node_ids` order;
+    /// - a repeated id yields one row, not one per occurrence.
+    ///
+    /// Key results by each row's own `"id"` field. Zipping them against
+    /// `node_ids` pairs data with the wrong id as soon as any of the above
+    /// applies, and does so silently.
     async fn get_nodes(&self, node_ids: &[String]) -> GraphDBResult<Vec<NodeData>>;
 
     /// Check if an edge exists between two nodes.

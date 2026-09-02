@@ -549,6 +549,48 @@ impl LadybugAdapter {
         value.replace('\\', "\\\\").replace('\'', "\\'")
     }
 
+    /// Render values as an escaped, quoted, comma-joined Cypher list body for
+    /// use inside `WHERE x IN [ ... ]`.
+    ///
+    /// The engine takes no bound parameters, so every batched read inlines its
+    /// key set. Centralising the escaping here keeps those call sites from
+    /// re-deriving the same `\\` / `'` transform by hand.
+    fn cypher_id_list<'a, I>(values: I) -> String
+    where
+        I: IntoIterator<Item = &'a str>,
+    {
+        values
+            .into_iter()
+            .map(|v| format!("'{}'", Self::escape_cypher_string(v)))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    /// Build a [`NodeData`] from one row of the standard four-column node
+    /// projection (`id`, `name`, `type`, `properties`).
+    ///
+    /// Returns `Ok(None)` for a short row, matching the `row.len() >=
+    /// NODE_QUERY_COLUMN_COUNT` guard the per-row readers use.
+    fn node_data_from_row(&self, row: &[serde_json::Value]) -> GraphDBResult<Option<NodeData>> {
+        if row.len() < Self::NODE_QUERY_COLUMN_COUNT {
+            return Ok(None);
+        }
+        let mut node_data = NodeData::new();
+        if let Some(id_str) = row[0].as_str() {
+            node_data.insert(Cow::Borrowed("id"), json!(id_str));
+        }
+        if let Some(name_str) = row[1].as_str() {
+            node_data.insert(Cow::Borrowed("name"), json!(name_str));
+        }
+        if let Some(type_str) = row[2].as_str() {
+            node_data.insert(Cow::Borrowed("type"), json!(type_str));
+        }
+        if let Some(props_str) = row[3].as_str() {
+            node_data.insert(Cow::Borrowed("properties"), json!(props_str));
+        }
+        Ok(Some(self.parse_node_data(node_data)?))
+    }
+
     fn upsert_node_with_conn(
         &self,
         conn: &Connection,
@@ -788,6 +830,11 @@ impl GraphDBTrait for LadybugAdapter {
     }
 
     async fn delete_graph(&self) -> GraphDBResult<()> {
+        // Two destructive statements that must not interleave with a concurrent
+        // upsert, and the last write path here that was not taking the lock.
+        let _write_guard = self.write_lock.lock().map_err(|_| {
+            GraphDBError::ConnectionError("Ladybug write lock poisoned".to_string())
+        })?;
         let db = self.db()?;
         let conn = Connection::new(&db).map_err(|e| {
             GraphDBError::ConnectionError(format!("Failed to create connection: {e}"))
@@ -894,6 +941,12 @@ impl GraphDBTrait for LadybugAdapter {
     }
 
     async fn delete_node(&self, node_id: &str) -> GraphDBResult<()> {
+        // `DETACH DELETE` is a write, so it serializes on the same lock as the
+        // node/edge upserts. Without it a delete could interleave with a
+        // concurrent upsert despite the adapter's write-serialization intent.
+        let _write_guard = self.write_lock.lock().map_err(|_| {
+            GraphDBError::ConnectionError("Ladybug write lock poisoned".to_string())
+        })?;
         let db = self.db()?;
         let conn = Connection::new(&db).map_err(|e| {
             GraphDBError::ConnectionError(format!("Failed to create connection: {e}"))
@@ -910,10 +963,36 @@ impl GraphDBTrait for LadybugAdapter {
         Ok(())
     }
 
+    /// Batched delete: one `DETACH DELETE` per 500 ids instead of one per id.
+    ///
+    /// Matters on the delete path, which calls this with whole orphan sets
+    /// (`cognee-delete`'s artifact sweep). The write lock is taken once for the
+    /// whole call, and `DETACH DELETE` keeps its per-node cascade semantics —
+    /// the only change is how many statements carry them.
     async fn delete_nodes(&self, node_ids: &[String]) -> GraphDBResult<()> {
-        for node_id in node_ids {
-            self.delete_node(node_id).await?;
+        if node_ids.is_empty() {
+            return Ok(());
         }
+
+        let _write_guard = self.write_lock.lock().map_err(|_| {
+            GraphDBError::ConnectionError("Ladybug write lock poisoned".to_string())
+        })?;
+        let db = self.db()?;
+        let conn = Connection::new(&db).map_err(|e| {
+            GraphDBError::ConnectionError(format!("Failed to create connection: {e}"))
+        })?;
+
+        const BATCH_SIZE: usize = 500;
+        for chunk in node_ids.chunks(BATCH_SIZE) {
+            let query = format!(
+                "MATCH (n:Node) WHERE n.id IN [{}] DETACH DELETE n",
+                Self::cypher_id_list(chunk.iter().map(String::as_str)),
+            );
+            conn.query(&query).map_err(|e| {
+                GraphDBError::NodeError(format!("Failed to delete {} nodes: {e}", chunk.len()))
+            })?;
+        }
+
         Ok(())
     }
 
@@ -948,13 +1027,39 @@ impl GraphDBTrait for LadybugAdapter {
         Ok(None)
     }
 
+    /// Batched node fetch: one query per 500 ids instead of one per id.
+    ///
+    /// Ids absent from storage are simply missing from the result, which is
+    /// the same contract the per-id loop had (it dropped `None`s).
+    ///
+    /// Two properties the per-id loop happened to have and this does **not**:
+    /// rows come back in engine order rather than `node_ids` order, and a
+    /// repeated id yields one row instead of one per occurrence. Neither is
+    /// promised by [`GraphDBTrait::get_nodes`] — the Postgres adapter has
+    /// always answered with a single set-based `IN` query — so callers must key
+    /// results by each row's own `id` rather than zip them against the input.
     async fn get_nodes(&self, node_ids: &[String]) -> GraphDBResult<Vec<NodeData>> {
-        let mut nodes = Vec::new();
-        for node_id in node_ids {
-            if let Some(node) = self.get_node(node_id).await? {
-                nodes.push(node);
+        if node_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        const BATCH_SIZE: usize = 500;
+        let mut nodes = Vec::with_capacity(node_ids.len());
+
+        for chunk in node_ids.chunks(BATCH_SIZE) {
+            let query = format!(
+                "MATCH (n:Node) WHERE n.id IN [{}] \
+                 RETURN n.id AS id, n.name AS name, n.type AS type, n.properties AS properties",
+                Self::cypher_id_list(chunk.iter().map(String::as_str)),
+            );
+            let rows = self.execute_query(&query)?;
+            for row in &rows {
+                if let Some(node) = self.node_data_from_row(row)? {
+                    nodes.push(node);
+                }
             }
         }
+
         Ok(nodes)
     }
 
@@ -984,14 +1089,104 @@ impl GraphDBTrait for LadybugAdapter {
         Ok(false)
     }
 
+    /// Batched existence check: one query per 500 candidates instead of one
+    /// per edge.
+    ///
+    /// This is the read-side counterpart of the Postgres adapter's
+    /// `unnest(...)` + `EXISTS` fix (`pg_graph_adapter::has_edges`), and it is
+    /// what makes the pre-write dedup check on the cognify path
+    /// (`retrieve_existing_edges` → this method) stop scaling its round-trip
+    /// count with the extracted edge count.
+    ///
+    /// The engine accepts no bound parameters, so the three key columns go in
+    /// as inlined `IN` lists. That matches a *superset* — every stored edge
+    /// whose source, target and relationship each appear somewhere in the
+    /// candidate batch, including cross-products that were never candidates —
+    /// so the exact triples are intersected in Rust afterwards. Endpoint ids
+    /// are de-duplicated before rendering, since a batch of 500 edges over a
+    /// dense entity set typically mentions far fewer distinct nodes.
+    ///
+    /// Output matches the per-edge loop it replaces (and the Postgres
+    /// adapter): the *input* is filtered, so results keep input order and each
+    /// edge keeps its properties, which are not part of the lookup key. A
+    /// repeated candidate triple is therefore still reported once per
+    /// occurrence.
+    ///
+    /// The trade this makes: the superset is the induced subgraph over the
+    /// batch's endpoints, so a chunk drawn from a densely connected region can
+    /// return more rows than it had candidates. That is bounded by the graph's
+    /// actual edge count, not by |sources| × |targets|, and extraction batches
+    /// are sparse in practice (distinct entity pairs, one relation each). If a
+    /// workload ever inverts that assumption, the fix is a smaller chunk size
+    /// rather than a return to per-edge queries.
     async fn has_edges(&self, edges: &[EdgeData]) -> GraphDBResult<Vec<EdgeData>> {
-        let mut existing_edges = Vec::new();
-        for edge in edges {
-            if self.has_edge(&edge.0, &edge.1, &edge.2).await? {
-                existing_edges.push(edge.clone());
+        use std::collections::HashSet;
+
+        if edges.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // Chunked for the same reason `add_edges` chunks: no bound parameters
+        // means the whole key set is inlined, so the query string is the limit.
+        const BATCH_SIZE: usize = 500;
+
+        let mut existing: HashSet<(String, String, String)> = HashSet::new();
+
+        for chunk in edges.chunks(BATCH_SIZE) {
+            let mut sources: Vec<&str> = Vec::with_capacity(chunk.len());
+            let mut targets: Vec<&str> = Vec::with_capacity(chunk.len());
+            let mut rels: Vec<&str> = Vec::with_capacity(chunk.len());
+            let mut seen_source: HashSet<&str> = HashSet::with_capacity(chunk.len());
+            let mut seen_target: HashSet<&str> = HashSet::with_capacity(chunk.len());
+            let mut seen_rel: HashSet<&str> = HashSet::with_capacity(chunk.len());
+            for edge in chunk {
+                if seen_source.insert(edge.0.as_str()) {
+                    sources.push(edge.0.as_str());
+                }
+                if seen_target.insert(edge.1.as_str()) {
+                    targets.push(edge.1.as_str());
+                }
+                if seen_rel.insert(edge.2.as_str()) {
+                    rels.push(edge.2.as_str());
+                }
+            }
+
+            let query = format!(
+                "MATCH (a:Node)-[r:EDGE]->(b:Node) \
+                 WHERE a.id IN [{}] AND b.id IN [{}] AND r.relationship_name IN [{}] \
+                 RETURN a.id AS source_id, b.id AS target_id, r.relationship_name AS rel_name",
+                Self::cypher_id_list(sources),
+                Self::cypher_id_list(targets),
+                Self::cypher_id_list(rels),
+            );
+
+            let rows = self.execute_query(&query)?;
+            for row in &rows {
+                if row.len() < 3 {
+                    continue;
+                }
+                if let (Some(source), Some(target), Some(rel)) =
+                    (row[0].as_str(), row[1].as_str(), row[2].as_str())
+                {
+                    existing.insert((source.to_string(), target.to_string(), rel.to_string()));
+                }
             }
         }
-        Ok(existing_edges)
+
+        // Borrowed view of the owned key set so the filter below does not
+        // allocate three `String`s per candidate just to probe the set.
+        let existing_refs: HashSet<(&str, &str, &str)> = existing
+            .iter()
+            .map(|(s, t, r)| (s.as_str(), t.as_str(), r.as_str()))
+            .collect();
+
+        let found = edges
+            .iter()
+            .filter(|e| existing_refs.contains(&(e.0.as_str(), e.1.as_str(), e.2.as_str())))
+            .cloned()
+            .collect();
+
+        Ok(found)
     }
 
     async fn add_edge(
@@ -1729,6 +1924,15 @@ impl GraphDBTrait for LadybugAdapter {
         key: &str,
         value: serde_json::Value,
     ) -> GraphDBResult<()> {
+        // Read-modify-write of the whole `properties` blob, so the lock has to
+        // span both halves: a concurrent `add_nodes_raw` (which holds it and
+        // `SET n.properties = <full blob>`) would otherwise land between the
+        // read and the write and lose this update entirely. Nothing in the body
+        // awaits, so holding the guard across it is safe, and no locked path
+        // calls back into here.
+        let _write_guard = self.write_lock.lock().map_err(|_| {
+            GraphDBError::ConnectionError("Ladybug write lock poisoned".to_string())
+        })?;
         let read_query = format!(
             "MATCH (n:Node) WHERE n.id = '{}' RETURN n.properties AS properties",
             node_id.replace('\\', "\\\\").replace('\'', "\\'")
@@ -1775,6 +1979,12 @@ impl GraphDBTrait for LadybugAdapter {
         key: &str,
         value: serde_json::Value,
     ) -> GraphDBResult<()> {
+        // Same read-modify-write of a whole `properties` blob as
+        // `update_node_property`, against `add_edges`' full-blob `ON MATCH SET`
+        // — so the lock spans both halves here too.
+        let _write_guard = self.write_lock.lock().map_err(|_| {
+            GraphDBError::ConnectionError("Ladybug write lock poisoned".to_string())
+        })?;
         let src_esc = source_id.replace('\\', "\\\\").replace('\'', "\\'");
         let tgt_esc = target_id.replace('\\', "\\\\").replace('\'', "\\'");
         let rel_esc = relationship_name.replace('\\', "\\\\").replace('\'', "\\'");
@@ -3224,5 +3434,265 @@ mod tests {
         assert_eq!(nodes.len(), 1);
         assert_eq!(nodes[0].1.get("name").unwrap().as_str().unwrap(), "Alice");
         assert_eq!(nodes[0].1.get("type").unwrap().as_str().unwrap(), "Person");
+    }
+
+    // -- batched read/delete paths (issue #21) -------------------------------
+
+    /// The batched `has_edges` must agree with the per-edge check it replaced:
+    /// only stored triples come back, in input order, with properties intact.
+    #[tokio::test]
+    #[serial]
+    async fn has_edges_batched_reports_only_stored_triples() {
+        let (adapter, _temp_dir) = setup_adapter().await;
+
+        adapter
+            .add_node(&TestNode::new("n-a", "A", 1))
+            .await
+            .unwrap();
+        adapter
+            .add_node(&TestNode::new("n-b", "B", 2))
+            .await
+            .unwrap();
+        adapter
+            .add_node(&TestNode::new("n-c", "C", 3))
+            .await
+            .unwrap();
+
+        adapter.add_edge("n-a", "n-b", "knows", None).await.unwrap();
+        adapter.add_edge("n-b", "n-c", "likes", None).await.unwrap();
+
+        let mut props: HashMap<Cow<'static, str>, serde_json::Value> = HashMap::new();
+        props.insert(Cow::Borrowed("edge_text"), json!("kept"));
+
+        let candidates: Vec<EdgeData> = vec![
+            ("n-a".into(), "n-b".into(), "knows".into(), props),
+            // same pair, a relationship that was never stored
+            ("n-a".into(), "n-b".into(), "likes".into(), HashMap::new()),
+            ("n-b".into(), "n-c".into(), "likes".into(), HashMap::new()),
+            ("n-c".into(), "n-a".into(), "knows".into(), HashMap::new()),
+        ];
+
+        let found = adapter.has_edges(&candidates).await.unwrap();
+
+        let keys: Vec<(String, String, String)> = found
+            .iter()
+            .map(|e| (e.0.clone(), e.1.clone(), e.2.clone()))
+            .collect();
+        assert_eq!(
+            keys,
+            vec![
+                ("n-a".to_string(), "n-b".to_string(), "knows".to_string()),
+                ("n-b".to_string(), "n-c".to_string(), "likes".to_string()),
+            ],
+            "only stored triples, in input order"
+        );
+        // Properties are not part of the lookup key and must survive the filter.
+        assert_eq!(found[0].3.get("edge_text").unwrap(), &json!("kept"));
+    }
+
+    /// Regression for the batched implementation specifically: the `IN`-list
+    /// query matches a *superset* — any stored edge whose source, target and
+    /// relationship each appear somewhere in the batch — so the client-side
+    /// triple intersection is what keeps cross-products out. `(n-a, n-d)` and
+    /// `(n-c, n-b)` are never stored, yet every component of both is present
+    /// in the candidate lists; a broken intersection would report them.
+    #[tokio::test]
+    #[serial]
+    async fn has_edges_batched_rejects_endpoint_cross_products() {
+        let (adapter, _temp_dir) = setup_adapter().await;
+
+        for id in ["n-a", "n-b", "n-c", "n-d"] {
+            adapter.add_node(&TestNode::new(id, id, 0)).await.unwrap();
+        }
+        adapter.add_edge("n-a", "n-b", "rel", None).await.unwrap();
+        adapter.add_edge("n-c", "n-d", "rel", None).await.unwrap();
+
+        let candidates: Vec<EdgeData> = vec![
+            ("n-a".into(), "n-d".into(), "rel".into(), HashMap::new()),
+            ("n-c".into(), "n-b".into(), "rel".into(), HashMap::new()),
+        ];
+
+        let found = adapter.has_edges(&candidates).await.unwrap();
+        assert!(
+            found.is_empty(),
+            "cross-product pairs must not be reported as existing, got {found:?}"
+        );
+    }
+
+    /// A repeated candidate is reported once per occurrence, as the per-edge
+    /// loop did — the caller collapses them into a set.
+    #[tokio::test]
+    #[serial]
+    async fn has_edges_batched_preserves_duplicate_candidates() {
+        let (adapter, _temp_dir) = setup_adapter().await;
+
+        adapter
+            .add_node(&TestNode::new("n-a", "A", 1))
+            .await
+            .unwrap();
+        adapter
+            .add_node(&TestNode::new("n-b", "B", 2))
+            .await
+            .unwrap();
+        adapter.add_edge("n-a", "n-b", "knows", None).await.unwrap();
+
+        let one: EdgeData = ("n-a".into(), "n-b".into(), "knows".into(), HashMap::new());
+        let found = adapter
+            .has_edges(&[one.clone(), one.clone(), one])
+            .await
+            .unwrap();
+        assert_eq!(found.len(), 3);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn has_edges_batched_handles_empty_input() {
+        let (adapter, _temp_dir) = setup_adapter().await;
+        assert!(adapter.has_edges(&[]).await.unwrap().is_empty());
+    }
+
+    /// Spans the 500-candidate chunk boundary: every even-numbered edge is
+    /// stored, every odd one is not, so an off-by-one or a dropped chunk in the
+    /// batching loop shows up as a wrong result rather than merely slower work.
+    #[tokio::test]
+    #[serial]
+    async fn has_edges_batched_spans_chunk_boundary() {
+        let (adapter, _temp_dir) = setup_adapter().await;
+
+        const TOTAL: usize = 600;
+        for i in 0..TOTAL {
+            adapter
+                .add_node(&TestNode::new(&format!("s-{i}"), "src", 0))
+                .await
+                .unwrap();
+            adapter
+                .add_node(&TestNode::new(&format!("t-{i}"), "tgt", 0))
+                .await
+                .unwrap();
+        }
+        for i in (0..TOTAL).step_by(2) {
+            adapter
+                .add_edge(&format!("s-{i}"), &format!("t-{i}"), "rel", None)
+                .await
+                .unwrap();
+        }
+
+        let candidates: Vec<EdgeData> = (0..TOTAL)
+            .map(|i| {
+                (
+                    format!("s-{i}"),
+                    format!("t-{i}"),
+                    "rel".to_string(),
+                    HashMap::new(),
+                )
+            })
+            .collect();
+
+        let found = adapter.has_edges(&candidates).await.unwrap();
+        assert_eq!(found.len(), TOTAL / 2);
+        assert!(
+            found.iter().all(|e| {
+                e.0.strip_prefix("s-")
+                    .and_then(|n| n.parse::<usize>().ok())
+                    .is_some_and(|n| n % 2 == 0)
+            }),
+            "only the stored (even-indexed) edges come back"
+        );
+    }
+
+    /// Ids carrying Cypher metacharacters must survive the inlined `IN` list.
+    /// Exercises `cypher_id_list`, which every batched path now shares.
+    #[tokio::test]
+    #[serial]
+    async fn batched_paths_escape_quotes_and_backslashes_in_ids() {
+        let (adapter, _temp_dir) = setup_adapter().await;
+
+        let tricky = r"o'brien\path";
+        let plain = "n-plain";
+        adapter
+            .add_node(&TestNode::new(tricky, "Tricky", 1))
+            .await
+            .unwrap();
+        adapter
+            .add_node(&TestNode::new(plain, "Plain", 2))
+            .await
+            .unwrap();
+        adapter
+            .add_edge(tricky, plain, "o'rel", None)
+            .await
+            .unwrap();
+
+        // get_nodes: both ids come back through the escaped IN list.
+        let nodes = adapter
+            .get_nodes(&[tricky.to_string(), plain.to_string()])
+            .await
+            .unwrap();
+        assert_eq!(nodes.len(), 2);
+
+        // has_edges: the escaped triple matches.
+        let found = adapter
+            .has_edges(&[(tricky.into(), plain.into(), "o'rel".into(), HashMap::new())])
+            .await
+            .unwrap();
+        assert_eq!(found.len(), 1);
+
+        // delete_nodes: the escaped id is removed.
+        adapter.delete_nodes(&[tricky.to_string()]).await.unwrap();
+        assert!(adapter.get_node(tricky).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn get_nodes_batched_returns_existing_and_skips_missing() {
+        let (adapter, _temp_dir) = setup_adapter().await;
+
+        adapter
+            .add_node(&TestNode::new("n-1", "One", 1))
+            .await
+            .unwrap();
+        adapter
+            .add_node(&TestNode::new("n-2", "Two", 2))
+            .await
+            .unwrap();
+
+        let nodes = adapter
+            .get_nodes(&["n-1".to_string(), "missing".to_string(), "n-2".to_string()])
+            .await
+            .unwrap();
+
+        let mut names: Vec<String> = nodes
+            .iter()
+            .filter_map(|n| n.get("name").and_then(|v| v.as_str()).map(str::to_string))
+            .collect();
+        names.sort();
+        assert_eq!(names, vec!["One".to_string(), "Two".to_string()]);
+
+        assert!(adapter.get_nodes(&[]).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn delete_nodes_batched_removes_all_and_detaches_edges() {
+        let (adapter, _temp_dir) = setup_adapter().await;
+
+        for id in ["d-1", "d-2", "keep"] {
+            adapter.add_node(&TestNode::new(id, id, 0)).await.unwrap();
+        }
+        adapter.add_edge("d-1", "d-2", "rel", None).await.unwrap();
+        adapter.add_edge("d-1", "keep", "rel", None).await.unwrap();
+
+        adapter
+            .delete_nodes(&["d-1".to_string(), "d-2".to_string()])
+            .await
+            .unwrap();
+
+        assert!(adapter.get_node("d-1").await.unwrap().is_none());
+        assert!(adapter.get_node("d-2").await.unwrap().is_none());
+        assert!(adapter.get_node("keep").await.unwrap().is_some());
+        // DETACH DELETE took the incident edges with the nodes.
+        assert!(adapter.get_edges("keep").await.unwrap().is_empty());
+
+        // Empty input is a no-op, not an error.
+        adapter.delete_nodes(&[]).await.unwrap();
     }
 }

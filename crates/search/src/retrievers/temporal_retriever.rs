@@ -438,9 +438,22 @@ impl SearchRetriever for TemporalRetriever {
             .take(params.top_k_or(self.top_k))
             .map(|(id, _)| id.clone())
             .collect();
-        let event_nodes = self.graph_db.get_nodes(&event_id_list).await?;
-        let nodes_by_id: HashMap<String, NodeData> =
-            event_id_list.into_iter().zip(event_nodes).collect();
+        // Keyed by each row's own `id`, not by zipping against `event_id_list`:
+        // `get_nodes` makes no promise about order (the Postgres adapter has
+        // always answered with one set-based `IN` query, and the ladybug
+        // adapter now does too), and it collapses duplicate ids. A positional
+        // zip therefore risked pairing an event's name/description with a
+        // different event's id — silently wrong context, no error.
+        let nodes_by_id: HashMap<String, NodeData> = self
+            .graph_db
+            .get_nodes(&event_id_list)
+            .await?
+            .into_iter()
+            .filter_map(|data| {
+                let id = data.get("id").and_then(|v| v.as_str())?.to_string();
+                Some((id, data))
+            })
+            .collect();
 
         let mut temporal_context = Vec::new();
 
@@ -742,15 +755,19 @@ mod tests {
             Ok(None)
         }
 
+        /// Answers in *storage* order, filtering to the requested ids — the
+        /// contract [`GraphDBTrait::get_nodes`] actually specifies, and what
+        /// both real adapters do with their single set-based query. Returning
+        /// them in `node_ids` order instead would let a caller that zips
+        /// positionally pass its tests and still mispair ids in production.
         async fn get_nodes(&self, node_ids: &[String]) -> GraphDBResult<Vec<NodeData>> {
-            let nodes_map: HashMap<&str, &NodeData> = self
+            let requested: std::collections::HashSet<&str> =
+                node_ids.iter().map(String::as_str).collect();
+            Ok(self
                 .nodes
                 .iter()
-                .map(|(id, data)| (id.as_str(), data))
-                .collect();
-            Ok(node_ids
-                .iter()
-                .filter_map(|id| nodes_map.get(id.as_str()).map(|d| (*d).clone()))
+                .filter(|(id, _)| requested.contains(id.as_str()))
+                .map(|(_, data)| data.clone())
                 .collect())
         }
 
@@ -1827,6 +1844,99 @@ mod tests {
             .unwrap();
 
         assert_eq!(context.len(), 2, "top_k=2 should limit results to 2 items");
+    }
+
+    /// Each context item's `event_name` must belong to its own `event_id`.
+    ///
+    /// `get_nodes` is a set lookup: it answers in storage order, not in the
+    /// order the ids were asked for. Here the vector scores ascend with `i`, so
+    /// the ranked order is the exact reverse of storage order — which is what
+    /// makes a positional `zip` of the requested ids against the returned rows
+    /// mispair every event with another event's name and description. Nothing
+    /// errors when that happens; the search just answers with the wrong text,
+    /// so only an id/name consistency assertion catches it.
+    #[tokio::test]
+    async fn get_context_pairs_each_event_with_its_own_node() {
+        let mut nodes = Vec::new();
+        let mut edges = Vec::new();
+        let mut neighbors = HashMap::new();
+        let mut vector_results = Vec::new();
+
+        for i in 1..=3 {
+            let ts_id = format!("aa000000-0000-0000-0000-0000000001{i:02}");
+            let ev_id = format!("bb000000-0000-0000-0000-0000000001{i:02}");
+            let ev_name = format!("Event {i}");
+            let time_ms = 1704067200000_i64 + (i as i64 - 1) * 30 * 86400 * 1000;
+
+            nodes.push(timestamp_node(&ts_id, time_ms));
+            nodes.push(event_graph_node(&ev_id, &ev_name));
+            edges.push((
+                ev_id.clone(),
+                ts_id.clone(),
+                "at".to_string(),
+                HashMap::new(),
+            ));
+            neighbors.insert(ts_id, vec![event_node_data(&ev_id, &ev_name)]);
+            // Ascending score: event 3 ranks first, though it is stored last.
+            vector_results.push(SearchResult {
+                id: uuid::Uuid::parse_str(&ev_id).unwrap(),
+                score: 0.5 + (i as f32 * 0.1),
+                metadata: HashMap::new(),
+            });
+        }
+
+        let graph_db = Arc::new(TestGraphDb {
+            nodes,
+            edges,
+            neighbors,
+        });
+        let vector_db = Arc::new(TestVectorDb {
+            collections: HashMap::from([(TestVectorDb::key("Event", "name"), vector_results)]),
+        });
+        let llm = Arc::new(TestLlm {
+            completion_response: String::new(),
+            interval_response: Some(QueryInterval {
+                starts_at: Some(qts(2024, 1, 1)),
+                ends_at: Some(qts(2024, 12, 31)),
+            }),
+            fail_structured_output: false,
+            last_messages: Mutex::new(vec![]),
+            ..TestLlm::default()
+        });
+
+        let retriever = build_retriever(vector_db, graph_db, llm);
+        let params = SearchParams {
+            top_k: Some(3),
+            ..Default::default()
+        };
+
+        let context = retriever
+            .get_context("What happened in 2024?", &params)
+            .await
+            .unwrap();
+
+        assert_eq!(context.len(), 3);
+
+        for item in &context {
+            let event_id = item.payload["event_id"].as_str().expect("event_id present");
+            let event_name = item.payload["event_name"]
+                .as_str()
+                .expect("event_name present");
+            // `bb…1<NN>` pairs with `Event <N>`.
+            let suffix = event_id
+                .rsplit('-')
+                .next()
+                .expect("uuid has a final group")
+                .to_string();
+            let index: u32 = suffix[suffix.len() - 2..]
+                .parse()
+                .expect("last two digits are the event index");
+            assert_eq!(
+                event_name,
+                format!("Event {index}"),
+                "event {event_id} was paired with another event's node ({event_name})"
+            );
+        }
     }
 
     #[tokio::test]
