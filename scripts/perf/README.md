@@ -19,6 +19,17 @@ This directory holds the offline (zero-API) benchmark harness for the
   the Rust `cognee-cli bench` in offline `--mock-llm` mode (deterministic mock
   embeddings + the committed cassette). See the script header for env-var
   overrides (`RUNS`, `COGNEE_PY`, `BENCH_BIN`, `CASSETTE`, `MEMORIES`, …).
+- `fixtures/<label>/{memories.json,cassette.json}` — the other nightly corpora,
+  each a corpus + cassette pair in the same shape: `war_and_peace` (one ~3.2 MB
+  document) and `henkel` (164 real product datasheets, ~1.3 MB — many
+  medium-sized documents, the shape most user datasets have). Both are copies of
+  the corpora the Python nightly reads from S3
+  (`s3://github-runner-cognee-tests/nightly_ci_artifacts/performance_test_artifacts/<label>.json`),
+  so the Rust and Python arms measure the same input. Their *cassettes* are not
+  interchangeable with the Python `mock_<label>.json` ones: Python replay matches
+  a chunk by `title in chunk_text`, this one by `sha256(messages + schema)`.
+- `fixtures/large/` — the Moby-Dick profiling fixture (see below). Not a nightly
+  arm.
 
 ## Running the offline benchmark (no API key)
 

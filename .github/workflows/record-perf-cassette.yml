@@ -139,6 +139,25 @@ jobs:
               --llm-model gpt-4o-mini \
               --output /tmp/rec_wap.json
 
+      # The henkel corpus (164 real product datasheets) drives the nightly's
+      # third Rust mock arm. Recorded unconditionally alongside the other two
+      # nightly cassettes: all three must stay in step with the same prompts,
+      # schemas and chunking, so refreshing one without the others just moves
+      # the drift somewhere else.
+      - name: Record henkel perf cassette
+        env:
+          LOG_LEVEL: info
+          MOCK_EMBEDDING: deterministic
+          EMBEDDING_PROVIDER: mock
+        run: |
+          set -euo pipefail
+          rm -f scripts/perf/fixtures/henkel/cassette.json
+          COGNEE_RECORD_LLM="$PWD/scripts/perf/fixtures/henkel/cassette.json" \
+            ./target/release/cognee-cli bench \
+              --memories scripts/perf/fixtures/henkel/memories.json \
+              --llm-model gpt-4o-mini \
+              --output /tmp/rec_henkel.json
+
       - name: Record large perf cassette
         if: ${{ github.event.inputs.include_large == 'true' }}
         env:
@@ -201,6 +220,27 @@ jobs:
             exit 1
           fi
 
+      - name: Verify replay (henkel)
+        env:
+          LOG_LEVEL: info
+          MOCK_EMBEDDING: deterministic
+        run: |
+          set -euo pipefail
+          log="$(mktemp)"
+          ./target/release/cognee-cli bench \
+            --mock-llm \
+            --mock-memories scripts/perf/fixtures/henkel/cassette.json \
+            --memories scripts/perf/fixtures/henkel/memories.json \
+            --num-memories 8 \
+            --output /tmp/verify_henkel.json >"$log" 2>&1 || { cat "$log"; exit 1; }
+          n="$(grep -oE 'Stored [0-9]+ entity types as graph nodes' "$log" | grep -oE '[0-9]+' | head -1 || true)"
+          echo "entity-type nodes on replay (8 docs): ${n:-0}"
+          if [ -z "${n:-}" ] || [ "${n:-0}" -lt 1 ]; then
+            echo "::error::recorded henkel cassette replays empty — recording failed." >&2
+            cat "$log" >&2
+            exit 1
+          fi
+
       - name: Commit refreshed cassette
         # Pass the user-controlled ref through an env var, never interpolated
         # directly into the shell (script-injection sink on a contents:write +
@@ -212,7 +252,8 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add scripts/perf/fixtures/cassette.json \
-                  scripts/perf/fixtures/war_and_peace/cassette.json
+                  scripts/perf/fixtures/war_and_peace/cassette.json \
+                  scripts/perf/fixtures/henkel/cassette.json
           git add scripts/perf/fixtures/large/cassette.json 2>/dev/null || true
           if git diff --cached --quiet; then
             echo "Perf cassette unchanged — nothing to commit."
