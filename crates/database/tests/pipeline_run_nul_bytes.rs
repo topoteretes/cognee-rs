@@ -51,12 +51,38 @@ fn dirty_errored_run_info(data_id: Uuid) -> Value {
 
 /// Assert a JSON value carries no NUL anywhere — in a string, an array element,
 /// a nested object value, or an object *key*.
+///
+/// Walks the `Value` itself rather than its rendering. Inspecting the rendering
+/// for the six-character escape `\u0000` false-fails on legitimate content: a
+/// string that really contains a backslash followed by `u0000` renders with the
+/// backslash doubled, which still contains that substring. If no key and no
+/// string holds an actual NUL codepoint, `serde_json` cannot emit a NUL escape
+/// either, so walking the value is both stricter and sufficient.
 fn assert_no_nul(value: &Value, what: &str) {
-    let rendered = value.to_string();
-    assert!(
-        !rendered.contains('\u{0}') && !rendered.contains("\\u0000"),
-        "{what} still carries a NUL byte: {rendered:?}"
-    );
+    if let Some((path, offender)) = find_nul(value, "$".to_string()) {
+        panic!("{what} still carries a NUL byte at {path}: {offender:?}");
+    }
+}
+
+/// The path of the first NUL-bearing object key or string value, paired with
+/// the offending string; `None` when the value is clean. Numbers, booleans and
+/// null hold no codepoints, so they cannot carry one.
+fn find_nul(value: &Value, path: String) -> Option<(String, String)> {
+    match value {
+        Value::String(text) => text.contains('\u{0}').then(|| (path, text.clone())),
+        Value::Array(items) => items
+            .iter()
+            .enumerate()
+            .find_map(|(index, item)| find_nul(item, format!("{path}[{index}]"))),
+        Value::Object(entries) => entries.iter().find_map(|(key, entry)| {
+            let child = format!("{path}.{}", key.escape_debug());
+            if key.contains('\u{0}') {
+                return Some((format!("{child} (key)"), key.clone()));
+            }
+            find_nul(entry, child)
+        }),
+        _ => None,
+    }
 }
 
 async fn sqlite_db() -> Arc<DatabaseConnection> {
@@ -170,6 +196,49 @@ async fn set_payload_field_strips_nul_from_value() {
     let stored = payload.get("extracted").expect("key present");
     assert_no_nul(stored, "stored payload value");
     assert_eq!(stored, &json!({"text": "pdftext"}));
+}
+
+// ---------------------------------------------------------------------------
+// The helper itself: literal `\u0000` text is not a NUL
+// ---------------------------------------------------------------------------
+
+/// `assert_no_nul` judges the *value*, not its rendering. A string that
+/// legitimately contains the six characters `\u0000` — a backslash followed by
+/// `u0000`, as an escaped error message or a quoted source snippet routinely
+/// does — renders with the backslash doubled, so a substring check over the
+/// rendering would flag it as a NUL escape. Nothing was ever stripped, and the
+/// content must survive the sanitizer untouched.
+#[tokio::test]
+async fn literal_backslash_u0000_text_is_not_mistaken_for_a_nul() {
+    // A backslash followed by `u0000`, not a NUL codepoint.
+    let literal = "parse failed near: \\u0000";
+    assert!(
+        !literal.contains('\u{0}'),
+        "the fixture must carry no real NUL, or it proves nothing"
+    );
+
+    let clean = json!({
+        "error": literal,
+        "nested": [{"\\u0000key": literal}],
+    });
+    // The regression: the old rendering-based check panicked right here.
+    assert_no_nul(&clean, "literal-escape payload");
+
+    // And it round-trips through the sanitizing write path unchanged.
+    let db = sqlite_db().await;
+    let repo = SeaOrmPipelineRunRepository::new(Arc::clone(&db));
+    let run_id = Uuid::new_v4();
+    repo.set_payload_field(run_id, "extracted", clean.clone())
+        .await
+        .expect("set_payload_field");
+
+    let payload = repo.get_payload(run_id).await.expect("get_payload");
+    let stored = payload.get("extracted").expect("key present");
+    assert_no_nul(stored, "stored payload value");
+    assert_eq!(
+        stored, &clean,
+        "sanitizing must leave literal escape text alone"
+    );
 }
 
 // ---------------------------------------------------------------------------
