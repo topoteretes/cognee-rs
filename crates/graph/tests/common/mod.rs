@@ -1397,4 +1397,45 @@ pub async fn test_nul_bytes_in_text_are_persistable(db: &dyn GraphDBTrait) {
     db.add_edges(&colliding)
         .await
         .expect("edges colliding only after NUL removal must not abort the batch");
+
+    // Reads must use the same key as writes. Probing with the *same* NUL-bearing
+    // relationship name that was just written has to find the edge, whichever
+    // way the backend chose to store it: Ladybug keeps the NUL and matches the
+    // raw name, the Postgres adapters strip it on both sides and match the
+    // sanitized one. Before this was asserted, `has_edge`/`has_edges` on
+    // Postgres bound the raw string, so the lookup either missed (dedup
+    // misfires, callers re-add) or the driver rejected the statement outright
+    // with `invalid byte sequence for encoding "UTF8": 0x00`.
+    assert!(
+        db.has_edge("nul1", "nul2", "cite\0s")
+            .await
+            .expect("probing with a NUL-bearing relationship name must not error"),
+        "an edge written under a NUL-bearing relationship name must be found by that same name"
+    );
+
+    let probe: Vec<EdgeData> = vec![(
+        "nul1".to_string(),
+        "nul2".to_string(),
+        "cite\0s".to_string(),
+        HashMap::new(),
+    )];
+    let present = db
+        .has_edges(&probe)
+        .await
+        .expect("batch-probing with a NUL-bearing relationship name must not error");
+    assert_eq!(
+        present.len(),
+        1,
+        "has_edges must report the NUL-bearing edge as present, got {present:?}"
+    );
+
+    // The clean spelling of the same name is the *other* half of the contract:
+    // on Postgres it is the stored key, on Ladybug it is the second colliding
+    // edge written above. Either way it must be present.
+    assert!(
+        db.has_edge("nul1", "nul2", "cites")
+            .await
+            .expect("probing with the sanitized relationship name must not error"),
+        "the sanitized spelling of the relationship must also resolve"
+    );
 }

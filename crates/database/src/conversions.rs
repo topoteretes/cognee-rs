@@ -330,10 +330,16 @@ impl From<&PipelineRun> for pipeline_run::ActiveModel {
             pipeline_name: Set(r.pipeline_name.clone()),
             pipeline_id: Set(uuid_hex::to_hex(r.pipeline_id)),
             dataset_id: Set(uuid_hex::to_hex_opt(r.dataset_id)),
-            // `run_info_for_errored` embeds an arbitrary error string, which can
-            // quote offending source text. A NUL here fails the Errored-status
-            // write, and that failure is logged-and-ignored by the run watcher —
-            // leaving the run recorded as `Started` with the error never stored.
+            // Defensive: `run_info` is a `json` column, whose Postgres parser
+            // rejects the `\u0000` escape `serde_json` emits for an embedded
+            // NUL. The errored payloads that actually carry arbitrary text
+            // (`run_info_for_errored`) do *not* reach this impl — the run
+            // watchers call `PipelineRunRepository::log_pipeline_run`, which
+            // builds the `ActiveModel` itself and sanitizes there. This impl is
+            // reached only through `ops::pipeline_runs::create_pipeline_run`,
+            // whose live payloads carry no free text: `dataset_resolver`'s
+            // completion row passes `rollback::run_info_with_failures`, which is
+            // uuid strings and counts, and every other caller passes `None`.
             run_info: Set(r.run_info.clone().map(sanitize_json)),
         }
     }
@@ -362,10 +368,11 @@ impl From<&TaskRun> for task_run::ActiveModel {
             task_name: Set(r.task_name.clone()),
             created_at: Set(r.created_at),
             status: Set(r.status.clone()),
-            // `run_info_for_errored` embeds an arbitrary error string, which can
-            // quote offending source text. A NUL here fails the Errored-status
-            // write, and that failure is logged-and-ignored by the run watcher —
-            // leaving the run recorded as `Started` with the error never stored.
+            // Defensive: `run_info` is a `json` column that Postgres will not
+            // accept with a NUL inside. `task_runs::create_task_run`, the only
+            // route to this impl, currently has no caller in the workspace, so
+            // nothing exercises this today — it guards the public op for
+            // whoever wires it up.
             run_info: Set(r.run_info.clone().map(sanitize_json)),
         }
     }
