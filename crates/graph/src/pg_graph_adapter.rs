@@ -958,15 +958,20 @@ impl GraphDBTrait for PgGraphAdapter {
         key: &str,
         value: Value,
     ) -> GraphDBResult<()> {
-        // The property value is sanitized, as `add_edges` does for the same
-        // column: Postgres rejects a NUL in a `jsonb` cast, so an unsanitized
-        // patch built from LLM- or PDF-derived text errors at runtime.
+        // Both halves are sanitized, for the two reasons `has_edge` above and
+        // `add_edges` already document: the value because Postgres rejects a
+        // NUL in a `jsonb` cast, and the key columns because `add_edges` keys
+        // rows on the sanitized triple *and* a NUL inside a bound parameter
+        // makes Postgres reject the whole statement.
         //
-        // The three key columns are *not* sanitized, matching every other
-        // read/delete path on this adapter — see the write-only-sanitization
-        // note in `serialize_node_to_row`. That keeps Postgres, ladybug and
-        // Python agreeing on whether a NUL-bearing key hits.
+        // Note this is the edge rule, not the node rule: node ids stay raw on
+        // lookup paths (see the write-only-sanitization note in
+        // `serialize_node_to_row`, which is about `get_node`/`get_nodes` and
+        // Python parity). Edge probes deliberately went the other way.
         let patch = sanitize_json(json!({ key: value }));
+        let source_id = sanitize_str(source_id).into_owned();
+        let target_id = sanitize_str(target_id).into_owned();
+        let relationship_name = sanitize_str(relationship_name).into_owned();
         let result = self
             .db
             .execute(Statement::from_sql_and_values(
@@ -976,9 +981,9 @@ impl GraphDBTrait for PgGraphAdapter {
                      updated_at = CURRENT_TIMESTAMP \
                  WHERE source_id = $1 AND target_id = $2 AND relationship_name = $3",
                 [
-                    source_id.into(),
-                    target_id.into(),
-                    relationship_name.into(),
+                    source_id.clone().into(),
+                    target_id.clone().into(),
+                    relationship_name.clone().into(),
                     patch.to_string().into(),
                 ],
             ))
@@ -1007,10 +1012,22 @@ impl GraphDBTrait for PgGraphAdapter {
             return Ok(HashMap::new());
         }
 
-        // Keys pass through raw, as on every other lookup path here.
-        let sources: Vec<String> = edge_keys.iter().map(|k| k.0.clone()).collect();
-        let targets: Vec<String> = edge_keys.iter().map(|k| k.1.clone()).collect();
-        let rels: Vec<String> = edge_keys.iter().map(|k| k.2.clone()).collect();
+        // Probe triples are sanitized, as `has_edges` does: `add_edges` keys
+        // rows on the sanitized triple, and a NUL inside a bound `text[]`
+        // element makes Postgres reject the whole statement.
+        let keys: Vec<crate::traits::EdgeKey> = edge_keys
+            .iter()
+            .map(|k| {
+                (
+                    sanitize_str(&k.0).into_owned(),
+                    sanitize_str(&k.1).into_owned(),
+                    sanitize_str(&k.2).into_owned(),
+                )
+            })
+            .collect();
+        let sources: Vec<String> = keys.iter().map(|k| k.0.clone()).collect();
+        let targets: Vec<String> = keys.iter().map(|k| k.1.clone()).collect();
+        let rels: Vec<String> = keys.iter().map(|k| k.2.clone()).collect();
 
         let rows = self
             .db
@@ -1027,7 +1044,7 @@ impl GraphDBTrait for PgGraphAdapter {
             .await
             .map_err(|e| GraphDBError::QueryError(e.to_string()))?;
 
-        let mut out = HashMap::with_capacity(rows.len());
+        let mut stored: HashMap<crate::traits::EdgeKey, f64> = HashMap::with_capacity(rows.len());
         for row in &rows {
             let s: String = row
                 .try_get("", "s")
@@ -1042,7 +1059,16 @@ impl GraphDBTrait for PgGraphAdapter {
             // fails `as_f64`. Both are "no weight", matching the node side.
             let w: Option<Value> = row.try_get("", "w").unwrap_or(None);
             if let Some(weight) = w.as_ref().and_then(Value::as_f64) {
-                out.insert((s, t, r), weight);
+                stored.insert((s, t, r), weight);
+            }
+        }
+
+        // Rows carry the sanitized key; report under the caller's own key, the
+        // way `has_edges` returns the caller's `EdgeData` untouched.
+        let mut out = HashMap::with_capacity(stored.len());
+        for (original, sanitized) in edge_keys.iter().zip(&keys) {
+            if let Some(weight) = stored.get(sanitized) {
+                out.insert(original.clone(), *weight);
             }
         }
         Ok(out)
@@ -1070,7 +1096,12 @@ impl GraphDBTrait for PgGraphAdapter {
         let mut weights: Vec<String> = Vec::with_capacity(updates.len());
         let mut out: HashMap<crate::traits::EdgeKey, bool> = HashMap::with_capacity(updates.len());
 
-        // Keys pass through raw, as on every other lookup path here.
+        // Sanitized (stored) key -> the caller's key. Keys are sanitized for
+        // the same reasons as in `has_edges`, and results are reported under
+        // the caller's own key rather than the stored form.
+        let mut by_stored: HashMap<crate::traits::EdgeKey, crate::traits::EdgeKey> =
+            HashMap::with_capacity(updates.len());
+
         for (key, weight) in updates {
             out.insert(key.clone(), false);
             // JSON has no infinity or NaN. Postgres does not reject them here
@@ -1083,9 +1114,15 @@ impl GraphDBTrait for PgGraphAdapter {
             if !weight.is_finite() {
                 continue;
             }
-            sources.push(key.0.clone());
-            targets.push(key.1.clone());
-            rels.push(key.2.clone());
+            let stored = (
+                sanitize_str(&key.0).into_owned(),
+                sanitize_str(&key.1).into_owned(),
+                sanitize_str(&key.2).into_owned(),
+            );
+            sources.push(stored.0.clone());
+            targets.push(stored.1.clone());
+            rels.push(stored.2.clone());
+            by_stored.insert(stored, key.clone());
             // `{:?}` is f64's shortest round-trip representation, so the
             // float8 cast parses back to exactly this value.
             weights.push(format!("{weight:?}"));
@@ -1124,7 +1161,9 @@ impl GraphDBTrait for PgGraphAdapter {
             let r: String = row
                 .try_get("", "r")
                 .map_err(|e| GraphDBError::EdgeError(e.to_string()))?;
-            out.insert((s, t, r), true);
+            if let Some(original) = by_stored.get(&(s, t, r)) {
+                out.insert(original.clone(), true);
+            }
         }
         Ok(out)
     }
