@@ -34,15 +34,24 @@ uuid = { workspace = true, features = ["v4", "v5"] }
 # Secret redaction (cognee_utils::redact)
 regex = { workspace = true }
 
-# JSON payload walking (cognee_utils::sanitize). `preserve_order` keeps
-# `serde_json::Map` insertion-ordered, which is what makes the sanitizer's
-# key-collision rule ("last one wins") actually match Python's dict
-# comprehension. Without it `Map` is a `BTreeMap` and the surviving value is
-# decided by raw-key sort order instead — a divergence that only shows up when
-# this crate is built in isolation (`cargo test -p cognee-utils`, the wasm32
-# lane), because `cognee-database` and `cognee-visualization` already turn the
-# feature on for every build that includes them.
-serde_json = { workspace = true, features = ["preserve_order"] }
+# JSON payload walking (cognee_utils::sanitize).
+#
+# Deliberately WITHOUT `preserve_order`. Cargo features are additive and unify
+# across the whole build graph, so enabling it here would switch
+# `serde_json::Map` from `BTreeMap` to `IndexMap` for every crate that depends
+# on the published `cognee-utils` — silently changing *their* key ordering and
+# any hash derived from it. A foundational utility crate must not export a
+# behaviour change that broad.
+#
+# The only thing it bought was the sanitizer's key-collision tie-break, which
+# fires solely when one JSON object holds two keys differing by nothing but an
+# embedded NUL. That is not lost where it matters: `cognee-database` and
+# `cognee-visualization` enable the feature for their own output ordering, so
+# every cognee binary and every workspace test still resolves the collision
+# Python's way. See `sanitize_json_in_place`, which documents the rule under
+# both backings, and `colliding_keys_resolve_to_the_last_in_map_order`, which
+# asserts the right winner either way.
+serde_json = { workspace = true }
 
 # WebAssembly (browser) spike — Config 1. The only getrandom in our wasm tree is
 # 0.2, pulled transitively by rand 0.8 (the jitter in retry.rs). On wasm32 it has

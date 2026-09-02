@@ -276,6 +276,14 @@ async fn baseline_creates_full_table_set_sqlite() {
 /// exclusivity check correlates on `slug` alone, which neither table could
 /// serve, so both gain a standalone `slug` index — again something existing
 /// databases must acquire without the baseline being rewritten.
+/// Bumped to 5 for `m20260918_000001_align_node_index_names`: the two `nodes`
+/// composites are recreated under Python's names, so a shared database stops
+/// carrying two byte-identical indexes over the same columns.
+/// Bumped to 6 for `m20260916_000001_provenance_edge_id_rekey_guard`: it is
+/// additive in the sense that matters here — it only reads, and it leaves an
+/// already-migrated database exactly as it found it — but it is still a real
+/// chain entry, so it is pinned like the rest. It sits third, ahead of the
+/// three schema changes above, so a database it refuses is left untouched.
 #[test]
 fn relational_chain_is_baseline_plus_additive_migrations() {
     use sea_orm_migration::MigratorTrait;
@@ -285,7 +293,7 @@ fn relational_chain_is_baseline_plus_additive_migrations() {
         .collect();
     assert_eq!(
         names.len(),
-        5,
+        6,
         "unexpected migration-chain length — chain: {names:?}"
     );
     assert!(

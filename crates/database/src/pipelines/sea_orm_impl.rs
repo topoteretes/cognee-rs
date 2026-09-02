@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::Utc;
+use cognee_utils::sanitize::sanitize_json;
 use sea_orm::sea_query::OnConflict;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter, QueryOrder,
@@ -97,7 +98,17 @@ impl PipelineRunRepository for SeaOrmPipelineRunRepository {
             pipeline_name: sea_orm::ActiveValue::Set(pipeline_name.to_string()),
             pipeline_id: sea_orm::ActiveValue::Set(uuid_hex::to_hex(pipeline_id)),
             dataset_id: sea_orm::ActiveValue::Set(uuid_hex::to_hex_opt(dataset_id)),
-            run_info: sea_orm::ActiveValue::Set(run_info),
+            // This is the write path every production caller takes — the
+            // watchers in `cognee_core::pipeline_run_registry` call this method
+            // directly, so the `From<&PipelineRun>` conversion (which sanitizes
+            // separately) never sees their payloads. `run_info_for_errored`
+            // embeds an arbitrary error string that can quote offending source
+            // text, and `run_info` is a `json` column whose Postgres parser
+            // rejects the `\u0000` escape `serde_json` emits for an embedded
+            // NUL. The watchers log-and-ignore a failure here, so an unstripped
+            // NUL would leave the run recorded as `Started` with the error
+            // never stored.
+            run_info: sea_orm::ActiveValue::Set(run_info.map(sanitize_json)),
         };
 
         active.insert(self.db.as_ref()).await.map_err(|e| {
@@ -311,7 +322,10 @@ impl PipelineRunRepository for SeaOrmPipelineRunRepository {
         }
 
         // Write new ERRORED rows for each orphan (new-row-per-transition pattern).
-        let reason_info = json!({"reason": reason});
+        // `reason` is caller-supplied and lands in the `run_info` json column,
+        // which Postgres rejects on an embedded NUL. Today's only production
+        // caller passes a literal, but the trait takes `&str` from anyone.
+        let reason_info = sanitize_json(json!({"reason": reason}));
         let mut count = 0u64;
         for orphan_id in &orphan_ids {
             // Fetch the orphan row to get all its fields.
@@ -356,7 +370,12 @@ impl PipelineRunRepository for SeaOrmPipelineRunRepository {
         let model = pipeline_run_payload_field::ActiveModel {
             pipeline_run_id: sea_orm::ActiveValue::Set(uuid_hex::to_hex(run_id)),
             key: sea_orm::ActiveValue::Set(key.to_owned()),
-            value: sea_orm::ActiveValue::Set(value),
+            // `value` is arbitrary task-published JSON (see
+            // `TaskContext::publish_payload_field`) and can carry extracted
+            // document text; the column is `json`, which Postgres will not
+            // accept with a NUL inside. Both watchers log-and-ignore a failure
+            // here, so the field would silently vanish.
+            value: sea_orm::ActiveValue::Set(sanitize_json(value)),
             created_at: sea_orm::ActiveValue::Set(now),
             updated_at: sea_orm::ActiveValue::Set(now),
         };

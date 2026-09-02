@@ -45,7 +45,7 @@ use cognee_models::{
 };
 use cognee_ontology::OntologyResolver;
 use cognee_storage::StorageTrait;
-use cognee_utils::sanitize::sanitize_string;
+use cognee_utils::sanitize::{sanitize_str, sanitize_string};
 use cognee_vector::{VectorDB, VectorPoint};
 use futures::StreamExt;
 use serde::Serialize;
@@ -4406,6 +4406,17 @@ async fn upsert_provenance(
             Some(serde_json::Value::Object(map))
         };
 
+        // Sanitize before deriving the id and the slug, exactly as the semantic
+        // branch above does. Python routes structural edges through the same
+        // `upsert_edges`, which feeds `sanitized_edge_text` into both its uuid5
+        // and `generate_edge_id`
+        // (`cognee/modules/graph/methods/upsert_edges.py:41-57`). Deriving from
+        // the raw name here while `conversions.rs` sanitizes `relationship_name`
+        // on the way out left the two loops on opposite conventions and would
+        // hand a NUL-bearing structural edge a different deterministic id than
+        // Python produces for the same input.
+        let rel_name = sanitize_str(rel_name);
+
         prov_edges.push(GraphEdge {
             // The nil `data_id` is folded into the id like every other edge's,
             // so the structural rows need no special case in the formula.
@@ -4415,17 +4426,17 @@ async fn upsert_provenance(
                 dataset_id,
                 Uuid::nil(),
                 source_id,
-                rel_name,
+                &rel_name,
                 target_id,
             ),
-            slug: edge_slug(rel_name),
+            slug: edge_slug(&rel_name),
             user_id,
             data_id: Uuid::nil(), // structural edges span multiple DataPoints
             dataset_id,
             pipeline_run_id,
             source_node_id: source_id,
             destination_node_id: target_id,
-            relationship_name: rel_name.clone(),
+            relationship_name: rel_name.into_owned(),
             label: None,
             attributes: attrs,
             created_at: Utc::now(),
@@ -5908,6 +5919,52 @@ mod tests {
             provenance_edge_id(tenant, user, dataset, data, source, dirty, target),
             provenance_edge_id(tenant, user, dataset, data, source, clean, target),
             "hashing raw text must differ — otherwise this guard proves nothing"
+        );
+    }
+
+    /// The structural-edge branch of `upsert_provenance` must follow the same
+    /// convention as the semantic branch above.
+    ///
+    /// It used not to: it derived `provenance_edge_id` and `edge_slug` from the
+    /// raw `rel_name` while `conversions.rs` sanitized `relationship_name` on
+    /// the way to the database — the opposite convention from the loop directly
+    /// above it. Python has no such split: every edge goes through the one
+    /// `upsert_edges`, which feeds `sanitized_edge_text` into both its uuid5 and
+    /// `generate_edge_id`.
+    #[test]
+    fn structural_edge_ids_derive_from_sanitized_rel_name() {
+        let tenant = Some(Uuid::new_v4());
+        let user = Uuid::new_v4();
+        let dataset = Uuid::new_v4();
+        let source = Uuid::new_v4();
+        let target = Uuid::new_v4();
+
+        let dirty = "is\u{0}_part_of";
+        let clean = "is_part_of";
+
+        assert_eq!(
+            provenance_edge_id(
+                tenant,
+                user,
+                dataset,
+                Uuid::nil(),
+                source,
+                &sanitize_str(dirty),
+                target
+            ),
+            provenance_edge_id(tenant, user, dataset, Uuid::nil(), source, clean, target),
+            "a structural edge's id must be derived from the sanitized name"
+        );
+        assert_eq!(
+            edge_slug(&sanitize_str(dirty)),
+            edge_slug(clean),
+            "a structural edge's slug must read the same sanitized name as its id"
+        );
+
+        assert_ne!(
+            edge_slug(dirty),
+            edge_slug(clean),
+            "hashing the raw name must differ — otherwise this guard proves nothing"
         );
     }
 
