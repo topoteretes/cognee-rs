@@ -241,10 +241,7 @@ mod tests {
         input.insert("ab".to_string(), json!("inserted_first"));
         input.insert("a\u{0}b".to_string(), json!("inserted_second"));
 
-        let insertion_ordered = input
-            .keys()
-            .map(String::as_str)
-            .eq(["ab", "a\u{0}b"].into_iter());
+        let insertion_ordered = input.keys().map(String::as_str).eq(["ab", "a\u{0}b"]);
         let expected = if insertion_ordered {
             "inserted_second"
         } else {

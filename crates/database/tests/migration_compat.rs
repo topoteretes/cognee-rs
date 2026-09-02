@@ -276,9 +276,13 @@ fn relational_chain_is_baseline_plus_additive_migrations() {
         .iter()
         .map(|m| m.name().to_string())
         .collect();
+    // 3 since `m20260916_000001_provenance_edge_id_rekey_guard` joined the
+    // chain. It is additive in the sense that matters here — it only reads, and
+    // it leaves an already-migrated database exactly as it found it — but it is
+    // still a real chain entry, so it is pinned like the rest.
     assert_eq!(
         names.len(),
-        2,
+        3,
         "unexpected migration-chain length — chain: {names:?}"
     );
     assert!(
