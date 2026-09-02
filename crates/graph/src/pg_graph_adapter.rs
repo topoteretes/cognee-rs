@@ -706,12 +706,27 @@ impl GraphDBTrait for PgGraphAdapter {
         target_id: &str,
         relationship_name: &str,
     ) -> GraphDBResult<bool> {
+        // Probe with the *sanitized* triple, because that is the key `add_edges`
+        // stores under. Passing the raw strings straight through would fail
+        // twice over: an edge written under its sanitized name would read as
+        // absent when probed with the NUL-bearing original (so dedup misfires
+        // and the caller re-adds it), and — worse — a NUL inside a bound `text`
+        // parameter makes Postgres reject *the query itself* with `invalid byte
+        // sequence for encoding "UTF8": 0x00`, turning a lookup into a hard
+        // error. Unlike node ids (see `serialize_node_to_row`, where the
+        // read/write asymmetry is deliberate parity with Python), edge
+        // relationship names carry real chunk text, so reads and writes must
+        // agree on the key.
+        let source_id = sanitize_str(source_id);
+        let target_id = sanitize_str(target_id);
+        let relationship_name = sanitize_str(relationship_name);
+
         let inner = Query::select()
             .expr(Expr::val(1))
             .from(GEdge::Table)
-            .and_where(Expr::col(GEdge::SourceId).eq(source_id))
-            .and_where(Expr::col(GEdge::TargetId).eq(target_id))
-            .and_where(Expr::col(GEdge::RelationshipName).eq(relationship_name))
+            .and_where(Expr::col(GEdge::SourceId).eq(source_id.as_ref()))
+            .and_where(Expr::col(GEdge::TargetId).eq(target_id.as_ref()))
+            .and_where(Expr::col(GEdge::RelationshipName).eq(relationship_name.as_ref()))
             .to_owned();
 
         let query = Query::select()
@@ -744,9 +759,24 @@ impl GraphDBTrait for PgGraphAdapter {
         // (source, target, relationship) triples as three `text[]` arrays and let
         // Postgres check existence for all of them at once via `unnest(...)` + `EXISTS`.
         // This replaces the previous one-round-trip-per-edge loop.
-        let sources: Vec<_> = edges.iter().map(|e| e.0.clone()).collect();
-        let targets: Vec<_> = edges.iter().map(|e| e.1.clone()).collect();
-        let rels: Vec<_> = edges.iter().map(|e| e.2.clone()).collect();
+        //
+        // The probe triples are sanitized for the same two reasons as in
+        // `has_edge` above: `add_edges` keys rows on the sanitized triple, and a
+        // NUL inside a bound `text[]` element makes Postgres reject the whole
+        // statement with `invalid byte sequence for encoding "UTF8": 0x00`.
+        let keys: Vec<(String, String, String)> = edges
+            .iter()
+            .map(|e| {
+                (
+                    sanitize_str(&e.0).into_owned(),
+                    sanitize_str(&e.1).into_owned(),
+                    sanitize_str(&e.2).into_owned(),
+                )
+            })
+            .collect();
+        let sources: Vec<_> = keys.iter().map(|k| k.0.clone()).collect();
+        let targets: Vec<_> = keys.iter().map(|k| k.1.clone()).collect();
+        let rels: Vec<_> = keys.iter().map(|k| k.2.clone()).collect();
 
         let rows = self
             .db
@@ -783,10 +813,14 @@ impl GraphDBTrait for PgGraphAdapter {
             existing.insert((s, t, r));
         }
 
+        // Match on the sanitized key computed above — `existing` holds what the
+        // database returned, which is sanitized by construction — but return the
+        // caller's original `EdgeData` untouched.
         let found = edges
             .iter()
-            .filter(|e| existing.contains(&(e.0.clone(), e.1.clone(), e.2.clone())))
-            .cloned()
+            .zip(&keys)
+            .filter(|(_, key)| existing.contains(*key))
+            .map(|(edge, _)| edge.clone())
             .collect();
 
         Ok(found)
