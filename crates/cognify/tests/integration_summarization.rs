@@ -100,10 +100,11 @@ async fn test_summarization_batch() {
 
     let extractor = SummaryExtractor::new(adapter);
 
-    let result = extractor.summarize_chunks(&chunks, None).await;
+    let outcome = extractor.summarize_chunks(&chunks, None).await;
 
-    match result {
-        Ok(summaries) => {
+    match outcome.failures.is_empty() {
+        true => {
+            let summaries = outcome.summaries;
             println!("\n✓ Batch summarization successful!");
             println!("   Generated {} summaries", summaries.len());
 
@@ -133,8 +134,8 @@ async fn test_summarization_batch() {
                 assert_eq!(summary.model, expected_model, "Model name should match");
             }
         }
-        Err(e) => {
-            panic!("❌ Batch summarization failed: {e}");
+        false => {
+            panic!("❌ Batch summarization failed: {:?}", outcome.failures);
         }
     }
 }
@@ -168,8 +169,9 @@ async fn test_summarization_deterministic_ids() {
         .summarize_chunks(std::slice::from_ref(&chunk), None)
         .await;
 
-    match (result1, result2) {
-        (Ok(summaries1), Ok(summaries2)) => {
+    match (result1.failures.is_empty(), result2.failures.is_empty()) {
+        (true, true) => {
+            let (summaries1, summaries2) = (result1.summaries, result2.summaries);
             assert_eq!(summaries1.len(), 1);
             assert_eq!(summaries2.len(), 1);
 
@@ -206,20 +208,18 @@ async fn test_summarization_empty_chunks() {
 
     let extractor = SummaryExtractor::new(adapter);
 
-    let result = extractor.summarize_chunks(&[], None).await;
+    let outcome = extractor.summarize_chunks(&[], None).await;
 
-    match result {
-        Ok(summaries) => {
-            println!("✓ Empty chunks handled correctly");
-            assert!(
-                summaries.is_empty(),
-                "Empty input should produce empty output"
-            );
-        }
-        Err(e) => {
-            panic!("❌ Empty chunks test failed: {e}");
-        }
-    }
+    assert!(
+        outcome.failures.is_empty(),
+        "empty input cannot fail: {:?}",
+        outcome.failures
+    );
+    assert!(
+        outcome.summaries.is_empty(),
+        "Empty input should produce empty output"
+    );
+    println!("✓ Empty chunks handled correctly");
 }
 
 #[tokio::test]

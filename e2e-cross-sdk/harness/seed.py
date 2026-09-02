@@ -90,6 +90,23 @@ def seed_cognify(
     return r.json()
 
 
+def extract_content_hash(resp: dict) -> str | None:
+    """Pull ``content_hash`` out of an /add response, whichever shape it uses.
+
+    Rust nests it in ``data_ingestion_info[].content_hash``; a top-level field
+    is accepted too so this keeps working if either SDK flattens the envelope.
+    Returns ``None`` when no hash is present in either position, which is the
+    pinned Python build's behaviour.
+    """
+    top = resp.get("content_hash")
+    if top is not None:
+        return top
+    items = resp.get("data_ingestion_info") or []
+    if isinstance(items, list) and items and isinstance(items[0], dict):
+        return items[0].get("content_hash")
+    return None
+
+
 def seed_both(
     both_clients: dict,
     *,
@@ -114,10 +131,31 @@ def seed_both(
     for side, client in both_clients.items():
         results[side] = seed_dataset_with_text(client, name=name, text=text)
 
-    # content_hash is deterministic (MD5 of content); both sides must agree.
-    py_hash = results["py"].get("content_hash")
-    rs_hash = results["rs"].get("content_hash")
-    if py_hash is not None and rs_hash is not None:
+    # content_hash is deterministic (MD5 of content), so where both sides
+    # present it they must agree.
+    #
+    # This lives one level down, not at the top level. Rust's /add returns a
+    # PipelineRunInfoDTO — {status, pipeline_run_id, dataset_id, dataset_name,
+    # data_ingestion_info: [...]} (crates/http-server/src/dto/pipeline_run.rs)
+    # — and the hash is a field of each data_ingestion_info item, never of the
+    # envelope. An earlier version of this check read results["rs"]["content_hash"]
+    # and so could only ever see None; it had misread the note in
+    # test_http_add.py, which describes the shape of the *items* inside
+    # data_ingestion_info, as a description of the response body.
+    #
+    # Rust's half is asserted unconditionally: the nested content_hash is a
+    # documented part of DataIngestionInfoDTO, and silently skipping is how the
+    # original check died. The pinned Python build returns a nested
+    # {run_info: PipelineRunInfo} carrying no content_hash in either position,
+    # so its half stays conditional and is tracked by the strict xfail in
+    # test_http_add.py::test_python_add_omits_content_hash.
+    py_hash = extract_content_hash(results["py"])
+    rs_hash = extract_content_hash(results["rs"])
+    assert rs_hash is not None, (
+        "seed_both: Rust /add returned no content_hash at the top level or in "
+        f"data_ingestion_info[]. rs response: {results['rs']}"
+    )
+    if py_hash is not None:
         assert py_hash == rs_hash, (
             f"seed_both: content_hash mismatch — py={py_hash!r} rs={rs_hash!r}\n"
             f"py response: {results['py']}\n"

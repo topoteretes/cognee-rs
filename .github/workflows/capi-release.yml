@@ -150,6 +150,16 @@ jobs:
         with:
           path: capi/target/ort-cache
           key: capi-ort-${{ matrix.archive_suffix }}-v1
+      # A restored ORT cache that lost its libonnxruntime.a still makes ort-sys
+      # skip the download; the failure then surfaces minutes later as the bare
+      # rustc error "could not find native static library `onnxruntime`". Drop any
+      # empty dist dir so ort-sys re-downloads -- and so this job's post-step
+      # cannot persist the empty skeleton under the ORT key. Full write-up in
+      # ci/ort/ensure-cache-usable.sh.
+      - name: Ensure the restored ORT cache is usable
+        if: runner.os != 'Windows'
+        shell: bash
+        run: bash ci/ort/ensure-cache-usable.sh capi/target/ort-cache
 
       - name: Resolve tag
         id: tag

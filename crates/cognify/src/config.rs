@@ -13,6 +13,8 @@ use cognee_llm::{Llm, Transcriber};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::failure::{FailurePolicy, FailureStop, RollbackScope};
+
 /// Chunks handed to the graph-extraction stage in one batch.
 ///
 /// Sized so that a batch boundary is rare rather than routine: the stage awaits
@@ -200,6 +202,48 @@ pub struct CognifyConfig {
     /// Default is determined at construction time via [`TokenCounterKind::from_env`].
     pub token_counter_kind: TokenCounterKind,
 
+    /// Axis 1 of failure handling — when a run stops scheduling further work.
+    ///
+    /// Default [`FailureStop::FailFast`], which with the default
+    /// [`Self::rollback_scope`] is Python's behaviour: stop at the first failed
+    /// batch, error the run. See [`FailureStop::FailFast`] for what "batch"
+    /// means in each stage — it is [`Self::chunks_per_batch`] for graph
+    /// extraction, and not a single file.
+    #[serde(default)]
+    pub failure_stop: FailureStop,
+
+    /// Axis 2 of failure handling — what a failed run removes.
+    ///
+    /// Default [`RollbackScope::WholeRun`]. Read at the end of the run by
+    /// [`crate::rollback`], which turns it into a sweep scope — and, under
+    /// [`RollbackScope::FailedItems`], during the run for the abort-time
+    /// partition.
+    #[serde(default)]
+    pub rollback_scope: RollbackScope,
+
+    /// Whether a summarization failure leaves its data item intact.
+    ///
+    /// Default `false` — Python parity, where a summarization failure is fatal
+    /// like any other. Setting it makes summarization failures reported-only:
+    /// they never fail the item or the run and never count toward
+    /// [`Self::chunk_failure_ratio_threshold`]. Either way they are *collected*
+    /// rather than propagated, so the reported list is complete.
+    #[serde(default)]
+    pub tolerate_summarization_failures: bool,
+
+    /// The share of chunks that may fail before a
+    /// [`RollbackScope::FailedItems`] run is called failed.
+    ///
+    /// Counted in chunks, evaluated per run, summarization excluded. Default
+    /// 0.05. Ignored under the other two scopes, which fail on any failed item.
+    #[serde(default = "default_chunk_failure_ratio_threshold")]
+    pub chunk_failure_ratio_threshold: f64,
+
+    /// How many individual failures the run's failure report lists before it
+    /// starts counting them only in the total. Default 100.
+    #[serde(default = "default_failure_report_cap")]
+    pub failure_report_cap: usize,
+
     /// Optional JSON Schema for custom graph extraction model.
     ///
     /// When `Some`, the LLM uses this schema instead of the default
@@ -283,6 +327,33 @@ pub enum ChunkStrategy {
     Recursive,
 }
 
+/// Serde default for [`CognifyConfig::chunk_failure_ratio_threshold`].
+fn default_chunk_failure_ratio_threshold() -> f64 {
+    FailurePolicy::DEFAULT_CHUNK_FAILURE_RATIO_THRESHOLD
+}
+
+/// Read a boolean environment variable, accepting the spellings the rest of
+/// the workspace accepts (`true`/`1`/`yes`, case-insensitive).
+fn env_bool(name: &str) -> Option<bool> {
+    let raw = std::env::var(name).ok()?;
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "true" | "1" | "yes" => Some(true),
+        "false" | "0" | "no" => Some(false),
+        _ => None,
+    }
+}
+
+/// Read and parse an environment variable, ignoring unparseable values so a
+/// typo falls back to the default rather than failing the process.
+fn env_parsed<T: std::str::FromStr>(name: &str) -> Option<T> {
+    std::env::var(name).ok()?.trim().parse().ok()
+}
+
+/// Serde default for [`CognifyConfig::failure_report_cap`].
+fn default_failure_report_cap() -> usize {
+    FailurePolicy::DEFAULT_REPORT_CAP
+}
+
 impl Default for CognifyConfig {
     fn default() -> Self {
         Self {
@@ -309,6 +380,23 @@ impl Default for CognifyConfig {
             data_per_batch: 20,
 
             token_counter_kind: TokenCounterKind::from_env(),
+
+            // Read from the environment like `token_counter_kind` above, so
+            // every construction path picks them up. `failure_stop` honours
+            // Python's own variable name; the rest are Rust-only extensions and
+            // say so with a `COGNEE_COGNIFY_` prefix.
+            failure_stop: FailureStop::from_env().unwrap_or_default(),
+            rollback_scope: RollbackScope::from_env().unwrap_or_default(),
+            tolerate_summarization_failures: env_bool(
+                "COGNEE_COGNIFY_TOLERATE_SUMMARIZATION_FAILURES",
+            )
+            .unwrap_or(false),
+            chunk_failure_ratio_threshold: env_parsed("COGNEE_COGNIFY_MAX_CHUNK_FAILURE_RATIO")
+                .filter(|r: &f64| r.is_finite() && *r > 0.0 && *r <= 1.0)
+                .unwrap_or_else(default_chunk_failure_ratio_threshold),
+            failure_report_cap: env_parsed("COGNEE_COGNIFY_FAILURE_REPORT_CAP")
+                .filter(|cap: &usize| *cap > 0)
+                .unwrap_or_else(default_failure_report_cap),
 
             graph_schema: None,
             summary_schema: None,
@@ -479,6 +567,48 @@ impl CognifyConfig {
         self
     }
 
+    /// Set axis 1 — when the run stops scheduling further work.
+    pub fn with_failure_stop(mut self, stop: FailureStop) -> Self {
+        self.failure_stop = stop;
+        self
+    }
+
+    /// Set axis 2 — what a failed run removes.
+    pub fn with_rollback_scope(mut self, scope: RollbackScope) -> Self {
+        self.rollback_scope = scope;
+        self
+    }
+
+    /// Set whether a summarization failure leaves its data item intact.
+    pub fn with_summarization_failure_tolerance(mut self, tolerate: bool) -> Self {
+        self.tolerate_summarization_failures = tolerate;
+        self
+    }
+
+    /// Set the share of chunks a [`RollbackScope::FailedItems`] run tolerates.
+    pub fn with_chunk_failure_ratio_threshold(mut self, threshold: f64) -> Self {
+        self.chunk_failure_ratio_threshold = threshold;
+        self
+    }
+
+    /// Set how many failures the run's failure report lists individually.
+    pub fn with_failure_report_cap(mut self, cap: usize) -> Self {
+        self.failure_report_cap = cap;
+        self
+    }
+
+    /// The failure-handling policy this configuration resolves to, read once
+    /// per run by the stages that collect failures.
+    pub fn failure_policy(&self) -> FailurePolicy {
+        FailurePolicy {
+            stop: self.failure_stop,
+            scope: self.rollback_scope,
+            tolerate_summarization_failures: self.tolerate_summarization_failures,
+            chunk_failure_ratio_threshold: self.chunk_failure_ratio_threshold,
+            report_cap: self.failure_report_cap,
+        }
+    }
+
     /// Auto-calculate `max_chunk_size`, mirroring Python's `get_max_chunk_tokens()`
     /// from `cognee/infrastructure/llm/utils.py`:
     ///
@@ -569,6 +699,21 @@ impl CognifyConfig {
         if self.data_per_batch == 0 {
             return Err(ConfigError::InvalidParameter(
                 "data_per_batch must be greater than 0".to_string(),
+            ));
+        }
+
+        if !self.chunk_failure_ratio_threshold.is_finite()
+            || !(0.0..=1.0).contains(&self.chunk_failure_ratio_threshold)
+        {
+            return Err(ConfigError::InvalidParameter(
+                "chunk_failure_ratio_threshold must be a finite value between 0.0 and 1.0"
+                    .to_string(),
+            ));
+        }
+
+        if self.failure_report_cap == 0 {
+            return Err(ConfigError::InvalidParameter(
+                "failure_report_cap must be greater than 0".to_string(),
             ));
         }
 
@@ -827,6 +972,42 @@ mod tests {
             ..Default::default()
         };
         assert!(config2.validate().is_err());
+    }
+
+    #[test]
+    fn test_config_validation_chunk_failure_ratio_threshold() {
+        for threshold in [f64::NAN, 1.5, -0.1, f64::INFINITY] {
+            let config = CognifyConfig {
+                chunk_failure_ratio_threshold: threshold,
+                ..Default::default()
+            };
+            assert!(
+                matches!(config.validate(), Err(ConfigError::InvalidParameter(_))),
+                "{threshold} is not a valid ratio"
+            );
+        }
+
+        for threshold in [0.0, 0.05, 1.0] {
+            let config = CognifyConfig {
+                chunk_failure_ratio_threshold: threshold,
+                ..Default::default()
+            };
+            assert!(config.validate().is_ok(), "{threshold} is a valid ratio");
+        }
+    }
+
+    /// A cap of zero would produce a report that lists nothing at all, so it is
+    /// rejected rather than silently swallowing every entry.
+    #[test]
+    fn test_config_validation_zero_failure_report_cap() {
+        let config = CognifyConfig {
+            failure_report_cap: 0,
+            ..Default::default()
+        };
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::InvalidParameter(_))
+        ));
     }
 
     /// Local ONNX/BGE default: the model's 512-token sequence limit binds →

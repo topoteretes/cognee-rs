@@ -1,0 +1,6 @@
+# Runner scratch, not evidence: `run_rust.sh` and `run_python.sh` redirect each
+# probe process's stderr/stdout here so a crashed cell can be read afterwards.
+# Regenerated on every run; the observations and the reports beside them are
+# the recorded output worth keeping.
+.rust_probe.log
+.py_*.log

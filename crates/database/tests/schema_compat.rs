@@ -192,3 +192,188 @@ async fn uuids_stored_as_32_char_hex() {
     assert!(!raw_owner.contains('-'));
     assert_eq!(raw_owner, "660e8400e29b41d4a716446655440001");
 }
+
+/// The run-ownership column must be NULLABLE on both provenance tables: rows
+/// written before it existed carry no run and must stay permanently exempt
+/// from every run-scoped sweep rather than being ambiguously owned.
+#[tokio::test]
+async fn nodes_and_edges_have_nullable_pipeline_run_id() {
+    use sea_orm::ConnectionTrait;
+
+    let db = connect("sqlite::memory:").await.expect("connect");
+    initialize(&db).await.expect("initialize");
+
+    for table in ["nodes", "edges"] {
+        let rows = db
+            .query_all(sea_orm::Statement::from_string(
+                sea_orm::DatabaseBackend::Sqlite,
+                format!("PRAGMA table_info({table})"),
+            ))
+            .await
+            .unwrap_or_else(|e| panic!("PRAGMA table_info({table}) failed: {e}"));
+
+        let notnull = rows
+            .iter()
+            .find(|row| {
+                row.try_get::<String>("", "name")
+                    .is_ok_and(|n| n == "pipeline_run_id")
+            })
+            .unwrap_or_else(|| panic!("{table} table is missing column 'pipeline_run_id'"))
+            .try_get::<i32>("", "notnull")
+            .expect("notnull flag");
+        assert_eq!(notnull, 0, "{table}.pipeline_run_id must be nullable");
+    }
+}
+
+/// Index names are copied verbatim from Python's alembic revision
+/// `aa753a730673` so that whichever SDK migrates a shared file first, the
+/// other skips instead of creating a second index on the same column.
+#[tokio::test]
+async fn pipeline_run_id_indexes_exist() {
+    use sea_orm::ConnectionTrait;
+
+    let db = connect("sqlite::memory:").await.expect("connect");
+    initialize(&db).await.expect("initialize");
+
+    for (table, index) in [
+        ("nodes", "ix_nodes_pipeline_run_id"),
+        ("edges", "ix_edges_pipeline_run_id"),
+    ] {
+        let rows = db
+            .query_all(sea_orm::Statement::from_string(
+                sea_orm::DatabaseBackend::Sqlite,
+                format!(
+                    "SELECT name FROM sqlite_master \
+                     WHERE type='index' AND tbl_name='{table}' AND name='{index}'"
+                ),
+            ))
+            .await
+            .unwrap_or_else(|e| panic!("index query failed: {e}"));
+        assert!(
+            !rows.is_empty(),
+            "expected index '{index}' on table '{table}' to exist"
+        );
+    }
+}
+
+/// The rollback sweep's exclusivity check (`get_unique_nodes_for_run` /
+/// `get_unique_edges_for_run`) correlates a subquery on `slug` alone. Without a
+/// standalone `slug` index on each table SQLite plans that subquery as
+/// `SCAN n2`, making the sweep O(n²) in the run's row count — a 40 000-row run
+/// took 52.8 s in one call. These indexes are what makes it a `SEARCH`, so a
+/// future migration edit must not silently drop them.
+///
+/// `nodes` keeps the baseline's `(dataset_id, slug)` composite alongside: it is
+/// declared on Python's model too, and `slug` is its second column, so it
+/// cannot serve the correlation on its own.
+#[tokio::test]
+async fn node_composites_carry_pythons_names_only() {
+    use sea_orm::ConnectionTrait;
+
+    // Rust and Python declare the same two composites on `nodes` under
+    // different names, and either SDK may migrate a shared database first.
+    // Before m20260918 a database both had touched carried two byte-identical
+    // indexes over the same columns. Rust adopted Python's names because
+    // Python is the reference and its names already ship.
+    let db = connect("sqlite::memory:").await.expect("connect");
+    initialize(&db).await.expect("initialize");
+
+    for superseded in ["idx_nodes_dataset_slug", "idx_nodes_dataset_data"] {
+        let rows = db
+            .query_all(sea_orm::Statement::from_string(
+                sea_orm::DatabaseBackend::Sqlite,
+                format!(
+                    "SELECT name FROM sqlite_master \
+                     WHERE type='index' AND tbl_name='nodes' AND name='{superseded}'"
+                ),
+            ))
+            .await
+            .unwrap_or_else(|e| panic!("index query failed: {e}"));
+        assert!(
+            rows.is_empty(),
+            "'{superseded}' should have been superseded by Python's name; \
+             leaving both is the duplicate this migration removes"
+        );
+    }
+}
+
+#[tokio::test]
+async fn slug_indexes_exist() {
+    use sea_orm::ConnectionTrait;
+
+    let db = connect("sqlite::memory:").await.expect("connect");
+    initialize(&db).await.expect("initialize");
+
+    for (table, index) in [
+        ("nodes", "ix_nodes_slug"),
+        ("edges", "ix_edges_slug"),
+        // The composite the standalone index sits next to, not replaces. It
+        // carries Python's name since m20260918 — the two SDKs share one
+        // database and were creating the same index twice under two names.
+        ("nodes", "index_node_dataset_slug"),
+        ("nodes", "index_node_dataset_data"),
+    ] {
+        let rows = db
+            .query_all(sea_orm::Statement::from_string(
+                sea_orm::DatabaseBackend::Sqlite,
+                format!(
+                    "SELECT name FROM sqlite_master \
+                     WHERE type='index' AND tbl_name='{table}' AND name='{index}'"
+                ),
+            ))
+            .await
+            .unwrap_or_else(|e| panic!("index query failed: {e}"));
+        assert!(
+            !rows.is_empty(),
+            "expected index '{index}' on table '{table}' to exist"
+        );
+    }
+}
+
+/// The standalone `slug` indexes must actually be *used* by the exclusivity
+/// subquery — an index the planner ignores costs write throughput and buys
+/// nothing. Assert on SQLite's plan rather than on the index's existence alone.
+#[tokio::test]
+async fn slug_exclusivity_subquery_uses_the_slug_index() {
+    use sea_orm::ConnectionTrait;
+
+    let db = connect("sqlite::memory:").await.expect("connect");
+    initialize(&db).await.expect("initialize");
+
+    for (table, alias, index) in [
+        ("nodes", "n2", "ix_nodes_slug"),
+        ("edges", "e2", "ix_edges_slug"),
+    ] {
+        let plan = db
+            .query_all(sea_orm::Statement::from_string(
+                sea_orm::DatabaseBackend::Sqlite,
+                format!(
+                    "EXPLAIN QUERY PLAN \
+                     SELECT \"{table}\".\"id\" FROM \"{table}\" \
+                     WHERE \"{table}\".\"pipeline_run_id\" = 'r' \
+                       AND \"{table}\".\"dataset_id\" = 'd' \
+                       AND NOT EXISTS (SELECT 1 FROM \"{table}\" AS \"{alias}\" \
+                         WHERE \"{alias}\".\"slug\" = \"{table}\".\"slug\" \
+                           AND (\"{alias}\".\"pipeline_run_id\" IS NULL \
+                                OR \"{alias}\".\"pipeline_run_id\" <> 'r' \
+                                OR \"{alias}\".\"dataset_id\" <> 'd')) \
+                     ORDER BY \"{table}\".\"created_at\" ASC"
+                ),
+            ))
+            .await
+            .unwrap_or_else(|e| panic!("EXPLAIN QUERY PLAN failed: {e}"))
+            .iter()
+            .map(|row| row.try_get::<String>("", "detail").unwrap_or_default())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(
+            plan.contains(&format!("SEARCH {alias} USING INDEX {index}")),
+            "exclusivity subquery over '{table}' must use '{index}'; plan was:\n{plan}"
+        );
+        assert!(
+            !plan.contains(&format!("SCAN {alias}")),
+            "exclusivity subquery over '{table}' still full-scans; plan was:\n{plan}"
+        );
+    }
+}

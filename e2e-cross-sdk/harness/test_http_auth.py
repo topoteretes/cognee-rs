@@ -143,7 +143,11 @@ def test_me_after_logout(py_client, rs_client):
         "Making this pass needs a shared relational DB across both servers, which "
         "is a harness architecture change, not an SDK bug."
     ),
-    strict=False,
+    # Deterministic under the harness's isolated-DB architecture. An XPASS
+    # means that architecture changed, which should be noticed. Note this test
+    # takes py_client/rs_client, not authed_clients, so it really does run in
+    # the default config — it xfails because the OSS server has no /auth/login.
+    strict=True,
 )
 def test_jwt_cross_compat(py_client, rs_client):
     """Issue a JWT on Python, present it to Rust's /me — must return 200.

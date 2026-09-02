@@ -11,6 +11,10 @@ pub struct Model {
     pub data_id: String,
     #[sea_orm(indexed)]
     pub dataset_id: String,
+    /// The run that created this row. `NULL` for rows written before run
+    /// ownership existed — they are permanently exempt from every sweep.
+    #[sea_orm(indexed, nullable)]
+    pub pipeline_run_id: Option<String>,
     #[sea_orm(column_type = "Text", nullable)]
     pub label: Option<String>,
     #[sea_orm(column_name = "type", column_type = "Text")]

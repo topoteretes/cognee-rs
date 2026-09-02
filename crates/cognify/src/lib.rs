@@ -8,6 +8,8 @@ pub mod dataset_resolver;
 pub mod error;
 /// Fact extraction module.
 pub mod fact_extraction;
+/// Failure-handling vocabulary (the two axes, the failure report).
+pub mod failure;
 /// Graph extraction module.
 pub mod graph_extraction;
 /// Graph integration module.
@@ -18,6 +20,8 @@ pub mod memify;
 pub mod pipeline;
 /// Qualification module.
 pub mod qualification;
+/// Run-orchestration policy: what a finished run sweeps, marks and records.
+pub mod rollback;
 /// Summarization module.
 pub mod summarization;
 /// Pipeline tasks module.
@@ -33,6 +37,9 @@ pub use config::{ChunkStrategy, CognifyConfig, ConfigError, CustomChunker};
 pub use dataset_resolver::{DatasetRef, DatasetResolver, cognify_dataset_refs, cognify_datasets};
 pub use error::CognifyError;
 pub use fact_extraction::{Edge, FactExtractor, GraphModel, KnowledgeGraph, Node};
+pub use failure::{
+    FailurePolicy, FailureReport, FailureStage, FailureStop, RollbackScope, StageFailure,
+};
 pub use graph_extraction::{GraphExtractable, Relationship, get_graph_from_model};
 pub use graph_integration::{
     DeduplicationResult, EdgeResolutionStats, GraphEdgePair, GraphNodePair,
@@ -55,15 +62,15 @@ pub use memify::{
 pub use cognee_truth_subspace::DEFAULT_K;
 pub use pipeline::{CognifyResult, IndexedFieldsStats};
 pub use qualification::{Qualification, check_pipeline_run_qualification};
-pub use summarization::{SummarizedContent, SummaryExtractor, TextSummary};
+pub use summarization::{SummarizeOutcome, SummarizedContent, SummaryExtractor, TextSummary};
 pub use tasks::{
-    ClassifiedDocuments, CognifyInput, ExtractedChunks, ExtractedGraphData,
-    ExtractedTemporalEvents, SummarizedData, add_data_points, add_temporal_data_points,
-    build_cognify_pipeline, build_temporal_cognify_pipeline, classify_documents, cognify,
-    create_web_page_nodes, extract_chunks_from_documents, extract_custom_graph_from_data,
-    extract_dlt_fk_edges, extract_graph_from_data, extract_temporal_events,
-    make_add_data_points_task, make_add_temporal_data_points_task, make_classify_documents_task,
-    make_extract_chunks_task, make_extract_graph_task, make_extract_temporal_events_task,
-    make_summarize_text_task, summarize_text,
+    AttributedEvent, ClassifiedDocuments, CognifyInput, DEFAULT_LEDGER_USER_ID, ExtractedChunks,
+    ExtractedGraphData, ExtractedTemporalEvents, LedgerIdentity, SummarizedData, add_data_points,
+    add_temporal_data_points, build_cognify_pipeline, build_temporal_cognify_pipeline,
+    classify_documents, cognify, create_web_page_nodes, extract_chunks_from_documents,
+    extract_custom_graph_from_data, extract_dlt_fk_edges, extract_graph_from_data,
+    extract_temporal_events, make_add_data_points_task, make_add_temporal_data_points_task,
+    make_classify_documents_task, make_extract_chunks_task, make_extract_graph_task,
+    make_extract_temporal_events_task, make_summarize_text_task, summarize_text,
 };
 pub use triplet_creation::create_triplets_from_graph;

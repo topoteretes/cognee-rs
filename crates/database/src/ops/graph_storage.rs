@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 use chrono::{DateTime, Utc};
 use cognee_utils::tracing_keys::{COGNEE_DB_ROW_COUNT, COGNEE_DB_SYSTEM};
@@ -7,7 +7,7 @@ use sea_orm::{
     ColumnTrait, Condition, ConnectionTrait, DatabaseConnection, EntityTrait, PaginatorTrait,
     QueryFilter, QueryOrder, QuerySelect, TransactionTrait,
 };
-use tracing::{Span, instrument};
+use tracing::{Span, instrument, warn};
 use uuid::Uuid;
 
 use crate::conversions::map_sea_err;
@@ -96,6 +96,13 @@ async fn upsert_nodes_on<C: ConnectionTrait>(
             .collect();
         node::Entity::insert_many(models)
             .on_conflict(
+                // `PipelineRunId` is deliberately absent from this list: the
+                // row id is keyed by logical identity, not by run, so the row
+                // records the run that *created* the artifact. Letting a later
+                // run overwrite the tag would make that run's rollback delete
+                // a node an earlier, successful run created. Python's
+                // `upsert_nodes.py` switched to `on_conflict_do_nothing` for
+                // the same reason.
                 OnConflict::column(node::Column::Id)
                     .update_columns([
                         node::Column::Slug,
@@ -203,6 +210,7 @@ async fn upsert_edges_on<C: ConnectionTrait>(
             .collect();
         edge::Entity::insert_many(models)
             .on_conflict(
+                // `PipelineRunId` is deliberately absent — see `upsert_nodes_on`.
                 OnConflict::column(edge::Column::Id)
                     .update_columns([
                         edge::Column::Slug,
@@ -727,4 +735,503 @@ pub async fn get_unique_edges_for_data(
         .collect();
     Span::current().record(COGNEE_DB_ROW_COUNT, rows.len() as i64);
     Ok(rows)
+}
+
+// ---------------------------------------------------------------------------
+// Run-scoped provenance queries
+// ---------------------------------------------------------------------------
+
+/// The provenance rows one sweep owns: this run, in this dataset, optionally
+/// narrowed to these data items.
+///
+/// Every run-scoped query below takes this and nothing else, so selection,
+/// exclusivity and deletion can never drift apart.
+///
+/// `pipeline_run_id` is the run *correlation* id (`pipeline_runs.pipeline_run_id`),
+/// not the `pipeline_runs.id` row key — `pipeline_runs` holds one row per status
+/// transition, so only the correlation id identifies a run.
+#[derive(Debug, Clone, Copy)]
+pub struct RunScope<'a> {
+    pub pipeline_run_id: Uuid,
+    pub dataset_id: Uuid,
+    /// `None` selects every data item the run touched in this dataset;
+    /// `Some(ids)` narrows to those items, and `Some(&[])` selects nothing.
+    pub data_ids: Option<&'a [Uuid]>,
+}
+
+impl<'a> RunScope<'a> {
+    /// Everything the run created in `dataset_id`.
+    pub fn whole_run(pipeline_run_id: Uuid, dataset_id: Uuid) -> Self {
+        Self {
+            pipeline_run_id,
+            dataset_id,
+            data_ids: None,
+        }
+    }
+
+    /// Only what the run created for `data_ids` in `dataset_id`.
+    pub fn for_data(pipeline_run_id: Uuid, dataset_id: Uuid, data_ids: &'a [Uuid]) -> Self {
+        Self {
+            pipeline_run_id,
+            dataset_id,
+            data_ids: Some(data_ids),
+        }
+    }
+
+    /// An empty narrowing set selects no rows at all — distinct from `None`,
+    /// which selects the whole run.
+    fn selects_nothing(&self) -> bool {
+        matches!(self.data_ids, Some(ids) if ids.is_empty())
+    }
+
+    fn run_hex(&self) -> String {
+        uuid_hex::to_hex(self.pipeline_run_id)
+    }
+
+    fn dataset_hex(&self) -> String {
+        uuid_hex::to_hex(self.dataset_id)
+    }
+
+    fn data_hexes(&self) -> Option<Vec<String>> {
+        self.data_ids
+            .map(|ids| ids.iter().copied().map(uuid_hex::to_hex).collect())
+    }
+}
+
+/// The selection predicate over `nodes`: `pipeline_run_id = :run AND
+/// dataset_id = :dataset [AND data_id IN (:data…)]`.
+///
+/// `pipeline_run_id = :run` is NULL-safe by construction — a `NULL` column
+/// never equals anything — so rows written before run ownership existed drop
+/// out of every select and every delete without a special case.
+fn node_selection(scope: &RunScope<'_>) -> Condition {
+    let mut cond = Condition::all()
+        .add(node::Column::PipelineRunId.eq(scope.run_hex()))
+        .add(node::Column::DatasetId.eq(scope.dataset_hex()));
+    if let Some(data_hexes) = scope.data_hexes() {
+        cond = cond.add(node::Column::DataId.is_in(data_hexes));
+    }
+    cond
+}
+
+/// The selection predicate over `edges`; see [`node_selection`].
+fn edge_selection(scope: &RunScope<'_>) -> Condition {
+    let mut cond = Condition::all()
+        .add(edge::Column::PipelineRunId.eq(scope.run_hex()))
+        .add(edge::Column::DatasetId.eq(scope.dataset_hex()));
+    if let Some(data_hexes) = scope.data_hexes() {
+        cond = cond.add(edge::Column::DataId.is_in(data_hexes));
+    }
+    cond
+}
+
+/// Return the provenance nodes the run owns within `scope`.
+#[instrument(
+    name = "cognee.db.relational.graph_storage.get_nodes_for_run",
+    level = "info",
+    skip_all,
+    fields(
+        cognee.db.system = tracing::field::Empty,
+        cognee.db.row_count = tracing::field::Empty,
+    ),
+    err,
+)]
+pub async fn get_nodes_for_run(
+    db: &DatabaseConnection,
+    scope: &RunScope<'_>,
+) -> Result<Vec<GraphNode>, DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
+    if scope.selects_nothing() {
+        Span::current().record(COGNEE_DB_ROW_COUNT, 0i64);
+        return Ok(Vec::new());
+    }
+    let rows: Vec<GraphNode> = node::Entity::find()
+        .filter(node_selection(scope))
+        .order_by_asc(node::Column::CreatedAt)
+        .all(db)
+        .await
+        .map_err(map_sea_err)?
+        .into_iter()
+        .map(GraphNode::from)
+        .collect();
+    Span::current().record(COGNEE_DB_ROW_COUNT, rows.len() as i64);
+    Ok(rows)
+}
+
+/// Return the provenance edges the run owns within `scope`.
+#[instrument(
+    name = "cognee.db.relational.graph_storage.get_edges_for_run",
+    level = "info",
+    skip_all,
+    fields(
+        cognee.db.system = tracing::field::Empty,
+        cognee.db.row_count = tracing::field::Empty,
+    ),
+    err,
+)]
+pub async fn get_edges_for_run(
+    db: &DatabaseConnection,
+    scope: &RunScope<'_>,
+) -> Result<Vec<GraphEdge>, DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
+    if scope.selects_nothing() {
+        Span::current().record(COGNEE_DB_ROW_COUNT, 0i64);
+        return Ok(Vec::new());
+    }
+    let rows: Vec<GraphEdge> = edge::Entity::find()
+        .filter(edge_selection(scope))
+        .order_by_asc(edge::Column::CreatedAt)
+        .all(db)
+        .await
+        .map_err(map_sea_err)?
+        .into_iter()
+        .map(GraphEdge::from)
+        .collect();
+    Span::current().record(COGNEE_DB_ROW_COUNT, rows.len() as i64);
+    Ok(rows)
+}
+
+/// Return the nodes of [`get_nodes_for_run`] whose `slug` — the graph store's
+/// real node id — is claimed by no row *outside* `scope`.
+///
+/// "Outside" is the negation of the selection predicate: another run, a `NULL`
+/// run, another dataset, or (when narrowed) a data item this sweep is keeping.
+/// Only those rows are safe to remove from the graph and vector stores.
+///
+/// Note the dataset clause runs the opposite way to [`get_unique_nodes_for_data`],
+/// which only treats *same-dataset* rows as claimants. OSS Rust has one graph
+/// store shared by every dataset and `slug` is the content-addressed graph node
+/// id, so two datasets mentioning the same entity share one physical node;
+/// deleting it while another dataset's ownership row still names it would
+/// corrupt that dataset. Leaving an extra artifact behind is recoverable —
+/// a later sweep or a dataset delete removes it — so the predicate errs that
+/// way.
+///
+/// The check is a correlated `NOT EXISTS` over the *predicate*, never over a
+/// list of the selected row ids: a large run owns millions of rows and an
+/// `IN (…)` of ids would blow past SQLite's `SQLITE_MAX_VARIABLE_NUMBER` and
+/// Postgres' 65 535. No `n2.id <> nodes.id` term is needed — the four
+/// disjuncts *are* the negation of the selection, so every selected row (the
+/// outer row included) fails all of them.
+#[instrument(
+    name = "cognee.db.relational.graph_storage.get_unique_nodes_for_run",
+    level = "info",
+    skip_all,
+    fields(
+        cognee.db.system = tracing::field::Empty,
+        cognee.db.row_count = tracing::field::Empty,
+    ),
+    err,
+)]
+pub async fn get_unique_nodes_for_run(
+    db: &DatabaseConnection,
+    scope: &RunScope<'_>,
+) -> Result<Vec<GraphNode>, DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
+    if scope.selects_nothing() {
+        Span::current().record(COGNEE_DB_ROW_COUNT, 0i64);
+        return Ok(Vec::new());
+    }
+    let n2 = Alias::new("n2");
+
+    // `IS NULL` is NOT redundant with `<> :run`: `NULL <> :run` evaluates to
+    // NULL, not TRUE, so without it a slug also claimed by a pre-ownership row
+    // would look unclaimed and the sweep would delete an artifact that
+    // predates every run.
+    let mut outside = Condition::any()
+        .add(Expr::col((n2.clone(), node::Column::PipelineRunId)).is_null())
+        .add(Expr::col((n2.clone(), node::Column::PipelineRunId)).ne(scope.run_hex()))
+        .add(Expr::col((n2.clone(), node::Column::DatasetId)).ne(scope.dataset_hex()));
+    if let Some(data_hexes) = scope.data_hexes() {
+        outside = outside.add(Expr::col((n2.clone(), node::Column::DataId)).is_not_in(data_hexes));
+    }
+
+    let claimed = Query::select()
+        .expr(Expr::val(1))
+        .from_as(Alias::new("nodes"), n2.clone())
+        .cond_where(
+            Condition::all()
+                .add(
+                    Expr::col((n2.clone(), node::Column::Slug))
+                        .equals((Alias::new("nodes"), node::Column::Slug)),
+                )
+                .add(outside),
+        )
+        .to_owned();
+
+    let rows: Vec<GraphNode> = node::Entity::find()
+        .filter(node_selection(scope))
+        .filter(Expr::exists(claimed).not())
+        .order_by_asc(node::Column::CreatedAt)
+        .all(db)
+        .await
+        .map_err(map_sea_err)?
+        .into_iter()
+        .map(GraphNode::from)
+        .collect();
+    Span::current().record(COGNEE_DB_ROW_COUNT, rows.len() as i64);
+    Ok(rows)
+}
+
+/// Return the edges of [`get_edges_for_run`] whose `slug` is claimed by no row
+/// outside `scope`; see [`get_unique_nodes_for_run`] for the reasoning.
+#[instrument(
+    name = "cognee.db.relational.graph_storage.get_unique_edges_for_run",
+    level = "info",
+    skip_all,
+    fields(
+        cognee.db.system = tracing::field::Empty,
+        cognee.db.row_count = tracing::field::Empty,
+    ),
+    err,
+)]
+pub async fn get_unique_edges_for_run(
+    db: &DatabaseConnection,
+    scope: &RunScope<'_>,
+) -> Result<Vec<GraphEdge>, DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
+    if scope.selects_nothing() {
+        Span::current().record(COGNEE_DB_ROW_COUNT, 0i64);
+        return Ok(Vec::new());
+    }
+    let e2 = Alias::new("e2");
+
+    let mut outside = Condition::any()
+        .add(Expr::col((e2.clone(), edge::Column::PipelineRunId)).is_null())
+        .add(Expr::col((e2.clone(), edge::Column::PipelineRunId)).ne(scope.run_hex()))
+        .add(Expr::col((e2.clone(), edge::Column::DatasetId)).ne(scope.dataset_hex()));
+    if let Some(data_hexes) = scope.data_hexes() {
+        outside = outside.add(Expr::col((e2.clone(), edge::Column::DataId)).is_not_in(data_hexes));
+    }
+
+    let claimed = Query::select()
+        .expr(Expr::val(1))
+        .from_as(Alias::new("edges"), e2.clone())
+        .cond_where(
+            Condition::all()
+                .add(
+                    Expr::col((e2.clone(), edge::Column::Slug))
+                        .equals((Alias::new("edges"), edge::Column::Slug)),
+                )
+                .add(outside),
+        )
+        .to_owned();
+
+    let rows: Vec<GraphEdge> = edge::Entity::find()
+        .filter(edge_selection(scope))
+        .filter(Expr::exists(claimed).not())
+        .order_by_asc(edge::Column::CreatedAt)
+        .all(db)
+        .await
+        .map_err(map_sea_err)?
+        .into_iter()
+        .map(GraphEdge::from)
+        .collect();
+    Span::current().record(COGNEE_DB_ROW_COUNT, rows.len() as i64);
+    Ok(rows)
+}
+
+/// The `relationship_name` values edge rows *outside* `scope` still claim.
+///
+/// A second exclusivity check, for a second identity. The
+/// `EdgeType_relationship_name` vector point is keyed on an edge's *retrieval
+/// text*, not on its slug, and that key is many-to-one over edges: every `is_a`
+/// edge in the store shares one point. So slug exclusivity — what
+/// [`get_unique_edges_for_run`] answers — says nothing about whether that point
+/// may go, and a sweep of one file's `is_a` edge would strip the point every
+/// surviving `is_a` edge still needs. Callers subtract this set before issuing
+/// any `EdgeType` delete.
+///
+/// "Outside" is the same negation [`get_unique_nodes_for_run`] uses, but
+/// *uncorrelated*: one `SELECT DISTINCT` over what is in practice a small
+/// vocabulary of relation names, rather than a per-row `NOT EXISTS` or an `IN`
+/// list of candidate texts — a run owns one text per edge, and that list would
+/// blow past SQLite's `SQLITE_MAX_VARIABLE_NUMBER` and Postgres' 65 535.
+///
+/// **Residual.** The column carries the retrieval text only for edges with no
+/// `edge_text` attribute, and for `contains` edges (where cognify writes the
+/// text into the column itself). An outside edge whose text lives *only* in its
+/// attributes claims under a name this query cannot see, so a candidate
+/// matching that text is not protected. Hitting it takes two edges with
+/// different endpoints — same endpoints would share a slug, and the slug check
+/// already protects those — and byte-identical descriptions.
+///
+/// No `selects_nothing` early return, deliberately: an empty selection makes
+/// every row an outside row, and "everything is claimed" is both the honest and
+/// the safe answer. A caller with nothing to filter should skip the call.
+#[instrument(
+    name = "cognee.db.relational.graph_storage.get_relationship_names_claimed_outside_run",
+    level = "info",
+    skip_all,
+    fields(
+        cognee.db.system = tracing::field::Empty,
+        cognee.db.row_count = tracing::field::Empty,
+    ),
+    err,
+)]
+pub async fn get_relationship_names_claimed_outside_run(
+    db: &DatabaseConnection,
+    scope: &RunScope<'_>,
+) -> Result<Vec<String>, DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
+
+    // `IS NULL` is not redundant with `<> :run`; see `get_unique_nodes_for_run`.
+    let mut outside = Condition::any()
+        .add(edge::Column::PipelineRunId.is_null())
+        .add(edge::Column::PipelineRunId.ne(scope.run_hex()))
+        .add(edge::Column::DatasetId.ne(scope.dataset_hex()));
+    if let Some(data_hexes) = scope.data_hexes() {
+        outside = outside.add(edge::Column::DataId.is_not_in(data_hexes));
+    }
+
+    let names: Vec<String> = edge::Entity::find()
+        .select_only()
+        .column(edge::Column::RelationshipName)
+        .distinct()
+        .filter(outside)
+        .into_tuple::<String>()
+        .all(db)
+        .await
+        .map_err(map_sea_err)?;
+
+    Span::current().record(COGNEE_DB_ROW_COUNT, names.len() as i64);
+    Ok(names)
+}
+
+/// Delete the provenance node rows within `scope`, returning how many went.
+///
+/// The plain selection predicate, with no exclusivity check: the ownership row
+/// belongs to this run whether or not the artifact it names survives.
+#[instrument(
+    name = "cognee.db.relational.graph_storage.delete_nodes_for_run",
+    level = "info",
+    skip_all,
+    fields(
+        cognee.db.system = tracing::field::Empty,
+        cognee.db.row_count = tracing::field::Empty,
+    ),
+    err,
+)]
+pub async fn delete_nodes_for_run(
+    db: &DatabaseConnection,
+    scope: &RunScope<'_>,
+) -> Result<u64, DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
+    if scope.selects_nothing() {
+        Span::current().record(COGNEE_DB_ROW_COUNT, 0i64);
+        return Ok(0);
+    }
+    let deleted = node::Entity::delete_many()
+        .filter(node_selection(scope))
+        .exec(db)
+        .await
+        .map_err(map_sea_err)?
+        .rows_affected;
+    Span::current().record(COGNEE_DB_ROW_COUNT, deleted as i64);
+    Ok(deleted)
+}
+
+/// Delete the provenance edge rows within `scope`, returning how many went;
+/// see [`delete_nodes_for_run`].
+#[instrument(
+    name = "cognee.db.relational.graph_storage.delete_edges_for_run",
+    level = "info",
+    skip_all,
+    fields(
+        cognee.db.system = tracing::field::Empty,
+        cognee.db.row_count = tracing::field::Empty,
+    ),
+    err,
+)]
+pub async fn delete_edges_for_run(
+    db: &DatabaseConnection,
+    scope: &RunScope<'_>,
+) -> Result<u64, DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
+    if scope.selects_nothing() {
+        Span::current().record(COGNEE_DB_ROW_COUNT, 0i64);
+        return Ok(0);
+    }
+    let deleted = edge::Entity::delete_many()
+        .filter(edge_selection(scope))
+        .exec(db)
+        .await
+        .map_err(map_sea_err)?
+        .rows_affected;
+    Span::current().record(COGNEE_DB_ROW_COUNT, deleted as i64);
+    Ok(deleted)
+}
+
+/// The distinct data items the run touched within `scope` — the set whose
+/// completion markers a sweep has to clear.
+///
+/// Read *before* the ownership rows go: they are what carries the answer.
+/// A `SELECT DISTINCT` rather than a load of every selected row (which is what
+/// Python's `rollback.py` does): a large run owns millions of rows, while the
+/// distinct data ids are bounded by the files in the dataset.
+///
+/// Exclusivity is deliberately *not* applied. A data item whose every artifact
+/// is also claimed elsewhere still had its work rolled back, so its marker must
+/// go even though none of its artifacts do.
+///
+/// A row whose stored id will not parse is skipped with a warning rather than
+/// failing the call: this feeds an error-path operation that has to make
+/// progress on everything else.
+#[instrument(
+    name = "cognee.db.relational.graph_storage.get_data_ids_for_run",
+    level = "info",
+    skip_all,
+    fields(
+        cognee.db.system = tracing::field::Empty,
+        cognee.db.row_count = tracing::field::Empty,
+    ),
+    err,
+)]
+pub async fn get_data_ids_for_run(
+    db: &DatabaseConnection,
+    scope: &RunScope<'_>,
+) -> Result<Vec<Uuid>, DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
+    if scope.selects_nothing() {
+        Span::current().record(COGNEE_DB_ROW_COUNT, 0i64);
+        return Ok(Vec::new());
+    }
+
+    // Two queries folded together in Rust rather than a SQL `UNION`: this
+    // reuses `node_selection` / `edge_selection` verbatim, so the set of data
+    // items reported can never drift from the set of rows deleted.
+    let node_hexes: Vec<String> = node::Entity::find()
+        .select_only()
+        .column(node::Column::DataId)
+        .distinct()
+        .filter(node_selection(scope))
+        .into_tuple::<String>()
+        .all(db)
+        .await
+        .map_err(map_sea_err)?;
+
+    let edge_hexes: Vec<String> = edge::Entity::find()
+        .select_only()
+        .column(edge::Column::DataId)
+        .distinct()
+        .filter(edge_selection(scope))
+        .into_tuple::<String>()
+        .all(db)
+        .await
+        .map_err(map_sea_err)?;
+
+    // BTreeSet, not HashSet: a deterministic order keeps the sweep's marker
+    // clearing (and its tests) reproducible.
+    let mut data_ids = BTreeSet::new();
+    for hex in node_hexes.into_iter().chain(edge_hexes) {
+        match uuid_hex::from_hex(&hex) {
+            Ok(id) => {
+                data_ids.insert(id);
+            }
+            Err(e) => warn!("Skipping unparseable provenance data_id {hex:?}: {e}"),
+        }
+    }
+
+    Span::current().record(COGNEE_DB_ROW_COUNT, data_ids.len() as i64);
+    Ok(data_ids.into_iter().collect())
 }

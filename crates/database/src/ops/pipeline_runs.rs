@@ -113,6 +113,44 @@ pub async fn delete_pipeline_runs_by_dataset(
     Ok(result.rows_affected)
 }
 
+/// The latest `pipeline_runs` row for `(pipeline_name, dataset_id)`.
+///
+/// [`get_latest_pipeline_status`] is this, projected. A pipeline-cache gate
+/// needs the row's `run_info` as well as its status — a run that completed
+/// with files still outstanding is not a cache hit — and reading the two with
+/// separate queries would let the answers come from different rows.
+#[instrument(
+    name = "cognee.db.relational.pipeline_runs.get_latest_pipeline_run",
+    level = "info",
+    skip_all,
+    fields(
+        cognee.db.system = tracing::field::Empty,
+        cognee.db.row_count = tracing::field::Empty,
+    ),
+    err,
+)]
+pub async fn get_latest_pipeline_run(
+    db: &DatabaseConnection,
+    pipeline_name: &str,
+    dataset_id: Uuid,
+) -> Result<Option<PipelineRun>, DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
+    let run = pipeline_run::Entity::find()
+        .filter(pipeline_run::Column::PipelineName.eq(pipeline_name))
+        .filter(pipeline_run::Column::DatasetId.eq(uuid_hex::to_hex(dataset_id)))
+        .order_by_desc(pipeline_run::Column::CreatedAt)
+        .one(db)
+        .await
+        .map_err(map_sea_err)?;
+
+    let result = run.map(PipelineRun::from);
+    Span::current().record(
+        COGNEE_DB_ROW_COUNT,
+        if result.is_some() { 1i64 } else { 0i64 },
+    );
+    Ok(result)
+}
+
 #[instrument(
     name = "cognee.db.relational.pipeline_runs.get_latest_pipeline_status",
     level = "info",
@@ -129,15 +167,9 @@ pub async fn get_latest_pipeline_status(
     dataset_id: Uuid,
 ) -> Result<Option<PipelineRunStatus>, DatabaseError> {
     Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
-    let run = pipeline_run::Entity::find()
-        .filter(pipeline_run::Column::PipelineName.eq(pipeline_name))
-        .filter(pipeline_run::Column::DatasetId.eq(uuid_hex::to_hex(dataset_id)))
-        .order_by_desc(pipeline_run::Column::CreatedAt)
-        .one(db)
-        .await
-        .map_err(map_sea_err)?;
-
-    let result = run.map(|m| PipelineRun::from(m).status);
+    let result = get_latest_pipeline_run(db, pipeline_name, dataset_id)
+        .await?
+        .map(|run| run.status);
     Span::current().record(
         COGNEE_DB_ROW_COUNT,
         if result.is_some() { 1i64 } else { 0i64 },

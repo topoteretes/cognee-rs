@@ -5,6 +5,9 @@ use sea_orm_migration::prelude::*;
 mod m20260914_000001_baseline;
 mod m20260915_000001_pipeline_run_claims;
 mod m20260916_000001_provenance_edge_id_rekey_guard;
+mod m20260916_000001_provenance_pipeline_run_id;
+mod m20260917_000001_graph_slug_indexes;
+mod m20260918_000001_align_node_index_names;
 
 pub struct Migrator;
 
@@ -39,7 +42,18 @@ pub fn core_migrations() -> Vec<Box<dyn MigrationTrait>> {
     vec![
         Box::new(m20260914_000001_baseline::Migration),
         Box::new(m20260915_000001_pipeline_run_claims::Migration),
+        // The rekey guard sorts — and runs — before the schema changes below,
+        // so a database it refuses is left exactly as it was found rather than
+        // half-migrated. It only reads `edges`, which the baseline created, and
+        // nothing between the baseline and here writes a row to it, so the
+        // emptiness question it asks is the same at this position as at any
+        // later one. Its name also sorts first among the `m20260916` pair
+        // (`provenance_edge_id_…` < `provenance_pipeline_run_id`), so list order
+        // and name order still agree.
         Box::new(m20260916_000001_provenance_edge_id_rekey_guard::Migration),
+        Box::new(m20260916_000001_provenance_pipeline_run_id::Migration),
+        Box::new(m20260917_000001_graph_slug_indexes::Migration),
+        Box::new(m20260918_000001_align_node_index_names::Migration),
     ]
 }
 

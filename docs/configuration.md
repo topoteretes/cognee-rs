@@ -385,6 +385,215 @@ The token counter is env-selected:
 | `COGNEE_TOKEN_COUNTER` | `tiktoken` / `word` / `huggingface`(`hf`) | auto from embedding provider |
 | `HUGGINGFACE_TOKENIZER` | model id when counter = `huggingface` | _(empty)_ |
 
+## Cognify failure handling
+
+Read by [`crates/cognify/src/failure.rs`](../crates/cognify/src/failure.rs).
+When a stage cannot process one chunk or one file it now *records* the failure
+— which stage, which file, which chunk, and why — instead of aborting the batch
+by propagating. The report rides every stage output to `CognifyResult.failures`
+(on success) or to `CognifyError::RunFailed` (when the run failed). Whether the
+run fails is decided once, at the end, from two independent axes.
+
+Each is a `CognifyConfig` builder, and each is also read from the environment
+at construction time. None of them adds a `Settings` field, so
+`GET /api/v1/settings` keeps the shape the parity suite compares against
+Python's — which is also how Python exposes its own equivalent flag: through
+the environment only, never through `CognifyConfig`.
+
+| Builder | Field | Env var | Default |
+|---|---|---|---|
+| `with_failure_stop` | `failure_stop` | `RAISE_INCREMENTAL_LOADING_ERRORS` / `COGNEE_RAISE_INCREMENTAL_LOADING_ERRORS` | `FailFast` |
+| `with_rollback_scope` | `rollback_scope` | `COGNEE_COGNIFY_ROLLBACK_SCOPE` (`whole_run` / `failed_items` only) | `WholeRun` |
+| `with_summarization_failure_tolerance` | `tolerate_summarization_failures` | `COGNEE_COGNIFY_TOLERATE_SUMMARIZATION_FAILURES` | `false` |
+| `with_chunk_failure_ratio_threshold` | `chunk_failure_ratio_threshold` | `COGNEE_COGNIFY_MAX_CHUNK_FAILURE_RATIO` | `0.05` |
+| `with_failure_report_cap` | `failure_report_cap` | `COGNEE_COGNIFY_FAILURE_REPORT_CAP` | `100` |
+
+**Axis 1 shares Python's variable name.** `RAISE_INCREMENTAL_LOADING_ERRORS` is
+Python's own flag (`run_tasks_data_item.py:200`, default `true`), so one `.env`
+configures both SDKs the same way. Its polarity is Python's and is inverted
+relative to the variant names: *raising* on the first error is `FailFast`,
+and `false` is `RunToEnd`. In Python that flag decides whether the first failed
+item aborts the run or every item is attempted first — it never changes what
+survives, because Python sweeps the whole run either way. That is precisely
+what this axis means here. The `COGNEE_`-prefixed alias follows the same
+dual-name convention as `CHUNK_SIZE` / `COGNEE_CHUNK_SIZE`.
+
+**The other four are Rust-only** and say so with a `COGNEE_COGNIFY_` prefix:
+Python has no counterpart for any of them. An unset or unparseable value leaves
+the default in place rather than failing the process, and out-of-range values
+(a ratio outside `0..=1`, a zero cap) are ignored the same way.
+
+**Axis 1 — when to stop.** `FailFast` stops the failing stage from scheduling
+further work once a failure has been recorded; the files that already completed
+still travel down the rest of the pipeline. `RunToEnd` continues past failures,
+collecting them, and decides at the end — a full run's worth of LLM cost for the
+complete failure list.
+
+*"Once" is not "immediately", and it is not per file.* Each stage stops at the
+boundary its own loop offers, and only one of them is the first failed file:
+
+| Stage | Stops after | Set by | Default |
+|---|---|---|---|
+| Chunking | the file that failed | — | one file |
+| Graph extraction (standard and custom-graph) | the batch that contained the failure | `chunks_per_batch` | **2000 chunks** |
+| Temporal extraction | the batch that contained the failure | `data_per_batch` | **20 files** |
+| Summarization | the calls already in flight when the failure came back | `max_parallel_extractions` | **1000 calls** (128 on Android/iOS) |
+
+The extraction row is the one to read twice. 2000 is Python's own default
+(`cognify.py:367-370`) and is deliberately large — the stage awaits each batch
+before starting the next, so small batches serialise a run into waves. The
+consequence is that any dataset under 2000 chunks *is* one batch: `FailFast`
+dispatches every extraction call, learns about the failure when the batch is
+collected, and only then stops. On such a dataset it saves nothing; what it
+saves is every batch after the one that failed. Lowering `chunks_per_batch`
+tightens the boundary at the cost of that serialisation.
+
+Summarization has no batch loop at all — one bounded stream covers the whole
+run — so it stops at the granularity of the concurrency window instead. The
+first chunk to fail closes the gate; every chunk not yet dispatched is skipped
+and its file is recorded as unreached, so it is neither marked complete nor
+left half-summarized. Calls already in flight are never cancelled and their
+summaries are never discarded, so a run with fewer chunks than
+`max_parallel_extractions` again saves nothing. A summarization failure that
+`COGNEE_COGNIFY_TOLERATE_SUMMARIZATION_FAILURES` makes non-fatal does not close
+the gate at all: it fails no item, so there is nothing to stop for.
+
+**Axis 2 — what to sweep.** `WholeRun` removes everything the run created;
+`FailedItems` removes only the failed files' contributions and keeps the rest.
+The default pair `FailFast` + `WholeRun` is Python's default behaviour in both
+execution and end state.
+
+`FailedItems` keeps the good files **only while the run as a whole is
+survivable** — that is, only below the failure ratio, and only if at least one
+item survived. Once a `FailedItems` run is judged failed it escalates to a
+whole-run sweep, and the escalation deletes the files that *completed* too,
+along with their completion markers, so the next run redoes the entire dataset
+rather than just the failures. That is the intended reading of the threshold:
+above this proportion, do not trust any of this run — and the pre-run state is
+both the honest end state and the only one a retry converges from. A caller who
+would rather keep the partial result raises
+`COGNEE_COGNIFY_MAX_CHUNK_FAILURE_RATIO`; there is no setting that keeps
+completed files once the run is fatal.
+
+A third variant, `Nothing`, removes nothing — and it is **not selectable from
+the environment**. `COGNEE_COGNIFY_ROLLBACK_SCOPE=nothing` (or `none`) is
+rejected like any other unknown value and leaves the default in place; the
+variant is reachable only in code, via
+`CognifyConfig::with_rollback_scope(RollbackScope::Nothing)`. It is off the
+configuration surface because what it leaves behind is permanent. A run that
+wrote graph edges and then died before the vector stage leaves those edges in
+the graph with no `Triplet_text` and no `EdgeType_relationship_name` point. The
+retry does not repair them: the completion marker is unset, so the item is
+processed again, but `retrieve_existing_edges` finds the orphaned edges and
+expansion skips every edge already in the graph — so no row and no vector is
+ever written for them again. Setting `incremental_loading = false` does not
+help; that dedup filter is not the incremental one. `WholeRun` and
+`FailedItems` both converge on a retry, because both remove the half-written
+artifacts first; `Nothing` is the only scope that cannot.
+
+**What each combination now does at the end of a run.**
+
+| Combination | End state |
+|---|---|
+| `FailFast` + `WholeRun` *(default)* | Stops at the first failed batch, removes everything the run created, marks the run `ERRORED`, returns `Err`. Everything earlier runs completed is untouched. Python's default |
+| `FailFast` + `FailedItems` | *Below the ratio:* stops at the first failed batch; the files that fully completed are kept, indexed and marked; the failed and never-reached ones are removed and left unmarked. *Above it, or with no survivor:* the run is fatal and escalates — everything it created goes, completed files included |
+| `RunToEnd` + `WholeRun` | Pays for the whole run to produce the complete failure list, then removes everything the run created |
+| `RunToEnd` + `FailedItems` | *Below the ratio:* every good file is cognified and marked; only the failed files are removed, and they come back to the caller in the report. *Above it:* the same escalation — the good files are removed too and the call returns `Err` |
+| _either_ + `Nothing` *(code only)* | Nothing is removed. Knowingly leaves partially-cognified files in place, permanently — see above |
+
+**What the SDK call returns.** Any combination that sweeps and ends with the
+run `ERRORED` returns `Err`, matching Python, which re-raises after rolling
+back. A `FailedItems` combination that completes below the ratio returns `Ok`
+carrying the failed-file list in `CognifyResult.failures` — the run genuinely
+completed. `Nothing` propagates whatever the pipeline produced.
+
+**What a sweep keeps.** An artifact is removed only when nothing outside the
+swept scope still claims it — another run, another dataset, a row predating
+ownership tracking, or, for an item-scoped sweep, a *surviving* file in the same
+run. So an entity a failed file shared with a good one stays.
+
+**Cancellation is swept**, a deliberate divergence: Python's rollback handler
+catches `Exception`, which excludes `CancelledError`, so a cancelled Python run
+keeps its partial graph. There is currently no caller-facing cancel handle on
+`cognify()`, so this is reachable only from inside the library; dropping the
+`cognify()` future runs no sweep at all (crash recovery is out of scope).
+
+**Per-stage policy.** Failure policy is a property of the stage, not a user
+choice — with one exception.
+
+| Stage | Failure unit | Behaviour |
+|---|---|---|
+| Chunking | data item | Collected; the item fails and contributes neither chunks nor a `Document` |
+| Graph extraction | chunk | Collected; the item fails. Ratio-checked under `FailedItems` |
+| Summarization | chunk | **Configurable.** Default: the item fails (Python parity). With tolerance on: recorded separately, never fails the item or the run, never counts toward the ratio |
+| Temporal event extraction | chunk | Collected; the item fails. Ratio-checked under `FailedItems` |
+| Temporal entity enrichment | chunk | Collected. One LLM call covers a whole batch, so the failure is recorded against **every chunk that fed the batch** and the batch's events are dropped — an event with no attributes carries none of the entity graph the pass exists to produce |
+| Persistence — graph, vector or ledger writes, and embeddings | run | Always fatal, under every combination |
+
+`tolerate_summarization_failures` governs **fatality only**. Either way the
+summarization stage collects rather than propagates: the whole stream is drained
+so already-completed summaries are kept and the reported list is complete.
+
+**The failure ratio** is counted in chunks, evaluated per run, excludes
+summarization failures, and applies only under `FailedItems`. It is backstopped
+by an explicit rule: if no item survived, the run failed regardless of the
+ratio — a file that failed at the chunk stage produced no chunks, so it
+contributes to neither side of the ratio. Crossing the ratio (or tripping the
+backstop) is what turns a `FailedItems` run fatal, and therefore what triggers
+the escalation to a whole-run sweep described above: the completed files and
+their markers go too.
+
+**The report cap** bounds the individual entries the report lists (and therefore
+the error message); the total count, the failed-file set and every counter are
+never capped.
+
+Note that a run that dies in a persistence stage loses the report of the
+failures collected earlier: persistence errors keep their own `CognifyError`
+variants, because they are already run-fatal under every configuration.
+
+## Completion markers and incremental loading
+
+`incremental_loading` (default **on**) is now live. After a successful run,
+every data item the run finished is marked complete on its `Data` row, under
+`pipeline_status["cognify_pipeline"][<dataset id>] =
+"DATA_ITEM_PROCESSING_COMPLETED"` — Python's format byte for byte, dashed
+dataset id and all, so the two SDKs can share a database. The next run reads
+those markers before it builds a pipeline and skips the items already carrying
+one: they are not classified, not chunked, and never sent to an LLM.
+
+Three consequences worth stating plainly:
+
+- **Re-cognifying an already-complete dataset is a no-op.** The call returns
+  `Ok` with `already_completed = true` and empty payloads. This is a behaviour
+  change: before this, every cognify re-processed everything.
+- **A failed run marks nothing**, and a sweep clears the markers of every item
+  it rolled back, so the next run redoes exactly the work that was lost.
+- **A run that completed with failures outstanding is not a pipeline-cache
+  hit**, even with `use_pipeline_cache` on — the next run has the failed files
+  to redo.
+
+**A divergence from Python worth knowing on a shared database.** A fully
+skipped Rust run writes no `pipeline_runs` rows at all: the marker check runs
+before the pipeline is built, so there is no `INITIATED` / `STARTED` /
+`COMPLETED` trail for that call, and nothing appears under
+`GET /api/v1/activity/pipeline-runs`. Python reaches the same end state by a
+different route — `run_tasks` logs the run start before it looks at any item
+(`operations/run_tasks.py`), and each item then yields
+`PipelineRunAlreadyCompleted` from inside the open run
+(`operations/run_tasks_data_item.py`) — so a repeat cognify leaves a complete
+run trail there. The two SDKs agree on what a repeat run *did* (nothing) and
+disagree on whether it is visible as a run.
+
+**Temporal runs share the markers.** Both branches write and read the one
+`cognify_pipeline` key, which is what Python does — its temporal cognify runs
+under the same `pipeline_name`. The consequence is user-visible: a `cognify()`
+followed by a temporal `cognify()` over the same dataset is a **no-op**, and the
+other way round. Callers who want both graphs over one dataset must set
+`with_incremental_loading(false)`.
+
+Set `with_incremental_loading(false)` to restore the previous behaviour and
+reprocess everything on every run.
+
 ## Search — hybrid retriever knobs
 
 The `HYBRID_COMPLETION` search type (`SearchType::HybridCompletion`) accepts a

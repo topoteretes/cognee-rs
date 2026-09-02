@@ -213,6 +213,7 @@ impl From<node::Model> for GraphNode {
             user_id: uuid_hex::from_hex(&m.user_id).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
             data_id: uuid_hex::from_hex(&m.data_id).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
             dataset_id: uuid_hex::from_hex(&m.dataset_id).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
+            pipeline_run_id: uuid_hex::from_hex_opt(m.pipeline_run_id.as_deref()).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
             label: m.label,
             node_type: m.node_type,
             indexed_fields: m.indexed_fields,
@@ -234,6 +235,7 @@ impl From<&GraphNode> for node::ActiveModel {
             user_id: Set(uuid_hex::to_hex(n.user_id)),
             data_id: Set(uuid_hex::to_hex(n.data_id)),
             dataset_id: Set(uuid_hex::to_hex(n.dataset_id)),
+            pipeline_run_id: Set(uuid_hex::to_hex_opt(n.pipeline_run_id)),
             label: Set(n.label.clone().map(sanitize_string)),
             node_type: Set(sanitize_str(&n.node_type).into_owned()),
             indexed_fields: Set(sanitize_json(n.indexed_fields.clone())),
@@ -251,6 +253,7 @@ impl From<edge::Model> for GraphEdge {
             user_id: uuid_hex::from_hex(&m.user_id).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
             data_id: uuid_hex::from_hex(&m.data_id).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
             dataset_id: uuid_hex::from_hex(&m.dataset_id).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
+            pipeline_run_id: uuid_hex::from_hex_opt(m.pipeline_run_id.as_deref()).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
             source_node_id: uuid_hex::from_hex(&m.source_node_id).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
             destination_node_id: uuid_hex::from_hex(&m.destination_node_id).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
             relationship_name: m.relationship_name,
@@ -269,6 +272,7 @@ impl From<&GraphEdge> for edge::ActiveModel {
             user_id: Set(uuid_hex::to_hex(e.user_id)),
             data_id: Set(uuid_hex::to_hex(e.data_id)),
             dataset_id: Set(uuid_hex::to_hex(e.dataset_id)),
+            pipeline_run_id: Set(uuid_hex::to_hex_opt(e.pipeline_run_id)),
             source_node_id: Set(uuid_hex::to_hex(e.source_node_id)),
             destination_node_id: Set(uuid_hex::to_hex(e.destination_node_id)),
             relationship_name: Set(sanitize_str(&e.relationship_name).into_owned()),
@@ -333,7 +337,9 @@ impl From<&PipelineRun> for pipeline_run::ActiveModel {
             // watchers call `PipelineRunRepository::log_pipeline_run`, which
             // builds the `ActiveModel` itself and sanitizes there. This impl is
             // reached only through `ops::pipeline_runs::create_pipeline_run`,
-            // whose callers pass `run_info: None` today.
+            // whose live payloads carry no free text: `dataset_resolver`'s
+            // completion row passes `rollback::run_info_with_failures`, which is
+            // uuid strings and counts, and every other caller passes `None`.
             run_info: Set(r.run_info.clone().map(sanitize_json)),
         }
     }
@@ -419,7 +425,7 @@ impl From<&GraphMetrics> for graph_metrics::ActiveModel {
 }
 
 // ---------------------------------------------------------------------------
-// NUL-byte sanitization (no database required)
+// NUL-byte sanitization and field mapping (no database required)
 // ---------------------------------------------------------------------------
 #[cfg(test)]
 #[allow(
@@ -455,6 +461,7 @@ mod sanitize_tests {
             user_id: Uuid::new_v4(),
             data_id: Uuid::new_v4(),
             dataset_id: Uuid::new_v4(),
+            pipeline_run_id: None,
             label: Some("Nikola\u{0} Tesla".to_string()),
             node_type: "Doc\u{0}Chunk".to_string(),
             indexed_fields: json!(["te\u{0}xt"]),
@@ -492,6 +499,7 @@ mod sanitize_tests {
             user_id: Uuid::new_v4(),
             data_id: Uuid::new_v4(),
             dataset_id: Uuid::new_v4(),
+            pipeline_run_id: None,
             source_node_id: Uuid::new_v4(),
             destination_node_id: Uuid::new_v4(),
             relationship_name: "is\u{0}_a".to_string(),
@@ -530,6 +538,7 @@ mod sanitize_tests {
             user_id: Uuid::new_v4(),
             data_id: Uuid::new_v4(),
             dataset_id: Uuid::new_v4(),
+            pipeline_run_id: None,
             label: Some("Ada Lovelace".to_string()),
             node_type: "Person".to_string(),
             indexed_fields: json!(["text"]),
@@ -542,5 +551,79 @@ mod sanitize_tests {
         assert_eq!(unwrap_set(model.label), Some("Ada Lovelace".to_string()));
         assert_eq!(unwrap_set(model.node_type), "Person");
         assert_eq!(unwrap_set(model.attributes), Some(attrs));
+    }
+
+    /// `None` must survive as SQL `NULL` and a run id as its 32-char hex, in
+    /// both directions — a legacy row that round-tripped into an invented run
+    /// id would stop being exempt from sweeps.
+    #[test]
+    fn graph_node_pipeline_run_id_round_trips() {
+        let run = Uuid::new_v4();
+        let model = node::Model {
+            id: uuid_hex::to_hex(Uuid::new_v4()),
+            slug: uuid_hex::to_hex(Uuid::new_v4()),
+            user_id: uuid_hex::to_hex(Uuid::new_v4()),
+            data_id: uuid_hex::to_hex(Uuid::new_v4()),
+            dataset_id: uuid_hex::to_hex(Uuid::new_v4()),
+            pipeline_run_id: Some(uuid_hex::to_hex(run)),
+            label: None,
+            node_type: "Entity".to_string(),
+            indexed_fields: json!(["name"]),
+            attributes: None,
+            created_at: Utc::now(),
+        };
+
+        let owned = GraphNode::from(model.clone());
+        assert_eq!(owned.pipeline_run_id, Some(run));
+        assert_eq!(
+            unwrap_set(node::ActiveModel::from(&owned).pipeline_run_id),
+            Some(uuid_hex::to_hex(run))
+        );
+
+        let legacy = GraphNode::from(node::Model {
+            pipeline_run_id: None,
+            ..model
+        });
+        assert_eq!(legacy.pipeline_run_id, None);
+        assert_eq!(
+            unwrap_set(node::ActiveModel::from(&legacy).pipeline_run_id),
+            None
+        );
+    }
+
+    #[test]
+    fn graph_edge_pipeline_run_id_round_trips() {
+        let run = Uuid::new_v4();
+        let model = edge::Model {
+            id: uuid_hex::to_hex(Uuid::new_v4()),
+            slug: uuid_hex::to_hex(Uuid::new_v4()),
+            user_id: uuid_hex::to_hex(Uuid::new_v4()),
+            data_id: uuid_hex::to_hex(Uuid::new_v4()),
+            dataset_id: uuid_hex::to_hex(Uuid::new_v4()),
+            pipeline_run_id: Some(uuid_hex::to_hex(run)),
+            source_node_id: uuid_hex::to_hex(Uuid::new_v4()),
+            destination_node_id: uuid_hex::to_hex(Uuid::new_v4()),
+            relationship_name: "is_a".to_string(),
+            label: None,
+            attributes: None,
+            created_at: Utc::now(),
+        };
+
+        let owned = GraphEdge::from(model.clone());
+        assert_eq!(owned.pipeline_run_id, Some(run));
+        assert_eq!(
+            unwrap_set(edge::ActiveModel::from(&owned).pipeline_run_id),
+            Some(uuid_hex::to_hex(run))
+        );
+
+        let legacy = GraphEdge::from(edge::Model {
+            pipeline_run_id: None,
+            ..model
+        });
+        assert_eq!(legacy.pipeline_run_id, None);
+        assert_eq!(
+            unwrap_set(edge::ActiveModel::from(&legacy).pipeline_run_id),
+            None
+        );
     }
 }

@@ -110,9 +110,15 @@ async fn test_entity_ids_are_stable_across_cognify_runs() {
     let owner_id = Uuid::nil();
     let dataset_name = "entity_id_determinism";
     // Keep the graph focused on entities — no summary/triplet nodes.
+    //
+    // Incremental loading off: this test cognifies the *same* data twice on
+    // purpose, and with markers live the second run would skip it entirely and
+    // have no entity ids to compare. Turning the flag off is what keeps the
+    // determinism question askable at all.
     let config = CognifyConfig::default()
         .with_summarization(false)
-        .with_triplet_embeddings(false);
+        .with_triplet_embeddings(false)
+        .with_incremental_loading(false);
 
     let ingest = AddPipeline::new(Arc::clone(&storage), database.clone() as Arc<dyn IngestDb>)
         .with_thread_pool(Arc::new(

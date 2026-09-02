@@ -83,7 +83,16 @@ jobs:
         uses: actions/cache@v4
         with:
           path: target/ort-cache
-          key: ort-v2.0.0-rc.12-cpu-linux-x86_64
+          key: ort-v2.0.0-rc.13-cpu-linux-x86_64
+      # A restored ORT cache that lost its libonnxruntime.a still makes ort-sys
+      # skip the download; the failure then surfaces minutes later as the bare
+      # rustc error "could not find native static library `onnxruntime`". Drop any
+      # empty dist dir so ort-sys re-downloads -- and so this job's post-step
+      # cannot persist the empty skeleton under the ORT key. Full write-up in
+      # ci/ort/ensure-cache-usable.sh.
+      - name: Ensure the restored ORT cache is usable
+        shell: bash
+        run: bash ci/ort/ensure-cache-usable.sh target/ort-cache
 
       - name: rustfmt (check)
         run: cargo fmt --all -- --check
@@ -158,7 +167,16 @@ jobs:
         uses: actions/cache@v4
         with:
           path: target/ort-cache
-          key: ort-v2.0.0-rc.12-cpu-linux-x86_64
+          key: ort-v2.0.0-rc.13-cpu-linux-x86_64
+      # A restored ORT cache that lost its libonnxruntime.a still makes ort-sys
+      # skip the download; the failure then surfaces minutes later as the bare
+      # rustc error "could not find native static library `onnxruntime`". Drop any
+      # empty dist dir so ort-sys re-downloads -- and so this job's post-step
+      # cannot persist the empty skeleton under the ORT key. Full write-up in
+      # ci/ort/ensure-cache-usable.sh.
+      - name: Ensure the restored ORT cache is usable
+        shell: bash
+        run: bash ci/ort/ensure-cache-usable.sh target/ort-cache
 
       - name: Show toolchain
         run: |
@@ -368,7 +386,16 @@ jobs:
         uses: actions/cache@v4
         with:
           path: target/ort-cache
-          key: ort-v2.0.0-rc.12-cpu-linux-x86_64
+          key: ort-v2.0.0-rc.13-cpu-linux-x86_64
+      # A restored ORT cache that lost its libonnxruntime.a still makes ort-sys
+      # skip the download; the failure then surfaces minutes later as the bare
+      # rustc error "could not find native static library `onnxruntime`". Drop any
+      # empty dist dir so ort-sys re-downloads -- and so this job's post-step
+      # cannot persist the empty skeleton under the ORT key. Full write-up in
+      # ci/ort/ensure-cache-usable.sh.
+      - name: Ensure the restored ORT cache is usable
+        shell: bash
+        run: bash ci/ort/ensure-cache-usable.sh target/ort-cache
 
       - name: Run PgVectorAdapter integration tests
         run: |
@@ -479,7 +506,16 @@ jobs:
         uses: actions/cache@v4
         with:
           path: target/ort-cache
-          key: ort-v2.0.0-rc.12-cpu-linux-x86_64
+          key: ort-v2.0.0-rc.13-cpu-linux-x86_64
+      # A restored ORT cache that lost its libonnxruntime.a still makes ort-sys
+      # skip the download; the failure then surfaces minutes later as the bare
+      # rustc error "could not find native static library `onnxruntime`". Drop any
+      # empty dist dir so ort-sys re-downloads -- and so this job's post-step
+      # cannot persist the empty skeleton under the ORT key. Full write-up in
+      # ci/ort/ensure-cache-usable.sh.
+      - name: Ensure the restored ORT cache is usable
+        shell: bash
+        run: bash ci/ort/ensure-cache-usable.sh target/ort-cache
 
       # `--features sqlite,postgres` — see the ci.yml twin: the non-Postgres case
       # in this file uses `sqlite::memory:`, and `cognee-database` has no default

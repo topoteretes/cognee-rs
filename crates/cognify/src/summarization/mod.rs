@@ -8,5 +8,5 @@
 pub mod extractor;
 pub mod models;
 
-pub use extractor::SummaryExtractor;
+pub use extractor::{SummarizeOutcome, SummaryExtractor};
 pub use models::{SummarizedContent, TextSummary};
