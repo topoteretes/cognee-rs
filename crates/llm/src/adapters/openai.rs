@@ -67,9 +67,20 @@ use crate::types::{GenerationOptions, GenerationResponse, Message, MessageRole, 
 /// The counter tracks "is this mode worth sending", not "does the server
 /// implement it". The distinction matters: an endpoint with no parser that
 /// echoes usable JSON in `content` is answered by mode 1 on its first attempt,
-/// so mode 1 is the *cheapest* path there and must not be skipped. Only a mode
-/// that ran out of attempts having produced nothing usable counts against
-/// itself.
+/// so mode 1 is the *cheapest* path there and must not be skipped.
+///
+/// Two things clear suspicion, and they are different claims:
+///
+/// - **The mode answered the call.** Whether the payload came from the native
+///   field or from `content` is irrelevant — the mode did its job.
+/// - **The endpoint emitted the mode's native field at all**, even if that
+///   payload then failed to parse or validate. The field's mere presence proves
+///   there is a server-side parser, which is the only question this probe is
+///   really asking; a badly-formed tool call is a model problem, not a
+///   capability one, and the corrective-retry ladder already handles it.
+///
+/// Only a mode that ran out of attempts having produced nothing usable, *on
+/// responses that arrived without its native field*, counts against itself.
 ///
 /// Python needs no equivalent: it pins one instructor mode per provider from a
 /// static table (`instructor_modes.py`) and stays there, overridable by
@@ -83,7 +94,8 @@ use crate::types::{GenerationOptions, GenerationResponse, Message, MessageRole, 
 #[derive(Debug)]
 struct ModeProbe {
     /// Structured calls in a row in which this mode ran to exhaustion having
-    /// produced nothing usable. Reset by any call the mode answered.
+    /// produced nothing usable, on responses carrying no native field. Reset by
+    /// any call the mode answered, and by any sighting of its native field.
     consecutive_misses: AtomicU32,
     /// Calls that have skipped this mode since the last attempt at it. Drives
     /// the periodic re-probe.
@@ -125,8 +137,9 @@ impl ModeProbe {
         false
     }
 
-    /// Record that the mode produced something usable, so it is worth sending.
-    /// Clears any accumulated suspicion.
+    /// Record that the mode is worth sending: it either answered the call, or
+    /// the endpoint emitted its native field (proving a parser exists) even if
+    /// that particular payload was unusable. Clears any accumulated suspicion.
     fn record_useful(&self) {
         self.consecutive_misses.store(0, Ordering::Relaxed);
         self.skipped_since_probe.store(0, Ordering::Relaxed);

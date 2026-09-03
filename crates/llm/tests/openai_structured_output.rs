@@ -459,15 +459,19 @@ async fn tool_calls_stop_after_an_endpoint_never_answers_one() {
             .await
             .unwrap_or_else(|e| panic!("call {i} should still succeed via JSON mode: {e}"));
     }
+    // Exact counts, not `>=`: with one structured-output retry and no network
+    // retries each call issues exactly one request per mode, so a looser bound
+    // would let a regression in request *volume* — the whole point of this
+    // change — pass unnoticed.
     let tools_after_priming = tools_mock.calls_async().await;
-    assert!(
-        tools_after_priming >= 3,
-        "each of the first three calls must have tried tool calling; saw {tools_after_priming}"
+    assert_eq!(
+        tools_after_priming, 3,
+        "each of the first three calls must have tried tool calling exactly once"
     );
     let legacy_after_priming = legacy_mock.calls_async().await;
-    assert!(
-        legacy_after_priming >= 3,
-        "the priming calls should have burned legacy mode too; saw {legacy_after_priming}"
+    assert_eq!(
+        legacy_after_priming, 3,
+        "the priming calls should have burned legacy mode exactly once each"
     );
 
     // The fourth call must skip mode 1 entirely.
@@ -481,9 +485,10 @@ async fn tool_calls_stop_after_an_endpoint_never_answers_one() {
         tools_after_priming,
         "tool-calling mode must not be re-sent once the endpoint is known to lack a parser"
     );
-    assert!(
-        json_mock.calls_async().await >= 4,
-        "the fourth call must still be answered, via JSON mode"
+    assert_eq!(
+        json_mock.calls_async().await,
+        4,
+        "all four calls must be answered by JSON mode, one request each"
     );
     // Legacy `functions` needs a server-side parser too, so it must stop being
     // sent as well — otherwise the cascade is only a third shorter and the
@@ -506,7 +511,9 @@ async fn tool_calls_stop_after_an_endpoint_never_answers_one() {
 async fn transport_errors_do_not_count_as_missing_tool_support() {
     let server = MockServer::start_async().await;
 
-    // Mode 1 errors outright for the first three calls, then starts working.
+    // Mode 1 errors outright on every call. The point is that an error is not
+    // evidence about the endpoint's parser, so the mode must keep being tried —
+    // not that it later recovers.
     let failing_tools = server
         .mock_async(|when, then| {
             when.method(POST)
@@ -565,7 +572,10 @@ async fn transport_errors_do_not_count_as_missing_tool_support() {
             .unwrap_or_else(|e| panic!("call {i} should fall through to JSON mode: {e}"));
     }
     let after_errors = failing_tools.calls_async().await;
-    assert!(after_errors >= 3, "three tool-call attempts errored");
+    assert_eq!(
+        after_errors, 3,
+        "three tool-call attempts errored, one per call"
+    );
 
     // The endpoint is still tried, because nothing was ever *observed* about
     // its tool-call support.
@@ -573,11 +583,12 @@ async fn transport_errors_do_not_count_as_missing_tool_support() {
         .create_structured_output_raw("input text", "system prompt", &schema, None)
         .await
         .expect("fourth call succeeds via JSON mode");
-    assert!(
-        failing_tools.calls_async().await > after_errors,
+    assert_eq!(
+        failing_tools.calls_async().await,
+        after_errors + 1,
         "an errored tool-call request must not count as evidence the endpoint lacks a parser"
     );
-    assert!(json_fallback.calls_async().await >= 4);
+    assert_eq!(json_fallback.calls_async().await, 4);
 }
 
 /// An endpoint that echoes usable JSON in `content` is *answered* by mode 1 on

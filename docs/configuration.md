@@ -734,9 +734,14 @@ These knobs form one resilience stack, matching Python cognee's:
   output tokens and cost producing nothing.
 
   The OpenAI-compatible adapter now remembers, per endpoint and **per mode**,
-  whether a shape is worth sending. After three consecutive structured calls in
-  which a mode ran out of attempts having produced nothing usable, that mode is
-  skipped. Tool calling and legacy `functions` are tracked separately, because
+  whether a shape is worth sending. A mode is skipped after three consecutive
+  structured calls in which it ran out of attempts having produced nothing
+  usable *and* every response that arrived was missing its native field
+  (`tool_calls`, or `function_call` for legacy). The native field is the actual
+  criterion: one sighting of it proves the server has a parser and clears the
+  count, even if that payload then failed to parse or validate — a badly-formed
+  tool call is a model problem, which the corrective-retry ladder already
+  handles, not a capability one. Tool calling and legacy `functions` are tracked separately, because
   the cascade exists precisely because a server may accept one and not the other;
   JSON mode is never skipped, being the terminal fallback and the only shape that
   needs no server-side parsing.
