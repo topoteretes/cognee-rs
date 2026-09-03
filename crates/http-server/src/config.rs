@@ -824,10 +824,17 @@ impl HttpServerConfig {
             // Wrapped in `Ok` like the vector side: `validate_graph_config` has
             // already rejected an empty or non-Postgres URL by the time the
             // factory runs, so resolution cannot fail here.
-            graph_postgres_url: if is_postgres_graph(&graph_provider) {
-                Some(Ok(self.graph_db_url.trim().to_string()))
-            } else {
-                None
+            graph_postgres_url: match self.graph_db_url.trim() {
+                // An empty URL stays `None` so PgGraphFactory still reports
+                // "requires a resolved Postgres URL". `backend_context()` is
+                // public and library embedders construct HttpServerConfig
+                // directly, bypassing `validate_graph_config` — without this
+                // guard they would get PgGraphAdapter::new("") and whatever
+                // sqlx says about an unparseable connection string.
+                url if is_postgres_graph(&graph_provider) && !url.is_empty() => {
+                    Some(Ok(url.to_string()))
+                }
+                _ => None,
             },
             vector_provider,
             vector_db_url: self.vector_db_url.clone(),

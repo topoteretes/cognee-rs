@@ -132,6 +132,14 @@ pub async fn wire_default_backends_with(
 /// Validate the Postgres graph configuration, mirroring
 /// [`validate_vector_config`]. Kept here rather than in the factory so the
 /// operator gets a message naming the env var, before any connection attempt.
+///
+/// Gated on `pggraph`. Without that feature the registry already produces a
+/// strictly better diagnosis for `GRAPH_DATABASE_PROVIDER=postgres` —
+/// "Rebuild with the `pggraph` crate feature to enable it." Validating first
+/// would replace it with "GRAPH_DATABASE_URL … is required", sending the
+/// operator off to provision a database that cannot help, and they would only
+/// discover they need a different binary on the next boot.
+#[cfg(feature = "pggraph")]
 fn validate_graph_config(cfg: &HttpServerConfig) -> Result<(), ServerError> {
     let provider = cfg.graph_provider.to_ascii_lowercase();
     if !crate::config::is_postgres_graph(&provider) {
@@ -141,7 +149,10 @@ fn validate_graph_config(cfg: &HttpServerConfig) -> Result<(), ServerError> {
     if url.is_empty() {
         return Err(ServerError::Other(anyhow!(
             "GRAPH_DATABASE_URL (postgres connection string) is required when \
-             GRAPH_DATABASE_PROVIDER={provider}"
+             GRAPH_DATABASE_PROVIDER={provider}. The standalone server reads only \
+             GRAPH_DATABASE_URL; it does not assemble one from the component-form \
+             GRAPH_DATABASE_HOST/PORT/NAME/USERNAME/PASSWORD variables (the SDK \
+             does)."
         )));
     }
     if !(url.starts_with("postgres://") || url.starts_with("postgresql://")) {
@@ -161,7 +172,12 @@ async fn wire_graph_db(
     registry: &ComponentRegistry,
     ctx: &cognee_components::BackendBuildContext,
 ) -> Result<Arc<dyn GraphDBTrait>, ServerError> {
+    #[cfg(feature = "pggraph")]
     validate_graph_config(cfg)?;
+    // Without `pggraph` there is nothing to pre-validate; the registry owns the
+    // error. Bind so the parameter is not flagged unused on that build.
+    #[cfg(not(feature = "pggraph"))]
+    let _ = cfg;
     // Delegate to the registry (like wire_vector_db): it already errors with an
     // actionable "registered providers: [...]" message for anything it doesn't
     // know, and — crucially — this keeps the extension seam intact so a
@@ -398,6 +414,7 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
+    #[cfg(feature = "pggraph")]
     fn rejected_urls_are_described_without_echoing_credentials() {
         // A validation failure must never put the raw connection string into
         // logs. Scheme only — it cannot contain a password.
@@ -431,6 +448,24 @@ mod tests {
     }
 
     #[test]
+    fn describe_scheme_never_reveals_credentials() {
+        assert_eq!(
+            describe_scheme("postgres://user:hunter2@db.internal:5432/x"),
+            "scheme 'postgres://'"
+        );
+        assert_eq!(
+            describe_scheme("/srv/.cognee_system/graph"),
+            "a value with no URL scheme"
+        );
+        // libpq keyword DSNs and bare user:pass@host have no "://" and must not
+        // fall through to echoing the value.
+        assert_eq!(
+            describe_scheme("host=db user=u password=hunter2"),
+            "a value with no URL scheme"
+        );
+    }
+
+    #[test]
     fn vector_rejected_urls_are_described_without_echoing_credentials() {
         let cfg = HttpServerConfig {
             vector_provider: "pgvector".to_string(),
@@ -449,6 +484,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "pggraph")]
     fn validate_graph_config_ladybug_ignores_graph_db_url() {
         // The embedded graph is file-backed; a stray GRAPH_DATABASE_URL must not
         // make the default provider fail to boot.
@@ -461,6 +497,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "pggraph")]
     fn validate_graph_config_postgres_requires_a_url() {
         // Regression: graph_postgres_url used to be hardcoded to None, so
         // GRAPH_DATABASE_PROVIDER=postgres failed deep inside PgGraphFactory with
@@ -482,6 +519,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "pggraph")]
     fn validate_graph_config_postgres_rejects_non_postgres_url() {
         let cfg = HttpServerConfig {
             graph_provider: "postgresql".to_string(),
