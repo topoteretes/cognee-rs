@@ -693,7 +693,11 @@ These knobs form one resilience stack, matching Python cognee's:
   provider's rate-limit window resets. Backoff is exponential with jitter,
   8s doubling to a 128s ceiling, and a `Retry-After` header is honoured (capped
   at 60s) when the provider sends one. Set `LLM_MIN_RETRY_SECONDS=0` to fail
-  fast on attempts alone.
+  fast on attempts alone. The elapsed time measured against this floor excludes
+  time spent queued for an `LLM_MAX_IN_FLIGHT` slot: the floor is a "keep
+  retrying for at least this long" guarantee, so counting queue time against it
+  could only ever end the ladder earlier, and a call that waited minutes for a
+  slot would give up having barely retried at all.
 - **Three timeouts, three scopes.** `LLM_CONNECT_TIMEOUT_SECONDS` bounds the TCP
   handshake (`reqwest` sets none by default, so a black-holed connect used to
   burn the whole request timeout without sending a byte).

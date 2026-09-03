@@ -942,13 +942,28 @@ impl OpenAIAdapter {
         let mut last_error = LlmError::NetworkError("No attempt made".to_string());
         let budget = self.retry_budget();
         let pacer = self.pacer();
-        // Started before the loop — and so before both the pacer's admission
-        // wait and the in-flight queue below — so the time a call spends waiting
-        // for its turn counts against the retry budget and the caller's
-        // aggregate deadline. Time queued is time the caller is blocked; hiding
-        // it would let a call overshoot `LLM_REQUEST_DEADLINE_SECONDS` by the
-        // whole queue wait.
+        // Wall clock for the whole call, started before the loop and so before
+        // both the pacer's admission wait and the in-flight queue below. It is
+        // what the logs and the deadline errors report, and time queued is time
+        // the caller is blocked, so it must include the waits.
+        //
+        // The retry *floor* is measured off it minus `queued_for_permit` — see
+        // there. `deadline` needs no clock of its own: it arrives as an absolute
+        // `Instant` fixed by the caller, so it already counts every wait.
         let started = Instant::now();
+        // Time this call has spent queued for an in-flight permit, subtracted
+        // from the elapsed time handed to `RetryBudget::is_exhausted`.
+        //
+        // That predicate is `attempts >= min_attempts && elapsed >= min_elapsed`,
+        // so a *larger* elapsed can only exhaust the budget earlier, and
+        // `min_elapsed` (`LLM_MIN_RETRY_SECONDS`) is a "keep retrying for at
+        // least this long" resilience guarantee rather than a deadline. Charging
+        // queue time against it silently weakens it: with `LLM_MAX_RETRIES=2` and
+        // a 240s floor, a call that spent 300s waiting for a permit would stop
+        // after its second attempt with no actual retrying done at all. The
+        // aggregate deadline above is the mechanism that bounds total time; this
+        // floor is not.
+        let mut queued_for_permit = Duration::ZERO;
         // `Retry-After` from the previous attempt. A usable hint replaces the
         // computed backoff outright — including when it asks for less, since the
         // provider knows when its own window resets. See `retry::retry_after_hint`
@@ -1017,7 +1032,9 @@ impl OpenAIAdapter {
             // sleepers as sockets and stall every other caller in the process.
             // A retry re-queues for a permit, which is correct: it opens a new
             // socket, so it is a new claim on the ceiling.
+            let permit_queue_started = Instant::now();
             let _in_flight = crate::in_flight::acquire_in_flight().await;
+            queued_for_permit += permit_queue_started.elapsed();
 
             // The pacer's contract is admission *immediately before the send*
             // (`cognee_utils::pacing` module docs) and the queue above breaks it.
@@ -1082,7 +1099,9 @@ impl OpenAIAdapter {
                         pacer.record_overload("timeout");
                     }
                     last_error = LlmError::NetworkError(e.to_string());
-                    if budget.is_exhausted(attempt, started.elapsed()) {
+                    if budget
+                        .is_exhausted(attempt, started.elapsed().saturating_sub(queued_for_permit))
+                    {
                         break;
                     }
                     continue;
@@ -1132,7 +1151,8 @@ impl OpenAIAdapter {
 
                 retry_after = hint;
                 last_error = err;
-                if budget.is_exhausted(attempt, started.elapsed()) {
+                if budget.is_exhausted(attempt, started.elapsed().saturating_sub(queued_for_permit))
+                {
                     break;
                 }
                 continue;
