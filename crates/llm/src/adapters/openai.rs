@@ -49,43 +49,49 @@ use crate::types::{GenerationOptions, GenerationResponse, Message, MessageRole, 
 ///     None,
 /// ).await?;
 /// ```
-/// Consecutive-miss memory for one endpoint's tool-calling support.
+/// Per-mode memory of whether a structured-output cascade mode is worth sending
+/// to one endpoint.
 ///
-/// The structured-output cascade below (tool calling -> legacy
-/// `functions`/`function_call` -> JSON mode) is stateless per call: nothing
-/// remembers that an endpoint has never once produced a `tool_calls` entry.
-/// Against an OpenAI-compatible server started without a tool-call parser --
-/// vLLM without `--enable-auto-tool-choice --tool-call-parser` is the case this
-/// exists for -- mode 1 can never succeed, so *every* structured call pays the
-/// full tools -> corrective -> legacy -> JSON ladder before reaching an answer
-/// the third mode could have given immediately. Measured on one such
+/// The cascade (tool calling -> legacy `functions`/`function_call` -> JSON mode)
+/// exists because OpenAI-compatible servers differ in what they accept, but it
+/// was stateless per call: nothing remembered that an endpoint had never once
+/// answered a given mode. A server started without a tool-call parser -- vLLM
+/// without `--enable-auto-tool-choice --tool-call-parser` -- answers 200 with
+/// the text in `message.content` and populates neither `tool_calls` nor
+/// `function_call`, so the first two modes can never produce anything and every
+/// structured call re-paid their whole retry ladder. Measured on one such
 /// deployment: zero tool calls in 11,890 responses, 4.14 API calls per
 /// extraction against 1.09 on an endpoint with a parser, with ~71% of output
 /// tokens and cost producing nothing.
 ///
-/// Python has no cascade to protect: it pins one instructor mode per provider
-/// from a static table (`instructor_modes.py`) and stays there, overridable by
-/// `llm_instructor_mode`. The cascade is a Rust-only mechanism, so bounding it
-/// is not a parity divergence.
+/// The counter tracks "is this mode worth sending", not "does the server
+/// implement it". The distinction matters: an endpoint with no parser that
+/// echoes usable JSON in `content` is answered by mode 1 on its first attempt,
+/// so mode 1 is the *cheapest* path there and must not be skipped. Only a mode
+/// that ran out of attempts having produced nothing usable counts against
+/// itself.
+///
+/// Python needs no equivalent: it pins one instructor mode per provider from a
+/// static table (`instructor_modes.py`) and stays there, overridable by
+/// `llm_instructor_mode`. The cascade is Rust-only, so bounding it is bounding
+/// our own mechanism rather than diverging from Python.
 ///
 /// The memory is deliberately **not** permanent. Once tripped it still lets one
-/// call in every [`Self::RE_PROBE_INTERVAL`] attempt tool calling, so an
-/// endpoint that gains a parser (a redeploy behind a stable URL) recovers on its
-/// own, and a transient run of bad responses cannot disable mode 1 for the life
-/// of the process. Held behind an `Arc` so the state follows the endpoint rather
-/// than resetting on every `clone()` of the adapter.
+/// call in every [`Self::RE_PROBE_INTERVAL`] try the mode, so an endpoint that
+/// gains a parser (a redeploy behind a stable URL) recovers on its own and a
+/// run of bad responses cannot disable a mode for the life of the process.
 #[derive(Debug)]
-struct ToolSupportProbe {
-    /// Structured calls in a row whose tool-calling mode completed without a
-    /// native tool call. Reset by any native tool call.
+struct ModeProbe {
+    /// Structured calls in a row in which this mode ran to exhaustion having
+    /// produced nothing usable. Reset by any call the mode answered.
     consecutive_misses: AtomicU32,
-    /// Calls that have skipped tool-calling mode since the last attempt at it.
-    /// Drives the periodic re-probe.
+    /// Calls that have skipped this mode since the last attempt at it. Drives
+    /// the periodic re-probe.
     skipped_since_probe: AtomicU32,
 }
 
-impl ToolSupportProbe {
-    /// Consecutive misses before tool calling is treated as unsupported.
+impl ModeProbe {
+    /// Consecutive misses before a mode is treated as not worth sending.
     ///
     /// Three rather than one: a single miss is far more likely to be a bad
     /// response than a missing parser, and being wrong in the cautious
@@ -103,12 +109,12 @@ impl ToolSupportProbe {
         }
     }
 
-    /// Whether this call should attempt tool-calling mode.
+    /// Whether this call should attempt the mode.
     ///
     /// `Relaxed` throughout: the counters are a heuristic, and the worst a
     /// racing pair of calls can do is probe once more or once less than
     /// intended.
-    fn should_try_tools(&self) -> bool {
+    fn should_try(&self) -> bool {
         if self.consecutive_misses.load(Ordering::Relaxed) < Self::MISS_THRESHOLD {
             return true;
         }
@@ -119,17 +125,47 @@ impl ToolSupportProbe {
         false
     }
 
-    /// Record that the endpoint produced a native tool call, so mode 1 is worth
-    /// sending. Clears any accumulated suspicion.
-    fn record_supported(&self) {
+    /// Record that the mode produced something usable, so it is worth sending.
+    /// Clears any accumulated suspicion.
+    fn record_useful(&self) {
         self.consecutive_misses.store(0, Ordering::Relaxed);
         self.skipped_since_probe.store(0, Ordering::Relaxed);
     }
 
-    /// Record that tool-calling mode ran to exhaustion without the endpoint
-    /// ever emitting a native tool call.
-    fn record_miss(&self) {
-        self.consecutive_misses.fetch_add(1, Ordering::Relaxed);
+    /// Record that the mode ran out of attempts having produced nothing usable,
+    /// on responses that actually arrived. Returns the new consecutive count so
+    /// the caller can log what was observed rather than the constant.
+    fn record_useless(&self) -> u32 {
+        self.consecutive_misses.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
+    /// Consecutive misses observed so far, for logging.
+    fn misses(&self) -> u32 {
+        self.consecutive_misses.load(Ordering::Relaxed)
+    }
+}
+
+/// Cascade-mode memory for one endpoint.
+///
+/// Tool calling and legacy `functions` are tracked **separately**: both need a
+/// server-side parser, but they are different parsers, and the cascade exists
+/// precisely because a server may accept one and not the other. Collapsing them
+/// into one counter would skip legacy mode on a server that supports only
+/// legacy. JSON mode has no probe -- it is the terminal fallback and the only
+/// mode that needs no server-side parsing, so there is nothing to fall back to
+/// if it were skipped.
+#[derive(Debug)]
+struct CascadeProbe {
+    tools: ModeProbe,
+    legacy: ModeProbe,
+}
+
+impl CascadeProbe {
+    fn new() -> Self {
+        Self {
+            tools: ModeProbe::new(),
+            legacy: ModeProbe::new(),
+        }
     }
 }
 
@@ -232,12 +268,12 @@ pub struct OpenAIAdapter {
     /// `tokio::time::timeout`, which would abandon a response the provider has
     /// already been paid for.
     request_deadline: Option<Duration>,
-    /// Whether this endpoint has ever answered with a native tool call.
+    /// Which cascade modes have proved worth sending to this endpoint.
     ///
     /// Shared across clones so the memory belongs to the endpoint, not to a
-    /// particular handle on it. See [`ToolSupportProbe`] for why the cascade
-    /// needs this at all.
-    tool_support: Arc<ToolSupportProbe>,
+    /// particular handle on it. See [`CascadeProbe`] for why the cascade needs
+    /// this at all.
+    cascade_probe: Arc<CascadeProbe>,
 }
 
 /// Whether `model` is an OpenAI reasoning family (`gpt-5*`, `o1*`, `o3*`, `o4*`)
@@ -457,7 +493,7 @@ impl OpenAIAdapter {
             // embedders, downstream users of the crate) keeps the historical
             // unbounded behaviour. The component factory opts in from settings.
             request_deadline: None,
-            tool_support: Arc::new(ToolSupportProbe::new()),
+            cascade_probe: Arc::new(CascadeProbe::new()),
         })
     }
 
@@ -1760,26 +1796,32 @@ impl OpenAIAdapter {
         let mut truncation_seen: Option<String> = None;
         // Most recent failure reason, threaded into the next corrective retry.
         let mut last_reason: Option<String> = None;
-        // Skip tool-calling mode entirely on an endpoint that has repeatedly
-        // shown it has no tool-call parser. Expressed as a zero-length attempt
+        // Skip tool-calling mode entirely on an endpoint where it has
+        // repeatedly produced nothing usable. Expressed as a zero-length attempt
         // range rather than a wrapping conditional so the loop body, the
         // `ValidationMiss` check after it and the budget variables above all
         // keep their existing shape: with no attempts the outcome stays
         // `NoUsableOutput`, the validation check is a no-op, and control falls
-        // straight through to legacy mode. See [`ToolSupportProbe`].
-        let try_tools = self.tool_support.should_try_tools();
+        // straight through to legacy mode. See [`CascadeProbe`].
+        let try_tools = self.cascade_probe.tools.should_try();
         if !try_tools {
             debug!(
-                "endpoint has not produced a native tool call in \
-                 {} consecutive structured calls; skipping tool-calling mode",
-                ToolSupportProbe::MISS_THRESHOLD,
+                consecutive_misses = self.cascade_probe.tools.misses(),
+                "tool-calling mode has produced nothing usable on this endpoint; skipping it",
             );
         }
-        // Whether any attempt below saw a *native* tool call (`tool_calls` or a
-        // legacy `function_call`), as opposed to JSON echoed in `content`. This
-        // is the capability signal: a server without a parser answers 200 with
-        // prose or bare JSON in `content` and never populates either field.
+        // Whether the endpoint answered with a *native* tool call (`tool_calls`
+        // or a legacy `function_call`), as opposed to JSON echoed in `content`.
+        // Gates the `ValidationMiss` short-circuit below, which claims the
+        // server "clearly speaks tool calling" — a claim only this can support.
         let mut native_tool_call = false;
+        // Whether at least one response *arrived* carrying no native tool call.
+        // This, not the absence of `native_tool_call`, is the evidence that the
+        // mode is useless here: a transport error, a deadline abort or a
+        // truncation says nothing about the endpoint's parser, and counting them
+        // would let a brief gateway blip disable tool calling on a healthy
+        // endpoint for the next `RE_PROBE_INTERVAL` calls.
+        let mut tools_answered_without_a_tool_call = false;
         let tool_attempts = if try_tools {
             self.structured_output_retries
         } else {
@@ -1866,11 +1908,17 @@ impl OpenAIAdapter {
                                 .map(|f| f.arguments.as_str())
                                 .filter(|s| non_blank(s))
                         });
-                    if native_arguments.is_some() && !native_tool_call {
+                    if native_arguments.is_some() {
                         // Recorded here rather than after the loop because the
                         // success path returns from inside it.
-                        native_tool_call = true;
-                        self.tool_support.record_supported();
+                        if !native_tool_call {
+                            native_tool_call = true;
+                            self.cascade_probe.tools.record_useful();
+                        }
+                    } else {
+                        // A response that arrived with no native tool call. Only
+                        // counts once the whole mode is exhausted (below).
+                        tools_answered_without_a_tool_call = true;
                     }
                     let arguments = native_arguments
                         .or(choice.message.content.as_deref())
@@ -1905,6 +1953,15 @@ impl OpenAIAdapter {
                                 };
                                 continue;
                             }
+                            // Mode 1 answered the call. Worth sending again even
+                            // if the payload came from `content` rather than a
+                            // native tool call: on a parser-less endpoint that
+                            // echoes JSON, this is the *cheapest* path — one
+                            // request — and skipping it would push the call into
+                            // the fallbacks, where JSON mode sends only a
+                            // `schema_to_example` template rather than the real
+                            // schema.
+                            self.cascade_probe.tools.record_useful();
                             return Ok(parsed);
                         }
                         Err(e) => {
@@ -1942,14 +1999,29 @@ impl OpenAIAdapter {
             }
         }
 
-        // Tool-calling mode ran out of attempts without the endpoint ever
-        // emitting a native tool call. One such call proves nothing on its own —
-        // the model may simply have answered badly — so this only accumulates
-        // suspicion, and `MISS_THRESHOLD` consecutive ones are needed before
-        // mode 1 is skipped. A `ValidationMiss` or a returned `Ok` from a native
-        // tool call has already reset the counter above.
-        if try_tools && !native_tool_call {
-            self.tool_support.record_miss();
+        // Tool-calling mode ran out of attempts having produced nothing usable,
+        // on responses that actually arrived. Gated on
+        // `tools_answered_without_a_tool_call` so only that evidence counts:
+        // transport errors (the `Err` arm below breaks without setting it),
+        // deadline aborts and truncations (which `continue` before the check) are
+        // all excluded, because none of them says anything about whether the
+        // endpoint can emit a tool call.
+        //
+        // One such call still proves little on its own — the model may simply
+        // have answered badly — so this only accumulates suspicion, and
+        // `MISS_THRESHOLD` consecutive ones are needed before mode 1 is skipped.
+        if try_tools && !native_tool_call && tools_answered_without_a_tool_call {
+            let misses = self.cascade_probe.tools.record_useless();
+            if misses == ModeProbe::MISS_THRESHOLD {
+                warn!(
+                    consecutive_misses = misses,
+                    "endpoint has answered {misses} consecutive structured calls without a tool \
+                     call; skipping tool-calling mode from now on (re-probed every {} calls). If \
+                     this is unexpected, the server may be missing a tool-call parser — for vLLM, \
+                     start it with --enable-auto-tool-choice --tool-call-parser",
+                    ModeProbe::RE_PROBE_INTERVAL,
+                );
+            }
         }
 
         // Every tool-calling attempt returned valid JSON that failed the caller's
@@ -1959,7 +2031,17 @@ impl OpenAIAdapter {
         // validation error instead (instructor parity), naming the field. This is
         // deliberately NOT done for a *parse* failure or empty output [#4], which
         // fall through below in case a different request mode succeeds.
-        if let ToolOutcome::ValidationMiss { reason, raw } = outcome {
+        //
+        // Gated on `native_tool_call`, which is the only thing that can support
+        // the "clearly speaks tool calling" claim above. Without the gate, a
+        // parser-less endpoint echoing an incomplete object in `content` takes
+        // this branch and errors — until the probe trips, after which the
+        // identical request is answered by JSON mode. Three failures then a
+        // success, for byte-identical input, is worse than either outcome
+        // consistently.
+        if let ToolOutcome::ValidationMiss { reason, raw } = outcome
+            && native_tool_call
+        {
             return Err(LlmError::DeserializationError(format!(
                 "Tool-call arguments failed schema validation after {} attempt(s): {reason}. Raw: {raw}",
                 self.structured_output_retries
@@ -1997,7 +2079,29 @@ impl OpenAIAdapter {
         // same bad output) — it appends the failure detail and drops temperature
         // to 0, exactly like the tool-calling and JSON-mode loops.
         let mut legacy_last_reason: Option<String> = None;
-        for attempt in 0..self.structured_output_retries {
+        // Legacy `functions` needs a server-side parser just as tool calling
+        // does, so a parser-less endpoint burns this ladder too. Probed
+        // separately from tool calling rather than sharing its counter, because
+        // the cascade exists precisely because a server may accept one shape and
+        // not the other — a shared counter would skip legacy mode on a server
+        // that supports only legacy.
+        let try_legacy = self.cascade_probe.legacy.should_try();
+        if !try_legacy {
+            debug!(
+                consecutive_misses = self.cascade_probe.legacy.misses(),
+                "legacy function-call mode has produced nothing usable on this endpoint; \
+                 skipping it",
+            );
+        }
+        // Same distinction as tool calling above: only a response that actually
+        // arrived carrying no `function_call` is evidence against the mode.
+        let mut legacy_answered_without_a_function_call = false;
+        let legacy_attempts = if try_legacy {
+            self.structured_output_retries
+        } else {
+            0
+        };
+        for attempt in 0..legacy_attempts {
             // Aggregate budget check. Placed at the head of the attempt rather
             // than only between modes so a long retry ladder inside one mode
             // cannot run past the budget either.
@@ -2040,6 +2144,9 @@ impl OpenAIAdapter {
             }
 
             if let Some(function_call) = &choice.message.function_call {
+                // The endpoint speaks legacy function calling — keep sending it
+                // this shape regardless of whether *this* payload parses.
+                self.cascade_probe.legacy.record_useful();
                 let last_attempt = attempt + 1 >= self.structured_output_retries;
                 match parse_json(&function_call.arguments) {
                     Ok(parsed) => {
@@ -2080,9 +2187,29 @@ impl OpenAIAdapter {
                         continue;
                     }
                 }
+            } else {
+                // A response arrived with no `function_call` at all: evidence the
+                // endpoint cannot parse this shape either.
+                legacy_answered_without_a_function_call = true;
             }
 
             break;
+        }
+
+        // Legacy mode ran out of attempts having produced nothing usable, on
+        // responses that arrived. Note the legacy loop propagates transport
+        // errors with `?` rather than breaking, so an errored request cannot
+        // reach here at all — but the flag is still what gates this, to keep the
+        // rule identical to tool calling above.
+        if try_legacy && legacy_answered_without_a_function_call {
+            let misses = self.cascade_probe.legacy.record_useless();
+            if misses == ModeProbe::MISS_THRESHOLD {
+                debug!(
+                    consecutive_misses = misses,
+                    "endpoint has answered {misses} consecutive structured calls without a \
+                     function call; skipping legacy function-call mode from now on",
+                );
+            }
         }
 
         // Fallback to JSON mode (works with Ollama and other providers)
@@ -2490,63 +2617,90 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tool_support_probe_tries_tools_until_the_miss_threshold() {
-        let probe = super::ToolSupportProbe::new();
+    fn mode_probe_tries_the_mode_until_the_miss_threshold() {
+        let probe = super::ModeProbe::new();
 
-        // Below the threshold every call still attempts tool calling: a single
-        // bad response must not disable mode 1.
-        for _ in 0..super::ToolSupportProbe::MISS_THRESHOLD - 1 {
-            probe.record_miss();
+        // Below the threshold every call still attempts the mode: a single bad
+        // response must not disable it.
+        for _ in 0..super::ModeProbe::MISS_THRESHOLD - 1 {
+            probe.record_useless();
             assert!(
-                probe.should_try_tools(),
+                probe.should_try(),
                 "must keep probing below MISS_THRESHOLD consecutive misses"
             );
         }
 
-        probe.record_miss();
+        probe.record_useless();
         assert!(
-            !probe.should_try_tools(),
-            "must stop sending tool calls once MISS_THRESHOLD is reached"
+            !probe.should_try(),
+            "must stop sending the mode once MISS_THRESHOLD is reached"
         );
     }
 
     #[test]
-    fn tool_support_probe_resets_on_a_native_tool_call() {
-        let probe = super::ToolSupportProbe::new();
-        for _ in 0..super::ToolSupportProbe::MISS_THRESHOLD {
-            probe.record_miss();
+    fn mode_probe_resets_when_the_mode_produces_something() {
+        let probe = super::ModeProbe::new();
+        for _ in 0..super::ModeProbe::MISS_THRESHOLD {
+            probe.record_useless();
         }
-        assert!(!probe.should_try_tools(), "tripped");
+        assert!(!probe.should_try(), "tripped");
 
-        // One native tool call clears the suspicion outright — the endpoint has
-        // demonstrably got a parser.
-        probe.record_supported();
+        // One useful answer clears the suspicion outright.
+        probe.record_useful();
         assert!(
-            probe.should_try_tools(),
-            "a native tool call must reset the probe"
+            probe.should_try(),
+            "a mode that produced output must be tried again"
         );
+        assert_eq!(probe.misses(), 0, "the observed count is reset too");
     }
 
     #[test]
-    fn tool_support_probe_re_probes_after_the_interval() {
-        let probe = super::ToolSupportProbe::new();
-        for _ in 0..super::ToolSupportProbe::MISS_THRESHOLD {
-            probe.record_miss();
+    fn mode_probe_re_probes_after_the_interval() {
+        let probe = super::ModeProbe::new();
+        for _ in 0..super::ModeProbe::MISS_THRESHOLD {
+            probe.record_useless();
         }
 
         // Skips for the whole interval...
-        for i in 0..super::ToolSupportProbe::RE_PROBE_INTERVAL {
-            assert!(!probe.should_try_tools(), "call {i} should still skip");
+        for i in 0..super::ModeProbe::RE_PROBE_INTERVAL {
+            assert!(!probe.should_try(), "call {i} should still skip");
         }
         // ...then lets exactly one call through, so an endpoint that gains a
-        // tool-call parser recovers without restarting the process.
+        // parser recovers without restarting the process.
         assert!(
-            probe.should_try_tools(),
+            probe.should_try(),
             "must re-probe once RE_PROBE_INTERVAL calls have been skipped"
         );
         assert!(
-            !probe.should_try_tools(),
+            !probe.should_try(),
             "the re-probe is one call, not a permanent reset"
+        );
+    }
+
+    #[test]
+    fn mode_probe_reports_the_observed_miss_count() {
+        // The skip log names what was seen rather than the constant, so an
+        // operator can tell three real misses from a mode that was skipped for
+        // another reason.
+        let probe = super::ModeProbe::new();
+        assert_eq!(probe.record_useless(), 1);
+        assert_eq!(probe.record_useless(), 2);
+        assert_eq!(probe.misses(), 2);
+    }
+
+    #[test]
+    fn cascade_probe_tracks_tools_and_legacy_independently() {
+        // A server that accepts legacy `functions` but not modern `tools` is
+        // exactly why the cascade exists; one shared counter would skip the mode
+        // that works.
+        let probe = super::CascadeProbe::new();
+        for _ in 0..super::ModeProbe::MISS_THRESHOLD {
+            probe.tools.record_useless();
+        }
+        assert!(!probe.tools.should_try(), "tool calling is tripped");
+        assert!(
+            probe.legacy.should_try(),
+            "legacy mode must be unaffected by tool-calling misses"
         );
     }
 

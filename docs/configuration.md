@@ -722,24 +722,43 @@ These knobs form one resilience stack, matching Python cognee's:
   than cancelling in flight, so the true ceiling is
   `LLM_REQUEST_DEADLINE_SECONDS + LLM_REQUEST_TIMEOUT_SECONDS`. Set it to `0` to
   restore the previous unbounded behaviour.
-- **The cascade stops probing an endpoint that cannot do tool calls.** The three
-  request shapes above exist because OpenAI-compatible servers vary in what they
-  accept, but an endpoint with no tool-call parser — vLLM started without
+- **The cascade stops sending an endpoint a mode that never produces anything.**
+  The three request shapes above exist because OpenAI-compatible servers vary in
+  what they accept, but tool calling and legacy `functions` both need a
+  server-side parser. An endpoint without one — vLLM started without
   `--enable-auto-tool-choice --tool-call-parser` is the usual case — answers 200
-  with the text in `message.content` and never populates `tool_calls`. It can
-  therefore never satisfy the first shape, and a stateless cascade re-pays the
-  whole ladder on every call: measured on one such deployment, 4.14 API calls per
+  with the text in `message.content` and populates neither field, so those two
+  shapes can never produce anything and a stateless cascade re-paid both retry
+  ladders on every call. Measured on one such deployment: 4.14 API calls per
   extraction against 1.09 on an endpoint with a parser, with roughly 71% of
-  output tokens and cost producing nothing. The OpenAI-compatible adapter now
-  remembers this per endpoint: after three consecutive structured calls in which
-  the server emits no native tool call, tool-calling mode is skipped and the
-  request goes straight to the legacy and JSON shapes. Any native tool call
-  clears the memory, and a skipped endpoint is still re-probed once every 64
-  calls, so a server that gains a parser (a redeploy behind a stable URL)
-  recovers without a restart. There is no setting to configure: it is a property
-  of the endpoint, observed rather than declared. Python needs no equivalent
-  because it has no cascade — it pins one instructor mode per provider from a
-  static table and stays there.
+  output tokens and cost producing nothing.
+
+  The OpenAI-compatible adapter now remembers, per endpoint and **per mode**,
+  whether a shape is worth sending. After three consecutive structured calls in
+  which a mode ran out of attempts having produced nothing usable, that mode is
+  skipped. Tool calling and legacy `functions` are tracked separately, because
+  the cascade exists precisely because a server may accept one and not the other;
+  JSON mode is never skipped, being the terminal fallback and the only shape that
+  needs no server-side parsing.
+
+  Two things deliberately do **not** count as evidence against a mode. A request
+  that *errored* — HTTP 4xx/5xx, a connection reset, a deadline abort — says
+  nothing about the endpoint's parser, so a brief gateway hiccup cannot downgrade
+  a healthy endpoint. And a truncated response says only that the output budget
+  was too small, which `LLM_ARGS` and the truncation retry already handle. Any
+  call a mode *answers* clears its count, including one whose payload arrived in
+  `content` rather than as a native tool call: on a parser-less endpoint that
+  echoes usable JSON, tool-calling mode succeeds on its first attempt and is the
+  cheapest path available, so it is kept.
+
+  A skipped mode is re-probed once every 64 calls, so a server that gains a
+  parser (a redeploy behind a stable URL) recovers without a restart; the
+  residual waste is ~1.6% of calls. There is no setting to configure — this is a
+  property of the endpoint, observed rather than declared — and the transition is
+  logged (`warn` for tool calling, naming the vLLM flags) so a mode downgrade is
+  visible rather than silent. Python needs no equivalent because it has no
+  cascade: it pins one instructor mode per provider from a static table and stays
+  there.
 - **Concurrency and rate are separate ceilings.** `LLM_MAX_PARALLEL_REQUESTS`
   bounds how many LLM requests are in flight at once; the `LLM_RATE_LIMIT_*`
   bucket below bounds how often they *start*. Neither substitutes for the other —
