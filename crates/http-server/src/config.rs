@@ -359,7 +359,7 @@ fn default_relational_db_url(system_root_directory: &std::path::Path) -> String 
 /// Is `provider` one of the spellings the Postgres graph factory registers
 /// under? `PgGraphFactory` is registered as both `"postgres"` and
 /// `"postgresql"`, so both must resolve a URL.
-pub fn is_postgres_graph(provider: &str) -> bool {
+pub(crate) fn is_postgres_graph(provider: &str) -> bool {
     matches!(provider, "postgres" | "postgresql")
 }
 

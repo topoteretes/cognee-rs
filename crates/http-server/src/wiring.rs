@@ -148,7 +148,9 @@ fn validate_graph_config(cfg: &HttpServerConfig) -> Result<(), ServerError> {
         return Err(ServerError::Other(anyhow!(
             "GRAPH_DATABASE_PROVIDER={provider} requires a postgres connection \
              string in GRAPH_DATABASE_URL (postgres://… or postgresql://…), but \
-             got '{url}'."
+             got {found}. The value is not echoed here because connection \
+             strings can carry credentials.",
+            found = describe_scheme(url)
         )));
     }
     Ok(())
@@ -166,6 +168,19 @@ async fn wire_graph_db(
     // caller-registered graph factory (and the built-in `kuzu` alias) is
     // reachable, instead of a hardcoded ladybug-only guard rejecting them.
     Ok(registry.build_graph(ctx).await?)
+}
+
+/// Describe a rejected connection string without echoing it.
+///
+/// Connection strings routinely carry credentials, so a startup validation
+/// failure must not put the raw value into logs. The scheme is the part the
+/// operator actually needs in order to see what went wrong, and it cannot
+/// contain a password.
+fn describe_scheme(url: &str) -> String {
+    match url.split_once("://") {
+        Some((scheme, _)) if !scheme.is_empty() => format!("scheme '{scheme}://'"),
+        _ => "a value with no URL scheme".to_string(),
+    }
 }
 
 /// Validate the pgvector configuration. Kept in the server wrapper (not the
@@ -191,10 +206,12 @@ fn validate_vector_config(cfg: &HttpServerConfig) -> Result<(), ServerError> {
     if !(url.starts_with("postgres://") || url.starts_with("postgresql://")) {
         return Err(ServerError::Other(anyhow!(
             "VECTOR_DB_PROVIDER=pgvector requires a postgres connection string in \
-             VECTOR_DB_URL (postgres://… or postgresql://…), but got '{url}'. If you \
+             VECTOR_DB_URL (postgres://… or postgresql://…), but got {found}. If you \
              did not intend to use pgvector, set VECTOR_DB_PROVIDER explicitly (e.g. \
              'mock' in a dev-mock build); the default derives this value from \
-             SYSTEM_ROOT_DIRECTORY, which is not a valid Postgres URL."
+             SYSTEM_ROOT_DIRECTORY, which is not a valid Postgres URL. The value is \
+             not echoed here because connection strings can carry credentials.",
+            found = describe_scheme(url)
         )));
     }
     Ok(())
@@ -379,6 +396,57 @@ fn wire_responses_client(cfg: &HttpServerConfig) -> Option<Arc<dyn ResponsesClie
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn rejected_urls_are_described_without_echoing_credentials() {
+        // A validation failure must never put the raw connection string into
+        // logs. Scheme only — it cannot contain a password.
+        assert_eq!(
+            describe_scheme("postgres://user:hunter2@db.internal:5432/x"),
+            "scheme 'postgres://'"
+        );
+        assert_eq!(
+            describe_scheme("/srv/.cognee_system/graph"),
+            "a value with no URL scheme"
+        );
+
+        let cfg = HttpServerConfig {
+            graph_provider: "postgres".to_string(),
+            graph_db_url: "mysql://user:hunter2@db.internal/x".to_string(),
+            ..Default::default()
+        };
+        let msg = match validate_graph_config(&cfg) {
+            Ok(()) => String::new(),
+            Err(err) => err.to_string(),
+        };
+        assert!(
+            !msg.contains("hunter2"),
+            "password leaked into error: {msg}"
+        );
+        assert!(
+            !msg.contains("db.internal"),
+            "host leaked into error: {msg}"
+        );
+        assert!(msg.contains("mysql://"), "scheme should be reported: {msg}");
+    }
+
+    #[test]
+    fn vector_rejected_urls_are_described_without_echoing_credentials() {
+        let cfg = HttpServerConfig {
+            vector_provider: "pgvector".to_string(),
+            vector_db_url: "mysql://user:hunter2@db.internal/x".to_string(),
+            ..Default::default()
+        };
+        let msg = match validate_vector_config(&cfg) {
+            Ok(()) => String::new(),
+            Err(err) => err.to_string(),
+        };
+        assert!(
+            !msg.contains("hunter2"),
+            "password leaked into error: {msg}"
+        );
+        assert!(msg.contains("mysql://"), "scheme should be reported: {msg}");
+    }
 
     #[test]
     fn validate_graph_config_ladybug_ignores_graph_db_url() {
