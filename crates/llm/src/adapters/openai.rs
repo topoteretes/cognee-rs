@@ -991,13 +991,21 @@ impl OpenAIAdapter {
 
             let dispatch_wait_started = Instant::now();
 
-            // Admission sits INSIDE the retry loop, immediately before the send,
-            // so an overload episode opened by any concurrent request throttles
-            // the remaining attempts of calls already in flight. This mirrors
-            // Python entering the limiter context manager inside tenacity.
-            if let Some(pacer) = pacer.as_deref() {
-                pacer.admit().await;
-            }
+            // Admission sits INSIDE the retry loop, so an overload episode
+            // opened by any concurrent request throttles the remaining attempts
+            // of calls already in flight. This mirrors Python entering the
+            // limiter context manager inside tenacity.
+            //
+            // This first admission is the one that can pace a caller *without*
+            // an in-flight permit in hand, which is why it comes before the
+            // queue below: parking in the bucket while holding a permit idles
+            // the pool during exactly the episode the pacer is draining. Its
+            // return value records whether it actually cost a token — the second
+            // admission after the queue reads it.
+            let paced_before_queue = match pacer.as_deref() {
+                Some(pacer) => pacer.admit().await,
+                None => false,
+            };
 
             // Transport-level concurrency ceiling, the analogue of the
             // connection-pool bound every Python HTTP client sets (see
@@ -1010,6 +1018,26 @@ impl OpenAIAdapter {
             // A retry re-queues for a permit, which is correct: it opens a new
             // socket, so it is a new claim on the ceiling.
             let _in_flight = crate::in_flight::acquire_in_flight().await;
+
+            // The pacer's contract is admission *immediately before the send*
+            // (`cognee_utils::pacing` module docs) and the queue above breaks it.
+            // Pacing is off by default, so N callers clear `admit()` on the fast
+            // path in one go and then pile up on the semaphore; the first reply
+            // is a 429, `record_overload` opens the 900s episode — and every
+            // caller already past the pacer still fires one unpaced send at a
+            // provider that has just said it is overloaded. That burst is what
+            // opened the episode, and the queue would let it through again.
+            //
+            // Skipped when the admission above actually paced this attempt: that
+            // caller has spent its token, and a second one would both halve the
+            // configured rate during an episode and park it in the bucket with a
+            // permit in hand — the failure the ordering above exists to avoid.
+            // So an attempt costs exactly one token, and the only wait ever held
+            // under a permit is the one no ordering can remove: an episode that
+            // opened while this caller sat in the queue.
+            if !paced_before_queue && let Some(pacer) = pacer.as_deref() {
+                pacer.admit().await;
+            }
 
             // Pacing and the in-flight queue can outlast the caller's aggregate
             // budget on their own — a 900s overload cooldown dwarfs a 240s

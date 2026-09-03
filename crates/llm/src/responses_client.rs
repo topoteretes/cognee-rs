@@ -267,14 +267,27 @@ impl OpenAIResponsesClient {
                 tokio::time::sleep(delay).await;
             }
 
-            if let Some(pacer) = pacer.as_deref() {
-                pacer.admit().await;
-            }
+            // Before the queue below, because this is the only admission that
+            // can pace a caller without an in-flight permit in hand.
+            let paced_before_queue = match pacer.as_deref() {
+                Some(pacer) => pacer.admit().await,
+                None => false,
+            };
 
             // See the identical acquisition in the OpenAI adapter: transport-level
             // concurrency ceiling, taken *after* admission and released at the end
             // of the iteration so a permit only ever covers a live socket.
             let _in_flight = crate::in_flight::acquire_in_flight().await;
+
+            // Re-gate immediately before the send: an episode can open while this
+            // caller sits in the queue, and without this every caller that
+            // cleared the fast path together would still fire one unpaced send at
+            // a provider that has just reported overload. Skipped when the
+            // admission above already paced this attempt, so an attempt never
+            // spends two tokens. See the OpenAI adapter for the full rationale.
+            if !paced_before_queue && let Some(pacer) = pacer.as_deref() {
+                pacer.admit().await;
+            }
 
             attempt += 1;
 

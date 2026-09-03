@@ -26,14 +26,24 @@
 //! stop a steady stream that exceeds a quota. `crates/core`'s own `rate_limiter`
 //! documentation makes the same distinction.
 //!
-//! Order matters at the call site: wait on the pacer *first*, then take the
-//! in-flight permit, and release it once the attempt's response has been read.
-//! What this semaphore counts is open sockets, and a request parked in
-//! `Pacer::admit` has none — so acquiring first would make sleepers occupy
-//! permits they are not using. During a 900s overload cooldown that turns the
-//! ceiling into a process-wide stall: every other LLM caller blocks in
-//! [`acquire_in_flight`], which has no timeout, behind requests that are only
-//! sleeping. Backwards from the intent, since the pool should be draining.
+//! Order matters at the call site. The adapters run `admit` → acquire → `admit`,
+//! and release the permit once the attempt's response has been read:
+//!
+//! * The **first** admission comes before the acquire because what this
+//!   semaphore counts is open sockets, and a request parked in `Pacer::admit`
+//!   has none — acquiring first would make sleepers occupy permits they are not
+//!   using. During a 900s overload cooldown that turns the ceiling into a
+//!   process-wide stall: every other LLM caller blocks in [`acquire_in_flight`],
+//!   which has no timeout, behind requests that are only sleeping. Backwards
+//!   from the intent, since the pool should be draining.
+//! * The **second** admission restores the pacer's own invariant, that a caller
+//!   is admitted immediately before its send. Queueing here breaks it: with
+//!   pacing off by default, a crowd of callers clears the fast path together,
+//!   and a 429 answering the first of them opens an episode that none of the
+//!   others — already past the pacer, merely waiting for a permit — would
+//!   observe. It runs only when the first admission was that free fast path, so
+//!   an attempt still costs exactly one token and a caller the pacer has already
+//!   throttled never sleeps in the bucket holding a permit.
 
 use std::sync::{Arc, OnceLock};
 
