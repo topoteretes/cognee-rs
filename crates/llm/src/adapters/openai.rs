@@ -942,15 +942,28 @@ impl OpenAIAdapter {
         let mut last_error = LlmError::NetworkError("No attempt made".to_string());
         let budget = self.retry_budget();
         let pacer = self.pacer();
-        // Transport-level concurrency ceiling, the analogue of the connection-pool
-        // bound every Python HTTP client sets (see `crate::in_flight`). Acquired
-        // outside the retry loop and held for the whole call, so a request that
-        // backs off keeps its slot rather than releasing it to a competitor and
-        // re-queueing behind it. Taken before the pacer's admission below: a
-        // permit held across a pacing sleep would idle the pool during exactly
-        // the overload episode the pacer is draining.
-        let _in_flight = crate::in_flight::acquire_in_flight().await;
+        // Wall clock for the whole call, started before the loop and so before
+        // both the pacer's admission wait and the in-flight queue below. It is
+        // what the logs and the deadline errors report, and time queued is time
+        // the caller is blocked, so it must include the waits.
+        //
+        // The retry *floor* is measured off it minus `queued_for_permit` — see
+        // there. `deadline` needs no clock of its own: it arrives as an absolute
+        // `Instant` fixed by the caller, so it already counts every wait.
         let started = Instant::now();
+        // Time this call has spent queued for an in-flight permit, subtracted
+        // from the elapsed time handed to `RetryBudget::is_exhausted`.
+        //
+        // That predicate is `attempts >= min_attempts && elapsed >= min_elapsed`,
+        // so a *larger* elapsed can only exhaust the budget earlier, and
+        // `min_elapsed` (`LLM_MIN_RETRY_SECONDS`) is a "keep retrying for at
+        // least this long" resilience guarantee rather than a deadline. Charging
+        // queue time against it silently weakens it: with `LLM_MAX_RETRIES=2` and
+        // a 240s floor, a call that spent 300s waiting for a permit would stop
+        // after its second attempt with no actual retrying done at all. The
+        // aggregate deadline above is the mechanism that bounds total time; this
+        // floor is not.
+        let mut queued_for_permit = Duration::ZERO;
         // `Retry-After` from the previous attempt. A usable hint replaces the
         // computed backoff outright — including when it asks for less, since the
         // provider knows when its own window resets. See `retry::retry_after_hint`
@@ -991,12 +1004,82 @@ impl OpenAIAdapter {
                 tokio::time::sleep(delay).await;
             }
 
-            // Admission sits INSIDE the retry loop, immediately before the send,
-            // so an overload episode opened by any concurrent request throttles
-            // the remaining attempts of calls already in flight. This mirrors
-            // Python entering the limiter context manager inside tenacity.
-            if let Some(pacer) = pacer.as_deref() {
+            let dispatch_wait_started = Instant::now();
+
+            // Admission sits INSIDE the retry loop, so an overload episode
+            // opened by any concurrent request throttles the remaining attempts
+            // of calls already in flight. This mirrors Python entering the
+            // limiter context manager inside tenacity.
+            //
+            // This first admission is the one that can pace a caller *without*
+            // an in-flight permit in hand, which is why it comes before the
+            // queue below: parking in the bucket while holding a permit idles
+            // the pool during exactly the episode the pacer is draining. Its
+            // return value records whether it actually cost a token — the second
+            // admission after the queue reads it.
+            let paced_before_queue = match pacer.as_deref() {
+                Some(pacer) => pacer.admit().await,
+                None => false,
+            };
+
+            // Transport-level concurrency ceiling, the analogue of the
+            // connection-pool bound every Python HTTP client sets (see
+            // `crate::in_flight`). Acquired *after* the pacer has admitted this
+            // attempt and dropped at the end of the iteration, so a permit
+            // covers only the window in which a socket actually exists. Taking
+            // it before `admit()` would let requests parked in a 900s cooldown
+            // hold permits they are not using, so the semaphore would count
+            // sleepers as sockets and stall every other caller in the process.
+            // A retry re-queues for a permit, which is correct: it opens a new
+            // socket, so it is a new claim on the ceiling.
+            let permit_queue_started = Instant::now();
+            let _in_flight = crate::in_flight::acquire_in_flight().await;
+            queued_for_permit += permit_queue_started.elapsed();
+
+            // The pacer's contract is admission *immediately before the send*
+            // (`cognee_utils::pacing` module docs) and the queue above breaks it.
+            // Pacing is off by default, so N callers clear `admit()` on the fast
+            // path in one go and then pile up on the semaphore; the first reply
+            // is a 429, `record_overload` opens the 900s episode — and every
+            // caller already past the pacer still fires one unpaced send at a
+            // provider that has just said it is overloaded. That burst is what
+            // opened the episode, and the queue would let it through again.
+            //
+            // Skipped when the admission above actually paced this attempt: that
+            // caller has spent its token, and a second one would both halve the
+            // configured rate during an episode and park it in the bucket with a
+            // permit in hand — the failure the ordering above exists to avoid.
+            // So an attempt costs exactly one token, and the only wait ever held
+            // under a permit is the one no ordering can remove: an episode that
+            // opened while this caller sat in the queue.
+            if !paced_before_queue && let Some(pacer) = pacer.as_deref() {
                 pacer.admit().await;
+            }
+
+            // Pacing and the in-flight queue can outlast the caller's aggregate
+            // budget on their own — a 900s overload cooldown dwarfs a 240s
+            // deadline — and the guard at the top of the loop cannot see that:
+            // it runs before the wait, so an overshoot there was only noticed
+            // one turn later, after an attempt the budget could never cover.
+            //
+            // Narrow on purpose. It fires only when budget *remained* when the
+            // wait began and the wait is what spent it, so the guard above keeps
+            // its existing behaviour: that one clamps its backoff to the
+            // remaining budget and deliberately lets the attempt it sleeps for
+            // start, and this must not retract it. Skipped on the first attempt
+            // too — every call makes at least one, as it did before the deadline
+            // existed.
+            if attempt > 0
+                && let Some(deadline) = deadline
+                && dispatch_wait_started < deadline
+                && Instant::now() >= deadline
+            {
+                return Err(LlmError::Timeout(format!(
+                    "LLM request abandoned after {:.0}s with {attempt} attempt(s): the call's \
+                     aggregate budget (LLM_REQUEST_DEADLINE_SECONDS) was spent waiting for \
+                     dispatch (pacing or the in-flight queue); last error: {last_error}",
+                    started.elapsed().as_secs_f64(),
+                )));
             }
 
             attempt += 1;
@@ -1016,7 +1099,9 @@ impl OpenAIAdapter {
                         pacer.record_overload("timeout");
                     }
                     last_error = LlmError::NetworkError(e.to_string());
-                    if budget.is_exhausted(attempt, started.elapsed()) {
+                    if budget
+                        .is_exhausted(attempt, started.elapsed().saturating_sub(queued_for_permit))
+                    {
                         break;
                     }
                     continue;
@@ -1066,7 +1151,8 @@ impl OpenAIAdapter {
 
                 retry_after = hint;
                 last_error = err;
-                if budget.is_exhausted(attempt, started.elapsed()) {
+                if budget.is_exhausted(attempt, started.elapsed().saturating_sub(queued_for_permit))
+                {
                     break;
                 }
                 continue;

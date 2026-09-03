@@ -21,14 +21,29 @@
 //!
 //! [`cognee_utils::pacing`] bounds the *rate* of dispatch (tokens per interval,
 //! plus a cooldown once the provider signals overload). This bounds *concurrency*
-//! — permits are held for the whole request, not just its start. They are not
-//! substitutes: a rate limiter cannot stop 1000 simultaneous sockets, and a
-//! semaphore cannot stop a steady stream that exceeds a quota. `crates/core`'s
-//! own `rate_limiter` documentation makes the same distinction.
+//! — permits are held for the HTTP exchange itself. They are not substitutes: a
+//! rate limiter cannot stop 1000 simultaneous sockets, and a semaphore cannot
+//! stop a steady stream that exceeds a quota. `crates/core`'s own `rate_limiter`
+//! documentation makes the same distinction.
 //!
-//! Order matters at the call site: take the in-flight permit *first*, then wait
-//! on the pacer. Reversed, a paced caller would hold a permit while sleeping,
-//! and an overload episode would idle the pool instead of draining it.
+//! Order matters at the call site. The adapters run `admit` → acquire → `admit`,
+//! and release the permit once the attempt's response has been read:
+//!
+//! * The **first** admission comes before the acquire because what this
+//!   semaphore counts is open sockets, and a request parked in `Pacer::admit`
+//!   has none — acquiring first would make sleepers occupy permits they are not
+//!   using. During a 900s overload cooldown that turns the ceiling into a
+//!   process-wide stall: every other LLM caller blocks in [`acquire_in_flight`],
+//!   which has no timeout, behind requests that are only sleeping. Backwards
+//!   from the intent, since the pool should be draining.
+//! * The **second** admission restores the pacer's own invariant, that a caller
+//!   is admitted immediately before its send. Queueing here breaks it: with
+//!   pacing off by default, a crowd of callers clears the fast path together,
+//!   and a 429 answering the first of them opens an episode that none of the
+//!   others — already past the pacer, merely waiting for a permit — would
+//!   observe. It runs only when the first admission was that free fast path, so
+//!   an attempt still costs exactly one token and a caller the pacer has already
+//!   throttled never sleeps in the bucket holding a permit.
 
 use std::sync::{Arc, OnceLock};
 
@@ -79,11 +94,14 @@ pub fn llm_in_flight() -> Option<Arc<Semaphore>> {
     LLM_IN_FLIGHT.get().map(Arc::clone)
 }
 
-/// Acquire a permit for one LLM request, or `None` when no ceiling is installed.
+/// Acquire a permit for one LLM request attempt, or `None` when no ceiling is
+/// installed.
 ///
-/// Held for the lifetime of the request — including its retries, so a request
-/// that backs off does not release its slot to a competitor and then have to
-/// re-queue behind it.
+/// Held for the lifetime of one attempt — from just after the pacer admits it
+/// to just after its response body has been read — and *not* across the retry
+/// ladder's backoff sleeps. A request that is sleeping holds no socket, so
+/// keeping its permit would only make the ceiling under-count the pool. A retry
+/// therefore re-queues, which is correct: it is a fresh socket.
 pub async fn acquire_in_flight() -> Option<OwnedSemaphorePermit> {
     match llm_in_flight() {
         // `acquire_owned` only errors when the semaphore is closed, and nothing

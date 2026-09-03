@@ -17,6 +17,15 @@
 //!    flight. Callers must therefore `admit().await` immediately before each
 //!    HTTP send, not before the loop.
 //!
+//!    Where a wait the caller cannot remove sits between admission and the send
+//!    — the LLM adapters queue for an in-flight permit there, and must not hold
+//!    one across a bucket wait — admission is taken *twice*: once before the
+//!    wait, and again after it if and only if the first was the free fast path.
+//!    [`Pacer::admit`] returns which it was. That keeps one token per attempt
+//!    while closing the hole where a crowd clears the fast path together, an
+//!    episode opens behind them, and every one of them still fires an unpaced
+//!    send.
+//!
 //! There is deliberately **no token/TPM accounting**: Python declares
 //! `llm_rate_limit_tokens` and never reads it, so a TPM budget here would be a
 //! divergence, not parity.
@@ -262,11 +271,20 @@ impl Pacer {
     ///
     /// Returns immediately on the fast path. Call this immediately before each
     /// HTTP send, inside the retry loop — see the module docs.
-    pub async fn admit(&self) {
+    ///
+    /// The return value reports whether pacing actually applied — `true` when a
+    /// token was taken from the bucket, `false` when the fast path let the
+    /// caller straight through. A caller that cannot admit *immediately* before
+    /// its send, because an unavoidable wait sits in between (the LLM adapters'
+    /// in-flight queue), uses this to re-admit after that wait only when the
+    /// first admission was free. Re-admitting unconditionally would spend two
+    /// tokens per attempt, halving the configured rate during an episode.
+    pub async fn admit(&self) -> bool {
         if !self.should_pace_at(Instant::now()) {
-            return;
+            return false;
         }
         self.bucket.acquire().await;
+        true
     }
 
     /// Feed a provider error to the policy. No-op when `auto_react` is off.
@@ -568,8 +586,8 @@ mod tests {
     async fn admit_returns_immediately_on_the_fast_path() {
         let pacer = Pacer::new(1, Duration::from_secs(3600), false, true);
         let started = Instant::now();
-        pacer.admit().await;
-        pacer.admit().await;
+        assert!(!pacer.admit().await, "the fast path takes no token");
+        assert!(!pacer.admit().await, "the fast path takes no token");
         assert!(started.elapsed() < Duration::from_millis(50));
     }
 
@@ -578,10 +596,10 @@ mod tests {
         // 20 per second => a 50ms spacing once the single-token burst is spent.
         let pacer = Pacer::new(20, Duration::from_secs(1), true, true);
         for _ in 0..20 {
-            pacer.admit().await;
+            assert!(pacer.admit().await, "an open episode paces every admission");
         }
         let started = Instant::now();
-        pacer.admit().await;
+        assert!(pacer.admit().await, "an open episode paces every admission");
         assert!(
             started.elapsed() >= Duration::from_millis(20),
             "expected the bucket to delay dispatch, waited {:?}",

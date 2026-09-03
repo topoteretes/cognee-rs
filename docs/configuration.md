@@ -693,7 +693,11 @@ These knobs form one resilience stack, matching Python cognee's:
   provider's rate-limit window resets. Backoff is exponential with jitter,
   8s doubling to a 128s ceiling, and a `Retry-After` header is honoured (capped
   at 60s) when the provider sends one. Set `LLM_MIN_RETRY_SECONDS=0` to fail
-  fast on attempts alone.
+  fast on attempts alone. The elapsed time measured against this floor excludes
+  time spent queued for an `LLM_MAX_IN_FLIGHT` slot: the floor is a "keep
+  retrying for at least this long" guarantee, so counting queue time against it
+  could only ever end the ladder earlier, and a call that waited minutes for a
+  slot would give up having barely retried at all.
 - **Three timeouts, three scopes.** `LLM_CONNECT_TIMEOUT_SECONDS` bounds the TCP
   handshake (`reqwest` sets none by default, so a black-holed connect used to
   burn the whole request timeout without sending a byte).
@@ -725,6 +729,10 @@ These knobs form one resilience stack, matching Python cognee's:
   cannot stop a steady stream that exceeds a quota. The concurrency ceiling is
   enforced inside the LLM transport, so it applies on every surface including
   the HTTP server, whose cognify routes have no per-request knob of their own.
+  A slot is held for the HTTP exchange itself and released while a request waits
+  — for its pacing turn or for a retry backoff — because a waiting request holds
+  no socket; counting waiters would let a 15-minute overload episode stall every
+  other LLM caller in the process behind requests that are merely sleeping.
   It defaults to 1000, matching the connection-pool limit `openai-python` and
   `litellm` set, and to 128 on Android/iOS where a 1024-descriptor budget is
   shared with the graph, vector and relational stores.

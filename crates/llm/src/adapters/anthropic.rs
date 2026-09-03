@@ -315,10 +315,22 @@ impl AnthropicAdapter {
 
         let budget = self.retry_budget();
         let pacer = self.pacer();
-        // See the identical acquisition in the OpenAI adapter: transport-level
-        // concurrency ceiling, held across retries, taken before pacing.
-        let _in_flight = crate::in_flight::acquire_in_flight().await;
+        // Wall clock for the whole call: what the retry logs report, and the
+        // base the retry floor is measured off once the in-flight queue waits
+        // below are subtracted.
         let started = Instant::now();
+        // Time this call has spent queued for an in-flight permit, subtracted
+        // from the elapsed time handed to `RetryBudget::is_exhausted`.
+        //
+        // That predicate is `attempts >= min_attempts && elapsed >= min_elapsed`,
+        // so a *larger* elapsed can only exhaust the budget earlier, and
+        // `min_elapsed` (`LLM_MIN_RETRY_SECONDS`) is a "keep retrying for at
+        // least this long" resilience guarantee, not a deadline — this adapter
+        // has no deadline concept at all. Charging queue time against the floor
+        // would only ever cut the ladder short: with `LLM_MAX_RETRIES=2` and a
+        // 240s floor, a call that spent 300s waiting for a permit would stop
+        // after its second attempt having done no real retrying.
+        let mut queued_for_permit = Duration::ZERO;
         let mut retry_after: Option<Duration> = None;
         let mut attempt: u32 = 0;
 
@@ -342,9 +354,29 @@ impl AnthropicAdapter {
                 tokio::time::sleep(delay).await;
             }
 
-            // Inside the loop, immediately before the send — see the OpenAI
-            // adapter and `cognee_utils::pacing` for why admission is per attempt.
-            if let Some(pacer) = pacer.as_deref() {
+            // Inside the loop — see the OpenAI adapter and `cognee_utils::pacing`
+            // for why admission is per attempt. This one runs before the queue
+            // below because it is the only admission that can pace a caller
+            // without an in-flight permit in hand.
+            let paced_before_queue = match pacer.as_deref() {
+                Some(pacer) => pacer.admit().await,
+                None => false,
+            };
+
+            // See the identical acquisition in the OpenAI adapter: transport-level
+            // concurrency ceiling, taken *after* admission and released at the end
+            // of the iteration so a permit only ever covers a live socket.
+            let permit_queue_started = Instant::now();
+            let _in_flight = crate::in_flight::acquire_in_flight().await;
+            queued_for_permit += permit_queue_started.elapsed();
+
+            // Re-gate immediately before the send: an episode can open while this
+            // caller sits in the queue, and without this every caller that
+            // cleared the fast path together would still fire one unpaced send at
+            // a provider that has just reported overload. Skipped when the
+            // admission above already paced this attempt, so an attempt never
+            // spends two tokens. See the OpenAI adapter for the full rationale.
+            if !paced_before_queue && let Some(pacer) = pacer.as_deref() {
                 pacer.admit().await;
             }
 
@@ -368,7 +400,9 @@ impl AnthropicAdapter {
                         pacer.record_overload("timeout");
                     }
                     last_error = LlmError::NetworkError(e.to_string());
-                    if budget.is_exhausted(attempt, started.elapsed()) {
+                    if budget
+                        .is_exhausted(attempt, started.elapsed().saturating_sub(queued_for_permit))
+                    {
                         break;
                     }
                     continue;
@@ -414,7 +448,8 @@ impl AnthropicAdapter {
                 }
                 retry_after = hint;
                 last_error = err;
-                if budget.is_exhausted(attempt, started.elapsed()) {
+                if budget.is_exhausted(attempt, started.elapsed().saturating_sub(queued_for_permit))
+                {
                     break;
                 }
                 continue;

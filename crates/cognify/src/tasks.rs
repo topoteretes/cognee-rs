@@ -735,31 +735,45 @@ pub async fn extract_graph_from_data(
         let chunk_documents: Vec<Uuid> = batch.iter().map(|chunk| chunk.document_id).collect();
 
         // Bounded-concurrency pipeline: at most `max_parallel` extraction calls
-        // are in flight at once. `buffered` (not `buffer_unordered`) yields
-        // results in input order, which `all_graphs` relies on — downstream
-        // dedup in `retrieve_existing_edges` is order-sensitive. The
-        // `tokio::spawn` inside the mapped future keeps calls on the
-        // multi-threaded runtime, and `buffered` only polls up to `max_parallel`
-        // futures, so at most that many extraction tasks exist at once.
+        // are in flight at once. `buffer_unordered`, not `buffered`: the latter's
+        // `FuturesOrdered` counts completed-but-undrained outputs against its
+        // limit, so a chunk stuck in the retry cascade pins its slot *and* every
+        // slot filled behind it until it returns — head-of-line blocking that
+        // stops the batch dead above `max_parallel` chunks. The `tokio::spawn`
+        // inside the mapped future keeps calls on the multi-threaded runtime,
+        // and `buffer_unordered` only polls up to `max_parallel` futures, so at
+        // most that many extraction tasks exist at once.
+        //
+        // Completion order is not input order, so each future carries its index
+        // and the batch is re-sorted below. Order still matters downstream:
+        // `all_graphs` feeds dedup in `retrieve_existing_edges`, and the failure
+        // records below must be deterministic for a given input. Same shape as
+        // `SummaryExtractor::summarize_chunks`.
         //
         // Peak duplicated text is still O(`chunks_per_batch`), not
         // O(`max_parallel`): `inputs` above clones every chunk's text up front.
         // Making that lazy would mean borrowing `&chunk` across the stream, which
         // is the higher-ranked-lifetime case the comment there describes.
-        let batch_results: Vec<_> = futures::stream::iter(inputs)
-            .map(|(_, text)| {
+        let mut indexed_results: Vec<_> = futures::stream::iter(inputs.into_iter().enumerate())
+            .map(|(index, (_, text))| {
                 let extractor = fact_extractor.clone();
                 let prompt = config.custom_extraction_prompt.clone();
                 async move {
-                    tokio::spawn(
-                        async move { extractor.extract_facts(&text, prompt.as_deref()).await },
-                    )
-                    .await
+                    let result = tokio::spawn(async move {
+                        extractor.extract_facts(&text, prompt.as_deref()).await
+                    })
+                    .await;
+                    (index, result)
                 }
             })
-            .buffered(max_parallel)
+            .buffer_unordered(max_parallel)
             .collect()
             .await;
+        indexed_results.sort_by_key(|(index, _)| *index);
+        let batch_results: Vec<_> = indexed_results
+            .into_iter()
+            .map(|(_, result)| result)
+            .collect();
 
         // The whole batch is collected before any result is inspected, so a
         // FailFast abort reports every failure in the batch that tripped it —
@@ -1475,22 +1489,33 @@ pub async fn extract_custom_graph_from_data<M: crate::fact_extraction::GraphMode
             .map(|&idx| updated_chunks[idx].text.clone())
             .collect();
 
-        // Bounded-concurrency pipeline, order-preserving (`buffered`) because the
-        // results below are zipped positionally back onto `batch_indices`.
-        let batch_results: Vec<_> = futures::stream::iter(inputs)
-            .map(|text| {
+        // Bounded-concurrency pipeline. `buffer_unordered`, not `buffered`, for
+        // the reason spelled out in `extract_graph_from_data`: `buffered` holds a
+        // completed-but-undrained output in its slot, so one slow chunk blocks
+        // every chunk queued behind it. The results below are indexed back onto
+        // `batch_indices`, so each future carries its position and the batch is
+        // re-sorted here — a positional zip against completion order would
+        // attach each extraction to the wrong chunk.
+        let mut indexed_results: Vec<_> = futures::stream::iter(inputs.into_iter().enumerate())
+            .map(|(index, text)| {
                 let extractor = FactExtractor::new(Arc::clone(&llm));
                 let prompt = config.custom_extraction_prompt.clone();
                 async move {
-                    tokio::spawn(
-                        async move { extractor.extract::<M>(&text, prompt.as_deref()).await },
-                    )
-                    .await
+                    let result = tokio::spawn(async move {
+                        extractor.extract::<M>(&text, prompt.as_deref()).await
+                    })
+                    .await;
+                    (index, result)
                 }
             })
-            .buffered(max_parallel)
+            .buffer_unordered(max_parallel)
             .collect()
             .await;
+        indexed_results.sort_by_key(|(index, _)| *index);
+        let batch_results: Vec<_> = indexed_results
+            .into_iter()
+            .map(|(_, result)| result)
+            .collect();
 
         let batch_len = batch_indices.len();
         let mut batch_failed = false;
@@ -2072,10 +2097,11 @@ pub async fn extract_temporal_events(
     let mut aborted_at: Option<usize> = None;
 
     for (batch_idx, batch) in non_dlt_chunks.chunks(batch_size).enumerate() {
-        // Owned inputs; `buffered` keeps the per-chunk event order stable so
-        // `all_events` is deterministic for a given input. `chunk_ids` and
-        // `chunk_documents` run parallel to them: a failure is attributed to
-        // its chunk and its file, neither of which the stream items carry.
+        // Owned inputs. `chunk_ids` and `chunk_documents` run parallel to them:
+        // a failure is attributed to its chunk and its file, neither of which
+        // the stream items carry, and the events a chunk produced are attributed
+        // to its file the same way — so the results must be back in input order
+        // before the zip below.
         let inputs: Vec<String> = batch.iter().map(|chunk| chunk.text.clone()).collect();
         let chunk_ids: Vec<Uuid> = batch.iter().map(|chunk| chunk.base.id).collect();
         let chunk_documents: Vec<Uuid> = batch.iter().map(|chunk| chunk.document_id).collect();
@@ -2083,14 +2109,28 @@ pub async fn extract_temporal_events(
         // The whole batch is collected before any result is inspected, so a
         // FailFast abort reports every failure in the batch that tripped it —
         // not only the first one to come back.
-        let batch_results: Vec<_> = futures::stream::iter(inputs)
-            .map(|text| {
+        // `buffer_unordered`, not `buffered`, for the reason spelled out in
+        // `extract_graph_from_data`: `buffered` keeps a completed-but-undrained
+        // output in its slot, so one slow chunk blocks every chunk behind it.
+        // Each future carries its index and the batch is re-sorted, which both
+        // keeps the zip below correlated and keeps `all_events` deterministic
+        // for a given input.
+        let mut indexed_results: Vec<_> = futures::stream::iter(inputs.into_iter().enumerate())
+            .map(|(index, text)| {
                 let ext = Arc::clone(&extractor);
-                async move { tokio::spawn(async move { ext.extract_events(&text).await }).await }
+                async move {
+                    let result = tokio::spawn(async move { ext.extract_events(&text).await }).await;
+                    (index, result)
+                }
             })
-            .buffered(max_parallel)
+            .buffer_unordered(max_parallel)
             .collect()
             .await;
+        indexed_results.sort_by_key(|(index, _)| *index);
+        let batch_results: Vec<_> = indexed_results
+            .into_iter()
+            .map(|(_, result)| result)
+            .collect();
 
         let mut batch_events: Vec<TemporalEvent> = Vec::new();
         let mut batch_data_ids: Vec<Uuid> = Vec::new();
