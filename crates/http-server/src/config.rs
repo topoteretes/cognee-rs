@@ -142,6 +142,16 @@ pub struct HttpServerConfig {
     /// Env: `GRAPH_FILE_PATH`.
     pub graph_file_path: PathBuf,
 
+    /// Graph DB connection string, used when `graph_provider` is
+    /// `postgres`/`postgresql`. Ignored by the embedded ladybug backend, which
+    /// is file-backed via `graph_file_path`.
+    ///
+    /// Env: `GRAPH_DATABASE_URL` (matches Python cognee's
+    /// `GraphConfig.graph_database_url`). Empty by default: there is no
+    /// sensible default for a remote database, and the postgres provider
+    /// reports a clear error when it is missing rather than inventing one.
+    pub graph_db_url: String,
+
     /// Vector provider name.
     /// Env: `VECTOR_DB_PROVIDER`. Default: `pgvector`.
     /// Note: the qdrant adapter has been extracted to the closed
@@ -346,6 +356,13 @@ fn default_relational_db_url(system_root_directory: &std::path::Path) -> String 
     )
 }
 
+/// Is `provider` one of the spellings the Postgres graph factory registers
+/// under? `PgGraphFactory` is registered as both `"postgres"` and
+/// `"postgresql"`, so both must resolve a URL.
+pub fn is_postgres_graph(provider: &str) -> bool {
+    matches!(provider, "postgres" | "postgresql")
+}
+
 fn default_graph_file_path(system_root_directory: &std::path::Path) -> PathBuf {
     system_root_directory.join("graph")
 }
@@ -386,6 +403,7 @@ impl Default for HttpServerConfig {
             relational_db_url: default_relational_db_url(&system_root),
             graph_provider: "ladybug".to_string(),
             graph_file_path: default_graph_file_path(&system_root),
+            graph_db_url: String::new(),
             vector_provider: "pgvector".to_string(),
             vector_db_url: default_vector_db_url(&system_root),
             embedding_provider: "onnx".to_string(),
@@ -564,6 +582,9 @@ impl HttpServerConfig {
         if let Ok(v) = std::env::var("GRAPH_DATABASE_PROVIDER") {
             cfg.graph_provider = v;
         }
+        if let Ok(v) = std::env::var("GRAPH_DATABASE_URL") {
+            cfg.graph_db_url = v;
+        }
         if let Ok(v) = std::env::var("GRAPH_FILE_PATH") {
             cfg.graph_file_path = PathBuf::from(v);
         }
@@ -735,6 +756,7 @@ impl HttpServerConfig {
         // `postgres://…` string. Trim it here so a copy-pasted value with
         // surrounding whitespace reaches PgVectorAdapter::new cleanly (the
         // validator checks the trimmed form).
+        let graph_provider = self.graph_provider.to_ascii_lowercase();
         let vector_postgres_url = if vector_provider == "pgvector" {
             // Already validated as a postgres URL by wire_vector_db; trim so a
             // copy-pasted value with surrounding whitespace reaches the adapter
@@ -789,11 +811,24 @@ impl HttpServerConfig {
             // `build_database` no longer creates the file itself — this restores
             // the old wire_database "create on boot" behavior via the driver.
             relational_db_url: ensure_sqlite_rwc(&self.relational_db_url),
-            graph_provider: self.graph_provider.to_ascii_lowercase(),
+            graph_provider: graph_provider.clone(),
             graph_file_path: self.graph_file_path.to_string_lossy().into_owned(),
-            // The standalone server supports only the embedded ladybug graph;
-            // Postgres graph is not wired here.
-            graph_postgres_url: None,
+            // Resolved for the Postgres graph provider, mirroring
+            // `vector_postgres_url` below. Previously hardcoded to `None`, which
+            // made GRAPH_DATABASE_PROVIDER=postgres impossible in the standalone
+            // server: PgGraphFactory is registered by the default registry under
+            // "postgres"/"postgresql" whenever the `pggraph` feature is on, but it
+            // reads the URL from this field and failed with
+            // "graph_database_provider=postgres requires a resolved Postgres URL".
+            //
+            // Wrapped in `Ok` like the vector side: `validate_graph_config` has
+            // already rejected an empty or non-Postgres URL by the time the
+            // factory runs, so resolution cannot fail here.
+            graph_postgres_url: if is_postgres_graph(&graph_provider) {
+                Some(Ok(self.graph_db_url.trim().to_string()))
+            } else {
+                None
+            },
             vector_provider,
             vector_db_url: self.vector_db_url.clone(),
             vector_postgres_url,

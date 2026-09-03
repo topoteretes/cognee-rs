@@ -59,7 +59,7 @@ pub async fn wire_default_backends_with(
     // Required backends — a failure here aborts startup.
     let storage = build_storage(&ctx).await?;
     let database = build_database(&ctx).await?;
-    let graph_db = wire_graph_db(registry, &ctx).await?;
+    let graph_db = wire_graph_db(cfg, registry, &ctx).await?;
     let vector_db = wire_vector_db(cfg, registry, &ctx).await?;
 
     // Optional backends — a failure downgrades to `None` (handlers surface a
@@ -129,10 +129,37 @@ pub async fn wire_default_backends_with(
     })
 }
 
+/// Validate the Postgres graph configuration, mirroring
+/// [`validate_vector_config`]. Kept here rather than in the factory so the
+/// operator gets a message naming the env var, before any connection attempt.
+fn validate_graph_config(cfg: &HttpServerConfig) -> Result<(), ServerError> {
+    let provider = cfg.graph_provider.to_ascii_lowercase();
+    if !crate::config::is_postgres_graph(&provider) {
+        return Ok(());
+    }
+    let url = cfg.graph_db_url.trim();
+    if url.is_empty() {
+        return Err(ServerError::Other(anyhow!(
+            "GRAPH_DATABASE_URL (postgres connection string) is required when \
+             GRAPH_DATABASE_PROVIDER={provider}"
+        )));
+    }
+    if !(url.starts_with("postgres://") || url.starts_with("postgresql://")) {
+        return Err(ServerError::Other(anyhow!(
+            "GRAPH_DATABASE_PROVIDER={provider} requires a postgres connection \
+             string in GRAPH_DATABASE_URL (postgres://… or postgresql://…), but \
+             got '{url}'."
+        )));
+    }
+    Ok(())
+}
+
 async fn wire_graph_db(
+    cfg: &HttpServerConfig,
     registry: &ComponentRegistry,
     ctx: &cognee_components::BackendBuildContext,
 ) -> Result<Arc<dyn GraphDBTrait>, ServerError> {
+    validate_graph_config(cfg)?;
     // Delegate to the registry (like wire_vector_db): it already errors with an
     // actionable "registered providers: [...]" message for anything it doesn't
     // know, and — crucially — this keeps the extension seam intact so a
@@ -352,6 +379,85 @@ fn wire_responses_client(cfg: &HttpServerConfig) -> Option<Arc<dyn ResponsesClie
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn validate_graph_config_ladybug_ignores_graph_db_url() {
+        // The embedded graph is file-backed; a stray GRAPH_DATABASE_URL must not
+        // make the default provider fail to boot.
+        let cfg = HttpServerConfig {
+            graph_provider: "ladybug".to_string(),
+            graph_db_url: "not-a-url".to_string(),
+            ..Default::default()
+        };
+        assert!(validate_graph_config(&cfg).is_ok());
+    }
+
+    #[test]
+    fn validate_graph_config_postgres_requires_a_url() {
+        // Regression: graph_postgres_url used to be hardcoded to None, so
+        // GRAPH_DATABASE_PROVIDER=postgres failed deep inside PgGraphFactory with
+        // "requires a resolved Postgres URL" and no hint at which env var was
+        // missing — because none existed. Fail here instead, naming it.
+        let cfg = HttpServerConfig {
+            graph_provider: "postgres".to_string(),
+            graph_db_url: String::new(),
+            ..Default::default()
+        };
+        let msg = match validate_graph_config(&cfg) {
+            Ok(()) => String::new(),
+            Err(err) => err.to_string(),
+        };
+        assert!(
+            msg.contains("GRAPH_DATABASE_URL") && msg.contains("GRAPH_DATABASE_PROVIDER"),
+            "expected an actionable pggraph error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn validate_graph_config_postgres_rejects_non_postgres_url() {
+        let cfg = HttpServerConfig {
+            graph_provider: "postgresql".to_string(),
+            graph_db_url: "/srv/.cognee_system/graph".to_string(),
+            ..Default::default()
+        };
+        let msg = match validate_graph_config(&cfg) {
+            Ok(()) => String::new(),
+            Err(err) => err.to_string(),
+        };
+        assert!(
+            msg.contains("postgres connection string"),
+            "expected an actionable pggraph error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn backend_context_resolves_graph_postgres_url_for_both_spellings() {
+        // The core of the fix: the context must carry the URL through, or
+        // PgGraphFactory rejects the build. Both registered spellings resolve.
+        for provider in ["postgres", "postgresql"] {
+            let cfg = HttpServerConfig {
+                graph_provider: provider.to_string(),
+                graph_db_url: "  postgres://u:p@h:5432/db  ".to_string(),
+                ..Default::default()
+            };
+            let ctx = cfg.backend_context();
+            assert_eq!(
+                ctx.graph_postgres_url,
+                Some(Ok("postgres://u:p@h:5432/db".to_string())),
+                "{provider} must resolve a trimmed URL"
+            );
+        }
+    }
+
+    #[test]
+    fn backend_context_leaves_graph_postgres_url_unset_for_ladybug() {
+        let cfg = HttpServerConfig {
+            graph_provider: "ladybug".to_string(),
+            graph_db_url: "postgres://u:p@h:5432/db".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(cfg.backend_context().graph_postgres_url, None);
+    }
 
     #[test]
     fn backend_context_applies_explicit_onnx_asset_paths() {
