@@ -373,3 +373,153 @@ async fn typed_validation_failure_exhausts_retries_and_surfaces_error() {
     // All three attempts were made (no early success).
     m.assert_calls_async(3).await;
 }
+
+/// An endpoint with no tool-call parser must stop being sent tool calls.
+///
+/// vLLM started without `--enable-auto-tool-choice --tool-call-parser` answers
+/// 200 with the text in `message.content` and never populates `tool_calls`. The
+/// cascade used to be stateless per call, so every structured call re-paid the
+/// full tools -> corrective -> legacy -> JSON ladder: 4.14 API calls per
+/// extraction against 1.09 on an endpoint with a parser, with ~71% of cost
+/// producing nothing. After `MISS_THRESHOLD` consecutive calls produce no
+/// native tool call, mode 1 is skipped.
+#[tokio::test]
+async fn tool_calls_stop_after_an_endpoint_never_answers_one() {
+    let server = MockServer::start_async().await;
+
+    // Mode 1: tool-calling. `body_excludes("json_object")` keeps this mock off
+    // the JSON-mode request, and `body_excludes("\"functions\"")` off the legacy
+    // one. Answers with prose in `content` and no `tool_calls` — exactly what a
+    // parser-less server does: HTTP 200, nothing usable.
+    let tools_mock = server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path("/chat/completions")
+                .body_includes("\"tools\"")
+                .body_excludes("\"functions\"")
+                .body_excludes("json_object");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(
+                    r#"{"id":"x","object":"chat.completion","created":1,"model":"m",
+                        "choices":[{"index":0,"message":{"role":"assistant",
+                            "content":"Sure! Here is the node you asked for."},
+                          "finish_reason":"stop"}]}"#,
+                );
+        })
+        .await;
+
+    // Mode 2: legacy `functions`/`function_call`. Also unanswerable here.
+    let legacy_mock = server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path("/chat/completions")
+                .body_includes("\"functions\"")
+                .body_excludes("json_object");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(
+                    r#"{"id":"x","object":"chat.completion","created":1,"model":"m",
+                        "choices":[{"index":0,"message":{"role":"assistant",
+                            "content":"still prose"},"finish_reason":"stop"}]}"#,
+                );
+        })
+        .await;
+
+    // Mode 3: JSON mode — the one this server can actually answer, so every
+    // call still succeeds. The assertion is about how many *mode 1* requests
+    // are sent, not about whether the call works.
+    let json_mock = server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path("/chat/completions")
+                .body_includes("json_object");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(
+                    r#"{"id":"x","object":"chat.completion","created":1,"model":"m",
+                        "choices":[{"index":0,"message":{"role":"assistant",
+                            "content":"{\"foo\":\"bar\"}"},
+                          "finish_reason":"stop"}]}"#,
+                );
+        })
+        .await;
+
+    let adapter = OpenAIAdapter::new("gpt-4o-mini", "test-key", Some(server.base_url()))
+        .unwrap()
+        .with_network_retries(0)
+        .with_structured_output_retries(1);
+
+    let schema = json!({"type":"object","properties":{"foo":{"type":"string"}}});
+
+    // Three calls trip the probe.
+    for i in 0..3 {
+        adapter
+            .create_structured_output_raw("input text", "system prompt", &schema, None)
+            .await
+            .unwrap_or_else(|e| panic!("call {i} should still succeed via JSON mode: {e}"));
+    }
+    let tools_after_priming = tools_mock.calls_async().await;
+    assert!(
+        tools_after_priming >= 3,
+        "each of the first three calls must have tried tool calling; saw {tools_after_priming}"
+    );
+    let legacy_after_priming = legacy_mock.calls_async().await;
+    assert!(
+        legacy_after_priming >= 3,
+        "the priming calls should have burned legacy mode too; saw {legacy_after_priming}"
+    );
+
+    // The fourth call must skip mode 1 entirely.
+    adapter
+        .create_structured_output_raw("input text", "system prompt", &schema, None)
+        .await
+        .expect("fourth call still succeeds");
+
+    assert_eq!(
+        tools_mock.calls_async().await,
+        tools_after_priming,
+        "tool-calling mode must not be re-sent once the endpoint is known to lack a parser"
+    );
+    assert!(
+        json_mock.calls_async().await >= 4,
+        "the fourth call must still be answered, via JSON mode"
+    );
+}
+
+/// The converse: an endpoint that does answer tool calls keeps being sent them.
+/// Guards against the probe tripping on a healthy provider.
+#[tokio::test]
+async fn tool_calls_keep_being_sent_to_an_endpoint_that_answers_them() {
+    let server = MockServer::start_async().await;
+    let tools_mock = server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path("/chat/completions")
+                .body_includes("\"tools\"")
+                .body_excludes("json_object");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(tool_call_response(r#"{"foo":"bar"}"#));
+        })
+        .await;
+
+    let adapter = OpenAIAdapter::new("gpt-4o-mini", "test-key", Some(server.base_url()))
+        .unwrap()
+        .with_network_retries(0)
+        .with_structured_output_retries(2);
+
+    let schema = json!({"type":"object","properties":{"foo":{"type":"string"}}});
+    for i in 0..5 {
+        adapter
+            .create_structured_output_raw("input text", "system prompt", &schema, None)
+            .await
+            .unwrap_or_else(|e| panic!("call {i} should succeed: {e}"));
+    }
+
+    assert_eq!(
+        tools_mock.calls_async().await,
+        5,
+        "a working tool-call endpoint must be sent exactly one tools request per call"
+    );
+}

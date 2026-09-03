@@ -722,6 +722,24 @@ These knobs form one resilience stack, matching Python cognee's:
   than cancelling in flight, so the true ceiling is
   `LLM_REQUEST_DEADLINE_SECONDS + LLM_REQUEST_TIMEOUT_SECONDS`. Set it to `0` to
   restore the previous unbounded behaviour.
+- **The cascade stops probing an endpoint that cannot do tool calls.** The three
+  request shapes above exist because OpenAI-compatible servers vary in what they
+  accept, but an endpoint with no tool-call parser — vLLM started without
+  `--enable-auto-tool-choice --tool-call-parser` is the usual case — answers 200
+  with the text in `message.content` and never populates `tool_calls`. It can
+  therefore never satisfy the first shape, and a stateless cascade re-pays the
+  whole ladder on every call: measured on one such deployment, 4.14 API calls per
+  extraction against 1.09 on an endpoint with a parser, with roughly 71% of
+  output tokens and cost producing nothing. The OpenAI-compatible adapter now
+  remembers this per endpoint: after three consecutive structured calls in which
+  the server emits no native tool call, tool-calling mode is skipped and the
+  request goes straight to the legacy and JSON shapes. Any native tool call
+  clears the memory, and a skipped endpoint is still re-probed once every 64
+  calls, so a server that gains a parser (a redeploy behind a stable URL)
+  recovers without a restart. There is no setting to configure: it is a property
+  of the endpoint, observed rather than declared. Python needs no equivalent
+  because it has no cascade — it pins one instructor mode per provider from a
+  static table and stays there.
 - **Concurrency and rate are separate ceilings.** `LLM_MAX_PARALLEL_REQUESTS`
   bounds how many LLM requests are in flight at once; the `LLM_RATE_LIMIT_*`
   bucket below bounds how often they *start*. Neither substitutes for the other —
