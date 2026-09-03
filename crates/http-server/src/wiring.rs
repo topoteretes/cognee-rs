@@ -381,6 +381,18 @@ mod tests {
         );
     }
 
+    // Gated on `onnx` because the fallback asserted below only exists in an
+    // `onnx` build. `cognee_components::onnx_asset_defaults()` reads
+    // `cognee_embedding::OnnxEmbeddingConfig::default()` under
+    // `cognee-components`'s own `onnx` cfg and returns inert (empty) paths
+    // otherwise — deliberately, because `build_embedding_config` populates
+    // `EmbeddingConfig::onnx` under that same cfg and so never reads them. The
+    // `./target/models` default is therefore unobservable *and* unused without
+    // `onnx`, which makes this a test of ONNX-build behaviour, not a bug.
+    // This crate's `onnx` forwards to `cognee-components/onnx`, so the gate is
+    // sufficient: under feature unification it can only skip the test (when our
+    // `onnx` is off but the dependency's is unified on), never fail it.
+    #[cfg(feature = "onnx")]
     #[test]
     fn backend_context_defaults_onnx_paths_when_unset() {
         let cfg = HttpServerConfig {

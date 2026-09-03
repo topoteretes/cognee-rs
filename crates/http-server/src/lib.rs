@@ -59,22 +59,47 @@ use std::net::SocketAddr;
 ///
 /// Only compiled when the `bin` feature is enabled so the library does not
 /// require `tokio/signal`.
+///
+/// **Never panics.** Installing a signal handler is an OS call that can fail,
+/// and this future is the argument to `with_graceful_shutdown` — an unwind out
+/// of it aborts the serve task *before* [`serve_with_shutdown`] reaches
+/// `lifecycle::on_shutdown`, i.e. it re-introduces exactly the leak that
+/// topoteretes/cognee-rs#132 fixed. A handler that cannot be installed is also
+/// no reason to refuse to serve: the signal just keeps its OS default
+/// disposition, so the process still dies on SIGINT/SIGTERM, only without
+/// draining first. A failed registration is therefore logged and that arm parks
+/// forever, leaving the other signal — and the teardown path behind it —
+/// working.
 #[cfg(feature = "bin")]
 async fn shutdown_signal() {
     use tokio::signal;
 
     let ctrl_c = async {
-        signal::ctrl_c()
-            .await
-            .expect("failed to install Ctrl+C handler");
+        if let Err(error) = signal::ctrl_c().await {
+            tracing::error!(
+                %error,
+                "failed to install the Ctrl+C handler; SIGINT will terminate the process \
+                 without draining in-flight requests"
+            );
+            std::future::pending::<()>().await;
+        }
     };
 
     #[cfg(unix)]
     let terminate = async {
-        signal::unix::signal(signal::unix::SignalKind::terminate())
-            .expect("failed to install SIGTERM handler")
-            .recv()
-            .await;
+        match signal::unix::signal(signal::unix::SignalKind::terminate()) {
+            Ok(mut sigterm) => {
+                sigterm.recv().await;
+            }
+            Err(error) => {
+                tracing::error!(
+                    %error,
+                    "failed to install the SIGTERM handler; SIGTERM will terminate the process \
+                     without draining in-flight requests"
+                );
+                std::future::pending::<()>().await;
+            }
+        }
     };
 
     #[cfg(not(unix))]
