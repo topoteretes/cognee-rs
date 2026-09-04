@@ -634,6 +634,280 @@ async fn a_content_echoing_endpoint_keeps_using_tool_calling_mode() {
     );
 }
 
+/// A native payload that arrives but never parses keeps the mode enabled.
+///
+/// This is the deliberate false-positive guard: malformed output is a model
+/// problem the corrective-retry ladder owns, not evidence the endpoint lacks a
+/// parser, and a wrong skip costs extraction quality because JSON mode sends
+/// only a `schema_to_example` template. Nothing previously covered this path —
+/// the healthy-endpoint test reaches `record_useful` via the *success* path, so
+/// a regression removing the clear-on-sighting branch passed the whole suite.
+///
+/// It is also the documented limitation: the mode never trips here, so the
+/// cascade is re-paid every call. That is the accepted cost of the guard.
+#[tokio::test]
+async fn a_native_payload_that_never_parses_keeps_the_mode_enabled() {
+    let server = MockServer::start_async().await;
+    // Non-blank `arguments` that is not JSON: a native tool call arrived, so the
+    // parser exists, but the payload is unusable.
+    let tools_mock = server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path("/chat/completions")
+                .body_includes("\"tools\"")
+                .body_excludes("\"functions\"")
+                .body_excludes("json_object");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(tool_call_response("definitely not json"));
+        })
+        .await;
+    let _legacy = server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path("/chat/completions")
+                .body_includes("\"functions\"")
+                .body_excludes("json_object");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(
+                    r#"{"id":"x","object":"chat.completion","created":1,"model":"m",
+                        "choices":[{"index":0,"message":{"role":"assistant",
+                            "content":"prose"},"finish_reason":"stop"}]}"#,
+                );
+        })
+        .await;
+    let _json = server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path("/chat/completions")
+                .body_includes("json_object");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(
+                    r#"{"id":"x","object":"chat.completion","created":1,"model":"m",
+                        "choices":[{"index":0,"message":{"role":"assistant",
+                            "content":"{\"foo\":\"bar\"}"},
+                          "finish_reason":"stop"}]}"#,
+                );
+        })
+        .await;
+
+    let adapter = OpenAIAdapter::new("gpt-4o-mini", "test-key", Some(server.base_url()))
+        .unwrap()
+        .with_network_retries(0)
+        .with_structured_output_retries(1);
+    let schema = json!({"type":"object","properties":{"foo":{"type":"string"}}});
+
+    for i in 0..5 {
+        adapter
+            .create_structured_output_raw("input text", "system prompt", &schema, None)
+            .await
+            .unwrap_or_else(|e| panic!("call {i} is served by JSON mode: {e}"));
+    }
+
+    assert_eq!(
+        tools_mock.calls_async().await,
+        5,
+        "a native payload proves the parser exists, so the mode must stay enabled \
+         even though it never parses"
+    );
+}
+
+/// A native payload arriving mid-run clears suspicion accumulated by earlier
+/// calls.
+///
+/// This is the only scenario in which the clear-on-sighting branch is
+/// load-bearing. In a run where *every* call yields an unparseable native
+/// payload the mode never trips anyway, because the miss gate already requires
+/// that no native payload arrived — so that shape cannot guard this line. It
+/// takes an interleaved run: two calls with no native field at all, then one
+/// whose native payload arrives but does not parse, then two more misses. With
+/// the clear that is a run of two, below the threshold; without it, four.
+#[tokio::test]
+async fn a_native_payload_clears_suspicion_from_earlier_calls() {
+    let server = MockServer::start_async().await;
+
+    // No native field at all -> counts against the mode.
+    let tools_miss = server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path("/chat/completions")
+                .body_includes("\"tools\"")
+                .body_includes("NOFIELD")
+                .body_excludes("json_object");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(
+                    r#"{"id":"x","object":"chat.completion","created":1,"model":"m",
+                        "choices":[{"index":0,"message":{"role":"assistant",
+                            "content":"prose"},"finish_reason":"stop"}]}"#,
+                );
+        })
+        .await;
+    // Native field present, non-blank, unparseable -> proves the parser, clears.
+    let _tools_sighting = server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path("/chat/completions")
+                .body_includes("\"tools\"")
+                .body_includes("SIGHTING")
+                .body_excludes("json_object");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(tool_call_response("definitely not json"));
+        })
+        .await;
+    let _legacy = server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path("/chat/completions")
+                .body_includes("\"functions\"")
+                .body_excludes("json_object");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(
+                    r#"{"id":"x","object":"chat.completion","created":1,"model":"m",
+                        "choices":[{"index":0,"message":{"role":"assistant",
+                            "content":"prose"},"finish_reason":"stop"}]}"#,
+                );
+        })
+        .await;
+    let _json = server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path("/chat/completions")
+                .body_includes("json_object");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(
+                    r#"{"id":"x","object":"chat.completion","created":1,"model":"m",
+                        "choices":[{"index":0,"message":{"role":"assistant",
+                            "content":"{\"foo\":\"bar\"}"},
+                          "finish_reason":"stop"}]}"#,
+                );
+        })
+        .await;
+
+    let adapter = OpenAIAdapter::new("gpt-4o-mini", "test-key", Some(server.base_url()))
+        .unwrap()
+        .with_network_retries(0)
+        .with_structured_output_retries(1);
+    let schema = json!({"type":"object","properties":{"foo":{"type":"string"}}});
+    let ask = async |text: &str| {
+        adapter
+            .create_structured_output_raw(text, "system prompt", &schema, None)
+            .await
+    };
+
+    ask("NOFIELD 1").await.expect("served by JSON mode");
+    ask("NOFIELD 2").await.expect("served by JSON mode");
+    ask("SIGHTING").await.expect("served by JSON mode");
+    ask("NOFIELD 3").await.expect("served by JSON mode");
+    ask("NOFIELD 4").await.expect("served by JSON mode");
+
+    let before = tools_miss.calls_async().await;
+    assert_eq!(before, 4, "one tools request per no-field call");
+
+    // Two misses since the sighting is below MISS_THRESHOLD, so mode 1 is still
+    // tried. Without the clear this is the fourth miss and it would be skipped.
+    ask("NOFIELD 5").await.expect("served by JSON mode");
+    assert_eq!(
+        tools_miss.calls_async().await,
+        before + 1,
+        "a native payload must clear earlier suspicion, so two later misses do not trip the mode"
+    );
+}
+
+/// A native field carrying *blank* `arguments` is not evidence of a working
+/// mode, and legacy must agree with tool calling about that.
+///
+/// Tool calling drops a blank-`arguments` native call before its own check, so
+/// that shape counts against it. Legacy used to call `record_useful` on any
+/// present `function_call`, so an endpoint emitting `{arguments: ""}` forever
+/// cleared legacy's count on every call and never tripped — while the identical
+/// tools-shaped server did.
+#[tokio::test]
+async fn a_blank_native_payload_still_counts_against_legacy_mode() {
+    let server = MockServer::start_async().await;
+    let _tools = server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path("/chat/completions")
+                .body_includes("\"tools\"")
+                .body_excludes("\"functions\"")
+                .body_excludes("json_object");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(
+                    r#"{"id":"x","object":"chat.completion","created":1,"model":"m",
+                        "choices":[{"index":0,"message":{"role":"assistant",
+                            "content":"prose"},"finish_reason":"stop"}]}"#,
+                );
+        })
+        .await;
+    // Legacy answers with a `function_call` whose `arguments` is empty: the
+    // field is present, but it carries nothing.
+    let legacy_mock = server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path("/chat/completions")
+                .body_includes("\"functions\"")
+                .body_excludes("json_object");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(
+                    r#"{"id":"x","object":"chat.completion","created":1,"model":"m",
+                        "choices":[{"index":0,"message":{"role":"assistant",
+                            "function_call":{"name":"extract_structured_data",
+                                             "arguments":""}},
+                          "finish_reason":"stop"}]}"#,
+                );
+        })
+        .await;
+    let _json = server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path("/chat/completions")
+                .body_includes("json_object");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(
+                    r#"{"id":"x","object":"chat.completion","created":1,"model":"m",
+                        "choices":[{"index":0,"message":{"role":"assistant",
+                            "content":"{\"foo\":\"bar\"}"},
+                          "finish_reason":"stop"}]}"#,
+                );
+        })
+        .await;
+
+    let adapter = OpenAIAdapter::new("gpt-4o-mini", "test-key", Some(server.base_url()))
+        .unwrap()
+        .with_network_retries(0)
+        .with_structured_output_retries(1);
+    let schema = json!({"type":"object","properties":{"foo":{"type":"string"}}});
+
+    for i in 0..3 {
+        adapter
+            .create_structured_output_raw("input text", "system prompt", &schema, None)
+            .await
+            .unwrap_or_else(|e| panic!("call {i} is served by JSON mode: {e}"));
+    }
+    let legacy_after_priming = legacy_mock.calls_async().await;
+    assert_eq!(legacy_after_priming, 3, "one legacy attempt per call");
+
+    adapter
+        .create_structured_output_raw("input text", "system prompt", &schema, None)
+        .await
+        .expect("fourth call still served by JSON mode");
+    assert_eq!(
+        legacy_mock.calls_async().await,
+        legacy_after_priming,
+        "a present-but-blank function_call must count against legacy mode, \
+         exactly as the equivalent shape counts against tool calling"
+    );
+}
+
 /// `consecutive_misses` must actually be consecutive: a call the mode answered
 /// has to clear the count, or misses accumulate across arbitrarily many
 /// intervening successes until a mode that keeps working gets skipped anyway.

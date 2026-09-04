@@ -69,18 +69,29 @@ use crate::types::{GenerationOptions, GenerationResponse, Message, MessageRole, 
 /// echoes usable JSON in `content` is answered by mode 1 on its first attempt,
 /// so mode 1 is the *cheapest* path there and must not be skipped.
 ///
-/// Two things clear suspicion, and they are different claims:
+/// A mode counts against itself only when it ran out of attempts **and** every
+/// response that arrived carried no native payload — no `tool_calls` /
+/// `function_call` at all, or one whose `arguments` was blank. Two things clear
+/// the count:
 ///
 /// - **The mode answered the call.** Whether the payload came from the native
 ///   field or from `content` is irrelevant — the mode did its job.
-/// - **The endpoint emitted the mode's native field at all**, even if that
-///   payload then failed to parse or validate. The field's mere presence proves
-///   there is a server-side parser, which is the only question this probe is
-///   really asking; a badly-formed tool call is a model problem, not a
-///   capability one, and the corrective-retry ladder already handles it.
+/// - **A native payload arrived**, even if it then failed to parse or validate.
+///   This is a deliberate false-positive guard rather than a claim about the
+///   server: a model that occasionally returns malformed JSON would otherwise
+///   accumulate misses and get its mode disabled for
+///   [`Self::RE_PROBE_INTERVAL`] calls, and JSON mode sends only a
+///   `schema_to_example` template rather than the real schema, so a wrong skip
+///   costs extraction quality. Malformed output is the corrective-retry
+///   ladder's job, not the probe's.
 ///
-/// Only a mode that ran out of attempts having produced nothing usable, *on
-/// responses that arrived without its native field*, counts against itself.
+/// **Known limitation.** That second rule means an endpoint whose native field
+/// arrives non-blank but *never* parses is not caught: it clears the count on
+/// every call, the mode never trips, and the full cascade is re-paid — the same
+/// waste profile as a missing parser, from a different cause. Catching it would
+/// mean counting parse failures as misses, which reintroduces the false-positive
+/// above. Left uncaught deliberately; the corrective-retry ladder and the
+/// `ValidationMiss` short-circuit are the mechanisms aimed at bad payloads.
 ///
 /// Python needs no equivalent: it pins one instructor mode per provider from a
 /// static table (`instructor_modes.py`) and stays there, overridable by
@@ -93,9 +104,9 @@ use crate::types::{GenerationOptions, GenerationResponse, Message, MessageRole, 
 /// run of bad responses cannot disable a mode for the life of the process.
 #[derive(Debug)]
 struct ModeProbe {
-    /// Structured calls in a row in which this mode ran to exhaustion having
-    /// produced nothing usable, on responses carrying no native field. Reset by
-    /// any call the mode answered, and by any sighting of its native field.
+    /// Structured calls in a row in which this mode ran to exhaustion and every
+    /// response that arrived carried no native payload. Reset by any call the
+    /// mode answered, and by any non-blank native payload.
     consecutive_misses: AtomicU32,
     /// Calls that have skipped this mode since the last attempt at it. Drives
     /// the periodic re-probe.
@@ -137,9 +148,9 @@ impl ModeProbe {
         false
     }
 
-    /// Record that the mode is worth sending: it either answered the call, or
-    /// the endpoint emitted its native field (proving a parser exists) even if
-    /// that particular payload was unusable. Clears any accumulated suspicion.
+    /// Record that the mode is worth sending: it either answered the call, or a
+    /// non-blank native payload arrived even though that payload was unusable.
+    /// Clears any accumulated suspicion.
     fn record_useful(&self) {
         self.consecutive_misses.store(0, Ordering::Relaxed);
         self.skipped_since_probe.store(0, Ordering::Relaxed);
@@ -1828,13 +1839,14 @@ impl OpenAIAdapter {
         // Gates the `ValidationMiss` short-circuit below, which claims the
         // server "clearly speaks tool calling" — a claim only this can support.
         let mut native_tool_call = false;
-        // Whether at least one response *arrived* carrying no native tool call.
+        // Whether at least one response *arrived* carrying no native payload —
+        // no `tool_calls`/`function_call`, or one whose `arguments` was blank.
         // This, not the absence of `native_tool_call`, is the evidence that the
         // mode is useless here: a transport error, a deadline abort or a
         // truncation says nothing about the endpoint's parser, and counting them
         // would let a brief gateway blip disable tool calling on a healthy
         // endpoint for the next `RE_PROBE_INTERVAL` calls.
-        let mut tools_answered_without_a_tool_call = false;
+        let mut tools_lacked_native_payload = false;
         let tool_attempts = if try_tools {
             self.structured_output_retries
         } else {
@@ -1929,9 +1941,11 @@ impl OpenAIAdapter {
                             self.cascade_probe.tools.record_useful();
                         }
                     } else {
-                        // A response that arrived with no native tool call. Only
-                        // counts once the whole mode is exhausted (below).
-                        tools_answered_without_a_tool_call = true;
+                        // A response that arrived with no usable native payload:
+                        // either the field was absent, or its `arguments` was
+                        // blank and the `non_blank` filter above dropped it.
+                        // Only counts once the whole mode is exhausted (below).
+                        tools_lacked_native_payload = true;
                     }
                     let arguments = native_arguments
                         .or(choice.message.content.as_deref())
@@ -2014,7 +2028,7 @@ impl OpenAIAdapter {
 
         // Tool-calling mode ran out of attempts having produced nothing usable,
         // on responses that actually arrived. Gated on
-        // `tools_answered_without_a_tool_call` so only that evidence counts:
+        // `tools_lacked_native_payload` so only that evidence counts:
         // transport errors (the `Err` arm below breaks without setting it),
         // deadline aborts and truncations (which `continue` before the check) are
         // all excluded, because none of them says anything about whether the
@@ -2023,7 +2037,7 @@ impl OpenAIAdapter {
         // One such call still proves little on its own — the model may simply
         // have answered badly — so this only accumulates suspicion, and
         // `MISS_THRESHOLD` consecutive ones are needed before mode 1 is skipped.
-        if try_tools && !native_tool_call && tools_answered_without_a_tool_call {
+        if try_tools && !native_tool_call && tools_lacked_native_payload {
             let misses = self.cascade_probe.tools.record_useless();
             if misses == ModeProbe::MISS_THRESHOLD {
                 warn!(
@@ -2107,8 +2121,9 @@ impl OpenAIAdapter {
             );
         }
         // Same distinction as tool calling above: only a response that actually
-        // arrived carrying no `function_call` is evidence against the mode.
-        let mut legacy_answered_without_a_function_call = false;
+        // arrived carrying no usable `function_call` is evidence against the
+        // mode.
+        let mut legacy_lacked_native_payload = false;
         let legacy_attempts = if try_legacy {
             self.structured_output_retries
         } else {
@@ -2157,9 +2172,21 @@ impl OpenAIAdapter {
             }
 
             if let Some(function_call) = &choice.message.function_call {
-                // The endpoint speaks legacy function calling — keep sending it
-                // this shape regardless of whether *this* payload parses.
-                self.cascade_probe.legacy.record_useful();
+                // A native payload arrived — keep sending this shape regardless
+                // of whether *this* one parses.
+                //
+                // Gated on non-blank `arguments` so the two modes agree. The
+                // tools branch drops a blank-`arguments` native call before its
+                // own check (the `non_blank` filter), so that shape counts
+                // against tool-calling mode; without this gate an endpoint
+                // emitting `function_call: {arguments: ""}` forever would clear
+                // legacy's count on every call and never trip, while the
+                // identical tools-shaped server would.
+                if is_blank(&function_call.arguments) {
+                    legacy_lacked_native_payload = true;
+                } else {
+                    self.cascade_probe.legacy.record_useful();
+                }
                 let last_attempt = attempt + 1 >= self.structured_output_retries;
                 match parse_json(&function_call.arguments) {
                     Ok(parsed) => {
@@ -2203,7 +2230,7 @@ impl OpenAIAdapter {
             } else {
                 // A response arrived with no `function_call` at all: evidence the
                 // endpoint cannot parse this shape either.
-                legacy_answered_without_a_function_call = true;
+                legacy_lacked_native_payload = true;
             }
 
             break;
@@ -2212,9 +2239,10 @@ impl OpenAIAdapter {
         // Legacy mode ran out of attempts having produced nothing usable, on
         // responses that arrived. Note the legacy loop propagates transport
         // errors with `?` rather than breaking, so an errored request cannot
-        // reach here at all — but the flag is still what gates this, to keep the
-        // rule identical to tool calling above.
-        if try_legacy && legacy_answered_without_a_function_call {
+        // reach here at all — but the flag is still what gates this, so the rule
+        // reads the same way as tool calling above: a response arrived, and it
+        // carried no usable native payload.
+        if try_legacy && legacy_lacked_native_payload {
             let misses = self.cascade_probe.legacy.record_useless();
             if misses == ModeProbe::MISS_THRESHOLD {
                 debug!(
