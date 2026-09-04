@@ -73,6 +73,15 @@ jobs:
       # The `test -f` guard is deliberate: rustc treats an unsupported crate
       # type as a warning, not an error, so without it a future toolchain could
       # quietly downgrade this step to a compile-only check.
+      # Baseline for the post-link probe below. Without a starting figure the
+      # probe can report what is left but not what this run consumed, and if
+      # the first link hits ENOSPC the only reading ever taken is the one from
+      # after the failure.
+      - name: Disk usage before linking
+        run: |
+          df -h /System/Volumes/Data || true
+          du -sh capi/target 2>/dev/null || true
+
       - name: Link — aarch64-apple-ios (device)
         run: |
           cargo rustc --crate-type cdylib \
@@ -98,14 +107,16 @@ jobs:
       # `/System/Volumes/Data` is the writable volume the build lands on. `/` is
       # the read-only system snapshot: across both builds of run 31305066951 its
       # `Used` column sat unchanged at 9.6Gi while capi/target grew to 5.8G, so
-      # only the container-shared `Avail` there carried any signal (36Gi ->
-      # 34Gi of a 320Gi disk). Peak usage is nowhere near the runner's limit —
+      # only the container-shared `Avail` there carried any signal. Note those
+      # figures were taken *between* the two builds, so they are mid-run
+      # readings rather than starting headroom — which is what the baseline
+      # step above now records. Peak usage is nowhere near the runner's limit —
       # the "full builds do not fit" premise this job was originally written
       # against no longer holds.
       - name: Disk usage after linking
         if: always()
         run: |
-          df -h /System/Volumes/Data
+          df -h /System/Volumes/Data || true
           du -sh capi/target || true
 
       # Validate Package.swift parses correctly (does not require the xcframework

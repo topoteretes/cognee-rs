@@ -107,7 +107,7 @@ The `ios` workflow (`.github/workflows/ios.yml`) runs on every push and PR on a 
 
 `cdylib` is the crate type that exercises the linker: rustc emits a staticlib by archiving objects without resolving symbols, so building one would catch nothing beyond `cargo check`. The shipped staticlib slices are a separate, release build performed by `capi/scripts/build_xcframework.sh`.
 
-This catches Rust type errors, unresolved symbols, C API signature drift, and Swift syntax mistakes without assembling the ~6.6 GB xcframework on the runner. The two debug link builds together occupy ~5.8 GB of `capi/target` against ~36 GB of free space on the runner, so disk is not the constraint it once was — an earlier revision of this job used `cargo check` on the assumption that a full build would not fit. What CI still cannot do is *run* the tests: XCTest behavioral tests are executed manually via `xcodebuild test` before each push.
+This catches Rust type errors, unresolved symbols, C API signature drift, and Swift syntax mistakes without assembling the ~6.6 GB xcframework on the runner. The two debug link builds together occupy ~4.0 GB of `capi/target` against ~34 GB of free space on the runner, so disk is not the constraint it once was — an earlier revision of this job used `cargo check` on the assumption that a full build would not fit. What CI still cannot do is *run* the tests: XCTest behavioral tests are executed manually via `xcodebuild test` before each push.
 
 ## Architecture
 

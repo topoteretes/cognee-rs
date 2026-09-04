@@ -88,8 +88,9 @@ Runs behind the **`release` environment** (required reviewers). Order:
      releases are immutable: re-deploying an existing version fails.
 3. **GitHub Release** — created/updated with the changelog section.
 
-`ios.yml` is **not** part of the release. It is a `main`/PR check only (cargo
-check for the iOS targets + a Swift parse) and ships no artifact; the Swift
+`ios.yml` is **not** part of the release. It is a `main`/PR check only — it
+links both iOS targets with `cargo rustc --crate-type cdylib` and type-checks
+the Swift wrapper with `swiftc -typecheck` — and ships no artifact; the Swift
 package is consumed from source.
 
 Publishing crates.io *before* the tag cascade means a crates.io failure aborts
