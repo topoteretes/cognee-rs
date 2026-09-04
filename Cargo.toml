@@ -89,7 +89,7 @@ aws-sigv4 = "=1.4.5"
 aws-smithy-runtime-api = "=1.12.3"
 # aws-smithy-runtime-api 1.12.3 depends on this as `^1.0.0`, so an unpinned
 # resolve takes 1.1.0 — which raised its MSRV to 1.94.1 and fails this
-# workspace's rust-version = 1.91. 1.0.0 declares 1.91.0 and is compatible.
+# workspace's rust-version = 1.91.1. 1.0.0 declares 1.91.0 and is compatible.
 aws-smithy-runtime-api-macros = "=1.0.0"
 # Transitive smithy crates, pinned for the same reason. They are not imported
 # directly; they are declared so the pin exists at all. Cargo.lock is
