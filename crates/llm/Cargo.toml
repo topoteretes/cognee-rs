@@ -30,6 +30,7 @@ bedrock = [
     # transitive smithy crates. See the workspace manifest.
     "dep:aws-smithy-async",
     "dep:aws-smithy-types",
+    "dep:aws-smithy-runtime-api-macros",
 ]
 
 [dependencies]
@@ -71,6 +72,7 @@ aws-credential-types = { workspace = true, optional = true }
 aws-sigv4 = { workspace = true, optional = true }
 aws-smithy-async = { workspace = true, optional = true }
 aws-smithy-runtime-api = { workspace = true, optional = true }
+aws-smithy-runtime-api-macros = { workspace = true, optional = true }
 aws-smithy-types = { workspace = true, optional = true }
 
 [dev-dependencies]
