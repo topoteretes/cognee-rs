@@ -26,10 +26,13 @@ bedrock = [
     "dep:aws-credential-types",
     "dep:aws-sigv4",
     "dep:aws-smithy-runtime-api",
-    # Not imported by this crate — declared only to hold the MSRV pin on two
-    # transitive smithy crates. See the workspace manifest.
+    # Not imported by this crate — declared only to hold the MSRV pin on three
+    # transitive smithy crates. See the workspace manifest. Add to this list
+    # whenever a new transitive smithy crate needs pinning; a pin in
+    # [workspace.dependencies] is inert until some crate references it.
     "dep:aws-smithy-async",
     "dep:aws-smithy-types",
+    "dep:aws-smithy-runtime-api-macros",
 ]
 
 [dependencies]
@@ -71,6 +74,7 @@ aws-credential-types = { workspace = true, optional = true }
 aws-sigv4 = { workspace = true, optional = true }
 aws-smithy-async = { workspace = true, optional = true }
 aws-smithy-runtime-api = { workspace = true, optional = true }
+aws-smithy-runtime-api-macros = { workspace = true, optional = true }
 aws-smithy-types = { workspace = true, optional = true }
 
 [dev-dependencies]
