@@ -56,23 +56,6 @@ jobs:
       - name: Install protoc (required by lance-encoding build script)
         run: brew install protobuf
 
-      # Link — not merely type-check — both iOS targets, so an unresolved or
-      # mismatched symbol anywhere in the Rust closure fails here instead of in
-      # a downstream Xcode build.
-      #
-      # `--crate-type cdylib` overrides the `["cdylib", "staticlib"]` list in
-      # capi/cognee-capi/Cargo.toml for this invocation only (the same trick
-      # build_xcframework.sh uses in the other direction, documented at
-      # capi/cognee-capi/Cargo.toml:20-25). The cdylib is the slice worth
-      # building: rustc emits a staticlib by archiving objects *without*
-      # resolving symbols, so a staticlib build runs no linker at all and would
-      # add nothing this job does not already get from `cargo check`. The
-      # shipped staticlib is built separately, in release, by
-      # capi/scripts/build_xcframework.sh.
-      #
-      # The `test -f` guard is deliberate: rustc treats an unsupported crate
-      # type as a warning, not an error, so without it a future toolchain could
-      # quietly downgrade this step to a compile-only check.
       # Baseline for the post-link probe below. Without a starting figure the
       # probe can report what is left but not what this run consumed, and if
       # the first link hits ENOSPC the only reading ever taken is the one from
@@ -82,6 +65,23 @@ jobs:
           df -h /System/Volumes/Data || true
           du -sh capi/target 2>/dev/null || true
 
+      # Link — not merely type-check — both iOS targets, so an unresolved or
+      # mismatched symbol anywhere in the Rust closure fails here instead of in
+      # a downstream Xcode build.
+      #
+      # `--crate-type cdylib` overrides the `["cdylib", "staticlib"]` list in
+      # capi/cognee-capi/Cargo.toml for this invocation only (the same trick
+      # build_xcframework.sh uses in the other direction, documented at
+      # capi/cognee-capi/Cargo.toml:20-25). The cdylib is the slice worth
+      # building: rustc emits a staticlib by archiving objects *without*
+      # resolving symbols, so a staticlib build runs no linker at all and
+      # therefore catches no unresolved-symbol errors — which is the one class
+      # of failure this step exists to surface. The shipped staticlib is built
+      # separately, in release, by capi/scripts/build_xcframework.sh.
+      #
+      # The `test -f` guard is deliberate: rustc treats an unsupported crate
+      # type as a warning, not an error, so without it a future toolchain could
+      # quietly downgrade this step to a compile-only check.
       - name: Link — aarch64-apple-ios (device)
         run: |
           cargo rustc --crate-type cdylib \
@@ -105,8 +105,8 @@ jobs:
       # one failure it exists to diagnose.
       #
       # `/System/Volumes/Data` is the writable volume the build lands on. `/` is
-      # the read-only system snapshot: across both builds of run 31305066951 its
-      # `Used` column sat unchanged at 9.6Gi while capi/target grew to 5.8G, so
+      # the read-only system snapshot: across both builds of run 33517170717 its
+      # `Used` column sat unchanged at 9.6Gi while capi/target grew to 4.0G, so
       # only the container-shared `Avail` there carried any signal. Note those
       # figures were taken *between* the two builds, so they are mid-run
       # readings rather than starting headroom — which is what the baseline

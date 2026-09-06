@@ -105,7 +105,7 @@ The `ios` workflow (`.github/workflows/ios.yml`) runs on every push and PR on a 
 - `swiftc -typecheck` — type-checks the Swift wrapper against the real C API header via a synthesised Clang module, catching renamed `cg_sdk_*` functions, changed argument counts, and changed `CgErrorCode` values — no xcframework needed
 - `swiftc -parse` — syntax-checks the Swift test sources (`@testable import CogneeSDK` requires a built module, so only parse-checking is possible in CI)
 
-`cdylib` is the crate type that exercises the linker: rustc emits a staticlib by archiving objects without resolving symbols, so building one would catch nothing beyond `cargo check`. The shipped staticlib slices are a separate, release build performed by `capi/scripts/build_xcframework.sh`.
+`cdylib` is the crate type that exercises the linker: rustc emits a staticlib by archiving objects without resolving symbols, so building one runs no linker at all and would therefore catch no unresolved-symbol errors. The shipped staticlib slices are a separate, release build performed by `capi/scripts/build_xcframework.sh`.
 
 This catches Rust type errors, unresolved symbols, C API signature drift, and Swift syntax mistakes without assembling the ~6.6 GB xcframework on the runner. The two debug link builds together occupy ~4.0 GB of `capi/target` against ~34 GB of free space on the runner, so disk is not the constraint it once was — an earlier revision of this job used `cargo check` on the assumption that a full build would not fit. What CI still cannot do is *run* the tests: XCTest behavioral tests are executed manually via `xcodebuild test` before each push.
 
