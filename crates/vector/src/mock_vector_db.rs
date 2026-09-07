@@ -17,6 +17,7 @@ use crate::error::{VectorDBError, VectorDBResult};
 use crate::models::{SearchResult, VectorPoint};
 use crate::node_filter::metadata_matches_node_filter;
 use crate::vector_db_trait::VectorDB;
+use crate::zero_norm::{warn_zero_norm_points, warn_zero_norm_query};
 
 /// Mock vector database for testing
 ///
@@ -208,6 +209,7 @@ impl VectorDB for MockVectorDB {
                 });
             }
         }
+        warn_zero_norm_points("mock", &key, points);
 
         // Upsert points (replace if ID exists, otherwise append). On replace,
         // union dataset membership so a content-addressed point indexed under
@@ -241,6 +243,7 @@ impl VectorDB for MockVectorDB {
         if points.is_empty() {
             return Ok(());
         }
+        warn_zero_norm_points("mock", &Self::collection_key(data_type, field_name), points);
 
         let key = Self::collection_key(data_type, field_name);
         let mut collections = self.collections.lock().unwrap(); // lock poison is unrecoverable
@@ -274,6 +277,7 @@ impl VectorDB for MockVectorDB {
         top_k: usize,
     ) -> VectorDBResult<Vec<SearchResult>> {
         let key = Self::collection_key(data_type, field_name);
+        warn_zero_norm_query("mock", &key, query_vector);
         let collections = self.collections.lock().unwrap(); // lock poison is unrecoverable
 
         let collection = collections
@@ -330,6 +334,7 @@ impl VectorDB for MockVectorDB {
             _ => None,
         };
         let key = Self::collection_key(data_type, field_name);
+        warn_zero_norm_query("mock", &key, query_vector);
         let collections = self.collections.lock().unwrap(); // lock poison is unrecoverable
 
         let collection = collections
