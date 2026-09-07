@@ -54,9 +54,11 @@ onnx = ["cognee-components/onnx", "cognee-embedding/onnx"]
 ladybug = ["cognee-components/ladybug", "cognee-graph/ladybug"]
 # Postgres-backed vector store. Default-on.
 pgvector = ["cognee-components/pgvector", "cognee-vector/pgvector"]
-# Postgres graph-as-tables store. NOT default-on: this crate wires
-# `graph_postgres_url: None`, so the standalone server does not use it — it is
-# here for consumers that build their own BackendBuildContext.
+# Postgres graph-as-tables store. The standalone server DOES support this:
+# set GRAPH_DATABASE_PROVIDER=postgres (or postgresql) and GRAPH_DATABASE_URL.
+# Not default-on, so such a deployment must opt in — and doing so lets you drop
+# `ladybug`, which removes the bundled C++ graph engine entirely (no cmake or
+# C++ toolchain needed to build, and a far smaller binary).
 pggraph = ["cognee-components/pggraph", "cognee-graph/postgres"]
 # AWS Bedrock LLM adapter + embedding engine (plan §2.3, §6.2). Default-on;
 # `--no-default-features` drops the whole AWS stack (aws-config + aws-sigv4).

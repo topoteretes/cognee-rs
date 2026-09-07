@@ -344,6 +344,14 @@ Supported providers: `ladybug`/`kuzu` (embedded), `postgres` (feature `pggraph`)
 When Postgres graph credentials are unset they fall back to the relational `DB_*`
 config (see [roadmap/cognify-compatibility-plan.md](roadmap/cognify-compatibility-plan.md)).
 
+> **The standalone HTTP server reads only `GRAPH_DATABASE_URL`.** The table
+> above describes the SDK `Settings` surface, where the component-form
+> `GRAPH_DATABASE_HOST`/`PORT`/`NAME`/`USERNAME`/`PASSWORD` variables and the
+> `DB_*` fallback are assembled into a connection string. The server does not
+> assemble one — with `GRAPH_DATABASE_PROVIDER=postgres` it requires
+> `GRAPH_DATABASE_URL` (a `postgres://…` or `postgresql://…` string) and fails
+> at startup otherwise. See [tools/http-server.md](tools/http-server.md).
+
 ## Relational database
 
 | Env var | `Settings` field | Default |

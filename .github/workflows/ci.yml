@@ -244,7 +244,7 @@ jobs:
         env:
           CARGO_TARGET_DIR: target/no-default
         run: |
-          cargo check -p cognee-http-server --no-default-features \
+          cargo check -p cognee-http-server --no-default-features --all-targets \
             --features telemetry,html-loader,pgvector,pggraph
 
       # crates/cli reaches `cognee` with `default-features = false`, so its own

@@ -59,7 +59,7 @@ pub async fn wire_default_backends_with(
     // Required backends — a failure here aborts startup.
     let storage = build_storage(&ctx).await?;
     let database = build_database(&ctx).await?;
-    let graph_db = wire_graph_db(registry, &ctx).await?;
+    let graph_db = wire_graph_db(cfg, registry, &ctx).await?;
     let vector_db = wire_vector_db(cfg, registry, &ctx).await?;
 
     // Optional backends — a failure downgrades to `None` (handlers surface a
@@ -129,16 +129,93 @@ pub async fn wire_default_backends_with(
     })
 }
 
+/// Validate the Postgres graph configuration, mirroring
+/// [`validate_vector_config`]. Kept here rather than in the factory so the
+/// operator gets a message naming the env var, before any connection attempt.
+///
+/// Skipped when no factory is registered for the provider: the registry then
+/// produces a strictly better diagnosis for `GRAPH_DATABASE_PROVIDER=postgres`
+/// — "Rebuild with the `pggraph` crate feature to enable it." Validating first
+/// would replace it with "GRAPH_DATABASE_URL … is required", sending the
+/// operator off to provision a database that cannot help, and they would only
+/// discover they need a different binary on the next boot.
+///
+/// Keyed off actual registration rather than this crate's `pggraph` feature.
+/// Registration is driven by `cognee-components/pggraph`, and the two features
+/// diverge in any multi-package build: `crates/lib`'s `pggraph` feature enables
+/// `cognee-components/pggraph`, so both `--workspace` and
+/// `cargo tree -p cognee-cli -p cognee-http-server` (the http-parity and e2e
+/// build recipe) resolve components *with* pggraph and this crate *without* it.
+/// Gating on the crate feature compiled the validator out of exactly those
+/// builds while `PgGraphFactory` stayed registered.
+fn validate_graph_config(
+    cfg: &HttpServerConfig,
+    registry: &ComponentRegistry,
+) -> Result<(), ServerError> {
+    let provider = cfg.graph_provider.to_ascii_lowercase();
+    if !crate::config::is_postgres_graph(&provider) {
+        return Ok(());
+    }
+    if !registry.graph_providers().iter().any(|p| p == &provider) {
+        return Ok(());
+    }
+    validate_graph_url(cfg)
+}
+
+/// The URL half of [`validate_graph_config`], split out so it is testable
+/// without a registry and compiles in every feature configuration.
+fn validate_graph_url(cfg: &HttpServerConfig) -> Result<(), ServerError> {
+    let provider = cfg.graph_provider.to_ascii_lowercase();
+    if !crate::config::is_postgres_graph(&provider) {
+        return Ok(());
+    }
+    let url = cfg.graph_db_url.trim();
+    if url.is_empty() {
+        return Err(ServerError::Other(anyhow!(
+            "GRAPH_DATABASE_URL (postgres connection string) is required when \
+             GRAPH_DATABASE_PROVIDER={provider}. The standalone server reads only \
+             GRAPH_DATABASE_URL; it does not assemble one from the component-form \
+             GRAPH_DATABASE_HOST/PORT/NAME/USERNAME/PASSWORD variables (the SDK \
+             does)."
+        )));
+    }
+    if !(url.starts_with("postgres://") || url.starts_with("postgresql://")) {
+        return Err(ServerError::Other(anyhow!(
+            "GRAPH_DATABASE_PROVIDER={provider} requires a postgres connection \
+             string in GRAPH_DATABASE_URL (postgres://… or postgresql://…), but \
+             got {found}. The value is not echoed here because connection \
+             strings can carry credentials.",
+            found = describe_scheme(url)
+        )));
+    }
+    Ok(())
+}
+
 async fn wire_graph_db(
+    cfg: &HttpServerConfig,
     registry: &ComponentRegistry,
     ctx: &cognee_components::BackendBuildContext,
 ) -> Result<Arc<dyn GraphDBTrait>, ServerError> {
+    validate_graph_config(cfg, registry)?;
     // Delegate to the registry (like wire_vector_db): it already errors with an
     // actionable "registered providers: [...]" message for anything it doesn't
     // know, and — crucially — this keeps the extension seam intact so a
     // caller-registered graph factory (and the built-in `kuzu` alias) is
     // reachable, instead of a hardcoded ladybug-only guard rejecting them.
     Ok(registry.build_graph(ctx).await?)
+}
+
+/// Describe a rejected connection string without echoing it.
+///
+/// Connection strings routinely carry credentials, so a startup validation
+/// failure must not put the raw value into logs. The scheme is the part the
+/// operator actually needs in order to see what went wrong, and it cannot
+/// contain a password.
+fn describe_scheme(url: &str) -> String {
+    match url.split_once("://") {
+        Some((scheme, _)) if !scheme.is_empty() => format!("scheme '{scheme}://'"),
+        _ => "a value with no URL scheme".to_string(),
+    }
 }
 
 /// Validate the pgvector configuration. Kept in the server wrapper (not the
@@ -164,10 +241,12 @@ fn validate_vector_config(cfg: &HttpServerConfig) -> Result<(), ServerError> {
     if !(url.starts_with("postgres://") || url.starts_with("postgresql://")) {
         return Err(ServerError::Other(anyhow!(
             "VECTOR_DB_PROVIDER=pgvector requires a postgres connection string in \
-             VECTOR_DB_URL (postgres://… or postgresql://…), but got '{url}'. If you \
+             VECTOR_DB_URL (postgres://… or postgresql://…), but got {found}. If you \
              did not intend to use pgvector, set VECTOR_DB_PROVIDER explicitly (e.g. \
              'mock' in a dev-mock build); the default derives this value from \
-             SYSTEM_ROOT_DIRECTORY, which is not a valid Postgres URL."
+             SYSTEM_ROOT_DIRECTORY, which is not a valid Postgres URL. The value is \
+             not echoed here because connection strings can carry credentials.",
+            found = describe_scheme(url)
         )));
     }
     Ok(())
@@ -352,6 +431,206 @@ fn wire_responses_client(cfg: &HttpServerConfig) -> Option<Arc<dyn ResponsesClie
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn rejected_urls_are_described_without_echoing_credentials() {
+        // A validation failure must never put the raw connection string into
+        // logs. Scheme only — it cannot contain a password.
+        assert_eq!(
+            describe_scheme("postgres://user:hunter2@db.internal:5432/x"),
+            "scheme 'postgres://'"
+        );
+        assert_eq!(
+            describe_scheme("/srv/.cognee_system/graph"),
+            "a value with no URL scheme"
+        );
+
+        let cfg = HttpServerConfig {
+            graph_provider: "postgres".to_string(),
+            graph_db_url: "mysql://user:hunter2@db.internal/x".to_string(),
+            ..Default::default()
+        };
+        let msg = match validate_graph_url(&cfg) {
+            Ok(()) => String::new(),
+            Err(err) => err.to_string(),
+        };
+        assert!(
+            !msg.contains("hunter2"),
+            "password leaked into error: {msg}"
+        );
+        assert!(
+            !msg.contains("db.internal"),
+            "host leaked into error: {msg}"
+        );
+        assert!(msg.contains("mysql://"), "scheme should be reported: {msg}");
+    }
+
+    #[test]
+    fn describe_scheme_never_reveals_credentials() {
+        assert_eq!(
+            describe_scheme("postgres://user:hunter2@db.internal:5432/x"),
+            "scheme 'postgres://'"
+        );
+        assert_eq!(
+            describe_scheme("/srv/.cognee_system/graph"),
+            "a value with no URL scheme"
+        );
+        // libpq keyword DSNs and bare user:pass@host have no "://" and must not
+        // fall through to echoing the value.
+        assert_eq!(
+            describe_scheme("host=db user=u password=hunter2"),
+            "a value with no URL scheme"
+        );
+    }
+
+    #[test]
+    fn vector_rejected_urls_are_described_without_echoing_credentials() {
+        let cfg = HttpServerConfig {
+            vector_provider: "pgvector".to_string(),
+            vector_db_url: "mysql://user:hunter2@db.internal/x".to_string(),
+            ..Default::default()
+        };
+        let msg = match validate_vector_config(&cfg) {
+            Ok(()) => String::new(),
+            Err(err) => err.to_string(),
+        };
+        assert!(
+            !msg.contains("hunter2"),
+            "password leaked into error: {msg}"
+        );
+        assert!(msg.contains("mysql://"), "scheme should be reported: {msg}");
+    }
+
+    #[test]
+    fn validate_graph_config_ladybug_ignores_graph_db_url() {
+        // The embedded graph is file-backed; a stray GRAPH_DATABASE_URL must not
+        // make the default provider fail to boot.
+        let cfg = HttpServerConfig {
+            graph_provider: "ladybug".to_string(),
+            graph_db_url: "not-a-url".to_string(),
+            ..Default::default()
+        };
+        assert!(validate_graph_url(&cfg).is_ok());
+    }
+
+    #[test]
+    fn validate_graph_config_postgres_requires_a_url() {
+        // Regression: graph_postgres_url used to be hardcoded to None, so
+        // GRAPH_DATABASE_PROVIDER=postgres failed deep inside PgGraphFactory with
+        // "requires a resolved Postgres URL" and no hint at which env var was
+        // missing — because none existed. Fail here instead, naming it.
+        let cfg = HttpServerConfig {
+            graph_provider: "postgres".to_string(),
+            graph_db_url: String::new(),
+            ..Default::default()
+        };
+        let msg = match validate_graph_url(&cfg) {
+            Ok(()) => String::new(),
+            Err(err) => err.to_string(),
+        };
+        assert!(
+            msg.contains("GRAPH_DATABASE_URL") && msg.contains("GRAPH_DATABASE_PROVIDER"),
+            "expected an actionable pggraph error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn validate_graph_config_postgres_rejects_non_postgres_url() {
+        let cfg = HttpServerConfig {
+            graph_provider: "postgresql".to_string(),
+            graph_db_url: "/srv/.cognee_system/graph".to_string(),
+            ..Default::default()
+        };
+        let msg = match validate_graph_url(&cfg) {
+            Ok(()) => String::new(),
+            Err(err) => err.to_string(),
+        };
+        assert!(
+            msg.contains("postgres connection string"),
+            "expected an actionable pggraph error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn validate_graph_config_skips_when_no_factory_is_registered() {
+        // Nothing registered for "postgres", so the registry owns the error
+        // ("Rebuild with the `pggraph` crate feature to enable it.") and
+        // pre-validation must stand aside even though the URL is unusable.
+        let cfg = HttpServerConfig {
+            graph_provider: "postgres".to_string(),
+            graph_db_url: String::new(),
+            ..Default::default()
+        };
+        assert!(validate_graph_config(&cfg, &ComponentRegistry::empty()).is_ok());
+    }
+
+    #[test]
+    fn validate_graph_config_validates_when_a_factory_is_registered() {
+        // Registered by a *stub*, so this holds regardless of which crate's
+        // `pggraph` feature is enabled. Gating the validator on this crate's
+        // feature compiled it out of every build where
+        // `cognee-components/pggraph` was on and this crate's was not, while
+        // `PgGraphFactory` stayed registered.
+        struct StubPgGraphFactory;
+        #[async_trait::async_trait]
+        impl cognee_components::GraphDbFactory for StubPgGraphFactory {
+            fn provider(&self) -> &str {
+                "postgres"
+            }
+            async fn build(
+                &self,
+                _ctx: &cognee_components::BackendBuildContext,
+            ) -> Result<Arc<dyn GraphDBTrait>, cognee_components::ComponentError> {
+                unreachable!("validation must reject the config before the factory is built")
+            }
+        }
+
+        let mut registry = ComponentRegistry::empty();
+        registry.register_graph(Arc::new(StubPgGraphFactory));
+
+        let cfg = HttpServerConfig {
+            graph_provider: "postgres".to_string(),
+            graph_db_url: String::new(),
+            ..Default::default()
+        };
+        let msg = match validate_graph_config(&cfg, &registry) {
+            Ok(()) => String::new(),
+            Err(err) => err.to_string(),
+        };
+        assert!(
+            msg.contains("GRAPH_DATABASE_URL") && msg.contains("GRAPH_DATABASE_PROVIDER"),
+            "expected the env-var-naming error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn backend_context_resolves_graph_postgres_url_for_both_spellings() {
+        // The core of the fix: the context must carry the URL through, or
+        // PgGraphFactory rejects the build. Both registered spellings resolve.
+        for provider in ["postgres", "postgresql"] {
+            let cfg = HttpServerConfig {
+                graph_provider: provider.to_string(),
+                graph_db_url: "  postgres://u:p@h:5432/db  ".to_string(),
+                ..Default::default()
+            };
+            let ctx = cfg.backend_context();
+            assert_eq!(
+                ctx.graph_postgres_url,
+                Some(Ok("postgres://u:p@h:5432/db".to_string())),
+                "{provider} must resolve a trimmed URL"
+            );
+        }
+    }
+
+    #[test]
+    fn backend_context_leaves_graph_postgres_url_unset_for_ladybug() {
+        let cfg = HttpServerConfig {
+            graph_provider: "ladybug".to_string(),
+            graph_db_url: "postgres://u:p@h:5432/db".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(cfg.backend_context().graph_postgres_url, None);
+    }
 
     #[test]
     fn backend_context_applies_explicit_onnx_asset_paths() {
