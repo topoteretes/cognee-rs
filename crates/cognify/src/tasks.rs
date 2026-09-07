@@ -915,9 +915,13 @@ pub async fn extract_graph_from_data(
             }
         };
 
-    // Database deduplication — query for existing edges
-    let graphs_only: Vec<KnowledgeGraph> = all_graphs.iter().map(|(_, g)| g.clone()).collect();
-    let existing_edges_set = retrieve_existing_edges(graph_db.as_ref(), &graphs_only).await?;
+    // Database deduplication — query for existing edges.
+    //
+    // Borrow the graphs out of `all_graphs` rather than deep-cloning every one
+    // of them (SDK-507): the callee only reads three `&str` fields per edge, so
+    // a second full copy of every extracted graph bought nothing.
+    let existing_edges_set =
+        retrieve_existing_edges(graph_db.as_ref(), all_graphs.iter().map(|(_, g)| g)).await?;
 
     // Merge and deduplicate graphs (with DB awareness).
     //
@@ -3884,13 +3888,28 @@ pub(crate) fn unwrap_execution_error(e: cognee_core::pipeline::ExecutionError) -
 /// `CognifyResult`. Mirrors `cognee_ingestion::pipeline::extract_data_outputs`
 /// (LIB-06-01) and `cognee_cognify::memify::extract_memify_outputs` (LIB-06-02).
 fn extract_cognify_outputs(outputs: Vec<Arc<dyn Value>>) -> Result<CognifyResult, CognifyError> {
-    let first = outputs
+    let mut first = outputs
         .into_iter()
         .next()
         .ok_or(CognifyError::OutputTypeMismatch {
             expected: "CognifyResult",
             actual: "empty",
         })?;
+
+    // Move the result out of the `Arc` when this is the last handle to it —
+    // the executor drops its own before returning — instead of deep-cloning
+    // the entire corpus payload (chunks, entities, edges, summaries and every
+    // embedding) one more time on the way out (SDK-507). `CognifyResult::empty`
+    // is the natural vacated value; it allocates nothing.
+    //
+    // Falls through to the clone below when the `Arc` is still shared, so the
+    // observable result is the same either way.
+    if let Some(value) = Arc::get_mut(&mut first)
+        && let Some(result) = value.as_any_mut().downcast_mut::<CognifyResult>()
+    {
+        return Ok(std::mem::replace(result, CognifyResult::empty()));
+    }
+
     // Explicit deref through `Arc` to reach the inner `dyn Value`, then call
     // `as_any` via vtable dispatch — without this, method resolution would
     // pick the blanket `<Arc<dyn Value> as Value>::as_any()` which downcasts
@@ -4566,7 +4585,7 @@ async fn generate_embeddings(
 /// parallel slices.
 async fn reuse_or_embed(
     engine: &Arc<dyn EmbeddingEngine>,
-    precomputed: &std::collections::HashMap<Uuid, Vec<f32>>,
+    precomputed: &std::collections::HashMap<Uuid, &[f32]>,
     ids: &[Uuid],
     texts: &[&str],
 ) -> Result<Vec<Vec<f32>>, CognifyError> {
@@ -4590,7 +4609,10 @@ async fn reuse_or_embed(
     let mut fresh = fresh.into_iter();
     ids.iter()
         .map(|id| match precomputed.get(id) {
-            Some(vector) => Ok(vector.clone()),
+            // Copy once, here, at the point the owned vector is actually
+            // needed — the map itself borrows from `precomputed_embeddings`
+            // rather than holding a second copy of every vector (SDK-507).
+            Some(vector) => Ok(vector.to_vec()),
             None => fresh
                 .next()
                 .ok_or_else(|| CognifyError::EmbeddingError("missing fresh embedding".into())),
@@ -4621,9 +4643,13 @@ async fn index_data_points(
     // Vectors already produced by `generate_embeddings`, keyed by data point id,
     // so the chunk/entity/summary collections below reuse them rather than
     // re-embedding the same text.
-    let precomputed: std::collections::HashMap<Uuid, Vec<f32>> = precomputed_embeddings
+    // Borrowed, not cloned (SDK-507): this map used to hold a second full copy
+    // of every chunk, entity and summary vector for the whole of
+    // `index_data_points` — ~1 GB at 1536 dimensions on a 170k-chunk corpus,
+    // live alongside the retained originals and the per-collection copies.
+    let precomputed: std::collections::HashMap<Uuid, &[f32]> = precomputed_embeddings
         .iter()
-        .map(|e| (e.data_point_id, e.vector.clone()))
+        .map(|e| (e.data_point_id, e.vector.as_slice()))
         .collect();
 
     // 1. Index DocumentChunk.text field
@@ -4658,7 +4684,11 @@ async fn index_data_points(
                 // 2. Context-specific keys not present on the DataPoint.
                 point = point
                     .with_metadata("field", json!("text"))
-                    .with_metadata("text", json!(chunk.text.clone()))
+                    // `json!(expr)` routes a non-literal through `to_value`,
+                    // which serialises the clone into a *second* String before
+                    // dropping the first. Constructing the node directly moves
+                    // the one copy we have to make (SDK-507).
+                    .with_metadata("text", serde_json::Value::String(chunk.text.clone()))
                     .with_metadata("dataset_id", json!(dataset_id.to_string()))
                     .with_metadata("document_id", json!(chunk.document_id.to_string()))
                     .with_metadata("chunk_index", json!(chunk.chunk_index));
@@ -4829,7 +4859,8 @@ async fn index_data_points(
                 // 2. Context-specific keys not present on the DataPoint.
                 point = point
                     .with_metadata("field", json!("text"))
-                    .with_metadata("text", json!(summary.text.clone()))
+                    // See the chunk-text note above — one copy, not two.
+                    .with_metadata("text", serde_json::Value::String(summary.text.clone()))
                     .with_metadata("dataset_id", json!(dataset_id.to_string()));
                 if let Some(made_from) = summary.made_from {
                     point = point.with_metadata("chunk_id", json!(made_from.to_string()));
@@ -10570,5 +10601,98 @@ mod tests {
                     && row.data_id == Uuid::nil()),
             "the schema-level FK edge spans data items"
         );
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
+mod extract_cognify_outputs_tests {
+    use super::*;
+
+    /// Carries a **non-empty** heap-backed field on purpose. Whether the
+    /// result was moved or cloned is otherwise unobservable — both produce
+    /// equal values — but a move preserves the `Vec`'s allocation while a
+    /// clone must allocate a fresh one, so `as_ptr()` discriminates. An empty
+    /// `Vec` would not: its pointer is dangling and shared between instances.
+    fn sample_result() -> CognifyResult {
+        let mut result = CognifyResult::empty();
+        result.pipeline_run_id = Some(Uuid::from_u128(7));
+        result.already_completed = true;
+        result.edge_types = vec![EdgeType::new_deterministic("works_at", None)];
+        result
+    }
+
+    /// The sole handle is moved out of the `Arc`, not deep-cloned (SDK-507).
+    ///
+    /// The pointer assertion is what gives this test teeth: delete the
+    /// `Arc::get_mut` fast path and the value assertions below still pass,
+    /// because the clone fallback produces an equal result. Only the retained
+    /// allocation proves the move actually happened.
+    #[test]
+    fn takes_the_result_when_the_arc_is_unique() {
+        let result = sample_result();
+        let heap_before = result.edge_types.as_ptr();
+        let outputs: Vec<Arc<dyn Value>> = vec![Arc::new(result)];
+
+        let extracted = extract_cognify_outputs(outputs).expect("downcast succeeds");
+
+        assert_eq!(extracted.pipeline_run_id, Some(Uuid::from_u128(7)));
+        assert!(extracted.already_completed);
+        assert_eq!(extracted.edge_types.len(), 1);
+        assert!(
+            std::ptr::eq(extracted.edge_types.as_ptr(), heap_before),
+            "a unique Arc must be moved out, not deep-cloned: the payload's \
+             allocation should survive extraction untouched"
+        );
+    }
+
+    /// A still-shared `Arc` falls back to the clone, so the payload is intact,
+    /// the other handle never observes the vacated value, and the extracted
+    /// result genuinely is a copy rather than a steal.
+    #[test]
+    fn clones_the_result_when_the_arc_is_shared() {
+        let result = sample_result();
+        let heap_before = result.edge_types.as_ptr();
+        let shared: Arc<dyn Value> = Arc::new(result);
+        let retained = Arc::clone(&shared);
+
+        let extracted = extract_cognify_outputs(vec![shared]).expect("downcast succeeds");
+        assert_eq!(extracted.pipeline_run_id, Some(Uuid::from_u128(7)));
+        assert!(
+            !std::ptr::eq(extracted.edge_types.as_ptr(), heap_before),
+            "a shared Arc must be cloned, so the extracted payload owns a \
+             fresh allocation"
+        );
+
+        let still_there = (*retained)
+            .as_any()
+            .downcast_ref::<CognifyResult>()
+            .expect("the retained handle still holds a CognifyResult");
+        assert_eq!(
+            still_there.pipeline_run_id,
+            Some(Uuid::from_u128(7)),
+            "the shared path must not empty the value the other handle sees"
+        );
+        assert_eq!(
+            still_there.edge_types.len(),
+            1,
+            "the retained handle keeps its own payload intact"
+        );
+    }
+
+    #[test]
+    fn reports_a_type_mismatch_for_an_empty_output_list() {
+        let err = extract_cognify_outputs(vec![]).expect_err("no outputs is an error");
+        assert!(matches!(
+            err,
+            CognifyError::OutputTypeMismatch {
+                actual: "empty",
+                ..
+            }
+        ));
     }
 }

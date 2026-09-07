@@ -11,6 +11,51 @@ use cognee_models::Entity;
 use crate::error::CognifyError;
 use crate::fact_extraction::KnowledgeGraph;
 
+/// Collect the distinct `(source_uuid, target_uuid, relationship_name)`
+/// candidates to look up, in first-seen order.
+///
+/// Chunk-level extraction routinely re-derives the same relation from several
+/// chunks of one document, and on a backend without a set-based existence
+/// check each repeat used to cost its own round-trip. De-duplicating here can
+/// only remove redundant lookups: the caller folds the results into a
+/// `HashSet` of edge keys, so a repeated candidate could never have changed
+/// the outcome.
+fn collect_distinct_candidate_edges<'a>(
+    graphs: impl IntoIterator<Item = &'a KnowledgeGraph>,
+) -> Vec<EdgeData> {
+    let mut seen: HashSet<(String, String, String)> = HashSet::new();
+    let mut edges_to_check: Vec<EdgeData> = Vec::new();
+
+    for graph in graphs {
+        for edge in &graph.edges {
+            // Generate deterministic UUIDs for source and target nodes. Must use
+            // the SAME scheme entities are actually persisted with
+            // (`Entity::id_for`) — using the old bare `generate_node_id` here made
+            // these keys never match the stored (deterministic) entity ids, so
+            // edge dedup was a silent no-op (issue #57 corollary). Matches
+            // Python `retrieve_existing_edges.py:75-76` (`Entity.id_for`).
+            let source_uuid = Entity::id_for(&edge.source_node_id).to_string();
+            let target_uuid = Entity::id_for(&edge.target_node_id).to_string();
+
+            // Note: relationship_name is already normalized by LLM or should be
+            let key = (source_uuid, target_uuid, edge.relationship_name.clone());
+            // `insert` reports novelty, so this hashes the three-String tuple
+            // once instead of twice (`contains` then `insert`). The clone is
+            // needed either way, to keep `key` for the push below.
+            if seen.insert(key.clone()) {
+                edges_to_check.push((
+                    key.0,
+                    key.1,
+                    key.2,
+                    HashMap::new(), // Properties not needed for existence check
+                ));
+            }
+        }
+    }
+
+    edges_to_check
+}
+
 /// Retrieve existing edges from the graph database.
 ///
 /// This function:
@@ -28,9 +73,13 @@ use crate::fact_extraction::KnowledgeGraph;
 /// value is a set of edge keys, so a repeated triple can only ever cost an
 /// extra lookup — never change the result.
 ///
-/// # Arguments  
+/// # Arguments
 /// * `graph_db` - Graph database trait object
-/// * `graphs` - Knowledge graphs extracted from text chunks
+/// * `graphs` - Any iterator of borrowed knowledge graphs extracted from text
+///   chunks. Deliberately not a slice: a caller holding
+///   `Vec<(Uuid, KnowledgeGraph)>` can project the graphs out without
+///   deep-cloning every one of them to change the element type, and only three
+///   `&str` fields per edge are ever read, so nothing here needs ownership.
 ///
 /// # Returns
 /// HashSet containing edge identifiers that already exist in the database
@@ -41,60 +90,15 @@ use crate::fact_extraction::KnowledgeGraph;
 /// let existing_edges = retrieve_existing_edges(&graph_db, &graphs).await?;
 ///
 /// // Check if edge exists before creating
-/// let edge_key = format!("{}_{}_{}",  source_id, target_id, "works_at");
+/// let edge_key = format!("{}_{}_{}", source_id, target_id, "works_at");
 /// if !existing_edges.contains(&edge_key) {
 ///     // Create new edge
 /// }
 /// ```
-/// Collect the distinct `(source_uuid, target_uuid, relationship_name)`
-/// candidates to look up, in first-seen order.
-///
-/// Chunk-level extraction routinely re-derives the same relation from several
-/// chunks of one document, and on a backend without a set-based existence
-/// check each repeat used to cost its own round-trip. De-duplicating here can
-/// only remove redundant lookups: the caller folds the results into a
-/// `HashSet` of edge keys, so a repeated candidate could never have changed
-/// the outcome.
-fn collect_distinct_candidate_edges(graphs: &[KnowledgeGraph]) -> Vec<EdgeData> {
-    let mut seen: HashSet<(String, String, String)> = HashSet::new();
-    let mut edges_to_check: Vec<EdgeData> = Vec::new();
-
-    for graph in graphs {
-        for edge in &graph.edges {
-            // Generate deterministic UUIDs for source and target nodes. Must use
-            // the SAME scheme entities are actually persisted with
-            // (`Entity::id_for`) — using the old bare `generate_node_id` here made
-            // these keys never match the stored (deterministic) entity ids, so
-            // edge dedup was a silent no-op (issue #57 corollary). Matches
-            // Python `retrieve_existing_edges.py:75-76` (`Entity.id_for`).
-            let source_uuid = Entity::id_for(&edge.source_node_id).to_string();
-            let target_uuid = Entity::id_for(&edge.target_node_id).to_string();
-
-            // Note: relationship_name is already normalized by LLM or should be
-            let key = (source_uuid, target_uuid, edge.relationship_name.clone());
-            if !seen.contains(&key) {
-                seen.insert(key.clone());
-                edges_to_check.push((
-                    key.0,
-                    key.1,
-                    key.2,
-                    HashMap::new(), // Properties not needed for existence check
-                ));
-            }
-        }
-    }
-
-    edges_to_check
-}
-
-pub async fn retrieve_existing_edges(
+pub async fn retrieve_existing_edges<'a>(
     graph_db: &dyn GraphDBTrait,
-    graphs: &[KnowledgeGraph],
+    graphs: impl IntoIterator<Item = &'a KnowledgeGraph>,
 ) -> Result<HashSet<String>, CognifyError> {
-    if graphs.is_empty() {
-        return Ok(HashSet::new());
-    }
-
     let edges_to_check = collect_distinct_candidate_edges(graphs);
 
     if edges_to_check.is_empty() {
