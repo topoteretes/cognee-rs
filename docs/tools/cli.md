@@ -101,10 +101,22 @@ cognee-cli config unset embedding_endpoint
 ## LLM retries
 
 `--llm-max-retries N` (accepted by `cognify`, `add-and-cognify`, `search`)
-overrides the retry count for structured-output LLM calls for that run; the
-persistent default is the `llm_max_retries` config key (default `2`, minimum `1`).
-The CLI flag wins over the config value. It is passed to `OpenAIAdapter` and
-governs the strict-schema, function-call, and JSON-fallback parsing paths.
+overrides the retry count for that run; the persistent default is the
+`llm_max_retries` config key (default `2`). The CLI flag wins over the config
+value, which in turn is set by `LLM_MAX_RETRIES`.
+
+It governs **both** the structured-output retry loop — the strict-schema,
+function-call and JSON-fallback parsing paths — and the transport retry loop,
+on whichever adapter the configured provider selects.
+
+`0` is accepted, for consistency with the env var, but is not a uniform
+"no retries" switch: the OpenAI-compatible, Azure and Anthropic adapters floor
+it to `1`, while Bedrock takes it literally as one attempt with no retry. On the
+adapters that floor it, `LLM_MIN_RETRY_SECONDS=0` is what shortens a retry that
+would otherwise keep waiting out its time floor.
+
+A `run-sequence` step may carry the flag; it applies to that step, and steps
+without it fall back to the configured value.
 
 ```bash
 cognee-cli cognify --llm-max-retries 4

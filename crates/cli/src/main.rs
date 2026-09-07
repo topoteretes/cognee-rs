@@ -17,10 +17,21 @@ use commands::{
 };
 use tracing::error;
 
-fn run(settings: Settings) -> Result<(), CliError> {
+fn run(mut settings: Settings) -> Result<(), CliError> {
     let cli = Cli::parse();
 
-    // Priority: defaults < JSON config < env vars (settings already overlaid in main).
+    // Priority: defaults < JSON config < env vars (settings already overlaid in
+    // main) < per-invocation CLI flags, applied here.
+    //
+    // Applied before `ConfigManager::new` so the value is simply part of the
+    // initial configuration. A later `ConfigManager::set_*` would also take
+    // effect — the setter bumps the config version and `ComponentManager`
+    // rebuilds affected components on next access — but that discards every
+    // warm component to deliver a value that was already known here. Doing it
+    // once at the top also keeps it off the list of things each new command has
+    // to remember.
+    cli.command.apply_overrides(&mut settings);
+
     let config = ConfigManager::new(settings);
     let cm = Arc::new(ComponentManager::new(config));
 
