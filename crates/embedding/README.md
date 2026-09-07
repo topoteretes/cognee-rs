@@ -20,7 +20,8 @@ Selected via `EmbeddingProvider` (or the `EMBEDDING_PROVIDER` env var):
   (`cohere.embed-*`; batched). Output is always L2-normalised — Titan v2
   server-side, the rest client-side. Shares the AWS plumbing (region/endpoint
   chains, credential ladder, SigV4) with `cognee-llm`'s Bedrock adapter
-- **`MockEmbeddingEngine`** — zero vectors for testing (`MOCK_EMBEDDING=true`)
+- **`MockEmbeddingEngine`** — deterministic SHA-256-derived vectors for testing
+  (`MOCK_EMBEDDING=true`); `MOCK_EMBEDDING=zero` gives all-zero vectors
 
 The default provider is **OpenAI `text-embedding-3-small`** (1536-d) on host
 platforms and local **ONNX** on Android (when the `onnx` feature is enabled).

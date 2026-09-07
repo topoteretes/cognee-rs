@@ -409,7 +409,7 @@ auto-installed stderr subscriber if your host manages the logging pipeline.
 | `EMBEDDING_DIMENSIONS` | Embedding vector dimensions. |
 | `EMBEDDING_ENDPOINT` | Embedding API base URL (falls back to `OPENAI_URL`). |
 | `EMBEDDING_API_KEY` | Embedding API key (falls back to `OPENAI_TOKEN`). |
-| `MOCK_EMBEDDING` | Set `true` to use zero-vector mock embeddings (no model download). |
+| `MOCK_EMBEDDING` | Set `true` to use deterministic SHA-256-derived mock embeddings (no model download); `zero` gives all-zero vectors instead. |
 | `COGNEE_BINDING_SUPPRESS_LOGS` | Suppress the auto-installed stderr fmt subscriber. |
 | `COGNEE_HOST_SDK` | Suppress binding-armed analytics when the host is an embedding SDK. |
 | `TELEMETRY_DISABLED`, `ENV` | Standard analytics opt-outs for `setupTelemetryAnalytics()`. |

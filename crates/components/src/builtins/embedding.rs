@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use cognee_embedding::{EmbeddingConfig, EmbeddingEngine, EmbeddingProvider, MockVectorMode};
+use cognee_embedding::{EmbeddingConfig, EmbeddingEngine, EmbeddingProvider};
 
 use crate::context::{BackendBuildContext, EmbeddingInputs};
 use crate::error::ComponentError;
@@ -82,7 +82,7 @@ fn parse_embedding_provider(provider: &str) -> Option<EmbeddingProvider> {
 /// non-empty unrecognized values separately (see [`DefaultEmbeddingFactory`]) so
 /// a typo surfaces as an error rather than a silent ONNX fallback.
 /// `MOCK_EMBEDDING` handling is expressed through [`EmbeddingInputs::mock`] /
-/// [`EmbeddingInputs::mock_deterministic`], which the caller populates.
+/// [`EmbeddingInputs::mock_mode`], which the caller populates.
 #[allow(
     clippy::field_reassign_with_default,
     reason = "the `onnx` field is cfg-gated on the embedding crate's own feature \
@@ -94,12 +94,6 @@ pub fn build_embedding_config(inputs: &EmbeddingInputs) -> EmbeddingConfig {
         EmbeddingProvider::Mock
     } else {
         parse_embedding_provider(&inputs.provider).unwrap_or(EmbeddingProvider::Onnx)
-    };
-
-    let mock_mode = if inputs.mock_deterministic {
-        MockVectorMode::Deterministic
-    } else {
-        MockVectorMode::Zero
     };
 
     // Start from the embedding crate's own defaults and override the fields we
@@ -119,7 +113,7 @@ pub fn build_embedding_config(inputs: &EmbeddingInputs) -> EmbeddingConfig {
     config.max_completion_tokens = inputs.max_completion_tokens;
     config.batch_size = inputs.batch_size;
     config.mock = inputs.mock;
-    config.mock_mode = mock_mode;
+    config.mock_mode = inputs.mock_mode;
     config.huggingface_tokenizer = inputs.huggingface_tokenizer.clone();
     // Same feature-unification caveat as `onnx` above, with a benign
     // degradation: when `cognee-embedding/bedrock` is unified on while *this*
@@ -234,7 +228,7 @@ mod tests {
             rate_limit_requests: 60,
             rate_limit_interval: 60,
             mock,
-            mock_deterministic: false,
+            mock_mode: Default::default(),
             api_version: None,
             huggingface_tokenizer: None,
             max_completion_tokens: 8191,

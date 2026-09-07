@@ -178,7 +178,8 @@ impl OnnxEmbeddingConfig {
 ///
 /// Environment variables (match Python SDK names):
 /// - `EMBEDDING_PROVIDER` — backend selection (default: `openai`; `onnx` on Android)
-/// - `MOCK_EMBEDDING` — set to `true`/`1`/`yes` to force mock mode
+/// - `MOCK_EMBEDDING` — `true`/`1`/`yes`/`deterministic` force the mock engine
+///   with SHA-256-derived vectors; `zero` forces it with all-zero vectors
 /// - `EMBEDDING_MODEL` — model identifier
 /// - `EMBEDDING_DIMENSIONS` — vector size
 /// - `EMBEDDING_ENDPOINT` — API endpoint URL
@@ -226,8 +227,10 @@ pub struct EmbeddingConfig {
     pub mock: bool,
 
     /// How the mock engine generates vectors when `provider` is `Mock`.
-    /// Defaults to [`MockVectorMode::Zero`]. Set via `MOCK_EMBEDDING=deterministic`
-    /// to derive content-stable vectors from `sha256(text)`.
+    /// Defaults to [`MockVectorMode::Deterministic`] (content-stable vectors
+    /// from `sha256(text)`, selected by any truthy `MOCK_EMBEDDING` value).
+    /// `MOCK_EMBEDDING=zero` opts into [`MockVectorMode::Zero`], under which
+    /// cosine KNN retrieval is vacuously empty.
     #[serde(default)]
     pub mock_mode: MockVectorMode,
 
@@ -304,7 +307,7 @@ impl Default for EmbeddingConfig {
             max_completion_tokens: 8191,
             batch_size: 36,
             mock: false,
-            mock_mode: MockVectorMode::Zero,
+            mock_mode: MockVectorMode::default(),
             #[cfg(feature = "onnx")]
             onnx: OnnxEmbeddingConfig::default(),
             huggingface_tokenizer: None,
@@ -323,20 +326,23 @@ impl EmbeddingConfig {
         let mut config = Self::default();
 
         // Parse MOCK_EMBEDDING first — it overrides everything else if set.
-        // `deterministic` (or `hash`) selects the SHA-256-derived deterministic
-        // mode; other truthy values keep the legacy zero-vector mode.
+        // Every truthy spelling (`true`/`1`/`yes`, plus the explicit
+        // `deterministic`/`hash`) selects the SHA-256-derived mode; `zero` is
+        // the only way to get the legacy all-zero vectors, which cosine KNN
+        // backends drop (NaN distance) and therefore never retrieve.
         if let Ok(val) = std::env::var("MOCK_EMBEDDING") {
             let val = val.trim().to_lowercase();
-            if val == "deterministic" || val == "hash" {
+            let mode = match val.as_str() {
+                "zero" => Some(MockVectorMode::Zero),
+                "true" | "1" | "yes" | "deterministic" | "hash" => {
+                    Some(MockVectorMode::Deterministic)
+                }
+                _ => None,
+            };
+            if let Some(mode) = mode {
                 config.mock = true;
                 config.provider = EmbeddingProvider::Mock;
-                config.mock_mode = MockVectorMode::Deterministic;
-                return config;
-            }
-            if val == "true" || val == "1" || val == "yes" {
-                config.mock = true;
-                config.provider = EmbeddingProvider::Mock;
-                config.mock_mode = MockVectorMode::Zero;
+                config.mock_mode = mode;
                 return config;
             }
         }
@@ -644,7 +650,19 @@ mod tests {
         let config = EmbeddingConfig::from_env();
         unsafe { std::env::remove_var("MOCK_EMBEDDING") };
         assert!(config.mock);
-        // Legacy truthy values keep the zero-vector mode.
+        // Truthy spellings select the deterministic mode, not zero vectors.
+        assert_eq!(config.mock_mode, MockVectorMode::Deterministic);
+    }
+
+    #[test]
+    #[serial]
+    fn test_from_env_mock_embedding_zero_opt_in() {
+        // SAFETY: see test_from_env_mock_embedding_true
+        unsafe { std::env::set_var("MOCK_EMBEDDING", "zero") };
+        let config = EmbeddingConfig::from_env();
+        unsafe { std::env::remove_var("MOCK_EMBEDDING") };
+        assert!(config.mock);
+        assert_eq!(config.effective_provider(), EmbeddingProvider::Mock);
         assert_eq!(config.mock_mode, MockVectorMode::Zero);
     }
 

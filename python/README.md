@@ -168,7 +168,7 @@ print(cfg)
 | `EMBEDDING_DIMENSIONS` | Embedding vector dimensions. |
 | `EMBEDDING_ENDPOINT` | Embedding API base URL (falls back to `OPENAI_URL`). |
 | `EMBEDDING_API_KEY` | Embedding API key (falls back to `OPENAI_TOKEN`). |
-| `MOCK_EMBEDDING` | Set `true` to use zero-vector mock embeddings (no model download). |
+| `MOCK_EMBEDDING` | Set `true` to use deterministic SHA-256-derived mock embeddings (no model download); `zero` gives all-zero vectors instead. |
 | `COGNEE_BINDING_SUPPRESS_LOGS` | Suppress the auto-installed `pyo3-log` bridge. |
 | `COGNEE_HOST_SDK` | Set by an upstream/host `cognee` SDK to suppress this binding's analytics emission (avoids double-counting). |
 | `RUST_LOG`, `LOG_LEVEL` | Standard `tracing-subscriber` env-filter level overrides. |

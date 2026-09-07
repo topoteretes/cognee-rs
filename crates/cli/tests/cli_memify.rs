@@ -31,7 +31,7 @@ fn test_memify_help() {
 // These follow the `cognify_live_smoke` pattern from cli_e2e.rs:
 // - Isolated TempDir per test with its own COGNEE_CONFIG_HOME and workdir.
 // - `config_set` writes settings via the `cognee-cli config set` subcommand.
-// - `MOCK_EMBEDDING=true` forces zero-vector embeddings (no network for the
+// - `MOCK_EMBEDDING=true` forces deterministic mock embeddings (no network for the
 //   embedding path). Memify itself never calls the LLM.
 // - LLM-gated tests short-circuit with a printed skip message when
 //   OPENAI_TOKEN / OPENAI_URL / OPENAI_MODEL are not all set, matching the

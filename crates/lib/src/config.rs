@@ -900,15 +900,25 @@ impl Settings {
             .cloned();
         let api_key = api_key_sources.into_iter().find(|v| !v.is_empty()).cloned();
 
-        // MOCK_EMBEDDING: `deterministic`/`hash` selects SHA-256-derived
-        // vectors; other truthy values keep the legacy zero-vector mode.
-        let mock_mode = std::env::var("MOCK_EMBEDDING")
+        // MOCK_EMBEDDING: every truthy spelling (`true`/`1`/`yes`, plus the
+        // explicit `deterministic`/`hash`) selects SHA-256-derived vectors;
+        // `zero` is the only way to get the legacy all-zero vectors, which
+        // cosine KNN backends drop (NaN distance) and therefore never retrieve.
+        // Mirrors `cognee_embedding::EmbeddingConfig::from_env`.
+        let mock_raw = std::env::var("MOCK_EMBEDDING")
             .ok()
             .map(|v| v.trim().to_lowercase());
-        let mock_deterministic =
-            matches!(mock_mode.as_deref(), Some("deterministic") | Some("hash"));
-        let mock = mock_deterministic
-            || matches!(mock_mode.as_deref(), Some("true") | Some("1") | Some("yes"));
+        let mock_zero = matches!(mock_raw.as_deref(), Some("zero"));
+        let mock = mock_zero
+            || matches!(
+                mock_raw.as_deref(),
+                Some("true") | Some("1") | Some("yes") | Some("deterministic") | Some("hash")
+            );
+        let mock_mode = if mock_zero {
+            cognee_embedding::MockVectorMode::Zero
+        } else {
+            cognee_embedding::MockVectorMode::Deterministic
+        };
 
         // Forward-compat env fields not yet on Settings.
         let api_version = std::env::var("EMBEDDING_API_VERSION")
@@ -946,7 +956,7 @@ impl Settings {
                 rate_limit_requests: self.embedding_rate_limit_requests,
                 rate_limit_interval: self.embedding_rate_limit_interval,
                 mock,
-                mock_deterministic,
+                mock_mode,
                 api_version,
                 huggingface_tokenizer,
                 max_completion_tokens,

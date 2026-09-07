@@ -271,10 +271,20 @@ Read by `EmbeddingConfig::from_env()` ([`crates/embedding/src/config.rs`](../cra
 | `EMBEDDING_MAX_SEQUENCE_LENGTH` | `embedding_max_sequence_length` | `512` |
 | `EMBEDDING_BATCH_SIZE` | `embedding_batch_size` | `36` (texts per embedding request; raise for providers that allow larger batches. The OpenAI-compatible engine also dispatches up to 8 sub-batches concurrently) |
 | `EMBEDDING_ONNX_BATCH_SIZE` | `embedding_onnx_batch_size` | `32` (ONNX inference batch size; independent of `EMBEDDING_BATCH_SIZE`. Lower it under memory pressure on edge devices) |
-| `MOCK_EMBEDDING` | _(provider override)_ | `false` (also accepts `deterministic`) |
+| `MOCK_EMBEDDING` | _(provider override)_ | `false`. `true`/`1`/`yes`/`deterministic` select the mock engine with deterministic SHA-256-derived vectors; `zero` selects all-zero vectors (cosine KNN then returns nothing) |
 
 Provider values: `onnx`, `fastembed`, `openai`, `openai_compatible`, `ollama`,
 `bedrock`, `mock`.
+
+**`MOCK_EMBEDDING` diverges from the Python SDK, deliberately.** Python cognee's
+embedding engines all return `[0.0] * dimensions` under a truthy `MOCK_EMBEDDING`
+and have no deterministic mode. Rust defaults to SHA-256-derived vectors instead,
+because zero vectors are silently discarded by cosine-distance KNN — the distance
+is `NaN`, and LanceDB filters `NaN` rows out — so retrieval under zero vectors is
+vacuously empty *and* unobservable, which is how a test or smoke check can search
+under the mock engine and assert nothing at all. The mock engine is test-only and
+no workflow enables it, so this does not affect production or cross-SDK parity.
+Set `MOCK_EMBEDDING=zero` to reproduce Python's behaviour where a test wants it.
 
 `EMBEDDING_PROVIDER=bedrock` uses Amazon Bedrock's **InvokeModel** API
 (`POST {endpoint}/model/{modelId}/invoke`) — Converse is the chat API and is

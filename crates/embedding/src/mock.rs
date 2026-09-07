@@ -16,21 +16,28 @@ use crate::error::{EmbeddingError, EmbeddingResult};
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MockVectorMode {
-    /// Every component is `0.0` (default; preserves legacy test behavior).
-    #[default]
+    /// Every component is `0.0`. Opt-in only (`MOCK_EMBEDDING=zero`,
+    /// [`MockEmbeddingEngine::zero`], or [`MockEmbeddingEngine::with_mode`]).
+    ///
+    /// Cosine-distance KNN backends (LanceDB in particular) cannot score an
+    /// all-zero vector — the distance is NaN and the row is silently dropped —
+    /// so retrieval under this mode is vacuously empty. It is kept for tests
+    /// that deliberately want every point to score identically.
     Zero,
     /// Components are derived deterministically from `sha256(text)`, mirroring
     /// the Python benchmark mock so that the same text always yields the same
-    /// vector and similar text yields stable neighbors.
+    /// vector and similar text yields stable neighbors. This is the default so
+    /// that `MOCK_EMBEDDING=true` exercises real (if arbitrary) KNN retrieval.
+    #[default]
     Deterministic,
 }
 
 /// A mock embedding engine.
 ///
 /// Useful for testing pipeline stages that depend on an `EmbeddingEngine`
-/// without requiring a real model or network connection. By default it returns
-/// zero vectors ([`MockVectorMode::Zero`]); in [`MockVectorMode::Deterministic`]
-/// it derives content-stable vectors from `sha256(text)`.
+/// without requiring a real model or network connection. By default it derives
+/// content-stable vectors from `sha256(text)` ([`MockVectorMode::Deterministic`]);
+/// [`MockVectorMode::Zero`] returns all-zero vectors on explicit request.
 pub struct MockEmbeddingEngine {
     dimensions: usize,
     batch_size: usize,
@@ -48,12 +55,12 @@ pub struct MockEmbeddingEngine {
 impl MockEmbeddingEngine {
     /// Create a mock engine with the given output dimensionality and a default batch size of 100.
     ///
-    /// Defaults to [`MockVectorMode::Zero`].
+    /// Defaults to [`MockVectorMode::Deterministic`].
     pub fn new(dimensions: usize) -> Self {
         Self {
             dimensions,
             batch_size: 100,
-            mode: MockVectorMode::Zero,
+            mode: MockVectorMode::default(),
             failure_after: Arc::new(Mutex::new(None)),
             call_count: Arc::new(Mutex::new(0)),
             text_count: Arc::new(Mutex::new(0)),
@@ -62,12 +69,12 @@ impl MockEmbeddingEngine {
 
     /// Create a mock engine with explicit dimensionality and batch size.
     ///
-    /// Defaults to [`MockVectorMode::Zero`].
+    /// Defaults to [`MockVectorMode::Deterministic`].
     pub fn with_batch_size(dimensions: usize, batch_size: usize) -> Self {
         Self {
             dimensions,
             batch_size,
-            mode: MockVectorMode::Zero,
+            mode: MockVectorMode::default(),
             failure_after: Arc::new(Mutex::new(None)),
             call_count: Arc::new(Mutex::new(0)),
             text_count: Arc::new(Mutex::new(0)),
@@ -76,15 +83,17 @@ impl MockEmbeddingEngine {
 
     /// Create a mock engine that produces deterministic, content-stable vectors
     /// derived from `sha256(text)` (see [`MockVectorMode::Deterministic`]).
+    ///
+    /// Equivalent to [`MockEmbeddingEngine::new`]; kept so call sites can spell
+    /// out that they depend on content-stable vectors.
     pub fn deterministic(dimensions: usize) -> Self {
-        Self {
-            dimensions,
-            batch_size: 100,
-            mode: MockVectorMode::Deterministic,
-            failure_after: Arc::new(Mutex::new(None)),
-            call_count: Arc::new(Mutex::new(0)),
-            text_count: Arc::new(Mutex::new(0)),
-        }
+        Self::new(dimensions).with_mode(MockVectorMode::Deterministic)
+    }
+
+    /// Create a mock engine that returns all-zero vectors
+    /// (see [`MockVectorMode::Zero`] for why retrieval is empty under it).
+    pub fn zero(dimensions: usize) -> Self {
+        Self::new(dimensions).with_mode(MockVectorMode::Zero)
     }
 
     /// Override the vector-generation mode, consuming and returning `self`.
@@ -216,7 +225,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_embed_returns_zero_vectors() {
-        let engine = MockEmbeddingEngine::new(128);
+        // `Zero` is opt-in: the escape hatch must still produce all-zero output.
+        let engine = MockEmbeddingEngine::new(128).with_mode(MockVectorMode::Zero);
         let texts = vec!["a", "b"];
         let embeddings = engine
             .embed(&texts)
@@ -329,9 +339,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_zero_mode_still_returns_zeros() {
-        // Regression guard: default mode must remain zero vectors.
-        let engine = MockEmbeddingEngine::new(128);
+    async fn test_zero_constructor_returns_zeros() {
+        let engine = MockEmbeddingEngine::zero(128);
         let out = engine
             .embed(&["a", "b"])
             .await
@@ -341,5 +350,31 @@ mod tests {
                 assert_eq!(val, 0.0_f32);
             }
         }
+    }
+
+    #[tokio::test]
+    async fn test_default_mode_is_deterministic() {
+        // Regression guard: `new` must NOT hand out zero vectors any more —
+        // cosine KNN drops them, which made retrieval under MOCK_EMBEDDING=true
+        // vacuously empty. The default must match `deterministic()` exactly.
+        assert_eq!(MockVectorMode::default(), MockVectorMode::Deterministic);
+        let default_engine = MockEmbeddingEngine::new(128);
+        let explicit = MockEmbeddingEngine::deterministic(128);
+        let a = default_engine
+            .embed(&["a", "b"])
+            .await
+            .expect("embed must not fail for mock engine");
+        let b = explicit
+            .embed(&["a", "b"])
+            .await
+            .expect("embed must not fail for mock engine");
+        assert_eq!(a, b);
+        for vec in &a {
+            assert!(
+                vec.iter().any(|&v| v != 0.0),
+                "default vector must be non-zero"
+            );
+        }
+        assert_ne!(a[0], a[1], "distinct texts must map to distinct vectors");
     }
 }
