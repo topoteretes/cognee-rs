@@ -159,6 +159,7 @@ mod tests {
                 llm_args: serde_json::Map::new(),
                 api_version: String::new(),
                 reasoning_override: None,
+                structured_output_mode: cognee_llm::StructuredOutputMode::Auto,
                 mock: false,
                 cassette: String::new(),
                 record_path: String::new(),

@@ -133,6 +133,7 @@ impl LlmFactory for OpenAiCompatibleLlmFactory {
         .with_extra_args(ctx.llm.llm_args.clone())
         .with_default_max_tokens(Some(ctx.llm.max_completion_tokens))
         .with_reasoning_override(ctx.llm.reasoning_override)
+        .with_structured_output_mode(ctx.llm.structured_output_mode)
         .with_request_deadline(request_deadline(ctx));
         let (request_timeout, connect_timeout) = http_timeouts(ctx);
         let adapter = adapter.with_http_timeouts(request_timeout, connect_timeout);
@@ -279,6 +280,7 @@ impl LlmFactory for AzureLlmFactory {
         // Azure deployments with a smaller output cap 400 on every such call.
         .with_default_max_tokens(Some(ctx.llm.max_completion_tokens))
         .with_reasoning_override(ctx.llm.reasoning_override)
+        .with_structured_output_mode(ctx.llm.structured_output_mode)
         .with_request_deadline(request_deadline(ctx));
         let (request_timeout, connect_timeout) = http_timeouts(ctx);
         let adapter = adapter.with_http_timeouts(request_timeout, connect_timeout);

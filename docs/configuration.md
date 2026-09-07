@@ -37,6 +37,7 @@ for retries and the `cognee-llm` rustdoc for the adapter.
 | `LLM_ENDPOINT` / `OPENAI_URL` | `llm_endpoint` | _(empty)_ |
 | `LLM_API_VERSION` | `llm_api_version` | _(empty)_ |
 | `LLM_REASONING` | `llm_reasoning` | `auto` |
+| `LLM_STRUCTURED_OUTPUT_MODE` | `llm_structured_output_mode` | `auto` |
 | `LLM_TEMPERATURE` | `llm_temperature` | `0.0` |
 | `LLM_STREAMING` | `llm_streaming` | `false` |
 | `LLM_MAX_COMPLETION_TOKENS` / `LLM_MAX_TOKENS` | `llm_max_completion_tokens` | `16384` |
@@ -248,6 +249,45 @@ shape). `LLM_REASONING` overrides that detection:
 - `never` — force the legacy `max_tokens`+`temperature` shape (e.g. a remote
   OpenAI-compatible gateway serving a reasoning-*named* model that only accepts
   the legacy parameters).
+
+### Structured-output request shape (`LLM_STRUCTURED_OUTPUT_MODE`)
+
+Nothing in the OpenAI-compatible protocol advertises which structured-output
+shape a server understands, so by default the adapter cascades: native `tools`,
+then legacy `functions`, then `response_format: {"type": "json_object"}`. The
+first shape that yields a parseable payload wins.
+
+That cascade costs nothing on an endpoint that answers the first shape, and a
+great deal on one that answers none of them. A vLLM deployment started without
+`--enable-auto-tool-choice --tool-call-parser` returns no tool call at all: every
+call then pays all three modes. The adapter keeps a per-mode miss counter and
+stops sending a mode that has produced nothing three calls running (re-probing
+occasionally, so a redeploy that gains a parser recovers on its own) — but that
+still spends the threshold in every fresh process.
+
+`LLM_STRUCTURED_OUTPUT_MODE` skips the discovery when you already know the
+answer:
+
+- `auto` (default) — cascade as above, bounded by the miss counter.
+- `tools` — only native tool-calling.
+- `functions` — only the legacy `functions`/`function_call` pair.
+- `json` — only JSON mode.
+
+Pick `json` when the server **rejects** `tools`/`functions` outright. If it
+merely *ignores* them — accepting the request and echoing JSON in `content` —
+leave it on `auto`: tool-calling mode already succeeds there in one request, and
+it is the only mode that puts the real JSON schema on the wire. JSON mode sends a
+prose example derived from the schema instead, so pinning it trades one wasted
+request for permanently weaker schema pressure, which shows up as more missing
+fields and more corrective retries.
+
+Pinning a mode means the other two are **never sent**, and exhausting the pinned
+mode fails the call rather than falling through — the error names the pin, so a
+mode the endpoint cannot actually speak is diagnosable rather than silent. An
+unrecognised value falls back to `auto`.
+
+This is the counterpart of Python cognee's `llm_instructor_mode`; Python picks
+one mode per provider from a static table and has no cascade to bound.
 
 > **Ollama embeddings:** set `EMBEDDING_ENDPOINT` explicitly when using
 > `EMBEDDING_PROVIDER=ollama`. The Ollama embedder needs the `/api/embed` route, and

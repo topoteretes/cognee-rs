@@ -138,6 +138,16 @@ pub struct Settings {
     /// or `never` (force the legacy `max_tokens`+sampling shape). Lets an operator
     /// correct an endpoint whose model name mis-signals its reasoning nature.
     pub llm_reasoning: String,
+    /// Structured-output request shape (`LLM_STRUCTURED_OUTPUT_MODE`): `auto`
+    /// (default, try native `tools` then legacy `functions` then JSON mode),
+    /// or `tools` / `functions` / `json` to pin one shape and never send the
+    /// others. The counterpart of Python's `llm_instructor_mode`.
+    ///
+    /// Worth pinning on an endpoint whose shape is known — a vLLM deployment
+    /// started without `--enable-auto-tool-choice --tool-call-parser` answers no
+    /// tool call at all, and the adapter's miss probe has to rediscover that in
+    /// every fresh process. An unrecognised value leaves the cascade in place.
+    pub llm_structured_output_mode: String,
     pub llm_temperature: f64,
     pub llm_streaming: bool,
     pub llm_max_completion_tokens: u32,
@@ -427,6 +437,9 @@ impl Settings {
         }
         if let Some(v) = str_var("LLM_REASONING") {
             self.llm_reasoning = v;
+        }
+        if let Some(v) = str_var("LLM_STRUCTURED_OUTPUT_MODE") {
+            self.llm_structured_output_mode = v;
         }
         if let Some(v) = str_var("LLM_TEMPERATURE")
             && let Ok(f) = v.parse::<f64>()
@@ -990,6 +1003,9 @@ impl Settings {
                 reasoning_override: cognee_components::parse_reasoning_override(
                     &self.llm_reasoning,
                 ),
+                structured_output_mode: cognee_components::parse_structured_output_mode(
+                    &self.llm_structured_output_mode,
+                ),
                 mock: self.llm_mock,
                 cassette: self.llm_cassette.clone(),
                 record_path: self.llm_record_path.clone(),
@@ -1218,6 +1234,7 @@ impl Default for Settings {
             llm_endpoint: String::new(),
             llm_api_version: String::new(),
             llm_reasoning: "auto".to_string(),
+            llm_structured_output_mode: "auto".to_string(),
             llm_temperature: 0.0,
             llm_streaming: false,
             // Single-sourced with the adapter/http-server default so lowering
@@ -1825,6 +1842,15 @@ impl ConfigManager {
         self.bump_version();
     }
 
+    /// Set the structured-output request shape (`auto` | `tools` | `functions` |
+    /// `json`); see [`Settings::llm_structured_output_mode`].
+    pub fn set_llm_structured_output_mode(&self, mode: &str) {
+        let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+        s.llm_structured_output_mode = mode.to_string();
+        drop(s);
+        self.bump_version();
+    }
+
     pub fn set_llm_temperature(&self, temperature: f64) {
         let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
         s.llm_temperature = temperature;
@@ -2035,6 +2061,10 @@ impl ConfigManager {
             Value::String(s.llm_reasoning.clone()),
         );
         m.insert(
+            "llm_structured_output_mode".into(),
+            Value::String(s.llm_structured_output_mode.clone()),
+        );
+        m.insert(
             "llm_temperature".into(),
             Value::Number(
                 serde_json::Number::from_f64(s.llm_temperature)
@@ -2212,6 +2242,9 @@ impl ConfigManager {
                 "llm_endpoint" => s.llm_endpoint = as_string(key, value)?,
                 "llm_api_version" => s.llm_api_version = as_string(key, value)?,
                 "llm_reasoning" => s.llm_reasoning = as_string(key, value)?,
+                "llm_structured_output_mode" => {
+                    s.llm_structured_output_mode = as_string(key, value)?
+                }
                 "llm_temperature" => s.llm_temperature = as_f64(key, value)?,
                 "llm_max_completion_tokens" => s.llm_max_completion_tokens = as_u32(key, value)?,
                 "llm_streaming" => s.llm_streaming = as_bool(key, value)?,
@@ -2325,6 +2358,9 @@ impl ConfigManager {
             // LLM tuning
             "llm_api_version" => self.set_llm_api_version(as_string(key, &value)?.as_str()),
             "llm_reasoning" => self.set_llm_reasoning(as_string(key, &value)?.as_str()),
+            "llm_structured_output_mode" => {
+                self.set_llm_structured_output_mode(as_string(key, &value)?.as_str())
+            }
             "llm_temperature" => self.set_llm_temperature(as_f64(key, &value)?),
             "llm_streaming" => self.set_llm_streaming(as_bool(key, &value)?),
             "llm_max_completion_tokens" => {

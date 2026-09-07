@@ -22,7 +22,9 @@ use cognee_utils::tracing_keys::{COGNEE_LLM_MODEL, COGNEE_LLM_PROVIDER};
 use crate::error::{LlmError, LlmResult};
 use crate::llm_trait::{Llm, StructuredOutputValidator};
 use crate::transcriber::{Transcriber, TranscriptionOutput, validate_audio_format};
-use crate::types::{GenerationOptions, GenerationResponse, Message, MessageRole, TokenUsage};
+use crate::types::{
+    GenerationOptions, GenerationResponse, Message, MessageRole, StructuredOutputMode, TokenUsage,
+};
 
 /// OpenAI API adapter.
 ///
@@ -298,6 +300,19 @@ pub struct OpenAIAdapter {
     /// particular handle on it. See [`CascadeProbe`] for why the cascade needs
     /// this at all.
     cascade_probe: Arc<CascadeProbe>,
+    /// Which structured-output shapes this endpoint is allowed to be sent.
+    ///
+    /// [`StructuredOutputMode::Auto`] — the default — runs the full cascade and
+    /// leans on [`cascade_probe`](Self::cascade_probe) to stop paying for a mode
+    /// that never answers. Any other value pins one mode: the others are never
+    /// sent at all, and exhausting the pinned one is terminal.
+    ///
+    /// The probe and the pin solve the same problem from opposite ends. The
+    /// probe *learns* an endpoint's shape at the cost of a miss threshold per
+    /// process and a periodic re-probe forever; the pin is told, so it costs
+    /// nothing and never re-probes. Both are kept because only the probe helps
+    /// an operator who does not know what their gateway speaks.
+    structured_output_mode: StructuredOutputMode,
 }
 
 /// Whether `model` is an OpenAI reasoning family (`gpt-5*`, `o1*`, `o3*`, `o4*`)
@@ -518,6 +533,9 @@ impl OpenAIAdapter {
             // unbounded behaviour. The component factory opts in from settings.
             request_deadline: None,
             cascade_probe: Arc::new(CascadeProbe::new()),
+            // Cascade by default, so an adapter built without config behaves
+            // exactly as it did before this knob existed.
+            structured_output_mode: StructuredOutputMode::default(),
         })
     }
 
@@ -563,6 +581,22 @@ impl OpenAIAdapter {
         if let Some(force) = force {
             self.reasoning_model = force;
         }
+        self
+    }
+
+    /// Pin the structured-output request shape, disabling the cascade.
+    ///
+    /// Wired from `LLM_STRUCTURED_OUTPUT_MODE` (`auto` | `tools` | `functions` |
+    /// `json`), the counterpart of Python's `llm_instructor_mode`. See
+    /// [`StructuredOutputMode`] for what each value sends and
+    /// [`structured_output_mode`](Self::structured_output_mode) for why this
+    /// exists alongside the miss probe.
+    ///
+    /// The default, [`StructuredOutputMode::Auto`], is the pre-existing cascade,
+    /// so this is opt-in: an endpoint whose shape the operator does not know
+    /// keeps the behaviour that discovers it.
+    pub fn with_structured_output_mode(mut self, mode: StructuredOutputMode) -> Self {
+        self.structured_output_mode = mode;
         self
     }
 
@@ -1827,12 +1861,38 @@ impl OpenAIAdapter {
         // keep their existing shape: with no attempts the outcome stays
         // `NoUsableOutput`, the validation check is a no-op, and control falls
         // straight through to legacy mode. See [`CascadeProbe`].
-        let try_tools = self.cascade_probe.tools.should_try();
+        //
+        // An operator pin overrides the probe in both directions: the probe
+        // exists to *discover* an endpoint's shape, and there is nothing to
+        // discover once it has been declared. A pin neither consults the
+        // counters nor records misses into them (see the `record_useless` call
+        // sites); a success still resets them, which is inert either way.
+        //
+        // Note the pinned arm is unconditionally `true` rather than deferring to
+        // the probe. The probe's purpose is to stop paying for a mode when other
+        // modes could answer instead; under a pin there are no others, so a
+        // tripped probe would mean sending *nothing* and failing every call
+        // without a request until the re-probe interval elapsed. Trying the one
+        // mode the operator asked for is strictly better, and its failure is
+        // reported against the pin. See [`StructuredOutputMode`].
+        let mode_pin = self.structured_output_mode;
+        let try_tools = if mode_pin.is_pinned() {
+            mode_pin.allows_tools()
+        } else {
+            self.cascade_probe.tools.should_try()
+        };
         if !try_tools {
-            debug!(
-                consecutive_misses = self.cascade_probe.tools.misses(),
-                "tool-calling mode has produced nothing usable on this endpoint; skipping it",
-            );
+            if mode_pin.is_pinned() {
+                debug!(
+                    structured_output_mode = mode_pin.as_str(),
+                    "tool-calling mode is disabled by configuration; skipping it",
+                );
+            } else {
+                debug!(
+                    consecutive_misses = self.cascade_probe.tools.misses(),
+                    "tool-calling mode has produced nothing usable on this endpoint; skipping it",
+                );
+            }
         }
         // Whether the endpoint answered with a *native* tool call (`tool_calls`
         // or a legacy `function_call`), as opposed to JSON echoed in `content`.
@@ -2019,6 +2079,15 @@ impl OpenAIAdapter {
                     // loops re-issue the request and surface any real API error
                     // via `?`. Crucially we do NOT return a stale validation/parse
                     // error here [#5]; we discard the prior miss and fall through.
+                    //
+                    // Under a pin there is nothing to fall through *to*, and the
+                    // generic pinned-exhaustion error at the end of this function
+                    // would replace the one fact the operator needs — typically
+                    // an HTTP 400 naming tool calling as unsupported, which is
+                    // exactly the mis-pin this knob can cause. Surface it.
+                    if mode_pin.is_pinned() {
+                        return Err(e);
+                    }
                     warn!(error = %e, "tool-call request failed; falling back to legacy function/JSON mode");
                     outcome = ToolOutcome::NoUsableOutput;
                     break;
@@ -2037,7 +2106,14 @@ impl OpenAIAdapter {
         // One such call still proves little on its own — the model may simply
         // have answered badly — so this only accumulates suspicion, and
         // `MISS_THRESHOLD` consecutive ones are needed before mode 1 is skipped.
-        if try_tools && !native_tool_call && tools_lacked_native_payload {
+        //
+        // Skipped entirely under a pin. The counters only exist to decide whether
+        // to keep sending a mode, and a pin has already decided; recording into
+        // them would make the threshold `warn!` below announce that tool-calling
+        // mode is being skipped "from now on" while a pinned adapter goes on
+        // sending it on every single call — telling an operator debugging a bad
+        // pin the opposite of what is happening.
+        if try_tools && !mode_pin.is_pinned() && !native_tool_call && tools_lacked_native_payload {
             let misses = self.cascade_probe.tools.record_useless();
             if misses == ModeProbe::MISS_THRESHOLD {
                 warn!(
@@ -2066,8 +2142,15 @@ impl OpenAIAdapter {
         // identical request is answered by JSON mode. Three failures then a
         // success, for byte-identical input, is worse than either outcome
         // consistently.
+        // The `native_tool_call` gate is also satisfied by a pin: its purpose is
+        // to leave a fall-through available when JSON mode might answer the same
+        // request, and under a pin JSON mode never runs. Without this, a
+        // parser-less endpoint echoing an incomplete object in `content` reports
+        // "without a parseable response" about a response that parsed perfectly
+        // and failed validation — the one error naming the missing field is the
+        // useful one.
         if let ToolOutcome::ValidationMiss { reason, raw } = outcome
-            && native_tool_call
+            && (native_tool_call || mode_pin.is_pinned())
         {
             return Err(LlmError::DeserializationError(format!(
                 "Tool-call arguments failed schema validation after {} attempt(s): {reason}. Raw: {raw}",
@@ -2112,13 +2195,25 @@ impl OpenAIAdapter {
         // the cascade exists precisely because a server may accept one shape and
         // not the other — a shared counter would skip legacy mode on a server
         // that supports only legacy.
-        let try_legacy = self.cascade_probe.legacy.should_try();
+        // A pin bypasses the probe, for the reason given at `try_tools`.
+        let try_legacy = if mode_pin.is_pinned() {
+            mode_pin.allows_functions()
+        } else {
+            self.cascade_probe.legacy.should_try()
+        };
         if !try_legacy {
-            debug!(
-                consecutive_misses = self.cascade_probe.legacy.misses(),
-                "legacy function-call mode has produced nothing usable on this endpoint; \
-                 skipping it",
-            );
+            if mode_pin.is_pinned() {
+                debug!(
+                    structured_output_mode = mode_pin.as_str(),
+                    "legacy function-call mode is disabled by configuration; skipping it",
+                );
+            } else {
+                debug!(
+                    consecutive_misses = self.cascade_probe.legacy.misses(),
+                    "legacy function-call mode has produced nothing usable on this endpoint; \
+                     skipping it",
+                );
+            }
         }
         // Same distinction as tool calling above: only a response that actually
         // arrived carrying no usable `function_call` is evidence against the
@@ -2242,7 +2337,8 @@ impl OpenAIAdapter {
         // reach here at all — but the flag is still what gates this, so the rule
         // reads the same way as tool calling above: a response arrived, and it
         // carried no usable native payload.
-        if try_legacy && legacy_lacked_native_payload {
+        // Skipped under a pin, for the reason given at the tool-calling counter.
+        if try_legacy && !mode_pin.is_pinned() && legacy_lacked_native_payload {
             let misses = self.cascade_probe.legacy.record_useless();
             if misses == ModeProbe::MISS_THRESHOLD {
                 debug!(
@@ -2253,7 +2349,19 @@ impl OpenAIAdapter {
             }
         }
 
-        // Fallback to JSON mode (works with Ollama and other providers)
+        // Fallback to JSON mode (works with Ollama and other providers).
+        //
+        // Unlike the two modes above this has no miss probe — it is the cascade's
+        // terminal fallback, so under `auto` it always runs. Only an operator pin
+        // can take it away, and then the same zero-length-attempt-range idiom is
+        // used, leaving the loop body and the exhaustion handling below untouched.
+        let try_json = mode_pin.allows_json();
+        if !try_json {
+            debug!(
+                structured_output_mode = mode_pin.as_str(),
+                "JSON mode is disabled by configuration; skipping it",
+            );
+        }
         let mut json_messages = Self::convert_messages(&messages);
 
         let example = Self::schema_to_example(&schema);
@@ -2289,7 +2397,12 @@ impl OpenAIAdapter {
             json_request["reasoning"] = json!({"effort": "none"});
         }
 
-        for attempt in 0..self.structured_output_retries {
+        let json_attempts = if try_json {
+            self.structured_output_retries
+        } else {
+            0
+        };
+        for attempt in 0..json_attempts {
             // Aggregate budget check. Placed at the head of the attempt rather
             // than only between modes so a long retry ladder inside one mode
             // cannot run past the budget either.
@@ -2380,6 +2493,19 @@ impl OpenAIAdapter {
             return Err(LlmError::InvalidResponse(format!(
                 "Structured output retries exhausted after a truncated response: {reason}. The \
                  answer does not fit the available output budget"
+            )));
+        }
+        // Name the pin when there was one. Otherwise the message implies three
+        // modes were tried and all failed, which sends the reader hunting for a
+        // provider fault when the actual cause is a one-line config choice —
+        // including the case where the pinned mode is one this endpoint cannot
+        // speak at all.
+        if mode_pin.is_pinned() {
+            return Err(LlmError::InvalidResponse(format!(
+                "Structured output retries exhausted without a parseable response in \
+                 {mode} mode. LLM_STRUCTURED_OUTPUT_MODE pins this endpoint to that mode, so \
+                 the other request shapes were not tried; unset it to restore the full cascade",
+                mode = mode_pin.as_str(),
             )));
         }
         Err(LlmError::InvalidResponse(
