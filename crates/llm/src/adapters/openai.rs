@@ -1862,9 +1862,11 @@ impl OpenAIAdapter {
         // `NoUsableOutput`, the validation check is a no-op, and control falls
         // straight through to legacy mode. See [`CascadeProbe`].
         //
-        // An operator pin overrides the probe in both directions, and never
-        // touches its counters: the probe exists to *discover* an endpoint's
-        // shape, and there is nothing to discover once it has been declared.
+        // An operator pin overrides the probe in both directions: the probe
+        // exists to *discover* an endpoint's shape, and there is nothing to
+        // discover once it has been declared. A pin neither consults the
+        // counters nor records misses into them (see the `record_useless` call
+        // sites); a success still resets them, which is inert either way.
         //
         // Note the pinned arm is unconditionally `true` rather than deferring to
         // the probe. The probe's purpose is to stop paying for a mode when other
@@ -2077,6 +2079,15 @@ impl OpenAIAdapter {
                     // loops re-issue the request and surface any real API error
                     // via `?`. Crucially we do NOT return a stale validation/parse
                     // error here [#5]; we discard the prior miss and fall through.
+                    //
+                    // Under a pin there is nothing to fall through *to*, and the
+                    // generic pinned-exhaustion error at the end of this function
+                    // would replace the one fact the operator needs — typically
+                    // an HTTP 400 naming tool calling as unsupported, which is
+                    // exactly the mis-pin this knob can cause. Surface it.
+                    if mode_pin.is_pinned() {
+                        return Err(e);
+                    }
                     warn!(error = %e, "tool-call request failed; falling back to legacy function/JSON mode");
                     outcome = ToolOutcome::NoUsableOutput;
                     break;
@@ -2095,7 +2106,14 @@ impl OpenAIAdapter {
         // One such call still proves little on its own — the model may simply
         // have answered badly — so this only accumulates suspicion, and
         // `MISS_THRESHOLD` consecutive ones are needed before mode 1 is skipped.
-        if try_tools && !native_tool_call && tools_lacked_native_payload {
+        //
+        // Skipped entirely under a pin. The counters only exist to decide whether
+        // to keep sending a mode, and a pin has already decided; recording into
+        // them would make the threshold `warn!` below announce that tool-calling
+        // mode is being skipped "from now on" while a pinned adapter goes on
+        // sending it on every single call — telling an operator debugging a bad
+        // pin the opposite of what is happening.
+        if try_tools && !mode_pin.is_pinned() && !native_tool_call && tools_lacked_native_payload {
             let misses = self.cascade_probe.tools.record_useless();
             if misses == ModeProbe::MISS_THRESHOLD {
                 warn!(
@@ -2124,8 +2142,15 @@ impl OpenAIAdapter {
         // identical request is answered by JSON mode. Three failures then a
         // success, for byte-identical input, is worse than either outcome
         // consistently.
+        // The `native_tool_call` gate is also satisfied by a pin: its purpose is
+        // to leave a fall-through available when JSON mode might answer the same
+        // request, and under a pin JSON mode never runs. Without this, a
+        // parser-less endpoint echoing an incomplete object in `content` reports
+        // "without a parseable response" about a response that parsed perfectly
+        // and failed validation — the one error naming the missing field is the
+        // useful one.
         if let ToolOutcome::ValidationMiss { reason, raw } = outcome
-            && native_tool_call
+            && (native_tool_call || mode_pin.is_pinned())
         {
             return Err(LlmError::DeserializationError(format!(
                 "Tool-call arguments failed schema validation after {} attempt(s): {reason}. Raw: {raw}",
@@ -2312,7 +2337,8 @@ impl OpenAIAdapter {
         // reach here at all — but the flag is still what gates this, so the rule
         // reads the same way as tool calling above: a response arrived, and it
         // carried no usable native payload.
-        if try_legacy && legacy_lacked_native_payload {
+        // Skipped under a pin, for the reason given at the tool-calling counter.
+        if try_legacy && !mode_pin.is_pinned() && legacy_lacked_native_payload {
             let misses = self.cascade_probe.legacy.record_useless();
             if misses == ModeProbe::MISS_THRESHOLD {
                 debug!(

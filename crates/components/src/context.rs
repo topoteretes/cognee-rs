@@ -429,10 +429,12 @@ pub fn parse_reasoning_override(value: &str) -> Option<bool> {
 /// try them.
 ///
 /// An unrecognised token falls back to the cascade rather than failing, matching
-/// [`parse_reasoning_override`]. That does mean a typo reads as `auto`: the
-/// counter-argument is that a hard failure here would take down a process over a
-/// misspelled optional knob, and the cascade is the safe default in a way that
-/// no particular pin is.
+/// [`parse_reasoning_override`]: a hard failure here would take down a process
+/// over a misspelled optional knob, and the cascade is the safe default in a way
+/// that no particular pin is. It does **warn**, though — not hard-failing is not
+/// a reason to be silent, and a silently-ignored pin is otherwise invisible,
+/// since the operator sees the cascade they were trying to turn off and no
+/// pinned-exhaustion error ever fires.
 ///
 /// Lives here — the shared config→[`LlmInputs`] boundary — so the SDK `Settings`
 /// and the standalone HTTP server resolve the knob identically.
@@ -441,7 +443,15 @@ pub fn parse_structured_output_mode(value: &str) -> StructuredOutputMode {
         "tools" | "tool" | "tool_calls" => StructuredOutputMode::Tools,
         "functions" | "function" | "function_call" | "legacy" => StructuredOutputMode::Functions,
         "json" | "json_object" | "json_mode" => StructuredOutputMode::Json,
-        _ => StructuredOutputMode::Auto,
+        "auto" | "" => StructuredOutputMode::Auto,
+        other => {
+            tracing::warn!(
+                value = other,
+                "LLM_STRUCTURED_OUTPUT_MODE is not one of auto|tools|functions|json; \
+                 ignoring it and using the full structured-output cascade",
+            );
+            StructuredOutputMode::Auto
+        }
     }
 }
 

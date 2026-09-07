@@ -271,7 +271,15 @@ answer:
 - `auto` (default) — cascade as above, bounded by the miss counter.
 - `tools` — only native tool-calling.
 - `functions` — only the legacy `functions`/`function_call` pair.
-- `json` — only JSON mode. The right choice for a server with no tool parser.
+- `json` — only JSON mode.
+
+Pick `json` when the server **rejects** `tools`/`functions` outright. If it
+merely *ignores* them — accepting the request and echoing JSON in `content` —
+leave it on `auto`: tool-calling mode already succeeds there in one request, and
+it is the only mode that puts the real JSON schema on the wire. JSON mode sends a
+prose example derived from the schema instead, so pinning it trades one wasted
+request for permanently weaker schema pressure, which shows up as more missing
+fields and more corrective retries.
 
 Pinning a mode means the other two are **never sent**, and exhausting the pinned
 mode fails the call rather than falling through — the error names the pin, so a

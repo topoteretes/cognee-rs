@@ -14,6 +14,9 @@
 //!   sending anything at all);
 //! - exhausting a pinned mode fails naming the pin, rather than reporting a
 //!   generic cascade exhaustion that sends the reader hunting a provider fault;
+//! - but a pin does **not** swallow a specific failure it has one for: an API
+//!   error and a schema-validation miss both survive, where the cascade would
+//!   have surfaced them by falling through to a mode that reports them;
 //! - `auto` is untouched — the cascade still cascades.
 //!
 //! Mock discrimination follows `openai_structured_output.rs`:
@@ -26,9 +29,16 @@
     reason = "integration test code — panics are acceptable"
 )]
 
-use cognee_llm::{Llm, OpenAIAdapter, StructuredOutputMode};
+use cognee_llm::{Llm, LlmExt, OpenAIAdapter, StructuredOutputMode};
 use httpmock::prelude::*;
 use serde_json::json;
+
+/// A target with two required fields, for the typed-validation case.
+#[derive(Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+struct Node {
+    name: String,
+    r#type: String,
+}
 
 /// Prose in `content`, no `tool_calls` — what a parser-less server returns.
 const PROSE: &str = r#"{"id":"x","object":"chat.completion","created":1,"model":"m",
@@ -118,7 +128,11 @@ async fn json_pin_sends_only_json_mode() {
         .await;
 
     assert!(result.is_ok(), "json mode answers: {result:?}");
-    assert_eq!(tools.calls_async().await, 0, "tool-calling must not be sent");
+    assert_eq!(
+        tools.calls_async().await,
+        0,
+        "tool-calling must not be sent"
+    );
     assert_eq!(legacy.calls_async().await, 0, "legacy must not be sent");
     assert_eq!(
         json_mode.calls_async().await,
@@ -137,7 +151,11 @@ async fn tools_pin_sends_only_tool_calling() {
         .await;
 
     assert!(result.is_ok(), "tool mode answers: {result:?}");
-    assert_eq!(tools.calls_async().await, 1, "tool-calling is the only send");
+    assert_eq!(
+        tools.calls_async().await,
+        1,
+        "tool-calling is the only send"
+    );
     assert_eq!(legacy.calls_async().await, 0, "legacy must not be sent");
     assert_eq!(
         json_mode.calls_async().await,
@@ -156,7 +174,11 @@ async fn functions_pin_sends_only_legacy() {
         .await;
 
     assert!(result.is_ok(), "legacy mode answers: {result:?}");
-    assert_eq!(tools.calls_async().await, 0, "tool-calling must not be sent");
+    assert_eq!(
+        tools.calls_async().await,
+        0,
+        "tool-calling must not be sent"
+    );
     assert_eq!(legacy.calls_async().await, 1, "legacy is the only send");
     assert_eq!(
         json_mode.calls_async().await,
@@ -215,6 +237,79 @@ async fn a_pin_keeps_sending_after_the_probe_would_have_tripped() {
     }
     assert_eq!(legacy.calls_async().await, 0, "still no legacy");
     assert_eq!(json_mode.calls_async().await, 0, "still no json");
+}
+
+// A pin must not swallow the reason the call failed. Both cases below produce a
+// specific, actionable error under `auto` (by falling through to a mode that
+// reports it) and were being replaced by the generic pinned-exhaustion message —
+// losing exactly the diagnostic a mis-pinned endpoint needs.
+
+#[tokio::test]
+async fn a_pinned_mode_surfaces_the_api_error_not_the_pin_message() {
+    let server = MockServer::start_async().await;
+    // What a server without a tool parser returns when it rejects the request
+    // outright rather than ignoring it.
+    let tools = server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path("/chat/completions")
+                .body_includes("\"tools\"");
+            then.status(400)
+                .header("content-type", "application/json")
+                .body(
+                    r#"{"error":{"message":"tool_choice unsupported: start vLLM with --enable-auto-tool-choice","type":"invalid_request_error"}}"#,
+                );
+        })
+        .await;
+
+    let err = adapter(&server, StructuredOutputMode::Tools)
+        .create_structured_output_raw("input text", "system prompt", &schema(), None)
+        .await
+        .expect_err("a 400 must fail the call");
+
+    let msg = err.to_string();
+    assert!(
+        msg.contains("enable-auto-tool-choice"),
+        "the provider's own explanation must survive the pin, got: {msg}"
+    );
+    assert!(tools.calls_async().await >= 1, "the request was sent");
+}
+
+#[tokio::test]
+async fn a_pinned_mode_surfaces_a_validation_failure() {
+    let server = MockServer::start_async().await;
+    // A parser-less endpoint echoing well-formed JSON in `content` that omits a
+    // required field: the payload parses, and fails validation. Reporting
+    // "without a parseable response" about it sends the reader looking in
+    // entirely the wrong place.
+    let tools = server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path("/chat/completions")
+                .body_includes("\"tools\"");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(
+                    r#"{"id":"x","object":"chat.completion","created":1,"model":"m",
+                        "choices":[{"index":0,"message":{"role":"assistant",
+                            "content":"{\"name\":\"Ada\"}"},
+                          "finish_reason":"stop"}]}"#,
+                );
+        })
+        .await;
+
+    let result: Result<Node, _> = adapter(&server, StructuredOutputMode::Tools)
+        .create_structured_output("input text", "extract a node", None)
+        .await;
+
+    let msg = result
+        .expect_err("a missing required field must fail")
+        .to_string();
+    assert!(
+        msg.contains("type"),
+        "the error must name the missing field rather than claim nothing parsed, got: {msg}"
+    );
+    assert!(tools.calls_async().await >= 1, "the request was sent");
 }
 
 #[tokio::test]
