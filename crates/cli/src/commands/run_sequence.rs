@@ -82,6 +82,10 @@ fn run_single_file(file_path: &str, cm: &Arc<ComponentManager>) -> Result<(), Cl
 
     info!("Starting sequence file: {}", file_path);
 
+    // Captured before the first step so a step *without* the flag falls back to
+    // the configured value rather than inheriting whatever a previous step set.
+    let baseline_llm_max_retries = cm.config().read().llm_max_retries;
+
     let start = Instant::now();
 
     for (index, step) in steps.iter().enumerate() {
@@ -139,6 +143,26 @@ fn run_single_file(file_path: &str, cm: &Arc<ComponentManager>) -> Result<(), Cl
                 e
             ))
         })?;
+
+        // A step's own flags must be folded in here, not by `main::run` — a
+        // sequence step never passes through it. Without this a step carrying
+        // `--llm-max-retries` parses cleanly and is then ignored, which is the
+        // exact bug SDK-511 fixes for the direct subcommands.
+        // `demo/sequences/demo_pipeline.json` already passes it.
+        //
+        // Applied through the setter rather than by mutating `Settings`, because
+        // the manager is built and shared across steps by this point. The setter
+        // bumps the config version and `ComponentManager` rebuilds affected
+        // components on next access, so it is called only when the effective
+        // value actually changes — a sequence where no step overrides anything
+        // keeps its warm components.
+        let desired = parsed
+            .command
+            .llm_max_retries_override()
+            .unwrap_or(baseline_llm_max_retries);
+        if desired != cm.config().read().llm_max_retries {
+            cm.config().set_llm_max_retries(desired);
+        }
 
         dispatch(parsed.command, cm).map_err(|e| {
             CliError::Runtime(format!("Step {} in '{}': {}", index + 1, file_path, e))

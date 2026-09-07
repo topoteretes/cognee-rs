@@ -44,22 +44,38 @@ impl Commands {
     /// silently did nothing while `LLM_MAX_RETRIES` worked — the sibling
     /// `--llm-max-parallel-requests` was wired, this one was missed (SDK-511).
     ///
-    /// Returned rather than applied here so the caller can fold it into
-    /// `Settings` *before* `ConfigManager` is built: `ComponentManager`
-    /// constructs the LLM adapter lazily from the settings snapshot it was
-    /// handed, so a mutation made after that point cannot reach an adapter that
-    /// has already been built.
+    /// Returned rather than applied, so each entry point can fold it in at the
+    /// point that suits it: `main::run` writes it into `Settings` before
+    /// `ConfigManager` exists, while `run_sequence` — whose steps never reach
+    /// `main::run` — goes through `ConfigManager::set_llm_max_retries` per step.
+    ///
+    /// Folding it in up front is preferred where possible. Not because a later
+    /// change could not take effect (it can: the setter bumps the config version
+    /// and `ComponentManager` rebuilds affected components on next access), but
+    /// because that rebuild discards every warm component, which is wasteful
+    /// when the value was known before anything was built.
     pub fn llm_max_retries_override(&self) -> Option<u32> {
         match self {
             Commands::Cognify(args) => args.llm_max_retries,
             Commands::AddAndCognify(args) => args.llm_max_retries,
             Commands::Search(args) => args.llm_max_retries,
+            // `memify` / `remember` / `recall` / `improve` also drive LLM work
+            // but do not declare the flag. Adding it to them is a separate
+            // change — this one wires the flag that already exists. `RunSequence`
+            // is `None` by design: its steps carry their own flags and are
+            // folded in per step by `run_sequence::run`.
             _ => None,
         }
     }
 
-    /// Fold this invocation's flags over `settings`, so a flag outranks config
-    /// and env for the run it was passed on.
+    /// Fold this invocation's settings-valued flags over `settings`, so a flag
+    /// outranks config and env for the run it was passed on.
+    ///
+    /// Currently one field. `--llm-max-parallel-requests` is deliberately *not*
+    /// here: it is resolved per command into `CognifyConfig` rather than into
+    /// `Settings`, so it never needed to reach the shared config at all. Flags
+    /// that do belong in `Settings` should be added here rather than growing a
+    /// second mechanism.
     ///
     /// Lives here rather than in `main` so it is reachable from tests: the
     /// binary's own `run()` cannot be called from the test harness, and the bug
@@ -237,9 +253,11 @@ pub struct CognifyArgs {
 
     /// Overrides `LLM_MAX_RETRIES` for this invocation.
     ///
-    /// `0` is accepted so the flag matches the env var, which parses it
-    /// happily; both end up floored to 1 by `build_openai_compatible_adapter`.
-    /// The real fail-fast escape hatch is `LLM_MIN_RETRY_SECONDS=0`.
+    /// `0` is accepted so the flag and the env var agree, but what it means is
+    /// provider-dependent: OpenAI-compatible, Azure and Anthropic floor it to 1,
+    /// while Bedrock takes it literally as a single attempt with no retry. On
+    /// the providers that floor it, `LLM_MIN_RETRY_SECONDS=0` is what shortens a
+    /// retry that would otherwise keep waiting.
     #[arg(long = "llm-max-retries", value_parser = clap::value_parser!(u32).range(0..))]
     pub llm_max_retries: Option<u32>,
 
@@ -271,9 +289,11 @@ pub struct AddAndCognifyArgs {
 
     /// Overrides `LLM_MAX_RETRIES` for this invocation.
     ///
-    /// `0` is accepted so the flag matches the env var, which parses it
-    /// happily; both end up floored to 1 by `build_openai_compatible_adapter`.
-    /// The real fail-fast escape hatch is `LLM_MIN_RETRY_SECONDS=0`.
+    /// `0` is accepted so the flag and the env var agree, but what it means is
+    /// provider-dependent: OpenAI-compatible, Azure and Anthropic floor it to 1,
+    /// while Bedrock takes it literally as a single attempt with no retry. On
+    /// the providers that floor it, `LLM_MIN_RETRY_SECONDS=0` is what shortens a
+    /// retry that would otherwise keep waiting.
     #[arg(long = "llm-max-retries", value_parser = clap::value_parser!(u32).range(0..))]
     pub llm_max_retries: Option<u32>,
 
@@ -339,9 +359,11 @@ pub struct SearchArgs {
 
     /// Overrides `LLM_MAX_RETRIES` for this invocation.
     ///
-    /// `0` is accepted so the flag matches the env var, which parses it
-    /// happily; both end up floored to 1 by `build_openai_compatible_adapter`.
-    /// The real fail-fast escape hatch is `LLM_MIN_RETRY_SECONDS=0`.
+    /// `0` is accepted so the flag and the env var agree, but what it means is
+    /// provider-dependent: OpenAI-compatible, Azure and Anthropic floor it to 1,
+    /// while Bedrock takes it literally as a single attempt with no retry. On
+    /// the providers that floor it, `LLM_MIN_RETRY_SECONDS=0` is what shortens a
+    /// retry that would otherwise keep waiting.
     #[arg(long = "llm-max-retries", value_parser = clap::value_parser!(u32).range(0..))]
     pub llm_max_retries: Option<u32>,
 }
@@ -602,11 +624,36 @@ mod tests {
     }
 
     /// `LLM_MAX_RETRIES=0` parses and is stored, so the flag accepting it keeps
-    /// the two surfaces consistent. Both are floored to 1 downstream.
+    /// the two surfaces consistent. What `0` then *means* is provider-dependent
+    /// — see the flag's doc comment — so this asserts only that it survives
+    /// parsing rather than asserting an equivalence that does not hold.
     #[test]
     fn zero_is_accepted_to_match_the_env_var() {
         let cli = parse(&["cognee-cli", "cognify", "--llm-max-retries", "0"]);
         assert_eq!(cli.command.llm_max_retries_override(), Some(0));
+    }
+
+    /// A `run-sequence` step is parsed by `run_sequence::run`, not `main::run`,
+    /// so it needs its own fold. This pins the half of the contract that lives
+    /// here: a step command parsed out of a sequence file still exposes its
+    /// override. `demo/sequences/demo_pipeline.json` passes this flag.
+    #[test]
+    fn a_sequence_step_command_still_exposes_its_override() {
+        // Copied from `demo/sequences/demo_pipeline.json`, shaped as
+        // `run_sequence::run` builds it: argv0 + the step's own command array.
+        let cli = parse(&[
+            "cognee-cli",
+            "cognify",
+            "--datasets",
+            "demo",
+            "--chunk-size",
+            "700",
+            "--llm-max-retries",
+            "3",
+            "--llm-max-parallel-requests",
+            "4",
+        ]);
+        assert_eq!(cli.command.llm_max_retries_override(), Some(3));
     }
 
     #[test]

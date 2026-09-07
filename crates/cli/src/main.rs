@@ -23,12 +23,13 @@ fn run(mut settings: Settings) -> Result<(), CliError> {
     // Priority: defaults < JSON config < env vars (settings already overlaid in
     // main) < per-invocation CLI flags, applied here.
     //
-    // This has to land before `ConfigManager::new`: `ComponentManager` builds
-    // the LLM adapter lazily from the settings snapshot it is handed, and the
-    // retry counts are baked in at construction, so setting them afterwards
-    // would not reach an adapter that had already been built. Doing it here
-    // rather than inside each command's `run` makes that ordering structural
-    // instead of a rule every new command has to remember.
+    // Applied before `ConfigManager::new` so the value is simply part of the
+    // initial configuration. A later `ConfigManager::set_*` would also take
+    // effect — the setter bumps the config version and `ComponentManager`
+    // rebuilds affected components on next access — but that discards every
+    // warm component to deliver a value that was already known here. Doing it
+    // once at the top also keeps it off the list of things each new command has
+    // to remember.
     cli.command.apply_overrides(&mut settings);
 
     let config = ConfigManager::new(settings);
