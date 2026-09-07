@@ -113,49 +113,64 @@ fn config_value(config_home: &TempDir, key: &str) -> serde_json::Value {
         .unwrap_or(serde_json::Value::Null)
 }
 
-fn live_cli_env(test_name: &str) -> Option<(String, String, String, String, String)> {
-    let api_key = std::env::var("OPENAI_TOKEN").ok();
-    let api_url = std::env::var("OPENAI_URL").ok();
-    let llm_model = std::env::var("OPENAI_MODEL").ok();
-    let embedding_model_path = std::env::var("COGNEE_E2E_EMBED_MODEL_PATH").ok();
-    let embedding_tokenizer_path = std::env::var("COGNEE_E2E_TOKENIZER_PATH").ok();
+/// Live-CLI environment for the LLM-backed smoke tests.
+///
+/// Only `api_key`, `api_url` and `llm_model` are required; the two embedding
+/// paths are optional. A named struct rather than a tuple both for
+/// `clippy::type_complexity` and to match `LlmEnv` in `cli_memify.rs`.
+struct LiveCliEnv {
+    api_key: String,
+    api_url: String,
+    llm_model: String,
+    /// Local BGE-Small ONNX model, when one has been fetched.
+    embedding_model_path: Option<String>,
+    /// Local BGE-Small tokenizer.json, when one has been fetched.
+    embedding_tokenizer_path: Option<String>,
+}
 
-    match (
+/// Resolve the live-CLI environment, or `None` (with a skip line) if the
+/// required variables are absent.
+///
+/// The two ONNX paths are **optional**, mirroring `pg_full_stack_e2e`: no CI job
+/// downloads BGE-Small, and requiring them is exactly what kept these tests
+/// unrunnable in CI. When they are absent the embedding endpoint and key fall
+/// back to `llm_*` via `Settings::resolve_embedding_inputs`, so embeddings come
+/// from the same OpenAI-compatible account as the LLM. Nothing here depends on
+/// which embedding backend produced the vectors.
+///
+/// The skip line deliberately reads `<VAR> not set — skipping <test>` so that
+/// `scripts/ci/assert_pg_suite_ran.sh` (whose marker pattern is
+/// `[A-Z_]+ not set .* skipping`) fails a lane where these silently no-op. A
+/// skipped test still prints `ok`, so the exit status alone proves nothing.
+fn live_cli_env(test_name: &str) -> Option<LiveCliEnv> {
+    let required = [
+        ("OPENAI_TOKEN", std::env::var("OPENAI_TOKEN").ok()),
+        ("OPENAI_URL", std::env::var("OPENAI_URL").ok()),
+        ("OPENAI_MODEL", std::env::var("OPENAI_MODEL").ok()),
+    ];
+    if let Some((name, _)) = required
+        .iter()
+        .find(|(_, v)| v.as_deref().unwrap_or("").is_empty())
+    {
+        eprintln!("[{test_name}] {name} not set — skipping {test_name}");
+        return None;
+    }
+    let mut vals = required
+        .into_iter()
+        .map(|(_, v)| v.expect("the is_empty scan above returns early on any absent required var"));
+    let api_key = vals.next().expect("three required vars were collected");
+    let api_url = vals.next().expect("three required vars were collected");
+    let llm_model = vals.next().expect("three required vars were collected");
+
+    // Optional: present only when a local BGE-Small model has been fetched.
+    let non_empty = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+    Some(LiveCliEnv {
         api_key,
         api_url,
         llm_model,
-        embedding_model_path,
-        embedding_tokenizer_path,
-    ) {
-        (
-            Some(api_key),
-            Some(api_url),
-            Some(llm_model),
-            Some(embedding_model_path),
-            Some(embedding_tokenizer_path),
-        ) if !api_key.is_empty()
-            && !api_url.is_empty()
-            && !llm_model.is_empty()
-            && !embedding_model_path.is_empty()
-            && !embedding_tokenizer_path.is_empty() =>
-        {
-            Some((
-                api_key,
-                api_url,
-                llm_model,
-                embedding_model_path,
-                embedding_tokenizer_path,
-            ))
-        }
-        _ => {
-            eprintln!(
-                "[{test_name}] skipping: live CLI env not configured \
-                 (set OPENAI_TOKEN, OPENAI_URL, OPENAI_MODEL, \
-                 COGNEE_E2E_EMBED_MODEL_PATH, COGNEE_E2E_TOKENIZER_PATH to run)"
-            );
-            None
-        }
-    }
+        embedding_model_path: non_empty("COGNEE_E2E_EMBED_MODEL_PATH"),
+        embedding_tokenizer_path: non_empty("COGNEE_E2E_TOKENIZER_PATH"),
+    })
 }
 
 #[test]
@@ -528,8 +543,13 @@ fn cognify_without_datasets_fails_with_explicit_message() {
 
 #[test]
 fn cognify_live_smoke() {
-    let Some((api_key, api_url, llm_model, embedding_model_path, embedding_tokenizer_path)) =
-        live_cli_env("cognify_live_smoke")
+    let Some(LiveCliEnv {
+        api_key,
+        api_url,
+        llm_model,
+        embedding_model_path,
+        embedding_tokenizer_path,
+    }) = live_cli_env("cognify_live_smoke")
     else {
         return;
     };
@@ -589,18 +609,24 @@ fn cognify_live_smoke() {
         "llm_api_key",
         &format!("\"{api_key}\""),
     );
-    config_set(
-        &config_home,
-        workdir.path(),
-        "embedding_model_path",
-        &format!("\"{embedding_model_path}\""),
-    );
-    config_set(
-        &config_home,
-        workdir.path(),
-        "embedding_tokenizer_path",
-        &format!("\"{embedding_tokenizer_path}\""),
-    );
+    // Only pin a local ONNX embedding model when one was provided; otherwise
+    // embeddings fall back to the same account as the LLM (see `live_cli_env`).
+    if let Some(path) = embedding_model_path.as_deref() {
+        config_set(
+            &config_home,
+            workdir.path(),
+            "embedding_model_path",
+            &format!("\"{path}\""),
+        );
+    }
+    if let Some(path) = embedding_tokenizer_path.as_deref() {
+        config_set(
+            &config_home,
+            workdir.path(),
+            "embedding_tokenizer_path",
+            &format!("\"{path}\""),
+        );
+    }
 
     make_cmd_in(&config_home, workdir.path())
         .args([
@@ -621,8 +647,13 @@ fn cognify_live_smoke() {
 
 #[test]
 fn search_live_smoke() {
-    let Some((api_key, api_url, llm_model, embedding_model_path, embedding_tokenizer_path)) =
-        live_cli_env("search_live_smoke")
+    let Some(LiveCliEnv {
+        api_key,
+        api_url,
+        llm_model,
+        embedding_model_path,
+        embedding_tokenizer_path,
+    }) = live_cli_env("search_live_smoke")
     else {
         return;
     };
@@ -682,18 +713,24 @@ fn search_live_smoke() {
         "llm_api_key",
         &format!("\"{api_key}\""),
     );
-    config_set(
-        &config_home,
-        workdir.path(),
-        "embedding_model_path",
-        &format!("\"{embedding_model_path}\""),
-    );
-    config_set(
-        &config_home,
-        workdir.path(),
-        "embedding_tokenizer_path",
-        &format!("\"{embedding_tokenizer_path}\""),
-    );
+    // Only pin a local ONNX embedding model when one was provided; otherwise
+    // embeddings fall back to the same account as the LLM (see `live_cli_env`).
+    if let Some(path) = embedding_model_path.as_deref() {
+        config_set(
+            &config_home,
+            workdir.path(),
+            "embedding_model_path",
+            &format!("\"{path}\""),
+        );
+    }
+    if let Some(path) = embedding_tokenizer_path.as_deref() {
+        config_set(
+            &config_home,
+            workdir.path(),
+            "embedding_tokenizer_path",
+            &format!("\"{path}\""),
+        );
+    }
 
     make_cmd_in(&config_home, workdir.path())
         .args([
@@ -710,7 +747,12 @@ fn search_live_smoke() {
         .assert()
         .success();
 
-    make_cmd_in(&config_home, workdir.path())
+    // The point of this test. `.success()` alone passed for the whole life of
+    // this file while retrieval returned nothing: an empty result set is a
+    // successful exit, so the only assertion that means anything here is a row
+    // count. Zero rows is what a broken embedding or vector path looks like —
+    // see `cognee_vector::zero_norm` for the case where it is silent.
+    let out = make_cmd_in(&config_home, workdir.path())
         .args([
             "search",
             "What is this dataset about?",
@@ -722,7 +764,47 @@ fn search_live_smoke() {
             "json",
         ])
         .assert()
-        .success();
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let stdout = String::from_utf8(out).expect("search --output-format json emits UTF-8");
+
+    // `--output-format json` does not give clean stdout: the logger writes to it
+    // too, so the payload is preceded by timestamped lines. Parsing the whole
+    // buffer reads the `2026` of a timestamp as a JSON number and then fails on
+    // "trailing characters". Slice from the first line that starts a JSON object
+    // and take a single value off a streaming deserializer, so anything the
+    // logger emits before or after the payload is tolerated.
+    let json_start = if stdout.starts_with('{') {
+        Some(0)
+    } else {
+        stdout.find("\n{").map(|i| i + 1)
+    }
+    .unwrap_or_else(|| panic!("no JSON object in search stdout:\n{stdout}"));
+    let parsed: serde_json::Value = serde_json::Deserializer::from_str(&stdout[json_start..])
+        .into_iter::<serde_json::Value>()
+        .next()
+        .unwrap_or_else(|| panic!("no JSON value in search stdout:\n{stdout}"))
+        .unwrap_or_else(|e| panic!("search JSON parse failed: {e}\n{stdout}"));
+
+    // Shape is `{"search_type": .., "result": {"kind": "Items", "data": [..]}}`.
+    // Read it defensively so a shape change fails with the payload in hand
+    // rather than a bare unwrap panic.
+    let rows = parsed
+        .pointer("/result/data")
+        .and_then(|d| d.as_array())
+        .unwrap_or_else(|| panic!("no /result/data array in search output:\n{stdout}"));
+    assert!(
+        !rows.is_empty(),
+        "CHUNKS search returned 0 rows after add + cognify — retrieval is broken, \
+         not merely unpopulated:\n{stdout}"
+    );
+    // Positive marker: proves the test did real work rather than skipping.
+    eprintln!(
+        "[search_live_smoke] CHUNKS returned {} row(s) after add + cognify",
+        rows.len()
+    );
 }
 
 // ---------------------------------------------------------------------------

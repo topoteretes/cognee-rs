@@ -15,7 +15,14 @@
 #
 # Called by the `pgvector-postgres`, `pggraph-postgres` and
 # `pg-single-db-postgres` lanes in .github/workflows/ci.yml and their mirrors in
-# .github/workflows/community.yml. It lives here rather than inline in six YAML
+# .github/workflows/community.yml.
+#
+# Also called by the `test` job's retrieval step, which is not Postgres-gated at
+# all — `search_live_smoke` gates on an LLM key and (formerly) a local ONNX
+# model. Nothing here is Postgres-specific: the skip-marker pattern is
+# variable-agnostic by design, and both the test-count floor and the required
+# test names are parameters. The name is kept for its three original callers
+# rather than churning six YAML references. It lives here rather than inline in six YAML
 # blocks so the copies cannot drift, and so it can be tested against captured
 # logs without a CI round-trip.
 #
@@ -208,4 +215,4 @@ for test_name in ${REQUIRE_TESTS[@]+"${REQUIRE_TESTS[@]}"}; do
     fail "required test $test_name did not run (or did not pass) in any of: ${LOGS[*]}."
 done
 
-echo "$LABEL suite verified: $total_passed tests passed against a live Postgres across ${#LOGS[@]} log(s), ${#REQUIRE_TESTS[@]} named case(s) confirmed, no skip markers."
+echo "$LABEL suite verified: $total_passed tests passed against a live backend across ${#LOGS[@]} log(s), ${#REQUIRE_TESTS[@]} named case(s) confirmed, no skip markers."
