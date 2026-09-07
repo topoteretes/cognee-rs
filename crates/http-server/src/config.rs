@@ -866,7 +866,7 @@ impl HttpServerConfig {
                 rate_limit_requests: 60,
                 rate_limit_interval: 60,
                 mock: false,
-                mock_deterministic: false,
+                mock_mode: Default::default(),
                 api_version: None,
                 huggingface_tokenizer: None,
                 max_completion_tokens: emb_defaults.max_completion_tokens,

@@ -30,6 +30,7 @@ pub enum EmbeddingProvider {
     /// litellm's Bedrock embedding handler; in Rust we use a direct-HTTP engine over the
     /// same wire shapes. Requires the `bedrock` crate feature.
     Bedrock,
-    /// Zero vectors; for testing. Activated by EMBEDDING_PROVIDER=mock or MOCK_EMBEDDING=true.
+    /// Deterministic SHA-256-derived vectors (or zeros with `MOCK_EMBEDDING=zero`); for
+    /// testing. Activated by EMBEDDING_PROVIDER=mock or MOCK_EMBEDDING=true.
     Mock,
 }

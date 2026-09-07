@@ -12,6 +12,8 @@
 use std::fmt;
 use std::path::PathBuf;
 
+use cognee_embedding::MockVectorMode;
+
 /// Resolved inputs consumed by [`crate::ComponentRegistry`] and the free
 /// `build_storage` / `build_database` constructors.
 #[derive(Clone)]
@@ -84,8 +86,10 @@ pub struct EmbeddingInputs {
     pub rate_limit_interval: u32,
     /// `MOCK_EMBEDDING` opt-in — overrides `provider` to the mock engine.
     pub mock: bool,
-    /// When `mock` is set, selects SHA-256-derived vectors instead of zeros.
-    pub mock_deterministic: bool,
+    /// When `mock` is set, how the mock engine fills vectors. Defaults to
+    /// SHA-256-derived content-stable vectors; `MOCK_EMBEDDING=zero` selects
+    /// all-zero vectors (which cosine KNN backends never retrieve).
+    pub mock_mode: MockVectorMode,
     /// Forward-compat fields historically read from the environment.
     pub api_version: Option<String>,
     pub huggingface_tokenizer: Option<String>,

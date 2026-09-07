@@ -1010,10 +1010,11 @@ mod tests {
     use cognee_embedding::MockEmbeddingEngine;
     use cognee_vector::{MockVectorDB, VectorPoint};
 
-    /// Sixteen-element vector matching `MockEmbeddingEngine::new(16)`. The engine
-    /// defaults to zero vectors, so every stored point scores identically and
-    /// `search_similar`'s stable sort returns them in insertion order — making
-    /// dedup/limit assertions deterministic.
+    /// Sixteen-element vector matching `MockEmbeddingEngine::new(16)`. Every
+    /// stored point carries this same vector, so whatever the (deterministic)
+    /// query vector is, they all score identically and `search_similar`'s stable
+    /// sort returns them in insertion order — making dedup/limit assertions
+    /// deterministic.
     fn v16() -> Vec<f32> {
         vec![0.25_f32; 16]
     }
