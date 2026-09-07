@@ -12,6 +12,9 @@ pub mod models;
 mod node_filter;
 /// Vector database trait definition.
 pub mod vector_db_trait;
+/// Zero-norm (all-zero) embedding vector detection, and the warnings that
+/// make an otherwise-silent unsearchable write or query visible.
+mod zero_norm;
 
 #[cfg(feature = "pgvector")]
 pub mod pgvector_adapter;

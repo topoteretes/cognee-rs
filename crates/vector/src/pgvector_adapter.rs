@@ -23,6 +23,7 @@ use cognee_utils::tracing_keys::{
 use crate::error::{VectorDBError, VectorDBResult};
 use crate::models::{SearchResult, VectorPoint};
 use crate::vector_db_trait::VectorDB;
+use crate::zero_norm::{warn_zero_norm_points, warn_zero_norm_query, warn_zero_norm_query_batch};
 
 /// Max points per INSERT batch (300 params = 100 rows × 3 columns).
 const BATCH_SIZE: usize = 100;
@@ -519,6 +520,10 @@ impl VectorDB for PgVectorAdapter {
             }
         }
 
+        // `vector <=> $1` is NaN when either operand has zero norm, so these
+        // rows score and sort unusably once written.
+        warn_zero_norm_points("pgvector", &coll, points);
+
         // Batch upsert in chunks to stay within parameter limits.
         for chunk in points.chunks(BATCH_SIZE) {
             // Point IDs are content-addressed, so the same point is re-indexed
@@ -612,6 +617,9 @@ impl VectorDB for PgVectorAdapter {
 
         let coll = Self::collection_name(data_type, field_name)?;
         Span::current().record(COGNEE_VECTOR_COLLECTION, coll.as_str());
+        // Raw upsert writes system-owned collections (TruthCentroid_vector and
+        // friends); a zero-norm centroid stored here is unsearchable too.
+        warn_zero_norm_points("pgvector", &coll, points);
 
         // Dimension check across the batch.
         let expected_dim = points[0].vector.len();
@@ -702,6 +710,7 @@ impl VectorDB for PgVectorAdapter {
     ) -> VectorDBResult<Vec<SearchResult>> {
         let coll = Self::collection_name(data_type, field_name)?;
         Span::current().record(COGNEE_VECTOR_COLLECTION, coll.as_str());
+        warn_zero_norm_query("pgvector", &coll, query_vector);
 
         let vec_str = Self::format_vector(query_vector);
 
@@ -765,6 +774,7 @@ impl VectorDB for PgVectorAdapter {
 
         let coll = Self::collection_name(data_type, field_name)?;
         Span::current().record(COGNEE_VECTOR_COLLECTION, coll.as_str());
+        warn_zero_norm_query("pgvector", &coll, query_vector);
 
         let vec_str = Self::format_vector(query_vector);
         // $1 = query vector, $2 = top_k, $3.. = requested node names. Pushing the
@@ -889,6 +899,9 @@ impl VectorDB for PgVectorAdapter {
         }
         let coll = Self::collection_name(data_type, field_name)?;
         Span::current().record(COGNEE_VECTOR_COLLECTION, coll.as_str());
+        // This override never routes through `search_similar`, so the
+        // single-query warning would otherwise never fire on this path.
+        warn_zero_norm_query_batch("pgvector", &coll, query_vectors);
 
         // One round-trip for the whole batch instead of the default's one query
         // per vector: unnest the query vectors with ordinality and run the ANN

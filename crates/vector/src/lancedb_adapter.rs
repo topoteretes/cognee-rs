@@ -39,6 +39,7 @@ use uuid::Uuid;
 use crate::error::{VectorDBError, VectorDBResult};
 use crate::models::{SearchResult, VectorPoint};
 use crate::vector_db_trait::VectorDB;
+use crate::zero_norm::{warn_zero_norm_points, warn_zero_norm_query};
 
 fn collection_name(data_type: &str, field_name: &str) -> String {
     format!("{data_type}_{field_name}")
@@ -86,6 +87,11 @@ fn points_to_batch(
             actual: p.vector.len(),
         });
     }
+
+    // A zero-norm vector is accepted by the writer and then dropped by the
+    // reader: lance scores it NaN and `KNNVectorDistanceExec` filters NaN rows
+    // out, so the row exists on disk and never appears in a result.
+    warn_zero_norm_points("lancedb", collection, points);
 
     let id_array = FixedSizeBinaryArray::try_from_iter(points.iter().map(|p| *p.id.as_bytes()))
         .map_err(|e| VectorDBError::StorageError(format!("id column build: {e}")))?;
@@ -435,6 +441,7 @@ impl VectorDB for LanceDbAdapter {
         top_k: usize,
     ) -> VectorDBResult<Vec<SearchResult>> {
         let name = collection_name(data_type, field_name);
+        warn_zero_norm_query("lancedb", &name, query_vector);
         let table = self
             .connection
             .open_table(&name)
@@ -754,6 +761,60 @@ mod tests {
             .await
             .unwrap();
         assert!(results.iter().all(|r| r.id != drop));
+    }
+
+    /// Pins the hazard the zero-norm warnings exist for: LanceDB accepts a
+    /// zero-norm vector and then never returns it.
+    ///
+    /// Cosine distance is `1 - xy/(|x|.|y|)`, so a zero-norm operand yields
+    /// NaN, and lance's `KNNVectorDistanceExec` masks NaN rows out. The row is
+    /// therefore on disk (`collection_size` counts it) and absent from every
+    /// result — no error, no signal. If this test ever goes red because the
+    /// zero row *is* returned, lance changed its NaN handling and the warning
+    /// text in `crate::zero_norm` needs revisiting.
+    #[tokio::test]
+    async fn zero_norm_points_are_stored_but_never_returned() {
+        let (adapter, _dir) = fresh_adapter().await;
+        adapter.create_collection("Chunk", "text", 2).await.unwrap();
+        let real = Uuid::new_v4();
+        let zero = Uuid::new_v4();
+        adapter
+            .index_points(
+                "Chunk",
+                "text",
+                &[
+                    point(real, vec![1.0, 0.0], "real"),
+                    point(zero, vec![0.0, 0.0], "zero"),
+                ],
+            )
+            .await
+            .unwrap();
+
+        // Both rows are persisted.
+        assert_eq!(adapter.collection_size("Chunk", "text").await.unwrap(), 2);
+
+        // A generous top_k cannot surface the zero-norm row.
+        let results = adapter
+            .search_similar("Chunk", "text", &[1.0, 0.0], 100)
+            .await
+            .unwrap();
+        assert_eq!(
+            results.len(),
+            1,
+            "expected only the non-zero point, got {results:?}"
+        );
+        assert_eq!(results[0].id, real);
+
+        // And a zero-norm *query* cannot rank anything at all, even though the
+        // collection holds a perfectly good point.
+        let none = adapter
+            .search_similar("Chunk", "text", &[0.0, 0.0], 100)
+            .await
+            .unwrap();
+        assert!(
+            none.is_empty(),
+            "a zero-norm query should match nothing, got {none:?}"
+        );
     }
 
     #[tokio::test]

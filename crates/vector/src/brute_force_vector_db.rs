@@ -31,6 +31,7 @@ use crate::error::{VectorDBError, VectorDBResult};
 use crate::models::{SearchResult, VectorPoint};
 use crate::node_filter::metadata_matches_node_filter;
 use crate::vector_db_trait::VectorDB;
+use crate::zero_norm::{warn_zero_norm_points, warn_zero_norm_query};
 
 #[derive(Debug)]
 struct Collection {
@@ -134,6 +135,11 @@ impl VectorDB for BruteForceVectorDB {
             }
         }
 
+        // Unlike LanceDB/pgvector this backend keeps the row — the denominator
+        // is clamped with `max(f32::EPSILON)` — but it scores 0.0 and so ranks
+        // below every real match. Degenerate either way, worth the same signal.
+        warn_zero_norm_points("brute-force", &key, points);
+
         // Upsert by id: replace existing, otherwise append. On replace, union
         // dataset membership so a content-addressed point indexed under several
         // datasets stays retrievable for all of them (cross-dataset dedup).
@@ -160,6 +166,9 @@ impl VectorDB for BruteForceVectorDB {
             return Ok(());
         }
         let key = Self::key(data_type, field_name);
+        // Raw upsert writes system-owned collections (TruthCentroid_vector and
+        // friends); a zero-norm centroid stored here is unsearchable too.
+        warn_zero_norm_points("brute-force", &key, points);
         let mut g = self.collections.write().await;
 
         // Self-create the collection when absent, sized from the first vector
@@ -190,6 +199,7 @@ impl VectorDB for BruteForceVectorDB {
         top_k: usize,
     ) -> VectorDBResult<Vec<SearchResult>> {
         let key = Self::key(data_type, field_name);
+        warn_zero_norm_query("brute-force", &key, query_vector);
         // Score under the read guard, then drop it before sorting + result
         // construction so we never hold the lock across the (synchronous,
         // but still post-await) sort/truncate step.
@@ -249,6 +259,7 @@ impl VectorDB for BruteForceVectorDB {
             _ => None,
         };
         let key = Self::key(data_type, field_name);
+        warn_zero_norm_query("brute-force", &key, query_vector);
         // Score (and filter) under the read guard, then drop it before the
         // sort/truncate, mirroring `search_similar`.
         let mut scored: Vec<(Uuid, f32, HashMap<String, serde_json::Value>)> = {

@@ -584,6 +584,42 @@ jobs:
       - name: Test
         run: bash scripts/run_tests_with_openai.sh
 
+      # Retrieval coverage. `search_live_smoke` is the only case in the repo that
+      # asserts search returns any rows, and it spent its whole life skipping:
+      # it gated on COGNEE_E2E_EMBED_MODEL_PATH / _TOKENIZER_PATH, which no job
+      # downloads, while still reporting `ok` — the same silent-green shape the
+      # `pgvector-spans` lane shipped with. Those two paths are optional now
+      # (embeddings fall back to the LLM account, as in `pg_full_stack_e2e`), and
+      # the guard below fails this lane if the case ever skips again.
+      #
+      # Run as its own step rather than asserting over the workspace log above:
+      # that run legitimately skips other backend-gated suites, whose skip markers
+      # the guard would — correctly, for its own purposes — treat as failures.
+      #
+      # Keyed, and deliberately absent from the community.yml mirror rather than
+      # allowed to skip there: a skip prints the marker the guard fails on, and
+      # "the key is missing" and "retrieval returned nothing" must not look alike.
+      #
+      # Cost, stated plainly: now that the ONNX gate is gone the case also runs
+      # inside the workspace step above, so each CI run performs two live
+      # add+cognify+search cycles rather than one. The duplicate is accepted
+      # because the guard needs a log containing only this suite, and because
+      # one extra gpt-4o-mini round-trip on a one-sentence corpus is cheap. If
+      # that stops being true, filter it out of the workspace run rather than
+      # dropping the guard — an unguarded assertion is what this step exists to
+      # prevent.
+      - name: Run retrieval smoke test (LLM)
+        run: |
+          set -o pipefail
+          cargo test -p cognee-cli --test cli_e2e search_live_smoke \
+            -- --nocapture 2>&1 | tee retrieval-smoke.log
+
+      - name: Assert the retrieval smoke test really ran
+        run: |
+          bash scripts/ci/assert_pg_suite_ran.sh --label "CLI retrieval" \
+            --log retrieval-smoke.log --min-tests 1 \
+            --require-test search_live_smoke
+
   # ── Stage 2.5: Docs + feature-variant lanes (depends on lint, parallel with `test`) ──
   # Moved out of the `test` job so they run concurrently with it instead of
   # serially after the workspace test run. Together these were ~14 min of the
