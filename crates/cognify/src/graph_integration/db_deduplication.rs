@@ -55,7 +55,9 @@ use crate::fact_extraction::KnowledgeGraph;
 /// only remove redundant lookups: the caller folds the results into a
 /// `HashSet` of edge keys, so a repeated candidate could never have changed
 /// the outcome.
-fn collect_distinct_candidate_edges(graphs: &[KnowledgeGraph]) -> Vec<EdgeData> {
+fn collect_distinct_candidate_edges<'a>(
+    graphs: impl IntoIterator<Item = &'a KnowledgeGraph>,
+) -> Vec<EdgeData> {
     let mut seen: HashSet<(String, String, String)> = HashSet::new();
     let mut edges_to_check: Vec<EdgeData> = Vec::new();
 
@@ -87,14 +89,14 @@ fn collect_distinct_candidate_edges(graphs: &[KnowledgeGraph]) -> Vec<EdgeData> 
     edges_to_check
 }
 
-pub async fn retrieve_existing_edges(
+/// Takes any iterator of borrowed graphs rather than a slice, so a caller
+/// holding `Vec<(Uuid, KnowledgeGraph)>` can project out the graphs without
+/// deep-cloning every one of them just to change the element type. Only three
+/// `&str` fields per edge are ever read, so nothing here needs ownership.
+pub async fn retrieve_existing_edges<'a>(
     graph_db: &dyn GraphDBTrait,
-    graphs: &[KnowledgeGraph],
+    graphs: impl IntoIterator<Item = &'a KnowledgeGraph>,
 ) -> Result<HashSet<String>, CognifyError> {
-    if graphs.is_empty() {
-        return Ok(HashSet::new());
-    }
-
     let edges_to_check = collect_distinct_candidate_edges(graphs);
 
     if edges_to_check.is_empty() {
