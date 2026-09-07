@@ -13,6 +13,7 @@ use std::fmt;
 use std::path::PathBuf;
 
 use cognee_embedding::MockVectorMode;
+use cognee_llm::StructuredOutputMode;
 
 /// Resolved inputs consumed by [`crate::ComponentRegistry`] and the free
 /// `build_storage` / `build_database` constructors.
@@ -189,6 +190,13 @@ pub struct LlmInputs {
     /// nature the model name mis-signals. Applied via
     /// `OpenAIAdapter::with_reasoning_override`.
     pub reasoning_override: Option<bool>,
+    /// Which structured-output request shape the OpenAI-compatible adapter may
+    /// send, from `LLM_STRUCTURED_OUTPUT_MODE` (`auto` | `tools` | `functions` |
+    /// `json`). [`StructuredOutputMode::Auto`] keeps the three-mode cascade; any
+    /// other value pins that one shape and never sends the others. The
+    /// counterpart of Python's `llm_instructor_mode`. Applied via
+    /// `OpenAIAdapter::with_structured_output_mode`.
+    pub structured_output_mode: StructuredOutputMode,
     /// Replaces the provider adapter with a cassette replay mock.
     pub mock: bool,
     /// Cassette path for the replay mock (consumed only under `mock-llm`).
@@ -408,9 +416,41 @@ pub fn parse_reasoning_override(value: &str) -> Option<bool> {
     }
 }
 
+/// Parse the `LLM_STRUCTURED_OUTPUT_MODE` knob into a
+/// [`StructuredOutputMode`] for [`LlmInputs::structured_output_mode`].
+/// `tools`, `functions` and `json` each pin that one request shape; everything
+/// else — including the default `auto`, an empty value, or an unrecognised
+/// token — leaves the three-mode cascade in place. Case- and
+/// whitespace-insensitive.
+///
+/// `function_call` and `legacy` are accepted as aliases of `functions`, and
+/// `json_object` of `json`, because those are the names the wire protocol and
+/// the adapter's own log lines use — an operator reading either will reasonably
+/// try them.
+///
+/// An unrecognised token falls back to the cascade rather than failing, matching
+/// [`parse_reasoning_override`]. That does mean a typo reads as `auto`: the
+/// counter-argument is that a hard failure here would take down a process over a
+/// misspelled optional knob, and the cascade is the safe default in a way that
+/// no particular pin is.
+///
+/// Lives here — the shared config→[`LlmInputs`] boundary — so the SDK `Settings`
+/// and the standalone HTTP server resolve the knob identically.
+pub fn parse_structured_output_mode(value: &str) -> StructuredOutputMode {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "tools" | "tool" | "tool_calls" => StructuredOutputMode::Tools,
+        "functions" | "function" | "function_call" | "legacy" => StructuredOutputMode::Functions,
+        "json" | "json_object" | "json_mode" => StructuredOutputMode::Json,
+        _ => StructuredOutputMode::Auto,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{AwsInputs, aws_inputs_from, parse_reasoning_override};
+    use super::{
+        AwsInputs, StructuredOutputMode, aws_inputs_from, parse_reasoning_override,
+        parse_structured_output_mode,
+    };
 
     #[test]
     fn parse_reasoning_override_maps_known_tokens() {
@@ -423,6 +463,60 @@ mod tests {
         // Default, empty, and unrecognised tokens fall through to auto (None).
         for auto in ["auto", "", "   ", "maybe", "yes"] {
             assert_eq!(parse_reasoning_override(auto), None, "{auto:?}");
+        }
+    }
+
+    #[test]
+    fn parse_structured_output_mode_maps_known_tokens() {
+        for tools in ["tools", "tool", "tool_calls", "  TOOLS  ", "Tool"] {
+            assert_eq!(
+                parse_structured_output_mode(tools),
+                StructuredOutputMode::Tools,
+                "{tools:?}"
+            );
+        }
+        for functions in ["functions", "function", "function_call", "legacy", "LEGACY"] {
+            assert_eq!(
+                parse_structured_output_mode(functions),
+                StructuredOutputMode::Functions,
+                "{functions:?}"
+            );
+        }
+        for json in ["json", "json_object", "json_mode", " Json "] {
+            assert_eq!(
+                parse_structured_output_mode(json),
+                StructuredOutputMode::Json,
+                "{json:?}"
+            );
+        }
+        // The default, empty, and unrecognised tokens all leave the cascade in
+        // place — a misspelled pin must not silently disable every mode.
+        for auto in ["auto", "", "   ", "cascade", "tolls", "yes"] {
+            assert_eq!(
+                parse_structured_output_mode(auto),
+                StructuredOutputMode::Auto,
+                "{auto:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_auto_permits_every_mode() {
+        let auto = StructuredOutputMode::Auto;
+        assert!(auto.allows_tools() && auto.allows_functions() && auto.allows_json());
+        assert!(!auto.is_pinned());
+
+        // Each pin permits exactly itself, so a pinned adapter can never send a
+        // shape the operator did not ask for.
+        for (mode, tools, functions, json) in [
+            (StructuredOutputMode::Tools, true, false, false),
+            (StructuredOutputMode::Functions, false, true, false),
+            (StructuredOutputMode::Json, false, false, true),
+        ] {
+            assert_eq!(mode.allows_tools(), tools, "{mode:?} tools");
+            assert_eq!(mode.allows_functions(), functions, "{mode:?} functions");
+            assert_eq!(mode.allows_json(), json, "{mode:?} json");
+            assert!(mode.is_pinned(), "{mode:?} is a pin");
         }
     }
 

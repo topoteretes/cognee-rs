@@ -37,7 +37,7 @@ pub use builtins::embedding::{OnnxAssetDefaults, onnx_asset_defaults};
 pub use builtins::{build_database, build_embedding_config, build_storage};
 pub use context::{
     AwsInputs, BackendBuildContext, EmbeddingInputs, LlmInputs, anthropic_base_url_from_env,
-    aws_inputs_from_env, parse_reasoning_override,
+    aws_inputs_from_env, parse_reasoning_override, parse_structured_output_mode,
 };
 pub use error::ComponentError;
 pub use registry::ComponentRegistry;

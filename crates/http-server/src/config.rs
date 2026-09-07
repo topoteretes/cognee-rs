@@ -216,6 +216,11 @@ pub struct HttpServerConfig {
     /// Env: `LLM_REASONING`.
     pub llm_reasoning: String,
 
+    /// Structured-output request shape: `auto` (default, cascade), or `tools` /
+    /// `functions` / `json` to pin one shape and never send the others.
+    /// Env: `LLM_STRUCTURED_OUTPUT_MODE`.
+    pub llm_structured_output_mode: String,
+
     /// LLM retry count for both structured-output and network retries.
     /// Env: `LLM_MAX_RETRIES`.
     pub llm_max_retries: u32,
@@ -419,6 +424,7 @@ impl Default for HttpServerConfig {
             llm_endpoint: String::new(),
             llm_api_version: String::new(),
             llm_reasoning: "auto".to_string(),
+            llm_structured_output_mode: "auto".to_string(),
             // Matches `Settings::llm_max_retries` and the value
             // `docs/configuration.md` documents. This was 3 — an undocumented
             // divergence that nothing here justified, and one that made the
@@ -638,6 +644,9 @@ impl HttpServerConfig {
         }
         if let Ok(v) = std::env::var("LLM_REASONING") {
             cfg.llm_reasoning = v;
+        }
+        if let Ok(v) = std::env::var("LLM_STRUCTURED_OUTPUT_MODE") {
+            cfg.llm_structured_output_mode = v;
         }
         if let Ok(v) = std::env::var("LLM_MAX_RETRIES") {
             cfg.llm_max_retries = v
@@ -906,6 +915,9 @@ impl HttpServerConfig {
                 api_version: self.llm_api_version.clone(),
                 reasoning_override: cognee_components::parse_reasoning_override(
                     &self.llm_reasoning,
+                ),
+                structured_output_mode: cognee_components::parse_structured_output_mode(
+                    &self.llm_structured_output_mode,
                 ),
                 mock: false,
                 cassette: String::new(),

@@ -81,5 +81,5 @@ pub use schema::{
 pub use transcriber::{Transcriber, TranscriptionOutput, validate_audio_format};
 pub use types::{
     DEFAULT_MAX_COMPLETION_TOKENS, GenerationOptions, GenerationResponse, Message, MessageRole,
-    TokenUsage,
+    StructuredOutputMode, TokenUsage,
 };
