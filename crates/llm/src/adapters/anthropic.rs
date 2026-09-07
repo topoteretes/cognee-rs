@@ -237,13 +237,19 @@ impl AnthropicAdapter {
     /// The `max_tokens` to send: `min(caller value, configured ceiling, model cap)`.
     ///
     /// The configured ceiling (`llm_max_completion_tokens`) is an upper bound on
-    /// *every* path, not only when the caller passes `None`:
-    /// `GenerationOptions::default()` sets `Some(16384)`, so a default-options
-    /// caller would otherwise silently bypass a lower operator-configured ceiling
-    /// (an operator setting 4096 to cap cost would still get 8192). Python treats
+    /// *every* path, not only when the caller passes `None`, so a caller cannot
+    /// silently bypass a lower operator-configured ceiling (an operator setting
+    /// 4096 to cap cost must not still get 8192). Python treats
     /// `llm_max_completion_tokens` as the effective ceiling on all paths. The
     /// model cap is applied last so Anthropic never 400s on
     /// `max_tokens > model limit`.
+    ///
+    /// A caller who passes no budget of their own — `None`, which is also what
+    /// `GenerationOptions::default()` now leaves in `max_tokens` (SDK-581) —
+    /// takes the configured ceiling directly. Before SDK-581 the default carried
+    /// `Some(16384)`, which clamped such callers to 16384 even when the operator
+    /// had configured something larger; taking the ceiling is what this doc
+    /// already claimed to do.
     fn effective_max_tokens(&self, opts: &GenerationOptions) -> u32 {
         let requested = opts.max_tokens.map_or(self.max_completion_tokens, |v| {
             v.min(self.max_completion_tokens)
@@ -795,10 +801,10 @@ impl Llm for AnthropicAdapter {
         }
         let b64 = base64::engine::general_purpose::STANDARD.encode(image_bytes);
         // Clamp to the model's documented output cap, like the chat path's
-        // `effective_max_tokens`. A caller supplying GenerationOptions with the
-        // default max_tokens (16384) on a model whose cap is lower (e.g. Claude
-        // 3.5 at 8192) would otherwise 400 the vision request. Floored at 1 so a
-        // zero never 400s either.
+        // `effective_max_tokens`. A caller supplying a large max_tokens (16384,
+        // say) on a model whose cap is lower (e.g. Claude 3.5 at 8192) would
+        // otherwise 400 the vision request. Floored at 1 so a zero never 400s
+        // either. A caller who sets nothing keeps the 300-token vision default.
         let max_tokens = options
             .as_ref()
             .and_then(|o| o.max_tokens)
@@ -912,8 +918,9 @@ mod tests {
         // Claude 3.5 Sonnet caps output at 8192.
         let sonnet = AnthropicAdapter::new("claude-3-5-sonnet-20241022", "k", None).unwrap();
 
-        // GenerationOptions::default() sets Some(16384); it must clamp to 8192
-        // (the model cap), not send 16384 (which 400s) nor a hard 4096.
+        // Default options carry no budget since SDK-581, so this resolves to the
+        // configured ceiling (16384) and must then clamp to 8192 (the model cap),
+        // not send 16384 (which 400s) nor a hard 4096.
         assert_eq!(
             sonnet.effective_max_tokens(&GenerationOptions::default()),
             8192
@@ -963,8 +970,9 @@ mod tests {
             .with_max_completion_tokens(2000);
         assert_eq!(capped.effective_max_tokens(&unset), 2000);
         // ...and it is an upper bound on the default-options path too, not only
-        // when the caller passes None: GenerationOptions::default() carries
-        // Some(16384), which must not bypass a lower configured ceiling.
+        // when the caller passes None. Since SDK-581
+        // GenerationOptions::default() carries no budget either, so both
+        // spellings take the configured ceiling and neither can bypass it.
         assert_eq!(
             capped.effective_max_tokens(&GenerationOptions::default()),
             2000

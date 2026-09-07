@@ -61,6 +61,24 @@ fn truncated_tool_call(finish_reason: &str) -> String {
     )
 }
 
+/// A truncated tool call that also reports what it spent, the way a real
+/// provider does. `usage.completion_tokens` is the only evidence of the budget
+/// the provider applied when the request carried no cap of its own.
+fn truncated_tool_call_with_usage(completion_tokens: u32) -> String {
+    let cut_off = serde_json::to_string(r#"{"name": "Alexander Gra"#).expect("string escapes");
+    format!(
+        r#"{{"id":"x","object":"chat.completion","created":1,"model":"m",
+            "choices":[{{"index":0,"message":{{"role":"assistant","tool_calls":[
+                {{"id":"c1","type":"function","function":{{
+                    "name":"extract_structured_data","arguments":{cut_off}
+                }}}}
+            ]}},"finish_reason":"length"}}],
+            "usage":{{"prompt_tokens":10,"completion_tokens":{completion_tokens},
+                      "total_tokens":{total}}}}}"#,
+        total = completion_tokens + 10
+    )
+}
+
 /// A complete, parseable tool call.
 fn complete_tool_call() -> String {
     let payload =
@@ -455,4 +473,248 @@ async fn gateway_max_tokens_finish_reason_is_treated_as_truncation() {
 
     assert!(err.to_string().contains("truncated"), "got: {err}");
     tools.assert_calls_async(1).await;
+}
+
+// ---------------------------------------------------------------------------
+// SDK-581: a library default is not a caller's choice, and a "raise" must not
+// be able to lower the budget.
+// ---------------------------------------------------------------------------
+
+/// The latent half of SDK-581. `..Default::default()` without setting
+/// `max_tokens` is the idiomatic spelling, and it used to hand the adapter a
+/// 16384 the caller never picked — which the recovery path then read as a
+/// deliberate constraint, refused to raise, and reported as
+/// "the caller-requested 16384-token output budget".
+///
+/// Such a caller has expressed no budget, so the truncation must be recovered
+/// exactly as it is for `max_tokens: None`.
+#[tokio::test]
+async fn a_defaulted_budget_is_not_treated_as_a_caller_choice() {
+    let server = MockServer::start_async().await;
+
+    // No cap on the wire: the default must not put one there.
+    let uncapped = server
+        .mock_async(|when, then| {
+            when.method(POST).path("/chat/completions").is_true(|req| {
+                let body = req.body_string();
+                body.contains(r#""tools""#) && !body.contains("max_tokens")
+            });
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(truncated_tool_call("length"));
+        })
+        .await;
+
+    let completed = server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path("/chat/completions")
+                .body_includes(format!(
+                    r#""max_tokens":{}"#,
+                    OpenAIAdapter::DEFAULT_MAX_COMPLETION_TOKENS
+                ));
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(complete_tool_call());
+        })
+        .await;
+
+    let value = adapter(server.base_url())
+        .create_structured_output_with_messages_raw(
+            user_msg(),
+            &schema(),
+            // The spelling that used to fail: temperature set, max_tokens absent.
+            Some(GenerationOptions {
+                temperature: Some(0.1),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("a defaulted budget carries no caller intent and must be raised");
+
+    assert_eq!(value["name"], "Alexander Graham Bell");
+    uncapped.assert_calls_async(1).await;
+    completed.assert_calls_async(1).await;
+}
+
+/// The live half of SDK-581. With no cap on the request, the budget in force is
+/// the provider's own default and the request body says nothing about it.
+/// Writing the configured ceiling over it is only a *raise* if the ceiling is
+/// larger — and when it is not, the old code wrote it anyway, shrinking the
+/// budget and re-truncating while announcing an increase.
+///
+/// `usage.completion_tokens` is the evidence: the provider spent 8000 tokens
+/// before cutting off, so its budget is at least that, and a 4096 ceiling cannot
+/// help. That must be terminal, and the cascade must not run.
+#[tokio::test]
+async fn a_ceiling_below_the_provider_default_is_not_written_as_a_raise() {
+    let server = MockServer::start_async().await;
+
+    let uncapped = server
+        .mock_async(|when, then| {
+            when.method(POST).path("/chat/completions").is_true(|req| {
+                let body = req.body_string();
+                body.contains(r#""tools""#) && !body.contains("max_tokens")
+            });
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(truncated_tool_call_with_usage(8000));
+        })
+        .await;
+
+    // Any request carrying the lowered ceiling is the bug: it would shrink the
+    // budget that just truncated.
+    let shrunk = server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path("/chat/completions")
+                .body_includes(r#""max_tokens":4096"#);
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(complete_tool_call());
+        })
+        .await;
+
+    let err = OpenAIAdapter::new("gpt-4o-mini", "test-key", Some(server.base_url()))
+        .unwrap()
+        .with_network_retries(0)
+        .with_structured_output_retries(2)
+        .with_default_max_tokens(Some(4096))
+        .create_structured_output_with_messages_raw(
+            user_msg(),
+            &schema(),
+            // The production shape: cognify sends no cap, so the provider's own
+            // default is what truncates.
+            Some(GenerationOptions {
+                max_tokens: None,
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect_err("a ceiling below the observed provider default cannot recover");
+
+    let msg = err.to_string();
+    assert!(
+        msg.contains("truncated"),
+        "the error must name truncation; got: {msg}"
+    );
+    assert!(
+        msg.contains("8000"),
+        "the error must name the budget that actually truncated, taken from usage; got: {msg}"
+    );
+    assert!(
+        msg.contains("LLM_MAX_COMPLETION_TOKENS"),
+        "the error must say how to fix it; got: {msg}"
+    );
+
+    uncapped.assert_calls_async(1).await;
+    // The whole point: the lowered ceiling was never sent, and no later cascade
+    // mode ran either.
+    shrunk.assert_calls_async(0).await;
+}
+
+/// The bound must gate the raise, not block it. Same shape as the test above,
+/// but the provider stopped at 2000 and the ceiling is 16384 — genuine headroom,
+/// so this recovers.
+#[tokio::test]
+async fn a_ceiling_above_the_observed_budget_still_raises() {
+    let server = MockServer::start_async().await;
+
+    let uncapped = server
+        .mock_async(|when, then| {
+            when.method(POST).path("/chat/completions").is_true(|req| {
+                let body = req.body_string();
+                body.contains(r#""tools""#) && !body.contains("max_tokens")
+            });
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(truncated_tool_call_with_usage(2000));
+        })
+        .await;
+
+    let raised = server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path("/chat/completions")
+                .body_includes(format!(
+                    r#""max_tokens":{}"#,
+                    OpenAIAdapter::DEFAULT_MAX_COMPLETION_TOKENS
+                ))
+                // The corrective instruction may name the budget it is raising
+                // from, and 2000 is the only figure it can honestly cite here.
+                .body_includes("2000");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(complete_tool_call());
+        })
+        .await;
+
+    let value = adapter(server.base_url())
+        .create_structured_output_with_messages_raw(
+            user_msg(),
+            &schema(),
+            Some(GenerationOptions {
+                max_tokens: None,
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("a ceiling above the observed budget is real headroom");
+
+    assert_eq!(value["name"], "Alexander Graham Bell");
+    uncapped.assert_calls_async(1).await;
+    raised.assert_calls_async(1).await;
+}
+
+/// With no cap on the request and no `usage` in the response, the previous
+/// budget is genuinely unknown. The retry still goes out at the ceiling — that
+/// is the best available move — but the corrective instruction must not assert
+/// an increase it cannot verify.
+#[tokio::test]
+async fn an_unverifiable_raise_is_not_announced_as_one() {
+    let server = MockServer::start_async().await;
+
+    let uncapped = server
+        .mock_async(|when, then| {
+            when.method(POST).path("/chat/completions").is_true(|req| {
+                let body = req.body_string();
+                body.contains(r#""tools""#) && !body.contains("max_tokens")
+            });
+            then.status(200)
+                .header("content-type", "application/json")
+                // No `usage` block at all.
+                .body(truncated_tool_call("length"));
+        })
+        .await;
+
+    let retried = server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path("/chat/completions")
+                .body_includes(format!(
+                    r#""max_tokens":{}"#,
+                    OpenAIAdapter::DEFAULT_MAX_COMPLETION_TOKENS
+                ))
+                .is_true(|req| !req.body_string().contains("has been raised to"));
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(complete_tool_call());
+        })
+        .await;
+
+    let value = adapter(server.base_url())
+        .create_structured_output_with_messages_raw(
+            user_msg(),
+            &schema(),
+            Some(GenerationOptions {
+                max_tokens: None,
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("an unknown previous budget still retries at the ceiling");
+
+    assert_eq!(value["name"], "Alexander Graham Bell");
+    uncapped.assert_calls_async(1).await;
+    retried.assert_calls_async(1).await;
 }

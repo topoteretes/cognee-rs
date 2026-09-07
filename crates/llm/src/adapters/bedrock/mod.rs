@@ -234,10 +234,15 @@ impl BedrockAdapter {
     /// ceiling, model cap)`, floored at 1 (plan §1.0).
     ///
     /// The configured ceiling bounds **every** path, not only the
-    /// `max_tokens: None` one: `GenerationOptions::default()` carries
-    /// `Some(16384)`, so a default-options caller would otherwise silently
-    /// bypass a lower operator-configured ceiling. The model cap is applied last
-    /// so Bedrock never 400s on `maxTokens > model limit`.
+    /// `max_tokens: None` one, so a caller cannot silently bypass a lower
+    /// operator-configured ceiling. The model cap is applied last so Bedrock
+    /// never 400s on `maxTokens > model limit`.
+    ///
+    /// A caller who passes no budget of their own — `None`, which is also what
+    /// `GenerationOptions::default()` leaves in `max_tokens` since SDK-581 —
+    /// takes the configured ceiling. Before then the default carried
+    /// `Some(16384)`, which clamped such callers to 16384 even where the
+    /// operator had configured more.
     fn effective_max_tokens(&self, opts: &GenerationOptions) -> u32 {
         let requested = opts.max_tokens.map_or(self.max_completion_tokens, |value| {
             value.min(self.max_completion_tokens)
@@ -700,11 +705,20 @@ impl Llm for BedrockAdapter {
         let encoded = base64::engine::general_purpose::STANDARD.encode(image_bytes);
         // Clamp to the same effective budget as the chat path — the lesser of
         // the model's documented output cap and the configured
-        // `llm_max_completion_tokens` ceiling. A caller passing
-        // GenerationOptions with the default max_tokens (16384) against a model
-        // that caps lower would otherwise 400, and would slip past an operator
-        // ceiling that bounds every other path. Floored at 1 so a zero never
-        // 400s either.
+        // `llm_max_completion_tokens` ceiling. A caller passing a large
+        // max_tokens against a model that caps lower would otherwise 400, and
+        // would slip past an operator ceiling that bounds every other path.
+        // Floored at 1 so a zero never 400s either.
+        //
+        // A caller who sets nothing keeps the 300-token vision default. Note the
+        // asymmetry with the chat path above, which substitutes the *ceiling* for
+        // an unset budget: 300 is a deliberate vision-specific floor, not the
+        // configured ceiling. Since SDK-581 that also covers
+        // `GenerationOptions::default()`, which no longer carries 16384 — so a
+        // published-crate caller passing default options gets 300 here where it
+        // used to get 16384. The only in-tree caller
+        // (`cognee-ingestion`'s image loader) passes `None` and always took this
+        // path.
         let max_tokens = options
             .as_ref()
             .and_then(|o| o.max_tokens)
@@ -776,7 +790,10 @@ mod tests {
             16_384
         );
         // A configured ceiling below the cap wins, on the default-options path
-        // too (GenerationOptions::default() carries Some(16384)).
+        // too. Since SDK-581 `GenerationOptions::default()` carries no budget,
+        // so this now asserts that an unset budget resolves *to* the ceiling
+        // rather than that a defaulted 16384 is clamped down to it. Same
+        // expected value, different guarantee.
         let capped = adapter("eu.anthropic.claude-sonnet-4-5-20250929-v1:0")
             .await
             .with_max_completion_tokens(2_000);
