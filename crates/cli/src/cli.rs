@@ -1,5 +1,7 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
+use crate::config_store::Settings;
+
 #[derive(Debug, Parser)]
 #[command(name = "cognee-cli", version)]
 #[command(about = "Cognee CLI - Manage your knowledge graphs and cognitive processing pipelines.")]
@@ -32,6 +34,44 @@ pub enum Commands {
     Visualize(VisualizeArgs),
     #[cfg(feature = "bench")]
     Bench(BenchArgs),
+}
+
+impl Commands {
+    /// The `--llm-max-retries` value carried by whichever subcommand was parsed.
+    ///
+    /// The flag exists on the three subcommands that drive LLM work. It was
+    /// declared on all three from the start but read by nothing, so passing it
+    /// silently did nothing while `LLM_MAX_RETRIES` worked — the sibling
+    /// `--llm-max-parallel-requests` was wired, this one was missed (SDK-511).
+    ///
+    /// Returned rather than applied here so the caller can fold it into
+    /// `Settings` *before* `ConfigManager` is built: `ComponentManager`
+    /// constructs the LLM adapter lazily from the settings snapshot it was
+    /// handed, so a mutation made after that point cannot reach an adapter that
+    /// has already been built.
+    pub fn llm_max_retries_override(&self) -> Option<u32> {
+        match self {
+            Commands::Cognify(args) => args.llm_max_retries,
+            Commands::AddAndCognify(args) => args.llm_max_retries,
+            Commands::Search(args) => args.llm_max_retries,
+            _ => None,
+        }
+    }
+
+    /// Fold this invocation's flags over `settings`, so a flag outranks config
+    /// and env for the run it was passed on.
+    ///
+    /// Lives here rather than in `main` so it is reachable from tests: the
+    /// binary's own `run()` cannot be called from the test harness, and the bug
+    /// this fixes was precisely a flag that parsed correctly and then reached
+    /// nothing. A test that only checks parsing would have passed against it.
+    ///
+    /// Call before building `ConfigManager` — see `llm_max_retries_override`.
+    pub fn apply_overrides(&self, settings: &mut Settings) {
+        if let Some(retries) = self.llm_max_retries_override() {
+            settings.llm_max_retries = retries;
+        }
+    }
 }
 
 /// Arguments for `cognee-cli bench` — the performance orchestrator driver.
@@ -195,7 +235,12 @@ pub struct CognifyArgs {
     #[arg(long = "background", short = 'b', default_value_t = false)]
     pub background: bool,
 
-    #[arg(long = "llm-max-retries", value_parser = clap::value_parser!(u32).range(1..))]
+    /// Overrides `LLM_MAX_RETRIES` for this invocation.
+    ///
+    /// `0` is accepted so the flag matches the env var, which parses it
+    /// happily; both end up floored to 1 by `build_openai_compatible_adapter`.
+    /// The real fail-fast escape hatch is `LLM_MIN_RETRY_SECONDS=0`.
+    #[arg(long = "llm-max-retries", value_parser = clap::value_parser!(u32).range(0..))]
     pub llm_max_retries: Option<u32>,
 
     #[arg(long = "llm-max-parallel-requests", value_parser = clap::value_parser!(u32).range(1..))]
@@ -224,7 +269,12 @@ pub struct AddAndCognifyArgs {
     #[arg(long = "chunker", default_value = "TextChunker")]
     pub chunker: ChunkerArg,
 
-    #[arg(long = "llm-max-retries", value_parser = clap::value_parser!(u32).range(1..))]
+    /// Overrides `LLM_MAX_RETRIES` for this invocation.
+    ///
+    /// `0` is accepted so the flag matches the env var, which parses it
+    /// happily; both end up floored to 1 by `build_openai_compatible_adapter`.
+    /// The real fail-fast escape hatch is `LLM_MIN_RETRY_SECONDS=0`.
+    #[arg(long = "llm-max-retries", value_parser = clap::value_parser!(u32).range(0..))]
     pub llm_max_retries: Option<u32>,
 
     #[arg(long = "llm-max-parallel-requests", value_parser = clap::value_parser!(u32).range(1..))]
@@ -287,7 +337,12 @@ pub struct SearchArgs {
     #[arg(long = "output-format", short = 'f', default_value = "pretty")]
     pub output_format: OutputFormatArg,
 
-    #[arg(long = "llm-max-retries", value_parser = clap::value_parser!(u32).range(1..))]
+    /// Overrides `LLM_MAX_RETRIES` for this invocation.
+    ///
+    /// `0` is accepted so the flag matches the env var, which parses it
+    /// happily; both end up floored to 1 by `build_openai_compatible_adapter`.
+    /// The real fail-fast escape hatch is `LLM_MIN_RETRY_SECONDS=0`.
+    #[arg(long = "llm-max-retries", value_parser = clap::value_parser!(u32).range(0..))]
     pub llm_max_retries: Option<u32>,
 }
 
@@ -492,4 +547,96 @@ pub struct RunSequenceArgs {
     /// Path(s) to JSON file(s) containing the command sequence
     #[arg(required = true)]
     pub sequence_files: Vec<String>,
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
+mod tests {
+    use super::*;
+
+    fn parse(argv: &[&str]) -> Cli {
+        Cli::try_parse_from(argv).expect("argv should parse")
+    }
+
+    /// The regression this guards: the flag parsed fine before SDK-511 and was
+    /// then dropped on the floor, so a parse-only assertion would have passed
+    /// against the bug. These assert the value is *reachable* from `Commands`,
+    /// which is what `run()` folds into `Settings`.
+    #[test]
+    fn llm_max_retries_is_reachable_from_every_subcommand_that_declares_it() {
+        for argv in [
+            vec!["cognee-cli", "cognify", "--llm-max-retries", "10"],
+            vec![
+                "cognee-cli",
+                "add-and-cognify",
+                "--llm-max-retries",
+                "10",
+                "data.txt",
+            ],
+            vec!["cognee-cli", "search", "--llm-max-retries", "10", "q"],
+        ] {
+            let cli = parse(&argv);
+            assert_eq!(
+                cli.command.llm_max_retries_override(),
+                Some(10),
+                "flag was not reachable from {:?}",
+                argv[1],
+            );
+        }
+    }
+
+    #[test]
+    fn absent_flag_yields_no_override_so_config_and_env_still_win() {
+        let cli = parse(&["cognee-cli", "cognify"]);
+        assert_eq!(cli.command.llm_max_retries_override(), None);
+    }
+
+    #[test]
+    fn subcommand_without_the_flag_yields_no_override() {
+        let cli = parse(&["cognee-cli", "add", "data.txt"]);
+        assert_eq!(cli.command.llm_max_retries_override(), None);
+    }
+
+    /// `LLM_MAX_RETRIES=0` parses and is stored, so the flag accepting it keeps
+    /// the two surfaces consistent. Both are floored to 1 downstream.
+    #[test]
+    fn zero_is_accepted_to_match_the_env_var() {
+        let cli = parse(&["cognee-cli", "cognify", "--llm-max-retries", "0"]);
+        assert_eq!(cli.command.llm_max_retries_override(), Some(0));
+    }
+
+    #[test]
+    fn apply_overrides_writes_the_flag_into_settings() {
+        let cli = parse(&["cognee-cli", "cognify", "--llm-max-retries", "10"]);
+        let mut settings = Settings::default();
+        assert_ne!(
+            settings.llm_max_retries, 10,
+            "default must differ from the test value"
+        );
+
+        cli.command.apply_overrides(&mut settings);
+
+        assert_eq!(settings.llm_max_retries, 10);
+    }
+
+    #[test]
+    fn apply_overrides_leaves_settings_alone_when_the_flag_is_absent() {
+        let cli = parse(&["cognee-cli", "cognify"]);
+        // 7 stands in for a value that came from config.json or the env.
+        let mut settings = Settings {
+            llm_max_retries: 7,
+            ..Default::default()
+        };
+
+        cli.command.apply_overrides(&mut settings);
+
+        assert_eq!(
+            settings.llm_max_retries, 7,
+            "an absent flag must not clobber config or env",
+        );
+    }
 }

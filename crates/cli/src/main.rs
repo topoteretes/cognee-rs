@@ -17,10 +17,20 @@ use commands::{
 };
 use tracing::error;
 
-fn run(settings: Settings) -> Result<(), CliError> {
+fn run(mut settings: Settings) -> Result<(), CliError> {
     let cli = Cli::parse();
 
-    // Priority: defaults < JSON config < env vars (settings already overlaid in main).
+    // Priority: defaults < JSON config < env vars (settings already overlaid in
+    // main) < per-invocation CLI flags, applied here.
+    //
+    // This has to land before `ConfigManager::new`: `ComponentManager` builds
+    // the LLM adapter lazily from the settings snapshot it is handed, and the
+    // retry counts are baked in at construction, so setting them afterwards
+    // would not reach an adapter that had already been built. Doing it here
+    // rather than inside each command's `run` makes that ordering structural
+    // instead of a rule every new command has to remember.
+    cli.command.apply_overrides(&mut settings);
+
     let config = ConfigManager::new(settings);
     let cm = Arc::new(ComponentManager::new(config));
 
