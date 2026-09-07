@@ -882,8 +882,9 @@ mod tests {
         // Claude 3.5 Sonnet caps output at 8192.
         let sonnet = AnthropicAdapter::new("claude-3-5-sonnet-20241022", "k", None).unwrap();
 
-        // GenerationOptions::default() sets Some(16384); it must clamp to 8192
-        // (the model cap), not send 16384 (which 400s) nor a hard 4096.
+        // Default options carry no budget since SDK-581, so this resolves to the
+        // configured ceiling (16384) and must then clamp to 8192 (the model cap),
+        // not send 16384 (which 400s) nor a hard 4096.
         assert_eq!(
             sonnet.effective_max_tokens(&GenerationOptions::default()),
             8192
@@ -933,8 +934,9 @@ mod tests {
             .with_max_completion_tokens(2000);
         assert_eq!(capped.effective_max_tokens(&unset), 2000);
         // ...and it is an upper bound on the default-options path too, not only
-        // when the caller passes None: GenerationOptions::default() carries
-        // Some(16384), which must not bypass a lower configured ceiling.
+        // when the caller passes None. Since SDK-581
+        // GenerationOptions::default() carries no budget either, so both
+        // spellings take the configured ceiling and neither can bypass it.
         assert_eq!(
             capped.effective_max_tokens(&GenerationOptions::default()),
             2000

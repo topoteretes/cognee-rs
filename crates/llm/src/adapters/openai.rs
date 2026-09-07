@@ -251,12 +251,16 @@ pub struct OpenAIAdapter {
     ///   control of `max_tokens` (including `None` = no cap), so the config
     ///   default never overrides an explicit choice.
     /// - Structured-output extraction (`structured_output_impl`) deliberately
-    ///   ignores this *configured* default and keeps the historical
-    ///   [`GenerationOptions::default`] cap (16384) for option-less calls: a
-    ///   lower cap there would truncate tool-call JSON mid-object, so lowering
-    ///   the completion ceiling never silently breaks internal structured calls
+    ///   ignores this *configured* default and substitutes
+    ///   [`Self::DEFAULT_MAX_COMPLETION_TOKENS`] for option-less calls: a lower
+    ///   cap there would truncate tool-call JSON mid-object, so lowering the
+    ///   completion ceiling never silently breaks internal structured calls
     ///   (e.g. feedback detection). Callers wanting NO cap pass explicit
     ///   `max_tokens: None` (as cognify's extraction paths do).
+    ///
+    ///   That cap used to arrive from [`GenerationOptions::default`] via
+    ///   `unwrap_or_default()`; since SDK-581 the default leaves `max_tokens` as
+    ///   `None` and the value is named here instead.
     ///
     /// `None` means "send no default cap". Defaults to
     /// [`Some(DEFAULT_MAX_COMPLETION_TOKENS)`](Self::DEFAULT_MAX_COMPLETION_TOKENS),
@@ -444,11 +448,17 @@ impl OpenAIAdapter {
     /// rate-limit window resets; the time floor is what actually carries a call
     /// through an overload episode.
     pub const DEFAULT_MIN_RETRY_ELAPSED: Duration = Duration::from_secs(240);
-    /// Default output-token cap applied to option-less calls, mirroring the
-    /// historical [`GenerationOptions::default`] cap and Python cognee's
+    /// Default output-token cap applied to option-less calls, and the cap the
+    /// structured-output path substitutes for them. Mirrors Python cognee's
     /// `llm_max_completion_tokens` default (`config.py`). Overridden per-adapter
     /// via [`with_default_max_tokens`](Self::with_default_max_tokens).
-    pub const DEFAULT_MAX_COMPLETION_TOKENS: u32 = 16384;
+    ///
+    /// Aliases the crate-wide [`crate::DEFAULT_MAX_COMPLETION_TOKENS`] so it
+    /// moves in lockstep with the Anthropic and Bedrock adapters, which already
+    /// do. It was a bare `16384` literal until SDK-581, which is a drift the
+    /// crate-wide doc claimed could not happen: raising the shared constant moved
+    /// those two adapters and left the OpenAI structured-output cap behind.
+    pub const DEFAULT_MAX_COMPLETION_TOKENS: u32 = crate::DEFAULT_MAX_COMPLETION_TOKENS;
     /// Default per-HTTP-request timeout. Unchanged from the value that used to be
     /// hardcoded in `new`, so an adapter built without config behaves as before.
     pub const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
@@ -1007,6 +1017,16 @@ impl OpenAIAdapter {
     /// behaviour stands — write the ceiling and try — but the reason string then
     /// says only what was sent, because there is nothing to claim an increase
     /// against.
+    ///
+    /// **Known gap.** That fallback is the unfixed case: with no cap on the
+    /// request and no usage in the response, nothing here can tell whether the
+    /// ceiling is larger than the provider default it is about to overwrite, so
+    /// the shrink-and-re-truncate is still reachable. `usage` is optional in the
+    /// response because OpenAI-compatible servers (llama.cpp, older Ollama, some
+    /// gateways) omit it, so which behaviour applies is chosen by the provider
+    /// rather than by configuration. Closing it needs a budget the request can
+    /// state rather than infer — see SDK-538, which changes which layer supplies
+    /// the cap this reads.
     ///
     /// Mirrors the Anthropic adapter, which has rejected a `stop_reason ==
     /// "max_tokens"` response since it shipped, with one deliberate difference:

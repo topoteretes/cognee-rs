@@ -18,6 +18,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking changes
 
+- **`GenerationOptions::default()` no longer carries a `max_tokens`.** It set
+  `Some(16384)`; it now leaves `None`. The field had to stop carrying a value so
+  that `Some(n)` means "a caller chose n" — the OpenAI adapter refuses to raise a
+  caller's own output budget when a structured-output answer is truncated, and it
+  could not tell a deliberate 16384 from the one the `Default` supplied. A caller
+  writing `GenerationOptions { temperature: Some(0.1), ..Default::default() }`
+  therefore had a budget it never picked treated as a constraint, and the call
+  failed terminally naming that number.
+
+  Both option-less paths are unchanged: `generate` with no options still gets the
+  configured `llm_max_completion_tokens`, and option-less structured output still
+  gets 16384 (now named at that call site rather than inherited from `Default`).
+
+  What changes is one spelling — options built with `..Default::default()` that
+  never set `max_tokens`. Such a caller now expresses "no budget of my own", and
+  each path resolves that its own way:
+
+  1. **OpenAI `generate` sends no cap**, so the provider's default applies rather
+     than 16384. Note this path does *not* substitute the configured ceiling for
+     an explicit `None`, by long-standing design ("an explicit `max_tokens`,
+     including `None` = no cap, always wins over config"). If you relied on the
+     old default to bound completion length, set `max_tokens` explicitly.
+  2. **Anthropic and Bedrock chat take the configured ceiling**
+     (`llm_max_completion_tokens`), clamped to the model cap — where they
+     previously clamped such callers to 16384 even if the operator had configured
+     more. This is what their docs already claimed to do.
+  3. **`transcribe_image` on Anthropic and Bedrock uses its 300-token vision
+     default** instead of 16384. Pass an explicit `max_tokens` for longer image
+     descriptions.
+
+  Python parity: `acreate_structured_output` passes no output cap either.
+
 - **Teardown now closes every backend, not just the relational pool — and a
   closed graph/vector store rejects later operations.** `ComponentManager::close`
   (reached by every binding's handle teardown and by the CLI on exit) used to
