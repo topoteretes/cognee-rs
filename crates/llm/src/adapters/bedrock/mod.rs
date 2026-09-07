@@ -385,6 +385,12 @@ impl BedrockAdapter {
         options: Option<GenerationOptions>,
         validator: Option<StructuredOutputValidator<'_>>,
     ) -> LlmResult<Value> {
+        // Captured before `unwrap_or_default()`, which is the only point where a
+        // caller's explicit `max_tokens` is still distinguishable from the
+        // adapter substituting its own ceiling. The truncation path below must
+        // not silently raise a budget the caller chose deliberately — matching
+        // `OpenAiAdapter::raise_budget_after_truncation`.
+        let caller_requested = options.as_ref().and_then(|o| o.max_tokens);
         let opts = options.unwrap_or_default();
         let mut body = self.base_request(&messages, &opts);
         // §1.4.3: the branch is read from the capability table, never hard-coded.
@@ -392,6 +398,9 @@ impl BedrockAdapter {
 
         let mut last_error =
             LlmError::InvalidResponse("No structured-output attempt made".to_string());
+        // Set only by the truncation branch, so the retry log can distinguish an
+        // expensive truncation loop from a routine corrective re-ask.
+        let mut truncation_retry = false;
 
         for attempt in 0..self.structured_output_retries {
             if attempt > 0 {
@@ -400,57 +409,115 @@ impl BedrockAdapter {
                 // immediately (Python waits between structured retries via
                 // `wait_exponential_jitter`).
                 let delay = crate::retry::retry_backoff(attempt as u32);
-                debug!(
-                    attempt,
-                    delay_ms = delay.as_millis() as u64,
-                    "retrying Bedrock structured output",
-                );
+                // Never render `last_error` here. `DeserializationError` embeds
+                // the raw Converse body verbatim (see `call_converse`), which on
+                // the cognify path is model output derived from the user's
+                // ingested documents — logging it would put user content in
+                // operator logs. Only the variant is safe unconditionally; the
+                // message is included solely for the errors this loop synthesises
+                // itself, which quote no provider payload.
+                let reason: &str = match &last_error {
+                    LlmError::InvalidResponse(msg) => msg,
+                    LlmError::DeserializationError(_) => "deserialization error (body elided)",
+                    LlmError::ApiError(_) => "provider api error (detail elided)",
+                    _ => "provider error (detail elided)",
+                };
+                // `warn` only for a truncation re-ask: that one costs a full
+                // generation plus this backoff and is what makes a cognify stall
+                // for minutes with nothing at INFO to explain it. A validator- or
+                // parse-driven repair is routine and expected — cognify runs this
+                // loop once per chunk, so shouting about those would emit a WARN
+                // per repaired chunk on an ordinary ingest.
+                if truncation_retry {
+                    warn!(
+                        attempt,
+                        delay_ms = delay.as_millis() as u64,
+                        max_tokens = body["inferenceConfig"]["maxTokens"].as_u64().unwrap_or(0),
+                        reason,
+                        "retrying Bedrock structured output after a truncated answer",
+                    );
+                } else {
+                    debug!(
+                        attempt,
+                        delay_ms = delay.as_millis() as u64,
+                        max_tokens = body["inferenceConfig"]["maxTokens"].as_u64().unwrap_or(0),
+                        reason,
+                        "retrying Bedrock structured output",
+                    );
+                }
                 tokio::time::sleep(delay).await;
             }
 
             match self.call_converse(&body).await {
                 Ok(response) => {
-                    let truncated = response.is_truncated();
-                    match response.structured_payload(&self.caps) {
-                        Some(_) if truncated => {
-                            // Cut off at maxTokens: present and JSON-parseable,
-                            // but incomplete. Matching the Python reference
-                            // (instructor), a length-truncated structured
-                            // response is rejected outright rather than returned
-                            // as a partial object — a shallow top-level check
-                            // cannot tell a complete object that happened to
-                            // finish at the budget from one whose nested
-                            // list/string was cut off. Re-asking with the SAME
-                            // budget would truncate at the same point, so raise
-                            // it toward the effective output budget. That budget
-                            // is the model cap bounded by the configured
-                            // `llm_max_completion_tokens` ceiling, which is an
-                            // upper bound on every path — so when we are already
-                            // at it, fail terminally rather than loop until
-                            // MaxRetriesExceeded.
-                            let cap = self.effective_output_cap();
-                            let current =
-                                body["inferenceConfig"]["maxTokens"].as_u64().unwrap_or(0) as u32;
-                            if current >= cap {
-                                return Err(LlmError::InvalidResponse(format!(
-                                    "Bedrock structured output was truncated at the effective \
-                                     {cap}-token output budget (the lesser of the \
-                                     llm_max_completion_tokens ceiling and the model cap) and \
-                                     cannot be completed within that budget"
-                                )));
-                            }
-                            body["inferenceConfig"]["maxTokens"] = json!(cap);
-                            let reason = "the previous answer was cut off at maxTokens before the \
-                                          object was complete";
-                            last_error = LlmError::InvalidResponse(format!(
-                                "Bedrock structured output truncated: {reason}"
-                            ));
-                            converse::append_corrective_instruction(
-                                &mut body,
-                                Some(reason),
-                                self.caps.supports_native_structured_output,
-                            );
+                    // Truncation is classified *before* the payload is inspected,
+                    // because a cut-off answer arrives in one of two disguises
+                    // and neither is self-describing. On the native branch it is
+                    // always the harder one: `structured_payload` parses the
+                    // response *text* as JSON, and text cut off at maxTokens
+                    // never parses — so testing truncation only on a *present*
+                    // payload left the stall recorded as "did not contain
+                    // parseable JSON", re-asked at the SAME budget, and
+                    // re-truncated at the same point every attempt until
+                    // MaxRetriesExceeded, burning a full generation plus a
+                    // backoff each time. On the fallback branch the partial
+                    // `toolUse.input` usually does survive parsing, and must not
+                    // be validated and returned either.
+                    if response.is_truncated() {
+                        // Matching the Python reference (instructor), a
+                        // length-truncated structured response is rejected
+                        // outright rather than returned as a partial object — a
+                        // shallow top-level check cannot tell a complete object
+                        // that happened to finish at the budget from one whose
+                        // nested list/string was cut off. Re-asking with the SAME
+                        // budget would truncate at the same point, so raise it
+                        // toward the effective output budget. That budget is the
+                        // model cap bounded by the configured
+                        // `llm_max_completion_tokens` ceiling, which is an upper
+                        // bound on every path — so when we are already at it,
+                        // fail terminally rather than loop until
+                        // MaxRetriesExceeded.
+                        let cap = self.effective_output_cap();
+                        let current =
+                            body["inferenceConfig"]["maxTokens"].as_u64().unwrap_or(0) as u32;
+                        truncation_retry = true;
+                        // An explicit caller budget is terminal even with
+                        // headroom: raising it would silently bill a generation
+                        // many times larger than the caller asked for. Same rule,
+                        // and same reason, as the merged OpenAI fix.
+                        if let Some(requested) = caller_requested {
+                            return Err(LlmError::InvalidResponse(format!(
+                                "Bedrock structured output was truncated at the \
+                                 caller-requested {requested}-token output budget. An explicit \
+                                 max_tokens is not raised automatically; request a larger one"
+                            )));
                         }
+                        if current >= cap {
+                            return Err(LlmError::InvalidResponse(format!(
+                                "Bedrock structured output was truncated at the effective \
+                                 {cap}-token output budget (the lesser of the \
+                                 llm_max_completion_tokens ceiling and the model cap) and \
+                                 cannot be completed within that budget"
+                            )));
+                        }
+                        body["inferenceConfig"]["maxTokens"] = json!(cap);
+                        let reason = "the previous answer was cut off at maxTokens before the \
+                                      object was complete";
+                        last_error = LlmError::InvalidResponse(format!(
+                            "Bedrock structured output truncated: {reason}"
+                        ));
+                        converse::append_corrective_instruction(
+                            &mut body,
+                            Some(reason),
+                            self.caps.supports_native_structured_output,
+                        );
+                        // Explicit, because the payload match below must stay
+                        // unreachable for a truncated response however parseable
+                        // the fragment happens to look.
+                        continue;
+                    }
+
+                    match response.structured_payload(&self.caps) {
                         Some(payload) => match validator.map(|validate| validate(&payload)) {
                             None | Some(Ok(())) => return Ok(payload),
                             Some(Err(reason)) => {

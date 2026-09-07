@@ -548,6 +548,9 @@ impl AnthropicAdapter {
 
         let mut last_error =
             LlmError::InvalidResponse("No structured-output attempt made".to_string());
+        // Set only by the truncation branch, so the retry log can distinguish an
+        // expensive truncation loop from a routine corrective re-ask.
+        let mut truncation_retry = false;
 
         for attempt in 0..self.structured_output_retries {
             if attempt > 0 {
@@ -556,62 +559,91 @@ impl AnthropicAdapter {
                 // this the outer loop would re-ask immediately (Python waits
                 // between structured retries via `wait_exponential_jitter`).
                 let delay = crate::retry::retry_backoff(attempt as u32);
-                debug!(
-                    attempt,
-                    delay_ms = delay.as_millis() as u64,
-                    "retrying Anthropic structured output",
-                );
+                // `warn` only for a truncation re-ask: that one costs a full
+                // generation plus this backoff, and a loop of them is what makes a
+                // cognify stall for minutes with nothing at the default INFO level
+                // to explain it. A validator- or parse-driven repair is routine —
+                // this loop runs once per chunk — so those stay at `debug`.
+                // No provider payload is rendered in either: the adapter's error
+                // variants can embed a raw response body.
+                if truncation_retry {
+                    warn!(
+                        attempt,
+                        delay_ms = delay.as_millis() as u64,
+                        max_tokens = body["max_tokens"].as_u64().unwrap_or(0),
+                        "retrying Anthropic structured output after a truncated answer",
+                    );
+                } else {
+                    debug!(
+                        attempt,
+                        delay_ms = delay.as_millis() as u64,
+                        "retrying Anthropic structured output",
+                    );
+                }
                 tokio::time::sleep(delay).await;
             }
 
             match self.call_api(&body).await {
                 Ok(response) => {
-                    // `stop_reason == "max_tokens"` means the tool input was cut
-                    // off mid-object: present and JSON-parseable, but incomplete.
-                    // Re-ask instead of returning a partial object.
-                    let truncated = response.stop_reason.as_deref() == Some("max_tokens");
-                    match response.tool_input(STRUCTURED_OUTPUT_TOOL) {
-                        Some(_) if truncated => {
-                            // The tool input was cut off at max_tokens: present and
-                            // JSON-parseable, but incomplete. Match the Python
-                            // reference (instructor), which rejects a length-truncated
-                            // structured response outright — before validation —
-                            // rather than returning a partial object: a shallow
-                            // top-level check cannot tell a complete object that
-                            // finished at the budget from one whose nested
-                            // list/string was cut off. Re-asking with the SAME budget
-                            // would truncate again at the same point, so raise it
-                            // toward the effective output budget for the next attempt.
-                            // That budget is the model cap bounded by the configured
-                            // `llm_max_completion_tokens` ceiling: `effective_max_tokens`
-                            // documents the ceiling as an upper bound on *every* path,
-                            // so the retry must not exceed it — matching the Python
-                            // reference, which caps every path at
-                            // `llm_max_completion_tokens` and never raises the budget on
-                            // truncation. If we are already at that effective cap a
-                            // larger budget is not allowed, so fail terminally rather
-                            // than re-ask until MaxRetriesExceeded (a truncation under a
-                            // binding cost ceiling is unrecoverable by design).
-                            let effective_cap = Self::model_max_output_tokens(&self.model)
-                                .min(self.max_completion_tokens)
-                                .max(1);
-                            let current = body["max_tokens"].as_u64().unwrap_or(0) as u32;
-                            if current >= effective_cap {
-                                return Err(LlmError::InvalidResponse(format!(
-                                    "Anthropic structured output was truncated at the effective \
-                                     {effective_cap}-token output budget (the lesser of the \
-                                     llm_max_completion_tokens ceiling and the model cap) and \
-                                     cannot be completed within that budget"
-                                )));
-                            }
-                            body["max_tokens"] = json!(effective_cap);
-                            let reason = "the previous answer was cut off at max_tokens before \
-                                          the object was complete";
-                            last_error = LlmError::InvalidResponse(format!(
-                                "Anthropic structured output truncated: {reason}"
-                            ));
-                            Self::append_corrective_instruction(&mut body, Some(reason));
+                    // `stop_reason == "max_tokens"` means the answer was cut off
+                    // mid-flight, and it is classified *before* the tool input is
+                    // inspected because a cut-off answer arrives in one of two
+                    // disguises and neither is self-describing: usually a present
+                    // but incomplete `tool_use.input`, and sometimes no
+                    // `tool_use` block at all, when the budget was spent on
+                    // thinking or text before the tool call began. Testing
+                    // truncation only on a *present* input let the second disguise
+                    // fall through to the "did not contain the forced tool_use
+                    // block" arm, which re-asks at the SAME max_tokens — and so
+                    // truncates at the same point every attempt until
+                    // MaxRetriesExceeded, a full generation plus a backoff each
+                    // time.
+                    if response.stop_reason.as_deref() == Some("max_tokens") {
+                        truncation_retry = true;
+                        // Match the Python reference (instructor), which rejects a
+                        // length-truncated structured response outright — before
+                        // validation — rather than returning a partial object: a
+                        // shallow top-level check cannot tell a complete object that
+                        // finished at the budget from one whose nested list/string
+                        // was cut off. Re-asking with the SAME budget would truncate
+                        // again at the same point, so raise it toward the effective
+                        // output budget for the next attempt. That budget is the
+                        // model cap bounded by the configured
+                        // `llm_max_completion_tokens` ceiling: `effective_max_tokens`
+                        // documents the ceiling as an upper bound on *every* path, so
+                        // the retry must not exceed it — matching the Python
+                        // reference, which caps every path at
+                        // `llm_max_completion_tokens` and never raises the budget on
+                        // truncation. If we are already at that effective cap a larger
+                        // budget is not allowed, so fail terminally rather than re-ask
+                        // until MaxRetriesExceeded (a truncation under a binding cost
+                        // ceiling is unrecoverable by design).
+                        let effective_cap = Self::model_max_output_tokens(&self.model)
+                            .min(self.max_completion_tokens)
+                            .max(1);
+                        let current = body["max_tokens"].as_u64().unwrap_or(0) as u32;
+                        if current >= effective_cap {
+                            return Err(LlmError::InvalidResponse(format!(
+                                "Anthropic structured output was truncated at the effective \
+                                 {effective_cap}-token output budget (the lesser of the \
+                                 llm_max_completion_tokens ceiling and the model cap) and \
+                                 cannot be completed within that budget"
+                            )));
                         }
+                        body["max_tokens"] = json!(effective_cap);
+                        let reason = "the previous answer was cut off at max_tokens before \
+                                      the object was complete";
+                        last_error = LlmError::InvalidResponse(format!(
+                            "Anthropic structured output truncated: {reason}"
+                        ));
+                        Self::append_corrective_instruction(&mut body, Some(reason));
+                        // Explicit, because the tool-input match below must stay
+                        // unreachable for a truncated response however complete
+                        // the partial object happens to look.
+                        continue;
+                    }
+
+                    match response.tool_input(STRUCTURED_OUTPUT_TOOL) {
                         Some(input) => match validator.map(|v| v(&input)) {
                             None | Some(Ok(())) => return Ok(input),
                             Some(Err(reason)) => {
