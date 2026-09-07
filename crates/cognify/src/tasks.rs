@@ -10613,33 +10613,60 @@ mod tests {
 mod extract_cognify_outputs_tests {
     use super::*;
 
+    /// Carries a **non-empty** heap-backed field on purpose. Whether the
+    /// result was moved or cloned is otherwise unobservable — both produce
+    /// equal values — but a move preserves the `Vec`'s allocation while a
+    /// clone must allocate a fresh one, so `as_ptr()` discriminates. An empty
+    /// `Vec` would not: its pointer is dangling and shared between instances.
     fn sample_result() -> CognifyResult {
         let mut result = CognifyResult::empty();
         result.pipeline_run_id = Some(Uuid::from_u128(7));
         result.already_completed = true;
+        result.edge_types = vec![EdgeType::new_deterministic("works_at", None)];
         result
     }
 
     /// The sole handle is moved out of the `Arc`, not deep-cloned (SDK-507).
+    ///
+    /// The pointer assertion is what gives this test teeth: delete the
+    /// `Arc::get_mut` fast path and the value assertions below still pass,
+    /// because the clone fallback produces an equal result. Only the retained
+    /// allocation proves the move actually happened.
     #[test]
     fn takes_the_result_when_the_arc_is_unique() {
-        let outputs: Vec<Arc<dyn Value>> = vec![Arc::new(sample_result())];
+        let result = sample_result();
+        let heap_before = result.edge_types.as_ptr();
+        let outputs: Vec<Arc<dyn Value>> = vec![Arc::new(result)];
 
         let extracted = extract_cognify_outputs(outputs).expect("downcast succeeds");
 
         assert_eq!(extracted.pipeline_run_id, Some(Uuid::from_u128(7)));
         assert!(extracted.already_completed);
+        assert_eq!(extracted.edge_types.len(), 1);
+        assert!(
+            std::ptr::eq(extracted.edge_types.as_ptr(), heap_before),
+            "a unique Arc must be moved out, not deep-cloned: the payload's \
+             allocation should survive extraction untouched"
+        );
     }
 
-    /// A still-shared `Arc` falls back to the clone, so the payload is intact
-    /// *and* the other handle never observes the vacated value.
+    /// A still-shared `Arc` falls back to the clone, so the payload is intact,
+    /// the other handle never observes the vacated value, and the extracted
+    /// result genuinely is a copy rather than a steal.
     #[test]
     fn clones_the_result_when_the_arc_is_shared() {
-        let shared: Arc<dyn Value> = Arc::new(sample_result());
+        let result = sample_result();
+        let heap_before = result.edge_types.as_ptr();
+        let shared: Arc<dyn Value> = Arc::new(result);
         let retained = Arc::clone(&shared);
 
         let extracted = extract_cognify_outputs(vec![shared]).expect("downcast succeeds");
         assert_eq!(extracted.pipeline_run_id, Some(Uuid::from_u128(7)));
+        assert!(
+            !std::ptr::eq(extracted.edge_types.as_ptr(), heap_before),
+            "a shared Arc must be cloned, so the extracted payload owns a \
+             fresh allocation"
+        );
 
         let still_there = (*retained)
             .as_any()
@@ -10649,6 +10676,11 @@ mod extract_cognify_outputs_tests {
             still_there.pipeline_run_id,
             Some(Uuid::from_u128(7)),
             "the shared path must not empty the value the other handle sees"
+        );
+        assert_eq!(
+            still_there.edge_types.len(),
+            1,
+            "the retained handle keeps its own payload intact"
         );
     }
 

@@ -11,41 +11,6 @@ use cognee_models::Entity;
 use crate::error::CognifyError;
 use crate::fact_extraction::KnowledgeGraph;
 
-/// Retrieve existing edges from the graph database.
-///
-/// This function:
-/// 1. Collects all edges from the knowledge graphs
-/// 2. Generates deterministic UUIDs for entity nodes using `Entity::id_for()`
-/// 3. Batch queries the graph database to check which edges already exist
-/// 4. Returns a set of existing edge keys
-///
-/// **Edge key format:** `"{source_uuid}_{target_uuid}_{relationship_name}"`
-/// (matches the format used in `expand_with_nodes_and_edges`)
-///
-/// **Deduplication strategy:** the candidate `(source, target, relationship)`
-/// triples are de-duplicated before the query. Chunk-level extraction routinely
-/// yields the same relation from several chunks of one document, and the return
-/// value is a set of edge keys, so a repeated triple can only ever cost an
-/// extra lookup — never change the result.
-///
-/// # Arguments  
-/// * `graph_db` - Graph database trait object
-/// * `graphs` - Knowledge graphs extracted from text chunks
-///
-/// # Returns
-/// HashSet containing edge identifiers that already exist in the database
-///
-/// # Example
-/// ```ignore
-/// let graphs = vec![knowledge_graph1, knowledge_graph2];
-/// let existing_edges = retrieve_existing_edges(&graph_db, &graphs).await?;
-///
-/// // Check if edge exists before creating
-/// let edge_key = format!("{}_{}_{}",  source_id, target_id, "works_at");
-/// if !existing_edges.contains(&edge_key) {
-///     // Create new edge
-/// }
-/// ```
 /// Collect the distinct `(source_uuid, target_uuid, relationship_name)`
 /// candidates to look up, in first-seen order.
 ///
@@ -74,8 +39,10 @@ fn collect_distinct_candidate_edges<'a>(
 
             // Note: relationship_name is already normalized by LLM or should be
             let key = (source_uuid, target_uuid, edge.relationship_name.clone());
-            if !seen.contains(&key) {
-                seen.insert(key.clone());
+            // `insert` reports novelty, so this hashes the three-String tuple
+            // once instead of twice (`contains` then `insert`). The clone is
+            // needed either way, to keep `key` for the push below.
+            if seen.insert(key.clone()) {
                 edges_to_check.push((
                     key.0,
                     key.1,
@@ -89,10 +56,45 @@ fn collect_distinct_candidate_edges<'a>(
     edges_to_check
 }
 
-/// Takes any iterator of borrowed graphs rather than a slice, so a caller
-/// holding `Vec<(Uuid, KnowledgeGraph)>` can project out the graphs without
-/// deep-cloning every one of them just to change the element type. Only three
-/// `&str` fields per edge are ever read, so nothing here needs ownership.
+/// Retrieve existing edges from the graph database.
+///
+/// This function:
+/// 1. Collects all edges from the knowledge graphs
+/// 2. Generates deterministic UUIDs for entity nodes using `Entity::id_for()`
+/// 3. Batch queries the graph database to check which edges already exist
+/// 4. Returns a set of existing edge keys
+///
+/// **Edge key format:** `"{source_uuid}_{target_uuid}_{relationship_name}"`
+/// (matches the format used in `expand_with_nodes_and_edges`)
+///
+/// **Deduplication strategy:** the candidate `(source, target, relationship)`
+/// triples are de-duplicated before the query. Chunk-level extraction routinely
+/// yields the same relation from several chunks of one document, and the return
+/// value is a set of edge keys, so a repeated triple can only ever cost an
+/// extra lookup — never change the result.
+///
+/// # Arguments
+/// * `graph_db` - Graph database trait object
+/// * `graphs` - Any iterator of borrowed knowledge graphs extracted from text
+///   chunks. Deliberately not a slice: a caller holding
+///   `Vec<(Uuid, KnowledgeGraph)>` can project the graphs out without
+///   deep-cloning every one of them to change the element type, and only three
+///   `&str` fields per edge are ever read, so nothing here needs ownership.
+///
+/// # Returns
+/// HashSet containing edge identifiers that already exist in the database
+///
+/// # Example
+/// ```ignore
+/// let graphs = vec![knowledge_graph1, knowledge_graph2];
+/// let existing_edges = retrieve_existing_edges(&graph_db, &graphs).await?;
+///
+/// // Check if edge exists before creating
+/// let edge_key = format!("{}_{}_{}", source_id, target_id, "works_at");
+/// if !existing_edges.contains(&edge_key) {
+///     // Create new edge
+/// }
+/// ```
 pub async fn retrieve_existing_edges<'a>(
     graph_db: &dyn GraphDBTrait,
     graphs: impl IntoIterator<Item = &'a KnowledgeGraph>,
