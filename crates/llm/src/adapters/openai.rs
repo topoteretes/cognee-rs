@@ -985,10 +985,28 @@ impl OpenAIAdapter {
     ///   route forwards client-supplied budgets straight into structured output,
     ///   so a client requesting 200 tokens could be re-issued at the ceiling.
     ///   A deliberate budget is treated as a constraint, not a suggestion.
-    /// - **The budget is already at or above the ceiling.** Raising is impossible
-    ///   and falling through to another request *mode* cannot help, because the
-    ///   legacy and JSON-mode requests carry the same budget and truncate
-    ///   identically.
+    /// - **The ceiling is no higher than the budget that just truncated.** Raising
+    ///   is impossible and falling through to another request *mode* cannot help,
+    ///   because the legacy and JSON-mode requests carry the same budget and
+    ///   truncate identically.
+    ///
+    /// `observed_completion_tokens` is `usage.completion_tokens` from the
+    /// truncated response, and it is what makes the second test sound when the
+    /// request carried no cap of its own (SDK-581). There,
+    /// [`effective_output_budget`](Self::effective_output_budget) reports `0`
+    /// meaning "unknown, the provider's own default applied" — and `0` is not
+    /// smaller than the ceiling in any useful sense. Comparing the ceiling against
+    /// `0` therefore always looked like headroom, so the response to a truncation
+    /// was to write the ceiling over a provider default that may well have been
+    /// *larger*, shrinking the budget and re-truncating, while the reason string
+    /// still announced a raise. The tokens the provider actually spent before
+    /// cutting the answer off are a lower bound on the budget it applied, so they
+    /// stand in for the unknown.
+    ///
+    /// When the provider reports no usage the bound is unavailable and the old
+    /// behaviour stands — write the ceiling and try — but the reason string then
+    /// says only what was sent, because there is nothing to claim an increase
+    /// against.
     ///
     /// Mirrors the Anthropic adapter, which has rejected a `stop_reason ==
     /// "max_tokens"` response since it shipped, with one deliberate difference:
@@ -998,6 +1016,7 @@ impl OpenAIAdapter {
         body: &mut Value,
         mode: &str,
         caller_requested: Option<u32>,
+        observed_completion_tokens: Option<u32>,
     ) -> LlmResult<(String, u32)> {
         let current = self.effective_output_budget(body);
         let ceiling = self.max_completion_tokens().max(1);
@@ -1010,40 +1029,57 @@ impl OpenAIAdapter {
             )));
         }
 
-        if current >= ceiling {
+        // The budget that actually truncated, as far as it can be known: the cap
+        // on the request if it carried one, otherwise the tokens the provider
+        // spent before cutting off. `0` means neither is available.
+        let truncated_at = current.max(observed_completion_tokens.unwrap_or(0));
+
+        if ceiling <= truncated_at {
             // Name the budget that actually truncated, not the ceiling — they
-            // differ whenever an option-less call sends the GenerationOptions
+            // differ whenever an option-less call sends the structured-output
             // default while a lower ceiling is configured, and pointing at the
             // ceiling there sends the operator to raise a setting that changes
             // nothing.
-            let what = if current == 0 {
-                "its output budget".to_string()
-            } else {
+            let what = if current > 0 {
                 format!("its {current}-token output budget")
+            } else {
+                // No cap of our own: `truncated_at` came from the response, so it
+                // describes the provider's default rather than a configured value.
+                format!("the provider's default output budget, after {truncated_at} tokens")
             };
             return Err(LlmError::InvalidResponse(format!(
                 "{mode} structured output was truncated at {what} before the JSON object was \
                  complete, and the configured ceiling (llm_max_completion_tokens = {ceiling}) \
                  is no higher, so the budget cannot be raised automatically. Raise \
-                 LLM_MAX_COMPLETION_TOKENS above {current}, or set a larger cap with \
+                 LLM_MAX_COMPLETION_TOKENS above {truncated_at}, or set a larger cap with \
                  LLM_ARGS='{{\"max_tokens\": N}}' (CLI and SDK only — the HTTP server does not \
                  read LLM_ARGS)"
             )));
         }
 
         self.write_max_tokens(body, Some(ceiling));
-        let previous = if current == 0 {
-            "provider-default".to_string()
-        } else {
-            format!("{current}-token")
-        };
-        Ok((
+        // Only claim a raise against a budget that is actually known. On the
+        // no-cap path with no usage reported, `truncated_at` is 0 and the previous
+        // budget is whatever the provider chose — asserting an increase over it
+        // would be unverifiable, and the number quoted was never the budget that
+        // truncated. Say what was sent instead.
+        let reason = if truncated_at > 0 {
+            let previous = if current > 0 {
+                format!("{current}-token")
+            } else {
+                format!("{truncated_at}-token provider-default")
+            };
             format!(
                 "the previous answer was cut off at the {previous} output budget before the \
                  JSON object was complete; the budget has been raised to {ceiling}"
-            ),
-            ceiling,
-        ))
+            )
+        } else {
+            format!(
+                "the previous answer was cut off at the provider's default output budget \
+                 before the JSON object was complete; this attempt asks for {ceiling}"
+            )
+        };
+        Ok((reason, ceiling))
     }
 
     /// Call the OpenAI chat completions API, retrying on transient network/server errors.
@@ -1749,21 +1785,32 @@ impl OpenAIAdapter {
         let validation_error =
             |parsed: &Value| -> Option<String> { validator.and_then(|v| v(parsed).err()) };
 
+        // A budget the caller *chose*. Only this is a deliberate constraint that
+        // must not be raised on truncation.
+        //
+        // `GenerationOptions::default()` leaves `max_tokens` as `None` precisely
+        // so this stays unambiguous (SDK-581): while the default carried
+        // `Some(16384)`, a caller writing `..Default::default()` was
+        // indistinguishable from one who had picked 16384 deliberately, and the
+        // recovery path below refused to raise a number nobody chose.
+        let caller_max_tokens = options.as_ref().and_then(|o| o.max_tokens);
+
         // Structured extraction intentionally does NOT inherit the config
         // `default_max_tokens` (the global completion ceiling applied to
-        // `generate`): it keeps the historical `GenerationOptions::default()`
-        // cap (16384) for option-less calls. Applying the *configured* ceiling
-        // here risks truncating the tool-call JSON mid-object, so a user
-        // lowering the answer ceiling never silently breaks internal structured
-        // calls (e.g. feedback detection). Callers that want NO cap at all pass
-        // explicit `max_tokens: None` (as cognify's extraction paths do).
-        // A budget the caller *chose*, as distinct from the one
-        // `GenerationOptions::default()` supplies when no options were passed at
-        // all. Only the former is a deliberate constraint that must not be raised
-        // on truncation; the default's 16384 is a library value and carries no
-        // caller intent.
-        let caller_max_tokens = options.as_ref().and_then(|o| o.max_tokens);
-        let opts = options.unwrap_or_default();
+        // `generate`): an option-less call keeps the historical 16384. Applying
+        // the *configured* ceiling here risks truncating the tool-call JSON
+        // mid-object, so a user lowering the answer ceiling never silently breaks
+        // internal structured calls (e.g. feedback detection). Callers that want
+        // NO cap at all pass explicit `max_tokens: None` (as cognify's extraction
+        // paths do).
+        //
+        // Spelled out rather than left to `unwrap_or_default()`, which supplied
+        // this same 16384 only as a side effect of the old `Default`. The cap is
+        // wanted here and not in `Default`, so it belongs here.
+        let opts = options.unwrap_or(GenerationOptions {
+            max_tokens: Some(Self::DEFAULT_MAX_COMPLETION_TOKENS),
+            ..GenerationOptions::default()
+        });
         // Align the advertised `required` array with what instructor sends on its
         // default TOOLS path (every non-default property is required). See
         // `recompute_top_level_required`. This is the shallow, Baseten-safe
@@ -1952,6 +1999,7 @@ impl OpenAIAdapter {
                             &mut tools_request,
                             "Tool-call",
                             caller_max_tokens,
+                            tools_response.usage.as_ref().map(|u| u.completion_tokens),
                         )?;
                         raised_budget = Some(budget);
                         truncation_seen = Some(reason.clone());
@@ -2258,6 +2306,7 @@ impl OpenAIAdapter {
                     &mut request_body,
                     "Function-call",
                     caller_max_tokens,
+                    response.usage.as_ref().map(|u| u.completion_tokens),
                 )?;
                 raised_budget = Some(budget);
                 truncation_seen = Some(reason.clone());
@@ -2445,6 +2494,7 @@ impl OpenAIAdapter {
                     &mut json_request,
                     "JSON-mode",
                     caller_max_tokens,
+                    json_response.usage.as_ref().map(|u| u.completion_tokens),
                 )?;
                 let _ = budget; // JSON mode is last; nothing downstream inherits it.
                 truncation_seen = Some(reason.clone());

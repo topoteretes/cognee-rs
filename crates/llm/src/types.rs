@@ -42,10 +42,16 @@ impl Message {
 }
 
 /// Default output-token ceiling (`llm_max_completion_tokens`) shared across the
-/// SDK: `GenerationOptions::default`, the config defaults in `cognee-lib` and
-/// `cognee-http-server`, and the Anthropic adapter's fallback. Kept in one place
-/// so all of them move in lockstep. The per-request value is still clamped to
-/// each model's documented cap (see `AnthropicAdapter::effective_max_tokens`).
+/// SDK: the config defaults in `cognee-lib` and `cognee-http-server`, the
+/// Anthropic adapter's fallback, and the cap the OpenAI adapter substitutes on
+/// *option-less* structured-output calls. Kept in one place so all of them move
+/// in lockstep. The per-request value is still clamped to each model's
+/// documented cap (see `AnthropicAdapter::effective_max_tokens`).
+///
+/// Deliberately *not* the value of [`GenerationOptions::default`]'s
+/// `max_tokens`: a default sitting in that field is indistinguishable from a
+/// budget the caller chose, and the truncation-recovery path has to tell those
+/// apart. See that impl.
 pub const DEFAULT_MAX_COMPLETION_TOKENS: u32 = 16384;
 
 /// Options for LLM generation.
@@ -77,10 +83,31 @@ pub struct GenerationOptions {
 }
 
 impl Default for GenerationOptions {
+    /// `max_tokens` defaults to `None` — "no budget of my own".
+    ///
+    /// It carried `Some(DEFAULT_MAX_COMPLETION_TOKENS)` until SDK-581, which made
+    /// `Some(_)` ambiguous. `GenerationOptions { temperature: Some(0.1),
+    /// ..Default::default() }` handed the adapter a 16384 the caller never
+    /// picked, and the OpenAI truncation-recovery path — which refuses to raise a
+    /// budget the caller *chose* — read that as a deliberate constraint and
+    /// failed the call terminally, naming a number nobody had asked for.
+    ///
+    /// With `None` here, `Some(n)` is only ever a value a caller wrote, so the
+    /// adapter carries intent instead of inferring it from `Option`. Both
+    /// option-less paths still apply a cap of their own and are unchanged:
+    /// `OpenAIAdapter::resolve_options` substitutes the configured
+    /// `default_max_tokens` for `generate`, and the structured-output path
+    /// substitutes [`DEFAULT_MAX_COMPLETION_TOKENS`].
+    ///
+    /// This does change behaviour for one spelling: a caller who builds options
+    /// with `..Default::default()` and never sets `max_tokens` now sends no cap,
+    /// so the provider's own default applies rather than 16384. That is the
+    /// documented meaning of an explicit `max_tokens: None`, and it matches
+    /// Python parity — `acreate_structured_output` passes no cap either.
     fn default() -> Self {
         Self {
             temperature: Some(0.0),
-            max_tokens: Some(DEFAULT_MAX_COMPLETION_TOKENS),
+            max_tokens: None,
             top_p: None,
             frequency_penalty: None,
             presence_penalty: None,
