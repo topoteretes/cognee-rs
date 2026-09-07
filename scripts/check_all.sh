@@ -109,7 +109,7 @@ echo "================================================================"
 # store on Postgres instead. Without a lane like this the `#[cfg(feature = ...)]`
 # paths behind those features rot and the seam silently stops building.
 # Scoped to cognee-http-server to stay cheap.
-cargo check -p cognee-http-server --no-default-features \
+cargo check -p cognee-http-server --no-default-features --all-targets \
   --features telemetry,html-loader,pgvector,pggraph
 
 echo ""

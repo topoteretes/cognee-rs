@@ -133,14 +133,38 @@ pub async fn wire_default_backends_with(
 /// [`validate_vector_config`]. Kept here rather than in the factory so the
 /// operator gets a message naming the env var, before any connection attempt.
 ///
-/// Gated on `pggraph`. Without that feature the registry already produces a
-/// strictly better diagnosis for `GRAPH_DATABASE_PROVIDER=postgres` —
-/// "Rebuild with the `pggraph` crate feature to enable it." Validating first
+/// Skipped when no factory is registered for the provider: the registry then
+/// produces a strictly better diagnosis for `GRAPH_DATABASE_PROVIDER=postgres`
+/// — "Rebuild with the `pggraph` crate feature to enable it." Validating first
 /// would replace it with "GRAPH_DATABASE_URL … is required", sending the
 /// operator off to provision a database that cannot help, and they would only
 /// discover they need a different binary on the next boot.
-#[cfg(feature = "pggraph")]
-fn validate_graph_config(cfg: &HttpServerConfig) -> Result<(), ServerError> {
+///
+/// Keyed off actual registration rather than this crate's `pggraph` feature.
+/// Registration is driven by `cognee-components/pggraph`, and the two features
+/// diverge in any multi-package build: `crates/lib`'s `pggraph` feature enables
+/// `cognee-components/pggraph`, so both `--workspace` and
+/// `cargo tree -p cognee-cli -p cognee-http-server` (the http-parity and e2e
+/// build recipe) resolve components *with* pggraph and this crate *without* it.
+/// Gating on the crate feature compiled the validator out of exactly those
+/// builds while `PgGraphFactory` stayed registered.
+fn validate_graph_config(
+    cfg: &HttpServerConfig,
+    registry: &ComponentRegistry,
+) -> Result<(), ServerError> {
+    let provider = cfg.graph_provider.to_ascii_lowercase();
+    if !crate::config::is_postgres_graph(&provider) {
+        return Ok(());
+    }
+    if !registry.graph_providers().iter().any(|p| p == &provider) {
+        return Ok(());
+    }
+    validate_graph_url(cfg)
+}
+
+/// The URL half of [`validate_graph_config`], split out so it is testable
+/// without a registry and compiles in every feature configuration.
+fn validate_graph_url(cfg: &HttpServerConfig) -> Result<(), ServerError> {
     let provider = cfg.graph_provider.to_ascii_lowercase();
     if !crate::config::is_postgres_graph(&provider) {
         return Ok(());
@@ -172,12 +196,7 @@ async fn wire_graph_db(
     registry: &ComponentRegistry,
     ctx: &cognee_components::BackendBuildContext,
 ) -> Result<Arc<dyn GraphDBTrait>, ServerError> {
-    #[cfg(feature = "pggraph")]
-    validate_graph_config(cfg)?;
-    // Without `pggraph` there is nothing to pre-validate; the registry owns the
-    // error. Bind so the parameter is not flagged unused on that build.
-    #[cfg(not(feature = "pggraph"))]
-    let _ = cfg;
+    validate_graph_config(cfg, registry)?;
     // Delegate to the registry (like wire_vector_db): it already errors with an
     // actionable "registered providers: [...]" message for anything it doesn't
     // know, and — crucially — this keeps the extension seam intact so a
@@ -414,7 +433,6 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
-    #[cfg(feature = "pggraph")]
     fn rejected_urls_are_described_without_echoing_credentials() {
         // A validation failure must never put the raw connection string into
         // logs. Scheme only — it cannot contain a password.
@@ -432,7 +450,7 @@ mod tests {
             graph_db_url: "mysql://user:hunter2@db.internal/x".to_string(),
             ..Default::default()
         };
-        let msg = match validate_graph_config(&cfg) {
+        let msg = match validate_graph_url(&cfg) {
             Ok(()) => String::new(),
             Err(err) => err.to_string(),
         };
@@ -484,7 +502,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "pggraph")]
     fn validate_graph_config_ladybug_ignores_graph_db_url() {
         // The embedded graph is file-backed; a stray GRAPH_DATABASE_URL must not
         // make the default provider fail to boot.
@@ -493,11 +510,10 @@ mod tests {
             graph_db_url: "not-a-url".to_string(),
             ..Default::default()
         };
-        assert!(validate_graph_config(&cfg).is_ok());
+        assert!(validate_graph_url(&cfg).is_ok());
     }
 
     #[test]
-    #[cfg(feature = "pggraph")]
     fn validate_graph_config_postgres_requires_a_url() {
         // Regression: graph_postgres_url used to be hardcoded to None, so
         // GRAPH_DATABASE_PROVIDER=postgres failed deep inside PgGraphFactory with
@@ -508,7 +524,7 @@ mod tests {
             graph_db_url: String::new(),
             ..Default::default()
         };
-        let msg = match validate_graph_config(&cfg) {
+        let msg = match validate_graph_url(&cfg) {
             Ok(()) => String::new(),
             Err(err) => err.to_string(),
         };
@@ -519,20 +535,71 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "pggraph")]
     fn validate_graph_config_postgres_rejects_non_postgres_url() {
         let cfg = HttpServerConfig {
             graph_provider: "postgresql".to_string(),
             graph_db_url: "/srv/.cognee_system/graph".to_string(),
             ..Default::default()
         };
-        let msg = match validate_graph_config(&cfg) {
+        let msg = match validate_graph_url(&cfg) {
             Ok(()) => String::new(),
             Err(err) => err.to_string(),
         };
         assert!(
             msg.contains("postgres connection string"),
             "expected an actionable pggraph error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn validate_graph_config_skips_when_no_factory_is_registered() {
+        // Nothing registered for "postgres", so the registry owns the error
+        // ("Rebuild with the `pggraph` crate feature to enable it.") and
+        // pre-validation must stand aside even though the URL is unusable.
+        let cfg = HttpServerConfig {
+            graph_provider: "postgres".to_string(),
+            graph_db_url: String::new(),
+            ..Default::default()
+        };
+        assert!(validate_graph_config(&cfg, &ComponentRegistry::empty()).is_ok());
+    }
+
+    #[test]
+    fn validate_graph_config_validates_when_a_factory_is_registered() {
+        // Registered by a *stub*, so this holds regardless of which crate's
+        // `pggraph` feature is enabled. Gating the validator on this crate's
+        // feature compiled it out of every build where
+        // `cognee-components/pggraph` was on and this crate's was not, while
+        // `PgGraphFactory` stayed registered.
+        struct StubPgGraphFactory;
+        #[async_trait::async_trait]
+        impl cognee_components::GraphDbFactory for StubPgGraphFactory {
+            fn provider(&self) -> &str {
+                "postgres"
+            }
+            async fn build(
+                &self,
+                _ctx: &cognee_components::BackendBuildContext,
+            ) -> Result<Arc<dyn GraphDBTrait>, cognee_components::ComponentError> {
+                unreachable!("validation must reject the config before the factory is built")
+            }
+        }
+
+        let mut registry = ComponentRegistry::empty();
+        registry.register_graph(Arc::new(StubPgGraphFactory));
+
+        let cfg = HttpServerConfig {
+            graph_provider: "postgres".to_string(),
+            graph_db_url: String::new(),
+            ..Default::default()
+        };
+        let msg = match validate_graph_config(&cfg, &registry) {
+            Ok(()) => String::new(),
+            Err(err) => err.to_string(),
+        };
+        assert!(
+            msg.contains("GRAPH_DATABASE_URL") && msg.contains("GRAPH_DATABASE_PROVIDER"),
+            "expected the env-var-naming error, got: {msg}"
         );
     }
 

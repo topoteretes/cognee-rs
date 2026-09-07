@@ -825,15 +825,28 @@ impl HttpServerConfig {
             // already rejected an empty or non-Postgres URL by the time the
             // factory runs, so resolution cannot fail here.
             graph_postgres_url: match self.graph_db_url.trim() {
-                // An empty URL stays `None` so PgGraphFactory still reports
-                // "requires a resolved Postgres URL". `backend_context()` is
-                // public and library embedders construct HttpServerConfig
-                // directly, bypassing `validate_graph_config` — without this
-                // guard they would get PgGraphAdapter::new("") and whatever
-                // sqlx says about an unparseable connection string.
                 url if is_postgres_graph(&graph_provider) && !url.is_empty() => {
                     Some(Ok(url.to_string()))
                 }
+                // Postgres provider with no URL: carry the cause instead of
+                // `None`. `Option<Result<_, _>>` exists precisely so the
+                // factory can restate a named reason (see the field's doc
+                // comment, which reserves `None` for "provider is not
+                // Postgres"); `None` here collapses to "requires a resolved
+                // Postgres URL", which names no env var. `backend_context()`
+                // is public, so library embedders construct HttpServerConfig
+                // directly and reach this without `validate_graph_config` —
+                // and without a URL they would otherwise get
+                // PgGraphAdapter::new("") and whatever sqlx says about an
+                // unparseable connection string.
+                _ if is_postgres_graph(&graph_provider) => Some(Err(
+                    "GRAPH_DATABASE_URL (postgres connection string) is required when \
+                     GRAPH_DATABASE_PROVIDER=postgres. The standalone server reads only \
+                     GRAPH_DATABASE_URL; it does not assemble one from the component-form \
+                     GRAPH_DATABASE_HOST/PORT/NAME/USERNAME/PASSWORD variables (the SDK \
+                     does)."
+                        .to_string(),
+                )),
                 _ => None,
             },
             vector_provider,
