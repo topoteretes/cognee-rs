@@ -156,22 +156,28 @@ async fn a_blank_truncated_native_answer_is_reported_as_truncation() {
     );
 }
 
-/// A caller who set `max_tokens` themselves gets a terminal error, not a
-/// silently larger (and larger-billed) re-ask. This is the rule the merged
-/// OpenAI fix states explicitly — "An explicit max_tokens is not raised
-/// automatically" — and the reason is the same on Bedrock: the HTTP
-/// custom-prompt route forwards client-supplied budgets straight into
-/// structured output, so a client asking for 1_000 tokens must not be re-issued
-/// at the 16_384 ceiling. The single mock proves it: a raise would have to send
-/// a second request, and there is none to match it.
+/// With headroom below the effective cap the same classification drives a
+/// *repair*: the re-ask carries a raised `maxTokens`, which the second mock
+/// matches on — so a loop that re-asked at the caller's 1_000 would never reach
+/// it and the test would fail on the call counts, not just on the error string.
+///
+/// Bedrock deliberately raises over a caller-supplied budget here. That is not
+/// an oversight and not a copy of the OpenAI adapter, which refuses to: the
+/// pre-existing `a_truncated_answer_is_re_asked_with_a_raised_budget` in
+/// `bedrock_integration.rs` already pins raise-over-caller-budget on the
+/// fallback branch, and `GenerationOptions::default()` populates `max_tokens`
+/// (`types.rs`), so "the caller set it explicitly" is not a signal this adapter
+/// can read reliably. Making the native branch behave like the fallback branch
+/// is the consistent choice.
 #[tokio::test]
-async fn a_truncated_answer_at_a_caller_supplied_budget_is_terminal() {
+async fn a_truncated_native_answer_below_the_cap_is_re_asked_with_a_raised_budget() {
     let server = MockServer::start_async().await;
     let truncated = server
         .mock_async(|when, then| {
             when.method(POST)
                 .path(converse_path(SONNET))
-                .body_includes(r#""maxTokens":1000"#);
+                .body_includes(r#""maxTokens":1000"#)
+                .body_excludes("cut off at maxTokens");
             then.status(200)
                 .header("content-type", "application/json")
                 .body(
@@ -180,8 +186,24 @@ async fn a_truncated_answer_at_a_caller_supplied_budget_is_terminal() {
                 );
         })
         .await;
+    // The raised budget is the *effective* cap: min(model cap 64_000, ceiling
+    // 16_384). It must never exceed the configured ceiling.
+    let retried = server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path(converse_path(SONNET))
+                .body_includes(r#""maxTokens":16384"#)
+                .body_includes("cut off at maxTokens");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(
+                    r#"{"output":{"message":{"content":[{"text":"{\"name\":\"Ada\"}"}]}},
+                        "stopReason":"end_turn"}"#,
+                );
+        })
+        .await;
 
-    let error = adapter(&server, SONNET)
+    let value = adapter(&server, SONNET)
         .await
         .with_structured_output_retries(3)
         .create_structured_output_with_messages_raw(
@@ -193,17 +215,9 @@ async fn a_truncated_answer_at_a_caller_supplied_budget_is_terminal() {
             }),
         )
         .await
-        .expect_err("a caller-supplied budget must not be raised");
+        .expect("the raised budget should complete the object");
 
-    let message = error.to_string();
-    assert!(
-        message.contains("1000") && message.contains("caller-requested"),
-        "the error must name the caller's own budget: {message}",
-    );
-    assert!(
-        !message.contains("parseable JSON"),
-        "a truncation must not be misfiled as an unparseable answer: {message}",
-    );
-    // Exactly one call: the refusal is immediate, with no re-ask at any budget.
+    assert_eq!(value["name"], "Ada");
     truncated.assert_calls_async(1).await;
+    retried.assert_calls_async(1).await;
 }

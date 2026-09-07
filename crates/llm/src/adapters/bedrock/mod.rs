@@ -385,12 +385,6 @@ impl BedrockAdapter {
         options: Option<GenerationOptions>,
         validator: Option<StructuredOutputValidator<'_>>,
     ) -> LlmResult<Value> {
-        // Captured before `unwrap_or_default()`, which is the only point where a
-        // caller's explicit `max_tokens` is still distinguishable from the
-        // adapter substituting its own ceiling. The truncation path below must
-        // not silently raise a budget the caller chose deliberately — matching
-        // `OpenAiAdapter::raise_budget_after_truncation`.
-        let caller_requested = options.as_ref().and_then(|o| o.max_tokens);
         let opts = options.unwrap_or_default();
         let mut body = self.base_request(&messages, &opts);
         // §1.4.3: the branch is read from the capability table, never hard-coded.
@@ -416,12 +410,14 @@ impl BedrockAdapter {
                 // operator logs. Only the variant is safe unconditionally; the
                 // message is included solely for the errors this loop synthesises
                 // itself, which quote no provider payload.
-                let reason: &str = match &last_error {
-                    LlmError::InvalidResponse(msg) => msg,
-                    LlmError::DeserializationError(_) => "deserialization error (body elided)",
-                    LlmError::ApiError(_) => "provider api error (detail elided)",
-                    _ => "provider error (detail elided)",
-                };
+                // Only the variant, never the message. `DeserializationError`
+                // embeds the raw Converse body, and `converse::map_error` puts
+                // the raw HTTP body into `InvalidResponse` for a 400 /
+                // ValidationException — which can echo the offending input. On
+                // the cognify path both are model output derived from the user's
+                // ingested documents, so neither may reach a log sink. The
+                // truncation case gets its own message on the branch below.
+                let reason = last_error.log_kind();
                 // `warn` only for a truncation re-ask: that one costs a full
                 // generation plus this backoff and is what makes a cognify stall
                 // for minutes with nothing at INFO to explain it. A validator- or
@@ -447,6 +443,10 @@ impl BedrockAdapter {
                 }
                 tokio::time::sleep(delay).await;
             }
+            // Cleared per attempt: the flag describes the attempt that just
+            // failed, so leaving it latched would label a later validator-driven
+            // re-ask as a truncation and reintroduce the WARN-per-chunk noise.
+            truncation_retry = false;
 
             match self.call_converse(&body).await {
                 Ok(response) => {
@@ -481,17 +481,6 @@ impl BedrockAdapter {
                         let current =
                             body["inferenceConfig"]["maxTokens"].as_u64().unwrap_or(0) as u32;
                         truncation_retry = true;
-                        // An explicit caller budget is terminal even with
-                        // headroom: raising it would silently bill a generation
-                        // many times larger than the caller asked for. Same rule,
-                        // and same reason, as the merged OpenAI fix.
-                        if let Some(requested) = caller_requested {
-                            return Err(LlmError::InvalidResponse(format!(
-                                "Bedrock structured output was truncated at the \
-                                 caller-requested {requested}-token output budget. An explicit \
-                                 max_tokens is not raised automatically; request a larger one"
-                            )));
-                        }
                         if current >= cap {
                             return Err(LlmError::InvalidResponse(format!(
                                 "Bedrock structured output was truncated at the effective \

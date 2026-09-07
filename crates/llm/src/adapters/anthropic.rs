@@ -582,6 +582,10 @@ impl AnthropicAdapter {
                 }
                 tokio::time::sleep(delay).await;
             }
+            // Cleared per attempt: the flag describes the attempt that just
+            // failed, so leaving it latched would label a later validator-driven
+            // re-ask as a truncation.
+            truncation_retry = false;
 
             match self.call_api(&body).await {
                 Ok(response) => {

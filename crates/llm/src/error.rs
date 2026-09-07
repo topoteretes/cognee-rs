@@ -60,3 +60,34 @@ pub enum LlmError {
 
 /// Result type for LLM operations.
 pub type LlmResult<T> = Result<T, LlmError>;
+
+impl LlmError {
+    /// A stable, payload-free discriminant for logging.
+    ///
+    /// Several variants embed provider payloads verbatim — `DeserializationError`
+    /// carries the raw Converse body, and `InvalidResponse` carries the raw HTTP
+    /// body for a 400 / ValidationException. On the cognify path those are model
+    /// output derived from the user's ingested documents, so `Display` must never
+    /// reach a log sink. Log this instead.
+    #[must_use]
+    pub fn log_kind(&self) -> &'static str {
+        match self {
+            Self::ApiError { .. } => "api_error",
+            Self::NetworkError { .. } => "network_error",
+            Self::SerializationError { .. } => "serialization_error",
+            Self::DeserializationError { .. } => "deserialization_error",
+            Self::InvalidResponse { .. } => "invalid_response",
+            Self::RateLimitExceeded { .. } => "rate_limit_exceeded",
+            Self::ContentPolicyViolation { .. } => "content_policy_violation",
+            Self::ModelNotFound { .. } => "model_not_found",
+            Self::AuthenticationError { .. } => "authentication_error",
+            Self::PaymentRequired { .. } => "payment_required",
+            Self::Timeout { .. } => "timeout",
+            Self::MaxRetriesExceeded { .. } => "max_retries_exceeded",
+            Self::ConfigError { .. } => "config_error",
+            Self::FeatureNotSupported { .. } => "feature_not_supported",
+            Self::LocalModelError { .. } => "local_model_error",
+            Self::InvalidAudioFormat { .. } => "invalid_audio_format",
+        }
+    }
+}
