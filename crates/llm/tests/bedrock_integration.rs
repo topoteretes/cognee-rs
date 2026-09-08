@@ -67,7 +67,7 @@ fn schema() -> Value {
 }
 
 #[tokio::test]
-async fn generate_posts_converse_with_the_un_normalised_id_and_a_clamped_budget() {
+async fn generate_posts_converse_with_the_un_normalised_id_and_no_budget() {
     let server = MockServer::start_async().await;
     let mock = server
         .mock_async(|when, then| {
@@ -78,9 +78,13 @@ async fn generate_posts_converse_with_the_un_normalised_id_and_a_clamped_budget(
                 // Bearer auth: a plain header, no SigV4 (plan §1.2).
                 .header("authorization", format!("Bearer {BEARER_KEY}"))
                 .header_excludes("authorization", "AWS4-HMAC-SHA256")
-                // nova-lite caps output at 10_000, below the 16_384 default
-                // ceiling — so the budget is clamped, not forwarded.
-                .body_includes(r#""maxTokens":10000"#)
+                // `generate(..., None)` passes no budget, so no `maxTokens` is
+                // sent at all and Bedrock applies the model maximum. This is the
+                // Python-parity contract: Python's Bedrock adapter never
+                // serialises a budget on any path, so its body carries a literal
+                // `"inferenceConfig": {}`. Substituting the ceiling here is what
+                // truncated extraction at 16384 against Sonnet 4.5's 64000.
+                .body_excludes(r#""maxTokens""#)
                 // System messages are hoisted out of `messages` into `system`.
                 .body_includes(r#""system":[{"text":"be terse"}]"#)
                 .body_includes(r#""content":[{"text":"hello"}]"#)

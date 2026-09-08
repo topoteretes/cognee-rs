@@ -64,8 +64,15 @@ fn normalize_node_names(graph: &mut KnowledgeGraph) {
 /// aborts cognify with a deserialization error. Kept in one place so the two
 /// call sites cannot drift.
 fn extraction_options() -> GenerationOptions {
+    // `temperature: None` for the same Python-parity reason as `max_tokens`:
+    // `llm_temperature` is declared in Python's config but never reaches any
+    // adapter, so Python's Converse body carries no `temperature` and the model
+    // default (1.0 for Claude) applies. Rust was sending 0.1, and a very low
+    // temperature is a known driver of degenerate repetition — the suspected
+    // trigger for the runaway generations that then truncated. Sending nothing
+    // is both the parity-correct choice and the safer one.
     GenerationOptions {
-        temperature: Some(0.1),
+        temperature: None,
         max_tokens: None,
         ..Default::default()
     }

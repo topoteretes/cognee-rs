@@ -165,8 +165,14 @@ pub fn append_corrective_instruction(body: &mut Value, reason: Option<&str>, nat
 ///
 /// `frequency_penalty` / `presence_penalty` have **no `inferenceConfig`
 /// analogue** — see [`penalty_model_fields`].
-pub fn inference_config(opts: &GenerationOptions, max_tokens: u32) -> Value {
-    let mut config = json!({ "maxTokens": max_tokens });
+pub fn inference_config(opts: &GenerationOptions, max_tokens: Option<u32>) -> Value {
+    // `None` omits the key entirely rather than sending a substituted ceiling.
+    // Bedrock then applies the model maximum, which is what the Python engine
+    // gets — its request body carries a literal `"inferenceConfig": {}`.
+    let mut config = match max_tokens {
+        Some(max_tokens) => json!({ "maxTokens": max_tokens }),
+        None => json!({}),
+    };
     if let Some(temperature) = opts.temperature {
         config["temperature"] = json!(temperature);
     }

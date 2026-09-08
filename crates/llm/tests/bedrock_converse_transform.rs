@@ -58,7 +58,7 @@ fn inference_config_carries_the_clamped_budget_and_the_sampling_params() {
     };
     // The adapter clamps before calling this; the transform reports what it is
     // handed, under Converse's camelCase names.
-    let config = inference_config(&opts, 10_000);
+    let config = inference_config(&opts, Some(10_000));
 
     assert_eq!(config["maxTokens"], json!(10_000));
     assert_eq!(config["temperature"], json!(0.25));
@@ -79,7 +79,7 @@ fn unset_and_empty_sampling_params_are_omitted_rather_than_sent_as_null() {
         stop: Some(Vec::new()),
         ..Default::default()
     };
-    let config = inference_config(&opts, 512);
+    let config = inference_config(&opts, Some(512));
 
     assert_eq!(config["maxTokens"], json!(512));
     for omitted in ["temperature", "topP", "stopSequences"] {
@@ -112,7 +112,7 @@ fn frequency_and_presence_penalties_go_to_additional_model_request_fields() {
     assert_eq!(fields["presence_penalty"], json!(0.5));
 
     // They never leak into `inferenceConfig`, which would 400.
-    let config = inference_config(&opts, 512);
+    let config = inference_config(&opts, Some(512));
     assert!(config.get("frequency_penalty").is_none());
     assert!(config.get("presence_penalty").is_none());
 }
@@ -265,4 +265,28 @@ fn the_remaining_bedrock_exceptions_map_to_their_taxonomy_slots() {
         map_error(401, "missing credentials"),
         LlmError::AuthenticationError(_)
     ));
+}
+
+/// The Python engine's Converse body carries a literal `"inferenceConfig": {}`.
+/// This pins the Rust equivalent: an absent caller budget must produce NO
+/// `maxTokens` key at all, not a substituted ceiling. Sending 16384 here is what
+/// truncated three chunks of a 55-chunk document at a quarter of Sonnet 4.5's
+/// 64000-token maximum, and then discarded the other 52 via WholeRun rollback.
+#[test]
+fn an_absent_budget_omits_max_tokens_entirely() {
+    let opts = GenerationOptions {
+        max_tokens: None,
+        temperature: None,
+        ..Default::default()
+    };
+    let config = inference_config(&opts, None);
+    assert!(
+        config.get("maxTokens").is_none(),
+        "maxTokens must be absent so Bedrock applies the model maximum: {config}",
+    );
+    assert_eq!(
+        config,
+        serde_json::json!({}),
+        "with no budget and no sampling overrides the block matches Python's empty inferenceConfig",
+    );
 }
