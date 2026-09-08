@@ -26,6 +26,18 @@ Notes:
   `ladybug`, and the `hf-tokenizer`/`tiktoken` counters are cargo features, on by
   default in `cognee`/`cognee-cli` (`pggraph` excepted) — see
   [architecture.md §feature strategy](../architecture.md#architecture-patterns).
+- **pgvector indexing.** Each collection gets an HNSW index over its `vector`
+  column (`vector_cosine_ops`, matching the `<=>` the searches order by) when the
+  collection is created, so similarity search is not a sequential scan.
+  Two exceptions: collections wider than 2000 dimensions cannot be indexed by
+  pgvector and keep the exact scan, and `search_similar_filtered` deliberately
+  forces the exact scan so its filter-then-limit guarantee holds — pgvector
+  post-filters an index scan, which would return fewer rows than asked for.
+  Collections created *before* this existed have only their primary key;
+  `PgVectorAdapter::create_missing_vector_indexes()` backfills them with
+  `CREATE INDEX CONCURRENTLY` (online, idempotent, and it rebuilds an index left
+  invalid by an interrupted build). It is not automatic: building HNSW over a
+  large collection is expensive, so the caller chooses when.
 - **Closed-source companions.** Embedded Qdrant (`cognee-vector-qdrant`) and
   on-device LiteRT inference (`cognee-llm-litert`, Android) live in the closed
   `cognee-cloud-rs` repository and are not part of OSS.
