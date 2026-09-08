@@ -26,5 +26,23 @@ pub fn extract_text(bytes: &[u8]) -> Result<String, LoaderError> {
         .map(|(idx, text)| (idx + 1, Ok(text)))
         .collect();
 
-    Ok(format_pages(&pages))
+    let text = format_pages(&pages);
+    // `format_pages` returns "" when every page extracted empty, and nothing
+    // downstream treats that as a failure: ingest stores a zero-byte document
+    // and reports success, the empty text embeds to a zero-norm vector, and
+    // cosine KNN drops that row (see `cognee_vector::zero_norm`). The whole
+    // pipeline then completes green with nothing retrievable. That is worse
+    // than an error, so at minimum it must not be silent.
+    if text.trim().is_empty() {
+        tracing::warn!(
+            backend = "pdf-pure-rust",
+            page_count = pages.len(),
+            "PDF extraction produced no text — this backend returns empty for some \
+             real PDFs (Type3 or otherwise undecodable font encodings) as well as for \
+             scanned/image-only documents. The document will be stored empty and will \
+             not be retrievable by search. Build with the `pdf-pdfium` feature to read \
+             these files."
+        );
+    }
+    Ok(text)
 }

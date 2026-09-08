@@ -53,6 +53,25 @@ default = [
     "tiktoken",
     "sqlite",
     "testing",
+    # URL / HTML ingestion — parity with the CLI, the HTTP server and the TS
+    # binding, all of which enable this by default. Without it `add` with a
+    # `url` input fails at runtime with `IngestionError::UrlIngestionUnavailable`.
+    # reqwest (rustls) is already linked via cognee-llm/cognee-embedding, so this
+    # only adds the scraper/robots parsing deps — no new native/TLS dependency.
+    "html-loader",
+    # Document ingestion parity with the CLI and HTTP server, which enable a PDF
+    # backend by default. Without one, `add` on a .pdf fails at runtime with
+    # "Unsupported document type at ingest: pdf" — including the README's own
+    # worked binary-ingestion example (#102).
+    #
+    # pdf-pure-rust rather than pdf-pdfium: pdfium extracts more reliably and is
+    # preferred wherever it is possible, but it needs a libpdfium the *consumer*
+    # supplies (PDFIUM_LIB_PATH, or pdfium-auto's own desktop download). This
+    # artifact ships prebuilt to users who cannot be asked to provide one, so
+    # moving to pdfium means bundling the library in the published package — a
+    # packaging change, not a feature flag. Same trade-off `android-default` in
+    # cognee/lib already makes.
+    "pdf-pure-rust",
     # Product-analytics emission ON by default — Python-SDK parity. The
     # cognee `send_telemetry` call sites are otherwise compiled out
     # because cognee is pulled with `default-features = false`.
@@ -71,6 +90,11 @@ hf-tokenizer  = ["cognee/hf-tokenizer",  "cognee-bindings-common/hf-tokenizer"]
 tiktoken      = ["cognee/tiktoken",      "cognee-bindings-common/tiktoken"]
 sqlite        = ["cognee/sqlite",        "cognee-bindings-common/sqlite"]
 testing       = ["cognee/testing",       "cognee-bindings-common/testing"]
+# Document/URL loaders. Only cognee gates these (ingestion/cognify); the
+# bindings-common facade always accepts `url` and binary inputs, so there is
+# nothing to forward there.
+html-loader   = ["cognee/html-loader"]
+pdf-pure-rust = ["cognee/pdf-pure-rust"]
 
 [build-dependencies]
 # For build.rs — emits the `-undefined dynamic_lookup` cdylib link args a PyO3
