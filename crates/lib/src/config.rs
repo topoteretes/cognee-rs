@@ -148,7 +148,15 @@ pub struct Settings {
     /// tool call at all, and the adapter's miss probe has to rediscover that in
     /// every fresh process. An unrecognised value leaves the cascade in place.
     pub llm_structured_output_mode: String,
-    pub llm_temperature: f64,
+    /// Sampling temperature, or `None` when the operator has not set one.
+    ///
+    /// `None` means "send no temperature at all" and is not the same as
+    /// `Some(0.0)`. Python draws exactly this distinction — its validator folds
+    /// the value into `llm_args` only `if "llm_temperature" in
+    /// self.model_fields_set` (`cognee/infrastructure/llm/config.py`) — because
+    /// the default gpt-5 family rejects any temperature but the provider's own,
+    /// so silently sending a defaulted 0.0 breaks those models outright.
+    pub llm_temperature: Option<f64>,
     pub llm_streaming: bool,
     pub llm_max_completion_tokens: u32,
     pub llm_max_retries: u32,
@@ -441,10 +449,13 @@ impl Settings {
         if let Some(v) = str_var("LLM_STRUCTURED_OUTPUT_MODE") {
             self.llm_structured_output_mode = v;
         }
+        // Only an explicitly-provided LLM_TEMPERATURE populates this; absence
+        // leaves it `None` so nothing is sent, matching Python's
+        // `model_fields_set` gate.
         if let Some(v) = str_var("LLM_TEMPERATURE")
             && let Ok(f) = v.parse::<f64>()
         {
-            self.llm_temperature = f;
+            self.llm_temperature = Some(f);
         }
         if let Some(v) = str_alias("LLM_MAX_COMPLETION_TOKENS", "LLM_MAX_TOKENS")
             && let Ok(n) = v.parse::<u32>()
@@ -998,6 +1009,11 @@ impl Settings {
                 rate_limit_interval: self.llm_rate_limit_interval,
                 auto_rate_limit: self.auto_rate_limit,
                 max_completion_tokens: self.llm_max_completion_tokens,
+                #[allow(
+                    clippy::cast_possible_truncation,
+                    reason = "GenerationOptions carries f32; a sampling temperature has no precision to lose"
+                )]
+                temperature: self.llm_temperature.map(|t| t as f32),
                 llm_args: self.llm_args.clone(),
                 api_version: self.llm_api_version.clone(),
                 reasoning_override: cognee_components::parse_reasoning_override(
@@ -1235,7 +1251,7 @@ impl Default for Settings {
             llm_api_version: String::new(),
             llm_reasoning: "auto".to_string(),
             llm_structured_output_mode: "auto".to_string(),
-            llm_temperature: 0.0,
+            llm_temperature: None,
             llm_streaming: false,
             // Single-sourced with the adapter/http-server default so lowering
             // the global completion ceiling in one place applies everywhere.
@@ -1853,7 +1869,7 @@ impl ConfigManager {
 
     pub fn set_llm_temperature(&self, temperature: f64) {
         let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
-        s.llm_temperature = temperature;
+        s.llm_temperature = Some(temperature);
         drop(s);
         self.bump_version();
     }
@@ -2066,10 +2082,9 @@ impl ConfigManager {
         );
         m.insert(
             "llm_temperature".into(),
-            Value::Number(
-                serde_json::Number::from_f64(s.llm_temperature)
-                    .unwrap_or(serde_json::Number::from(0)),
-            ),
+            s.llm_temperature
+                .and_then(serde_json::Number::from_f64)
+                .map_or(Value::Null, Value::Number),
         );
         m.insert(
             "llm_max_completion_tokens".into(),
@@ -2245,7 +2260,8 @@ impl ConfigManager {
                 "llm_structured_output_mode" => {
                     s.llm_structured_output_mode = as_string(key, value)?
                 }
-                "llm_temperature" => s.llm_temperature = as_f64(key, value)?,
+                "llm_temperature" if value.is_null() => s.llm_temperature = None,
+                "llm_temperature" => s.llm_temperature = Some(as_f64(key, value)?),
                 "llm_max_completion_tokens" => s.llm_max_completion_tokens = as_u32(key, value)?,
                 "llm_streaming" => s.llm_streaming = as_bool(key, value)?,
                 "llm_max_retries" => s.llm_max_retries = as_u32(key, value)?,
@@ -2360,6 +2376,12 @@ impl ConfigManager {
             "llm_reasoning" => self.set_llm_reasoning(as_string(key, &value)?.as_str()),
             "llm_structured_output_mode" => {
                 self.set_llm_structured_output_mode(as_string(key, &value)?.as_str())
+            }
+            "llm_temperature" if value.is_null() => {
+                let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+                s.llm_temperature = None;
+                drop(s);
+                self.bump_version();
             }
             "llm_temperature" => self.set_llm_temperature(as_f64(key, &value)?),
             "llm_streaming" => self.set_llm_streaming(as_bool(key, &value)?),
@@ -2831,7 +2853,11 @@ mod tests {
 
         cm.set_llm_temperature(0.7);
         expected_version += 1;
-        assert!((cm.read().llm_temperature - 0.7).abs() < f64::EPSILON);
+        assert!(
+            cm.read()
+                .llm_temperature
+                .is_some_and(|t| (t - 0.7).abs() < f64::EPSILON)
+        );
 
         cm.set_llm_streaming(true);
         expected_version += 1;
@@ -2922,7 +2948,11 @@ mod tests {
 
         cm.set("llm_temperature", serde_json::json!(0.5))
             .expect("llm_temperature should be settable");
-        assert!((cm.read().llm_temperature - 0.5).abs() < f64::EPSILON);
+        assert!(
+            cm.read()
+                .llm_temperature
+                .is_some_and(|t| (t - 0.5).abs() < f64::EPSILON)
+        );
 
         cm.set("llm_streaming", serde_json::json!(true))
             .expect("llm_streaming should be settable");

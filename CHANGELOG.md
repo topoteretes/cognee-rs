@@ -40,13 +40,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
      an explicit `None`, by long-standing design ("an explicit `max_tokens`,
      including `None` = no cap, always wins over config"). If you relied on the
      old default to bound completion length, set `max_tokens` explicitly.
-  2. **Anthropic and Bedrock chat take the configured ceiling**
-     (`llm_max_completion_tokens`), clamped to the model cap — where they
+  2. **Anthropic chat takes the configured ceiling**
+     (`llm_max_completion_tokens`), clamped to the model cap — where it
      previously clamped such callers to 16384 even if the operator had configured
-     more. This is what their docs already claimed to do.
+     more. This is what its docs already claimed to do. **Bedrock no longer does
+     this** — see the entry below, which supersedes it for that adapter.
   3. **`transcribe_image` on Anthropic and Bedrock uses its 300-token vision
      default** instead of 16384. Pass an explicit `max_tokens` for longer image
      descriptions.
+
+- **Bedrock: an absent caller budget now sends no `maxTokens` at all**, so the
+  model's own maximum applies (64000 for Claude Sonnet 4.5) instead of the
+  16384 configured ceiling. This matches the Python engine, whose Bedrock
+  adapter never serialises a budget — its request body carries a literal
+  `"inferenceConfig": {}`.
+
+  **`llm_max_completion_tokens` therefore no longer bounds such a call.** On the
+  cognify path, which passes no budget by design, a runaway generation can now
+  bill up to the model maximum per chunk with no setting to cap it. That is also
+  Python's behaviour, where the setting only sizes input chunks. A caller that
+  needs a bound must pass `max_tokens` explicitly; it is still clamped by the
+  ceiling and then the model cap.
+
+  Motivation: with the ceiling substituted, three chunks of a 55-chunk document
+  truncated at 16384, and because the ceiling equalled the retry cap the
+  truncation ladder had nothing to raise into — so `RollbackScope::WholeRun`
+  discarded the other 52 and cognify returned HTTP 500.
+
+- **`LLM_TEMPERATURE` changes from `0.0` to unset**, and `Settings::llm_temperature`
+  changes type from `f64` to `Option<f64>`. `None` means no `temperature` is sent,
+  which is deliberately not the same as `Some(0.0)`: Python draws the same
+  distinction because the default gpt-5 family rejects any temperature but the
+  provider's own.
+
+  A CLI config written by an earlier version persists `"llm_temperature": 0.0`,
+  which would otherwise read back as an explicit zero on upgrade. `ConfigDocument`
+  v3 migrates a persisted default back to unset; a value you actually chose is
+  kept. `config set llm_temperature null` now unsets it.
+
+  Rust SDK consumers reading or writing `Settings::llm_temperature` directly must
+  handle the `Option`.
+
+  Extraction previously pinned `temperature: 0.1` regardless of configuration; it
+  now sends the configured value when there is one and nothing otherwise. **This
+  reaches the wire on Bedrock only** — the OpenAI-compatible, Azure and Anthropic
+  factories do not yet consume the setting.
 
   Python parity: `acreate_structured_output` passes no output cap either.
 

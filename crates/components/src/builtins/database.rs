@@ -135,6 +135,7 @@ mod tests {
                 aws: crate::context::AwsInputs::default(),
             },
             llm: crate::context::LlmInputs {
+                temperature: None,
                 provider: "openai".to_string(),
                 model: "gpt-4o-mini".to_string(),
                 api_key: "sk-test".to_string(),

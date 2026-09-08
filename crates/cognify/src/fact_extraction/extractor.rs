@@ -64,8 +64,30 @@ fn normalize_node_names(graph: &mut KnowledgeGraph) {
 /// aborts cognify with a deserialization error. Kept in one place so the two
 /// call sites cannot drift.
 fn extraction_options() -> GenerationOptions {
+    // `temperature: None` because Python OMITS temperature unless an operator
+    // explicitly sets one, and no deployment we ship sets it.
+    //
+    // Be precise about the upstream history, because the obvious summary is
+    // wrong. On cognee 1.4.0 — the image this divergence was measured against —
+    // `llm_temperature` reached no adapter at all. Upstream fixed that in 1.5.0
+    // (PR #4477, COG-6174): a model validator folds the value into `llm_args`
+    // when, and only when, it was explicitly set, plus an unset-means-0.0
+    // carve-out for local inference servers. So on current Python
+    // `LLM_TEMPERATURE` IS honoured — it is simply absent by default.
+    //
+    // Either way the default path sends no temperature, and Rust was pinning 0.1
+    // on every extraction call. That divergence holds against both 1.4.0 and
+    // 1.5.x. A very low temperature is also a known driver of degenerate
+    // repetition, the suspected trigger for the runaway generations that
+    // truncated three chunks of a 55-chunk document.
+    //
+    // Deliberately NOT fixed here: nothing threads the configured
+    // `llm_temperature` (crates/lib/src/config.rs) into cognify, so an operator
+    // who sets one is ignored. Matching 1.5.x fully means honouring an
+    // explicitly-set value and omitting it otherwise, which needs the same
+    // set-vs-default distinction `llm_max_completion_tokens` also lacks.
     GenerationOptions {
-        temperature: Some(0.1),
+        temperature: None,
         max_tokens: None,
         ..Default::default()
     }

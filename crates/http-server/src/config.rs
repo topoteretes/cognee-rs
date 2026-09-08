@@ -265,6 +265,24 @@ pub struct HttpServerConfig {
     /// HTTP-server surface too (issue #67).
     pub llm_max_completion_tokens: u32,
 
+    /// Sampling temperature, or `None` when the operator set none. Env:
+    /// `LLM_TEMPERATURE`.
+    ///
+    /// `None` sends no `temperature` at all, so the provider default applies —
+    /// deliberately not the same as `Some(0.0)`. Python draws the same
+    /// distinction: its validator folds `llm_temperature` into `llm_args` only
+    /// when the field was explicitly set, because the default gpt-5 family
+    /// rejects any temperature but the provider's own.
+    ///
+    /// Without this the HTTP server could not honour the setting at all — the
+    /// deployed BYOD stack runs this surface, so an operator setting
+    /// `LLM_TEMPERATURE` was silently ignored.
+    ///
+    /// SCOPE: reaches the wire on Bedrock only. The OpenAI-compatible, Azure and
+    /// Anthropic factories do not yet consume `LlmInputs::temperature`, so on
+    /// those providers this is still accepted and still ignored.
+    pub llm_temperature: Option<f64>,
+
     /// Server-wide maximum tokens per chunk. `None` (the default) leaves the
     /// automatic model-based sizing in place (`CognifyConfig::auto_chunk_size`).
     /// Env: `COGNEE_CHUNK_SIZE`, alias `CHUNK_SIZE`. A per-request
@@ -449,6 +467,7 @@ impl Default for HttpServerConfig {
             llm_rate_limit_interval: 60,
             auto_rate_limit: true,
             llm_max_completion_tokens: cognee_llm::OpenAIAdapter::DEFAULT_MAX_COMPLETION_TOKENS,
+            llm_temperature: None,
             chunk_size: None,
             session_store_backend: "seaorm".to_string(),
             session_root_directory: default_session_root_directory(&system_root),
@@ -702,6 +721,13 @@ impl HttpServerConfig {
             })?;
         }
 
+        if let Some(v) = first_non_empty_env(&["LLM_TEMPERATURE"]) {
+            cfg.llm_temperature = Some(
+                v.parse::<f64>()
+                    .map_err(|e| ServerError::Other(anyhow::anyhow!("LLM_TEMPERATURE: {e}")))?,
+            );
+        }
+
         // Rust extension (no Python counterpart — upstream takes `chunk_size` as a
         // per-call argument only). Lets a server deployment cap chunk size for a
         // small-context LLM endpoint, which is otherwise unreachable over HTTP
@@ -888,6 +914,11 @@ impl HttpServerConfig {
                 aws: cognee_components::aws_inputs_from_env(),
             },
             llm: cognee_components::LlmInputs {
+                #[allow(
+                    clippy::cast_possible_truncation,
+                    reason = "GenerationOptions carries f32; a sampling temperature has no precision to lose"
+                )]
+                temperature: self.llm_temperature.map(|t| t as f32),
                 provider: self.llm_provider.to_ascii_lowercase(),
                 model: self.llm_model.clone(),
                 api_key: self.llm_api_key.expose_secret().to_string(),

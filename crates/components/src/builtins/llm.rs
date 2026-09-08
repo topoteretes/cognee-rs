@@ -344,6 +344,7 @@ impl LlmFactory for BedrockLlmFactory {
                 .with_structured_output_retries(ctx.llm.max_retries)
                 .with_network_retries(ctx.llm.max_retries)
                 .with_max_completion_tokens(ctx.llm.max_completion_tokens)
+                .with_default_temperature(ctx.llm.temperature)
                 .with_extra_args(ctx.llm.llm_args.clone());
         Ok(Arc::new(adapter))
     }
