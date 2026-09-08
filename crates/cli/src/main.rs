@@ -123,13 +123,26 @@ fn main() -> StdExitCode {
     // `cognee-logging::LoggingConfig`; if parsing fails we keep startup
     // alive by falling back to the documented defaults instead of
     // aborting before any log line could surface the problem.
-    let logging_cfg = match cognee_logging::LoggingConfig::from_env() {
+    let mut logging_cfg = match cognee_logging::LoggingConfig::from_env() {
         Ok(cfg) => cfg,
         Err(err) => {
             eprintln!("warning: invalid logging env var: {err}; falling back to defaults");
             cognee_logging::LoggingConfig::defaults()
         }
     };
+    // `--output-format json` needs a clean stdout to stay parseable. Scoped to
+    // that mode rather than applied to every invocation — see
+    // `cognee_cli::cli::console_stream_for` for why.
+    //
+    // `run()` does the real `Cli::parse()` later; this is a non-committal peek
+    // just to pick the stream, using clap so the flag's spellings (`-f json`,
+    // `--output-format=json`) stay defined in exactly one place. `try_parse`
+    // rather than `parse` on purpose: it returns instead of exiting, so a bad
+    // argument still surfaces from `run()` with clap's own message and exit
+    // code rather than being reported here, before logging even exists.
+    logging_cfg.console_stream = Cli::try_parse()
+        .map(|parsed| cognee_cli::cli::console_stream_for(&parsed.command))
+        .unwrap_or(cognee_logging::ConsoleStream::Stdout);
 
     // Extra tracing layers installed alongside the stdout logger. The
     // `profiling` build adds an offline per-stage span-timing layer that the

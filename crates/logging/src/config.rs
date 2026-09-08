@@ -26,6 +26,23 @@ pub enum LogFormat {
     Json,
 }
 
+/// Which standard stream the console layer writes to.
+///
+/// Defaults to [`ConsoleStream::Stdout`], preserving the behaviour every
+/// existing consumer had. The CLI selects [`ConsoleStream::Stderr`]: it emits
+/// *data* on stdout (notably `--output-format json`), and diagnostics
+/// interleaved with that data make the output unparseable — `serde_json` reads
+/// the `2026` of a log timestamp as a number and fails with "trailing
+/// characters at line 1 column 5". Keeping logs on stderr is also the
+/// conventional split for a command-line tool.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConsoleStream {
+    /// Write console logs to stdout.
+    Stdout,
+    /// Write console logs to stderr, leaving stdout for data.
+    Stderr,
+}
+
 /// Time-based rotation cadence. Size-based deferred per decision 1.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LogRotation {
@@ -105,6 +122,9 @@ pub struct LoggingConfig {
     /// `COGNEE_LOG_MAX_FILES` (decision 14): retention ceiling
     /// enforced by the startup cleanup pass (task 06-03). Default `10`.
     pub max_files: usize,
+    /// Which standard stream the console layer writes to. Not env-driven:
+    /// it is a property of the embedding program, not the deployment.
+    pub console_stream: ConsoleStream,
     /// Resolved `EnvFilter` directive string built from `RUST_LOG`
     /// (preferred) or `LOG_LEVEL` (fallback). `None` means neither
     /// env var was set, and the init layer should substitute the
@@ -129,6 +149,7 @@ impl LoggingConfig {
             format: LogFormat::Plain,
             backup_count: 5,
             max_files: 10,
+            console_stream: ConsoleStream::Stdout,
             level_filter: None,
         }
     }
@@ -196,6 +217,7 @@ impl LoggingConfig {
             format,
             backup_count,
             max_files,
+            console_stream: ConsoleStream::Stdout,
             level_filter,
         })
     }

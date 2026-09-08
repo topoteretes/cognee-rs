@@ -101,17 +101,27 @@ where
     let env_filter =
         EnvFilter::try_new(&filter_directive).unwrap_or_else(|_| EnvFilter::new("info"));
 
-    // (2) Stdout layer per cfg.format.
+    // (2) Console layer per cfg.format, on the stream cfg selects. The CLI
+    // picks stderr so that `--output-format json` leaves stdout as pure data;
+    // everything else keeps stdout, which is what it always had.
+    let console_writer = match cfg.console_stream {
+        crate::ConsoleStream::Stdout => {
+            tracing_subscriber::fmt::writer::BoxMakeWriter::new(std::io::stdout)
+        }
+        crate::ConsoleStream::Stderr => {
+            tracing_subscriber::fmt::writer::BoxMakeWriter::new(std::io::stderr)
+        }
+    };
     let stdout_layer: BoxedLayer = match cfg.format {
         LogFormat::Plain => Box::new(
             tracing_subscriber::fmt::layer()
                 .event_format(crate::PythonPlainFormatter)
-                .with_writer(std::io::stdout),
+                .with_writer(console_writer),
         ),
         LogFormat::Json => Box::new(
             tracing_subscriber::fmt::layer()
                 .json()
-                .with_writer(std::io::stdout),
+                .with_writer(console_writer),
         ),
     };
 

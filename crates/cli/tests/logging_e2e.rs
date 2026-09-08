@@ -151,3 +151,109 @@ fn cli_default_filter_suppresses_library_noise_in_log_file() {
         );
     }
 }
+
+/// In a machine-readable mode, stdout must be **exactly the payload**.
+///
+/// The console layer used to write to stdout, so the payload arrived preceded
+/// by timestamped log lines and `serde_json::from_str` read the `2026` of the
+/// first timestamp as a number, failing with "trailing characters at line 1
+/// column 5".
+///
+/// Three separate assertions, and the split is deliberate:
+///
+/// 1. stderr carries the log anchor — without this the test would also pass if
+///    logging stopped working altogether, a different bug with the same tick.
+/// 2. stdout parses as JSON — without this the test would also pass if the
+///    payload were never emitted, or were moved to stderr along with the logs.
+///    That was a real gap in the first version of this test, which only checked
+///    for the absence of log markers.
+/// 3. stdout carries no log markers — the original defect.
+///
+/// Keyless: `CYPHER` passes the query to the graph store verbatim rather than
+/// asking an LLM to generate it, so a dummy `llm_api_key` (the component
+/// manager builds an LLM eagerly) plus `MOCK_EMBEDDING=true` is enough. No
+/// network, and it still produces a real payload.
+#[test]
+fn machine_readable_stdout_is_exactly_the_payload() {
+    let dir = tempdir().expect("tempdir");
+    let bin = env!("CARGO_BIN_EXE_cognee-cli");
+    let doc = dir.path().join("doc.txt");
+    std::fs::write(&doc, "badgers and mushrooms").expect("write fixture");
+
+    let run = |args: &[&str]| {
+        Command::new(bin)
+            .env("COGNEE_LOGS_DIR", dir.path())
+            .env("COGNEE_CONFIG_HOME", dir.path())
+            .env("MOCK_EMBEDDING", "true")
+            .env_remove("LOG_FILE_NAME")
+            .env_remove("RUST_LOG")
+            .env_remove("LOG_LEVEL")
+            .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
+            .current_dir(dir.path())
+            .args(args)
+            .output()
+            .expect("spawn cognee-cli")
+    };
+
+    // The component manager constructs an LLM even for CYPHER, which never
+    // calls one; a placeholder satisfies it without any network.
+    assert!(
+        run(&["config", "set", "llm_api_key", "\"dummy-key\""])
+            .status
+            .success(),
+        "config set should succeed"
+    );
+    let added = run(&[
+        "add",
+        doc.to_str().expect("utf-8 path"),
+        "--dataset-name",
+        "logstream",
+    ]);
+    assert!(
+        added.status.success(),
+        "add should succeed; stderr=\n{}",
+        String::from_utf8_lossy(&added.stderr)
+    );
+
+    let output = run(&[
+        "search",
+        "MATCH (n) RETURN n",
+        "--query-type",
+        "CYPHER",
+        "--datasets",
+        "logstream",
+        "--output-format",
+        "json",
+    ]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "cypher search should succeed; stderr=\n{stderr}"
+    );
+
+    // (1) Logging happened, and it happened on stderr.
+    assert!(
+        stderr.contains("Logging initialized"),
+        "expected the console layer on stderr; an empty stderr means the layer \
+         is not installed at all, which this test must not pass for. \
+         stderr=\n{stderr}"
+    );
+
+    // (2) stdout is the payload, and it is parseable as-is.
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("stdout must be exactly the JSON payload: {e}\n{stdout}"));
+    assert_eq!(
+        parsed.get("search_type").and_then(|v| v.as_str()),
+        Some("CYPHER"),
+        "expected the search payload on stdout, got:\n{stdout}"
+    );
+
+    // (3) And nothing log-shaped joined it.
+    for marker in ["Logging initialized", "[INFO", "[DEBUG", "[WARN", "[ERROR"] {
+        assert!(
+            !stdout.contains(marker),
+            "machine-readable stdout must carry only the payload, found {marker:?} in:\n{stdout}"
+        );
+    }
+}
