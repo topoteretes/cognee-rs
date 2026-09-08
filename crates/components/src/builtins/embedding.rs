@@ -59,6 +59,33 @@ pub fn onnx_asset_defaults() -> OnnxAssetDefaults {
 /// truth for the provider-id set: validity is `is_some()`, and config mapping
 /// falls back to `onnx` via `unwrap_or`. The recognized ids mirror
 /// `EmbeddingProvider`'s serde `snake_case` names.
+/// Reject a non-empty but unrecognized provider id.
+///
+/// This is the guard that keeps [`build_embedding_config`]'s
+/// `unwrap_or(EmbeddingProvider::Onnx)` from ever being reached with a typo:
+/// without it, `EMBEDDING_PROVIDER=gemini` would silently select ONNX and
+/// produce vectors from a completely different model than the caller asked
+/// for — a misconfiguration that looks like a working setup until retrieval
+/// quality is inexplicably wrong.
+///
+/// Extracted from [`DefaultEmbeddingFactory::build`] so it is reachable from a
+/// unit test: exercising it through the factory needs a fully-populated
+/// `BackendBuildContext`, which is why this behaviour previously had no direct
+/// coverage at all.
+///
+/// An empty id means "use the default" and is allowed. `mock` short-circuits
+/// provider selection entirely, so the id is not consulted when mocking.
+fn validate_provider_id(provider: &str, mock: bool) -> Result<(), ComponentError> {
+    let provider = provider.trim();
+    if !mock && !provider.is_empty() && parse_embedding_provider(provider).is_none() {
+        return Err(ComponentError::EmbeddingEngine(format!(
+            "unknown embedding provider '{provider}'. Supported: onnx, fastembed, \
+             openai, openai_compatible, ollama, bedrock, mock."
+        )));
+    }
+    Ok(())
+}
+
 fn parse_embedding_provider(provider: &str) -> Option<EmbeddingProvider> {
     match provider.trim().to_lowercase().as_str() {
         "onnx" => Some(EmbeddingProvider::Onnx),
@@ -163,16 +190,7 @@ impl EmbeddingFactory for DefaultEmbeddingFactory {
             ctx.embedding.rate_limit_enabled,
         );
 
-        let provider = ctx.embedding.provider.trim();
-        if !ctx.embedding.mock
-            && !provider.is_empty()
-            && parse_embedding_provider(provider).is_none()
-        {
-            return Err(ComponentError::EmbeddingEngine(format!(
-                "unknown embedding provider '{provider}'. Supported: onnx, fastembed, \
-                 openai, openai_compatible, ollama, bedrock, mock."
-            )));
-        }
+        validate_provider_id(&ctx.embedding.provider, ctx.embedding.mock)?;
         let config = build_embedding_config(&ctx.embedding);
         config.create_engine().await.map_err(|e| {
             ComponentError::EmbeddingEngine(format!("embedding engine init failed: {e}"))
@@ -239,6 +257,52 @@ mod tests {
             onnx_max_sequence_length: 512,
             onnx_batch_size: 32,
             aws: crate::context::AwsInputs::default(),
+        }
+    }
+
+    /// The guard that makes `build_embedding_config`'s ONNX fallback
+    /// unreachable for a typo. Deleting it would turn
+    /// `EMBEDDING_PROVIDER=gemini` into a silent ONNX selection, and until this
+    /// test existed nothing would have gone red — the sibling test below
+    /// asserts the *fallback*, which is the behaviour this guard prevents from
+    /// mattering.
+    #[test]
+    fn unknown_provider_id_is_rejected_not_silently_defaulted() {
+        let msg = match validate_provider_id("gemini", false) {
+            Err(e) => e.to_string(),
+            Ok(()) => panic!("a non-empty unrecognized provider must be rejected"),
+        };
+        assert!(
+            msg.contains("unknown embedding provider 'gemini'"),
+            "the error must name the offending id; got: {msg}"
+        );
+        assert!(
+            msg.contains("openai_compatible"),
+            "the error must list the supported ids so the fix is obvious; got: {msg}"
+        );
+
+        // Surrounding whitespace must not smuggle a bad id past the check.
+        assert!(validate_provider_id("  gemini  ", false).is_err());
+
+        // Empty means "use the default", and mock short-circuits the id.
+        assert!(validate_provider_id("", false).is_ok());
+        assert!(validate_provider_id("gemini", true).is_ok());
+
+        // Every id the parser accepts must pass the guard, or the two would
+        // disagree and a supported backend would be rejected.
+        for id in [
+            "onnx",
+            "fastembed",
+            "openai",
+            "openai_compatible",
+            "ollama",
+            "bedrock",
+            "mock",
+        ] {
+            assert!(
+                validate_provider_id(id, false).is_ok(),
+                "'{id}' parses, so the guard must accept it"
+            );
         }
     }
 
