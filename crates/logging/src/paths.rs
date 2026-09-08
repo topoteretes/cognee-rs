@@ -203,6 +203,7 @@ mod tests {
 
     fn cfg_with_override(dir: Option<PathBuf>) -> LoggingConfig {
         LoggingConfig {
+            console_stream: crate::ConsoleStream::Stdout,
             file_enabled: true,
             logs_dir_override: dir,
             log_file_name: None,

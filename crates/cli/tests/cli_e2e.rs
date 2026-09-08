@@ -317,7 +317,11 @@ fn search_errors_when_dataset_name_does_not_exist() {
         ])
         .assert()
         .failure()
-        .stdout(predicate::str::contains("dataset not found"));
+        // `simple` is a machine format — `search`'s Simple arm prints
+        // `item.payload`, i.e. NDJSON — so diagnostics go to stderr and stdout
+        // carries only rows. Asserting this on stdout previously passed because
+        // the console layer wrote there, which is the bug this pins the fix for.
+        .stderr(predicate::str::contains("dataset not found"));
 }
 
 #[test]
@@ -770,23 +774,13 @@ fn search_live_smoke() {
         .clone();
     let stdout = String::from_utf8(out).expect("search --output-format json emits UTF-8");
 
-    // `--output-format json` does not give clean stdout: the logger writes to it
-    // too, so the payload is preceded by timestamped lines. Parsing the whole
-    // buffer reads the `2026` of a timestamp as a JSON number and then fails on
-    // "trailing characters". Slice from the first line that starts a JSON object
-    // and take a single value off a streaming deserializer, so anything the
-    // logger emits before or after the payload is tolerated.
-    let json_start = if stdout.starts_with('{') {
-        Some(0)
-    } else {
-        stdout.find("\n{").map(|i| i + 1)
-    }
-    .unwrap_or_else(|| panic!("no JSON object in search stdout:\n{stdout}"));
-    let parsed: serde_json::Value = serde_json::Deserializer::from_str(&stdout[json_start..])
-        .into_iter::<serde_json::Value>()
-        .next()
-        .unwrap_or_else(|| panic!("no JSON value in search stdout:\n{stdout}"))
-        .unwrap_or_else(|e| panic!("search JSON parse failed: {e}\n{stdout}"));
+    // Parsed straight off stdout, with no slicing. That is the contract
+    // `--output-format json` owes a consumer, and asserting it here makes this
+    // test a canary: if the console log layer ever moves back to stdout, this
+    // fails with the same "trailing characters at line 1 column 5" a piping
+    // user would see. See `logging_e2e::machine_readable_stdout_is_exactly_the_payload`.
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("search stdout must be pure JSON: {e}\n{stdout}"));
 
     // Shape is `{"search_type": .., "result": {"kind": "Items", "data": [..]}}`.
     // Read it defensively so a shape change fails with the payload in hand
@@ -956,13 +950,14 @@ fn export_rejects_a_format_python_cannot_reimport() {
     // Only `cogx` round-trips into Python; the other Python export formats
     // have no reader, so accepting them would promise a restore we cannot do.
     let config_home = TempDir::new().expect("temp dir should be created");
-    // The CLI's tracing layer writes to stdout, so the rejection lands there,
-    // not on stderr.
+    // `export` prints the archive path on stdout for `$(cognee-cli export -o …)`,
+    // so its diagnostics go to stderr. This assertion used to read `.stdout`
+    // because the console layer wrote there — the bug, not the intent.
     make_cmd(&config_home)
         .args(["export", "--format", "graphml"])
         .assert()
         .failure()
-        .stdout(predicate::str::contains("graphml").and(predicate::str::contains("cogx")));
+        .stderr(predicate::str::contains("graphml").and(predicate::str::contains("cogx")));
 }
 
 #[test]

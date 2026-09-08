@@ -329,6 +329,61 @@ pub enum OutputFormatArg {
     Simple,
 }
 
+/// Which stream the console log layer should use for this invocation.
+///
+/// Any invocation whose stdout is a **contract with a program** gets stderr,
+/// because the console layer writing to stdout corrupts that contract: the
+/// payload ends up preceded by timestamped log lines, so `serde_json::from_str`
+/// reads the `2026` of the first timestamp as a number and fails with "trailing
+/// characters at line 1 column 5".
+///
+/// That covers more than `--output-format json`:
+///
+/// - `json` — the obvious one, a single JSON document.
+/// - `simple` — also machine output, not prose. `search`'s `Simple` arm prints
+///   `item.payload`, a `serde_json::Value`, one per line (NDJSON). This repo's
+///   own cross-SDK harness consumes it programmatically and had to work around
+///   the pollution with `RUST_LOG=error` plus a log-prefix-stripping regex
+///   (`e2e-cross-sdk/harness/helpers.py`).
+/// - `export` / `visualize` — `println!` a bare path, for `$(cognee-cli …)`.
+/// - `bench` — `println!` a JSON result, with every progress line deliberately
+///   on `eprintln!` already; `docs/performance/mock-benchmark.md` documents the
+///   stdout contract.
+///
+/// `pretty` and every other command keep stdout, deliberately. This CLI routes
+/// its whole human-facing surface through `tracing` — not only diagnostics but
+/// progress lines like "Cognify completed." — so switching those too would
+/// relocate all of it to stderr. That is a UX decision well beyond fixing a
+/// broken machine contract, and ten `cli_e2e`/`cli_memify` assertions pin the
+/// current placement as intended behaviour. The faithful end state is Python's
+/// (`cognee/cli/logging_utils.py` puts its handler on stderr in every mode,
+/// with data via `echo`), and getting there means routing CLI messages through
+/// something other than `tracing` — a separate change.
+///
+/// Known gap: `run-sequence` parses its steps internally
+/// (`commands/run_sequence.rs`), so a step's `-f json` is invisible here and
+/// that invocation keeps stdout.
+pub fn console_stream_for(command: &Commands) -> cognee_logging::ConsoleStream {
+    use cognee_logging::ConsoleStream;
+    let format = match command {
+        Commands::Search(args) => &args.output_format,
+        Commands::Recall(args) => &args.output_format,
+        // stdout is a path or a JSON document for these, regardless of flags.
+        // `Visualize` and `Bench` are feature-gated on the enum, so their arms
+        // must be too — a slim CLI build has no such variants.
+        Commands::Export(_) => return ConsoleStream::Stderr,
+        #[cfg(feature = "visualization")]
+        Commands::Visualize(_) => return ConsoleStream::Stderr,
+        #[cfg(feature = "bench")]
+        Commands::Bench(_) => return ConsoleStream::Stderr,
+        _ => return ConsoleStream::Stdout,
+    };
+    match format {
+        OutputFormatArg::Json | OutputFormatArg::Simple => ConsoleStream::Stderr,
+        OutputFormatArg::Pretty => ConsoleStream::Stdout,
+    }
+}
+
 #[derive(Debug, Args)]
 pub struct SearchArgs {
     pub query_text: String,
@@ -685,5 +740,68 @@ mod tests {
             settings.llm_max_retries, 7,
             "an absent flag must not clobber config or env",
         );
+    }
+}
+
+#[cfg(test)]
+mod console_stream_tests {
+    use super::*;
+    use clap::Parser;
+    use cognee_logging::ConsoleStream;
+
+    fn stream_for(args: &[&str]) -> ConsoleStream {
+        match Cli::try_parse_from(args) {
+            Ok(cli) => console_stream_for(&cli.command),
+            Err(e) => panic!("fixture args {args:?} must parse: {e}"),
+        }
+    }
+
+    #[test]
+    fn machine_readable_output_moves_console_logs_off_stdout() {
+        for args in [
+            // json: a single JSON document.
+            vec!["cognee-cli", "search", "q", "--output-format", "json"],
+            // Short flag and `=` form are clap's problem, not ours — assert
+            // they reach the same decision so the spelling cannot drift.
+            vec!["cognee-cli", "search", "q", "-f", "json"],
+            vec!["cognee-cli", "recall", "q", "--output-format=json"],
+            // simple: NDJSON, not prose — `Simple` prints `item.payload`,
+            // which is a `serde_json::Value`. The cross-SDK harness parses it.
+            vec!["cognee-cli", "search", "q", "--output-format", "simple"],
+            vec!["cognee-cli", "recall", "q", "-f", "simple"],
+            // These `println!` a bare path or a JSON document regardless of
+            // flags, so their stdout is a contract too. `visualize`/`bench` are
+            // feature-gated subcommands; only assert what this build has.
+            vec!["cognee-cli", "export", "-o", "out"],
+            #[cfg(feature = "visualization")]
+            vec!["cognee-cli", "visualize"],
+        ] {
+            assert_eq!(
+                stream_for(&args),
+                ConsoleStream::Stderr,
+                "expected stderr for {args:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn human_output_and_other_commands_keep_stdout() {
+        // Not a fallback. The CLI routes progress lines like "Cognify
+        // completed." through tracing too, and ten cli_e2e/cli_memify
+        // assertions pin those on stdout. Moving them is a UX change, not part
+        // of fixing a broken machine contract.
+        for args in [
+            vec!["cognee-cli", "search", "q"],
+            vec!["cognee-cli", "search", "q", "--output-format", "pretty"],
+            vec!["cognee-cli", "recall", "q", "-f", "pretty"],
+            vec!["cognee-cli", "cognify", "--datasets", "d"],
+            vec!["cognee-cli", "config", "get", "default_user_id"],
+        ] {
+            assert_eq!(
+                stream_for(&args),
+                ConsoleStream::Stdout,
+                "expected stdout for {args:?}"
+            );
+        }
     }
 }

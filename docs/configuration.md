@@ -860,6 +860,13 @@ flag-gated only — provider overload does not switch it on automatically.
 > structured logs to **stdout** and (when writable) to a rotating file. File logging
 > is owned by [`cognee-logging`](../crates/logging/), initialised by the CLI and HTTP
 > server via `cognee_logging::init_logging`.
+>
+> **Exception — machine-readable CLI output.** `cognee-cli` sends console logs to
+> **stderr** for any invocation whose stdout is a contract with a program:
+> `search`/`recall` with `-f json` or `-f simple`, and `export`, `visualize` and
+> `bench`, which print a path or a JSON document. Logs on stdout make those
+> unparseable (a leading timestamp is read as a JSON number). Human-facing
+> `pretty` output, and every other subcommand, still log to stdout.
 
 | Env var | Default | Purpose |
 |---|---|---|
