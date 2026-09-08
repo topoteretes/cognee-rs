@@ -227,7 +227,6 @@ impl BedrockAdapter {
 
     /// Set `LLM_ARGS`, merged into `additionalModelRequestFields`. Explicit
     /// keys the adapter sets always win (litellm's `{**llm_args, **kwargs}`).
-
     pub fn with_extra_args(mut self, args: Map<String, Value>) -> Self {
         self.extra_args = args;
         self
