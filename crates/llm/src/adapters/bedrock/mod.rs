@@ -85,6 +85,14 @@ pub struct BedrockAdapter {
     /// Output-token ceiling (Python's `llm_max_completion_tokens`). The
     /// per-request `inferenceConfig.maxTokens` is `min(this, the model cap)`.
     max_completion_tokens: u32,
+    /// Operator-configured sampling temperature, or `None` when unset.
+    ///
+    /// Applied only when the caller passes no temperature of its own, which is
+    /// Python's rule: its validator folds `llm_temperature` into `llm_args`
+    /// (which every adapter merges) if and only if the field was explicitly
+    /// set, and per-request kwargs override it. `None` sends nothing, so the
+    /// provider default applies — not the same as `Some(0.0)`.
+    default_temperature: Option<f32>,
     /// `LLM_ARGS`, merged into `additionalModelRequestFields`.
     extra_args: Map<String, Value>,
 }
@@ -179,6 +187,7 @@ impl BedrockAdapter {
             structured_output_retries: Self::DEFAULT_STRUCTURED_OUTPUT_RETRIES,
             network_retries: Self::DEFAULT_NETWORK_RETRIES,
             max_completion_tokens: Self::DEFAULT_MAX_COMPLETION_TOKENS,
+            default_temperature: None,
             extra_args: Map::new(),
         })
     }
@@ -204,6 +213,16 @@ impl BedrockAdapter {
 
     /// Set `LLM_ARGS`, merged into `additionalModelRequestFields`. Explicit
     /// keys the adapter sets always win (litellm's `{**llm_args, **kwargs}`).
+    /// Set the operator-configured temperature (`llm_temperature`).
+    ///
+    /// `None` means the operator set none, so no `temperature` reaches the wire
+    /// and the model's own default applies.
+    #[must_use]
+    pub fn with_default_temperature(mut self, temperature: Option<f32>) -> Self {
+        self.default_temperature = temperature;
+        self
+    }
+
     pub fn with_extra_args(mut self, args: Map<String, Value>) -> Self {
         self.extra_args = args;
         self
@@ -310,7 +329,15 @@ impl BedrockAdapter {
         if !system.is_empty() {
             body["system"] = json!(system);
         }
-        body["inferenceConfig"] = converse::inference_config(opts, self.effective_max_tokens(opts));
+        // Caller's own temperature wins; otherwise the operator-configured one;
+        // otherwise nothing at all. Mirrors Python, where per-request kwargs
+        // override the folded `llm_args` value and an unset field contributes
+        // no key.
+        body["inferenceConfig"] = converse::inference_config(
+            opts,
+            self.effective_max_tokens(opts),
+            self.default_temperature,
+        );
         converse::merge_additional_model_request_fields(
             &mut body,
             &self.extra_args,
@@ -642,6 +669,7 @@ impl std::fmt::Debug for BedrockAdapter {
             .field("endpoint", &self.endpoint)
             .field("caps", &self.caps)
             .field("max_completion_tokens", &self.max_completion_tokens)
+            .field("default_temperature", &self.default_temperature)
             .finish_non_exhaustive()
     }
 }

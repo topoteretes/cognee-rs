@@ -175,6 +175,17 @@ pub struct LlmInputs {
     /// adapters that must send an explicit `max_tokens` (Anthropic) clamp it
     /// against the model's documented output limit.
     pub max_completion_tokens: u32,
+    /// Sampling temperature, or `None` when the operator set none.
+    ///
+    /// Lowered from `Settings.llm_temperature`. `None` means no `temperature`
+    /// reaches the provider, so its own default applies — deliberately not the
+    /// same as `Some(0.0)`. This mirrors Python, whose validator folds
+    /// `llm_temperature` into `llm_args` only when the field was explicitly set
+    /// (`cognee/infrastructure/llm/config.py`), because the default gpt-5 family
+    /// rejects any temperature but the provider's own.
+    ///
+    /// A per-call `GenerationOptions.temperature` still wins over this.
+    pub temperature: Option<f32>,
     /// Extra request parameters merged into every chat-completion request body,
     /// lowered from `LLM_ARGS` (Python `llm_config.llm_args`). Empty = no-op.
     /// Applied by the OpenAI-compatible factory via
