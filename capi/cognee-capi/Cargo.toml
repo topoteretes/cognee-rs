@@ -37,6 +37,22 @@ default = [
     "tiktoken",
     "sqlite",
     "testing",
+    # URL / HTML ingestion — parity with the CLI, the HTTP server and the TS
+    # binding, all of which enable this by default. Without it `add` with a
+    # `url` input fails at runtime with `IngestionError::UrlIngestionUnavailable`.
+    # reqwest (rustls) is already linked via cognee-llm/cognee-embedding, so this
+    # only adds the scraper/robots parsing deps — no new native/TLS dependency.
+    "html-loader",
+    # NOTE: no PDF backend is enabled *by default* here, unlike the other three
+    # bindings, and the pure-Rust one is not even offered. capi sets
+    # `panic = "abort"` (capi/Cargo.toml) as its FFI safety floor, and
+    # `pdf-extract` — the pure-Rust backend — panics rather than erroring on
+    # fonts it cannot decode (`panic!("unsupported encoding ...")` and friends).
+    # Under abort that is not a catchable error but an abort of the host
+    # process, so it would turn a clean `UnsupportedDocumentType` into a crashed
+    # C or Swift application. Only `pdf-pdfium` is exposed below, as an opt-in:
+    # it returns errors rather than panicking, at the cost of a libpdfium the
+    # consumer ships alongside the artifact.
     # Product-analytics emission ON by default — Python-SDK parity. The
     # cognee `send_telemetry` call sites are otherwise compiled out
     # because cognee is pulled with `default-features = false`.
@@ -62,6 +78,15 @@ testing       = ["cognee/testing",               "cognee-bindings-common/testing
 # Record/replay cassette-based mock LLM. Required for the iOS demo and offline
 # testing. Enables `llm_mock` / `llm_cassette` settings keys at runtime.
 mock-llm      = ["cognee/mock-llm"]
+# Document/URL loaders. Only cognee gates these (ingestion/cognify); the
+# bindings-common facade always accepts `url` and binary inputs, so there is
+# nothing to forward there.
+html-loader   = ["cognee/html-loader"]
+# PDF via PDFium, opt-in. Deliberately the only PDF backend offered here —
+# see the note in the default list for why pure-Rust is unsafe under
+# `panic = "abort"`. Requires a libpdfium (pdfium-auto's PDFIUM_LIB_PATH or
+# its own desktop download).
+pdf-pdfium    = ["cognee/pdf-pdfium"]
 # Test-only opt-in: exposes `cg_test_force_panic`, a no-return symbol
 # that always panics. Used by the capi smoke tests under
 # `capi/examples/panic_hook_smoke.c` to verify the gap-07 panic hook

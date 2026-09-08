@@ -2027,6 +2027,45 @@ mod tests {
         let _ = std::fs::remove_file(&pdf_path);
     }
 
+    /// Positive counterpart to `test_unsupported_loader_type_errors_at_add`.
+    ///
+    /// #102 was a `pdf` loader that no shipped binding registered, so `.pdf`
+    /// input hit `UnsupportedDocumentType` at dispatch. The negative test above
+    /// pins the disabled case and `cfg`s out wherever a backend is on, which
+    /// left the enabled case with no coverage at all — so a future edit to a
+    /// binding `default` list could silently reinstate the bug.
+    ///
+    /// This asserts registration rather than driving an `add`, deliberately.
+    /// Going through the pipeline would exercise the *extraction* backend,
+    /// which is a different thing from what broke and brings two problems with
+    /// it: the error type is erased by the task wrapper (`add` yields
+    /// `Box<dyn Error>`, and `downcast_ref` for `IngestionError`/`LoaderError`
+    /// is `None` at every level of the source chain, so a variant assertion
+    /// would be vacuous), and the pdfium backend panics rather than erroring
+    /// when no libpdfium is present — `pdfium_auto::bind_pdfium_silent()`
+    /// builds a tokio runtime and drops it inside async, which aborts the test
+    /// under both current-thread and multi-thread flavours. That panic is a
+    /// real pre-existing defect in the pdfium path, unrelated to loader
+    /// registration and tracked separately; a registration assertion is
+    /// backend-agnostic, needs no PDF fixture, and pins exactly what #102 was.
+    #[cfg(any(feature = "pdf-pdfium", feature = "pdf-pure-rust"))]
+    #[test]
+    fn test_pdf_loader_is_registered_when_a_backend_is_enabled() {
+        let registry = crate::loaders::LoaderRegistry::default_registry();
+        let loader = registry.get("pdf");
+        assert!(
+            loader.is_some(),
+            "a pdf backend is compiled in, so `default_registry` must register a \
+             `pdf` loader; without it `.pdf` input fails at dispatch with \
+             `UnsupportedDocumentType`, which is #102"
+        );
+        assert_eq!(
+            loader.map(|l| l.engine_name()),
+            Some("pypdf_loader"),
+            "the registered pdf loader should be `PdfLoader` (Python-parity engine name)"
+        );
+    }
+
     /// Text-path no-regression: the stored artifact is byte-identical to the
     /// input, `raw_content_hash == content_hash`, `extension == "txt"`, and the
     /// content hash / data_id match the pinned Python-compatible values.

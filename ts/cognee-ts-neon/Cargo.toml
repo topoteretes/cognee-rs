@@ -32,6 +32,19 @@ default = [
     "tiktoken",
     "sqlite",
     "testing",
+    # Document ingestion parity with the CLI and HTTP server, which enable a PDF
+    # backend by default. Without one, `add` on a .pdf fails at runtime with
+    # "Unsupported document type at ingest: pdf" — including the README's own
+    # worked binary-ingestion example (#102).
+    #
+    # pdf-pure-rust rather than pdf-pdfium: pdfium extracts more reliably and is
+    # preferred wherever it is possible, but it needs a libpdfium the *consumer*
+    # supplies (PDFIUM_LIB_PATH, or pdfium-auto's own desktop download). This
+    # artifact ships prebuilt to users who cannot be asked to provide one, so
+    # moving to pdfium means bundling the library in the published package — a
+    # packaging change, not a feature flag. Same trade-off `android-default` in
+    # cognee/lib already makes.
+    "pdf-pure-rust",
     # URL / HTML ingestion — parity with the CLI and HTTP server, which enable
     # this by default. Without it `remember`/`add` with a `url` input fail at
     # runtime with `IngestionError::UrlIngestionUnavailable`. reqwest (rustls)
@@ -60,6 +73,9 @@ testing       = ["cognee/testing",       "cognee-bindings-common/testing"]
 # URL/HTML ingestion. Only cognee gates this (ingestion/cognify); the
 # bindings-common facade always accepts `url` inputs, so nothing to forward there.
 html-loader   = ["cognee/html-loader"]
+# Pure-Rust PDF text extraction. No cognee-bindings-common half — the facade
+# does not gate document loaders. See the default-list comment for why not pdfium.
+pdf-pure-rust = ["cognee/pdf-pure-rust"]
 
 [dependencies]
 # Shared SDK facade (HandleState, CogneeServices, SdkError, wire helpers).

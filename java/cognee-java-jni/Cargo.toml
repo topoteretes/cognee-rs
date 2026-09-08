@@ -33,6 +33,12 @@ default = [
     "sqlite",
     "testing",
     "html-loader",
+    # PDF ingestion parity with the CLI and HTTP server. Without a pdf-* feature
+    # `add` on a .pdf fails at runtime with "Unsupported document type at ingest:
+    # pdf" (#102). pdf-pure-rust rather than pdf-pdfium for the reason spelled
+    # out on those two features below: pdfium needs a libpdfium the consumer
+    # supplies, and this .so ships prebuilt to consumers who cannot supply one.
+    "pdf-pure-rust",
     "telemetry",
 ]
 telemetry     = ["cognee/telemetry"]
