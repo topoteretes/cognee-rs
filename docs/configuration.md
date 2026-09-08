@@ -38,7 +38,7 @@ for retries and the `cognee-llm` rustdoc for the adapter.
 | `LLM_API_VERSION` | `llm_api_version` | _(empty)_ |
 | `LLM_REASONING` | `llm_reasoning` | `auto` |
 | `LLM_STRUCTURED_OUTPUT_MODE` | `llm_structured_output_mode` | `auto` |
-| `LLM_TEMPERATURE` | `llm_temperature` | `0.0` |
+| `LLM_TEMPERATURE` | `llm_temperature` | *unset — no `temperature` is sent* |
 | `LLM_STREAMING` | `llm_streaming` | `false` |
 | `LLM_MAX_COMPLETION_TOKENS` / `LLM_MAX_TOKENS` | `llm_max_completion_tokens` | `16384` |
 | `LLM_ARGS` | `llm_args` | _(empty)_ |

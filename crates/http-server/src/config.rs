@@ -277,6 +277,10 @@ pub struct HttpServerConfig {
     /// Without this the HTTP server could not honour the setting at all — the
     /// deployed BYOD stack runs this surface, so an operator setting
     /// `LLM_TEMPERATURE` was silently ignored.
+    ///
+    /// SCOPE: reaches the wire on Bedrock only. The OpenAI-compatible, Azure and
+    /// Anthropic factories do not yet consume `LlmInputs::temperature`, so on
+    /// those providers this is still accepted and still ignored.
     pub llm_temperature: Option<f64>,
 
     /// Server-wide maximum tokens per chunk. `None` (the default) leaves the

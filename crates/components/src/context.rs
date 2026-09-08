@@ -185,6 +185,13 @@ pub struct LlmInputs {
     /// rejects any temperature but the provider's own.
     ///
     /// A per-call `GenerationOptions.temperature` still wins over this.
+    ///
+    /// SCOPE: only `BedrockLlmFactory` consumes this today. The OpenAI-compatible,
+    /// Azure and Anthropic factories ignore it, so an operator on those providers
+    /// sets `LLM_TEMPERATURE` and nothing reaches the wire. Python folds the value
+    /// into `llm_args`, which every one of its adapters merges, so closing that gap
+    /// means adding `with_default_temperature` to the other factories — tracked
+    /// separately rather than bundled into the Bedrock incident fix.
     pub temperature: Option<f32>,
     /// Extra request parameters merged into every chat-completion request body,
     /// lowered from `LLM_ARGS` (Python `llm_config.llm_args`). Empty = no-op.

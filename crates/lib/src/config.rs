@@ -2260,6 +2260,7 @@ impl ConfigManager {
                 "llm_structured_output_mode" => {
                     s.llm_structured_output_mode = as_string(key, value)?
                 }
+                "llm_temperature" if value.is_null() => s.llm_temperature = None,
                 "llm_temperature" => s.llm_temperature = Some(as_f64(key, value)?),
                 "llm_max_completion_tokens" => s.llm_max_completion_tokens = as_u32(key, value)?,
                 "llm_streaming" => s.llm_streaming = as_bool(key, value)?,
@@ -2375,6 +2376,12 @@ impl ConfigManager {
             "llm_reasoning" => self.set_llm_reasoning(as_string(key, &value)?.as_str()),
             "llm_structured_output_mode" => {
                 self.set_llm_structured_output_mode(as_string(key, &value)?.as_str())
+            }
+            "llm_temperature" if value.is_null() => {
+                let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+                s.llm_temperature = None;
+                drop(s);
+                self.bump_version();
             }
             "llm_temperature" => self.set_llm_temperature(as_f64(key, &value)?),
             "llm_streaming" => self.set_llm_streaming(as_bool(key, &value)?),

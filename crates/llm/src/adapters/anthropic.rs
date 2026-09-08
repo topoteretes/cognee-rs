@@ -250,6 +250,17 @@ impl AnthropicAdapter {
     /// `Some(16384)`, which clamped such callers to 16384 even when the operator
     /// had configured something larger; taking the ceiling is what this doc
     /// already claimed to do.
+    // PARITY GAP (tracked, not fixed here): this still resolves an absent caller
+    // budget to `self.max_completion_tokens`, so cognify's
+    // `extraction_options()` — which passes `max_tokens: None` to mean "use the
+    // model's full budget" — is clamped to the 16384 default ceiling. With
+    // claude-sonnet-4-5 (64000 cap) that reproduces the Bedrock incident exactly:
+    // extraction truncates at 16384, `effective_output_cap` equals the same
+    // number so the truncation ladder has nothing to raise into, and
+    // `RollbackScope::WholeRun` discards the run. Anthropic REQUIRES max_tokens
+    // so it cannot simply be omitted the way Bedrock's now is — the fix is to
+    // resolve an absent caller budget to the model cap instead of the ceiling,
+    // which is a behaviour change worth its own change and its own tests.
     fn effective_max_tokens(&self, opts: &GenerationOptions) -> u32 {
         let requested = opts.max_tokens.map_or(self.max_completion_tokens, |v| {
             v.min(self.max_completion_tokens)

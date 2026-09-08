@@ -82,8 +82,11 @@ pub struct BedrockAdapter {
     transport: Arc<dyn BedrockTransport>,
     structured_output_retries: usize,
     network_retries: usize,
-    /// Output-token ceiling (Python's `llm_max_completion_tokens`). The
-    /// per-request `inferenceConfig.maxTokens` is `min(this, the model cap)`.
+    /// Output-token ceiling (Python's `llm_max_completion_tokens`). Applied only
+    /// when the CALLER supplies a budget: the per-request
+    /// `inferenceConfig.maxTokens` is then `min(caller, this, the model cap)`.
+    /// A caller passing `None` gets no `maxTokens` at all and this bounds
+    /// nothing — see `effective_max_tokens`.
     max_completion_tokens: u32,
     /// Operator-configured sampling temperature, or `None` when unset.
     ///
@@ -211,17 +214,19 @@ impl BedrockAdapter {
         self
     }
 
-    /// Set `LLM_ARGS`, merged into `additionalModelRequestFields`. Explicit
-    /// keys the adapter sets always win (litellm's `{**llm_args, **kwargs}`).
     /// Set the operator-configured temperature (`llm_temperature`).
     ///
     /// `None` means the operator set none, so no `temperature` reaches the wire
-    /// and the model's own default applies.
+    /// and the model's own default applies. A per-call
+    /// `GenerationOptions::temperature` still wins over this.
     #[must_use]
     pub fn with_default_temperature(mut self, temperature: Option<f32>) -> Self {
         self.default_temperature = temperature;
         self
     }
+
+    /// Set `LLM_ARGS`, merged into `additionalModelRequestFields`. Explicit
+    /// keys the adapter sets always win (litellm's `{**llm_args, **kwargs}`).
 
     pub fn with_extra_args(mut self, args: Map<String, Value>) -> Self {
         self.extra_args = args;
@@ -257,11 +262,20 @@ impl BedrockAdapter {
     /// operator-configured ceiling. The model cap is applied last so Bedrock
     /// never 400s on `maxTokens > model limit`.
     ///
-    /// A caller who passes no budget of their own — `None`, which is also what
+    /// A caller who passes NO budget of their own — `None`, which is also what
     /// `GenerationOptions::default()` leaves in `max_tokens` since SDK-581 —
-    /// takes the configured ceiling. Before then the default carried
-    /// `Some(16384)`, which clamped such callers to 16384 even where the
-    /// operator had configured more.
+    /// gets `None` back, and `maxTokens` is omitted from the request entirely.
+    /// Bedrock then applies the model maximum, matching the Python engine, whose
+    /// Bedrock adapter never serialises a budget at all.
+    ///
+    /// CONSEQUENCE, deliberate and worth knowing before you rely on it:
+    /// `llm_max_completion_tokens` does NOT bound such a call. On the cognify
+    /// path — which passes `max_tokens: None` by design — a runaway generation
+    /// can bill up to the model maximum per chunk, and there is no setting that
+    /// caps it. That is Python's behaviour too: there the setting only sizes
+    /// input chunks and never reaches the request. A caller that needs a bound
+    /// passes one explicitly, and it is clamped by the ceiling and then the
+    /// model cap.
     fn effective_max_tokens(&self, opts: &GenerationOptions) -> Option<u32> {
         // `None` is sent as an ABSENT `maxTokens`, not as the configured
         // ceiling. Bedrock documents the omitted case as "the maximum allowed
@@ -490,7 +504,7 @@ impl BedrockAdapter {
                     warn!(
                         attempt,
                         delay_ms = delay.as_millis() as u64,
-                        max_tokens = body["inferenceConfig"]["maxTokens"].as_u64().unwrap_or(0),
+                        max_tokens = ?body["inferenceConfig"].get("maxTokens"),
                         reason,
                         "retrying Bedrock structured output after a truncated answer",
                     );
@@ -498,7 +512,7 @@ impl BedrockAdapter {
                     debug!(
                         attempt,
                         delay_ms = delay.as_millis() as u64,
-                        max_tokens = body["inferenceConfig"]["maxTokens"].as_u64().unwrap_or(0),
+                        max_tokens = ?body["inferenceConfig"].get("maxTokens"),
                         reason,
                         "retrying Bedrock structured output",
                     );

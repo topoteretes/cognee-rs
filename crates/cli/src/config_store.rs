@@ -17,10 +17,21 @@ use std::path::{Path, PathBuf};
 /// per chunk on OpenAI-compatible embeddings (~5x the extraction calls), or
 /// 512 -> 1500 on the local ONNX/BGE engine, where every chunk then exceeds the
 /// model's sequence limit. `migrate_document` rewrites it on load.
-const CURRENT_VERSION: u32 = 2;
+/// Version 3 exists for the identical reason, one field over: `llm_temperature`
+/// moved from `f64` (default `0.0`) to `Option<f64>` (default "send nothing").
+/// A config.json written by any prior version carries `"llm_temperature": 0.0`
+/// — the whole `Settings` struct is serialised, so merely running
+/// `cognee-cli config set <anything>` persists it. Deserialising that as
+/// `Some(0.0)` would put an explicit `temperature: 0.0` on every Bedrock call
+/// for a user who never chose one, which is the extreme of the very setting
+/// this release stopped sending by default.
+const CURRENT_VERSION: u32 = 3;
 
 /// The version-1 sentinel for "auto-calculate the chunk size".
 const LEGACY_AUTO_CHUNK_SIZE: u32 = 1500;
+
+/// The pre-v3 default for `llm_temperature`, persisted as a real value.
+const LEGACY_DEFAULT_TEMPERATURE: f64 = 0.0;
 
 pub use cognee::config::DEFAULT_SYSTEM_PROMPT_PATH;
 
@@ -104,6 +115,26 @@ fn migrate_document(document: &mut ConfigDocument) {
             document.settings.chunk_size = None;
         }
         document.version = 2;
+    }
+    if document.version < 3 {
+        // v2 -> v3: `llm_temperature` moved from `f64` (default 0.0) to
+        // `Option<f64>` (default: send no temperature at all). Map a persisted
+        // 0.0 back to "unset", so an upgrade does not silently start pinning
+        // every request to the lowest possible temperature.
+        //
+        // This does lose the setting for a user who deliberately chose 0.0 under
+        // v2 — but under v2 that value was never reaching the provider on the
+        // path that matters, so what they had was the provider default anyway.
+        // Preserving the appearance of a setting that did nothing, at the cost
+        // of silently changing every request, is the worse trade.
+        if document
+            .settings
+            .llm_temperature
+            .is_some_and(|t| (t - LEGACY_DEFAULT_TEMPERATURE).abs() < f64::EPSILON)
+        {
+            document.settings.llm_temperature = None;
+        }
+        document.version = 3;
     }
 }
 
@@ -398,6 +429,10 @@ pub fn set_value(settings: &mut Settings, key: &str, value: Value) -> Result<(),
         "llm_api_key" => settings.llm_api_key = expect_string(key, value)?,
         "llm_endpoint" => settings.llm_endpoint = expect_string(key, value)?,
         "llm_api_version" => settings.llm_api_version = expect_string(key, value)?,
+        // `null` unsets, mirroring `chunk_size`: `config get` now emits null for
+        // an unset temperature, so without this the output is not round-trippable
+        // through `config set` and there is no way to go back to "unset".
+        "llm_temperature" if value.is_null() => settings.llm_temperature = None,
         "llm_temperature" => settings.llm_temperature = Some(expect_f64(key, value)?),
         "llm_streaming" => settings.llm_streaming = expect_bool(key, value)?,
         "llm_max_completion_tokens" => settings.llm_max_completion_tokens = expect_u32(key, value)?,
@@ -650,5 +685,41 @@ mod tests {
             Some(LEGACY_AUTO_CHUNK_SIZE),
             "an explicit 1500 chosen under v2 must not be reinterpreted as auto"
         );
+    }
+
+    /// A config.json written before v3 carries `"llm_temperature": 0.0` even for
+    /// a user who only ever set an API key — the whole `Settings` struct is
+    /// serialised. Reading that back as `Some(0.0)` would pin every Bedrock call
+    /// to the lowest possible temperature on upgrade, which is the opposite of
+    /// the release's intent.
+    #[test]
+    fn migrating_v2_maps_a_persisted_default_temperature_back_to_unset() {
+        let mut document = ConfigDocument {
+            version: 2,
+            settings: Settings {
+                llm_temperature: Some(0.0),
+                ..Settings::default()
+            },
+        };
+        migrate_document(&mut document);
+        assert_eq!(document.version, CURRENT_VERSION);
+        assert_eq!(
+            document.settings.llm_temperature, None,
+            "a persisted 0.0 must become 'unset', not an explicit zero",
+        );
+    }
+
+    /// A temperature the user actually chose survives the migration.
+    #[test]
+    fn migrating_v2_keeps_a_deliberately_set_temperature() {
+        let mut document = ConfigDocument {
+            version: 2,
+            settings: Settings {
+                llm_temperature: Some(0.7),
+                ..Settings::default()
+            },
+        };
+        migrate_document(&mut document);
+        assert_eq!(document.settings.llm_temperature, Some(0.7));
     }
 }
