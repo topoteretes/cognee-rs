@@ -105,6 +105,14 @@ pub(crate) fn warn_zero_norm_query(backend: &str, collection: &str, query_vector
 /// `search_similar` (pgvector builds one `unnest ... LATERAL` round-trip), so
 /// the single-query helper never runs for them. Counts rather than warning per
 /// vector, so a large batch of blanks cannot flood the log.
+///
+/// Gated because pgvector is currently the only backend that overrides
+/// `batch_search_similar`; every other backend inherits the default, which
+/// loops `search_similar` and is therefore covered by the single-query helper.
+/// Without the gate this is dead code in any build without `pgvector` — a
+/// `-D warnings` failure that only appears in feature combinations the lint
+/// lanes do not happen to cover. Widen the gate if another backend overrides.
+#[cfg(feature = "pgvector")]
 pub(crate) fn warn_zero_norm_query_batch(
     backend: &str,
     collection: &str,
