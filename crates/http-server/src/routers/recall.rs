@@ -237,6 +237,7 @@ pub async fn post_recall(
                     top_k,
                     /* auto_route = */ false,
                     session_id_opt,
+                    user_id_opt,
                     orchestrator.as_ref(),
                     &span,
                     None,

@@ -179,6 +179,7 @@ pub async fn recall(
                     top_k,
                     auto_route,
                     session_id,
+                    user_id,
                     search_orchestrator,
                     &span,
                     options.as_ref(),
