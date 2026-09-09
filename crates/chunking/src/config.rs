@@ -121,6 +121,46 @@ impl TokenCounterKind {
         }
     }
 
+    /// What this kind will ACTUALLY be at runtime, given the compiled features.
+    ///
+    /// `build()` falls back to `WordCounter` when the feature backing the
+    /// requested counter is not compiled in, and says so only on stderr. Callers
+    /// that size a budget by unit therefore cannot trust the requested kind:
+    /// asking for `TikToken` in an image built without the `tiktoken` feature
+    /// yields whitespace counting, and any token budget handed to it is spent in
+    /// the wrong unit.
+    ///
+    /// That is not hypothetical — it shipped. A build requested TikToken for
+    /// Bedrock, degraded silently to `WordCounter`, and the resulting 8191-word
+    /// chunks measured ~11149 real tokens against an 8192-token embedder limit,
+    /// failing every embedding call with HTTP 400.
+    #[must_use]
+    pub fn effective(&self) -> TokenCounterKind {
+        match self {
+            TokenCounterKind::Word => TokenCounterKind::Word,
+            TokenCounterKind::HuggingFace { .. } | TokenCounterKind::HuggingFaceFile { .. } => {
+                #[cfg(feature = "hf-tokenizer")]
+                {
+                    self.clone()
+                }
+                #[cfg(not(feature = "hf-tokenizer"))]
+                {
+                    TokenCounterKind::Word
+                }
+            }
+            TokenCounterKind::TikToken => {
+                #[cfg(feature = "tiktoken")]
+                {
+                    TokenCounterKind::TikToken
+                }
+                #[cfg(not(feature = "tiktoken"))]
+                {
+                    TokenCounterKind::Word
+                }
+            }
+        }
+    }
+
     /// Construct a boxed `TokenCounter` from this kind.
     ///
     /// Returns an error if the selected kind cannot be constructed (e.g. file not found,
