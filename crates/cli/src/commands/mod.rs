@@ -11,6 +11,7 @@ pub mod export;
 pub mod forget;
 pub mod improve;
 pub mod memify;
+pub mod pipeline_unblock;
 pub mod recall;
 pub mod remember;
 pub mod run_sequence;

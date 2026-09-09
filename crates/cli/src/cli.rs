@@ -27,6 +27,8 @@ pub enum Commands {
     Improve(ImproveArgs),
     Delete(DeleteArgs),
     Export(ExportArgs),
+    #[command(name = "pipeline-unblock")]
+    PipelineUnblock(PipelineUnblockArgs),
     Config(ConfigArgs),
     #[command(name = "run-sequence")]
     RunSequence(RunSequenceArgs),
@@ -191,6 +193,36 @@ pub struct VisualizeArgs {
     /// Destination HTML file. If omitted, writes to `~/graph_visualization.html`.
     #[arg(long = "output", short = 'o')]
     pub output: Option<String>,
+}
+
+/// Report, and optionally clear, what a killed run left behind on a dataset.
+///
+/// A run is refused as "already running" by two independent gates, and a killed
+/// process leaves both set: the latest `pipeline_runs` row stuck at `Started`,
+/// which is checked first and **never expires** outside an HTTP-server restart;
+/// and the exclusive-run claim, which expires after a day. Clearing only the
+/// claim leaves the run still refused, so this handles both.
+///
+/// Reporting is the default. Clearing is opt-in because nothing here can tell a
+/// dead holder from a live run, and clearing a live one re-admits the
+/// concurrent run the claim exists to prevent.
+#[derive(Debug, Args)]
+pub struct PipelineUnblockArgs {
+    /// Dataset to inspect, by name.
+    #[arg(long = "dataset", short = 'd')]
+    pub dataset: String,
+
+    /// Pipeline to inspect: `cognify_pipeline`, `temporal-cognify` or
+    /// `memify_pipeline`. Each claims a dataset under its own name, so they
+    /// never exclude each other.
+    #[arg(long = "pipeline", default_value = "cognify_pipeline")]
+    pub pipeline: String,
+
+    /// Actually clear what is reported.
+    ///
+    /// Only do this when the process that started the run is known to be gone.
+    #[arg(long = "clear", default_value_t = false)]
+    pub clear: bool,
 }
 
 #[derive(Debug, Args)]

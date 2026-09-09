@@ -38,7 +38,16 @@ pub enum MemifyError {
     /// for the same `(pipeline_name, dataset_id)` pair (latest status =
     /// `STARTED`). Caller should not start a second run concurrently. See
     /// doc 08 §13 / 08-08 §4.4.
-    #[error("pipeline {pipeline_name} for dataset {dataset_id:?} is already running")]
+    /// Same wording as the cognify variant, and for the same reason: memify
+    /// takes a claim under `memify_pipeline` and leaves the same two records
+    /// behind when killed, so an operator wedged on memify needs the same
+    /// pointer a wedged cognify gets (SDK-616).
+    #[error(
+        "pipeline {pipeline_name} for dataset {dataset_id:?} is already running. If the \
+         previous run was killed rather than finishing, it left both an unfinished run record \
+         and a claim behind, and both must be cleared before another run can start (the CLI \
+         exposes this as `pipeline-unblock`)"
+    )]
     PipelineAlreadyRunning {
         pipeline_name: String,
         dataset_id: Option<Uuid>,
