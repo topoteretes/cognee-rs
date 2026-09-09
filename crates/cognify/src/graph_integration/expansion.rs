@@ -35,7 +35,18 @@ const UNRESOLVED_SAMPLE_LIMIT: usize = 10;
 /// Counting note, inherited: `attempted` is per **edge**, while every
 /// `resolved_*` counter is per **endpoint**, so the resolved tallies run to
 /// roughly twice `attempted` on a pass that drops nothing.
+///
+/// # Stability
+///
+/// `#[non_exhaustive]`: this is a diagnostic tally the pipeline **produces** and
+/// callers **read**, so constructing one outside this crate is not a supported
+/// use. It has already gained counters twice, and each addition would otherwise
+/// be a breaking change for any downstream struct literal or exhaustive
+/// destructuring. Taking that break once, here, alongside an addition that is
+/// breaking anyway, is cheaper than taking it again on the next counter.
+/// Reading fields, `Default`, `Clone` and `Copy` are all unaffected.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct EdgeResolutionStats {
     /// Edges considered (before database-existence filtering).
     pub attempted: usize,
@@ -403,14 +414,18 @@ pub async fn expand_with_nodes_and_edges_with_stats(
     let mut producers = ArtifactProducers::default();
 
     // Map from node_id to entity_id for edge resolution. The second element is
-    // the position of the chunk that first registered the key, carried here
-    // rather than in a parallel map so attribution costs 8 bytes an entry
-    // instead of a second copy of every key (SDK-507 is an allocation ticket).
+    // the position of the chunk that **most recently** declared the key, at or
+    // before the chunk currently being read — refreshed on every re-declaration,
+    // not just the first, because that is the declaration a wave would still
+    // hold. It is carried here rather than in a parallel map so attribution
+    // costs 8 bytes an entry instead of a second copy of every key (SDK-507 is
+    // an allocation ticket).
     let mut node_id_to_entity_id: HashMap<String, (Uuid, ChunkPosition)> = HashMap::new();
 
     // Fallback map from a node's human-readable *name* to its entity id, used
     // only when the id map misses. `None` marks a name claimed by two or more
-    // distinct entities, which must stay unresolvable.
+    // distinct entities, which must stay unresolvable. The position follows the
+    // same most-recent-declaration rule as the id map above.
     let mut name_to_entity_id: HashMap<String, Option<(Uuid, ChunkPosition)>> = HashMap::new();
 
     let mut stats = EdgeResolutionStats::default();
