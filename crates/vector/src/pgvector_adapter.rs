@@ -412,7 +412,10 @@ impl PgVectorAdapter {
             .await
             .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
 
-        debug!("created HNSW index {index} on {coll} (dim={dimension})");
+        // "ensured", not "created": the statement carries `IF NOT EXISTS`, so it
+        // is a no-op when the index is already there — including when two
+        // backfills race — and claiming a creation would misreport that.
+        debug!("ensured HNSW index {index} on {coll} (dim={dimension})");
         Ok(true)
     }
 

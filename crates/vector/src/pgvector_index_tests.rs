@@ -178,7 +178,11 @@ async fn backfill_replaces_an_invalid_index_left_by_a_failed_build() {
                    )",
             )
             .await
-            .unwrap();
+            .expect(
+                "writing to pg_index requires a superuser role; the CI service container \
+                 runs as one, so point PGVECTOR_TEST_URL at a superuser (e.g. the default \
+                 `postgres`) to run this case locally",
+            );
 
             assert_eq!(
                 PgVectorAdapter::vector_index_state(&db, "Broken_f_vector_hnsw")
