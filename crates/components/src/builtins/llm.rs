@@ -318,6 +318,12 @@ impl LlmFactory for BedrockLlmFactory {
     }
 
     async fn build(&self, ctx: &BackendBuildContext) -> Result<Arc<dyn Llm>, ComponentError> {
+        // Bedrock is a first-class provider, so it gets the same dispatch
+        // pacing as the other three. `install_pacer` is first-call-wins, so in
+        // a mixed process this is a no-op; in a Bedrock-only one it is the only
+        // thing that installs a pacer at all.
+        install_pacer(ctx);
+
         // Deliberately NO API-key requirement, unlike the Anthropic factory
         // above. Bedrock is absent from Python's `_API_KEY_REQUIRED_PROVIDERS`
         // (`get_llm_client.py:98`) and listed in `_NO_API_KEY_PROVIDERS`
