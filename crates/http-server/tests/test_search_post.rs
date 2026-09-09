@@ -13,7 +13,11 @@ use serde_json::json;
 use std::sync::Arc;
 use tower::ServiceExt;
 
-use support::{StubRetriever, body_json, build_orchestrator, build_p4_state, build_search_db};
+use support::{
+    RecordingRetriever, StubRetriever, body_json, build_orchestrator,
+    build_orchestrator_with_dataset_resolver, build_p4_state, build_search_db,
+    default_test_user_id, seed_dataset,
+};
 
 async fn make_app_with_text(kind: SearchType, text: &'static str) -> axum::Router {
     let db = build_search_db().await;
@@ -187,4 +191,73 @@ async fn invalid_input_maps_to_422_with_error_envelope() {
     // Search uses the {error, detail} envelope, NOT {detail}.
     assert_eq!(body["error"], "Search prerequisites not met");
     assert!(body.get("detail").is_some());
+}
+
+async fn make_recording_app(
+    db: Arc<cognee_database::DatabaseConnection>,
+) -> (axum::Router, Arc<RecordingRetriever>) {
+    let retriever = Arc::new(RecordingRetriever::new(SearchType::Chunks));
+    let orchestrator = build_orchestrator_with_dataset_resolver(
+        db,
+        Arc::clone(&retriever) as Arc<dyn cognee_search::retrievers::SearchRetriever>,
+    )
+    .await;
+    let state = build_p4_state(Some(orchestrator), None, None).await;
+    let app = cognee_http_server::build_router(state)
+        .await
+        .expect("router");
+    (app, retriever)
+}
+
+/// `POST /v1/search` always forwarded `dataset_ids`, but nothing checked
+/// who owned them: any authenticated caller could read any tenant's rows by
+/// UUID. Python answers `403 {"detail": "... [PermissionDeniedError]"}` via
+/// the global handler (`get_search_router.py:290-295`, `client.py:220-236`).
+#[tokio::test]
+async fn foreign_dataset_id_is_forbidden_and_never_searched() {
+    let db = build_search_db().await;
+    let stranger = uuid::Uuid::new_v4();
+    assert_ne!(stranger, default_test_user_id());
+    let foreign_dataset_id = seed_dataset(&db, "notes", stranger).await;
+    let (app, retriever) = make_recording_app(db).await;
+
+    let resp = post_search(
+        app,
+        json!({"search_type": "CHUNKS", "query": "x", "dataset_ids": [foreign_dataset_id]}),
+    )
+    .await;
+    assert_eq!(resp.status(), 403);
+    let body = body_json(resp).await;
+    let detail = body["detail"]
+        .as_str()
+        .expect("Python-shaped {detail} body");
+    assert!(
+        detail.contains("[PermissionDeniedError]"),
+        "detail must carry Python's exception name: {detail}"
+    );
+    assert!(
+        retriever.last_params().is_none(),
+        "retriever must not run for a dataset the caller does not own"
+    );
+}
+
+/// The owner check must not break the legitimate case: an owned id is
+/// accepted and is what the retriever is scoped to.
+#[tokio::test]
+async fn owned_dataset_id_reaches_the_retriever() {
+    let db = build_search_db().await;
+    let dataset_id = seed_dataset(&db, "notes", default_test_user_id()).await;
+    let (app, retriever) = make_recording_app(db).await;
+
+    let resp = post_search(
+        app,
+        json!({"search_type": "CHUNKS", "query": "x", "dataset_ids": [dataset_id]}),
+    )
+    .await;
+    let status = resp.status();
+    let body = body_json(resp).await;
+    assert_eq!(status, 200, "got {status}: {body}");
+
+    let seen = retriever.last_params().expect("retriever must run");
+    assert_eq!(seen.dataset_ids.as_deref(), Some([dataset_id].as_slice()));
 }

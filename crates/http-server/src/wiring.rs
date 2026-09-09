@@ -12,7 +12,8 @@ use anyhow::anyhow;
 use cognee_components::{ComponentRegistry, build_database, build_storage};
 use cognee_core::{CpuPool, RayonThreadPool};
 use cognee_database::{
-    CheckpointStore, DatabaseConnection, DeleteDb, IngestDb, SeaOrmCheckpointStore, SearchHistoryDb,
+    AclDb, CheckpointStore, DatabaseConnection, DeleteDb, IngestDb, SeaOrmCheckpointStore,
+    SearchHistoryDb,
 };
 use cognee_delete::DeleteService;
 use cognee_embedding::EmbeddingEngine;
@@ -89,8 +90,16 @@ pub async fn wire_default_backends_with(
 
     let (session_store, session_manager) = wire_session(cfg, Arc::clone(&database)).await;
 
+    // OSS ships no production `AclDb` impl — the `DatabaseConnection` blanket
+    // impl lives in the closed `cognee-access-control` crate — so this is
+    // `None` here. It is threaded into the search orchestrator anyway so that
+    // a build which does supply one gets ACL-based `dataset_ids`
+    // authorization from the same handle the routers already consult.
+    let acl_db: Option<Arc<dyn AclDb>> = None;
+
     let search_orchestrator = wire_search_orchestrator(
         Arc::clone(&database),
+        acl_db.clone(),
         llm.clone(),
         Arc::clone(&graph_db),
         Arc::clone(&vector_db),
@@ -108,7 +117,7 @@ pub async fn wire_default_backends_with(
 
     Ok(ComponentHandles {
         database,
-        acl_db: None,
+        acl_db,
         storage,
         delete_service,
         cloud_client: None,
@@ -324,6 +333,7 @@ async fn wire_session(
 
 fn wire_search_orchestrator(
     database: Arc<DatabaseConnection>,
+    acl_db: Option<Arc<dyn AclDb>>,
     llm: Option<Arc<dyn Llm>>,
     graph_db: Arc<dyn GraphDBTrait>,
     vector_db: Arc<dyn VectorDB>,
@@ -345,6 +355,10 @@ fn wire_search_orchestrator(
         Arc::clone(&database) as Arc<dyn SearchHistoryDb>,
     )
     .with_dataset_resolver(Arc::clone(&database) as Arc<dyn IngestDb>);
+
+    if let Some(acl) = acl_db {
+        builder = builder.with_acl_db(acl);
+    }
 
     if let Some(sm) = session_manager {
         builder = builder.with_session_manager(sm);

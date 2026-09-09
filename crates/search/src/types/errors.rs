@@ -26,6 +26,14 @@ pub enum SearchError {
     #[error("dataset not found: {0}")]
     DatasetNotFound(String),
 
+    /// The caller asked for at least one dataset it may not read. Mirrors
+    /// Python's `PermissionDeniedError` (`get_specific_user_permission_datasets.py:35-38`):
+    /// one error for the whole batch, raised whether the id belongs to
+    /// someone else or does not exist at all, so a caller cannot probe which
+    /// ids are real.
+    #[error("permission denied: {0}")]
+    PermissionDenied(String),
+
     #[error("unsupported search type: {0:?}")]
     UnsupportedSearchType(crate::types::SearchType),
 
