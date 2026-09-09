@@ -305,3 +305,99 @@ pub async fn build_p4_state(
     state.lib = Some(handles);
     state
 }
+
+// ─── Dataset-scoped search helpers ───────────────────────────────────────────
+
+use cognee_database::IngestDb;
+use cognee_models::Dataset;
+use uuid::Uuid;
+
+/// The id `AuthenticatedUser` resolves to when no auth resolver is wired and
+/// `require_authentication=false` — `uuid5(NAMESPACE_OID, default_user_email)`
+/// per `auth::extractor::default_user_from_state`. Derived from the same
+/// default config the test state is built from, so a seeded dataset owned by
+/// this id is the *caller's* dataset from the router's point of view.
+pub fn default_test_user_id() -> Uuid {
+    let email = HttpServerConfig::default().default_user_email;
+    Uuid::new_v5(&Uuid::NAMESPACE_OID, email.as_bytes())
+}
+
+/// Insert a dataset row named `name` owned by `owner` and return its id.
+pub async fn seed_dataset(db: &DatabaseConnection, name: &str, owner: Uuid) -> Uuid {
+    let dataset = Dataset::new(name.to_string(), owner, None, Uuid::new_v4());
+    IngestDb::create_dataset(db, dataset)
+        .await
+        .expect("seed dataset")
+        .id
+}
+
+/// Like [`build_orchestrator`], but also wires `db` as the dataset-name
+/// resolver so a `datasets: [<name>]` filter is resolved owner-scoped instead
+/// of failing with "no dataset resolver is wired".
+pub async fn build_orchestrator_with_dataset_resolver(
+    db: Arc<DatabaseConnection>,
+    retriever: Arc<dyn SearchRetriever>,
+) -> Arc<SearchOrchestrator> {
+    let mut registry = SearchTypeRegistry::new();
+    registry.register(retriever);
+    let orchestrator = SearchOrchestrator::new(registry)
+        .with_database(db.clone() as Arc<dyn cognee_database::SearchHistoryDb>)
+        .with_dataset_resolver(db as Arc<dyn IngestDb>);
+    Arc::new(orchestrator)
+}
+
+/// Retriever that records the `SearchParams` the orchestrator handed it, so a
+/// test can assert on what dataset-name resolution produced rather than on the
+/// status code alone.
+pub struct RecordingRetriever {
+    kind: SearchType,
+    seen: std::sync::Mutex<Option<SearchParams>>,
+}
+
+impl RecordingRetriever {
+    pub fn new(kind: SearchType) -> Self {
+        Self {
+            kind,
+            seen: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// The params from the most recent invocation, or `None` if the retriever
+    /// was never reached.
+    pub fn last_params(&self) -> Option<SearchParams> {
+        // lock poison is unrecoverable
+        self.seen.lock().unwrap().clone()
+    }
+
+    fn record(&self, params: &SearchParams) {
+        // lock poison is unrecoverable
+        *self.seen.lock().unwrap() = Some(params.clone());
+    }
+}
+
+#[async_trait]
+impl SearchRetriever for RecordingRetriever {
+    fn search_type(&self) -> SearchType {
+        self.kind
+    }
+
+    async fn get_context(
+        &self,
+        _query: &str,
+        params: &SearchParams,
+    ) -> Result<SearchContext, SearchError> {
+        self.record(params);
+        Ok(vec![])
+    }
+
+    async fn get_completion(
+        &self,
+        _query: &str,
+        _context: Option<SearchContext>,
+        _session: &SessionContext,
+        params: &SearchParams,
+    ) -> Result<SearchOutput, SearchError> {
+        self.record(params);
+        Ok(SearchOutput::Text("recorded".to_string()))
+    }
+}

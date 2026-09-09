@@ -12,7 +12,11 @@ use cognee_search::types::SearchType;
 use std::sync::Arc;
 use tower::ServiceExt;
 
-use support::{StubRetriever, body_json, build_orchestrator, build_p4_state, build_search_db};
+use support::{
+    RecordingRetriever, StubRetriever, body_json, build_orchestrator,
+    build_orchestrator_with_dataset_resolver, build_p4_state, build_search_db,
+    default_test_user_id, seed_dataset,
+};
 
 async fn build_app_with(
     retriever: Arc<dyn cognee_search::retrievers::SearchRetriever>,
@@ -279,4 +283,102 @@ async fn get_recall_returns_same_history_as_get_search() {
     let s = body_json(app.clone().oneshot(search_req).await.expect("search")).await;
     let r = body_json(app.oneshot(recall_req).await.expect("recall")).await;
     assert_eq!(s, r, "search and recall histories must match");
+}
+
+/// Regression guard for #197 (issue #198): `POST /v1/recall` with a
+/// `datasets` *name* filter must run dataset resolution as the caller.
+///
+/// The orchestrator resolves names owner-scoped and refuses to guess an owner
+/// (`dataset name filter requires SearchRequest.user_id to identify the
+/// owner`), so the router has to hand `run_graph` the authenticated
+/// `user.id`. Before #197 it passed `None` and every name filter died with
+/// that error; the lib `recall()` and CLI paths are pinned elsewhere, this is
+/// the HTTP layer's copy.
+///
+/// The assertion is deliberately stronger than "200": the recording
+/// retriever must have been reached with `dataset_ids == [<seeded id>]`.
+/// That can only happen if the name resolved against the caller's owner id,
+/// so the case goes red as soon as the router stops forwarding the user
+/// (the orchestrator then returns 422 and the retriever is never invoked).
+#[tokio::test]
+async fn post_recall_dataset_name_filter_resolves_as_the_caller() {
+    let db = build_search_db().await;
+    let dataset_id = seed_dataset(&db, "notes", default_test_user_id()).await;
+    let retriever = Arc::new(RecordingRetriever::new(SearchType::Chunks));
+    let orchestrator = build_orchestrator_with_dataset_resolver(
+        db,
+        Arc::clone(&retriever) as Arc<dyn cognee_search::retrievers::SearchRetriever>,
+    )
+    .await;
+    let state = build_p4_state(Some(orchestrator), None, None).await;
+    let app = cognee_http_server::build_router(state)
+        .await
+        .expect("router");
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/recall")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            r#"{"query":"hi","searchType":"CHUNKS","scope":"graph","datasets":["notes"]}"#,
+        ))
+        .unwrap();
+    let resp = app.oneshot(req).await.expect("resp");
+    let status = resp.status();
+    let body = body_json(resp).await;
+    assert_eq!(
+        status, 200,
+        "dataset name must resolve for its owner, got {status} with body {body}"
+    );
+
+    let seen = retriever
+        .last_params()
+        .expect("retriever must have been invoked after the dataset name resolved");
+    assert_eq!(
+        seen.dataset_ids.as_deref(),
+        Some([dataset_id].as_slice()),
+        "the caller's dataset id must reach the retriever"
+    );
+}
+
+/// Complement to the guard above: resolution stays scoped to the caller.
+/// A same-named dataset owned by someone else is invisible, so the request
+/// surfaces the 422 prerequisites envelope (DatasetNotFound) rather than
+/// silently widening to another owner's rows. Note this case cannot by
+/// itself detect a dropped `user_id` — both failures map to 422 — which is
+/// why the positive case above carries the #197 regression.
+#[tokio::test]
+async fn post_recall_dataset_name_filter_does_not_widen_to_another_owner() {
+    let db = build_search_db().await;
+    let stranger = uuid::Uuid::new_v4();
+    assert_ne!(stranger, default_test_user_id());
+    let _foreign_dataset_id = seed_dataset(&db, "notes", stranger).await;
+    let retriever = Arc::new(RecordingRetriever::new(SearchType::Chunks));
+    let orchestrator = build_orchestrator_with_dataset_resolver(
+        db,
+        Arc::clone(&retriever) as Arc<dyn cognee_search::retrievers::SearchRetriever>,
+    )
+    .await;
+    let state = build_p4_state(Some(orchestrator), None, None).await;
+    let app = cognee_http_server::build_router(state)
+        .await
+        .expect("router");
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/recall")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            r#"{"query":"hi","searchType":"CHUNKS","scope":"graph","datasets":["notes"]}"#,
+        ))
+        .unwrap();
+    let resp = app.oneshot(req).await.expect("resp");
+    assert_eq!(resp.status(), 422);
+    let body = body_json(resp).await;
+    assert_eq!(body["error"], "Recall prerequisites not met");
+    assert!(body["hint"].is_string());
+    assert!(
+        retriever.last_params().is_none(),
+        "retriever must not run when the name does not resolve for the caller"
+    );
 }
