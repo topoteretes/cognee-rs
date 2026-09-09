@@ -688,13 +688,13 @@ pub async fn expand_with_nodes_and_edges_with_stats(
                     &id_key,
                     position,
                 );
-                if let Some(canonical_name) = node_map
-                    .get(&entity_key)
-                    .map(|pair| pair.entity.name.clone())
-                {
+                // Borrowed straight out of `node_map`: the two maps are distinct
+                // locals, so holding a shared borrow of one across a mutable
+                // borrow of the other is fine, and this runs once per node.
+                if let Some(pair) = node_map.get(&entity_key) {
                     register_name_alias(
                         &mut name_to_entity_id,
-                        &canonical_name,
+                        &pair.entity.name,
                         entity_id,
                         &id_key,
                         position,
