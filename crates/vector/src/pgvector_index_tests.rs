@@ -205,3 +205,114 @@ async fn backfill_replaces_an_invalid_index_left_by_a_failed_build() {
     )
     .await;
 }
+
+/// An HNSW index scan returns at most `hnsw.ef_search` tuples and then stops, so
+/// a `LIMIT` above that default of 40 is silently unmet — no error, just missing
+/// rows. cognee's retrieval paths ask for `DEFAULT_WIDE_SEARCH_TOP_K = 100`, so
+/// without an `ef_search` floor every graph-completion, triplet and temporal
+/// seed set would quietly lose 60% of its candidates.
+///
+/// The vectors here are tightly clustered on purpose. With uniformly random
+/// vectors the scan happens to return the full 100 and the bug hides; real
+/// embeddings cluster, which is when it bites.
+#[tokio::test]
+async fn a_search_returns_top_k_rows_even_above_the_default_ef_search() {
+    with_temp_db(
+        "a_search_returns_top_k_rows_even_above_the_default_ef_search",
+        |url| async move {
+            let adapter = PgVectorAdapter::new(&url, 8).await.unwrap();
+            adapter.create_collection("Clust", "f", 8).await.unwrap();
+
+            // 5000 rows is enough for the planner to prefer the index over a
+            // sequential scan, which is the only situation where the cap applies.
+            let points: Vec<_> = (0..5000)
+                .map(|i| {
+                    let jitter = f64::from(i) * 1e-6;
+                    #[allow(clippy::cast_possible_truncation)]
+                    let v = vec![1.0, jitter as f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+                    crate::models::VectorPoint::new(uuid::Uuid::new_v4(), v)
+                })
+                .collect();
+            for batch in points.chunks(500) {
+                adapter.index_points("Clust", "f", batch).await.unwrap();
+            }
+
+            let query = vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+            let hits = adapter
+                .search_similar("Clust", "f", &query, 100)
+                .await
+                .unwrap();
+            assert_eq!(
+                hits.len(),
+                100,
+                "top_k=100 must return 100 rows; {} means the HNSW scan stopped at \
+                 hnsw.ef_search and the LIMIT went silently unmet",
+                hits.len()
+            );
+
+            // The batched path runs one index scan per LATERAL subquery, each
+            // with its own LIMIT, so it needs the same floor.
+            let batched = adapter
+                .batch_search_similar("Clust", "f", &[query.clone(), query.clone()], 100)
+                .await
+                .unwrap();
+            assert_eq!(batched.len(), 2);
+            for (i, bucket) in batched.iter().enumerate() {
+                assert_eq!(
+                    bucket.len(),
+                    100,
+                    "batch query {i} returned {} rows instead of 100",
+                    bucket.len()
+                );
+            }
+
+            adapter.close().await.unwrap();
+        },
+    )
+    .await;
+}
+
+/// Postgres truncates identifiers at 63 bytes. The index name adds 12 characters
+/// to the collection name, so a collection over 51 characters gets an index
+/// whose real name is shorter than the one we computed — and the state probe
+/// compares the name as *data*, so it would never match. That silently breaks
+/// both guarantees the probe exists for: the backfill would re-issue
+/// `CREATE INDEX` and re-count it forever, and an index left invalid by a failed
+/// build would read as absent and so never be rebuilt.
+#[tokio::test]
+async fn a_collection_name_past_the_identifier_limit_is_still_tracked() {
+    with_temp_db(
+        "a_collection_name_past_the_identifier_limit_is_still_tracked",
+        |url| async move {
+            let adapter = PgVectorAdapter::new(&url, 8).await.unwrap();
+            // 57-char collection name -> 69-char index name, past the 63 limit.
+            let data_type = "L".repeat(55);
+            adapter.create_collection(&data_type, "f", 8).await.unwrap();
+
+            let expected = {
+                let mut n = format!("{data_type}_f_vector_hnsw");
+                n.truncate(63);
+                n
+            };
+
+            let db = Database::connect(&url).await.unwrap();
+            assert!(
+                index_present(&db, &expected).await,
+                "the probe must look for the name Postgres actually stored"
+            );
+
+            // The regression: with an untruncated name the probe finds nothing,
+            // so this reports 1 on every run instead of 0.
+            let again = adapter.create_missing_vector_indexes().await.unwrap();
+            assert_eq!(
+                again, 0,
+                "a long-named collection is already indexed; re-counting it means \
+                 the probe is blind and an invalid index would never be rebuilt"
+            );
+
+            drop(db);
+            adapter.close().await.unwrap();
+        },
+    )
+    .await;
+}

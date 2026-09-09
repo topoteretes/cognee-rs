@@ -33,7 +33,7 @@ use sea_orm::{
 use sea_orm_migration::MigratorTrait;
 use std::collections::HashMap;
 use std::fmt;
-use tracing::{Span, debug, instrument};
+use tracing::{Span, debug, instrument, warn};
 use uuid::Uuid;
 
 use cognee_utils::sanitize::sanitize_json;
@@ -70,6 +70,23 @@ const HNSW_EF_CONSTRUCTION: u32 = 64;
 /// line, so a collection that wide keeps the exact scan and says so, rather
 /// than failing `create_collection` outright.
 const MAX_INDEXABLE_DIMENSION: usize = 2000;
+
+/// pgvector's own default `hnsw.ef_search`.
+///
+/// Load-bearing, not decorative: an HNSW index scan returns **at most**
+/// `ef_search` tuples and then ends, so a `LIMIT` above it is silently unmet —
+/// no error, just fewer rows. cognee's retrieval paths ask for
+/// `DEFAULT_WIDE_SEARCH_TOP_K = 100`, so leaving this at 40 would quietly drop
+/// 60% of every graph-completion, triplet and temporal seed set.
+const HNSW_EF_SEARCH_DEFAULT: usize = 40;
+
+/// Largest `hnsw.ef_search` pgvector accepts. Beyond this a search cannot be
+/// made to return `top_k` rows by raising `ef_search`, so those queries fall
+/// back to the exact scan — see [`PgVectorAdapter::ann_search_locals`].
+const HNSW_EF_SEARCH_MAX: usize = 1000;
+
+/// Postgres truncates any identifier past this many bytes (`NAMEDATALEN - 1`).
+const PG_MAX_IDENTIFIER_BYTES: usize = 63;
 
 // ---------------------------------------------------------------------------
 // Table / column identifiers for sea_query (`_vector_collections`)
@@ -282,8 +299,78 @@ impl PgVectorAdapter {
     ///
     /// Derived from the collection name, which [`Self::validate_identifier`] has
     /// already restricted to `[A-Za-z0-9_]`, so it is safe to interpolate.
+    ///
+    /// Truncated to [`PG_MAX_IDENTIFIER_BYTES`] here, because Postgres would
+    /// truncate it anyway when creating the index — and then
+    /// [`Self::vector_index_state`], which compares the name as *data* against
+    /// `pg_class.relname`, would be looking for the untruncated string and never
+    /// match. The consequences of that mismatch are not cosmetic: the backfill
+    /// would re-issue `CREATE INDEX` and re-count it on every run, and an index
+    /// left invalid by an interrupted build would report as absent, so it would
+    /// never be dropped or rebuilt. Slicing bytes is safe because the name is
+    /// ASCII by construction.
+    ///
+    /// Two collections whose names agree in their first 51 characters therefore
+    /// collide on one index name. That is inherited from the collection names
+    /// themselves — they are table names under the same limit — so it is not
+    /// introduced here.
     fn vector_index_name(coll: &str) -> String {
-        format!("{coll}_vector_hnsw")
+        let mut name = format!("{coll}_vector_hnsw");
+        name.truncate(PG_MAX_IDENTIFIER_BYTES);
+        name
+    }
+
+    /// `SET LOCAL` statements that make an ANN search actually return `top_k`
+    /// rows, as one semicolon-separated string (one round trip).
+    ///
+    /// An HNSW index scan stops after `ef_search` tuples, so `ef_search` must be
+    /// at least `top_k` or the `LIMIT` is silently unmet. Past
+    /// [`HNSW_EF_SEARCH_MAX`] that lever runs out, and the only way left to
+    /// guarantee `top_k` rows is to not use the index — which is the right
+    /// trade at that size, since such a query is scanning most of the
+    /// collection regardless.
+    fn ann_search_locals(top_k: usize) -> String {
+        if top_k > HNSW_EF_SEARCH_MAX {
+            return Self::exact_scan_locals().to_string();
+        }
+        let ef = top_k.max(HNSW_EF_SEARCH_DEFAULT);
+        format!("SET LOCAL hnsw.ef_search = {ef}")
+    }
+
+    /// `SET LOCAL` statements that force an exact scan, for the paths whose
+    /// correctness depends on it.
+    fn exact_scan_locals() -> &'static str {
+        "SET LOCAL enable_indexscan = off; SET LOCAL enable_bitmapscan = off"
+    }
+
+    /// Run `stmt` in a transaction with `locals` applied first.
+    ///
+    /// The transaction is what makes `SET LOCAL` mean anything — outside one it
+    /// is a no-op with a warning — and it scopes the settings to this statement
+    /// so they cannot leak to the next borrower of a pooled connection. `locals`
+    /// goes over the simple-query protocol, so several `SET LOCAL`s cost one
+    /// round trip rather than one each.
+    async fn query_all_with_locals(
+        &self,
+        locals: &str,
+        stmt: Statement,
+    ) -> VectorDBResult<Vec<sea_orm::QueryResult>> {
+        let txn = self
+            .db
+            .begin()
+            .await
+            .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
+        txn.execute_unprepared(locals)
+            .await
+            .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
+        let rows = txn
+            .query_all(stmt)
+            .await
+            .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
+        txn.commit()
+            .await
+            .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
+        Ok(rows)
     }
 
     /// Create the HNSW index over `coll`'s `vector` column, if the collection is
@@ -346,6 +433,17 @@ impl PgVectorAdapter {
     /// `idx_f_vector_hnsw` and never match the `"Idx_f_vector_hnsw"` that was
     /// actually created — collection names carry their case, coming from a
     /// `data_type` like `DocumentChunk`.
+    ///
+    /// Restricted to `current_schema()`, because `relname` alone matches across
+    /// every schema in the database while every other statement here is
+    /// unqualified and so `search_path`-relative. Without the filter, two cognee
+    /// installs in one database (the shared single-database deployment) would
+    /// interfere: schema A's valid index would make this report `Some(true)` for
+    /// schema B, leaving B on the sequential scan — and worse, an *invalid*
+    /// index in A would report `Some(false)`, so the caller's unqualified
+    /// `DROP INDEX` would resolve through `search_path` and drop B's valid one.
+    /// `current_schema()` is the first entry of `search_path`, which is exactly
+    /// what the unqualified DDL resolves to, so probe and DDL agree.
     async fn vector_index_state(
         db: &DatabaseConnection,
         index: &str,
@@ -356,7 +454,8 @@ impl PgVectorAdapter {
                 "SELECT i.indisvalid AS valid
                    FROM pg_class c
                    JOIN pg_index i ON i.indexrelid = c.oid
-                  WHERE c.relname = $1",
+                  WHERE c.relname = $1
+                    AND c.relnamespace = current_schema()::regnamespace",
                 [index.into()],
             ))
             .await
@@ -387,6 +486,13 @@ impl PgVectorAdapter {
     /// The returned count is indexes this call actually built: collections that
     /// already had one, and collections wider than [`MAX_INDEXABLE_DIMENSION`],
     /// are skipped and not counted.
+    ///
+    /// A collection that fails is logged and skipped rather than aborting the
+    /// run, so one bad entry cannot leave every collection after it unindexed.
+    /// That is reachable without any corruption: `delete_collection` drops the
+    /// table before deleting its bookkeeping row and not in one transaction, so
+    /// an interrupted delete leaves an orphan row whose `CREATE INDEX` fails
+    /// with `relation does not exist`.
     pub async fn create_missing_vector_indexes(&self) -> VectorDBResult<usize> {
         let query = Query::select()
             .columns([VColl::CollectionName, VColl::Dimension])
@@ -418,23 +524,39 @@ impl PgVectorAdapter {
             // reports work actually done and an already-indexed collection is
             // not handed a redundant CONCURRENTLY build.
             let index = Self::vector_index_name(&coll);
-            match Self::vector_index_state(&self.db, &index).await? {
-                Some(true) => continue,
-                // Left behind by an interrupted CONCURRENTLY build. `IF NOT
-                // EXISTS` would refuse to replace it, so drop it and rebuild —
-                // otherwise this collection can never become indexed.
-                Some(false) => {
-                    debug!("dropping invalid index {index} left by a failed build, rebuilding");
-                    self.db
-                        .execute_unprepared(&format!(r#"DROP INDEX CONCURRENTLY "{index}""#))
-                        .await
-                        .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
+            let state = match Self::vector_index_state(&self.db, &index).await {
+                Ok(state) => state,
+                Err(e) => {
+                    warn!("could not read index state for collection {coll}, skipping it: {e}");
+                    continue;
                 }
-                None => {}
+            };
+
+            if state == Some(true) {
+                continue;
             }
 
-            if Self::create_vector_index(&self.db, &coll, dimension.max(0) as usize, true).await? {
-                created += 1;
+            // `Some(false)` is an index left behind by an interrupted
+            // CONCURRENTLY build. `IF NOT EXISTS` would refuse to replace it, so
+            // drop it and rebuild — otherwise this collection can never become
+            // indexed.
+            if state == Some(false) {
+                debug!("dropping invalid index {index} left by a failed build, rebuilding");
+                if let Err(e) = self
+                    .db
+                    .execute_unprepared(&format!(r#"DROP INDEX CONCURRENTLY "{index}""#))
+                    .await
+                {
+                    warn!("could not drop invalid index {index}, skipping {coll}: {e}");
+                    continue;
+                }
+            }
+
+            match Self::create_vector_index(&self.db, &coll, dimension.max(0) as usize, true).await
+            {
+                Ok(true) => created += 1,
+                Ok(false) => {}
+                Err(e) => warn!("could not index collection {coll}, skipping it: {e}"),
             }
         }
 
@@ -634,7 +756,22 @@ impl VectorDB for PgVectorAdapter {
         // cannot be built here and would need a rebuild policy. HNSW builds
         // incrementally, so an empty-table CREATE INDEX is instant and takes no
         // meaningful lock.
-        Self::create_vector_index(&self.db, &coll, dimension, false).await?;
+        //
+        // Best-effort on purpose. `CREATE TABLE` above has no `IF NOT EXISTS`
+        // and `has_collection` reads only the bookkeeping table, so propagating
+        // an error here would leave the table created and unregistered — and
+        // every retry would then fail at `CREATE TABLE` with `already exists`,
+        // wedging that collection permanently. An index failure (pgvector too
+        // old to have the `hnsw` access method, a restricted role, no
+        // `maintenance_work_mem`) must degrade to the sequential scan, which is
+        // exactly the behaviour before this index existed. The backfill picks it
+        // up later.
+        if let Err(e) = Self::create_vector_index(&self.db, &coll, dimension, false).await {
+            warn!(
+                "collection {coll} was created without an ANN index, so its searches will \
+                 be sequential scans until create_missing_vector_indexes() runs: {e}"
+            );
+        }
 
         // Register in bookkeeping table.
         let insert = Query::insert()
@@ -936,15 +1073,18 @@ impl VectorDB for PgVectorAdapter {
                LIMIT $2"#
         );
 
+        // `ef_search` must cover `top_k`, or the index scan ends early and the
+        // LIMIT is silently unmet — see `ann_search_locals`.
         let rows = self
-            .db
-            .query_all(Statement::from_sql_and_values(
-                DatabaseBackend::Postgres,
-                &sql,
-                [vec_str.into(), (top_k as i64).into()],
-            ))
-            .await
-            .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
+            .query_all_with_locals(
+                &Self::ann_search_locals(top_k),
+                Statement::from_sql_and_values(
+                    DatabaseBackend::Postgres,
+                    &sql,
+                    [vec_str.into(), (top_k as i64).into()],
+                ),
+            )
+            .await?;
 
         let mut results = Vec::with_capacity(rows.len());
         for row in &rows {
@@ -1028,30 +1168,12 @@ impl VectorDB for PgVectorAdapter {
         // the predicate into something GIN-indexable) but it is a behaviour
         // change that needs its own decision, not a side effect of adding an
         // index.
-        let txn = self
-            .db
-            .begin()
-            .await
-            .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
-        for guc in [
-            "SET LOCAL enable_indexscan = off",
-            "SET LOCAL enable_bitmapscan = off",
-        ] {
-            txn.execute_unprepared(guc)
-                .await
-                .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
-        }
-        let rows = txn
-            .query_all(Statement::from_sql_and_values(
-                DatabaseBackend::Postgres,
-                &sql,
-                values,
-            ))
-            .await
-            .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
-        txn.commit()
-            .await
-            .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
+        let rows = self
+            .query_all_with_locals(
+                Self::exact_scan_locals(),
+                Statement::from_sql_and_values(DatabaseBackend::Postgres, &sql, values),
+            )
+            .await?;
 
         let mut results = Vec::with_capacity(rows.len());
         for row in &rows {
@@ -1172,11 +1294,15 @@ impl VectorDB for PgVectorAdapter {
                ORDER BY q.idx, t.score DESC"#
         );
 
+        // Each LATERAL subquery is its own index scan with its own `LIMIT
+        // {top_k}`, so this path needs the same `ef_search` floor as
+        // `search_similar` or every one of them ends early.
         let rows = self
-            .db
-            .query_all(Statement::from_string(DatabaseBackend::Postgres, sql))
-            .await
-            .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
+            .query_all_with_locals(
+                &Self::ann_search_locals(top_k),
+                Statement::from_string(DatabaseBackend::Postgres, sql),
+            )
+            .await?;
 
         // Pre-size one bucket per query; `idx` (1-based ordinality) routes each row
         // back to its query, and queries with no hits keep their empty bucket.
