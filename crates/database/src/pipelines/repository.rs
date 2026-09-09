@@ -210,4 +210,57 @@ pub trait PipelineRunRepository: Send + Sync {
     ) -> Result<(), DbError> {
         Ok(())
     }
+
+    /// The claim currently held on this pair, if any.
+    ///
+    /// Read-only, for an operator asking why a run is being refused. The two
+    /// answers that matter are different: no claim means the refusal came from
+    /// somewhere else, while a claim means this is the exclusion working — and
+    /// its age is the only evidence available about whether the holder is still
+    /// alive.
+    ///
+    /// The default implementation reports none, matching the default
+    /// [`Self::try_claim_pipeline_run`], which never records one.
+    async fn get_pipeline_run_claim(
+        &self,
+        _dataset_id: Uuid,
+        _pipeline_name: &str,
+    ) -> Result<Option<PipelineRunClaim>, DbError> {
+        Ok(None)
+    }
+
+    /// Drop whatever claim holds this pair, whoever holds it. Returns whether
+    /// there was one.
+    ///
+    /// Unlike [`Self::release_pipeline_run_claim`] this is **not** scoped to a
+    /// `claim_id`, which is the whole point: the operator reaching for it does
+    /// not have the dead holder's id. That also makes it the one call that can
+    /// re-admit a concurrent run into a live one, so it belongs behind a
+    /// deliberate operator action and nothing on the run path may call it.
+    ///
+    /// Note this is only reachable for a claim *younger* than the staleness
+    /// window — an older one is already reclaimed by
+    /// [`Self::try_claim_pipeline_run`] without anyone asking.
+    ///
+    /// The default implementation reports nothing released.
+    async fn force_release_pipeline_run_claim(
+        &self,
+        _dataset_id: Uuid,
+        _pipeline_name: &str,
+    ) -> Result<bool, DbError> {
+        Ok(false)
+    }
+}
+
+/// A held exclusive-run claim, as reported by
+/// [`PipelineRunRepository::get_pipeline_run_claim`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PipelineRunClaim {
+    /// Identifies the holder. Opaque to an operator, but it is what
+    /// distinguishes one wedged claim from a pair that is being re-claimed
+    /// repeatedly by successive live runs.
+    pub claim_id: Uuid,
+    /// When the claim was taken. Its age is the only signal available about
+    /// whether the holder is still running.
+    pub claimed_at: chrono::DateTime<chrono::Utc>,
 }

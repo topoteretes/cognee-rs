@@ -14,6 +14,7 @@ use uuid::Uuid;
 
 use crate::conversions::{domain_status_to_entity, entity_status_to_domain};
 use crate::entities::{dataset, pipeline_run, pipeline_run_claim, pipeline_run_payload_field};
+use crate::pipelines::repository::PipelineRunClaim;
 use crate::types::{DatabaseError, PipelineRun, PipelineRunStatus};
 use crate::uuid_hex;
 
@@ -563,5 +564,67 @@ impl PipelineRunRepository for SeaOrmPipelineRunRepository {
                 DatabaseError::QueryError(format!("release pipeline_run_claim failed: {e}"))
             })?;
         Ok(())
+    }
+
+    async fn get_pipeline_run_claim(
+        &self,
+        dataset_id: Uuid,
+        pipeline_name: &str,
+    ) -> Result<Option<PipelineRunClaim>, DatabaseError> {
+        let Some(row) = pipeline_run_claim::Entity::find_by_id((
+            uuid_hex::to_hex(dataset_id),
+            pipeline_name.to_string(),
+        ))
+        .one(self.db.as_ref())
+        .await
+        .map_err(|e| DatabaseError::QueryError(format!("find pipeline_run_claim failed: {e}")))?
+        else {
+            return Ok(None);
+        };
+
+        // The column is the same un-hyphenated hex every id column in this
+        // schema uses. A row that does not parse is a corrupt claim rather than
+        // an absent one, and reporting it as absent would tell an operator the
+        // pair is free while the row keeps refusing their runs.
+        let claim_id = uuid_hex::from_hex(&row.claim_id).map_err(|e| {
+            DatabaseError::QueryError(format!(
+                "pipeline_run_claim for dataset {dataset_id} / {pipeline_name} holds an \
+                 unparseable claim_id {:?}: {e}",
+                row.claim_id
+            ))
+        })?;
+
+        Ok(Some(PipelineRunClaim {
+            claim_id,
+            claimed_at: row.claimed_at,
+        }))
+    }
+
+    async fn force_release_pipeline_run_claim(
+        &self,
+        dataset_id: Uuid,
+        pipeline_name: &str,
+    ) -> Result<bool, DatabaseError> {
+        // Deliberately not scoped to a `claim_id`, unlike the release above:
+        // the caller is an operator clearing a claim whose holder is gone, and
+        // the dead holder's id is exactly what they do not have.
+        let deleted = pipeline_run_claim::Entity::delete_many()
+            .filter(pipeline_run_claim::Column::DatasetId.eq(uuid_hex::to_hex(dataset_id)))
+            .filter(pipeline_run_claim::Column::PipelineName.eq(pipeline_name.to_string()))
+            .exec(self.db.as_ref())
+            .await
+            .map_err(|e| {
+                DatabaseError::QueryError(format!("force-release pipeline_run_claim failed: {e}"))
+            })?;
+
+        if deleted.rows_affected > 0 {
+            tracing::warn!(
+                dataset_id = %dataset_id,
+                pipeline_name = %pipeline_name,
+                "force-released a pipeline-run claim on operator request; if its holder is \
+                 still alive, a concurrent run is now possible on this pair"
+            );
+        }
+        Ok(deleted.rows_affected > 0)
     }
 }

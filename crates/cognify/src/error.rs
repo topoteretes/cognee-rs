@@ -81,7 +81,16 @@ pub enum CognifyError {
     /// `False` (skip silently) in this case; the Rust port surfaces it as an
     /// error so callers can distinguish the "rejected" path from the
     /// short-circuit "already completed" path. See doc 08 §13 / 08-08 §4.3.
-    #[error("pipeline {pipeline_name} for dataset {dataset_id} is already running")]
+    /// The message names the remedy because the most common way to reach it is
+    /// not a concurrent run at all: a killed process cannot release its claim,
+    /// so the row outlives it and refuses every later run on the pair until it
+    /// ages out a day later (SDK-616). An operator who has just had a cognify
+    /// OOM needs to be told that clearing it is possible, and told where.
+    #[error(
+        "pipeline {pipeline_name} for dataset {dataset_id} is already running. If the previous \
+         run was killed rather than finishing, its claim is still held; inspect it with \
+         `cognee-cli pipeline-claim -d <dataset> --pipeline {pipeline_name}`"
+    )]
     PipelineAlreadyRunning {
         pipeline_name: String,
         dataset_id: Uuid,

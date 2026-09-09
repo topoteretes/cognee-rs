@@ -1067,3 +1067,221 @@ async fn concurrent_claims_grant_exactly_one() {
         "exactly one concurrent caller may hold the claim"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Operator inspection and force-release (SDK-616)
+//
+// A killed process cannot release its claim, so the row outlives it and refuses
+// every later run on the pair until it ages out — a day later. These cover the
+// escape hatch: seeing what is held, and clearing it without the dead holder's
+// `claim_id`, which is exactly what an operator does not have.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn get_claim_reports_none_when_the_pair_is_free() {
+    let db = make_db().await;
+    let repo = make_repo(Arc::clone(&db));
+    let dataset_id = Uuid::new_v4();
+    create_dataset(&db, dataset_id).await;
+
+    assert!(
+        repo.get_pipeline_run_claim(dataset_id, "cognify_pipeline")
+            .await
+            .expect("get_pipeline_run_claim")
+            .is_none(),
+        "an unclaimed pair must report no claim, so a refusal from elsewhere is not \
+         misattributed to the claim"
+    );
+}
+
+#[tokio::test]
+async fn get_claim_reports_the_holder_it_was_taken_with() {
+    let db = make_db().await;
+    let repo = make_repo(Arc::clone(&db));
+    let dataset_id = Uuid::new_v4();
+    create_dataset(&db, dataset_id).await;
+
+    let holder = Uuid::new_v4();
+    let before = chrono::Utc::now();
+    assert!(
+        repo.try_claim_pipeline_run(dataset_id, "cognify_pipeline", holder, NEVER_STALE)
+            .await
+            .expect("claim")
+    );
+
+    let claim = repo
+        .get_pipeline_run_claim(dataset_id, "cognify_pipeline")
+        .await
+        .expect("get_pipeline_run_claim")
+        .expect("a claim is held");
+
+    // The id round-trips through the hex column, which is the part that would
+    // silently break: a mangled id still reads as "a claim is held", so only
+    // comparing it catches the encoding.
+    assert_eq!(claim.claim_id, holder);
+    assert!(
+        claim.claimed_at >= before - chrono::Duration::seconds(5),
+        "claimed_at must be the time of the claim, not a default"
+    );
+}
+
+/// Claims are per pipeline, so inspecting cognify must not report memify's.
+#[tokio::test]
+async fn get_claim_is_scoped_to_its_pipeline() {
+    let db = make_db().await;
+    let repo = make_repo(Arc::clone(&db));
+    let dataset_id = Uuid::new_v4();
+    create_dataset(&db, dataset_id).await;
+
+    assert!(
+        repo.try_claim_pipeline_run(dataset_id, "memify_pipeline", Uuid::new_v4(), NEVER_STALE)
+            .await
+            .expect("claim")
+    );
+
+    assert!(
+        repo.get_pipeline_run_claim(dataset_id, "cognify_pipeline")
+            .await
+            .expect("get_pipeline_run_claim")
+            .is_none(),
+        "a memify claim must not present as a cognify claim"
+    );
+}
+
+/// The point of the force-release: it clears a claim whose `claim_id` the
+/// caller does not know, which the ordinary release cannot do.
+#[tokio::test]
+async fn force_release_clears_a_claim_without_its_holder_id() {
+    let db = make_db().await;
+    let repo = make_repo(Arc::clone(&db));
+    let dataset_id = Uuid::new_v4();
+    create_dataset(&db, dataset_id).await;
+
+    let dead_holder = Uuid::new_v4();
+    assert!(
+        repo.try_claim_pipeline_run(dataset_id, "cognify_pipeline", dead_holder, NEVER_STALE)
+            .await
+            .expect("claim")
+    );
+
+    // A release scoped to the wrong id leaves it held — the situation an
+    // operator is stuck in, and the reason force-release exists.
+    repo.release_pipeline_run_claim(dataset_id, "cognify_pipeline", Uuid::new_v4())
+        .await
+        .expect("scoped release with a wrong id is a no-op, not an error");
+    assert!(
+        repo.get_pipeline_run_claim(dataset_id, "cognify_pipeline")
+            .await
+            .expect("get")
+            .is_some(),
+        "a scoped release must not drop a claim it does not own"
+    );
+
+    assert!(
+        repo.force_release_pipeline_run_claim(dataset_id, "cognify_pipeline")
+            .await
+            .expect("force release"),
+        "force-release reports that it removed a claim"
+    );
+    assert!(
+        repo.get_pipeline_run_claim(dataset_id, "cognify_pipeline")
+            .await
+            .expect("get")
+            .is_none()
+    );
+
+    // And the pair is usable again, which is the outcome the operator wanted.
+    assert!(
+        repo.try_claim_pipeline_run(dataset_id, "cognify_pipeline", Uuid::new_v4(), NEVER_STALE)
+            .await
+            .expect("re-claim after force release")
+    );
+}
+
+#[tokio::test]
+async fn force_release_reports_false_when_nothing_was_held() {
+    let db = make_db().await;
+    let repo = make_repo(Arc::clone(&db));
+    let dataset_id = Uuid::new_v4();
+    create_dataset(&db, dataset_id).await;
+
+    assert!(
+        !repo
+            .force_release_pipeline_run_claim(dataset_id, "cognify_pipeline")
+            .await
+            .expect("force release"),
+        "nothing held means nothing released — the CLI reports that differently, so the \
+         distinction has to survive the repository"
+    );
+}
+
+/// Force-release is unscoped by holder but must still be scoped by pair, or
+/// clearing a wedged cognify claim would silently abort a live memify.
+#[tokio::test]
+async fn force_release_does_not_touch_another_pipeline() {
+    let db = make_db().await;
+    let repo = make_repo(Arc::clone(&db));
+    let dataset_id = Uuid::new_v4();
+    create_dataset(&db, dataset_id).await;
+
+    let memify_holder = Uuid::new_v4();
+    assert!(
+        repo.try_claim_pipeline_run(dataset_id, "cognify_pipeline", Uuid::new_v4(), NEVER_STALE)
+            .await
+            .expect("cognify claim")
+    );
+    assert!(
+        repo.try_claim_pipeline_run(dataset_id, "memify_pipeline", memify_holder, NEVER_STALE)
+            .await
+            .expect("memify claim")
+    );
+
+    assert!(
+        repo.force_release_pipeline_run_claim(dataset_id, "cognify_pipeline")
+            .await
+            .expect("force release")
+    );
+
+    let memify = repo
+        .get_pipeline_run_claim(dataset_id, "memify_pipeline")
+        .await
+        .expect("get")
+        .expect("the memify claim survives");
+    assert_eq!(memify.claim_id, memify_holder);
+}
+
+/// Two datasets, same pipeline: clearing one must not free the other.
+#[tokio::test]
+async fn force_release_does_not_touch_another_dataset() {
+    let db = make_db().await;
+    let repo = make_repo(Arc::clone(&db));
+    let wedged = Uuid::new_v4();
+    let healthy = Uuid::new_v4();
+    create_dataset(&db, wedged).await;
+    create_dataset(&db, healthy).await;
+
+    let healthy_holder = Uuid::new_v4();
+    assert!(
+        repo.try_claim_pipeline_run(wedged, "cognify_pipeline", Uuid::new_v4(), NEVER_STALE)
+            .await
+            .expect("claim on the wedged dataset")
+    );
+    assert!(
+        repo.try_claim_pipeline_run(healthy, "cognify_pipeline", healthy_holder, NEVER_STALE)
+            .await
+            .expect("claim on the healthy dataset")
+    );
+
+    assert!(
+        repo.force_release_pipeline_run_claim(wedged, "cognify_pipeline")
+            .await
+            .expect("force release")
+    );
+
+    let survivor = repo
+        .get_pipeline_run_claim(healthy, "cognify_pipeline")
+        .await
+        .expect("get")
+        .expect("the other dataset's claim survives");
+    assert_eq!(survivor.claim_id, healthy_holder);
+}
