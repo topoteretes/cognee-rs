@@ -47,6 +47,7 @@ pub mod route;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use cognee_utils::pacing::{Pacer, llm_pacer};
 use serde_json::{Map, Value, json};
 use tracing::{debug, info, instrument, warn};
 
@@ -130,6 +131,9 @@ pub struct BedrockAdapter {
     default_temperature: Option<f32>,
     /// `LLM_ARGS`, merged into `additionalModelRequestFields`.
     extra_args: Map<String, Value>,
+    /// Dispatch pacer; `None` here falls back to the process-wide one, and only
+    /// a process with no pacer installed at all runs unpaced.
+    pacer: Option<Arc<Pacer>>,
 }
 
 impl BedrockAdapter {
@@ -229,6 +233,7 @@ impl BedrockAdapter {
             max_completion_tokens: Self::DEFAULT_MAX_COMPLETION_TOKENS,
             default_temperature: None,
             extra_args: Map::new(),
+            pacer: None,
         })
     }
 
@@ -336,6 +341,17 @@ impl BedrockAdapter {
             deadline.as_secs(),
             elapsed.as_secs_f64(),
         )))
+    }
+
+    /// Attach a dispatch pacer, overriding the process-wide one.
+    pub fn with_pacer(mut self, pacer: Arc<Pacer>) -> Self {
+        self.pacer = Some(pacer);
+        self
+    }
+
+    /// The pacer governing this adapter, falling back to the process-wide one.
+    fn pacer(&self) -> Option<Arc<Pacer>> {
+        self.pacer.clone().or_else(llm_pacer)
     }
 
     /// Set the output-token ceiling (`llm_max_completion_tokens`). The
@@ -541,6 +557,7 @@ impl BedrockAdapter {
         // Only for the deadline messages below; the ladder itself is a plain
         // attempt count, with no time floor to measure.
         let started = std::time::Instant::now();
+        let pacer = self.pacer();
 
         for attempt in 0..=self.network_retries {
             if attempt > 0 {
@@ -573,9 +590,38 @@ impl BedrockAdapter {
                 tokio::time::sleep(delay).await;
             }
 
+            // Admission per attempt, then the in-flight permit, then a re-gate —
+            // the same three steps and the same order as the OpenAI and
+            // Anthropic adapters. The permit is taken *after* admission and
+            // dropped at the end of the iteration so it only ever covers a live
+            // socket (PR #174); the re-gate exists because an overload episode
+            // can open while this caller sits in the queue, and is skipped when
+            // the first admission already paced this attempt so no attempt ever
+            // spends two tokens.
+            //
+            // Unlike those two adapters there is no queued-time bookkeeping
+            // here: this loop is a fixed attempt count with no minimum-elapsed
+            // floor, so time spent queuing cannot cut the retry budget short.
+            let paced_before_queue = match pacer.as_deref() {
+                Some(pacer) => pacer.admit().await,
+                None => false,
+            };
+            let _in_flight = crate::in_flight::acquire_in_flight().await;
+            if !paced_before_queue && let Some(pacer) = pacer.as_deref() {
+                pacer.admit().await;
+            }
+
             let response = match self.transport.post_json(&url, payload.clone()).await {
                 Ok(response) => response,
                 Err(error) => {
+                    // A transport timeout is the one error shape here that
+                    // carries no status code, and it is how a saturated
+                    // provider presents before it starts answering with 429s.
+                    if matches!(error, LlmError::Timeout(_))
+                        && let Some(pacer) = pacer.as_deref()
+                    {
+                        pacer.record_overload("timeout");
+                    }
                     if !converse::is_retryable(&error) {
                         return Err(error);
                     }
@@ -585,6 +631,17 @@ impl BedrockAdapter {
             };
 
             if !response.status.is_success() {
+                // Bedrock reports ThrottlingException as 429 and a busy or
+                // not-yet-ready model as 503, so the shared status classifier
+                // covers it without a Bedrock-specific notion of overload.
+                // Recorded before the terminal check: a 429 that turns out to be
+                // terminal still means the provider is saturated right now.
+                if let Some(reason) = crate::retry::overload_reason(response.status.as_u16())
+                    && let Some(pacer) = pacer.as_deref()
+                {
+                    pacer.record_overload(reason);
+                }
+
                 let error = converse::map_error(response.status.as_u16(), &response.body_lossy());
                 // Terminal: auth, unknown model, and a ValidationException —
                 // re-POSTing the identical body cannot start working.
