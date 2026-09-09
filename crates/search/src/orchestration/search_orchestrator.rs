@@ -245,16 +245,27 @@ impl SearchOrchestrator {
         Ok(responses)
     }
 
-    /// Whether `requester` may read `dataset_id`, for authorizing explicit
+    /// The set of dataset ids `requester` may read, for authorizing explicit
     /// `SearchRequest.dataset_ids`.
     ///
-    /// **ACL wired** — `AclDb::has_permission_with_roles(requester, dataset_id,
+    /// One listing query, then membership-checked locally by the caller —
+    /// deliberately not a per-id lookup. `dataset_ids` is client-supplied and
+    /// unbounded, so a per-id loop lets any authenticated caller amplify one
+    /// request into N database round-trips, and on an authorization path that
+    /// is the wrong bound to hand the requester. The readable set is bounded
+    /// by the caller's own grants (or data) instead. Same N+1 class as
+    /// `has_edges` in #21. A caller asking for two ids against thousands of
+    /// readable datasets fetches more rows than it needs; that trade-off is
+    /// accepted — the requester must not get to choose how much work the
+    /// authorization check costs.
+    ///
+    /// **ACL wired** — `AclDb::authorized_dataset_ids_with_roles(requester,
     /// "read")`: direct, tenant and role grants, which is Python's
     /// `get_all_user_permission_datasets` and so admits datasets *shared* with
     /// the caller, not only owned ones. This is the intended production path.
     ///
-    /// **No ACL wired (OSS degradation)** — `true` iff the requester owns the
-    /// dataset, via `IngestDb::get_dataset`. OSS ships no production `AclDb`
+    /// **No ACL wired (OSS degradation)** — the datasets the requester owns,
+    /// via `IngestDb::list_datasets_by_owner`. OSS ships no production `AclDb`
     /// impl (the `DatabaseConnection` blanket impl lives in the closed
     /// `cognee-access-control` crate), so ownership is the only signal
     /// available. It under-approximates Python in every "shared" case: a
@@ -265,25 +276,28 @@ impl SearchOrchestrator {
     /// owner whose grant was revoked is admitted here and denied in Python.
     ///
     /// Callers gate on `acl_db.is_some() || dataset_resolver.is_some()`; if
-    /// neither is wired this returns `false`, i.e. fails closed rather than
-    /// open should that gate ever be removed.
-    async fn may_read_dataset(
+    /// neither is wired this returns an empty set, i.e. fails closed rather
+    /// than open should that gate ever be removed.
+    async fn readable_dataset_ids(
         &self,
         requester: uuid::Uuid,
-        dataset_id: uuid::Uuid,
-    ) -> Result<bool, SearchError> {
+    ) -> Result<std::collections::HashSet<uuid::Uuid>, SearchError> {
         if let Some(acl) = self.acl_db.as_ref() {
             return Ok(acl
-                .has_permission_with_roles(requester, dataset_id, "read")
-                .await?);
+                .authorized_dataset_ids_with_roles(requester, "read")
+                .await?
+                .into_iter()
+                .collect());
         }
         if let Some(resolver) = self.dataset_resolver.as_ref() {
-            return Ok(matches!(
-                resolver.get_dataset(dataset_id).await?,
-                Some(dataset) if dataset.owner_id == requester
-            ));
+            return Ok(resolver
+                .list_datasets_by_owner(requester)
+                .await?
+                .into_iter()
+                .map(|dataset| dataset.id)
+                .collect());
         }
-        Ok(false)
+        Ok(std::collections::HashSet::new())
     }
 
     #[tracing::instrument(
@@ -318,10 +332,10 @@ impl SearchOrchestrator {
         // (direct + tenant + role grants) and raises one
         // `PermissionDeniedError` when any requested id is not in it —
         // whether it belongs to someone else or does not exist
-        // (`get_specific_user_permission_datasets.py:30-38`). Each id is
-        // checked with `may_read_dataset`: the ACL when one is wired, else
-        // the ownership fallback. Without either there is nothing to check
-        // against and the ids pass through, which keeps in-process
+        // (`get_specific_user_permission_datasets.py:30-38`). The readable
+        // set comes from `readable_dataset_ids`: the ACL when one is wired,
+        // else the ownership fallback. Without either there is nothing to
+        // check against and the ids pass through, which keeps in-process
         // embedders that never wired one working as before.
         // `Some(vec![])` is "no filter" (Python: `dataset_ids or None`).
         if let Some(ids) = request.dataset_ids.as_ref().filter(|ids| !ids.is_empty())
@@ -333,15 +347,17 @@ impl SearchOrchestrator {
                         .to_string(),
                 )
             })?;
+            let readable = self.readable_dataset_ids(requester).await?;
             // Unknown and foreign ids are indistinguishable on purpose: the
             // caller gets no existence oracle. Python reaches the same place by
-            // comparing set lengths rather than reporting which id failed.
-            let mut denied: Vec<uuid::Uuid> = Vec::new();
-            for id in ids {
-                if !self.may_read_dataset(requester, *id).await? {
-                    denied.push(*id);
-                }
-            }
+            // comparing set lengths rather than reporting which id failed. The
+            // ACL path preserves this too — it never looks an id up, only
+            // intersects against the caller's own readable set.
+            let denied: Vec<uuid::Uuid> = ids
+                .iter()
+                .copied()
+                .filter(|id| !readable.contains(id))
+                .collect();
             if !denied.is_empty() {
                 // Log the specifics server-side; the error the caller sees
                 // deliberately does not say which ids failed or why.
