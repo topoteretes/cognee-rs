@@ -579,17 +579,50 @@ impl BedrockAdapter {
                             .as_u64()
                             .map_or(self.caps.max_output_tokens, |v| v as u32);
                         truncation_retry = true;
-                        if current >= cap {
-                            return Err(LlmError::InvalidResponse(format!(
-                                "Bedrock structured output was truncated at the effective \
-                                 {cap}-token output budget (the lesser of the \
-                                 llm_max_completion_tokens ceiling and the model cap) and \
-                                 cannot be completed within that budget"
-                            )));
+                        // At the cap there is no larger budget to move to, but a
+                        // re-ask is still worth an attempt, because this failure
+                        // is STOCHASTIC rather than a property of the input.
+                        //
+                        // Measured on Bedrock/Sonnet 4.5 with native structured
+                        // output: ~4.5% of extraction calls run away and emit
+                        // until they hit the model maximum, on ordinary ~2.7k-token
+                        // chunks whose siblings answer in under 2k. It is a
+                        // per-call dice roll, not a poisoned chunk — the runaway
+                        // chunk ids differ between runs of the same document.
+                        //
+                        // Direct evidence that a re-ask clears it: in one run a
+                        // call ran past the 600s transport timeout, the network
+                        // ladder re-POSTed the IDENTICAL body, and the retry
+                        // returned a normal 686-token answer 11 seconds later.
+                        // Same chunk, same request, same budget.
+                        //
+                        // Returning terminally here therefore threw away a run for
+                        // a failure that a second attempt usually survives — and
+                        // because `RollbackScope::WholeRun` then sweeps, 2 bad
+                        // chunks out of 55 discarded all 53 good extractions.
+                        //
+                        // Bounded by `structured_output_retries`, so a chunk that
+                        // truly cannot be answered still terminates, now with the
+                        // exhaustion error rather than this one.
+                        let at_cap = current >= cap;
+                        if !at_cap {
+                            body["inferenceConfig"]["maxTokens"] = json!(cap);
                         }
-                        body["inferenceConfig"]["maxTokens"] = json!(cap);
-                        let reason = "the previous answer was cut off at maxTokens before the \
-                                      object was complete";
+                        // The cap is named in the message so the exhaustion error a
+                        // caller finally sees still says which budget was hit, not
+                        // merely that something truncated.
+                        let at_cap_reason;
+                        let reason: &str = if at_cap {
+                            at_cap_reason = format!(
+                                "the previous answer ran to the effective {cap}-token output \
+                                 budget without completing the object; produce a smaller, \
+                                 complete result rather than continuing the previous one"
+                            );
+                            &at_cap_reason
+                        } else {
+                            "the previous answer was cut off at maxTokens before the \
+                             object was complete"
+                        };
                         last_error = LlmError::InvalidResponse(format!(
                             "Bedrock structured output truncated: {reason}"
                         ));

@@ -104,12 +104,18 @@ async fn a_truncated_native_answer_is_reported_as_truncation_not_as_unparseable_
         .with_structured_output_retries(3)
         .create_structured_output_with_messages_raw(vec![Message::user("who?")], &schema(), None)
         .await
-        .expect_err("a truncation at the effective cap cannot be repaired");
+        .expect_err("a mock that always truncates must exhaust the retry budget");
 
-    // Exactly one exchange: the loop stopped instead of re-asking at a budget
-    // that would truncate at the same point.
-    mock.assert_calls_async(1).await;
-    assert!(matches!(error, LlmError::InvalidResponse(_)), "{error:?}");
+    // Exhausts rather than bailing after one attempt: a cap truncation is a
+    // stochastic runaway, not a property of the input, so a re-ask is worth
+    // spending. This mock always truncates, so it burns the full budget.
+    mock.assert_calls_async(3).await;
+    // Exhaustion surfaces as MaxRetriesExceeded wrapping the truncation reason;
+    // the inner cause is what #187 pinned and is asserted on the message below.
+    assert!(
+        matches!(error, LlmError::MaxRetriesExceeded(_)),
+        "{error:?}"
+    );
     let message = error.to_string();
     assert!(
         message.contains("truncated") && message.contains("output budget"),
@@ -150,9 +156,12 @@ async fn a_blank_truncated_native_answer_is_reported_as_truncation() {
         .with_structured_output_retries(3)
         .create_structured_output_with_messages_raw(vec![Message::user("who?")], &schema(), None)
         .await
-        .expect_err("a blank truncation at the effective cap cannot be repaired");
+        .expect_err("a blank truncation that always repeats must exhaust the budget");
 
-    mock.assert_calls_async(1).await;
+    // Exhausts rather than bailing after one attempt: a cap truncation is a
+    // stochastic runaway, not a property of the input, so a re-ask is worth
+    // spending. This mock always truncates, so it burns the full budget.
+    mock.assert_calls_async(3).await;
     let message = error.to_string();
     assert!(
         message.contains("truncated") && message.contains("output budget"),

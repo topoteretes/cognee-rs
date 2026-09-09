@@ -96,6 +96,12 @@ impl TokenCounterKind {
                 TokenCounterKind::Word
             }
             "openai" | "openai_compatible" => TokenCounterKind::TikToken,
+            // Titan's tokenizer is not published, so no counter here is exact.
+            // cl100k BPE is the closest available proxy: both are byte-level BPE
+            // over a ~100k vocabulary and agree within a few percent on prose,
+            // where whitespace counting is off by ~35% and in the wrong unit
+            // entirely. `fit_token_budget` absorbs the residual difference.
+            "bedrock" => TokenCounterKind::TikToken,
             "ollama" => {
                 if let Ok(model_id) = std::env::var("HUGGINGFACE_TOKENIZER")
                     && !model_id.trim().is_empty()
@@ -105,6 +111,77 @@ impl TokenCounterKind {
                 TokenCounterKind::Word
             }
             _ => TokenCounterKind::Word,
+        }
+    }
+
+    /// What this kind will ACTUALLY be at runtime, given the compiled features.
+    ///
+    /// `build()` falls back to `WordCounter` when the feature backing the
+    /// requested counter is not compiled in, and says so only on stderr. Callers
+    /// that size a budget by unit therefore cannot trust the requested kind:
+    /// asking for `TikToken` in an image built without the `tiktoken` feature
+    /// yields whitespace counting, and any token budget handed to it is spent in
+    /// the wrong unit.
+    ///
+    /// That is not hypothetical — it shipped. A build requested TikToken for
+    /// Bedrock, degraded silently to `WordCounter`, and the resulting 8191-word
+    /// chunks measured ~11149 real tokens against an 8192-token embedder limit,
+    /// failing every embedding call with HTTP 400.
+    fn effective(&self) -> TokenCounterKind {
+        match self {
+            TokenCounterKind::Word => TokenCounterKind::Word,
+            TokenCounterKind::HuggingFace { .. } | TokenCounterKind::HuggingFaceFile { .. } => {
+                #[cfg(feature = "hf-tokenizer")]
+                {
+                    self.clone()
+                }
+                #[cfg(not(feature = "hf-tokenizer"))]
+                {
+                    TokenCounterKind::Word
+                }
+            }
+            TokenCounterKind::TikToken => {
+                #[cfg(feature = "tiktoken")]
+                {
+                    TokenCounterKind::TikToken
+                }
+                #[cfg(not(feature = "tiktoken"))]
+                {
+                    TokenCounterKind::Word
+                }
+            }
+        }
+    }
+
+    /// Convert a TOKEN budget into whatever unit this counter actually measures.
+    ///
+    /// The single entry point callers need: it resolves the counter that will
+    /// really run (a BPE counter degrades to `WordCounter` when its cargo
+    /// feature is absent) and converts the budget for it. There is deliberately
+    /// no way to size a budget against a counter that will not run.
+    ///
+    /// `auto_chunk_size`-style budgets are derived from an embedding model's
+    /// TOKEN limit, so handing one to a word counter overshoots that limit by
+    /// construction: 8191 spent as words measured ~11100 real tokens and every
+    /// Bedrock embedding call failed with "Too many input tokens. Max input
+    /// tokens: 8192".
+    ///
+    /// `WORD_TOKENS_UPPER_BOUND` is deliberately pessimistic. English prose runs
+    /// ~1.3 tokens/word, the observed ratio on the corpus that produced the bug
+    /// was 1.36, and dense or punctuation-heavy text goes higher. Undershooting
+    /// costs a few more chunks; overshooting costs the whole run.
+    #[must_use]
+    pub fn fit_token_budget(&self, token_budget: usize) -> usize {
+        /// Pessimistic tokens-per-word, scaled by 100 to stay in integer maths.
+        const WORD_TOKENS_UPPER_BOUND: usize = 150;
+        match self.effective() {
+            // Already BPE/WordPiece: the budget is in the right unit. Exactness
+            // against a *different* BPE vocabulary is covered by the caller's own
+            // headroom, not by this conversion.
+            TokenCounterKind::HuggingFace { .. }
+            | TokenCounterKind::HuggingFaceFile { .. }
+            | TokenCounterKind::TikToken => token_budget,
+            TokenCounterKind::Word => (token_budget * 100 / WORD_TOKENS_UPPER_BOUND).max(1),
         }
     }
 
@@ -142,27 +219,33 @@ impl TokenCounterKind {
             // the user that their configured tokenizer is not active.
             #[cfg(not(feature = "hf-tokenizer"))]
             TokenCounterKind::HuggingFace { model_id: _ } => {
-                eprintln!(
+                tracing::warn!(
                     "cognee-chunking: HuggingFace tokenizer requested but `hf-tokenizer` \
-                     feature is not enabled — falling back to WordCounter"
+                     feature is not enabled — falling back to WordCounter. A token budget \
+                     spent in words undercounts real tokens by ~35%, which can \
+                     exceed an embedding model's input cap."
                 );
                 Ok(Box::new(WordCounter))
             }
 
             #[cfg(not(feature = "hf-tokenizer"))]
             TokenCounterKind::HuggingFaceFile { path: _ } => {
-                eprintln!(
+                tracing::warn!(
                     "cognee-chunking: HuggingFaceFile tokenizer requested but `hf-tokenizer` \
-                     feature is not enabled — falling back to WordCounter"
+                     feature is not enabled — falling back to WordCounter. A token budget \
+                     spent in words undercounts real tokens by ~35%, which can \
+                     exceed an embedding model's input cap."
                 );
                 Ok(Box::new(WordCounter))
             }
 
             #[cfg(not(feature = "tiktoken"))]
             TokenCounterKind::TikToken => {
-                eprintln!(
+                tracing::warn!(
                     "cognee-chunking: TikToken tokenizer requested but `tiktoken` feature is \
-                     not enabled — falling back to WordCounter"
+                     not enabled — falling back to WordCounter. A token budget spent \
+                     in words undercounts real tokens by ~35%, which can exceed an \
+                     embedding model's input cap."
                 );
                 Ok(Box::new(WordCounter))
             }
@@ -258,5 +341,93 @@ mod tests {
         assert!(counter.is_ok(), "should fall back to WordCounter");
         let counter = counter.unwrap();
         assert_eq!(counter.count_tokens("hello world"), 2);
+    }
+    /// Bedrock must not fall through to whitespace counting. `auto_chunk_size`
+    /// derives its budget from the embedding model's TOKEN limit, so a word
+    /// counter spends it in the wrong unit — 8191 words measured ~11100 Titan
+    /// tokens and every embed call 400d against Titan v2's 8192 cap.
+    ///
+    /// # Safety
+    /// Same as the sibling tests: env mutation under a single-threaded harness.
+    #[test]
+    fn bedrock_gets_a_bpe_counter_not_whitespace() {
+        unsafe {
+            std::env::remove_var("COGNEE_TOKEN_COUNTER");
+            std::env::remove_var("HUGGINGFACE_TOKENIZER");
+            std::env::remove_var("EMBEDDING_TOKENIZER_PATH");
+            std::env::set_var("EMBEDDING_PROVIDER", "bedrock");
+        }
+        let kind = TokenCounterKind::from_env();
+        unsafe { std::env::remove_var("EMBEDDING_PROVIDER") };
+        assert!(
+            matches!(kind, TokenCounterKind::TikToken),
+            "bedrock must count BPE tokens, not whitespace words: {kind:?}",
+        );
+    }
+
+    /// A token budget must be converted before a word counter spends it.
+    ///
+    /// This is the bug that produced `Too many input tokens. Max input tokens:
+    /// 8192, request input token count: 11100` on Bedrock: the budget is the
+    /// embedding model's TOKEN limit, the chunker measured whitespace, and 8191
+    /// words is ~11100 tokens. An auto-derived budget could only ever exceed the
+    /// limit it was derived from.
+    #[test]
+    fn a_token_budget_is_converted_before_a_word_counter_spends_it() {
+        // Word counting must be scaled down, and far enough that the observed
+        // 1.36 tokens/word on real prose still lands under the limit.
+        let words = TokenCounterKind::Word.fit_token_budget(8191);
+        assert!(
+            words < 8191,
+            "a word budget must be smaller than the token budget, got {words}",
+        );
+        let worst_case_tokens = (words as f64 * 1.36) as usize;
+        assert!(
+            worst_case_tokens <= 8191,
+            "{words} words is ~{worst_case_tokens} tokens at the observed ratio, \
+             which must not exceed the 8191-token budget it came from",
+        );
+
+        // Never zero, however small the budget.
+        assert!(TokenCounterKind::Word.fit_token_budget(1) >= 1);
+    }
+
+    /// Sizing must follow the counter that will ACTUALLY run, not the one that
+    /// was requested. `build()` degrades a BPE counter to `WordCounter` when its
+    /// cargo feature is absent, so a request for TikToken in a build without the
+    /// `tiktoken` feature means whitespace counting.
+    ///
+    /// This shipped: an image requested TikToken for Bedrock, silently got
+    /// WordCounter, and 8191 "tokens" became 8191 words ~= 11149 real tokens
+    /// against an 8192-token embedder cap — HTTP 400 on every embedding call.
+    #[test]
+    fn sizing_follows_the_effective_counter_not_the_requested_one() {
+        let sized = TokenCounterKind::TikToken.fit_token_budget(8191);
+        if cfg!(feature = "tiktoken") {
+            assert_eq!(sized, 8191, "a real BPE counter spends the budget as-is");
+        } else {
+            assert!(
+                sized < 8191,
+                "a counter that degraded to whitespace must still get a converted \
+                 budget, got {sized}",
+            );
+        }
+    }
+
+    /// A budget already in BPE units passes through untouched.
+    #[test]
+    fn a_bpe_counter_receives_the_token_budget_unchanged() {
+        let hf = TokenCounterKind::HuggingFace {
+            model_id: "bert-base-uncased".to_string(),
+        };
+        assert_eq!(
+            hf.fit_token_budget(8191),
+            if cfg!(feature = "hf-tokenizer") {
+                8191
+            } else {
+                5460
+            },
+            "a HuggingFace request keeps the token budget only when compiled in",
+        );
     }
 }

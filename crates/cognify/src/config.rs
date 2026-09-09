@@ -654,7 +654,8 @@ impl CognifyConfig {
         embedding_engine: &dyn EmbeddingEngine,
         llm: &dyn Llm,
     ) -> Self {
-        self.max_chunk_size = Some(Self::auto_chunk_size(embedding_engine, llm));
+        let budget = Self::auto_chunk_size(embedding_engine, llm);
+        self.max_chunk_size = Some(self.token_counter_kind.fit_token_budget(budget));
         self
     }
 
@@ -1117,13 +1118,21 @@ mod tests {
     fn validation_catches_a_too_large_overlap_once_the_size_is_resolved() {
         let embed = MockEmbedding { max_seq: 512 };
         let llm = MockLlm::with_ctx(4096);
+        // Counter pinned explicitly. `Default::default()` reads
+        // `TokenCounterKind::from_env()`, so leaving it ambient made the expected
+        // value depend on whatever EMBEDDING_PROVIDER the developer's shell had —
+        // and, once budgets became unit-converted, on which cargo features the
+        // test binary happened to be built with.
         let resolved = CognifyConfig {
             max_chunk_size: None,
             chunk_overlap: 100_000,
+            token_counter_kind: TokenCounterKind::Word,
             ..Default::default()
         }
         .with_auto_chunk_size(&embed, &llm);
-        assert_eq!(resolved.max_chunk_size, Some(512));
+        // 512 TOKENS converted for a word counter at the pessimistic 1.50
+        // tokens/word: 512 * 100 / 150 = 341.
+        assert_eq!(resolved.max_chunk_size, Some(341));
         assert!(matches!(
             resolved.validate(),
             Err(ConfigError::InvalidParameter(_))
@@ -1166,8 +1175,30 @@ mod tests {
     fn test_with_auto_chunk_size_builder() {
         let embed = MockEmbedding { max_seq: 512 };
         let llm = MockLlm::with_ctx(4096);
-        let config = CognifyConfig::default().with_auto_chunk_size(&embed, &llm);
-        assert_eq!(config.max_chunk_size, Some(512));
+        // Counter pinned so the expectation does not depend on ambient env or
+        // on the feature set this test binary was built with.
+        let config = CognifyConfig {
+            token_counter_kind: TokenCounterKind::Word,
+            ..Default::default()
+        }
+        .with_auto_chunk_size(&embed, &llm);
+        // 512 tokens -> 341 words at the pessimistic 1.50 tokens/word.
+        assert_eq!(config.max_chunk_size, Some(341));
+        // And a BPE counter spends the same budget untouched.
+        let bpe = CognifyConfig {
+            token_counter_kind: TokenCounterKind::TikToken,
+            ..Default::default()
+        }
+        .with_auto_chunk_size(&embed, &llm);
+        // Predicted from the counter itself, not from `cfg!(feature = "tiktoken")`,
+        // which inside cognify names COGNIFY's passthrough rather than the feature
+        // cognee-chunking compiles the counter behind. The two differ, and reading
+        // the wrong one is the cross-crate confusion this bug came from.
+        assert_eq!(
+            bpe.max_chunk_size,
+            Some(TokenCounterKind::TikToken.fit_token_budget(512)),
+            "a TikToken request only keeps the token budget when the feature is compiled in",
+        );
         // Other fields should remain at defaults
         assert_eq!(config.chunk_overlap, 10);
         assert_eq!(config.chunks_per_batch, DEFAULT_CHUNKS_PER_BATCH);

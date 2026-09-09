@@ -37,11 +37,16 @@ path = "src/main.rs"
 required-features = ["bin"]
 
 [features]
+# Forwarded so a deployment can compile a real BPE token counter. Without it
+# `TokenCounterKind::TikToken` degrades to whitespace counting at runtime and a
+# token budget gets spent in words — see cognee-chunking::TokenCounterKind::effective.
+tiktoken = ["cognee-cognify/tiktoken"]
 # decision 1: telemetry is ON by default in cognee-http-server. Disable with
 # --no-default-features for compile-time opt-out.
 # html-loader is on by default so the server binary supports URL ingestion and
 # HTML documents out of the box (parity with the Python `/add` URL path).
-default = ["telemetry", "html-loader", "onnx", "ladybug", "lancedb", "pgvector", "bedrock"]
+default = ["telemetry", "html-loader", "onnx", "ladybug", "lancedb", "pgvector", "bedrock",
+           "tiktoken"]
 # Embedded LanceDB vector store, forwarded to cognee-components + cognee-vector.
 # Default-on, so a plain build of this crate is unchanged; a consumer whose vector
 # backend is pgvector (or a closed adapter) can now drop the Arrow + lance native

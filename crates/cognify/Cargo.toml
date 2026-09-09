@@ -15,6 +15,10 @@ authors.workspace = true
 workspace = true
 
 [features]
+# Forwarded so a deployment can compile a real BPE token counter. Without it
+# `TokenCounterKind::TikToken` degrades to whitespace counting at runtime and a
+# token budget gets spent in words — see cognee-chunking::TokenCounterKind::effective.
+tiktoken = ["cognee-chunking/tiktoken"]
 testing = ["cognee-storage/testing", "cognee-graph/testing", "cognee-vector/testing"]
 html-loader = ["cognee-ingestion/html-loader"]
 image-loader = ["cognee-ingestion/image-loader"]

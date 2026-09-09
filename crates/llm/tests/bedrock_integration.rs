@@ -615,11 +615,16 @@ async fn a_truncated_answer_is_re_asked_with_a_raised_budget() {
     retried.assert_calls_async(1).await;
 }
 
-/// ...but truncation *at* the effective cap is unrecoverable by design: raising
-/// the budget further would breach the `llm_max_completion_tokens` ceiling, so
-/// it fails terminally instead of looping until the retry budget is gone.
+/// ...and truncation *at* the effective cap is now RE-ASKED rather than returned
+/// terminally. The budget cannot be raised — there is nothing above the cap — but
+/// the failure it guards against is stochastic, not a property of the input:
+/// measured at ~4.5% of extraction calls on Bedrock/Sonnet 4.5, with the runaway
+/// chunks differing between runs of the same document, and a re-POST of an
+/// identical body observed returning a normal answer.
+///
+/// So the contract is "exhaust the retry budget", not "give up after one".
 #[tokio::test]
-async fn truncation_at_the_effective_cap_fails_terminally() {
+async fn truncation_at_the_effective_cap_is_re_asked_until_the_budget_is_gone() {
     let server = MockServer::start_async().await;
     let mock = server
         .mock_async(|when, then| {
@@ -636,7 +641,7 @@ async fn truncation_at_the_effective_cap_fails_terminally() {
 
     let error = adapter(&server, NOVA_LITE)
         .await
-        .with_structured_output_retries(5)
+        .with_structured_output_retries(3)
         .create_structured_output_with_messages_raw(
             // nova-lite's 10_000 cap is already the effective budget.
             vec![Message::user("who?")],
@@ -644,12 +649,13 @@ async fn truncation_at_the_effective_cap_fails_terminally() {
             None,
         )
         .await
-        .expect_err("a truncation at the cap cannot be repaired");
+        .expect_err("a mock that always truncates must still exhaust");
 
-    assert!(matches!(error, LlmError::InvalidResponse(_)), "{error:?}");
     assert!(
-        error.to_string().contains("truncated"),
-        "the error must name the cause: {error}",
+        error.to_string().contains("truncat"),
+        "the exhaustion error must still name the cause: {error}",
     );
-    mock.assert_calls_async(1).await;
+    // Every attempt is spent, rather than bailing out after the first — that is
+    // the whole change. A real runaway usually clears on the second try.
+    mock.assert_calls_async(3).await;
 }
