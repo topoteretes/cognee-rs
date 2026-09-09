@@ -70,6 +70,7 @@ async fn recall_records_router_override() {
         "Give me a summary of the project",
         Some(SearchType::Temporal),
         None,
+        None,
         10,
         true,
         None,
@@ -117,6 +118,7 @@ async fn recall_auto_route_does_not_record_override() {
         "Give me a summary of the project",
         None,
         None,
+        None,
         10,
         true,
         None,
@@ -155,6 +157,7 @@ async fn recall_explicit_without_auto_route_skips_router() {
     let result = recall(
         "Give me a summary of the project",
         Some(SearchType::Temporal),
+        None,
         None,
         10,
         false, // auto_route=false

@@ -131,6 +131,7 @@ async fn test_scope_auto_with_session_id_uses_session_path() {
         "rust language",
         None,
         None,
+        None,
         10,
         false,
         Some(SESSION_ID),
@@ -165,6 +166,7 @@ async fn test_scope_auto_without_session_id_uses_graph_path() {
 
     let result = recall(
         "anything",
+        None,
         None,
         None,
         10,
@@ -204,6 +206,7 @@ async fn test_scope_session_returns_qa_pairs() {
 
     let result = recall(
         "rust ownership",
+        None,
         None,
         None,
         10,
@@ -254,6 +257,7 @@ async fn test_scope_trace_returns_trace_entries() {
         "rust ownership",
         None,
         None,
+        None,
         10,
         false,
         Some(SESSION_ID),
@@ -288,6 +292,7 @@ async fn test_scope_graph_context_returns_subgraph() {
 
     let result = recall(
         "doesn't matter -- not query-matched",
+        None,
         None,
         None,
         10,
@@ -331,6 +336,7 @@ async fn test_scope_all_merges_four_sources() {
         "rust",
         None,
         None,
+        None,
         10,
         false,
         Some(SESSION_ID),
@@ -370,6 +376,7 @@ async fn test_scope_session_without_session_id_returns_empty() {
 
     let result = recall(
         "q1",
+        None,
         None,
         None,
         10,

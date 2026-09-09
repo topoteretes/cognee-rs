@@ -382,3 +382,183 @@ async fn post_recall_dataset_name_filter_does_not_widen_to_another_owner() {
         "retriever must not run when the name does not resolve for the caller"
     );
 }
+
+/// Shared setup for the `dataset_ids` cases: a recording retriever behind an
+/// orchestrator with the dataset resolver wired, plus the DB so a test can
+/// seed whatever ownership it needs first.
+async fn build_recording_app(
+    db: Arc<cognee_database::DatabaseConnection>,
+) -> (axum::Router, Arc<RecordingRetriever>) {
+    let retriever = Arc::new(RecordingRetriever::new(SearchType::Chunks));
+    let orchestrator = build_orchestrator_with_dataset_resolver(
+        db,
+        Arc::clone(&retriever) as Arc<dyn cognee_search::retrievers::SearchRetriever>,
+    )
+    .await;
+    let state = build_p4_state(Some(orchestrator), None, None).await;
+    let app = cognee_http_server::build_router(state)
+        .await
+        .expect("router");
+    (app, retriever)
+}
+
+fn post_recall_request(body: String) -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri("/api/v1/recall")
+        .header("content-type", "application/json")
+        .body(Body::from(body))
+        .unwrap()
+}
+
+/// `POST /v1/recall` deserialized `datasetIds` and then never forwarded it —
+/// `run_graph` hard-coded `dataset_ids: None` — so an id filter came back
+/// `200` with unfiltered results. Python forwards it
+/// (`get_recall_router.py:285`) and `_run_graph` hands it to
+/// `authorized_search` (`recall.py:655-657, 767-770`).
+///
+/// Like the name-filter guard above, the assertion is on what reached the
+/// retriever, not on the status: `SearchParams.dataset_ids` must equal the
+/// requested id.
+#[tokio::test]
+async fn post_recall_dataset_ids_filter_reaches_the_retriever() {
+    let db = build_search_db().await;
+    let dataset_id = seed_dataset(&db, "notes", default_test_user_id()).await;
+    let (app, retriever) = build_recording_app(db).await;
+
+    let resp = app
+        .oneshot(post_recall_request(format!(
+            r#"{{"query":"hi","searchType":"CHUNKS","scope":"graph","datasetIds":["{dataset_id}"]}}"#
+        )))
+        .await
+        .expect("resp");
+    let status = resp.status();
+    let body = body_json(resp).await;
+    assert_eq!(
+        status, 200,
+        "an owned dataset id must be accepted, got {status} with body {body}"
+    );
+
+    let seen = retriever
+        .last_params()
+        .expect("retriever must have been invoked for an owned dataset id");
+    assert_eq!(
+        seen.dataset_ids.as_deref(),
+        Some([dataset_id].as_slice()),
+        "the requested dataset id must reach the retriever"
+    );
+}
+
+/// The security case: an id owned by someone else must not widen access.
+/// Python raises `PermissionDeniedError` from
+/// `get_specific_user_permission_datasets` (`:30-38`) and the recall router
+/// re-raises it into the global handler (`get_recall_router.py:322-325`), so
+/// the wire answer is `403 {"detail": "... [PermissionDeniedError]"}` — not
+/// an empty `200`, and not the other tenant's rows. The retriever must never
+/// run.
+#[tokio::test]
+async fn post_recall_foreign_dataset_id_is_forbidden_and_never_searched() {
+    let db = build_search_db().await;
+    let stranger = uuid::Uuid::new_v4();
+    assert_ne!(stranger, default_test_user_id());
+    let foreign_dataset_id = seed_dataset(&db, "notes", stranger).await;
+    let (app, retriever) = build_recording_app(db).await;
+
+    let resp = app
+        .oneshot(post_recall_request(format!(
+            r#"{{"query":"hi","searchType":"CHUNKS","scope":"graph","datasetIds":["{foreign_dataset_id}"]}}"#
+        )))
+        .await
+        .expect("resp");
+    assert_eq!(resp.status(), 403);
+    let body = body_json(resp).await;
+    let detail = body["detail"]
+        .as_str()
+        .expect("Python-shaped {detail} body");
+    assert!(
+        detail.contains("[PermissionDeniedError]"),
+        "detail must carry Python's exception name: {detail}"
+    );
+    assert!(
+        retriever.last_params().is_none(),
+        "retriever must not run for a dataset the caller does not own"
+    );
+}
+
+/// A well-formed id that names nothing gets the same 403 as a foreign one
+/// (Python's check is `len(permitted) != len(requested)`, whatever the
+/// reason), so the endpoint cannot be used to probe which ids exist.
+#[tokio::test]
+async fn post_recall_unknown_dataset_id_is_forbidden_like_a_foreign_one() {
+    let db = build_search_db().await;
+    let (app, retriever) = build_recording_app(db).await;
+
+    let resp = app
+        .oneshot(post_recall_request(format!(
+            r#"{{"query":"hi","searchType":"CHUNKS","scope":"graph","datasetIds":["{}"]}}"#,
+            uuid::Uuid::new_v4()
+        )))
+        .await
+        .expect("resp");
+    assert_eq!(resp.status(), 403);
+    assert!(retriever.last_params().is_none());
+}
+
+/// Precedence when both fields are sent: ids win and the names are never
+/// resolved (`get_recall_router.py:47-48`, `recall.py:655-657`). The name
+/// here is deliberately one the caller does *not* own — if names were
+/// consulted the request would 422 instead of reaching the retriever with
+/// the id.
+#[tokio::test]
+async fn post_recall_dataset_ids_take_precedence_over_dataset_names() {
+    let db = build_search_db().await;
+    let owned_id = seed_dataset(&db, "mine", default_test_user_id()).await;
+    let _foreign = seed_dataset(&db, "theirs", uuid::Uuid::new_v4()).await;
+    let (app, retriever) = build_recording_app(db).await;
+
+    let resp = app
+        .oneshot(post_recall_request(format!(
+            r#"{{"query":"hi","searchType":"CHUNKS","scope":"graph","datasets":["theirs"],"datasetIds":["{owned_id}"]}}"#
+        )))
+        .await
+        .expect("resp");
+    let status = resp.status();
+    let body = body_json(resp).await;
+    assert_eq!(status, 200, "ids must win over names, got {status}: {body}");
+
+    let seen = retriever.last_params().expect("retriever must run");
+    assert_eq!(
+        seen.dataset_ids.as_deref(),
+        Some([owned_id].as_slice()),
+        "only the explicit id may reach the retriever"
+    );
+}
+
+/// `datasetIds: []` is "no id filter", not "match nothing": Python's
+/// `dataset_ids or None` (`recall.py:656`) makes it fall through to the
+/// names, and the HTTP search router's `if not payload.dataset_ids` does the
+/// same. So the name must resolve exactly as if the field were omitted.
+#[tokio::test]
+async fn post_recall_empty_dataset_ids_is_no_filter_and_names_still_resolve() {
+    let db = build_search_db().await;
+    let dataset_id = seed_dataset(&db, "notes", default_test_user_id()).await;
+    let (app, retriever) = build_recording_app(db).await;
+
+    let resp = app
+        .oneshot(post_recall_request(
+            r#"{"query":"hi","searchType":"CHUNKS","scope":"graph","datasets":["notes"],"datasetIds":[]}"#
+                .to_string(),
+        ))
+        .await
+        .expect("resp");
+    let status = resp.status();
+    let body = body_json(resp).await;
+    assert_eq!(status, 200, "got {status}: {body}");
+
+    let seen = retriever.last_params().expect("retriever must run");
+    assert_eq!(
+        seen.dataset_ids.as_deref(),
+        Some([dataset_id].as_slice()),
+        "the name must resolve when the id list is empty"
+    );
+}

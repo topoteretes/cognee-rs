@@ -3,7 +3,9 @@
 //! Per Python parity ([`get_recall_router.py`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/recall/routers/get_recall_router.py)),
 //! this router shares the underlying `SearchOrchestrator` with `/api/v1/search`
 //! but maps errors through three distinct envelopes:
-//! - `200 []` for permission denied (silent — NOT 403).
+//! - `403 {detail}` for permission denied — a `dataset_ids` entry the caller
+//!   may not read (Python re-raises `PermissionDeniedError` into the global
+//!   `CogneeApiError` handler, `get_recall_router.py:322-325`).
 //! - `422 {error, hint}` for prerequisite errors.
 //! - `409 {error}` for any other unhandled exception.
 //!
@@ -113,6 +115,7 @@ pub async fn get_recall_history(
         (status = 200, description = "recall results — flat list of dicts each tagged with `_source`", body = Vec<serde_json::Value>),
         (status = 400, description = "validation error", body = serde_json::Value),
         (status = 401, description = "unauthorized"),
+        (status = 403, description = "permission denied on a requested dataset id", body = serde_json::Value),
         (status = 409, description = "catch-all", body = RecallErrorBody),
         (status = 422, description = "prerequisites not met", body = RecallErrorBody),
     )
@@ -181,12 +184,23 @@ pub async fn post_recall(
         .and_then(|n| if n > 0 { Some(n as usize) } else { None })
         .unwrap_or(10);
     let datasets: Option<Vec<String>> = payload.datasets.clone();
+    // Forwarded verbatim; the orchestrator gives ids precedence over names
+    // and authorizes each one against the caller (Python `recall.py:655-657`
+    // + `authorized_search`). Dropping this line is the bug this router had:
+    // an id filter deserialized fine and then produced unfiltered results.
+    let dataset_ids = payload.dataset_ids.clone();
     let query_type: Option<cognee_search::SearchType> = Some(payload.search_type.into());
 
     let auto_mode = normalized.as_slice() == [RecallScope::Auto];
     let (sources, auto_fallthrough): (Vec<RecallScope>, bool) = if auto_mode {
-        match (session_id_opt, datasets.as_ref(), query_type) {
-            (Some(_), None, None) => (vec![RecallScope::Session, RecallScope::Graph], true),
+        // Python `recall.py:466-476`: either dataset filter counts as scope.
+        // (`query_type` is always `Some` on this wire — `searchType` has a
+        // default — so the short-circuit arm is unreachable over HTTP; kept
+        // so the lib and HTTP fan-outs read the same.)
+        let has_dataset_scope = dataset_ids.as_ref().is_some_and(|d| !d.is_empty())
+            || datasets.as_ref().is_some_and(|d| !d.is_empty());
+        match (session_id_opt, has_dataset_scope, query_type) {
+            (Some(_), false, None) => (vec![RecallScope::Session, RecallScope::Graph], true),
             (Some(_), _, _) => (vec![RecallScope::Session, RecallScope::Graph], false),
             (None, _, _) => (vec![RecallScope::Graph], false),
         }
@@ -234,6 +248,7 @@ pub async fn post_recall(
                     &payload.query,
                     query_type,
                     datasets.clone(),
+                    dataset_ids.clone(),
                     top_k,
                     /* auto_route = */ false,
                     session_id_opt,
@@ -323,17 +338,20 @@ fn inject_source_into_object(value: serde_json::Value, src: &str) -> serde_json:
 ///
 /// See `docs/http-server/routers/recall.md` §2.2.
 ///
-/// **Parity gap (silent `200 []` for permission denied)**: Python's HTTP
-/// recall returns `200 []` when `PermissionDeniedError` is raised by
-/// `get_authorized_existing_datasets`. The Rust `SearchOrchestrator` has no
-/// `PermissionDenied` variant on `SearchError` and does not perform per-
-/// dataset ACL filtering before dispatch — so the silent-empty path is not
-/// reachable through this handler today. When the orchestrator gains a
-/// `PermissionDenied` variant (or the handler grows an explicit ACL
-/// pre-check) this map MUST recognise it and return `Ok(Json(vec![]))`
-/// rather than 409. Tracked at `docs/http-server/routers/recall.md` §2.2.
+/// **Permission denied is 403, not a silent `200 []`.** An earlier revision
+/// of this file (and `docs/http-server/routers/recall.md`) recorded Python as
+/// swallowing `PermissionDeniedError` into an empty list. Current upstream
+/// re-raises every `CogneeApiError` (`get_recall_router.py:322-325`) and the
+/// global handler in `cognee/api/client.py:220-236` answers with the
+/// exception's own status — 403 for `PermissionDeniedError` — and the body
+/// `{"detail": "<message> [<name>]"}`. `ApiError::Forbidden` produces that
+/// shape. Silence here would also re-create the failure this module exists
+/// to remove: a request that looks like it worked.
 fn map_recall_error(err: CoreSearchError) -> ApiError {
     match err {
+        CoreSearchError::PermissionDenied(message) => {
+            ApiError::Forbidden(format!("{message} [PermissionDeniedError]"))
+        }
         // 422: prerequisite errors carry the `{error, hint}` envelope.
         // Python emits this for DatabaseNotCreatedError, UserNotFoundError,
         // CogneeValidationError, DatasetNotFoundError.

@@ -421,12 +421,19 @@ pub async fn fetch_graph_context(
 /// `user_id` is the caller's identity in the same string form the session
 /// helpers take. It becomes `SearchRequest.user_id`, which the orchestrator
 /// needs to resolve `datasets` *names* owner-scoped — without it any name
-/// filter fails with "dataset name filter requires SearchRequest.user_id".
+/// filter fails with "dataset name filter requires SearchRequest.user_id" —
+/// and to authorize explicit `dataset_ids` against their owner.
+///
+/// `dataset_ids` takes precedence over `datasets`: when it is non-empty the
+/// names are never resolved (Python `recall.py:655-657`,
+/// `search_dataset_ids = dataset_ids or None`). An empty list is the same as
+/// `None`.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_graph(
     query_text: &str,
     query_type: Option<SearchType>,
     datasets: Option<Vec<String>>,
+    dataset_ids: Option<Vec<Uuid>>,
     top_k: usize,
     auto_route: bool,
     session_id: Option<&str>,
@@ -435,20 +442,24 @@ pub async fn run_graph(
     span: &tracing::Span,
     options: Option<&RecallOptions>,
 ) -> Result<(Vec<RecallItem>, SearchType, bool, SearchResponse), SearchError> {
-    // The orchestrator resolves dataset *names* owner-scoped (Python
-    // `_run_graph` -> `get_authorized_existing_datasets(datasets, "read",
-    // user)`), so it needs the caller's identity on the request. Recall's
-    // `user_id` is a string because the session helpers key on strings; the
-    // graph side needs the UUID form. A non-UUID caller id only matters when a
-    // name filter is in play -- without one the graph search has no owner scope
-    // to apply and the value is simply not forwarded, as before.
+    // The orchestrator resolves dataset *names* owner-scoped and authorizes
+    // explicit *ids* against their owner (Python `_run_graph` ->
+    // `get_authorized_existing_datasets(datasets, "read", user)` and
+    // `authorized_search(dataset_ids=...)`), so it needs the caller's identity
+    // on the request. Recall's `user_id` is a string because the session
+    // helpers key on strings; the graph side needs the UUID form. A non-UUID
+    // caller id only matters when a dataset filter is in play -- without one
+    // the graph search has no owner scope to apply and the value is simply not
+    // forwarded, as before.
+    let has_dataset_filter = datasets.as_ref().is_some_and(|d| !d.is_empty())
+        || dataset_ids.as_ref().is_some_and(|d| !d.is_empty());
     let owner_id: Option<Uuid> = match user_id {
         None => None,
         Some(raw) => match Uuid::parse_str(raw) {
             Ok(id) => Some(id),
-            Err(error) if datasets.as_ref().is_some_and(|d| !d.is_empty()) => {
+            Err(error) if has_dataset_filter => {
                 return Err(SearchError::InvalidInput(format!(
-                    "dataset name filter requires a UUID user_id to identify the owner, \
+                    "dataset filter requires a UUID user_id to identify the owner, \
                      got '{raw}': {error}"
                 )));
             }
@@ -484,7 +495,7 @@ pub async fn run_graph(
         search_type,
         top_k: Some(top_k),
         datasets,
-        dataset_ids: None,
+        dataset_ids,
         system_prompt: options.and_then(|o| o.system_prompt.clone()),
         system_prompt_path: options.and_then(|o| o.system_prompt_path.clone()),
         only_context: options.and_then(|o| o.only_context),
@@ -813,6 +824,7 @@ mod tests {
             "anything",
             Some(SearchType::Chunks),
             Some(vec!["notes".to_string()]),
+            None,
             5,
             false,
             None,
@@ -854,6 +866,7 @@ mod tests {
             "anything",
             Some(SearchType::Chunks),
             Some(vec!["notes".to_string()]),
+            None,
             5,
             false,
             None,
@@ -885,6 +898,7 @@ mod tests {
             "anything",
             Some(SearchType::Chunks),
             Some(vec!["notes".to_string()]),
+            None,
             5,
             false,
             None,
@@ -907,6 +921,7 @@ mod tests {
             "anything",
             Some(SearchType::Chunks),
             None,
+            None,
             5,
             false,
             None,
@@ -917,5 +932,82 @@ mod tests {
         )
         .await
         .expect("no name filter -> non-UUID id is simply not forwarded");
+    }
+
+    /// `POST /v1/recall` deserialized `dataset_ids` and then dropped it on
+    /// the floor: `run_graph` had no parameter for it and hard-coded
+    /// `dataset_ids: None`, so an id filter returned unfiltered results with
+    /// a 200. The id must reach the retriever.
+    #[tokio::test]
+    async fn run_graph_forwards_dataset_ids_to_the_retriever() {
+        let owner = Uuid::new_v4();
+        let (orchestrator, retriever, dataset_id) =
+            orchestrator_with_seeded_dataset("notes", owner).await;
+        let owner_str = owner.to_string();
+        let span = tracing::Span::none();
+
+        run_graph(
+            "anything",
+            Some(SearchType::Chunks),
+            None,
+            Some(vec![dataset_id]),
+            5,
+            false,
+            None,
+            Some(owner_str.as_str()),
+            &orchestrator,
+            &span,
+            None,
+        )
+        .await
+        .expect("an owned dataset id must be accepted");
+
+        let seen = retriever
+            .seen
+            .lock()
+            .expect("test mutex")
+            .clone()
+            .expect("retriever must have been invoked");
+        assert_eq!(
+            seen.dataset_ids.as_deref(),
+            Some([dataset_id].as_slice()),
+            "the explicit dataset id must reach the retriever"
+        );
+    }
+
+    /// Ids are authorized against the caller: another user's dataset id is
+    /// refused with `PermissionDenied` (Python `PermissionDeniedError`),
+    /// never silently searched.
+    #[tokio::test]
+    async fn run_graph_dataset_ids_are_owner_checked() {
+        let owner = Uuid::new_v4();
+        let stranger = Uuid::new_v4().to_string();
+        let (orchestrator, retriever, dataset_id) =
+            orchestrator_with_seeded_dataset("notes", owner).await;
+        let span = tracing::Span::none();
+
+        let err = run_graph(
+            "anything",
+            Some(SearchType::Chunks),
+            None,
+            Some(vec![dataset_id]),
+            5,
+            false,
+            None,
+            Some(stranger.as_str()),
+            &orchestrator,
+            &span,
+            None,
+        )
+        .await
+        .expect_err("a stranger must not read another owner's dataset by id");
+        assert!(
+            matches!(err, SearchError::PermissionDenied(_)),
+            "expected PermissionDenied, got {err:?}"
+        );
+        assert!(
+            retriever.seen.lock().expect("test mutex").is_none(),
+            "retriever must not run for a denied id"
+        );
     }
 }

@@ -80,6 +80,7 @@ pub fn run(args: RecallArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
             &args.query,
             query_type,
             datasets,
+            None,
             args.top_k,
             auto_route,
             args.session_id.as_deref(),

@@ -59,18 +59,18 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
   | Status | Body | Condition |
   |---|---|---|
   | 401 | `{"detail": "Unauthorized"}` | No credential. |
-  | 200 with `[]` | `[]` | `PermissionDeniedError`. **Different from `/api/v1/search`** — Python recall silently returns an empty list ([`get_recall_router.py:127-128`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/recall/routers/get_recall_router.py#L127-L128)) instead of 403. Recall is meant to "always succeed" from the caller's perspective. We match. |
+  | 403 | `{"detail": "Request owner does not have necessary permission: [read] for all datasets requested. [PermissionDeniedError]"}` | A `dataset_ids` entry the caller may not read — someone else's dataset or a UUID that names nothing (one error for the batch, so ids cannot be probed). Python re-raises `PermissionDeniedError` into the global `CogneeApiError` handler ([`get_recall_router.py:322-325`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/recall/routers/get_recall_router.py#L322-L325), [`client.py:220-236`](https://github.com/topoteretes/cognee/blob/main/cognee/api/client.py#L220-L236)), the same as search. Earlier revisions of this doc recorded a silent `200 []`; upstream no longer does that, and Rust matches current upstream. |
   | 422 | `{"error": "Recall prerequisites not met", "hint": "Run `await cognee.remember(...)` or `await cognee.add(...)` then `await cognee.cognify()` before recalling."}` | `DatabaseNotCreatedError`, `UserNotFoundError`, `CogneeValidationError`. Python: [`get_recall_router.py:116-126`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/recall/routers/get_recall_router.py#L116-L126). Note the **two-field envelope** (`error`, `hint`) is **distinct from search**'s `{error, detail}` shape — recall uses `hint` instead of `detail`. Match exactly. |
   | 409 | `{"error": "An error occurred during recall."}` | Catch-all for any other exception. Single-field `{error}` envelope. The underlying error is logged at `error!` level. Python: [`get_recall_router.py:129-135`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/recall/routers/get_recall_router.py#L129-L135). |
 
-  **Three distinct error envelopes** in this endpoint alone (`{error, hint}`, `{error}`, plus the silent-empty for permission denied). Document loudly in `crates/http-server/src/error.rs`; gate via `ApiError::RecallError(status, ErrorBody)`.
+  **Three distinct error envelopes** in this endpoint alone (`{error, hint}`, `{error}`, plus the canonical `{detail}` shared by 401 and 403). Document loudly in `crates/http-server/src/error.rs`; gate via `ApiError::RecallError(status, ErrorBody)`.
 - **Side effects**:
   1. **Search-history write** (every POST). Same two rows as `/api/v1/search`: one `Query` row, one `Result` row. Persisted via `SearchHistoryDb::log_query` + `log_result` from inside `SearchOrchestrator::search`. The history is **shared** between the two endpoints — `GET /api/v1/recall` and `GET /api/v1/search` return the same set.
   2. **Vector / graph reads** as in search.
 - **Delegation target**: the `cognee_search::recall_scope::*` helpers (`search_session`, `search_trace`, `fetch_graph_context`, `run_graph`), iterated per the resolved scope list. The `Graph` source calls `run_graph` against the `SearchOrchestrator`; the session-backed sources use the optional `session_store` / `session_manager` component handles (which gracefully return `Ok(vec![])` when unwired). The handler does **not** call `cognee::api::recall::recall` (cycle constraint); the `recall_scope` helpers were lifted into `cognee-search` so the fan-out is reachable without a cycle.
 - **Validation rules**: same as search.
 - **Rate / size limits**: default body limit (100 MiB).
-- **Permission gate**: `read` permission on each requested dataset (same as search). When permission resolution drops the entire scope, the orchestrator returns a `PermissionDenied` error which the recall handler maps to **`200 []`** (not 403, unlike search).
+- **Permission gate**: `read` permission on each requested dataset (same as search). Names resolve owner-scoped; explicit `dataset_ids` are owner-checked in `SearchOrchestrator::search` (OSS wires no ACL grants, so "readable" is "owned by the caller" — Python's `ENABLE_BACKEND_ACCESS_CONTROL=false` default). Any denied id fails the whole batch with `SearchError::PermissionDenied`, which the handler maps to **403** exactly as search does. `dataset_ids` takes precedence over `datasets` when both are sent; an empty list is no filter.
 - **OpenAPI**: tag `["v1", "recall"]`. Request body schema from `RecallPayloadDTO`; response schema `Vec<RecallResultDTO>`. The error envelopes are declared separately in the `responses` block.
 - **Telemetry**: span name `cognee.api.recall`. Attributes (per [../observability.md §3.3](../observability.md#33-span-instrumentation-conventions)):
   - `cognee.search.query` — first 500 chars of the user query.
@@ -102,7 +102,7 @@ This router has three distinct error envelope shapes:
 - `{detail}` — for 401 (canonical).
 - `{error}` — for 409 catch-all and GET-history 500.
 - `{error, hint}` — for 422 prerequisite errors.
-- `200 []` — for permission denied (silent).
+- `{detail}` — also for 403 permission denied (a `dataset_ids` entry the caller may not read).
 
 Match all four exactly. Encode via dedicated `ApiError::RecallError { status, body: RecallErrorBody }` variants where `RecallErrorBody` is itself an enum.
 
@@ -200,7 +200,7 @@ Same as in [search.md §4](search.md#searchtype-wire-shapes) — all 15 `SearchT
 8. Integration tests in `crates/http-server/tests/test_recall.rs`:
    - POST with `search_type="GRAPH_COMPLETION"` against a populated dataset → 200 with results.
    - POST with `search_type="CYPHER"` and a Cypher query → 200 with results.
-   - POST against a dataset the user can't read → returns `200 []` (NOT 403).
+   - POST with `dataset_ids` naming a dataset the user does not own → `403 {detail}`, and the retriever never runs.
    - POST against an empty database → 422 with `{error, hint}`.
    - POST that triggers an arbitrary unhandled error → 409 with `{error}`.
 9. Cross-SDK parity test in `e2e-cross-sdk/harness/test_http_recall.py`. Recall and search should produce identical results for identical request bodies (modulo error-envelope differences when failing).
@@ -209,14 +209,14 @@ Same as in [search.md §4](search.md#searchtype-wire-shapes) — all 15 `SearchT
 
 1. **`SearchType::Feedback` parity** — present in the Rust enum but absent from Python's `SearchType`. Drop from the HTTP DTO; keep an internal `SearchTypeInternal` superset for library callers. The HTTP wire enum mirrors Python's set verbatim. Defer the per-router resolution to the search-router doc.
 2. **Telemetry parity (PostHog)** — Python's `send_telemetry(...)` is skipped in Rust per [../observability.md §1](../observability.md#1-goals--non-goals). Confirm this gap is documented for the user-facing CHANGELOG.
-3. **Empty `[]` permission-denied response** — Python returns `200 []` rather than `403`, which is a deliberate UX choice (recall is "always succeed"). Confirm the e2e parity test asserts on `200` not `403`.
+3. **Permission-denied response** — *resolved*: current Python re-raises `PermissionDeniedError` and answers `403`; the silent `200 []` this question was written against is gone upstream. Any e2e parity test must assert `403`.
 4. **Search-history history-write idempotency** — does Python double-write when the SDK retries? If so, Rust matches; if not, Rust matches; either way confirm via a parity test.
 5. **Library-level recall reachability** — embedders who call `cognee::api::recall::recall` directly should still get auto-routing and session-first dispatch. The HTTP layer simply doesn't expose them. Confirm the embedder-facing docs make this distinction clear.
 3. **`?include_source=true` query parameter**: should the HTTP layer expose the library's `_source: "session" | "graph"` tag? Useful for frontends building "Recent activity" UIs that distinguish session-cached answers. Recommend yes, behind an opt-in query param to keep default wire format Python-compatible.
 4. **Override counter exposure**: where does `record_override`'s state surface to the operator? Options: (a) a new `GET /api/v1/activity/recall-overrides` endpoint, (b) a span attribute on every recall request, (c) only via the in-memory span buffer (current state). Recommend (c) for phase 4; revisit if misrouting becomes a real issue.
 5. **Session search algorithm**: the library uses `HashSet::intersection` (token overlap, min length 2). For a session with thousands of Q&A entries, this is O(n) per call. Should the session store cache an inverted index? Out of scope for the HTTP doc — flag in [`crates/session/`](../../../crates/session/).
-6. **Permission-denied silent vs explicit**: recall returns `200 []` for permission denied; search returns `403`. Inconsistency is intentional in Python (recall is "memory" so it should "always remember nothing"). Document for cross-SDK test authors.
-7. **`PermissionDenied` arm currently unreachable** — *resolved in P4 implementation but kept open for a future phase*. The recall handler's `200 []` branch for permission-denied was wired in [`crates/http-server/src/routers/recall.rs`](../../../crates/http-server/src/routers/recall.rs) (commit 3e10c70), but `cognee_search::SearchError` does not yet carry a `PermissionDenied` variant — the orchestrator silently drops permission-denied datasets upstream, so the silent-empty-list branch is **structurally unreachable** at the HTTP layer today. The handler's match arm is defensive scaffolding for the day a `PermissionDenied` variant is added (likely as part of the P5 RBAC work). Leave the arm in place; revisit once `cognee-search` surfaces explicit permission errors.
+6. **Permission-denied silent vs explicit** — *resolved*: both recall and search return `403 {detail}`; there is no longer an inconsistency to document.
+7. **`PermissionDenied` arm** — *resolved*: `cognee_search::SearchError::PermissionDenied` exists. The orchestrator raises it when an explicit `dataset_ids` entry is not owned by the caller (or does not exist), before any retriever runs, and both handlers map it to `403`. What remains open is ACL-aware authorization for the closed build: the check is ownership-only, so a dataset shared with the caller through `AclDb` grants (never wired in OSS) would be refused by id where Python would allow it.
 
 ## 7. References
 

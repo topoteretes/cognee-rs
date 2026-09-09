@@ -288,6 +288,10 @@ pub async fn recall(
         query,
         query_type,
         datasets,
+        // `datasetIds` is not read from the recall opts yet — the typed
+        // wrappers do not expose it for recall (they do for search, above).
+        // Follow-up: parse it the way the search op does and forward it.
+        None,
         top_k,
         auto_route,
         session_id,
