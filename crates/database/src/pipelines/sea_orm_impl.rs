@@ -604,13 +604,16 @@ impl PipelineRunRepository for SeaOrmPipelineRunRepository {
         &self,
         dataset_id: Uuid,
         pipeline_name: &str,
+        claim_id: Uuid,
     ) -> Result<bool, DatabaseError> {
-        // Deliberately not scoped to a `claim_id`, unlike the release above:
-        // the caller is an operator clearing a claim whose holder is gone, and
-        // the dead holder's id is exactly what they do not have.
+        // Scoped to the holder the caller observed. An unscoped delete would be
+        // simpler and wrong: between their read and this call the holder can
+        // have finished and a new run taken the pair, and this would then kill
+        // a live run while reporting the dead holder's id.
         let deleted = pipeline_run_claim::Entity::delete_many()
             .filter(pipeline_run_claim::Column::DatasetId.eq(uuid_hex::to_hex(dataset_id)))
             .filter(pipeline_run_claim::Column::PipelineName.eq(pipeline_name.to_string()))
+            .filter(pipeline_run_claim::Column::ClaimId.eq(uuid_hex::to_hex(claim_id)))
             .exec(self.db.as_ref())
             .await
             .map_err(|e| {
@@ -621,10 +624,64 @@ impl PipelineRunRepository for SeaOrmPipelineRunRepository {
             tracing::warn!(
                 dataset_id = %dataset_id,
                 pipeline_name = %pipeline_name,
-                "force-released a pipeline-run claim on operator request; if its holder is \
-                 still alive, a concurrent run is now possible on this pair"
+                claim_id = %claim_id,
+                "released a pipeline-run claim on operator request; if its holder is still \
+                 alive, a concurrent run is now possible on this pair"
             );
         }
         Ok(deleted.rows_affected > 0)
+    }
+
+    async fn reset_orphan_run(
+        &self,
+        dataset_id: Uuid,
+        pipeline_name: &str,
+        reason: &str,
+    ) -> Result<bool, DatabaseError> {
+        // The same row `check_pipeline_run_qualification` reads, so what is
+        // retired here is exactly what would have refused the next run.
+        let Some(latest) = self
+            .get_pipeline_run_by_dataset(dataset_id, pipeline_name)
+            .await?
+        else {
+            return Ok(false);
+        };
+
+        if !matches!(
+            latest.status,
+            PipelineRunStatus::Initiated | PipelineRunStatus::Started
+        ) {
+            return Ok(false);
+        }
+
+        // New-row-per-transition, matching `reset_orphans`: an `Errored`
+        // successor rather than a delete, so the audit trail still shows the
+        // run started and how it ended. `Errored` is also what qualification
+        // needs to see to return `Proceed`.
+        let active = pipeline_run::ActiveModel {
+            id: sea_orm::ActiveValue::Set(uuid_hex::to_hex(Uuid::new_v4())),
+            created_at: sea_orm::ActiveValue::Set(Utc::now()),
+            status: sea_orm::ActiveValue::Set(pipeline_run::PipelineRunStatus::Errored),
+            pipeline_run_id: sea_orm::ActiveValue::Set(uuid_hex::to_hex(latest.pipeline_run_id)),
+            pipeline_name: sea_orm::ActiveValue::Set(latest.pipeline_name),
+            pipeline_id: sea_orm::ActiveValue::Set(uuid_hex::to_hex(latest.pipeline_id)),
+            dataset_id: sea_orm::ActiveValue::Set(uuid_hex::to_hex_opt(latest.dataset_id)),
+            // Operator-supplied, and `run_info` is a json column whose Postgres
+            // parser rejects the `\u0000` escape — the same reason
+            // `reset_orphans` sanitizes its own literal reason.
+            run_info: sea_orm::ActiveValue::Set(Some(sanitize_json(json!({"reason": reason})))),
+        };
+        active.insert(self.db.as_ref()).await.map_err(|e| {
+            DatabaseError::QueryError(format!("reset_orphan_run insert failed: {e}"))
+        })?;
+
+        tracing::warn!(
+            dataset_id = %dataset_id,
+            pipeline_name = %pipeline_name,
+            pipeline_run_id = %latest.pipeline_run_id,
+            reason,
+            "retired an orphaned pipeline run on operator request"
+        );
+        Ok(true)
     }
 }

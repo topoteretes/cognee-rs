@@ -27,8 +27,8 @@ pub enum Commands {
     Improve(ImproveArgs),
     Delete(DeleteArgs),
     Export(ExportArgs),
-    #[command(name = "pipeline-claim")]
-    PipelineClaim(PipelineClaimArgs),
+    #[command(name = "pipeline-unblock")]
+    PipelineUnblock(PipelineUnblockArgs),
     Config(ConfigArgs),
     #[command(name = "run-sequence")]
     RunSequence(RunSequenceArgs),
@@ -195,37 +195,34 @@ pub struct VisualizeArgs {
     pub output: Option<String>,
 }
 
-/// Inspect, and optionally clear, the exclusive-run claim on a dataset.
+/// Report, and optionally clear, what a killed run left behind on a dataset.
 ///
-/// A cognify or memify run takes a claim for its `(dataset, pipeline)` pair and
-/// releases it on every graceful exit path, errors included. A process that is
-/// *killed* — SIGKILL, OOM, a hard crash — cannot release, so the row survives
-/// and every later run on that pair is refused as "already running" until the
-/// claim ages out. That window is a day.
+/// A run is refused as "already running" by two independent gates, and a killed
+/// process leaves both set: the latest `pipeline_runs` row stuck at `Started`,
+/// which is checked first and **never expires** outside an HTTP-server restart;
+/// and the exclusive-run claim, which expires after a day. Clearing only the
+/// claim leaves the run still refused, so this handles both.
 ///
-/// A claim older than the staleness window is already reclaimed automatically,
-/// so the case this command exists for is a *young* claim whose holder is dead.
-/// Nothing can distinguish that from a run genuinely in progress, which is why
-/// releasing is opt-in: without `--release` this only reports.
+/// Reporting is the default. Clearing is opt-in because nothing here can tell a
+/// dead holder from a live run, and clearing a live one re-admits the
+/// concurrent run the claim exists to prevent.
 #[derive(Debug, Args)]
-pub struct PipelineClaimArgs {
+pub struct PipelineUnblockArgs {
     /// Dataset to inspect, by name.
     #[arg(long = "dataset", short = 'd')]
     pub dataset: String,
 
-    /// Pipeline whose claim to inspect. Defaults to the cognify pipeline;
-    /// memify claims the same dataset under its own name, so the two never
-    /// exclude each other.
+    /// Pipeline to inspect: `cognify_pipeline`, `temporal-cognify` or
+    /// `memify_pipeline`. Each claims a dataset under its own name, so they
+    /// never exclude each other.
     #[arg(long = "pipeline", default_value = "cognify_pipeline")]
     pub pipeline: String,
 
-    /// Actually release the claim.
+    /// Actually clear what is reported.
     ///
-    /// Only do this when the holding process is known to be gone. Releasing a
-    /// claim a live run still holds re-admits the concurrent run the claim
-    /// exists to prevent.
-    #[arg(long = "release", default_value_t = false)]
-    pub release: bool,
+    /// Only do this when the process that started the run is known to be gone.
+    #[arg(long = "clear", default_value_t = false)]
+    pub clear: bool,
 }
 
 #[derive(Debug, Args)]

@@ -38,8 +38,8 @@ fn dispatch(command: Commands, cm: &Arc<ComponentManager>) -> Result<(), CliErro
         Commands::Export(args) => export::run(args, Arc::clone(cm)),
         // Operator triage, not a pipeline step: a sequence that pauses to
         // ask a human whether a claim's holder is dead is not a sequence.
-        Commands::PipelineClaim(_) => Err(CliError::Validation(
-            "pipeline-claim is not allowed inside run-sequence".to_string(),
+        Commands::PipelineUnblock(_) => Err(CliError::Validation(
+            "pipeline-unblock is not allowed inside run-sequence".to_string(),
         )),
         Commands::Config(args) => config::run(args),
         Commands::RunSequence(_) => Err(CliError::Validation(

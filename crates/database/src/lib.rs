@@ -47,7 +47,8 @@ pub use ops::checkpoint::{CheckpointStore, SeaOrmCheckpointStore};
 pub use ops::graph_storage::RunScope;
 pub use pipelines::sea_orm_impl::SeaOrmPipelineRunRepository;
 pub use pipelines::{
-    NoopPipelineRunRepository, PipelineRunRepository, PipelineRunWithAttributionRow,
+    NoopPipelineRunRepository, PipelineRunClaim, PipelineRunRepository,
+    PipelineRunWithAttributionRow,
 };
 pub use sea_orm::DatabaseConnection;
 pub use sync::{

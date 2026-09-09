@@ -229,24 +229,49 @@ pub trait PipelineRunRepository: Send + Sync {
         Ok(None)
     }
 
-    /// Drop whatever claim holds this pair, whoever holds it. Returns whether
-    /// there was one.
+    /// Drop the claim held by `claim_id`, reporting whether a row went.
     ///
-    /// Unlike [`Self::release_pipeline_run_claim`] this is **not** scoped to a
-    /// `claim_id`, which is the whole point: the operator reaching for it does
-    /// not have the dead holder's id. That also makes it the one call that can
-    /// re-admit a concurrent run into a live one, so it belongs behind a
-    /// deliberate operator action and nothing on the run path may call it.
+    /// Scoped to the holder exactly like [`Self::release_pipeline_run_claim`],
+    /// and for the same reason: an operator releases a claim they read a moment
+    /// earlier, and between the read and this call the holder may have finished
+    /// and a *new* run taken the pair. An unscoped delete would kill that live
+    /// run while reporting the dead holder's id.
     ///
-    /// Note this is only reachable for a claim *younger* than the staleness
-    /// window — an older one is already reclaimed by
-    /// [`Self::try_claim_pipeline_run`] without anyone asking.
+    /// What it adds over the release above is the return value. A tool acting
+    /// on behalf of an operator has to tell "cleared the claim you saw" apart
+    /// from "it was already gone", and the run path — which releases its own
+    /// claim and cannot care — does not.
     ///
     /// The default implementation reports nothing released.
     async fn force_release_pipeline_run_claim(
         &self,
         _dataset_id: Uuid,
         _pipeline_name: &str,
+        _claim_id: Uuid,
+    ) -> Result<bool, DbError> {
+        Ok(false)
+    }
+
+    /// Retire an orphaned `Initiated`/`Started` row for one pair, as
+    /// [`Self::reset_orphans`] does for every pair at once.
+    ///
+    /// This is the *first* thing that refuses a re-run after a kill, and the
+    /// one with no expiry. `check_pipeline_run_qualification` reads the latest
+    /// row for the pair before any claim is consulted and rejects a `Started`
+    /// one; a killed process leaves that row behind exactly as it leaves its
+    /// claim. The claim ages out on its own after a day — this does not age out
+    /// at all, and the only existing sweep runs at HTTP-server startup, so a
+    /// CLI-only deployment never reaches it.
+    ///
+    /// Writes an `Errored` successor rather than deleting, keeping the
+    /// new-row-per-transition audit trail intact.
+    ///
+    /// The default implementation reports nothing reset.
+    async fn reset_orphan_run(
+        &self,
+        _dataset_id: Uuid,
+        _pipeline_name: &str,
+        _reason: &str,
     ) -> Result<bool, DbError> {
         Ok(false)
     }
