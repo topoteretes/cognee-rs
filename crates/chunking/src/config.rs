@@ -96,6 +96,19 @@ impl TokenCounterKind {
                 TokenCounterKind::Word
             }
             "openai" | "openai_compatible" => TokenCounterKind::TikToken,
+            // Bedrock previously fell through to `Word`, and whitespace counting
+            // against a token budget is not a rounding error — it is a different
+            // unit. `auto_chunk_size` derives its number from the EMBEDDING
+            // MODEL'S TOKEN LIMIT (8191 for Titan v2), so counting words spent
+            // that budget in the wrong currency: 8191 words measured ~11100
+            // Titan tokens on real text, and every embed call 400d with
+            // "Too many input tokens. Max input tokens: 8192".
+            //
+            // Titan's own tokenizer is not published, so no counter here is
+            // exact. cl100k BPE is nonetheless far closer to it than whitespace
+            // (~1.3 tokens/word vs 1.0 by construction), and the clamp in
+            // `CognifyConfig::with_auto_chunk_size` covers the residual error.
+            "bedrock" => TokenCounterKind::TikToken,
             "ollama" => {
                 if let Ok(model_id) = std::env::var("HUGGINGFACE_TOKENIZER")
                     && !model_id.trim().is_empty()
@@ -258,5 +271,27 @@ mod tests {
         assert!(counter.is_ok(), "should fall back to WordCounter");
         let counter = counter.unwrap();
         assert_eq!(counter.count_tokens("hello world"), 2);
+    }
+    /// Bedrock must not fall through to whitespace counting. `auto_chunk_size`
+    /// derives its budget from the embedding model's TOKEN limit, so a word
+    /// counter spends it in the wrong unit — 8191 words measured ~11100 Titan
+    /// tokens and every embed call 400d against Titan v2's 8192 cap.
+    ///
+    /// # Safety
+    /// Same as the sibling tests: env mutation under a single-threaded harness.
+    #[test]
+    fn bedrock_gets_a_bpe_counter_not_whitespace() {
+        unsafe {
+            std::env::remove_var("COGNEE_TOKEN_COUNTER");
+            std::env::remove_var("HUGGINGFACE_TOKENIZER");
+            std::env::remove_var("EMBEDDING_TOKENIZER_PATH");
+            std::env::set_var("EMBEDDING_PROVIDER", "bedrock");
+        }
+        let kind = TokenCounterKind::from_env();
+        unsafe { std::env::remove_var("EMBEDDING_PROVIDER") };
+        assert!(
+            matches!(kind, TokenCounterKind::TikToken),
+            "bedrock must count BPE tokens, not whitespace words: {kind:?}",
+        );
     }
 }

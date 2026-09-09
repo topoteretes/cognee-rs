@@ -654,8 +654,43 @@ impl CognifyConfig {
         embedding_engine: &dyn EmbeddingEngine,
         llm: &dyn Llm,
     ) -> Self {
-        self.max_chunk_size = Some(Self::auto_chunk_size(embedding_engine, llm));
+        let budget = Self::auto_chunk_size(embedding_engine, llm);
+        self.max_chunk_size = Some(Self::fit_budget_to_counter(
+            budget,
+            &self.token_counter_kind,
+        ));
         self
+    }
+
+    /// Convert a TOKEN budget into whatever unit the configured counter measures.
+    ///
+    /// `auto_chunk_size` returns tokens, because it is derived from the embedding
+    /// model's token limit and the LLM's completion ceiling. The chunker then
+    /// spends that number using `token_counter_kind` — and `TokenCounterKind::Word`
+    /// counts whitespace, which is a different unit, not an approximation of one.
+    ///
+    /// Handing 8191 straight to a word counter produced ~11100 real tokens on
+    /// English prose and every embedding call failed with Bedrock's
+    /// "Too many input tokens. Max input tokens: 8192". The overshoot is
+    /// structural: an auto-derived budget can only ever exceed the limit it was
+    /// derived from.
+    ///
+    /// `WORD_TOKENS_UPPER_BOUND` is deliberately pessimistic. English prose runs
+    /// ~1.3 tokens/word; the observed ratio on this corpus was 1.36; dense or
+    /// punctuation-heavy text goes higher. Undershooting costs a few more chunks,
+    /// overshooting costs the whole run.
+    fn fit_budget_to_counter(token_budget: usize, kind: &TokenCounterKind) -> usize {
+        /// Pessimistic tokens-per-word, scaled by 100 to stay in integer maths.
+        const WORD_TOKENS_UPPER_BOUND: usize = 150;
+        match kind {
+            // Already BPE/WordPiece: the budget is in the right unit. Exactness
+            // against a *different* BPE vocabulary is covered by the caller's own
+            // headroom, not by this conversion.
+            TokenCounterKind::HuggingFace { .. }
+            | TokenCounterKind::HuggingFaceFile { .. }
+            | TokenCounterKind::TikToken => token_budget,
+            TokenCounterKind::Word => (token_budget * 100 / WORD_TOKENS_UPPER_BOUND).max(1),
+        }
     }
 
     /// Validate configuration parameters.
@@ -1195,5 +1230,45 @@ mod tests {
             crate::summarization::SummaryExtractor::DEFAULT_MAX_PARALLEL,
             CognifyConfig::default().max_parallel_extractions,
         );
+    }
+    /// A token budget must be converted before a word counter spends it.
+    ///
+    /// This is the bug that produced `Too many input tokens. Max input tokens:
+    /// 8192, request input token count: 11100` on Bedrock: `auto_chunk_size`
+    /// returns the embedding model's TOKEN limit, the chunker measured
+    /// whitespace, and 8191 words is ~11100 tokens. An auto-derived budget could
+    /// only ever exceed the limit it was derived from.
+    #[test]
+    fn a_token_budget_is_converted_before_a_word_counter_spends_it() {
+        // BPE counters already speak the right unit — pass through untouched.
+        for kind in [
+            TokenCounterKind::TikToken,
+            TokenCounterKind::HuggingFace {
+                model_id: "bert-base-uncased".to_string(),
+            },
+        ] {
+            assert_eq!(
+                CognifyConfig::fit_budget_to_counter(8191, &kind),
+                8191,
+                "a BPE counter must receive the token budget unchanged: {kind:?}",
+            );
+        }
+
+        // Word counting must be scaled down, and far enough that the observed
+        // 1.36 tokens/word on real prose still lands under the limit.
+        let words = CognifyConfig::fit_budget_to_counter(8191, &TokenCounterKind::Word);
+        assert!(
+            words < 8191,
+            "a word budget must be smaller than the token budget, got {words}",
+        );
+        let worst_case_tokens = (words as f64 * 1.36) as usize;
+        assert!(
+            worst_case_tokens <= 8191,
+            "{words} words is ~{worst_case_tokens} tokens at the observed ratio, \
+             which must not exceed the 8191-token budget it came from",
+        );
+
+        // Never zero, however small the budget.
+        assert!(CognifyConfig::fit_budget_to_counter(1, &TokenCounterKind::Word) >= 1);
     }
 }
