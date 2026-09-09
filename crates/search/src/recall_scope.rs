@@ -14,6 +14,7 @@ use std::collections::HashSet;
 use cognee_session::{SessionManager, SessionStore};
 use serde::{Deserialize, Serialize};
 use tracing::debug;
+use uuid::Uuid;
 
 use crate::observability::COGNEE_SEARCH_TYPE;
 use crate::types::SearchError;
@@ -416,6 +417,11 @@ pub async fn fetch_graph_context(
 /// orchestrator. Mirrors Python's inline `_run_graph` closure
 /// (`recall.py:455-493`). Returns `(items, search_type_used, auto_routed,
 /// raw_response)`.
+///
+/// `user_id` is the caller's identity in the same string form the session
+/// helpers take. It becomes `SearchRequest.user_id`, which the orchestrator
+/// needs to resolve `datasets` *names* owner-scoped — without it any name
+/// filter fails with "dataset name filter requires SearchRequest.user_id".
 #[allow(clippy::too_many_arguments)]
 pub async fn run_graph(
     query_text: &str,
@@ -424,10 +430,32 @@ pub async fn run_graph(
     top_k: usize,
     auto_route: bool,
     session_id: Option<&str>,
+    user_id: Option<&str>,
     search_orchestrator: &SearchOrchestrator,
     span: &tracing::Span,
     options: Option<&RecallOptions>,
 ) -> Result<(Vec<RecallItem>, SearchType, bool, SearchResponse), SearchError> {
+    // The orchestrator resolves dataset *names* owner-scoped (Python
+    // `_run_graph` -> `get_authorized_existing_datasets(datasets, "read",
+    // user)`), so it needs the caller's identity on the request. Recall's
+    // `user_id` is a string because the session helpers key on strings; the
+    // graph side needs the UUID form. A non-UUID caller id only matters when a
+    // name filter is in play -- without one the graph search has no owner scope
+    // to apply and the value is simply not forwarded, as before.
+    let owner_id: Option<Uuid> = match user_id {
+        None => None,
+        Some(raw) => match Uuid::parse_str(raw) {
+            Ok(id) => Some(id),
+            Err(error) if datasets.as_ref().is_some_and(|d| !d.is_empty()) => {
+                return Err(SearchError::InvalidInput(format!(
+                    "dataset name filter requires a UUID user_id to identify the owner, \
+                     got '{raw}': {error}"
+                )));
+            }
+            Err(_) => None,
+        },
+    };
+
     // Python recall.py:458-472: still run the router on explicit query_type
     // + auto_route=true so the override gets recorded.
     let (search_type, auto_routed) = match (query_type, auto_route) {
@@ -467,7 +495,7 @@ pub async fn run_graph(
         wide_search_top_k: options.and_then(|o| o.wide_search_top_k),
         triplet_distance_penalty: options.and_then(|o| o.triplet_distance_penalty),
         save_interaction: None,
-        user_id: None,
+        user_id: owner_id,
         verbose: None,
         feedback_influence: options.and_then(|o| o.feedback_influence),
         retriever_specific_config: None,
@@ -697,5 +725,197 @@ mod tests {
         assert_eq!(RecallScope::Session.as_wire(), "session");
         assert_eq!(RecallScope::Trace.as_wire(), "trace");
         assert_eq!(RecallScope::GraphContext.as_wire(), "graph_context");
+    }
+
+    // -----------------------------------------------------------------------
+    // run_graph threads the caller identity into the dataset-name filter
+    // -----------------------------------------------------------------------
+
+    use crate::orchestration::SearchTypeRegistry;
+    use crate::retrievers::SearchRetriever;
+    use crate::types::{SearchContext, SearchOutput, SearchParams};
+    use async_trait::async_trait;
+    use cognee_database::ops as db_ops;
+    use cognee_database::{IngestDb, connect, initialize};
+    use cognee_models::Dataset;
+    use cognee_session::SessionContext;
+    use std::sync::Arc;
+
+    /// Records the `SearchParams` it was invoked with so a test can assert on
+    /// what the orchestrator handed down after dataset-name resolution.
+    struct RecordingRetriever {
+        seen: std::sync::Mutex<Option<SearchParams>>,
+    }
+
+    #[async_trait]
+    impl SearchRetriever for RecordingRetriever {
+        fn search_type(&self) -> SearchType {
+            SearchType::Chunks
+        }
+
+        async fn get_context(
+            &self,
+            _query: &str,
+            params: &SearchParams,
+        ) -> Result<SearchContext, SearchError> {
+            *self.seen.lock().expect("test mutex") = Some(params.clone());
+            Ok(vec![])
+        }
+
+        async fn get_completion(
+            &self,
+            _query: &str,
+            _context: Option<SearchContext>,
+            _session: &SessionContext,
+            _params: &SearchParams,
+        ) -> Result<SearchOutput, SearchError> {
+            Ok(SearchOutput::Text("graph-stub".to_string()))
+        }
+    }
+
+    async fn orchestrator_with_seeded_dataset(
+        name: &str,
+        owner: Uuid,
+    ) -> (SearchOrchestrator, Arc<RecordingRetriever>, Uuid) {
+        let db = Arc::new(connect("sqlite::memory:").await.expect("in-memory sqlite"));
+        initialize(&db).await.expect("schema init");
+        let dataset = db_ops::datasets::create_dataset(
+            &db,
+            Dataset::new(name.to_string(), owner, None, Uuid::new_v4()),
+        )
+        .await
+        .expect("seed dataset");
+
+        let retriever = Arc::new(RecordingRetriever {
+            seen: std::sync::Mutex::new(None),
+        });
+        let mut registry = SearchTypeRegistry::new();
+        registry.register(Arc::clone(&retriever) as Arc<dyn SearchRetriever>);
+        let orchestrator =
+            SearchOrchestrator::new(registry).with_dataset_resolver(db as Arc<dyn IngestDb>);
+        (orchestrator, retriever, dataset.id)
+    }
+
+    /// Regression: `recall -d <name>` used to fail with "dataset name filter
+    /// requires SearchRequest.user_id" because `run_graph` built the request
+    /// with `user_id: None` even though every caller had the owner in hand.
+    /// The owner must reach the orchestrator so the name resolves to the
+    /// caller's dataset id.
+    #[tokio::test]
+    async fn run_graph_forwards_owner_so_dataset_names_resolve() {
+        let owner = Uuid::new_v4();
+        let (orchestrator, retriever, dataset_id) =
+            orchestrator_with_seeded_dataset("notes", owner).await;
+        let owner_str = owner.to_string();
+        let span = tracing::Span::none();
+
+        let (_items, used, auto, _response) = run_graph(
+            "anything",
+            Some(SearchType::Chunks),
+            Some(vec!["notes".to_string()]),
+            5,
+            false,
+            None,
+            Some(owner_str.as_str()),
+            &orchestrator,
+            &span,
+            None,
+        )
+        .await
+        .expect("dataset name must resolve for its owner");
+
+        assert_eq!(used, SearchType::Chunks);
+        assert!(!auto);
+        let seen = retriever
+            .seen
+            .lock()
+            .expect("test mutex")
+            .clone()
+            .expect("retriever must have been invoked");
+        assert_eq!(
+            seen.dataset_ids.as_deref(),
+            Some([dataset_id].as_slice()),
+            "resolved dataset id must reach the retriever"
+        );
+    }
+
+    /// Name resolution stays owner-scoped: another user's dataset of the same
+    /// name is not visible, so the filter surfaces `DatasetNotFound` instead
+    /// of silently widening.
+    #[tokio::test]
+    async fn run_graph_dataset_name_is_owner_scoped() {
+        let owner = Uuid::new_v4();
+        let stranger = Uuid::new_v4().to_string();
+        let (orchestrator, _retriever, _dataset_id) =
+            orchestrator_with_seeded_dataset("notes", owner).await;
+        let span = tracing::Span::none();
+
+        let err = run_graph(
+            "anything",
+            Some(SearchType::Chunks),
+            Some(vec!["notes".to_string()]),
+            5,
+            false,
+            None,
+            Some(stranger.as_str()),
+            &orchestrator,
+            &span,
+            None,
+        )
+        .await
+        .expect_err("a stranger must not resolve another owner's dataset");
+        assert!(
+            matches!(err, SearchError::DatasetNotFound(_)),
+            "expected DatasetNotFound, got {err:?}"
+        );
+    }
+
+    /// A caller id that is not a UUID cannot identify an owner. That is fine
+    /// when no name filter is requested (the session helpers accept arbitrary
+    /// strings), but with one it must be reported as the caller's mistake
+    /// rather than resurfacing as the misleading "requires user_id" error.
+    #[tokio::test]
+    async fn run_graph_rejects_non_uuid_user_only_when_names_are_filtered() {
+        let owner = Uuid::new_v4();
+        let (orchestrator, _retriever, _dataset_id) =
+            orchestrator_with_seeded_dataset("notes", owner).await;
+        let span = tracing::Span::none();
+
+        let err = run_graph(
+            "anything",
+            Some(SearchType::Chunks),
+            Some(vec!["notes".to_string()]),
+            5,
+            false,
+            None,
+            Some("user-1"),
+            &orchestrator,
+            &span,
+            None,
+        )
+        .await
+        .expect_err("non-UUID id with a name filter must be rejected");
+        match err {
+            SearchError::InvalidInput(msg) => {
+                assert!(msg.contains("user-1"), "message must name the value: {msg}")
+            }
+            other => panic!("expected InvalidInput, got {other:?}"),
+        }
+
+        // Without a name filter the same id is tolerated, as before the fix.
+        run_graph(
+            "anything",
+            Some(SearchType::Chunks),
+            None,
+            5,
+            false,
+            None,
+            Some("user-1"),
+            &orchestrator,
+            &span,
+            None,
+        )
+        .await
+        .expect("no name filter -> non-UUID id is simply not forwarded");
     }
 }

@@ -324,6 +324,95 @@ fn search_errors_when_dataset_name_does_not_exist() {
         .stderr(predicate::str::contains("dataset not found"));
 }
 
+/// Regression: `cognee-cli recall "..." -d <name>` used to fail with
+/// `dataset name filter requires SearchRequest.user_id to identify the owner`
+/// because `run_graph` built its `SearchRequest` with `user_id: None`, even
+/// though the CLI hands `recall()` the configured owner. `search -d` never had
+/// the problem, so the two convenience paths disagreed on the same flag.
+///
+/// Keyless on purpose (`MOCK_EMBEDDING=true`, dummy `llm_api_key`) so it runs
+/// in every CI lane. Nothing is cognified, so a recall against the *real*
+/// dataset still fails downstream in the retriever -- the assertion there is
+/// only that the owner-threading error is gone. The bogus-name recall is the
+/// positive proof: reaching `dataset not found` means resolution actually ran
+/// with an owner.
+#[test]
+#[cfg(feature = "ladybug")]
+fn recall_dataset_name_filter_threads_the_owner() {
+    let config_home = TempDir::new().expect("temp dir should be created");
+    let workdir = TempDir::new().expect("temp dir should be created");
+
+    let owner_id = Uuid::from_u128(0);
+    let db_file_path = workdir.path().join("cognee.db");
+    let db_url = format!("sqlite://{}", db_file_path.display());
+    std::fs::File::create(&db_file_path).expect("sqlite database file should be created");
+
+    for (key, value) in [
+        ("default_user_id", format!("\"{owner_id}\"")),
+        (
+            "data_root_directory",
+            format!("\"{}\"", workdir.path().join("cognee_data").display()),
+        ),
+        ("relational_db_url", format!("\"{db_url}\"")),
+        (
+            "graph_file_path",
+            format!("\"{}\"", workdir.path().join("graph").display()),
+        ),
+        (
+            "vector_db_url",
+            format!("\"{}\"", workdir.path().join("vectors").display()),
+        ),
+        ("graph_database_provider", "\"ladybug\"".to_string()),
+        ("vector_db_provider", "\"brute-force\"".to_string()),
+        ("embedding_dimensions", "2".to_string()),
+        ("llm_api_key", "\"dummy-key\"".to_string()),
+    ] {
+        config_set(&config_home, workdir.path(), key, &value);
+    }
+
+    make_cmd_in(&config_home, workdir.path())
+        .args(["add", "real content", "--dataset-name", "real_dataset"])
+        .assert()
+        .success();
+
+    let owner_error = "requires SearchRequest.user_id";
+
+    // Unknown name: resolution must run as the owner and report the miss.
+    make_cmd_in(&config_home, workdir.path())
+        .env("MOCK_EMBEDDING", "true")
+        .args([
+            "recall",
+            "anything",
+            "--query-type",
+            "CHUNKS",
+            "-d",
+            "this_dataset_does_not_exist",
+            "--output-format",
+            "simple",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("dataset not found"))
+        .stderr(predicate::str::contains(owner_error).not());
+
+    // Known name: whatever happens downstream, the owner-threading error is
+    // no longer the reason `-d` fails.
+    make_cmd_in(&config_home, workdir.path())
+        .env("MOCK_EMBEDDING", "true")
+        .args([
+            "recall",
+            "anything",
+            "--query-type",
+            "CHUNKS",
+            "-d",
+            "real_dataset",
+            "--output-format",
+            "simple",
+        ])
+        .assert()
+        .stderr(predicate::str::contains(owner_error).not());
+}
+
 #[test]
 fn delete_rejects_missing_scope() {
     let config_home = TempDir::new().expect("temp dir should be created");
