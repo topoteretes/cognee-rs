@@ -440,7 +440,13 @@ jobs:
             --require-test upsert_emits_pgvector_span \
             --require-test search_emits_pgvector_span \
             --require-test delete_emits_pgvector_span \
-            --require-test close_releases_the_pool_while_the_adapter_is_still_held
+            --require-test close_releases_the_pool_while_the_adapter_is_still_held \
+            --require-test create_collection_builds_an_hnsw_index \
+            --require-test a_collection_over_the_dimension_ceiling_is_left_unindexed \
+            --require-test backfill_indexes_pre_existing_collections_and_is_idempotent \
+            --require-test backfill_replaces_an_invalid_index_left_by_a_failed_build \
+            --require-test a_search_returns_top_k_rows_even_above_the_default_ef_search \
+            --require-test a_collection_name_past_the_identifier_limit_is_still_tracked
 
   # ── Single-database Postgres stack (mirror of ci.yml's `pg-single-db-postgres`) ──
   # Two of the three suites in the keyed twin; `pg_full_stack_e2e` is deliberately

@@ -3,16 +3,37 @@
 //! Each `(data_type, field_name)` pair maps to a dedicated PostgreSQL table with
 //! columns: `id UUID PRIMARY KEY`, `vector vector(N)`, `metadata JSONB`.
 //! A `_vector_collections` bookkeeping table tracks which collection tables exist.
+//!
+//! # Indexing
+//!
+//! Each collection also carries an HNSW index over its `vector` column, built at
+//! [`VectorDB::create_collection`] time with the `vector_cosine_ops` opclass —
+//! matching the `<=>` operator every search orders by. Without it, similarity
+//! search is an exact sequential scan over the whole collection.
+//!
+//! Two deliberate exceptions:
+//!
+//! - Collections wider than [`MAX_INDEXABLE_DIMENSION`] cannot be indexed by
+//!   pgvector and keep the exact scan.
+//! - [`VectorDB::search_similar_filtered`] forces the exact scan, because
+//!   pgvector post-filters an index scan and that would break the
+//!   filter-then-limit guarantee that path exists to provide. See the comment
+//!   at that call site.
+//!
+//! Collections created before indexing existed keep only their btree primary
+//! key; [`PgVectorAdapter::create_missing_vector_indexes`] backfills them.
 
 use async_trait::async_trait;
 use sea_orm::sea_query::{
     Alias, Asterisk, Expr, Func, Iden, OnConflict, Order, PostgresQueryBuilder, Query, Table,
 };
-use sea_orm::{ConnectionTrait, Database, DatabaseBackend, DatabaseConnection, Statement};
+use sea_orm::{
+    ConnectionTrait, Database, DatabaseBackend, DatabaseConnection, Statement, TransactionTrait,
+};
 use sea_orm_migration::MigratorTrait;
 use std::collections::HashMap;
 use std::fmt;
-use tracing::{Span, debug, instrument};
+use tracing::{Span, debug, instrument, warn};
 use uuid::Uuid;
 
 use cognee_utils::sanitize::sanitize_json;
@@ -25,8 +46,47 @@ use crate::models::{SearchResult, VectorPoint};
 use crate::vector_db_trait::VectorDB;
 use crate::zero_norm::{warn_zero_norm_points, warn_zero_norm_query, warn_zero_norm_query_batch};
 
+#[cfg(test)]
+#[path = "pgvector_index_tests.rs"]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
+mod vector_index_tests;
+
 /// Max points per INSERT batch (300 params = 100 rows × 3 columns).
 const BATCH_SIZE: usize = 100;
+
+/// HNSW graph degree. pgvector's own default; raising it trades build time and
+/// index size for recall.
+const HNSW_M: u32 = 16;
+
+/// HNSW build-time candidate list size. pgvector's own default.
+const HNSW_EF_CONSTRUCTION: u32 = 64;
+
+/// pgvector cannot index a `vector` wider than 2000 dimensions — the index
+/// tuple would not fit in a page. `text-embedding-3-large` at 3072 is over the
+/// line, so a collection that wide keeps the exact scan and says so, rather
+/// than failing `create_collection` outright.
+const MAX_INDEXABLE_DIMENSION: usize = 2000;
+
+/// pgvector's own default `hnsw.ef_search`.
+///
+/// Load-bearing, not decorative: an HNSW index scan returns **at most**
+/// `ef_search` tuples and then ends, so a `LIMIT` above it is silently unmet —
+/// no error, just fewer rows. cognee's retrieval paths ask for
+/// `DEFAULT_WIDE_SEARCH_TOP_K = 100`, so leaving this at 40 would quietly drop
+/// 60% of every graph-completion, triplet and temporal seed set.
+const HNSW_EF_SEARCH_DEFAULT: usize = 40;
+
+/// Largest `hnsw.ef_search` pgvector accepts. Beyond this a search cannot be
+/// made to return `top_k` rows by raising `ef_search`, so those queries fall
+/// back to the exact scan — see [`PgVectorAdapter::ann_search_locals`].
+const HNSW_EF_SEARCH_MAX: usize = 1000;
+
+/// Postgres truncates any identifier past this many bytes (`NAMEDATALEN - 1`).
+const PG_MAX_IDENTIFIER_BYTES: usize = 63;
 
 // ---------------------------------------------------------------------------
 // Table / column identifiers for sea_query (`_vector_collections`)
@@ -235,6 +295,277 @@ impl PgVectorAdapter {
         Ok(())
     }
 
+    /// Name of the HNSW index over a collection's `vector` column.
+    ///
+    /// Derived from the collection name, which [`Self::validate_identifier`] has
+    /// already restricted to `[A-Za-z0-9_]`, so it is safe to interpolate.
+    ///
+    /// Truncated to [`PG_MAX_IDENTIFIER_BYTES`] here, because Postgres would
+    /// truncate it anyway when creating the index — and then
+    /// [`Self::vector_index_state`], which compares the name as *data* against
+    /// `pg_class.relname`, would be looking for the untruncated string and never
+    /// match. The consequences of that mismatch are not cosmetic: the backfill
+    /// would re-issue `CREATE INDEX` and re-count it on every run, and an index
+    /// left invalid by an interrupted build would report as absent, so it would
+    /// never be dropped or rebuilt. Slicing bytes is safe because the name is
+    /// ASCII by construction.
+    ///
+    /// Two collections whose names agree in their first 51 characters therefore
+    /// collide on one index name. That is inherited from the collection names
+    /// themselves — they are table names under the same limit — so it is not
+    /// introduced here.
+    fn vector_index_name(coll: &str) -> String {
+        let mut name = format!("{coll}_vector_hnsw");
+        name.truncate(PG_MAX_IDENTIFIER_BYTES);
+        name
+    }
+
+    /// `SET LOCAL` statements that make an ANN search actually return `top_k`
+    /// rows, as one semicolon-separated string (one round trip).
+    ///
+    /// An HNSW index scan stops after `ef_search` tuples, so `ef_search` must be
+    /// at least `top_k` or the `LIMIT` is silently unmet. Past
+    /// [`HNSW_EF_SEARCH_MAX`] that lever runs out, and the only way left to
+    /// guarantee `top_k` rows is to not use the index — which is the right
+    /// trade at that size, since such a query is scanning most of the
+    /// collection regardless.
+    fn ann_search_locals(top_k: usize) -> String {
+        if top_k > HNSW_EF_SEARCH_MAX {
+            return Self::exact_scan_locals().to_string();
+        }
+        let ef = top_k.max(HNSW_EF_SEARCH_DEFAULT);
+        format!("SET LOCAL hnsw.ef_search = {ef}")
+    }
+
+    /// `SET LOCAL` statements that force an exact scan, for the paths whose
+    /// correctness depends on it.
+    fn exact_scan_locals() -> &'static str {
+        "SET LOCAL enable_indexscan = off; SET LOCAL enable_bitmapscan = off"
+    }
+
+    /// Run `stmt` in a transaction with `locals` applied first.
+    ///
+    /// The transaction is what makes `SET LOCAL` mean anything — outside one it
+    /// is a no-op with a warning — and it scopes the settings to this statement
+    /// so they cannot leak to the next borrower of a pooled connection. `locals`
+    /// goes over the simple-query protocol, so several `SET LOCAL`s cost one
+    /// round trip rather than one each.
+    async fn query_all_with_locals(
+        &self,
+        locals: &str,
+        stmt: Statement,
+    ) -> VectorDBResult<Vec<sea_orm::QueryResult>> {
+        let txn = self
+            .db
+            .begin()
+            .await
+            .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
+        txn.execute_unprepared(locals)
+            .await
+            .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
+        let rows = txn
+            .query_all(stmt)
+            .await
+            .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
+        txn.commit()
+            .await
+            .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
+        Ok(rows)
+    }
+
+    /// Create the HNSW index over `coll`'s `vector` column, if the collection is
+    /// narrow enough to index.
+    ///
+    /// The opclass is `vector_cosine_ops` because every search site orders by
+    /// the cosine operator `<=>`; an opclass that does not match the operator in
+    /// the `ORDER BY` is simply never used by the planner, which would leave the
+    /// sequential scan in place while looking like it had been fixed.
+    ///
+    /// `concurrently` builds without taking a write lock, at the cost of not
+    /// being runnable inside a transaction. Pass `false` from
+    /// [`VectorDB::create_collection`], where the table is empty and the lock is
+    /// free; pass `true` from [`Self::create_missing_vector_indexes`], which
+    /// backfills tables that already hold rows and may be serving traffic.
+    async fn create_vector_index(
+        db: &DatabaseConnection,
+        coll: &str,
+        dimension: usize,
+        concurrently: bool,
+    ) -> VectorDBResult<bool> {
+        if dimension > MAX_INDEXABLE_DIMENSION {
+            debug!(
+                "collection {coll} is {dimension}-dimensional, over pgvector's \
+                 {MAX_INDEXABLE_DIMENSION}-d index ceiling — keeping the exact scan"
+            );
+            return Ok(false);
+        }
+
+        let index = Self::vector_index_name(coll);
+        let concurrent_kw = if concurrently { " CONCURRENTLY" } else { "" };
+        let ddl = format!(
+            r#"CREATE INDEX{concurrent_kw} IF NOT EXISTS "{index}"
+               ON "{coll}" USING hnsw (vector vector_cosine_ops)
+               WITH (m = {HNSW_M}, ef_construction = {HNSW_EF_CONSTRUCTION})"#
+        );
+
+        db.execute_unprepared(&ddl)
+            .await
+            .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
+
+        // "ensured", not "created": the statement carries `IF NOT EXISTS`, so it
+        // is a no-op when the index is already there — including when two
+        // backfills race — and claiming a creation would misreport that.
+        debug!("ensured HNSW index {index} on {coll} (dim={dimension})");
+        Ok(true)
+    }
+
+    /// State of the index named `index`: `None` if it does not exist, else
+    /// whether Postgres considers it valid.
+    ///
+    /// Validity is the part that matters for the backfill. A `CREATE INDEX
+    /// CONCURRENTLY` that fails or is interrupted leaves the index in place but
+    /// marked invalid; the planner ignores an invalid index, and
+    /// `CREATE INDEX ... IF NOT EXISTS` sees the *name* and does nothing — so a
+    /// presence-only check would skip it on every subsequent run and the
+    /// collection would keep its sequential scan forever, while looking indexed.
+    /// The caller drops an invalid index and rebuilds it.
+    ///
+    /// Matches on `pg_class.relname`, which compares the name as *data*. The
+    /// obvious alternative, `to_regclass($1)`, parses its argument as an SQL
+    /// identifier and case-folds an unquoted one, so it would look for
+    /// `idx_f_vector_hnsw` and never match the `"Idx_f_vector_hnsw"` that was
+    /// actually created — collection names carry their case, coming from a
+    /// `data_type` like `DocumentChunk`.
+    ///
+    /// Restricted to `current_schema()`, because `relname` alone matches across
+    /// every schema in the database while every other statement here is
+    /// unqualified and so `search_path`-relative. Without the filter, two cognee
+    /// installs in one database (the shared single-database deployment) would
+    /// interfere: schema A's valid index would make this report `Some(true)` for
+    /// schema B, leaving B on the sequential scan — and worse, an *invalid*
+    /// index in A would report `Some(false)`, so the caller's unqualified
+    /// `DROP INDEX` would resolve through `search_path` and drop B's valid one.
+    /// `current_schema()` is the first entry of `search_path`, which is exactly
+    /// what the unqualified DDL resolves to, so probe and DDL agree.
+    async fn vector_index_state(
+        db: &DatabaseConnection,
+        index: &str,
+    ) -> VectorDBResult<Option<bool>> {
+        let row = db
+            .query_one(Statement::from_sql_and_values(
+                DatabaseBackend::Postgres,
+                "SELECT i.indisvalid AS valid
+                   FROM pg_class c
+                   JOIN pg_index i ON i.indexrelid = c.oid
+                  WHERE c.relname = $1
+                    AND c.relnamespace = current_schema()::regnamespace",
+                [index.into()],
+            ))
+            .await
+            .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
+
+        match row {
+            Some(row) => row
+                .try_get::<bool>("", "valid")
+                .map(Some)
+                .map_err(|e| VectorDBError::StorageError(e.to_string())),
+            None => Ok(None),
+        }
+    }
+
+    /// Build the HNSW index on every registered collection that does not have
+    /// one yet, and report how many were created.
+    ///
+    /// [`VectorDB::create_collection`] indexes new collections, but it guards on
+    /// `has_collection`, so it never runs for a collection that already exists.
+    /// Every collection created before this change therefore still has only its
+    /// btree primary key, and stays on the sequential scan until this runs once.
+    ///
+    /// Uses `CREATE INDEX CONCURRENTLY`, so it does not block writes and cannot
+    /// be called inside a transaction — which is also why it is not a migration.
+    /// Idempotent and safe to call on every startup, but building an HNSW index
+    /// over a large collection is expensive, so the caller decides when.
+    ///
+    /// The returned count is indexes this call actually built: collections that
+    /// already had one, and collections wider than [`MAX_INDEXABLE_DIMENSION`],
+    /// are skipped and not counted.
+    ///
+    /// A collection that fails is logged and skipped rather than aborting the
+    /// run, so one bad entry cannot leave every collection after it unindexed.
+    /// That is reachable without any corruption: `delete_collection` drops the
+    /// table before deleting its bookkeeping row and not in one transaction, so
+    /// an interrupted delete leaves an orphan row whose `CREATE INDEX` fails
+    /// with `relation does not exist`.
+    pub async fn create_missing_vector_indexes(&self) -> VectorDBResult<usize> {
+        let query = Query::select()
+            .columns([VColl::CollectionName, VColl::Dimension])
+            .from(VColl::Table)
+            .to_owned();
+
+        let rows = self
+            .db
+            .query_all(self.build(&query))
+            .await
+            .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
+
+        let mut created = 0usize;
+        for row in &rows {
+            let coll: String = row
+                .try_get("", "collection_name")
+                .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
+            let dimension: i32 = row
+                .try_get("", "dimension")
+                .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
+
+            // A row in the bookkeeping table came from `create_collection`, which
+            // validated the name before creating the table — but re-validate
+            // rather than trust the table, since this name is interpolated into
+            // DDL and the table is reachable by anything with the connection.
+            Self::validate_identifier(&coll)?;
+
+            // Check first rather than leaning on `IF NOT EXISTS`, so the count
+            // reports work actually done and an already-indexed collection is
+            // not handed a redundant CONCURRENTLY build.
+            let index = Self::vector_index_name(&coll);
+            let state = match Self::vector_index_state(&self.db, &index).await {
+                Ok(state) => state,
+                Err(e) => {
+                    warn!("could not read index state for collection {coll}, skipping it: {e}");
+                    continue;
+                }
+            };
+
+            if state == Some(true) {
+                continue;
+            }
+
+            // `Some(false)` is an index left behind by an interrupted
+            // CONCURRENTLY build. `IF NOT EXISTS` would refuse to replace it, so
+            // drop it and rebuild — otherwise this collection can never become
+            // indexed.
+            if state == Some(false) {
+                debug!("dropping invalid index {index} left by a failed build, rebuilding");
+                if let Err(e) = self
+                    .db
+                    .execute_unprepared(&format!(r#"DROP INDEX CONCURRENTLY "{index}""#))
+                    .await
+                {
+                    warn!("could not drop invalid index {index}, skipping {coll}: {e}");
+                    continue;
+                }
+            }
+
+            match Self::create_vector_index(&self.db, &coll, dimension.max(0) as usize, true).await
+            {
+                Ok(true) => created += 1,
+                Ok(false) => {}
+                Err(e) => warn!("could not index collection {coll}, skipping it: {e}"),
+            }
+        }
+
+        Ok(created)
+    }
+
     /// Format a vector as pgvector text literal: `[1.0,2.0,3.0]`
     fn format_vector(v: &[f32]) -> String {
         let inner: String = v
@@ -422,6 +753,28 @@ impl VectorDB for PgVectorAdapter {
             .execute_unprepared(&ddl)
             .await
             .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
+
+        // Build the ANN index while the table is empty, which is why HNSW and
+        // not IVFFlat: IVFFlat derives its centroids from existing rows, so it
+        // cannot be built here and would need a rebuild policy. HNSW builds
+        // incrementally, so an empty-table CREATE INDEX is instant and takes no
+        // meaningful lock.
+        //
+        // Best-effort on purpose. `CREATE TABLE` above has no `IF NOT EXISTS`
+        // and `has_collection` reads only the bookkeeping table, so propagating
+        // an error here would leave the table created and unregistered — and
+        // every retry would then fail at `CREATE TABLE` with `already exists`,
+        // wedging that collection permanently. An index failure (pgvector too
+        // old to have the `hnsw` access method, a restricted role, no
+        // `maintenance_work_mem`) must degrade to the sequential scan, which is
+        // exactly the behaviour before this index existed. The backfill picks it
+        // up later.
+        if let Err(e) = Self::create_vector_index(&self.db, &coll, dimension, false).await {
+            warn!(
+                "collection {coll} was created without an ANN index, so its searches will \
+                 be sequential scans until create_missing_vector_indexes() runs: {e}"
+            );
+        }
 
         // Register in bookkeeping table.
         let insert = Query::insert()
@@ -723,15 +1076,18 @@ impl VectorDB for PgVectorAdapter {
                LIMIT $2"#
         );
 
+        // `ef_search` must cover `top_k`, or the index scan ends early and the
+        // LIMIT is silently unmet — see `ann_search_locals`.
         let rows = self
-            .db
-            .query_all(Statement::from_sql_and_values(
-                DatabaseBackend::Postgres,
-                &sql,
-                [vec_str.into(), (top_k as i64).into()],
-            ))
-            .await
-            .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
+            .query_all_with_locals(
+                &Self::ann_search_locals(top_k),
+                Statement::from_sql_and_values(
+                    DatabaseBackend::Postgres,
+                    &sql,
+                    [vec_str.into(), (top_k as i64).into()],
+                ),
+            )
+            .await?;
 
         let mut results = Vec::with_capacity(rows.len());
         for row in &rows {
@@ -797,15 +1153,30 @@ impl VectorDB for PgVectorAdapter {
         values.push((top_k as i64).into());
         values.extend(name_values);
 
+        // Deliberately keep the HNSW index out of this one query.
+        //
+        // pgvector post-filters an index scan: the index yields roughly
+        // `hnsw.ef_search` (default 40) candidates by distance alone, and the
+        // `WHERE` clause is applied to *those*. A selective NodeSet filter then
+        // returns fewer than `top_k` rows, or none at all — the exact opposite
+        // of the filter-then-limit guarantee documented above, which
+        // `test_search_similar_filtered_filter_then_limit` pins with 64
+        // zero-distance out-of-set rows crowding 2 in-set ones.
+        //
+        // Disabling index and bitmap scans for the statement forces the exact
+        // scan that guarantee needs. The unfiltered paths — `search_similar` and
+        // `batch_search_similar`, which is where the volume is — are untouched
+        // and do use the index. Trading this exactness for indexed filtered
+        // search is possible (pgvector 0.8's `hnsw.iterative_scan`, or reshaping
+        // the predicate into something GIN-indexable) but it is a behaviour
+        // change that needs its own decision, not a side effect of adding an
+        // index.
         let rows = self
-            .db
-            .query_all(Statement::from_sql_and_values(
-                DatabaseBackend::Postgres,
-                &sql,
-                values,
-            ))
-            .await
-            .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
+            .query_all_with_locals(
+                Self::exact_scan_locals(),
+                Statement::from_sql_and_values(DatabaseBackend::Postgres, &sql, values),
+            )
+            .await?;
 
         let mut results = Vec::with_capacity(rows.len());
         for row in &rows {
@@ -926,11 +1297,15 @@ impl VectorDB for PgVectorAdapter {
                ORDER BY q.idx, t.score DESC"#
         );
 
+        // Each LATERAL subquery is its own index scan with its own `LIMIT
+        // {top_k}`, so this path needs the same `ef_search` floor as
+        // `search_similar` or every one of them ends early.
         let rows = self
-            .db
-            .query_all(Statement::from_string(DatabaseBackend::Postgres, sql))
-            .await
-            .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
+            .query_all_with_locals(
+                &Self::ann_search_locals(top_k),
+                Statement::from_string(DatabaseBackend::Postgres, sql),
+            )
+            .await?;
 
         // Pre-size one bucket per query; `idx` (1-based ordinality) routes each row
         // back to its query, and queries with no hits keep their empty bucket.
