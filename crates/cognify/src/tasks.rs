@@ -983,13 +983,28 @@ pub async fn extract_graph_from_data(
     // This counts endpoint resolution only. An edge that resolves here can still
     // be filtered out downstream for already existing in the database, so the
     // resolved figure is an upper bound on what this pass goes on to emit.
+    //
+    // The cross-chunk fields are not a loss report. They price SDK-507 tier 2:
+    // resolution is run-global today, so an endpoint can match a node declared
+    // by any earlier chunk, and flushing per wave would only see its own wave.
+    // `cross_chunk` is the upper bound on what that would cost and
+    // `max_cross_chunk_distance` is how wide a wave has to be to avoid most of
+    // it. Logged here, once per run, because the expansion pass cannot see the
+    // configured batch size and should not be given it for a diagnostic.
     info!(
         attempted = edge_resolution.attempted,
         dropped = edge_resolution.dropped(),
         recovered_by_name = edge_resolution.resolved_by_name,
-        "Edge endpoint resolution: both endpoints resolved for {} of {} extracted edges",
+        cross_chunk = edge_resolution.resolved_cross_chunk(),
+        cross_chunk_by_id = edge_resolution.resolved_by_id_cross_chunk,
+        cross_chunk_by_name = edge_resolution.resolved_by_name_cross_chunk,
+        max_cross_chunk_distance = edge_resolution.max_cross_chunk_distance,
+        "Edge endpoint resolution: both endpoints resolved for {} of {} extracted edges; \
+         {} endpoint(s) matched a node from an earlier chunk (max {} chunks back)",
         edge_resolution.attempted - edge_resolution.dropped(),
-        edge_resolution.attempted
+        edge_resolution.attempted,
+        edge_resolution.resolved_cross_chunk(),
+        edge_resolution.max_cross_chunk_distance
     );
 
     // Final deduplication pass (in-memory only after DB filtering)
