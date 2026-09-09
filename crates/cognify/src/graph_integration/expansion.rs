@@ -43,13 +43,13 @@ pub struct EdgeResolutionStats {
     pub resolved_by_id: usize,
     /// Endpoints resolved only via the node-name fallback alias.
     pub resolved_by_name: usize,
-    /// Of [`Self::resolved_by_id`], those whose id key was first registered by
-    /// an *earlier* chunk than the one whose edge referenced it.
+    /// Of [`Self::resolved_by_id`], those whose id key was last declared by an
+    /// *earlier* chunk than the one whose edge referenced it.
     pub resolved_by_id_cross_chunk: usize,
     /// Of [`Self::resolved_by_name`], the same split.
     pub resolved_by_name_cross_chunk: usize,
-    /// Largest gap, in chunk positions, between the chunk that registered a
-    /// matched key and the chunk whose edge referenced it. Zero when every
+    /// Largest gap, in chunk positions, between the most recent declaration of
+    /// a matched key and the chunk whose edge referenced it. Zero when every
     /// resolution was chunk-local.
     pub max_cross_chunk_distance: usize,
     /// Edges dropped because the source endpoint matched nothing.
@@ -73,9 +73,15 @@ impl EdgeResolutionStats {
     /// which would reset the registry at each wave boundary and so resolve an
     /// endpoint only against nodes from its own wave.
     ///
+    /// Attribution follows the **most recent** declaration of a key at or
+    /// before the referencing chunk, because that is the one a wave would still
+    /// hold. Extraction re-declares a recurring entity in every chunk that
+    /// mentions it, so attributing to the *first* declaration would count a
+    /// resolution the referencing chunk could satisfy on its own.
+    ///
     /// It is an **upper bound** on what a given wave size would actually lose,
     /// not a prediction: flushing every `N` chunks breaks a resolution only
-    /// when the registering and referencing chunks land in *different* waves,
+    /// when the declaring and referencing chunks land in *different* waves,
     /// so a pass whose [`Self::max_cross_chunk_distance`] sits far below `N`
     /// keeps most of these and only loses the ones straddling a boundary.
     /// Read the two together — the count says how much is at stake, the
@@ -115,18 +121,18 @@ impl EdgeResolutionStats {
 
 /// Zero-based position of a chunk in this pass's `graphs` sequence.
 ///
-/// Used to attribute a resolved endpoint to the chunk that registered its key.
-/// It is a position within the pass, not a chunk id: per-wave flushing would
-/// cut the registry on these boundaries, so the comparison that matters is
-/// ordinal.
+/// Used to attribute a resolved endpoint to the chunk that most recently
+/// declared its key. It is a position within the pass, not a chunk id:
+/// per-wave flushing would cut the registry on these boundaries, so the
+/// comparison that matters is ordinal.
 type ChunkPosition = usize;
 
 /// How one edge endpoint resolved to an entity.
 enum EndpointResolution {
-    /// Matched a declared node id, first registered at `origin`.
+    /// Matched a declared node id, last declared at `origin`.
     ById { entity: Uuid, origin: ChunkPosition },
-    /// Matched a node's human-readable name via the fallback alias, first
-    /// registered at `origin`.
+    /// Matched a node's human-readable name via the fallback alias, last
+    /// declared at `origin`.
     ByName { entity: Uuid, origin: ChunkPosition },
     /// The name is shared by two or more distinct entities.
     Ambiguous,
@@ -158,34 +164,34 @@ fn register_name_alias(
     }
     aliases
         .entry(key)
-        .and_modify(|slot| {
-            // Compare on the entity only: the same entity re-registering from a
-            // later chunk must not poison its own alias, and the origin stays
-            // the first position that claimed it.
-            if slot.map(|(id, _)| id) != Some(entity_id) {
-                *slot = None;
-            }
+        .and_modify(|slot| match slot {
+            // The same entity re-registering from a later chunk must not poison
+            // its own alias — and it *does* move the origin forward, because the
+            // alias is now available to the re-declaring chunk's wave.
+            Some((id, origin)) if *id == entity_id => *origin = position,
+            // A different entity claiming the same name: unresolvable, and it
+            // stays that way.
+            Some(_) => *slot = None,
+            None => {}
         })
         .or_insert(Some((entity_id, position)));
 }
 
 /// Resolve one edge endpoint, preferring an exact node-id match and falling
 /// back to the node-name alias only when the id map misses.
-/// `key` is the caller's already-normalized endpoint reference. It is passed in
-/// rather than normalized here so the caller can reuse the one allocation for
-/// both this lookup and its own bookkeeping.
 fn resolve_endpoint(
     by_id: &HashMap<String, (Uuid, ChunkPosition)>,
     by_name: &HashMap<String, Option<(Uuid, ChunkPosition)>>,
-    key: &str,
+    raw: &str,
 ) -> EndpointResolution {
-    if let Some((entity, origin)) = by_id.get(key) {
+    let key = normalize_identifier(raw);
+    if let Some((entity, origin)) = by_id.get(&key) {
         return EndpointResolution::ById {
             entity: *entity,
             origin: *origin,
         };
     }
-    match by_name.get(key) {
+    match by_name.get(&key) {
         Some(Some((entity, origin))) => EndpointResolution::ByName {
             entity: *entity,
             origin: *origin,
@@ -535,13 +541,16 @@ pub async fn expand_with_nodes_and_edges_with_stats(
                 .expect("entity type was just inserted or already existed");
 
             // Step 2: Create Entity
+            // Cloned into the `entry` call below so the key survives for the
+            // canonical-name lookup after the match.
             let entity_key = format!("{}_entity", node.id);
 
             // Validate entity against ontology "individuals" with subgraph expansion.
             // Collect subgraph data for deferred processing (after insert releases borrow).
             let mut deferred_individual_data = None;
 
-            if let std::collections::hash_map::Entry::Vacant(e) = node_map.entry(entity_key) {
+            if let std::collections::hash_map::Entry::Vacant(e) = node_map.entry(entity_key.clone())
+            {
                 let mut entity_pair = create_entity_node(
                     &node,
                     entity_type.clone(), // Pass the shared entity_type
@@ -594,30 +603,10 @@ pub async fn expand_with_nodes_and_edges_with_stats(
                 let entity_id = entity_pair.entity.base.id;
                 let id_key = normalize_identifier(&node.id);
 
-                // Alias the name the LLM gave this node, and — when the ontology
-                // canonicalised it — the canonical name too, so an edge that
-                // references either spelling still resolves.
-                register_name_alias(
-                    &mut name_to_entity_id,
-                    &node.name,
-                    entity_id,
-                    &id_key,
-                    position,
-                );
-                register_name_alias(
-                    &mut name_to_entity_id,
-                    &entity_pair.entity.name,
-                    entity_id,
-                    &id_key,
-                    position,
-                );
-
-                // First writer wins the origin: two raw spellings of one node id
-                // both reach this branch (`node_map` keys on the raw id), and the
-                // earlier chunk is the one a wave boundary would separate us from.
-                node_id_to_entity_id
-                    .entry(id_key)
-                    .or_insert((entity_id, position));
+                // Name aliasing and the origin refresh both happen after the
+                // match, so a chunk that *re*-declares this node id runs them
+                // too — see the comment on that block.
+                node_id_to_entity_id.insert(id_key, (entity_id, position));
 
                 e.insert(entity_pair);
             }
@@ -646,13 +635,58 @@ pub async fn expand_with_nodes_and_edges_with_stats(
             }
 
             // Record this chunk as a producer whether or not it was the chunk
-            // that created the entity. Read back out of `node_id_to_entity_id`
-            // rather than from the vacant branch so the id is the canonical one
-            // after an ontology individual rewrote `entity.base.id`, and so the
-            // occupied branch is covered by the same two lines.
-            if let Some((entity_id, _)) = node_id_to_entity_id.get(&normalize_identifier(&node.id))
-            {
-                producers.record_entity(*entity_id, chunk_id);
+            // that created the entity, and refresh the registry origin to this
+            // chunk. Read back out of `node_id_to_entity_id` rather than from
+            // the vacant branch so the id is the canonical one after an
+            // ontology individual rewrote `entity.base.id`, and so the occupied
+            // branch is covered by the same lines.
+            //
+            // The origin has to follow the **most recent** declaration at or
+            // before this chunk, not the first. `node_map` is keyed on the raw
+            // node id and spans the pass, so a chunk that re-declares a node id
+            // an earlier chunk already declared skips the vacant branch
+            // entirely — yet that chunk has the node in its own wave and would
+            // lose nothing to a flush. Attributing to the first declaration
+            // would count such a resolution as cross-chunk and, because
+            // extraction re-declares a recurring entity in every chunk that
+            // mentions it, drag `max_cross_chunk_distance` toward the corpus
+            // length. That is the opposite of the signal this counter exists to
+            // give.
+            let id_key = normalize_identifier(&node.id);
+            let declared_entity = node_id_to_entity_id
+                .get_mut(&id_key)
+                .map(|(entity, origin)| {
+                    *origin = position;
+                    *entity
+                });
+
+            if let Some(entity_id) = declared_entity {
+                // Alias the name the LLM gave this node, and — when the ontology
+                // canonicalised it — the canonical name too, so an edge that
+                // references either spelling still resolves. Re-running these on
+                // a re-declaration is what keeps the alias origins in step with
+                // the id origin above.
+                register_name_alias(
+                    &mut name_to_entity_id,
+                    &node.name,
+                    entity_id,
+                    &id_key,
+                    position,
+                );
+                if let Some(canonical_name) = node_map
+                    .get(&entity_key)
+                    .map(|pair| pair.entity.name.clone())
+                {
+                    register_name_alias(
+                        &mut name_to_entity_id,
+                        &canonical_name,
+                        entity_id,
+                        &id_key,
+                        position,
+                    );
+                }
+
+                producers.record_entity(entity_id, chunk_id);
             }
         }
 
@@ -662,69 +696,73 @@ pub async fn expand_with_nodes_and_edges_with_stats(
             // node IDs that don't match any extracted node (common with local models).
             stats.attempted += 1;
 
-            let source_key = normalize_identifier(&edge.source_node_id);
-            let source_entity_id =
-                match resolve_endpoint(&node_id_to_entity_id, &name_to_entity_id, &source_key) {
-                    EndpointResolution::ById { entity, origin } => {
-                        stats.record_resolved_by_id(origin, position);
-                        entity
+            let source_entity_id = match resolve_endpoint(
+                &node_id_to_entity_id,
+                &name_to_entity_id,
+                &edge.source_node_id,
+            ) {
+                EndpointResolution::ById { entity, origin } => {
+                    stats.record_resolved_by_id(origin, position);
+                    entity
+                }
+                EndpointResolution::ByName { entity, origin } => {
+                    stats.record_resolved_by_name(origin, position);
+                    entity
+                }
+                EndpointResolution::Ambiguous => {
+                    stats.dropped_ambiguous_name += 1;
+                    debug!(
+                        "Skipping edge: source '{}' matches a name shared by several entities",
+                        edge.source_node_id
+                    );
+                    continue;
+                }
+                EndpointResolution::Missing => {
+                    stats.dropped_source_missing += 1;
+                    if unresolved_sample.len() < UNRESOLVED_SAMPLE_LIMIT {
+                        unresolved_sample.push(edge.source_node_id.clone());
                     }
-                    EndpointResolution::ByName { entity, origin } => {
-                        stats.record_resolved_by_name(origin, position);
-                        entity
-                    }
-                    EndpointResolution::Ambiguous => {
-                        stats.dropped_ambiguous_name += 1;
-                        debug!(
-                            "Skipping edge: source '{}' matches a name shared by several entities",
-                            edge.source_node_id
-                        );
-                        continue;
-                    }
-                    EndpointResolution::Missing => {
-                        stats.dropped_source_missing += 1;
-                        if unresolved_sample.len() < UNRESOLVED_SAMPLE_LIMIT {
-                            unresolved_sample.push(edge.source_node_id.clone());
-                        }
-                        debug!(
-                            "Skipping edge: source node '{}' not found in extracted nodes",
-                            edge.source_node_id
-                        );
-                        continue;
-                    }
-                };
+                    debug!(
+                        "Skipping edge: source node '{}' not found in extracted nodes",
+                        edge.source_node_id
+                    );
+                    continue;
+                }
+            };
 
-            let target_key = normalize_identifier(&edge.target_node_id);
-            let target_entity_id =
-                match resolve_endpoint(&node_id_to_entity_id, &name_to_entity_id, &target_key) {
-                    EndpointResolution::ById { entity, origin } => {
-                        stats.record_resolved_by_id(origin, position);
-                        entity
+            let target_entity_id = match resolve_endpoint(
+                &node_id_to_entity_id,
+                &name_to_entity_id,
+                &edge.target_node_id,
+            ) {
+                EndpointResolution::ById { entity, origin } => {
+                    stats.record_resolved_by_id(origin, position);
+                    entity
+                }
+                EndpointResolution::ByName { entity, origin } => {
+                    stats.record_resolved_by_name(origin, position);
+                    entity
+                }
+                EndpointResolution::Ambiguous => {
+                    stats.dropped_ambiguous_name += 1;
+                    debug!(
+                        "Skipping edge: target '{}' matches a name shared by several entities",
+                        edge.target_node_id
+                    );
+                    continue;
+                }
+                EndpointResolution::Missing => {
+                    stats.dropped_target_missing += 1;
+                    if unresolved_sample.len() < UNRESOLVED_SAMPLE_LIMIT {
+                        unresolved_sample.push(edge.target_node_id.clone());
                     }
-                    EndpointResolution::ByName { entity, origin } => {
-                        stats.record_resolved_by_name(origin, position);
-                        entity
-                    }
-                    EndpointResolution::Ambiguous => {
-                        stats.dropped_ambiguous_name += 1;
-                        debug!(
-                            "Skipping edge: target '{}' matches a name shared by several entities",
-                            edge.target_node_id
-                        );
-                        continue;
-                    }
-                    EndpointResolution::Missing => {
-                        stats.dropped_target_missing += 1;
-                        if unresolved_sample.len() < UNRESOLVED_SAMPLE_LIMIT {
-                            unresolved_sample.push(edge.target_node_id.clone());
-                        }
-                        debug!(
-                            "Skipping edge: target node '{}' not found in extracted nodes",
-                            edge.target_node_id
-                        );
-                        continue;
-                    }
-                };
+                    debug!(
+                        "Skipping edge: target node '{}' not found in extracted nodes",
+                        edge.target_node_id
+                    );
+                    continue;
+                }
+            };
 
             // Whether the edge is already in the graph database. It is still
             // built and its producer still recorded below — the flag only
@@ -1853,6 +1891,85 @@ mod tests {
         )
         .await;
         (edges, stats)
+    }
+
+    /// A node re-declared by a later chunk is available to that chunk's own
+    /// wave, so an edge referencing it loses nothing to a flush — no matter how
+    /// far back the *first* declaration was.
+    ///
+    /// This is the case that makes the counter worth trusting. LLM extraction
+    /// re-declares a recurring entity in every chunk that mentions it, so
+    /// attributing to the earliest declaration would drive
+    /// `max_cross_chunk_distance` toward the corpus length and argue against a
+    /// per-wave flush that would in fact be free.
+    #[tokio::test]
+    async fn test_edge_resolution_stats_ignores_redeclared_node() {
+        let (edges, stats) = expand_ordered_chunks(vec![
+            KnowledgeGraph {
+                nodes: vec![node_named("einstein", "Albert Einstein")],
+                edges: vec![],
+            },
+            KnowledgeGraph {
+                nodes: vec![node_named("planck", "Max Planck")],
+                edges: vec![],
+            },
+            KnowledgeGraph {
+                // Re-declares the chunk-0 node alongside a fresh one, then
+                // references both. Everything it needs is in its own chunk.
+                nodes: vec![
+                    node_named("einstein", "Albert Einstein"),
+                    node_named("bohr", "Niels Bohr"),
+                ],
+                edges: vec![edge_between("einstein", "bohr")],
+            },
+        ])
+        .await;
+
+        assert_eq!(edges.len(), 1);
+        assert_eq!(stats.resolved_by_id, 2);
+        assert_eq!(
+            stats.resolved_cross_chunk(),
+            0,
+            "the referencing chunk declared both endpoints itself"
+        );
+        assert_eq!(
+            stats.max_cross_chunk_distance, 0,
+            "distance must follow the most recent declaration, not the first"
+        );
+    }
+
+    /// The same, through the name-alias fallback: a re-declared node's alias is
+    /// equally available to the re-declaring chunk's wave.
+    #[tokio::test]
+    async fn test_edge_resolution_stats_ignores_redeclared_name_alias() {
+        let (edges, stats) = expand_ordered_chunks(vec![
+            KnowledgeGraph {
+                nodes: vec![node_named("einstein", "Albert Einstein")],
+                edges: vec![],
+            },
+            KnowledgeGraph {
+                nodes: vec![node_named("planck", "Max Planck")],
+                edges: vec![],
+            },
+            KnowledgeGraph {
+                nodes: vec![
+                    node_named("einstein", "Albert Einstein"),
+                    node_named("bohr", "Niels Bohr"),
+                ],
+                // Source by name, resolved through the alias the chunk itself
+                // just re-registered.
+                edges: vec![edge_between("Albert Einstein", "bohr")],
+            },
+        ])
+        .await;
+
+        assert_eq!(edges.len(), 1);
+        assert_eq!(
+            stats.resolved_cross_chunk(),
+            0,
+            "the alias was re-registered by the referencing chunk"
+        );
+        assert_eq!(stats.max_cross_chunk_distance, 0);
     }
 
     /// An edge referencing only its own chunk's nodes is chunk-local, so
