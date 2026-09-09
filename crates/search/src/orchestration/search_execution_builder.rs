@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use cognee_database::{IngestDb, SearchHistoryDb};
+use cognee_database::{AclDb, IngestDb, SearchHistoryDb};
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
 use cognee_llm::Llm;
@@ -22,6 +22,7 @@ pub struct SearchBuilder {
     retrievers: HashMap<SearchType, SearchRetrieverRef>,
     database: Arc<dyn SearchHistoryDb>,
     dataset_resolver: Option<Arc<dyn IngestDb>>,
+    acl_db: Option<Arc<dyn AclDb>>,
     session_manager: Option<Arc<SessionManager>>,
 }
 
@@ -37,6 +38,7 @@ impl SearchBuilder {
             retrievers: HashMap::new(),
             database,
             dataset_resolver: None,
+            acl_db: None,
             session_manager: None,
         }
         .register_standard_retrievers(vector_db, embedding_engine, graph_db, llm)
@@ -52,6 +54,14 @@ impl SearchBuilder {
     /// requests carrying `datasets` fail with `SearchError::InvalidInput`.
     pub fn with_dataset_resolver(mut self, resolver: Arc<dyn IngestDb>) -> Self {
         self.dataset_resolver = Some(resolver);
+        self
+    }
+
+    /// Wire in an ACL backend so explicit `SearchRequest.dataset_ids` are
+    /// authorized against the caller's `read` grants rather than ownership.
+    /// See [`SearchOrchestrator::with_acl_db`].
+    pub fn with_acl_db(mut self, acl_db: Arc<dyn AclDb>) -> Self {
+        self.acl_db = Some(acl_db);
         self
     }
 
@@ -294,6 +304,9 @@ impl SearchBuilder {
             orchestrator = orchestrator
                 .with_dataset_resolver(resolver)
                 .with_access_tracking();
+        }
+        if let Some(acl_db) = self.acl_db {
+            orchestrator = orchestrator.with_acl_db(acl_db);
         }
         if let Some(session_manager) = self.session_manager {
             orchestrator = orchestrator.with_session_manager(session_manager);

@@ -236,8 +236,9 @@ pub enum ApiError {
     /// - `WithHint { error, hint }` for 422 prerequisite errors.
     /// - `JustError { error }` for the 409 catch-all and the GET-history 500.
     ///
-    /// Permission denied is NOT encoded here — the recall handler returns
-    /// `200 []` directly without going through `ApiError`.
+    /// Permission denied is NOT encoded here — both recall and search map
+    /// `SearchError::PermissionDenied` to [`ApiError::Forbidden`], the
+    /// `403 {detail}` shape Python's global `CogneeApiError` handler emits.
     #[error("recall error")]
     RecallError {
         status: StatusCode,

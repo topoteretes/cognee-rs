@@ -3,7 +3,7 @@ use crate::orchestration::{
 };
 use crate::types::{SearchError, SearchOutput, SearchParams, SearchRequest, SearchResponse};
 use crate::utils::detect_feedback;
-use cognee_database::{IngestDb, SearchHistoryDb, SearchHistoryEntry};
+use cognee_database::{AclDb, IngestDb, SearchHistoryDb, SearchHistoryEntry};
 use cognee_llm::Llm;
 use cognee_session::{SessionContext, SessionManager, UsedGraphElementIds};
 use std::sync::Arc;
@@ -137,6 +137,11 @@ pub struct SearchOrchestrator {
     registry: SearchTypeRegistry,
     database: Option<Arc<dyn SearchHistoryDb>>,
     dataset_resolver: Option<Arc<dyn IngestDb>>,
+    /// ACL backend used to authorize caller-supplied `dataset_ids`. `None` in
+    /// OSS builds (no production `AclDb` impl ships outside the closed
+    /// `cognee-access-control` crate), in which case authorization degrades
+    /// to the ownership check — see the `dataset_ids` block in [`Self::search`].
+    acl_db: Option<Arc<dyn AclDb>>,
     session_manager: Option<Arc<SessionManager>>,
     llm: Option<Arc<dyn Llm>>,
     /// When `true`, `last_accessed` timestamps are updated on source Data records
@@ -151,6 +156,7 @@ impl SearchOrchestrator {
             registry,
             database: None,
             dataset_resolver: None,
+            acl_db: None,
             session_manager: None,
             llm: None,
             enable_access_tracking: false,
@@ -168,6 +174,17 @@ impl SearchOrchestrator {
     /// `SearchError::InvalidInput`.
     pub fn with_dataset_resolver(mut self, resolver: Arc<dyn IngestDb>) -> Self {
         self.dataset_resolver = Some(resolver);
+        self
+    }
+
+    /// Wire in an ACL backend so caller-supplied `SearchRequest.dataset_ids`
+    /// are authorized against the caller's `read` grants (direct, tenant and
+    /// role) — Python's `get_specific_user_permission_datasets(user.id,
+    /// "read", dataset_ids)`. Without one the orchestrator falls back to an
+    /// ownership check when a `dataset_resolver` is wired, and passes the ids
+    /// through unchecked when neither is.
+    pub fn with_acl_db(mut self, acl_db: Arc<dyn AclDb>) -> Self {
+        self.acl_db = Some(acl_db);
         self
     }
 
@@ -228,6 +245,61 @@ impl SearchOrchestrator {
         Ok(responses)
     }
 
+    /// The set of dataset ids `requester` may read, for authorizing explicit
+    /// `SearchRequest.dataset_ids`.
+    ///
+    /// One listing query, then membership-checked locally by the caller —
+    /// deliberately not a per-id lookup. `dataset_ids` is client-supplied and
+    /// unbounded, so a per-id loop lets any authenticated caller amplify one
+    /// request into N database round-trips, and on an authorization path that
+    /// is the wrong bound to hand the requester. The readable set is bounded
+    /// by the caller's own grants (or data) instead. Same N+1 class as
+    /// `has_edges` in #21. A caller asking for two ids against thousands of
+    /// readable datasets fetches more rows than it needs; that trade-off is
+    /// accepted — the requester must not get to choose how much work the
+    /// authorization check costs.
+    ///
+    /// **ACL wired** — `AclDb::authorized_dataset_ids_with_roles(requester,
+    /// "read")`: direct, tenant and role grants, which is Python's
+    /// `get_all_user_permission_datasets` and so admits datasets *shared* with
+    /// the caller, not only owned ones. This is the intended production path.
+    ///
+    /// **No ACL wired (OSS degradation)** — the datasets the requester owns,
+    /// via `IngestDb::list_datasets_by_owner`. OSS ships no production `AclDb`
+    /// impl (the `DatabaseConnection` blanket impl lives in the closed
+    /// `cognee-access-control` crate), so ownership is the only signal
+    /// available. It under-approximates Python in every "shared" case: a
+    /// dataset granted `read` to the caller directly, to the caller's tenant,
+    /// or to a role the caller holds is readable in Python but denied here.
+    /// It also skips Python's checks that the owner's own `read` grant is
+    /// still present and that `dataset.tenant_id == user.tenant_id`, so an
+    /// owner whose grant was revoked is admitted here and denied in Python.
+    ///
+    /// Callers gate on `acl_db.is_some() || dataset_resolver.is_some()`; if
+    /// neither is wired this returns an empty set, i.e. fails closed rather
+    /// than open should that gate ever be removed.
+    async fn readable_dataset_ids(
+        &self,
+        requester: uuid::Uuid,
+    ) -> Result<std::collections::HashSet<uuid::Uuid>, SearchError> {
+        if let Some(acl) = self.acl_db.as_ref() {
+            return Ok(acl
+                .authorized_dataset_ids_with_roles(requester, "read")
+                .await?
+                .into_iter()
+                .collect());
+        }
+        if let Some(resolver) = self.dataset_resolver.as_ref() {
+            return Ok(resolver
+                .list_datasets_by_owner(requester)
+                .await?
+                .into_iter()
+                .map(|dataset| dataset.id)
+                .collect());
+        }
+        Ok(std::collections::HashSet::new())
+    }
+
     #[tracing::instrument(
         name = "cognee.search",
         skip(self, request),
@@ -252,6 +324,54 @@ impl SearchOrchestrator {
             } else {
                 self.registry.get(request.search_type)?
             };
+
+        // Authorize caller-supplied dataset UUIDs. Python runs every explicit
+        // id through `get_authorized_existing_datasets(dataset_ids, "read",
+        // user)` → `get_specific_user_permission_datasets`, which lists the
+        // caller's whole readable set via `get_all_user_permission_datasets`
+        // (direct + tenant + role grants) and raises one
+        // `PermissionDeniedError` when any requested id is not in it —
+        // whether it belongs to someone else or does not exist
+        // (`get_specific_user_permission_datasets.py:30-38`). The readable
+        // set comes from `readable_dataset_ids`: the ACL when one is wired,
+        // else the ownership fallback. Without either there is nothing to
+        // check against and the ids pass through, which keeps in-process
+        // embedders that never wired one working as before.
+        // `Some(vec![])` is "no filter" (Python: `dataset_ids or None`).
+        if let Some(ids) = request.dataset_ids.as_ref().filter(|ids| !ids.is_empty())
+            && (self.acl_db.is_some() || self.dataset_resolver.is_some())
+        {
+            let requester = request.user_id.ok_or_else(|| {
+                SearchError::InvalidInput(
+                    "dataset_ids filter requires SearchRequest.user_id to authorize the caller"
+                        .to_string(),
+                )
+            })?;
+            let readable = self.readable_dataset_ids(requester).await?;
+            // Unknown and foreign ids are indistinguishable on purpose: the
+            // caller gets no existence oracle. Python reaches the same place by
+            // comparing set lengths rather than reporting which id failed. The
+            // ACL path preserves this too — it never looks an id up, only
+            // intersects against the caller's own readable set.
+            let denied: Vec<uuid::Uuid> = ids
+                .iter()
+                .copied()
+                .filter(|id| !readable.contains(id))
+                .collect();
+            if !denied.is_empty() {
+                // Log the specifics server-side; the error the caller sees
+                // deliberately does not say which ids failed or why.
+                tracing::warn!(
+                    requester = %requester,
+                    denied = ?denied,
+                    "dataset_ids filter names datasets the caller may not read"
+                );
+                return Err(SearchError::PermissionDenied(
+                    "Request owner does not have necessary permission: [read] for all datasets requested."
+                        .to_string(),
+                ));
+            }
+        }
 
         // Resolve dataset names → UUIDs. Mirrors Python `cognee.search()`:
         //   - names are looked up via owner-scoped `get_dataset_by_name`
@@ -665,8 +785,8 @@ mod tests {
         SearchContext, SearchError, SearchOutput, SearchParams, SearchRequest, SearchType,
     };
     use async_trait::async_trait;
-    use cognee_database::IngestDb;
     use cognee_database::ops as db_ops;
+    use cognee_database::{AclDb, IngestDb};
     use cognee_database::{SearchHistoryDb, SearchHistoryEntryType, connect, initialize};
     use cognee_models::Dataset;
     use cognee_session::SessionContext;
@@ -1620,6 +1740,364 @@ mod tests {
             .expect("explicit dataset_ids must succeed without resolver");
         let context_map = response.context.expect("scoped context");
         assert!(context_map.contains_key(&id.to_string()));
+    }
+
+    /// Scenario: the caller passes an explicit `dataset_ids` entry for a
+    /// dataset it owns, with a resolver wired.
+    /// Expected: the owner check passes and the scope filter applies to
+    /// that UUID — authorization must not get in the way of the happy path.
+    #[tokio::test]
+    async fn owned_dataset_ids_pass_the_owner_check_and_scope_results() {
+        let owner = Uuid::new_v4();
+        let db = fresh_db().await;
+        let dataset = seed_dataset(&db, "mine", owner).await;
+        let other = Uuid::new_v4();
+
+        let mut registry = SearchTypeRegistry::new();
+        registry.register(Arc::new(ResolutionFixtureRetriever {
+            dataset_a: dataset.id,
+            dataset_b: other,
+        }));
+        let orchestrator =
+            super::SearchOrchestrator::new(registry).with_dataset_resolver(db as Arc<dyn IngestDb>);
+
+        let request = SearchRequest {
+            dataset_ids: Some(vec![dataset.id]),
+            user_id: Some(owner),
+            ..dataset_request_template()
+        };
+
+        let response = orchestrator
+            .search(&request)
+            .await
+            .expect("an owned id must pass the owner check");
+        let context_map = response.context.expect("scoped context map");
+        assert!(context_map.contains_key(&dataset.id.to_string()));
+        assert!(!context_map.contains_key(&other.to_string()));
+    }
+
+    /// Scenario: owner A's dataset id is passed by owner B.
+    /// Expected: `SearchError::PermissionDenied` before any retriever runs.
+    /// Python raises `PermissionDeniedError` from
+    /// `get_specific_user_permission_datasets` for the same request; without
+    /// this check an explicit UUID was the one filter that skipped the owner
+    /// scope the name path enforces, so any caller could read any tenant's
+    /// rows by id.
+    #[tokio::test]
+    async fn foreign_dataset_id_is_permission_denied() {
+        let owner_a = Uuid::new_v4();
+        let owner_b = Uuid::new_v4();
+        let db = fresh_db().await;
+        let dataset = seed_dataset(&db, "theirs", owner_a).await;
+
+        let mut registry = SearchTypeRegistry::new();
+        registry.register(Arc::new(FakeChunksRetriever));
+        let orchestrator =
+            super::SearchOrchestrator::new(registry).with_dataset_resolver(db as Arc<dyn IngestDb>);
+
+        let request = SearchRequest {
+            dataset_ids: Some(vec![dataset.id]),
+            user_id: Some(owner_b),
+            ..dataset_request_template()
+        };
+
+        let err = orchestrator.search(&request).await.expect_err("must error");
+        assert!(
+            matches!(err, SearchError::PermissionDenied(_)),
+            "got {err:?}"
+        );
+    }
+
+    /// Scenario: a well-formed UUID that names no dataset at all.
+    /// Expected: the same `PermissionDenied` as a foreign id (Python:
+    /// `len(search_datasets) != len(dataset_ids)` raises regardless of why),
+    /// so a caller cannot use the error to learn which ids exist.
+    #[tokio::test]
+    async fn unknown_dataset_id_is_permission_denied() {
+        let owner = Uuid::new_v4();
+        let db = fresh_db().await;
+
+        let mut registry = SearchTypeRegistry::new();
+        registry.register(Arc::new(FakeChunksRetriever));
+        let orchestrator =
+            super::SearchOrchestrator::new(registry).with_dataset_resolver(db as Arc<dyn IngestDb>);
+
+        let request = SearchRequest {
+            dataset_ids: Some(vec![Uuid::new_v4()]),
+            user_id: Some(owner),
+            ..dataset_request_template()
+        };
+
+        let err = orchestrator.search(&request).await.expect_err("must error");
+        assert!(
+            matches!(err, SearchError::PermissionDenied(_)),
+            "got {err:?}"
+        );
+    }
+
+    /// Scenario: one owned id and one foreign id in the same request.
+    /// Expected: the whole batch is denied — Python does not narrow to the
+    /// permitted subset for ids (unlike partial misses on names).
+    #[tokio::test]
+    async fn mixed_dataset_ids_deny_the_whole_batch() {
+        let owner = Uuid::new_v4();
+        let stranger = Uuid::new_v4();
+        let db = fresh_db().await;
+        let mine = seed_dataset(&db, "mine", owner).await;
+        let theirs = seed_dataset(&db, "theirs", stranger).await;
+
+        let mut registry = SearchTypeRegistry::new();
+        registry.register(Arc::new(FakeChunksRetriever));
+        let orchestrator =
+            super::SearchOrchestrator::new(registry).with_dataset_resolver(db as Arc<dyn IngestDb>);
+
+        let request = SearchRequest {
+            dataset_ids: Some(vec![mine.id, theirs.id]),
+            user_id: Some(owner),
+            ..dataset_request_template()
+        };
+
+        let err = orchestrator.search(&request).await.expect_err("must error");
+        assert!(
+            matches!(err, SearchError::PermissionDenied(_)),
+            "got {err:?}"
+        );
+    }
+
+    /// Scenario: `dataset_ids` supplied, resolver wired, but no `user_id`.
+    /// Expected: `InvalidInput`, mirroring the name path — the orchestrator
+    /// must not skip the owner check just because nobody told it who is
+    /// asking.
+    #[tokio::test]
+    async fn errors_when_dataset_ids_supplied_without_user_id() {
+        let owner = Uuid::new_v4();
+        let db = fresh_db().await;
+        let dataset = seed_dataset(&db, "mine", owner).await;
+
+        let mut registry = SearchTypeRegistry::new();
+        registry.register(Arc::new(FakeChunksRetriever));
+        let orchestrator =
+            super::SearchOrchestrator::new(registry).with_dataset_resolver(db as Arc<dyn IngestDb>);
+
+        let request = SearchRequest {
+            dataset_ids: Some(vec![dataset.id]),
+            user_id: None,
+            ..dataset_request_template()
+        };
+
+        let err = orchestrator.search(&request).await.expect_err("must error");
+        assert!(matches!(err, SearchError::InvalidInput(_)), "got {err:?}");
+    }
+
+    /// Scenario: an ACL is wired; the caller does NOT own the dataset but
+    /// holds a `read` grant on it.
+    /// Expected: allowed, and the id reaches the retriever's scope filter.
+    /// This is the Python-parity case — `get_all_user_permission_datasets`
+    /// is grant-based, so a dataset shared with the caller is readable even
+    /// though `list_datasets_by_owner(caller)` would never return it. With
+    /// only the ownership fallback this request is a 403.
+    #[tokio::test]
+    async fn acl_read_grant_admits_a_dataset_the_caller_does_not_own() {
+        let owner = Uuid::new_v4();
+        let grantee = Uuid::new_v4();
+        let db = fresh_db().await;
+        let shared = seed_dataset(&db, "shared", owner).await;
+        let other = Uuid::new_v4();
+
+        let acl = Arc::new(cognee_test_utils::MockAclDb::new());
+        acl.grant_permission(grantee, shared.id, "read")
+            .await
+            .expect("grant");
+
+        let mut registry = SearchTypeRegistry::new();
+        registry.register(Arc::new(ResolutionFixtureRetriever {
+            dataset_a: shared.id,
+            dataset_b: other,
+        }));
+        let orchestrator = super::SearchOrchestrator::new(registry)
+            .with_dataset_resolver(db as Arc<dyn IngestDb>)
+            .with_acl_db(acl as Arc<dyn AclDb>);
+
+        let request = SearchRequest {
+            dataset_ids: Some(vec![shared.id]),
+            user_id: Some(grantee),
+            ..dataset_request_template()
+        };
+
+        let response = orchestrator
+            .search(&request)
+            .await
+            .expect("an ACL-granted id must pass even when not owned");
+        let context_map = response.context.expect("scoped context map");
+        assert!(context_map.contains_key(&shared.id.to_string()));
+        assert!(!context_map.contains_key(&other.to_string()));
+    }
+
+    /// Scenario: an ACL is wired; the requested dataset exists but the
+    /// caller holds no `read` grant on it.
+    /// Expected: `PermissionDenied`. Ownership must not rescue the request
+    /// either — the caller here is the owner, and the ACL path is
+    /// authoritative once wired (Python denies an owner whose grant was
+    /// revoked, too).
+    #[tokio::test]
+    async fn acl_wired_without_read_grant_is_permission_denied() {
+        let owner = Uuid::new_v4();
+        let db = fresh_db().await;
+        let dataset = seed_dataset(&db, "mine-but-ungranted", owner).await;
+
+        let acl = Arc::new(cognee_test_utils::MockAclDb::new());
+        // A grant for a different permission must not count as `read`.
+        acl.grant_permission(owner, dataset.id, "write")
+            .await
+            .expect("grant");
+
+        let mut registry = SearchTypeRegistry::new();
+        registry.register(Arc::new(FakeChunksRetriever));
+        let orchestrator = super::SearchOrchestrator::new(registry)
+            .with_dataset_resolver(db as Arc<dyn IngestDb>)
+            .with_acl_db(acl as Arc<dyn AclDb>);
+
+        let request = SearchRequest {
+            dataset_ids: Some(vec![dataset.id]),
+            user_id: Some(owner),
+            ..dataset_request_template()
+        };
+
+        let err = orchestrator.search(&request).await.expect_err("must error");
+        assert!(
+            matches!(err, SearchError::PermissionDenied(_)),
+            "got {err:?}"
+        );
+    }
+
+    /// Scenario: an ACL is wired; the caller has a `read` grant on some
+    /// dataset, and asks for that one plus a UUID that names nothing.
+    /// Expected: the same `PermissionDenied`, with the same message, as an
+    /// existing-but-ungranted id — the ACL path must not become an existence
+    /// oracle. Python compares set lengths and never says which id failed.
+    #[tokio::test]
+    async fn acl_wired_unknown_id_is_indistinguishable_from_ungranted() {
+        let caller = Uuid::new_v4();
+        let db = fresh_db().await;
+        let granted = seed_dataset(&db, "granted", caller).await;
+        let ungranted = seed_dataset(&db, "ungranted", Uuid::new_v4()).await;
+
+        let acl = Arc::new(cognee_test_utils::MockAclDb::new());
+        acl.grant_permission(caller, granted.id, "read")
+            .await
+            .expect("grant");
+
+        let mut registry = SearchTypeRegistry::new();
+        registry.register(Arc::new(FakeChunksRetriever));
+        let orchestrator = super::SearchOrchestrator::new(registry)
+            .with_dataset_resolver(db as Arc<dyn IngestDb>)
+            .with_acl_db(acl as Arc<dyn AclDb>);
+
+        let unknown_err = orchestrator
+            .search(&SearchRequest {
+                dataset_ids: Some(vec![granted.id, Uuid::new_v4()]),
+                user_id: Some(caller),
+                ..dataset_request_template()
+            })
+            .await
+            .expect_err("unknown id must error");
+        let ungranted_err = orchestrator
+            .search(&SearchRequest {
+                dataset_ids: Some(vec![granted.id, ungranted.id]),
+                user_id: Some(caller),
+                ..dataset_request_template()
+            })
+            .await
+            .expect_err("ungranted id must error");
+
+        let SearchError::PermissionDenied(unknown_msg) = unknown_err else {
+            panic!("unknown id: expected PermissionDenied, got {unknown_err:?}");
+        };
+        let SearchError::PermissionDenied(ungranted_msg) = ungranted_err else {
+            panic!("ungranted id: expected PermissionDenied, got {ungranted_err:?}");
+        };
+        assert_eq!(
+            unknown_msg, ungranted_msg,
+            "the caller-visible error must not reveal whether the id exists"
+        );
+    }
+
+    /// Scenario: an ACL is wired but no `dataset_resolver` is; the caller
+    /// asks for an id it holds no `read` grant on.
+    /// Expected: `PermissionDenied`. The ACL path needs no metadata DB, and
+    /// the "nothing wired → pass through" leniency must not apply when an
+    /// ACL alone is present.
+    #[tokio::test]
+    async fn acl_alone_authorizes_without_a_dataset_resolver() {
+        let caller = Uuid::new_v4();
+        let granted = Uuid::new_v4();
+        let acl = Arc::new(cognee_test_utils::MockAclDb::new());
+        acl.grant_permission(caller, granted, "read")
+            .await
+            .expect("grant");
+
+        let mut registry = SearchTypeRegistry::new();
+        registry.register(Arc::new(FakeChunksRetriever));
+        // Intentionally no .with_dataset_resolver(...).
+        let orchestrator =
+            super::SearchOrchestrator::new(registry).with_acl_db(acl as Arc<dyn AclDb>);
+
+        let denied = orchestrator
+            .search(&SearchRequest {
+                dataset_ids: Some(vec![Uuid::new_v4()]),
+                user_id: Some(caller),
+                ..dataset_request_template()
+            })
+            .await
+            .expect_err("ungranted id must be denied even without a resolver");
+        assert!(
+            matches!(denied, SearchError::PermissionDenied(_)),
+            "got {denied:?}"
+        );
+
+        orchestrator
+            .search(&SearchRequest {
+                dataset_ids: Some(vec![granted]),
+                user_id: Some(caller),
+                ..dataset_request_template()
+            })
+            .await
+            .expect("granted id must pass without a resolver");
+    }
+
+    /// Scenario: `dataset_ids: Some(vec![])` alongside a real name.
+    /// Expected: the empty list means "no id filter" (Python:
+    /// `dataset_ids or None`), so the name resolves and scopes the search;
+    /// it is not treated as "match nothing" and it is not owner-checked.
+    #[tokio::test]
+    async fn empty_dataset_ids_fall_back_to_dataset_names() {
+        let owner = Uuid::new_v4();
+        let db = fresh_db().await;
+        let dataset = seed_dataset(&db, "real", owner).await;
+        let other = Uuid::new_v4();
+
+        let mut registry = SearchTypeRegistry::new();
+        registry.register(Arc::new(ResolutionFixtureRetriever {
+            dataset_a: dataset.id,
+            dataset_b: other,
+        }));
+        let orchestrator =
+            super::SearchOrchestrator::new(registry).with_dataset_resolver(db as Arc<dyn IngestDb>);
+
+        let request = SearchRequest {
+            datasets: Some(vec!["real".into()]),
+            dataset_ids: Some(vec![]),
+            user_id: Some(owner),
+            ..dataset_request_template()
+        };
+
+        let response = orchestrator
+            .search(&request)
+            .await
+            .expect("empty dataset_ids must not block name resolution");
+        let context_map = response.context.expect("scoped context map");
+        assert!(context_map.contains_key(&dataset.id.to_string()));
+        assert!(!context_map.contains_key(&other.to_string()));
     }
 
     /// Scenario: caller passes `datasets` (names) but the orchestrator

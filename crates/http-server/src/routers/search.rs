@@ -220,9 +220,12 @@ fn map_search_error(err: CoreSearchError) -> ApiError {
             error: "Search prerequisites not met".to_string(),
             detail: Some(detail),
         },
-        // Python's PermissionDeniedError → 403 with error="Permission denied";
-        // the Rust SearchError enum does not expose that variant, so the
-        // mapping happens at the orchestrator layer or as a generic 500.
+        // Python re-raises `PermissionDeniedError` into the global
+        // `CogneeApiError` handler (`get_search_router.py:290-295`,
+        // `client.py:220-236`): 403 with `{"detail": "<message> [<name>]"}`.
+        CoreSearchError::PermissionDenied(message) => {
+            ApiError::Forbidden(format!("{message} [PermissionDeniedError]"))
+        }
         _ => ApiError::SearchError {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             error: "Internal server error".to_string(),

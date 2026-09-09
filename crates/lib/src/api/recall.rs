@@ -51,7 +51,7 @@ pub struct RecallResult {
 ///
 /// # Behavior
 /// 1. Normalize `scope` via [`normalize_scope`] (`recall.py:373`).
-/// 2. Resolve `[Auto]` per `(session_id, datasets, query_type)` triple
+/// 2. Resolve `[Auto]` per `(session_id, dataset scope, query_type)` triple
 ///    (`recall.py:374-386`):
 ///    - `session_id` set + no datasets + no query_type -> `[Session, Graph]`
 ///      with `auto_fallthrough=true` (graph short-circuited on session hit).
@@ -66,6 +66,7 @@ pub async fn recall(
     query_text: &str,
     query_type: Option<SearchType>,
     datasets: Option<Vec<String>>,
+    dataset_ids: Option<Vec<uuid::Uuid>>,
     top_k: usize,
     auto_route: bool,
     session_id: Option<&str>,
@@ -90,9 +91,13 @@ pub async fn recall(
 
     let auto_mode = normalized.as_slice() == [RecallScope::Auto];
     let (sources, auto_fallthrough): (Vec<RecallScope>, bool) = if auto_mode {
-        // Python recall.py:374-386.
-        match (session_id, datasets.as_ref(), query_type) {
-            (Some(_), None, None) => (vec![RecallScope::Session, RecallScope::Graph], true),
+        // Python recall.py:466-476: `has_dataset_scope = bool(dataset_ids)
+        // or bool(datasets)` — either filter counts, and an empty list does
+        // not.
+        let has_dataset_scope = dataset_ids.as_ref().is_some_and(|d| !d.is_empty())
+            || datasets.as_ref().is_some_and(|d| !d.is_empty());
+        match (session_id, has_dataset_scope, query_type) {
+            (Some(_), false, None) => (vec![RecallScope::Session, RecallScope::Graph], true),
             (Some(_), _, _) => (vec![RecallScope::Session, RecallScope::Graph], false),
             (None, _, _) => (vec![RecallScope::Graph], false),
         }
@@ -176,6 +181,7 @@ pub async fn recall(
                     query_text,
                     query_type,
                     datasets.clone(),
+                    dataset_ids.clone(),
                     top_k,
                     auto_route,
                     session_id,
@@ -241,7 +247,7 @@ pub async fn recall(
                 "search_type": search_type_label,
                 "session_id": session_id,
                 "datasets": datasets,
-                "dataset_ids": serde_json::Value::Null,
+                "dataset_ids": dataset_ids,
             })),
         );
     }
