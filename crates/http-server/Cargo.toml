@@ -45,7 +45,8 @@ tiktoken = ["cognee-cognify/tiktoken"]
 # --no-default-features for compile-time opt-out.
 # html-loader is on by default so the server binary supports URL ingestion and
 # HTML documents out of the box (parity with the Python `/add` URL path).
-default = ["telemetry", "html-loader", "onnx", "ladybug", "lancedb", "pgvector", "bedrock"]
+default = ["telemetry", "html-loader", "onnx", "ladybug", "lancedb", "pgvector", "bedrock",
+           "tiktoken"]
 # Embedded LanceDB vector store, forwarded to cognee-components + cognee-vector.
 # Default-on, so a plain build of this crate is unchanged; a consumer whose vector
 # backend is pgvector (or a closed adapter) can now drop the Arrow + lance native

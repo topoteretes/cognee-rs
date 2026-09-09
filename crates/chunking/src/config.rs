@@ -195,27 +195,33 @@ impl TokenCounterKind {
             // the user that their configured tokenizer is not active.
             #[cfg(not(feature = "hf-tokenizer"))]
             TokenCounterKind::HuggingFace { model_id: _ } => {
-                eprintln!(
+                tracing::warn!(
                     "cognee-chunking: HuggingFace tokenizer requested but `hf-tokenizer` \
-                     feature is not enabled — falling back to WordCounter"
+                     feature is not enabled — falling back to WordCounter. A token budget \
+                     spent in words undercounts real tokens by ~35%, which can \
+                     exceed an embedding model's input cap."
                 );
                 Ok(Box::new(WordCounter))
             }
 
             #[cfg(not(feature = "hf-tokenizer"))]
             TokenCounterKind::HuggingFaceFile { path: _ } => {
-                eprintln!(
+                tracing::warn!(
                     "cognee-chunking: HuggingFaceFile tokenizer requested but `hf-tokenizer` \
-                     feature is not enabled — falling back to WordCounter"
+                     feature is not enabled — falling back to WordCounter. A token budget \
+                     spent in words undercounts real tokens by ~35%, which can \
+                     exceed an embedding model's input cap."
                 );
                 Ok(Box::new(WordCounter))
             }
 
             #[cfg(not(feature = "tiktoken"))]
             TokenCounterKind::TikToken => {
-                eprintln!(
+                tracing::warn!(
                     "cognee-chunking: TikToken tokenizer requested but `tiktoken` feature is \
-                     not enabled — falling back to WordCounter"
+                     not enabled — falling back to WordCounter. A token budget spent \
+                     in words undercounts real tokens by ~35%, which can exceed an \
+                     embedding model's input cap."
                 );
                 Ok(Box::new(WordCounter))
             }

@@ -1228,9 +1228,17 @@ mod tests {
             ..Default::default()
         }
         .with_auto_chunk_size(&embed, &llm);
+        // `cfg!(feature = "tiktoken")` here would name COGNIFY's passthrough
+        // feature, not the one cognee-chunking actually compiles the counter
+        // behind — the two differ, and reading the wrong one is the same
+        // cross-crate confusion that produced this bug. Ask the counter.
+        let keeps_token_budget = matches!(
+            TokenCounterKind::TikToken.effective(),
+            TokenCounterKind::TikToken
+        );
         assert_eq!(
             bpe.max_chunk_size,
-            Some(if cfg!(feature = "tiktoken") { 512 } else { 341 }),
+            Some(if keeps_token_budget { 512 } else { 341 }),
             "a TikToken request only keeps the token budget when the feature is compiled in",
         );
         // Other fields should remain at defaults
