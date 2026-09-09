@@ -60,6 +60,15 @@ export interface CogneeDataRecord {
   external_metadata: string | null;
   node_set: string | null;
   pipeline_status: string | null;
+  /**
+   * Token count of the raw data, or `-1` when it has not been computed yet.
+   *
+   * The count is written by `cognify()`, not by `add()`, so a record read
+   * straight out of a {@link CogneeAddResult} reports `-1`. That includes the
+   * `add` half of `addAndCognify()`, which is snapshotted before extraction
+   * runs. Re-fetch the record with `datasets.listData()` once `cognify()` has
+   * completed to read the real count. See issue #99.
+   */
   token_count: number;
   data_size: number;
   last_accessed: string | null;
