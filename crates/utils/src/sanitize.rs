@@ -76,10 +76,10 @@ pub fn sanitize_string(mut value: String) -> String {
 ///
 /// This crate deliberately does not enable the feature itself, because doing so
 /// would force the `IndexMap` backing on every downstream consumer of
-/// `cognee-utils` (see the dependency comment in `Cargo.toml`). Every cognee
-/// build gets the Python rule regardless, via `cognee-database` and
-/// `cognee-visualization`. The divergence is reachable only when one object
-/// holds two keys differing by nothing but an embedded NUL.
+/// `cognee-utils` (see the dependency comment in `Cargo.toml`). Every in-workspace
+/// cognee build gets the Python rule regardless, via the workspace root's
+/// `serde_json/preserve_order` setting. The divergence is reachable only when
+/// one object holds two keys differing by nothing but an embedded NUL.
 pub fn sanitize_json_in_place(value: &mut Value) {
     match value {
         Value::String(s) => {
