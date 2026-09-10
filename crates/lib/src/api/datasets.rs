@@ -54,7 +54,9 @@ impl DatasetManager {
     /// on are returned. Without ACL, all datasets owned by the user are listed.
     pub async fn list_datasets(&self, owner_id: Uuid) -> Result<Vec<Dataset>, DatasetError> {
         if let Some(acl) = &self.acl_db {
-            let authorized_ids = acl.authorized_dataset_ids(owner_id, "read").await?;
+            let authorized_ids = acl
+                .authorized_dataset_ids_with_roles(owner_id, "read")
+                .await?;
             let mut datasets = Vec::with_capacity(authorized_ids.len());
             for id in authorized_ids {
                 if let Some(ds) = self.db.get_dataset(id).await? {
@@ -284,7 +286,9 @@ impl DatasetManager {
         dataset_id: Uuid,
     ) -> Result<(), DatasetError> {
         if let Some(acl) = &self.acl_db
-            && !acl.has_permission(owner_id, dataset_id, "read").await?
+            && !acl
+                .has_permission_with_roles(owner_id, dataset_id, "read")
+                .await?
         {
             return Err(DatasetError::PermissionDenied);
         }
@@ -297,7 +301,9 @@ impl DatasetManager {
         dataset_id: Uuid,
     ) -> Result<(), DatasetError> {
         if let Some(acl) = &self.acl_db
-            && !acl.has_permission(owner_id, dataset_id, "delete").await?
+            && !acl
+                .has_permission_with_roles(owner_id, dataset_id, "delete")
+                .await?
         {
             return Err(DatasetError::PermissionDenied);
         }
@@ -697,5 +703,156 @@ mod tests {
                 "owner must have '{perm}'"
             );
         }
+    }
+
+    // ------------------------------------------------------------------
+    // Role / tenant inheritance (issue #206)
+    //
+    // Python's `datasets.list_datasets` → `get_authorized_existing_datasets
+    // ([], "read", user)` and `get_authorized_dataset(user, id, perm)` walk
+    // tenant and role grants. These tests grant to a role/tenant id and call
+    // as the member; with the plain `AclDb` variants they go red.
+    // ------------------------------------------------------------------
+
+    /// Scenario: one dataset granted `read` directly, one only via a role,
+    /// one not at all. Expected: `list_datasets` returns exactly the first two
+    /// (exercises `authorized_dataset_ids_with_roles`).
+    #[tokio::test]
+    async fn acl_list_datasets_includes_role_granted_dataset() {
+        let db = fresh_db().await;
+        let owner_id = Uuid::new_v4();
+        let member = Uuid::new_v4();
+        let role = Uuid::new_v4();
+        let direct = make_dataset(owner_id);
+        let via_role = make_dataset(owner_id);
+        let ungranted = make_dataset(owner_id);
+        let ingest: &dyn IngestDb = db.as_ref();
+        for ds in [&direct, &via_role, &ungranted] {
+            ingest
+                .create_dataset(ds.clone())
+                .await
+                .expect("create_dataset");
+        }
+
+        let acl = Arc::new(cognee_test_utils::MockAclDb::new());
+        // A role only confers grants within a tenant the user belongs to
+        // (AclDb's contract, and Python nests the role walk in the tenant loop).
+        acl.add_user_to_tenant(member, Uuid::new_v4());
+        acl.add_user_to_role(member, role);
+        acl.grant_permission(member, direct.id, "read")
+            .await
+            .expect("grant direct");
+        acl.grant_permission(role, via_role.id, "read")
+            .await
+            .expect("grant role");
+
+        let mgr =
+            DatasetManager::new(db.clone() as Arc<dyn DatasetDb>).with_acl(acl as Arc<dyn AclDb>);
+        let mut listed: Vec<Uuid> = mgr
+            .list_datasets(member)
+            .await
+            .expect("list_datasets")
+            .into_iter()
+            .map(|d| d.id)
+            .collect();
+        listed.sort();
+        let mut expected = vec![direct.id, via_role.id];
+        expected.sort();
+        assert_eq!(listed, expected, "direct + role grants, nothing else");
+    }
+
+    /// Scenario: `read` granted only to a tenant the caller belongs to.
+    /// Expected: `has_data` / `list_data` succeed (exercises
+    /// `check_read_permission` → `has_permission_with_roles`).
+    #[tokio::test]
+    async fn acl_read_grant_via_tenant_admits_has_data_and_list_data() {
+        let db = fresh_db().await;
+        let owner_id = Uuid::new_v4();
+        let member = Uuid::new_v4();
+        let tenant = Uuid::new_v4();
+        let ds = make_dataset(owner_id);
+        let ingest: &dyn IngestDb = db.as_ref();
+        ingest
+            .create_dataset(ds.clone())
+            .await
+            .expect("create_dataset");
+
+        let acl = Arc::new(cognee_test_utils::MockAclDb::new());
+        acl.add_user_to_tenant(member, tenant);
+        acl.grant_permission(tenant, ds.id, "read")
+            .await
+            .expect("grant tenant");
+
+        let mgr =
+            DatasetManager::new(db.clone() as Arc<dyn DatasetDb>).with_acl(acl as Arc<dyn AclDb>);
+        assert!(
+            mgr.has_data(ds.id, member).await.is_ok(),
+            "tenant-held read must admit has_data"
+        );
+        assert!(
+            mgr.list_data(ds.id, member).await.is_ok(),
+            "tenant-held read must admit list_data"
+        );
+    }
+
+    /// Scenario: the dataset owner holds `delete` only through a role (no
+    /// direct grant — e.g. revoked), and a second user holds `read` through
+    /// another role. Expected: the owner's `empty_dataset` passes the gate
+    /// (exercises `check_delete_permission` → `has_permission_with_roles`);
+    /// the reader is denied.
+    ///
+    /// The caller is made the owner deliberately: `empty_dataset` feeds the
+    /// caller id into `DeleteScope::Dataset { owner_id }`, so the inner
+    /// `DeleteService` resolves the dataset by `(name, caller)` and a
+    /// non-owner would fail *after* the gate with `Validation(not found)`.
+    #[tokio::test]
+    async fn acl_delete_grant_via_role_admits_empty_dataset() {
+        use cognee_database::DeleteDb;
+        let db = fresh_db().await;
+        let member = Uuid::new_v4();
+        let reader = Uuid::new_v4();
+        let deleter_role = Uuid::new_v4();
+        let reader_role = Uuid::new_v4();
+        let ds = make_dataset(member);
+        let ingest: &dyn IngestDb = db.as_ref();
+        ingest
+            .create_dataset(ds.clone())
+            .await
+            .expect("create_dataset");
+
+        let acl = Arc::new(cognee_test_utils::MockAclDb::new());
+        // A role only confers grants within a tenant the user belongs to
+        // (AclDb's contract, and Python nests the role walk in the tenant loop).
+        acl.add_user_to_tenant(member, Uuid::new_v4());
+        acl.add_user_to_tenant(reader, Uuid::new_v4());
+        acl.add_user_to_role(member, deleter_role);
+        acl.add_user_to_role(reader, reader_role);
+        acl.grant_permission(deleter_role, ds.id, "delete")
+            .await
+            .expect("grant delete to role");
+        acl.grant_permission(reader_role, ds.id, "read")
+            .await
+            .expect("grant read to role");
+
+        let storage = Arc::new(cognee_storage::MockStorage::new());
+        let delete_service = DeleteService::new(
+            storage as Arc<dyn cognee_storage::StorageTrait>,
+            db.clone() as Arc<dyn DeleteDb>,
+        );
+        let mgr =
+            DatasetManager::new(db.clone() as Arc<dyn DatasetDb>).with_acl(acl as Arc<dyn AclDb>);
+
+        let err = mgr
+            .empty_dataset(ds.id, reader, &delete_service)
+            .await
+            .expect_err("a role-held read grant must not authorize delete");
+        assert!(
+            matches!(err, DatasetError::PermissionDenied),
+            "expected PermissionDenied, got {err:?}"
+        );
+
+        mgr.empty_dataset(ds.id, member, &delete_service)
+            .await
+            .expect("a role-held delete grant must authorize empty_dataset");
     }
 }

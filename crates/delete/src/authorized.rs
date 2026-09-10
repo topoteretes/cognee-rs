@@ -5,6 +5,7 @@
 //! inner [`DeleteService`]. The plain `DeleteService` remains available for
 //! edge/embedded deployments that do not require ACL enforcement.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use cognee_database::{AclDb, DeleteDb};
@@ -108,12 +109,16 @@ impl AuthorizedDeleteService {
                 // For user-scoped deletion, verify the principal has delete
                 // on all datasets that would be affected. The inner service
                 // will list all datasets by owner. We check that the
-                // principal's authorized set covers them.
-                let authorized = self
+                // principal's authorized set covers them. Collected into a set:
+                // with tenant/role inheritance the authorized list can be
+                // tenant-wide, and the cover check below is per dataset.
+                let authorized: HashSet<Uuid> = self
                     .acl_db
-                    .authorized_dataset_ids(principal_id, "delete")
+                    .authorized_dataset_ids_with_roles(principal_id, "delete")
                     .await
-                    .map_err(|e| DeleteError::Runtime(format!("ACL query failed: {e}")))?;
+                    .map_err(|e| DeleteError::Runtime(format!("ACL query failed: {e}")))?
+                    .into_iter()
+                    .collect();
 
                 let owner_datasets = self
                     .database
@@ -136,11 +141,13 @@ impl AuthorizedDeleteService {
                 // All-scope is an administrative operation. We check that
                 // the principal has delete permission on every dataset that
                 // exists. If any dataset lacks the permission, deny.
-                let authorized = self
+                let authorized: HashSet<Uuid> = self
                     .acl_db
-                    .authorized_dataset_ids(principal_id, "delete")
+                    .authorized_dataset_ids_with_roles(principal_id, "delete")
                     .await
-                    .map_err(|e| DeleteError::Runtime(format!("ACL query failed: {e}")))?;
+                    .map_err(|e| DeleteError::Runtime(format!("ACL query failed: {e}")))?
+                    .into_iter()
+                    .collect();
 
                 let all_datasets = self.database.list_datasets().await.map_err(|e| {
                     DeleteError::Runtime(format!("Failed to list all datasets: {e}"))
@@ -190,7 +197,7 @@ impl AuthorizedDeleteService {
     ) -> Result<(), DeleteError> {
         let has_perm = self
             .acl_db
-            .has_permission(principal_id, dataset_id, "delete")
+            .has_permission_with_roles(principal_id, dataset_id, "delete")
             .await
             .map_err(|e| DeleteError::Runtime(format!("ACL check failed: {e}")))?;
 

@@ -55,8 +55,12 @@ pub struct UpdateResult {
 /// * `llm` .. `cognify_config` - Components for the cognify phase.
 ///
 /// # Errors
-/// Returns `ApiError::PermissionDenied` when `acl_db` is set and the caller
-/// lacks `write` on the dataset. Propagates errors from delete, add, or
+/// Returns `ApiError::InvalidArgument` when `acl_db` is set and the caller
+/// lacks `write` on the dataset — **not** `PermissionDenied`, which this
+/// doc previously claimed. The variant exists (`api::error::ApiError`) and is
+/// arguably the right one, but changing it is a caller-visible break, so the
+/// doc is corrected to the shipped behaviour and the shape is pinned by
+/// `missing_write_grant_is_denied`. Propagates errors from delete, add, or
 /// cognify phases.
 #[allow(clippy::too_many_arguments)]
 pub async fn update(
@@ -83,15 +87,7 @@ pub async fn update(
 ) -> Result<UpdateResult, ApiError> {
     // ── Permission gate ───────────────────────────────────────────────────────
     if let Some(acl) = acl_db {
-        let permitted = acl
-            .has_permission(owner_id, dataset_id, "write")
-            .await
-            .map_err(|e| ApiError::InvalidArgument(e.to_string()))?;
-        if !permitted {
-            return Err(ApiError::InvalidArgument(
-                "write permission denied on dataset".to_string(),
-            ));
-        }
+        require_write_permission(acl, owner_id, dataset_id).await?;
     }
 
     // ── Step 1: Delete old data ───────────────────────────────────────────────
@@ -182,4 +178,91 @@ pub async fn update(
         new_data: data_items,
         cognify_result,
     })
+}
+
+/// Deny the update unless `owner_id` holds `write` on `dataset_id`.
+///
+/// Uses the roles-aware check: Python authorizes `update()` through the
+/// dataset ACL (`ingest_data` → `get_specific_user_permission_datasets(user.id,
+/// "write", [dataset_id])`), which walks the caller's tenant and role grants
+/// as well as direct ones. A collaborator who holds `write` only via a role
+/// must therefore be admitted here too.
+async fn require_write_permission(
+    acl: &dyn AclDb,
+    owner_id: Uuid,
+    dataset_id: Uuid,
+) -> Result<(), ApiError> {
+    let permitted = acl
+        .has_permission_with_roles(owner_id, dataset_id, "write")
+        .await
+        .map_err(|e| ApiError::InvalidArgument(e.to_string()))?;
+    if permitted {
+        Ok(())
+    } else {
+        Err(ApiError::InvalidArgument(
+            "write permission denied on dataset".to_string(),
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cognee_test_utils::MockAclDb;
+
+    /// Scenario: the caller holds `write` on the dataset only through a role.
+    /// Expected: admitted — Python's `get_specific_user_permission_datasets`
+    /// resolves role grants, so a direct-grant-only check would wrongly deny.
+    #[tokio::test]
+    async fn write_grant_via_role_is_admitted() {
+        let acl = MockAclDb::new();
+        let user = Uuid::new_v4();
+        let role = Uuid::new_v4();
+        let dataset = Uuid::new_v4();
+        // A role only confers grants within a tenant the user belongs to
+        // (AclDb's contract, and Python nests the role walk in the tenant loop).
+        acl.add_user_to_tenant(user, Uuid::new_v4());
+        acl.add_user_to_role(user, role);
+        assert!(acl.grant_permission(role, dataset, "write").await.is_ok());
+
+        assert!(
+            require_write_permission(&acl, user, dataset).await.is_ok(),
+            "a role-held write grant must satisfy the update gate"
+        );
+    }
+
+    /// Scenario: the caller holds `write` directly.
+    /// Expected: admitted — behaviour unchanged by the roles-aware switch.
+    #[tokio::test]
+    async fn direct_write_grant_is_admitted() {
+        let acl = MockAclDb::new();
+        let user = Uuid::new_v4();
+        let dataset = Uuid::new_v4();
+        assert!(acl.grant_permission(user, dataset, "write").await.is_ok());
+
+        assert!(require_write_permission(&acl, user, dataset).await.is_ok());
+    }
+
+    /// Scenario: the caller holds `read` (directly and via a role) but not
+    /// `write`. Expected: denied with `InvalidArgument`, the pre-existing
+    /// error shape for this gate.
+    #[tokio::test]
+    async fn missing_write_grant_is_denied() {
+        let acl = MockAclDb::new();
+        let user = Uuid::new_v4();
+        let role = Uuid::new_v4();
+        let dataset = Uuid::new_v4();
+        // A role only confers grants within a tenant the user belongs to
+        // (AclDb's contract, and Python nests the role walk in the tenant loop).
+        acl.add_user_to_tenant(user, Uuid::new_v4());
+        acl.add_user_to_role(user, role);
+        assert!(acl.grant_permission(user, dataset, "read").await.is_ok());
+        assert!(acl.grant_permission(role, dataset, "read").await.is_ok());
+
+        let err = require_write_permission(&acl, user, dataset).await;
+        assert!(
+            matches!(err, Err(ApiError::InvalidArgument(_))),
+            "got {err:?}"
+        );
+    }
 }
