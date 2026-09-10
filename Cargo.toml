@@ -141,7 +141,16 @@ rayon = "1.10"
 regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip", "json", "stream", "multipart"] }
 scraper = "0.21"
-schemars = "0.8"
+# `preserve_order` makes `schemars::Map` an `IndexMap`, so a generated schema
+# lists properties in DECLARATION order instead of alphabetically. That is not
+# cosmetic: the extraction schema is sent to the model on every cognify call,
+# and the model emits object keys in the order the schema declares them.
+# Alphabetical order put `Edge.target_node_id` last, after a free-text
+# `description`, and 19% of calls on a runaway-prone chunk then ran away inside
+# that id until they hit the output cap (0% in declaration order; Fisher exact
+# p=0.0002, n=126). Pinned by `schema_properties_are_in_declaration_order` in
+# crates/cognify/src/fact_extraction/models.rs.
+schemars = { version = "0.8", features = ["preserve_order"] }
 serde = { version = "1", features = ["derive"] }
 serial_test = "3.2"
 # COGX `.cogx.tar.gz` transport packing (cognee-migration `archive` feature).
@@ -159,7 +168,25 @@ sqlx = "0.8"
 strsim = "0.11"
 thiserror = "2.0"
 tiktoken-rs = "0.6"
-serde_json = "1"
+# `preserve_order` is enabled workspace-wide, deliberately, so that no crate can
+# forget it. `serde_json::Map` is a compile-time type alias: without this feature
+# it is a `BTreeMap` that SORTS keys, with it an `IndexMap` that keeps insertion
+# order (serde_json's map.rs:33-36). Three things in this workspace depend on
+# insertion order surviving — LLM JSON schemas, entity properties and the
+# visualization Schema — and a fourth will eventually be added by someone who
+# does not know this note exists.
+#
+# It was previously opted into per crate, which meant a crate that needed it and
+# did not ask still worked, silently, via cargo feature unification from the
+# crates that did. cognee-llm was exactly that case: its generated schema was
+# re-sorted alphabetically on the wire, which measured a 19% LLM runaway rate
+# against 0% for declaration order. A per-crate option that is wrong to leave
+# off is not an option, it is a trap.
+#
+# Cost is `indexmap` plus a little memory per map. Nothing here is `no_std`
+# (zero `#![no_std]` crates in the workspace), so the `std` requirement it pulls
+# in costs us nothing.
+serde_json = { version = "1", features = ["preserve_order"] }
 tempfile = "3"
 texting_robots = "0.2"
 tokenizers = "0.21"

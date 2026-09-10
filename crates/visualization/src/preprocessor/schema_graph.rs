@@ -319,13 +319,12 @@ fn field_from_column(column: &Value) -> Option<Value> {
 ///
 /// Parity note: for the **object**-shaped `columns` payload Python emits fields
 /// in the payload's own key order, which requires an insertion-ordered
-/// `serde_json::Map`. That is why this crate declares
-/// `serde_json/preserve_order` itself (`Cargo.toml`) instead of relying on
-/// feature unification to leak it in from `cognee-database` — a `-p
-/// cognee-visualization` build used to key-sort the payload and emit a different
-/// field order than the shipped workspace binary. The array-shaped payload (what
-/// DLT actually writes) is unaffected either way, as is every field's
-/// name/type/required content.
+/// `serde_json::Map`. The workspace root therefore enables
+/// `serde_json/preserve_order` for every crate, so a `-p cognee-visualization`
+/// build observes the same field order as the shipped workspace binary instead
+/// of key-sorting the payload. The array-shaped payload (what DLT actually
+/// writes) is unaffected either way, as is every field's name/type/required
+/// content.
 pub fn extract_schema_fields(node: &Value) -> Vec<Value> {
     let mut fields: Vec<Value> = Vec::new();
     let columns = coerce_json_value(node.get("columns"));
@@ -490,12 +489,12 @@ fn schema_value_type(value: &Value) -> &'static str {
 /// 1. **Derived keys must never outrank adapter properties.** They do not,
 ///    because `super::props_to_object` inserts the adapter's properties before
 ///    `preprocess()` stamps `degree`/`importance`/`stage`/… — but only while
-///    `serde_json::Map` is insertion ordered. This crate therefore declares
-///    `serde_json/preserve_order` in its own `Cargo.toml`; without it `Map` is a
-///    `BTreeMap`, *every* key is globally alphabetical, and a `DocumentChunk`
-///    card reads `…, chunk_index, degree` where Python reads
-///    `…, chunk_index, document_id`. `tests/preprocessor_test.rs::
-///    type_card_fields_prefer_database_properties_over_derived_keys` pins this.
+///    `serde_json::Map` is insertion ordered. The workspace root therefore
+///    enables `serde_json/preserve_order`; without it `Map` is a `BTreeMap`,
+///    *every* key is globally alphabetical, and a `DocumentChunk` card reads
+///    `…, chunk_index, degree` where Python reads `…, chunk_index, document_id`.
+///    `tests/preprocessor_test.rs::type_card_fields_prefer_database_properties_
+///    over_derived_keys` pins this.
 /// 2. **Ties *between* adapter properties are still ordered differently.**
 ///    Python sees them in `json.dumps()` (model-field) order; Rust sees them
 ///    key-sorted, because `super::props_to_object` must impose *some* order on

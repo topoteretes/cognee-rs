@@ -42,6 +42,11 @@ async-trait.workspace = true
 
 # Serialization
 serde.workspace = true
+# serde_json's `preserve_order` is LOAD-BEARING here, and comes from the
+# workspace root (see the note there). `generate_json_schema` ends with
+# `serde_json::to_value(schema)`, so without it the schema's properties are
+# re-sorted ALPHABETICALLY on the wire — which measured a 19% LLM runaway rate
+# against 0% for declaration order (Fisher p=0.0002).
 serde_json.workspace = true
 
 # JSON Schema generation

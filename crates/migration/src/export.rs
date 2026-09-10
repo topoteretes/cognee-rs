@@ -204,13 +204,12 @@ pub fn write_cogx(
 /// Python's `{"id": str(node_id), **properties}`.
 ///
 /// Properties are emitted in sorted key order. `NodeData` is a `HashMap`, so
-/// its iteration order changes between runs, and the workspace enables
-/// serde_json's `preserve_order` (via `cognee-database`), which makes
-/// `serde_json::Map` an insertion-ordered `IndexMap` rather than a sorted
-/// `BTreeMap` — together those would leak the hash order straight into the
-/// file. JSON object order carries no meaning to the importer, but a
-/// non-reproducible export cannot be diffed between runs or checked against a
-/// golden archive.
+/// its iteration order changes between runs, and the workspace root enables
+/// serde_json's `preserve_order`, which makes `serde_json::Map` an
+/// insertion-ordered `IndexMap` rather than a sorted `BTreeMap` — together
+/// those would leak the hash order straight into the file. JSON object order
+/// carries no meaning to the importer, but a non-reproducible export cannot be
+/// diffed between runs or checked against a golden archive.
 fn raw_node_value(node_id: &str, properties: &cognee_graph::NodeData) -> serde_json::Value {
     let mut map = serde_json::Map::new();
     map.insert(

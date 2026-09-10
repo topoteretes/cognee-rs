@@ -789,10 +789,10 @@ fn schema_data_is_passed_through() {
 ///
 /// Rust reproduces the *grouping* by inserting the adapter's properties before
 /// any derived key, which only holds when `serde_json::Map` is insertion-ordered.
-/// Without the `preserve_order` feature declared in this crate's `Cargo.toml`,
-/// `Map` is a `BTreeMap`, every key is globally alphabetical, and `degree` /
-/// `importance` displace `document_id` / `version` on the type card. The two
-/// expected lists below are the Python-observed ones.
+/// Without the workspace's `serde_json/preserve_order` feature, `Map` is a
+/// `BTreeMap`, every key is globally alphabetical, and `degree` / `importance`
+/// displace `document_id` / `version` on the type card. The two expected lists
+/// below are the Python-observed ones.
 #[test]
 fn type_card_fields_prefer_database_properties_over_derived_keys() {
     // Only `chunk_index` / `document_id` (chunk) and `version` (document) are
