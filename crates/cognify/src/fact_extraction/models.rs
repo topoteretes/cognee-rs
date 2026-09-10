@@ -38,15 +38,21 @@ pub trait GraphModel:
 }
 
 /// Node in a knowledge graph.
-///
-/// Represents an entity or concept extracted from text.
-/// Nodes are akin to Wikipedia nodes - they represent distinct entities.
-///
-/// # Fields
-/// * `id` - Unique identifier (human-readable, not an integer)
-/// * `name` - Display name of the entity
-/// * `node_type` - Type classification (e.g., "PERSON", "ORGANIZATION", "CONCEPT")
-/// * `description` - Brief description of the entity
+//
+// Everything below this line is a `//` comment, not a `///` one, and must stay
+// that way: `schemars` copies a type's rustdoc into the schema's `description`,
+// and this schema is sent to the model on every extraction call. The one-line
+// `///` above is the whole model-facing description, and it is byte-identical
+// to Python's (`cognee/shared/data_models.py`).
+//
+// Represents an entity or concept extracted from text. Nodes are akin to
+// Wikipedia nodes - they represent distinct entities.
+//
+// # Fields
+// * `id` - Unique identifier (human-readable, not an integer)
+// * `name` - Display name of the entity
+// * `node_type` - Type classification (e.g., "PERSON", "ORGANIZATION", "CONCEPT")
+// * `description` - Brief description of the entity
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Node {
     /// Unique identifier for the node (human-readable, e.g., "Albert Einstein")
@@ -65,15 +71,18 @@ pub struct Node {
 }
 
 /// Edge in a knowledge graph.
-///
-/// Represents a relationship between two nodes.
-/// Edges are akin to Wikipedia links - they connect related concepts.
-///
-/// # Fields
-/// * `source_node_id` - ID of the source node
-/// * `target_node_id` - ID of the target node
-/// * `relationship_name` - Type of relationship (use snake_case, e.g., "works_at")
-/// * `description` - Concrete one-sentence fact expressed by this edge
+//
+// `//`, not `///` — see the note on `Node`. The one-line `///` above is the
+// whole model-facing description and matches Python's byte for byte.
+//
+// Represents a relationship between two nodes. Edges are akin to Wikipedia
+// links - they connect related concepts.
+//
+// # Fields
+// * `source_node_id` - ID of the source node
+// * `target_node_id` - ID of the target node
+// * `relationship_name` - Type of relationship (use snake_case, e.g., "works_at")
+// * `description` - Concrete one-sentence fact expressed by this edge
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Edge {
     /// ID of the source node
@@ -86,39 +95,47 @@ pub struct Edge {
     pub relationship_name: String,
 
     /// Concrete one-sentence fact expressed by this edge, using endpoint names.
-    /// Mirrors Python `KnowledgeGraph.Edge.description` (data_models.py:62-71).
-    /// Becomes the `edge_text` graph-edge property, feeding EdgeType + Triplet
-    /// embeddings. Optional because older/custom outputs may omit it.
+    //
+    // The provenance below is a `//` comment: only the `///` line above is
+    // model-facing, and it is byte-identical to Python's field description.
+    //
+    // Mirrors Python `KnowledgeGraph.Edge.description` (data_models.py:62-71).
+    // Becomes the `edge_text` graph-edge property, feeding EdgeType + Triplet
+    // embeddings. Optional because older/custom outputs may omit it.
     #[serde(default)]
     pub description: Option<String>,
 }
 
-/// Knowledge graph extracted from text.
-///
-/// Contains nodes (entities/concepts) and edges (relationships).
-/// This is the primary output of fact extraction.
-///
-/// # Fields
-/// * `nodes` - List of extracted entities and concepts
-/// * `edges` - List of relationships between nodes
+/// Knowledge graph.
+//
+// `//`, not `///` — see the note on `Node`. The one-line `///` above is the
+// whole model-facing description and matches Python's byte for byte.
+//
+// Contains nodes (entities/concepts) and edges (relationships). This is the
+// primary output of fact extraction.
+//
+// # Fields
+// * `nodes` - List of extracted entities and concepts
+// * `edges` - List of relationships between nodes
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct KnowledgeGraph {
-    /// List of nodes (entities and concepts).
-    ///
-    /// Intentionally NOT `#[serde(default)]`: schemars honours serde `default`
-    /// by emitting a JSON-schema `"default"` and dropping the field from the
-    /// `required` array, which advertises the field as optional to the model.
-    /// gpt-oss-120b (and other non-strict tool-callers) then omit it. Requiring
-    /// `nodes`/`edges` here makes schemars list them in `required` (forcing the
-    /// model to return both) and makes a payload missing either field fail typed
-    /// deserialization, driving the adapter's corrective-retry loop instead of
-    /// silently yielding a 0-edge graph. Mirrors what instructor does in Python,
-    /// where its TOOLS-mode schema builder re-adds non-default fields to
-    /// `required` (Python's `default_factory` emits no schema `"default"`).
+    // NOT a doc comment, deliberately — same rule as `edges` below, and Python
+    // ships no description on this property either.
+    //
+    // Intentionally NOT `#[serde(default)]`: schemars honours serde `default`
+    // by emitting a JSON-schema `"default"` and dropping the field from the
+    // `required` array, which advertises the field as optional to the model.
+    // gpt-oss-120b (and other non-strict tool-callers) then omit it. Requiring
+    // `nodes`/`edges` here makes schemars list them in `required` (forcing the
+    // model to return both) and makes a payload missing either field fail typed
+    // deserialization, driving the adapter's corrective-retry loop instead of
+    // silently yielding a 0-edge graph. Mirrors what instructor does in Python,
+    // where its TOOLS-mode schema builder re-adds non-default fields to
+    // `required` (Python's `default_factory` emits no schema `"default"`).
     pub nodes: Vec<Node>,
 
-    /// List of edges (relationships between nodes). NOT `#[serde(default)]` — see
-    /// the note on `nodes`. An empty graph must send `{"nodes":[],"edges":[]}`.
+    // List of edges (relationships between nodes). NOT `#[serde(default)]` — see
+    // the note on `nodes`. An empty graph must send `{"nodes":[],"edges":[]}`.
     //
     // NOT a doc comment, deliberately. `schemars` copies every `///` on a field
     // straight into that property's JSON-schema `description`, and this struct's
@@ -562,38 +579,88 @@ mod tests {
         }
     }
 
-    /// The `edges` explanation must stay OFF the field's doc comment.
+    /// No rustdoc written for Rust readers may reach the model.
     ///
-    /// `schemars` copies a field's `///` into that property's JSON-schema
-    /// `description`, and this schema is sent to the model on every extraction
-    /// call. Describing a private Rust deserializer there spends prompt tokens
-    /// and, worse, tells the model a tolerance exists. The comment on the field
-    /// is therefore a plain `//`; this test is what keeps it that way.
+    /// `schemars` copies every `///` — on a struct and on a field — into the
+    /// generated JSON schema's `description`, and that schema is sent to the
+    /// model on every extraction call. Internal notes there are not merely
+    /// wasted prompt tokens: they describe private deserializer tolerances and
+    /// serde attributes, i.e. they condition the model on implementation facts
+    /// it should never aim at.
+    ///
+    /// Measured before this was fixed: the Rust schema carried 13 `description`
+    /// strings totalling 2567 chars against Python's 4 / 140, and Rust's request
+    /// shape drew +38% median output tokens and +41% prompt tokens on identical
+    /// text (Mann-Whitney p=0.0025, n=20/arm).
     #[test]
     fn the_model_facing_schema_carries_no_implementation_detail() {
         let schema = cognee_llm::schema::generate_json_schema::<KnowledgeGraph>();
         let rendered = schema.to_string();
 
-        // Precondition: field docs really do reach the model, so the assertion
-        // below is testing something. `nodes` keeps its `///` and its text is
-        // in the schema.
-        assert!(
-            rendered.contains("serde(default)") || rendered.contains("schemars honours serde"),
-            "precondition failed: field doc comments are expected to appear in the \
-             generated schema, so this test would be vacuous. Schema: {rendered}"
-        );
-
         for leak in [
             "deserialize_edges_lenient",
             "malformed",
             "MAX_DROPPABLE_EDGE_FRACTION",
+            "serde(default)",
+            "schemars",
+            "gpt-oss-120b",
+            "instructor",
+            "data_models.py",
+            "edge_text",
+            "Wikipedia",
+            "# Fields",
         ] {
             assert!(
                 !rendered.contains(leak),
-                "the model-facing schema leaks the internal `{leak}`; keep the \
-                 lenient-deserialization note on a `//` comment, not a `///` one"
+                "the model-facing schema leaks the internal `{leak}`; keep notes                  written for Rust readers on `//` comments, not `///` ones"
             );
         }
+    }
+
+    /// The schema's `description` budget, pinned.
+    ///
+    /// A regression here is silent — nothing fails, the model is just handed a
+    /// longer prompt and answers at greater length — so it needs a number to
+    /// trip over. Python's equivalent schema carries 4 descriptions / 140 chars;
+    /// Rust carries a few more because its per-field hints (node id must be
+    /// human-readable, relationship_name is snake_case) are genuinely
+    /// model-facing and are worth their tokens.
+    #[test]
+    fn schema_descriptions_stay_within_budget() {
+        fn walk(v: &serde_json::Value, out: &mut Vec<String>) {
+            match v {
+                serde_json::Value::Object(map) => {
+                    for (k, val) in map {
+                        if k == "description"
+                            && let Some(text) = val.as_str()
+                        {
+                            out.push(text.to_string());
+                        }
+                        walk(val, out);
+                    }
+                }
+                serde_json::Value::Array(items) => items.iter().for_each(|i| walk(i, out)),
+                _ => {}
+            }
+        }
+
+        let schema = cognee_llm::schema::generate_json_schema::<KnowledgeGraph>();
+        let mut descriptions = Vec::new();
+        walk(&schema, &mut descriptions);
+        let total: usize = descriptions.iter().map(String::len).sum();
+
+        assert!(
+            total <= 600,
+            "schema descriptions grew to {total} chars across {} fields (budget 600).              Every char is sent to the model on every extraction call. If a new              description is genuinely model-facing, raise the budget deliberately;              if it is a note for Rust readers, make it a `//` comment. Descriptions: {descriptions:#?}",
+            descriptions.len(),
+        );
+
+        // Longest single description: no field needs a paragraph.
+        let longest = descriptions.iter().map(String::len).max().unwrap_or(0);
+        assert!(
+            longest <= 120,
+            "a single schema description is {longest} chars; model-facing hints              should be one short sentence"
+        );
     }
 
     /// The schema must list properties in DECLARATION order, not alphabetically.
@@ -658,6 +725,33 @@ mod tests {
             ["nodes", "edges"],
             "nodes must precede edges: the model cannot reference a node id in an \
              edge it has not declared yet"
+        );
+    }
+
+    /// `Node.description` stays required and stays documented.
+    ///
+    /// It is a deliberate Rust-only strictness (issue #66): non-strict
+    /// tool-callers omit the field unless both the schema and the prompt demand
+    /// it. Stripping the leaked rustdoc above must not take this with it.
+    #[test]
+    fn node_description_stays_required_with_a_model_facing_hint() {
+        let schema = cognee_llm::schema::generate_json_schema::<KnowledgeGraph>();
+        let node = &schema["definitions"]["Node"];
+        let required: Vec<&str> = node["required"]
+            .as_array()
+            .expect("Node schema always carries a `required` array")
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .collect();
+        assert!(
+            required.contains(&"description"),
+            "Node.description must stay required (issue #66); got {required:?}"
+        );
+        assert!(
+            node["properties"]["description"]["description"]
+                .as_str()
+                .is_some_and(|d| !d.is_empty()),
+            "Node.description keeps a short model-facing hint"
         );
     }
 }
