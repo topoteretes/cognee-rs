@@ -595,4 +595,69 @@ mod tests {
             );
         }
     }
+
+    /// The schema must list properties in DECLARATION order, not alphabetically.
+    ///
+    /// This is the single highest-impact finding of the Bedrock runaway
+    /// investigation, and it is invisible in code review — the schema is
+    /// semantically identical either way, so only this test can hold it.
+    ///
+    /// `schemars` keys its `properties` map on [`schemars::Map`], which is a
+    /// `BTreeMap` (alphabetical) unless the `preserve_order` feature is on, in
+    /// which case it is an `IndexMap` (declaration order). The workspace
+    /// `Cargo.toml` turns that feature on **for this reason and no other**.
+    ///
+    /// Why it matters. Alphabetical order puts `Edge.target_node_id` LAST, after
+    /// the free-text `description`, and `Node.description` FIRST. Declaration
+    /// order (which is also Pydantic's, hence Python's) writes the two endpoint
+    /// ids adjacently and defers free text to the end. Measured on Bedrock
+    /// Sonnet 4.5, 250 calls, one runaway-prone chunk held fixed:
+    ///
+    /// | properties order | truncated at an 8192 cap | max output |
+    /// |---|---|---|
+    /// | alphabetical (schemars default) | 13/68 = 19% | 8192 (censored) |
+    /// | declaration (this) | **0/58 = 0%** | 2732 |
+    ///
+    /// Fisher exact two-sided p = 0.0002 pooled; p = 0.0057 for the baseline
+    /// against exactly the shape this test pins. The degenerate mode it removes
+    /// is a free-association loop inside `Edge.target_node_id` — one captured
+    /// payload spent 22,305 chars (94% of the answer) on a single node id.
+    ///
+    /// If a future schemars bump drops `preserve_order`, or someone reorders the
+    /// fields, this test is the only thing that will notice.
+    #[test]
+    fn schema_properties_are_in_declaration_order() {
+        let schema = cognee_llm::schema::generate_json_schema::<KnowledgeGraph>();
+
+        fn keys(v: &serde_json::Value) -> Vec<&str> {
+            v.as_object()
+                .expect("every `properties` value is a JSON object")
+                .keys()
+                .map(String::as_str)
+                .collect()
+        }
+
+        assert_eq!(
+            keys(&schema["definitions"]["Node"]["properties"]),
+            ["id", "name", "type", "description"],
+            "Node properties must be in declaration order — see this test's docs"
+        );
+        assert_eq!(
+            keys(&schema["definitions"]["Edge"]["properties"]),
+            [
+                "source_node_id",
+                "target_node_id",
+                "relationship_name",
+                "description"
+            ],
+            "Edge properties must be in declaration order: the two endpoint ids \
+             adjacent, free text last — see this test's docs"
+        );
+        assert_eq!(
+            keys(&schema["properties"]),
+            ["nodes", "edges"],
+            "nodes must precede edges: the model cannot reference a node id in an \
+             edge it has not declared yet"
+        );
+    }
 }

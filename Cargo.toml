@@ -141,7 +141,16 @@ rayon = "1.10"
 regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip", "json", "stream", "multipart"] }
 scraper = "0.21"
-schemars = "0.8"
+# `preserve_order` makes `schemars::Map` an `IndexMap`, so a generated schema
+# lists properties in DECLARATION order instead of alphabetically. That is not
+# cosmetic: the extraction schema is sent to the model on every cognify call,
+# and the model emits object keys in the order the schema declares them.
+# Alphabetical order put `Edge.target_node_id` last, after a free-text
+# `description`, and 19% of calls on a runaway-prone chunk then ran away inside
+# that id until they hit the output cap (0% in declaration order; Fisher exact
+# p=0.0002, n=126). Pinned by `schema_properties_are_in_declaration_order` in
+# crates/cognify/src/fact_extraction/models.rs.
+schemars = { version = "0.8", features = ["preserve_order"] }
 serde = { version = "1", features = ["derive"] }
 serial_test = "3.2"
 # COGX `.cogx.tar.gz` transport packing (cognee-migration `archive` feature).
