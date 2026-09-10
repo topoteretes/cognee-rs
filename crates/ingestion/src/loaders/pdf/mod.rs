@@ -34,7 +34,7 @@ pub struct PdfLoader;
 #[async_trait]
 impl DocumentLoader for PdfLoader {
     async fn extract(&self, bytes: &[u8], _doc: &Document) -> Result<LoaderOutput, LoaderError> {
-        let text = extract_impl(bytes)?;
+        let text = extract_impl(bytes).await?;
         Ok(LoaderOutput::Text(text))
     }
 
@@ -43,12 +43,17 @@ impl DocumentLoader for PdfLoader {
     }
 }
 
+/// Resolving the PDFium library is async because on a cold cache it downloads
+/// libpdfium with a *blocking* HTTP client, which has to be driven from
+/// `spawn_blocking` — doing it inline aborted the process. See
+/// [`pdfium`] for the full story.
 #[cfg(feature = "pdf-pdfium")]
-fn extract_impl(bytes: &[u8]) -> Result<String, LoaderError> {
-    pdfium::extract_text(bytes)
+async fn extract_impl(bytes: &[u8]) -> Result<String, LoaderError> {
+    let lib_path = pdfium::ensure_library().await?;
+    pdfium::extract_text(bytes, lib_path)
 }
 
 #[cfg(all(feature = "pdf-pure-rust", not(feature = "pdf-pdfium")))]
-fn extract_impl(bytes: &[u8]) -> Result<String, LoaderError> {
+async fn extract_impl(bytes: &[u8]) -> Result<String, LoaderError> {
     pure_rust::extract_text(bytes)
 }

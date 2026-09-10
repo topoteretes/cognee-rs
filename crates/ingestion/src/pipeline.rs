@@ -2041,13 +2041,14 @@ mod tests {
     /// it: the error type is erased by the task wrapper (`add` yields
     /// `Box<dyn Error>`, and `downcast_ref` for `IngestionError`/`LoaderError`
     /// is `None` at every level of the source chain, so a variant assertion
-    /// would be vacuous), and the pdfium backend panics rather than erroring
-    /// when no libpdfium is present — `pdfium_auto::bind_pdfium_silent()`
-    /// builds a tokio runtime and drops it inside async, which aborts the test
-    /// under both current-thread and multi-thread flavours. That panic is a
-    /// real pre-existing defect in the pdfium path, unrelated to loader
-    /// registration and tracked separately; a registration assertion is
-    /// backend-agnostic, needs no PDF fixture, and pins exactly what #102 was.
+    /// would be vacuous), and on a cold cache the pdfium backend would have to
+    /// download a ~7 MB libpdfium. A registration assertion is backend-agnostic,
+    /// needs no PDF fixture and no network, and pins exactly what #102 was.
+    ///
+    /// The cold-cache abort this comment used to describe — `bind_pdfium_silent`
+    /// building and dropping a tokio runtime inside async — is fixed; the
+    /// download now runs on `spawn_blocking`, and
+    /// `tests/pdf_pdfium_cold_cache.rs` pins that it errors rather than aborts.
     #[cfg(any(feature = "pdf-pdfium", feature = "pdf-pure-rust"))]
     #[test]
     fn test_pdf_loader_is_registered_when_a_backend_is_enabled() {
