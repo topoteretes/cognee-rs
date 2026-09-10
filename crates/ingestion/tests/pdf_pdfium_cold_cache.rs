@@ -82,12 +82,26 @@ async fn cold_pdfium_cache_errors_instead_of_aborting() {
     // code aborts the process inside `extract`.
     let result = PdfLoader.extract(MINIMAL_PDF, &doc).await;
 
+    // The proxy is a best-effort way to keep the download from succeeding; a
+    // machine with NO_PROXY set, a proxy-exempt route, or a warm pdfium cache
+    // can still resolve the library. In that case `MINIMAL_PDF` — deliberately
+    // the smallest thing that is structurally a PDF — may fail in the PARSER
+    // instead, which is a different error and must not be held to the
+    // resolution hint. Assert the hint only on the error this test is about.
     if let Err(e) = result {
         let msg = e.to_string();
-        assert!(
-            msg.contains("PDFIUM_LIB_PATH"),
-            "a failure to obtain libpdfium must tell the operator how to supply \
-             one; got: {msg}"
-        );
+        // Keyed on the resolution error's own prefix, not the word "PDFium".
+        // `extract_text`'s *bind* failure is "Failed to load PDFium library: …"
+        // (pdfium.rs:80) — it contains "PDFium" but cannot contain the hint, so
+        // a looser predicate turns a truncated download or an arch mismatch
+        // into a spurious failure of a test that is about the process abort.
+        let is_resolution_failure = msg.contains("Failed to obtain the PDFium library");
+        if is_resolution_failure {
+            assert!(
+                msg.contains("PDFIUM_LIB_PATH"),
+                "a failure to obtain libpdfium must tell the operator how to supply \
+                 one; got: {msg}"
+            );
+        }
     }
 }

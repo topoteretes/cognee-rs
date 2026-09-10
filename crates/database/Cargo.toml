@@ -37,10 +37,11 @@ thiserror.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 serde.workspace = true
-# `preserve_order` keeps `serde_json::Map` insertion-ordered so entity
+# serde_json's `preserve_order` (workspace root) keeps `serde_json::Map`
+# insertion-ordered so entity
 # `to_dict()` helpers (e.g. `session_record::Model::to_dict`) can match
 # the field ordering of Python's `to_dict()` byte-for-byte.
-serde_json = { workspace = true, features = ["preserve_order"] }
+serde_json.workspace = true
 # Only the sqlite connect path uses `spawn_blocking` (for the WAL writability
 # probe); gated behind the `sqlite` feature so non-sqlite builds don't link it.
 tokio = { workspace = true, optional = true }

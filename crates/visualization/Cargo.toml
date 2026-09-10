@@ -18,16 +18,16 @@ workspace = true
 cognee-graph = { path = "../graph", version = "0.2.0" }
 dirs = { workspace = true }
 serde = { workspace = true }
-# `preserve_order` keeps `serde_json::Map` insertion-ordered, which the Schema
+# serde_json's `preserve_order` (workspace root) keeps `serde_json::Map`
+# insertion-ordered, which the Schema
 # tab's field selection depends on: Python's `Counter.most_common()` tie-break is
 # first-seen key order, so the derived renderer keys (`degree`, `importance`, …)
 # must stay *after* the database properties they are appended to. Without the
 # feature `Map` is a `BTreeMap`, every key is globally alphabetical and
-# `degree`/`importance` outrank `document_id`/`version`. The workspace build gets
-# the feature via `cognee-database`; declaring it here is what makes
-# `cargo test -p cognee-visualization` observe the same ordering as the shipped
-# binary. See `preprocessor::schema_graph::extract_type_schema_fields`.
-serde_json = { workspace = true, features = ["preserve_order"] }
+# `degree`/`importance` outrank `document_id`/`version`. The feature is enabled
+# at the workspace root, so a per-crate build observes the same ordering as the
+# shipped binary. See `preprocessor::schema_graph::extract_type_schema_fields`.
+serde_json.workspace = true
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util"] }
 tracing = { workspace = true }
