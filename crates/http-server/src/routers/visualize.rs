@@ -86,20 +86,8 @@ pub async fn get_visualize(
                 format!("dataset {} not found", query.dataset_id),
             )
         })?;
-    let allowed = if let Some(ref acl) = components.acl_db {
-        acl.has_permission(user.id, dataset.id, "read")
-            .await
-            .map_err(|err| ApiError::VisualizeError(StatusCode::CONFLICT, err.to_string()))?
-    } else {
-        // No ACL backend wired (pure-OSS); allow.
-        true
-    };
-    if !allowed {
-        return Err(ApiError::VisualizeError(
-            StatusCode::CONFLICT,
-            "permission denied".to_string(),
-        ));
-    }
+    // No ACL backend wired (pure-OSS) → allow.
+    require_read_permission(components.acl_db.as_deref(), user.id, dataset.id).await?;
 
     let Some(graph_db) = components.graph_db.clone() else {
         return Err(ApiError::VisualizeError(
@@ -176,19 +164,7 @@ pub async fn post_visualize_multi(
         // OSS does not bundle an ACL backend — when no `acl_db` is wired
         // (the pure-OSS case), allow the read. Closed embedders install
         // a real `AclDb` impl via `ComponentHandles::acl_db`.
-        let allowed = if let Some(ref acl) = components.acl_db {
-            acl.has_permission(pair.user_id, dataset.id, "read")
-                .await
-                .map_err(|err| ApiError::VisualizeError(StatusCode::CONFLICT, err.to_string()))?
-        } else {
-            true
-        };
-        if !allowed {
-            return Err(ApiError::VisualizeError(
-                StatusCode::CONFLICT,
-                "permission denied".to_string(),
-            ));
-        }
+        require_read_permission(components.acl_db.as_deref(), pair.user_id, dataset.id).await?;
         let Some(graph_db) = components.graph_db.clone() else {
             return Err(ApiError::VisualizeError(
                 StatusCode::CONFLICT,
@@ -209,4 +185,98 @@ pub async fn post_visualize_multi(
         .await
         .map_err(|err| ApiError::VisualizeError(StatusCode::CONFLICT, err.to_string()))?;
     Ok(Html(html))
+}
+
+/// Deny the visualization unless `user_id` can `read` `dataset_id`.
+///
+/// `acl` is `None` when no ACL backend is wired (pure-OSS) — the read is
+/// allowed. Otherwise the roles-aware check is used, matching Python's
+/// `get_authorized_existing_datasets([dataset_id], "read", user)`, which
+/// resolves tenant and role grants alongside direct ones. Any failure —
+/// backend error or denial — collapses into the 409 envelope per the
+/// module-level parity note.
+async fn require_read_permission(
+    acl: Option<&dyn cognee_database::AclDb>,
+    user_id: uuid::Uuid,
+    dataset_id: uuid::Uuid,
+) -> Result<(), ApiError> {
+    let Some(acl) = acl else {
+        return Ok(());
+    };
+    let allowed = acl
+        .has_permission_with_roles(user_id, dataset_id, "read")
+        .await
+        .map_err(|err| ApiError::VisualizeError(StatusCode::CONFLICT, err.to_string()))?;
+    if allowed {
+        Ok(())
+    } else {
+        Err(ApiError::VisualizeError(
+            StatusCode::CONFLICT,
+            "permission denied".to_string(),
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cognee_database::AclDb;
+    use cognee_test_utils::MockAclDb;
+    use uuid::Uuid;
+
+    /// Scenario: the caller can read the dataset only through a tenant grant.
+    /// Expected: allowed — Python's visualize path resolves tenant/role grants.
+    #[tokio::test]
+    async fn read_grant_via_tenant_is_admitted() {
+        let acl = MockAclDb::new();
+        let user = Uuid::new_v4();
+        let tenant = Uuid::new_v4();
+        let dataset = Uuid::new_v4();
+        acl.add_user_to_tenant(user, tenant);
+        assert!(acl.grant_permission(tenant, dataset, "read").await.is_ok());
+
+        assert!(
+            require_read_permission(Some(&acl), user, dataset)
+                .await
+                .is_ok(),
+            "a tenant-held read grant must satisfy the visualize gate"
+        );
+    }
+
+    /// Scenario: direct `read` grant. Expected: allowed (unchanged).
+    #[tokio::test]
+    async fn direct_read_grant_is_admitted() {
+        let acl = MockAclDb::new();
+        let user = Uuid::new_v4();
+        let dataset = Uuid::new_v4();
+        assert!(acl.grant_permission(user, dataset, "read").await.is_ok());
+
+        assert!(
+            require_read_permission(Some(&acl), user, dataset)
+                .await
+                .is_ok()
+        );
+    }
+
+    /// Scenario: no grant at all. Expected: the 409 parity envelope, not 403.
+    #[tokio::test]
+    async fn missing_read_grant_is_a_409() {
+        let acl = MockAclDb::new();
+        let user = Uuid::new_v4();
+        let dataset = Uuid::new_v4();
+
+        let err = require_read_permission(Some(&acl), user, dataset).await;
+        assert!(
+            matches!(err, Err(ApiError::VisualizeError(StatusCode::CONFLICT, _))),
+            "got {err:?}"
+        );
+    }
+
+    /// Scenario: no ACL backend wired (pure-OSS). Expected: allowed.
+    #[tokio::test]
+    async fn no_acl_backend_allows() {
+        let user = Uuid::new_v4();
+        let dataset = Uuid::new_v4();
+        assert!(require_read_permission(None, user, dataset).await.is_ok());
+    }
 }

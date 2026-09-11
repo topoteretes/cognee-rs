@@ -3732,6 +3732,200 @@ mod tests {
         );
     }
 
+    // ------------------------------------------------------------------
+    // Role / tenant inheritance (issue #206)
+    //
+    // Python `check_permission_on_dataset` → `get_specific_user_permission_
+    // datasets` → `get_all_user_permission_datasets` resolves direct, tenant
+    // and role grants for every permission type. The delete path must use
+    // the `_with_roles` variants so a principal holding `delete` only through
+    // a role or tenant is admitted. Each test below grants to a role/tenant
+    // id and calls as the member user; with the plain variants the grant is
+    // invisible and every one of these goes red.
+    // ------------------------------------------------------------------
+
+    /// Scenario: `delete` granted to a *role*; the caller holds the role.
+    /// Exercises `require_delete_permission` (Dataset scope →
+    /// `has_permission_with_roles`).
+    #[tokio::test]
+    async fn authorized_delete_via_role_grant_dataset_scope() {
+        use cognee_database::AclDb;
+        let (svc, storage, db, acl) = make_authorized_service().await;
+        let owner = Uuid::new_v4();
+        let member = Uuid::new_v4();
+        let role = Uuid::new_v4();
+        let (dataset_id, _data_id) =
+            seed_dataset_with_data(&db, &storage, owner, "acl_role_ds").await;
+
+        // A role only confers grants within a tenant the user belongs to
+        // (AclDb's contract, and Python nests the role walk in the tenant loop).
+        acl.add_user_to_tenant(member, Uuid::new_v4());
+        acl.add_user_to_role(member, role);
+        let acl_dyn: &dyn AclDb = acl.as_ref();
+        acl_dyn
+            .grant_permission(role, dataset_id, "delete")
+            .await
+            .unwrap();
+        // Sanity: the member has no direct grant of its own.
+        assert!(!acl.has_grant(member, dataset_id, "delete"));
+
+        let result = svc
+            .execute(
+                &DeleteRequest {
+                    scope: DeleteScope::Dataset {
+                        owner_id: owner,
+                        dataset_name: "acl_role_ds".to_string(),
+                    },
+                    mode: DeleteMode::Soft,
+                    memory_only: false,
+                },
+                member,
+            )
+            .await
+            .expect("a role-held delete grant must authorize the delete");
+        assert_eq!(result.deleted_datasets, 1);
+    }
+
+    /// Scenario: a role grants `read` but not `delete`.
+    /// Expected: still denied — inheritance must not widen the permission.
+    #[tokio::test]
+    async fn authorized_delete_via_role_with_wrong_permission_is_denied() {
+        use cognee_database::AclDb;
+        let (svc, storage, db, acl) = make_authorized_service().await;
+        let owner = Uuid::new_v4();
+        let member = Uuid::new_v4();
+        let role = Uuid::new_v4();
+        let (dataset_id, _data_id) =
+            seed_dataset_with_data(&db, &storage, owner, "acl_role_read_only").await;
+
+        // A role only confers grants within a tenant the user belongs to
+        // (AclDb's contract, and Python nests the role walk in the tenant loop).
+        acl.add_user_to_tenant(member, Uuid::new_v4());
+        acl.add_user_to_role(member, role);
+        let acl_dyn: &dyn AclDb = acl.as_ref();
+        acl_dyn
+            .grant_permission(role, dataset_id, "read")
+            .await
+            .unwrap();
+
+        let err = svc
+            .execute(
+                &DeleteRequest {
+                    scope: DeleteScope::Dataset {
+                        owner_id: owner,
+                        dataset_name: "acl_role_read_only".to_string(),
+                    },
+                    mode: DeleteMode::Soft,
+                    memory_only: false,
+                },
+                member,
+            )
+            .await
+            .expect_err("a role-held read grant must not authorize delete");
+        assert!(
+            matches!(err, DeleteError::PermissionDenied(_)),
+            "expected PermissionDenied, got: {err:?}"
+        );
+    }
+
+    /// Scenario: User scope; the owner has two datasets, one granted to the
+    /// caller directly and one granted only to a *tenant* the caller belongs
+    /// to. Exercises the `authorized_dataset_ids_with_roles` set-cover in the
+    /// `DeleteScope::User` branch. A third, ungranted dataset must still deny.
+    #[tokio::test]
+    async fn authorized_delete_via_tenant_grant_user_scope() {
+        use cognee_database::AclDb;
+        let (svc, storage, db, acl) = make_authorized_service().await;
+        let owner = Uuid::new_v4();
+        let member = Uuid::new_v4();
+        let tenant = Uuid::new_v4();
+        let (direct_ds, _) = seed_dataset_with_data(&db, &storage, owner, "user_direct").await;
+        let (tenant_ds, _) = seed_dataset_with_data(&db, &storage, owner, "user_tenant").await;
+
+        acl.add_user_to_tenant(member, tenant);
+        let acl_dyn: &dyn AclDb = acl.as_ref();
+        acl_dyn
+            .grant_permission(member, direct_ds, "delete")
+            .await
+            .unwrap();
+        acl_dyn
+            .grant_permission(tenant, tenant_ds, "delete")
+            .await
+            .unwrap();
+
+        let request = DeleteRequest {
+            scope: DeleteScope::User { owner_id: owner },
+            mode: DeleteMode::Soft,
+            memory_only: false,
+        };
+        let result = svc
+            .execute(&request, member)
+            .await
+            .expect("direct + tenant grants must cover every owner dataset");
+        assert_eq!(result.deleted_datasets, 2);
+
+        // Now an ungranted dataset appears for the same owner: the cover
+        // check must fail even though the member still holds the others.
+        seed_dataset_with_data(&db, &storage, owner, "user_ungranted").await;
+        let err = svc
+            .execute(&request, member)
+            .await
+            .expect_err("an owner dataset with no grant must deny User scope");
+        assert!(
+            matches!(err, DeleteError::PermissionDenied(_)),
+            "expected PermissionDenied, got: {err:?}"
+        );
+    }
+
+    /// Scenario: All scope; every dataset in the DB is granted to a *role*
+    /// the caller holds. Exercises `authorized_dataset_ids_with_roles` in the
+    /// `DeleteScope::All` branch.
+    #[tokio::test]
+    async fn authorized_delete_via_role_grant_all_scope() {
+        use cognee_database::AclDb;
+        let (svc, storage, db, acl) = make_authorized_service().await;
+        let owner_a = Uuid::new_v4();
+        let owner_b = Uuid::new_v4();
+        let admin = Uuid::new_v4();
+        let admin_role = Uuid::new_v4();
+        let (ds_a, _) = seed_dataset_with_data(&db, &storage, owner_a, "all_a").await;
+        let (ds_b, _) = seed_dataset_with_data(&db, &storage, owner_b, "all_b").await;
+
+        // A role only confers grants within a tenant the user belongs to
+        // (AclDb's contract, and Python nests the role walk in the tenant loop).
+        acl.add_user_to_tenant(admin, Uuid::new_v4());
+        acl.add_user_to_role(admin, admin_role);
+        let acl_dyn: &dyn AclDb = acl.as_ref();
+        for ds in [ds_a, ds_b] {
+            acl_dyn
+                .grant_permission(admin_role, ds, "delete")
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            acl_dyn
+                .authorized_dataset_ids(admin, "delete")
+                .await
+                .unwrap()
+                .len(),
+            0,
+            "sanity: the admin holds nothing directly"
+        );
+
+        let result = svc
+            .execute(
+                &DeleteRequest {
+                    scope: DeleteScope::All,
+                    mode: DeleteMode::Soft,
+                    memory_only: false,
+                },
+                admin,
+            )
+            .await
+            .expect("role-held delete on every dataset must authorize All scope");
+        assert_eq!(result.deleted_datasets, 2);
+    }
+
     #[tokio::test]
     async fn unauthorized_service_still_works() {
         // The plain DeleteService (without ACL wrapper) should continue
