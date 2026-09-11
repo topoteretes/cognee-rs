@@ -94,20 +94,18 @@ async fn create_dataset_grants_the_owner_all_four_permissions() {
     }
 }
 
-/// Scenario: a create whose grant failed left the dataset row behind; the
-/// caller retries the same name once the ACL backend is healthy.
-/// Expected: the retry repairs the missing grants. The dataset row and its ACL
-/// rows cannot be written in one transaction, so the handler grants on the
-/// already-exists arm too — otherwise the short-circuit return would answer
-/// 200 forever while the ACL rows stayed missing, which is the state the whole
-/// fix exists to make unreachable.
-/// Verification: create the row directly (simulating the half-finished create,
-/// with no grants), POST the same name, assert 200 and that all four grants
-/// now exist.
+/// Scenario: the grant fails, so the handler errors — but the dataset row was
+/// already written.
+/// Expected: the row is rolled back. The row and its ACL rows cannot share a
+/// transaction, so without a compensating delete the failed create would leave
+/// an orphan, and because the handler short-circuits on an existing name every
+/// later POST would answer 200 while the ACL rows stayed missing — permanently
+/// re-creating the exact state this fix exists to prevent.
+/// Verification: POST with a failing ACL, assert the error, then assert no row
+/// with that name survives.
 #[tokio::test]
-async fn a_retry_repairs_a_dataset_left_without_grants() {
-    let mock = Arc::new(MockAclDb::new());
-    let acl: Arc<dyn AclDb> = Arc::clone(&mock) as Arc<dyn AclDb>;
+async fn a_failed_grant_rolls_the_dataset_row_back() {
+    let acl: Arc<dyn AclDb> = Arc::new(MockAclDb::failing_grants("acl backend is down"));
     let state = build_state_with_acl(acl).await;
     let db = state
         .components()
@@ -116,26 +114,57 @@ async fn a_retry_repairs_a_dataset_left_without_grants() {
         .clone();
     let owner = default_test_user_id();
 
-    // The wreckage of a create whose grant failed: a row, and no ACL for it.
-    let dataset_id = cognee_ingestion::generate_dataset_id("half_created", owner, None);
-    IngestDb::create_dataset(
-        db.as_ref(),
-        cognee_models::Dataset::new("half_created".to_string(), owner, None, dataset_id),
-    )
-    .await
-    .expect("seed the half-created dataset");
-    assert_eq!(mock.grant_count(), 0, "precondition: no grants exist yet");
-
     let app = build_router(state).await.expect("router");
-    let resp = oneshot_request(app, create_request("half_created")).await;
-    assert_eq!(resp.status(), 200, "the retry must succeed");
+    let resp = oneshot_request(app, create_request("rolled_back")).await;
+    assert!(!resp.status().is_success(), "the create must fail");
 
-    for perm in cognee_database::ops::acl::PERMISSION_NAMES {
-        assert!(
-            mock.has_grant(owner, dataset_id, perm),
-            "retrying the create must repair the missing '{perm}' grant"
-        );
-    }
+    let leftover = IngestDb::get_dataset_by_name(db.as_ref(), "rolled_back", owner, None)
+        .await
+        .expect("lookup");
+    assert!(
+        leftover.is_none(),
+        "a failed grant must not leave the dataset row behind — an orphan here is \
+         unreachable by every later POST, which short-circuits on the name"
+    );
+}
+
+/// Scenario: an owner's `read` grant was deliberately revoked; they POST the
+/// same dataset name again.
+/// Expected: the existing row comes back untouched and the revocation stands.
+/// Re-granting on the already-exists arm would turn an idempotent create into
+/// an ACL reset — a privilege-restoration path, and a real one now that the
+/// orchestrator denies an ungranted owner by name as well as by id.
+/// Verification: create normally, revoke `read`, POST again, assert 200 and
+/// that `read` is still absent.
+#[tokio::test]
+async fn re_creating_an_existing_dataset_does_not_restore_a_revoked_grant() {
+    let mock = Arc::new(MockAclDb::new());
+    let acl: Arc<dyn AclDb> = Arc::clone(&mock) as Arc<dyn AclDb>;
+    let state = build_state_with_acl(Arc::clone(&acl)).await;
+    let app = build_router(state).await.expect("router");
+    let owner = default_test_user_id();
+
+    let resp = oneshot_request(app.clone(), create_request("revoked")).await;
+    assert_eq!(resp.status(), 200);
+    let dataset_id: uuid::Uuid = body_json(resp)
+        .await
+        .get("id")
+        .and_then(|v| v.as_str())
+        .expect("dataset id")
+        .parse()
+        .expect("uuid");
+
+    acl.revoke_permission(owner, dataset_id, "read")
+        .await
+        .expect("revoke");
+    assert!(!mock.has_grant(owner, dataset_id, "read"));
+
+    let resp = oneshot_request(app, create_request("revoked")).await;
+    assert_eq!(resp.status(), 200, "the idempotent create still succeeds");
+    assert!(
+        !mock.has_grant(owner, dataset_id, "read"),
+        "POSTing an existing dataset must not silently restore a revoked grant"
+    );
 }
 
 /// Scenario: no `AclDb` is wired — OSS single-user mode.

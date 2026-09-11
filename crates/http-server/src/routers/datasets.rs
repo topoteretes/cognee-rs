@@ -400,53 +400,73 @@ pub async fn create_new_dataset(
         .await
         .map_err(|e| ApiError::Teapot(format!("Error creating dataset: {e}")))?;
 
-    // Create the dataset unless it already exists. The row and its ACL rows
-    // cannot be written in one transaction — `AclDb` is a separate trait over
-    // a possibly separate store — so the grant below runs on *both* arms
-    // rather than only on the freshly-created one. That is what makes a retry
-    // repair a half-finished create: without it, a create whose grant failed
-    // leaves a dataset row behind, and every subsequent POST for the same name
-    // short-circuits here and answers 200 while the ACL rows stay missing —
-    // the exact state this handler is supposed to make unreachable.
-    // `grant_all_permissions_on_dataset_via_trait` is idempotent, so
-    // re-granting an already-complete dataset is a no-op.
-    let created = match existing {
-        Some(ds) => ds,
-        None => {
-            let new_id =
-                cognee_ingestion::generate_dataset_id(&payload.name, user.id, user.tenant_id);
-            let dataset = Dataset::new(payload.name, user.id, user.tenant_id, new_id);
-            db.create_dataset(dataset)
-                .await
-                .map_err(|e| ApiError::Teapot(format!("Error creating dataset: {e}")))?
-        }
-    };
+    // An existing dataset is returned as-is and its ACL is left alone. That is
+    // deliberate: re-granting here would turn an idempotent create into an ACL
+    // reset, letting an owner restore a deliberately revoked `read` grant just
+    // by POSTing the same name again. The rollback below is what keeps that
+    // safe — it guarantees a row that exists is a row whose grants were
+    // written, so there is never a half-finished dataset needing repair.
+    if let Some(ds) = existing {
+        return Ok(Json(dataset_to_dto(&ds)));
+    }
+
+    // Create a new dataset.
+    let new_id = cognee_ingestion::generate_dataset_id(&payload.name, user.id, user.tenant_id);
+    let dataset = Dataset::new(payload.name, user.id, user.tenant_id, new_id);
+    let created = db
+        .create_dataset(dataset)
+        .await
+        .map_err(|e| ApiError::Teapot(format!("Error creating dataset: {e}")))?;
 
     // Grant read+write+share+delete ACLs to the owner — only when an
     // `acl_db` impl is wired. OSS single-user mode skips this entirely.
     //
     // The grant is NOT best-effort. Once an `acl_db` is wired, a dataset with
-    // no owner `read` row is invisible to every ACL-aware reader — the
-    // `cognee::api::datasets` facade's `list_datasets`, and `search` when the
-    // caller filters by dataset id — while this router's own `GET
-    // /v1/datasets` still lists it from ownership. Propagate the failure
-    // instead, and share the grant loop with
+    // no owner `read` row is unreadable to every ACL-aware path — the
+    // `cognee::api::datasets` facade's `list_datasets`, and `search` by id or
+    // by name — while this router's own `GET /v1/datasets` still lists it from
+    // ownership. The grant loop is shared with
     // `cognee::api::datasets::create_authorized_dataset` (this crate cannot
     // depend on `cognee` — see the NOTE in Cargo.toml) so the two create paths
     // cannot drift apart again.
-    if let Some(acl) = components.acl_db.as_ref() {
-        cognee_database::ops::acl::grant_all_permissions_on_dataset_via_trait(
-            acl.as_ref(),
-            user.id,
-            created.id,
-        )
-        .await
-        .map_err(|e| {
-            ApiError::Teapot(format!(
-                "Error creating dataset: failed to grant owner permissions on {}: {e}",
-                created.id
-            ))
-        })?;
+    //
+    // The dataset row and its ACL rows cannot share a transaction — `AclDb` is
+    // a separate trait over a possibly separate store — so a failed grant is
+    // compensated by deleting the row we just wrote. Without that the failed
+    // create would leave an orphan behind, and because the early return above
+    // short-circuits on the name, every later POST would answer 200 while the
+    // ACL rows stayed missing, permanently.
+    if let Some(acl) = components.acl_db.as_ref()
+        && let Err(grant_err) =
+            cognee_database::ops::acl::grant_all_permissions_on_dataset_via_trait(
+                acl.as_ref(),
+                user.id,
+                created.id,
+            )
+            .await
+    {
+        let rollback = DeleteDb::delete_dataset(&*db, created.id).await;
+        if let Err(rollback_err) = rollback {
+            // Now we really are stuck with an orphan: say so loudly rather
+            // than reporting only the grant failure, because the operator has
+            // a row to clean up by hand.
+            tracing::error!(
+                dataset_id = %created.id,
+                grant_error = %grant_err,
+                rollback_error = %rollback_err,
+                "failed to grant owner permissions AND failed to roll the dataset row back"
+            );
+            return Err(ApiError::Teapot(format!(
+                "Error creating dataset: failed to grant owner permissions on {} ({grant_err}), \
+                 and rolling the dataset row back also failed ({rollback_err}) — \
+                 dataset {} needs manual cleanup",
+                created.id, created.id
+            )));
+        }
+        return Err(ApiError::Teapot(format!(
+            "Error creating dataset: failed to grant owner permissions on {}: {grant_err}",
+            created.id
+        )));
     }
 
     Ok(Json(dataset_to_dto(&created)))

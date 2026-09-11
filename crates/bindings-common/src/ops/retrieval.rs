@@ -66,17 +66,39 @@ pub fn parse_search_type(s: &str) -> Result<SearchType, SdkError> {
 /// `Option<Vec<Uuid>>`.
 ///
 /// Shared by the `search` and `recall` ops so the two cannot diverge again:
-/// recall used to ignore the key outright and run unfiltered. Entries that are
-/// not parseable UUID strings are dropped rather than erroring, which is the
-/// behaviour the search op has always had.
-fn parse_dataset_ids(opts: &serde_json::Value) -> Option<Vec<Uuid>> {
-    opts.get("datasetIds")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|x| x.as_str().and_then(|s| Uuid::parse_str(s).ok()))
-                .collect()
-        })
+/// recall used to ignore the key outright and run unfiltered.
+///
+/// **Every entry must be a valid UUID string.** The previous behaviour dropped
+/// unparseable entries silently, which failed in the dangerous direction: an
+/// all-invalid `datasetIds` collapsed to `Some(vec![])`, and both the
+/// orchestrator and `recall` read an empty list as *no filter*, so one typo
+/// turned a scoped query into an unscoped one over every dataset the caller
+/// can read. The HTTP DTOs reject malformed UUIDs at deserialization; binding
+/// callers reach this parser directly, so it has to reject them here.
+fn parse_dataset_ids(opts: &serde_json::Value) -> Result<Option<Vec<Uuid>>, SdkError> {
+    let Some(value) = opts.get("datasetIds") else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let Some(arr) = value.as_array() else {
+        return Err(SdkError::Validation(
+            "`datasetIds` must be an array of UUID strings".to_string(),
+        ));
+    };
+    let mut ids = Vec::with_capacity(arr.len());
+    for entry in arr {
+        let raw = entry.as_str().ok_or_else(|| {
+            SdkError::Validation(format!(
+                "`datasetIds` entries must be UUID strings, got {entry}"
+            ))
+        })?;
+        ids.push(Uuid::parse_str(raw).map_err(|e| {
+            SdkError::Validation(format!("invalid UUID in `datasetIds`: {raw}: {e}"))
+        })?);
+    }
+    Ok(Some(ids))
 }
 
 /// Everything [`recall`] reads out of its camelCase `opts`, in the order
@@ -120,7 +142,7 @@ pub fn build_recall_args(opts: &serde_json::Value) -> Result<RecallArgs, SdkErro
     // datasetIds from opts.datasetIds, parsed exactly as the search op does.
     // Recall opts are read key-by-key, so before this was wired an unknown
     // `datasetIds` was silently dropped and the recall ran unscoped.
-    let dataset_ids = parse_dataset_ids(opts);
+    let dataset_ids = parse_dataset_ids(opts)?;
     let tenant_id = crate::ops::pipeline::opts_tenant(opts)?;
 
     // top_k from opts.topK (default 10)
@@ -189,7 +211,7 @@ pub fn build_search_request(
         })
     });
 
-    let dataset_ids = parse_dataset_ids(opts);
+    let dataset_ids = parse_dataset_ids(opts)?;
     let tenant_id = crate::ops::pipeline::opts_tenant(opts)?;
 
     // scalar opts
@@ -426,7 +448,7 @@ mod tests {
     fn parse_dataset_ids_reads_a_uuid_array() {
         let opts = json!({ "datasetIds": [ID_A, ID_B] });
         assert_eq!(
-            parse_dataset_ids(&opts),
+            parse_dataset_ids(&opts).unwrap(),
             Some(vec![
                 Uuid::parse_str(ID_A).unwrap(),
                 Uuid::parse_str(ID_B).unwrap()
@@ -435,29 +457,42 @@ mod tests {
     }
 
     #[test]
-    fn parse_dataset_ids_is_none_when_absent_or_not_an_array() {
-        assert_eq!(parse_dataset_ids(&json!({})), None);
-        assert_eq!(parse_dataset_ids(&json!({ "datasetIds": null })), None);
-        assert_eq!(parse_dataset_ids(&json!({ "datasetIds": ID_A })), None);
-    }
-
-    /// Unparseable entries are dropped rather than erroring — the behaviour
-    /// the search op has always had, preserved so the two stay identical.
-    #[test]
-    fn parse_dataset_ids_drops_unparseable_entries() {
-        let opts = json!({ "datasetIds": [ID_A, "not-a-uuid", 7] });
+    fn parse_dataset_ids_is_none_when_absent_or_null() {
+        assert_eq!(parse_dataset_ids(&json!({})).unwrap(), None);
         assert_eq!(
-            parse_dataset_ids(&opts),
-            Some(vec![Uuid::parse_str(ID_A).unwrap()])
+            parse_dataset_ids(&json!({ "datasetIds": null })).unwrap(),
+            None
         );
     }
 
+    /// A malformed entry is rejected, never dropped. Dropping failed in the
+    /// dangerous direction: `["bad"]` collapsed to `Some(vec![])`, which every
+    /// consumer reads as *no filter*, so one typo silently widened a scoped
+    /// query to every dataset the caller can read.
+    #[test]
+    fn parse_dataset_ids_rejects_malformed_entries_instead_of_widening_scope() {
+        assert!(parse_dataset_ids(&json!({ "datasetIds": ["not-a-uuid"] })).is_err());
+        assert!(parse_dataset_ids(&json!({ "datasetIds": [ID_A, "not-a-uuid"] })).is_err());
+        assert!(parse_dataset_ids(&json!({ "datasetIds": [ID_A, 7] })).is_err());
+        // A non-array is a caller mistake too, not "no filter".
+        assert!(parse_dataset_ids(&json!({ "datasetIds": ID_A })).is_err());
+    }
+
+    /// Both ops must reject it, not just the parser in isolation.
+    #[test]
+    fn a_malformed_dataset_id_fails_both_ops() {
+        let opts = json!({ "datasetIds": ["not-a-uuid"] });
+        assert!(build_recall_args(&opts).is_err());
+        assert!(build_search_request("q", &opts, Uuid::new_v4()).is_err());
+    }
+
     /// An empty array stays `Some(vec![])`, which every downstream consumer
-    /// treats as "no filter" — not as "match nothing".
+    /// treats as "no filter" — not as "match nothing". Explicitly asking for
+    /// no filter is fine; arriving there by way of a typo is not.
     #[test]
     fn parse_dataset_ids_keeps_an_empty_array_distinct_from_absent() {
         assert_eq!(
-            parse_dataset_ids(&json!({ "datasetIds": [] })),
+            parse_dataset_ids(&json!({ "datasetIds": [] })).unwrap(),
             Some(vec![])
         );
     }
