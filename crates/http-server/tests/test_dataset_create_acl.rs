@@ -94,6 +94,50 @@ async fn create_dataset_grants_the_owner_all_four_permissions() {
     }
 }
 
+/// Scenario: a create whose grant failed left the dataset row behind; the
+/// caller retries the same name once the ACL backend is healthy.
+/// Expected: the retry repairs the missing grants. The dataset row and its ACL
+/// rows cannot be written in one transaction, so the handler grants on the
+/// already-exists arm too — otherwise the short-circuit return would answer
+/// 200 forever while the ACL rows stayed missing, which is the state the whole
+/// fix exists to make unreachable.
+/// Verification: create the row directly (simulating the half-finished create,
+/// with no grants), POST the same name, assert 200 and that all four grants
+/// now exist.
+#[tokio::test]
+async fn a_retry_repairs_a_dataset_left_without_grants() {
+    let mock = Arc::new(MockAclDb::new());
+    let acl: Arc<dyn AclDb> = Arc::clone(&mock) as Arc<dyn AclDb>;
+    let state = build_state_with_acl(acl).await;
+    let db = state
+        .components()
+        .expect("components are wired")
+        .database
+        .clone();
+    let owner = default_test_user_id();
+
+    // The wreckage of a create whose grant failed: a row, and no ACL for it.
+    let dataset_id = cognee_ingestion::generate_dataset_id("half_created", owner, None);
+    IngestDb::create_dataset(
+        db.as_ref(),
+        cognee_models::Dataset::new("half_created".to_string(), owner, None, dataset_id),
+    )
+    .await
+    .expect("seed the half-created dataset");
+    assert_eq!(mock.grant_count(), 0, "precondition: no grants exist yet");
+
+    let app = build_router(state).await.expect("router");
+    let resp = oneshot_request(app, create_request("half_created")).await;
+    assert_eq!(resp.status(), 200, "the retry must succeed");
+
+    for perm in cognee_database::ops::acl::PERMISSION_NAMES {
+        assert!(
+            mock.has_grant(owner, dataset_id, perm),
+            "retrying the create must repair the missing '{perm}' grant"
+        );
+    }
+}
+
 /// Scenario: no `AclDb` is wired — OSS single-user mode.
 /// Expected: the create still succeeds. `create_authorized_dataset` would
 /// return `AclNotConfigured` here, which is why the handler branches on

@@ -6,6 +6,13 @@ import java.util.List;
 public final class RecallOptions extends Options {
     public RecallOptions searchType(SearchType t) { if (t != null) put("searchType", t.wire()); return this; }
     public RecallOptions datasets(List<String> d) { put("datasets", d); return this; }
+    /**
+     * Dataset UUIDs to restrict graph search to. Takes precedence over
+     * {@link #datasets}; an empty list is no filter. A dataset shared with the
+     * caller is reachable here and not by name — name resolution is
+     * owner-scoped in both SDKs.
+     */
+    public RecallOptions datasetIds(List<String> ids) { put("datasetIds", ids); return this; }
     public RecallOptions topK(int n) { put("topK", n); return this; }
     public RecallOptions autoRoute(boolean b) { put("autoRoute", b); return this; }
     public RecallOptions sessionId(String s) { put("sessionId", s); return this; }

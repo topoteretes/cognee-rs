@@ -164,6 +164,13 @@ export interface CogneeRecallOptions {
   searchType?: SearchTypeString;
   /** Dataset names to restrict graph search to. */
   datasets?: string[];
+  /**
+   * Dataset UUIDs to restrict graph search to. Takes precedence over
+   * `datasets` when both are given; an empty array is no filter.
+   * Unlike `datasets`, a dataset shared with the caller is reachable here —
+   * name resolution is owner-scoped in both SDKs.
+   */
+  datasetIds?: string[];
   /** Maximum number of results per source. Defaults to 10. */
   topK?: number;
   /** Automatically select the best search type (defaults to false). */

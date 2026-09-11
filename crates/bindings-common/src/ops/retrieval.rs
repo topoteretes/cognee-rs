@@ -32,7 +32,7 @@ use std::sync::Arc;
 use serde_json::json;
 use uuid::Uuid;
 
-use cognee::api::{ScopeInput, normalize_scope, recall as cognee_recall};
+use cognee::api::{RecallOptions, ScopeInput, normalize_scope, recall as cognee_recall};
 use cognee::search::{SearchRequest, SearchType};
 
 use crate::{HandleState, SdkError};
@@ -79,6 +79,91 @@ fn parse_dataset_ids(opts: &serde_json::Value) -> Option<Vec<Uuid>> {
         })
 }
 
+/// Everything [`recall`] reads out of its camelCase `opts`, in the order
+/// [`cognee::api::recall`] takes them.
+///
+/// Extracted from the body of [`recall`] so the opts → arguments mapping is
+/// assertable without a warmed [`HandleState`]. That mapping is exactly where
+/// the `datasetIds` regression lived: the key parsed fine and was then never
+/// handed on, so a recall silently ran unscoped. A test over
+/// [`build_recall_args`] catches that re-appearing; a test over
+/// [`parse_dataset_ids`] alone does not.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecallArgs {
+    pub query_type: Option<SearchType>,
+    pub datasets: Option<Vec<String>>,
+    pub dataset_ids: Option<Vec<Uuid>>,
+    pub tenant_id: Option<Uuid>,
+    pub top_k: usize,
+    pub auto_route: bool,
+    pub session_id: Option<String>,
+    pub scope: Option<Vec<cognee::api::RecallScope>>,
+}
+
+/// Parse camelCase recall `opts` into [`RecallArgs`].
+pub fn build_recall_args(opts: &serde_json::Value) -> Result<RecallArgs, SdkError> {
+    // query_type from opts.searchType
+    let query_type = match opts.get("searchType").and_then(|v| v.as_str()) {
+        Some(s) => Some(parse_search_type(s)?),
+        None => None,
+    };
+
+    // datasets from opts.datasets
+    let datasets: Option<Vec<String>> = opts.get("datasets").and_then(|v| {
+        v.as_array().map(|arr| {
+            arr.iter()
+                .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+    });
+
+    // datasetIds from opts.datasetIds, parsed exactly as the search op does.
+    // Recall opts are read key-by-key, so before this was wired an unknown
+    // `datasetIds` was silently dropped and the recall ran unscoped.
+    let dataset_ids = parse_dataset_ids(opts);
+    let tenant_id = crate::ops::pipeline::opts_tenant(opts)?;
+
+    // top_k from opts.topK (default 10)
+    let top_k = opts
+        .get("topK")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize)
+        .unwrap_or(10);
+
+    // auto_route from opts.autoRoute (default false)
+    let auto_route = opts
+        .get("autoRoute")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    // session_id from opts.sessionId
+    let session_id = opts
+        .get("sessionId")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    // scope from opts.scope
+    let scope_input = build_scope_input(opts)?;
+    let scope = normalize_scope(scope_input)
+        .map_err(|e| SdkError::Validation(format!("invalid scope: {e}")))?;
+    // normalize_scope returns Vec<RecallScope>. An empty vec (from an empty Many
+    // input) is passed as None so recall() applies its own Auto default; any
+    // non-empty vec (including vec![Auto] from a missing/null/auto scope) is
+    // passed as-is — recall() treats Some(vec![Auto]) and None identically.
+    let scope = if scope.is_empty() { None } else { Some(scope) };
+
+    Ok(RecallArgs {
+        query_type,
+        datasets,
+        dataset_ids,
+        tenant_id,
+        top_k,
+        auto_route,
+        session_id,
+        scope,
+    })
+}
+
 /// Build a `SearchRequest` from camelCase opts.
 ///
 /// `user_id` is always set from `owner_id` — required when `datasets` is
@@ -105,6 +190,7 @@ pub fn build_search_request(
     });
 
     let dataset_ids = parse_dataset_ids(opts);
+    let tenant_id = crate::ops::pipeline::opts_tenant(opts)?;
 
     // scalar opts
     let top_k = opts
@@ -160,11 +246,13 @@ pub fn build_search_request(
         save_interaction,
         // Always populate user_id from owner_id so dataset-name resolution works.
         user_id: Some(owner_id),
-        // The bindings' default user carries no tenant — `HandleState.tenant_id`
-        // is `None` with no setter — so there is no tenant to scope name
-        // resolution by. `None` is "no tenant filter", which is what every row
-        // these SDKs write (`tenant_id = NULL`) needs.
-        tenant_id: None,
+        // Read from the same `tenant` opt `add` / `remember` write with
+        // (`ops::pipeline::opts_tenant`). One handle can therefore hold
+        // same-named datasets in several tenants, so resolving a `datasets`
+        // name without this predicate could pick the wrong tenant's row.
+        // Absent, it stays `None` — "no tenant filter" — which is right for
+        // the single-tenant default where every row carries `tenant_id = NULL`.
+        tenant_id,
         verbose,
         feedback_influence: None,
         retriever_specific_config: None,
@@ -249,55 +337,17 @@ pub async fn recall(
     let owner_id = state.owner_id().await?;
     let owner_str = owner_id.to_string();
 
-    // query_type from opts.searchType
-    let query_type = match opts.get("searchType").and_then(|v| v.as_str()) {
-        Some(s) => Some(parse_search_type(s)?),
-        None => None,
-    };
-
-    // datasets from opts.datasets
-    let datasets: Option<Vec<String>> = opts.get("datasets").and_then(|v| {
-        v.as_array().map(|arr| {
-            arr.iter()
-                .filter_map(|x| x.as_str().map(|s| s.to_string()))
-                .collect()
-        })
-    });
-
-    // datasetIds from opts.datasetIds, parsed exactly as the search op does.
-    // Recall opts are read key-by-key, so before this was wired an unknown
-    // `datasetIds` was silently dropped and the recall ran unscoped.
-    let dataset_ids = parse_dataset_ids(opts);
-
-    // top_k from opts.topK (default 10)
-    let top_k = opts
-        .get("topK")
-        .and_then(|v| v.as_u64())
-        .map(|n| n as usize)
-        .unwrap_or(10);
-
-    // auto_route from opts.autoRoute (default false)
-    let auto_route = opts
-        .get("autoRoute")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-
-    // session_id from opts.sessionId
-    let session_id_owned = opts
-        .get("sessionId")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+    let RecallArgs {
+        query_type,
+        datasets,
+        dataset_ids,
+        tenant_id,
+        top_k,
+        auto_route,
+        session_id: session_id_owned,
+        scope: scope_opt,
+    } = build_recall_args(opts)?;
     let session_id: Option<&str> = session_id_owned.as_deref();
-
-    // scope from opts.scope
-    let scope_input = build_scope_input(opts)?;
-    let scope = normalize_scope(scope_input)
-        .map_err(|e| SdkError::Validation(format!("invalid scope: {e}")))?;
-    // normalize_scope returns Vec<RecallScope>. An empty vec (from an empty Many
-    // input) is passed as None so recall() applies its own Auto default; any
-    // non-empty vec (including vec![Auto] from a missing/null/auto scope) is
-    // passed as-is — recall() treats Some(vec![Auto]) and None identically.
-    let scope_opt = if scope.is_empty() { None } else { Some(scope) };
 
     // session_store and session_manager are Option<&dyn …> — borrow from Arc.
     let session_store_ref = Arc::clone(&svc.session_store);
@@ -316,7 +366,14 @@ pub async fn recall(
         Some(session_store_ref.as_ref()),
         Some(session_manager_ref.as_ref()),
         scope_opt,
-        None,
+        // Only the tenant is set; the rest of `RecallOptions` is advanced
+        // tuning these opts do not expose. Same reasoning as the `tenant_id`
+        // on `build_search_request`: `add` / `remember` accept a per-call
+        // `tenant`, so a name must be resolved under the caller's tenant.
+        Some(RecallOptions {
+            tenant_id,
+            ..Default::default()
+        }),
     )
     .await
     .map_err(|e| SdkError::Runtime(format!("recall failed: {e}")))?;
@@ -414,5 +471,78 @@ mod tests {
         let req = build_search_request("q", &opts, owner).unwrap();
         assert_eq!(req.dataset_ids, Some(vec![Uuid::parse_str(ID_A).unwrap()]));
         assert_eq!(req.user_id, Some(owner));
+    }
+
+    /// The regression this ticket exists for: `recall` parsed nothing for
+    /// `datasetIds` and handed `None` to `cognee::api::recall`, so the filter
+    /// was silently dropped. Asserting the whole argument bundle — not just
+    /// the parse — is what makes a repeat of that failure visible.
+    #[test]
+    fn build_recall_args_carries_dataset_ids() {
+        let opts = json!({ "datasetIds": [ID_A, ID_B] });
+        let args = build_recall_args(&opts).unwrap();
+        assert_eq!(
+            args.dataset_ids,
+            Some(vec![
+                Uuid::parse_str(ID_A).unwrap(),
+                Uuid::parse_str(ID_B).unwrap()
+            ]),
+            "recall must forward datasetIds, not drop them"
+        );
+    }
+
+    /// `add` / `remember` accept a per-call `tenant`, so one handle can hold
+    /// same-named datasets in several tenants. Both retrieval ops must read
+    /// the same key or a `datasets` name resolves against the wrong tenant.
+    #[test]
+    fn both_ops_carry_the_per_call_tenant() {
+        let tenant = Uuid::new_v4();
+        let opts = json!({ "tenant": tenant.to_string(), "datasets": ["ds"] });
+
+        let args = build_recall_args(&opts).unwrap();
+        assert_eq!(args.tenant_id, Some(tenant), "recall must scope by tenant");
+
+        let req = build_search_request("q", &opts, Uuid::new_v4()).unwrap();
+        assert_eq!(req.tenant_id, Some(tenant), "search must scope by tenant");
+    }
+
+    /// An absent `tenant` stays `None` — "no tenant filter" — which is what
+    /// the single-tenant default needs, since those rows carry a NULL tenant.
+    #[test]
+    fn tenant_is_none_when_absent() {
+        let opts = json!({});
+        assert_eq!(build_recall_args(&opts).unwrap().tenant_id, None);
+        assert_eq!(
+            build_search_request("q", &opts, Uuid::new_v4())
+                .unwrap()
+                .tenant_id,
+            None
+        );
+    }
+
+    /// A malformed tenant is rejected rather than silently ignored, matching
+    /// `ops::pipeline::opts_tenant`'s behaviour on the write side — otherwise
+    /// a typo would widen the scope instead of failing.
+    #[test]
+    fn a_malformed_tenant_is_rejected() {
+        let opts = json!({ "tenant": "not-a-uuid" });
+        assert!(build_recall_args(&opts).is_err());
+        assert!(build_search_request("q", &opts, Uuid::new_v4()).is_err());
+    }
+
+    /// The rest of the recall bundle, so an extraction refactor cannot quietly
+    /// change a default (`topK` 10, `autoRoute` false).
+    #[test]
+    fn build_recall_args_defaults_match_the_documented_wire_shape() {
+        let args = build_recall_args(&json!({})).unwrap();
+        assert_eq!(args.top_k, 10);
+        assert!(!args.auto_route);
+        assert_eq!(args.datasets, None);
+        assert_eq!(args.dataset_ids, None);
+        assert_eq!(args.session_id, None);
+        assert_eq!(args.query_type, None);
+        // A missing `scope` normalizes to `[Auto]`, which recall() treats the
+        // same as `None`; it must not arrive as an empty vec.
+        assert_eq!(args.scope, Some(vec![cognee::api::RecallScope::Auto]));
     }
 }

@@ -400,28 +400,40 @@ pub async fn create_new_dataset(
         .await
         .map_err(|e| ApiError::Teapot(format!("Error creating dataset: {e}")))?;
 
-    if let Some(ds) = existing {
-        return Ok(Json(dataset_to_dto(&ds)));
-    }
-
-    // Create a new dataset.
-    let new_id = cognee_ingestion::generate_dataset_id(&payload.name, user.id, user.tenant_id);
-    let dataset = Dataset::new(payload.name, user.id, user.tenant_id, new_id);
-    let created = db
-        .create_dataset(dataset)
-        .await
-        .map_err(|e| ApiError::Teapot(format!("Error creating dataset: {e}")))?;
+    // Create the dataset unless it already exists. The row and its ACL rows
+    // cannot be written in one transaction — `AclDb` is a separate trait over
+    // a possibly separate store — so the grant below runs on *both* arms
+    // rather than only on the freshly-created one. That is what makes a retry
+    // repair a half-finished create: without it, a create whose grant failed
+    // leaves a dataset row behind, and every subsequent POST for the same name
+    // short-circuits here and answers 200 while the ACL rows stay missing —
+    // the exact state this handler is supposed to make unreachable.
+    // `grant_all_permissions_on_dataset_via_trait` is idempotent, so
+    // re-granting an already-complete dataset is a no-op.
+    let created = match existing {
+        Some(ds) => ds,
+        None => {
+            let new_id =
+                cognee_ingestion::generate_dataset_id(&payload.name, user.id, user.tenant_id);
+            let dataset = Dataset::new(payload.name, user.id, user.tenant_id, new_id);
+            db.create_dataset(dataset)
+                .await
+                .map_err(|e| ApiError::Teapot(format!("Error creating dataset: {e}")))?
+        }
+    };
 
     // Grant read+write+share+delete ACLs to the owner — only when an
     // `acl_db` impl is wired. OSS single-user mode skips this entirely.
     //
-    // The grant is NOT best-effort. `SearchOrchestrator::readable_dataset_ids`
-    // consults the ACL alone once an `acl_db` is wired, so an owner whose
-    // grant silently failed would get a 403 from `POST /v1/search` on a
-    // dataset `GET /v1/datasets` still lists. Propagate instead, and share the
-    // grant loop with `cognee::api::datasets::create_authorized_dataset` (this
-    // crate cannot depend on `cognee` — see the NOTE in Cargo.toml) so the two
-    // create paths cannot drift apart again.
+    // The grant is NOT best-effort. Once an `acl_db` is wired, a dataset with
+    // no owner `read` row is invisible to every ACL-aware reader — the
+    // `cognee::api::datasets` facade's `list_datasets`, and `search` when the
+    // caller filters by dataset id — while this router's own `GET
+    // /v1/datasets` still lists it from ownership. Propagate the failure
+    // instead, and share the grant loop with
+    // `cognee::api::datasets::create_authorized_dataset` (this crate cannot
+    // depend on `cognee` — see the NOTE in Cargo.toml) so the two create paths
+    // cannot drift apart again.
     if let Some(acl) = components.acl_db.as_ref() {
         cognee_database::ops::acl::grant_all_permissions_on_dataset_via_trait(
             acl.as_ref(),
