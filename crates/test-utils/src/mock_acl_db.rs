@@ -47,6 +47,9 @@ pub struct MockAclDb {
     tenant_memberships: Mutex<HashMap<Uuid, HashSet<Uuid>>>,
     /// user_id → role ids the user holds.
     role_memberships: Mutex<HashMap<Uuid, HashSet<Uuid>>>,
+    /// When set, [`AclDb::grant_permission`] returns this error instead of
+    /// recording the grant. See [`MockAclDb::failing_grants`].
+    grant_failure: Option<String>,
 }
 
 impl MockAclDb {
@@ -56,6 +59,20 @@ impl MockAclDb {
             principals: Mutex::new(HashSet::new()),
             tenant_memberships: Mutex::new(HashMap::new()),
             role_memberships: Mutex::new(HashMap::new()),
+            grant_failure: None,
+        }
+    }
+
+    /// A mock whose [`AclDb::grant_permission`] always fails with `reason`.
+    ///
+    /// Models the production case a best-effort grant used to hide: the
+    /// dataset row is written, the ACL row is not, and the owner then cannot
+    /// read their own dataset because `readable_dataset_ids` consults the ACL
+    /// alone. Every create path must surface that as a failed create.
+    pub fn failing_grants(reason: &str) -> Self {
+        Self {
+            grant_failure: Some(reason.to_string()),
+            ..Self::new()
         }
     }
 
@@ -185,6 +202,9 @@ impl AclDb for MockAclDb {
         dataset_id: Uuid,
         permission_name: &str,
     ) -> Result<(), DatabaseError> {
+        if let Some(reason) = &self.grant_failure {
+            return Err(DatabaseError::QueryError(reason.clone()));
+        }
         let mut grants = self.grants.lock().unwrap(); // lock poison is unrecoverable
         grants.insert((principal_id, dataset_id, permission_name.to_string()));
         Ok(())

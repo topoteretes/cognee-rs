@@ -255,7 +255,14 @@ pub async fn post_recall(
                     user_id_opt,
                     orchestrator.as_ref(),
                     &span,
-                    None,
+                    // Only the tenant is set: every other `RecallOptions`
+                    // field is an advanced tuning knob this wire shape does
+                    // not expose. The tenant scopes `datasets` name
+                    // resolution, matching `POST /v1/search`.
+                    Some(&cognee_search::recall_scope::RecallOptions {
+                        tenant_id: user.tenant_id,
+                        ..Default::default()
+                    }),
                 )
                 .await
                 .map_err(map_recall_error)?;

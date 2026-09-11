@@ -39,6 +39,11 @@ pub struct RecallOptions {
     pub feedback_influence: Option<f32>,
     pub neighborhood_depth: Option<usize>,
     pub neighborhood_seed_top_k: Option<usize>,
+    /// Tenant the requester belongs to. Forwarded to
+    /// [`SearchRequest::tenant_id`] so `datasets` name resolution is scoped to
+    /// the caller's tenant, as Python's `get_dataset_ids` does. `None` means
+    /// no tenant filter — correct for single-tenant callers.
+    pub tenant_id: Option<Uuid>,
 }
 
 /// Source tag for recall results. Mirrors the discriminator strings emitted
@@ -507,6 +512,7 @@ pub async fn run_graph(
         triplet_distance_penalty: options.and_then(|o| o.triplet_distance_penalty),
         save_interaction: None,
         user_id: owner_id,
+        tenant_id: options.and_then(|o| o.tenant_id),
         verbose: None,
         feedback_influence: options.and_then(|o| o.feedback_influence),
         retriever_specific_config: None,

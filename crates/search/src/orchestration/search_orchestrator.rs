@@ -374,7 +374,15 @@ impl SearchOrchestrator {
         }
 
         // Resolve dataset names → UUIDs. Mirrors Python `cognee.search()`:
-        //   - names are looked up via owner-scoped `get_dataset_by_name`
+        //   - names are looked up via owner-scoped `get_dataset_by_name`,
+        //     additionally scoped to `request.tenant_id` when the caller
+        //     supplies one. Python's `get_dataset_ids` filters on owner AND
+        //     `dataset.tenant_id == user.tenant_id`; owner-scoping alone let a
+        //     name resolve to a row belonging to another tenant. Owner-scoping
+        //     itself is deliberate and matches Python, whose docstring reads
+        //     "If a user wants to write to a dataset he is not the owner of it
+        //     must be provided through UUID" — do not widen it to shared
+        //     datasets.
         //   - per-batch error: if ZERO names resolve → `DatasetNotFound`;
         //     partial misses are logged and the search proceeds with the
         //     resolved subset (matches `get_authorized_existing_datasets`
@@ -406,7 +414,10 @@ impl SearchOrchestrator {
                 let mut resolved = Vec::with_capacity(names.len());
                 let mut missing = Vec::new();
                 for name in names {
-                    match resolver.get_dataset_by_name(name, owner_id, None).await? {
+                    match resolver
+                        .get_dataset_by_name(name, owner_id, request.tenant_id)
+                        .await?
+                    {
                         Some(ds) => resolved.push(ds.id),
                         None => missing.push(name.clone()),
                     }
@@ -850,6 +861,7 @@ mod tests {
             triplet_distance_penalty: None,
             save_interaction: None,
             user_id: None,
+            tenant_id: None,
             verbose: None,
             feedback_influence: None,
             retriever_specific_config: None,
@@ -897,6 +909,7 @@ mod tests {
             triplet_distance_penalty: None,
             save_interaction: None,
             user_id: None,
+            tenant_id: None,
             verbose: None,
             feedback_influence: None,
             retriever_specific_config: None,
@@ -949,6 +962,7 @@ mod tests {
             triplet_distance_penalty: None,
             save_interaction: None,
             user_id: None,
+            tenant_id: None,
             verbose: None,
             feedback_influence: None,
             retriever_specific_config: None,
@@ -1028,6 +1042,7 @@ mod tests {
             triplet_distance_penalty: None,
             save_interaction: None,
             user_id: None,
+            tenant_id: None,
             verbose: None,
             feedback_influence: None,
             retriever_specific_config: None,
@@ -1130,6 +1145,7 @@ mod tests {
             triplet_distance_penalty: None,
             save_interaction: None,
             user_id: None,
+            tenant_id: None,
             verbose: None,
             feedback_influence: None,
             retriever_specific_config: None,
@@ -1226,6 +1242,7 @@ mod tests {
             triplet_distance_penalty: None,
             save_interaction: None,
             user_id: None,
+            tenant_id: None,
             verbose: Some(true),
             feedback_influence: None,
             retriever_specific_config: None,
@@ -1277,6 +1294,7 @@ mod tests {
             triplet_distance_penalty: None,
             save_interaction: Some(true),
             user_id: None,
+            tenant_id: None,
             verbose: None,
             feedback_influence: None,
             retriever_specific_config: None,
@@ -1330,6 +1348,7 @@ mod tests {
                 triplet_distance_penalty: None,
                 save_interaction: None,
                 user_id: None,
+                tenant_id: None,
                 verbose: None,
                 feedback_influence: None,
                 retriever_specific_config: None,
@@ -1358,6 +1377,7 @@ mod tests {
                 triplet_distance_penalty: None,
                 save_interaction: None,
                 user_id: None,
+                tenant_id: None,
                 verbose: None,
                 feedback_influence: None,
                 retriever_specific_config: None,
@@ -1405,6 +1425,7 @@ mod tests {
             triplet_distance_penalty: None,
             save_interaction: None,
             user_id: None,
+            tenant_id: None,
             verbose: None,
             feedback_influence: None,
             retriever_specific_config: None,
@@ -1500,6 +1521,7 @@ mod tests {
             triplet_distance_penalty: None,
             save_interaction: Some(false),
             user_id: None,
+            tenant_id: None,
             verbose: None,
             feedback_influence: None,
             retriever_specific_config: None,
@@ -1526,6 +1548,20 @@ mod tests {
         db_ops::datasets::create_dataset(
             db,
             Dataset::new(name.to_string(), owner, None, Uuid::new_v4()),
+        )
+        .await
+        .expect("seed dataset")
+    }
+
+    async fn seed_dataset_in_tenant(
+        db: &cognee_database::DatabaseConnection,
+        name: &str,
+        owner: Uuid,
+        tenant: Uuid,
+    ) -> Dataset {
+        db_ops::datasets::create_dataset(
+            db,
+            Dataset::new(name.to_string(), owner, Some(tenant), Uuid::new_v4()),
         )
         .await
         .expect("seed dataset")
@@ -1559,6 +1595,7 @@ mod tests {
         let request = SearchRequest {
             datasets: Some(vec!["real".into()]),
             user_id: Some(owner),
+            tenant_id: None,
             ..dataset_request_template()
         };
 
@@ -1591,6 +1628,86 @@ mod tests {
         let request = SearchRequest {
             datasets: Some(vec!["shared_name".into()]),
             user_id: Some(owner_b),
+            tenant_id: None,
+            ..dataset_request_template()
+        };
+
+        let err = orchestrator.search(&request).await.expect_err("must error");
+        assert!(
+            matches!(err, SearchError::DatasetNotFound(_)),
+            "got {err:?}"
+        );
+    }
+
+    /// Scenario: the *same* owner has a dataset named `"shared_name"` in
+    /// tenant A and another in tenant B; the request carries tenant A.
+    /// Expected: name resolution is tenant-scoped as well as owner-scoped,
+    /// so only tenant A's row resolves. Python's `get_dataset_ids` filters
+    /// on `dataset.owner_id == user.id` **and** `dataset.tenant_id ==
+    /// user.tenant_id`; Rust passed `None` for the tenant, which let a name
+    /// resolve to whichever row the DB returned first — a cross-tenant leak.
+    /// Verification: seed both rows, search as the owner with
+    /// `tenant_id = Some(tenant_a)`, and assert the scoped context map
+    /// contains tenant A's id and not tenant B's.
+    #[tokio::test]
+    async fn dataset_name_resolution_is_tenant_scoped() {
+        let owner = Uuid::new_v4();
+        let tenant_a = Uuid::new_v4();
+        let tenant_b = Uuid::new_v4();
+        let db = fresh_db().await;
+        let ds_a = seed_dataset_in_tenant(&db, "shared_name", owner, tenant_a).await;
+        let ds_b = seed_dataset_in_tenant(&db, "shared_name", owner, tenant_b).await;
+
+        let mut registry = SearchTypeRegistry::new();
+        registry.register(Arc::new(ResolutionFixtureRetriever {
+            dataset_a: ds_a.id,
+            dataset_b: ds_b.id,
+        }));
+        let orchestrator =
+            super::SearchOrchestrator::new(registry).with_dataset_resolver(db as Arc<dyn IngestDb>);
+
+        let request = SearchRequest {
+            datasets: Some(vec!["shared_name".into()]),
+            user_id: Some(owner),
+            tenant_id: Some(tenant_a),
+            ..dataset_request_template()
+        };
+
+        let response = orchestrator.search(&request).await.unwrap();
+        let context_map = response.context.expect("scoped context map");
+        assert!(
+            context_map.contains_key(&ds_a.id.to_string()),
+            "tenant A's dataset must resolve"
+        );
+        assert!(
+            !context_map.contains_key(&ds_b.id.to_string()),
+            "tenant B's same-named dataset must not be reachable from tenant A"
+        );
+    }
+
+    /// Scenario: a dataset named `"tenant_only"` exists for the owner in
+    /// tenant A; the request carries tenant B.
+    /// Expected: nothing resolves, so the orchestrator surfaces
+    /// `DatasetNotFound` rather than searching another tenant's data.
+    /// Verification: seed under tenant A, search with `tenant_id =
+    /// Some(tenant_b)`, assert `DatasetNotFound`.
+    #[tokio::test]
+    async fn dataset_name_from_another_tenant_does_not_resolve() {
+        let owner = Uuid::new_v4();
+        let tenant_a = Uuid::new_v4();
+        let tenant_b = Uuid::new_v4();
+        let db = fresh_db().await;
+        let _ = seed_dataset_in_tenant(&db, "tenant_only", owner, tenant_a).await;
+
+        let mut registry = SearchTypeRegistry::new();
+        registry.register(Arc::new(FakeChunksRetriever));
+        let orchestrator =
+            super::SearchOrchestrator::new(registry).with_dataset_resolver(db as Arc<dyn IngestDb>);
+
+        let request = SearchRequest {
+            datasets: Some(vec!["tenant_only".into()]),
+            user_id: Some(owner),
+            tenant_id: Some(tenant_b),
             ..dataset_request_template()
         };
 
@@ -1623,6 +1740,7 @@ mod tests {
         let request = SearchRequest {
             datasets: Some(vec!["does_not_exist".into(), "also_missing".into()]),
             user_id: Some(owner),
+            tenant_id: None,
             ..dataset_request_template()
         };
 
@@ -1665,6 +1783,7 @@ mod tests {
         let request = SearchRequest {
             datasets: Some(vec!["real".into(), "missing".into()]),
             user_id: Some(owner),
+            tenant_id: None,
             ..dataset_request_template()
         };
 
@@ -1696,6 +1815,7 @@ mod tests {
         let request = SearchRequest {
             datasets: Some(vec![]),
             user_id: None,
+            tenant_id: None,
             only_context: Some(false),
             ..dataset_request_template()
         };
@@ -1764,6 +1884,7 @@ mod tests {
         let request = SearchRequest {
             dataset_ids: Some(vec![dataset.id]),
             user_id: Some(owner),
+            tenant_id: None,
             ..dataset_request_template()
         };
 
@@ -1798,6 +1919,7 @@ mod tests {
         let request = SearchRequest {
             dataset_ids: Some(vec![dataset.id]),
             user_id: Some(owner_b),
+            tenant_id: None,
             ..dataset_request_template()
         };
 
@@ -1825,6 +1947,7 @@ mod tests {
         let request = SearchRequest {
             dataset_ids: Some(vec![Uuid::new_v4()]),
             user_id: Some(owner),
+            tenant_id: None,
             ..dataset_request_template()
         };
 
@@ -1854,6 +1977,7 @@ mod tests {
         let request = SearchRequest {
             dataset_ids: Some(vec![mine.id, theirs.id]),
             user_id: Some(owner),
+            tenant_id: None,
             ..dataset_request_template()
         };
 
@@ -1882,6 +2006,7 @@ mod tests {
         let request = SearchRequest {
             dataset_ids: Some(vec![dataset.id]),
             user_id: None,
+            tenant_id: None,
             ..dataset_request_template()
         };
 
@@ -1921,6 +2046,7 @@ mod tests {
         let request = SearchRequest {
             dataset_ids: Some(vec![shared.id]),
             user_id: Some(grantee),
+            tenant_id: None,
             ..dataset_request_template()
         };
 
@@ -1960,6 +2086,7 @@ mod tests {
         let request = SearchRequest {
             dataset_ids: Some(vec![dataset.id]),
             user_id: Some(owner),
+            tenant_id: None,
             ..dataset_request_template()
         };
 
@@ -1997,6 +2124,7 @@ mod tests {
             .search(&SearchRequest {
                 dataset_ids: Some(vec![granted.id, Uuid::new_v4()]),
                 user_id: Some(caller),
+                tenant_id: None,
                 ..dataset_request_template()
             })
             .await
@@ -2005,6 +2133,7 @@ mod tests {
             .search(&SearchRequest {
                 dataset_ids: Some(vec![granted.id, ungranted.id]),
                 user_id: Some(caller),
+                tenant_id: None,
                 ..dataset_request_template()
             })
             .await
@@ -2046,6 +2175,7 @@ mod tests {
             .search(&SearchRequest {
                 dataset_ids: Some(vec![Uuid::new_v4()]),
                 user_id: Some(caller),
+                tenant_id: None,
                 ..dataset_request_template()
             })
             .await
@@ -2059,6 +2189,7 @@ mod tests {
             .search(&SearchRequest {
                 dataset_ids: Some(vec![granted]),
                 user_id: Some(caller),
+                tenant_id: None,
                 ..dataset_request_template()
             })
             .await
@@ -2088,6 +2219,7 @@ mod tests {
             datasets: Some(vec!["real".into()]),
             dataset_ids: Some(vec![]),
             user_id: Some(owner),
+            tenant_id: None,
             ..dataset_request_template()
         };
 
@@ -2121,6 +2253,7 @@ mod tests {
         let request = SearchRequest {
             datasets: Some(vec!["whatever".into()]),
             user_id: Some(Uuid::new_v4()),
+            tenant_id: None,
             ..dataset_request_template()
         };
 
@@ -2149,6 +2282,7 @@ mod tests {
         let request = SearchRequest {
             datasets: Some(vec!["whatever".into()]),
             user_id: None,
+            tenant_id: None,
             ..dataset_request_template()
         };
 
@@ -2179,6 +2313,7 @@ mod tests {
             triplet_distance_penalty: None,
             save_interaction: None,
             user_id: None,
+            tenant_id: None,
             verbose: None,
             feedback_influence: None,
             retriever_specific_config: None,

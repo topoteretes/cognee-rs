@@ -414,14 +414,27 @@ pub async fn create_new_dataset(
 
     // Grant read+write+share+delete ACLs to the owner — only when an
     // `acl_db` impl is wired. OSS single-user mode skips this entirely.
+    //
+    // The grant is NOT best-effort. `SearchOrchestrator::readable_dataset_ids`
+    // consults the ACL alone once an `acl_db` is wired, so an owner whose
+    // grant silently failed would get a 403 from `POST /v1/search` on a
+    // dataset `GET /v1/datasets` still lists. Propagate instead, and share the
+    // grant loop with `cognee::api::datasets::create_authorized_dataset` (this
+    // crate cannot depend on `cognee` — see the NOTE in Cargo.toml) so the two
+    // create paths cannot drift apart again.
     if let Some(acl) = components.acl_db.as_ref() {
-        for perm in &["read", "write", "share", "delete"] {
-            // Ensure principal exists first.
-            let _ = acl.ensure_principal(user.id, "user").await;
-            if let Err(e) = acl.grant_permission(user.id, created.id, perm).await {
-                tracing::warn!("Failed to grant {perm} on dataset {}: {e}", created.id);
-            }
-        }
+        cognee_database::ops::acl::grant_all_permissions_on_dataset_via_trait(
+            acl.as_ref(),
+            user.id,
+            created.id,
+        )
+        .await
+        .map_err(|e| {
+            ApiError::Teapot(format!(
+                "Error creating dataset: failed to grant owner permissions on {}: {e}",
+                created.id
+            ))
+        })?;
     }
 
     Ok(Json(dataset_to_dto(&created)))

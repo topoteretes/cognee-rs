@@ -31,6 +31,17 @@ pub struct SearchRequest {
     pub save_interaction: Option<bool>,
     #[serde(default)]
     pub user_id: Option<Uuid>,
+    /// Tenant the requester belongs to, used to scope `datasets` name
+    /// resolution.
+    ///
+    /// Python's `get_dataset_ids` filters candidate rows on both
+    /// `dataset.owner_id == user.id` **and** `dataset.tenant_id ==
+    /// user.tenant_id`; leaving this `None` resolves names across every
+    /// tenant the owner id appears in. `None` means "no tenant filter" and is
+    /// correct for single-tenant callers (the CLI, OSS single-user mode),
+    /// where every row carries `tenant_id = NULL` anyway.
+    #[serde(default)]
+    pub tenant_id: Option<Uuid>,
     pub verbose: Option<bool>,
     pub feedback_influence: Option<f32>,
     /// Arbitrary retriever-specific configuration passed through from the caller.

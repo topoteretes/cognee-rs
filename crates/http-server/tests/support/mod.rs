@@ -292,6 +292,45 @@ pub fn build_component_handles(
     })
 }
 
+/// Build an `AppState` whose components wire `acl_db`.
+///
+/// The OSS helpers above all leave `acl_db: None`, which is single-user mode —
+/// every router's `if let Some(acl) = components.acl_db` check is skipped. Use
+/// this when the behaviour under test is what happens once an `AclDb` *is*
+/// wired (the closed/cloud build's shape).
+pub async fn build_state_with_acl(acl: Arc<dyn cognee_database::AclDb>) -> AppState {
+    let db = build_search_db().await;
+    let handles = build_component_handles(db, None, None, None);
+    // `ComponentHandles` is not `Clone` and its fields are behind an `Arc`, so
+    // rebuild it with the ACL attached rather than mutating in place.
+    let handles = Arc::new(ComponentHandles {
+        acl_db: Some(acl),
+        database: Arc::clone(&handles.database),
+        storage: Arc::clone(&handles.storage),
+        delete_service: Arc::clone(&handles.delete_service),
+        cloud_client: None,
+        ontology_manager: Arc::clone(&handles.ontology_manager),
+        search_orchestrator: None,
+        llm: None,
+        graph_db: None,
+        vector_db: None,
+        thread_pool: None,
+        embedding_engine: None,
+        ontology_resolver: None,
+        session_store: None,
+        session_manager: None,
+        checkpoint_store: None,
+        responses_client: None,
+        transcriber: None,
+        notebook_runner: None,
+    });
+    let mut state = AppState::build(HttpServerConfig::default())
+        .await
+        .expect("build state");
+    state.lib = Some(handles);
+    state
+}
+
 /// Build an `AppState` wired for the P4 read-path tests.
 pub async fn build_p4_state(
     search_orchestrator: Option<Arc<SearchOrchestrator>>,

@@ -62,6 +62,23 @@ pub fn parse_search_type(s: &str) -> Result<SearchType, SdkError> {
 // SearchRequest builder from opts.
 // ---------------------------------------------------------------------------
 
+/// Parse the `datasetIds` opt — a JSON array of UUID strings — into
+/// `Option<Vec<Uuid>>`.
+///
+/// Shared by the `search` and `recall` ops so the two cannot diverge again:
+/// recall used to ignore the key outright and run unfiltered. Entries that are
+/// not parseable UUID strings are dropped rather than erroring, which is the
+/// behaviour the search op has always had.
+fn parse_dataset_ids(opts: &serde_json::Value) -> Option<Vec<Uuid>> {
+    opts.get("datasetIds")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|x| x.as_str().and_then(|s| Uuid::parse_str(s).ok()))
+                .collect()
+        })
+}
+
 /// Build a `SearchRequest` from camelCase opts.
 ///
 /// `user_id` is always set from `owner_id` — required when `datasets` is
@@ -87,15 +104,7 @@ pub fn build_search_request(
         })
     });
 
-    // datasetIds: UUID string array
-    let dataset_ids: Option<Vec<Uuid>> =
-        opts.get("datasetIds")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|x| x.as_str().and_then(|s| Uuid::parse_str(s).ok()))
-                    .collect()
-            });
+    let dataset_ids = parse_dataset_ids(opts);
 
     // scalar opts
     let top_k = opts
@@ -151,6 +160,11 @@ pub fn build_search_request(
         save_interaction,
         // Always populate user_id from owner_id so dataset-name resolution works.
         user_id: Some(owner_id),
+        // The bindings' default user carries no tenant — `HandleState.tenant_id`
+        // is `None` with no setter — so there is no tenant to scope name
+        // resolution by. `None` is "no tenant filter", which is what every row
+        // these SDKs write (`tenant_id = NULL`) needs.
+        tenant_id: None,
         verbose,
         feedback_influence: None,
         retriever_specific_config: None,
@@ -250,6 +264,11 @@ pub async fn recall(
         })
     });
 
+    // datasetIds from opts.datasetIds, parsed exactly as the search op does.
+    // Recall opts are read key-by-key, so before this was wired an unknown
+    // `datasetIds` was silently dropped and the recall ran unscoped.
+    let dataset_ids = parse_dataset_ids(opts);
+
     // top_k from opts.topK (default 10)
     let top_k = opts
         .get("topK")
@@ -288,10 +307,7 @@ pub async fn recall(
         query,
         query_type,
         datasets,
-        // `datasetIds` is not read from the recall opts yet — the typed
-        // wrappers do not expose it for recall (they do for search, above).
-        // Follow-up: parse it the way the search op does and forward it.
-        None,
+        dataset_ids,
         top_k,
         auto_route,
         session_id,
@@ -331,4 +347,72 @@ pub async fn recall(
         "autoRouted": result.auto_routed,
         "searchResponse": search_response,
     }))
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
+mod tests {
+    use super::*;
+
+    const ID_A: &str = "11111111-1111-4111-8111-111111111111";
+    const ID_B: &str = "22222222-2222-4222-8222-222222222222";
+
+    /// The `recall` op reads its opts key by key, so an unrecognised
+    /// `datasetIds` used to vanish silently and the recall ran unscoped —
+    /// exactly the failure PR 204 existed to fix, on the sibling op. Both ops
+    /// now parse through this one helper.
+    #[test]
+    fn parse_dataset_ids_reads_a_uuid_array() {
+        let opts = json!({ "datasetIds": [ID_A, ID_B] });
+        assert_eq!(
+            parse_dataset_ids(&opts),
+            Some(vec![
+                Uuid::parse_str(ID_A).unwrap(),
+                Uuid::parse_str(ID_B).unwrap()
+            ])
+        );
+    }
+
+    #[test]
+    fn parse_dataset_ids_is_none_when_absent_or_not_an_array() {
+        assert_eq!(parse_dataset_ids(&json!({})), None);
+        assert_eq!(parse_dataset_ids(&json!({ "datasetIds": null })), None);
+        assert_eq!(parse_dataset_ids(&json!({ "datasetIds": ID_A })), None);
+    }
+
+    /// Unparseable entries are dropped rather than erroring — the behaviour
+    /// the search op has always had, preserved so the two stay identical.
+    #[test]
+    fn parse_dataset_ids_drops_unparseable_entries() {
+        let opts = json!({ "datasetIds": [ID_A, "not-a-uuid", 7] });
+        assert_eq!(
+            parse_dataset_ids(&opts),
+            Some(vec![Uuid::parse_str(ID_A).unwrap()])
+        );
+    }
+
+    /// An empty array stays `Some(vec![])`, which every downstream consumer
+    /// treats as "no filter" — not as "match nothing".
+    #[test]
+    fn parse_dataset_ids_keeps_an_empty_array_distinct_from_absent() {
+        assert_eq!(
+            parse_dataset_ids(&json!({ "datasetIds": [] })),
+            Some(vec![])
+        );
+    }
+
+    /// The search op's own wiring, asserted here so a future refactor cannot
+    /// drop the field on this side either.
+    #[test]
+    fn build_search_request_carries_dataset_ids() {
+        let owner = Uuid::new_v4();
+        let opts = json!({ "datasetIds": [ID_A] });
+        let req = build_search_request("q", &opts, owner).unwrap();
+        assert_eq!(req.dataset_ids, Some(vec![Uuid::parse_str(ID_A).unwrap()]));
+        assert_eq!(req.user_id, Some(owner));
+    }
 }

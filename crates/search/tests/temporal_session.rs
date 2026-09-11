@@ -140,6 +140,7 @@ fn temporal_request(query: &str, session_id: Option<&str>) -> SearchRequest {
         triplet_distance_penalty: None,
         save_interaction: Some(true),
         user_id: None,
+        tenant_id: None,
         verbose: None,
         feedback_influence: None,
         retriever_specific_config: None,

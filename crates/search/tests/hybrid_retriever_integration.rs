@@ -279,6 +279,7 @@ fn completion_request(query: &str, session_id: &str) -> SearchRequest {
         triplet_distance_penalty: None,
         save_interaction: Some(false),
         user_id: None,
+        tenant_id: None,
         verbose: None,
         feedback_influence: None,
         retriever_specific_config: None,
