@@ -406,6 +406,15 @@ pub async fn create_new_dataset(
     // by POSTing the same name again. The rollback below is what keeps that
     // safe — it guarantees a row that exists is a row whose grants were
     // written, so there is never a half-finished dataset needing repair.
+    //
+    // Not serialized against a concurrent create of the same name: a second
+    // POST can observe the row between the insert and the grant below, and
+    // answer 200 for a dataset the first request then rolls back. Closing that
+    // needs a lock keyed on the deterministic dataset id (or a store that can
+    // hold both writes in one transaction), which neither this handler nor
+    // `AppState` has today. The window is one failed ACL write wide, and both
+    // callers can retry; the alternative failure — a silently ungranted
+    // dataset — was permanent, which is the one worth ruling out first.
     if let Some(ds) = existing {
         return Ok(Json(dataset_to_dto(&ds)));
     }
@@ -445,22 +454,39 @@ pub async fn create_new_dataset(
             )
             .await
     {
-        let rollback = DeleteDb::delete_dataset(&*db, created.id).await;
-        if let Err(rollback_err) = rollback {
-            // Now we really are stuck with an orphan: say so loudly rather
-            // than reporting only the grant failure, because the operator has
-            // a row to clean up by hand.
+        // The helper grants the four permissions in sequence, so a failure on
+        // the third leaves the first two written. Revoke all four before
+        // dropping the row: the dataset id is deterministic
+        // (`uuid5(name, owner, tenant)`), so a later create of the same name
+        // would otherwise inherit those stale grants — and an ACL enumeration
+        // would keep returning an id whose dataset no longer exists. Revokes
+        // are idempotent, so revoking one that was never granted is a no-op.
+        let mut cleanup_errors: Vec<String> = Vec::new();
+        for perm in cognee_database::ops::acl::PERMISSION_NAMES {
+            if let Err(e) = acl.revoke_permission(user.id, created.id, perm).await {
+                cleanup_errors.push(format!("revoke {perm}: {e}"));
+            }
+        }
+        if let Err(e) = DeleteDb::delete_dataset(&*db, created.id).await {
+            cleanup_errors.push(format!("delete dataset row: {e}"));
+        }
+
+        if !cleanup_errors.is_empty() {
+            // Now we really are stuck with a half-written dataset: say so
+            // loudly rather than reporting only the grant failure, because the
+            // operator has rows to clean up by hand.
             tracing::error!(
                 dataset_id = %created.id,
                 grant_error = %grant_err,
-                rollback_error = %rollback_err,
-                "failed to grant owner permissions AND failed to roll the dataset row back"
+                cleanup_errors = ?cleanup_errors,
+                "failed to grant owner permissions AND failed to roll the dataset back"
             );
             return Err(ApiError::Teapot(format!(
                 "Error creating dataset: failed to grant owner permissions on {} ({grant_err}), \
-                 and rolling the dataset row back also failed ({rollback_err}) — \
-                 dataset {} needs manual cleanup",
-                created.id, created.id
+                 and rolling it back also failed ({}) — dataset {} needs manual cleanup",
+                created.id,
+                cleanup_errors.join("; "),
+                created.id
             )));
         }
         return Err(ApiError::Teapot(format!(

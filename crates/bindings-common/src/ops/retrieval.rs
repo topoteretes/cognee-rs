@@ -558,11 +558,23 @@ mod tests {
     /// A malformed tenant is rejected rather than silently ignored, matching
     /// `ops::pipeline::opts_tenant`'s behaviour on the write side — otherwise
     /// a typo would widen the scope instead of failing.
+    ///
+    /// The non-string cases matter as much as the bad-UUID one: `opts_tenant`
+    /// used `and_then(as_str)`, so `{"tenant": 123}` read as *absent* and the
+    /// query silently lost its tenant predicate.
     #[test]
     fn a_malformed_tenant_is_rejected() {
-        let opts = json!({ "tenant": "not-a-uuid" });
-        assert!(build_recall_args(&opts).is_err());
-        assert!(build_search_request("q", &opts, Uuid::new_v4()).is_err());
+        for bad in [json!("not-a-uuid"), json!(123), json!({}), json!([])] {
+            let opts = json!({ "tenant": bad });
+            assert!(
+                build_recall_args(&opts).is_err(),
+                "recall must reject tenant {bad}"
+            );
+            assert!(
+                build_search_request("q", &opts, Uuid::new_v4()).is_err(),
+                "search must reject tenant {bad}"
+            );
+        }
     }
 
     /// The rest of the recall bundle, so an extraction refactor cannot quietly

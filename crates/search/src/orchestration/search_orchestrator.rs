@@ -271,9 +271,15 @@ impl SearchOrchestrator {
     /// available. It under-approximates Python in every "shared" case: a
     /// dataset granted `read` to the caller directly, to the caller's tenant,
     /// or to a role the caller holds is readable in Python but denied here.
-    /// It also skips Python's checks that the owner's own `read` grant is
-    /// still present and that `dataset.tenant_id == user.tenant_id`, so an
-    /// owner whose grant was revoked is admitted here and denied in Python.
+    /// It also skips Python's check that the owner's own `read` grant is still
+    /// present, so an owner whose grant was revoked is admitted here and
+    /// denied in Python. Python's other filter — `dataset.tenant_id ==
+    /// user.tenant_id` — **is** applied, via `tenant`: `list_datasets_by_owner`
+    /// spans every tenant the owner appears in, and the bindings let one handle
+    /// write under several (`add`'s `tenant` opt), so without it a caller
+    /// scoped to tenant A could pass tenant B's dataset id and pass the check.
+    /// `tenant: None` means the caller named no tenant and no filter applies,
+    /// which is the single-tenant default every OSS row is written under.
     ///
     /// Callers gate on `acl_db.is_some() || dataset_resolver.is_some()`; if
     /// neither is wired this returns an empty set, i.e. fails closed rather
@@ -281,6 +287,7 @@ impl SearchOrchestrator {
     async fn readable_dataset_ids(
         &self,
         requester: uuid::Uuid,
+        tenant: Option<uuid::Uuid>,
     ) -> Result<std::collections::HashSet<uuid::Uuid>, SearchError> {
         if let Some(acl) = self.acl_db.as_ref() {
             return Ok(acl
@@ -294,6 +301,7 @@ impl SearchOrchestrator {
                 .list_datasets_by_owner(requester)
                 .await?
                 .into_iter()
+                .filter(|dataset| tenant.is_none_or(|t| dataset.tenant_id == Some(t)))
                 .map(|dataset| dataset.id)
                 .collect());
         }
@@ -320,9 +328,10 @@ impl SearchOrchestrator {
     async fn authorize_dataset_ids(
         &self,
         requester: uuid::Uuid,
+        tenant: Option<uuid::Uuid>,
         ids: &[uuid::Uuid],
     ) -> Result<(), SearchError> {
-        let readable = self.readable_dataset_ids(requester).await?;
+        let readable = self.readable_dataset_ids(requester, tenant).await?;
         let denied: Vec<uuid::Uuid> = ids
             .iter()
             .copied()
@@ -391,7 +400,8 @@ impl SearchOrchestrator {
                         .to_string(),
                 )
             })?;
-            self.authorize_dataset_ids(requester, ids).await?;
+            self.authorize_dataset_ids(requester, request.tenant_id, ids)
+                .await?;
         }
 
         // Resolve dataset names → UUIDs. Mirrors Python `cognee.search()`:
@@ -465,7 +475,8 @@ impl SearchOrchestrator {
                 // only once an `AclDb` is wired, which is exactly where the
                 // bypass was — a name resolved on ownership alone and reached
                 // the retriever without a `read` grant.
-                self.authorize_dataset_ids(owner_id, &resolved).await?;
+                self.authorize_dataset_ids(owner_id, request.tenant_id, &resolved)
+                    .await?;
 
                 let mut clone = request.clone();
                 clone.dataset_ids = Some(resolved);
@@ -1669,6 +1680,61 @@ mod tests {
             matches!(err, SearchError::DatasetNotFound(_)),
             "got {err:?}"
         );
+    }
+
+    /// Scenario: no `AclDb` (the bindings' wiring — resolver only). The owner
+    /// has datasets in tenant A and tenant B, and asks for tenant B's id while
+    /// scoped to tenant A.
+    /// Expected: `PermissionDenied`. The ownership fallback lists by owner
+    /// alone, which spans every tenant, so without a tenant filter an explicit
+    /// id from another tenant sailed through — and the bindings let one handle
+    /// write under several tenants (`add`'s `tenant` opt), so this is
+    /// reachable. Python applies the same `dataset.tenant_id == user.tenant_id`
+    /// filter.
+    /// Verification: seed one dataset per tenant, request B's id with
+    /// `tenant_id = Some(tenant_a)`, assert denial; then repeat with the
+    /// matching tenant and assert it succeeds.
+    #[tokio::test]
+    async fn explicit_ids_are_tenant_scoped_without_an_acl() {
+        let owner = Uuid::new_v4();
+        let tenant_a = Uuid::new_v4();
+        let tenant_b = Uuid::new_v4();
+        let db = fresh_db().await;
+        let ds_a = seed_dataset_in_tenant(&db, "a", owner, tenant_a).await;
+        let ds_b = seed_dataset_in_tenant(&db, "b", owner, tenant_b).await;
+
+        let mut registry = SearchTypeRegistry::new();
+        registry.register(Arc::new(FakeChunksRetriever));
+        let orchestrator =
+            super::SearchOrchestrator::new(registry).with_dataset_resolver(db as Arc<dyn IngestDb>);
+
+        let cross_tenant = SearchRequest {
+            dataset_ids: Some(vec![ds_b.id]),
+            user_id: Some(owner),
+            tenant_id: Some(tenant_a),
+            ..dataset_request_template()
+        };
+        assert!(
+            matches!(
+                orchestrator
+                    .search(&cross_tenant)
+                    .await
+                    .expect_err("must error"),
+                SearchError::PermissionDenied(_)
+            ),
+            "a dataset id from another tenant must not pass the ownership fallback"
+        );
+
+        let same_tenant = SearchRequest {
+            dataset_ids: Some(vec![ds_a.id]),
+            user_id: Some(owner),
+            tenant_id: Some(tenant_a),
+            ..dataset_request_template()
+        };
+        orchestrator
+            .search(&same_tenant)
+            .await
+            .expect("the caller's own tenant must still be reachable by id");
     }
 
     /// Scenario: an `AclDb` is wired, the caller owns a dataset but holds no
