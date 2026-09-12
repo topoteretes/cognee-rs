@@ -425,8 +425,9 @@ pub async fn create_new_dataset(
     // Accepted for now because the failure it replaced — a dataset silently
     // created with no ACL rows — was *permanent* and needed no concurrency to
     // hit, whereas these need a failing ACL write and a simultaneous second
-    // request, and leave a retryable state. Worth revisiting if the create path
-    // ever gets a transactional store or a keyed lock.
+    // request, and leave a retryable state. Tracked in SDK-636; do not close it
+    // by re-granting on the already-exists arm below (that was tried and
+    // reverted — it lets a revoked grant be restored by re-POSTing the name).
     if let Some(ds) = existing {
         return Ok(Json(dataset_to_dto(&ds)));
     }
