@@ -221,8 +221,9 @@ pub struct HttpServerConfig {
     /// Env: `LLM_STRUCTURED_OUTPUT_MODE`.
     pub llm_structured_output_mode: String,
 
-    /// Corrective re-asks for one structured-output call (Python's
-    /// `_MAX_VALIDATION_RETRIES`). Mirrors `Settings::llm_max_retries`.
+    /// Total attempts at one structured-output call — the first ask plus its
+    /// corrective re-asks (Python's `_MAX_VALIDATION_RETRIES`). Mirrors
+    /// `Settings::llm_max_retries`.
     /// Env: `LLM_MAX_RETRIES`.
     pub llm_max_retries: u32,
     /// Minimum transport attempts for one HTTP request (Python's

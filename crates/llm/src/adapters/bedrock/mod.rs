@@ -86,6 +86,16 @@ pub struct BedrockAdapter {
     /// reaches a log line (see the hand-written `Debug`).
     auth: Arc<aws::credentials::BedrockAuthProvider>,
     structured_output_retries: usize,
+    /// Transport attempts, as `0..=network_retries` — so this is `n + 1`
+    /// attempts, and `LLM_NETWORK_RETRIES=2` buys three.
+    ///
+    /// ⚠️ Deliberately noted because it diverges from the other adapters, which
+    /// run the same knob through [`crate::retry::RetryBudget`] and stop at `n`
+    /// attempts once the `retry_min_elapsed` floor is also met. This adapter
+    /// carries no such floor, so `LLM_MIN_RETRY_SECONDS` does not reach it and
+    /// its ladder is a plain attempt count. Both differences predate
+    /// `LLM_NETWORK_RETRIES`; unifying them belongs with the Bedrock pacing work
+    /// (SDK-612), which rewrites this loop.
     network_retries: usize,
     /// Wall-clock ceiling on **one logical structured-output call** — spanning
     /// every corrective re-ask and every transport retry inside them. `None`

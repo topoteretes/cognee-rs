@@ -126,8 +126,12 @@ pub struct LlmInputs {
     /// inheriting it would point Anthropic traffic at the OpenAI host. Only the
     /// Anthropic factory consumes it; other providers ignore it.
     pub anthropic_base_url: Option<String>,
-    /// Corrective re-asks for one structured-output call (`LLM_MAX_RETRIES`),
-    /// Python's `_MAX_VALIDATION_RETRIES`. Distinct from
+    /// Total attempts at one structured-output call (`LLM_MAX_RETRIES`),
+    /// Python's `_MAX_VALIDATION_RETRIES`. The loop is
+    /// `0..structured_output_retries`, so this counts the first ask *plus* its
+    /// corrective re-asks: `3` is three attempts, at most two re-asks. Floored
+    /// at 1 by every adapter, so `0` means one attempt and no re-ask. Distinct
+    /// from
     /// [`network_retries`](Self::network_retries): one value driving both used to
     /// multiply the two ladders into each other (SDK-624).
     pub max_retries: u32,
@@ -137,6 +141,18 @@ pub struct LlmInputs {
     /// A floor, not a cap — paired with `min_retry_seconds` it forms Python's
     /// dual-floor stop condition, so the ladder also keeps retrying until the
     /// time floor is met.
+    ///
+    /// ⚠️ **Bedrock is the exception, and predates this knob.** The OpenAI,
+    /// Azure and Anthropic adapters run this through `retry::RetryBudget`, whose
+    /// stop condition is `attempts >= network_retries && elapsed >=
+    /// min_retry_seconds`. `BedrockAdapter::call_converse_before` instead loops
+    /// `0..=network_retries` — so `2` buys **three** attempts there against two
+    /// elsewhere — and it holds no `retry_min_elapsed` at all, so
+    /// `min_retry_seconds` does not reach it and its ladder has no time floor.
+    /// Both halves are pre-existing (SDK-624 only stopped `max_retries` from
+    /// feeding this loop); giving Bedrock the dual floor belongs with the
+    /// Bedrock pacing work in SDK-612, which touches the same loop. Until then
+    /// this knob means "at least N attempts" on every provider and nothing more.
     pub network_retries: u32,
     /// Minimum seconds a transient failure is retried for. Together with
     /// `network_retries` this is Python's dual-floor stop condition; `0` reduces
@@ -166,9 +182,10 @@ pub struct LlmInputs {
     /// and every retry inside it. `0` disables it.
     ///
     /// Distinct from `request_timeout_seconds`, which bounds a single HTTP
-    /// request and composes into no aggregate: `max_retries` corrective re-asks,
-    /// each running a transport ladder that honours the `min_retry_seconds` time
-    /// floor, multiply out to a worst case well over an hour.
+    /// request and composes into no aggregate: `max_retries` structured-output
+    /// attempts, each running a transport ladder that honours the
+    /// `min_retry_seconds` time floor, multiply out to a worst case well over an
+    /// hour.
     ///
     /// Honoured by every adapter since SDK-624. It reached only the
     /// OpenAI-compatible and Azure adapters before that — the two native ones

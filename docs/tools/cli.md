@@ -106,8 +106,9 @@ overrides the retry count for that run; the persistent default is the
 value, which in turn is set by `LLM_MAX_RETRIES`.
 
 It governs the **structured-output** retry loop only — the strict-schema,
-function-call and JSON-fallback parsing paths. The transport retry loop
-underneath it is a separate knob, `LLM_NETWORK_RETRIES` (config key
+function-call and JSON-fallback parsing paths — and counts *attempts*, not
+re-asks: `3` is three attempts, so at most two corrective re-asks. The transport
+retry loop underneath it is a separate knob, `LLM_NETWORK_RETRIES` (config key
 `llm_network_retries`, default `2`), which has no CLI flag. They used to share
 one value, which multiplied the two ladders into each other.
 

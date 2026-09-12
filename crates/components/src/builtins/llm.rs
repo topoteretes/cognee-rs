@@ -53,8 +53,8 @@ fn http_timeouts(ctx: &BackendBuildContext) -> (std::time::Duration, std::time::
 /// ceiling is entitled to one, but should not get one by accident.
 ///
 /// The ladder is `max_retries x min_retry_seconds`: each of the `LLM_MAX_RETRIES`
-/// corrective re-asks runs a transport ladder that honours the time floor before
-/// it is allowed to give up. That is also the envelope Python has —
+/// structured-output attempts runs a transport ladder that honours the time
+/// floor before it is allowed to give up. That is also the envelope Python has —
 /// `_MAX_VALIDATION_RETRIES` nested over `stop_after_attempt & stop_after_delay`.
 ///
 /// The three-mode structured-output cascade is deliberately **not** a factor.

@@ -159,12 +159,15 @@ pub struct Settings {
     pub llm_temperature: Option<f64>,
     pub llm_streaming: bool,
     pub llm_max_completion_tokens: u32,
-    /// Corrective re-asks for one structured-output call, mirroring Python's
+    /// Total attempts at one structured-output call, mirroring Python's
     /// `_MAX_VALIDATION_RETRIES = 3` (`litellm_native/native_adapter.py`).
     ///
     /// Governs the *outer* loop only: a response that fails validation, arrives
     /// truncated, or is rejected by the caller's validator is re-asked with the
-    /// reason in context. The transport ladder underneath it is
+    /// reason in context. The loop is `0..structured_output_retries`, so this is
+    /// the first ask *plus* its re-asks — `3` is three attempts, at most two
+    /// corrective re-asks — and every adapter floors it at 1, so `0` means one
+    /// attempt and no re-ask. The transport ladder underneath it is
     /// `llm_network_retries`, a separate knob since SDK-624 — one value feeding
     /// both multiplied the ladders into each other
     /// (`retries x (network_retries + 1) x llm_request_timeout_seconds`), which
@@ -206,8 +209,8 @@ pub struct Settings {
     /// (`LLM_REQUEST_DEADLINE_SECONDS`). `0` disables it.
     ///
     /// The per-request timeout above composes into no aggregate: structured
-    /// extraction runs `llm_max_retries` corrective re-asks, each running a
-    /// transport ladder that honours the `llm_min_retry_seconds` time floor.
+    /// extraction makes `llm_max_retries` attempts, each running a transport
+    /// ladder that honours the `llm_min_retry_seconds` time floor.
     /// Multiplied out, the designed worst case exceeds an hour — which is how a
     /// single extraction can run for 45 minutes while every individual HTTP
     /// request completes well inside its timeout.
@@ -2432,6 +2435,7 @@ impl ConfigManager {
                 self.set_llm_max_completion_tokens(as_u32(key, &value)?);
             }
             "llm_max_retries" => self.set_llm_max_retries(as_u32(key, &value)?),
+            "llm_network_retries" => self.set_llm_network_retries(as_u32(key, &value)?),
             "llm_max_parallel_requests" => {
                 self.set_llm_max_parallel_requests(as_u32(key, &value)?);
             }
@@ -2720,6 +2724,33 @@ mod tests {
             s.llm_max_retries,
             s.llm_min_retry_seconds,
         );
+    }
+
+    /// Every entry point that reaches one retry knob must reach the other.
+    ///
+    /// `set_llm_network_retries` first shipped reachable from the bulk
+    /// `set_llm_config` map and the CLI config store but **not** from the
+    /// generic `set(key, value)` dispatcher, so the public API that Python and
+    /// the C binding both go through answered `UnknownKey` for a key the CLI
+    /// accepted. Caught in review of PR #215.
+    #[test]
+    fn llm_network_retries_is_reachable_from_every_config_entry_point() {
+        let cm = ConfigManager::new(Settings::default());
+
+        cm.set("llm_network_retries", serde_json::json!(5))
+            .expect("the generic dispatcher must accept the key the CLI accepts");
+        assert_eq!(cm.read().llm_network_retries, 5);
+
+        cm.set_llm_config(
+            &[("llm_network_retries".to_string(), serde_json::json!(6))]
+                .into_iter()
+                .collect(),
+        )
+        .expect("the bulk LLM setter must accept it too");
+        assert_eq!(cm.read().llm_network_retries, 6);
+
+        cm.set_llm_network_retries(7);
+        assert_eq!(cm.read().llm_network_retries, 7);
     }
 
     #[test]

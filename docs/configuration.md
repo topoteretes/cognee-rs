@@ -747,14 +747,17 @@ Setting `system_root_directory` cascades to the default `graph_file_path` and
 These knobs form one resilience stack, matching Python cognee's:
 
 - **Two retry counts, one per loop.** `LLM_MAX_RETRIES` (Python's
-  `_MAX_VALIDATION_RETRIES`) is the number of corrective *re-asks* for one
-  structured-output call: a reply that fails validation, arrives truncated, or is
-  rejected by the caller's validator is asked again with the reason in context.
-  `LLM_NETWORK_RETRIES` (Python's `stop_after_attempt(2)`) is the transport
-  ladder underneath it, for 429s, 5xx and connection failures. They are separate
-  knobs because they *nest*: one value feeding both multiplied the ladders into
-  each other — `retries x (network retries + 1) x LLM_REQUEST_TIMEOUT_SECONDS`,
-  which is an hour of wall clock for a single chunk at defaults that look modest.
+  `_MAX_VALIDATION_RETRIES`) is the number of *attempts* at one structured-output
+  call — the first ask plus its corrective re-asks, so the default `3` is three
+  attempts and at most two re-asks. A reply that fails validation, arrives
+  truncated, or is rejected by the caller's validator is asked again with the
+  reason in context. Every adapter floors it at `1`, so `0` means one attempt and
+  no re-ask. `LLM_NETWORK_RETRIES` (Python's `stop_after_attempt(2)`) is the
+  transport ladder underneath it, for 429s, 5xx and connection failures. They are
+  separate knobs because they *nest*: one value feeding both multiplied the
+  ladders into each other — `attempts x (network retries + 1) x
+  LLM_REQUEST_TIMEOUT_SECONDS`, which is an hour of wall clock for a single chunk
+  at defaults that look modest.
 - **Retrying stops only once BOTH floors are met** — at least
   `LLM_NETWORK_RETRIES`
   attempts *and* at least `LLM_MIN_RETRY_SECONDS` elapsed. The time floor is the
@@ -767,6 +770,14 @@ These knobs form one resilience stack, matching Python cognee's:
   retrying for at least this long" guarantee, so counting queue time against it
   could only ever end the ladder earlier, and a call that waited minutes for a
   slot would give up having barely retried at all.
+
+  ⚠️ **Bedrock does not run this dual floor.** Its transport ladder is a plain
+  attempt count looping `0..=LLM_NETWORK_RETRIES` — so `2` buys three attempts
+  there against two elsewhere — and it holds no time floor at all, so
+  `LLM_MIN_RETRY_SECONDS` does not reach it. Both differences predate
+  `LLM_NETWORK_RETRIES`; unifying them is tracked with the Bedrock pacing work,
+  which rewrites the same loop. On Bedrock, read this knob as "at least N
+  attempts" and nothing more. The aggregate deadline below *does* bind there.
 - **Three timeouts, three scopes.** `LLM_CONNECT_TIMEOUT_SECONDS` bounds the TCP
   handshake (`reqwest` sets none by default, so a black-holed connect used to
   burn the whole request timeout without sending a byte).
@@ -778,7 +789,7 @@ These knobs form one resilience stack, matching Python cognee's:
   Responses client still uses a fixed 600s request / 10s connect pair.
   `LLM_REQUEST_DEADLINE_SECONDS` bounds one *logical* structured-extraction
   call — and that last one is the only bound on total time. Structured
-  extraction makes `LLM_MAX_RETRIES` re-asks, each running a transport ladder
+  extraction makes `LLM_MAX_RETRIES` attempts, each running a transport ladder
   that honours the `LLM_MIN_RETRY_SECONDS` floor above; multiplied out, the
   designed worst case runs past an hour while every individual request finishes
   well inside its timeout. Keep the deadline above
