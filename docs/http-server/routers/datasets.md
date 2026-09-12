@@ -33,6 +33,8 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
 - **Delegation target**: `cognee::modules::users::permissions::get_all_user_permission_datasets(user, "read") -> Vec<Dataset>`. Source: [`get_datasets_router.py:118`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/datasets/routers/get_datasets_router.py#L118).
 - **Validation rules**: none.
 - **Permission gate**: `read` on each candidate dataset (the SDK call already filters; the handler does not re-check). [../tenants.md §5](../tenants.md#5-permission-resolution).
+
+  ⚠️ **Known divergence from `POST /v1/search`.** When no `AclDb` is wired, this handler falls back to `IngestDb::list_datasets_by_owner(user.id)` with **no tenant predicate**, so it lists the caller's rows across every tenant. Search's equivalent fallback *does* filter on the requester's tenant (Python's `dataset.tenant_id == user.tenant_id`). A caller with a non-null `tenant_id` whose datasets carry a NULL tenant — rows written through the CLI or bindings into a shared database, or written before a tenant was assigned — therefore sees them listed here and gets a `403` searching them by id. Aligning the two means adding the same tenant filter to this fallback, which is a behaviour change for existing single-tenant deployments and is deliberately not bundled into the search fix; see [search.md §Permission gate](search.md).
 - **OpenAPI**: tag `["datasets"]`, response `200: list[DatasetDTO]`.
 - **Telemetry**:
   - Span name: `cognee.api.datasets.list`.

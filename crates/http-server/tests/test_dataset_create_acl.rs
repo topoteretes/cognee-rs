@@ -128,6 +128,79 @@ async fn a_failed_grant_rolls_the_dataset_row_back() {
     );
 }
 
+/// Scenario: the grant helper gets `read` and `write` in before failing on
+/// `delete`, and the revokes succeed.
+/// Expected: no grant survives and no row survives. `failing_grants` fails
+/// *every* grant, so nothing partial is ever written and the revoke loop is a
+/// no-op under it — this is the case that actually needs the cleanup.
+/// Verification: POST with a mock that fails only `delete`, assert the error,
+/// then assert both the ACL and the metadata row are empty.
+#[tokio::test]
+async fn a_partial_grant_is_revoked_before_the_row_is_dropped() {
+    let mock = Arc::new(MockAclDb::failing_grant_of("delete"));
+    let acl: Arc<dyn AclDb> = Arc::clone(&mock) as Arc<dyn AclDb>;
+    let state = build_state_with_acl(acl).await;
+    let db = state
+        .components()
+        .expect("components are wired")
+        .database
+        .clone();
+    let owner = default_test_user_id();
+
+    let app = build_router(state).await.expect("router");
+    let resp = oneshot_request(app, create_request("partial")).await;
+    assert!(!resp.status().is_success(), "the create must fail");
+
+    assert_eq!(
+        mock.grant_count(),
+        0,
+        "the grants written before the failure must be revoked — the dataset id is \
+         deterministic, so a later create of the same name would inherit them"
+    );
+    let leftover = IngestDb::get_dataset_by_name(db.as_ref(), "partial", owner, None)
+        .await
+        .expect("lookup");
+    assert!(leftover.is_none(), "the row must be rolled back too");
+}
+
+/// Scenario: the ACL store is unreachable, so the compensating revokes fail
+/// for the same reason the grant did.
+/// Expected: the row is **kept**, and the error names it for manual cleanup.
+/// Deleting it while grants survive is the one outcome that poisons a future
+/// request: `uuid5(name, owner, tenant)` hands the same id to the next create
+/// of that name, which would silently inherit a partial permission set.
+/// Verification: fail `delete` grants and all revokes, assert the error, then
+/// assert the row is still present and the stale grants are still visible.
+#[tokio::test]
+async fn the_row_is_kept_when_cleanup_cannot_succeed() {
+    let mock = Arc::new(MockAclDb::failing_grant_of("delete").with_failing_revokes());
+    let acl: Arc<dyn AclDb> = Arc::clone(&mock) as Arc<dyn AclDb>;
+    let state = build_state_with_acl(acl).await;
+    let db = state
+        .components()
+        .expect("components are wired")
+        .database
+        .clone();
+    let owner = default_test_user_id();
+
+    let app = build_router(state).await.expect("router");
+    let resp = oneshot_request(app, create_request("stuck")).await;
+    assert!(!resp.status().is_success(), "the create must fail");
+
+    assert!(
+        mock.grant_count() > 0,
+        "precondition: some grants landed before the failure and could not be revoked"
+    );
+    let leftover = IngestDb::get_dataset_by_name(db.as_ref(), "stuck", owner, None)
+        .await
+        .expect("lookup");
+    assert!(
+        leftover.is_some(),
+        "the row must NOT be deleted while grants on its deterministic id survive — \
+         that state is invisible and would be inherited by the next create"
+    );
+}
+
 /// Scenario: an owner's `read` grant was deliberately revoked; they POST the
 /// same dataset name again.
 /// Expected: the existing row comes back untouched and the revocation stands.

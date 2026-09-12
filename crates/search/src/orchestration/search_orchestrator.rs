@@ -469,14 +469,22 @@ impl SearchOrchestrator {
                 // Authorize the resolved ids exactly as an explicitly-supplied
                 // batch, because Python does: `get_authorized_existing_datasets`
                 // pipes `get_dataset_ids(datasets, user)` straight into
-                // `get_specific_user_permission_datasets`. Resolution is
-                // owner-scoped, so with only a resolver wired every resolved id
-                // is owned by the requester and this always passes; it bites
-                // only once an `AclDb` is wired, which is exactly where the
-                // bypass was — a name resolved on ownership alone and reached
-                // the retriever without a `read` grant.
-                self.authorize_dataset_ids(owner_id, request.tenant_id, &resolved)
-                    .await?;
+                // `get_specific_user_permission_datasets`. That closes the
+                // bypass a name-only path had — a name resolved on ownership
+                // alone and reached the retriever without a `read` grant.
+                //
+                // Only when an `AclDb` is wired. Without one the check cannot
+                // reject anything: `readable_dataset_ids` falls back to
+                // `list_datasets_by_owner` filtered by tenant, and
+                // `get_dataset_by_name` above already filtered on that same
+                // owner and tenant, so every resolved id is in the set by
+                // construction. Running it anyway would add a full
+                // owner-wide dataset listing to every name-scoped search for
+                // a result that is provably `Ok(())`.
+                if self.acl_db.is_some() {
+                    self.authorize_dataset_ids(owner_id, request.tenant_id, &resolved)
+                        .await?;
+                }
 
                 let mut clone = request.clone();
                 clone.dataset_ids = Some(resolved);

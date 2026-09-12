@@ -407,14 +407,26 @@ pub async fn create_new_dataset(
     // safe — it guarantees a row that exists is a row whose grants were
     // written, so there is never a half-finished dataset needing repair.
     //
-    // Not serialized against a concurrent create of the same name: a second
-    // POST can observe the row between the insert and the grant below, and
-    // answer 200 for a dataset the first request then rolls back. Closing that
-    // needs a lock keyed on the deterministic dataset id (or a store that can
-    // hold both writes in one transaction), which neither this handler nor
-    // `AppState` has today. The window is one failed ACL write wide, and both
-    // callers can retry; the alternative failure — a silently ungranted
-    // dataset — was permanent, which is the one worth ruling out first.
+    // ⚠️ Not serialized against anything else touching the same name while the
+    // grant below is in flight. Two known windows, both open only between the
+    // insert and the grant, and both closed by the same missing piece — a lock
+    // keyed on the deterministic dataset id, or a store that can hold the row
+    // and its ACL rows in one transaction. Neither this handler nor `AppState`
+    // has one today:
+    //
+    //   1. A second `POST /v1/datasets` for the same name observes the row and
+    //      answers 200 for a dataset the first request then rolls back.
+    //   2. Worse: a concurrent `POST /v1/add` with the same `datasetName`
+    //      resolves this row and ingests into it, and the rollback then deletes
+    //      it out from under that data. `DeleteDb::delete_dataset` is the raw
+    //      row delete, not `components.delete_service`, so `dataset_data` links
+    //      are orphaned rather than swept.
+    //
+    // Accepted for now because the failure it replaced — a dataset silently
+    // created with no ACL rows — was *permanent* and needed no concurrency to
+    // hit, whereas these need a failing ACL write and a simultaneous second
+    // request, and leave a retryable state. Worth revisiting if the create path
+    // ever gets a transactional store or a keyed lock.
     if let Some(ds) = existing {
         return Ok(Json(dataset_to_dto(&ds)));
     }
@@ -467,7 +479,18 @@ pub async fn create_new_dataset(
                 cleanup_errors.push(format!("revoke {perm}: {e}"));
             }
         }
-        if let Err(e) = DeleteDb::delete_dataset(&*db, created.id).await {
+
+        // Drop the row only if the ACL is provably clean. In the common
+        // failure — the ACL store being unreachable — the revokes fail for the
+        // same reason the grant did, and deleting anyway would produce the one
+        // state that poisons a *future* request: no dataset row, but surviving
+        // grants on an id that `uuid5(name, owner, tenant)` will hand to the
+        // next create of the same name, which would then silently inherit a
+        // partial permission set. Keeping the row instead leaves the damage
+        // visible to `GET /v1/datasets` and to the operator this error names.
+        if cleanup_errors.is_empty()
+            && let Err(e) = DeleteDb::delete_dataset(&*db, created.id).await
+        {
             cleanup_errors.push(format!("delete dataset row: {e}"));
         }
 

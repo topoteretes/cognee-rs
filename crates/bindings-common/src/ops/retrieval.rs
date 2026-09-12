@@ -101,6 +101,42 @@ fn parse_dataset_ids(opts: &serde_json::Value) -> Result<Option<Vec<Uuid>>, SdkE
     Ok(Some(ids))
 }
 
+/// Parse the `datasets` opt — a JSON array of dataset-name strings — into
+/// `Option<Vec<String>>`.
+///
+/// Strict for the same reason [`parse_dataset_ids`] is, and it matters more
+/// here: `{"datasets": [123]}` used to `filter_map` down to `Some(vec![])`,
+/// and the orchestrator's name branch is guarded on `!names.is_empty()`, so an
+/// empty list falls through to *no dataset filter at all* — a scoped query
+/// silently becoming an unscoped one over everything the caller can read. A
+/// non-array `{"datasets": "ds"}` failed `as_array()` and reached the same
+/// place via `None`.
+///
+/// An explicitly empty array stays `Some(vec![])`: Python's `if datasets:`
+/// short-circuits empty lists too, so "no filter" is the correct reading of a
+/// list the caller deliberately sent empty. Only a *malformed* entry errors.
+fn parse_dataset_names(opts: &serde_json::Value) -> Result<Option<Vec<String>>, SdkError> {
+    let Some(value) = opts.get("datasets") else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let Some(arr) = value.as_array() else {
+        return Err(SdkError::Validation(
+            "`datasets` must be an array of dataset-name strings".to_string(),
+        ));
+    };
+    arr.iter()
+        .map(|entry| {
+            entry.as_str().map(|s| s.to_string()).ok_or_else(|| {
+                SdkError::Validation(format!("`datasets` entries must be strings, got {entry}"))
+            })
+        })
+        .collect::<Result<Vec<String>, SdkError>>()
+        .map(Some)
+}
+
 /// Everything [`recall`] reads out of its camelCase `opts`, in the order
 /// [`cognee::api::recall`] takes them.
 ///
@@ -131,13 +167,7 @@ pub fn build_recall_args(opts: &serde_json::Value) -> Result<RecallArgs, SdkErro
     };
 
     // datasets from opts.datasets
-    let datasets: Option<Vec<String>> = opts.get("datasets").and_then(|v| {
-        v.as_array().map(|arr| {
-            arr.iter()
-                .filter_map(|x| x.as_str().map(|s| s.to_string()))
-                .collect()
-        })
-    });
+    let datasets = parse_dataset_names(opts)?;
 
     // datasetIds from opts.datasetIds, parsed exactly as the search op does.
     // Recall opts are read key-by-key, so before this was wired an unknown
@@ -203,13 +233,7 @@ pub fn build_search_request(
     };
 
     // datasets: string array
-    let datasets: Option<Vec<String>> = opts.get("datasets").and_then(|v| {
-        v.as_array().map(|arr| {
-            arr.iter()
-                .filter_map(|x| x.as_str().map(|s| s.to_string()))
-                .collect()
-        })
-    });
+    let datasets = parse_dataset_names(opts)?;
 
     let dataset_ids = parse_dataset_ids(opts)?;
     let tenant_id = crate::ops::pipeline::opts_tenant(opts)?;
@@ -476,6 +500,43 @@ mod tests {
         assert!(parse_dataset_ids(&json!({ "datasetIds": [ID_A, 7] })).is_err());
         // A non-array is a caller mistake too, not "no filter".
         assert!(parse_dataset_ids(&json!({ "datasetIds": ID_A })).is_err());
+    }
+
+    /// `datasets` is the more dangerous half of the same bug: the
+    /// orchestrator's name branch is guarded on `!names.is_empty()`, so a list
+    /// that `filter_map`s down to empty does not merely lose one name — it
+    /// falls through to *no dataset filter at all*.
+    #[test]
+    fn parse_dataset_names_rejects_malformed_entries_instead_of_widening_scope() {
+        assert!(parse_dataset_names(&json!({ "datasets": [123] })).is_err());
+        assert!(parse_dataset_names(&json!({ "datasets": ["ok", null] })).is_err());
+        // A bare string instead of an array reached the same place via `None`.
+        assert!(parse_dataset_names(&json!({ "datasets": "ds" })).is_err());
+    }
+
+    #[test]
+    fn parse_dataset_names_reads_a_string_array() {
+        assert_eq!(
+            parse_dataset_names(&json!({ "datasets": ["a", "b"] })).unwrap(),
+            Some(vec!["a".to_string(), "b".to_string()])
+        );
+        assert_eq!(parse_dataset_names(&json!({})).unwrap(), None);
+        assert_eq!(
+            parse_dataset_names(&json!({ "datasets": null })).unwrap(),
+            None
+        );
+        // Deliberately empty stays "no filter", matching Python's `if datasets:`.
+        assert_eq!(
+            parse_dataset_names(&json!({ "datasets": [] })).unwrap(),
+            Some(vec![])
+        );
+    }
+
+    #[test]
+    fn a_malformed_dataset_name_fails_both_ops() {
+        let opts = json!({ "datasets": [123] });
+        assert!(build_recall_args(&opts).is_err());
+        assert!(build_search_request("q", &opts, Uuid::new_v4()).is_err());
     }
 
     /// Both ops must reject it, not just the parser in isolation.
