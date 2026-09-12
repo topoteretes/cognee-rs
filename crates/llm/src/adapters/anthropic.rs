@@ -44,6 +44,22 @@ pub struct AnthropicAdapter {
     /// Minimum elapsed time before the request may fail — the other half of
     /// Python's dual-floor stop condition.
     retry_min_elapsed: Duration,
+    /// Wall-clock ceiling on **one logical structured-output call** — spanning
+    /// every corrective re-ask and every transport retry inside them. `None`
+    /// leaves the call unbounded.
+    ///
+    /// The same bound [`OpenAIAdapter`](crate::OpenAIAdapter) carries, and for
+    /// the same reason: the reqwest client timeout is per-HTTP-request and
+    /// composes into no aggregate, so `structured_output_retries` re-asks each
+    /// running a transport ladder that keeps retrying for `retry_min_elapsed`
+    /// multiply out well past an hour. It was unreachable from config on this
+    /// adapter until SDK-624 — there was no setter to call — so
+    /// `LLM_REQUEST_DEADLINE_SECONDS` silently did nothing here.
+    ///
+    /// Bounds *starting* work rather than cancelling it, so a request already on
+    /// the wire when the budget expires still runs to its own timeout: the
+    /// effective ceiling is `request_deadline + request_timeout`.
+    request_deadline: Option<Duration>,
     /// Dispatch pacer; `None` leaves the adapter unpaced.
     pacer: Option<Arc<Pacer>>,
     /// Output-token ceiling (Python's `llm_max_completion_tokens`). The per-request
@@ -67,6 +83,13 @@ impl AnthropicAdapter {
     /// Default minimum retry window for transient failures — Python's
     /// `LLM_MIN_RETRY_SECONDS = 240` (`retry_config.py`).
     pub const DEFAULT_MIN_RETRY_ELAPSED: Duration = Duration::from_secs(240);
+    /// Default per-HTTP-request timeout, aliasing the OpenAI adapter's so the
+    /// two cannot drift. Was a bare `600` literal in `new` until SDK-624.
+    pub const DEFAULT_REQUEST_TIMEOUT: Duration = crate::OpenAIAdapter::DEFAULT_REQUEST_TIMEOUT;
+    /// Default TCP connect timeout, aliasing the OpenAI adapter's. `reqwest`
+    /// applies none by default, so without it a black-holed connect burns the
+    /// whole request timeout doing nothing.
+    pub const DEFAULT_CONNECT_TIMEOUT: Duration = crate::OpenAIAdapter::DEFAULT_CONNECT_TIMEOUT;
     /// Default output-token ceiling, matching Python's `llm_max_completion_tokens`.
     /// The per-request value is clamped to the model's documented cap. Aliases the
     /// crate-wide [`crate::DEFAULT_MAX_COMPLETION_TOKENS`] so it moves in lockstep
@@ -83,14 +106,8 @@ impl AnthropicAdapter {
         api_key: impl Into<String>,
         base_url: Option<String>,
     ) -> LlmResult<Self> {
-        let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(600))
-            // `reqwest` sets no connect timeout, so a black-holed connect would
-            // otherwise burn the full request timeout doing nothing. Matches
-            // `OpenAIAdapter::DEFAULT_CONNECT_TIMEOUT`.
-            .connect_timeout(std::time::Duration::from_secs(10))
-            .build()
-            .map_err(|e| LlmError::ConfigError(format!("Failed to create HTTP client: {e}")))?;
+        let client =
+            Self::build_http_client(Self::DEFAULT_REQUEST_TIMEOUT, Self::DEFAULT_CONNECT_TIMEOUT)?;
 
         let model: String = model.into();
         let model = model
@@ -109,6 +126,7 @@ impl AnthropicAdapter {
             structured_output_retries: Self::DEFAULT_STRUCTURED_OUTPUT_RETRIES,
             network_retries: Self::DEFAULT_NETWORK_RETRIES,
             retry_min_elapsed: Self::DEFAULT_MIN_RETRY_ELAPSED,
+            request_deadline: None,
             pacer: None,
             max_completion_tokens: Self::DEFAULT_MAX_COMPLETION_TOKENS,
             extra_args: serde_json::Map::new(),
@@ -138,6 +156,91 @@ impl AnthropicAdapter {
     pub fn with_pacer(mut self, pacer: Arc<Pacer>) -> Self {
         self.pacer = Some(pacer);
         self
+    }
+
+    /// Build the HTTP client used for every request.
+    ///
+    /// Kept as one place so `new` and
+    /// [`with_http_timeouts`](Self::with_http_timeouts) cannot drift in which
+    /// timeouts they set. `0` means "no limit" for both, matching the OpenAI
+    /// adapter: handing `reqwest` a `Duration::ZERO` timeout times every request
+    /// out instantly, so an operator generalising the `0` escape hatch from
+    /// `LLM_REQUEST_DEADLINE_SECONDS` would stop all traffic rather than lift a
+    /// bound.
+    fn build_http_client(
+        request_timeout: Duration,
+        connect_timeout: Duration,
+    ) -> LlmResult<Client> {
+        let mut builder = Client::builder();
+        if !request_timeout.is_zero() {
+            builder = builder.timeout(request_timeout);
+        }
+        if !connect_timeout.is_zero() {
+            builder = builder.connect_timeout(connect_timeout);
+        }
+        builder
+            .build()
+            .map_err(|e| LlmError::ConfigError(format!("Failed to create HTTP client: {e}")))
+    }
+
+    /// Override the per-request and TCP-connect timeouts
+    /// (`LLM_REQUEST_TIMEOUT_SECONDS` / `LLM_CONNECT_TIMEOUT_SECONDS`).
+    ///
+    /// Rebuilds the client, which is why this is a builder rather than a setter:
+    /// it is only sound before any request is in flight. On the (TLS-init-only)
+    /// failure path the existing client is kept and a warning logged, so a
+    /// misconfigured timeout degrades to the defaults rather than failing
+    /// component construction — the same contract as
+    /// [`OpenAIAdapter::with_http_timeouts`](crate::OpenAIAdapter::with_http_timeouts).
+    #[must_use]
+    pub fn with_http_timeouts(
+        mut self,
+        request_timeout: Duration,
+        connect_timeout: Duration,
+    ) -> Self {
+        match Self::build_http_client(request_timeout, connect_timeout) {
+            Ok(client) => self.client = client,
+            Err(e) => warn!(
+                error = %e,
+                "failed to rebuild the Anthropic HTTP client with configured timeouts; \
+                 keeping defaults",
+            ),
+        }
+        self
+    }
+
+    /// Set the aggregate ceiling for one logical structured-output call
+    /// (`LLM_REQUEST_DEADLINE_SECONDS`). `None` disables it.
+    ///
+    /// See the [`request_deadline`](Self::request_deadline) field for what it
+    /// does and does not bound.
+    #[must_use]
+    pub fn with_request_deadline(mut self, deadline: Option<Duration>) -> Self {
+        self.request_deadline = deadline;
+        self
+    }
+
+    /// The deadline error for a call that started at `started`, if the budget is
+    /// set and already spent.
+    ///
+    /// Returns the error rather than a bool so the message can name the budget,
+    /// the elapsed time and the stage that was about to be entered — without
+    /// that, an aggregate cut is indistinguishable from a provider timeout in a
+    /// log.
+    fn deadline_exceeded(&self, started: Instant, next_stage: &str) -> Option<LlmError> {
+        let deadline = self.request_deadline?;
+        let elapsed = started.elapsed();
+        if elapsed < deadline {
+            return None;
+        }
+        Some(LlmError::Timeout(format!(
+            "Anthropic structured output exceeded its {}s aggregate budget \
+             (LLM_REQUEST_DEADLINE_SECONDS) after {:.0}s, before {next_stage}; raise the \
+             budget, or lower LLM_MAX_RETRIES / LLM_MIN_RETRY_SECONDS so the retry \
+             ladder fits inside it",
+            deadline.as_secs(),
+            elapsed.as_secs_f64(),
+        )))
     }
 
     /// The stop condition for this adapter's transient-failure retries.
@@ -304,19 +407,36 @@ impl AnthropicAdapter {
         out
     }
 
+    /// POST `request_body` to `/messages`, unbounded by any aggregate budget.
+    ///
+    /// The plain-completion entry point; the structured-output loop goes through
+    /// [`call_api_before`](Self::call_api_before) so its re-asks share one
+    /// deadline.
+    async fn call_api(&self, request_body: &Value) -> LlmResult<AnthropicResponse> {
+        self.call_api_before(request_body, None).await
+    }
+
     /// POST `request_body` to `/messages` with the standard headers and a
     /// transient-retry loop with exponential backoff.
+    ///
+    /// `deadline` is the caller's aggregate budget as an absolute instant, so it
+    /// already counts every wait this call has made and every earlier attempt in
+    /// the same logical call. `None` leaves the ladder unbounded.
     #[instrument(
         name = "llm.api_call",
         level = "info",
-        skip(self, request_body),
+        skip(self, request_body, deadline),
         fields(
             url = tracing::field::Empty,
             cognee.llm.model = self.model.as_str(),
             cognee.llm.provider = "anthropic",
         ),
     )]
-    async fn call_api(&self, request_body: &Value) -> LlmResult<AnthropicResponse> {
+    async fn call_api_before(
+        &self,
+        request_body: &Value,
+        deadline: Option<Instant>,
+    ) -> LlmResult<AnthropicResponse> {
         let url = format!("{}/messages", self.base_url);
         tracing::Span::current().record("url", url.as_str());
         let debug_enabled = std::env::var("COGNEE_DEBUG_LLM_REQUEST")
@@ -341,12 +461,13 @@ impl AnthropicAdapter {
         //
         // That predicate is `attempts >= min_attempts && elapsed >= min_elapsed`,
         // so a *larger* elapsed can only exhaust the budget earlier, and
-        // `min_elapsed` (`LLM_MIN_RETRY_SECONDS`) is a "keep retrying for at
-        // least this long" resilience guarantee, not a deadline — this adapter
-        // has no deadline concept at all. Charging queue time against the floor
-        // would only ever cut the ladder short: with `LLM_MAX_RETRIES=2` and a
-        // 240s floor, a call that spent 300s waiting for a permit would stop
-        // after its second attempt having done no real retrying.
+        // `min_elapsed` (`LLM_NETWORK_RETRIES` / `LLM_MIN_RETRY_SECONDS`) is a
+        // "keep retrying for at least this long" resilience guarantee rather
+        // than a deadline. Charging queue time against the floor would only ever
+        // cut the ladder short: with a 240s floor, a call that spent 300s
+        // waiting for a permit would stop after its second attempt having done
+        // no real retrying. `deadline` is the mechanism that bounds total time;
+        // this floor is not.
         let mut queued_for_permit = Duration::ZERO;
         let mut retry_after: Option<Duration> = None;
         let mut attempt: u32 = 0;
@@ -360,7 +481,23 @@ impl AnthropicAdapter {
                 let backoff = crate::retry::retry_backoff(attempt);
                 // A usable hint replaces the backoff outright, including when it
                 // asks for less: the provider knows when its window resets.
-                let delay = retry_after.take().unwrap_or(backoff);
+                let mut delay = retry_after.take().unwrap_or(backoff);
+                // The caller's aggregate budget outranks the retry ladder. Give
+                // up rather than start an attempt that cannot finish inside it,
+                // and never sleep past it — a 128s backoff against 5s of
+                // remaining budget would otherwise blow the ceiling on its own.
+                if let Some(deadline) = deadline {
+                    let remaining = deadline.saturating_duration_since(Instant::now());
+                    if remaining.is_zero() {
+                        return Err(LlmError::Timeout(format!(
+                            "Anthropic request abandoned after {:.0}s with {attempt} attempt(s): \
+                             the call's aggregate budget (LLM_REQUEST_DEADLINE_SECONDS) was spent \
+                             mid-retry; last error: {last_error}",
+                            started.elapsed().as_secs_f64(),
+                        )));
+                    }
+                    delay = delay.min(remaining);
+                }
                 warn!(
                     attempt,
                     delay_ms = delay.as_millis() as u64,
@@ -370,6 +507,8 @@ impl AnthropicAdapter {
                 );
                 tokio::time::sleep(delay).await;
             }
+
+            let dispatch_wait_started = Instant::now();
 
             // Inside the loop — see the OpenAI adapter and `cognee_utils::pacing`
             // for why admission is per attempt. This one runs before the queue
@@ -395,6 +534,28 @@ impl AnthropicAdapter {
             // spends two tokens. See the OpenAI adapter for the full rationale.
             if !paced_before_queue && let Some(pacer) = pacer.as_deref() {
                 pacer.admit().await;
+            }
+
+            // Pacing and the in-flight queue can outlast the caller's aggregate
+            // budget on their own — a 900s overload cooldown dwarfs a 720s
+            // deadline — and the guard at the top of the loop cannot see that:
+            // it runs before the wait. Narrow on purpose, exactly as in the
+            // OpenAI adapter: it fires only when budget *remained* when the wait
+            // began and the wait is what spent it, so the guard above keeps its
+            // existing behaviour of clamping the backoff and letting the attempt
+            // it slept for start. Skipped on the first attempt too — every call
+            // makes at least one, as it did before the deadline existed.
+            if attempt > 0
+                && let Some(deadline) = deadline
+                && dispatch_wait_started < deadline
+                && Instant::now() >= deadline
+            {
+                return Err(LlmError::Timeout(format!(
+                    "Anthropic request abandoned after {:.0}s with {attempt} attempt(s): the \
+                     call's aggregate budget (LLM_REQUEST_DEADLINE_SECONDS) was spent waiting \
+                     for dispatch (pacing or the in-flight queue); last error: {last_error}",
+                    started.elapsed().as_secs_f64(),
+                )));
             }
 
             attempt += 1;
@@ -569,13 +730,30 @@ impl AnthropicAdapter {
         // expensive truncation loop from a routine corrective re-ask.
         let mut truncation_retry = false;
 
+        // Start of the aggregate budget. Every re-ask and transport retry below
+        // is measured against this one instant, because the thing that needs
+        // bounding is the *logical* call: no individual HTTP request in a
+        // 45-minute extraction was itself slow.
+        let call_started = Instant::now();
+        // Absolute form of the budget, threaded into every transport call below
+        // so the retry ladder inside an attempt is bounded by it too, not just
+        // the gaps between attempts.
+        let call_deadline = self.request_deadline.map(|d| call_started + d);
+
         for attempt in 0..self.structured_output_retries {
             if attempt > 0 {
                 // Back off between corrective re-asks. `call_api`'s ladder only
                 // covers transport retries inside a single attempt, so without
                 // this the outer loop would re-ask immediately (Python waits
                 // between structured retries via `wait_exponential_jitter`).
-                let delay = crate::retry::retry_backoff(attempt as u32);
+                let mut delay = crate::retry::retry_backoff(attempt as u32);
+                // Never sleep past the aggregate budget: a 128s backoff against
+                // 5s of remaining budget would blow the ceiling on its own. The
+                // check below then abandons rather than paying for a re-ask the
+                // budget can no longer cover.
+                if let Some(deadline) = call_deadline {
+                    delay = delay.min(deadline.saturating_duration_since(Instant::now()));
+                }
                 // `warn` only for a truncation re-ask: that one costs a full
                 // generation plus this backoff, and a loop of them is what makes a
                 // cognify stall for minutes with nothing at the default INFO level
@@ -599,12 +777,20 @@ impl AnthropicAdapter {
                 }
                 tokio::time::sleep(delay).await;
             }
+            // Aggregate budget check at the head of the attempt — after the
+            // backoff above, so a sleep that consumed the rest of the budget
+            // aborts here rather than buying one more full generation, and
+            // placed inside the loop rather than only between modes so a long
+            // transport ladder inside one attempt is bounded too.
+            if let Some(e) = self.deadline_exceeded(call_started, "another re-ask") {
+                return Err(e);
+            }
             // Cleared per attempt: the flag describes the attempt that just
             // failed, so leaving it latched would label a later validator-driven
             // re-ask as a truncation.
             truncation_retry = false;
 
-            match self.call_api(&body).await {
+            match self.call_api_before(&body, call_deadline).await {
                 Ok(response) => {
                     // `stop_reason == "max_tokens"` means the answer was cut off
                     // mid-flight, and it is classified *before* the tool input is

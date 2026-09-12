@@ -102,18 +102,19 @@ cognee-cli config unset embedding_endpoint
 
 `--llm-max-retries N` (accepted by `cognify`, `add-and-cognify`, `search`)
 overrides the retry count for that run; the persistent default is the
-`llm_max_retries` config key (default `2`). The CLI flag wins over the config
+`llm_max_retries` config key (default `3`). The CLI flag wins over the config
 value, which in turn is set by `LLM_MAX_RETRIES`.
 
-It governs **both** the structured-output retry loop — the strict-schema,
-function-call and JSON-fallback parsing paths — and the transport retry loop,
-on whichever adapter the configured provider selects.
+It governs the **structured-output** retry loop only — the strict-schema,
+function-call and JSON-fallback parsing paths. The transport retry loop
+underneath it is a separate knob, `LLM_NETWORK_RETRIES` (config key
+`llm_network_retries`, default `2`), which has no CLI flag. They used to share
+one value, which multiplied the two ladders into each other.
 
-`0` is accepted, for consistency with the env var, but is not a uniform
-"no retries" switch: the OpenAI-compatible, Azure and Anthropic adapters floor
-it to `1`, while Bedrock takes it literally as one attempt with no retry. On the
-adapters that floor it, `LLM_MIN_RETRY_SECONDS=0` is what shortens a retry that
-would otherwise keep waiting out its time floor.
+`0` is accepted for consistency with the env var; every adapter floors the
+structured count at `1`, so it means "one attempt, no re-ask". To shorten a
+transport ladder that would otherwise keep waiting out its time floor, set
+`LLM_MIN_RETRY_SECONDS=0`.
 
 A `run-sequence` step may carry the flag; it applies to that step, and steps
 without it fall back to the configured value.

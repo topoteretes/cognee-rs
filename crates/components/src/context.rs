@@ -126,10 +126,21 @@ pub struct LlmInputs {
     /// inheriting it would point Anthropic traffic at the OpenAI host. Only the
     /// Anthropic factory consumes it; other providers ignore it.
     pub anthropic_base_url: Option<String>,
+    /// Corrective re-asks for one structured-output call (`LLM_MAX_RETRIES`),
+    /// Python's `_MAX_VALIDATION_RETRIES`. Distinct from
+    /// [`network_retries`](Self::network_retries): one value driving both used to
+    /// multiply the two ladders into each other (SDK-624).
     pub max_retries: u32,
+    /// Minimum transport attempts for one HTTP request before it may fail
+    /// (`LLM_NETWORK_RETRIES`), Python's `stop_after_attempt(2)`.
+    ///
+    /// A floor, not a cap — paired with `min_retry_seconds` it forms Python's
+    /// dual-floor stop condition, so the ladder also keeps retrying until the
+    /// time floor is met.
+    pub network_retries: u32,
     /// Minimum seconds a transient failure is retried for. Together with
-    /// `max_retries` this is Python's dual-floor stop condition; `0` reduces it
-    /// to a plain attempt cap. See `Settings::llm_min_retry_seconds`.
+    /// `network_retries` this is Python's dual-floor stop condition; `0` reduces
+    /// it to a plain attempt cap. See `Settings::llm_min_retry_seconds`.
     pub min_retry_seconds: u32,
     /// Ceiling on LLM requests in flight process-wide (`LLM_MAX_PARALLEL_REQUESTS`).
     ///
@@ -155,9 +166,13 @@ pub struct LlmInputs {
     /// and every retry inside it. `0` disables it.
     ///
     /// Distinct from `request_timeout_seconds`, which bounds a single HTTP
-    /// request and composes into no aggregate: three cascade modes, each
-    /// `max_retries` deep, each honouring the `min_retry_seconds` time floor,
-    /// multiply out to a worst case well over an hour.
+    /// request and composes into no aggregate: `max_retries` corrective re-asks,
+    /// each running a transport ladder that honours the `min_retry_seconds` time
+    /// floor, multiply out to a worst case well over an hour.
+    ///
+    /// Honoured by every adapter since SDK-624. It reached only the
+    /// OpenAI-compatible and Azure adapters before that — the two native ones
+    /// had no setter to call, so on Bedrock and Anthropic this was inert.
     pub request_deadline_seconds: u32,
     /// Pace dispatch unconditionally (`LLM_RATE_LIMIT_ENABLED`).
     pub rate_limit_enabled: bool,

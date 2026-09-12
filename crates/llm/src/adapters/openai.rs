@@ -473,16 +473,20 @@ impl OpenAIAdapter {
     ///
     /// Chosen to sit above the legitimate retry envelope and below the
     /// pathological one. That envelope is
-    /// `CASCADE_MODES x max_retries x min_retry_seconds` — all three factors,
-    /// since each of the three modes is retried `max_retries` times and every
-    /// attempt honours the time floor before it may give up. At the defaults
-    /// (3 x 2 x 240s) that is 24 minutes of *deliberate* waiting, which a call
-    /// surviving a provider rate-limit window genuinely needs; the unbounded
-    /// worst case ran past an hour. 30 minutes preserves the former and cuts the
-    /// latter. Keep this figure in step with the ladder computed in
+    /// `structured_output_retries x min_retry_seconds`: each corrective re-ask
+    /// runs a transport ladder that honours the time floor before it may give
+    /// up. At the defaults (3 x 240s) that is 12 minutes of *deliberate*
+    /// waiting, which a call surviving a provider rate-limit window genuinely
+    /// needs; the unbounded worst case ran past an hour.
+    ///
+    /// It is also the envelope Python actually has: `_MAX_VALIDATION_RETRIES =
+    /// 3` nested over `stop_after_attempt(2) & stop_after_delay(240)`
+    /// (`retry_config.py`), whose `&` keeps each transport ladder going until
+    /// *both* floors are met. The three-mode cascade is deliberately **not** a
+    /// factor here — see the ladder computed in
     /// `cognee_components::builtins::llm`, which warns when a configured
-    /// deadline does not fit inside it.
-    pub const DEFAULT_REQUEST_DEADLINE: Duration = Duration::from_secs(1800);
+    /// deadline does not fit inside it, for why it is not a per-call multiplier.
+    pub const DEFAULT_REQUEST_DEADLINE: Duration = Duration::from_secs(720);
 
     /// Create a new OpenAI adapter.
     ///
@@ -1200,7 +1204,7 @@ impl OpenAIAdapter {
         // so a *larger* elapsed can only exhaust the budget earlier, and
         // `min_elapsed` (`LLM_MIN_RETRY_SECONDS`) is a "keep retrying for at
         // least this long" resilience guarantee rather than a deadline. Charging
-        // queue time against it silently weakens it: with `LLM_MAX_RETRIES=2` and
+        // queue time against it silently weakens it: with `LLM_NETWORK_RETRIES=2` and
         // a 240s floor, a call that spent 300s waiting for a permit would stop
         // after its second attempt with no actual retrying done at all. The
         // aggregate deadline above is the mechanism that bounds total time; this

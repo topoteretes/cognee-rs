@@ -255,7 +255,7 @@ impl OpenAIResponsesClient {
         // `min_elapsed` (`LLM_MIN_RETRY_SECONDS`) is a "keep retrying for at
         // least this long" resilience guarantee, not a deadline — this client
         // has no deadline concept at all. Charging queue time against the floor
-        // would only ever cut the ladder short: with `LLM_MAX_RETRIES=2` and a
+        // would only ever cut the ladder short: with `LLM_NETWORK_RETRIES=2` and a
         // 240s floor, a call that spent 300s waiting for a permit would stop
         // after its second attempt having done no real retrying.
         let mut queued_for_permit = Duration::ZERO;

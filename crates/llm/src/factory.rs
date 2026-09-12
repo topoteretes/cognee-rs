@@ -112,8 +112,13 @@ const SUPPORTED_PROVIDERS: &[&str] = &[
 /// `openai`, the adapter's built-in OpenAI default). `custom` /
 /// `openai_compatible` has no default and requires an explicit endpoint.
 ///
-/// `max_retries` is floored at 1 and applied to both the structured-output and
-/// network retry loops, matching the previous inline wiring.
+/// `max_retries` is floored at 1 and applied to the **structured-output** retry
+/// loop only (`LLM_MAX_RETRIES`). The transport ladder is left at
+/// [`OpenAIAdapter::DEFAULT_NETWORK_RETRIES`]; a caller that wants it configured
+/// chains [`OpenAIAdapter::with_network_retries`] (`LLM_NETWORK_RETRIES`), as
+/// the component factories do. Feeding one value into both used to multiply the
+/// two ladders into each other — `max_retries x (network_retries + 1) x
+/// request_timeout` — which is the runaway SDK-624 exists to cut.
 ///
 /// litellm-style provider prefixes on the model (`openai/`, `baseten/`,
 /// `ollama/`, `mistral/`, `gemini/`, `groq/`, …) are stripped so
@@ -200,8 +205,7 @@ pub fn build_openai_compatible_adapter(
     };
 
     let adapter = OpenAIAdapter::new(model.to_string(), api_key.to_string(), base_url)?
-        .with_structured_output_retries(retries)
-        .with_network_retries(retries);
+        .with_structured_output_retries(retries);
     Ok(adapter)
 }
 

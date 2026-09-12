@@ -221,9 +221,14 @@ pub struct HttpServerConfig {
     /// Env: `LLM_STRUCTURED_OUTPUT_MODE`.
     pub llm_structured_output_mode: String,
 
-    /// LLM retry count for both structured-output and network retries.
+    /// Corrective re-asks for one structured-output call (Python's
+    /// `_MAX_VALIDATION_RETRIES`). Mirrors `Settings::llm_max_retries`.
     /// Env: `LLM_MAX_RETRIES`.
     pub llm_max_retries: u32,
+    /// Minimum transport attempts for one HTTP request (Python's
+    /// `stop_after_attempt(2)`). Mirrors `Settings::llm_network_retries`.
+    /// Env: `LLM_NETWORK_RETRIES`.
+    pub llm_network_retries: u32,
     /// Minimum seconds a transient LLM failure is retried for (`0` = attempt cap
     /// only). Mirrors `Settings::llm_min_retry_seconds`.
     pub llm_min_retry_seconds: u32,
@@ -444,13 +449,17 @@ impl Default for HttpServerConfig {
             llm_reasoning: "auto".to_string(),
             llm_structured_output_mode: "auto".to_string(),
             // Matches `Settings::llm_max_retries` and the value
-            // `docs/configuration.md` documents. This was 3 — an undocumented
-            // divergence that nothing here justified, and one that made the
-            // server's *own defaults* trip the deadline guard-rail: the ladder
-            // (3 modes x 3 retries x 240s = 2160s) exceeded the 1800s default
-            // deadline, so every startup warned. Aligning the two makes the
-            // documented default true and the default configuration quiet.
-            llm_max_retries: 2,
+            // `docs/configuration.md` documents. It was briefly lowered to 2
+            // because the server's *own defaults* tripped the deadline
+            // guard-rail — the ladder then counted the three cascade modes as a
+            // per-call multiplier (3 x 3 x 240s = 2160s) against a 1800s
+            // deadline, so every startup warned. SDK-624 dropped the cascade
+            // from that ladder (it is memoised endpoint discovery, not per-call
+            // work) and set the deadline to the envelope Python actually has,
+            // so 3 — Python's `_MAX_VALIDATION_RETRIES` — is both documented and
+            // quiet.
+            llm_max_retries: 3,
+            llm_network_retries: 2,
             llm_min_retry_seconds: 240,
             llm_request_timeout_seconds: cognee_llm::OpenAIAdapter::DEFAULT_REQUEST_TIMEOUT
                 .as_secs() as u32,
@@ -671,6 +680,11 @@ impl HttpServerConfig {
             cfg.llm_max_retries = v
                 .parse::<u32>()
                 .map_err(|e| ServerError::Other(anyhow::anyhow!("LLM_MAX_RETRIES: {e}")))?;
+        }
+        if let Ok(v) = std::env::var("LLM_NETWORK_RETRIES") {
+            cfg.llm_network_retries = v
+                .parse::<u32>()
+                .map_err(|e| ServerError::Other(anyhow::anyhow!("LLM_NETWORK_RETRIES: {e}")))?;
         }
         if let Ok(v) = std::env::var("LLM_MIN_RETRY_SECONDS") {
             cfg.llm_min_retry_seconds = v
@@ -925,6 +939,7 @@ impl HttpServerConfig {
                 endpoint: self.llm_endpoint.clone(),
                 anthropic_base_url: cognee_components::anthropic_base_url_from_env(),
                 max_retries: self.llm_max_retries,
+                network_retries: self.llm_network_retries,
                 min_retry_seconds: self.llm_min_retry_seconds,
                 max_parallel_requests: self.llm_max_parallel_requests,
                 request_timeout_seconds: self.llm_request_timeout_seconds,
@@ -1012,6 +1027,49 @@ mod tests {
     #[test]
     fn chunk_size_defaults_to_auto() {
         assert_eq!(HttpServerConfig::default().chunk_size, None);
+    }
+
+    /// The server's retry defaults must equal the SDK's, and must not trip the
+    /// deadline guard-rail in `cognee_components::builtins::llm`.
+    ///
+    /// Both halves are regressions that already happened once: the server
+    /// carried an undocumented `3` while the SDK and the docs said `2`, and the
+    /// fix was to lower the server rather than reconcile the ladder — because
+    /// its own defaults warned at every startup. A default configuration that
+    /// warns about itself trains operators to ignore the warning.
+    #[test]
+    fn retry_defaults_match_the_sdk_and_fit_inside_the_default_deadline() {
+        let cfg = HttpServerConfig::default();
+        assert_eq!(cfg.llm_max_retries, 3, "Python's _MAX_VALIDATION_RETRIES");
+        assert_eq!(cfg.llm_network_retries, 2, "Python's stop_after_attempt(2)");
+
+        let ladder = cfg.llm_max_retries.max(1) * cfg.llm_min_retry_seconds;
+        assert!(
+            cfg.llm_request_deadline_seconds >= ladder,
+            "the default deadline ({}) must contain the default ladder ({} = {} x {}s)",
+            cfg.llm_request_deadline_seconds,
+            ladder,
+            cfg.llm_max_retries,
+            cfg.llm_min_retry_seconds,
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn from_env_reads_llm_network_retries_without_touching_max_retries() {
+        // SAFETY: test is serial — no other thread reads/writes env concurrently.
+        unsafe { std::env::remove_var("LLM_MAX_RETRIES") };
+        unsafe { std::env::set_var("LLM_NETWORK_RETRIES", "7") };
+        let cfg = HttpServerConfig::from_env().expect("config builds");
+        unsafe { std::env::remove_var("LLM_NETWORK_RETRIES") };
+
+        assert_eq!(cfg.llm_network_retries, 7);
+        assert_eq!(
+            cfg.llm_max_retries,
+            HttpServerConfig::default().llm_max_retries,
+            "the transport knob must not move the structured-output one — \
+             sharing a value is the defect SDK-624 fixed"
+        );
     }
 
     #[test]

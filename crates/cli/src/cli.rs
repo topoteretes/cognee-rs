@@ -253,11 +253,11 @@ pub struct CognifyArgs {
 
     /// Overrides `LLM_MAX_RETRIES` for this invocation.
     ///
-    /// `0` is accepted so the flag and the env var agree, but what it means is
-    /// provider-dependent: OpenAI-compatible, Azure and Anthropic floor it to 1,
-    /// while Bedrock takes it literally as a single attempt with no retry. On
-    /// the providers that floor it, `LLM_MIN_RETRY_SECONDS=0` is what shortens a
-    /// retry that would otherwise keep waiting.
+    /// Structured-output re-asks only; every adapter floors the value at 1, so
+    /// `0` means "one attempt, no re-ask". The transport ladder underneath is
+    /// `LLM_NETWORK_RETRIES`, which has no flag — set the env var, or
+    /// `LLM_MIN_RETRY_SECONDS=0` to shorten a ladder that would otherwise keep
+    /// waiting out its time floor.
     #[arg(long = "llm-max-retries", value_parser = clap::value_parser!(u32).range(0..))]
     pub llm_max_retries: Option<u32>,
 
@@ -289,11 +289,11 @@ pub struct AddAndCognifyArgs {
 
     /// Overrides `LLM_MAX_RETRIES` for this invocation.
     ///
-    /// `0` is accepted so the flag and the env var agree, but what it means is
-    /// provider-dependent: OpenAI-compatible, Azure and Anthropic floor it to 1,
-    /// while Bedrock takes it literally as a single attempt with no retry. On
-    /// the providers that floor it, `LLM_MIN_RETRY_SECONDS=0` is what shortens a
-    /// retry that would otherwise keep waiting.
+    /// Structured-output re-asks only; every adapter floors the value at 1, so
+    /// `0` means "one attempt, no re-ask". The transport ladder underneath is
+    /// `LLM_NETWORK_RETRIES`, which has no flag — set the env var, or
+    /// `LLM_MIN_RETRY_SECONDS=0` to shorten a ladder that would otherwise keep
+    /// waiting out its time floor.
     #[arg(long = "llm-max-retries", value_parser = clap::value_parser!(u32).range(0..))]
     pub llm_max_retries: Option<u32>,
 
@@ -414,11 +414,11 @@ pub struct SearchArgs {
 
     /// Overrides `LLM_MAX_RETRIES` for this invocation.
     ///
-    /// `0` is accepted so the flag and the env var agree, but what it means is
-    /// provider-dependent: OpenAI-compatible, Azure and Anthropic floor it to 1,
-    /// while Bedrock takes it literally as a single attempt with no retry. On
-    /// the providers that floor it, `LLM_MIN_RETRY_SECONDS=0` is what shortens a
-    /// retry that would otherwise keep waiting.
+    /// Structured-output re-asks only; every adapter floors the value at 1, so
+    /// `0` means "one attempt, no re-ask". The transport ladder underneath is
+    /// `LLM_NETWORK_RETRIES`, which has no flag — set the env var, or
+    /// `LLM_MIN_RETRY_SECONDS=0` to shorten a ladder that would otherwise keep
+    /// waiting out its time floor.
     #[arg(long = "llm-max-retries", value_parser = clap::value_parser!(u32).range(0..))]
     pub llm_max_retries: Option<u32>,
 }
