@@ -42,12 +42,13 @@ for retries and the `cognee-llm` rustdoc for the adapter.
 | `LLM_STREAMING` | `llm_streaming` | `false` |
 | `LLM_MAX_COMPLETION_TOKENS` / `LLM_MAX_TOKENS` | `llm_max_completion_tokens` | `16384` |
 | `LLM_ARGS` | `llm_args` | _(empty)_ |
-| `LLM_MAX_RETRIES` | `llm_max_retries` | `2` |
+| `LLM_MAX_RETRIES` | `llm_max_retries` | `3` |
+| `LLM_NETWORK_RETRIES` | `llm_network_retries` | `2` |
 | `LLM_MIN_RETRY_SECONDS` | `llm_min_retry_seconds` | `240` |
 | `LLM_MAX_PARALLEL_REQUESTS` | `llm_max_parallel_requests` | `1000` (`128` on Android/iOS) |
 | `LLM_REQUEST_TIMEOUT_SECONDS` | `llm_request_timeout_seconds` | `600` |
 | `LLM_CONNECT_TIMEOUT_SECONDS` | `llm_connect_timeout_seconds` | `10` |
-| `LLM_REQUEST_DEADLINE_SECONDS` | `llm_request_deadline_seconds` | `1800` (`0` disables) |
+| `LLM_REQUEST_DEADLINE_SECONDS` | `llm_request_deadline_seconds` | `720` (`0` disables) |
 | `MOCK_LLM` | `llm_mock` | `false` |
 | `MOCK_LLM_CASSETTE` | `llm_cassette` | _(empty)_ |
 | `COGNEE_RECORD_LLM` | `llm_record_path` | _(empty)_ |
@@ -745,7 +746,20 @@ Setting `system_root_directory` cascades to the default `graph_file_path` and
 
 These knobs form one resilience stack, matching Python cognee's:
 
-- **Retrying stops only once BOTH floors are met** — at least `LLM_MAX_RETRIES`
+- **Two retry counts, one per loop.** `LLM_MAX_RETRIES` (Python's
+  `_MAX_VALIDATION_RETRIES`) is the number of *attempts* at one structured-output
+  call — the first ask plus its corrective re-asks, so the default `3` is three
+  attempts and at most two re-asks. A reply that fails validation, arrives
+  truncated, or is rejected by the caller's validator is asked again with the
+  reason in context. Every adapter floors it at `1`, so `0` means one attempt and
+  no re-ask. `LLM_NETWORK_RETRIES` (Python's `stop_after_attempt(2)`) is the
+  transport ladder underneath it, for 429s, 5xx and connection failures. They are
+  separate knobs because they *nest*: one value feeding both multiplied the
+  ladders into each other — `attempts x (network retries + 1) x
+  LLM_REQUEST_TIMEOUT_SECONDS`, which is an hour of wall clock for a single chunk
+  at defaults that look modest.
+- **Retrying stops only once BOTH floors are met** — at least
+  `LLM_NETWORK_RETRIES`
   attempts *and* at least `LLM_MIN_RETRY_SECONDS` elapsed. The time floor is the
   one that matters: an attempt count alone gives up in seconds, long before a
   provider's rate-limit window resets. Backoff is exponential with jitter,
@@ -756,27 +770,36 @@ These knobs form one resilience stack, matching Python cognee's:
   retrying for at least this long" guarantee, so counting queue time against it
   could only ever end the ladder earlier, and a call that waited minutes for a
   slot would give up having barely retried at all.
+
+  ⚠️ **Bedrock does not run this dual floor.** Its transport ladder is a plain
+  attempt count looping `0..=LLM_NETWORK_RETRIES` — so `2` buys three attempts
+  there against two elsewhere — and it holds no time floor at all, so
+  `LLM_MIN_RETRY_SECONDS` does not reach it. Both differences predate
+  `LLM_NETWORK_RETRIES`; unifying them is tracked with the Bedrock pacing work,
+  which rewrites the same loop. On Bedrock, read this knob as "at least N
+  attempts" and nothing more. The aggregate deadline below *does* bind there.
 - **Three timeouts, three scopes.** `LLM_CONNECT_TIMEOUT_SECONDS` bounds the TCP
   handshake (`reqwest` sets none by default, so a black-holed connect used to
   burn the whole request timeout without sending a byte).
   `LLM_REQUEST_TIMEOUT_SECONDS` bounds one HTTP request. `0` means "no limit"
   for both of those, matching curl — note that this is *not* the same as passing
   a zero duration to the HTTP client, which would time every request out
-  instantly, so the zero case is handled explicitly. Both currently apply to the
-  OpenAI-compatible adapter (including Azure); the Anthropic, Responses and
-  Bedrock clients still use a fixed 600s request / 10s connect pair.
+  instantly, so the zero case is handled explicitly. Both apply to the
+  OpenAI-compatible (including Azure), Anthropic and Bedrock adapters; the
+  Responses client still uses a fixed 600s request / 10s connect pair.
   `LLM_REQUEST_DEADLINE_SECONDS` bounds one *logical* structured-extraction
   call — and that last one is the only bound on total time. Structured
-  extraction cascades through three request shapes (tool calls, legacy
-  functions, JSON mode), each `LLM_MAX_RETRIES` deep, each attempt honouring the
-  `LLM_MIN_RETRY_SECONDS` floor above; multiplied out, the designed worst case
-  runs past an hour while every individual request finishes well inside its
-  timeout. Keep the deadline above
-  `3 x LLM_MAX_RETRIES x LLM_MIN_RETRY_SECONDS` — 1440s at the defaults — or it
-  will cut the rate-limit-window waits the floors exist to protect. All three
-  factors count: three request shapes, each retried `LLM_MAX_RETRIES` times,
-  each attempt honouring the floor. A warning naming the computed ladder is
-  logged at startup if the deadline does not fit inside it. The deadline gates *starting* new work rather
+  extraction makes `LLM_MAX_RETRIES` attempts, each running a transport ladder
+  that honours the `LLM_MIN_RETRY_SECONDS` floor above; multiplied out, the
+  designed worst case runs past an hour while every individual request finishes
+  well inside its timeout. Keep the deadline above
+  `LLM_MAX_RETRIES x LLM_MIN_RETRY_SECONDS` — 720s at the defaults, which is
+  exactly the default deadline — or it will cut the rate-limit-window waits the
+  floors exist to protect. A warning naming the computed ladder is logged at
+  startup if the deadline does not fit inside it. The three-mode cascade below
+  is deliberately not a factor in that ladder: it is endpoint-capability
+  discovery, memoised per endpoint, so a healthy endpoint pays for one mode per
+  call. The deadline gates *starting* new work rather
   than cancelling in flight, so the true ceiling is
   `LLM_REQUEST_DEADLINE_SECONDS + LLM_REQUEST_TIMEOUT_SECONDS`. Set it to `0` to
   restore the previous unbounded behaviour.

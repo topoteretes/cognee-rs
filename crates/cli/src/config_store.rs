@@ -184,6 +184,7 @@ pub fn known_keys() -> Vec<&'static str> {
         "llm_streaming",
         "llm_max_completion_tokens",
         "llm_max_retries",
+        "llm_network_retries",
         "llm_max_parallel_requests",
         "graph_prompt_path",
         "graph_database_provider",
@@ -283,6 +284,10 @@ pub fn as_flat_map(settings: &Settings) -> BTreeMap<&'static str, Value> {
             Value::from(settings.llm_max_completion_tokens),
         ),
         ("llm_max_retries", Value::from(settings.llm_max_retries)),
+        (
+            "llm_network_retries",
+            Value::from(settings.llm_network_retries),
+        ),
         (
             "llm_max_parallel_requests",
             Value::from(settings.llm_max_parallel_requests),
@@ -437,6 +442,7 @@ pub fn set_value(settings: &mut Settings, key: &str, value: Value) -> Result<(),
         "llm_streaming" => settings.llm_streaming = expect_bool(key, value)?,
         "llm_max_completion_tokens" => settings.llm_max_completion_tokens = expect_u32(key, value)?,
         "llm_max_retries" => settings.llm_max_retries = expect_u32(key, value)?,
+        "llm_network_retries" => settings.llm_network_retries = expect_u32(key, value)?,
         "llm_max_parallel_requests" => settings.llm_max_parallel_requests = expect_u32(key, value)?,
         "graph_prompt_path" => settings.graph_prompt_path = expect_string(key, value)?,
         "graph_database_provider" => settings.graph_database_provider = expect_string(key, value)?,
@@ -519,6 +525,7 @@ pub fn unset_key(settings: &mut Settings, key: &str) -> Result<(), CliError> {
             settings.llm_max_completion_tokens = defaults.llm_max_completion_tokens
         }
         "llm_max_retries" => settings.llm_max_retries = defaults.llm_max_retries,
+        "llm_network_retries" => settings.llm_network_retries = defaults.llm_network_retries,
         "llm_max_parallel_requests" => {
             settings.llm_max_parallel_requests = defaults.llm_max_parallel_requests
         }

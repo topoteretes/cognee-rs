@@ -52,25 +52,24 @@ fn http_timeouts(ctx: &BackendBuildContext) -> (std::time::Duration, std::time::
 /// side door. Warn rather than clamp: an operator who deliberately wants a tight
 /// ceiling is entitled to one, but should not get one by accident.
 ///
-/// The ladder is `CASCADE_MODES x max_retries x min_retry_seconds`. All three
-/// factors matter: the cascade tries three request shapes, each is retried
-/// `max_retries` times (`LLM_MAX_RETRIES` feeds *both* the structured-output and
-/// network retry counts), and every attempt honours the time floor before it is
-/// allowed to give up. Counting the modes but not the attempts under-reports the
-/// ladder by the retry multiplier and lets the misconfiguration this warning
-/// exists to catch pass silently.
+/// The ladder is `max_retries x min_retry_seconds`: each of the `LLM_MAX_RETRIES`
+/// structured-output attempts runs a transport ladder that honours the time
+/// floor before it is allowed to give up. That is also the envelope Python has —
+/// `_MAX_VALIDATION_RETRIES` nested over `stop_after_attempt & stop_after_delay`.
+///
+/// The three-mode structured-output cascade is deliberately **not** a factor.
+/// It is endpoint-capability discovery, memoised per endpoint by `CascadeProbe`,
+/// so a healthy endpoint pays for exactly one mode per call; counting it as a
+/// per-call multiplier made the warning fire on configurations that were never
+/// going to spend that time, and is what previously forced `LLM_MAX_RETRIES`
+/// down to 2 to keep the server's own defaults quiet.
 fn request_deadline(ctx: &BackendBuildContext) -> Option<std::time::Duration> {
-    /// Request shapes `structured_output_impl` falls through: tool calls, legacy
-    /// functions, JSON mode.
-    const CASCADE_MODES: u64 = 3;
-
     if ctx.llm.request_deadline_seconds == 0 {
         return None;
     }
     let deadline = u64::from(ctx.llm.request_deadline_seconds);
-    let ladder = u64::from(ctx.llm.min_retry_seconds)
-        .saturating_mul(u64::from(ctx.llm.max_retries).max(1))
-        .saturating_mul(CASCADE_MODES);
+    let ladder =
+        u64::from(ctx.llm.min_retry_seconds).saturating_mul(u64::from(ctx.llm.max_retries).max(1));
     if deadline < ladder {
         tracing::warn!(
             deadline_seconds = deadline,
@@ -78,9 +77,9 @@ fn request_deadline(ctx: &BackendBuildContext) -> Option<std::time::Duration> {
             min_retry_seconds = ctx.llm.min_retry_seconds,
             max_retries = ctx.llm.max_retries,
             "LLM_REQUEST_DEADLINE_SECONDS is below the retry ladder it has to \
-             contain (3 cascade modes x LLM_MAX_RETRIES x LLM_MIN_RETRY_SECONDS), \
-             so structured extraction will be cut mid-retry; raise the deadline, \
-             or lower LLM_MAX_RETRIES / LLM_MIN_RETRY_SECONDS",
+             contain (LLM_MAX_RETRIES x LLM_MIN_RETRY_SECONDS), so structured \
+             extraction will be cut mid-retry; raise the deadline, or lower \
+             LLM_MAX_RETRIES / LLM_MIN_RETRY_SECONDS",
         );
     }
     Some(std::time::Duration::from_secs(deadline))
@@ -129,6 +128,10 @@ impl LlmFactory for OpenAiCompatibleLlmFactory {
             ctx.llm.max_retries,
         )
         .map_err(|e| ComponentError::Llm(e.to_string()))?
+        // The factory sets only the structured-output count from
+        // `max_retries`; the transport ladder is its own knob (SDK-624), and
+        // without this line it would silently stay at the adapter default.
+        .with_network_retries(ctx.llm.network_retries)
         .with_min_retry_elapsed(min_retry_elapsed(ctx))
         .with_extra_args(ctx.llm.llm_args.clone())
         .with_default_max_tokens(Some(ctx.llm.max_completion_tokens))
@@ -170,6 +173,7 @@ impl LlmFactory for OpenAiCompatibleLlmFactory {
             ctx.llm.max_retries,
         )
         .map_err(|e| ComponentError::Llm(e.to_string()))?
+        .with_network_retries(ctx.llm.network_retries)
         .with_http_timeouts(request_timeout, connect_timeout);
         Ok(Some(Arc::new(adapter) as Arc<dyn Transcriber>))
     }
@@ -211,10 +215,16 @@ impl LlmFactory for AnthropicLlmFactory {
         )
         .map_err(|e| ComponentError::Llm(e.to_string()))?
         .with_structured_output_retries(ctx.llm.max_retries)
-        .with_network_retries(ctx.llm.max_retries)
+        .with_network_retries(ctx.llm.network_retries)
         .with_min_retry_elapsed(min_retry_elapsed(ctx))
         .with_max_completion_tokens(ctx.llm.max_completion_tokens)
-        .with_extra_args(ctx.llm.llm_args.clone());
+        .with_extra_args(ctx.llm.llm_args.clone())
+        // Both were unreachable on this adapter before SDK-624 — no setter
+        // existed — so `LLM_REQUEST_DEADLINE_SECONDS` and the two timeout knobs
+        // were inert here while working on the OpenAI-compatible path.
+        .with_request_deadline(request_deadline(ctx));
+        let (request_timeout, connect_timeout) = http_timeouts(ctx);
+        let adapter = adapter.with_http_timeouts(request_timeout, connect_timeout);
         Ok(Arc::new(adapter))
     }
 
@@ -271,6 +281,7 @@ impl LlmFactory for AzureLlmFactory {
             ctx.llm.max_retries,
         )
         .map_err(|e| ComponentError::Llm(e.to_string()))?
+        .with_network_retries(ctx.llm.network_retries)
         .with_min_retry_elapsed(min_retry_elapsed(ctx))
         .with_api_version(api_version)
         .with_extra_args(ctx.llm.llm_args.clone())
@@ -342,10 +353,17 @@ impl LlmFactory for BedrockLlmFactory {
                 .await
                 .map_err(|e| ComponentError::Llm(e.to_string()))?
                 .with_structured_output_retries(ctx.llm.max_retries)
-                .with_network_retries(ctx.llm.max_retries)
+                .with_network_retries(ctx.llm.network_retries)
                 .with_max_completion_tokens(ctx.llm.max_completion_tokens)
                 .with_default_temperature(ctx.llm.temperature)
-                .with_extra_args(ctx.llm.llm_args.clone());
+                .with_extra_args(ctx.llm.llm_args.clone())
+                // Both were unreachable on this adapter before SDK-624 — no
+                // setter existed. This is the pairing that made the runaway
+                // possible: `max_retries x (network_retries + 1) x 600s` with
+                // nothing bounding the product.
+                .with_request_deadline(request_deadline(ctx));
+        let (request_timeout, connect_timeout) = http_timeouts(ctx);
+        let adapter = adapter.with_http_timeouts(request_timeout, connect_timeout);
         Ok(Arc::new(adapter))
     }
 

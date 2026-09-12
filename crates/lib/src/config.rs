@@ -159,13 +159,33 @@ pub struct Settings {
     pub llm_temperature: Option<f64>,
     pub llm_streaming: bool,
     pub llm_max_completion_tokens: u32,
+    /// Total attempts at one structured-output call, mirroring Python's
+    /// `_MAX_VALIDATION_RETRIES = 3` (`litellm_native/native_adapter.py`).
+    ///
+    /// Governs the *outer* loop only: a response that fails validation, arrives
+    /// truncated, or is rejected by the caller's validator is re-asked with the
+    /// reason in context. The loop is `0..structured_output_retries`, so this is
+    /// the first ask *plus* its re-asks — `3` is three attempts, at most two
+    /// corrective re-asks — and every adapter floors it at 1, so `0` means one
+    /// attempt and no re-ask. The transport ladder underneath it is
+    /// `llm_network_retries`, a separate knob since SDK-624 — one value feeding
+    /// both multiplied the ladders into each other
+    /// (`retries x (network_retries + 1) x llm_request_timeout_seconds`), which
+    /// is how a single chunk could occupy an hour of wall clock.
     pub llm_max_retries: u32,
+    /// Minimum transport attempts for one HTTP request before it is allowed to
+    /// fail, mirroring Python's `stop_after_attempt(2)` (`llm/retry_config.py`).
+    ///
+    /// A floor, not a cap: paired with `llm_min_retry_seconds` this forms
+    /// Python's dual-floor stop condition, so the ladder keeps retrying until
+    /// BOTH floors are satisfied.
+    pub llm_network_retries: u32,
     /// Minimum seconds a transient LLM failure is retried for before the call is
-    /// allowed to fail. Paired with `llm_max_retries` this forms Python's
+    /// allowed to fail. Paired with `llm_network_retries` this forms Python's
     /// dual-floor stop condition (`stop_after_attempt & stop_after_delay`,
     /// `retry_config.py`): retrying continues until BOTH floors are satisfied.
     ///
-    /// Python hard-codes 240. It is configurable here so `LLM_MAX_RETRIES` keeps
+    /// Python hard-codes 240. It is configurable here so the retry ladder keeps
     /// a fail-fast escape hatch: set this to `0` and the stop condition reduces
     /// to a plain attempt cap, as it behaved before.
     pub llm_min_retry_seconds: u32,
@@ -189,16 +209,19 @@ pub struct Settings {
     /// (`LLM_REQUEST_DEADLINE_SECONDS`). `0` disables it.
     ///
     /// The per-request timeout above composes into no aggregate: structured
-    /// extraction runs up to three cascade modes (tools, legacy functions, JSON
-    /// mode), each `llm_max_retries` deep, each attempt honouring the
-    /// `llm_min_retry_seconds` time floor. Multiplied out, the designed worst
-    /// case exceeds an hour — which is how a single extraction can run for 45
-    /// minutes while every individual HTTP request completes well inside its
-    /// timeout.
+    /// extraction makes `llm_max_retries` attempts, each running a transport
+    /// ladder that honours the `llm_min_retry_seconds` time floor.
+    /// Multiplied out, the designed worst case exceeds an hour — which is how a
+    /// single extraction can run for 45 minutes while every individual HTTP
+    /// request completes well inside its timeout.
     ///
     /// Enforced when *starting* new work (each cascade mode and each corrective
     /// re-ask), not as a cancellation, so one already-dispatched request can
     /// overrun by at most `llm_request_timeout_seconds`.
+    ///
+    /// Reaches every adapter since SDK-624. Before that the Bedrock and
+    /// Anthropic adapters had no setter for it, so it bound only the
+    /// OpenAI-compatible and Azure paths.
     pub llm_request_deadline_seconds: u32,
 
     /// Extra parameters merged into every LLM chat-completion request, parsed
@@ -485,6 +508,11 @@ impl Settings {
             && let Ok(n) = v.parse::<u32>()
         {
             self.llm_max_retries = n;
+        }
+        if let Some(v) = str_var("LLM_NETWORK_RETRIES")
+            && let Ok(n) = v.parse::<u32>()
+        {
+            self.llm_network_retries = n;
         }
         if let Some(v) = str_var("LLM_MIN_RETRY_SECONDS")
             && let Ok(n) = v.parse::<u32>()
@@ -999,6 +1027,7 @@ impl Settings {
                 endpoint: self.llm_endpoint.clone(),
                 anthropic_base_url: cognee_components::anthropic_base_url_from_env(),
                 max_retries: self.llm_max_retries,
+                network_retries: self.llm_network_retries,
                 min_retry_seconds: self.llm_min_retry_seconds,
                 max_parallel_requests: self.llm_max_parallel_requests,
                 request_timeout_seconds: self.llm_request_timeout_seconds,
@@ -1256,7 +1285,14 @@ impl Default for Settings {
             // Single-sourced with the adapter/http-server default so lowering
             // the global completion ceiling in one place applies everywhere.
             llm_max_completion_tokens: cognee_llm::OpenAIAdapter::DEFAULT_MAX_COMPLETION_TOKENS,
-            llm_max_retries: 2,
+            // Python's `_MAX_VALIDATION_RETRIES = 3`
+            // (`litellm_native/native_adapter.py`). Was 2 while this single knob
+            // also drove the transport ladder — the two multiplied, so the value
+            // had to be kept low to bound the product. SDK-624 split them, and
+            // the structured count now matches Python's.
+            llm_max_retries: 3,
+            // Python's `stop_after_attempt(2)` (`llm/retry_config.py`).
+            llm_network_retries: 2,
             llm_min_retry_seconds: 240,
             // Single-sourced with the adapter constants so the setting and the
             // adapter default cannot drift.
@@ -1895,6 +1931,15 @@ impl ConfigManager {
         self.bump_version();
     }
 
+    /// Set the transport retry floor (`LLM_NETWORK_RETRIES`), the inner ladder
+    /// underneath [`set_llm_max_retries`](Self::set_llm_max_retries).
+    pub fn set_llm_network_retries(&self, retries: u32) {
+        let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+        s.llm_network_retries = retries;
+        drop(s);
+        self.bump_version();
+    }
+
     pub fn set_llm_max_parallel_requests(&self, parallel: u32) {
         let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
         s.llm_max_parallel_requests = parallel;
@@ -2265,6 +2310,7 @@ impl ConfigManager {
                 "llm_max_completion_tokens" => s.llm_max_completion_tokens = as_u32(key, value)?,
                 "llm_streaming" => s.llm_streaming = as_bool(key, value)?,
                 "llm_max_retries" => s.llm_max_retries = as_u32(key, value)?,
+                "llm_network_retries" => s.llm_network_retries = as_u32(key, value)?,
                 "llm_min_retry_seconds" => s.llm_min_retry_seconds = as_u32(key, value)?,
                 "llm_request_timeout_seconds" => {
                     s.llm_request_timeout_seconds = as_u32(key, value)?;
@@ -2389,6 +2435,7 @@ impl ConfigManager {
                 self.set_llm_max_completion_tokens(as_u32(key, &value)?);
             }
             "llm_max_retries" => self.set_llm_max_retries(as_u32(key, &value)?),
+            "llm_network_retries" => self.set_llm_network_retries(as_u32(key, &value)?),
             "llm_max_parallel_requests" => {
                 self.set_llm_max_parallel_requests(as_u32(key, &value)?);
             }
@@ -2634,6 +2681,93 @@ mod tests {
         assert_eq!(
             s.chunk_size, None,
             "unset must stay None so the pipeline auto-calculates (Python chunk_size=None)"
+        );
+    }
+
+    /// The two retry counts are separate knobs with separate Python sources.
+    ///
+    /// They shared one value until SDK-624, which multiplied the loops into each
+    /// other — `max_retries x (network_retries + 1) x llm_request_timeout_seconds`
+    /// — and forced `llm_max_retries` to be kept at 2 to bound the product.
+    #[test]
+    fn retry_defaults_mirror_pythons_two_independent_counts() {
+        let s = Settings::default();
+        assert_eq!(
+            s.llm_max_retries, 3,
+            "structured-output re-asks mirror Python's _MAX_VALIDATION_RETRIES = 3"
+        );
+        assert_eq!(
+            s.llm_network_retries, 2,
+            "the transport ladder mirrors Python's stop_after_attempt(2)"
+        );
+    }
+
+    /// The shipped defaults must not trip the deadline guard-rail in
+    /// `cognee_components::builtins::llm`, which warns when the aggregate budget
+    /// cannot contain `llm_max_retries x llm_min_retry_seconds`.
+    ///
+    /// This is a real regression, not a hypothetical: the http-server default
+    /// was once lowered 3 -> 2 purely because its own defaults warned at every
+    /// startup. A default configuration that warns about itself trains operators
+    /// to ignore the warning.
+    #[test]
+    fn the_default_deadline_contains_the_default_retry_ladder() {
+        let s = Settings::default();
+        let ladder = s.llm_max_retries.max(1) * s.llm_min_retry_seconds;
+        assert!(
+            s.llm_request_deadline_seconds >= ladder,
+            "LLM_REQUEST_DEADLINE_SECONDS default ({}) must contain the default \
+             ladder ({} = {} x {}s), or every startup warns about the values it \
+             shipped with",
+            s.llm_request_deadline_seconds,
+            ladder,
+            s.llm_max_retries,
+            s.llm_min_retry_seconds,
+        );
+    }
+
+    /// Every entry point that reaches one retry knob must reach the other.
+    ///
+    /// `set_llm_network_retries` first shipped reachable from the bulk
+    /// `set_llm_config` map and the CLI config store but **not** from the
+    /// generic `set(key, value)` dispatcher, so the public API that Python and
+    /// the C binding both go through answered `UnknownKey` for a key the CLI
+    /// accepted. Caught in review of PR #215.
+    #[test]
+    fn llm_network_retries_is_reachable_from_every_config_entry_point() {
+        let cm = ConfigManager::new(Settings::default());
+
+        cm.set("llm_network_retries", serde_json::json!(5))
+            .expect("the generic dispatcher must accept the key the CLI accepts");
+        assert_eq!(cm.read().llm_network_retries, 5);
+
+        cm.set_llm_config(
+            &[("llm_network_retries".to_string(), serde_json::json!(6))]
+                .into_iter()
+                .collect(),
+        )
+        .expect("the bulk LLM setter must accept it too");
+        assert_eq!(cm.read().llm_network_retries, 6);
+
+        cm.set_llm_network_retries(7);
+        assert_eq!(cm.read().llm_network_retries, 7);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn overlay_picks_up_llm_network_retries() {
+        // SAFETY: test is serial — no other thread reads/writes env concurrently.
+        unsafe { std::env::set_var("LLM_NETWORK_RETRIES", "7") };
+        let mut s = Settings::default();
+        s.overlay_from_env();
+        unsafe { std::env::remove_var("LLM_NETWORK_RETRIES") };
+
+        assert_eq!(s.llm_network_retries, 7);
+        assert_eq!(
+            s.llm_max_retries,
+            Settings::default().llm_max_retries,
+            "the transport knob must not move the structured-output one — \
+             sharing a value is the defect SDK-624 fixed"
         );
     }
 

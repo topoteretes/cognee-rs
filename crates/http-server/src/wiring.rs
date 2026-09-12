@@ -419,11 +419,13 @@ fn wire_responses_client(cfg: &HttpServerConfig) -> Option<Arc<dyn ResponsesClie
     // Honour the configured retry budget. Without this the client falls back to
     // its own defaults, including the 240s minimum retry window — which would
     // block an HTTP request handler for four minutes on a provider 429 and make
-    // both LLM_MAX_RETRIES and the LLM_MIN_RETRY_SECONDS=0 fail-fast escape
-    // hatch inert on this path.
+    // both the retry count and the LLM_MIN_RETRY_SECONDS=0 fail-fast escape
+    // hatch inert on this path. `LLM_NETWORK_RETRIES`, not `LLM_MAX_RETRIES`:
+    // this client has no structured-output repair loop, so the transport ladder
+    // is the only one it runs (SDK-624).
     match OpenAIResponsesClient::new(api_key, endpoint).map(|client| {
         client
-            .with_network_retries(cfg.llm_max_retries)
+            .with_network_retries(cfg.llm_network_retries)
             .with_min_retry_elapsed(std::time::Duration::from_secs(u64::from(
                 cfg.llm_min_retry_seconds,
             )))

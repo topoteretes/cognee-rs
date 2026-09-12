@@ -80,8 +80,40 @@ pub struct BedrockAdapter {
     /// The §3 transport seam. `pub(crate)` by design, so it never appears in a
     /// public signature of this adapter.
     transport: Arc<dyn BedrockTransport>,
+    /// The resolved auth, kept so [`with_http_timeouts`](Self::with_http_timeouts)
+    /// can rebuild the transport around a new HTTP client without re-running the
+    /// §1.2 credential ladder. The transport holds its own clone; this one never
+    /// reaches a log line (see the hand-written `Debug`).
+    auth: Arc<aws::credentials::BedrockAuthProvider>,
     structured_output_retries: usize,
+    /// Transport attempts, as `0..=network_retries` — so this is `n + 1`
+    /// attempts, and `LLM_NETWORK_RETRIES=2` buys three.
+    ///
+    /// ⚠️ Deliberately noted because it diverges from the other adapters, which
+    /// run the same knob through [`crate::retry::RetryBudget`] and stop at `n`
+    /// attempts once the `retry_min_elapsed` floor is also met. This adapter
+    /// carries no such floor, so `LLM_MIN_RETRY_SECONDS` does not reach it and
+    /// its ladder is a plain attempt count. Both differences predate
+    /// `LLM_NETWORK_RETRIES`; unifying them belongs with the Bedrock pacing work
+    /// (SDK-612), which rewrites this loop.
     network_retries: usize,
+    /// Wall-clock ceiling on **one logical structured-output call** — spanning
+    /// every corrective re-ask and every transport retry inside them. `None`
+    /// leaves the call unbounded.
+    ///
+    /// The same bound [`OpenAIAdapter`](crate::OpenAIAdapter) carries, and for
+    /// the same reason: the HTTP client timeout is per-request and composes into
+    /// no aggregate, so `structured_output_retries` re-asks each running a
+    /// `network_retries + 1` transport ladder multiply out to
+    /// `retries x (network_retries + 1) x request_timeout` — hours at the
+    /// adapter defaults. It was unreachable from config here until SDK-624:
+    /// there was no setter to call, so `LLM_REQUEST_DEADLINE_SECONDS` silently
+    /// did nothing on Bedrock.
+    ///
+    /// Bounds *starting* work rather than cancelling it, so a request already on
+    /// the wire when the budget expires still runs to its own timeout: the
+    /// effective ceiling is `request_deadline + request_timeout`.
+    request_deadline: Option<std::time::Duration>,
     /// Output-token ceiling (Python's `llm_max_completion_tokens`). Applied only
     /// when the CALLER supplies a budget: the per-request
     /// `inferenceConfig.maxTokens` is then `min(caller, this, the model cap)`.
@@ -109,10 +141,17 @@ impl BedrockAdapter {
     /// [`crate::DEFAULT_MAX_COMPLETION_TOKENS`] so it moves in lockstep with the
     /// config and `GenerationOptions` defaults.
     pub const DEFAULT_MAX_COMPLETION_TOKENS: u32 = crate::DEFAULT_MAX_COMPLETION_TOKENS;
-    /// Request timeout, matching the other adapters.
-    const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
-    /// TCP connect timeout. `reqwest` applies none by default.
-    const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+    /// Default per-HTTP-request timeout, aliasing the OpenAI adapter's so the
+    /// two cannot drift. Overridable with
+    /// [`with_http_timeouts`](Self::with_http_timeouts)
+    /// (`LLM_REQUEST_TIMEOUT_SECONDS`); it was a bare `600` constant with no
+    /// setter until SDK-624.
+    pub const DEFAULT_REQUEST_TIMEOUT: std::time::Duration =
+        crate::OpenAIAdapter::DEFAULT_REQUEST_TIMEOUT;
+    /// Default TCP connect timeout, aliasing the OpenAI adapter's. `reqwest`
+    /// applies none by default.
+    pub const DEFAULT_CONNECT_TIMEOUT: std::time::Duration =
+        crate::OpenAIAdapter::DEFAULT_CONNECT_TIMEOUT;
 
     /// Build an adapter for `model`.
     ///
@@ -155,16 +194,12 @@ impl BedrockAdapter {
         let endpoint = aws::endpoint::resolve_endpoint(api_base, &settings, &region);
         let auth = aws::credentials::resolve_auth_provider(api_key, &settings, &region).await?;
 
-        let client = reqwest::Client::builder()
-            .timeout(Self::REQUEST_TIMEOUT)
-            // See `OpenAIAdapter::DEFAULT_CONNECT_TIMEOUT`: without this a
-            // black-holed connect consumes the whole request timeout.
-            .connect_timeout(Self::CONNECT_TIMEOUT)
-            .build()
-            .map_err(|e| LlmError::ConfigError(format!("Failed to create HTTP client: {e}")))?;
+        let client =
+            Self::build_http_client(Self::DEFAULT_REQUEST_TIMEOUT, Self::DEFAULT_CONNECT_TIMEOUT)?;
+        let auth = Arc::new(auth);
         let transport = Arc::new(ReqwestBedrockTransport::with_auth_provider(
             client,
-            Arc::new(auth),
+            Arc::clone(&auth),
             region.clone(),
         ));
 
@@ -187,8 +222,10 @@ impl BedrockAdapter {
             endpoint,
             region,
             transport,
+            auth,
             structured_output_retries: Self::DEFAULT_STRUCTURED_OUTPUT_RETRIES,
             network_retries: Self::DEFAULT_NETWORK_RETRIES,
+            request_deadline: None,
             max_completion_tokens: Self::DEFAULT_MAX_COMPLETION_TOKENS,
             default_temperature: None,
             extra_args: Map::new(),
@@ -205,6 +242,100 @@ impl BedrockAdapter {
     pub fn with_network_retries(mut self, retries: u32) -> Self {
         self.network_retries = usize::try_from(retries).unwrap_or(usize::MAX);
         self
+    }
+
+    /// Build the HTTP client used for every request.
+    ///
+    /// Kept as one place so `new` and
+    /// [`with_http_timeouts`](Self::with_http_timeouts) cannot drift in which
+    /// timeouts they set. `0` means "no limit" for both, matching the OpenAI
+    /// adapter: handing `reqwest` a `Duration::ZERO` timeout times every request
+    /// out instantly, so an operator generalising the `0` escape hatch from
+    /// `LLM_REQUEST_DEADLINE_SECONDS` would stop all traffic rather than lift a
+    /// bound.
+    fn build_http_client(
+        request_timeout: std::time::Duration,
+        connect_timeout: std::time::Duration,
+    ) -> LlmResult<reqwest::Client> {
+        let mut builder = reqwest::Client::builder();
+        if !request_timeout.is_zero() {
+            builder = builder.timeout(request_timeout);
+        }
+        // See `OpenAIAdapter::DEFAULT_CONNECT_TIMEOUT`: without this a
+        // black-holed connect consumes the whole request timeout.
+        if !connect_timeout.is_zero() {
+            builder = builder.connect_timeout(connect_timeout);
+        }
+        builder
+            .build()
+            .map_err(|e| LlmError::ConfigError(format!("Failed to create HTTP client: {e}")))
+    }
+
+    /// Override the per-request and TCP-connect timeouts
+    /// (`LLM_REQUEST_TIMEOUT_SECONDS` / `LLM_CONNECT_TIMEOUT_SECONDS`).
+    ///
+    /// Rebuilds the client *and* the transport around it, reusing the auth
+    /// resolved in [`new`](Self::new) rather than re-running the credential
+    /// ladder — which is why this is a builder rather than a setter: it is only
+    /// sound before any request is in flight. On the (TLS-init-only) failure
+    /// path the existing transport is kept and a warning logged, so a
+    /// misconfigured timeout degrades to the defaults rather than failing
+    /// component construction.
+    #[must_use]
+    pub fn with_http_timeouts(
+        mut self,
+        request_timeout: std::time::Duration,
+        connect_timeout: std::time::Duration,
+    ) -> Self {
+        match Self::build_http_client(request_timeout, connect_timeout) {
+            Ok(client) => {
+                self.transport = Arc::new(ReqwestBedrockTransport::with_auth_provider(
+                    client,
+                    Arc::clone(&self.auth),
+                    self.region.clone(),
+                ));
+            }
+            Err(e) => warn!(
+                error = %e,
+                "failed to rebuild the Bedrock HTTP client with configured timeouts; \
+                 keeping defaults",
+            ),
+        }
+        self
+    }
+
+    /// Set the aggregate ceiling for one logical structured-output call
+    /// (`LLM_REQUEST_DEADLINE_SECONDS`). `None` disables it.
+    ///
+    /// See the [`request_deadline`](Self::request_deadline) field for what it
+    /// does and does not bound.
+    #[must_use]
+    pub fn with_request_deadline(mut self, deadline: Option<std::time::Duration>) -> Self {
+        self.request_deadline = deadline;
+        self
+    }
+
+    /// The deadline error for a call that started at `started`, if the budget is
+    /// set and already spent.
+    ///
+    /// Returns the error rather than a bool so the message can name the budget,
+    /// the elapsed time and the stage that was about to be entered — without
+    /// that, an aggregate cut is indistinguishable from a provider timeout in a
+    /// log.
+    fn deadline_exceeded(&self, started: std::time::Instant, next_stage: &str) -> Option<LlmError> {
+        let deadline = self.request_deadline?;
+        let elapsed = started.elapsed();
+        if elapsed < deadline {
+            return None;
+        }
+        Some(LlmError::Timeout(format!(
+            "Bedrock structured output exceeded its {}s aggregate budget \
+             (LLM_REQUEST_DEADLINE_SECONDS) after {:.0}s, before {next_stage}; raise the \
+             budget, or lower LLM_MAX_RETRIES / LLM_NETWORK_RETRIES so the retry ladder \
+             fits inside it",
+            deadline.as_secs(),
+            elapsed.as_secs_f64(),
+        )))
     }
 
     /// Set the output-token ceiling (`llm_max_completion_tokens`). The
@@ -359,19 +490,37 @@ impl BedrockAdapter {
         body
     }
 
+    /// POST `request_body` to the Converse endpoint, unbounded by any aggregate
+    /// budget.
+    ///
+    /// The plain-completion entry point; the structured-output loop goes through
+    /// [`call_converse_before`](Self::call_converse_before) so its re-asks share
+    /// one deadline.
+    async fn call_converse(&self, request_body: &Value) -> LlmResult<ConverseResponse> {
+        self.call_converse_before(request_body, None).await
+    }
+
     /// POST `request_body` to the Converse endpoint with a transient-retry
     /// ladder and exponential backoff.
+    ///
+    /// `deadline` is the caller's aggregate budget as an absolute instant, so it
+    /// already counts every earlier attempt in the same logical call. `None`
+    /// leaves the ladder unbounded.
     #[instrument(
         name = "llm.api_call",
         level = "info",
-        skip(self, request_body),
+        skip(self, request_body, deadline),
         fields(
             url = tracing::field::Empty,
             cognee.llm.model = self.model.as_str(),
             cognee.llm.provider = "bedrock",
         ),
     )]
-    async fn call_converse(&self, request_body: &Value) -> LlmResult<ConverseResponse> {
+    async fn call_converse_before(
+        &self,
+        request_body: &Value,
+        deadline: Option<std::time::Instant>,
+    ) -> LlmResult<ConverseResponse> {
         let url = converse::converse_url(&self.endpoint, &self.model);
         tracing::Span::current().record("url", url.as_str());
 
@@ -389,12 +538,31 @@ impl BedrockAdapter {
         })?;
 
         let mut last_error = LlmError::NetworkError("No attempt made".to_string());
+        // Only for the deadline messages below; the ladder itself is a plain
+        // attempt count, with no time floor to measure.
+        let started = std::time::Instant::now();
 
         for attempt in 0..=self.network_retries {
             if attempt > 0 {
                 // Shared jittered backoff (issue #19): a batch of concurrent
                 // requests that all throttle at once must not retry in lockstep.
-                let delay = crate::retry::retry_backoff(attempt as u32);
+                let mut delay = crate::retry::retry_backoff(attempt as u32);
+                // The caller's aggregate budget outranks the retry ladder. Give
+                // up rather than start an attempt that cannot finish inside it,
+                // and never sleep past it — a 128s backoff against 5s of
+                // remaining budget would otherwise blow the ceiling on its own.
+                if let Some(deadline) = deadline {
+                    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                    if remaining.is_zero() {
+                        return Err(LlmError::Timeout(format!(
+                            "Bedrock request abandoned after {:.0}s with {attempt} attempt(s): \
+                             the call's aggregate budget (LLM_REQUEST_DEADLINE_SECONDS) was spent \
+                             mid-retry; last error: {last_error}",
+                            started.elapsed().as_secs_f64(),
+                        )));
+                    }
+                    delay = delay.min(remaining);
+                }
                 warn!(
                     attempt,
                     network_retries = self.network_retries,
@@ -471,13 +639,31 @@ impl BedrockAdapter {
         // expensive truncation loop from a routine corrective re-ask.
         let mut truncation_retry = false;
 
+        // Start of the aggregate budget. Every re-ask and transport retry below
+        // is measured against this one instant, because the thing that needs
+        // bounding is the *logical* call: no individual HTTP request in a
+        // 45-minute extraction was itself slow.
+        let call_started = std::time::Instant::now();
+        // Absolute form of the budget, threaded into every transport call below
+        // so the retry ladder inside an attempt is bounded by it too, not just
+        // the gaps between attempts.
+        let call_deadline = self.request_deadline.map(|d| call_started + d);
+
         for attempt in 0..self.structured_output_retries {
             if attempt > 0 {
                 // `call_converse`'s ladder only covers transport retries inside
                 // a single attempt, so without this the outer loop would re-ask
                 // immediately (Python waits between structured retries via
                 // `wait_exponential_jitter`).
-                let delay = crate::retry::retry_backoff(attempt as u32);
+                let mut delay = crate::retry::retry_backoff(attempt as u32);
+                // Never sleep past the aggregate budget: a 128s backoff against
+                // 5s of remaining budget would blow the ceiling on its own. The
+                // check below then abandons rather than paying for a re-ask the
+                // budget can no longer cover.
+                if let Some(deadline) = call_deadline {
+                    delay =
+                        delay.min(deadline.saturating_duration_since(std::time::Instant::now()));
+                }
                 // Never render `last_error` here. `DeserializationError` embeds
                 // the raw Converse body verbatim (see `call_converse`), which on
                 // the cognify path is model output derived from the user's
@@ -518,12 +704,20 @@ impl BedrockAdapter {
                 }
                 tokio::time::sleep(delay).await;
             }
+            // Aggregate budget check at the head of the attempt — after the
+            // backoff above, so a sleep that consumed the rest of the budget
+            // aborts here rather than buying one more full generation, and
+            // inside the loop rather than only around it so a long transport
+            // ladder inside one attempt is bounded too.
+            if let Some(e) = self.deadline_exceeded(call_started, "another re-ask") {
+                return Err(e);
+            }
             // Cleared per attempt: the flag describes the attempt that just
             // failed, so leaving it latched would label a later validator-driven
             // re-ask as a truncation and reintroduce the WARN-per-chunk noise.
             truncation_retry = false;
 
-            match self.call_converse(&body).await {
+            match self.call_converse_before(&body, call_deadline).await {
                 Ok(response) => {
                     // Emitted at INFO so a single production run can tell the two
                     // parity fixes apart. If output_tokens now sit near the

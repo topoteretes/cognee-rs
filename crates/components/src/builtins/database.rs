@@ -142,6 +142,7 @@ mod tests {
                 endpoint: String::new(),
                 anthropic_base_url: None,
                 max_retries: 3,
+                network_retries: 2,
                 min_retry_seconds: 0,
                 max_parallel_requests: cognee_llm::in_flight::DEFAULT_MAX_IN_FLIGHT as u32,
                 request_timeout_seconds: cognee_llm::OpenAIAdapter::DEFAULT_REQUEST_TIMEOUT
