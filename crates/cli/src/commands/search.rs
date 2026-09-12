@@ -107,6 +107,7 @@ pub fn run(args: SearchArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
             triplet_distance_penalty: None,
             save_interaction: Some(false),
             user_id: Some(owner_id),
+            tenant_id: None,
             verbose: None,
             feedback_influence: None,
             retriever_specific_config: None,

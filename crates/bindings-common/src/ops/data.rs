@@ -53,14 +53,11 @@ use crate::{HandleState, SdkError};
 // ---------------------------------------------------------------------------
 
 /// Parse an optional `tenant` UUID string out of an `opts` object.
-fn opts_tenant(opts: &serde_json::Value) -> Result<Option<Uuid>, SdkError> {
-    match opts.get("tenant").and_then(|v| v.as_str()) {
-        Some(s) => Uuid::parse_str(s)
-            .map(Some)
-            .map_err(|e| SdkError::Validation(format!("invalid `tenant` UUID: {e}"))),
-        None => Ok(None),
-    }
-}
+///
+/// Re-exported from `ops::pipeline` rather than copied: three identical copies
+/// of this parser existed, all silently treating a present non-string `tenant`
+/// as absent, and a fix to one would not have reached the others.
+use super::pipeline::opts_tenant;
 
 // ---------------------------------------------------------------------------
 // ForgetTarget marshalling (shared by all binding surfaces).

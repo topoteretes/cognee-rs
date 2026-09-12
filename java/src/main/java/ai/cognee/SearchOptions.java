@@ -7,6 +7,12 @@ public final class SearchOptions extends Options {
     public SearchOptions searchType(SearchType t) { if (t != null) put("searchType", t.wire()); return this; }
     public SearchOptions datasets(List<String> d) { put("datasets", d); return this; }
     public SearchOptions datasetIds(List<String> ids) { put("datasetIds", ids); return this; }
+    /**
+     * Tenant UUID, matching the {@code tenant} passed to {@code add}/{@code cognify}.
+     * Scopes {@link #datasets} name resolution: one handle can hold same-named
+     * datasets in several tenants. Omit for the single-tenant default.
+     */
+    public SearchOptions tenant(String tenant) { put("tenant", tenant); return this; }
     public SearchOptions topK(int n) { put("topK", n); return this; }
     public SearchOptions systemPrompt(String p) { put("systemPrompt", p); return this; }
     public SearchOptions sessionId(String s) { put("sessionId", s); return this; }

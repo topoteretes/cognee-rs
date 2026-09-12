@@ -189,6 +189,7 @@ async fn test_search_updates_last_accessed_timestamp() {
         triplet_distance_penalty: None,
         save_interaction: Some(false),
         user_id: None,
+        tenant_id: None,
         verbose: None,
         feedback_influence: None,
         retriever_specific_config: None,

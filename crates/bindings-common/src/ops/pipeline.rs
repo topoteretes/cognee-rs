@@ -41,13 +41,26 @@ use crate::{CogneeServices, HandleState, SdkError};
 // ---------------------------------------------------------------------------
 
 /// Parse an optional `tenant` UUID string out of an `opts` object.
+///
+/// Absent or `null` is `None` — the single-tenant default. A *present* value
+/// that is not a UUID string is an error, never silently `None`: this used to
+/// `and_then(as_str)`, so `{"tenant": 123}` dropped the tenant and the call
+/// ran unscoped. On the write side that files a row under the wrong tenant; on
+/// the retrieval side it lets a `datasets` name resolve to another tenant's
+/// same-named row. Failing loudly is the only safe direction.
 pub fn opts_tenant(opts: &serde_json::Value) -> Result<Option<Uuid>, SdkError> {
-    match opts.get("tenant").and_then(|v| v.as_str()) {
-        Some(s) => Uuid::parse_str(s)
-            .map(Some)
-            .map_err(|e| SdkError::Validation(format!("invalid `tenant` UUID: {e}"))),
-        None => Ok(None),
+    let Some(value) = opts.get("tenant") else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
     }
+    let raw = value.as_str().ok_or_else(|| {
+        SdkError::Validation(format!("`tenant` must be a UUID string, got {value}"))
+    })?;
+    Uuid::parse_str(raw)
+        .map(Some)
+        .map_err(|e| SdkError::Validation(format!("invalid `tenant` UUID: {e}")))
 }
 
 /// Build a per-call `CognifyConfig` by cloning the cached config and applying

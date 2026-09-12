@@ -271,9 +271,15 @@ impl SearchOrchestrator {
     /// available. It under-approximates Python in every "shared" case: a
     /// dataset granted `read` to the caller directly, to the caller's tenant,
     /// or to a role the caller holds is readable in Python but denied here.
-    /// It also skips Python's checks that the owner's own `read` grant is
-    /// still present and that `dataset.tenant_id == user.tenant_id`, so an
-    /// owner whose grant was revoked is admitted here and denied in Python.
+    /// It also skips Python's check that the owner's own `read` grant is still
+    /// present, so an owner whose grant was revoked is admitted here and
+    /// denied in Python. Python's other filter — `dataset.tenant_id ==
+    /// user.tenant_id` — **is** applied, via `tenant`: `list_datasets_by_owner`
+    /// spans every tenant the owner appears in, and the bindings let one handle
+    /// write under several (`add`'s `tenant` opt), so without it a caller
+    /// scoped to tenant A could pass tenant B's dataset id and pass the check.
+    /// `tenant: None` means the caller named no tenant and no filter applies,
+    /// which is the single-tenant default every OSS row is written under.
     ///
     /// Callers gate on `acl_db.is_some() || dataset_resolver.is_some()`; if
     /// neither is wired this returns an empty set, i.e. fails closed rather
@@ -281,6 +287,7 @@ impl SearchOrchestrator {
     async fn readable_dataset_ids(
         &self,
         requester: uuid::Uuid,
+        tenant: Option<uuid::Uuid>,
     ) -> Result<std::collections::HashSet<uuid::Uuid>, SearchError> {
         if let Some(acl) = self.acl_db.as_ref() {
             return Ok(acl
@@ -294,10 +301,56 @@ impl SearchOrchestrator {
                 .list_datasets_by_owner(requester)
                 .await?
                 .into_iter()
+                .filter(|dataset| tenant.is_none_or(|t| dataset.tenant_id == Some(t)))
                 .map(|dataset| dataset.id)
                 .collect());
         }
         Ok(std::collections::HashSet::new())
+    }
+
+    /// Fail with `PermissionDenied` if any of `ids` is outside the caller's
+    /// readable set.
+    ///
+    /// Mirrors Python `get_specific_user_permission_datasets`
+    /// (`get_specific_user_permission_datasets.py:30-38`): it intersects the
+    /// requested ids with `get_all_user_permission_datasets` and raises one
+    /// `PermissionDeniedError` when the lengths differ — whether an id belongs
+    /// to someone else or does not exist. Unknown and foreign ids stay
+    /// indistinguishable on purpose, so the caller gets no existence oracle.
+    ///
+    /// Applied to **both** the caller's explicit `dataset_ids` and the ids that
+    /// dataset *names* resolve to. Python reaches this same function on both
+    /// paths — `get_authorized_existing_datasets` calls `get_dataset_ids` and
+    /// then feeds the result straight into it
+    /// (`get_authorized_existing_datasets.py:25-32`) — and checking only the
+    /// explicit-id path left a bypass: a caller whose `read` grant was revoked
+    /// or never written was refused by id and served by name.
+    async fn authorize_dataset_ids(
+        &self,
+        requester: uuid::Uuid,
+        tenant: Option<uuid::Uuid>,
+        ids: &[uuid::Uuid],
+    ) -> Result<(), SearchError> {
+        let readable = self.readable_dataset_ids(requester, tenant).await?;
+        let denied: Vec<uuid::Uuid> = ids
+            .iter()
+            .copied()
+            .filter(|id| !readable.contains(id))
+            .collect();
+        if !denied.is_empty() {
+            // Log the specifics server-side; the error the caller sees
+            // deliberately does not say which ids failed or why.
+            tracing::warn!(
+                requester = %requester,
+                denied = ?denied,
+                "dataset filter names datasets the caller may not read"
+            );
+            return Err(SearchError::PermissionDenied(
+                "Request owner does not have necessary permission: [read] for all datasets requested."
+                    .to_string(),
+            ));
+        }
+        Ok(())
     }
 
     #[tracing::instrument(
@@ -347,34 +400,20 @@ impl SearchOrchestrator {
                         .to_string(),
                 )
             })?;
-            let readable = self.readable_dataset_ids(requester).await?;
-            // Unknown and foreign ids are indistinguishable on purpose: the
-            // caller gets no existence oracle. Python reaches the same place by
-            // comparing set lengths rather than reporting which id failed. The
-            // ACL path preserves this too — it never looks an id up, only
-            // intersects against the caller's own readable set.
-            let denied: Vec<uuid::Uuid> = ids
-                .iter()
-                .copied()
-                .filter(|id| !readable.contains(id))
-                .collect();
-            if !denied.is_empty() {
-                // Log the specifics server-side; the error the caller sees
-                // deliberately does not say which ids failed or why.
-                tracing::warn!(
-                    requester = %requester,
-                    denied = ?denied,
-                    "dataset_ids filter names datasets the caller may not read"
-                );
-                return Err(SearchError::PermissionDenied(
-                    "Request owner does not have necessary permission: [read] for all datasets requested."
-                        .to_string(),
-                ));
-            }
+            self.authorize_dataset_ids(requester, request.tenant_id, ids)
+                .await?;
         }
 
         // Resolve dataset names → UUIDs. Mirrors Python `cognee.search()`:
-        //   - names are looked up via owner-scoped `get_dataset_by_name`
+        //   - names are looked up via owner-scoped `get_dataset_by_name`,
+        //     additionally scoped to `request.tenant_id` when the caller
+        //     supplies one. Python's `get_dataset_ids` filters on owner AND
+        //     `dataset.tenant_id == user.tenant_id`; owner-scoping alone let a
+        //     name resolve to a row belonging to another tenant. Owner-scoping
+        //     itself is deliberate and matches Python, whose docstring reads
+        //     "If a user wants to write to a dataset he is not the owner of it
+        //     must be provided through UUID" — do not widen it to shared
+        //     datasets.
         //   - per-batch error: if ZERO names resolve → `DatasetNotFound`;
         //     partial misses are logged and the search proceeds with the
         //     resolved subset (matches `get_authorized_existing_datasets`
@@ -406,7 +445,10 @@ impl SearchOrchestrator {
                 let mut resolved = Vec::with_capacity(names.len());
                 let mut missing = Vec::new();
                 for name in names {
-                    match resolver.get_dataset_by_name(name, owner_id, None).await? {
+                    match resolver
+                        .get_dataset_by_name(name, owner_id, request.tenant_id)
+                        .await?
+                    {
                         Some(ds) => resolved.push(ds.id),
                         None => missing.push(name.clone()),
                     }
@@ -422,6 +464,26 @@ impl SearchOrchestrator {
                         missing = ?missing,
                         "some requested dataset names did not resolve; proceeding with the resolved subset"
                     );
+                }
+
+                // Authorize the resolved ids exactly as an explicitly-supplied
+                // batch, because Python does: `get_authorized_existing_datasets`
+                // pipes `get_dataset_ids(datasets, user)` straight into
+                // `get_specific_user_permission_datasets`. That closes the
+                // bypass a name-only path had — a name resolved on ownership
+                // alone and reached the retriever without a `read` grant.
+                //
+                // Only when an `AclDb` is wired. Without one the check cannot
+                // reject anything: `readable_dataset_ids` falls back to
+                // `list_datasets_by_owner` filtered by tenant, and
+                // `get_dataset_by_name` above already filtered on that same
+                // owner and tenant, so every resolved id is in the set by
+                // construction. Running it anyway would add a full
+                // owner-wide dataset listing to every name-scoped search for
+                // a result that is provably `Ok(())`.
+                if self.acl_db.is_some() {
+                    self.authorize_dataset_ids(owner_id, request.tenant_id, &resolved)
+                        .await?;
                 }
 
                 let mut clone = request.clone();
@@ -850,6 +912,7 @@ mod tests {
             triplet_distance_penalty: None,
             save_interaction: None,
             user_id: None,
+            tenant_id: None,
             verbose: None,
             feedback_influence: None,
             retriever_specific_config: None,
@@ -897,6 +960,7 @@ mod tests {
             triplet_distance_penalty: None,
             save_interaction: None,
             user_id: None,
+            tenant_id: None,
             verbose: None,
             feedback_influence: None,
             retriever_specific_config: None,
@@ -949,6 +1013,7 @@ mod tests {
             triplet_distance_penalty: None,
             save_interaction: None,
             user_id: None,
+            tenant_id: None,
             verbose: None,
             feedback_influence: None,
             retriever_specific_config: None,
@@ -1028,6 +1093,7 @@ mod tests {
             triplet_distance_penalty: None,
             save_interaction: None,
             user_id: None,
+            tenant_id: None,
             verbose: None,
             feedback_influence: None,
             retriever_specific_config: None,
@@ -1130,6 +1196,7 @@ mod tests {
             triplet_distance_penalty: None,
             save_interaction: None,
             user_id: None,
+            tenant_id: None,
             verbose: None,
             feedback_influence: None,
             retriever_specific_config: None,
@@ -1226,6 +1293,7 @@ mod tests {
             triplet_distance_penalty: None,
             save_interaction: None,
             user_id: None,
+            tenant_id: None,
             verbose: Some(true),
             feedback_influence: None,
             retriever_specific_config: None,
@@ -1277,6 +1345,7 @@ mod tests {
             triplet_distance_penalty: None,
             save_interaction: Some(true),
             user_id: None,
+            tenant_id: None,
             verbose: None,
             feedback_influence: None,
             retriever_specific_config: None,
@@ -1330,6 +1399,7 @@ mod tests {
                 triplet_distance_penalty: None,
                 save_interaction: None,
                 user_id: None,
+                tenant_id: None,
                 verbose: None,
                 feedback_influence: None,
                 retriever_specific_config: None,
@@ -1358,6 +1428,7 @@ mod tests {
                 triplet_distance_penalty: None,
                 save_interaction: None,
                 user_id: None,
+                tenant_id: None,
                 verbose: None,
                 feedback_influence: None,
                 retriever_specific_config: None,
@@ -1405,6 +1476,7 @@ mod tests {
             triplet_distance_penalty: None,
             save_interaction: None,
             user_id: None,
+            tenant_id: None,
             verbose: None,
             feedback_influence: None,
             retriever_specific_config: None,
@@ -1500,6 +1572,7 @@ mod tests {
             triplet_distance_penalty: None,
             save_interaction: Some(false),
             user_id: None,
+            tenant_id: None,
             verbose: None,
             feedback_influence: None,
             retriever_specific_config: None,
@@ -1526,6 +1599,20 @@ mod tests {
         db_ops::datasets::create_dataset(
             db,
             Dataset::new(name.to_string(), owner, None, Uuid::new_v4()),
+        )
+        .await
+        .expect("seed dataset")
+    }
+
+    async fn seed_dataset_in_tenant(
+        db: &cognee_database::DatabaseConnection,
+        name: &str,
+        owner: Uuid,
+        tenant: Uuid,
+    ) -> Dataset {
+        db_ops::datasets::create_dataset(
+            db,
+            Dataset::new(name.to_string(), owner, Some(tenant), Uuid::new_v4()),
         )
         .await
         .expect("seed dataset")
@@ -1559,6 +1646,7 @@ mod tests {
         let request = SearchRequest {
             datasets: Some(vec!["real".into()]),
             user_id: Some(owner),
+            tenant_id: None,
             ..dataset_request_template()
         };
 
@@ -1591,6 +1679,225 @@ mod tests {
         let request = SearchRequest {
             datasets: Some(vec!["shared_name".into()]),
             user_id: Some(owner_b),
+            tenant_id: None,
+            ..dataset_request_template()
+        };
+
+        let err = orchestrator.search(&request).await.expect_err("must error");
+        assert!(
+            matches!(err, SearchError::DatasetNotFound(_)),
+            "got {err:?}"
+        );
+    }
+
+    /// Scenario: no `AclDb` (the bindings' wiring — resolver only). The owner
+    /// has datasets in tenant A and tenant B, and asks for tenant B's id while
+    /// scoped to tenant A.
+    /// Expected: `PermissionDenied`. The ownership fallback lists by owner
+    /// alone, which spans every tenant, so without a tenant filter an explicit
+    /// id from another tenant sailed through — and the bindings let one handle
+    /// write under several tenants (`add`'s `tenant` opt), so this is
+    /// reachable. Python applies the same `dataset.tenant_id == user.tenant_id`
+    /// filter.
+    /// Verification: seed one dataset per tenant, request B's id with
+    /// `tenant_id = Some(tenant_a)`, assert denial; then repeat with the
+    /// matching tenant and assert it succeeds.
+    #[tokio::test]
+    async fn explicit_ids_are_tenant_scoped_without_an_acl() {
+        let owner = Uuid::new_v4();
+        let tenant_a = Uuid::new_v4();
+        let tenant_b = Uuid::new_v4();
+        let db = fresh_db().await;
+        let ds_a = seed_dataset_in_tenant(&db, "a", owner, tenant_a).await;
+        let ds_b = seed_dataset_in_tenant(&db, "b", owner, tenant_b).await;
+
+        let mut registry = SearchTypeRegistry::new();
+        registry.register(Arc::new(FakeChunksRetriever));
+        let orchestrator =
+            super::SearchOrchestrator::new(registry).with_dataset_resolver(db as Arc<dyn IngestDb>);
+
+        let cross_tenant = SearchRequest {
+            dataset_ids: Some(vec![ds_b.id]),
+            user_id: Some(owner),
+            tenant_id: Some(tenant_a),
+            ..dataset_request_template()
+        };
+        assert!(
+            matches!(
+                orchestrator
+                    .search(&cross_tenant)
+                    .await
+                    .expect_err("must error"),
+                SearchError::PermissionDenied(_)
+            ),
+            "a dataset id from another tenant must not pass the ownership fallback"
+        );
+
+        let same_tenant = SearchRequest {
+            dataset_ids: Some(vec![ds_a.id]),
+            user_id: Some(owner),
+            tenant_id: Some(tenant_a),
+            ..dataset_request_template()
+        };
+        orchestrator
+            .search(&same_tenant)
+            .await
+            .expect("the caller's own tenant must still be reachable by id");
+    }
+
+    /// Scenario: an `AclDb` is wired, the caller owns a dataset but holds no
+    /// `read` grant on it, and searches by **name**.
+    /// Expected: `PermissionDenied` — the same answer they get by id. Python's
+    /// `get_authorized_existing_datasets` resolves names via `get_dataset_ids`
+    /// and pipes the result into `get_specific_user_permission_datasets`, so
+    /// the permission filter covers both paths. Checking only explicit ids
+    /// left a bypass: name resolution is owner-scoped, so an owner whose grant
+    /// was revoked (or never written) was refused by id and served by name.
+    /// Verification: seed a dataset for the owner, grant nothing, search by
+    /// name, assert `PermissionDenied` rather than results.
+    #[tokio::test]
+    async fn dataset_names_are_authorized_against_the_acl_too() {
+        let owner = Uuid::new_v4();
+        let db = fresh_db().await;
+        let dataset = seed_dataset(&db, "ungranted", owner).await;
+
+        let mut registry = SearchTypeRegistry::new();
+        registry.register(Arc::new(FakeChunksRetriever));
+        // An ACL with no grant at all for this owner.
+        let acl: Arc<dyn cognee_database::AclDb> = Arc::new(cognee_test_utils::MockAclDb::new());
+        let orchestrator = super::SearchOrchestrator::new(registry)
+            .with_dataset_resolver(db as Arc<dyn IngestDb>)
+            .with_acl_db(acl);
+
+        let request = SearchRequest {
+            datasets: Some(vec!["ungranted".into()]),
+            user_id: Some(owner),
+            ..dataset_request_template()
+        };
+
+        let err = orchestrator.search(&request).await.expect_err("must error");
+        assert!(
+            matches!(err, SearchError::PermissionDenied(_)),
+            "a name must not bypass the ACL the same id is checked against; got {err:?}"
+        );
+        // And the same dataset by id is denied identically — the two paths
+        // must not disagree.
+        let by_id = SearchRequest {
+            dataset_ids: Some(vec![dataset.id]),
+            user_id: Some(owner),
+            ..dataset_request_template()
+        };
+        assert!(matches!(
+            orchestrator.search(&by_id).await.expect_err("must error"),
+            SearchError::PermissionDenied(_)
+        ));
+    }
+
+    /// The same shape, but with the `read` grant present: the name resolves
+    /// and the search runs. Guards against the authorization above being too
+    /// strict and denying a properly-granted owner.
+    #[tokio::test]
+    async fn a_granted_owner_can_still_search_by_name() {
+        let owner = Uuid::new_v4();
+        let db = fresh_db().await;
+        let dataset = seed_dataset(&db, "granted", owner).await;
+
+        let mock = Arc::new(cognee_test_utils::MockAclDb::new());
+        cognee_database::ops::acl::grant_all_permissions_on_dataset_via_trait(
+            mock.as_ref(),
+            owner,
+            dataset.id,
+        )
+        .await
+        .expect("grant");
+
+        let mut registry = SearchTypeRegistry::new();
+        registry.register(Arc::new(FakeChunksRetriever));
+        let orchestrator = super::SearchOrchestrator::new(registry)
+            .with_dataset_resolver(db as Arc<dyn IngestDb>)
+            .with_acl_db(mock as Arc<dyn cognee_database::AclDb>);
+
+        let request = SearchRequest {
+            datasets: Some(vec!["granted".into()]),
+            user_id: Some(owner),
+            ..dataset_request_template()
+        };
+
+        orchestrator
+            .search(&request)
+            .await
+            .expect("a granted owner must still be able to search by name");
+    }
+
+    /// Scenario: the *same* owner has a dataset named `"shared_name"` in
+    /// tenant A and another in tenant B; the request carries tenant A.
+    /// Expected: name resolution is tenant-scoped as well as owner-scoped,
+    /// so only tenant A's row resolves. Python's `get_dataset_ids` filters
+    /// on `dataset.owner_id == user.id` **and** `dataset.tenant_id ==
+    /// user.tenant_id`; Rust passed `None` for the tenant, which let a name
+    /// resolve to whichever row the DB returned first — a cross-tenant leak.
+    /// Verification: seed both rows, search as the owner with
+    /// `tenant_id = Some(tenant_a)`, and assert the scoped context map
+    /// contains tenant A's id and not tenant B's.
+    #[tokio::test]
+    async fn dataset_name_resolution_is_tenant_scoped() {
+        let owner = Uuid::new_v4();
+        let tenant_a = Uuid::new_v4();
+        let tenant_b = Uuid::new_v4();
+        let db = fresh_db().await;
+        let ds_a = seed_dataset_in_tenant(&db, "shared_name", owner, tenant_a).await;
+        let ds_b = seed_dataset_in_tenant(&db, "shared_name", owner, tenant_b).await;
+
+        let mut registry = SearchTypeRegistry::new();
+        registry.register(Arc::new(ResolutionFixtureRetriever {
+            dataset_a: ds_a.id,
+            dataset_b: ds_b.id,
+        }));
+        let orchestrator =
+            super::SearchOrchestrator::new(registry).with_dataset_resolver(db as Arc<dyn IngestDb>);
+
+        let request = SearchRequest {
+            datasets: Some(vec!["shared_name".into()]),
+            user_id: Some(owner),
+            tenant_id: Some(tenant_a),
+            ..dataset_request_template()
+        };
+
+        let response = orchestrator.search(&request).await.unwrap();
+        let context_map = response.context.expect("scoped context map");
+        assert!(
+            context_map.contains_key(&ds_a.id.to_string()),
+            "tenant A's dataset must resolve"
+        );
+        assert!(
+            !context_map.contains_key(&ds_b.id.to_string()),
+            "tenant B's same-named dataset must not be reachable from tenant A"
+        );
+    }
+
+    /// Scenario: a dataset named `"tenant_only"` exists for the owner in
+    /// tenant A; the request carries tenant B.
+    /// Expected: nothing resolves, so the orchestrator surfaces
+    /// `DatasetNotFound` rather than searching another tenant's data.
+    /// Verification: seed under tenant A, search with `tenant_id =
+    /// Some(tenant_b)`, assert `DatasetNotFound`.
+    #[tokio::test]
+    async fn dataset_name_from_another_tenant_does_not_resolve() {
+        let owner = Uuid::new_v4();
+        let tenant_a = Uuid::new_v4();
+        let tenant_b = Uuid::new_v4();
+        let db = fresh_db().await;
+        let _ = seed_dataset_in_tenant(&db, "tenant_only", owner, tenant_a).await;
+
+        let mut registry = SearchTypeRegistry::new();
+        registry.register(Arc::new(FakeChunksRetriever));
+        let orchestrator =
+            super::SearchOrchestrator::new(registry).with_dataset_resolver(db as Arc<dyn IngestDb>);
+
+        let request = SearchRequest {
+            datasets: Some(vec!["tenant_only".into()]),
+            user_id: Some(owner),
+            tenant_id: Some(tenant_b),
             ..dataset_request_template()
         };
 
@@ -1623,6 +1930,7 @@ mod tests {
         let request = SearchRequest {
             datasets: Some(vec!["does_not_exist".into(), "also_missing".into()]),
             user_id: Some(owner),
+            tenant_id: None,
             ..dataset_request_template()
         };
 
@@ -1665,6 +1973,7 @@ mod tests {
         let request = SearchRequest {
             datasets: Some(vec!["real".into(), "missing".into()]),
             user_id: Some(owner),
+            tenant_id: None,
             ..dataset_request_template()
         };
 
@@ -1696,6 +2005,7 @@ mod tests {
         let request = SearchRequest {
             datasets: Some(vec![]),
             user_id: None,
+            tenant_id: None,
             only_context: Some(false),
             ..dataset_request_template()
         };
@@ -1764,6 +2074,7 @@ mod tests {
         let request = SearchRequest {
             dataset_ids: Some(vec![dataset.id]),
             user_id: Some(owner),
+            tenant_id: None,
             ..dataset_request_template()
         };
 
@@ -1798,6 +2109,7 @@ mod tests {
         let request = SearchRequest {
             dataset_ids: Some(vec![dataset.id]),
             user_id: Some(owner_b),
+            tenant_id: None,
             ..dataset_request_template()
         };
 
@@ -1825,6 +2137,7 @@ mod tests {
         let request = SearchRequest {
             dataset_ids: Some(vec![Uuid::new_v4()]),
             user_id: Some(owner),
+            tenant_id: None,
             ..dataset_request_template()
         };
 
@@ -1854,6 +2167,7 @@ mod tests {
         let request = SearchRequest {
             dataset_ids: Some(vec![mine.id, theirs.id]),
             user_id: Some(owner),
+            tenant_id: None,
             ..dataset_request_template()
         };
 
@@ -1882,6 +2196,7 @@ mod tests {
         let request = SearchRequest {
             dataset_ids: Some(vec![dataset.id]),
             user_id: None,
+            tenant_id: None,
             ..dataset_request_template()
         };
 
@@ -1921,6 +2236,7 @@ mod tests {
         let request = SearchRequest {
             dataset_ids: Some(vec![shared.id]),
             user_id: Some(grantee),
+            tenant_id: None,
             ..dataset_request_template()
         };
 
@@ -1960,6 +2276,7 @@ mod tests {
         let request = SearchRequest {
             dataset_ids: Some(vec![dataset.id]),
             user_id: Some(owner),
+            tenant_id: None,
             ..dataset_request_template()
         };
 
@@ -1997,6 +2314,7 @@ mod tests {
             .search(&SearchRequest {
                 dataset_ids: Some(vec![granted.id, Uuid::new_v4()]),
                 user_id: Some(caller),
+                tenant_id: None,
                 ..dataset_request_template()
             })
             .await
@@ -2005,6 +2323,7 @@ mod tests {
             .search(&SearchRequest {
                 dataset_ids: Some(vec![granted.id, ungranted.id]),
                 user_id: Some(caller),
+                tenant_id: None,
                 ..dataset_request_template()
             })
             .await
@@ -2046,6 +2365,7 @@ mod tests {
             .search(&SearchRequest {
                 dataset_ids: Some(vec![Uuid::new_v4()]),
                 user_id: Some(caller),
+                tenant_id: None,
                 ..dataset_request_template()
             })
             .await
@@ -2059,6 +2379,7 @@ mod tests {
             .search(&SearchRequest {
                 dataset_ids: Some(vec![granted]),
                 user_id: Some(caller),
+                tenant_id: None,
                 ..dataset_request_template()
             })
             .await
@@ -2088,6 +2409,7 @@ mod tests {
             datasets: Some(vec!["real".into()]),
             dataset_ids: Some(vec![]),
             user_id: Some(owner),
+            tenant_id: None,
             ..dataset_request_template()
         };
 
@@ -2121,6 +2443,7 @@ mod tests {
         let request = SearchRequest {
             datasets: Some(vec!["whatever".into()]),
             user_id: Some(Uuid::new_v4()),
+            tenant_id: None,
             ..dataset_request_template()
         };
 
@@ -2149,6 +2472,7 @@ mod tests {
         let request = SearchRequest {
             datasets: Some(vec!["whatever".into()]),
             user_id: None,
+            tenant_id: None,
             ..dataset_request_template()
         };
 
@@ -2179,6 +2503,7 @@ mod tests {
             triplet_distance_penalty: None,
             save_interaction: None,
             user_id: None,
+            tenant_id: None,
             verbose: None,
             feedback_influence: None,
             retriever_specific_config: None,

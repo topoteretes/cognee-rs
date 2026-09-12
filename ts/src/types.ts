@@ -134,6 +134,13 @@ export interface CogneeSearchOptions {
   datasets?: string[];
   /** Dataset UUIDs to restrict the search to. */
   datasetIds?: string[];
+  /**
+   * Tenant UUID string, matching the `tenant` passed to `add`/`cognify`.
+   * Scopes `datasets` name resolution: one handle can hold same-named
+   * datasets in several tenants, and without this a name may resolve to the
+   * wrong one. Omit for the single-tenant default.
+   */
+  tenant?: string;
   /** Maximum number of results to return. */
   topK?: number;
   /** System prompt override for completion-generating retrievers. */
@@ -164,6 +171,18 @@ export interface CogneeRecallOptions {
   searchType?: SearchTypeString;
   /** Dataset names to restrict graph search to. */
   datasets?: string[];
+  /**
+   * Dataset UUIDs to restrict graph search to. Takes precedence over
+   * `datasets` when both are given; an empty array is no filter.
+   * Every entry must be a valid UUID — a malformed one is rejected rather
+   * than dropped, so a typo cannot silently widen the query.
+   */
+  datasetIds?: string[];
+  /**
+   * Tenant UUID string, matching the `tenant` passed to `add`/`cognify`.
+   * Scopes `datasets` name resolution the same way it does for search.
+   */
+  tenant?: string;
   /** Maximum number of results per source. Defaults to 10. */
   topK?: number;
   /** Automatically select the best search type (defaults to false). */

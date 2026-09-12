@@ -47,6 +47,15 @@ pub struct MockAclDb {
     tenant_memberships: Mutex<HashMap<Uuid, HashSet<Uuid>>>,
     /// user_id → role ids the user holds.
     role_memberships: Mutex<HashMap<Uuid, HashSet<Uuid>>>,
+    /// When set, [`AclDb::grant_permission`] returns this error instead of
+    /// recording the grant. See [`MockAclDb::failing_grants`].
+    grant_failure: Option<String>,
+    /// When set, only this permission name fails to grant; the others are
+    /// recorded normally. See [`MockAclDb::failing_grant_of`].
+    grant_failure_only: Option<String>,
+    /// When true, [`AclDb::revoke_permission`] fails as well — the realistic
+    /// shape of an unreachable ACL store, where cleanup cannot succeed either.
+    revokes_fail: bool,
 }
 
 impl MockAclDb {
@@ -56,7 +65,46 @@ impl MockAclDb {
             principals: Mutex::new(HashSet::new()),
             tenant_memberships: Mutex::new(HashMap::new()),
             role_memberships: Mutex::new(HashMap::new()),
+            grant_failure: None,
+            grant_failure_only: None,
+            revokes_fail: false,
         }
+    }
+
+    /// A mock whose [`AclDb::grant_permission`] always fails with `reason`.
+    ///
+    /// Models the production case a best-effort grant used to hide: the
+    /// dataset row is written, the ACL row is not, and the owner then cannot
+    /// read their own dataset because `readable_dataset_ids` consults the ACL
+    /// alone. Every create path must surface that as a failed create.
+    pub fn failing_grants(reason: &str) -> Self {
+        Self {
+            grant_failure: Some(reason.to_string()),
+            ..Self::new()
+        }
+    }
+
+    /// A mock where only `permission_name` fails to grant — the others land.
+    ///
+    /// [`failing_grants`](Self::failing_grants) fails everything, so no partial
+    /// grant is ever written and a caller's compensating revoke loop is a no-op
+    /// under it. This models the state that actually needs cleaning up: a
+    /// helper that grants in sequence got some rows in before it failed.
+    pub fn failing_grant_of(permission_name: &str) -> Self {
+        Self {
+            grant_failure_only: Some(permission_name.to_string()),
+            ..Self::new()
+        }
+    }
+
+    /// Also fail every [`AclDb::revoke_permission`].
+    ///
+    /// The realistic unreachable-ACL-store shape: whatever broke the grant
+    /// breaks the cleanup too, so a caller must not assume its compensation
+    /// succeeded.
+    pub fn with_failing_revokes(mut self) -> Self {
+        self.revokes_fail = true;
+        self
     }
 
     /// Return the number of ACL grants currently stored.
@@ -185,6 +233,14 @@ impl AclDb for MockAclDb {
         dataset_id: Uuid,
         permission_name: &str,
     ) -> Result<(), DatabaseError> {
+        if let Some(reason) = &self.grant_failure {
+            return Err(DatabaseError::QueryError(reason.clone()));
+        }
+        if self.grant_failure_only.as_deref() == Some(permission_name) {
+            return Err(DatabaseError::QueryError(format!(
+                "simulated failure granting '{permission_name}'"
+            )));
+        }
         let mut grants = self.grants.lock().unwrap(); // lock poison is unrecoverable
         grants.insert((principal_id, dataset_id, permission_name.to_string()));
         Ok(())
@@ -196,6 +252,11 @@ impl AclDb for MockAclDb {
         dataset_id: Uuid,
         permission_name: &str,
     ) -> Result<(), DatabaseError> {
+        if self.revokes_fail {
+            return Err(DatabaseError::QueryError(format!(
+                "simulated failure revoking '{permission_name}'"
+            )));
+        }
         let mut grants = self.grants.lock().unwrap(); // lock poison is unrecoverable
         grants.remove(&(principal_id, dataset_id, permission_name.to_string()));
         Ok(())

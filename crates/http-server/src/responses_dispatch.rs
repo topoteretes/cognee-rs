@@ -206,6 +206,7 @@ impl ToolDispatcher for ComponentHandlesDispatcher {
             triplet_distance_penalty: None,
             save_interaction: None,
             user_id: Some(user.id),
+            tenant_id: user.tenant_id,
             verbose: None,
             feedback_influence: None,
             retriever_specific_config: None,

@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use cognee_database::ops::acl::grant_all_permissions_on_dataset_via_trait;
 use cognee_database::{AclDb, DeleteDb, IngestDb, PipelineRunStatus};
 use cognee_delete::{DeleteMode, DeleteRequest, DeleteResult, DeleteScope, DeleteService};
 use cognee_ingestion::generate_dataset_id;
@@ -14,7 +15,9 @@ use uuid::Uuid;
 
 use super::error::DatasetError;
 
-const DATASET_PERMISSIONS: [&str; 4] = ["read", "write", "delete", "share"];
+// The canonical permission list lives in `cognee_database::ops::acl::PERMISSION_NAMES`,
+// which `grant_all_permissions_on_dataset_via_trait` iterates. Tests below assert
+// against that same list rather than a local copy that could drift from it.
 
 /// Combined trait for dataset operations.
 ///
@@ -255,23 +258,23 @@ impl DatasetManager {
         let ds = self.create_dataset(name, owner_id, tenant_id).await?;
         let acl = self.acl_db.as_ref().ok_or(DatasetError::AclNotConfigured)?;
 
-        // The `acls.principal_id` FK references `principals.id`; ensure the
-        // principal row exists before granting, otherwise the grant fails a
-        // foreign-key constraint. Python's `give_permission_on_dataset` takes
-        // an already-persisted `User`; the Rust facade may be called with a
-        // bare id, so we upsert the principal here. `ensure_principal` is an
-        // idempotent upsert.
-        acl.ensure_principal(owner_id, "user").await?;
-        for perm in DATASET_PERMISSIONS {
-            acl.grant_permission(owner_id, ds.id, perm).await?;
-        }
+        // `grant_all_permissions_on_dataset_via_trait` ensures the principal
+        // row exists before granting: the `acls.principal_id` FK references
+        // `principals.id`, so a bare id would otherwise fail a foreign-key
+        // constraint. Python's `give_permission_on_dataset` takes an
+        // already-persisted `User`; this facade may be called with a bare id.
+        // Both the upsert and the grants are idempotent.
+        //
+        // The same helper backs `POST /v1/datasets`
+        // (`cognee_http_server::routers::datasets::create_new_dataset`), which
+        // cannot call this facade — `cognee-http-server` deliberately does not
+        // depend on `cognee`. One grant implementation is what keeps the two
+        // create paths from drifting.
+        grant_all_permissions_on_dataset_via_trait(acl.as_ref(), owner_id, ds.id).await?;
         if let Some(parent) = parent_user_id
             && parent != owner_id
         {
-            acl.ensure_principal(parent, "user").await?;
-            for perm in DATASET_PERMISSIONS {
-                acl.grant_permission(parent, ds.id, perm).await?;
-            }
+            grant_all_permissions_on_dataset_via_trait(acl.as_ref(), parent, ds.id).await?;
         }
         Ok(ds)
     }
@@ -672,7 +675,7 @@ mod tests {
             .expect("create_authorized_dataset");
 
         // Owner and parent both receive all four permissions on the dataset.
-        for perm in DATASET_PERMISSIONS {
+        for perm in cognee_database::ops::acl::PERMISSION_NAMES {
             assert!(
                 acl.has_permission(owner_id, ds.id, perm).await.unwrap(),
                 "owner must have '{perm}'"
@@ -697,7 +700,7 @@ mod tests {
             .await
             .expect("create_authorized_dataset with self-parent should succeed");
 
-        for perm in DATASET_PERMISSIONS {
+        for perm in cognee_database::ops::acl::PERMISSION_NAMES {
             assert!(
                 acl.has_permission(owner_id, ds.id, perm).await.unwrap(),
                 "owner must have '{perm}'"
