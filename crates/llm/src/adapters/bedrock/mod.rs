@@ -873,6 +873,18 @@ impl BedrockAdapter {
                     e @ (LlmError::AuthenticationError(_)
                     | LlmError::ModelNotFound(_)
                     | LlmError::ConfigError(_)
+                    // A mid-ladder deadline abort. Terminal for the same reason
+                    // the others are, and it must be listed explicitly: the
+                    // aggregate budget is already spent, so a re-ask can only
+                    // spend more of a budget that has none left. Falling through
+                    // to the retryable arm below would also splice this
+                    // adapter's own control-plane message ("the call's aggregate
+                    // budget ... was spent mid-retry") into the prompt as a
+                    // corrective instruction, and would surface the failure as
+                    // `MaxRetriesExceeded` rather than `Timeout` whenever
+                    // `structured_output_retries` is 1 — which is what
+                    // `LLM_MAX_RETRIES=0` floors to.
+                    | LlmError::Timeout(_)
                     | LlmError::MaxRetriesExceeded(_)),
                 ) => return Err(e),
                 // What reaches here is a ValidationException (InvalidResponse):

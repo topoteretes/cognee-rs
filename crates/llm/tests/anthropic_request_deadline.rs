@@ -31,6 +31,7 @@
 
 use std::time::Duration;
 
+use cognee_llm::error::LlmError;
 use cognee_llm::{AnthropicAdapter, GenerationOptions, Llm, Message, MessageRole};
 use httpmock::prelude::*;
 
@@ -277,5 +278,64 @@ async fn spent_budget_stops_the_transport_retry_ladder_too() {
     assert!(
         calls <= 4,
         "the budget must cap transport attempts; made {calls}"
+    );
+}
+
+/// A deadline abort must stay a `Timeout` even when the structured loop has no
+/// second attempt to fall into.
+///
+/// The transport `Timeout` used to land in the retryable arm of
+/// `structured_output_impl`, which had two consequences: the adapter's own
+/// control-plane message was spliced into the prompt as a corrective
+/// instruction, and with `structured_output_retries == 1` — what
+/// `LLM_MAX_RETRIES=0` floors to — the loop then fell out to
+/// `MaxRetriesExceeded`, so callers classifying on the timeout variant saw the
+/// wrong one. The sibling test above passes either way because its second
+/// attempt re-derives the deadline at the loop head; only a single-attempt loop
+/// exposes it. Caught reviewing PR #215.
+#[tokio::test]
+async fn a_deadline_abort_stays_a_timeout_with_a_single_structured_attempt() {
+    let server = MockServer::start_async().await;
+
+    let endpoint = server
+        .mock_async(|when, then| {
+            when.method(POST).path("/messages");
+            then.status(500)
+                .header("content-type", "application/json")
+                .delay(Duration::from_millis(80))
+                .body(r#"{"type":"error","error":{"type":"api_error","message":"boom"}}"#);
+        })
+        .await;
+
+    let err = AnthropicAdapter::new(MODEL, "test-key", Some(server.base_url()))
+        .expect("construct AnthropicAdapter")
+        // What `LLM_MAX_RETRIES=0` becomes: floored to a single attempt, so a
+        // transport abort has no re-ask to be reclassified by.
+        .with_structured_output_retries(0)
+        .with_min_retry_elapsed(Duration::from_secs(30))
+        .with_network_retries(10)
+        .with_request_deadline(Some(Duration::from_millis(120)))
+        .create_structured_output_with_messages_raw(user_msg(), &schema(), None)
+        .await
+        .expect_err("a spent budget must fail the call");
+
+    // On the VARIANT, not the rendered string. `MaxRetriesExceeded` interpolates
+    // its inner error, so a wrapped deadline abort still renders the substring
+    // "Timeout" and a `to_string().contains(..)` assertion passes either way —
+    // which is exactly how the first draft of this test managed to pass against
+    // the bug it was written to catch.
+    assert!(
+        matches!(err, LlmError::Timeout(_)),
+        "a deadline abort must surface as the Timeout variant regardless of how \
+         many structured attempts are configured, so callers can classify on it; \
+         got: {err:?}"
+    );
+    assert!(
+        err.to_string().contains("LLM_REQUEST_DEADLINE_SECONDS"),
+        "and must still name the knob that produced it; got: {err}"
+    );
+    assert!(
+        endpoint.calls_async().await >= 1,
+        "the call must actually have been dispatched"
     );
 }

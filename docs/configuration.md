@@ -792,10 +792,16 @@ These knobs form one resilience stack, matching Python cognee's:
   extraction makes `LLM_MAX_RETRIES` attempts, each running a transport ladder
   that honours the `LLM_MIN_RETRY_SECONDS` floor above; multiplied out, the
   designed worst case runs past an hour while every individual request finishes
-  well inside its timeout. Keep the deadline above
-  `LLM_MAX_RETRIES x LLM_MIN_RETRY_SECONDS` — 720s at the defaults, which is
-  exactly the default deadline — or it will cut the rate-limit-window waits the
-  floors exist to protect. A warning naming the computed ladder is logged at
+  well inside its timeout. Keep the deadline at or above
+  `LLM_MAX_RETRIES x LLM_MIN_RETRY_SECONDS` — 720s at the defaults, which the
+  default deadline exactly equals — or it will cut the rate-limit-window waits
+  the floors exist to protect. Note "at or above": the shipped defaults sit
+  exactly *on* the boundary (the guard-rail warns on `deadline < ladder`), so
+  they leave no headroom for request time, backoff or time queued behind
+  `LLM_MAX_PARALLEL_REQUESTS`. That is deliberate — the ladder is the
+  *deliberate-waiting* budget, and a call is not entitled to the full ladder
+  plus overhead — but if you raise `LLM_MIN_RETRY_SECONDS` or `LLM_MAX_RETRIES`,
+  raise the deadline with them. A warning naming the computed ladder is logged at
   startup if the deadline does not fit inside it. The three-mode cascade below
   is deliberately not a factor in that ladder: it is endpoint-capability
   discovery, memoised per endpoint, so a healthy endpoint pays for one mode per
