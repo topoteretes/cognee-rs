@@ -48,7 +48,7 @@ for retries and the `cognee-llm` rustdoc for the adapter.
 | `LLM_MAX_PARALLEL_REQUESTS` | `llm_max_parallel_requests` | `1000` (`128` on Android/iOS) |
 | `LLM_REQUEST_TIMEOUT_SECONDS` | `llm_request_timeout_seconds` | `600` |
 | `LLM_CONNECT_TIMEOUT_SECONDS` | `llm_connect_timeout_seconds` | `10` |
-| `LLM_REQUEST_DEADLINE_SECONDS` | `llm_request_deadline_seconds` | `720` (`0` disables) |
+| `LLM_REQUEST_DEADLINE_SECONDS` | `llm_request_deadline_seconds` | `1200` (`0` disables) |
 | `MOCK_LLM` | `llm_mock` | `false` |
 | `MOCK_LLM_CASSETTE` | `llm_cassette` | _(empty)_ |
 | `COGNEE_RECORD_LLM` | `llm_record_path` | _(empty)_ |
@@ -792,16 +792,19 @@ These knobs form one resilience stack, matching Python cognee's:
   extraction makes `LLM_MAX_RETRIES` attempts, each running a transport ladder
   that honours the `LLM_MIN_RETRY_SECONDS` floor above; multiplied out, the
   designed worst case runs past an hour while every individual request finishes
-  well inside its timeout. Keep the deadline at or above
-  `LLM_MAX_RETRIES x LLM_MIN_RETRY_SECONDS` — 720s at the defaults, which the
-  default deadline exactly equals — or it will cut the rate-limit-window waits
-  the floors exist to protect. Note "at or above": the shipped defaults sit
-  exactly *on* the boundary (the guard-rail warns on `deadline < ladder`), so
-  they leave no headroom for request time, backoff or time queued behind
-  `LLM_MAX_PARALLEL_REQUESTS`. That is deliberate — the ladder is the
-  *deliberate-waiting* budget, and a call is not entitled to the full ladder
-  plus overhead — but if you raise `LLM_MIN_RETRY_SECONDS` or `LLM_MAX_RETRIES`,
-  raise the deadline with them. A warning naming the computed ladder is logged at
+  well inside its timeout. Keep the deadline above
+  `LLM_MAX_RETRIES x LLM_MIN_RETRY_SECONDS` — 720s at the defaults — or it will
+  cut the rate-limit-window waits the floors exist to protect, and raise it
+  alongside either factor if you change them.
+  **Also keep it above 900s**, and here is the reason the ladder alone does not
+  tell you: this clock starts at the head of the logical call and *includes*
+  time spent paced and queued for an `LLM_MAX_PARALLEL_REQUESTS` slot. (The
+  retry floor above deliberately excludes that time; the deadline deliberately
+  counts it, because it is time the caller is blocked.) A provider 429/503 opens
+  a **900-second** pacing episode, so a deadline at or below that is spent before
+  the episode closes and every call queued behind one fails after a single
+  dispatch — converting the paced recovery into hard failures. The `1200`
+  default clears the cooldown with the 720s ladder still inside it. A warning naming the computed ladder is logged at
   startup if the deadline does not fit inside it. The three-mode cascade below
   is deliberately not a factor in that ladder: it is endpoint-capability
   discovery, memoised per endpoint, so a healthy endpoint pays for one mode per

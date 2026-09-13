@@ -2726,6 +2726,28 @@ mod tests {
         );
     }
 
+    /// ...and must also outlast one provider-overload episode.
+    ///
+    /// The deadline clock includes time spent paced and queued for an in-flight
+    /// permit — deliberately, unlike the retry floor, which subtracts it. So a
+    /// default at or below `OVERLOAD_COOLDOWN` means every call queued behind a
+    /// 429/503 episode aborts after its first dispatch, turning the paced
+    /// recovery the pacer exists to perform into hard failures. Caught reviewing
+    /// PR #215, when the default was briefly 720s against a 900s cooldown.
+    #[test]
+    fn the_default_deadline_outlasts_one_overload_cooldown() {
+        let s = Settings::default();
+        let cooldown = cognee_utils::pacing::OVERLOAD_COOLDOWN.as_secs();
+        assert!(
+            u64::from(s.llm_request_deadline_seconds) > cooldown,
+            "LLM_REQUEST_DEADLINE_SECONDS default ({}s) must outlast one \
+             OVERLOAD_COOLDOWN ({cooldown}s), or a call paced behind a provider \
+             overload episode spends its whole budget queueing and fails after a \
+             single dispatch",
+            s.llm_request_deadline_seconds,
+        );
+    }
+
     /// Every entry point that reaches one retry knob must reach the other.
     ///
     /// `set_llm_network_retries` first shipped reachable from the bulk

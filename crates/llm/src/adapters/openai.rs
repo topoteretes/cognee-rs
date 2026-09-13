@@ -473,20 +473,42 @@ impl OpenAIAdapter {
     ///
     /// Chosen to sit above the legitimate retry envelope and below the
     /// pathological one. That envelope is
-    /// `structured_output_retries x min_retry_seconds`: each corrective re-ask
-    /// runs a transport ladder that honours the time floor before it may give
-    /// up. At the defaults (3 x 240s) that is 12 minutes of *deliberate*
-    /// waiting, which a call surviving a provider rate-limit window genuinely
-    /// needs; the unbounded worst case ran past an hour.
+    /// `structured_output_retries x min_retry_seconds`: each attempt runs a
+    /// transport ladder that honours the time floor before it may give up. At
+    /// the defaults (3 x 240s) that is 12 minutes of *deliberate* waiting, which
+    /// a call surviving a provider rate-limit window genuinely needs; the
+    /// unbounded worst case ran past an hour.
     ///
-    /// It is also the envelope Python actually has: `_MAX_VALIDATION_RETRIES =
-    /// 3` nested over `stop_after_attempt(2) & stop_after_delay(240)`
-    /// (`retry_config.py`), whose `&` keeps each transport ladder going until
-    /// *both* floors are met. The three-mode cascade is deliberately **not** a
-    /// factor here — see the ladder computed in
+    /// That 720s envelope is also the one Python actually has:
+    /// `_MAX_VALIDATION_RETRIES = 3` nested over `stop_after_attempt(2) &
+    /// stop_after_delay(240)` (`retry_config.py`), whose `&` keeps each
+    /// transport ladder going until *both* floors are met. The three-mode
+    /// cascade is deliberately **not** a factor — see the ladder computed in
     /// `cognee_components::builtins::llm`, which warns when a configured
     /// deadline does not fit inside it, for why it is not a per-call multiplier.
-    pub const DEFAULT_REQUEST_DEADLINE: Duration = Duration::from_secs(720);
+    ///
+    /// # Why 1200 and not that 720
+    ///
+    /// This clock starts at the head of the logical call and **includes** time
+    /// spent paced and queued for an in-flight permit — deliberately, since that
+    /// is time the caller is blocked, and unlike the retry *floor*, which
+    /// subtracts `queued_for_permit` precisely because it is a resilience
+    /// guarantee rather than a bound.
+    ///
+    /// So the budget has to cover the ladder *plus* the wait in front of it, and
+    /// the wait has a known worst case:
+    /// [`OVERLOAD_COOLDOWN`](cognee_utils::pacing::OVERLOAD_COOLDOWN) paces
+    /// dispatch for 900s after a provider 429/503. A 720s budget is spent before
+    /// a single such episode closes, so every call queued behind one would abort
+    /// after its first dispatch — converting the paced recovery the pacer exists
+    /// to perform into hard failures, which is the same "turn the rate-limit
+    /// survival off by the side door" failure the guard-rail warning exists to
+    /// catch, arriving through the default rather than through a misconfiguration.
+    ///
+    /// 1200s clears that cooldown with the 720s ladder still fitting inside, and
+    /// stays well under the 1800s this was before the ladder was corrected. Keep
+    /// it above `OVERLOAD_COOLDOWN` if you change it.
+    pub const DEFAULT_REQUEST_DEADLINE: Duration = Duration::from_secs(1200);
 
     /// Create a new OpenAI adapter.
     ///
