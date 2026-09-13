@@ -40,7 +40,7 @@ pub use context::{
     aws_inputs_from_env, parse_reasoning_override, parse_structured_output_mode,
 };
 pub use error::ComponentError;
-pub use registry::ComponentRegistry;
+pub use registry::{ComponentRegistry, default_graph_provider};
 pub use traits::{EmbeddingFactory, GraphDbFactory, LlmFactory, VectorDbFactory};
 
 // Re-export the default embedding factory so external callers can compose it.

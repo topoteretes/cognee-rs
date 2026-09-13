@@ -150,6 +150,45 @@ impl ComponentRegistry {
         v
     }
 
+    /// The graph provider to use when nothing selected one, derived from what
+    /// this registry actually holds.
+    ///
+    /// Resolution order:
+    /// 1. the first id in [`GRAPH_PROVIDER_PREFERENCE`] that is registered —
+    ///    `ladybug` leads, so every build that has it keeps the historical
+    ///    default bit-for-bit;
+    /// 2. otherwise the single registered provider, when there is exactly one;
+    /// 3. otherwise an error naming what is registered — two unrelated backends
+    ///    and no preference between them is a choice only the operator can make.
+    ///
+    /// The preference list carries one id per backend. The built-ins register
+    /// two spellings each (`ladybug`/`kuzu`, `postgres`/`postgresql`), so rule 2
+    /// on its own would call a plain `pggraph` build ambiguous.
+    ///
+    /// Why derive at all: the default used to be the literal `"ladybug"`, so an
+    /// image compiled with `pggraph` and without `ladybug` aborted on every
+    /// container start — `Unsupported graph_database_provider 'ladybug'.
+    /// Registered providers: [postgres, postgresql]` — unless the deployment
+    /// happened to set `GRAPH_DATABASE_PROVIDER` by hand.
+    pub fn default_graph_provider(&self) -> Result<String, ComponentError> {
+        if let Some(preferred) = GRAPH_PROVIDER_PREFERENCE
+            .iter()
+            .find(|id| self.graph.contains_key(**id))
+        {
+            return Ok((*preferred).to_string());
+        }
+        let registered = self.graph_providers();
+        match registered.as_slice() {
+            [only] => Ok(only.clone()),
+            _ => Err(ComponentError::Config(format!(
+                "Cannot derive a default graph_database_provider from the registered \
+                 providers: [{}]. Set GRAPH_DATABASE_PROVIDER (or \
+                 `graph_database_provider` in config) to one of them explicitly.",
+                registered.join(", ")
+            ))),
+        }
+    }
+
     /// Provider ids with a registered LLM factory (sorted).
     pub fn llm_providers(&self) -> Vec<String> {
         let mut v: Vec<String> = self.llm.keys().cloned().collect();
@@ -313,6 +352,49 @@ const ANDROID_LANCEDB_FALLBACK: bool = cfg!(all(target_os = "android", not(featu
 /// unconditionally by [`ComponentRegistry::with_builtins`].
 const ANDROID_LANCEDB_FALLBACK_KEY: &str = "brute-force";
 
+/// Canonical graph-backend ids, most preferred first, used by
+/// [`ComponentRegistry::default_graph_provider`] when a build registers more
+/// than one backend.
+///
+/// One entry per backend: alias spellings (`kuzu` for ladybug, `postgresql` for
+/// pggraph) are deliberately absent, because a backend registered under two ids
+/// must not read as two candidate backends. `ladybug` leads so that every build
+/// that has it resolves exactly as it did before the default was derived.
+const GRAPH_PROVIDER_PREFERENCE: [&str; 2] = ["ladybug", "postgres"];
+
+/// What [`default_graph_provider`] falls back to when the built-in registry
+/// cannot derive anything.
+///
+/// With only built-ins that means a build with no graph feature at all, since
+/// every feature-driven combination resolves through the preference list.
+/// Reporting the historical literal there keeps the diagnosis the operator
+/// eventually gets from [`ComponentRegistry::build_graph`] — "Unsupported
+/// graph_database_provider 'ladybug' … Rebuild with the `ladybug` crate
+/// feature" — which names the actual problem better than a derivation error
+/// about an empty registry would.
+const GRAPH_PROVIDER_FALLBACK: &str = "ladybug";
+
+/// The graph provider a build should default to, derived once from the
+/// factories its compiled features register.
+///
+/// This is the value config defaults (`Settings::graph_database_provider`,
+/// `HttpServerConfig::graph_provider`) use instead of a hardcoded string, so a
+/// feature set that drops `ladybug` no longer defaults to a backend it cannot
+/// build. See [`ComponentRegistry::default_graph_provider`] for the rule.
+///
+/// Memoised: building a registry is cheap but not free, and config defaults are
+/// constructed far more than once per process.
+pub fn default_graph_provider() -> &'static str {
+    static DERIVED: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    DERIVED
+        .get_or_init(|| {
+            ComponentRegistry::with_builtins()
+                .default_graph_provider()
+                .unwrap_or_else(|_| GRAPH_PROVIDER_FALLBACK.to_string())
+        })
+        .as_str()
+}
+
 /// Canonicalize a vector-provider string, collapsing the historical
 /// brute-force spelling variants (`brute_force`, `bruteforce`) onto the single
 /// registered key `brute-force`. All other providers pass through lowercased.
@@ -449,6 +531,125 @@ mod tests {
     #[cfg(not(target_os = "android"))]
     fn android_fallback_constant_is_off_on_non_android_targets() {
         assert!(!ANDROID_LANCEDB_FALLBACK);
+    }
+
+    /// A graph factory that only answers to `provider`, for composing registries
+    /// whose provider set does not depend on this crate's enabled features.
+    struct StubGraph(&'static str);
+    #[async_trait::async_trait]
+    impl GraphDbFactory for StubGraph {
+        fn provider(&self) -> &str {
+            self.0
+        }
+        async fn build(
+            &self,
+            _ctx: &BackendBuildContext,
+        ) -> Result<Arc<dyn GraphDBTrait>, ComponentError> {
+            unreachable!("default-resolution test")
+        }
+    }
+
+    fn graph_registry(providers: &[&'static str]) -> ComponentRegistry {
+        let mut reg = ComponentRegistry::empty();
+        for p in providers {
+            reg.register_graph(Arc::new(StubGraph(p)));
+        }
+        reg
+    }
+
+    // The default must follow what is registered, not a literal. This is the
+    // case that used to abort every `pggraph`-only container at boot: the
+    // registry knows postgres/postgresql, the default said "ladybug".
+    #[test]
+    #[allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        reason = "test module: a failed derivation should fail the test loudly"
+    )]
+    fn default_graph_provider_follows_the_registered_set() {
+        // pggraph-only: both spellings of one backend still resolve to one
+        // answer, via the preference list rather than the single-entry rule.
+        assert_eq!(
+            graph_registry(&["postgres", "postgresql"])
+                .default_graph_provider()
+                .unwrap(),
+            "postgres"
+        );
+
+        // ladybug wins wherever it is registered, alone or alongside others, so
+        // every build that has it keeps the pre-derivation default.
+        assert_eq!(
+            graph_registry(&["ladybug", "kuzu"])
+                .default_graph_provider()
+                .unwrap(),
+            "ladybug"
+        );
+        assert_eq!(
+            graph_registry(&["ladybug", "kuzu", "postgres", "postgresql", "mock"])
+                .default_graph_provider()
+                .unwrap(),
+            "ladybug"
+        );
+
+        // A single registered provider is unambiguous even when it is not in
+        // the preference list — a `testing`-only build, or one external adapter.
+        assert_eq!(
+            graph_registry(&["mock"]).default_graph_provider().unwrap(),
+            "mock"
+        );
+
+        // pggraph + testing: the preference list decides, so the extra `mock`
+        // registration does not make a deployable build ambiguous.
+        assert_eq!(
+            graph_registry(&["postgres", "postgresql", "mock"])
+                .default_graph_provider()
+                .unwrap(),
+            "postgres"
+        );
+
+        // Nothing registered, or two unrelated backends with no preference
+        // between them: refuse to guess and name what is there.
+        let err = graph_registry(&[])
+            .default_graph_provider()
+            .expect_err("an empty graph registry has no default to derive");
+        assert!(matches!(err, ComponentError::Config(_)));
+        assert!(err.to_string().contains("GRAPH_DATABASE_PROVIDER"));
+        let err = graph_registry(&["mock", "neo4j"])
+            .default_graph_provider()
+            .expect_err("two unpreferred backends must not resolve silently");
+        assert!(err.to_string().contains("mock, neo4j"));
+    }
+
+    // The value the config defaults actually take: derived from `with_builtins`,
+    // so it must name a provider this build can construct.
+    #[test]
+    fn derived_default_graph_provider_is_buildable_by_this_feature_set() {
+        let derived = default_graph_provider();
+
+        #[cfg(feature = "ladybug")]
+        assert_eq!(
+            derived, "ladybug",
+            "a build with `ladybug` must keep the historical default"
+        );
+        #[cfg(all(not(feature = "ladybug"), feature = "pggraph"))]
+        assert_eq!(
+            derived, "postgres",
+            "a `pggraph`-only build must default to a provider it registers"
+        );
+
+        // Whatever the feature set, the default has to be registered -- except
+        // when there is no graph feature at all, where the fallback is what
+        // produces the "rebuild with the `ladybug` crate feature" diagnosis.
+        #[cfg(any(feature = "ladybug", feature = "pggraph", feature = "testing"))]
+        {
+            let registered = ComponentRegistry::with_builtins().graph_providers();
+            assert!(
+                registered.iter().any(|p| p == derived),
+                "derived default '{derived}' is not registered; have {registered:?}"
+            );
+        }
+        #[cfg(not(any(feature = "ladybug", feature = "pggraph", feature = "testing")))]
+        assert_eq!(derived, GRAPH_PROVIDER_FALLBACK);
     }
 
     // The unsupported-provider feature hint must be keyed on BOTH the component

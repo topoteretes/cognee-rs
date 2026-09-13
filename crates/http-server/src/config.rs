@@ -135,7 +135,11 @@ pub struct HttpServerConfig {
     pub relational_db_url: String,
 
     /// Graph provider name.
-    /// Env: `GRAPH_DATABASE_PROVIDER`. Default: `ladybug`.
+    ///
+    /// Env: `GRAPH_DATABASE_PROVIDER`. The default is derived from the graph
+    /// factories this binary's features register
+    /// ([`cognee_components::default_graph_provider`]): `ladybug` wherever that
+    /// feature is compiled in, otherwise the single backend the build has.
     pub graph_provider: String,
 
     /// Graph file path (for embedded ladybug graph DB).
@@ -430,7 +434,12 @@ impl Default for HttpServerConfig {
             data_root_directory: data_root,
             system_root_directory: system_root.clone(),
             relational_db_url: default_relational_db_url(&system_root),
-            graph_provider: "ladybug".to_string(),
+            // Derived from the graph factories this binary's features register,
+            // not hardcoded: an image built with `pggraph` and without
+            // `ladybug` used to default to a provider it could not build and
+            // abort on every container start. `ladybug` still wins whenever it
+            // is compiled in, so existing deployments are unaffected.
+            graph_provider: cognee_components::default_graph_provider().to_string(),
             graph_file_path: default_graph_file_path(&system_root),
             graph_db_url: String::new(),
             vector_provider: "pgvector".to_string(),
@@ -1087,6 +1096,29 @@ mod tests {
         assert!(!cfg.require_authentication);
         assert!(cfg.cors_allowed_origins.is_empty());
         assert_eq!(cfg.env, Environment::Prod);
+    }
+
+    /// The default graph provider must be one this binary can actually build.
+    /// It used to be the literal `"ladybug"`, so an image compiled with
+    /// `pggraph` and without `ladybug` aborted on every container start:
+    /// `Unsupported graph_database_provider 'ladybug'. Registered providers:
+    /// [postgres, postgresql]`. Asserting against the registry rather than a
+    /// string keeps that true for whatever feature set the image is built with.
+    #[test]
+    fn default_graph_provider_is_registered_in_this_build() {
+        let cfg = HttpServerConfig::default();
+        let registered = cognee_components::ComponentRegistry::with_builtins().graph_providers();
+        // A build with no graph feature at all has nothing to derive; the
+        // literal fallback is what produces the "rebuild with the `ladybug`
+        // crate feature" diagnosis, so only assert where there is a backend.
+        if registered.is_empty() {
+            return;
+        }
+        assert!(
+            registered.contains(&cfg.graph_provider),
+            "default graph_provider '{}' is not registered; have {registered:?}",
+            cfg.graph_provider
+        );
     }
 
     #[test]

@@ -258,6 +258,10 @@ pub struct Settings {
     /// API key for the fallback LLM provider.
     pub llm_fallback_api_key: String,
 
+    /// Graph backend id. The default is derived from the graph factories the
+    /// compiled features register
+    /// ([`cognee_components::default_graph_provider`]) — `ladybug` in every
+    /// default build, the single registered backend in a build that drops it.
     pub graph_database_provider: String,
     pub graph_database_url: String,
     pub graph_database_name: String,
@@ -1322,7 +1326,14 @@ impl Default for Settings {
             llm_fallback_endpoint: String::new(),
             llm_fallback_api_key: String::new(),
 
-            graph_database_provider: "ladybug".to_string(),
+            // Derived from the graph factories the compiled features register
+            // rather than hardcoded, for the same reason as the HTTP server's
+            // `graph_provider`: a build without `ladybug` (an SDK or CLI
+            // compiled `--no-default-features` with `pggraph`) would otherwise
+            // default to a backend the registry cannot build, and fail on the
+            // first graph access. `ladybug` still wins wherever it is compiled
+            // in, which is every default build.
+            graph_database_provider: cognee_components::default_graph_provider().to_string(),
             graph_database_url: String::new(),
             graph_database_name: String::new(),
             graph_database_username: String::new(),
@@ -3612,7 +3623,14 @@ mod tests {
     #[test]
     fn test_config_defaults_match_expected_values() {
         let settings = Settings::default();
+        // The graph default is derived from the compiled graph backends, so pin
+        // it only where the derivation has an answer to give. `ladybug` is in
+        // this crate's default features, which is the configuration every
+        // consumer of the documented default builds.
+        #[cfg(feature = "ladybug")]
         assert_eq!(settings.graph_database_provider, "ladybug");
+        #[cfg(all(not(feature = "ladybug"), feature = "pggraph"))]
+        assert_eq!(settings.graph_database_provider, "postgres");
         assert_eq!(settings.logs_root_directory, "./logs");
     }
 
