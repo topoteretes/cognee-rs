@@ -77,6 +77,15 @@ async fn extracts_text_from_a_real_pdf() {
         && let Err(e) = &result
         && e.to_string().contains(LIBRARY_UNOBTAINABLE)
     {
+        // As in `pdf_fixture_extraction.rs`: a skip is invisible in a passing
+        // test, so CI must not be allowed to go green having never pinned the
+        // selection rule below.
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "libpdfium could not be obtained, so the pdfium-priority rule was never checked — \
+             and a CI lane must not report green on that. Provision the library and set \
+             PDFIUM_LIB_PATH. Cause: {e}"
+        );
         eprintln!(
             "SKIP extracts_text_from_a_real_pdf: both PDF backends are enabled, so the loader \
              selected PDFium, and libpdfium could not be obtained on this machine. Set \

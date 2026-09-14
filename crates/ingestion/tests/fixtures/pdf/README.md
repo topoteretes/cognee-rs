@@ -84,4 +84,17 @@ buf += b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (n, xr
 sys.stdout.buffer.write(bytes(buf))
 ```
 
-If you change the page text, update `sample.expected.txt` to match.
+If you change `PAGE1` or `PAGE2`, **two** snapshots go stale, not one — update
+both `sample.expected.txt` (PDFium) and `sample.expected.pure-rust.txt`
+(`pdf-extract`). They hold the same page text in different shapes, so neither
+can be derived from the other by hand; regenerate each from its own backend:
+
+```sh
+cargo test -p cognee-ingestion --features pdf-pdfium \
+    --test pdf_fixture_extraction -- --nocapture
+cargo test -p cognee-ingestion --features pdf-pure-rust \
+    --test pdf_pure_rust_fixture_extraction -- --nocapture
+```
+
+Each failure prints the mismatch, and the module docs on `loaders::pdf` record
+how the two backends differ.

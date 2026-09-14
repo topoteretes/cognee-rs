@@ -25,17 +25,28 @@
 //! that exists today — reproducing the exact trap the accompanying
 //! `[[test]] required-features` change closes.
 //!
-//! # When this test skips
+//! # When this test skips — and when it must not
 //!
 //! The pdfium backend needs `libpdfium`, which `pdfium-auto` downloads on first
-//! use. On a machine that cannot obtain it — no network, a blocked proxy, an
-//! unsupported target triple — this test prints a skip notice and returns.
+//! use. On a developer machine that cannot obtain it — no network, a blocked
+//! proxy, an unsupported target triple — this test returns instead of failing.
 //!
-//! That escape hatch is deliberately narrow: it fires *only* on the library
-//! resolution error, and it loses no coverage, because the resolution failure
-//! path is itself what `pdf_pdfium_cold_cache.rs` pins. A parse failure, a bind
-//! failure, or the wrong text still fail the test. Set `PDFIUM_LIB_PATH` to an
-//! existing `libpdfium` to run this offline.
+//! **In CI it fails instead.** A skip here is not visible: cargo captures the
+//! output of a *passing* test, so a bare `test ... ok` is all a normal
+//! `cargo test` prints, and a lane could go green having never parsed a PDF —
+//! which is precisely the green-zero failure this file and its `[[test]]`
+//! entry exist to close. Keying the hard failure on `CI` (set by GitHub
+//! Actions) keeps the local convenience without letting the guarantee evaporate
+//! where it is load-bearing. The repo's own runner passes `--no-capture`
+//! (`scripts/run_tests_with_openai.sh`), so the notice is legible there too.
+//!
+//! If a CI environment ever genuinely cannot download it, provision the library
+//! and point `PDFIUM_LIB_PATH` at it rather than relaxing this.
+//!
+//! The escape hatch is otherwise deliberately narrow: it fires *only* on the
+//! library-resolution error, and it loses no coverage, because that path is
+//! itself what `pdf_pdfium_cold_cache.rs` pins. A parse failure, a bind
+//! failure, or the wrong text still fail the test.
 
 use cognee_ingestion::loaders::{DocumentLoader, LoaderOutput, pdf::PdfLoader};
 use cognee_models::{DataPoint, Document};
@@ -79,6 +90,12 @@ async fn extracts_text_from_a_real_pdf() {
     let output = match PdfLoader.extract(SAMPLE_PDF, &doc).await {
         Ok(output) => output,
         Err(e) if e.to_string().contains(LIBRARY_UNOBTAINABLE) => {
+            assert!(
+                std::env::var_os("CI").is_none(),
+                "libpdfium could not be obtained, so real-PDF extraction never ran — and a CI \
+                 lane must not report green on that. Provision the library and set \
+                 PDFIUM_LIB_PATH. Cause: {e}"
+            );
             eprintln!(
                 "SKIP extracts_text_from_a_real_pdf: libpdfium could not be obtained on this \
                  machine, so real-PDF extraction was NOT verified. Set PDFIUM_LIB_PATH to an \
