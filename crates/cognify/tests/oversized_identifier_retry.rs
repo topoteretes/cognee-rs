@@ -140,7 +140,7 @@ async fn an_oversized_identifier_is_re_asked_and_the_retry_succeeds() {
             when.method(POST)
                 .path("/chat/completions")
                 .body_includes("failed validation")
-                .body_includes("Edge.target_node_id")
+                .body_includes("edges[].target_node_id")
                 .body_includes("1024-character limit");
             then.status(200)
                 .header("content-type", "application/json")
@@ -196,7 +196,7 @@ async fn an_unrecoverable_oversized_identifier_fails_the_chunk() {
 
     let msg = err.to_string();
     assert!(
-        msg.contains("Edge.target_node_id"),
+        msg.contains("edges[].target_node_id"),
         "the surfaced error must name the offending field, got: {msg}"
     );
     always_degenerate.assert_calls_async(3).await;
