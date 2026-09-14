@@ -95,8 +95,13 @@ pub struct BedrockAdapter {
     /// attempts once the `retry_min_elapsed` floor is also met. This adapter
     /// carries no such floor, so `LLM_MIN_RETRY_SECONDS` does not reach it and
     /// its ladder is a plain attempt count. Both differences predate
-    /// `LLM_NETWORK_RETRIES`; unifying them belongs with the Bedrock pacing work
-    /// (SDK-612), which rewrites this loop.
+    /// `LLM_NETWORK_RETRIES`.
+    ///
+    /// SDK-612 rewrote this loop to add pacing and left the divergence standing
+    /// on purpose: a `retry_min_elapsed` floor is a "keep retrying for at least
+    /// this long" guarantee, and adding one here would lengthen Bedrock calls
+    /// rather than bound them, which is the opposite of what the aggregate
+    /// deadline is for. Unify only with a reason to, not for symmetry.
     network_retries: usize,
     /// Wall-clock ceiling on **one logical structured-output call** — spanning
     /// every corrective re-ask and every transport retry inside them. `None`
@@ -599,9 +604,13 @@ impl BedrockAdapter {
             // the first admission already paced this attempt so no attempt ever
             // spends two tokens.
             //
-            // Unlike those two adapters there is no queued-time bookkeeping
-            // here: this loop is a fixed attempt count with no minimum-elapsed
-            // floor, so time spent queuing cannot cut the retry budget short.
+            // Unlike those two adapters there is no `queued_for_permit`
+            // bookkeeping: that subtraction protects a minimum-elapsed retry
+            // *floor*, and this ladder is a plain attempt count with no floor to
+            // protect. The aggregate *deadline* guarded below is a different
+            // mechanism, and it does apply — Bedrock gained one in SDK-624.
+            let dispatch_wait_started = std::time::Instant::now();
+
             let paced_before_queue = match pacer.as_deref() {
                 Some(pacer) => pacer.admit().await,
                 None => false,
@@ -609,6 +618,34 @@ impl BedrockAdapter {
             let _in_flight = crate::in_flight::acquire_in_flight().await;
             if !paced_before_queue && let Some(pacer) = pacer.as_deref() {
                 pacer.admit().await;
+            }
+
+            // Pacing and the in-flight queue can outlast the caller's aggregate
+            // budget on their own — a 900s overload cooldown dwarfs the 1200s
+            // default once callers queue behind it — and the guard at the top of
+            // the loop cannot see that, because it runs before the wait exists.
+            // `docs/configuration.md` states this clock counts time paced and
+            // queued for a slot, so without this the documented contract is not
+            // delivered on Bedrock.
+            //
+            // Narrow on purpose, matching the OpenAI and Anthropic guards: it
+            // fires only when budget *remained* when the wait began and the wait
+            // is what spent it, so the top-of-loop guard keeps its behaviour of
+            // clamping the backoff and letting the attempt it slept for start.
+            // Skipped on the first attempt, because every call makes at least
+            // one, as it did before the deadline existed.
+            if dispatch_wait_spent_the_budget(
+                attempt,
+                deadline,
+                dispatch_wait_started,
+                std::time::Instant::now(),
+            ) {
+                return Err(LlmError::Timeout(format!(
+                    "Bedrock request abandoned after {:.0}s with {attempt} attempt(s): the \
+                     call's aggregate budget (LLM_REQUEST_DEADLINE_SECONDS) was spent waiting \
+                     for dispatch (pacing or the in-flight queue); last error: {last_error}",
+                    started.elapsed().as_secs_f64(),
+                )));
             }
 
             let response = match self.transport.post_json(&url, payload.clone()).await {
@@ -1128,6 +1165,32 @@ impl Llm for BedrockAdapter {
     }
 }
 
+/// Whether the wait for dispatch — pacing, then the in-flight queue — is what
+/// spent the caller's aggregate budget.
+///
+/// Extracted from the retry loop so the narrowness is testable. The three
+/// conditions each exclude a case that must *not* abort:
+///
+/// * `attempt > 0` — every call makes at least one attempt, as it did before
+///   the deadline existed.
+/// * `wait_started < deadline` — budget remained when the wait began. If it was
+///   already spent, the guard at the top of the loop owns that case: it clamps
+///   the backoff and lets the attempt it slept for proceed.
+/// * `now >= deadline` — and the wait is what crossed it.
+///
+/// Note this detects rather than preempts: it runs after the wait returns, so a
+/// wait far longer than the budget still blocks for its full length and then
+/// reports. Bounding the wait itself would mean a timeout on `admit` and
+/// `acquire_in_flight`, which neither this adapter nor the two it mirrors has.
+fn dispatch_wait_spent_the_budget(
+    attempt: usize,
+    deadline: Option<std::time::Instant>,
+    wait_started: std::time::Instant,
+    now: std::time::Instant,
+) -> bool {
+    attempt > 0 && deadline.is_some_and(|deadline| wait_started < deadline && now >= deadline)
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -1263,5 +1326,100 @@ mod tests {
             matches!(error, LlmError::FeatureNotSupported(_)),
             "{error:?}"
         );
+    }
+
+    // ── dispatch-wait deadline guard ────────────────────────────────────────
+    //
+    // Ported from the OpenAI and Anthropic loops, where the same guard exists
+    // and — checked while porting — is asserted by no test in either. These
+    // pin the narrowness, which is the whole difficulty: the guard must fire
+    // when the wait crossed the budget and stay silent in the three cases that
+    // would otherwise abort a call the design intends to let run.
+
+    fn at(base: std::time::Instant, secs: u64) -> std::time::Instant {
+        base + std::time::Duration::from_secs(secs)
+    }
+
+    #[test]
+    fn dispatch_wait_guard_fires_when_the_wait_crossed_the_budget() {
+        let base = std::time::Instant::now();
+        assert!(dispatch_wait_spent_the_budget(
+            1,
+            Some(at(base, 10)),
+            at(base, 9),  // budget remained when the wait began
+            at(base, 11), // and the wait is what spent it
+        ));
+    }
+
+    /// The first attempt always runs. Every call made one before the deadline
+    /// existed, and a call that never dispatches cannot report a provider error.
+    #[test]
+    fn dispatch_wait_guard_never_fires_on_the_first_attempt() {
+        let base = std::time::Instant::now();
+        assert!(!dispatch_wait_spent_the_budget(
+            0,
+            Some(at(base, 10)),
+            at(base, 9),
+            at(base, 11),
+        ));
+    }
+
+    /// Budget already spent when the wait began belongs to the top-of-loop
+    /// guard, which clamps the backoff and lets the attempt it slept for start.
+    /// Firing here too would abort that attempt and change existing behaviour.
+    #[test]
+    fn dispatch_wait_guard_defers_when_the_budget_was_already_spent() {
+        let base = std::time::Instant::now();
+        assert!(!dispatch_wait_spent_the_budget(
+            1,
+            Some(at(base, 10)),
+            at(base, 11), // wait began after the deadline had passed
+            at(base, 12),
+        ));
+    }
+
+    #[test]
+    fn dispatch_wait_guard_is_silent_while_budget_remains() {
+        let base = std::time::Instant::now();
+        assert!(!dispatch_wait_spent_the_budget(
+            1,
+            Some(at(base, 10)),
+            at(base, 1),
+            at(base, 9),
+        ));
+    }
+
+    /// `LLM_REQUEST_DEADLINE_SECONDS=0` disables the budget, and an unbounded
+    /// call must not be aborted by a long pacing wait.
+    #[test]
+    fn dispatch_wait_guard_is_silent_without_a_deadline() {
+        let base = std::time::Instant::now();
+        assert!(!dispatch_wait_spent_the_budget(
+            3,
+            None,
+            at(base, 1),
+            at(base, 9_999),
+        ));
+    }
+
+    /// The boundary: reaching the deadline exactly is spent, one tick short is
+    /// not. Off by one here either aborts a call with budget left or lets one
+    /// through with none.
+    #[test]
+    fn dispatch_wait_guard_treats_the_deadline_instant_as_spent() {
+        let base = std::time::Instant::now();
+        let deadline = at(base, 10);
+        assert!(dispatch_wait_spent_the_budget(
+            1,
+            Some(deadline),
+            at(base, 9),
+            deadline,
+        ));
+        assert!(!dispatch_wait_spent_the_budget(
+            1,
+            Some(deadline),
+            at(base, 9),
+            deadline - std::time::Duration::from_nanos(1),
+        ));
     }
 }
