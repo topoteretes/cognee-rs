@@ -67,19 +67,22 @@ pub fn sanitize_string(mut value: String) -> String {
 /// keys that collapse to the same text after stripping merge, last one wins —
 /// the same outcome as Python's dict comprehension.
 ///
-/// "Last" means last in `serde_json::Map` iteration order, and *which* key that
-/// is depends on the final binary's build graph, not on this crate. With
-/// serde_json's `preserve_order` enabled anywhere in it, `Map` is an
-/// insertion-ordered `IndexMap` and the last *inserted* colliding key wins —
-/// Python's dict-comprehension rule. Without it `Map` is a `BTreeMap` and the
-/// winner is whichever *raw* key sorts last instead.
+/// "Last" means last in `serde_json::Map` iteration order, and that backing is
+/// insertion-ordered here: this crate takes `serde_json` from the workspace,
+/// which enables `preserve_order`, so `Map` is an `IndexMap` and the last
+/// *inserted* colliding key wins — Python's dict-comprehension rule. Under the
+/// `BTreeMap` backing the winner would instead be whichever *raw* key sorts
+/// last, which is a different key.
 ///
-/// This crate deliberately does not enable the feature itself, because doing so
-/// would force the `IndexMap` backing on every downstream consumer of
-/// `cognee-utils` (see the dependency comment in `Cargo.toml`). Every in-workspace
-/// cognee build gets the Python rule regardless, via the workspace root's
-/// `serde_json/preserve_order` setting. The divergence is reachable only when
-/// one object holds two keys differing by nothing but an embedded NUL.
+/// This holds in every build of this crate, not only in-workspace ones: the
+/// feature is declared by this crate's own (inherited) dependency line, so it
+/// survives a bare `cargo test -p cognee-utils`, the wasm32 lane, and the
+/// published manifest — external consumers of `cognee-utils` get the same rule.
+/// See the dependency comment in `Cargo.toml`, which records why that is
+/// accepted rather than opted out of.
+///
+/// The distinction is reachable only when one object holds two keys differing
+/// by nothing but an embedded NUL.
 pub fn sanitize_json_in_place(value: &mut Value) {
     match value {
         Value::String(s) => {
@@ -221,20 +224,22 @@ mod tests {
         assert_eq!(sanitize_str("a\u{fffd}\u{0}b"), "a\u{fffd}b");
     }
 
-    /// Pins the collision rule under *both* `serde_json::Map` backings, since
-    /// which one is in play is a property of the final binary's build graph
-    /// rather than of this crate (see `sanitize_json_in_place`).
+    /// Pins the collision rule, deriving the expectation from the `Map`
+    /// backing actually in play rather than assuming one.
     ///
-    /// `"ab"` is inserted first and `"a\u{0}b"` second. With `preserve_order`
-    /// somewhere in the graph — which is every cognee build, via
-    /// `cognee-database` and `cognee-visualization` — `Map` is insertion-ordered
-    /// and the *second* insertion wins the collapse, matching Python's dict
-    /// comprehension. In a bare `cargo test -p cognee-utils` or the wasm32 lane
-    /// `Map` is a `BTreeMap`, the raw keys iterate sorted (`"a\u{0}b"` before
-    /// `"ab"`, since 0x00 < 0x62) and the first insertion survives instead.
+    /// `"ab"` is inserted first and `"a\u{0}b"` second. `Map` is
+    /// insertion-ordered in every build of this crate — `serde_json` is
+    /// inherited from the workspace with `preserve_order` on, which a bare
+    /// `cargo test -p cognee-utils` and the wasm32 lane get too — so the
+    /// *second* insertion wins the collapse, matching Python's dict
+    /// comprehension. (An earlier version of this comment claimed those two
+    /// configurations fell back to `BTreeMap`; they do not.)
     ///
-    /// Asserting both keeps the standalone configuration covered too; the old
-    /// version of this test only held in the feature-enabled one.
+    /// The `BTreeMap` arm is kept anyway: under that backing the raw keys
+    /// iterate sorted (`"a\u{0}b"` before `"ab"`, since 0x00 < 0x62) and the
+    /// first insertion survives. Computing the expectation instead of hardcoding
+    /// it means that if the feature ever came off, this test would assert the
+    /// correct winner rather than fail spuriously.
     #[test]
     fn colliding_keys_resolve_to_the_last_in_map_order() {
         let mut input = Map::new();

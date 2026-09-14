@@ -780,8 +780,6 @@ fn extract_original_location(input: &DataInput) -> String {
 // Task 1 wrapper: DataInput → ProcessedInput
 // ---------------------------------------------------------------------------
 
-/// Build a [`TypedTask`] that streams a [`DataInput`] to storage, hashes its
-/// content, and returns a self-contained [`ProcessedInput`].
 /// Lift a `process_input` error into a [`TaskError`], keeping the type where
 /// it is possible to keep it.
 ///
@@ -807,6 +805,8 @@ fn preserve_ingestion_error(e: Box<dyn std::error::Error>) -> TaskError {
     }
 }
 
+/// Build a [`TypedTask`] that streams a [`DataInput`] to storage, hashes its
+/// content, and returns a self-contained [`ProcessedInput`].
 pub fn make_process_input_task(
     storage: Arc<dyn StorageTrait>,
     hash_algorithm: HashAlgorithm,
