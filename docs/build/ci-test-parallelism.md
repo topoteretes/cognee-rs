@@ -77,7 +77,14 @@ using the cassette record/replay infra in `crates/llm/src/mock/`.
     with `MissPolicy::Error` (a stale/missing entry fails loudly instead of the
     `ReplayLlm` default of silently returning an empty graph). No credentials.
   - `COGNEE_RECORD_LLM=1` → wrap the real adapter and write/merge the cassette.
-  - neither → the real adapter.
+    Credentials are **required** here: with none available this panics rather
+    than skipping, because `record-cassettes.yml` deletes the cassettes before
+    running and commits the result, so a skip would commit the deletions as a
+    successful recording.
+  - neither → the real adapter when credentials are available, otherwise
+    `None`, and the caller skips. The helper returns `Option<Arc<dyn Llm>>` for
+    exactly this reason: a separate guard is one fifteen tests forgot, which
+    made a keyless `cargo test -p cognee-cognify` panic for everyone.
 - Embeddings use `create_deterministic_embedding_engine()`
   (`MockEmbeddingEngine::deterministic(384)`, `sha256(text)`-derived) — chosen
   **per test in code**, never via a global `MOCK_EMBEDDING` env var, so the

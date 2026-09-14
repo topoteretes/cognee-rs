@@ -109,15 +109,21 @@ pub struct CognifyConfig {
     ///
     /// # Inert — kept deliberately, on both sides
     ///
-    /// **Nothing reads this.** It is defaulted and validated here, plumbed
-    /// through `Settings`, the CLI and `bindings-common`, and then never
-    /// consulted: `crates/chunking/` contains zero references to it. Setting it
-    /// changes no chunk boundary. (An earlier version of this comment said
-    /// "Used when chunk_strategy is RECURSIVE or LANGCHAIN", which was not
-    /// true of any code path.)
+    /// **No chunking code reads this.** It is defaulted here, plumbed through
+    /// `Settings`, the CLI and `bindings-common`, and then never consulted:
+    /// `crates/chunking/` contains zero references to it, so setting it changes
+    /// no chunk boundary. (An earlier version of this comment said "Used when
+    /// chunk_strategy is RECURSIVE or LANGCHAIN", which was not true of any
+    /// code path.)
     ///
-    /// It is a faithful port of a knob that is dead in Python too. Python
-    /// declares `ChunkConfig.chunk_overlap = 10`
+    /// The one thing that *does* read it is [`CognifyConfig::validate`], which
+    /// rejects `chunk_overlap >= max_chunk_size`. So an out-of-range value is
+    /// still an error even though an in-range one has no effect — worth knowing
+    /// before assuming the field is entirely unobservable.
+    ///
+    /// It is a faithful port of a knob that is dead in Python too — though dead
+    /// by unreachability, not by absence. Python declares
+    /// `ChunkConfig.chunk_overlap = 10`
     /// (`cognee/infrastructure/data/chunking/config.py:16`) and
     /// `DefaultChunkEngine` genuinely consumes it — but
     /// `get_chunking_engine()` has zero callers, and the default path is

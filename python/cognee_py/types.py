@@ -91,7 +91,7 @@ class CognifyOpts(TypedDict, total=False):
 
     tenant: str
     chunk_size: int
-    #: Currently inert: nothing in the chunking pipeline reads it (same in Python). Kept for API compatibility; see CognifyConfig::chunk_overlap in crates/cognify/src/config.rs.
+    #: Accepted but inert on the default chunking path: no chunker reads it, so it changes no chunk boundary (Python's DefaultChunkEngine does consume it, but that engine is unreachable). Only validation reads it, rejecting overlap >= chunk size. Kept for API compatibility; see CognifyConfig::chunk_overlap in crates/cognify/src/config.rs.
     chunk_overlap: int
     summarization: bool
     temporal_cognify: bool

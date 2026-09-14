@@ -407,9 +407,10 @@ void cg_sdk_add(const CgSdk*        sdk,
  * opts_json may be NULL or a JSON object with optional keys:
  *   "tenant"         — UUID string
  *   "chunkSize"      — integer
- *   "chunkOverlap"   — integer (INERT: nothing in the chunking pipeline
- *                      reads it, in Rust or Python. Accepted and ignored;
- *                      kept for API compatibility.)
+ *   "chunkOverlap"   — integer (INERT on the default chunking path: no
+ *                      chunker reads it, so chunk boundaries are
+ *                      unaffected. Only validation reads it, rejecting
+ *                      overlap >= chunk size. Kept for API compat.)
  *   "summarization"  — boolean
  *   "temporalCognify"— boolean
  *   "triplet"        — boolean

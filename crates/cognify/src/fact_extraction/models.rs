@@ -128,7 +128,9 @@ pub struct KnowledgeGraph {
     // tolerance it should never aim at. `the_model_facing_schema_carries_no_
     // implementation_detail` below pins that.
     //
-    // It would also INVALIDATE EVERY COMMITTED CASSETTE. `cassette::input_hash`
+    // It would also INVALIDATE EVERY COMMITTED STRUCTURED-OUTPUT CASSETTE —
+    // that is, every recorded call that sends a schema; plain chat entries hash
+    // messages only and are unaffected. `cassette::input_hash`
     // hashes the canonicalized schema alongside the messages, and while
     // `canonicalize` sorts object keys — so property *order* does not matter —
     // it serialises every value, `description` strings included. Editing or

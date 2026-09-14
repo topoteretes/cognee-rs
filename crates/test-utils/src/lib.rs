@@ -220,8 +220,31 @@ pub fn create_openai_adapter_from_env() -> Arc<OpenAIAdapter> {
 /// omitted, which made `cargo test -p cognee-cognify` red for anyone without
 /// credentials. CI never saw it: it sets `COGNEE_TEST_REPLAY=1`, which takes the
 /// cassette path and never reaches this function.
+/// # Record mode is the one case that must NOT skip
+///
+/// `COGNEE_RECORD_LLM` is an explicit request for a live call, and
+/// `.github/workflows/record-cassettes.yml` runs it destructively: it `rm -f`s
+/// each cassette, runs the tests, then `git add`s the fixture glob and commits
+/// whatever the staged diff holds. A skip there would exit 0 with the files
+/// still deleted, so the workflow would commit the deletions as a "successful"
+/// recording and every later replay run would fail on a cassette miss. Its
+/// credentials come from `OPENAI_TOKEN: ${{ secrets.BASETEN_KEY }}`, which is
+/// empty whenever that secret is absent — so this is reachable, not theoretical.
+///
+/// Before the keyless skip existed, `require_env`'s panic happened to protect
+/// that workflow by failing the step. Panicking here deliberately preserves it.
 pub fn create_openai_adapter_if_available() -> Option<Arc<OpenAIAdapter>> {
-    llm_env_available().then(create_openai_adapter_from_env)
+    if llm_env_available() {
+        return Some(create_openai_adapter_from_env());
+    }
+    assert!(
+        !std::env::var("COGNEE_RECORD_LLM").is_ok_and(|v| !v.is_empty()),
+        "❌ COGNEE_RECORD_LLM is set but no live LLM credentials are available \
+         (OPENAI_URL/LLM_ENDPOINT and OPENAI_TOKEN/LLM_API_KEY). Refusing to skip: \
+         the recording workflow deletes cassettes before running and commits the \
+         result, so skipping would commit the deletions as a successful recording."
+    );
+    None
 }
 
 /// Returns a PostgreSQL connection URL built from environment variables, or `None`
