@@ -28,6 +28,7 @@ export interface CogneeAddOptions {
 export interface CogneeCognifyOptions {
   tenant?: string;
   chunkSize?: number;
+  /** Currently inert: nothing in the chunking pipeline reads it (same in Python). Kept for API compatibility; see CognifyConfig::chunk_overlap in crates/cognify/src/config.rs. */
   chunkOverlap?: number;
   summarization?: boolean;
   temporalCognify?: boolean;

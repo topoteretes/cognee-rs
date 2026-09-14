@@ -128,6 +128,15 @@ pub struct KnowledgeGraph {
     // tolerance it should never aim at. `the_model_facing_schema_carries_no_
     // implementation_detail` below pins that.
     //
+    // It would also INVALIDATE EVERY COMMITTED CASSETTE. `cassette::input_hash`
+    // hashes the canonicalized schema alongside the messages, and while
+    // `canonicalize` sorts object keys — so property *order* does not matter —
+    // it serialises every value, `description` strings included. Editing or
+    // adding a `///` on any type reachable from this schema therefore changes
+    // the hash of every recorded call, and the replay lane
+    // (`COGNEE_TEST_REPLAY=1`, which is how CI runs) fails on a cassette miss.
+    // Re-record with `COGNEE_RECORD_LLM=1` when that is genuinely intended.
+    //
     // Deserialized through `deserialize_edges_lenient`, which drops a small
     // number of malformed entries instead of failing the whole graph. See that
     // function for why the model emits them.

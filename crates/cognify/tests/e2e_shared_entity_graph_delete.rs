@@ -82,7 +82,10 @@ async fn test_shared_entity_graph_delete() {
     // In-memory mock vector DB (qdrant extracted to closed cognee-vector-qdrant).
     let vector_db: Arc<dyn VectorDB> = Arc::new(MockVectorDB::new());
 
-    let llm: Arc<dyn Llm> = create_llm_from_env("shared_entity_graph_delete");
+    let Some(llm) = create_llm_from_env("shared_entity_graph_delete") else {
+        eprintln!("skipping: live LLM credentials (OPENAI_URL/OPENAI_TOKEN) not set");
+        return;
+    };
 
     let owner_id = Uuid::nil();
     let ontology = Arc::new(NoOpOntologyResolver::new());

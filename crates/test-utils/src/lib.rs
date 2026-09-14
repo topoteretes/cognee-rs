@@ -209,6 +209,21 @@ pub fn create_openai_adapter_from_env() -> Arc<OpenAIAdapter> {
     )
 }
 
+/// [`create_openai_adapter_from_env`], gated: `None` when live credentials are
+/// absent instead of panicking.
+///
+/// Prefer this over remembering to call [`llm_env_available`] first. The
+/// `Option` is the point — a caller cannot forget the guard, because it has to
+/// destructure the result. Fifteen integration tests across three crates were
+/// hard-panicking with `❌ Required environment variable 'OPENAI_URL' is not
+/// set` precisely because the guard was a separate call that each of them
+/// omitted, which made `cargo test -p cognee-cognify` red for anyone without
+/// credentials. CI never saw it: it sets `COGNEE_TEST_REPLAY=1`, which takes the
+/// cassette path and never reaches this function.
+pub fn create_openai_adapter_if_available() -> Option<Arc<OpenAIAdapter>> {
+    llm_env_available().then(create_openai_adapter_from_env)
+}
+
 /// Returns a PostgreSQL connection URL built from environment variables, or `None`
 /// if `DB_PROVIDER` is not set to `"postgres"`.
 ///

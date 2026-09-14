@@ -29,19 +29,23 @@ pub fn cassette_path(name: &str) -> String {
 /// `COGNEE_RECORD_LLM=1`, else the real adapter. See crates/cognify for the
 /// full rationale (Approach E).
 #[allow(dead_code)]
-pub fn create_llm_from_env(cassette_name: &str) -> Arc<dyn Llm> {
+/// Returns `None` when neither replay nor live credentials are available, so the
+/// caller skips instead of panicking. See
+/// `cognee_test_utils::create_openai_adapter_if_available` for why this is an
+/// `Option` rather than a separate guard the caller has to remember.
+pub fn create_llm_from_env(cassette_name: &str) -> Option<Arc<dyn Llm>> {
     let cassette = cassette_path(cassette_name);
     if std::env::var("COGNEE_TEST_REPLAY").is_ok_and(|v| !v.is_empty()) {
         let replay = ReplayLlm::from_path(&cassette)
             .unwrap_or_else(|e| panic!("❌ Failed to load cassette {cassette}: {e}"))
             .with_miss_policy(MissPolicy::Error);
-        return Arc::new(replay);
+        return Some(Arc::new(replay));
     }
-    let adapter = create_adapter_from_env();
+    let adapter: Arc<dyn Llm> = cognee_test_utils::create_openai_adapter_if_available()?;
     if std::env::var("COGNEE_RECORD_LLM").is_ok_and(|v| !v.is_empty()) {
-        return Arc::new(RecordingLlm::new(adapter, cassette));
+        return Some(Arc::new(RecordingLlm::new(adapter, cassette)));
     }
-    adapter
+    Some(adapter)
 }
 
 /// Deterministic in-process embedding engine (sha256(text), 384 dims) for

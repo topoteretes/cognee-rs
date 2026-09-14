@@ -70,7 +70,10 @@ async fn test_delete_preview_counts_match_execution() {
     let vector_db: Arc<dyn VectorDB> = Arc::new(MockVectorDB::new());
 
     // LLM via cassette (replay/record/real) — see test_utils::create_llm_from_env.
-    let llm: Arc<dyn Llm> = create_llm_from_env("delete_preview_accuracy");
+    let Some(llm) = create_llm_from_env("delete_preview_accuracy") else {
+        eprintln!("skipping: live LLM credentials (OPENAI_URL/OPENAI_TOKEN) not set");
+        return;
+    };
 
     let owner_id = Uuid::nil();
     let dataset_name = "preview_test";

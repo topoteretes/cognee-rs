@@ -104,9 +104,32 @@ pub struct CognifyConfig {
     /// explicit `Some(1500)` is honoured rather than treated as "unset".
     pub max_chunk_size: Option<usize>,
 
-    /// Overlap between chunks (in tokens).
-    /// Python default: 10 (from ChunkConfig.chunk_overlap)
-    /// Used when chunk_strategy is RECURSIVE or LANGCHAIN
+    /// Overlap between chunks (in tokens). Python default: 10 (from
+    /// `ChunkConfig.chunk_overlap`).
+    ///
+    /// # Inert — kept deliberately, on both sides
+    ///
+    /// **Nothing reads this.** It is defaulted and validated here, plumbed
+    /// through `Settings`, the CLI and `bindings-common`, and then never
+    /// consulted: `crates/chunking/` contains zero references to it. Setting it
+    /// changes no chunk boundary. (An earlier version of this comment said
+    /// "Used when chunk_strategy is RECURSIVE or LANGCHAIN", which was not
+    /// true of any code path.)
+    ///
+    /// It is a faithful port of a knob that is dead in Python too. Python
+    /// declares `ChunkConfig.chunk_overlap = 10`
+    /// (`cognee/infrastructure/data/chunking/config.py:16`) and
+    /// `DefaultChunkEngine` genuinely consumes it — but
+    /// `get_chunking_engine()` has zero callers, and the default path is
+    /// `TextChunker` (`cognee/api/v1/cognify/cognify.py:62`), which never reads
+    /// it. (`text_chunker_with_overlap.py` uses a *ratio*, a different opt-in
+    /// knob.)
+    ///
+    /// Kept rather than removed because removal is a SemVer break across four
+    /// public binding surfaces — `python/cognee_py/types.py`, `ts/src/types.ts`
+    /// (plus `configSetChunkOverlap`), `java/…/CognifyOptions.java` and
+    /// `capi/include/cognee_sdk.h` — for a knob that costs nothing to keep, and
+    /// would diverge from Python, which still declares it.
     pub chunk_overlap: usize,
 
     /// Chunking strategy.

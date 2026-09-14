@@ -122,7 +122,10 @@ async fn test_readd_and_recognify_after_delete() {
     let vector_db: Arc<dyn VectorDB> = Arc::new(MockVectorDB::new());
 
     // LLM via cassette (replay/record/real) — see test_utils::create_llm_from_env.
-    let llm: Arc<dyn Llm> = create_llm_from_env("lifecycle_loop");
+    let Some(llm) = create_llm_from_env("lifecycle_loop") else {
+        eprintln!("skipping: live LLM credentials (OPENAI_URL/OPENAI_TOKEN) not set");
+        return;
+    };
 
     let owner_id = Uuid::nil();
 

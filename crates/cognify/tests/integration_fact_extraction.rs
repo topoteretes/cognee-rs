@@ -18,7 +18,10 @@ use test_utils::create_llm_from_env;
 
 #[tokio::test]
 async fn test_fact_extraction_single_text() {
-    let adapter = create_llm_from_env("fact_extraction");
+    let Some(adapter) = create_llm_from_env("fact_extraction") else {
+        eprintln!("skipping: live LLM credentials (OPENAI_URL/OPENAI_TOKEN) not set");
+        return;
+    };
 
     println!("\n🧪 Testing fact extraction with single text");
     println!("   Model: {}", adapter.model());
@@ -83,7 +86,10 @@ async fn test_fact_extraction_single_text() {
 
 #[tokio::test]
 async fn test_fact_extraction_batch() {
-    let adapter = create_llm_from_env("fact_extraction");
+    let Some(adapter) = create_llm_from_env("fact_extraction") else {
+        eprintln!("skipping: live LLM credentials (OPENAI_URL/OPENAI_TOKEN) not set");
+        return;
+    };
 
     println!("\n  Testing batch fact extraction with multiple texts");
     println!("   Model: {}", adapter.model());
@@ -174,7 +180,10 @@ async fn test_fact_extraction_batch() {
 
 #[tokio::test]
 async fn test_fact_extraction_with_custom_prompt() {
-    let adapter = create_llm_from_env("fact_extraction");
+    let Some(adapter) = create_llm_from_env("fact_extraction") else {
+        eprintln!("skipping: live LLM credentials (OPENAI_URL/OPENAI_TOKEN) not set");
+        return;
+    };
 
     println!("\n  Testing fact extraction with custom prompt");
     println!("   Model: {}", adapter.model());

@@ -25,7 +25,10 @@ use test_utils::create_llm_from_env;
 
 #[tokio::test]
 async fn test_summarization_single_text() {
-    let adapter = create_llm_from_env("summarization");
+    let Some(adapter) = create_llm_from_env("summarization") else {
+        eprintln!("skipping: live LLM credentials (OPENAI_URL/OPENAI_TOKEN) not set");
+        return;
+    };
 
     println!("\n🧪 Testing summarization with single text");
     println!("   Model: {}", adapter.model());
@@ -69,7 +72,10 @@ async fn test_summarization_single_text() {
 
 #[tokio::test]
 async fn test_summarization_batch() {
-    let adapter = create_llm_from_env("summarization");
+    let Some(adapter) = create_llm_from_env("summarization") else {
+        eprintln!("skipping: live LLM credentials (OPENAI_URL/OPENAI_TOKEN) not set");
+        return;
+    };
 
     println!("\n🧪 Testing batch summarization");
     println!("   Model: {}", adapter.model());
@@ -142,7 +148,10 @@ async fn test_summarization_batch() {
 
 #[tokio::test]
 async fn test_summarization_deterministic_ids() {
-    let adapter = create_llm_from_env("summarization");
+    let Some(adapter) = create_llm_from_env("summarization") else {
+        eprintln!("skipping: live LLM credentials (OPENAI_URL/OPENAI_TOKEN) not set");
+        return;
+    };
 
     println!("\n🧪 Testing deterministic summary IDs");
 
@@ -202,7 +211,10 @@ async fn test_summarization_deterministic_ids() {
 
 #[tokio::test]
 async fn test_summarization_empty_chunks() {
-    let adapter = create_llm_from_env("summarization");
+    let Some(adapter) = create_llm_from_env("summarization") else {
+        eprintln!("skipping: live LLM credentials (OPENAI_URL/OPENAI_TOKEN) not set");
+        return;
+    };
 
     println!("\n🧪 Testing summarization with empty chunks");
 
@@ -224,7 +236,10 @@ async fn test_summarization_empty_chunks() {
 
 #[tokio::test]
 async fn test_summarization_custom_prompt() {
-    let adapter = create_llm_from_env("summarization");
+    let Some(adapter) = create_llm_from_env("summarization") else {
+        eprintln!("skipping: live LLM credentials (OPENAI_URL/OPENAI_TOKEN) not set");
+        return;
+    };
 
     println!("\n🧪 Testing summarization with custom prompt");
 

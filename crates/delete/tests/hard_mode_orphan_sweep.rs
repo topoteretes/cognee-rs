@@ -25,8 +25,8 @@ use cognee_delete::{DeleteMode, DeleteRequest, DeleteScope, DeleteService};
 use cognee_embedding::{EmbeddingEngine, MockEmbeddingEngine};
 use cognee_graph::{GraphDBTrait, LadybugAdapter};
 use cognee_ingestion::AddPipeline;
+use cognee_llm::Llm;
 use cognee_llm::mock::{MissPolicy, RecordingLlm, ReplayLlm};
-use cognee_llm::{Llm, build_openai_compatible_adapter};
 use cognee_models::DataInput;
 use cognee_ontology::NoOpOntologyResolver;
 use cognee_storage::{LocalStorage, StorageTrait};
@@ -35,66 +35,35 @@ use cognee_vector::VectorDB;
 use tempfile::TempDir;
 use uuid::Uuid;
 
-/// Read a required environment variable, loading `.env` first (idempotent).
-///
-/// Accepts Python-compatible canonical names as fallbacks for legacy aliases.
-fn require_env(var_name: &str) -> String {
-    let _ = dotenv::dotenv();
-
-    let canonical_fallback = match var_name {
-        "OPENAI_TOKEN" => Some("LLM_API_KEY"),
-        "OPENAI_URL" => Some("LLM_ENDPOINT"),
-        "OPENAI_MODEL" => Some("LLM_MODEL"),
-        _ => None,
-    };
-
-    if let Ok(v) = std::env::var(var_name)
-        && !v.is_empty()
-    {
-        return v;
-    }
-    if let Some(canonical) = canonical_fallback
-        && let Ok(v) = std::env::var(canonical)
-        && !v.is_empty()
-    {
-        return v;
-    }
-    panic!("Required environment variable '{var_name}' is not set")
-}
-
 /// LLM for this test: offline replay when `COGNEE_TEST_REPLAY=1` (MissPolicy::Error
 /// so a stale cassette fails loudly), recording when `COGNEE_RECORD_LLM=1`, else
 /// the real adapter. Mirrors crates/cognify/tests/test_utils.rs (Approach E); the
 /// delete crate has no shared test_utils module, so it is inlined here.
-fn create_llm_from_env(cassette_name: &str) -> Arc<dyn Llm> {
+///
+/// Returns `None` when neither replay nor live credentials are available, so the
+/// caller skips rather than panicking — see
+/// `cognee_test_utils::create_openai_adapter_if_available`, which also replaces
+/// the hand-rolled `build_openai_compatible_adapter` call this used to make.
+/// That copy additionally `require_env`-ed `OPENAI_MODEL`, so it panicked on a
+/// machine that set an endpoint and key but no model; the shared helper defaults
+/// the model instead.
+fn create_llm_from_env(cassette_name: &str) -> Option<Arc<dyn Llm>> {
     let cassette = format!(
         "{}/tests/fixtures/cassettes/{cassette_name}.json",
         env!("CARGO_MANIFEST_DIR")
     );
     if std::env::var("COGNEE_TEST_REPLAY").is_ok_and(|v| !v.is_empty()) {
-        return Arc::new(
+        return Some(Arc::new(
             ReplayLlm::from_path(&cassette)
                 .unwrap_or_else(|e| panic!("❌ Failed to load cassette {cassette}: {e}"))
                 .with_miss_policy(MissPolicy::Error),
-        );
+        ));
     }
-    // Route through the production factory (provider from env, default `openai`)
-    // so litellm-style model prefixes are stripped exactly as in a real run.
-    let provider = std::env::var("LLM_PROVIDER").unwrap_or_else(|_| "openai".to_string());
-    let adapter: Arc<dyn Llm> = Arc::new(
-        build_openai_compatible_adapter(
-            &provider,
-            &require_env("OPENAI_MODEL"),
-            &require_env("OPENAI_TOKEN"),
-            &require_env("OPENAI_URL"),
-            3,
-        )
-        .expect("build_openai_compatible_adapter"),
-    );
+    let adapter: Arc<dyn Llm> = cognee_test_utils::create_openai_adapter_if_available()?;
     if std::env::var("COGNEE_RECORD_LLM").is_ok_and(|v| !v.is_empty()) {
-        return Arc::new(RecordingLlm::new(adapter, cassette));
+        return Some(Arc::new(RecordingLlm::new(adapter, cassette)));
     }
-    adapter
+    Some(adapter)
 }
 
 /// Build full infrastructure: storage, database, graph, vector, embedding, LLM.
@@ -142,7 +111,9 @@ async fn setup_infrastructure(
     let vector_db: Arc<dyn VectorDB> = Arc::new(MockVectorDB::new());
 
     // LLM via cassette (replay/record/real) — see create_llm_from_env above.
-    let llm: Arc<dyn Llm> = create_llm_from_env("hard_mode_orphan_sweep");
+    // `None` (no replay, no credentials) propagates out of this builder, which
+    // both callers already treat as "skip", so it needs no separate guard.
+    let llm: Arc<dyn Llm> = create_llm_from_env("hard_mode_orphan_sweep")?;
 
     Some((
         storage,

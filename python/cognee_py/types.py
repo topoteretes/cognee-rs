@@ -91,6 +91,7 @@ class CognifyOpts(TypedDict, total=False):
 
     tenant: str
     chunk_size: int
+    #: Currently inert: nothing in the chunking pipeline reads it (same in Python). Kept for API compatibility; see CognifyConfig::chunk_overlap in crates/cognify/src/config.rs.
     chunk_overlap: int
     summarization: bool
     temporal_cognify: bool

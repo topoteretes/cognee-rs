@@ -30,7 +30,6 @@ use cognee_database::{DatabaseConnection, IngestDb, SearchHistoryDb, connect, in
 
 use cognee_graph::{GraphDBTrait, LadybugAdapter};
 use cognee_ingestion::AddPipeline;
-use cognee_llm::Llm;
 use cognee_models::DataInput;
 use cognee_ontology::NoOpOntologyResolver;
 use cognee_search::{SearchBuilder, SearchRequest, SearchType};
@@ -76,7 +75,10 @@ async fn test_search_updates_last_accessed_timestamp() {
     // In-memory mock vector DB (qdrant extracted to closed cognee-vector-qdrant).
     let vector_db: Arc<dyn VectorDB> = Arc::new(MockVectorDB::new());
 
-    let llm: Arc<dyn Llm> = create_llm_from_env("last_accessed_update");
+    let Some(llm) = create_llm_from_env("last_accessed_update") else {
+        eprintln!("skipping: live LLM credentials (OPENAI_URL/OPENAI_TOKEN) not set");
+        return;
+    };
     let owner_id = Uuid::nil();
 
     // ── Ingest text ──────────────────────────────────────────────────────────
