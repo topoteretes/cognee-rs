@@ -68,7 +68,9 @@ objs = {
 }
 for num, lines in ((5, PAGE1), (6, PAGE2)):
     s = content_stream(lines)
-    objs[num] = b"<< /Length %d >>\nstream\n" % len(s) + s + b"endstream"
+    # PDF 32000-1 §7.3.8.1: the EOL before `endstream` is not stream data,
+    # so /Length excludes the trailing newline `s` ends with.
+    objs[num] = b"<< /Length %d >>\nstream\n" % (len(s) - 1) + s + b"endstream"
 
 buf = bytearray(b"%PDF-1.4\n")
 offsets = {}

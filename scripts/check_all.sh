@@ -102,6 +102,22 @@ cargo test -p cognee-vector --features lancedb
 
 echo ""
 echo "================================================================"
+echo "=== Rust: Test (PDF pure-rust backend lane) ==="
+echo "================================================================"
+# Same class as the lancedb lane above, with an extra twist. `pdf-pure-rust` IS
+# on in a workspace build — `python` is a workspace member and ships it by
+# default, so unification enables it (check with `cargo metadata`) — but
+# `loaders::pdf` gives pdfium priority whenever both backends are compiled in.
+# So the workspace run builds the pure-rust test and then exercises *pdfium*
+# through it, and `loaders::pdf::pure_rust`, being `cfg(not(pdf-pdfium))`, is
+# not even type-checked by `cargo check --all-targets`. The backend the Python,
+# TS and Java bindings actually ship is therefore untested and unchecked unless
+# the lane is spelled out with pdfium excluded.
+cargo test -p cognee-ingestion --no-default-features --features pdf-pure-rust \
+  --test pdf_pure_rust_fixture_extraction
+
+echo ""
+echo "================================================================"
 echo "=== Rust: Compilation check (Postgres-only server: no onnx/ladybug/lancedb) ==="
 echo "================================================================"
 # Guards the seam a downstream consumer uses to drop the embedded backends —

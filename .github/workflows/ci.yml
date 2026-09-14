@@ -300,6 +300,18 @@ jobs:
       - name: Test (cognee-vector lancedb lane)
         run: cargo test -p cognee-vector --features lancedb
 
+      # `pdf-pure-rust` is on in a workspace build (the `python` member ships it
+      # by default), but `loaders::pdf` prefers pdfium whenever both are
+      # compiled in — so the workspace run exercises pdfium through the
+      # pure-rust test, and `loaders::pdf::pure_rust` is `cfg(not(pdf-pdfium))`
+      # and so is not even type-checked by `cargo check --all-targets`. This is
+      # the only lane that reads a real PDF with the backend the Python, TS and
+      # Java bindings actually ship. Mirrored in scripts/check_all.sh.
+      - name: Test (PDF pure-rust backend lane)
+        run: |
+          cargo test -p cognee-ingestion --no-default-features \
+            --features pdf-pure-rust --test pdf_pure_rust_fixture_extraction
+
       - name: License presence (every published crate)
         run: |
           cargo metadata --no-deps --format-version 1 \

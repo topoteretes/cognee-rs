@@ -6,16 +6,29 @@
 )]
 //! The `pdf-pure-rust` half of [`pdf_fixture_extraction`], over the same PDF.
 //!
-//! This backend is default-nowhere in this workspace — only the non-default
-//! `android-default` composite turns it on — so this file runs only under an
-//! explicit `--features pdf-pure-rust`. Its `[[test]]` entry carries the
-//! matching `required-features`, so every other lane skips it and says so
-//! instead of compiling it to a green `running 0 tests`.
-//!
 //! It exists because `pdf-pure-rust` is what a container build wants — no
 //! native library and no runtime download — and it is what the Python, TS and
 //! Java bindings already ship, so it should not be the one backend that nothing
 //! ever reads a real PDF with.
+//!
+//! # ⚠️ A `--workspace` run does NOT exercise the pure backend
+//!
+//! It would be easy to assume otherwise, so: `pdf-pure-rust` *is* enabled in a
+//! workspace build. `cognee-ingestion` declares `default = []`, but the
+//! `python` crate is a root workspace member and ships `pdf-pure-rust` in its
+//! defaults, so unification turns it on for every `--workspace` command
+//! (VERIFIED with `cargo metadata`: both PDF features resolve on).
+//!
+//! But `loaders::pdf` gives pdfium priority whenever both are compiled in, so
+//! in that configuration this test asserts the *pdfium* output and
+//! `pdf-extract` is never called. Worse, `loaders::pdf::pure_rust` is itself
+//! `cfg(not(feature = "pdf-pdfium"))`, so a root `cargo check --all-targets`
+//! does not even type-check it.
+//!
+//! Exercising this backend therefore requires a dedicated
+//! `--no-default-features --features pdf-pure-rust` invocation. `check_all.sh`
+//! and `ci.yml` run one; without it this file, and
+//! `sample.expected.pure-rust.txt`, would be decoration.
 //!
 //! # Why this file is not `not(feature = "pdf-pdfium")`
 //!
@@ -55,6 +68,16 @@ fn normalise(s: &str) -> String {
     s.replace("\r\n", "\n")
 }
 
+/// Duplicated from `pdf_fixture_extraction.rs` — integration tests are separate
+/// crates, so there is nothing to share short of a `mod common` file, which for
+/// four lines would cost more than it saves. See that copy for the reasoning.
+fn in_ci() -> bool {
+    match std::env::var("CI") {
+        Ok(v) => !matches!(v.trim().to_ascii_lowercase().as_str(), "" | "0" | "false"),
+        Err(_) => false,
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn extracts_text_from_a_real_pdf() {
     let doc = Document {
@@ -81,7 +104,7 @@ async fn extracts_text_from_a_real_pdf() {
         // test, so CI must not be allowed to go green having never pinned the
         // selection rule below.
         assert!(
-            std::env::var_os("CI").is_none(),
+            !in_ci(),
             "libpdfium could not be obtained, so the pdfium-priority rule was never checked — \
              and a CI lane must not report green on that. Provision the library and set \
              PDFIUM_LIB_PATH. Cause: {e}"
@@ -104,6 +127,15 @@ async fn extracts_text_from_a_real_pdf() {
     let (expected, fixture) = if cfg!(feature = "pdf-pdfium") {
         (EXPECTED_PDFIUM, "fixtures/pdf/sample.expected.txt")
     } else {
+        // The other half of the MEASURED claim in the `loaders::pdf` docs, and
+        // the half `normalise` would otherwise erase: `pdf-extract` uses LF
+        // where PDFium uses CRLF. Pinned here so the documented divergence
+        // cannot rot in either direction.
+        assert!(
+            !text.contains('\r'),
+            "pdf-extract is documented to emit LF within a page; if that changed, \
+             update the `loaders::pdf` module docs and both expected files. Got: {text:?}"
+        );
         (
             EXPECTED_PURE_RUST,
             "fixtures/pdf/sample.expected.pure-rust.txt",

@@ -17,13 +17,20 @@
 //! `format_pages` was tested only against hand-written `Vec`s, never against
 //! what a PDF engine actually hands it.
 //!
-//! # Why this is gated on `pdf-pdfium`, not `pdf-pure-rust`
+//! # Why this is gated on `pdf-pdfium`
 //!
 //! `pdf-pdfium` is in `crates/lib`'s default feature list, so a workspace test
-//! run unifies it on and this file executes. `pdf-pure-rust` is default
-//! nowhere, so a fixture gated on it would compile to zero tests in every lane
-//! that exists today — reproducing the exact trap the accompanying
-//! `[[test]] required-features` change closes.
+//! run unifies it on and this file executes — and because `loaders::pdf` gives
+//! pdfium priority when both backends are compiled in, pdfium is what a
+//! workspace lane actually exercises.
+//!
+//! Note that `pdf-pure-rust` is *also* on in a workspace build, contrary to
+//! what one might assume from `cognee-ingestion`'s own `default = []`: the
+//! `python` crate is a root workspace member (`Cargo.toml`) and ships
+//! `pdf-pure-rust` in its defaults, so feature unification turns it on for
+//! every `--workspace` command. VERIFIED with `cargo metadata`. That is why
+//! `pdf_pure_rust_fixture_extraction.rs` needs a lane of its own to be worth
+//! anything — see its module docs.
 //!
 //! # When this test skips — and when it must not
 //!
@@ -65,6 +72,17 @@ const EXPECTED: &str = include_str!("fixtures/pdf/sample.expected.txt");
 /// must not be swallowed as an environment skip.
 const LIBRARY_UNOBTAINABLE: &str = "Failed to obtain the PDFium library";
 
+/// Whether this is an automated run that must not skip. GitHub Actions sets
+/// `CI=true`; some local tooling exports `CI=false` or an empty `CI`, and
+/// treating merely-present as true would hard-fail those developers for no
+/// reason, so the value is read rather than just its existence.
+fn in_ci() -> bool {
+    match std::env::var("CI") {
+        Ok(v) => !matches!(v.trim().to_ascii_lowercase().as_str(), "" | "0" | "false"),
+        Err(_) => false,
+    }
+}
+
 /// PDFium reports intra-page line breaks as `\r\n`, while the `Page N:`
 /// separators come from `format_pages` as `\n`. Committing that mixture as a
 /// text fixture invites an editor or a `.gitattributes` rule to rewrite it, so
@@ -91,7 +109,7 @@ async fn extracts_text_from_a_real_pdf() {
         Ok(output) => output,
         Err(e) if e.to_string().contains(LIBRARY_UNOBTAINABLE) => {
             assert!(
-                std::env::var_os("CI").is_none(),
+                !in_ci(),
                 "libpdfium could not be obtained, so real-PDF extraction never ran — and a CI \
                  lane must not report green on that. Provision the library and set \
                  PDFIUM_LIB_PATH. Cause: {e}"
@@ -109,6 +127,18 @@ async fn extracts_text_from_a_real_pdf() {
     let LoaderOutput::Text(text) = output else {
         panic!("the PDF loader must yield text, got {output:?}");
     };
+
+    // `loaders::pdf` documents, as MEASURED, that PDFium separates intra-page
+    // lines with CRLF. `normalise` below deliberately erases exactly that, so
+    // without this assertion the divergence the module docs describe — and
+    // that `sample.expected.pure-rust.txt` exists to contrast with — would be
+    // unpinned, and a pdfium upgrade that switched to LF would slip through
+    // green while the docs went stale.
+    assert!(
+        text.contains("\r\n"),
+        "PDFium is documented to emit CRLF within a page; if that changed, \
+         update the `loaders::pdf` module docs and both expected files. Got: {text:?}"
+    );
 
     assert_eq!(
         normalise(&text),
