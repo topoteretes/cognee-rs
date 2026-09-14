@@ -139,7 +139,10 @@ pub struct HttpServerConfig {
     /// Env: `GRAPH_DATABASE_PROVIDER`. The default is derived from the graph
     /// factories this binary's features register
     /// ([`cognee_components::default_graph_provider`]): `ladybug` wherever that
-    /// feature is compiled in, otherwise the single backend the build has.
+    /// feature is compiled in, else `postgres` wherever `pggraph` is, else the
+    /// single registered backend if there is exactly one. Only a build
+    /// registering two or more backends and neither preferred id has to set
+    /// the env var.
     pub graph_provider: String,
 
     /// Graph file path (for embedded ladybug graph DB).

@@ -158,8 +158,9 @@ impl ComponentRegistry {
     ///    `ladybug` leads, so every build that has it keeps the historical
     ///    default bit-for-bit;
     /// 2. otherwise the single registered provider, when there is exactly one;
-    /// 3. otherwise an error naming what is registered — two unrelated backends
-    ///    and no preference between them is a choice only the operator can make.
+    /// 3. otherwise an error. Two shapes, because they need different actions:
+    ///    nothing registered at all is a build-configuration problem, while two
+    ///    or more unpreferred backends is a choice only the operator can make.
     ///
     /// The preference list carries one id per backend. The built-ins register
     /// two spellings each (`ladybug`/`kuzu`, `postgres`/`postgresql`), so rule 2
@@ -180,10 +181,22 @@ impl ComponentRegistry {
         let registered = self.graph_providers();
         match registered.as_slice() {
             [only] => Ok(only.clone()),
+            // Nothing to choose between: telling the operator to pick one of an
+            // empty list is not actionable. This is a build-configuration
+            // problem, so name the lever that fixes it.
+            [] => Err(ComponentError::Config(
+                "No graph backend is registered, so there is no default \
+                 graph_database_provider to derive. Rebuild with the `ladybug` or \
+                 `pggraph` crate feature, or register a factory at the binary \
+                 entry point via ComponentRegistry::register_graph."
+                    .to_string(),
+            )),
             _ => Err(ComponentError::Config(format!(
-                "Cannot derive a default graph_database_provider from the registered \
-                 providers: [{}]. Set GRAPH_DATABASE_PROVIDER (or \
-                 `graph_database_provider` in config) to one of them explicitly.",
+                "Cannot derive a default graph_database_provider: the registered \
+                 providers [{}] are two or more backends and include neither \
+                 `ladybug` nor `postgres`, so there is no preference to apply. Set \
+                 GRAPH_DATABASE_PROVIDER (or `graph_database_provider` in config) \
+                 to one of them explicitly.",
                 registered.join(", ")
             ))),
         }
@@ -607,17 +620,24 @@ mod tests {
             "postgres"
         );
 
-        // Nothing registered, or two unrelated backends with no preference
-        // between them: refuse to guess and name what is there.
+        // The two error shapes need different actions from the reader, so they
+        // are different messages. Nothing registered is a build-configuration
+        // problem -- pointing at an empty list to choose from would not be
+        // actionable -- while two unpreferred backends is the operator's call.
         let err = graph_registry(&[])
             .default_graph_provider()
             .expect_err("an empty graph registry has no default to derive");
         assert!(matches!(err, ComponentError::Config(_)));
-        assert!(err.to_string().contains("GRAPH_DATABASE_PROVIDER"));
+        assert!(
+            err.to_string().contains("crate feature"),
+            "the empty case must name the build lever, not an empty choice: {err}"
+        );
+        assert!(!err.to_string().contains("GRAPH_DATABASE_PROVIDER"));
         let err = graph_registry(&["mock", "neo4j"])
             .default_graph_provider()
             .expect_err("two unpreferred backends must not resolve silently");
         assert!(err.to_string().contains("mock, neo4j"));
+        assert!(err.to_string().contains("GRAPH_DATABASE_PROVIDER"));
     }
 
     // The value the config defaults actually take: derived from `with_builtins`,

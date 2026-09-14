@@ -394,13 +394,20 @@ initialization in OSS (it returns a config error rather than falling back).
 Supported providers: `ladybug`/`kuzu` (embedded), `postgres` (feature `pggraph`).
 
 The default is **derived from the graph backends the binary was compiled with**,
-not hardcoded: `ladybug` when that feature is on (every default build, so the
-documented `ladybug` above is what you get), otherwise the single backend the
-build registers — `postgres` for a `--no-default-features … pggraph` image. A
-build registering two unrelated backends and no `ladybug` has to set
-`GRAPH_DATABASE_PROVIDER` explicitly. Before this was derived, a `pggraph`-only
-image defaulted to `ladybug` and aborted at start-up with `Unsupported
-graph_database_provider 'ladybug'`.
+not hardcoded. In order:
+
+1. `ladybug`, when that feature is on — every default build, so the documented
+   `ladybug` above is what you get;
+2. otherwise `postgres`, when `pggraph` is on — a `--no-default-features … pggraph`
+   image. This holds however many *other* ids are registered, so a `pggraph` build
+   that also carries `testing` (registering `postgres`, `postgresql` and `mock`)
+   still resolves to `postgres` on its own;
+3. otherwise the single registered backend, when the build has exactly one.
+
+Only a build registering two or more backends of which neither is `ladybug` nor
+`postgres` has to set `GRAPH_DATABASE_PROVIDER` explicitly. Before this was
+derived, a `pggraph`-only image defaulted to `ladybug` and aborted at start-up
+with `Unsupported graph_database_provider 'ladybug'`.
 
 When Postgres graph credentials are unset they fall back to the relational `DB_*`
 config (see [roadmap/cognify-compatibility-plan.md](roadmap/cognify-compatibility-plan.md)).

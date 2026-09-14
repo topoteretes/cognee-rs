@@ -260,8 +260,11 @@ pub struct Settings {
 
     /// Graph backend id. The default is derived from the graph factories the
     /// compiled features register
-    /// ([`cognee_components::default_graph_provider`]) — `ladybug` in every
-    /// default build, the single registered backend in a build that drops it.
+    /// ([`cognee_components::default_graph_provider`]): `ladybug` in every
+    /// default build, else `postgres` wherever `pggraph` is compiled in, else
+    /// the single registered backend if there is exactly one. A build that
+    /// drops `ladybug` therefore still resolves on its own unless it registers
+    /// two or more backends and neither preferred id.
     pub graph_database_provider: String,
     pub graph_database_url: String,
     pub graph_database_name: String,
