@@ -220,3 +220,36 @@ def test_add_validation_error_on_missing_file(authed_clients, unique_dataset_nam
         f"Validation-error status mismatch: py={py.status_code} rs={rs.status_code}"
     )
     assert py.status_code >= 400, f"Expected 4xx, got py={py.status_code}"
+
+
+@pytest.mark.xfail(
+    reason=(
+        "Deliberate divergence introduced by SDK-626. A media type no loader "
+        "can handle is the caller's problem, so Rust answers 415 "
+        '{"error": "Unsupported document type"}. Python answers 500: it defines '
+        "IngestionError with HTTP_415_UNSUPPORTED_MEDIA_TYPE and client.py has a "
+        "CogneeApiError handler that would honour it, but get_add_router.py wraps "
+        "the whole cognee_add call in `except Exception` and returns 500, so the "
+        "415 never reaches the wire. Rust is the more-correct side; Python having "
+        "written 415 into the exception and then swallowed it reads as an "
+        "oversight. See `classify_add_error` in crates/http-server/src/routers/add.rs. "
+        "An XPASS means Python stopped swallowing it — at which point drop this "
+        "xfail, because the two sides now agree."
+    ),
+    # Deterministic, so an XPASS is a real signal rather than a flake.
+    strict=True,
+)
+def test_add_unsupported_media_type_status_diverges(authed_clients, unique_dataset_name):
+    """POST /api/v1/add with a file type no loader handles: statuses should match."""
+    # `.xyz` has no loader on either side, so dispatch fails before any backend
+    # work — no LLM, no embedding, no network.
+    kw = {
+        "files": {"data": ("sample.xyz", b"\x00\x01binary-blob", "application/octet-stream")},
+        "data": {"datasetName": unique_dataset_name},
+    }
+    py = authed_clients["py"].post("/api/v1/add", **kw)
+    rs = authed_clients["rs"].post("/api/v1/add", **kw)
+
+    assert py.status_code == rs.status_code, (
+        f"Unsupported-media-type status mismatch: py={py.status_code} rs={rs.status_code}"
+    )

@@ -23,38 +23,69 @@ use crate::error::ApiError;
 use crate::multipart::{MultipartOpts, UploadGuard, check_filename_traversal, parse_multipart};
 use crate::state::AppState;
 
-// ─── add_error_status ─────────────────────────────────────────────────────────
+// ─── classify_add_error ───────────────────────────────────────────────────────
 
-/// HTTP status for a failed `add` pipeline run.
+/// Status and `error` label for a failed `add` pipeline run.
 ///
-/// Everything defaults to 500, except the cases that are the *client's* fault.
-/// Today that is `IngestionError::UnsupportedDocumentType`, raised at loader
-/// dispatch when no loader is registered for the input's derived type — posting
-/// a PDF to a build without a `pdf-*` feature, say. Reporting that as 500 told
-/// the caller the server had broken when in fact the payload was unsupported.
+/// Everything defaults to 500 / `"Pipeline run errored"`, except the cases that
+/// are the *client's* fault. Today that is
+/// `IngestionError::UnsupportedDocumentType`, raised at loader dispatch when no
+/// loader is registered for the input's derived type — posting a PDF to a build
+/// without a `pdf-*` feature, say. Reporting that as 500 told the caller the
+/// server had broken when in fact the payload was unsupported.
 ///
-/// **415, not 422** — matching Python, which is the authority here: its
-/// `IngestionError` overrides the 422 of its `CogneeValidationError` base with
-/// `status.HTTP_415_UNSUPPORTED_MEDIA_TYPE`
-/// (`cognee/modules/ingestion/exceptions/exceptions.py:10`, against
-/// `cognee/exceptions/exceptions.py:59`).
+/// # This is a deliberate divergence from Python, not a parity match
+///
+/// An earlier version of this comment claimed 415 "matches Python". It does
+/// not, and the distinction is worth spelling out because the surface looks
+/// like it should.
+///
+/// Python *defines* the right status — `IngestionError` overrides the 422 of
+/// its `CogneeValidationError` base with `HTTP_415_UNSUPPORTED_MEDIA_TYPE`
+/// (`cognee/modules/ingestion/exceptions/exceptions.py:10` against
+/// `cognee/exceptions/exceptions.py:59`) — and `client.py`'s
+/// `@app.exception_handler(CogneeApiError)` would honour it. But the add route
+/// never lets it get there: `get_add_router.py` wraps the whole `cognee_add`
+/// call in `except Exception` and returns
+/// `500 {"error": "Internal server error", …}`, and its `PipelineRunErrored`
+/// branch is likewise hard-coded to 500. Every `IngestionError` raise site sits
+/// inside that `try`, and the route's OpenAPI `responses` map declares only
+/// 400/403/422/500. So on the wire Python answers 500 here.
+///
+/// We answer 415 anyway: a media type this build cannot load is the caller's
+/// problem, and 500 tells them to retry or page someone for a condition no
+/// retry can fix. Python having written 415 into the exception and then
+/// swallowed it reads as an oversight rather than an intended contract.
+///
+/// The cost is real and accepted: a client branching on 4xx-vs-5xx behaves
+/// differently against the two servers. `e2e-cross-sdk` pins the divergence
+/// with a `strict=True` xfail
+/// (`test_add_unsupported_media_type_status_diverges`) so it is tracked, and so
+/// that an XPASS tells us Python changed its handling.
+///
+/// # Chain walking
 ///
 /// The error arrives wrapped — `ExecutionError::TaskFailed` carries the task's
 /// error as its `#[source]` — so this walks the whole source chain rather than
 /// inspecting only the outermost error. That chain is intact only because
 /// `make_process_input_task` passes `IngestionError` through as a typed error
 /// instead of flattening it to a string; see the note there.
-fn add_error_status(err: &(dyn std::error::Error + 'static)) -> StatusCode {
+fn classify_add_error(err: &(dyn std::error::Error + 'static)) -> (StatusCode, &'static str) {
     let mut current = Some(err);
     while let Some(e) = current {
         if let Some(IngestionError::UnsupportedDocumentType { .. }) =
             e.downcast_ref::<IngestionError>()
         {
-            return StatusCode::UNSUPPORTED_MEDIA_TYPE;
+            // The label moves with the status: a 415 carrying the 5xx
+            // "Pipeline run errored" envelope would be internally inconsistent.
+            return (
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "Unsupported document type",
+            );
         }
         current = e.source();
     }
-    StatusCode::INTERNAL_SERVER_ERROR
+    (StatusCode::INTERNAL_SERVER_ERROR, "Pipeline run errored")
 }
 
 // ─── parse_add_multipart ──────────────────────────────────────────────────────
@@ -316,12 +347,15 @@ pub async fn post_add(
     let result = pipeline
         .add_with_params(inputs, &dataset_name, user.id, user.tenant_id, &params)
         .await
-        .map_err(|e| (add_error_status(&*e), e.to_string()));
+        .map_err(|e| {
+            let (status, label) = classify_add_error(&*e);
+            (status, label, e.to_string())
+        });
 
     match result {
-        Err((status, e)) => {
+        Err((status, label, e)) => {
             let body = json!({
-                "error": "Pipeline run errored",
+                "error": label,
                 "detail": e
             });
             let resp = axum::response::Response::builder()
@@ -400,17 +434,21 @@ mod tests {
     /// It used to surface as 500 because the router mapped every pipeline error
     /// to `INTERNAL_SERVER_ERROR` with the type erased to a string.
     ///
-    /// 415 matches Python, whose `IngestionError` overrides its validation
-    /// base's 422 with `HTTP_415_UNSUPPORTED_MEDIA_TYPE`.
+    /// 415 is a deliberate divergence from Python, which answers 500 on this
+    /// route — see `classify_add_error` for why, and
+    /// `e2e-cross-sdk`'s `test_add_unsupported_media_type_status_diverges`,
+    /// which pins it.
     #[test]
     fn unsupported_document_type_maps_to_415() {
         let err = IngestionError::UnsupportedDocumentType {
             document_type: "pdf".to_string(),
         };
         assert_eq!(
-            add_error_status(&err),
-            StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            "415, matching Python's IngestionError"
+            classify_add_error(&err),
+            (
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "Unsupported document type"
+            ),
         );
     }
 
@@ -427,21 +465,25 @@ mod tests {
             }),
         };
         assert_eq!(
-            add_error_status(&wrapped),
+            classify_add_error(&wrapped).0,
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
             "the classifier must look past the executor's wrapper"
         );
     }
 
     /// Everything else stays a 500 — this is a targeted exception, not a
-    /// blanket downgrade of pipeline failures to client errors.
+    /// blanket downgrade of pipeline failures to client errors — and keeps the
+    /// `"Pipeline run errored"` label Python uses for that case.
     #[test]
     fn other_errors_stay_500() {
         let other = IngestionError::MissingBackend { which: "graph_db" };
-        assert_eq!(add_error_status(&other), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            classify_add_error(&other),
+            (StatusCode::INTERNAL_SERVER_ERROR, "Pipeline run errored"),
+        );
 
         let io = std::io::Error::other("disk on fire");
-        assert_eq!(add_error_status(&io), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(classify_add_error(&io).0, StatusCode::INTERNAL_SERVER_ERROR);
 
         // A stringified error carrying the same text must NOT be treated as a
         // client error: classification is by type, not by message matching.
@@ -451,8 +493,20 @@ mod tests {
             source: "Unsupported document type at ingest: pdf".into(),
         };
         assert_eq!(
-            add_error_status(&stringly),
+            classify_add_error(&stringly).0,
             StatusCode::INTERNAL_SERVER_ERROR
         );
+    }
+
+    /// The status and the body label move together. A 415 carrying the 5xx
+    /// `"Pipeline run errored"` envelope would tell the client two different
+    /// stories about the same failure.
+    #[test]
+    fn label_matches_the_status_class() {
+        let (status, label) = classify_add_error(&IngestionError::UnsupportedDocumentType {
+            document_type: "png".to_string(),
+        });
+        assert!(status.is_client_error());
+        assert_ne!(label, "Pipeline run errored");
     }
 }
