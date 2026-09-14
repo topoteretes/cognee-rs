@@ -69,5 +69,10 @@ cognee-test-utils = { path = "../test-utils" }
 cognee-llm        = { path = "../llm", features = ["mock"] }
 cognee-session    = { path = "../session", features = ["fs"] }
 dotenv.workspace = true
+# `oversized_identifier_retry` drives a real `OpenAIAdapter` against a local mock
+# endpoint, which is the only way to observe the corrective-retry ladder end to
+# end: the loop lives in the adapter, so a hand-written `Llm` double would test
+# the double. Same version as cognee-llm's own dev-dependency.
+httpmock = "0.8"
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

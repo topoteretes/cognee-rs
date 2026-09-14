@@ -37,6 +37,76 @@ pub trait GraphModel:
     }
 }
 
+/// The longest an extracted **identifier** may be, in characters.
+///
+/// # What this defends against
+///
+/// Non-constrained structured output lets the model emit whatever tokens it
+/// likes (see [`deserialize_edges_lenient`] for why that is also true of
+/// Python). Its observed degenerate mode is a free-association loop *inside a
+/// single identifier*: the payload captured during the Bedrock runaway
+/// investigation (PR #210) spent **22,305 characters** — 94% of the whole answer
+/// — on one `Edge.target_node_id`. That payload was valid JSON with
+/// `stop_reason: end_turn`, so nothing downstream would have questioned it; only
+/// a correction the model happened to append kept the graph from taking the id.
+///
+/// `maxLength` in the JSON schema is **not** the defence. PR #210 MEASURED it as
+/// advisory rather than enforced: a `maxLength` of 5 on `Node.id` came back with
+/// ids of 13 and 14 characters and no error. The bound has to be checked on the
+/// way in, which is what this constant and [`check_identifier`] do.
+///
+/// # Why 1024
+///
+/// MEASURED, not guessed. Every identifier in all 12 committed cassettes — real
+/// recorded extractions over real documents, War and Peace included — was
+/// scanned for `id`, `source_node_id`, `target_node_id` and `relationship_name`.
+/// The longest was **43 characters**; the longest in any cognify cassette was 42.
+/// So 1024 sits roughly 24x above anything a model has actually produced here
+/// and 22x below the captured runaway, which is about as far from both ends as a
+/// single number can be.
+///
+/// The asymmetry of the two errors is what argues for leaving that much room.
+/// Accepting an oversized id corrupts a graph; rejecting a legitimate one fails
+/// the chunk — and under the shipped defaults a failed chunk fails the whole run
+/// (see `tests/oversized_identifier_retry.rs` for the verified chain). A false
+/// rejection is therefore much the more expensive mistake, so the bound is set
+/// where a legitimate identifier cannot plausibly reach it rather than snugly
+/// around observed practice.
+///
+/// It is deliberately not configurable: a knob here would be a knob for
+/// tolerating corrupt extractions.
+///
+/// # This is Rust-only hardening, not parity
+///
+/// VERIFIED: Python has no identifier validation either — nothing in
+/// `cognee/shared/data_models.py` or `cognee/modules/graph/` bounds id length,
+/// so Python would have accepted the same 22k id. Do not "correct" this toward
+/// Python; the divergence is the point.
+const MAX_IDENTIFIER_CHARS: usize = 1024;
+
+/// Reject an identifier too long to be one.
+///
+/// Counted in `char`s, not bytes, so the bound means the same thing for a name
+/// written in Latin script and one written in Han — a byte bound would reject a
+/// legitimate CJK name at a third of the length it allows an ASCII one.
+///
+/// The returned message is not just a log line: it becomes the corrective
+/// instruction the adapter re-asks with (`structured_output_impl` threads the
+/// validation error into the next attempt), so it names the field, the observed
+/// length and the remedy. It deliberately does **not** echo the value — the
+/// whole problem is that the value is enormous.
+fn check_identifier(field: &str, value: &str) -> Result<(), String> {
+    let len = value.chars().count();
+    if len <= MAX_IDENTIFIER_CHARS {
+        return Ok(());
+    }
+    Err(format!(
+        "`{field}` is {len} characters long, over the {MAX_IDENTIFIER_CHARS}-character limit \
+         for an identifier. Identifiers are short entity names and snake_case relationship \
+         labels; put prose in `description` instead and re-extract."
+    ))
+}
+
 /// Node in a knowledge graph.
 ///
 /// Represents an entity or concept extracted from text.
@@ -115,6 +185,13 @@ pub struct KnowledgeGraph {
     /// silently yielding a 0-edge graph. Mirrors what instructor does in Python,
     /// where its TOOLS-mode schema builder re-adds non-default fields to
     /// `required` (Python's `default_factory` emits no schema `"default"`).
+    //
+    // NOT part of the doc comment above, for the same reason the note on `edges`
+    // is a `//`: `schemars` copies `///` into the model-facing schema, and the
+    // model has no business knowing about a private Rust bound. Deserialized
+    // through `deserialize_nodes_checked`, which rejects an oversized `Node.id`
+    // — see [`MAX_IDENTIFIER_CHARS`].
+    #[serde(deserialize_with = "deserialize_nodes_checked")]
     pub nodes: Vec<Node>,
 
     /// List of edges (relationships between nodes). NOT `#[serde(default)]` — see
@@ -164,6 +241,37 @@ pub struct KnowledgeGraph {
 /// A one-edge payload whose single edge is malformed is rejected, which is the
 /// right answer — there is nothing left to keep.
 const MAX_DROPPABLE_EDGE_FRACTION: f64 = 0.25;
+
+/// Deserialize `nodes`, rejecting the whole payload if any `id` is oversized.
+///
+/// There is no leniency here and there is none for an oversized identifier in
+/// `edges` either — see [`deserialize_edges_lenient`] for why an oversized id is
+/// categorically different from a stray entry.
+fn deserialize_nodes_checked<'de, D>(deserializer: D) -> Result<Vec<Node>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error as _;
+
+    let nodes = Vec::<Node>::deserialize(deserializer)?;
+    for node in &nodes {
+        check_identifier("Node.id", &node.id).map_err(D::Error::custom)?;
+    }
+    Ok(nodes)
+}
+
+/// Reject an [`Edge`] carrying an oversized identifier.
+///
+/// `description` is exempt: it is prose by design, not an identifier, and it
+/// forms no key. The three fields checked here are the ones the graph is keyed
+/// on — the endpoints are matched against node ids by
+/// `graph_integration::expansion`, and `relationship_name` is half of the
+/// `{source}_{target}_{relationship}` edge key.
+fn check_edge_identifiers(edge: &Edge) -> Result<(), String> {
+    check_identifier("Edge.source_node_id", &edge.source_node_id)?;
+    check_identifier("Edge.target_node_id", &edge.target_node_id)?;
+    check_identifier("Edge.relationship_name", &edge.relationship_name)
+}
 
 /// Deserialize `edges`, dropping individual entries that are not edges at all.
 ///
@@ -233,7 +341,20 @@ where
     let mut dropped: Vec<String> = Vec::new();
     for entry in raw {
         match serde_json::from_value::<Edge>(entry.clone()) {
-            Ok(edge) => edges.push(edge),
+            Ok(edge) => {
+                // An oversized identifier is NOT a droppable entry, and must not
+                // be allowed to fall into the tolerance below. A stray entry is a
+                // blemish on an otherwise good answer — the model repairing its
+                // own omission. A 22k-character id is the opposite: it is the
+                // free-association loop itself, and in the captured payload it
+                // consumed 94% of the output budget, so whatever else the answer
+                // contains was written under a budget the runaway had already
+                // eaten. Keeping the "good" 49 edges of such a response means
+                // building a graph out of a generation we have no reason to
+                // trust. Fail here instead, and let the ladder re-ask.
+                check_edge_identifiers(&edge).map_err(D::Error::custom)?;
+                edges.push(edge);
+            }
             Err(err) => {
                 // Keep a compact, non-PII-ish trace: the reason plus the keys the
                 // object actually carried. The full entry can be large.
@@ -573,6 +694,188 @@ mod tests {
         }
     }
 
+    /// The captured degenerate payload, reduced to its essential shape: valid
+    /// JSON, `stop_reason: end_turn`, one `Edge.target_node_id` of 22,305
+    /// characters. Before this check the graph would have taken the id.
+    #[test]
+    fn the_captured_22k_target_node_id_is_rejected() {
+        let runaway = "a".repeat(22_305);
+        let raw = serde_json::json!({
+            "nodes": [
+                {"id": "Alice", "name": "Alice", "type": "PERSON", "description": "A girl."}
+            ],
+            "edges": [
+                {"source_node_id": "Alice", "target_node_id": runaway,
+                 "relationship_name": "relates_to", "description": "d"}
+            ]
+        });
+
+        let err = serde_json::from_value::<KnowledgeGraph>(raw)
+            .expect_err("a 22,305-character node id must not be accepted");
+        let msg = err.to_string();
+        assert!(msg.contains("Edge.target_node_id"), "{msg}");
+        assert!(
+            msg.contains("22305"),
+            "the message must state the length: {msg}"
+        );
+        assert!(
+            !msg.contains(&runaway),
+            "the message must not echo the 22k value it is complaining about"
+        );
+    }
+
+    /// The load-bearing interaction with [`deserialize_edges_lenient`].
+    ///
+    /// One oversized id among 49 good edges is 2% of the array — comfortably
+    /// inside [`MAX_DROPPABLE_EDGE_FRACTION`]. If the bound were expressed as an
+    /// ordinary per-entry deserialization failure it would be silently *dropped*
+    /// here and the remaining 49 edges kept, which is exactly the drop-and-count
+    /// handling SDK-629 considered and rejected. It must hard-fail instead.
+    #[test]
+    fn an_oversized_id_is_not_absorbed_by_the_edge_drop_tolerance() {
+        let mut edges: Vec<serde_json::Value> = (0..49)
+            .map(|i| {
+                serde_json::json!({
+                    "source_node_id": format!("n{i}"),
+                    "target_node_id": format!("n{}", i + 1),
+                    "relationship_name": "r"
+                })
+            })
+            .collect();
+        edges.push(serde_json::json!({
+            "source_node_id": "n0",
+            "target_node_id": "a".repeat(22_305),
+            "relationship_name": "r"
+        }));
+        let total = edges.len();
+
+        let raw = serde_json::json!({ "nodes": [], "edges": edges });
+        let err = serde_json::from_value::<KnowledgeGraph>(raw)
+            .expect_err("1 oversized id in 50 is only 2% of the array, but it must still be fatal");
+        assert!(err.to_string().contains("Edge.target_node_id"), "{err}");
+        assert_eq!(total, 50, "fixture sanity: the drop tolerance is 25%");
+    }
+
+    /// An oversized `Node.id` is fatal too — `nodes` has no leniency at all.
+    #[test]
+    fn an_oversized_node_id_is_rejected() {
+        let raw = serde_json::json!({
+            "nodes": [
+                {"id": "Alice", "name": "Alice", "type": "PERSON", "description": "d"},
+                {"id": "b".repeat(MAX_IDENTIFIER_CHARS + 1),
+                 "name": "Runaway", "type": "PERSON", "description": "d"}
+            ],
+            "edges": []
+        });
+        let err = serde_json::from_value::<KnowledgeGraph>(raw)
+            .expect_err("an oversized Node.id must reach the retry loop");
+        assert!(err.to_string().contains("Node.id"), "{err}");
+    }
+
+    /// `relationship_name` is an identifier as much as the endpoints are — it is
+    /// half of the `{source}_{target}_{relationship}` edge key.
+    #[test]
+    fn an_oversized_relationship_name_is_rejected() {
+        let raw = serde_json::json!({
+            "nodes": [],
+            "edges": [{
+                "source_node_id": "a",
+                "target_node_id": "b",
+                "relationship_name": "r".repeat(MAX_IDENTIFIER_CHARS + 1)
+            }]
+        });
+        let err = serde_json::from_value::<KnowledgeGraph>(raw)
+            .expect_err("an oversized relationship_name must reach the retry loop");
+        assert!(err.to_string().contains("Edge.relationship_name"), "{err}");
+    }
+
+    /// The bound is inclusive, and it is the *only* thing that rejects: exactly
+    /// `MAX_IDENTIFIER_CHARS` passes, one more fails. Without this a later
+    /// `<` / `<=` slip would move the limit by one and nothing would notice.
+    #[test]
+    fn the_identifier_bound_is_inclusive() {
+        let at_limit = "a".repeat(MAX_IDENTIFIER_CHARS);
+        let over_limit = "a".repeat(MAX_IDENTIFIER_CHARS + 1);
+
+        let build = |id: &str| {
+            serde_json::json!({
+                "nodes": [{"id": id, "name": "N", "type": "T", "description": "d"}],
+                "edges": []
+            })
+        };
+
+        assert!(
+            serde_json::from_value::<KnowledgeGraph>(build(&at_limit)).is_ok(),
+            "exactly {MAX_IDENTIFIER_CHARS} characters must be accepted"
+        );
+        assert!(
+            serde_json::from_value::<KnowledgeGraph>(build(&over_limit)).is_err(),
+            "{} characters must be rejected",
+            MAX_IDENTIFIER_CHARS + 1
+        );
+    }
+
+    /// The bound counts characters, not bytes, so a name in a non-Latin script
+    /// gets the same allowance as one in ASCII. A 3-byte-per-char string of
+    /// exactly `MAX_IDENTIFIER_CHARS` chars is ~3 KiB and must still pass.
+    #[test]
+    fn the_bound_counts_characters_not_bytes() {
+        let han = "字".repeat(MAX_IDENTIFIER_CHARS);
+        assert!(han.len() > MAX_IDENTIFIER_CHARS, "fixture is multi-byte");
+
+        let raw = serde_json::json!({
+            "nodes": [{"id": han, "name": "N", "type": "T", "description": "d"}],
+            "edges": []
+        });
+        assert!(
+            serde_json::from_value::<KnowledgeGraph>(raw).is_ok(),
+            "a byte-counted bound would reject this at a third of the allowance"
+        );
+    }
+
+    /// Ordinary identifiers are untouched — the check must not become a cost on
+    /// the normal path or a source of false rejections.
+    #[test]
+    fn realistic_identifiers_are_unaffected() {
+        let raw = serde_json::json!({
+            "nodes": [
+                {"id": "Albert Einstein", "name": "Albert Einstein",
+                 "type": "PERSON", "description": "A physicist."},
+                {"id": "Institute for Advanced Study (Princeton, New Jersey)",
+                 "name": "IAS", "type": "ORGANIZATION", "description": "A research institute."}
+            ],
+            "edges": [{
+                "source_node_id": "Albert Einstein",
+                "target_node_id": "Institute for Advanced Study (Princeton, New Jersey)",
+                "relationship_name": "worked_at"
+            }]
+        });
+        let graph: KnowledgeGraph = serde_json::from_value(raw).unwrap();
+        assert_eq!(graph.node_count(), 2);
+        assert_eq!(graph.edge_count(), 1);
+    }
+
+    /// `description` is prose, not an identifier, and is deliberately NOT bound.
+    ///
+    /// Pinned because it is the obvious next thing to "fix": bounding free text
+    /// is a different decision with a different realistic range, and SDK-629 did
+    /// not take it. A reviewer who wants it should have to delete this test.
+    #[test]
+    fn free_text_fields_are_deliberately_unbounded() {
+        let long_prose = "word ".repeat(MAX_IDENTIFIER_CHARS);
+        let raw = serde_json::json!({
+            "nodes": [{"id": "a", "name": "A", "type": "T", "description": long_prose}],
+            "edges": [{
+                "source_node_id": "a", "target_node_id": "a",
+                "relationship_name": "r", "description": "word ".repeat(MAX_IDENTIFIER_CHARS)
+            }]
+        });
+        assert!(
+            serde_json::from_value::<KnowledgeGraph>(raw).is_ok(),
+            "only identifiers are bounded; widening to free text is a separate decision"
+        );
+    }
+
     /// The `edges` explanation must stay OFF the field's doc comment.
     ///
     /// `schemars` copies a field's `///` into that property's JSON-schema
@@ -598,11 +901,42 @@ mod tests {
             "deserialize_edges_lenient",
             "malformed",
             "MAX_DROPPABLE_EDGE_FRACTION",
+            // Same rule for the identifier bound (SDK-629). Telling the model
+            // about it would also be useless: PR #210 MEASURED schema-declared
+            // `maxLength` as advisory, which is why the bound is enforced on the
+            // way in rather than advertised.
+            "deserialize_nodes_checked",
+            "MAX_IDENTIFIER_CHARS",
+            "characters long",
         ] {
             assert!(
                 !rendered.contains(leak),
                 "the model-facing schema leaks the internal `{leak}`; keep the \
                  lenient-deserialization note on a `//` comment, not a `///` one"
+            );
+        }
+
+        // The identifier check must not have perturbed the schema at all: a
+        // changed schema rehashes every committed structured-output cassette
+        // (`cassette::input_hash` canonicalizes the schema alongside the
+        // messages) and the `COGNEE_TEST_REPLAY=1` lane then fails on a miss.
+        // `deserialize_with` is invisible to `schemars` — `edges` has carried one
+        // since the lenient deserializer landed — and this pins that it stays so.
+        assert!(
+            !rendered.contains("maxLength"),
+            "the bound is enforced in Rust, not declared in the schema: adding \
+             `maxLength` would invalidate every committed cassette and PR #210 \
+             measured it as advisory anyway. Schema: {rendered}"
+        );
+        for required in ["nodes", "edges"] {
+            assert!(
+                schema["required"]
+                    .as_array()
+                    .expect("`required` is an array")
+                    .iter()
+                    .any(|v| v.as_str() == Some(required)),
+                "`{required}` must stay in the schema's `required` array — a \
+                 `deserialize_with` must not have made it look optional"
             );
         }
     }
