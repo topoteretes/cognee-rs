@@ -242,8 +242,13 @@ pub trait PipelineRunRepository: Send + Sync {
     /// from "it was already gone", and the run path — which releases its own
     /// claim and cannot care — does not.
     ///
+    /// Named `try_` rather than `force_` on purpose: it removes nothing unless
+    /// `claim_id` still holds the pair, so a caller that does not have the
+    /// holder's id cannot use it to clear a claim. There is deliberately no
+    /// holder-unscoped variant — see the TOCTOU the scoping prevents.
+    ///
     /// The default implementation reports nothing released.
-    async fn force_release_pipeline_run_claim(
+    async fn try_release_pipeline_run_claim(
         &self,
         _dataset_id: Uuid,
         _pipeline_name: &str,
@@ -252,8 +257,9 @@ pub trait PipelineRunRepository: Send + Sync {
         Ok(false)
     }
 
-    /// Retire an orphaned `Initiated`/`Started` row for one pair, as
-    /// [`Self::reset_orphans`] does for every pair at once.
+    /// Retire the orphaned `Initiated`/`Started` row identified by
+    /// `pipeline_run_id`, as [`Self::reset_orphans`] does for every pair at
+    /// once. Returns whether a successor was written.
     ///
     /// This is the *first* thing that refuses a re-run after a kill, and the
     /// one with no expiry. `check_pipeline_run_qualification` reads the latest
@@ -263,6 +269,13 @@ pub trait PipelineRunRepository: Send + Sync {
     /// at all, and the only existing sweep runs at HTTP-server startup, so a
     /// CLI-only deployment never reaches it.
     ///
+    /// Scoped to the run the caller observed, for the same reason
+    /// [`Self::try_release_pipeline_run_claim`] is scoped to its holder: an
+    /// operator reports first and clears second, and a real run can start
+    /// between the two. Retiring by pair alone would write an `Errored`
+    /// successor over that healthy in-flight run — marking it failed and
+    /// re-opening the gate it had legitimately closed.
+    ///
     /// Writes an `Errored` successor rather than deleting, keeping the
     /// new-row-per-transition audit trail intact.
     ///
@@ -271,6 +284,7 @@ pub trait PipelineRunRepository: Send + Sync {
         &self,
         _dataset_id: Uuid,
         _pipeline_name: &str,
+        _pipeline_run_id: Uuid,
         _reason: &str,
     ) -> Result<bool, DbError> {
         Ok(false)

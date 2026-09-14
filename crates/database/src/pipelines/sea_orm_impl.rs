@@ -600,7 +600,7 @@ impl PipelineRunRepository for SeaOrmPipelineRunRepository {
         }))
     }
 
-    async fn force_release_pipeline_run_claim(
+    async fn try_release_pipeline_run_claim(
         &self,
         dataset_id: Uuid,
         pipeline_name: &str,
@@ -617,7 +617,7 @@ impl PipelineRunRepository for SeaOrmPipelineRunRepository {
             .exec(self.db.as_ref())
             .await
             .map_err(|e| {
-                DatabaseError::QueryError(format!("force-release pipeline_run_claim failed: {e}"))
+                DatabaseError::QueryError(format!("release pipeline_run_claim failed: {e}"))
             })?;
 
         if deleted.rows_affected > 0 {
@@ -636,6 +636,7 @@ impl PipelineRunRepository for SeaOrmPipelineRunRepository {
         &self,
         dataset_id: Uuid,
         pipeline_name: &str,
+        pipeline_run_id: Uuid,
         reason: &str,
     ) -> Result<bool, DatabaseError> {
         // The same row `check_pipeline_run_qualification` reads, so what is
@@ -646,6 +647,14 @@ impl PipelineRunRepository for SeaOrmPipelineRunRepository {
         else {
             return Ok(false);
         };
+
+        // Scoped to the run the caller observed. Without this, a real run
+        // started between an operator's report and their clear would be the
+        // latest row by the time we get here, and would be marked `Errored`
+        // while healthy and in flight.
+        if latest.pipeline_run_id != pipeline_run_id {
+            return Ok(false);
+        }
 
         if !matches!(
             latest.status,

@@ -1178,10 +1178,10 @@ async fn force_release_clears_a_claim_without_its_holder_id() {
     );
 
     assert!(
-        repo.force_release_pipeline_run_claim(dataset_id, "cognify_pipeline", dead_holder)
+        repo.try_release_pipeline_run_claim(dataset_id, "cognify_pipeline", dead_holder)
             .await
-            .expect("force release"),
-        "force-release reports that it removed a claim"
+            .expect("release"),
+        "release reports that it removed a claim"
     );
     assert!(
         repo.get_pipeline_run_claim(dataset_id, "cognify_pipeline")
@@ -1207,9 +1207,9 @@ async fn force_release_reports_false_when_nothing_was_held() {
 
     assert!(
         !repo
-            .force_release_pipeline_run_claim(dataset_id, "cognify_pipeline", Uuid::new_v4())
+            .try_release_pipeline_run_claim(dataset_id, "cognify_pipeline", Uuid::new_v4())
             .await
-            .expect("force release"),
+            .expect("release"),
         "nothing held means nothing released — the CLI reports that differently, so the \
          distinction has to survive the repository"
     );
@@ -1238,9 +1238,9 @@ async fn force_release_does_not_touch_another_pipeline() {
     );
 
     assert!(
-        repo.force_release_pipeline_run_claim(dataset_id, "cognify_pipeline", cognify_holder)
+        repo.try_release_pipeline_run_claim(dataset_id, "cognify_pipeline", cognify_holder)
             .await
-            .expect("force release")
+            .expect("release")
     );
 
     let memify = repo
@@ -1275,9 +1275,9 @@ async fn force_release_does_not_touch_another_dataset() {
     );
 
     assert!(
-        repo.force_release_pipeline_run_claim(wedged, "cognify_pipeline", wedged_holder)
+        repo.try_release_pipeline_run_claim(wedged, "cognify_pipeline", wedged_holder)
             .await
-            .expect("force release")
+            .expect("release")
     );
 
     let survivor = repo
@@ -1319,9 +1319,9 @@ async fn force_release_does_not_remove_a_claim_taken_over_since_the_read() {
     // The operator now acts on what they read a moment ago.
     assert!(
         !repo
-            .force_release_pipeline_run_claim(dataset_id, "cognify_pipeline", observed)
+            .try_release_pipeline_run_claim(dataset_id, "cognify_pipeline", observed)
             .await
-            .expect("force release"),
+            .expect("release"),
         "releasing a holder that is gone must remove nothing"
     );
 
@@ -1383,7 +1383,7 @@ async fn reset_orphan_run_retires_a_started_row_so_the_pair_qualifies_again() {
     .await;
 
     assert!(
-        repo.reset_orphan_run(dataset_id, "cognify_pipeline", "operator_unblock")
+        repo.reset_orphan_run(dataset_id, "cognify_pipeline", run_id, "operator_unblock")
             .await
             .expect("reset_orphan_run")
     );
@@ -1432,7 +1432,7 @@ async fn reset_orphan_run_leaves_a_completed_run_alone() {
 
     assert!(
         !repo
-            .reset_orphan_run(dataset_id, "cognify_pipeline", "operator_unblock")
+            .reset_orphan_run(dataset_id, "cognify_pipeline", run_id, "operator_unblock")
             .await
             .expect("reset_orphan_run"),
         "a finished run is not an orphan"
@@ -1455,7 +1455,12 @@ async fn reset_orphan_run_reports_false_when_the_pair_has_no_runs() {
 
     assert!(
         !repo
-            .reset_orphan_run(dataset_id, "cognify_pipeline", "operator_unblock")
+            .reset_orphan_run(
+                dataset_id,
+                "cognify_pipeline",
+                Uuid::new_v4(),
+                "operator_unblock"
+            )
             .await
             .expect("reset_orphan_run")
     );
@@ -1470,11 +1475,12 @@ async fn reset_orphan_run_does_not_touch_another_pipeline() {
     let dataset_id = Uuid::new_v4();
     create_dataset(&db, dataset_id).await;
 
+    let run_id = Uuid::new_v4();
     log_status(
         &repo,
         dataset_id,
         "cognify_pipeline",
-        Uuid::new_v4(),
+        run_id,
         PipelineRunStatus::Started,
     )
     .await;
@@ -1488,7 +1494,7 @@ async fn reset_orphan_run_does_not_touch_another_pipeline() {
     .await;
 
     assert!(
-        repo.reset_orphan_run(dataset_id, "cognify_pipeline", "operator_unblock")
+        repo.reset_orphan_run(dataset_id, "cognify_pipeline", run_id, "operator_unblock")
             .await
             .expect("reset_orphan_run")
     );
@@ -1515,11 +1521,12 @@ async fn reset_orphan_run_does_not_touch_another_dataset() {
     create_dataset(&db, wedged).await;
     create_dataset(&db, healthy).await;
 
+    let wedged_run = Uuid::new_v4();
     log_status(
         &repo,
         wedged,
         "cognify_pipeline",
-        Uuid::new_v4(),
+        wedged_run,
         PipelineRunStatus::Started,
     )
     .await;
@@ -1533,7 +1540,7 @@ async fn reset_orphan_run_does_not_touch_another_dataset() {
     .await;
 
     assert!(
-        repo.reset_orphan_run(wedged, "cognify_pipeline", "operator_unblock")
+        repo.reset_orphan_run(wedged, "cognify_pipeline", wedged_run, "operator_unblock")
             .await
             .expect("reset_orphan_run")
     );
@@ -1544,4 +1551,63 @@ async fn reset_orphan_run_does_not_touch_another_dataset() {
         .expect("get latest")
         .expect("a row exists");
     assert_eq!(survivor.status, PipelineRunStatus::Started);
+}
+
+/// The TOCTOU the run-id scoping exists for, and the counterpart to
+/// `force_release_does_not_remove_a_claim_taken_over_since_the_read`.
+///
+/// The command reports first and clears second, so a real run can start between
+/// the two invocations. Retiring by `(dataset, pipeline)` alone would write an
+/// `Errored` successor over that healthy in-flight run — marking it failed and
+/// re-opening the gate it had legitimately closed.
+#[tokio::test]
+async fn reset_orphan_run_does_not_retire_a_run_started_since_the_read() {
+    let db = make_db().await;
+    let repo = make_repo(Arc::clone(&db));
+    let dataset_id = Uuid::new_v4();
+    create_dataset(&db, dataset_id).await;
+
+    let observed = Uuid::new_v4();
+    log_status(
+        &repo,
+        dataset_id,
+        "cognify_pipeline",
+        observed,
+        PipelineRunStatus::Started,
+    )
+    .await;
+
+    // The wedged run is cleaned up some other way, and a fresh one starts.
+    let newcomer = Uuid::new_v4();
+    log_status(
+        &repo,
+        dataset_id,
+        "cognify_pipeline",
+        newcomer,
+        PipelineRunStatus::Started,
+    )
+    .await;
+
+    assert!(
+        !repo
+            .reset_orphan_run(dataset_id, "cognify_pipeline", observed, "operator_unblock")
+            .await
+            .expect("reset_orphan_run"),
+        "retiring a run that is no longer the latest must do nothing"
+    );
+
+    let latest = repo
+        .get_pipeline_run_by_dataset(dataset_id, "cognify_pipeline")
+        .await
+        .expect("get latest")
+        .expect("a row exists");
+    assert_eq!(
+        latest.pipeline_run_id, newcomer,
+        "the live run must still be the latest"
+    );
+    assert_eq!(
+        latest.status,
+        PipelineRunStatus::Started,
+        "and must not have been marked failed"
+    );
 }

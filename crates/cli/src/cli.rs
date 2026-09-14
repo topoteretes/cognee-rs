@@ -215,8 +215,12 @@ pub struct PipelineUnblockArgs {
     /// Pipeline to inspect: `cognify_pipeline`, `temporal-cognify` or
     /// `memify_pipeline`. Each claims a dataset under its own name, so they
     /// never exclude each other.
-    #[arg(long = "pipeline", default_value = "cognify_pipeline")]
-    pub pipeline: String,
+    ///
+    /// Omit to check all three. Defaulting to one would answer "nothing is
+    /// blocking" for a dataset wedged on another, and the failing run's error
+    /// does not tell an operator which name to pass.
+    #[arg(long = "pipeline")]
+    pub pipeline: Option<String>,
 
     /// Actually clear what is reported.
     ///

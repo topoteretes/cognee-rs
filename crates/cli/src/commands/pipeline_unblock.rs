@@ -40,14 +40,25 @@ const KNOWN_PIPELINES: &[&str] = &["cognify_pipeline", "temporal-cognify", "memi
 const RESET_REASON: &str = "operator_unblock";
 
 pub fn run(args: PipelineUnblockArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
-    if !KNOWN_PIPELINES.contains(&args.pipeline.as_str()) {
-        return Err(CliError::Validation(format!(
-            "Unknown pipeline '{}'. Expected one of: {}. A name that takes no claim would \
-             report nothing blocking, which is the wrong answer rather than no answer.",
-            args.pipeline,
-            KNOWN_PIPELINES.join(", ")
-        )));
-    }
+    // Which pipelines to look at. Naming one is an optimisation, not a
+    // requirement: defaulting to cognify would answer "nothing is blocking" for
+    // a wedged `temporal-cognify`, which is the confident-wrong-answer
+    // `KNOWN_PIPELINES` exists to prevent — and nothing in the failing cognify
+    // output tells the operator which pipeline name to pass.
+    let pipelines: Vec<String> = match &args.pipeline {
+        Some(named) => {
+            if !KNOWN_PIPELINES.contains(&named.as_str()) {
+                return Err(CliError::Validation(format!(
+                    "Unknown pipeline '{named}'. Expected one of: {}. A name that takes no \
+                     claim would report nothing blocking, which is the wrong answer rather \
+                     than no answer.",
+                    KNOWN_PIPELINES.join(", ")
+                )));
+            }
+            vec![named.clone()]
+        }
+        None => KNOWN_PIPELINES.iter().map(|p| (*p).to_string()).collect(),
+    };
 
     // Scoped so the settings read guard is dropped before the async block below
     // captures `cm` — holding it across an await would keep a lock alive for
@@ -79,100 +90,152 @@ pub fn run(args: PipelineUnblockArgs, cm: Arc<ComponentManager>) -> Result<(), C
             .ok_or_else(|| CliError::Validation(format!("Dataset '{}' not found", args.dataset)))?;
 
         let repo = SeaOrmPipelineRunRepository::new(Arc::clone(&database));
-        let (ds, pipe) = (dataset.id, args.pipeline.as_str());
+        let ds = dataset.id;
+        let mut found_any = false;
 
-        // Gate 1: the orphaned run row. Checked first because that is the order
-        // cognify checks them in, so it is the order the operator hits them.
-        let orphan = repo
-            .get_pipeline_run_by_dataset(ds, pipe)
-            .await
-            .map_err(|e| CliError::Runtime(format!("{e}")))?
-            .filter(|run| {
-                matches!(
-                    run.status,
-                    PipelineRunStatus::Initiated | PipelineRunStatus::Started
-                )
-            });
+        for pipe in &pipelines {
+            let pipe = pipe.as_str();
 
-        // Gate 2: the claim.
-        let claim = repo
-            .get_pipeline_run_claim(ds, pipe)
-            .await
-            .map_err(|e| CliError::Runtime(format!("{e}")))?;
-
-        if orphan.is_none() && claim.is_none() {
-            info!(
-                "Nothing is blocking '{pipe}' on dataset '{}' ({ds}). If a run is still being \
-                 refused, it is being refused by something else.",
-                args.dataset
-            );
-            return Ok(());
-        }
-
-        for line in describe(orphan.as_ref(), claim.as_ref(), &args.dataset, ds, pipe) {
-            info!("{line}");
-        }
-
-        if !args.clear {
-            info!(
-                "Reporting only. If the process that started this run is gone, clear it with: \
-                 cognee-cli pipeline-unblock -d {} --pipeline {pipe} --clear",
-                args.dataset
-            );
-            return Ok(());
-        }
-
-        let mut cleared = 0usize;
-
-        if orphan.is_some() {
-            warn!(
-                "Retiring the orphaned '{pipe}' run on dataset '{}'.",
-                args.dataset
-            );
-            if repo
-                .reset_orphan_run(ds, pipe, RESET_REASON)
+            // Gate 1: the orphaned run row. Checked first because that is the
+            // order cognify checks them in, so it is the order the operator
+            // hits them.
+            //
+            // `Started` only. `check_pipeline_run_qualification` maps
+            // `Initiated` to `Proceed`, so an `Initiated` row refuses nothing —
+            // reporting it as a blocker, and then "clearing" it, would be a
+            // confident wrong answer about a problem that does not exist.
+            let orphan = repo
+                .get_pipeline_run_by_dataset(ds, pipe)
                 .await
                 .map_err(|e| CliError::Runtime(format!("{e}")))?
-            {
-                cleared += 1;
+                .filter(|run| matches!(run.status, PipelineRunStatus::Started));
+
+            // Gate 2: the claim.
+            let claim = repo
+                .get_pipeline_run_claim(ds, pipe)
+                .await
+                .map_err(|e| CliError::Runtime(format!("{e}")))?;
+
+            // A claim past the staleness window is reclaimed by the next run on
+            // its own, so it refuses nothing. Counting it as a blocker would
+            // send the operator to clear something that was never the problem.
+            let claim_blocks = claim.as_ref().is_some_and(|held| !is_reclaimable(held));
+            if orphan.is_none() && !claim_blocks {
+                if claim.is_some() {
+                    for line in describe(orphan.as_ref(), claim.as_ref(), &args.dataset, ds, pipe) {
+                        info!("{line}");
+                    }
+                }
+                continue;
             }
-        }
 
-        if let Some(held) = &claim {
-            warn!(
-                "Releasing the '{pipe}' claim on dataset '{}', holder {}.",
-                args.dataset, held.claim_id
-            );
-            // Scoped to the holder read above: if it finished and a new run
-            // took the pair in between, this removes nothing rather than
-            // killing the newcomer.
-            if repo
-                .force_release_pipeline_run_claim(ds, pipe, held.claim_id)
-                .await
-                .map_err(|e| CliError::Runtime(format!("{e}")))?
+            found_any = true;
+            for line in describe(orphan.as_ref(), claim.as_ref(), &args.dataset, ds, pipe) {
+                info!("{line}");
+            }
+
+            if !args.clear {
+                info!(
+                    "Reporting only. If the process that started this run is gone, clear it \
+                     with: cognee-cli pipeline-unblock -d {} --pipeline {pipe} --clear",
+                    args.dataset
+                );
+                continue;
+            }
+
+            let mut cleared = 0usize;
+            let mut contradicted = false;
+
+            if let Some(stuck) = &orphan {
+                warn!(
+                    "Retiring the orphaned '{pipe}' run {} on dataset '{}'.",
+                    stuck.pipeline_run_id, args.dataset
+                );
+                // Scoped to the run reported above: a real run started between
+                // the report and this clear must not be marked failed.
+                if repo
+                    .reset_orphan_run(ds, pipe, stuck.pipeline_run_id, RESET_REASON)
+                    .await
+                    .map_err(|e| CliError::Runtime(format!("{e}")))?
+                {
+                    cleared += 1;
+                } else {
+                    contradicted = true;
+                    info!(
+                        "The run reported above is no longer the latest for this pair — \
+                         nothing retired. A new run may have started since."
+                    );
+                }
+            }
+
+            if let Some(held) = &claim
+                && claim_blocks
             {
-                cleared += 1;
+                warn!(
+                    "Releasing the '{pipe}' claim on dataset '{}', holder {}.",
+                    args.dataset, held.claim_id
+                );
+                // Scoped to the holder read above: if it finished and a new run
+                // took the pair in between, this removes nothing rather than
+                // killing the newcomer.
+                if repo
+                    .try_release_pipeline_run_claim(ds, pipe, held.claim_id)
+                    .await
+                    .map_err(|e| CliError::Runtime(format!("{e}")))?
+                {
+                    cleared += 1;
+                } else {
+                    contradicted = true;
+                    info!(
+                        "The claim was given up while this command ran — nothing released, \
+                         and a new run may now hold it."
+                    );
+                }
+            }
+
+            if cleared > 0 && !contradicted {
+                info!(
+                    "Cleared. '{pipe}' can run on dataset '{}' again.",
+                    args.dataset
+                );
+            } else if contradicted {
+                // Something moved under us, so "can run again" would contradict
+                // the line printed immediately above it. Say what is known.
+                info!(
+                    "Partly cleared. State changed while this command ran, so re-run without \
+                     --clear to see where '{pipe}' on dataset '{}' now stands.",
+                    args.dataset
+                );
             } else {
                 info!(
-                    "The claim was given up while this command ran — nothing released, and a \
-                     new run may now hold it."
+                    "Nothing left to clear on '{pipe}' for dataset '{}'.",
+                    args.dataset
                 );
             }
         }
 
-        if cleared > 0 {
+        if !found_any {
             info!(
-                "Cleared. '{pipe}' can run on dataset '{}' again.",
-                args.dataset
-            );
-        } else {
-            info!(
-                "Nothing left to clear on '{pipe}' for dataset '{}'.",
+                "Nothing is blocking a run on dataset '{}' ({ds}). If one is still being \
+                 refused, it is being refused by something else.",
                 args.dataset
             );
         }
         Ok(())
     })
+}
+
+/// Whether a claim is already past the staleness window, so the next run
+/// reclaims it without anyone asking.
+///
+/// `get_pipeline_run_claim` applies no staleness filter — it reports the row as
+/// it stands — so this is the caller's job. Mirrors `try_claim_pipeline_run`'s
+/// rule, which reclaims when `age >= stale_after`.
+fn is_reclaimable(claim: &cognee::database::PipelineRunClaim) -> bool {
+    chrono::Utc::now()
+        .signed_duration_since(claim.claimed_at)
+        .to_std()
+        .is_ok_and(|age| age >= CLAIM_STALE_AFTER)
 }
 
 /// The report shown before any action, one line per blocker.
@@ -206,7 +269,7 @@ fn describe(
     match claim {
         Some(held) => {
             let age = chrono::Utc::now().signed_duration_since(held.claimed_at);
-            let expiry = if age.to_std().is_ok_and(|a| a >= CLAIM_STALE_AFTER) {
+            let expiry = if is_reclaimable(held) {
                 " It is already past the staleness window, so the next run would reclaim it \
                  automatically — it is not what is blocking you."
                     .to_string()
