@@ -34,21 +34,46 @@
  *       invocation, a hard R1 violation;
  *     - same thread after the call returned → also a violation (the C API
  *       has no run loop to legitimately dispatch onto the caller).
- *   No sleeps, no timing assumptions, no unsynchronized reads.
+ *   No sleeps and no unsynchronized reads.  The R1 verdict itself carries
+ *   no timing assumption; the only clock in the file is the
+ *   CALLBACK_DEADLINE_SECONDS failsafe below, which exists so an op that
+ *   never calls back fails instead of hanging, and is set far above any
+ *   legitimate completion so it cannot decide a verdict.
  *
  * Tests:
  *   1. cg_sdk_warm    — assert R1 (no re-entrant/caller-thread delivery),
- *      then wait on a condvar and assert the callback fired exactly once
- *      with CG_OK.
+ *      then wait on a condvar and assert the callback fired with CG_OK.
  *   2. cg_sdk_owner_id — same.
+ *
+ * Known gap, deliberate: nothing here asserts that the *initiating call*
+ * returns before the work completes. An implementation that spawned and
+ * then joined would deliver off the caller's thread and still pass. That
+ * property is not specified anywhere — every capi mention of "D4" restates
+ * the same R1 delivery rule and none of them promises a non-blocking
+ * call — and the old pre-wait check only covered it as a side effect of
+ * testing a stronger, unguaranteed property, which is exactly what made it
+ * flaky. (The likelier regression, `rt.block_on(...)` in place of
+ * `spawn`, runs the callback on the caller's thread and IS caught.) If the
+ * non-blocking property is wanted, specify it in cognee_sdk.h first, then
+ * test it deterministically.
  *
  * Threading model:
  *   All mutable state shared with the callback is guarded by `mu`; the
  *   mutex/condvar pair provides the memory barrier so the callback's
- *   writes are visible to the main thread after the wait.  The only
- *   unguarded field is `caller_tid`/`in_call`, which are written by the
- *   caller thread and read by the callback *only* when the callback is
- *   running on that same thread — i.e. never concurrently.
+ *   writes are visible to the main thread after the wait.
+ *
+ *   Two fields are read outside `mu`, for different reasons:
+ *     - `in_call` is read by the callback only after it has established it
+ *       is running on the caller's own thread (the `&&` short-circuits), so
+ *       that access is sequential, never concurrent.
+ *     - `caller_tid` IS read unconditionally, on whatever thread the
+ *       callback lands on. That read is safe by ordering rather than by
+ *       exclusion: it is written before the op is initiated, and the
+ *       runtime's own spawn synchronization establishes happens-before
+ *       between the initiating call and the callback. It is never written
+ *       again while an op is in flight.
+ *   Do not add further unguarded fields on the strength of the first rule;
+ *   it does not cover the second.
  *
  * Environment:
  *   MOCK_EMBEDDING=true set via JSON settings overlay (no network needed).
@@ -56,14 +81,24 @@
  * Exit codes: 0 = all assertions passed, 1 = at least one failure.
  */
 
+#include <errno.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "cognee_sdk.h"
 
 /* ── Shared state for custom callback ────────────────────────────────────── */
+
+/*
+ * Failsafe only. R1 is decided by thread identity with no timing
+ * assumption; this bound exists so an op that never calls back fails
+ * instead of hanging the whole C API check. Orders of magnitude above any
+ * legitimate completion, so it cannot itself flake.
+ */
+#define CALLBACK_DEADLINE_SECONDS 60
 
 static int g_failures = 0;
 
@@ -92,7 +127,7 @@ typedef struct {
 
     /* ── Guarded by mu ───────────────────────────────────────────────── */
     int         fired;       /* 0 = not yet, 1 = callback fired */
-    int         fire_count;  /* callback must fire exactly once */
+    int         fire_count;  /* best-effort duplicate-fire check; see check_deferred */
     CgErrorCode code;
     int         on_caller_thread;  /* R1 violation: ran on the caller's thread */
     int         reentrant;         /* R1 violation: ... inside the initiating call */
@@ -133,9 +168,10 @@ static void deferred_callback(CgErrorCode code, const char* result_json,
     (void)error_message;
     OpSync* s = (OpSync*)user_data;
 
-    /* R1 evidence.  Reading caller_tid/in_call here is race-free: they are
-     * written only by the caller thread, and `in_call` is only consulted
-     * when we have already established that *we are* that thread, in which
+    /* R1 evidence.  `caller_tid` is read on whatever thread we landed on;
+     * that is safe by ordering (written before the op was initiated, and
+     * the spawn establishes happens-before).  `in_call` is only consulted
+     * once we have already established that *we are* that thread, in which
      * case the access is sequential, not concurrent. */
     int same_thread = pthread_equal(pthread_self(), s->caller_tid) != 0;
     int reentrant   = same_thread && s->in_call != 0;
@@ -169,7 +205,8 @@ typedef void (*SdkOpFn)(const CgSdk*, CgSdkResultCallback, void*);
  *
  * Deliberately NOT asserted: that the callback has not yet *completed*
  * when the initiating call returns.  That is not what R1 guarantees, and
- * a correct async implementation may finish first on another core — see
+ * a correct async implementation may finish first on another core.  Nor
+ * that the initiating call is non-blocking — see the "Known gap" note in
  * the file header.
  */
 static void check_deferred(const CgSdk* sdk, SdkOpFn op, const char* op_name)
@@ -180,21 +217,55 @@ static void check_deferred(const CgSdk* sdk, SdkOpFn op, const char* op_name)
     /* Invoke the op.  R1: the callback must NOT fire synchronously from
      * inside this call.  The sentinel lets the callback detect exactly
      * that, on whichever thread it happens to run. */
-    s.caller_tid = pthread_self();
-    s.in_call    = 1;
+    /* `caller_tid` was recorded by op_sync_init on this same thread. */
+    s.in_call = 1;
     op(sdk, deferred_callback, &s);
-    s.in_call    = 0;
+    s.in_call = 0;
 
     /* ── Wait for the callback to fire ─────────────────────────────────── */
+    /*
+     * Bounded, so that an op which never calls back FAILS rather than
+     * hanging: capi/scripts/check.sh runs this binary with no `timeout`
+     * wrapper, so an unbounded wait would stall the whole C API check (and
+     * its CI lane) until the job timeout. That is not hypothetical — both
+     * ops have a documented early-return path that never invokes the
+     * callback ("NULL -> no-op (null-check returns early)", cognee_sdk.h),
+     * so any regression routing into one would convert a clean FAIL into a
+     * hang.
+     *
+     * The deadline is a failsafe, not the correctness mechanism: R1 itself
+     * is decided by thread identity, with no timing assumption. 60s is far
+     * beyond any legitimate completion (these ops finish in milliseconds),
+     * so it cannot produce a flaky failure the way the old pre-wait check
+     * produced flaky failures.
+     */
+    struct timespec deadline;
+    clock_gettime(CLOCK_REALTIME, &deadline);
+    deadline.tv_sec += CALLBACK_DEADLINE_SECONDS;
+
+    int timed_out = 0;
     pthread_mutex_lock(&s.mu);
     while (s.fired == 0) {
-        pthread_cond_wait(&s.cv, &s.mu);
+        if (pthread_cond_timedwait(&s.cv, &s.mu, &deadline) == ETIMEDOUT) {
+            timed_out = s.fired == 0;
+            break;
+        }
     }
     int reentrant_val = s.reentrant;
     int same_thread_val = s.on_caller_thread;
     int fire_count_val = s.fire_count;
     CgErrorCode code_val = s.code;
     pthread_mutex_unlock(&s.mu);
+
+    if (timed_out) {
+        fprintf(stderr,
+                "FAIL: callback for %s never fired within %d seconds — the op "
+                "returned without ever invoking it\n",
+                op_name, CALLBACK_DEADLINE_SECONDS);
+        g_failures++;
+        op_sync_destroy(&s);
+        return;
+    }
 
     /* ── Assert: delivery was deferred (R1) ─────────────────────────────── */
     if (reentrant_val) {
@@ -216,7 +287,18 @@ static void check_deferred(const CgSdk* sdk, SdkOpFn op, const char* op_name)
                op_name);
     }
 
-    ASSERT_EQ(fire_count_val, 1, "callback must fire exactly once");
+    /*
+     * Best-effort only, and deliberately not advertised as an exactly-once
+     * check: `fire_count` is snapshotted the moment the first signal wakes
+     * us, so it catches a duplicate that arrived *before* that point but
+     * cannot see a later one. A genuinely late second callback would in
+     * fact land on this frame after `op_sync_destroy` — undefined
+     * behaviour, not an assertion failure. Detecting that properly needs an
+     * `OpSync` that outlives the frame, which is not worth the machinery
+     * here; the exactly-once guarantee is the implementation's
+     * (`CgSdkResultCallback` is documented as "invoked exactly once").
+     */
+    ASSERT_EQ(fire_count_val, 1, "callback must not have fired more than once");
     ASSERT_EQ(code_val, CG_OK, "op must complete with CG_OK");
 
     op_sync_destroy(&s);
