@@ -6,8 +6,22 @@
 //! - If both are enabled, pdfium takes priority
 //! - If neither is enabled, this module is not compiled
 //!
-//! Both backends produce identical output matching the Python
-//! `pypdf_loader.py:70-84` format.
+//! Both backends wrap their pages in the same `"Page N:\n{text}\n"` envelope,
+//! which is what matches the Python `pypdf_loader.py:70-84` format — but the
+//! page *text* they put inside it is not identical, and this module used to
+//! claim it was. MEASURED over `tests/fixtures/pdf/sample.pdf` (PDFium builds
+//! 7690 and 7961, `pdf-extract` as pinned):
+//!
+//! - PDFium separates lines within a page with `\r\n` and adds nothing else.
+//! - `pdf-extract` separates them with `\n` and prefixes every page's text with
+//!   two blank lines.
+//!
+//! So text ingested through a `pdf-pure-rust` build (the Python, TS and Java
+//! bindings, `android-default`, and any container build that wants no native
+//! library) does not byte-match the same document ingested through a
+//! `pdf-pdfium` build. Chunk boundaries, and therefore embeddings and extracted
+//! graph nodes, can differ between the two. `tests/pdf_fixture_extraction.rs`
+//! and `tests/pdf_pure_rust_fixture_extraction.rs` pin each backend's output.
 
 mod format;
 

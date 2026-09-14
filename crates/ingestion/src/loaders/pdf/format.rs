@@ -1,8 +1,9 @@
 //! Shared output formatter for PDF backends.
 //!
-//! Both the pdfium and pure-Rust backends call [`format_pages`] so
-//! their output is byte-identical and matches the Python
-//! `pypdf_loader.py:70-84` format.
+//! Both the pdfium and pure-Rust backends call [`format_pages`], so the
+//! `"Page N:"` envelope they produce is byte-identical and matches the Python
+//! `pypdf_loader.py:70-84` format. The page text each hands *in* is not — see
+//! the [`super`] module docs for the measured difference.
 
 /// Formats per-page text into the Python-compatible output format.
 ///

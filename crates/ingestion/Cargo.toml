@@ -71,6 +71,34 @@ unstructured = ["unstructured-xlsx", "unstructured-docx", "unstructured-pptx", "
 image-loader = ["dep:cognee-llm"]
 audio-loader = ["dep:cognee-llm"]
 
+# Integration tests whose whole file is behind a `#![cfg(feature = ...)]`.
+# Without a `required-features` entry cargo still builds the target in a lane
+# that does not enable the feature, and it compiles to a green `running 0
+# tests` that is indistinguishable from a lane that really ran them. Declaring
+# the requirement makes cargo omit the target instead, and naming it explicitly
+# then fails with the feature to pass rather than reporting a green zero.
+# Every other test target here is still auto-discovered; listing these does not
+# opt out of that (`autotests` stays at its edition-2018+ default of `true`).
+[[test]]
+name = "html_extraction"
+path = "tests/html_extraction.rs"
+required-features = ["html-loader"]
+
+[[test]]
+name = "pdf_pdfium_cold_cache"
+path = "tests/pdf_pdfium_cold_cache.rs"
+required-features = ["pdf-pdfium"]
+
+[[test]]
+name = "pdf_fixture_extraction"
+path = "tests/pdf_fixture_extraction.rs"
+required-features = ["pdf-pdfium"]
+
+[[test]]
+name = "pdf_pure_rust_fixture_extraction"
+path = "tests/pdf_pure_rust_fixture_extraction.rs"
+required-features = ["pdf-pure-rust"]
+
 [dev-dependencies]
 cognee-database = { path = "../database", features = ["sqlite"] }
 cognee-delete = { path = "../delete" }

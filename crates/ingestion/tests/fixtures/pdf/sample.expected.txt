@@ -1,0 +1,9 @@
+Page 1:
+Cognee PDF loader fixture.
+This page exists so the test suite drives a real PDF parser
+over real PDF bytes instead of a synthesized %PDF-1.x stub.
+
+Page 2:
+Second page.
+Two pages are needed to pin the page-header output format,
+which must match the Python pypdf_loader.

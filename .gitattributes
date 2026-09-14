@@ -4,3 +4,11 @@
 # capi/scripts/header_sync_allow.txt.
 *.sh  text eol=lf
 *.txt text eol=lf
+
+# crates/ingestion/tests/fixtures/pdf/sample.pdf is deliberately uncompressed,
+# so it is pure ASCII and git's auto-detection classifies it as *text*. A
+# Windows checkout would then rewrite its line endings, which shifts every byte
+# after the first newline and silently invalidates the offsets in the PDF
+# `xref` table. `-text` (rather than `binary`) disables that conversion while
+# keeping the file diffable, which is the whole reason it is uncompressed.
+*.pdf -text

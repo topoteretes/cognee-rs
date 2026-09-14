@@ -68,7 +68,7 @@ generated artifact dir is added, extend `CARGO_MANIFESTS` / `ALL_ARTIFACTS` in t
 - **Integration tests:** 27 files under `crates/*/tests/` across 12 crates (ingestion, cognify, search, database, embedding, session, CLI, etc.)
 - **E2E tests:** CLI E2E via `assert_cmd`, integration tests requiring `COGNEE_E2E_EMBED_MODEL_PATH` / `COGNEE_E2E_TOKENIZER_PATH` env vars, cross-SDK tests in `e2e-cross-sdk/`
 - **Conditional skipping:** Tests gracefully skip when required env vars or models are unavailable
-- **Feature-gated tests:** e.g. `#![cfg(feature = "fs")]` for filesystem-specific session tests
+- **Feature-gated tests:** e.g. `#![cfg(feature = "fs")]` for filesystem-specific session tests. A file-level `#![cfg(feature = ...)]` **also needs a matching `[[test]] required-features` entry** in that crate's `Cargo.toml` — without one, a lane that does not enable the feature still builds the target and reports a green `running 0 tests`, indistinguishable from a lane that ran them. `crates/ingestion` is wired this way; most crates are not yet (see issue #212).
 - **Serial tests:** `#[serial_test::serial]` for PostgreSQL tests that cannot run in parallel
 - **Test fixtures:** Ontology test files in `crates/ontology/tests/fixtures/`, shared test data modules in cognify and search
 
