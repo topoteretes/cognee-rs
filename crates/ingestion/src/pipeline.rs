@@ -19,7 +19,7 @@ use cognee_core::CpuPool;
 use cognee_core::RayonThreadPool;
 use cognee_core::pipeline::DataIdFn;
 use cognee_core::pipeline_run_registry::DbPipelineWatcher;
-use cognee_core::task::Value;
+use cognee_core::task::{TaskError, Value};
 use cognee_core::{Pipeline, PipelineBuilder, PipelineContext, TaskContextBuilder, TypedTask};
 use cognee_database::{AclDb, DatabaseConnection, IngestDb, PipelineRunRepository};
 use cognee_graph::GraphDBTrait;
@@ -782,6 +782,31 @@ fn extract_original_location(input: &DataInput) -> String {
 
 /// Build a [`TypedTask`] that streams a [`DataInput`] to storage, hashes its
 /// content, and returns a self-contained [`ProcessedInput`].
+/// Lift a `process_input` error into a [`TaskError`], keeping the type where
+/// it is possible to keep it.
+///
+/// `process_input` returns a plain `Box<dyn Error>`, which does not satisfy
+/// `TaskError`'s `Send + Sync`, so the general case has to flatten to a string.
+/// `IngestionError` itself IS `Send + Sync`, so recover it first and let it
+/// cross intact: the executor then keeps it as `ExecutionError::TaskFailed`'s
+/// `#[source]`, which is what lets the HTTP layer classify
+/// `UnsupportedDocumentType` as 415 instead of 500.
+///
+/// This used to flatten unconditionally, so `downcast_ref` found nothing at any
+/// level of the source chain and no caller could tell a client error from a
+/// server one.
+///
+/// Split out of the closure so it can be tested without a storage backend or a
+/// particular loader feature set — the end-to-end assertion in
+/// `test_unsupported_loader_type_errors_at_add` is gated on the pdf features
+/// being *off*, which is not the configuration a workspace test run uses.
+fn preserve_ingestion_error(e: Box<dyn std::error::Error>) -> TaskError {
+    match e.downcast::<IngestionError>() {
+        Ok(typed) => typed as TaskError,
+        Err(other) => format!("{other}").into(),
+    }
+}
+
 pub fn make_process_input_task(
     storage: Arc<dyn StorageTrait>,
     hash_algorithm: HashAlgorithm,
@@ -795,7 +820,7 @@ pub fn make_process_input_task(
             process_input(&input, &*storage, hash_algorithm, owner_id, tenant_id)
                 .await
                 .map(Box::new)
-                .map_err(|e| format!("{e}").into())
+                .map_err(preserve_ingestion_error)
         })
     })
 }
@@ -2024,7 +2049,66 @@ mod tests {
             result.is_err(),
             "pdf input must error when the pdf loader feature is off"
         );
+
+        // The VARIANT must survive the trip out, not just the failure. The task
+        // wrapper used to flatten every error to a string, so `downcast_ref`
+        // found nothing at any level of the source chain and callers could not
+        // tell a client error from a server one — which is why `POST /add`
+        // reported an unsupported type as 500. `make_process_input_task` now
+        // passes `IngestionError` through typed, and `ExecutionError::TaskFailed`
+        // keeps it as `#[source]`; this pins that path end to end.
+        let err = result.expect_err("checked is_err above");
+        let mut current: Option<&(dyn std::error::Error + 'static)> = Some(&*err);
+        let mut found = false;
+        while let Some(e) = current {
+            if matches!(
+                e.downcast_ref::<IngestionError>(),
+                Some(IngestionError::UnsupportedDocumentType { .. })
+            ) {
+                found = true;
+                break;
+            }
+            current = e.source();
+        }
+        assert!(
+            found,
+            "`IngestionError::UnsupportedDocumentType` must be recoverable from the \
+             error chain (the HTTP layer classifies on it to return 415); got: {err}"
+        );
+
         let _ = std::fs::remove_file(&pdf_path);
+    }
+
+    /// Feature-independent guard for the typed-error passthrough that
+    /// `POST /api/v1/add`'s 415 depends on. The end-to-end version of this
+    /// (`test_unsupported_loader_type_errors_at_add`) only compiles when the
+    /// pdf features are OFF, which is not how a workspace run resolves them,
+    /// so on its own it would leave this unguarded in CI.
+    #[test]
+    fn preserve_ingestion_error_keeps_the_variant_recoverable() {
+        let boxed: Box<dyn std::error::Error> = Box::new(IngestionError::UnsupportedDocumentType {
+            document_type: "pdf".to_string(),
+        });
+        let lifted = preserve_ingestion_error(boxed);
+        assert!(
+            matches!(
+                lifted.downcast_ref::<IngestionError>(),
+                Some(IngestionError::UnsupportedDocumentType { document_type }) if document_type == "pdf"
+            ),
+            "the variant must survive the lift into TaskError; got: {lifted}"
+        );
+    }
+
+    /// The other half of the contract: anything that is not an
+    /// `IngestionError` still has to cross, since it cannot be moved into a
+    /// `Send + Sync` box. It flattens to its message, and must not be
+    /// mistaken for a typed error afterwards.
+    #[test]
+    fn preserve_ingestion_error_flattens_everything_else() {
+        let boxed: Box<dyn std::error::Error> = Box::new(std::io::Error::other("disk on fire"));
+        let lifted = preserve_ingestion_error(boxed);
+        assert_eq!(lifted.to_string(), "disk on fire");
+        assert!(lifted.downcast_ref::<IngestionError>().is_none());
     }
 
     /// Positive counterpart to `test_unsupported_loader_type_errors_at_add`.
@@ -2037,13 +2121,16 @@ mod tests {
     ///
     /// This asserts registration rather than driving an `add`, deliberately.
     /// Going through the pipeline would exercise the *extraction* backend,
-    /// which is a different thing from what broke and brings two problems with
-    /// it: the error type is erased by the task wrapper (`add` yields
-    /// `Box<dyn Error>`, and `downcast_ref` for `IngestionError`/`LoaderError`
-    /// is `None` at every level of the source chain, so a variant assertion
-    /// would be vacuous), and on a cold cache the pdfium backend would have to
-    /// download a ~7 MB libpdfium. A registration assertion is backend-agnostic,
-    /// needs no PDF fixture and no network, and pins exactly what #102 was.
+    /// which is a different thing from what broke, and on a cold cache the
+    /// pdfium backend would have to download a ~7 MB libpdfium. A registration
+    /// assertion is backend-agnostic, needs no PDF fixture and no network, and
+    /// pins exactly what #102 was.
+    ///
+    /// (This comment used to give a second reason — that the task wrapper
+    /// erased the error type, making a variant assertion vacuous. That is no
+    /// longer true: `make_process_input_task` passes `IngestionError` through
+    /// typed, and the negative test above now asserts the variant. The
+    /// remaining reasons still stand.)
     ///
     /// The cold-cache abort this comment used to describe — `bind_pdfium_silent`
     /// building and dropping a tokio runtime inside async — is fixed; the

@@ -370,27 +370,18 @@ impl IntoResponse for ApiError {
             ApiError::ServiceUnavailable(msg) => {
                 (StatusCode::SERVICE_UNAVAILABLE, json!({"error": msg}))
             }
-            ApiError::NotImplementedStub { code, detail } => {
-                // Field order is load-bearing: detail first, then code
-                // (matches Python's JSONResponse dict insertion order).
-                // serde_json::Map uses BTreeMap (no preserve_order feature),
-                // so we emit a raw JSON string to guarantee field order.
-                let raw = format!(
-                    "{{\"detail\":{},\"code\":{}}}",
-                    serde_json::Value::String(detail.to_string()),
-                    serde_json::Value::String(code.to_string()),
-                );
-                #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
-                return (
-                    StatusCode::NOT_IMPLEMENTED,
-                    axum::response::Response::builder()
-                        .status(StatusCode::NOT_IMPLEMENTED)
-                        .header(axum::http::header::CONTENT_TYPE, "application/json")
-                        .body(axum::body::Body::from(raw))
-                        .expect("valid response builder args"),
-                )
-                    .into_response();
-            }
+            // Field order is load-bearing: detail first, then code (matching
+            // Python's JSONResponse dict insertion order). `json!` preserves it
+            // — the workspace enables `serde_json/preserve_order`, so
+            // `serde_json::Map` is an insertion-ordered `IndexMap`, not a
+            // key-sorting `BTreeMap`. This arm used to hand-build the raw JSON
+            // string and its own `Response`, on a comment asserting the
+            // opposite; the feature has been on workspace-wide since it was
+            // hoisted into the root manifest.
+            ApiError::NotImplementedStub { code, detail } => (
+                StatusCode::NOT_IMPLEMENTED,
+                json!({"detail": detail, "code": code}),
+            ),
             ApiError::SearchError {
                 status,
                 error,

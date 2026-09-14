@@ -12,7 +12,7 @@ use axum::{
     routing::post,
 };
 use cognee_database::{IngestDb, NoopPipelineRunRepository};
-use cognee_ingestion::{AddParams, AddPipeline};
+use cognee_ingestion::{AddParams, AddPipeline, IngestionError};
 use cognee_models::DataInput;
 use serde_json::json;
 use uuid::Uuid;
@@ -22,6 +22,40 @@ use crate::dto::add::{AddRequest, DataIngestionInfoDTO, PipelineRunInfoDTO, Uplo
 use crate::error::ApiError;
 use crate::multipart::{MultipartOpts, UploadGuard, check_filename_traversal, parse_multipart};
 use crate::state::AppState;
+
+// ─── add_error_status ─────────────────────────────────────────────────────────
+
+/// HTTP status for a failed `add` pipeline run.
+///
+/// Everything defaults to 500, except the cases that are the *client's* fault.
+/// Today that is `IngestionError::UnsupportedDocumentType`, raised at loader
+/// dispatch when no loader is registered for the input's derived type — posting
+/// a PDF to a build without a `pdf-*` feature, say. Reporting that as 500 told
+/// the caller the server had broken when in fact the payload was unsupported.
+///
+/// **415, not 422** — matching Python, which is the authority here: its
+/// `IngestionError` overrides the 422 of its `CogneeValidationError` base with
+/// `status.HTTP_415_UNSUPPORTED_MEDIA_TYPE`
+/// (`cognee/modules/ingestion/exceptions/exceptions.py:10`, against
+/// `cognee/exceptions/exceptions.py:59`).
+///
+/// The error arrives wrapped — `ExecutionError::TaskFailed` carries the task's
+/// error as its `#[source]` — so this walks the whole source chain rather than
+/// inspecting only the outermost error. That chain is intact only because
+/// `make_process_input_task` passes `IngestionError` through as a typed error
+/// instead of flattening it to a string; see the note there.
+fn add_error_status(err: &(dyn std::error::Error + 'static)) -> StatusCode {
+    let mut current = Some(err);
+    while let Some(e) = current {
+        if let Some(IngestionError::UnsupportedDocumentType { .. }) =
+            e.downcast_ref::<IngestionError>()
+        {
+            return StatusCode::UNSUPPORTED_MEDIA_TYPE;
+        }
+        current = e.source();
+    }
+    StatusCode::INTERNAL_SERVER_ERROR
+}
 
 // ─── parse_add_multipart ──────────────────────────────────────────────────────
 
@@ -276,20 +310,22 @@ pub async fn post_add(
         ..AddParams::default()
     };
 
-    // Convert Box<dyn Error> → String immediately to keep the future Send.
+    // Classify before erasing: the typed error is only available here, and
+    // `Box<dyn Error>` is not Send, so it cannot be held across the await
+    // boundary. Both the status and the message are extracted in one go.
     let result = pipeline
         .add_with_params(inputs, &dataset_name, user.id, user.tenant_id, &params)
         .await
-        .map_err(|e| e.to_string());
+        .map_err(|e| (add_error_status(&*e), e.to_string()));
 
     match result {
-        Err(e) => {
+        Err((status, e)) => {
             let body = json!({
                 "error": "Pipeline run errored",
                 "detail": e
             });
             let resp = axum::response::Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .status(status)
                 .header("Content-Type", "application/json")
                 .body(axum::body::Body::from(
                     #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
@@ -346,4 +382,77 @@ pub async fn post_add(
 
 pub fn router() -> Router<AppState> {
     Router::new().route("/", post(post_add))
+}
+
+// ─── tests ───────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
+mod tests {
+    use super::*;
+    use cognee_core::pipeline::ExecutionError;
+
+    /// An unsupported document type is the caller's problem, not the server's.
+    /// It used to surface as 500 because the router mapped every pipeline error
+    /// to `INTERNAL_SERVER_ERROR` with the type erased to a string.
+    ///
+    /// 415 matches Python, whose `IngestionError` overrides its validation
+    /// base's 422 with `HTTP_415_UNSUPPORTED_MEDIA_TYPE`.
+    #[test]
+    fn unsupported_document_type_maps_to_415() {
+        let err = IngestionError::UnsupportedDocumentType {
+            document_type: "pdf".to_string(),
+        };
+        assert_eq!(
+            add_error_status(&err),
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "415, matching Python's IngestionError"
+        );
+    }
+
+    /// The real error never arrives bare: the executor wraps the task's error
+    /// in `ExecutionError::TaskFailed` as its `#[source]`. Classification must
+    /// walk the chain, or the 415 would only ever fire in a unit test.
+    #[test]
+    fn unsupported_document_type_is_found_through_the_source_chain() {
+        let wrapped = ExecutionError::TaskFailed {
+            task_index: 0,
+            attempts: 1,
+            source: Box::new(IngestionError::UnsupportedDocumentType {
+                document_type: "pdf".to_string(),
+            }),
+        };
+        assert_eq!(
+            add_error_status(&wrapped),
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "the classifier must look past the executor's wrapper"
+        );
+    }
+
+    /// Everything else stays a 500 — this is a targeted exception, not a
+    /// blanket downgrade of pipeline failures to client errors.
+    #[test]
+    fn other_errors_stay_500() {
+        let other = IngestionError::MissingBackend { which: "graph_db" };
+        assert_eq!(add_error_status(&other), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let io = std::io::Error::other("disk on fire");
+        assert_eq!(add_error_status(&io), StatusCode::INTERNAL_SERVER_ERROR);
+
+        // A stringified error carrying the same text must NOT be treated as a
+        // client error: classification is by type, not by message matching.
+        let stringly = ExecutionError::TaskFailed {
+            task_index: 0,
+            attempts: 1,
+            source: "Unsupported document type at ingest: pdf".into(),
+        };
+        assert_eq!(
+            add_error_status(&stringly),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
 }
