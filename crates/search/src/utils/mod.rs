@@ -1,5 +1,6 @@
 pub mod access_tracking;
 mod completion;
+mod edge_type_id;
 pub mod feedback_detection;
 mod resolve_edges_to_text;
 mod session_messages;
@@ -10,6 +11,7 @@ pub use completion::{
     DEFAULT_RAG_SYSTEM_PROMPT, DEFAULT_RAG_USER_PROMPT_TEMPLATE, render_graph_user_prompt,
     render_user_prompt, resolve_system_prompt,
 };
+pub(crate) use edge_type_id::edge_type_point_id;
 pub use feedback_detection::detect_feedback;
 pub(crate) use resolve_edges_to_text::DEFAULT_STOP_WORDS;
 pub use resolve_edges_to_text::resolve_edges_to_text as render_edges_context;

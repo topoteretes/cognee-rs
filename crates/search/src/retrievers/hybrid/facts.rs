@@ -11,11 +11,11 @@
 
 use std::collections::{HashMap, HashSet};
 
-use cognee_models::EdgeType;
 use serde_json::Value;
 
 use super::results::{display_value, first_display_value, payload, result_id};
 use crate::types::SearchItem;
+use crate::utils::edge_type_point_id;
 
 /// Minimum whitespace-delimited word count for a fact to be kept.
 ///
@@ -61,9 +61,11 @@ pub(crate) struct FactResult {
 /// Port of `connection_edge_type_id` (`facts.py:13-25`). Must mirror
 /// `index_graph_edges._get_edge_text`: prefer a nonblank `edge_text`
 /// (top-level first, then nested in `properties`), falling back to the
-/// `relationship_name`. The resolved retrieval text is then hashed exactly like
-/// the stored `EdgeType` row (`EdgeType::deterministic_id`). Returns `None` when
-/// the retrieval text is empty (the caller drops such edges from ranking).
+/// `relationship_name`. This function owns only that JSON-shape extraction; the
+/// hashing rule that has to match cognify's writer lives once in
+/// [`crate::utils::edge_type_point_id`], which the graph-retrieval lane calls
+/// with its own typed edge triple. Returns `None` when the retrieval text is
+/// empty (the caller drops such edges from ranking).
 pub(crate) fn connection_edge_type_id(edge: &EdgeLite) -> Option<String> {
     let nested_edge_text = edge
         .properties
@@ -87,12 +89,7 @@ pub(crate) fn connection_edge_type_id(edge: &EdgeLite) -> Option<String> {
         .and_then(display_value)
         .unwrap_or_default();
 
-    let retrieval_text = EdgeType::retrieval_text(text.as_deref(), &relationship_name);
-    if retrieval_text.is_empty() {
-        None
-    } else {
-        Some(EdgeType::deterministic_id(&retrieval_text).to_string())
-    }
+    edge_type_point_id(text.as_deref(), &relationship_name)
 }
 
 /// Map each edge hit's id to its rank (position), first occurrence winning.
@@ -212,6 +209,7 @@ pub(crate) fn format_facts(facts: &[FactResult]) -> String {
     reason = "test code — panics are acceptable failures"
 )]
 mod tests {
+    use cognee_models::EdgeType;
     use serde_json::json;
 
     use super::*;

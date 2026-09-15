@@ -7,6 +7,7 @@ use tracing::debug;
 
 use crate::graph_retrieval::rank_edge_score;
 use crate::types::SearchError;
+use crate::utils::edge_type_point_id;
 
 const DEFAULT_WIDE_SEARCH_TOP_K: usize = 100;
 
@@ -158,10 +159,23 @@ pub async fn brute_force_triplet_search(
     let mut candidate_node_ids = HashSet::<String>::new();
     let mut node_dataset_ids = HashMap::<String, String>::new();
 
-    // relationship_name -> cosine distance (lower = better)
-    // Keyed by relationship_name because edge_type_id is NOT stored in graph edge
-    // properties by cognify. The EdgeType vector points store relationship_name in
-    // their metadata (confirmed in cognify tasks.rs).
+    // EdgeType vector-row point id -> cosine distance (lower = better).
+    //
+    // NOT keyed by the bare `relationship_name`. cognify builds one EdgeType row
+    // per edge *retrieval text* — the nonblank `edge_text` property falling back
+    // to the relationship name (`EdgeType::retrieval_text`) — and both the row's
+    // point id and its `relationship_name` metadata carry that retrieval text,
+    // not the relation label. Since `fact_extraction` asks the LLM for a
+    // description on every edge, keying on the label made the lookup below miss
+    // for essentially every edge, so every edge silently took the
+    // `triplet_distance_penalty` and edge vectors never influenced ranking at all.
+    //
+    // Python matches by point id for the same reason: `CogneeGraph.add_edge`
+    // stamps `edge_type_id = EdgeType.id_for(edge_text or relationship_type)` on
+    // each edge (`CogneeGraph.py:58-61`) and `map_vector_distances_to_graph_edges`
+    // looks the hit up by `str(result.id)` (`CogneeGraph.py:392`). Rust's hybrid
+    // lane already did the same via `connection_edge_type_id`. The lookup below
+    // recomputes the id with the shared `edge_type_point_id` helper.
     let mut edge_type_distances = HashMap::<String, f32>::new();
 
     for (data_type, field_name) in SEARCH_COLLECTIONS {
@@ -184,20 +198,21 @@ pub async fn brute_force_triplet_search(
             let distance = 1.0 - result.score;
 
             if data_type == "EdgeType" && field_name == "relationship_name" {
-                // Edge distances keyed by relationship_name from vector point metadata.
-                // edge_type_id is NOT stored in graph edge properties, so we key by
-                // relationship_name to match graph edges at scoring time.
-                if let Some(rel_name) = result
-                    .metadata
-                    .get("relationship_name")
-                    .and_then(|v| v.as_str())
-                {
-                    let entry = edge_type_distances
-                        .entry(rel_name.to_string())
-                        .or_insert(distance);
-                    if distance < *entry {
-                        *entry = distance;
-                    }
+                // The row's point id IS `EdgeType::deterministic_id(retrieval_text)`
+                // (cognify builds these with `EdgeType::new_deterministic`), which is
+                // exactly what the scoring loop recomputes per graph edge. Take it
+                // straight off the hit rather than re-deriving it from the
+                // `relationship_name` metadata: identical in value, but it is the
+                // point's actual identity and matches Python's `str(result.id)`.
+                //
+                // Deliberately NOT added to `candidate_node_ids`: an EdgeType id is
+                // never a graph node id, and seeding the node set with it would widen
+                // the neighborhood load for nothing.
+                let entry = edge_type_distances
+                    .entry(result.id.to_string())
+                    .or_insert(distance);
+                if distance < *entry {
+                    *entry = distance;
                 }
             } else {
                 // Node distances keyed by vector point ID.
@@ -316,7 +331,7 @@ pub async fn brute_force_triplet_search(
 
     let mut ranked_edges = graph_edges
         .into_iter()
-        .filter_map(|(source_id, target_id, relationship_name, _properties)| {
+        .filter_map(|(source_id, target_id, relationship_name, properties)| {
             // Only consider edges where at least one endpoint was found in vector search
             if !candidate_node_ids.contains(&source_id) && !candidate_node_ids.contains(&target_id)
             {
@@ -333,12 +348,18 @@ pub async fn brute_force_triplet_search(
                 .copied()
                 .unwrap_or(default_penalty);
 
-            // Look up edge distance by relationship_name.
-            // Unmatched edge types also get the default penalty distance.
-            let edge_dist = edge_type_distances
-                .get(&relationship_name)
-                .copied()
-                .unwrap_or(default_penalty);
+            // Recompute the EdgeType vector-row id this edge was indexed under and
+            // look the distance up by that. `edge_type_point_id` returns `None`
+            // only when both the `edge_text` property and the relationship name
+            // are blank — cognify skips building a row for such an edge, so there
+            // is nothing to match and the penalty is correct.
+            // Unmatched edge types get the default penalty distance.
+            let edge_dist = edge_type_point_id(
+                properties.get("edge_text").and_then(|v| v.as_str()),
+                &relationship_name,
+            )
+            .and_then(|point_id| edge_type_distances.get(&point_id).copied())
+            .unwrap_or(default_penalty);
 
             let source_name = node_names
                 .get(&source_id)
