@@ -334,7 +334,13 @@ pub fn strict_json_schema(schema: &Value) -> Value {
         };
         let mut required: Vec<String> = properties.keys().cloned().collect();
         required.sort();
-        if !required.is_empty() {
+        if required.is_empty() {
+            // `"properties": {}` with a leftover `required` naming something
+            // that does not exist. Leaving it while closing the node builds a
+            // schema demanding a property the model is forbidden to emit —
+            // unsatisfiable, and rejected by providers that check.
+            node.remove("required");
+        } else {
             node.insert("required".to_string(), json!(required));
         }
         node.insert("additionalProperties".to_string(), json!(false));
@@ -348,11 +354,18 @@ pub fn strict_json_schema(schema: &Value) -> Value {
 /// A **process-local** fingerprint of a schema, insensitive to object-key order.
 ///
 /// Used to key the OpenAI adapter's per-schema structured-output demotion memo
-/// (litellm caches the same demotion per `(model, response_model)`). Key order
-/// has to be normalised because the workspace enables `serde_json`'s
+/// (litellm caches the same demotion per `(model, response_model)`). Object-key
+/// order has to be normalised because the workspace enables `serde_json`'s
 /// `preserve_order`, so two logically identical schemas built in different key
-/// orders are distinct `Map`s; array order is *not* normalised, because in JSON
-/// Schema it is significant (`required`, `anyOf`, `prefixItems`).
+/// orders are distinct `Map`s.
+///
+/// Array order *is* significant in JSON Schema and is kept — `anyOf` branches,
+/// `prefixItems` positions, `enum` members — with one exception: `required` is a
+/// **set** of property names, so its order carries no meaning and is sorted
+/// before hashing. Without that, `["a","b"]` and `["b","a"]` describe the same
+/// schema but take two separate trips down the demotion ladder. It is the one
+/// keyword worth special-casing because every object schema has one and
+/// `strict_json_schema` rewrites it.
 ///
 /// Not stable across processes or releases, and must never be persisted or put
 /// on the wire: `DefaultHasher`'s algorithm is explicitly unspecified. The memo
@@ -397,7 +410,22 @@ fn hash_canonical<H: Hasher>(value: &Value, hasher: &mut H) {
             let sorted: BTreeMap<&String, &Value> = map.iter().collect();
             for (key, val) in sorted {
                 key.hash(hasher);
-                hash_canonical(val, hasher);
+                // `required` is a set; its order says nothing. Sorted here
+                // rather than in `hash_canonical`'s array arm so every other
+                // array keeps its order, which in JSON Schema does carry
+                // meaning.
+                match (key.as_str(), val) {
+                    ("required", Value::Array(names)) => {
+                        4u8.hash(hasher);
+                        names.len().hash(hasher);
+                        let mut sorted_names: Vec<&Value> = names.iter().collect();
+                        sorted_names.sort_by_key(|name| name.as_str().map(str::to_string));
+                        for name in sorted_names {
+                            hash_canonical(name, hasher);
+                        }
+                    }
+                    _ => hash_canonical(val, hasher),
+                }
             }
         }
     }
@@ -685,6 +713,25 @@ mod tests {
     }
 
     #[test]
+    fn strict_json_schema_drops_a_required_naming_nothing() {
+        // `"properties": {}` with a leftover `required`. Closing the node while
+        // keeping the entry builds a schema that demands a property the model is
+        // forbidden to emit — unsatisfiable, and a rejection that would be
+        // remembered as "this endpoint refuses constrained decoding".
+        let strict = strict_json_schema(&json!({
+            "type": "object",
+            "properties": {},
+            "required": ["missing"],
+        }));
+
+        assert!(
+            strict.get("required").is_none(),
+            "stale required is dropped"
+        );
+        assert_eq!(strict["additionalProperties"], json!(false));
+    }
+
+    #[test]
     fn strict_json_schema_reaches_tuple_positions() {
         // `prefixItems` is draft 2020-12's tuple spelling and an array-valued
         // `items` is the older one; schemars uses them for a tuple field. A
@@ -784,11 +831,25 @@ mod tests {
         let b = json!({"properties": {"x": {"type": "string"}}, "type": "object"});
         assert_eq!(schema_fingerprint(&a), schema_fingerprint(&b));
 
-        // Array order is significant in JSON Schema, so it must be part of the
-        // key.
+        // `required` is a set, so its order carries no meaning: two spellings of
+        // the same schema must share one memo entry rather than each taking its
+        // own trip down the demotion ladder.
         let c = json!({"required": ["x", "y"]});
         let d = json!({"required": ["y", "x"]});
-        assert_ne!(schema_fingerprint(&c), schema_fingerprint(&d));
+        assert_eq!(schema_fingerprint(&c), schema_fingerprint(&d));
+
+        // Every other array keeps its order, because in JSON Schema that order
+        // is significant — `anyOf` branch precedence, `prefixItems` positions.
+        let e = json!({"prefixItems": [{"type": "string"}, {"type": "number"}]});
+        let f = json!({"prefixItems": [{"type": "number"}, {"type": "string"}]});
+        assert_ne!(schema_fingerprint(&e), schema_fingerprint(&f));
+
+        // Normalising `required` must not make it collide with a same-named key
+        // holding the same strings in another position.
+        assert_ne!(
+            schema_fingerprint(&json!({"required": ["x"]})),
+            schema_fingerprint(&json!({"enum": ["x"]})),
+        );
 
         // Different values of the same shape must not collide.
         assert_ne!(

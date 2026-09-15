@@ -263,6 +263,70 @@ async fn demotes_on_not_implemented_and_falls_through_to_the_cascade() {
 }
 
 #[tokio::test]
+async fn a_retry_carries_the_failure_reason_and_names_no_function() {
+    // Two things this pins that the one-attempt cases cannot.
+    //
+    // First, the refusal text has to *reach* the re-ask. With
+    // `structured_output_retries(1)` the mode falls through before a second
+    // request is ever built, so a regression that dropped the text entirely
+    // would leave every other test green.
+    //
+    // Second, the re-ask must not tell the model to "call the
+    // `extract_structured_data` function again" — the wording the other three
+    // modes use. A constrained request carries no tool and no function, so that
+    // directive names something the model cannot see.
+    let server = MockServer::start_async().await;
+    let refused = r#"{"id":"x","object":"chat.completion","created":1,"model":"m",
+        "choices":[{"index":0,"message":{"role":"assistant","content":null,
+            "refusal":"I will not do that."},
+          "finish_reason":"stop"}]}"#;
+    // First attempt: no corrective text yet.
+    let first = server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path("/chat/completions")
+                .body_includes("\"json_schema\"")
+                .body_excludes("previous response");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(refused);
+        })
+        .await;
+    // Second attempt: carries the refusal verbatim, and asks for a JSON object
+    // rather than a function call.
+    let retry = server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path("/chat/completions")
+                .body_includes("\"json_schema\"")
+                .body_includes("I will not do that.")
+                .body_includes("ONE complete JSON object")
+                .body_excludes("extract_structured_data` function");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(USABLE);
+        })
+        .await;
+    let llm = OpenAIAdapter::new("gpt-4o-mini", "test-key", Some(server.base_url()))
+        .unwrap()
+        .with_network_retries(0)
+        .with_structured_output_retries(2)
+        .with_structured_output_mode(StructuredOutputMode::JsonSchema);
+
+    let result = llm
+        .create_structured_output_raw("input text", "system prompt", &schema(), None)
+        .await;
+
+    assert_eq!(result.unwrap(), json!({"foo": "bar"}));
+    assert_eq!(first.calls_async().await, 1);
+    assert_eq!(
+        retry.calls_async().await,
+        1,
+        "the re-ask carried the refusal and a directive the request can satisfy",
+    );
+}
+
+#[tokio::test]
 async fn remembers_the_demotion_per_schema() {
     let server = MockServer::start_async().await;
     let strict = strict_mock(&server, 501, "{}").await;
