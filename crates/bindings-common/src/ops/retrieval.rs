@@ -115,12 +115,27 @@ fn parse_dataset_ids(opts: &serde_json::Value) -> Result<Option<Vec<Uuid>>, SdkE
 /// An explicitly empty array stays `Some(vec![])`: Python's `if datasets:`
 /// short-circuits empty lists too, so "no filter" is the correct reading of a
 /// list the caller deliberately sent empty. Only a *malformed* entry errors.
-fn parse_dataset_names(opts: &serde_json::Value) -> Result<Option<Vec<String>>, SdkError> {
+///
+/// `coerce_bare_string` wraps a lone `{"datasets": "ds"}` into `["ds"]` instead
+/// of erroring. It is set on the *search* path only, because only Python's
+/// `search` normalizes: `cognee/api/v1/search/search.py:294-295` does
+/// `if isinstance(datasets, UUID) or isinstance(datasets, str): datasets = [datasets]`.
+/// Python's `recall` declares `datasets: list[str] | None`
+/// (`cognee/api/v1/recall/recall.py:344`) and normalizes nothing, so a bare
+/// string there iterates its characters and raises `DatasetNotFoundError` —
+/// a rejection, just a worse-worded one. Rust keeps rejecting it outright.
+fn parse_dataset_names(
+    opts: &serde_json::Value,
+    coerce_bare_string: bool,
+) -> Result<Option<Vec<String>>, SdkError> {
     let Some(value) = opts.get("datasets") else {
         return Ok(None);
     };
     if value.is_null() {
         return Ok(None);
+    }
+    if coerce_bare_string && let Some(name) = value.as_str() {
+        return Ok(Some(vec![name.to_string()]));
     }
     let Some(arr) = value.as_array() else {
         return Err(SdkError::Validation(
@@ -166,8 +181,11 @@ pub fn build_recall_args(opts: &serde_json::Value) -> Result<RecallArgs, SdkErro
         None => None,
     };
 
-    // datasets from opts.datasets
-    let datasets = parse_dataset_names(opts)?;
+    // datasets from opts.datasets. Strict: Python's `recall` takes
+    // `datasets: list[str] | None` and normalizes nothing
+    // (`cognee/api/v1/recall/recall.py:344`), so a bare string is a caller
+    // error there too — it just fails later and less clearly.
+    let datasets = parse_dataset_names(opts, false)?;
 
     // datasetIds from opts.datasetIds, parsed exactly as the search op does.
     // Recall opts are read key-by-key, so before this was wired an unknown
@@ -232,8 +250,13 @@ pub fn build_search_request(
         None => SearchType::default(),
     };
 
-    // datasets: string array
-    let datasets = parse_dataset_names(opts)?;
+    // datasets: string array, or a bare string that Python's `search`
+    // normalizes into a one-element list
+    // (`cognee/api/v1/search/search.py:294-295`). The Python shim forwards the
+    // value verbatim (`python/cognee_py/compat.py:325-326`), so
+    // `cognee.search("q", datasets="docs")` has to scope here the way it does
+    // upstream.
+    let datasets = parse_dataset_names(opts, true)?;
 
     let dataset_ids = parse_dataset_ids(opts)?;
     let tenant_id = crate::ops::pipeline::opts_tenant(opts)?;
@@ -508,28 +531,85 @@ mod tests {
     /// falls through to *no dataset filter at all*.
     #[test]
     fn parse_dataset_names_rejects_malformed_entries_instead_of_widening_scope() {
-        assert!(parse_dataset_names(&json!({ "datasets": [123] })).is_err());
-        assert!(parse_dataset_names(&json!({ "datasets": ["ok", null] })).is_err());
-        // A bare string instead of an array reached the same place via `None`.
-        assert!(parse_dataset_names(&json!({ "datasets": "ds" })).is_err());
+        for coerce in [false, true] {
+            assert!(parse_dataset_names(&json!({ "datasets": [123] }), coerce).is_err());
+            assert!(parse_dataset_names(&json!({ "datasets": ["ok", null] }), coerce).is_err());
+            // A non-string, non-array scalar is a caller mistake on both paths:
+            // coercion only ever wraps a *string*.
+            assert!(parse_dataset_names(&json!({ "datasets": 7 }), coerce).is_err());
+            assert!(parse_dataset_names(&json!({ "datasets": {"a": 1} }), coerce).is_err());
+        }
     }
 
     #[test]
     fn parse_dataset_names_reads_a_string_array() {
+        for coerce in [false, true] {
+            assert_eq!(
+                parse_dataset_names(&json!({ "datasets": ["a", "b"] }), coerce).unwrap(),
+                Some(vec!["a".to_string(), "b".to_string()])
+            );
+            assert_eq!(parse_dataset_names(&json!({}), coerce).unwrap(), None);
+            assert_eq!(
+                parse_dataset_names(&json!({ "datasets": null }), coerce).unwrap(),
+                None
+            );
+            // Deliberately empty stays "no filter", matching Python's `if datasets:`.
+            assert_eq!(
+                parse_dataset_names(&json!({ "datasets": [] }), coerce).unwrap(),
+                Some(vec![])
+            );
+        }
+    }
+
+    /// Python's `search` wraps a bare string into a one-element list
+    /// (`cognee/api/v1/search/search.py:294-295`), and the Python shim forwards
+    /// `datasets` verbatim (`python/cognee_py/compat.py:325-326`), so
+    /// `cognee.search("q", datasets="docs")` scopes to `docs` upstream.
+    ///
+    /// This never worked in Rust: before PR #214 a bare string failed
+    /// `as_array()`, fell through to `None`, and ran a *silently unscoped*
+    /// search over every dataset the caller can read; #214 turned that into a
+    /// hard error. Neither scoped. This is the first version that does.
+    #[test]
+    fn a_bare_dataset_string_scopes_a_search_the_way_python_does() {
         assert_eq!(
-            parse_dataset_names(&json!({ "datasets": ["a", "b"] })).unwrap(),
-            Some(vec!["a".to_string(), "b".to_string()])
+            parse_dataset_names(&json!({ "datasets": "docs" }), true).unwrap(),
+            Some(vec!["docs".to_string()])
         );
-        assert_eq!(parse_dataset_names(&json!({})).unwrap(), None);
+
+        let req = build_search_request("q", &json!({ "datasets": "docs" }), Uuid::new_v4())
+            .expect("a bare `datasets` string is what Python accepts");
         assert_eq!(
-            parse_dataset_names(&json!({ "datasets": null })).unwrap(),
-            None
+            req.datasets,
+            Some(vec!["docs".to_string()]),
+            "a bare string must scope to that one dataset, not widen to all of them"
         );
-        // Deliberately empty stays "no filter", matching Python's `if datasets:`.
-        assert_eq!(
-            parse_dataset_names(&json!({ "datasets": [] })).unwrap(),
-            Some(vec![])
-        );
+    }
+
+    /// `recall` stays strict. Python's `recall` declares
+    /// `datasets: list[str] | None` (`cognee/api/v1/recall/recall.py:344`) and
+    /// normalizes nothing, so a bare string iterates its characters and raises
+    /// `DatasetNotFoundError`. Python rejects it; Rust's explicit error is the
+    /// same verdict, earlier and better worded.
+    #[test]
+    fn recall_still_rejects_a_bare_dataset_string() {
+        assert!(parse_dataset_names(&json!({ "datasets": "docs" }), false).is_err());
+        assert!(build_recall_args(&json!({ "datasets": "docs" })).is_err());
+    }
+
+    /// `dataset_ids` stays strict on both paths. Python declares
+    /// `Optional[Union[list[UUID], UUID]]` (`search.py:46`) but only ever
+    /// normalizes a bare UUID for *telemetry* (`search.py:340-341`,
+    /// `modules/search/methods/search.py:50`); the scope value handed on at
+    /// `search.py:377` is the raw one, and
+    /// `modules/search/methods/search.py:111` calls `len()` on it — a bare
+    /// UUID `TypeError`s. That is a bug upstream, not a behaviour to port.
+    #[test]
+    fn a_bare_dataset_id_stays_rejected_on_both_paths() {
+        let opts = json!({ "datasetIds": ID_A });
+        assert!(parse_dataset_ids(&opts).is_err());
+        assert!(build_recall_args(&opts).is_err());
+        assert!(build_search_request("q", &opts, Uuid::new_v4()).is_err());
     }
 
     #[test]
