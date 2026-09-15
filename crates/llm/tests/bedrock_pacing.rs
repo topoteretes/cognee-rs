@@ -61,8 +61,12 @@ async fn adapter(server: &MockServer, pacer: Arc<Pacer>) -> BedrockAdapter {
     BedrockAdapter::new(NOVA_LITE, Some(BEARER_KEY), None, &aws)
         .await
         .expect("adapter builds offline under bearer auth")
-        // One mocked exchange per case: no retry ladder to reason about.
+        // One mocked exchange per case: no retry ladder to reason about. The
+        // attempt count alone is not enough for that — the ladder also honours
+        // the `retry_min_elapsed` floor, which defaults to 240s, and half these
+        // cases answer with the 429/503 that floor exists to ride out.
         .with_network_retries(0)
+        .with_min_retry_elapsed(Duration::ZERO)
         .with_structured_output_retries(1)
         .with_pacer(pacer)
 }

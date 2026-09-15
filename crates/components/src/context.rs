@@ -142,17 +142,21 @@ pub struct LlmInputs {
     /// dual-floor stop condition, so the ladder also keeps retrying until the
     /// time floor is met.
     ///
-    /// ⚠️ **Bedrock is the exception, and predates this knob.** The OpenAI,
-    /// Azure and Anthropic adapters run this through `retry::RetryBudget`, whose
-    /// stop condition is `attempts >= network_retries && elapsed >=
-    /// min_retry_seconds`. `BedrockAdapter::call_converse_before` instead loops
-    /// `0..=network_retries` — so `2` buys **three** attempts there against two
-    /// elsewhere — and it holds no `retry_min_elapsed` at all, so
-    /// `min_retry_seconds` does not reach it and its ladder has no time floor.
-    /// Both halves are pre-existing (SDK-624 only stopped `max_retries` from
-    /// feeding this loop); giving Bedrock the dual floor belongs with the
-    /// Bedrock pacing work in SDK-612, which touches the same loop. Until then
-    /// this knob means "at least N attempts" on every provider and nothing more.
+    /// ⚠️ **Bedrock counts one attempt more.** Every adapter now runs the dual
+    /// floor through `retry::RetryBudget` — `attempts >= N && elapsed >=
+    /// min_retry_seconds` — but `BedrockAdapter::retry_budget` passes
+    /// `network_retries + 1` as its attempt floor, preserving the
+    /// `0..=network_retries` ladder that predates this knob: `2` buys **three**
+    /// attempts there against two elsewhere.
+    ///
+    /// The larger half of that divergence is gone. Bedrock used to hold no
+    /// `retry_min_elapsed` at all, so `min_retry_seconds` did not reach it and
+    /// its ladder was a plain attempt count — ~28-56s, after which a throttle
+    /// window the other providers ride out for 240s failed the item and, under
+    /// the default whole-run rollback, swept the run. That divergence was left
+    /// standing deliberately until SDK-624 gave the adapter an aggregate
+    /// deadline to bound the floor from above; see
+    /// `BedrockAdapter::retry_min_elapsed`.
     pub network_retries: u32,
     /// Minimum seconds a transient failure is retried for. Together with
     /// `network_retries` this is Python's dual-floor stop condition; `0` reduces

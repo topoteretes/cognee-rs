@@ -884,13 +884,17 @@ These knobs form one resilience stack, matching Python cognee's:
   could only ever end the ladder earlier, and a call that waited minutes for a
   slot would give up having barely retried at all.
 
-  ⚠️ **Bedrock does not run this dual floor.** Its transport ladder is a plain
-  attempt count looping `0..=LLM_NETWORK_RETRIES` — so `2` buys three attempts
-  there against two elsewhere — and it holds no time floor at all, so
-  `LLM_MIN_RETRY_SECONDS` does not reach it. Both differences predate
-  `LLM_NETWORK_RETRIES`; unifying them is tracked with the Bedrock pacing work,
-  which rewrites the same loop. On Bedrock, read this knob as "at least N
-  attempts" and nothing more. The aggregate deadline below *does* bind there.
+  ⚠️ **Bedrock makes one attempt more.** Its attempt floor is
+  `LLM_NETWORK_RETRIES + 1` — so `2` buys three attempts there against two
+  elsewhere — preserving the `0..=LLM_NETWORK_RETRIES` ladder that predates this
+  knob. The time floor now applies there like everywhere else: Bedrock used to
+  hold none at all, so `LLM_MIN_RETRY_SECONDS` did not reach it and a throttle
+  window the other providers ride out for 240s failed the item after ~30-60s,
+  which under the default whole-run rollback discards the run. That was left
+  standing deliberately until the aggregate deadline below reached this adapter,
+  since the floor is a "keep retrying" guarantee and needs something to bound it
+  from above; the deadline outranks it, as on every other provider. Bedrock does
+  still ignore `Retry-After`, so its gaps are always the 8s-to-128s ladder.
 - **Three timeouts, three scopes.** `LLM_CONNECT_TIMEOUT_SECONDS` bounds the TCP
   handshake (`reqwest` sets none by default, so a black-holed connect used to
   burn the whole request timeout without sending a byte).
