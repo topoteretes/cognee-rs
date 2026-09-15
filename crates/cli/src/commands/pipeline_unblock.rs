@@ -16,6 +16,10 @@
 //! that matters cannot be made from here: a young claim is either a live run or
 //! a holder that died minutes ago, and clearing a live one re-admits the
 //! concurrent run the claim exists to prevent. Only the operator knows which.
+//!
+//! For the same reason the two modes have different default scopes — see
+//! [`resolve_pipelines`]. Reporting covers every pipeline; clearing covers only
+//! the one named.
 
 use std::sync::Arc;
 
@@ -40,25 +44,7 @@ const KNOWN_PIPELINES: &[&str] = &["cognify_pipeline", "temporal-cognify", "memi
 const RESET_REASON: &str = "operator_unblock";
 
 pub fn run(args: PipelineUnblockArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
-    // Which pipelines to look at. Naming one is an optimisation, not a
-    // requirement: defaulting to cognify would answer "nothing is blocking" for
-    // a wedged `temporal-cognify`, which is the confident-wrong-answer
-    // `KNOWN_PIPELINES` exists to prevent — and nothing in the failing cognify
-    // output tells the operator which pipeline name to pass.
-    let pipelines: Vec<String> = match &args.pipeline {
-        Some(named) => {
-            if !KNOWN_PIPELINES.contains(&named.as_str()) {
-                return Err(CliError::Validation(format!(
-                    "Unknown pipeline '{named}'. Expected one of: {}. A name that takes no \
-                     claim would report nothing blocking, which is the wrong answer rather \
-                     than no answer.",
-                    KNOWN_PIPELINES.join(", ")
-                )));
-            }
-            vec![named.clone()]
-        }
-        None => KNOWN_PIPELINES.iter().map(|p| (*p).to_string()).collect(),
-    };
+    let pipelines = resolve_pipelines(args.pipeline.as_deref(), args.clear)?;
 
     // Scoped so the settings read guard is dropped before the async block below
     // captures `cm` — holding it across an await would keep a lock alive for
@@ -151,10 +137,13 @@ pub fn run(args: PipelineUnblockArgs, cm: Arc<ComponentManager>) -> Result<(), C
                     "Retiring the orphaned '{pipe}' run {} on dataset '{}'.",
                     stuck.pipeline_run_id, args.dataset
                 );
-                // Scoped to the run reported above: a real run started between
-                // the report and this clear must not be marked failed.
+                // Scoped to the *row* reported above: a real run started between
+                // the report and this clear must not be marked failed. It has
+                // to be `stuck.id` — `pipeline_run_id` is derived from
+                // `(pipeline_id, dataset_id)` alone, so a newcomer dispatched
+                // over HTTP carries the same one and would slip past the guard.
                 if repo
-                    .reset_orphan_run(ds, pipe, stuck.pipeline_run_id, RESET_REASON)
+                    .reset_orphan_run(ds, pipe, stuck.id, RESET_REASON)
                     .await
                     .map_err(|e| CliError::Runtime(format!("{e}")))?
                 {
@@ -223,6 +212,52 @@ pub fn run(args: PipelineUnblockArgs, cm: Arc<ComponentManager>) -> Result<(), C
         }
         Ok(())
     })
+}
+
+/// Which pipelines this invocation acts on, and whether it is allowed to act
+/// on them at all.
+///
+/// The two modes want opposite defaults, so they do not share one.
+///
+/// *Reporting* is broad on purpose. Naming a pipeline is an optimisation, not a
+/// requirement: defaulting to cognify would answer "nothing is blocking" for a
+/// wedged `temporal-cognify`, which is the confident-wrong-answer
+/// `KNOWN_PIPELINES` exists to prevent — and nothing in the failing cognify
+/// output tells the operator which pipeline name to pass. So an omitted
+/// `--pipeline` sweeps all three and tells them which one is wedged.
+///
+/// *Clearing* must not inherit that breadth. The three pipelines are
+/// independent — each claims a dataset under its own name — so the operator who
+/// diagnosed a wedged `cognify_pipeline` and reaches for `--clear` would also
+/// retire a `memify_pipeline` run that is alive and mid-flight, marking it
+/// failed and releasing its fresh claim. Nothing in the report they just read
+/// warned them, because the report is *supposed* to cover all three. Naming the
+/// pipeline is therefore required for the destructive path: the operator has
+/// already read which one is wedged, so it costs them a word, and it is the
+/// same word the reporting output tells them to pass.
+fn resolve_pipelines(pipeline: Option<&str>, clear: bool) -> Result<Vec<String>, CliError> {
+    match pipeline {
+        Some(named) => {
+            if !KNOWN_PIPELINES.contains(&named) {
+                return Err(CliError::Validation(format!(
+                    "Unknown pipeline '{named}'. Expected one of: {}. A name that takes no \
+                     claim would report nothing blocking, which is the wrong answer rather \
+                     than no answer.",
+                    KNOWN_PIPELINES.join(", ")
+                )));
+            }
+            Ok(vec![named.to_string()])
+        }
+        None if clear => Err(CliError::Validation(format!(
+            "--clear needs an explicit --pipeline. Without one this command covers {}, and \
+             clearing all of them would retire a run on another pipeline that is alive and \
+             mid-flight — they claim the dataset independently, so a wedged one says nothing \
+             about the others. Re-run without --clear to see which pipeline is blocked, then \
+             pass that name: cognee-cli pipeline-unblock -d <dataset> --pipeline <name> --clear",
+            KNOWN_PIPELINES.join(", ")
+        ))),
+        None => Ok(KNOWN_PIPELINES.iter().map(|p| (*p).to_string()).collect()),
+    }
 }
 
 /// Whether a claim is already past the staleness window, so the next run
@@ -306,6 +341,11 @@ fn humanise(age: chrono::Duration) -> String {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
     use cognee::database::{PipelineRun, PipelineRunClaim};
@@ -327,6 +367,57 @@ mod tests {
             pipeline_id: Uuid::nil(),
             dataset_id: None,
             run_info: None,
+        }
+    }
+
+    fn validation_message(result: Result<Vec<String>, CliError>) -> String {
+        match result {
+            Err(CliError::Validation(message)) => message,
+            other => panic!("expected a validation error, got {other:?}"),
+        }
+    }
+
+    /// Reporting keeps the broad default: a dataset wedged on `temporal-cognify`
+    /// must be found by an operator who only knows cognify failed.
+    #[test]
+    fn reporting_without_a_pipeline_covers_every_known_pipeline() {
+        let resolved = resolve_pipelines(None, false).expect("reporting needs no pipeline");
+        assert_eq!(resolved, KNOWN_PIPELINES);
+    }
+
+    /// The destructive path does not inherit that breadth. `--clear` on all
+    /// three retires a live `memify_pipeline` run while the operator is
+    /// unblocking cognify.
+    #[test]
+    fn clearing_without_a_pipeline_is_refused() {
+        let message = validation_message(resolve_pipelines(None, true));
+        assert!(
+            message.contains("--pipeline"),
+            "the error must name the flag to pass; got: {message}"
+        );
+        for known in KNOWN_PIPELINES {
+            assert!(
+                message.contains(known),
+                "the error must list the names that are valid, missing {known}; got: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn clearing_one_named_pipeline_is_allowed() {
+        let resolved =
+            resolve_pipelines(Some("memify_pipeline"), true).expect("a named pipeline clears");
+        assert_eq!(resolved, vec!["memify_pipeline".to_string()]);
+    }
+
+    #[test]
+    fn an_unknown_pipeline_is_refused_in_either_mode() {
+        for clear in [false, true] {
+            let message = validation_message(resolve_pipelines(Some("cognify"), clear));
+            assert!(
+                message.contains("Unknown pipeline"),
+                "clear={clear}; got: {message}"
+            );
         }
     }
 

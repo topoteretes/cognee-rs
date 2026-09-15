@@ -257,9 +257,9 @@ pub trait PipelineRunRepository: Send + Sync {
         Ok(false)
     }
 
-    /// Retire the orphaned `Initiated`/`Started` row identified by
-    /// `pipeline_run_id`, as [`Self::reset_orphans`] does for every pair at
-    /// once. Returns whether a successor was written.
+    /// Retire the orphaned `Initiated`/`Started` row whose primary key is
+    /// `run_row_id`, as [`Self::reset_orphans`] does for every pair at once.
+    /// Returns whether a successor was written.
     ///
     /// This is the *first* thing that refuses a re-run after a kill, and the
     /// one with no expiry. `check_pipeline_run_qualification` reads the latest
@@ -276,6 +276,17 @@ pub trait PipelineRunRepository: Send + Sync {
     /// successor over that healthy in-flight run — marking it failed and
     /// re-opening the gate it had legitimately closed.
     ///
+    /// The scope is `pipeline_runs.id` — the row primary key, a fresh UUIDv4
+    /// per transition — and **not** `pipeline_run_id`, which does not identify
+    /// a run. `pipeline_run_id` is `uuid5(OID, "{pipeline_id}_{dataset_id}")`
+    /// (see `cognee_core::pipeline_run_registry::ids::pipeline_run_id`), so for
+    /// every dataset whose rows the HTTP server wrote, a *different, healthy*
+    /// run started since the operator's report carries the identical value.
+    /// Scoping by it would let exactly the newcomer this guard exists to
+    /// protect through. The reuse is Python parity and deliberate — a
+    /// re-cognify of a dataset is meant to return the same `pipeline_run_id` —
+    /// so the guard is what has to change, not the id.
+    ///
     /// Writes an `Errored` successor rather than deleting, keeping the
     /// new-row-per-transition audit trail intact.
     ///
@@ -284,7 +295,7 @@ pub trait PipelineRunRepository: Send + Sync {
         &self,
         _dataset_id: Uuid,
         _pipeline_name: &str,
-        _pipeline_run_id: Uuid,
+        _run_row_id: Uuid,
         _reason: &str,
     ) -> Result<bool, DbError> {
         Ok(false)

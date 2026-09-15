@@ -636,7 +636,7 @@ impl PipelineRunRepository for SeaOrmPipelineRunRepository {
         &self,
         dataset_id: Uuid,
         pipeline_name: &str,
-        pipeline_run_id: Uuid,
+        run_row_id: Uuid,
         reason: &str,
     ) -> Result<bool, DatabaseError> {
         // The same row `check_pipeline_run_qualification` reads, so what is
@@ -648,11 +648,17 @@ impl PipelineRunRepository for SeaOrmPipelineRunRepository {
             return Ok(false);
         };
 
-        // Scoped to the run the caller observed. Without this, a real run
+        // Scoped to the row the caller observed. Without this, a real run
         // started between an operator's report and their clear would be the
         // latest row by the time we get here, and would be marked `Errored`
         // while healthy and in flight.
-        if latest.pipeline_run_id != pipeline_run_id {
+        //
+        // Compared on `id`, the row primary key, because `pipeline_run_id` does
+        // not identify a run: it is `uuid5(OID, "{pipeline_id}_{dataset_id}")`,
+        // so every run of the same pipeline on the same dataset dispatched by
+        // the HTTP server carries the same value. Comparing that would pass the
+        // guard for precisely the healthy newcomer it exists to spare.
+        if latest.id != run_row_id {
             return Ok(false);
         }
 
@@ -687,6 +693,7 @@ impl PipelineRunRepository for SeaOrmPipelineRunRepository {
         tracing::warn!(
             dataset_id = %dataset_id,
             pipeline_name = %pipeline_name,
+            run_row_id = %latest.id,
             pipeline_run_id = %latest.pipeline_run_id,
             reason,
             "retired an orphaned pipeline run on operator request"

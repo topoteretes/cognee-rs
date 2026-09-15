@@ -219,10 +219,13 @@ pub struct PipelineUnblockArgs {
     /// Omit to check all three. Defaulting to one would answer "nothing is
     /// blocking" for a dataset wedged on another, and the failing run's error
     /// does not tell an operator which name to pass.
+    ///
+    /// Required with `--clear`: clearing all three would retire a run on
+    /// another pipeline that is alive and mid-flight.
     #[arg(long = "pipeline")]
     pub pipeline: Option<String>,
 
-    /// Actually clear what is reported.
+    /// Actually clear what is reported. Requires `--pipeline`.
     ///
     /// Only do this when the process that started the run is known to be gone.
     #[arg(long = "clear", default_value_t = false)]

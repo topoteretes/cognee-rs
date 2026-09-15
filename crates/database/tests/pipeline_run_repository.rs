@@ -1346,13 +1346,16 @@ async fn force_release_does_not_remove_a_claim_taken_over_since_the_read() {
 // dataset permanently rather than for a day.
 // ---------------------------------------------------------------------------
 
+/// Returns the new row's primary key (`pipeline_runs.id`) — the value
+/// `reset_orphan_run` is scoped by. It is *not* `run_id`: several rows share
+/// one `pipeline_run_id`, by design.
 async fn log_status(
     repo: &SeaOrmPipelineRunRepository,
     dataset_id: Uuid,
     pipeline: &str,
     run_id: Uuid,
     status: PipelineRunStatus,
-) {
+) -> Uuid {
     repo.log_pipeline_run(
         run_id,
         Uuid::new_v4(),
@@ -1362,7 +1365,7 @@ async fn log_status(
         None,
     )
     .await
-    .expect("log_pipeline_run");
+    .expect("log_pipeline_run")
 }
 
 #[tokio::test]
@@ -1373,7 +1376,7 @@ async fn reset_orphan_run_retires_a_started_row_so_the_pair_qualifies_again() {
     create_dataset(&db, dataset_id).await;
 
     let run_id = Uuid::new_v4();
-    log_status(
+    let row_id = log_status(
         &repo,
         dataset_id,
         "cognify_pipeline",
@@ -1383,7 +1386,7 @@ async fn reset_orphan_run_retires_a_started_row_so_the_pair_qualifies_again() {
     .await;
 
     assert!(
-        repo.reset_orphan_run(dataset_id, "cognify_pipeline", run_id, "operator_unblock")
+        repo.reset_orphan_run(dataset_id, "cognify_pipeline", row_id, "operator_unblock")
             .await
             .expect("reset_orphan_run")
     );
@@ -1421,7 +1424,7 @@ async fn reset_orphan_run_leaves_a_completed_run_alone() {
         PipelineRunStatus::Started,
     )
     .await;
-    log_status(
+    let completed_row = log_status(
         &repo,
         dataset_id,
         "cognify_pipeline",
@@ -1432,7 +1435,12 @@ async fn reset_orphan_run_leaves_a_completed_run_alone() {
 
     assert!(
         !repo
-            .reset_orphan_run(dataset_id, "cognify_pipeline", run_id, "operator_unblock")
+            .reset_orphan_run(
+                dataset_id,
+                "cognify_pipeline",
+                completed_row,
+                "operator_unblock"
+            )
             .await
             .expect("reset_orphan_run"),
         "a finished run is not an orphan"
@@ -1475,12 +1483,11 @@ async fn reset_orphan_run_does_not_touch_another_pipeline() {
     let dataset_id = Uuid::new_v4();
     create_dataset(&db, dataset_id).await;
 
-    let run_id = Uuid::new_v4();
-    log_status(
+    let row_id = log_status(
         &repo,
         dataset_id,
         "cognify_pipeline",
-        run_id,
+        Uuid::new_v4(),
         PipelineRunStatus::Started,
     )
     .await;
@@ -1494,7 +1501,7 @@ async fn reset_orphan_run_does_not_touch_another_pipeline() {
     .await;
 
     assert!(
-        repo.reset_orphan_run(dataset_id, "cognify_pipeline", run_id, "operator_unblock")
+        repo.reset_orphan_run(dataset_id, "cognify_pipeline", row_id, "operator_unblock")
             .await
             .expect("reset_orphan_run")
     );
@@ -1521,12 +1528,11 @@ async fn reset_orphan_run_does_not_touch_another_dataset() {
     create_dataset(&db, wedged).await;
     create_dataset(&db, healthy).await;
 
-    let wedged_run = Uuid::new_v4();
-    log_status(
+    let wedged_row = log_status(
         &repo,
         wedged,
         "cognify_pipeline",
-        wedged_run,
+        Uuid::new_v4(),
         PipelineRunStatus::Started,
     )
     .await;
@@ -1540,7 +1546,7 @@ async fn reset_orphan_run_does_not_touch_another_dataset() {
     .await;
 
     assert!(
-        repo.reset_orphan_run(wedged, "cognify_pipeline", wedged_run, "operator_unblock")
+        repo.reset_orphan_run(wedged, "cognify_pipeline", wedged_row, "operator_unblock")
             .await
             .expect("reset_orphan_run")
     );
@@ -1568,7 +1574,7 @@ async fn reset_orphan_run_does_not_retire_a_run_started_since_the_read() {
     create_dataset(&db, dataset_id).await;
 
     let observed = Uuid::new_v4();
-    log_status(
+    let observed_row = log_status(
         &repo,
         dataset_id,
         "cognify_pipeline",
@@ -1590,7 +1596,12 @@ async fn reset_orphan_run_does_not_retire_a_run_started_since_the_read() {
 
     assert!(
         !repo
-            .reset_orphan_run(dataset_id, "cognify_pipeline", observed, "operator_unblock")
+            .reset_orphan_run(
+                dataset_id,
+                "cognify_pipeline",
+                observed_row,
+                "operator_unblock"
+            )
             .await
             .expect("reset_orphan_run"),
         "retiring a run that is no longer the latest must do nothing"
@@ -1604,6 +1615,94 @@ async fn reset_orphan_run_does_not_retire_a_run_started_since_the_read() {
     assert_eq!(
         latest.pipeline_run_id, newcomer,
         "the live run must still be the latest"
+    );
+    assert_eq!(
+        latest.status,
+        PipelineRunStatus::Started,
+        "and must not have been marked failed"
+    );
+}
+
+/// The same TOCTOU as above, but with the `pipeline_run_id` the **HTTP server**
+/// writes — and this is the case that matters, because the guard used to be
+/// written against that id.
+///
+/// `pipeline_run_id` is `uuid5(OID, "{pipeline_id}_{dataset_id}")`
+/// (`cognee_core::pipeline_run_registry::ids::pipeline_run_id`, called from
+/// `dispatch_pipeline`), so every run of one pipeline on one dataset shares it
+/// — Python reuses it deliberately, so a re-cognify reports the same run id.
+/// The test above only passes under a `pipeline_run_id` guard because the
+/// library executor happens to mint a fresh `Uuid::new_v4()` per run; the
+/// moment the rows came from the HTTP server, the observed id and the
+/// newcomer's were equal and the guard waved the newcomer through to be marked
+/// `Errored` while healthy and in flight.
+///
+/// Hence the guard is on `pipeline_runs.id`, which is a fresh UUIDv4 per row.
+#[tokio::test]
+async fn reset_orphan_run_does_not_retire_a_newcomer_reusing_the_same_pipeline_run_id() {
+    let db = make_db().await;
+    let repo = make_repo(Arc::clone(&db));
+    let dataset_id = Uuid::new_v4();
+    create_dataset(&db, dataset_id).await;
+
+    // Derived exactly as `dispatch_pipeline` derives it, so both runs below
+    // carry the identical value — as they do in any HTTP-written database.
+    let pipeline_id = Uuid::new_v5(
+        &Uuid::NAMESPACE_OID,
+        format!("{}cognify_pipeline{dataset_id}", Uuid::new_v4()).as_bytes(),
+    );
+    let shared_run_id = Uuid::new_v5(
+        &Uuid::NAMESPACE_OID,
+        format!("{pipeline_id}_{dataset_id}").as_bytes(),
+    );
+
+    let observed_row = log_status(
+        &repo,
+        dataset_id,
+        "cognify_pipeline",
+        shared_run_id,
+        PipelineRunStatus::Started,
+    )
+    .await;
+
+    // The wedged run is cleaned up some other way, and a fresh one starts. Same
+    // pipeline, same dataset, so the HTTP server hands it the same
+    // `pipeline_run_id` — only the row PK differs.
+    let newcomer_row = log_status(
+        &repo,
+        dataset_id,
+        "cognify_pipeline",
+        shared_run_id,
+        PipelineRunStatus::Started,
+    )
+    .await;
+    assert_ne!(
+        observed_row, newcomer_row,
+        "the row PK is what distinguishes the two runs; the run id cannot"
+    );
+
+    assert!(
+        !repo
+            .reset_orphan_run(
+                dataset_id,
+                "cognify_pipeline",
+                observed_row,
+                "operator_unblock"
+            )
+            .await
+            .expect("reset_orphan_run"),
+        "the observed row is no longer the latest — a guard keyed on the reused \
+         pipeline_run_id would not notice and would retire the live run"
+    );
+
+    let latest = repo
+        .get_pipeline_run_by_dataset(dataset_id, "cognify_pipeline")
+        .await
+        .expect("get latest")
+        .expect("a row exists");
+    assert_eq!(
+        latest.id, newcomer_row,
+        "the live run's row must still be the latest"
     );
     assert_eq!(
         latest.status,
