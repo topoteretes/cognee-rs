@@ -1050,6 +1050,87 @@ fn export_rejects_a_format_python_cannot_reimport() {
 }
 
 #[test]
+fn vector_reindex_subcommand_help_flag_prints_usage() {
+    let config_home = TempDir::new().expect("temp dir should be created");
+    make_cmd(&config_home)
+        .args(["vector-reindex", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Usage").or(predicate::str::contains("usage")));
+}
+
+/// The backfill is pgvector-only, and the runtime default is not pgvector. The
+/// command must then say *why* there is nothing to do — a bare "0 indexes" is
+/// indistinguishable from a pgvector store that was already fully indexed.
+///
+/// Also the wiring check: it exercises the dispatch arm end to end, and it can
+/// do so with no service container precisely because the provider check happens
+/// before any connection is opened.
+///
+/// The assertions are deliberately specific. Bare `contains("lancedb")` and
+/// `contains("pgvector")` both hold *by accident* once the provider guard is
+/// gone: the LanceDB store logs its own `cognee.lancedb` path while opening,
+/// and the fallback "no collection was missing an index" line names pgvector
+/// itself — so the loose version passed with the guard mutated away, pinning
+/// nothing. Match the guard's own sentence instead, and assert the line the
+/// command prints just before touching the backend is *absent*, which is what
+/// "before any connection is opened" actually means.
+#[test]
+fn vector_reindex_names_the_backend_when_it_is_not_pgvector() {
+    let config_home = TempDir::new().expect("temp dir should be created");
+    let workdir = TempDir::new().expect("temp dir should be created");
+    config_set(
+        &config_home,
+        workdir.path(),
+        "vector_db_provider",
+        "\"lancedb\"",
+    );
+
+    make_cmd_in(&config_home, workdir.path())
+        .args(["vector-reindex"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains(
+                "Vector backend is 'lancedb', which has no ANN index to backfill",
+            )
+            .and(predicate::str::contains("VECTOR_DB_PROVIDER=pgvector"))
+            .and(predicate::str::contains("Building missing vector indexes").not()),
+        );
+}
+
+/// `run-sequence` refuses `vector-reindex`, the same way it refuses
+/// `pipeline-unblock`: an HNSW build over an existing collection runs for an
+/// unbounded time and that time lands on the following step's measurement,
+/// which is the one thing a sequence file exists to produce.
+///
+/// Pinned end to end rather than by reading the match arm, because the arm is
+/// reachable only through the step parser — a refusal that compiled but never
+/// fired (a step name clap rejects first, say) would look identical in review.
+/// The step here is the *first* one, so a run that does not refuse proceeds to
+/// open the vector store instead of stopping.
+#[test]
+fn run_sequence_refuses_vector_reindex_as_a_step() {
+    let config_home = TempDir::new().expect("temp dir should be created");
+    let workdir = TempDir::new().expect("temp dir should be created");
+    let sequence = workdir.path().join("reindex_step.json");
+    std::fs::write(&sequence, r#"[{"command": ["vector-reindex"]}]"#)
+        .expect("sequence file should be written");
+
+    make_cmd_in(&config_home, workdir.path())
+        .args([
+            "run-sequence",
+            sequence.to_str().expect("temp path should be UTF-8"),
+        ])
+        .assert()
+        .failure()
+        .stdout(
+            predicate::str::contains("vector-reindex is not allowed inside run-sequence")
+                .and(predicate::str::contains("Building missing vector indexes").not()),
+        );
+}
+
+#[test]
 fn config_subcommand_help_flag_prints_usage() {
     let config_home = TempDir::new().expect("temp dir should be created");
     make_cmd(&config_home)

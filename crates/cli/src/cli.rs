@@ -29,6 +29,8 @@ pub enum Commands {
     Export(ExportArgs),
     #[command(name = "pipeline-unblock")]
     PipelineUnblock(PipelineUnblockArgs),
+    #[command(name = "vector-reindex")]
+    VectorReindex(VectorReindexArgs),
     Config(ConfigArgs),
     #[command(name = "run-sequence")]
     RunSequence(RunSequenceArgs),
@@ -231,6 +233,24 @@ pub struct PipelineUnblockArgs {
     #[arg(long = "clear", default_value_t = false)]
     pub clear: bool,
 }
+
+/// Build the ANN index on every vector collection that is missing one.
+///
+/// pgvector only: the index is created alongside the collection, so a
+/// collection can end up without one either by predating the index entirely or
+/// by having its best-effort creation fail (pgvector too old for the `hnsw`
+/// access method, a restricted role, too little `maintenance_work_mem`) — which
+/// is logged and then continues, so the collection is usable and silently slow.
+/// Every other backend has no such index and this is a no-op there.
+///
+/// Takes no flags on purpose. Unlike `pipeline-unblock` there is nothing here
+/// only the operator can decide: the build is online (`CREATE INDEX
+/// CONCURRENTLY`), idempotent, and touches nothing that already has a usable
+/// index — so a report-first mode would ask for a second invocation to reach
+/// the same end state. Choosing *when* to pay for it is the whole reason this
+/// is a command rather than something startup does.
+#[derive(Debug, Args)]
+pub struct VectorReindexArgs {}
 
 #[derive(Debug, Args)]
 pub struct MemifyArgs {

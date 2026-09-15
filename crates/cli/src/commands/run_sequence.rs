@@ -41,6 +41,18 @@ fn dispatch(command: Commands, cm: &Arc<ComponentManager>) -> Result<(), CliErro
         Commands::PipelineUnblock(_) => Err(CliError::Validation(
             "pipeline-unblock is not allowed inside run-sequence".to_string(),
         )),
+        // Store maintenance, not a pipeline step. A sequence is a scripted
+        // add/cognify/search workload replayed with per-step timings, and an
+        // HNSW build over an existing collection takes an unbounded amount of
+        // time that lands on whichever step follows it — so allowing it would
+        // corrupt the measurement the sequence exists to produce. It is also
+        // idempotent, so a second occurrence in a script would do nothing
+        // while still reading as a step that ran.
+        Commands::VectorReindex(_) => Err(CliError::Validation(
+            "vector-reindex is not allowed inside run-sequence — run it on its own \
+             before or after the sequence"
+                .to_string(),
+        )),
         Commands::Config(args) => config::run(args),
         Commands::RunSequence(_) => Err(CliError::Validation(
             "Nested run-sequence is not allowed".to_string(),

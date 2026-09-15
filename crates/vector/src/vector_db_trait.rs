@@ -303,6 +303,42 @@ pub trait VectorDB: Send + Sync {
         Ok(())
     }
 
+    /// Build the backend's approximate-nearest-neighbour index on every
+    /// collection that does not have a usable one yet, and report how many were
+    /// built.
+    ///
+    /// The operator entry point for a backend whose index is created alongside
+    /// the collection rather than by a migration, so collections can be left
+    /// unindexed in two ways: they predate the index existing at all, or their
+    /// `create_collection` built the table and then failed to build the index
+    /// (the pgvector adapter logs and continues in that case, rather than
+    /// leaving a created-but-unregistered table behind). Either way the
+    /// collection still answers every query — correctly, by sequential scan —
+    /// so nothing surfaces the gap except latency, and nothing repairs it
+    /// except this call.
+    ///
+    /// Contract for an implementor:
+    /// - **Idempotent.** A collection that already has a usable index is
+    ///   skipped and *not* counted, so a second run reports `0`.
+    /// - **Online.** It must not block reads or writes, and must not be
+    ///   wrapped in a transaction by its caller — pgvector's implementation
+    ///   issues `CREATE INDEX CONCURRENTLY`, which Postgres rejects inside one.
+    /// - **Per-collection failures are logged and skipped**, not propagated, so
+    ///   one bad entry cannot leave every collection after it unindexed. The
+    ///   returned count is therefore work actually done, not collections seen.
+    /// - **Never automatic.** Building an ANN index over a large collection is
+    ///   expensive; the caller chooses when.
+    ///
+    /// The **default body returns `Ok(0)`**, meaning "this backend has no such
+    /// index to backfill" — the truth for the in-memory brute-force store
+    /// (exact scan, no index), for the mock, and for LanceDB (which manages its
+    /// own indexing). Only the pgvector adapter overrides it. A backend that
+    /// grows a lazily-created index must override it too, or operators get no
+    /// way to repair one.
+    async fn create_missing_vector_indexes(&self) -> VectorDBResult<usize> {
+        Ok(0)
+    }
+
     /// Perform multiple vector similarity searches in sequence.
     ///
     /// Default implementation loops over [`search_similar`]. Backends may override
@@ -363,5 +399,48 @@ mod tests {
         assert_eq!(results.len(), 2, "one result set per query vector");
         assert!(results[0].is_empty(), "no indexed points → empty result");
         assert!(results[1].is_empty(), "no indexed points → empty result");
+    }
+}
+
+/// Cases for the defaulted [`VectorDB::create_missing_vector_indexes`].
+///
+/// Deliberately gated on `cfg(test)` alone, not on `feature = "testing"` like
+/// the module above: `BruteForceVectorDB` is always compiled, so these run
+/// under a plain `cargo test -p cognee-vector` with no features and no service
+/// container — which is the point, since what they pin is the *default* body
+/// every non-pgvector backend inherits.
+#[cfg(test)]
+mod default_index_backfill_tests {
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        reason = "test code — panics are acceptable"
+    )]
+    use super::*;
+    use crate::brute_force_vector_db::BruteForceVectorDB;
+
+    /// A backend with no ANN index reports no work — it must not error, because
+    /// `cognee-cli vector-reindex` calls this through `Arc<dyn VectorDB>`
+    /// without knowing which backend is configured.
+    #[tokio::test]
+    async fn default_backfill_reports_no_work_and_is_idempotent() {
+        let db = BruteForceVectorDB::new();
+        db.create_collection("TestType", "field", 3).await.unwrap();
+
+        assert_eq!(
+            db.create_missing_vector_indexes().await.unwrap(),
+            0,
+            "a backend with nothing to index must report zero, not fail"
+        );
+        assert_eq!(
+            db.create_missing_vector_indexes().await.unwrap(),
+            0,
+            "and stay at zero on a second run"
+        );
+
+        assert!(
+            db.has_collection("TestType", "field").await.unwrap(),
+            "the no-op must not disturb the collections it looked at"
+        );
     }
 }

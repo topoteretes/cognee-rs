@@ -16,6 +16,7 @@ pub mod recall;
 pub mod remember;
 pub mod run_sequence;
 pub mod search;
+pub mod vector_reindex;
 #[cfg(feature = "visualization")]
 pub mod visualize;
 

@@ -334,6 +334,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `MaxRetriesExceeded`. HTTP defines 501 as the server lacking the capability, so
   no wait can make it succeed — and a retried one would have arrived as an error
   the cascade treats as fatal, which would have made the demotion unreachable.
+- **`cognee-cli vector-reindex`: an operator entry point for the pgvector ANN
+  index backfill.** The pgvector HNSW index (#196, also unreleased — it ships in
+  this same release) is built by `create_collection`, not by a migration, and
+  the backfill that repairs a collection without one
+  (`PgVectorAdapter::create_missing_vector_indexes`) was
+  deliberately left un-automatic — building HNSW over a large collection is
+  expensive and the operator should choose when — but it had no caller outside
+  tests, so "choose when" meant writing Rust. It is now a subcommand.
+
+  Two things leave a collection unindexed, and the second is the stronger
+  reason: a collection may predate the index entirely, *or* it was created
+  afterwards and its index build failed. That build is best-effort on purpose —
+  propagating the error would leave the table created and unregistered, and
+  every retry would then fail at `CREATE TABLE` with `already exists` — so
+  pgvector without the `hnsw` access method, a restricted role, or too little
+  `maintenance_work_mem` each yield a collection that answers every query
+  correctly by sequential scan and reports nothing but latency. This is the
+  repair for both.
+
+  The command does the work rather than reporting first (the build is online via
+  `CREATE INDEX CONCURRENTLY`, idempotent, and skips anything already indexed),
+  and is refused inside `run-sequence`, where an unbounded index build would
+  land on the following step's timing. `VectorDB` grows a defaulted
+  `create_missing_vector_indexes()` returning `Ok(0)` so the CLI reaches it
+  through `Arc<dyn VectorDB>` without a downcast; on a non-pgvector backend the
+  command names the configured provider instead of printing a bare `0`.
 
 - **`cognee-cognify`: the temporal pipeline records artifact ownership, and is
   therefore rollback-able.** `add_temporal_data_points` wrote `Event`,
