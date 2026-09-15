@@ -241,11 +241,17 @@ pub struct LlmInputs {
     /// `OpenAIAdapter::with_reasoning_override`.
     pub reasoning_override: Option<bool>,
     /// Which structured-output request shape the OpenAI-compatible adapter may
-    /// send, from `LLM_STRUCTURED_OUTPUT_MODE` (`auto` | `tools` | `functions` |
-    /// `json`). [`StructuredOutputMode::Auto`] keeps the three-mode cascade; any
-    /// other value pins that one shape and never sends the others. The
-    /// counterpart of Python's `llm_instructor_mode`. Applied via
+    /// send, from `LLM_STRUCTURED_OUTPUT_MODE` (`auto` | `json_schema` |
+    /// `tools` | `functions` | `json`). [`StructuredOutputMode::Auto`] keeps the
+    /// three-mode cascade; `tools` / `functions` / `json` each pin that one
+    /// shape and never send the others. The counterpart of Python's
+    /// `llm_instructor_mode`. Applied via
     /// `OpenAIAdapter::with_structured_output_mode`.
+    ///
+    /// `json_schema` is **not** a pin — it puts constrained decoding *ahead* of
+    /// the cascade and demotes back into it when the endpoint refuses the
+    /// request shape, so exhaustion there is not terminal. See
+    /// [`StructuredOutputMode::JsonSchema`].
     pub structured_output_mode: StructuredOutputMode,
     /// Replaces the provider adapter with a cassette replay mock.
     pub mock: bool,

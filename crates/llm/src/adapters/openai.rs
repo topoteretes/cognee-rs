@@ -210,10 +210,15 @@ impl CascadeProbe {
 /// adapter). Mirrors what litellm's `litellm_native` adapter caches per
 /// `(model, response_model)`: it tries `strict: true` first and remembers the
 /// demotion rather than re-discovering it on every call.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum JsonSchemaSupport {
-    /// Not yet contradicted: send the strict-transformed schema with
-    /// `"strict": true`.
+    /// Never sent for this schema. Behaves like [`Self::Strict`] on the wire,
+    /// but is tracked separately because it is the only state in which a probe
+    /// has to be *coordinated* — see [`JsonSchemaMemo::try_begin_probe`].
+    #[default]
+    Unknown,
+    /// Strict constrained decoding, observed to work: send the
+    /// strict-transformed schema with `"strict": true`.
     Strict,
     /// `strict` was refused. Send the same `response_format: json_schema`
     /// envelope without it, carrying the shallow schema the tool-calling path
@@ -233,6 +238,14 @@ enum JsonSchemaSupport {
     Unsupported,
 }
 
+impl JsonSchemaSupport {
+    /// Whether this schema has never been sent to this endpoint — the only
+    /// state in which a probe needs reserving.
+    const fn is_unknown(self) -> bool {
+        matches!(self, Self::Unknown)
+    }
+}
+
 /// Per-schema memory of the constrained-decoding demotion ladder.
 ///
 /// Keyed on [`crate::schema::schema_fingerprint`] rather than held as one flag
@@ -250,10 +263,41 @@ enum JsonSchemaSupport {
 #[derive(Debug, Default)]
 struct JsonSchemaMemo {
     levels: Mutex<HashMap<u64, JsonSchemaSupport>>,
+    /// Fingerprints whose *first* probe is on the wire right now.
+    ///
+    /// Without this the "one probe per schema" above is only true of a serial
+    /// caller. Cognify extracts chunks concurrently through one shared adapter
+    /// with one shared schema, so every task in the first wave would read
+    /// `Unknown`, and a refusing endpoint would take a burst of rejections —
+    /// two per task, since each would also walk its own ladder — instead of one.
+    /// A task that finds a probe already in flight skips the mode for that call
+    /// and goes straight to the cascade, which is where it would have ended up
+    /// anyway if the probe fails. The cost when the probe *succeeds* is that the
+    /// first wave misses constrained decoding once; every later call has the
+    /// answer.
+    probing: Mutex<std::collections::HashSet<u64>>,
+}
+
+/// Releases a [`JsonSchemaMemo::try_begin_probe`] reservation.
+///
+/// A guard rather than a paired call because the probe's owner can leave by a
+/// dozen paths — a `?`, a `return Err`, a panic, a dropped future when the
+/// caller is cancelled. Any one of them leaking the reservation would disable
+/// constrained decoding for that schema for the life of the process, with
+/// nothing recorded to explain why.
+struct ProbeGuard {
+    memo: Arc<JsonSchemaMemo>,
+    fingerprint: u64,
+}
+
+impl Drop for ProbeGuard {
+    fn drop(&mut self) {
+        self.memo.end_probe(self.fingerprint);
+    }
 }
 
 impl JsonSchemaMemo {
-    /// Take the lock, reading through a poisoning.
+    /// Take the levels lock, reading through a poisoning.
     ///
     /// A poisoned mutex here only means some other caller panicked while
     /// recording a demotion; the map is a cache of observations, so every entry
@@ -266,18 +310,39 @@ impl JsonSchemaMemo {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// The level to send for `fingerprint`, defaulting to [`JsonSchemaSupport::Strict`].
+    /// The level to send for `fingerprint`, defaulting to
+    /// [`JsonSchemaSupport::Unknown`].
     fn level(&self, fingerprint: u64) -> JsonSchemaSupport {
-        self.lock()
-            .get(&fingerprint)
-            .copied()
-            .unwrap_or(JsonSchemaSupport::Strict)
+        self.lock().get(&fingerprint).copied().unwrap_or_default()
     }
 
-    /// Record a demotion. Monotonic: a `Strict` write can never undo a
-    /// previously recorded `Unsupported`, so a racing pair of calls cannot
-    /// resurrect a mode the endpoint has already refused.
-    fn demote(&self, fingerprint: u64, level: JsonSchemaSupport) {
+    /// Reserve the right to run the first probe for `fingerprint`, or `None` if
+    /// another call already holds it.
+    fn try_begin_probe(self: &Arc<Self>, fingerprint: u64) -> Option<ProbeGuard> {
+        let mut probing = self
+            .probing
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        probing.insert(fingerprint).then(|| ProbeGuard {
+            memo: Arc::clone(self),
+            fingerprint,
+        })
+    }
+
+    fn end_probe(&self, fingerprint: u64) {
+        self.probing
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&fingerprint);
+    }
+
+    /// Record what this endpoint accepts for `fingerprint`.
+    ///
+    /// Monotonic along [`rank`], which is what makes a racing pair of calls
+    /// safe: a success recorded by a slow caller can never resurrect a mode a
+    /// faster one has already seen refused, and the ladder can only ever move
+    /// one way.
+    fn record(&self, fingerprint: u64, level: JsonSchemaSupport) {
         let mut levels = self.lock();
         let entry = levels.entry(fingerprint).or_insert(level);
         if rank(level) > rank(*entry) {
@@ -286,12 +351,15 @@ impl JsonSchemaMemo {
     }
 }
 
-/// Ordering for [`JsonSchemaMemo::demote`]'s monotonicity check.
+/// Ordering for [`JsonSchemaMemo::record`]'s monotonicity check: what is known,
+/// weakest first. `Unknown` is below `Strict` so the first success sticks, and
+/// `Unsupported` is above everything so a refusal is never undone.
 const fn rank(level: JsonSchemaSupport) -> u8 {
     match level {
-        JsonSchemaSupport::Strict => 0,
-        JsonSchemaSupport::NonStrict => 1,
-        JsonSchemaSupport::Unsupported => 2,
+        JsonSchemaSupport::Unknown => 0,
+        JsonSchemaSupport::Strict => 1,
+        JsonSchemaSupport::NonStrict => 2,
+        JsonSchemaSupport::Unsupported => 3,
     }
 }
 
@@ -307,6 +375,17 @@ const fn rank(level: JsonSchemaSupport) -> u8 {
 /// Both arms are produced by `send_chat_request_before`'s status mapping a few
 /// hundred lines above; `openai_json_schema_mode.rs` pins the 400 spelling so a
 /// reformat there cannot silently switch this off.
+///
+/// **The 400 arm is deliberately broad**: it does not check that the body names
+/// `response_format`, so a 400 caused by something else demotes too. Narrowing
+/// it would mean classifying provider error prose, which is inconsistent enough
+/// that a shape-rejecting server with an unhelpful message would then never
+/// demote and would re-probe on *every* call — the unbounded waste this ladder
+/// exists to prevent, and on a deployment that is otherwise working. The
+/// over-breadth costs little in return, because the constrained request differs
+/// from the cascade's only in `response_format`: a 400 caused by anything else
+/// (a bad budget, a malformed message) fails every other mode too, so that call
+/// fails whatever this returns, and the memo it poisons is process-local.
 fn is_request_shape_rejection(error: &LlmError) -> bool {
     match error {
         // 501 Not Implemented.
@@ -986,6 +1065,19 @@ impl OpenAIAdapter {
         } else {
             Some(trimmed.to_string())
         };
+        // The api-version is part of the endpoint's identity, and both memories
+        // below describe *an endpoint*: which request shapes it answers, and how
+        // far constrained decoding had to be demoted for each schema. They are
+        // shared across clones on purpose, so retargeting one clone at a
+        // different Azure api-version would otherwise let it inherit — and keep
+        // writing into — observations made against the other one. That matters
+        // most for `json_schema_memo`, whose whole non-strict rung exists
+        // because api-versions differ on `strict`: a demotion observed on an
+        // older version would silently disable constrained decoding on a newer
+        // one. Starting fresh is always safe; the worst case is re-discovering
+        // what was already known.
+        self.cascade_probe = Arc::new(CascadeProbe::new());
+        self.json_schema_memo = Arc::new(JsonSchemaMemo::default());
         self
     }
 
@@ -2045,8 +2137,28 @@ impl OpenAIAdapter {
         // adds is the demotion ladder — the whole reason the mode is safe to
         // turn on across a heterogeneous fleet. See [`JsonSchemaMemo`].
         // ------------------------------------------------------------------
-        if mode_pin.allows_json_schema() {
-            let fingerprint = crate::schema::schema_fingerprint(json_schema);
+        let fingerprint = crate::schema::schema_fingerprint(json_schema);
+        // Reserve the first probe, so a wave of concurrent extractions sharing
+        // one schema costs one rejection rather than one per task. Held for the
+        // whole ladder — the non-strict rung is part of the same discovery — and
+        // released by `Drop` on every exit path. `None` here means either the
+        // schema is already discovered (no coordination needed) or another call
+        // is discovering it right now; `skip_for_probe` tells those apart.
+        let probe_level = self.json_schema_memo.level(fingerprint);
+        let _probe_guard = if mode_pin.allows_json_schema() && probe_level.is_unknown() {
+            self.json_schema_memo.try_begin_probe(fingerprint)
+        } else {
+            None
+        };
+        let skip_for_probe = probe_level.is_unknown() && _probe_guard.is_none();
+
+        if mode_pin.allows_json_schema() && skip_for_probe {
+            debug!(
+                "another call is probing constrained decoding for this schema; using the \
+                 cascade for this one",
+            );
+        }
+        if mode_pin.allows_json_schema() && !skip_for_probe {
             // Reason carried into the next attempt's corrective instruction, so
             // a retry is never a byte-identical re-send. Separate from the
             // cascade's `last_reason` below: a constrained-decoding failure says
@@ -2054,13 +2166,15 @@ impl OpenAIAdapter {
             // would open the fallback with an accusation about a request the
             // model never saw.
             let mut js_last_reason: Option<String> = None;
-            // One iteration per demotion level, at most three (`Strict`,
-            // `NonStrict`, then the `Unsupported` exit). `loop` rather than a
-            // bounded `for` because the ladder advances where the rejection is
-            // seen, and `JsonSchemaMemo::demote` is monotonic, so it terminates.
+            // One iteration per rung, at most three (strict, non-strict, then
+            // the `Unsupported` exit). `loop` rather than a bounded `for`
+            // because the ladder advances where the rejection is seen, and
+            // `JsonSchemaMemo::record` is monotonic, so it terminates.
             'levels: loop {
                 let strict = match self.json_schema_memo.level(fingerprint) {
-                    JsonSchemaSupport::Strict => true,
+                    // Never tried, or tried and accepted — same request either
+                    // way; the two differ only in whether a probe is reserved.
+                    JsonSchemaSupport::Unknown | JsonSchemaSupport::Strict => true,
                     JsonSchemaSupport::NonStrict => false,
                     JsonSchemaSupport::Unsupported => {
                         debug!(
@@ -2209,6 +2323,18 @@ impl OpenAIAdapter {
                                         js_last_reason = Some(reason);
                                         continue;
                                     }
+                                    // Record what the endpoint just accepted, so
+                                    // the next call skips the probe reservation
+                                    // and sends this rung straight away. A
+                                    // no-op on a rung already recorded.
+                                    self.json_schema_memo.record(
+                                        fingerprint,
+                                        if strict {
+                                            JsonSchemaSupport::Strict
+                                        } else {
+                                            JsonSchemaSupport::NonStrict
+                                        },
+                                    );
                                     return Ok(parsed);
                                 }
                                 Err(e) => {
@@ -2239,7 +2365,7 @@ impl OpenAIAdapter {
                                 "endpoint refused the constrained-decoding request shape; \
                                  demoting and remembering it for this schema",
                             );
-                            self.json_schema_memo.demote(fingerprint, next);
+                            self.json_schema_memo.record(fingerprint, next);
                             continue 'levels;
                         }
                         Err(e) => {

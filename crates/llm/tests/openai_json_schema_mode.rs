@@ -18,6 +18,10 @@
 //!   only a *shape* rejection (HTTP 400 / 501) moves it;
 //! - that each step is remembered per schema, so a refusing endpoint pays one
 //!   wasted request per distinct schema rather than one per call;
+//! - that the first probe for a schema is single-flighted, which is what makes
+//!   that per-schema claim true under cognify's concurrency rather than only for
+//!   a serial caller;
+//! - that a model *refusal* is neither an empty answer nor a reason to demote;
 //! - that `auto` is untouched: no constrained request is ever sent under it.
 //!
 //! Two couplings worth naming, because a refactor elsewhere could break the
@@ -296,6 +300,94 @@ async fn remembers_the_demotion_per_schema() {
         strict.calls_async().await,
         2,
         "a new schema gets its own probe"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_callers_share_one_probe() {
+    // Cognify extracts chunks concurrently through one shared adapter with one
+    // shared schema. Without single-flighting the first probe, every task in the
+    // first wave reads "not yet tried" and walks its own ladder, so a refusing
+    // endpoint takes two rejections *per task* rather than two in total — and
+    // the per-schema claim in the docs would be false under the exact workload
+    // the feature is for.
+    //
+    // The delay makes the race deterministic: it holds the first probe on the
+    // wire long enough that the other tasks are guaranteed to arrive while the
+    // reservation is held.
+    //
+    // The probe **succeeds** here rather than 501ing, which is what makes this a
+    // real test. Against a refusing endpoint, "one strict request" is also what
+    // six *serialised* calls would produce — the first records `Unsupported` and
+    // the rest skip — so the assertion would hold with no single-flighting at
+    // all. With a succeeding probe the three outcomes separate: six strict
+    // requests means no coordination (every task sent its own), one strict plus
+    // five cascade calls means the reservation held, and anything else means the
+    // tasks never actually overlapped.
+    let server = MockServer::start_async().await;
+    let strict = server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path("/chat/completions")
+                .body_includes("\"json_schema\"")
+                .body_includes("\"strict\":true");
+            then.status(200)
+                .header("content-type", "application/json")
+                .delay(std::time::Duration::from_millis(300))
+                .body(USABLE);
+        })
+        .await;
+    let non_strict = non_strict_mock(&server, 200, USABLE).await;
+    let tools = tools_mock(&server, USABLE).await;
+    let llm = std::sync::Arc::new(adapter(&server, StructuredOutputMode::JsonSchema));
+
+    let mut tasks = Vec::new();
+    for _ in 0..6 {
+        let llm = std::sync::Arc::clone(&llm);
+        tasks.push(tokio::spawn(async move {
+            llm.create_structured_output_raw("input text", "system prompt", &schema(), None)
+                .await
+        }));
+    }
+    for task in tasks {
+        assert_eq!(
+            task.await.unwrap().unwrap(),
+            json!({"foo": "bar"}),
+            "every concurrent caller still gets an answer",
+        );
+    }
+
+    assert_eq!(
+        strict.calls_async().await,
+        1,
+        "exactly one task probes; six would mean no single-flighting",
+    );
+    assert_eq!(
+        non_strict.calls_async().await,
+        0,
+        "the probe succeeded, so the ladder never advanced",
+    );
+    assert_eq!(
+        tools.calls_async().await,
+        5,
+        "the rest of the first wave uses the cascade — this is the documented \
+         cost of reserving the probe, and it is paid once",
+    );
+
+    // Once the probe has landed, the answer is in the memo and every later call
+    // gets constrained decoding without coordinating.
+    llm.create_structured_output_raw("input text", "system prompt", &schema(), None)
+        .await
+        .unwrap();
+    assert_eq!(
+        strict.calls_async().await,
+        2,
+        "a later call sends strict directly",
+    );
+    assert_eq!(
+        tools.calls_async().await,
+        5,
+        "and does not touch the cascade"
     );
 }
 

@@ -328,11 +328,23 @@ failing:
    `json` cascade runs exactly as under `auto`.
 
 Only an outright refusal of the request *shape* (HTTP 400 or 501) moves that
-ladder — a rate limit, a 5xx or a bad answer does not — and each step is
-remembered per schema for the life of the process, so an endpoint that refuses
-constrained decoding pays one wasted request per distinct schema, once. Both
-statuses are terminal in the transport layer, so that request is not retried
-first.
+ladder — a rate limit, any **other** 5xx, a network error or a bad answer does
+not — and each step is remembered per schema for the life of the process, so an
+endpoint that refuses constrained decoding pays one wasted request per distinct
+schema, once. Both statuses are terminal in the transport layer, so that request
+is not retried first, and the first probe for a given schema is single-flighted:
+a wave of concurrent extractions sharing one schema costs one rejection, not one
+per task. (Calls that arrive while that probe is in flight use the cascade for
+that call.)
+
+One deliberate over-breadth: *any* HTTP 400 demotes, not only one whose body
+names `response_format`. Provider error text is too inconsistent to classify
+reliably, and the alternative — re-probing forever on a server whose 400 does not
+name the field — is the unbounded waste this ladder exists to prevent. The
+over-breadth is close to harmless because the constrained request differs from
+the cascade's only in `response_format`: a 400 caused by anything else (a bad
+budget, a malformed message) fails every other mode too, so the call was going to
+fail regardless, and the memo is process-local.
 
 The Bedrock adapter does not read this knob. It has the equivalent of litellm's
 table (`crates/llm/src/adapters/bedrock/caps.rs`) and already picks Converse's

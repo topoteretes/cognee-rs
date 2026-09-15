@@ -259,7 +259,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the same envelope without `strict` (for gateways that reject only the keyword),
   then out to the ordinary cascade. Only an outright refusal of the request
   *shape* moves that ladder, and each step is remembered per schema, so a
-  refusing endpoint pays one wasted request per distinct schema per process.
+  refusing endpoint pays one wasted request per distinct schema per process. The
+  first probe for a schema is single-flighted, so that holds under cognify's
+  concurrency — where a whole wave of chunks shares one schema — and not only for
+  a serial caller.
 
   The Bedrock adapter does not read the knob: it has the equivalent of litellm's
   table and already picks Converse's native

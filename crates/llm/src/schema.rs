@@ -225,9 +225,27 @@ where
         let rewritten = recurse_map(properties);
         out.insert("properties".to_string(), rewritten);
     }
-    if let Some(items) = out.get("items").filter(|items| items.is_object()) {
-        let rewritten = rewrite_object_nodes(items, rewrite);
-        out.insert("items".to_string(), rewritten);
+    // `items` is a single schema in draft 2020-12 and may be an *array* of
+    // per-position schemas in the older tuple form; `prefixItems` is 2020-12's
+    // spelling of that tuple. All three carry object nodes — schemars renders a
+    // Rust tuple field that way — and a node this misses is a node the strict
+    // rewrite never closes, which is exactly what makes a strict request get
+    // rejected.
+    for items_key in ["items", "prefixItems"] {
+        match out.get(items_key) {
+            Some(Value::Array(entries)) => {
+                let rewritten: Vec<Value> = entries
+                    .iter()
+                    .map(|entry| rewrite_object_nodes(entry, rewrite))
+                    .collect();
+                out.insert(items_key.to_string(), Value::Array(rewritten));
+            }
+            Some(items @ Value::Object(_)) => {
+                let rewritten = rewrite_object_nodes(items, rewrite);
+                out.insert(items_key.to_string(), rewritten);
+            }
+            _ => {}
+        }
     }
     for defs_key in ["$defs", "definitions"] {
         if let Some(defs) = out.get(defs_key) {
@@ -285,12 +303,33 @@ pub fn force_additional_properties_false(schema: &Value) -> Value {
 /// value — it just has to say so explicitly, which is precisely what OpenAI's
 /// strict mode asks for and what makes the field impossible to silently drop.
 ///
+/// `default` is dropped wherever it appears. Under strict decoding every
+/// property is `required`, so the model must emit each one and a default can
+/// never apply — the keyword is dead weight at best, and OpenAI's strict subset
+/// is documented as accepting only a listed set of keywords, so leaving it in
+/// risks a rejection that demotes a schema which would otherwise have worked.
+/// schemars emits one for every `#[serde(default)]` field on a type that derives
+/// `Default`, which includes real cognee models, so this is not hypothetical.
+/// Note the interaction with the shallow `recompute_top_level_required`, which
+/// does the opposite — it treats a literal `default` as the marker for
+/// *optional*. That is correct there (it reproduces instructor's non-strict
+/// rewrite) and wrong here, where OpenAI requires every property listed.
+///
 /// `$schema` is stripped from the root: it is a meta-annotation rather than a
 /// constraint, and providers reject or ignore it inconsistently (Bedrock
 /// rejects it outright — see the Converse adapter's `sanitize_schema`).
 pub fn strict_json_schema(schema: &Value) -> Value {
     let mut out = rewrite_object_nodes(schema, &|node: &mut Map<String, Value>| {
+        node.remove("default");
+        // `{"type": "object"}` with no `properties` is a valid object node and
+        // still has to be closed — returning early on the missing `properties`
+        // map left it as the one node in the document outside the strict
+        // subset, which is enough for the whole request to be rejected.
+        let is_object = node.get("type").and_then(Value::as_str) == Some("object");
         let Some(properties) = node.get("properties").and_then(Value::as_object) else {
+            if is_object {
+                node.insert("additionalProperties".to_string(), json!(false));
+            }
             return;
         };
         let mut required: Vec<String> = properties.keys().cloned().collect();
@@ -613,6 +652,75 @@ mod tests {
         // `$schema` is a meta-annotation, not a constraint; providers disagree
         // about whether it is even allowed here.
         assert!(strict.get("$schema").is_none());
+    }
+
+    #[test]
+    fn strict_json_schema_drops_defaults_and_closes_bare_object_nodes() {
+        // `default` is what schemars emits for a `#[serde(default)]` field, and
+        // it is exactly the marker the *shallow* rewrite reads as "optional" —
+        // so it is both common on real cognee models and meaningless here,
+        // where every property is required. A bare `{"type": "object"}` has no
+        // properties to require but still has to be closed; leaving it open was
+        // enough to put the whole document outside the strict subset.
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "description": {"type": "string", "default": ""},
+                "bag": {"type": "object"},
+            },
+        });
+
+        let strict = strict_json_schema(&schema);
+
+        assert!(
+            strict["properties"]["description"].get("default").is_none(),
+            "default must not survive into a strict schema",
+        );
+        assert_eq!(strict["required"], json!(["bag", "description"]));
+        assert_eq!(
+            strict["properties"]["bag"]["additionalProperties"],
+            json!(false),
+            "a property-less object node still has to be closed",
+        );
+    }
+
+    #[test]
+    fn strict_json_schema_reaches_tuple_positions() {
+        // `prefixItems` is draft 2020-12's tuple spelling and an array-valued
+        // `items` is the older one; schemars uses them for a tuple field. A
+        // node missed in either is a node the strict request is rejected for.
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "pair": {
+                    "type": "array",
+                    "prefixItems": [
+                        {"type": "object", "properties": {"a": {"type": "string"}}},
+                        {"type": "object", "properties": {"b": {"type": "string"}}},
+                    ],
+                },
+                "legacy": {
+                    "type": "array",
+                    "items": [{"type": "object", "properties": {"c": {"type": "string"}}}],
+                },
+            },
+        });
+
+        let strict = strict_json_schema(&schema);
+
+        for (key, index, field) in [("pair", 0, "a"), ("pair", 1, "b"), ("legacy", 0, "c")] {
+            let node = &strict["properties"][key][if key == "pair" {
+                "prefixItems"
+            } else {
+                "items"
+            }][index];
+            assert_eq!(node["required"], json!([field]), "{key}[{index}] required");
+            assert_eq!(
+                node["additionalProperties"],
+                json!(false),
+                "{key}[{index}] closed"
+            );
+        }
     }
 
     #[test]

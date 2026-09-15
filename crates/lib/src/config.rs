@@ -1915,8 +1915,11 @@ impl ConfigManager {
         self.bump_version();
     }
 
-    /// Set the structured-output request shape (`auto` | `tools` | `functions` |
-    /// `json`); see [`Settings::llm_structured_output_mode`].
+    /// Set the structured-output request shape (`auto` | `json_schema` |
+    /// `tools` | `functions` | `json`); see
+    /// [`Settings::llm_structured_output_mode`]. `tools` / `functions` / `json`
+    /// pin one shape; `json_schema` is a preference that demotes back to the
+    /// cascade rather than a pin.
     pub fn set_llm_structured_output_mode(&self, mode: &str) {
         let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
         s.llm_structured_output_mode = mode.to_string();
