@@ -290,10 +290,11 @@ where
 /// some node keeps saying so.
 pub fn force_additional_properties_false(schema: &Value) -> Value {
     rewrite_object_nodes(schema, &|node: &mut Map<String, Value>| {
-        if node.get("type").and_then(Value::as_str) == Some("object")
-            && !node.contains_key("additionalProperties")
-        {
-            node.insert("additionalProperties".to_string(), json!(false));
+        // `declares_object` rather than a string-only `type` check: schemars
+        // renders a nullable object as `{"type": ["object", "null"]}`, and such
+        // a node is still an object node Bedrock's validator expects closed.
+        if declares_object(node) {
+            close_object_node(node);
         }
     })
 }
@@ -341,6 +342,13 @@ pub fn strict_json_schema(schema: &Value) -> Value {
         // subset, which is enough for the whole request to be rejected.
         let Some(properties) = node.get("properties").and_then(Value::as_object) else {
             if declares_object(node) {
+                // Same reconciliation as the empty-`properties` branch below,
+                // and for the same reason: `{"type": "object", "required":
+                // ["x"]}` names a property the node does not describe, so
+                // closing it demands a key the model is forbidden to emit. The
+                // provider rejects that, and the schema is demoted for a fault
+                // the rewrite introduced rather than one it had.
+                node.remove("required");
                 close_object_node(node);
             }
             return;
@@ -373,9 +381,18 @@ pub fn strict_json_schema(schema: &Value) -> Value {
 /// and asserts nothing on its own, so a schema relying on it would be rejected
 /// by the provider anyway — and synthesising the missing `type` would narrow a
 /// schema its author chose to leave open.
+///
+/// Stricter than [`declares_object`], which the *nested* rewrite uses: a
+/// nullable object (`{"type": ["object", "null"]}`) is a legitimate node inside
+/// a document and has to be closed there, but as a **root** it permits a bare
+/// `null` response, which structured outputs do not accept. So the root must say
+/// `"type": "object"` and nothing else.
 #[must_use]
 pub fn declares_object_root(schema: &Value) -> bool {
-    schema.as_object().is_some_and(declares_object)
+    schema
+        .get("type")
+        .and_then(Value::as_str)
+        .is_some_and(|declared| declared == "object")
 }
 
 /// Whether a node's `type` says it is an object.
@@ -829,6 +846,37 @@ mod tests {
     }
 
     #[test]
+    fn declares_object_root_rejects_a_nullable_root() {
+        // A nullable object is a legitimate *nested* node and has to be closed
+        // there, but as a root it permits a bare `null` response, which
+        // structured outputs do not accept. The root must be unambiguous.
+        assert!(declares_object_root(&json!({"type": "object"})));
+        assert!(!declares_object_root(&json!({"type": ["object", "null"]})));
+        assert!(!declares_object_root(&json!({"type": "string"})));
+        // `properties` alone asserts nothing about the instance's type.
+        assert!(!declares_object_root(
+            &json!({"properties": {"a": {"type": "string"}}})
+        ));
+        assert!(!declares_object_root(&json!(true)));
+    }
+
+    #[test]
+    fn force_additional_properties_false_closes_a_nullable_object() {
+        // The helper's contract is *every* object node. Reading only the string
+        // form of `type` left a nullable object open, which Bedrock's native
+        // schema validation rejects.
+        let out = force_additional_properties_false(&json!({
+            "type": "object",
+            "properties": {"maybe": {"type": ["object", "null"], "properties": {}}},
+        }));
+
+        assert_eq!(
+            out["properties"]["maybe"]["additionalProperties"],
+            json!(false),
+        );
+    }
+
+    #[test]
     fn strict_json_schema_drops_a_required_naming_nothing() {
         // `"properties": {}` with a leftover `required`. Closing the node while
         // keeping the entry builds a schema that demands a property the model is
@@ -845,6 +893,20 @@ mod tests {
             "stale required is dropped"
         );
         assert_eq!(strict["additionalProperties"], json!(false));
+
+        // The same reconciliation is owed when `properties` is absent
+        // altogether, not merely empty — otherwise closing the node demands a
+        // key the model is forbidden to emit, and the schema is demoted for a
+        // fault the rewrite introduced rather than one it had.
+        let no_properties = strict_json_schema(&json!({
+            "type": "object",
+            "required": ["x"],
+        }));
+        assert!(
+            no_properties.get("required").is_none(),
+            "a required naming nothing goes whether properties is empty or missing",
+        );
+        assert_eq!(no_properties["additionalProperties"], json!(false));
     }
 
     #[test]

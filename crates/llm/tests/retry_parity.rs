@@ -29,7 +29,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use cognee_llm::{AnthropicAdapter, Llm, LlmExt, Message, MessageRole, OpenAIAdapter};
+use cognee_llm::{AnthropicAdapter, Llm, LlmError, LlmExt, Message, MessageRole, OpenAIAdapter};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -156,7 +156,10 @@ async fn a_successful_call_is_not_retried_and_does_not_pace() {
 
 // ── Terminal: one request, no retries ───────────────────────────────────────
 
-async fn assert_terminal(status: u16, body: &str, label: &str) {
+/// Returns the error so a caller can also assert *which* one it is — the status
+/// mapping is a public contract for `generate`, not only an input to the
+/// structured-output cascade.
+async fn assert_terminal(status: u16, body: &str, label: &str) -> LlmError {
     let server = MockServer::start_async().await;
     let pacer = test_pacer();
 
@@ -171,12 +174,15 @@ async fn assert_terminal(status: u16, body: &str, label: &str) {
         .generate(prompt(), None)
         .await;
 
-    assert!(result.is_err(), "{label} must fail");
     assert_eq!(
         mock.calls_async().await,
         1,
         "{label} is terminal — retrying can never help, so exactly one request"
     );
+    match result {
+        Err(error) => error,
+        Ok(_) => panic!("{label} must fail"),
+    }
 }
 
 #[tokio::test]
@@ -194,6 +200,24 @@ async fn unknown_model_is_terminal() {
     // Regression: the OpenAI adapter previously had no 404 arm and retried it,
     // unlike the Anthropic adapter and unlike Python's terminal NotFoundError.
     assert_terminal(404, "no such model", "404").await;
+}
+
+#[tokio::test]
+async fn not_implemented_is_terminal_and_typed() {
+    // 501 is the one entry in the terminal set with no Python counterpart. HTTP
+    // defines it as the server lacking the capability, so no wait can help.
+    //
+    // The *variant* is asserted here, not just the terminality, because it is a
+    // public `generate` contract and because the structured-output demotion
+    // ladder matches on `FeatureNotSupported` rather than on a formatted string
+    // (SDK-630). The json_schema tests observe this only through the fallback,
+    // so without this case a regression could keep demotion working while
+    // `generate` started retrying or returning a different error.
+    let error = assert_terminal(501, "Error making prediction", "501").await;
+    assert!(
+        matches!(error, LlmError::FeatureNotSupported(_)),
+        "501 must surface as FeatureNotSupported, got {error:?}",
+    );
 }
 
 #[tokio::test]
