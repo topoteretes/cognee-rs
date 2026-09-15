@@ -4,8 +4,11 @@
 //! using the `schemars` crate. The schemas are used to guide LLMs in producing
 //! correctly structured output.
 
+use std::collections::BTreeMap;
+use std::hash::{Hash, Hasher};
+
 use schemars::{JsonSchema, schema_for};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 /// Generate a JSON schema for a given type.
 ///
@@ -179,6 +182,186 @@ Schema:
 
 IMPORTANT: Return ONLY the JSON object. No additional text before or after."#
     )
+}
+
+/// Apply `rewrite` to every **object node** of a JSON schema, in place of the
+/// three near-identical hand-rolled traversals this crate would otherwise carry.
+///
+/// "Object node" means any JSON object in the schema document that can itself
+/// describe a value — the root, each entry of `properties`, `items`, each entry
+/// of `$defs` / `definitions`, and each branch of `anyOf` / `allOf` / `oneOf`.
+/// Children are rewritten before the node itself, so `rewrite` always sees
+/// already-rewritten descendants; none of the current callers depend on that,
+/// but a caller that reads a child's keys would.
+///
+/// Non-object input is returned unchanged rather than erroring: a schema
+/// fragment may legitimately be a bare `true` / `false` (JSON Schema's
+/// always-accept / always-reject forms) and the rewriters have nothing to say
+/// about those.
+fn rewrite_object_nodes<F>(schema: &Value, rewrite: &F) -> Value
+where
+    F: Fn(&mut Map<String, Value>),
+{
+    let Some(object) = schema.as_object() else {
+        return schema.clone();
+    };
+    let mut out = object.clone();
+
+    // A map whose *values* are each a schema: `properties`, `$defs`,
+    // `definitions`.
+    let recurse_map = |map: &Value| -> Value {
+        match map.as_object() {
+            Some(entries) => Value::Object(
+                entries
+                    .iter()
+                    .map(|(key, value)| (key.clone(), rewrite_object_nodes(value, rewrite)))
+                    .collect(),
+            ),
+            None => map.clone(),
+        }
+    };
+
+    if let Some(properties) = out.get("properties") {
+        let rewritten = recurse_map(properties);
+        out.insert("properties".to_string(), rewritten);
+    }
+    if let Some(items) = out.get("items").filter(|items| items.is_object()) {
+        let rewritten = rewrite_object_nodes(items, rewrite);
+        out.insert("items".to_string(), rewritten);
+    }
+    for defs_key in ["$defs", "definitions"] {
+        if let Some(defs) = out.get(defs_key) {
+            let rewritten = recurse_map(defs);
+            out.insert(defs_key.to_string(), rewritten);
+        }
+    }
+    for combinator in ["anyOf", "allOf", "oneOf"] {
+        if let Some(Value::Array(branches)) = out.get(combinator) {
+            let rewritten: Vec<Value> = branches
+                .iter()
+                .map(|branch| rewrite_object_nodes(branch, rewrite))
+                .collect();
+            out.insert(combinator.to_string(), Value::Array(rewritten));
+        }
+    }
+
+    rewrite(&mut out);
+    Value::Object(out)
+}
+
+/// Recursively force `"additionalProperties": false` onto every object node.
+///
+/// Extracted from the Bedrock Converse adapter, which needs exactly this for
+/// `outputConfig` (`_add_additional_properties_to_schema`), so the OpenAI strict
+/// transform below and the Bedrock one cannot drift apart. Only sets the key
+/// where it is absent, so a schema that deliberately allows extra properties on
+/// some node keeps saying so.
+pub fn force_additional_properties_false(schema: &Value) -> Value {
+    rewrite_object_nodes(schema, &|node: &mut Map<String, Value>| {
+        if node.get("type").and_then(Value::as_str) == Some("object")
+            && !node.contains_key("additionalProperties")
+        {
+            node.insert("additionalProperties".to_string(), json!(false));
+        }
+    })
+}
+
+/// Rewrite a schema into the shape OpenAI's **strict** structured output
+/// requires: every object node carries `additionalProperties: false` and lists
+/// *every* one of its properties in `required`.
+///
+/// This is the constrained-decoding ("grammar") form — the request body it goes
+/// into is `response_format: {"type": "json_schema", "json_schema": {"strict":
+/// true, …}}`, which OpenAI rejects outright unless the schema satisfies both
+/// rules. It is deliberately **much** stronger than
+/// [`crate::adapters::openai`]'s shallow top-level `required` recompute, and it
+/// is the transform whose non-strict variant is MEASURED to make Baseten's
+/// `gpt-oss-120b` answer HTTP 501 — which is why the caller that sends it also
+/// carries a demotion ladder rather than assuming it will be accepted.
+///
+/// Making an optional field `required` is not a semantic change here: schemars
+/// renders `Option<T>` as a nullable type (`"type": ["string", "null"]` or an
+/// `anyOf` with a `"null"` branch), so the model can still decline to supply a
+/// value — it just has to say so explicitly, which is precisely what OpenAI's
+/// strict mode asks for and what makes the field impossible to silently drop.
+///
+/// `$schema` is stripped from the root: it is a meta-annotation rather than a
+/// constraint, and providers reject or ignore it inconsistently (Bedrock
+/// rejects it outright — see the Converse adapter's `sanitize_schema`).
+pub fn strict_json_schema(schema: &Value) -> Value {
+    let mut out = rewrite_object_nodes(schema, &|node: &mut Map<String, Value>| {
+        let Some(properties) = node.get("properties").and_then(Value::as_object) else {
+            return;
+        };
+        let mut required: Vec<String> = properties.keys().cloned().collect();
+        required.sort();
+        if !required.is_empty() {
+            node.insert("required".to_string(), json!(required));
+        }
+        node.insert("additionalProperties".to_string(), json!(false));
+    });
+    if let Some(object) = out.as_object_mut() {
+        object.remove("$schema");
+    }
+    out
+}
+
+/// A **process-local** fingerprint of a schema, insensitive to object-key order.
+///
+/// Used to key the OpenAI adapter's per-schema structured-output demotion memo
+/// (litellm caches the same demotion per `(model, response_model)`). Key order
+/// has to be normalised because the workspace enables `serde_json`'s
+/// `preserve_order`, so two logically identical schemas built in different key
+/// orders are distinct `Map`s; array order is *not* normalised, because in JSON
+/// Schema it is significant (`required`, `anyOf`, `prefixItems`).
+///
+/// Not stable across processes or releases, and must never be persisted or put
+/// on the wire: `DefaultHasher`'s algorithm is explicitly unspecified. The memo
+/// it keys lives only for the life of the adapter. (The cassette hash in
+/// `crate::mock::cassette` is the stable, persisted counterpart — it is sha256
+/// over a canonical *string*, and is feature-gated behind `mock`.)
+#[must_use]
+pub fn schema_fingerprint(schema: &Value) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    hash_canonical(schema, &mut hasher);
+    hasher.finish()
+}
+
+/// Feed `value` into `hasher` with object keys visited in sorted order.
+fn hash_canonical<H: Hasher>(value: &Value, hasher: &mut H) {
+    // Discriminate the variants so `null`, `"0"` and `0` cannot collide by
+    // hashing to the same byte sequence.
+    match value {
+        Value::Null => 0u8.hash(hasher),
+        Value::Bool(b) => {
+            1u8.hash(hasher);
+            b.hash(hasher);
+        }
+        Value::Number(n) => {
+            2u8.hash(hasher);
+            n.to_string().hash(hasher);
+        }
+        Value::String(s) => {
+            3u8.hash(hasher);
+            s.hash(hasher);
+        }
+        Value::Array(items) => {
+            4u8.hash(hasher);
+            items.len().hash(hasher);
+            for item in items {
+                hash_canonical(item, hasher);
+            }
+        }
+        Value::Object(map) => {
+            5u8.hash(hasher);
+            map.len().hash(hasher);
+            let sorted: BTreeMap<&String, &Value> = map.iter().collect();
+            for (key, val) in sorted {
+                key.hash(hasher);
+                hash_canonical(val, hasher);
+            }
+        }
+    }
 }
 
 /// Build a schema-aware validator for the type-erased raw structured-output path
@@ -379,5 +562,134 @@ mod tests {
         let loose = json!({"type": "object"});
         let validate = schema_required_validator(&loose);
         assert!(validate(&json!({})).is_ok());
+    }
+
+    #[test]
+    fn strict_json_schema_forces_all_required_at_every_depth() {
+        // OpenAI rejects `strict: true` unless *every* object node lists all of
+        // its properties in `required` and sets `additionalProperties: false`.
+        // The nesting here is the shape that matters in practice: a `$defs`
+        // entry reached through an array's `items`, which is how schemars
+        // renders `Vec<Edge>` on `KnowledgeGraph`.
+        let schema = json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "required": ["nodes"],
+            "properties": {
+                "nodes": {"type": "array", "items": {"$ref": "#/$defs/Node"}},
+                "edges": {"type": "array", "items": {"$ref": "#/$defs/Edge"}},
+            },
+            "$defs": {
+                "Node": {
+                    "type": "object",
+                    "required": ["id"],
+                    "properties": {
+                        "id": {"type": "string"},
+                        "description": {"type": ["string", "null"]},
+                    },
+                },
+                "Edge": {"type": "object", "properties": {"rel": {"type": "string"}}},
+            },
+        });
+
+        let strict = strict_json_schema(&schema);
+
+        // Root: both properties required even though only one was.
+        assert_eq!(strict["required"], json!(["edges", "nodes"]));
+        assert_eq!(strict["additionalProperties"], json!(false));
+        // A `$defs` entry whose optional (nullable) field was omitted from
+        // `required` now carries it — the model must say `null` rather than
+        // silently drop the key, which is the whole point of strict mode.
+        assert_eq!(
+            strict["$defs"]["Node"]["required"],
+            json!(["description", "id"])
+        );
+        assert_eq!(
+            strict["$defs"]["Node"]["additionalProperties"],
+            json!(false)
+        );
+        // A node that had no `required` at all gains one.
+        assert_eq!(strict["$defs"]["Edge"]["required"], json!(["rel"]));
+        // `$schema` is a meta-annotation, not a constraint; providers disagree
+        // about whether it is even allowed here.
+        assert!(strict.get("$schema").is_none());
+    }
+
+    #[test]
+    fn strict_json_schema_leaves_non_object_nodes_alone() {
+        // A bare `true`/`false` subschema and a plain scalar node have no
+        // properties to require, and rewriting them would corrupt the document.
+        assert_eq!(strict_json_schema(&json!(true)), json!(true));
+        let scalars = json!({
+            "type": "object",
+            "properties": {"n": {"type": "integer"}},
+            "additionalProperties": true,
+        });
+        let strict = strict_json_schema(&scalars);
+        assert_eq!(strict["properties"]["n"], json!({"type": "integer"}));
+        // Strict mode overrides an explicit `additionalProperties: true`: it is
+        // not satisfiable alongside `strict`, so the alternative is a request
+        // the provider rejects.
+        assert_eq!(strict["additionalProperties"], json!(false));
+    }
+
+    #[test]
+    fn force_additional_properties_false_keeps_bedrocks_shape() {
+        // Regression guard for the traversal being shared with the Bedrock
+        // Converse adapter: unlike `strict_json_schema` this must NOT touch
+        // `required`, and must leave an explicit `additionalProperties: true`
+        // where the schema author put it.
+        let schema = json!({
+            "type": "object",
+            "required": ["a"],
+            "properties": {
+                "a": {"type": "string"},
+                "nested": {"type": "object", "properties": {"b": {"type": "string"}}},
+                "open": {"type": "object", "additionalProperties": true},
+            },
+            "anyOf": [{"type": "object", "properties": {"c": {"type": "string"}}}],
+        });
+
+        let out = force_additional_properties_false(&schema);
+
+        assert_eq!(out["additionalProperties"], json!(false));
+        assert_eq!(
+            out["properties"]["nested"]["additionalProperties"],
+            json!(false)
+        );
+        assert_eq!(
+            out["properties"]["open"]["additionalProperties"],
+            json!(true)
+        );
+        assert_eq!(out["anyOf"][0]["additionalProperties"], json!(false));
+        // `required` untouched — Bedrock's native branch does not force it.
+        assert_eq!(out["required"], json!(["a"]));
+        assert!(out["properties"]["nested"].get("required").is_none());
+    }
+
+    #[test]
+    fn schema_fingerprint_ignores_key_order_but_not_array_order() {
+        // The workspace enables `serde_json/preserve_order`, so these two are
+        // genuinely different `Map`s. They describe the same schema, and the
+        // demotion memo must not probe the endpoint twice for them.
+        let a = json!({"type": "object", "properties": {"x": {"type": "string"}}});
+        let b = json!({"properties": {"x": {"type": "string"}}, "type": "object"});
+        assert_eq!(schema_fingerprint(&a), schema_fingerprint(&b));
+
+        // Array order is significant in JSON Schema, so it must be part of the
+        // key.
+        let c = json!({"required": ["x", "y"]});
+        let d = json!({"required": ["y", "x"]});
+        assert_ne!(schema_fingerprint(&c), schema_fingerprint(&d));
+
+        // Different values of the same shape must not collide.
+        assert_ne!(
+            schema_fingerprint(&json!({"n": 0})),
+            schema_fingerprint(&json!({"n": "0"})),
+        );
+        assert_ne!(
+            schema_fingerprint(&json!({"n": null})),
+            schema_fingerprint(&json!({"n": false})),
+        );
     }
 }

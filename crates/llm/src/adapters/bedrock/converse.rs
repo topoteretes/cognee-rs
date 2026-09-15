@@ -246,56 +246,12 @@ pub fn merge_additional_model_request_fields(
 /// field is explicitly set on each object node
 /// (`_add_additional_properties_to_schema`). Recurses through `properties`,
 /// `items`, `$defs` / `definitions` and `anyOf` / `allOf` / `oneOf`.
-pub fn force_additional_properties_false(schema: &Value) -> Value {
-    let Some(object) = schema.as_object() else {
-        return schema.clone();
-    };
-    let mut out = object.clone();
-
-    if out.get("type").and_then(Value::as_str) == Some("object")
-        && !out.contains_key("additionalProperties")
-    {
-        out.insert("additionalProperties".to_string(), json!(false));
-    }
-
-    let recurse_map = |map: &Value| -> Value {
-        match map.as_object() {
-            Some(entries) => Value::Object(
-                entries
-                    .iter()
-                    .map(|(key, value)| (key.clone(), force_additional_properties_false(value)))
-                    .collect(),
-            ),
-            None => map.clone(),
-        }
-    };
-
-    if let Some(properties) = out.get("properties") {
-        let rewritten = recurse_map(properties);
-        out.insert("properties".to_string(), rewritten);
-    }
-    if let Some(items) = out.get("items").filter(|items| items.is_object()) {
-        let rewritten = force_additional_properties_false(items);
-        out.insert("items".to_string(), rewritten);
-    }
-    for defs_key in ["$defs", "definitions"] {
-        if let Some(defs) = out.get(defs_key) {
-            let rewritten = recurse_map(defs);
-            out.insert(defs_key.to_string(), rewritten);
-        }
-    }
-    for combinator in ["anyOf", "allOf", "oneOf"] {
-        if let Some(Value::Array(branches)) = out.get(combinator) {
-            let rewritten: Vec<Value> = branches
-                .iter()
-                .map(force_additional_properties_false)
-                .collect();
-            out.insert(combinator.to_string(), Value::Array(rewritten));
-        }
-    }
-
-    Value::Object(out)
-}
+///
+/// Re-exported from [`crate::schema`] rather than kept here: the OpenAI adapter's
+/// strict `response_format: json_schema` transform (SDK-630) needs the identical
+/// traversal plus an all-required step, and two hand-rolled copies of it would
+/// drift the moment one provider grows a new combinator.
+pub use crate::schema::force_additional_properties_false;
 
 /// Strip the `$schema` meta key, which Bedrock does not expect on a tool input
 /// schema or inside `outputConfig`.

@@ -241,6 +241,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`LLM_STRUCTURED_OUTPUT_MODE=json_schema` — constrained decoding on
+  OpenAI-compatible endpoints, with a demotion ladder.** The adapter can now send
+  `response_format: {"type": "json_schema", "json_schema": {"strict": true,
+  "schema": …}}` ahead of its `tools` → `functions` → `json` cascade. On a
+  backend that supports it the sampler itself is constrained to the schema,
+  rather than being asked to follow one; measured on a runaway-prone chunk, the
+  unconstrained `tools` arms dropped a required `target_node_id` in 8 of 11
+  payloads where the strict arms were 5/5 clean. This is the shape Python sends
+  on its default `litellm_native` path.
+
+  **Opt-in, and not a pin.** `auto` is unchanged and never sends the shape:
+  Python gates it on litellm's `supports_response_schema` table, there is no such
+  table for an arbitrary `LLM_ENDPOINT`, and one deployment target cognee is used
+  against answers HTTP 501 to a constrained request. Turning the knob on is safe
+  even so, because the mode demotes rather than failing — `strict: true`, then
+  the same envelope without `strict` (for gateways that reject only the keyword),
+  then out to the ordinary cascade. Only an outright refusal of the request
+  *shape* moves that ladder, and each step is remembered per schema, so a
+  refusing endpoint pays one wasted request per distinct schema per process.
+
+  The Bedrock adapter does not read the knob: it has the equivalent of litellm's
+  table and already picks Converse's native
+  `outputConfig.textFormat.jsonSchema` for the models that advertise support.
+
+  Also in this change: **HTTP 501 is now terminal** on the chat path, surfacing
+  as `LlmError::FeatureNotSupported` instead of being retried into
+  `MaxRetriesExceeded`. HTTP defines 501 as the server lacking the capability, so
+  no wait can make it succeed — and a retried one would have arrived as an error
+  the cascade treats as fatal, which would have made the demotion unreachable.
+
 - **`cognee-cognify`: the temporal pipeline records artifact ownership, and is
   therefore rollback-able.** `add_temporal_data_points` wrote `Event`,
   `Timestamp`, `Interval` and entity nodes, their edges, and `Event_name` vector

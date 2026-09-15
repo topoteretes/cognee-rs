@@ -151,21 +151,51 @@ pub struct TokenUsage {
 /// override it. This knob is the counterpart of that override.
 ///
 /// [`Self::Auto`] keeps the cascade, bounded per mode by the adapter's own miss
-/// probe. Every other variant **pins** one shape: the other two are never sent,
-/// and exhausting the pinned mode is terminal rather than falling through.
+/// probe. [`Self::Tools`], [`Self::Functions`] and [`Self::Json`] each **pin**
+/// one shape: the other two are never sent, and exhausting the pinned mode is
+/// terminal rather than falling through.
 ///
 /// Pinning is the cheaper answer whenever the operator already knows what the
 /// endpoint speaks. A vLLM deployment started without
 /// `--enable-auto-tool-choice --tool-call-parser` answers no tool call at all,
 /// and the miss probe still has to spend its threshold rediscovering that in
 /// every fresh process — while a pin costs nothing and is exact.
+///
+/// [`Self::JsonSchema`] is the odd one out: it adds a *fourth* shape ahead of
+/// the cascade rather than choosing among the three, and it is not a pin. See
+/// its docs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+// `snake_case` rather than `lowercase` so `JsonSchema` spells itself
+// `json_schema`. The other four variants are single words, so their wire
+// spelling is unchanged.
+#[serde(rename_all = "snake_case")]
 pub enum StructuredOutputMode {
     /// Try each mode in cascade order, skipping any the miss probe has tripped.
     /// The default, and the behaviour before this knob existed.
     #[default]
     Auto,
+    /// **Prefer** constrained decoding — `response_format: {"type":
+    /// "json_schema", "json_schema": {"strict": true, …}}` — ahead of the
+    /// cascade, and demote out of it when the endpoint says no.
+    ///
+    /// The opt-in half of SDK-630. Python reaches the same request shape on its
+    /// default `litellm_native` path, but only for a model litellm's table
+    /// advertises as `supports_response_schema`; Rust has no such table for an
+    /// arbitrary OpenAI-compatible base URL, so the operator supplies the
+    /// knowledge instead — this knob. (The Bedrock adapter *does* have the
+    /// table, in `adapters::bedrock::caps`, and picks its own native
+    /// `outputConfig` branch from it without consulting this enum.)
+    ///
+    /// **Not a pin, deliberately.** The other three values exclude everything
+    /// else and make exhaustion terminal; this one is a *preference* with a
+    /// demotion ladder — strict → non-strict → out of the mode entirely, at
+    /// which point the ordinary `tools` → `functions` → `json` cascade runs and
+    /// behaves exactly as under [`Self::Auto`]. A hard pin here would be
+    /// unusable on the fleet this exists for: Baseten's `gpt-oss-120b` answers
+    /// HTTP 501 to a constrained request, so pinning would fail every call
+    /// rather than costing one probe. The demotion is memoised per schema, so
+    /// an endpoint that refuses pays once per distinct schema per process.
+    JsonSchema,
     /// Only native `tools`.
     Tools,
     /// Only the legacy `functions` / `function_call` pair.
@@ -175,14 +205,25 @@ pub enum StructuredOutputMode {
 }
 
 impl StructuredOutputMode {
+    /// Whether the constrained `response_format: json_schema` shape may be sent.
+    ///
+    /// False under [`Self::Auto`]: unlike the other three, this mode is not
+    /// something an unknown endpoint can be probed for cheaply — the shapes that
+    /// fail do so with a hard HTTP error rather than an unusable 200, and the
+    /// SDK's own default deployment target is one of them. Opting in is the
+    /// operator's call.
+    pub fn allows_json_schema(self) -> bool {
+        matches!(self, Self::JsonSchema)
+    }
+
     /// Whether native tool-calling may be sent.
     pub fn allows_tools(self) -> bool {
-        matches!(self, Self::Auto | Self::Tools)
+        matches!(self, Self::Auto | Self::Tools | Self::JsonSchema)
     }
 
     /// Whether the legacy `functions` shape may be sent.
     pub fn allows_functions(self) -> bool {
-        matches!(self, Self::Auto | Self::Functions)
+        matches!(self, Self::Auto | Self::Functions | Self::JsonSchema)
     }
 
     /// Whether JSON mode may be sent.
@@ -190,22 +231,27 @@ impl StructuredOutputMode {
     /// Under [`Self::Auto`] this is always true: JSON mode is the cascade's
     /// terminal fallback and the one mode with no miss probe.
     pub fn allows_json(self) -> bool {
-        matches!(self, Self::Auto | Self::Json)
+        matches!(self, Self::Auto | Self::Json | Self::JsonSchema)
     }
 
     /// Whether a single mode is pinned, i.e. the cascade is disabled.
     ///
     /// Used to phrase an exhaustion error honestly: under a pin there is no
     /// further mode to fall through to, so the message should name the pinned
-    /// mode rather than implying the whole cascade ran.
+    /// mode rather than implying the whole cascade ran. It also switches off the
+    /// miss probes, which exist only to choose *between* modes.
+    ///
+    /// False for [`Self::JsonSchema`], which leaves the whole cascade available
+    /// behind it — every one of those uses wants the cascade's behaviour there.
     pub fn is_pinned(self) -> bool {
-        !matches!(self, Self::Auto)
+        matches!(self, Self::Tools | Self::Functions | Self::Json)
     }
 
     /// The knob spelling, for log and error messages.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Auto => "auto",
+            Self::JsonSchema => "json_schema",
             Self::Tools => "tools",
             Self::Functions => "functions",
             Self::Json => "json",

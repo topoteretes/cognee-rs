@@ -270,6 +270,7 @@ still spends the threshold in every fresh process.
 answer:
 
 - `auto` (default) — cascade as above, bounded by the miss counter.
+- `json_schema` — try constrained decoding first, then cascade. See below.
 - `tools` — only native tool-calling.
 - `functions` — only the legacy `functions`/`function_call` pair.
 - `json` — only JSON mode.
@@ -289,6 +290,54 @@ unrecognised value falls back to `auto`.
 
 This is the counterpart of Python cognee's `llm_instructor_mode`; Python picks
 one mode per provider from a static table and has no cascade to bound.
+
+#### `json_schema` — constrained decoding
+
+`json_schema` is the odd one out: it is **not a pin**. It sends
+
+```json
+"response_format": {"type": "json_schema",
+                    "json_schema": {"name": "extract_structured_data",
+                                    "strict": true, "schema": {…}}}
+```
+
+ahead of the cascade, and falls back to it when the endpoint says no. On a
+backend that supports it this is *constrained* decoding — the sampler cannot
+emit a token that would break the schema — rather than the schema pressure the
+other three modes apply through the prompt and a tool definition. Measured on
+one runaway-prone chunk over an OpenAI chat-completions endpoint, the
+unconstrained `tools` arms dropped a required `target_node_id` in 8 of 11
+payloads while the strict arms were 5/5 clean.
+
+Why it is opt-in rather than part of `auto`: Python requests the same shape on
+its default path, but only for a model litellm's table advertises as
+`supports_response_schema`. There is no such table for an arbitrary
+OpenAI-compatible base URL — anything can sit behind `LLM_ENDPOINT` — and one of
+the backends cognee is deployed against (Baseten's `gpt-oss-120b`) answers
+**HTTP 501** to a constrained request. So you supply the knowledge the table
+would have.
+
+Setting it is safe on a mixed fleet even so, because the mode demotes rather than
+failing:
+
+1. `strict: true` with the all-required / `additionalProperties: false` schema;
+2. on rejection, the same envelope without `strict`, carrying the ordinary
+   schema — for gateways that reject the keyword but handle the response format
+   (older Azure api-versions, some vLLM builds);
+3. on rejection again, out of the mode entirely: the `tools` → `functions` →
+   `json` cascade runs exactly as under `auto`.
+
+Only an outright refusal of the request *shape* (HTTP 400 or 501) moves that
+ladder — a rate limit, a 5xx or a bad answer does not — and each step is
+remembered per schema for the life of the process, so an endpoint that refuses
+constrained decoding pays one wasted request per distinct schema, once. Both
+statuses are terminal in the transport layer, so that request is not retried
+first.
+
+The Bedrock adapter does not read this knob. It has the equivalent of litellm's
+table (`crates/llm/src/adapters/bedrock/caps.rs`) and already picks Converse's
+native `outputConfig.textFormat.jsonSchema` for the models that advertise
+support, falling back to a synthetic `json_tool_call` tool for the rest.
 
 > **Ollama embeddings:** set `EMBEDDING_ENDPOINT` explicitly when using
 > `EMBEDDING_PROVIDER=ollama`. The Ollama embedder needs the `/api/embed` route, and

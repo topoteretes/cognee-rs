@@ -4,9 +4,16 @@
 //! shape Python cognee sends via instructor/litellm — to generate structured
 //! outputs based on JSON schemas derived from Rust types, falling back to legacy
 //! function calling and JSON mode for older OpenAI-compatible servers.
+//!
+//! `LLM_STRUCTURED_OUTPUT_MODE=json_schema` puts a fourth shape *ahead* of that
+//! cascade: `response_format: {"type": "json_schema", …, "strict": true}`,
+//! constrained decoding, matching Python's default `litellm_native` path. It is
+//! opt-in and demotes back into the cascade when an endpoint refuses it — see
+//! [`crate::types::StructuredOutputMode`] and [`JsonSchemaMemo`].
 
-use std::sync::Arc;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
@@ -195,6 +202,123 @@ impl CascadeProbe {
     }
 }
 
+/// How much constrained decoding this endpoint has been observed to accept for
+/// **one particular schema**.
+///
+/// Only reachable under [`StructuredOutputMode::JsonSchema`], and only ever
+/// moves in one direction (a demotion is never undone for the life of the
+/// adapter). Mirrors what litellm's `litellm_native` adapter caches per
+/// `(model, response_model)`: it tries `strict: true` first and remembers the
+/// demotion rather than re-discovering it on every call.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum JsonSchemaSupport {
+    /// Not yet contradicted: send the strict-transformed schema with
+    /// `"strict": true`.
+    Strict,
+    /// `strict` was refused. Send the same `response_format: json_schema`
+    /// envelope without it, carrying the shallow schema the tool-calling path
+    /// uses.
+    ///
+    /// Both knobs move together on purpose. The only MEASURED evidence about
+    /// this endpoint class is Baseten's, where the recursive all-required
+    /// rewrite 501s *with or without* `strict: true` — so a demotion that kept
+    /// the strict schema and dropped only the keyword would be a request nobody
+    /// has ever seen accepted. This step exists for the gateways that reject the
+    /// `strict` keyword itself (older Azure api-versions, some vLLM builds)
+    /// while handling an ordinary JSON-schema response format fine.
+    NonStrict,
+    /// The `response_format: json_schema` envelope itself was refused. Skip the
+    /// mode for this schema and go straight to the `tools` → `functions` →
+    /// `json` cascade.
+    Unsupported,
+}
+
+/// Per-schema memory of the constrained-decoding demotion ladder.
+///
+/// Keyed on [`crate::schema::schema_fingerprint`] rather than held as one flag
+/// per endpoint, because the two rejections this has to survive have different
+/// scopes and collapsing them would get one of them wrong. Baseten refuses
+/// constrained decoding *at all*, so every schema demotes and the endpoint pays
+/// one probe per distinct schema per process — cognify uses a handful. A
+/// provider that refuses only a *particular* schema (grammar too deep, a
+/// recursive `$ref`, too many enum members) demotes just that one and keeps
+/// constrained decoding for the rest, which an endpoint-wide flag would have
+/// thrown away.
+///
+/// Shared across clones, like [`CascadeProbe`]: the memory describes the
+/// endpoint, not a handle on it.
+#[derive(Debug, Default)]
+struct JsonSchemaMemo {
+    levels: Mutex<HashMap<u64, JsonSchemaSupport>>,
+}
+
+impl JsonSchemaMemo {
+    /// Take the lock, reading through a poisoning.
+    ///
+    /// A poisoned mutex here only means some other caller panicked while
+    /// recording a demotion; the map is a cache of observations, so every entry
+    /// in it is still true, and refusing to read it would cost a re-probe of
+    /// every schema — strictly worse than the stale read. Same reasoning, and
+    /// the same idiom, as `cognee_utils::pacing`'s token bucket.
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<u64, JsonSchemaSupport>> {
+        self.levels
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// The level to send for `fingerprint`, defaulting to [`JsonSchemaSupport::Strict`].
+    fn level(&self, fingerprint: u64) -> JsonSchemaSupport {
+        self.lock()
+            .get(&fingerprint)
+            .copied()
+            .unwrap_or(JsonSchemaSupport::Strict)
+    }
+
+    /// Record a demotion. Monotonic: a `Strict` write can never undo a
+    /// previously recorded `Unsupported`, so a racing pair of calls cannot
+    /// resurrect a mode the endpoint has already refused.
+    fn demote(&self, fingerprint: u64, level: JsonSchemaSupport) {
+        let mut levels = self.lock();
+        let entry = levels.entry(fingerprint).or_insert(level);
+        if rank(level) > rank(*entry) {
+            *entry = level;
+        }
+    }
+}
+
+/// Ordering for [`JsonSchemaMemo::demote`]'s monotonicity check.
+const fn rank(level: JsonSchemaSupport) -> u8 {
+    match level {
+        JsonSchemaSupport::Strict => 0,
+        JsonSchemaSupport::NonStrict => 1,
+        JsonSchemaSupport::Unsupported => 2,
+    }
+}
+
+/// Whether `error` is the endpoint refusing the **shape** of the request, as
+/// opposed to failing to answer it.
+///
+/// Only these two refusals demote the constrained-decoding ladder. Everything
+/// else — a 429, a 5xx that is not 501, a network error, a deadline — says
+/// nothing about whether the endpoint can parse a `response_format:
+/// json_schema` body, and treating it as though it did would disable
+/// constrained decoding for the life of the process over one bad minute.
+///
+/// Both arms are produced by `send_chat_request_before`'s status mapping a few
+/// hundred lines above; `openai_json_schema_mode.rs` pins the 400 spelling so a
+/// reformat there cannot silently switch this off.
+fn is_request_shape_rejection(error: &LlmError) -> bool {
+    match error {
+        // 501 Not Implemented.
+        LlmError::FeatureNotSupported(_) => true,
+        // 400 Bad Request. The prefix is what the status mapping writes; the
+        // variant alone is too broad, since it is also how a malformed *response*
+        // surfaces.
+        LlmError::InvalidResponse(message) => message.starts_with("Bad request:"),
+        _ => false,
+    }
+}
+
 #[derive(Clone)]
 pub struct OpenAIAdapter {
     model: String,
@@ -317,6 +441,11 @@ pub struct OpenAIAdapter {
     /// nothing and never re-probes. Both are kept because only the probe helps
     /// an operator who does not know what their gateway speaks.
     structured_output_mode: StructuredOutputMode,
+    /// How far constrained decoding has been demoted, per schema.
+    ///
+    /// Only consulted under [`StructuredOutputMode::JsonSchema`]. Shared across
+    /// clones for the same reason as [`cascade_probe`](Self::cascade_probe).
+    json_schema_memo: Arc<JsonSchemaMemo>,
 }
 
 /// Whether `model` is an OpenAI reasoning family (`gpt-5*`, `o1*`, `o3*`, `o4*`)
@@ -569,6 +698,7 @@ impl OpenAIAdapter {
             // unbounded behaviour. The component factory opts in from settings.
             request_deadline: None,
             cascade_probe: Arc::new(CascadeProbe::new()),
+            json_schema_memo: Arc::new(JsonSchemaMemo::default()),
             // Cascade by default, so an adapter built without config behaves
             // exactly as it did before this knob existed.
             structured_output_mode: StructuredOutputMode::default(),
@@ -620,13 +750,17 @@ impl OpenAIAdapter {
         self
     }
 
-    /// Pin the structured-output request shape, disabling the cascade.
+    /// Choose the structured-output request shape.
     ///
-    /// Wired from `LLM_STRUCTURED_OUTPUT_MODE` (`auto` | `tools` | `functions` |
-    /// `json`), the counterpart of Python's `llm_instructor_mode`. See
-    /// [`StructuredOutputMode`] for what each value sends and
-    /// [`structured_output_mode`](Self::structured_output_mode) for why this
-    /// exists alongside the miss probe.
+    /// Wired from `LLM_STRUCTURED_OUTPUT_MODE` (`auto` | `json_schema` | `tools`
+    /// | `functions` | `json`), the counterpart of Python's
+    /// `llm_instructor_mode`. See [`StructuredOutputMode`] for what each value
+    /// sends and [`structured_output_mode`](Self::structured_output_mode) for
+    /// why this exists alongside the miss probe.
+    ///
+    /// `tools`, `functions` and `json` each **pin** one shape and disable the
+    /// cascade; `json_schema` **prefers** constrained decoding and demotes out of
+    /// it, leaving the cascade behind it.
     ///
     /// The default, [`StructuredOutputMode::Auto`], is the pre-existing cascade,
     /// so this is opt-in: an endpoint whose shape the operator does not know
@@ -1406,14 +1540,30 @@ impl OpenAIAdapter {
                     429 if quota_exhausted => LlmError::PaymentRequired(error_body),
                     429 => LlmError::RateLimitExceeded(error_body),
                     400 => LlmError::InvalidResponse(format!("Bad request: {error_body}")),
+                    // 501 Not Implemented is the server saying it does not
+                    // support the functionality the request needs — by
+                    // definition not a transient condition, and the answer
+                    // Baseten's gpt-oss-120b gives to a constrained-decoding
+                    // request. Typed rather than folded into `ApiError` so the
+                    // structured-output demotion ladder can recognise "this
+                    // endpoint will not accept this request shape" without
+                    // pattern-matching on a formatted string.
+                    501 => LlmError::FeatureNotSupported(error_body),
                     _ => LlmError::ApiError(format!("HTTP {status}: {error_body}")),
                 };
 
                 // Non-retryable: bad request, auth, billing (402), unknown model
-                // (404), and quota exhaustion. All mirror Python's terminal set
-                // in `should_retry_llm_exception`; retrying any of them only
-                // burns the budget a recoverable error will need.
-                if matches!(code, 400..=402 | 404) || quota_exhausted {
+                // (404), quota exhaustion, and 501. The first five mirror
+                // Python's terminal set in `should_retry_llm_exception`;
+                // retrying any of them only burns the budget a recoverable error
+                // will need. 501 is a Rust-only addition and is terminal for the
+                // same reason, one step stronger: HTTP defines it as the server
+                // lacking the capability, so no wait can make it succeed. It
+                // matters that this is terminal — a retried 501 arrives as
+                // `MaxRetriesExceeded`, which the structured-output cascade
+                // treats as fatal, so the json_schema demotion below could never
+                // fire and the mode would fail the call instead of falling back.
+                if matches!(code, 400..=402 | 404 | 501) || quota_exhausted {
                     return Err(err);
                 }
 
@@ -1863,6 +2013,259 @@ impl OpenAIAdapter {
         // rewrite — NOT the all-required/strict transform warned about below.
         let schema = Self::recompute_top_level_required(json_schema);
 
+        // Which shapes this call is allowed to send. Read once, before the first
+        // of them: `json_schema` below needs it too, not just the cascade.
+        let mode_pin = self.structured_output_mode;
+
+        // A budget raised after a truncation, carried into every later mode.
+        // Without this the later modes rebuild their bodies from `opts` and drop
+        // straight back to the budget that already truncated — which, with
+        // `LLM_MAX_RETRIES=1`, turns this fix back into the cascade it exists to
+        // prevent.
+        let mut raised_budget: Option<u32> = None;
+        // Set whenever a truncation was detected and the budget raised. If every
+        // mode still runs out of attempts afterwards, this is what the caller
+        // hears about — the generic "retries exhausted" message would otherwise
+        // bury the one fact that explains the failure and says how to fix it.
+        let mut truncation_seen: Option<String> = None;
+
+        // ------------------------------------------------------------------
+        // Mode 0 (opt-in): constrained decoding.
+        //
+        // `response_format: {"type": "json_schema", "json_schema": {"strict":
+        // true, "schema": …}}` — the request Python's default `litellm_native`
+        // path sends whenever `litellm.supports_response_schema(model)` is true
+        // (SDK-630). Reached only under `LLM_STRUCTURED_OUTPUT_MODE=json_schema`,
+        // never under `auto`; [`StructuredOutputMode::JsonSchema`] explains why
+        // the opt-in sits with the operator rather than with a probe.
+        //
+        // Structurally this is the JSON-mode loop, not the tool-calling one: the
+        // answer arrives in `message.content` as a plain JSON document, so there
+        // is no native payload to look for and no miss probe to feed. What it
+        // adds is the demotion ladder — the whole reason the mode is safe to
+        // turn on across a heterogeneous fleet. See [`JsonSchemaMemo`].
+        // ------------------------------------------------------------------
+        if mode_pin.allows_json_schema() {
+            let fingerprint = crate::schema::schema_fingerprint(json_schema);
+            // Reason carried into the next attempt's corrective instruction, so
+            // a retry is never a byte-identical re-send. Separate from the
+            // cascade's `last_reason` below: a constrained-decoding failure says
+            // nothing useful to a tool-calling re-ask, and threading it there
+            // would open the fallback with an accusation about a request the
+            // model never saw.
+            let mut js_last_reason: Option<String> = None;
+            // One iteration per demotion level, at most three (`Strict`,
+            // `NonStrict`, then the `Unsupported` exit). `loop` rather than a
+            // bounded `for` because the ladder advances where the rejection is
+            // seen, and `JsonSchemaMemo::demote` is monotonic, so it terminates.
+            'levels: loop {
+                let strict = match self.json_schema_memo.level(fingerprint) {
+                    JsonSchemaSupport::Strict => true,
+                    JsonSchemaSupport::NonStrict => false,
+                    JsonSchemaSupport::Unsupported => {
+                        debug!(
+                            "endpoint has refused constrained decoding for this schema; \
+                             using the tools/functions/json cascade",
+                        );
+                        break 'levels;
+                    }
+                };
+
+                // The strict form has to be the all-required /
+                // `additionalProperties: false` rewrite — OpenAI rejects
+                // `strict: true` outright without it. The demoted form carries
+                // the *shallow* schema instead, for the reason on
+                // [`JsonSchemaSupport::NonStrict`].
+                let mut body_schema = if strict {
+                    crate::schema::strict_json_schema(json_schema)
+                } else {
+                    schema.clone()
+                };
+                // `$schema` is a meta-annotation rather than a constraint, and
+                // providers disagree about whether it is even allowed inside a
+                // `response_format` — Bedrock rejects it outright. Stripped on
+                // both rungs so the demoted request is not carrying a second,
+                // unrelated reason to be refused. (`strict_json_schema` already
+                // does this; the shallow form has to be told.)
+                if let Some(object) = body_schema.as_object_mut() {
+                    object.remove("$schema");
+                }
+                let mut response_format = json!({
+                    "name": "extract_structured_data",
+                    "schema": body_schema,
+                });
+                if strict {
+                    response_format["strict"] = json!(true);
+                }
+                let mut js_request = json!({
+                    "model": self.model,
+                    "messages": Self::convert_messages(&messages),
+                    "response_format": {
+                        "type": "json_schema",
+                        "json_schema": response_format,
+                    }
+                });
+                if !self.is_reasoning_model()
+                    && let Some(temp) = opts.temperature
+                {
+                    js_request["temperature"] = json!(temp);
+                }
+                self.write_max_tokens(&mut js_request, opts.max_tokens);
+                // A truncation on the previous level already established that
+                // `opts` is too small; do not repeat the failure.
+                self.write_max_tokens(&mut js_request, raised_budget);
+                if self.should_disable_thinking() {
+                    js_request["think"] = json!(false);
+                    js_request["reasoning"] = json!({"effort": "none"});
+                }
+
+                for attempt in 0..self.structured_output_retries {
+                    // Aggregate budget check, at the head of the attempt for the
+                    // same reason as every other mode: a long ladder inside one
+                    // mode must not run past the budget either.
+                    if let Some(e) =
+                        self.deadline_exceeded(call_started, "another constrained-decoding attempt")
+                    {
+                        return Err(e);
+                    }
+                    let mut request_for_attempt = js_request.clone();
+                    if attempt > 0 {
+                        Self::append_corrective_instruction(
+                            &mut request_for_attempt,
+                            js_last_reason.as_deref(),
+                        );
+                        if !self.is_reasoning_model() {
+                            request_for_attempt["temperature"] = json!(0.0);
+                        }
+                    }
+
+                    match self
+                        .call_api_before(request_for_attempt, call_deadline)
+                        .await
+                    {
+                        Ok(response) => {
+                            let choice = response.choices.first().ok_or_else(|| {
+                                LlmError::InvalidResponse(
+                                    "No choices in constrained-decoding response".to_string(),
+                                )
+                            })?;
+
+                            // Checked before `content` is read, as in JSON mode:
+                            // a truncation that spent the budget on reasoning
+                            // tokens leaves content absent and would otherwise
+                            // look like an empty answer.
+                            if Self::is_length_truncated(choice) {
+                                let (reason, budget) = self.raise_budget_after_truncation(
+                                    &mut js_request,
+                                    "Constrained-decoding",
+                                    caller_max_tokens,
+                                    response.usage.as_ref().map(|u| u.completion_tokens),
+                                )?;
+                                raised_budget = Some(budget);
+                                truncation_seen = Some(reason.clone());
+                                debug!(
+                                    attempt,
+                                    %reason,
+                                    "constrained-decoding response truncated at the output \
+                                     budget; re-asking with a raised budget",
+                                );
+                                js_last_reason = Some(reason);
+                                continue;
+                            }
+
+                            // A structured-outputs refusal arrives *instead of*
+                            // `content`, so without this branch it is
+                            // indistinguishable from an empty answer and the
+                            // next attempt re-asks the identical question. The
+                            // refusal text goes into the corrective instruction
+                            // instead — and only there: it is model output
+                            // derived from the user's ingested documents, which
+                            // this crate does not put in a log sink (see
+                            // `LlmError::log_kind`), so the warning records that
+                            // a refusal happened and not what it said.
+                            if let Some(refusal) =
+                                choice.message.refusal.as_deref().filter(|r| !is_blank(r))
+                            {
+                                warn!(attempt, "model refused the constrained-decoding request");
+                                js_last_reason = Some(format!("model refused: {refusal}"));
+                                continue;
+                            }
+
+                            let content = choice.message.content.as_deref().unwrap_or("");
+                            if is_blank(content) {
+                                js_last_reason = None;
+                                continue;
+                            }
+                            match parse_json(content) {
+                                Ok(parsed) => {
+                                    if let Some(reason) = validation_error(&parsed) {
+                                        debug!(
+                                            attempt,
+                                            %reason,
+                                            "constrained-decoding response parsed but failed \
+                                             typed validation; retrying with corrective \
+                                             instruction",
+                                        );
+                                        js_last_reason = Some(reason);
+                                        continue;
+                                    }
+                                    return Ok(parsed);
+                                }
+                                Err(e) => {
+                                    js_last_reason = Some(e.to_string());
+                                    continue;
+                                }
+                            }
+                        }
+                        // Terminal for the same reason as in tool-calling mode:
+                        // the transport budget is already spent, and it now has a
+                        // *time* floor, so falling through would restart it from
+                        // attempt 0 in the next mode.
+                        Err(e @ LlmError::MaxRetriesExceeded(_)) => return Err(e),
+                        // The endpoint refused the request *shape*. This is the
+                        // one error class that is evidence about constrained
+                        // decoding itself, so it — and only it — moves the
+                        // ladder. Costs exactly one HTTP request: both 400 and
+                        // 501 are terminal in the transport layer.
+                        Err(e) if is_request_shape_rejection(&e) => {
+                            let next = if strict {
+                                JsonSchemaSupport::NonStrict
+                            } else {
+                                JsonSchemaSupport::Unsupported
+                            };
+                            warn!(
+                                error_kind = e.log_kind(),
+                                strict,
+                                "endpoint refused the constrained-decoding request shape; \
+                                 demoting and remembering it for this schema",
+                            );
+                            self.json_schema_memo.demote(fingerprint, next);
+                            continue 'levels;
+                        }
+                        Err(e) => {
+                            // Anything else (auth, rate limit, network): no
+                            // evidence about the shape, so the memo is left
+                            // alone and the cascade below gets its turn — it
+                            // re-issues the request and surfaces any real error.
+                            warn!(
+                                error_kind = e.log_kind(),
+                                "constrained-decoding request failed; falling back to the \
+                                 tools/functions/JSON cascade",
+                            );
+                            break 'levels;
+                        }
+                    }
+                }
+
+                // Attempts exhausted with no shape rejection: the endpoint
+                // accepts constrained decoding, it simply did not answer
+                // usefully this time. Nothing to demote — that would punish the
+                // shape for the model's output — so fall through to the cascade
+                // with the memo untouched.
+                break 'levels;
+            }
+        }
+
         // Primary path: OpenAI tool calling (`tools` + forced `tool_choice`).
         //
         // This mirrors Python cognee's request: instructor's default `Mode.TOOLS`
@@ -1907,6 +2310,12 @@ impl OpenAIAdapter {
             tools_request["temperature"] = json!(temp);
         }
         self.write_max_tokens(&mut tools_request, opts.max_tokens);
+        // A truncation in constrained-decoding mode above already established
+        // that `opts` is too small; inherit the raised budget rather than
+        // repeating the failure, exactly as the legacy and JSON-mode bodies do
+        // for a truncation seen here. `None` when mode 0 did not run or did not
+        // truncate, which leaves the line inert.
+        self.write_max_tokens(&mut tools_request, raised_budget);
         if self.should_disable_thinking() {
             tools_request["think"] = json!(false);
             tools_request["reasoning"] = json!({"effort": "none"});
@@ -1934,17 +2343,6 @@ impl OpenAIAdapter {
             ParseFailure,
         }
         let mut outcome = ToolOutcome::NoUsableOutput;
-        // A budget raised after a truncation, carried into the legacy and
-        // JSON-mode requests below. Without this the later modes rebuild their
-        // bodies from `opts` and drop straight back to the budget that already
-        // truncated — which, with `LLM_MAX_RETRIES=1`, turns this fix back into
-        // the three-mode cascade it exists to prevent.
-        let mut raised_budget: Option<u32> = None;
-        // Set whenever a truncation was detected and the budget raised. If every
-        // mode still runs out of attempts afterwards, this is what the caller
-        // hears about — the generic "retries exhausted" message would otherwise
-        // bury the one fact that explains the failure and says how to fix it.
-        let mut truncation_seen: Option<String> = None;
         // Most recent failure reason, threaded into the next corrective retry.
         let mut last_reason: Option<String> = None;
         // Skip tool-calling mode entirely on an endpoint where it has
@@ -1968,7 +2366,6 @@ impl OpenAIAdapter {
         // without a request until the re-probe interval elapsed. Trying the one
         // mode the operator asked for is strictly better, and its failure is
         // reported against the pin. See [`StructuredOutputMode`].
-        let mode_pin = self.structured_output_mode;
         let try_tools = if mode_pin.is_pinned() {
             mode_pin.allows_tools()
         } else {
@@ -2830,6 +3227,13 @@ struct OpenAIMessage {
     role: String,
     content: Option<String>,
     reasoning: Option<String>,
+    /// Structured-outputs refusal. OpenAI returns this *instead of* `content`
+    /// when the model declines the request under a `response_format:
+    /// json_schema`, so without it a refusal is indistinguishable from an empty
+    /// answer and the reason the model gave is thrown away. Absent on every
+    /// other mode and on servers that do not implement it.
+    #[serde(default)]
+    refusal: Option<String>,
     /// Modern tool-calling response (`tool_choice`/`tools`); the structured
     /// output is the first call's `function.arguments` JSON string.
     tool_calls: Option<Vec<OpenAIToolCall>>,

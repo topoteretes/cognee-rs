@@ -225,6 +225,8 @@ pub struct HttpServerConfig {
 
     /// Structured-output request shape: `auto` (default, cascade), or `tools` /
     /// `functions` / `json` to pin one shape and never send the others.
+    /// `json_schema` prefers constrained decoding and demotes back to the
+    /// cascade when the endpoint refuses it — a preference, not a pin.
     /// Env: `LLM_STRUCTURED_OUTPUT_MODE`.
     pub llm_structured_output_mode: String,
 

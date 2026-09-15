@@ -468,15 +468,19 @@ pub fn parse_reasoning_override(value: &str) -> Option<bool> {
 
 /// Parse the `LLM_STRUCTURED_OUTPUT_MODE` knob into a
 /// [`StructuredOutputMode`] for [`LlmInputs::structured_output_mode`].
-/// `tools`, `functions` and `json` each pin that one request shape; everything
-/// else — including the default `auto`, an empty value, or an unrecognised
-/// token — leaves the three-mode cascade in place. Case- and
-/// whitespace-insensitive.
+/// `tools`, `functions` and `json` each pin that one request shape;
+/// `json_schema` *prefers* constrained decoding and demotes out of it on
+/// rejection, leaving the cascade behind it; everything else — including the
+/// default `auto`, an empty value, or an unrecognised token — leaves the
+/// three-mode cascade in place. Case- and whitespace-insensitive.
 ///
-/// `function_call` and `legacy` are accepted as aliases of `functions`, and
-/// `json_object` of `json`, because those are the names the wire protocol and
-/// the adapter's own log lines use — an operator reading either will reasonably
-/// try them.
+/// `function_call` and `legacy` are accepted as aliases of `functions`,
+/// `json_object` of `json`, and `jsonschema` / `strict` / `structured_outputs`
+/// of `json_schema`, because those are the names the wire protocol and the
+/// adapter's own log lines use — an operator reading either will reasonably try
+/// them. Note `json` and `json_schema` are *different* modes, and the shorter
+/// one is not a prefix match for the longer: `json` is OpenAI's untyped
+/// `{"type": "json_object"}`, which constrains nothing but the syntax.
 ///
 /// An unrecognised token falls back to the cascade rather than failing, matching
 /// [`parse_reasoning_override`]: a hard failure here would take down a process
@@ -493,11 +497,14 @@ pub fn parse_structured_output_mode(value: &str) -> StructuredOutputMode {
         "tools" | "tool" | "tool_calls" => StructuredOutputMode::Tools,
         "functions" | "function" | "function_call" | "legacy" => StructuredOutputMode::Functions,
         "json" | "json_object" | "json_mode" => StructuredOutputMode::Json,
+        "json_schema" | "jsonschema" | "strict" | "structured_outputs" => {
+            StructuredOutputMode::JsonSchema
+        }
         "auto" | "" => StructuredOutputMode::Auto,
         other => {
             tracing::warn!(
                 value = other,
-                "LLM_STRUCTURED_OUTPUT_MODE is not one of auto|tools|functions|json; \
+                "LLM_STRUCTURED_OUTPUT_MODE is not one of auto|json_schema|tools|functions|json; \
                  ignoring it and using the full structured-output cascade",
             );
             StructuredOutputMode::Auto
@@ -549,6 +556,19 @@ mod tests {
                 "{json:?}"
             );
         }
+        for js in [
+            "json_schema",
+            "jsonschema",
+            "strict",
+            "structured_outputs",
+            " JSON_Schema ",
+        ] {
+            assert_eq!(
+                parse_structured_output_mode(js),
+                StructuredOutputMode::JsonSchema,
+                "{js:?}"
+            );
+        }
         // The default, empty, and unrecognised tokens all leave the cascade in
         // place — a misspelled pin must not silently disable every mode.
         for auto in ["auto", "", "   ", "cascade", "tolls", "yes"] {
@@ -565,6 +585,9 @@ mod tests {
         let auto = StructuredOutputMode::Auto;
         assert!(auto.allows_tools() && auto.allows_functions() && auto.allows_json());
         assert!(!auto.is_pinned());
+        // Constrained decoding is the one shape `auto` will not probe for: its
+        // failures are hard HTTP errors, not unusable 200s.
+        assert!(!auto.allows_json_schema());
 
         // Each pin permits exactly itself, so a pinned adapter can never send a
         // shape the operator did not ask for.
@@ -576,8 +599,34 @@ mod tests {
             assert_eq!(mode.allows_tools(), tools, "{mode:?} tools");
             assert_eq!(mode.allows_functions(), functions, "{mode:?} functions");
             assert_eq!(mode.allows_json(), json, "{mode:?} json");
+            assert!(!mode.allows_json_schema(), "{mode:?} json_schema");
             assert!(mode.is_pinned(), "{mode:?} is a pin");
         }
+    }
+
+    #[test]
+    fn json_schema_is_a_preference_not_a_pin() {
+        // The demotion ladder ends in the ordinary cascade, so every other mode
+        // has to stay reachable — and `is_pinned()` has to stay false, since it
+        // is what switches off the miss probes and makes exhaustion terminal.
+        let mode = StructuredOutputMode::JsonSchema;
+        assert!(mode.allows_json_schema());
+        assert!(mode.allows_tools() && mode.allows_functions() && mode.allows_json());
+        assert!(!mode.is_pinned());
+        assert_eq!(mode.as_str(), "json_schema");
+        // The knob spelling round-trips through serde. Adding `JsonSchema`
+        // required moving the enum from `rename_all = "lowercase"` to
+        // `"snake_case"`, which is a no-op for the four single-word variants —
+        // asserted here so a later variant cannot quietly re-spell them.
+        assert_eq!(
+            serde_json::to_value(mode).ok(),
+            Some(serde_json::json!("json_schema"))
+        );
+        assert_eq!(
+            serde_json::to_value(StructuredOutputMode::Json).ok(),
+            Some(serde_json::json!("json")),
+            "the pre-existing spellings must not move with the rename_all change",
+        );
     }
 
     /// A fake environment: every key not listed is unset.

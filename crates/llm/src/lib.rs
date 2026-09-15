@@ -74,9 +74,10 @@ pub use factory::build_openai_compatible_adapter;
 pub use llm_trait::{Llm, LlmExt};
 pub use responses_client::{OpenAIResponsesClient, ResponsesClient, ResponsesRequest};
 pub use schema::{
-    append_corrective_instruction, build_schema_prompt, generate_json_schema,
-    generate_json_schema_string, graph_model_to_schema, graph_model_to_schema_string,
-    schema_required_validator,
+    append_corrective_instruction, build_schema_prompt, force_additional_properties_false,
+    generate_json_schema, generate_json_schema_string, graph_model_to_schema,
+    graph_model_to_schema_string, schema_fingerprint, schema_required_validator,
+    strict_json_schema,
 };
 pub use transcriber::{Transcriber, TranscriptionOutput, validate_audio_format};
 pub use types::{
