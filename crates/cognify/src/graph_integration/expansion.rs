@@ -162,6 +162,14 @@ enum EndpointResolution {
 /// A name claimed by two distinct entities is poisoned to `None` rather than
 /// resolved arbitrarily — dropping such an edge is correct, silently attaching
 /// it to whichever entity happened to be seen first is not.
+///
+/// Call this **only where a node id is declared for the first time**, next to
+/// the `node_id_to_entity_id` insert. Because it poisons, it is not idempotent
+/// across re-declarations: a later chunk that re-declares an already-known node
+/// id under a name some *other* entity already owns would turn that name from
+/// resolvable into `Ambiguous` and drop edges that resolve today. A
+/// re-declaration must go through [`refresh_name_alias_origin`] instead, which
+/// moves an existing alias's origin forward without minting a new mapping.
 fn register_name_alias(
     aliases: &mut HashMap<String, Option<(Uuid, ChunkPosition)>>,
     raw_name: &str,
@@ -186,6 +194,33 @@ fn register_name_alias(
             None => {}
         })
         .or_insert(Some((entity_id, position)));
+}
+
+/// Move an *already registered* alias's origin forward to `position`.
+///
+/// The sibling of the `node_id_to_entity_id` refresh: both maps record the most
+/// recent declaration of a key at or before the chunk reading it, and both do
+/// that by `get_mut`-ing an existing entry — never by inserting one. Extraction
+/// re-declares a recurring entity in every chunk that mentions it, and without
+/// this the cross-chunk counters would attribute such a resolution to the first
+/// declaration and over-report the population at risk from a per-wave flush.
+///
+/// Narrower than [`register_name_alias`] in exactly two ways, both deliberate:
+/// an unknown name is left unknown rather than created, and a name owned by a
+/// different entity is left alone rather than poisoned. Only the entity that
+/// already holds the alias can move it.
+fn refresh_name_alias_origin(
+    aliases: &mut HashMap<String, Option<(Uuid, ChunkPosition)>>,
+    raw_name: &str,
+    entity_id: Uuid,
+    position: ChunkPosition,
+) {
+    let key = normalize_identifier(raw_name);
+    if let Some(Some((id, origin))) = aliases.get_mut(&key)
+        && *id == entity_id
+    {
+        *origin = position;
+    }
 }
 
 /// Resolve one edge endpoint, preferring an exact node-id match and falling
@@ -618,9 +653,31 @@ pub async fn expand_with_nodes_and_edges_with_stats(
                 let entity_id = entity_pair.entity.base.id;
                 let id_key = normalize_identifier(&node.id);
 
-                // Name aliasing and the origin refresh both happen after the
-                // match, so a chunk that *re*-declares this node id runs them
-                // too — see the comment on that block.
+                // Alias the name the LLM gave this node, and — when the ontology
+                // canonicalised it — the canonical name too, so an edge that
+                // references either spelling still resolves.
+                //
+                // Registration lives here, in the first-declaration branch,
+                // alongside the `node_id_to_entity_id` insert below: creating a
+                // name→entity mapping is a first-declaration act. The post-match
+                // block runs on re-declarations too and only moves origins.
+                register_name_alias(
+                    &mut name_to_entity_id,
+                    &node.name,
+                    entity_id,
+                    &id_key,
+                    position,
+                );
+                register_name_alias(
+                    &mut name_to_entity_id,
+                    &entity_pair.entity.name,
+                    entity_id,
+                    &id_key,
+                    position,
+                );
+
+                // The origin refresh happens after the match, so a chunk that
+                // *re*-declares this node id runs it too — see that block.
                 node_id_to_entity_id.insert(id_key, (entity_id, position));
 
                 e.insert(entity_pair);
@@ -676,27 +733,25 @@ pub async fn expand_with_nodes_and_edges_with_stats(
                 });
 
             if let Some(entity_id) = declared_entity {
-                // Alias the name the LLM gave this node, and — when the ontology
-                // canonicalised it — the canonical name too, so an edge that
-                // references either spelling still resolves. Re-running these on
-                // a re-declaration is what keeps the alias origins in step with
-                // the id origin above.
-                register_name_alias(
-                    &mut name_to_entity_id,
-                    &node.name,
-                    entity_id,
-                    &id_key,
-                    position,
-                );
+                // Keep the alias origins in step with the id origin above — and
+                // *only* the origins. This runs on re-declarations, where the
+                // name the LLM chose this time may differ from the one that
+                // registered the node; registering it here would widen the alias
+                // set and, worse, poison a name another entity already owns,
+                // turning endpoints that resolve today into `Ambiguous` drops.
+                // Creation stays in the vacant branch, exactly as the sibling
+                // `node_id_to_entity_id` insert does.
+                refresh_name_alias_origin(&mut name_to_entity_id, &node.name, entity_id, position);
                 // Borrowed straight out of `node_map`: the two maps are distinct
                 // locals, so holding a shared borrow of one across a mutable
-                // borrow of the other is fine, and this runs once per node.
+                // borrow of the other is fine, and this runs once per node. The
+                // lookup is what picks up an ontology-canonicalised name, whose
+                // alias the declaring chunk registered under that same name.
                 if let Some(pair) = node_map.get(&entity_key) {
-                    register_name_alias(
+                    refresh_name_alias_origin(
                         &mut name_to_entity_id,
                         &pair.entity.name,
                         entity_id,
-                        &id_key,
                         position,
                     );
                 }
@@ -1985,6 +2040,74 @@ mod tests {
             "the alias was re-registered by the referencing chunk"
         );
         assert_eq!(stats.max_cross_chunk_distance, 0);
+    }
+
+    /// A re-declaration must refresh alias *origins* without registering new
+    /// name→entity mappings.
+    ///
+    /// The distinction is not cosmetic: `register_name_alias` poisons a name a
+    /// second entity claims. Chunk 2 below re-declares the already-known node id
+    /// `nova_labs` under the short name "Nova", which chunk 0 gave to a
+    /// different entity. Registering on that re-declaration poisons "Nova" and
+    /// drops the edge as `Ambiguous`; only first declarations may register, so
+    /// the chunk-0 mapping stands and the edge resolves.
+    #[tokio::test]
+    async fn test_redeclared_node_does_not_register_a_conflicting_name_alias() {
+        let graphs = vec![
+            KnowledgeGraph {
+                nodes: vec![node_named("nova_corp", "Nova")],
+                edges: vec![],
+            },
+            KnowledgeGraph {
+                nodes: vec![node_named("nova_labs", "Nova Labs")],
+                edges: vec![],
+            },
+            KnowledgeGraph {
+                // Re-declares `nova_labs`, but the model picked the short name
+                // this time — the one chunk 0 already gave to `nova_corp`.
+                nodes: vec![
+                    node_named("nova_labs", "Nova"),
+                    node_named("bohr", "Niels Bohr"),
+                ],
+                edges: vec![edge_between("Nova", "bohr")],
+            },
+        ]
+        .into_iter()
+        .map(|graph| (Uuid::new_v4(), graph))
+        .collect();
+
+        let (nodes, edges, _claimed, _producers, stats) = expand_with_nodes_and_edges_with_stats(
+            graphs,
+            Uuid::new_v4(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            &noop(),
+            None,
+            None,
+        )
+        .await;
+
+        assert_eq!(
+            stats.dropped_ambiguous_name, 0,
+            "a re-declaration must not poison a name another entity owns"
+        );
+        assert_eq!(edges.len(), 1, "the edge still resolves and is emitted");
+        assert_eq!(stats.resolved_by_name, 1);
+
+        // It resolves to chunk 0's entity — the one that registered the alias —
+        // not to the re-declaring node.
+        let nova_corp_id = nodes
+            .iter()
+            .find(|p| p.entity.name == "Nova")
+            .map(|p| p.entity.base.id)
+            .expect("the chunk-0 `nova_corp` node is present");
+        assert_eq!(edges[0].source_entity_id, nova_corp_id);
+
+        // ...and the origin refresh is untouched: the alias still dates from
+        // chunk 0, two chunks back from the edge that read it.
+        assert_eq!(stats.resolved_by_name_cross_chunk, 1);
+        assert_eq!(stats.max_cross_chunk_distance, 2);
     }
 
     /// An edge referencing only its own chunk's nodes is chunk-local, so
