@@ -2,6 +2,11 @@ pub mod add;
 pub mod add_and_cognify;
 #[cfg(feature = "bench")]
 pub mod bench;
+/// Peak-RSS sampling for the `bench` subcommand's memory report (SDK-507).
+/// Gated with `bench` rather than `profiling`: unlike the flamegraph layer this
+/// costs one syscall per phase, so it is always on for a bench run.
+#[cfg(feature = "bench")]
+pub mod bench_rss;
 #[cfg(feature = "profiling")]
 pub mod bench_telemetry;
 pub mod cognify;

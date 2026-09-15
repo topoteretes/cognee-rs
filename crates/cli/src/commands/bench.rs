@@ -29,6 +29,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 use uuid::Uuid;
 
+use super::bench_rss::{MemoryReport, peak_rss_bytes};
 use crate::cli::BenchArgs;
 use crate::error::CliError;
 
@@ -73,6 +74,10 @@ struct BenchResult {
     /// Graph size after cognify. Also drives the stale-cassette guard.
     node_count: i64,
     edge_count: i64,
+    /// Peak-RSS and corpus-size samples for SDK-507. Purely additive to the
+    /// Python parity schema: the shared orchestrator reads the keys above by
+    /// name and ignores this block.
+    memory: MemoryReport,
 }
 
 /// Per-phase status: `"success"` or `"failed: <msg>"` (Python parity).
@@ -174,26 +179,44 @@ fn start_phase_telemetry(_profile_dir: Option<&str>) {}
 #[cfg(not(feature = "profiling"))]
 fn finish_phase_telemetry(_profile_dir: Option<&str>, _phase: &str) {}
 
+/// What one bracketed phase produced: its wall-clock, the process peak RSS as
+/// of its end, and whatever the phase itself returned.
+struct PhaseOutcome<T> {
+    elapsed_s: f64,
+    /// Process high-water RSS sampled at the end of the phase — see
+    /// [`super::bench_rss`] for what that does and does not mean.
+    peak_rss_bytes: Option<u64>,
+    result: Result<T, String>,
+}
+
 /// Run one pipeline phase with profiling/telemetry armed, timing only the
 /// workload. The timer starts *after* the profiler/telemetry are armed and
 /// stops *before* the flamegraph/telemetry artifacts are written, so the
 /// returned elapsed is workload-only — not inflated by profiler startup or
 /// report generation. Centralizes the bracketing so the measured phases (add /
-/// cognify / search / dataset delete) cannot drift out of sync. Returns
-/// `(elapsed_secs, result)`.
-async fn timed_phase(
+/// cognify / search / dataset delete) cannot drift out of sync.
+///
+/// The peak-RSS sample is taken inside the same bracket, before the profiler
+/// writes its flamegraph: building a pprof report allocates, and with
+/// `--profile-dir` set that would be charged to whichever phase it followed.
+async fn timed_phase<T>(
     profile_dir: Option<&str>,
     phase: &str,
-    work: impl std::future::Future<Output = Result<(), String>>,
-) -> (f64, Result<(), String>) {
+    work: impl std::future::Future<Output = Result<T, String>>,
+) -> PhaseOutcome<T> {
     start_phase_telemetry(profile_dir);
     let guard = start_phase_profiler(profile_dir);
     let start = Instant::now();
     let result = work.await;
-    let elapsed = start.elapsed().as_secs_f64();
+    let elapsed_s = start.elapsed().as_secs_f64();
+    let peak_rss_bytes = peak_rss_bytes();
     finish_phase_profiler(guard, profile_dir, phase);
     finish_phase_telemetry(profile_dir, phase);
-    (elapsed, result)
+    PhaseOutcome {
+        elapsed_s,
+        peak_rss_bytes,
+        result,
+    }
 }
 
 /// Round to 3 decimals to match Python's `round(x, 3)` output.
@@ -253,6 +276,20 @@ fn memory_to_text(mem: &Memory) -> String {
         Some(other) => other.to_string(),
     };
     format!("Title: {title}\n\n{}\n\nReferences: {refs}", mem.content)
+}
+
+/// Total bytes of document text the corpus hands to `add` — one copy of the
+/// input, and the x-axis SDK-507's slope is fitted against.
+///
+/// This is exactly what `phase_add` builds and what each `Data.raw_data_location`
+/// ends up holding, so it is the measured form of the ticket's "sum the corpus
+/// file sizes" arithmetic rather than an estimate of it. Counted in bytes, not
+/// `chars()`: the pipeline allocates and clones bytes.
+fn corpus_text_bytes(memories: &[Memory]) -> u64 {
+    memories
+        .iter()
+        .map(|mem| memory_to_text(mem).len() as u64)
+        .sum()
 }
 
 pub fn run(args: BenchArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
@@ -427,6 +464,9 @@ async fn run_phases(
     config: BenchConfig,
 ) -> BenchResult {
     let n = memories.len();
+    // Sampled before `prune`, so the baseline is the process footprint the
+    // corpus-dependent terms sit on top of.
+    let mut memory = MemoryReport::new(corpus_text_bytes(memories), n);
     let mut status = BenchStatus {
         prune: PHASE_OK.to_string(),
         db_setup: PHASE_OK.to_string(),
@@ -456,28 +496,35 @@ async fn run_phases(
 
     // ── Add ────────────────────────────────────────────────────────────────
     eprintln!("Phase 1: Adding {n} memories...");
-    let (t_add, add_res) = timed_phase(
+    let add = timed_phase(
         profile_dir,
         "add",
         phase_add(cm, owner_id, dataset_name, memories),
     )
     .await;
-    if let Err(msg) = add_res {
+    let t_add = add.elapsed_s;
+    memory.record_add(add.peak_rss_bytes);
+    if let Err(msg) = add.result {
         warn!("Add FAILED: {msg}");
         status.add = format!("failed: {msg}");
     }
 
     // ── Cognify ──────────────────────────────────────────────────────────
     eprintln!("Phase 2: Running cognify (knowledge graph build)...");
-    let (t_cognify, cognify_res) = timed_phase(
+    let cognify = timed_phase(
         profile_dir,
         "cognify",
         phase_cognify(cm, owner_id, dataset_name),
     )
     .await;
-    if let Err(msg) = cognify_res {
-        warn!("Cognify FAILED: {msg}");
-        status.cognify = format!("failed: {msg}");
+    let t_cognify = cognify.elapsed_s;
+    memory.record_cognify(cognify.peak_rss_bytes);
+    match cognify.result {
+        Ok(counts) => memory.record_cognify_counts(counts.chunks, counts.embeddings),
+        Err(msg) => {
+            warn!("Cognify FAILED: {msg}");
+            status.cognify = format!("failed: {msg}");
+        }
     }
 
     let t_total = t_add + t_cognify;
@@ -527,13 +574,15 @@ async fn run_phases(
 
     // ── Search ───────────────────────────────────────────────────────────
     eprintln!("Phase 3: Running search query...");
-    let (t_search, search_res) = timed_phase(
+    let search = timed_phase(
         profile_dir,
         "search",
         phase_search(cm, owner_id, dataset_name),
     )
     .await;
-    if let Err(msg) = search_res {
+    let t_search = search.elapsed_s;
+    memory.record_search(search.peak_rss_bytes);
+    if let Err(msg) = search.result {
         warn!("Search FAILED: {msg}");
         status.search = format!("failed: {msg}");
     }
@@ -548,13 +597,14 @@ async fn run_phases(
     // is documented as ignored and no flamegraph would be written anyway.
     if cfg!(feature = "profiling") && profile_dir.is_some() {
         eprintln!("Profiling: running the extra no-LLM retrievers...");
-        let (t_retrievers, retriever_res) = timed_phase(
+        let retrievers = timed_phase(
             profile_dir,
             "search_retrievers",
             phase_search_retrievers(cm, owner_id, dataset_name),
         )
         .await;
-        match retriever_res {
+        let t_retrievers = retrievers.elapsed_s;
+        match retrievers.result {
             Ok(()) => info!("search_retrievers took {t_retrievers:.3}s (not reported)"),
             Err(msg) => warn!("Extra retrievers FAILED (not reported): {msg}"),
         }
@@ -564,13 +614,14 @@ async fn run_phases(
     // Runs last, so it measures deletion with nodes, edges and vectors all
     // present — the meaningful case, and what Python's Phase 4 measures.
     eprintln!("Phase 4: Deleting the populated dataset...");
-    let (t_dataset_delete, dataset_delete_res) = timed_phase(
+    let dataset_delete = timed_phase(
         profile_dir,
         "dataset_delete",
         phase_dataset_delete(cm, owner_id, dataset_name),
     )
     .await;
-    if let Err(msg) = dataset_delete_res {
+    let t_dataset_delete = dataset_delete.elapsed_s;
+    if let Err(msg) = dataset_delete.result {
         warn!("Dataset delete FAILED: {msg}");
         status.dataset_delete = format!("failed: {msg}");
     }
@@ -596,6 +647,7 @@ async fn run_phases(
         config,
         node_count,
         edge_count,
+        memory,
     }
 }
 
@@ -669,12 +721,23 @@ async fn phase_add(
     Ok(())
 }
 
+/// What cognify produced, for the SDK-507 memory report.
+///
+/// Chunks, not documents, are the unit the retention model is expressed in, and
+/// the embedding count times the configured dimension gives the vector term
+/// exactly. Neither is derivable from the graph node/edge counts already
+/// reported: those mix chunks, entities, documents and summaries.
+struct CognifyCounts {
+    chunks: usize,
+    embeddings: usize,
+}
+
 /// `cognify(dataset)` — build the knowledge graph.
 async fn phase_cognify(
     cm: &Arc<ComponentManager>,
     owner_id: Uuid,
     dataset_name: &str,
-) -> Result<(), String> {
+) -> Result<CognifyCounts, String> {
     let database = cm.database().await.map_err(|e| e.to_string())?;
     let storage = cm.storage().await.map_err(|e| e.to_string())?;
     let graph_db = cm.graph_db().await.map_err(|e| e.to_string())?;
@@ -723,7 +786,7 @@ async fn phase_cognify(
             .with_token_counter(TokenCounterKind::TikToken)
     };
 
-    cognify(
+    let result = cognify(
         data_items,
         dataset.id,
         Some(owner_id),
@@ -742,7 +805,11 @@ async fn phase_cognify(
     )
     .await
     .map_err(|e| e.to_string())?;
-    Ok(())
+
+    Ok(CognifyCounts {
+        chunks: result.chunks.len(),
+        embeddings: result.embeddings.len(),
+    })
 }
 
 /// Build a bench `SearchRequest` for one query type over the bench dataset.
