@@ -140,13 +140,26 @@ async fn persist_tags_nodes_with_user_sessions_node_set() {
         .await
         .unwrap();
 
-    // Mock LLM returns an empty KG (sufficient to drive the pipeline).
-    // The cognify pipeline then exercises chunking, fact extraction,
-    // graph add, etc. Returning empty relationships keeps the test fast
-    // and deterministic without needing a realistic extraction model.
-    let llm: Arc<dyn Llm> = Arc::new(MockLlm::new(vec![
-        r#"{"nodes":[],"relationships":[]}"#.to_string(),
-    ]));
+    // Mock LLM drives the cognify pipeline through chunking, fact extraction
+    // and graph add without a realistic extraction model.
+    //
+    // The summary answer is routed by schema rather than queued: graph
+    // extraction and summarization are one fused stage that dispatches both
+    // concurrently, so a single-item FIFO queue would hand whichever call the
+    // scheduler runs first the other one's response, and which of the two saw
+    // the queued payload would vary from run to run.
+    //
+    // ⚠️ The queued payload says `relationships`, but `KnowledgeGraph::edges`
+    // is a required field (deliberately — see `fact_extraction/models.rs`), so
+    // extraction fails to deserialize it and cognify errors. That is
+    // pre-existing, and this test tolerates it on purpose: it asserts the
+    // add()-phase `node_set` tagging below, not cognify's outcome. Left as
+    // found — making cognify actually succeed here would change what the test
+    // covers, which is a separate question from this fixture's determinism.
+    let llm: Arc<dyn Llm> = Arc::new(
+        MockLlm::new(vec![r#"{"nodes":[],"relationships":[]}"#.to_string()])
+            .with_summary_response(r#"{"summary":"s","description":"d"}"#.to_string()),
+    );
     let config = CognifyConfig::default();
 
     let _ = persist_sessions_in_knowledge_graph(

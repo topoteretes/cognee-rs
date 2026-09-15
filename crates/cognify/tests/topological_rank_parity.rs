@@ -115,11 +115,15 @@ fn canned_graph_response() -> String {
 
 #[tokio::test]
 async fn cognify_stamps_the_python_topological_ranks() {
-    // FIFO: graph extraction first, then summarization.
-    let llm: Arc<dyn cognee_llm::Llm> = Arc::new(MockLlm::new(vec![
-        canned_graph_response(),
-        json!({"summary": "Alice and Acme.", "description": "A short description."}).to_string(),
-    ]));
+    // Schema-routed, not FIFO: graph extraction and summarization are one fused
+    // stage that dispatches both concurrently, so "extraction first" is no
+    // longer a property a response queue can rely on.
+    let llm: Arc<dyn cognee_llm::Llm> = Arc::new(
+        MockLlm::new(vec![canned_graph_response()]).with_summary_response(
+            json!({"summary": "Alice and Acme.", "description": "A short description."})
+                .to_string(),
+        ),
+    );
 
     let storage: Arc<dyn StorageTrait> = Arc::new(MockStorage::new());
     let graph_db: Arc<dyn cognee_graph::GraphDBTrait> = Arc::new(MockGraphDB::new());

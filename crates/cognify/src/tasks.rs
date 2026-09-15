@@ -15,8 +15,8 @@
 //!
 //! Public surface:
 //! - Intermediate types: [`CognifyInput`], [`ClassifiedDocuments`],
-//!   [`ExtractedChunks`], [`ExtractedGraphData`], [`SummarizedData`],
-//!   [`ExtractedTemporalEvents`], [`AttributedEvent`]
+//!   [`ExtractedChunks`], [`ExtractedGraphData`], [`SummarizedChunks`],
+//!   [`SummarizedData`], [`ExtractedTemporalEvents`], [`AttributedEvent`]
 //! - Task implementations (free functions)
 //! - [`TypedTask`] factories: [`make_classify_documents_task`], etc.
 //! - Pipeline builders: [`build_cognify_pipeline`], [`build_temporal_cognify_pipeline`]
@@ -142,7 +142,29 @@ pub struct ExtractedGraphData {
     pub failures: FailureReport,
 }
 
-/// Output of [`summarize_text`]: graph data plus generated summaries.
+/// Output of [`summarize_text`]: the summaries, and nothing else.
+///
+/// Summarization reads chunk text only — it has never had a data dependency on
+/// graph extraction, and used to consume [`ExtractedGraphData`] purely because
+/// that is what the stage in front of it handed over. Typing it over
+/// [`ExtractedChunks`] is what lets
+/// [`make_extract_graph_and_summarize_task`] run the two concurrently, the way
+/// Python's `extract_graph_and_summarize.py:22` gathers them.
+///
+/// [`Self::failures`] holds **only this stage's own** failures, not the run's
+/// history: the sibling branch is carrying the same upstream report forward and
+/// the two are folded back together with [`FailureReport::absorb`], which would
+/// double-count anything present on both sides.
+#[derive(Debug, Clone)]
+pub struct SummarizedChunks {
+    pub summaries: Vec<TextSummary>,
+    /// Summarization's own failures and undispatched items. See the type-level
+    /// note — this is deliberately not seeded from the input's report.
+    pub failures: FailureReport,
+}
+
+/// Output of the fused extract-and-summarize stage: graph data plus generated
+/// summaries.
 #[derive(Debug, Clone)]
 pub struct SummarizedData {
     pub chunks: Vec<DocumentChunk>,
@@ -565,7 +587,8 @@ pub async fn extract_chunks_from_documents(
 }
 
 // ---------------------------------------------------------------------------
-// Task 3: extract_graph_from_data
+// Task 3a: extract_graph_from_data — the first half of the fused stage built by
+// `make_extract_graph_and_summarize_task`; `summarize_text` below is the other.
 // ---------------------------------------------------------------------------
 
 /// Which entities each chunk should list in its `contains` field.
@@ -1630,10 +1653,11 @@ pub async fn extract_custom_graph_from_data<M: crate::fact_extraction::GraphMode
 }
 
 // ---------------------------------------------------------------------------
-// Task 4: summarize_text
+// Task 3b: summarize_text — the other half of the fused stage; runs
+// concurrently with `extract_graph_from_data` over the same chunks.
 // ---------------------------------------------------------------------------
 
-/// Summarize text chunks via LLM (Task 4).
+/// Summarize text chunks via LLM (the second half of task 3).
 ///
 /// If summarization is enabled in config, generates summaries for each chunk
 /// using batched parallel LLM calls.
@@ -1648,10 +1672,10 @@ pub async fn extract_custom_graph_from_data<M: crate::fact_extraction::GraphMode
 /// unreached, which keeps them out of the completion markers and inside the
 /// item-scoped sweep.
 pub async fn summarize_text(
-    input: &ExtractedGraphData,
+    input: &ExtractedChunks,
     llm: Arc<dyn Llm>,
     config: &CognifyConfig,
-) -> Result<SummarizedData, CognifyError> {
+) -> Result<SummarizedChunks, CognifyError> {
     // Filter out DLT chunks — structured data rows should not be summarized.
     // Mirrors Python: cognee/tasks/summarization/summarize_text.py:52-62
     let dlt_doc_ids: HashSet<Uuid> = input
@@ -1676,8 +1700,13 @@ pub async fn summarize_text(
         );
     }
 
-    let mut failures = input.failures.clone();
     let failure_policy = config.failure_policy();
+    // Deliberately **not** seeded from `input.failures`: this stage now runs
+    // concurrently with graph extraction, which carries the upstream report
+    // forward itself. Seeding here would put every upstream entry on both sides
+    // of the [`FailureReport::absorb`] that merges them. The policy is still
+    // read so the branch pushes under the run's configured entry cap.
+    let mut failures = FailureReport::with_policy(&failure_policy);
 
     let summaries = if config.enable_summarization && !non_dlt_chunks.is_empty() {
         // Axis 1 reaches this stage here. `FailFast` alone is not enough: with
@@ -1772,21 +1801,17 @@ pub async fn summarize_text(
         Vec::new()
     };
 
-    // This stage never drops a chunk or a document, under any policy: by the
-    // time it runs, the extraction stage has already committed those files'
-    // entities and edges to the graph, so dropping them here would manufacture
-    // exactly the partial file invariant I2 exists to prevent. The failed item
-    // is recorded and the sweep removes it.
-    Ok(SummarizedData {
-        chunks: input.chunks.clone(),
-        documents: input.documents.clone(),
-        entities: input.entities.clone(),
-        edges: input.edges.clone(),
-        producers: input.producers.clone(),
+    // This stage does not decide which chunks and documents survive — since the
+    // re-typing it does not carry them at all. The sibling extraction branch
+    // owns them, and it is also the branch that commits those files' entities
+    // and edges to the graph, so it is the only one that can drop a file
+    // without manufacturing the partial-file shape invariant I2 exists to
+    // prevent. What used to hold because this stage ran *after* extraction now
+    // holds because the merge in [`make_extract_graph_and_summarize_task`]
+    // applies extraction's exclusions to the summaries. A summarization failure
+    // is still only recorded here; the sweep is what removes the item.
+    Ok(SummarizedChunks {
         summaries,
-        dataset_id: input.dataset_id,
-        user_id: input.user_id,
-        tenant_id: input.tenant_id,
         failures,
     })
 }
@@ -3488,8 +3513,9 @@ fn stamp_provenance(dp: &mut DataPoint, pipeline: &str, task: &str, user: Option
 
 /// Run the complete cognify pipeline on a set of Data items.
 ///
-/// Executes each task sequentially: classify → chunk → extract graph →
-/// summarize → add data points (embed + index).
+/// Executes the stages in order: classify → chunk → graph extraction and
+/// summarization (concurrently, one fused stage) → add data points
+/// (embed + index).
 ///
 /// For composable pipeline-based execution (with concurrency, retry, progress
 /// tracking), use [`build_cognify_pipeline`] + [`cognee_core::execute`].
@@ -5159,6 +5185,14 @@ pub const CLASSIFY_DOCUMENTS_TASK_NAME: &str = "classify_documents";
 pub const EXTRACT_CHUNKS_TASK_NAME: &str = "extract_chunks_from_documents";
 pub const EXTRACT_GRAPH_TASK_NAME: &str = "extract_graph_from_data";
 pub const SUMMARIZE_TEXT_TASK_NAME: &str = "summarize_text";
+/// Name of the fused **pipeline stage** that runs both of the two above,
+/// concurrently — [`make_extract_graph_and_summarize_task`].
+///
+/// Matches the name of the single Python task it ports
+/// (`cognify.py:350-375`), which is also why both halves' `*_TASK_RANK`
+/// constants are 3. It names the *stage*; the two constants above still name
+/// what each half writes to `DataPoint.source_task`, and those are unchanged.
+pub const EXTRACT_GRAPH_AND_SUMMARIZE_TASK_NAME: &str = "extract_graph_and_summarize";
 pub const ADD_DATA_POINTS_TASK_NAME: &str = "add_data_points";
 
 /// `topological_rank` stamped on every DataPoint emitted by
@@ -5181,12 +5215,14 @@ pub const ADD_DATA_POINTS_TASK_NAME: &str = "add_data_points";
 /// `[classify_documents, extract_chunks_from_documents,
 /// extract_graph_and_summarize, add_data_points, extract_dlt_fk_edges]`
 /// (`cognify.py:350-375`), so its deduplicated sequence numbers
-/// `extract_graph_and_summarize` **3** and `add_data_points` **4**. Rust
-/// splits Python's single fused stage into two tasks (`extract_graph_from_data`
-/// then `summarize_text`); numbering them 3 and 4 would push
-/// `add_data_points` to 5 and give the same node type a different column in
-/// each SDK. Both halves of the fused stage therefore share rank **3** and
-/// `add_data_points` keeps Python's **4**.
+/// `extract_graph_and_summarize` **3** and `add_data_points` **4**. Rust runs
+/// one fused stage there too — [`make_extract_graph_and_summarize_task`] — but
+/// its two halves stamp their own `source_task`, so both share rank **3** and
+/// `add_data_points` keeps Python's **4**. (These constants predate the fusion:
+/// while the halves were still two sequential pipeline stages, numbering them
+/// 3 and 4 would have pushed `add_data_points` to 5 and given the same node
+/// type a different column in each SDK. Sharing 3 was already the answer, which
+/// is why fusing them changed no rank.)
 ///
 /// # How the value actually reaches the DataPoint
 ///
@@ -5525,13 +5561,22 @@ pub fn make_extract_graph_task_with_rank(
 
 /// Build a [`TypedTask`] that summarizes text chunks via LLM.
 ///
+/// Reads the *same* [`ExtractedChunks`] graph extraction reads, so the two can
+/// be fused by [`make_extract_graph_and_summarize_task`]. On its own it is not
+/// a pipeline stage any more — nothing downstream consumes a bare
+/// [`SummarizedChunks`] — but it stays public because a custom pipeline can
+/// fuse it against a different sibling.
+///
 /// In-body provenance stamping: stamps every emitted `TextSummary`
-/// with `source_task = "summarize_text"`. Carried-forward
-/// chunks/documents/entities keep their upstream stamps.
+/// with `source_task = "summarize_text"`. Nothing else is stamped here: the
+/// carried-forward chunks, documents and entities this used to walk all belong
+/// to the sibling branch now, and every one of those stamps was already an
+/// idempotent no-op — upstream stages had filled the same fields in, under the
+/// same pipeline name, the same user label and the same rank 3.
 pub fn make_summarize_text_task(
     llm: Arc<dyn Llm>,
     config: CognifyConfig,
-) -> TypedTask<ExtractedGraphData, SummarizedData> {
+) -> TypedTask<ExtractedChunks, SummarizedChunks> {
     make_summarize_text_task_with_rank(llm, config, SUMMARIZE_TEXT_TASK_RANK)
 }
 
@@ -5540,8 +5585,8 @@ pub fn make_summarize_text_task_with_rank(
     llm: Arc<dyn Llm>,
     config: CognifyConfig,
     rank: i32,
-) -> TypedTask<ExtractedGraphData, SummarizedData> {
-    TypedTask::async_fn(move |input: &ExtractedGraphData, ctx| {
+) -> TypedTask<ExtractedChunks, SummarizedChunks> {
+    TypedTask::async_fn(move |input: &ExtractedChunks, ctx| {
         let input = input.clone();
         let llm = Arc::clone(&llm);
         let config = config.clone();
@@ -5557,45 +5602,167 @@ pub fn make_summarize_text_task_with_rank(
                     rank,
                 );
             }
-            // Idempotent re-stamp of carried-forward DataPoints — only
-            // ones that somehow escaped earlier stamping get filled in.
-            for chunk in &mut summarized.chunks {
-                stamp_provenance(
-                    &mut chunk.base,
-                    COGNIFY_PIPELINE_STAMP_NAME,
-                    SUMMARIZE_TEXT_TASK_NAME,
-                    user_label.as_deref(),
-                    rank,
-                );
-            }
-            for doc in &mut summarized.documents {
-                stamp_provenance(
-                    &mut doc.base,
-                    COGNIFY_PIPELINE_STAMP_NAME,
-                    SUMMARIZE_TEXT_TASK_NAME,
-                    user_label.as_deref(),
-                    rank,
-                );
-            }
-            for pair in &mut summarized.entities {
-                stamp_provenance(
-                    &mut pair.entity.base,
-                    COGNIFY_PIPELINE_STAMP_NAME,
-                    SUMMARIZE_TEXT_TASK_NAME,
-                    user_label.as_deref(),
-                    rank,
-                );
-                stamp_provenance(
-                    &mut pair.entity_type.base,
-                    COGNIFY_PIPELINE_STAMP_NAME,
-                    SUMMARIZE_TEXT_TASK_NAME,
-                    user_label.as_deref(),
-                    rank,
-                );
-            }
             Ok(Box::new(summarized))
         })
     })
+}
+
+/// Merge the two halves of the fused extract-and-summarize stage.
+///
+/// Extraction owns everything structural — chunks, documents, entities, edges,
+/// producers and the run's failure history — because it is the branch that
+/// writes to the graph and the branch that decides, under
+/// [`RollbackScope::FailedItems`], which files survive an abort. Summarization
+/// contributes its summaries and its own failures.
+///
+/// Two things have to be reconciled, both of which the old sequential order got
+/// for free:
+///
+/// 1. **Summaries of excluded chunks.** Summarization no longer sees
+///    extraction's post-abort filtering, so it can return a summary for a chunk
+///    whose file extraction has just dropped. Keeping it would put a summary in
+///    the graph for a file the sweep is about to remove — the partial-file
+///    shape invariant I2 exists to prevent — so those summaries are dropped
+///    here. Nothing is dropped on the ordinary path, where no chunk is excluded.
+/// 2. **Two failure reports.** Both branches started from the same upstream
+///    report, but only extraction carried it forward (see
+///    [`SummarizedChunks::failures`]), so the merge is
+///    [`FailureReport::absorb`] rather than a union.
+fn merge_graph_and_summaries(
+    graph: ExtractedGraphData,
+    summarized: SummarizedChunks,
+) -> SummarizedData {
+    let surviving_chunks: HashSet<Uuid> = graph.chunks.iter().map(|c| c.base.id).collect();
+    let mut summaries = summarized.summaries;
+    let before = summaries.len();
+    // `made_from` is set at construction for every summary this stage produces;
+    // an unattributable one is kept rather than guessed away.
+    summaries.retain(|s| s.made_from.is_none_or(|id| surviving_chunks.contains(&id)));
+    if summaries.len() < before {
+        info!(
+            dropped = before - summaries.len(),
+            "Dropped summaries whose chunks graph extraction excluded after an abort"
+        );
+    }
+
+    let mut failures = graph.failures;
+    failures.absorb(&summarized.failures);
+
+    SummarizedData {
+        chunks: graph.chunks,
+        documents: graph.documents,
+        entities: graph.entities,
+        edges: graph.edges,
+        producers: graph.producers,
+        summaries,
+        dataset_id: graph.dataset_id,
+        user_id: graph.user_id,
+        tenant_id: graph.tenant_id,
+        failures,
+    }
+}
+
+/// Build the fused **task 3**: graph extraction and summarization over the same
+/// chunks, concurrently.
+///
+/// This is Python's `extract_graph_and_summarize`
+/// (`cognee/tasks/graph/extract_graph_and_summarize.py:22`), which hands the
+/// same `data_chunks` to both and `asyncio.gather`s them. Rust ran them as two
+/// sequential pipeline stages and paid `extract + summarize`; measured on the
+/// BYOD baseline runs, summarization alone was 20–29 s of a ~70 s cognify. The
+/// fused stage costs `max(extract, summarize)`.
+///
+/// It is also what the `topological_rank` constants have always claimed: both
+/// halves are rank **3** precisely because Python has one stage here, and
+/// [`CLASSIFY_DOCUMENTS_TASK_RANK`] documents why. The stamps stay split —
+/// entities keep `source_task = "extract_graph_from_data"` and summaries keep
+/// `"summarize_text"`, which is what the cross-SDK provenance parity harness
+/// asserts.
+///
+/// # Concurrency cost
+///
+/// Both branches dispatch LLM calls at once, so the stage's peak in-flight
+/// requests is the sum of the two stage-level `max_parallel_extractions`
+/// semaphores rather than one of them. That is the same thing Python's
+/// `asyncio.gather` does, and the transport-level `cognee_llm::in_flight`
+/// ceiling still bounds the process as a whole. The other cost: under
+/// [`RollbackScope::FailedItems`] an abort in
+/// extraction no longer stops summarization from having already paid for the
+/// excluded files' chunks — see [`merge_graph_and_summaries`].
+///
+/// # Retries
+///
+/// One stage is one retry unit, so a `RetryPolicy` that re-runs this task
+/// re-dispatches **both** branches, including the one that had already
+/// succeeded. That is inert on every shipped path —
+/// [`build_cognify_pipeline`] sets no policy and
+/// [`RetryPolicy::NoRetry`](cognee_core::RetryPolicy) is the
+/// `PipelineBuilder` default, so cognify does not retry tasks at all — and it
+/// is what Python does, whose `extract_graph_and_summarize` is likewise a
+/// single task. It matters only to an embedder who composes a custom pipeline
+/// with `RetryPolicy::Limited`, who should know that the granularity here is
+/// the pair: retrying is already expensive at this stage (extraction alone
+/// re-issues every extraction call, and it has written graph nodes, edges and
+/// ownership rows by the time it can fail), and fusing widens that to
+/// summarization's calls too. A caller who needs independent retry boundaries
+/// wants the two halves as separate stages, which is what the
+/// [`make_extract_graph_task`] / [`make_summarize_text_task`] pair still
+/// offers.
+pub fn make_extract_graph_and_summarize_task(
+    llm: Arc<dyn Llm>,
+    graph_db: Arc<dyn GraphDBTrait>,
+    ontology_resolver: Arc<dyn OntologyResolver>,
+    db: Arc<DatabaseConnection>,
+    config: CognifyConfig,
+) -> TypedTask<ExtractedChunks, SummarizedData> {
+    // Both halves take the same rank, because they are one stage — which is
+    // also why `EXTRACT_GRAPH_TASK_RANK` and `SUMMARIZE_TEXT_TASK_RANK` are the
+    // same number.
+    make_extract_graph_and_summarize_task_with_rank(
+        llm,
+        graph_db,
+        ontology_resolver,
+        db,
+        config,
+        EXTRACT_GRAPH_TASK_RANK,
+    )
+}
+
+/// [`make_extract_graph_and_summarize_task`] with a caller-chosen
+/// `topological_rank`.
+///
+/// One rank for both halves: a custom pipeline that puts this stage somewhere
+/// else puts *both* its halves there, so splitting the argument in two would
+/// only offer a way to stamp one node type at a position the stage does not
+/// occupy.
+pub fn make_extract_graph_and_summarize_task_with_rank(
+    llm: Arc<dyn Llm>,
+    graph_db: Arc<dyn GraphDBTrait>,
+    ontology_resolver: Arc<dyn OntologyResolver>,
+    db: Arc<DatabaseConnection>,
+    config: CognifyConfig,
+    rank: i32,
+) -> TypedTask<ExtractedChunks, SummarizedData> {
+    let extract = make_extract_graph_task_with_rank(
+        Arc::clone(&llm),
+        graph_db,
+        ontology_resolver,
+        db,
+        config.clone(),
+        rank,
+    );
+    let summarize = make_summarize_text_task_with_rank(llm, config, rank);
+    #[allow(
+        clippy::expect_used,
+        reason = "invariant is upheld by construction — see the message"
+    )]
+    TypedTask::try_parallel(extract, summarize, |graph, summarized| {
+        Ok(Box::new(merge_graph_and_summaries(*graph, *summarized)))
+    })
+    .expect(
+        "both branches are built by this function with TypedTask::async_fn, which is \
+         the single-value variant try_parallel accepts",
+    )
 }
 
 /// Build a [`TypedTask`] that generates embeddings and indexes data points.
@@ -5762,7 +5929,11 @@ fn build_loader_registry(llm: &Arc<dyn Llm>, config: &CognifyConfig) -> LoaderRe
 }
 
 /// Build a complete cognify [`Pipeline`]:
-/// [`CognifyInput`] → classify → chunk → extract_graph → summarize → add_data_points → [`CognifyResult`].
+/// [`CognifyInput`] → classify → chunk → (extract_graph ‖ summarize) →
+/// add_data_points → [`CognifyResult`].
+///
+/// The third stage runs graph extraction and summarization concurrently over
+/// the same chunks — see [`make_extract_graph_and_summarize_task`].
 ///
 /// The `user_id` and `tenant_id` parameters are threaded through all pipeline
 /// stages and included as metadata on vector points and graph nodes.
@@ -5805,18 +5976,14 @@ pub fn build_cognify_pipeline(
         EXTRACT_CHUNKS_TASK_NAME,
     )
     .add_task_named(
-        make_extract_graph_task(
-            Arc::clone(&llm),
+        make_extract_graph_and_summarize_task(
+            llm,
             Arc::clone(&graph_db),
             ontology_resolver,
             Arc::clone(&db),
             config.clone(),
         ),
-        EXTRACT_GRAPH_TASK_NAME,
-    )
-    .add_task_named(
-        make_summarize_text_task(llm, config.clone()),
-        SUMMARIZE_TEXT_TASK_NAME,
+        EXTRACT_GRAPH_AND_SUMMARIZE_TASK_NAME,
     )
     .add_task_named(
         make_add_data_points_task(graph_db, vector_db, embedding_engine, db, config),
@@ -8093,12 +8260,9 @@ mod tests {
             doc_id_dlt,
         );
 
-        let input = ExtractedGraphData {
+        let input = ExtractedChunks {
             chunks: vec![text_chunk, dlt_chunk],
             documents: vec![text_doc, dlt_doc],
-            entities: vec![],
-            edges: vec![],
-            producers: ArtifactProducers::default(),
             dataset_id: Uuid::new_v4(),
             user_id: None,
             tenant_id: None,
@@ -8110,8 +8274,10 @@ mod tests {
         let llm: Arc<dyn Llm> = Arc::new(MockLlm::empty());
         let result = summarize_text(&input, llm, &config).await.unwrap();
         assert!(result.summaries.is_empty());
-        // All chunks (both DLT and non-DLT) are still passed through.
-        assert_eq!(result.chunks.len(), 2);
+        // Chunks are no longer this stage's to carry — the sibling extraction
+        // branch owns them. `merge_graph_and_summaries` is what puts them back
+        // together; see `fused_stage_*` below.
+        assert!(result.failures.is_empty());
     }
 
     // ── Summarization and axis 1 ────────────────────────────────────────────
@@ -8119,7 +8285,7 @@ mod tests {
     /// Five single-chunk files, the one at `failing_index` carrying the marker
     /// the mock LLM fails on. Returned alongside the file ids in input order so
     /// a test can name which file failed and which were never reached.
-    fn summarization_fixture(failing_index: usize) -> (ExtractedGraphData, Vec<Uuid>) {
+    fn summarization_fixture(failing_index: usize) -> (ExtractedChunks, Vec<Uuid>) {
         let doc_ids: Vec<Uuid> = (0..5).map(|_| Uuid::new_v4()).collect();
         let chunks = doc_ids
             .iter()
@@ -8138,12 +8304,9 @@ mod tests {
             .map(|doc_id| test_document_with_metadata(*doc_id, None))
             .collect();
         (
-            ExtractedGraphData {
+            ExtractedChunks {
                 chunks,
                 documents,
-                entities: vec![],
-                edges: vec![],
-                producers: ArtifactProducers::default(),
                 dataset_id: Uuid::new_v4(),
                 user_id: None,
                 tenant_id: None,
@@ -8220,9 +8383,6 @@ mod tests {
                 .collect::<std::collections::BTreeSet<_>>(),
             doc_ids[1..].iter().copied().collect(),
         );
-        // Axis 1 changes what is dispatched, never what is carried forward.
-        assert_eq!(result.chunks.len(), 5);
-        assert_eq!(result.documents.len(), 5);
     }
 
     /// The other half of the axis: `RunToEnd` still pays for the whole run, and
@@ -8281,6 +8441,307 @@ mod tests {
         assert!(result.failures.failed_items().is_empty());
         assert!(result.failures.unreached_items().is_empty());
         assert_eq!(result.failures.summarization_failures(), 1);
+    }
+
+    // ── The fused extract-and-summarize stage ───────────────────────────────
+
+    /// A graph response with one edge between two nodes, so the extraction
+    /// branch produces entities rather than nothing.
+    fn canned_graph_response() -> String {
+        serde_json::json!({
+            "nodes": [
+                {"id": "alice", "name": "Alice", "type": "PERSON", "description": "A person."},
+                {"id": "acme", "name": "Acme", "type": "ORGANIZATION", "description": "A company."}
+            ],
+            "edges": [{
+                "source_node_id": "alice",
+                "target_node_id": "acme",
+                "relationship_name": "works_at",
+                "description": "Alice works at Acme."
+            }]
+        })
+        .to_string()
+    }
+
+    /// The fused stage must produce what the two sequential stages produced:
+    /// the graph half's entities *and* the summarization half's summaries, in
+    /// one `SummarizedData`, with each half's own `source_task` stamp intact.
+    ///
+    /// The stamps are the part worth pinning. Fusing the stages does not fuse
+    /// their provenance — `e2e-cross-sdk/harness/test_provenance_parity.py`
+    /// expects both literals, and both halves share rank 3 because Python has
+    /// one task here (see [`CLASSIFY_DOCUMENTS_TASK_RANK`]).
+    #[tokio::test]
+    async fn fused_stage_merges_both_halves_and_keeps_their_stamps() {
+        use cognee_ontology::NoOpOntologyResolver;
+        use cognee_test_utils::{MockLlm, test_task_context};
+
+        let doc_id = Uuid::new_v4();
+        let input = ExtractedChunks {
+            chunks: vec![test_chunk(Uuid::new_v4(), doc_id, "Alice works at Acme.")],
+            documents: vec![test_document_with_metadata(doc_id, None)],
+            dataset_id: Uuid::new_v4(),
+            user_id: None,
+            tenant_id: None,
+            failures: FailureReport::default(),
+        };
+
+        let llm = Arc::new(
+            MockLlm::new(vec![canned_graph_response()])
+                .with_summary_response(r#"{"summary":"s","description":"d"}"#.to_string()),
+        );
+        let graph = Arc::new(cognee_graph::MockGraphDB::new());
+        let (_, ctx, db) = test_task_context().await;
+        seed_dataset(&db, input.dataset_id).await;
+
+        let task = make_extract_graph_and_summarize_task(
+            llm,
+            graph,
+            Arc::new(NoOpOntologyResolver::new()),
+            Arc::clone(&db),
+            CognifyConfig::default(),
+        );
+        let TypedTask::Async(run) = task else {
+            panic!("the fused stage must be a single async task");
+        };
+        let out = run(&input, ctx).await.expect("neither branch failed");
+
+        assert!(
+            !out.entities.is_empty(),
+            "the graph half's output must survive the merge"
+        );
+        assert_eq!(
+            out.summaries.len(),
+            1,
+            "the summarization half's output must survive the merge"
+        );
+        assert_eq!(out.chunks.len(), 1);
+        assert_eq!(out.documents.len(), 1);
+
+        assert_eq!(
+            out.entities[0].entity.base.source_task.as_deref(),
+            Some(EXTRACT_GRAPH_TASK_NAME)
+        );
+        assert_eq!(
+            out.summaries[0].base.source_task.as_deref(),
+            Some(SUMMARIZE_TEXT_TASK_NAME)
+        );
+        assert_eq!(
+            out.entities[0].entity.base.topological_rank,
+            Some(EXTRACT_GRAPH_TASK_RANK)
+        );
+        assert_eq!(
+            out.summaries[0].base.topological_rank,
+            Some(SUMMARIZE_TEXT_TASK_RANK)
+        );
+    }
+
+    /// The wall-clock claim, pinned end to end: the extraction call and the
+    /// summarization call are in flight at the same time.
+    ///
+    /// Asserted with a two-party barrier rather than a stopwatch — the LLM does
+    /// not answer either call until *both* have arrived, so the stage can only
+    /// finish if the two branches overlapped. Every other test in this file
+    /// passes just as well against the old sequential pair of stages; this one
+    /// is the only thing that fails if the fusion is undone. Run under a
+    /// timeout so that shows up as a failure rather than a hung suite.
+    #[tokio::test]
+    async fn fused_stage_has_both_llm_calls_in_flight_at_once() {
+        use cognee_llm::types::{GenerationOptions, GenerationResponse, Message};
+        use cognee_llm::{LlmError, LlmResult};
+        use cognee_ontology::NoOpOntologyResolver;
+        use cognee_test_utils::test_task_context;
+
+        /// Answers a structured-output call only once its sibling has also
+        /// arrived. A sequential pipeline deadlocks on the first call.
+        struct RendezvousLlm {
+            barrier: tokio::sync::Barrier,
+            graph_response: String,
+            summary_response: String,
+        }
+
+        #[async_trait::async_trait]
+        impl Llm for RendezvousLlm {
+            async fn generate(
+                &self,
+                _messages: Vec<Message>,
+                _options: Option<GenerationOptions>,
+            ) -> LlmResult<GenerationResponse> {
+                Err(LlmError::FeatureNotSupported(
+                    "this probe only serves structured output".to_string(),
+                ))
+            }
+
+            async fn create_structured_output_with_messages_raw(
+                &self,
+                _messages: Vec<Message>,
+                json_schema: &serde_json::Value,
+                _options: Option<GenerationOptions>,
+            ) -> LlmResult<serde_json::Value> {
+                let is_summary = json_schema
+                    .get("properties")
+                    .and_then(|p| p.get("summary"))
+                    .is_some();
+                self.barrier.wait().await;
+                let raw = if is_summary {
+                    &self.summary_response
+                } else {
+                    &self.graph_response
+                };
+                serde_json::from_str(raw).map_err(|e| {
+                    LlmError::DeserializationError(format!("probe response is not JSON: {e}"))
+                })
+            }
+
+            fn model(&self) -> &str {
+                "rendezvous-probe"
+            }
+        }
+
+        let doc_id = Uuid::new_v4();
+        let input = ExtractedChunks {
+            chunks: vec![test_chunk(Uuid::new_v4(), doc_id, "Alice works at Acme.")],
+            documents: vec![test_document_with_metadata(doc_id, None)],
+            dataset_id: Uuid::new_v4(),
+            user_id: None,
+            tenant_id: None,
+            failures: FailureReport::default(),
+        };
+
+        let llm = Arc::new(RendezvousLlm {
+            barrier: tokio::sync::Barrier::new(2),
+            graph_response: canned_graph_response(),
+            summary_response: r#"{"summary":"s","description":"d"}"#.to_string(),
+        });
+        let (_, ctx, db) = test_task_context().await;
+        seed_dataset(&db, input.dataset_id).await;
+
+        let task = make_extract_graph_and_summarize_task(
+            llm,
+            Arc::new(cognee_graph::MockGraphDB::new()),
+            Arc::new(NoOpOntologyResolver::new()),
+            Arc::clone(&db),
+            CognifyConfig::default(),
+        );
+        let TypedTask::Async(run) = task else {
+            panic!("the fused stage must be a single async task");
+        };
+
+        let out = tokio::time::timeout(std::time::Duration::from_secs(10), run(&input, ctx))
+            .await
+            .expect("sequential stages would deadlock on the barrier")
+            .expect("neither branch failed");
+
+        assert!(!out.entities.is_empty());
+        assert_eq!(out.summaries.len(), 1);
+    }
+
+    /// Summarization no longer sees extraction's post-abort chunk filtering, so
+    /// the merge has to apply it. Keeping a summary for a file the sweep is
+    /// about to remove is the partial-file shape invariant I2 exists to
+    /// prevent.
+    #[test]
+    fn merge_drops_summaries_of_chunks_extraction_excluded() {
+        let kept_doc = Uuid::new_v4();
+        let dropped_doc = Uuid::new_v4();
+        let kept_chunk = test_chunk(Uuid::new_v4(), kept_doc, "kept");
+        let dropped_chunk = test_chunk(Uuid::new_v4(), dropped_doc, "dropped");
+
+        // Extraction aborted and excluded `dropped_doc`'s chunk.
+        let graph = ExtractedGraphData {
+            chunks: vec![kept_chunk.clone()],
+            documents: vec![test_document_with_metadata(kept_doc, None)],
+            entities: vec![],
+            edges: vec![],
+            producers: ArtifactProducers::default(),
+            dataset_id: Uuid::new_v4(),
+            user_id: None,
+            tenant_id: None,
+            failures: FailureReport::default(),
+        };
+        // Summarization, running concurrently, summarized both.
+        let summarized = SummarizedChunks {
+            summaries: vec![
+                TextSummary::new(kept_chunk.base.id, "kept".into(), None, "mock".into()),
+                TextSummary::new(dropped_chunk.base.id, "dropped".into(), None, "mock".into()),
+            ],
+            failures: FailureReport::default(),
+        };
+
+        let merged = merge_graph_and_summaries(graph, summarized);
+
+        assert_eq!(
+            merged
+                .summaries
+                .iter()
+                .map(|s| s.made_from)
+                .collect::<Vec<_>>(),
+            [Some(kept_chunk.base.id)],
+            "only the surviving chunk's summary is kept"
+        );
+    }
+
+    /// Both branches start from the same upstream report but only extraction
+    /// carries it forward, so the merge must not count the upstream failure
+    /// twice — the reason `summarize_text` starts from an empty report.
+    #[test]
+    fn merge_absorbs_the_summarization_failures_without_double_counting() {
+        let upstream_item = Uuid::new_v4();
+        let summarization_item = Uuid::new_v4();
+
+        let mut upstream = FailureReport::default();
+        upstream.note_totals(2, 2);
+        upstream.record(StageFailure {
+            stage: FailureStage::Chunking,
+            data_id: upstream_item,
+            chunk_id: None,
+            error: "upstream".to_string(),
+            fails_item: true,
+        });
+
+        let graph = ExtractedGraphData {
+            chunks: vec![],
+            documents: vec![],
+            entities: vec![],
+            edges: vec![],
+            producers: ArtifactProducers::default(),
+            dataset_id: Uuid::new_v4(),
+            user_id: None,
+            tenant_id: None,
+            // Extraction is the branch that forwards the upstream report.
+            failures: upstream,
+        };
+
+        let mut own = FailureReport::default();
+        own.record(StageFailure {
+            stage: FailureStage::Summarization,
+            data_id: summarization_item,
+            chunk_id: Some(Uuid::new_v4()),
+            error: "summary".to_string(),
+            fails_item: true,
+        });
+        let summarized = SummarizedChunks {
+            summaries: vec![],
+            failures: own,
+        };
+
+        let merged = merge_graph_and_summaries(graph, summarized);
+
+        assert_eq!(
+            merged.failures.total(),
+            2,
+            "one upstream + one summarization"
+        );
+        assert_eq!(merged.failures.summarization_failures(), 1);
+        assert_eq!(merged.failures.failed_items().len(), 2);
+        assert_eq!(
+            (
+                merged.failures.total_items(),
+                merged.failures.total_chunks()
+            ),
+            (2, 2),
+            "the run denominators survive the merge"
+        );
     }
 
     /// Regression guard: an image document must produce ≥1 chunk and must NOT

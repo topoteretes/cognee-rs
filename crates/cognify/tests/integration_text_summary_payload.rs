@@ -38,23 +38,28 @@ const EXPECTED_SUMMARY: &str = "Concise NLP summary about language and computers
 
 #[tokio::test]
 async fn text_summary_payload_contains_text_field() {
-    // -- Mock LLM with two FIFO responses ----------------------------------------
+    // -- Mock LLM: one queued graph response, one schema-routed summary ----------
     //
-    // 1. Empty knowledge graph  (consumed by the graph-extraction stage)
-    // 2. Summarization response (consumed by the summarize-text stage)
+    // Routed by schema rather than queued FIFO behind the graph response: graph
+    // extraction and summarization are one fused stage that dispatches both
+    // concurrently (`make_extract_graph_and_summarize_task`), so which call pops
+    // a FIFO queue first is a matter of scheduling. `with_summary_response`
+    // answers calls carrying `SummarizedContent`'s schema without touching the
+    // queue, which leaves the queued response for extraction whatever the order.
     let mock_llm = MockLlm::new(vec![
-        // Response 1: graph extraction -> empty graph. Field is `edges`, not the
+        // Graph extraction -> empty graph. Field is `edges`, not the
         // ignored `relationships`: since #83 dropped `#[serde(default)]` from
         // `KnowledgeGraph.edges`, it is a required field and a payload missing it
         // fails typed deserialization ("missing field `edges`").
         json!({"nodes": [], "edges": []}).to_string(),
-        // Response 2: summarization -> deterministic summary
+    ])
+    .with_summary_response(
         json!({
             "summary": EXPECTED_SUMMARY,
             "description": "Detailed description of natural language processing topics."
         })
         .to_string(),
-    ]);
+    );
     let llm: Arc<dyn cognee_llm::Llm> = Arc::new(mock_llm);
 
     // -- Other mocks --------------------------------------------------------------

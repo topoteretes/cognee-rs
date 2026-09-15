@@ -46,9 +46,9 @@ pub use rate_limiter::{RateLimiter, SemaphoreLimiter, TokenBucketLimiter};
 pub use runtime::AsyncRuntime;
 pub use sentinels::{DroppedSentinel, PassthroughSentinel, is_dropped, is_passthrough};
 pub use task::{
-    AsyncBatchFn, AsyncFn, AsyncStreamBatchFn, AsyncStreamFn, SyncBatchFn, SyncFn, SyncIterBatchFn,
-    SyncIterFn, Tagged, TaggedMeta, Task, TaskCall, TaskError, TaskInfo, TypedTask, Value,
-    ValueIter, ValueStream, downcast_value, extract_node_set,
+    AsyncBatchFn, AsyncFn, AsyncStreamBatchFn, AsyncStreamFn, ParallelFuseError, SyncBatchFn,
+    SyncFn, SyncIterBatchFn, SyncIterFn, Tagged, TaggedMeta, Task, TaskCall, TaskError, TaskInfo,
+    TypedTask, Value, ValueIter, ValueStream, downcast_value, extract_node_set,
 };
 pub use task_context::{PipelineContext, TaskContext, TaskContextBuilder};
 pub use thread_pool::{CpuPool, CpuPoolExt, RayonThreadPool};

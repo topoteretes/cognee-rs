@@ -267,7 +267,29 @@ pub struct FailureReport {
     total: usize,
     failed_items: BTreeSet<Uuid>,
     unreached_items: BTreeSet<Uuid>,
-    failed_chunks: usize,
+    /// The distinct chunks at least one of whose failures fails its item — the
+    /// numerator of [`Self::chunk_failure_ratio`].
+    ///
+    /// A **set**, not a counter, because one chunk can fail more than once: two
+    /// stages both work the same chunk, so a chunk whose graph extraction *and*
+    /// whose summarization failed produces two entries carrying the same
+    /// `chunk_id`. Counting failures there would charge one chunk twice and
+    /// hand `chunk_failure_ratio` a numerator that can exceed
+    /// [`Self::total_chunks`] — enough, on its own, to escalate a run that is
+    /// under the configured threshold into a fatal one.
+    ///
+    /// This changed the serialized shape of the field, from a number to an
+    /// array of uuids, and **no compatibility shim accepts the old form**. A
+    /// legacy `"failed_chunks": 1` carries no chunk ids, so it cannot populate
+    /// the set; a deserializer that took it would produce a report whose ratio
+    /// reads correctly but whose set cannot be unioned by [`Self::absorb`] —
+    /// silently reintroducing the very miscount above, in the one direction
+    /// (undercount) that hides a fatal run rather than inventing one. A hard
+    /// failure on a stale payload is the better error. Nothing in this
+    /// workspace serialises a report — [`crate::rollback`] writes the
+    /// `run_info` row as a hand-built object carrying the *derived* ratio —
+    /// so this reaches only an external caller who persisted one itself.
+    failed_chunks: BTreeSet<Uuid>,
     summarization_failures: usize,
     total_chunks: usize,
     total_items: usize,
@@ -281,7 +303,7 @@ impl Default for FailureReport {
             total: 0,
             failed_items: BTreeSet::new(),
             unreached_items: BTreeSet::new(),
-            failed_chunks: 0,
+            failed_chunks: BTreeSet::new(),
             summarization_failures: 0,
             total_chunks: 0,
             total_items: 0,
@@ -317,8 +339,8 @@ impl FailureReport {
             // A file that failed is no longer "unreached" — a chunk of it was
             // attempted.
             self.unreached_items.remove(&failure.data_id);
-            if failure.chunk_id.is_some() {
-                self.failed_chunks += 1;
+            if let Some(chunk_id) = failure.chunk_id {
+                self.failed_chunks.insert(chunk_id);
             }
         }
         if self.entries.len() < self.cap {
@@ -335,6 +357,67 @@ impl FailureReport {
             return;
         }
         self.unreached_items.insert(data_id);
+    }
+
+    /// Fold a **sibling** report into this one.
+    ///
+    /// For stages that ran concurrently over the same input and therefore each
+    /// collected their own failures — see
+    /// [`make_extract_graph_and_summarize_task`](crate::tasks::make_extract_graph_and_summarize_task).
+    /// Going through [`Self::record`] entry by entry would be wrong twice over:
+    /// the entry list is capped, so a sibling that overflowed the cap would
+    /// silently shrink [`Self::total`], and re-recording would re-derive
+    /// counters the sibling has already computed.
+    ///
+    /// # The sibling must be independent
+    ///
+    /// `other` must have been built fresh (`with_policy`) rather than cloned
+    /// from this report: the two *counters* here are added, so a shared history
+    /// would be counted twice. The concurrent stage gives each branch its own
+    /// empty report for exactly this reason.
+    ///
+    /// # What is added and what is unioned
+    ///
+    /// Only [`Self::total`] and [`Self::summarization_failures`] are sums —
+    /// they count failures, and two failures are two failures even on one
+    /// chunk. Every id set is unioned, which is what keeps the merge honest
+    /// where the branches overlap: both work the *same* chunks, so a chunk that
+    /// failed extraction and also failed summarization appears on both sides,
+    /// and adding [`Self::failed_chunks`] would charge it twice and hand
+    /// [`Self::chunk_failure_ratio`] a numerator that can exceed
+    /// [`Self::total_chunks`].
+    ///
+    /// `failed_items` wins over `unreached_items` on both sides afterwards —
+    /// the same precedence [`Self::mark_unreached`] applies, so a file one
+    /// branch left undispatched and the other actually failed ends up a
+    /// failure.
+    ///
+    /// [`Self::note_totals`] values are taken from `other` only where this
+    /// report has none, since they are per-run denominators, not sums.
+    pub fn absorb(&mut self, other: &FailureReport) {
+        self.total += other.total;
+        self.summarization_failures += other.summarization_failures;
+        // Unioned, not added: the two branches work the same chunks, so the
+        // same `chunk_id` can appear on both sides.
+        self.failed_chunks
+            .extend(other.failed_chunks.iter().copied());
+        self.failed_items.extend(other.failed_items.iter().copied());
+        self.unreached_items
+            .extend(other.unreached_items.iter().copied());
+        self.unreached_items
+            .retain(|id| !self.failed_items.contains(id));
+        // The cap is this report's, so the merged entry list stays inside the
+        // single bound the run was configured with. `truncated()` still reports
+        // the difference honestly because `total` was summed above.
+        let room = self.cap.saturating_sub(self.entries.len());
+        self.entries
+            .extend(other.entries.iter().take(room).cloned());
+        if self.total_items == 0 {
+            self.total_items = other.total_items;
+        }
+        if self.total_chunks == 0 {
+            self.total_chunks = other.total_chunks;
+        }
     }
 
     /// Record the denominators of the failure ratio, once per run, from the
@@ -400,7 +483,7 @@ impl FailureReport {
         if self.total_chunks == 0 {
             return 0.0;
         }
-        self.failed_chunks as f64 / self.total_chunks as f64
+        self.failed_chunks.len() as f64 / self.total_chunks as f64
     }
 
     /// Whether this report makes the run fail, under `policy`.
@@ -895,5 +978,201 @@ mod tests {
         assert!(report.is_empty());
         report.mark_unreached(Uuid::new_v4());
         assert!(!report.is_empty());
+    }
+
+    // ── absorb: folding a concurrent sibling's report back in ────────────────
+
+    /// The ratio's numerator counts *chunks*, not failures carrying a chunk id.
+    ///
+    /// Two stages work the same chunk, so one chunk can fail twice. Counting
+    /// the failures gave a numerator that can exceed `total_chunks` — a ratio
+    /// above 1.0, which under `FailedItems` escalates a run that is under its
+    /// configured threshold into a fatal one that sweeps everything.
+    ///
+    /// Reachable within a single report, and so predates the concurrent stage:
+    /// under `RunToEnd` extraction drops nothing, so summarization has always
+    /// been able to fail a chunk extraction had already failed.
+    #[test]
+    fn one_chunk_failing_in_two_stages_counts_once_toward_the_ratio() {
+        let data_id = Uuid::new_v4();
+        let chunk_id = Uuid::new_v4();
+
+        let mut report = FailureReport::default();
+        report.note_totals(1, 1);
+        report.record(item_failure(
+            FailureStage::GraphExtraction,
+            data_id,
+            Some(chunk_id),
+        ));
+        report.record(item_failure(
+            FailureStage::Summarization,
+            data_id,
+            Some(chunk_id),
+        ));
+
+        assert_eq!(report.total(), 2, "two failures really did happen");
+        assert!(
+            (report.chunk_failure_ratio() - 1.0).abs() < f64::EPSILON,
+            "but only one chunk failed, so the ratio is 1/1, got {}",
+            report.chunk_failure_ratio()
+        );
+    }
+
+    /// The same chunk, failed once on each side of a concurrent stage. This is
+    /// the path the fused extract-and-summarize stage opened: summarization no
+    /// longer runs on extraction's filtered chunk list, so under the default
+    /// `FailFast` both branches can fail the same chunk.
+    #[test]
+    fn absorb_counts_a_chunk_both_branches_failed_only_once() {
+        let data_id = Uuid::new_v4();
+        let chunk_id = Uuid::new_v4();
+
+        let mut extraction = FailureReport::default();
+        extraction.note_totals(1, 2);
+        extraction.record(item_failure(
+            FailureStage::GraphExtraction,
+            data_id,
+            Some(chunk_id),
+        ));
+
+        let mut summarization = FailureReport::default();
+        summarization.record(item_failure(
+            FailureStage::Summarization,
+            data_id,
+            Some(chunk_id),
+        ));
+
+        extraction.absorb(&summarization);
+
+        assert_eq!(extraction.total(), 2);
+        assert!(
+            (extraction.chunk_failure_ratio() - 0.5).abs() < f64::EPSILON,
+            "one distinct chunk of two, got {}",
+            extraction.chunk_failure_ratio()
+        );
+    }
+
+    #[test]
+    fn absorb_sums_counters_and_unions_the_id_sets() {
+        let extraction_item = Uuid::new_v4();
+        let summarization_item = Uuid::new_v4();
+
+        let mut extraction = FailureReport::default();
+        extraction.note_totals(4, 9);
+        extraction.record(item_failure(
+            FailureStage::GraphExtraction,
+            extraction_item,
+            Some(Uuid::new_v4()),
+        ));
+
+        let mut summarization = FailureReport::default();
+        summarization.record(item_failure(
+            FailureStage::Summarization,
+            summarization_item,
+            Some(Uuid::new_v4()),
+        ));
+
+        extraction.absorb(&summarization);
+
+        assert_eq!(extraction.total(), 2);
+        assert_eq!(extraction.entries().len(), 2);
+        assert_eq!(extraction.truncated(), 0);
+        assert_eq!(extraction.summarization_failures(), 1);
+        // Both item-failing chunk failures count toward the ratio denominator
+        // the chunking stage recorded, which `absorb` must not disturb.
+        assert_eq!(extraction.total_items(), 4);
+        assert_eq!(extraction.total_chunks(), 9);
+        assert!((extraction.chunk_failure_ratio() - 2.0 / 9.0).abs() < f64::EPSILON);
+        assert_eq!(
+            extraction
+                .failed_items()
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
+            {
+                let mut ids = vec![extraction_item, summarization_item];
+                ids.sort();
+                ids
+            }
+        );
+    }
+
+    /// A file one branch left undispatched and the other actually failed is a
+    /// failure, whichever order the two reports are merged in — the same
+    /// precedence `mark_unreached` applies within one report.
+    #[test]
+    fn absorb_lets_a_failure_on_either_side_win_over_unreached() {
+        let contested = Uuid::new_v4();
+
+        // Failed here, unreached there.
+        let mut failed_side = FailureReport::default();
+        failed_side.record(item_failure(FailureStage::GraphExtraction, contested, None));
+        let mut unreached_side = FailureReport::default();
+        unreached_side.mark_unreached(contested);
+        failed_side.absorb(&unreached_side);
+        assert!(failed_side.failed_items().contains(&contested));
+        assert!(failed_side.unreached_items().is_empty());
+
+        // And the other way round.
+        let mut unreached_side = FailureReport::default();
+        unreached_side.mark_unreached(contested);
+        let mut failed_side = FailureReport::default();
+        failed_side.record(item_failure(FailureStage::Summarization, contested, None));
+        unreached_side.absorb(&failed_side);
+        assert!(unreached_side.failed_items().contains(&contested));
+        assert!(unreached_side.unreached_items().is_empty());
+    }
+
+    /// The merged entry list stays under *one* cap, and `total` keeps counting
+    /// past it — the reason `absorb` exists rather than replaying `record`.
+    #[test]
+    fn absorb_respects_the_cap_without_losing_the_total() {
+        let policy = FailurePolicy {
+            report_cap: 3,
+            ..FailurePolicy::default()
+        };
+        let mut left = FailureReport::with_policy(&policy);
+        let mut right = FailureReport::with_policy(&policy);
+        for _ in 0..2 {
+            left.record(item_failure(
+                FailureStage::GraphExtraction,
+                Uuid::new_v4(),
+                None,
+            ));
+        }
+        for _ in 0..4 {
+            right.record(item_failure(
+                FailureStage::Summarization,
+                Uuid::new_v4(),
+                None,
+            ));
+        }
+        assert_eq!(right.entries().len(), 3, "the sibling capped its own list");
+        assert_eq!(right.total(), 4);
+
+        left.absorb(&right);
+
+        assert_eq!(left.total(), 6, "every failure is still counted");
+        assert_eq!(left.entries().len(), 3, "one cap, not two");
+        assert_eq!(left.truncated(), 3);
+        assert_eq!(left.failed_items().len(), 6);
+    }
+
+    /// `note_totals` values are per-run denominators, not sums: absorbing a
+    /// sibling that never saw them must not zero them, and absorbing into a
+    /// report that never saw them must pick them up.
+    #[test]
+    fn absorb_takes_the_run_totals_from_whichever_side_has_them() {
+        let mut with_totals = FailureReport::default();
+        with_totals.note_totals(7, 21);
+        let without = FailureReport::default();
+
+        let mut left = with_totals.clone();
+        left.absorb(&without);
+        assert_eq!((left.total_items(), left.total_chunks()), (7, 21));
+
+        let mut right = without;
+        right.absorb(&with_totals);
+        assert_eq!((right.total_items(), right.total_chunks()), (7, 21));
     }
 }

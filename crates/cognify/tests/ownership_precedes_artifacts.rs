@@ -67,10 +67,16 @@ async fn run_cognify(
     Arc<DatabaseConnection>,
     Arc<dyn PipelineRunRepository>,
 ) {
-    let llm: Arc<dyn cognee_llm::Llm> = Arc::new(MockLlm::new(vec![
-        canned_graph_response(),
-        json!({"summary": "Alice and Acme.", "description": "A short description."}).to_string(),
-    ]));
+    // The summary answer is routed by schema, not queued behind the graph
+    // response: graph extraction and summarization are one fused stage that
+    // dispatches both concurrently, so a FIFO queue would hand whichever call
+    // the scheduler runs first the other one's response.
+    let llm: Arc<dyn cognee_llm::Llm> = Arc::new(
+        MockLlm::new(vec![canned_graph_response()]).with_summary_response(
+            json!({"summary": "Alice and Acme.", "description": "A short description."})
+                .to_string(),
+        ),
+    );
     let storage: Arc<dyn StorageTrait> = Arc::new(MockStorage::new());
     let graph_db: Arc<dyn cognee_graph::GraphDBTrait> = Arc::new(MockGraphDB::new());
     let vector_db: Arc<dyn VectorDB> = Arc::new(MockVectorDB::new());

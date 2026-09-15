@@ -76,10 +76,12 @@ SDKs. Pipeline: [`cognee-ingestion`](../crates/ingestion/) (`AddPipeline`).
 
 ### cognify (knowledge-graph extraction)
 
-Turns stored data into a knowledge graph in six stages: **classify** documents →
-**chunk** text → **extract** entities/relationships (LLM, batched) → **summarize**
-(conditional) → **add data points** (six vector collections + provenance to the
-relational DB) → **extract DLT FK edges**. Configurable via `CognifyConfig`
+Turns stored data into a knowledge graph in five stages: **classify** documents →
+**chunk** text → **extract** entities/relationships (LLM, batched) **and
+summarize** (conditional) — one fused stage running both concurrently over the
+same chunks, matching Python's `extract_graph_and_summarize` → **add data
+points** (six vector collections + provenance to the relational DB) →
+**extract DLT FK edges**. Configurable via `CognifyConfig`
 (chunk strategy, custom prompts/schemas, temporal mode). Pipeline:
 [`cognee-cognify`](../crates/cognify/) (`cognify()` / `cognify_datasets()`).
 

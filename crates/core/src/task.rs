@@ -1154,6 +1154,133 @@ impl<I: Value, O: Value> TypedTask<I, O> {
             f(items, ctx).map(|s| Box::pin(s) as BoxStream<'static, Box<O>>)
         }))
     }
+
+    /// The variant's name, for diagnostics.
+    fn variant_name(&self) -> &'static str {
+        match self {
+            TypedTask::Sync(_) => "Sync",
+            TypedTask::Async(_) => "Async",
+            TypedTask::SyncIter(_) => "SyncIter",
+            TypedTask::AsyncStream(_) => "AsyncStream",
+            TypedTask::SyncBatch(_) => "SyncBatch",
+            TypedTask::AsyncBatch(_) => "AsyncBatch",
+            TypedTask::SyncIterBatch(_) => "SyncIterBatch",
+            TypedTask::AsyncStreamBatch(_) => "AsyncStreamBatch",
+        }
+    }
+
+    /// Normalise a single-value task to the [`TypedTask::Async`] call shape, so
+    /// [`TypedTask::try_parallel`] can drive `Sync` and `Async` branches through
+    /// one code path.
+    ///
+    /// A `Sync` branch is wrapped rather than spawned: it is called at the point
+    /// the future is *built*, exactly as [`Task::call`] calls it, and the
+    /// already-computed result is handed back as a ready future. A blocking
+    /// branch therefore does not overlap with its sibling — fusing it is still
+    /// correct, it just buys no wall-clock. `Err` carries the offending variant
+    /// name for the caller's error.
+    fn into_single_value_fn(self) -> Result<Arc<TypedAsyncFn<I, O>>, &'static str> {
+        match self {
+            TypedTask::Async(f) => Ok(f),
+            TypedTask::Sync(f) => Ok(Arc::new(move |i: &I, ctx| {
+                let result = f(i, ctx);
+                Box::pin(async move { result })
+            })),
+            other => Err(other.variant_name()),
+        }
+    }
+
+    /// Fuse two tasks over the same input into one task that runs them
+    /// concurrently and merges their outputs.
+    ///
+    /// Both branches are called with the same `&I` and the same
+    /// [`TaskContext`], their futures are built before either is awaited, and
+    /// they are then driven together by `futures::try_join!` on one task — so
+    /// the fused stage costs `max(first, second)` rather than
+    /// `first + second`. The pipeline sees one ordinary
+    /// [`TypedTask<I, O>`](TypedTask) and stays unaware that anything ran
+    /// concurrently.
+    ///
+    /// On the first branch error the fused task fails with that error and the
+    /// other branch's future is dropped (that is, cancelled at its next await
+    /// point — work it already committed elsewhere is not undone).
+    ///
+    /// # Relationship to [`Task::parallel`]
+    ///
+    /// [`Task::parallel`] is the type-erased, N-ary port of Python's
+    /// `run_tasks_parallel`: it returns the **last** sub-task's output and
+    /// discards the rest. This is its typed, merging counterpart — use it when
+    /// the stage after the fusion needs something from *both* branches.
+    ///
+    /// # More than two branches
+    ///
+    /// Nest it: `try_parallel(a, try_parallel(b, c, merge_bc)?, merge_a_bc)`
+    /// runs all three concurrently, because the inner fused task builds both of
+    /// its futures before the outer `try_join` polls anything.
+    ///
+    /// # Errors
+    ///
+    /// [`ParallelFuseError::NotSingleValue`] when a branch is not a `Sync` or
+    /// `Async` task. Iterator and stream branches emit *many* outputs and batch
+    /// branches take `&[&I]` rather than `&I`, so neither has one output to
+    /// merge.
+    ///
+    /// ```rust,ignore
+    /// let fused = TypedTask::try_parallel(
+    ///     make_extract_graph_task(..),   // TypedTask<ExtractedChunks, ExtractedGraphData>
+    ///     make_summarize_text_task(..),  // TypedTask<ExtractedChunks, SummarizedChunks>
+    ///     |graph, summaries| Ok(Box::new(merge(*graph, *summaries))),
+    /// )?;                                // TypedTask<ExtractedChunks, SummarizedData>
+    /// ```
+    pub fn try_parallel<A, B, M>(
+        first: TypedTask<I, A>,
+        second: TypedTask<I, B>,
+        merge: M,
+    ) -> Result<Self, ParallelFuseError>
+    where
+        A: Value,
+        B: Value,
+        M: Fn(Box<A>, Box<B>) -> Result<Box<O>, TaskError> + Send + Sync + 'static,
+    {
+        let first = first
+            .into_single_value_fn()
+            .map_err(|variant| ParallelFuseError::NotSingleValue { branch: 0, variant })?;
+        let second = second
+            .into_single_value_fn()
+            .map_err(|variant| ParallelFuseError::NotSingleValue { branch: 1, variant })?;
+        let merge = Arc::new(merge);
+
+        Ok(TypedTask::async_fn(move |input: &I, ctx| {
+            // Both futures are built here, from the same borrowed input and
+            // before either is polled. That is what keeps the returned future
+            // `'static` without either branch having to borrow the input: each
+            // branch owns whatever it needs by the time it returns its future,
+            // which is the same contract `TypedTask::async_fn` already imposes.
+            let first = first(input, Arc::clone(&ctx));
+            let second = second(input, ctx);
+            let merge = Arc::clone(&merge);
+            Box::pin(async move {
+                let (first, second) = futures::try_join!(first, second)?;
+                merge(first, second)
+            })
+        }))
+    }
+}
+
+/// Why [`TypedTask::try_parallel`] refused to fuse two tasks into one stage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum ParallelFuseError {
+    /// A branch was not a single-value task, so it has no one output to merge.
+    #[error(
+        "branch {branch} is a {variant} task; only single-value branches \
+         (TypedTask::sync / TypedTask::async_fn) can be fused"
+    )]
+    NotSingleValue {
+        /// 0-based position of the offending branch in the argument list.
+        branch: usize,
+        /// The [`TypedTask`] variant the branch turned out to be.
+        variant: &'static str,
+    },
 }
 
 impl<I: Value, O: Value> From<TypedTask<I, O>> for Task {
@@ -1602,5 +1729,196 @@ mod tests {
         .is_err();
 
         assert!(panicked, "a genuinely mismatched batch item must panic");
+    }
+
+    // ── TypedTask::try_parallel ──────────────────────────────────────────────
+
+    /// Call a fused task the way the executor would and await its output.
+    async fn call_fused<I: Value, O: Value>(
+        task: TypedTask<I, O>,
+        input: I,
+    ) -> Result<Box<O>, TaskError> {
+        match task {
+            TypedTask::Async(f) => f(&input, stub_ctx().await).await,
+            other => panic!(
+                "try_parallel must produce Async, got {}",
+                other.variant_name()
+            ),
+        }
+    }
+
+    /// The whole point of the combinator: the branches overlap in time.
+    ///
+    /// Asserted with a rendezvous rather than a stopwatch — both branches park
+    /// on the same two-party barrier, which only releases once both have
+    /// arrived, so the fused task can finish only if both futures were in
+    /// flight at once. Run under a timeout so a regression to sequential
+    /// execution fails instead of hanging the suite.
+    #[tokio::test]
+    async fn try_parallel_runs_both_branches_concurrently() {
+        let barrier = Arc::new(tokio::sync::Barrier::new(2));
+
+        let first_barrier = Arc::clone(&barrier);
+        let first: TypedTask<i32, i32> = TypedTask::async_fn(move |x: &i32, _ctx| {
+            let v = *x;
+            let barrier = Arc::clone(&first_barrier);
+            Box::pin(async move {
+                barrier.wait().await;
+                Ok(Box::new(v * 2))
+            })
+        });
+        let second: TypedTask<i32, String> = TypedTask::async_fn(move |x: &i32, _ctx| {
+            let v = *x;
+            let barrier = Arc::clone(&barrier);
+            Box::pin(async move {
+                barrier.wait().await;
+                Ok(Box::new(format!("saw {v}")))
+            })
+        });
+
+        let fused = TypedTask::try_parallel(first, second, |a: Box<i32>, b: Box<String>| {
+            Ok(Box::new(format!("{a}/{b}")))
+        })
+        .expect("both branches are Async");
+
+        let out =
+            tokio::time::timeout(std::time::Duration::from_secs(5), call_fused(fused, 21_i32))
+                .await
+                .expect("sequential execution would deadlock here")
+                .unwrap();
+
+        assert_eq!(*out, "42/saw 21");
+    }
+
+    /// A `Sync` branch is accepted (and called when its future is built), so a
+    /// blocking stage can still be fused with an async one.
+    #[tokio::test]
+    async fn try_parallel_accepts_a_sync_branch() {
+        let first: TypedTask<i32, i32> = TypedTask::sync(|x: &i32, _ctx| Ok(Box::new(*x + 1)));
+        let second: TypedTask<i32, i32> = TypedTask::async_fn(|x: &i32, _ctx| {
+            let v = *x + 2;
+            Box::pin(async move { Ok(Box::new(v)) })
+        });
+
+        let fused = TypedTask::try_parallel(first, second, |a: Box<i32>, b: Box<i32>| {
+            Ok(Box::new(*a * *b))
+        })
+        .expect("Sync and Async are both single-value variants");
+
+        assert_eq!(*call_fused(fused, 10_i32).await.unwrap(), 11 * 12);
+    }
+
+    /// A failing branch fails the fused task, with that branch's error.
+    #[tokio::test]
+    async fn try_parallel_propagates_a_branch_error() {
+        let ok: TypedTask<i32, i32> = TypedTask::async_fn(|x: &i32, _ctx| {
+            let v = *x;
+            Box::pin(async move { Ok(Box::new(v)) })
+        });
+        let boom: TypedTask<i32, i32> =
+            TypedTask::async_fn(|_x: &i32, _ctx| Box::pin(async { Err("branch blew up".into()) }));
+
+        let fused =
+            TypedTask::try_parallel(ok, boom, |a: Box<i32>, b: Box<i32>| Ok(Box::new(*a + *b)))
+                .expect("both branches are Async");
+
+        let err = call_fused(fused, 1_i32).await.expect_err("branch 1 failed");
+        assert_eq!(err.to_string(), "branch blew up");
+    }
+
+    /// The merge can reject the combination even when both branches succeeded.
+    #[tokio::test]
+    async fn try_parallel_propagates_a_merge_error() {
+        let a: TypedTask<i32, i32> = TypedTask::sync(|x: &i32, _ctx| Ok(Box::new(*x)));
+        let b: TypedTask<i32, i32> = TypedTask::sync(|x: &i32, _ctx| Ok(Box::new(*x)));
+
+        let fused: TypedTask<i32, i32> =
+            TypedTask::try_parallel(a, b, |_a, _b| Err("merge refused".into()))
+                .expect("both branches are Sync");
+
+        let err = call_fused(fused, 1_i32).await.expect_err("merge failed");
+        assert_eq!(err.to_string(), "merge refused");
+    }
+
+    /// Multi-output and batch branches have no single output to merge, and the
+    /// refusal names which branch and which variant — a runtime panic or a
+    /// silently-dropped branch would both be worse.
+    #[test]
+    fn try_parallel_refuses_a_non_single_value_branch() {
+        let single: TypedTask<i32, i32> = TypedTask::sync(|x: &i32, _ctx| Ok(Box::new(*x)));
+        let streaming: TypedTask<i32, i32> =
+            TypedTask::sync_iter(|x: &i32, _ctx| Ok(std::iter::once(Box::new(*x))));
+
+        let err = TypedTask::try_parallel(streaming, single, |a: Box<i32>, b: Box<i32>| {
+            Ok(Box::new(*a + *b))
+        })
+        .err()
+        .expect("a SyncIter branch cannot be fused");
+        assert_eq!(
+            err,
+            ParallelFuseError::NotSingleValue {
+                branch: 0,
+                variant: "SyncIter",
+            }
+        );
+
+        let single: TypedTask<i32, i32> = TypedTask::sync(|x: &i32, _ctx| Ok(Box::new(*x)));
+        let batched: TypedTask<i32, i32> =
+            TypedTask::sync_batch(|items: &[&i32], _ctx| Ok(Box::new(items.len() as i32)));
+        let err = TypedTask::try_parallel(single, batched, |a: Box<i32>, b: Box<i32>| {
+            Ok(Box::new(*a + *b))
+        })
+        .err()
+        .expect("a SyncBatch branch cannot be fused");
+        assert_eq!(
+            err,
+            ParallelFuseError::NotSingleValue {
+                branch: 1,
+                variant: "SyncBatch",
+            }
+        );
+    }
+
+    /// Nesting is the documented way to fuse three or more branches, and the
+    /// claim is that all three run concurrently — not merely that the values
+    /// come out right.
+    ///
+    /// All three branches are `Async` and park on the *same* three-party
+    /// barrier, so none can finish until all three are in flight. `Sync`
+    /// branches would not test this at all: they run while the futures are
+    /// being built, so a nesting that serialised its async branches would still
+    /// pass.
+    #[tokio::test]
+    async fn try_parallel_nests_three_concurrent_branches() {
+        let barrier = Arc::new(tokio::sync::Barrier::new(3));
+
+        /// One `Async` branch that adds `delta` once every branch has arrived.
+        fn branch(barrier: Arc<tokio::sync::Barrier>, delta: i32) -> TypedTask<i32, i32> {
+            TypedTask::async_fn(move |x: &i32, _ctx| {
+                let v = *x + delta;
+                let barrier = Arc::clone(&barrier);
+                Box::pin(async move {
+                    barrier.wait().await;
+                    Ok(Box::new(v))
+                })
+            })
+        }
+
+        let a = branch(Arc::clone(&barrier), 1);
+        let b = branch(Arc::clone(&barrier), 2);
+        let c = branch(barrier, 3);
+
+        let bc: TypedTask<i32, (i32, i32)> =
+            TypedTask::try_parallel(b, c, |b, c| Ok(Box::new((*b, *c)))).expect("both Async");
+        let abc: TypedTask<i32, (i32, i32, i32)> =
+            TypedTask::try_parallel(a, bc, |a, bc| Ok(Box::new((*a, bc.0, bc.1))))
+                .expect("both single-value");
+
+        let out = tokio::time::timeout(std::time::Duration::from_secs(5), call_fused(abc, 10_i32))
+            .await
+            .expect("a nesting that serialised any branch would deadlock here")
+            .unwrap();
+
+        assert_eq!(*out, (11, 12, 13));
     }
 }

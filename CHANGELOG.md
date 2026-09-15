@@ -18,6 +18,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking changes
 
+- **`cognee-cognify`: summarization is re-typed over `ExtractedChunks`, and the
+  two graph/summarize pipeline stages are now one.** Graph extraction and
+  summarization run concurrently, as Python's single `extract_graph_and_summarize`
+  task always has (`asyncio.gather` over the same `data_chunks`). Summarization
+  never had a data dependency on graph extraction — it reads chunk text; it
+  consumed `ExtractedGraphData` only because that is what the stage in front of
+  it handed over.
+
+  Signatures that changed:
+
+  | Item | Before | After |
+  |---|---|---|
+  | `summarize_text` | `&ExtractedGraphData -> SummarizedData` | `&ExtractedChunks -> SummarizedChunks` |
+  | `make_summarize_text_task` | `TypedTask<ExtractedGraphData, SummarizedData>` | `TypedTask<ExtractedChunks, SummarizedChunks>` |
+  | `make_summarize_text_task_with_rank` | as above, plus `rank` | as above, plus `rank` |
+
+  `SummarizedChunks { summaries, failures }` is new; `SummarizedData` is
+  unchanged and is now produced by the fused stage.
+
+  **Migration.** A custom pipeline that chained `make_extract_graph_task` into
+  `make_summarize_text_task` replaces *both* with the new
+  `make_extract_graph_and_summarize_task` (or its `_with_rank` variant), which
+  takes exactly the arguments `make_extract_graph_task` took and keeps the
+  `ExtractedChunks -> SummarizedData` shape the pair had end to end. The two
+  halves remain separately available for a caller who wants to fuse one of them
+  against a different sibling, via the new `TypedTask::try_parallel` in
+  `cognee-core`. Provenance is unaffected: entities still stamp
+  `source_task = "extract_graph_from_data"` and summaries `"summarize_text"`,
+  both at `topological_rank` 3.
+
+  Three behavioural consequences, all three shared with Python: the stage's
+  peak in-flight LLM calls is now the sum of the two `max_parallel_extractions`
+  semaphores rather than one of them (the transport-level
+  `cognee_llm::in_flight` ceiling still bounds the process); under
+  `RollbackScope::FailedItems` an abort in extraction no longer prevents
+  summarization having already paid for the excluded files' chunks; and one
+  stage is one retry unit, so a custom `RetryPolicy::Limited` re-dispatches
+  *both* branches rather than each independently. The last is inert on shipped
+  paths — `build_cognify_pipeline` sets no policy and `RetryPolicy::NoRetry` is
+  the builder default — and a caller who needs separate retry boundaries can
+  still compose the two halves as separate stages.
+
+- **`FailureReport`'s serialized shape changed: `failed_chunks` is an array of
+  chunk uuids, not a count.** It counted *failures carrying a chunk id* rather
+  than distinct chunks, so a chunk that failed in two stages was charged twice
+  and `chunk_failure_ratio()` could exceed 1.0 — enough on its own to escalate
+  a run below its configured threshold into a fatal one that sweeps the files
+  that completed. Reachable before this release too, under `RunToEnd`, where
+  extraction drops no chunks and summarization can fail one extraction already
+  failed.
+
+  There is deliberately **no compatibility shim for the old numeric form**: a
+  legacy `"failed_chunks": 1` carries no ids, so it cannot populate the set,
+  and accepting it would yield a report that merges wrong — undercounting,
+  which hides a fatal run rather than inventing one. Failing loudly on a stale
+  payload is the better error. Nothing in this workspace serialises a report
+  (the `run_info` row is hand-built and stores the derived ratio), so this
+  affects only a caller who persisted one directly.
+
 - **`GenerationOptions::default()` no longer carries a `max_tokens`.** It set
   `Some(16384)`; it now leaves `None`. The field had to stop carrying a value so
   that `Some(n)` means "a caller chose n" — the OpenAI adapter refuses to raise a
