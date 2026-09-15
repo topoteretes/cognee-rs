@@ -827,8 +827,16 @@ These knobs form one resilience stack, matching Python cognee's:
   discovery, memoised per endpoint, so a healthy endpoint pays for one mode per
   call. The deadline gates *starting* new work rather
   than cancelling in flight, so the true ceiling is
-  `LLM_REQUEST_DEADLINE_SECONDS + LLM_REQUEST_TIMEOUT_SECONDS`. Set it to `0` to
-  restore the previous unbounded behaviour.
+  `LLM_REQUEST_DEADLINE_SECONDS + LLM_REQUEST_TIMEOUT_SECONDS`. "Starting work"
+  includes the wait in front of a send: on every retry, both the pacing wait and
+  the wait for an `LLM_MAX_PARALLEL_REQUESTS` slot are bounded by whatever is
+  left of the budget, so a retry cannot park in a 900-second cooldown on top of
+  a ceiling it has already reached. A retry whose backoff was clamped to the
+  last of the budget keeps its right to *dispatch* — it sends if nothing makes
+  it wait — but not to wait. The **first** attempt of a call is exempt and may
+  wait out a whole episode, because a call that never dispatches cannot report
+  what the provider said. Set it to `0` to restore the previous unbounded
+  behaviour.
 - **The cascade stops sending an endpoint a mode that never produces anything.**
   The three request shapes above exist because OpenAI-compatible servers vary in
   what they accept, but tool calling and legacy `functions` both need a

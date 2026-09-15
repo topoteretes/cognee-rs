@@ -508,14 +508,28 @@ impl AnthropicAdapter {
                 tokio::time::sleep(delay).await;
             }
 
-            let dispatch_wait_started = Instant::now();
+            // How long this attempt may spend waiting to be dispatched — see
+            // `crate::retry::dispatch_budget`, and the OpenAI adapter for the
+            // same three bounded waits in the same order.
+            let dispatch_budget =
+                || crate::retry::dispatch_budget(attempt, deadline, Instant::now());
 
             // Inside the loop — see the OpenAI adapter and `cognee_utils::pacing`
             // for why admission is per attempt. This one runs before the queue
             // below because it is the only admission that can pace a caller
             // without an in-flight permit in hand.
             let paced_before_queue = match pacer.as_deref() {
-                Some(pacer) => pacer.admit().await,
+                Some(pacer) => match pacer.admit_within(dispatch_budget()).await {
+                    Some(paced) => paced,
+                    None => {
+                        return Err(crate::retry::dispatch_budget_spent(
+                            "Anthropic",
+                            started.elapsed(),
+                            attempt,
+                            &last_error,
+                        ));
+                    }
+                },
                 None => false,
             };
 
@@ -523,7 +537,18 @@ impl AnthropicAdapter {
             // concurrency ceiling, taken *after* admission and released at the end
             // of the iteration so a permit only ever covers a live socket.
             let permit_queue_started = Instant::now();
-            let _in_flight = crate::in_flight::acquire_in_flight().await;
+            let _in_flight =
+                match crate::in_flight::acquire_in_flight_within(dispatch_budget()).await {
+                    Ok(permit) => permit,
+                    Err(_) => {
+                        return Err(crate::retry::dispatch_budget_spent(
+                            "Anthropic",
+                            started.elapsed(),
+                            attempt,
+                            &last_error,
+                        ));
+                    }
+                };
             queued_for_permit += permit_queue_started.elapsed();
 
             // Re-gate immediately before the send: an episode can open while this
@@ -532,30 +557,16 @@ impl AnthropicAdapter {
             // a provider that has just reported overload. Skipped when the
             // admission above already paced this attempt, so an attempt never
             // spends two tokens. See the OpenAI adapter for the full rationale.
-            if !paced_before_queue && let Some(pacer) = pacer.as_deref() {
-                pacer.admit().await;
-            }
-
-            // Pacing and the in-flight queue can outlast the caller's aggregate
-            // budget on their own — a 900s overload cooldown dwarfs a 720s
-            // deadline — and the guard at the top of the loop cannot see that:
-            // it runs before the wait. Narrow on purpose, exactly as in the
-            // OpenAI adapter: it fires only when budget *remained* when the wait
-            // began and the wait is what spent it, so the guard above keeps its
-            // existing behaviour of clamping the backoff and letting the attempt
-            // it slept for start. Skipped on the first attempt too — every call
-            // makes at least one, as it did before the deadline existed.
-            if attempt > 0
-                && let Some(deadline) = deadline
-                && dispatch_wait_started < deadline
-                && Instant::now() >= deadline
+            if !paced_before_queue
+                && let Some(pacer) = pacer.as_deref()
+                && pacer.admit_within(dispatch_budget()).await.is_none()
             {
-                return Err(LlmError::Timeout(format!(
-                    "Anthropic request abandoned after {:.0}s with {attempt} attempt(s): the \
-                     call's aggregate budget (LLM_REQUEST_DEADLINE_SECONDS) was spent waiting \
-                     for dispatch (pacing or the in-flight queue); last error: {last_error}",
-                    started.elapsed().as_secs_f64(),
-                )));
+                return Err(crate::retry::dispatch_budget_spent(
+                    "Anthropic",
+                    started.elapsed(),
+                    attempt,
+                    &last_error,
+                ));
             }
 
             attempt += 1;

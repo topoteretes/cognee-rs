@@ -1272,7 +1272,12 @@ impl OpenAIAdapter {
                 tokio::time::sleep(delay).await;
             }
 
-            let dispatch_wait_started = Instant::now();
+            // How long this attempt may spend waiting to be dispatched. `None`
+            // on the first attempt and when no deadline is set; otherwise
+            // whatever is left of the budget, which may legitimately be zero —
+            // see `crate::retry::dispatch_budget`.
+            let dispatch_budget =
+                || crate::retry::dispatch_budget(attempt, deadline, Instant::now());
 
             // Admission sits INSIDE the retry loop, so an overload episode
             // opened by any concurrent request throttles the remaining attempts
@@ -1285,8 +1290,24 @@ impl OpenAIAdapter {
             // the pool during exactly the episode the pacer is draining. Its
             // return value records whether it actually cost a token — the second
             // admission after the queue reads it.
+            //
+            // Bounded by what is left of the aggregate budget: the bucket can
+            // hold a caller for a whole overload cooldown, and doing that on an
+            // attempt with no budget left overshoots the documented ceiling
+            // before a socket is even opened. `admit_within` refuses instead of
+            // pacing past the budget, and releases the token it did not spend.
             let paced_before_queue = match pacer.as_deref() {
-                Some(pacer) => pacer.admit().await,
+                Some(pacer) => match pacer.admit_within(dispatch_budget()).await {
+                    Some(paced) => paced,
+                    None => {
+                        return Err(crate::retry::dispatch_budget_spent(
+                            "LLM",
+                            started.elapsed(),
+                            attempt,
+                            &last_error,
+                        ));
+                    }
+                },
                 None => false,
             };
 
@@ -1301,7 +1322,18 @@ impl OpenAIAdapter {
             // A retry re-queues for a permit, which is correct: it opens a new
             // socket, so it is a new claim on the ceiling.
             let permit_queue_started = Instant::now();
-            let _in_flight = crate::in_flight::acquire_in_flight().await;
+            let _in_flight =
+                match crate::in_flight::acquire_in_flight_within(dispatch_budget()).await {
+                    Ok(permit) => permit,
+                    Err(_) => {
+                        return Err(crate::retry::dispatch_budget_spent(
+                            "LLM",
+                            started.elapsed(),
+                            attempt,
+                            &last_error,
+                        ));
+                    }
+                };
             queued_for_permit += permit_queue_started.elapsed();
 
             // The pacer's contract is admission *immediately before the send*
@@ -1320,34 +1352,16 @@ impl OpenAIAdapter {
             // So an attempt costs exactly one token, and the only wait ever held
             // under a permit is the one no ordering can remove: an episode that
             // opened while this caller sat in the queue.
-            if !paced_before_queue && let Some(pacer) = pacer.as_deref() {
-                pacer.admit().await;
-            }
-
-            // Pacing and the in-flight queue can outlast the caller's aggregate
-            // budget on their own — a 900s overload cooldown dwarfs a 240s
-            // deadline — and the guard at the top of the loop cannot see that:
-            // it runs before the wait, so an overshoot there was only noticed
-            // one turn later, after an attempt the budget could never cover.
-            //
-            // Narrow on purpose. It fires only when budget *remained* when the
-            // wait began and the wait is what spent it, so the guard above keeps
-            // its existing behaviour: that one clamps its backoff to the
-            // remaining budget and deliberately lets the attempt it sleeps for
-            // start, and this must not retract it. Skipped on the first attempt
-            // too — every call makes at least one, as it did before the deadline
-            // existed.
-            if attempt > 0
-                && let Some(deadline) = deadline
-                && dispatch_wait_started < deadline
-                && Instant::now() >= deadline
+            if !paced_before_queue
+                && let Some(pacer) = pacer.as_deref()
+                && pacer.admit_within(dispatch_budget()).await.is_none()
             {
-                return Err(LlmError::Timeout(format!(
-                    "LLM request abandoned after {:.0}s with {attempt} attempt(s): the call's \
-                     aggregate budget (LLM_REQUEST_DEADLINE_SECONDS) was spent waiting for \
-                     dispatch (pacing or the in-flight queue); last error: {last_error}",
-                    started.elapsed().as_secs_f64(),
-                )));
+                return Err(crate::retry::dispatch_budget_spent(
+                    "LLM",
+                    started.elapsed(),
+                    attempt,
+                    &last_error,
+                ));
             }
 
             attempt += 1;

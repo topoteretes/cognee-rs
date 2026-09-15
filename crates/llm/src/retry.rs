@@ -10,10 +10,12 @@
 //! so the backoff math has a single source of truth shared with the rest of the
 //! workspace; this module only layers **equal jitter** on top.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use cognee_utils::retry::RetryConfig;
 use reqwest::header::HeaderMap;
+
+use crate::error::LlmError;
 
 /// First-retry backoff, matching Python's `wait_exponential_jitter(8, ...)`.
 const INITIAL_BACKOFF_MS: u64 = 8_000;
@@ -62,6 +64,65 @@ pub(crate) fn retry_backoff(attempt: u32) -> Duration {
         rand::random::<u64>() % (half + 1)
     };
     Duration::from_millis(half + jitter)
+}
+
+/// How long the wait for dispatch — pacing, then the in-flight queue — may take
+/// on this attempt, given the caller's aggregate deadline. `None` is unbounded.
+///
+/// The adapters wait twice before they can send: the pacer's bucket, which can
+/// hold a caller for a whole [`cognee_utils::pacing::OVERLOAD_COOLDOWN`] (900s),
+/// and the in-flight queue, which has no bound of its own. Neither is visible to
+/// the guard at the top of the retry loop, because both happen after it. The
+/// documented ceiling is `deadline + one request timeout`, so an attempt that
+/// parks in either of them past the deadline has already blown it before it
+/// opens a socket — and bounding those waits by what is left is what keeps the
+/// ceiling true.
+///
+/// Two cases return `None`, and both are deliberate:
+///
+/// * `attempt == 0` — every call makes at least one attempt, as it did before
+///   the deadline existed. A first attempt is allowed to wait out a whole
+///   overload episode; a call that never dispatches cannot even report what the
+///   provider said.
+/// * no deadline — `LLM_REQUEST_DEADLINE_SECONDS=0` means unbounded, and a long
+///   pacing wait must not abort a call that asked for no budget at all.
+///
+/// Otherwise the budget is what is left, **including zero**. Zero is the case
+/// this function exists for: the guard at the top of the loop clamps a retry
+/// backoff to the remaining budget and lets the attempt it slept for start, so
+/// that attempt reaches this point with its budget exactly spent. It keeps its
+/// right to dispatch — `Pacer::admit_within` and `acquire_in_flight_within` both
+/// admit on a zero budget whenever they do not have to block — but it loses the
+/// right to wait, which is what stops a clamped attempt from silently adding a
+/// 900s cooldown on top of the ceiling.
+pub(crate) fn dispatch_budget(
+    attempt: u32,
+    deadline: Option<Instant>,
+    now: Instant,
+) -> Option<Duration> {
+    if attempt == 0 {
+        return None;
+    }
+    deadline.map(|deadline| deadline.saturating_duration_since(now))
+}
+
+/// The error a retry attempt returns when the wait for dispatch will not fit in
+/// what is left of the caller's aggregate budget.
+///
+/// Shared so the three adapters report the overshoot identically; `label` is the
+/// provider noun each of them already uses in its other deadline messages.
+pub(crate) fn dispatch_budget_spent(
+    label: &str,
+    elapsed: Duration,
+    attempts: u32,
+    last_error: &LlmError,
+) -> LlmError {
+    LlmError::Timeout(format!(
+        "{label} request abandoned after {:.0}s with {attempts} attempt(s): waiting for \
+         dispatch (pacing or the in-flight queue) would have run past the call's aggregate \
+         budget (LLM_REQUEST_DEADLINE_SECONDS); last error: {last_error}",
+        elapsed.as_secs_f64(),
+    ))
 }
 
 /// When a retry loop is allowed to give up.
@@ -323,5 +384,70 @@ mod tests {
             None
         );
         assert_eq!(retry_after_hint(&headers_with("retry-after", "")), None);
+    }
+
+    /// `Instant` arithmetic without sleeping: an offset from a fixed base.
+    fn at(base: Instant, secs: u64) -> Instant {
+        base + Duration::from_secs(secs)
+    }
+
+    /// The first attempt always runs. Every call made one before the deadline
+    /// existed, and a call that never dispatches cannot report a provider error.
+    #[test]
+    fn the_first_attempt_waits_for_dispatch_unbounded() {
+        let base = Instant::now();
+        assert_eq!(dispatch_budget(0, Some(at(base, 10)), at(base, 1)), None);
+        // Even with the budget already gone.
+        assert_eq!(dispatch_budget(0, Some(at(base, 10)), at(base, 99)), None);
+    }
+
+    /// `LLM_REQUEST_DEADLINE_SECONDS=0` disables the budget, and an unbounded
+    /// call must not be aborted by a long pacing wait.
+    #[test]
+    fn no_deadline_leaves_the_dispatch_wait_unbounded() {
+        let base = Instant::now();
+        assert_eq!(dispatch_budget(3, None, at(base, 9_999)), None);
+    }
+
+    #[test]
+    fn a_retry_may_wait_for_what_is_left_of_the_budget() {
+        let base = Instant::now();
+        assert_eq!(
+            dispatch_budget(1, Some(at(base, 10)), at(base, 4)),
+            Some(Duration::from_secs(6))
+        );
+    }
+
+    /// The hole this function closes. A retry backoff is clamped to the
+    /// remaining budget and then slept, so the attempt it clamped for reaches
+    /// the dispatch wait at or past the deadline. That attempt keeps its right
+    /// to dispatch — `Some(ZERO)`, not an abort — but must not be handed an
+    /// unbounded wait, which is what `None` here would mean: up to a 900s
+    /// cooldown plus an untimed queue on top of a ceiling already reached.
+    #[test]
+    fn a_spent_budget_bounds_the_wait_at_zero_rather_than_removing_it() {
+        let base = Instant::now();
+        let deadline = at(base, 10);
+        assert_eq!(
+            dispatch_budget(1, Some(deadline), deadline),
+            Some(Duration::ZERO),
+            "reaching the deadline exactly leaves no time to wait"
+        );
+        assert_eq!(
+            dispatch_budget(4, Some(deadline), at(base, 900)),
+            Some(Duration::ZERO),
+            "long past it, still bounded rather than unbounded"
+        );
+    }
+
+    /// The boundary: one tick short of the deadline is still budget.
+    #[test]
+    fn a_tick_of_budget_is_still_budget() {
+        let base = Instant::now();
+        let deadline = at(base, 10);
+        assert_eq!(
+            dispatch_budget(1, Some(deadline), deadline - Duration::from_nanos(1)),
+            Some(Duration::from_nanos(1))
+        );
     }
 }

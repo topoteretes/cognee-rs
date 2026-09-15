@@ -26,6 +26,12 @@
 //!    episode opens behind them, and every one of them still fires an unpaced
 //!    send.
 //!
+//!    A caller under a wall-clock budget of its own uses [`Pacer::admit_within`]
+//!    instead: it refuses rather than pacing past the budget, and releases the
+//!    token it did not spend. It never admits a caller [`Pacer::admit`] would
+//!    have paced, so the invariant above — everything that reaches the wire was
+//!    admitted immediately before its send — holds either way.
+//!
 //! There is deliberately **no token/TPM accounting**: Python declares
 //! `llm_rate_limit_tokens` and never reads it, so a TPM budget here would be a
 //! divergence, not parity.
@@ -114,11 +120,52 @@ impl TokenBucket {
         }
     }
 
+    /// Reserve one token as of `now`, but only if the wait for it fits in
+    /// `budget`. Returns the wait, or `None` when it does not fit.
+    ///
+    /// The `None` case **releases the reservation**: the caller is walking away,
+    /// and a token it never spends must not be left as debt, or a crowd of
+    /// callers abandoning a long episode together would deepen the debt that
+    /// delays the traffic still trying to get through. Also pure with respect to
+    /// the clock, so the release is directly testable.
+    ///
+    /// A `budget` of [`Duration::ZERO`] therefore means "admit me only if you do
+    /// not have to make me wait", which is what a caller whose aggregate
+    /// deadline has already passed is entitled to ask for.
+    pub fn reserve_within(&self, now: Instant, budget: Duration) -> Option<Duration> {
+        let wait = self.reserve(now);
+        if wait <= budget {
+            return Some(wait);
+        }
+        // Put it back. `reserve` subtracted 1 from a value already capped at
+        // `capacity`, so this can never push the bucket above capacity.
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.tokens += 1.0;
+        None
+    }
+
     /// Reserve a token and wait for it.
     pub async fn acquire(&self) {
         let wait = self.reserve(Instant::now());
         if !wait.is_zero() {
             futures_timer::Delay::new(wait).await;
+        }
+    }
+
+    /// Reserve a token and wait for it, giving up rather than waiting longer
+    /// than `budget`. `false` means the wait did not fit and no token was spent.
+    pub async fn acquire_within(&self, budget: Duration) -> bool {
+        match self.reserve_within(Instant::now(), budget) {
+            Some(wait) => {
+                if !wait.is_zero() {
+                    futures_timer::Delay::new(wait).await;
+                }
+                true
+            }
+            None => false,
         }
     }
 }
@@ -285,6 +332,35 @@ impl Pacer {
         }
         self.bucket.acquire().await;
         true
+    }
+
+    /// [`Pacer::admit`], bounded: give up rather than pace this attempt for
+    /// longer than `budget`. `None` is unbounded and identical to `admit`.
+    ///
+    /// `Some(paced)` is an admission, reporting the same fast-path/token
+    /// distinction `admit` does. `None` means the bucket would have held this
+    /// caller past its budget, so it was **not** admitted and spent no token —
+    /// the caller must abandon the attempt rather than send.
+    ///
+    /// This never admits a caller the unbounded [`Pacer::admit`] would have
+    /// paced: it shortens the wait to nothing by refusing, never by skipping the
+    /// bucket. So the pacer's invariant — an attempt that reaches the wire was
+    /// admitted immediately before its send — is unchanged.
+    ///
+    /// A `budget` of [`Duration::ZERO`] is meaningful rather than degenerate: it
+    /// admits on the fast path and against a bucket with a token in hand, and
+    /// refuses only when pacing would actually block. That is what the LLM
+    /// adapters ask for on an attempt whose aggregate deadline has already been
+    /// spent by its retry backoff — such an attempt may still dispatch, but it
+    /// may no longer wait.
+    pub async fn admit_within(&self, budget: Option<Duration>) -> Option<bool> {
+        let Some(budget) = budget else {
+            return Some(self.admit().await);
+        };
+        if !self.should_pace_at(Instant::now()) {
+            return Some(false);
+        }
+        self.bucket.acquire_within(budget).await.then_some(true)
     }
 
     /// Feed a provider error to the policy. No-op when `auto_react` is off.
@@ -604,6 +680,98 @@ mod tests {
             started.elapsed() >= Duration::from_millis(20),
             "expected the bucket to delay dispatch, waited {:?}",
             started.elapsed()
+        );
+    }
+
+    #[test]
+    fn reserve_within_admits_a_wait_that_fits() {
+        // One per second: the first token is free, the second costs a 1s wait,
+        // which a 2s budget covers.
+        let bucket = TokenBucket::new(1, Duration::from_secs(1));
+        let now = Instant::now();
+        assert_eq!(
+            bucket.reserve_within(now, Duration::from_secs(2)),
+            Some(Duration::ZERO)
+        );
+        match bucket.reserve_within(now, Duration::from_secs(2)) {
+            Some(wait) => assert!(
+                (wait.as_secs_f64() - 1.0).abs() < 1e-6,
+                "expected ~1s, got {wait:?}"
+            ),
+            None => panic!("a 1s wait fits in a 2s budget"),
+        }
+    }
+
+    #[test]
+    fn reserve_within_returns_the_token_when_the_wait_does_not_fit() {
+        let bucket = TokenBucket::new(1, Duration::from_secs(1));
+        let now = Instant::now();
+        assert_eq!(
+            bucket.reserve_within(now, Duration::ZERO),
+            Some(Duration::ZERO),
+            "the burst token is free"
+        );
+        // The bucket is now empty, so the next token is a 1s wait a zero budget
+        // cannot cover.
+        assert_eq!(bucket.reserve_within(now, Duration::ZERO), None);
+        // ...and the refusal must not have left the bucket in debt: an
+        // abandoned caller that kept its reservation would push the *next*
+        // caller's wait out to 2s. One second of refill buys exactly one token.
+        let wait = bucket.reserve(now + Duration::from_secs(1));
+        assert_eq!(
+            wait,
+            Duration::ZERO,
+            "a refused reservation must be released, not left as debt"
+        );
+    }
+
+    #[test]
+    fn a_zero_budget_still_admits_while_the_bucket_has_a_token() {
+        // The case the LLM adapters rely on: an attempt whose aggregate
+        // deadline is spent may still dispatch, as long as pacing does not have
+        // to make it wait.
+        let bucket = TokenBucket::new(5, Duration::from_secs(1));
+        let now = Instant::now();
+        for _ in 0..5 {
+            assert_eq!(
+                bucket.reserve_within(now, Duration::ZERO),
+                Some(Duration::ZERO)
+            );
+        }
+        assert_eq!(bucket.reserve_within(now, Duration::ZERO), None);
+    }
+
+    #[tokio::test]
+    async fn admit_within_is_unbounded_without_a_budget() {
+        let pacer = Pacer::new(1, Duration::from_secs(3600), true, true);
+        assert_eq!(pacer.admit_within(None).await, Some(true));
+    }
+
+    #[tokio::test]
+    async fn admit_within_takes_the_fast_path_whatever_the_budget() {
+        // Pacing off and no episode: nothing to wait for, so a zero budget is
+        // not a reason to refuse. Refusing here would fail every retry of every
+        // deadline-bounded call on an idle provider.
+        let pacer = Pacer::new(1, Duration::from_secs(3600), false, true);
+        assert_eq!(pacer.admit_within(Some(Duration::ZERO)).await, Some(false));
+        assert_eq!(pacer.admit_within(Some(Duration::ZERO)).await, Some(false));
+    }
+
+    #[tokio::test]
+    async fn admit_within_refuses_rather_than_pacing_past_the_budget() {
+        // One request per hour, episode open: the burst token goes to the first
+        // admission and the second would have to sleep out the hour.
+        let pacer = Pacer::new(1, Duration::from_secs(3600), true, true);
+        assert_eq!(pacer.admit_within(Some(Duration::ZERO)).await, Some(true));
+        let started = Instant::now();
+        assert_eq!(
+            pacer.admit_within(Some(Duration::ZERO)).await,
+            None,
+            "an hour-long bucket wait cannot fit in a spent budget"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "the refusal must be immediate, not after the wait it refused"
         );
     }
 }

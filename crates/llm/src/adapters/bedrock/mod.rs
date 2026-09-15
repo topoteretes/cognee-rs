@@ -607,19 +607,10 @@ impl BedrockAdapter {
             // Unlike those two adapters there is no `queued_for_permit`
             // bookkeeping: that subtraction protects a minimum-elapsed retry
             // *floor*, and this ladder is a plain attempt count with no floor to
-            // protect. The aggregate *deadline* guarded below is a different
-            // mechanism, and it does apply — Bedrock gained one in SDK-624.
-            let dispatch_wait_started = std::time::Instant::now();
-
-            let paced_before_queue = match pacer.as_deref() {
-                Some(pacer) => pacer.admit().await,
-                None => false,
-            };
-            let _in_flight = crate::in_flight::acquire_in_flight().await;
-            if !paced_before_queue && let Some(pacer) = pacer.as_deref() {
-                pacer.admit().await;
-            }
-
+            // protect. The aggregate *deadline* bounding the waits below is a
+            // different mechanism, and it does apply — Bedrock gained one in
+            // SDK-624.
+            //
             // Pacing and the in-flight queue can outlast the caller's aggregate
             // budget on their own — a 900s overload cooldown dwarfs the 1200s
             // default once callers queue behind it — and the guard at the top of
@@ -628,24 +619,51 @@ impl BedrockAdapter {
             // queued for a slot, so without this the documented contract is not
             // delivered on Bedrock.
             //
-            // Narrow on purpose, matching the OpenAI and Anthropic guards: it
-            // fires only when budget *remained* when the wait began and the wait
-            // is what spent it, so the top-of-loop guard keeps its behaviour of
-            // clamping the backoff and letting the attempt it slept for start.
-            // Skipped on the first attempt, because every call makes at least
-            // one, as it did before the deadline existed.
-            if dispatch_wait_spent_the_budget(
-                attempt,
-                deadline,
-                dispatch_wait_started,
-                std::time::Instant::now(),
-            ) {
-                return Err(LlmError::Timeout(format!(
-                    "Bedrock request abandoned after {:.0}s with {attempt} attempt(s): the \
-                     call's aggregate budget (LLM_REQUEST_DEADLINE_SECONDS) was spent waiting \
-                     for dispatch (pacing or the in-flight queue); last error: {last_error}",
-                    started.elapsed().as_secs_f64(),
-                )));
+            // Both waits are therefore bounded by what is left of the budget,
+            // exactly as in the OpenAI and Anthropic adapters — including the
+            // zero left to an attempt whose backoff the top-of-loop guard
+            // clamped, which keeps its right to dispatch but not to wait. See
+            // `crate::retry::dispatch_budget`.
+            let dispatch_budget = || {
+                crate::retry::dispatch_budget(attempt as u32, deadline, std::time::Instant::now())
+            };
+
+            let paced_before_queue = match pacer.as_deref() {
+                Some(pacer) => match pacer.admit_within(dispatch_budget()).await {
+                    Some(paced) => paced,
+                    None => {
+                        return Err(crate::retry::dispatch_budget_spent(
+                            "Bedrock",
+                            started.elapsed(),
+                            attempt as u32,
+                            &last_error,
+                        ));
+                    }
+                },
+                None => false,
+            };
+            let _in_flight =
+                match crate::in_flight::acquire_in_flight_within(dispatch_budget()).await {
+                    Ok(permit) => permit,
+                    Err(_) => {
+                        return Err(crate::retry::dispatch_budget_spent(
+                            "Bedrock",
+                            started.elapsed(),
+                            attempt as u32,
+                            &last_error,
+                        ));
+                    }
+                };
+            if !paced_before_queue
+                && let Some(pacer) = pacer.as_deref()
+                && pacer.admit_within(dispatch_budget()).await.is_none()
+            {
+                return Err(crate::retry::dispatch_budget_spent(
+                    "Bedrock",
+                    started.elapsed(),
+                    attempt as u32,
+                    &last_error,
+                ));
             }
 
             let response = match self.transport.post_json(&url, payload.clone()).await {
@@ -1165,32 +1183,6 @@ impl Llm for BedrockAdapter {
     }
 }
 
-/// Whether the wait for dispatch — pacing, then the in-flight queue — is what
-/// spent the caller's aggregate budget.
-///
-/// Extracted from the retry loop so the narrowness is testable. The three
-/// conditions each exclude a case that must *not* abort:
-///
-/// * `attempt > 0` — every call makes at least one attempt, as it did before
-///   the deadline existed.
-/// * `wait_started < deadline` — budget remained when the wait began. If it was
-///   already spent, the guard at the top of the loop owns that case: it clamps
-///   the backoff and lets the attempt it slept for proceed.
-/// * `now >= deadline` — and the wait is what crossed it.
-///
-/// Note this detects rather than preempts: it runs after the wait returns, so a
-/// wait far longer than the budget still blocks for its full length and then
-/// reports. Bounding the wait itself would mean a timeout on `admit` and
-/// `acquire_in_flight`, which neither this adapter nor the two it mirrors has.
-fn dispatch_wait_spent_the_budget(
-    attempt: usize,
-    deadline: Option<std::time::Instant>,
-    wait_started: std::time::Instant,
-    now: std::time::Instant,
-) -> bool {
-    attempt > 0 && deadline.is_some_and(|deadline| wait_started < deadline && now >= deadline)
-}
-
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -1328,98 +1320,132 @@ mod tests {
         );
     }
 
-    // ── dispatch-wait deadline guard ────────────────────────────────────────
+    // ── dispatch-wait deadline bound ────────────────────────────────────────
     //
-    // Ported from the OpenAI and Anthropic loops, where the same guard exists
-    // and — checked while porting — is asserted by no test in either. These
-    // pin the narrowness, which is the whole difficulty: the guard must fire
-    // when the wait crossed the budget and stay silent in the three cases that
-    // would otherwise abort a call the design intends to let run.
+    // The arithmetic is unit-tested on the pure `crate::retry::dispatch_budget`.
+    // What only the loop can show is the interaction these two cover: a retry
+    // whose backoff the top-of-loop guard clamped arrives at the dispatch wait
+    // with its budget exactly spent, and must still *dispatch* while refusing to
+    // *wait*. Those two halves pull in opposite directions, which is why both
+    // are asserted here rather than left to the predicate.
 
-    fn at(base: std::time::Instant, secs: u64) -> std::time::Instant {
-        base + std::time::Duration::from_secs(secs)
+    /// Answers every request with a Bedrock throttling error, counting calls.
+    struct AlwaysThrottles {
+        calls: std::sync::atomic::AtomicUsize,
     }
 
-    #[test]
-    fn dispatch_wait_guard_fires_when_the_wait_crossed_the_budget() {
-        let base = std::time::Instant::now();
-        assert!(dispatch_wait_spent_the_budget(
+    impl AlwaysThrottles {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                calls: std::sync::atomic::AtomicUsize::new(0),
+            })
+        }
+
+        fn calls(&self) -> usize {
+            self.calls.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait]
+    impl BedrockTransport for AlwaysThrottles {
+        async fn post_json(
+            &self,
+            _url: &str,
+            _body: Vec<u8>,
+        ) -> LlmResult<aws::transport::BedrockHttpResponse> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(aws::transport::BedrockHttpResponse {
+                status: reqwest::StatusCode::TOO_MANY_REQUESTS,
+                body: br#"{"message":"ThrottlingException"}"#.to_vec(),
+            })
+        }
+    }
+
+    /// An adapter that talks to `transport` and paces through `pacer`.
+    async fn throttling_adapter(pacer: Pacer) -> (BedrockAdapter, Arc<AlwaysThrottles>) {
+        let transport = AlwaysThrottles::new();
+        let mut adapter = adapter("eu.amazon.nova-lite-v1:0")
+            .await
+            .with_pacer(Arc::new(pacer));
+        adapter.transport = Arc::clone(&transport) as Arc<dyn BedrockTransport>;
+        (adapter, transport)
+    }
+
+    /// The hole. A retry backoff clamped to the last of the budget leaves the
+    /// attempt it slept for standing exactly on the deadline — and that attempt
+    /// used to enter an *unbounded* pacing wait, so a 900s overload cooldown
+    /// could be added on top of a ceiling already reached, and the 600s request
+    /// after it on top of that.
+    ///
+    /// Against the unbounded wait this test does not merely fail, it hangs for
+    /// the length of the bucket wait, which is why the call is wrapped.
+    #[tokio::test]
+    async fn a_clamped_retry_refuses_a_pacing_wait_it_has_no_budget_for() {
+        // One request per hour, pacing forced on: the first attempt takes the
+        // only token, and a second would have to sleep out the rest of the hour.
+        let (adapter, transport) = throttling_adapter(Pacer::new(
             1,
-            Some(at(base, 10)),
-            at(base, 9),  // budget remained when the wait began
-            at(base, 11), // and the wait is what spent it
-        ));
-    }
+            std::time::Duration::from_secs(3600),
+            true,
+            true,
+        ))
+        .await;
 
-    /// The first attempt always runs. Every call made one before the deadline
-    /// existed, and a call that never dispatches cannot report a provider error.
-    #[test]
-    fn dispatch_wait_guard_never_fires_on_the_first_attempt() {
-        let base = std::time::Instant::now();
-        assert!(!dispatch_wait_spent_the_budget(
-            0,
-            Some(at(base, 10)),
-            at(base, 9),
-            at(base, 11),
-        ));
-    }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(300);
+        let error = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            adapter.call_converse_before(&json!({"messages": []}), Some(deadline)),
+        )
+        .await
+        .expect("must give up on the pacing wait, not serve out the hour")
+        .expect_err("the provider only ever throttles");
 
-    /// Budget already spent when the wait began belongs to the top-of-loop
-    /// guard, which clamps the backoff and lets the attempt it slept for start.
-    /// Firing here too would abort that attempt and change existing behaviour.
-    #[test]
-    fn dispatch_wait_guard_defers_when_the_budget_was_already_spent() {
-        let base = std::time::Instant::now();
-        assert!(!dispatch_wait_spent_the_budget(
+        assert!(
+            matches!(&error, LlmError::Timeout(message) if message.contains("waiting for dispatch")),
+            "expected the dispatch-wait bound to report, got {error:?}",
+        );
+        assert_eq!(
+            transport.calls(),
             1,
-            Some(at(base, 10)),
-            at(base, 11), // wait began after the deadline had passed
-            at(base, 12),
-        ));
+            "the clamped attempt must be abandoned before it opens a socket",
+        );
     }
 
-    #[test]
-    fn dispatch_wait_guard_is_silent_while_budget_remains() {
-        let base = std::time::Instant::now();
-        assert!(!dispatch_wait_spent_the_budget(
+    /// The other half, and the reason the bound is a zero budget rather than an
+    /// abort: the top-of-loop guard deliberately clamps its backoff and lets the
+    /// attempt it slept for run, so with nothing to wait *for* that attempt must
+    /// still reach the provider. Aborting it instead would delete the last
+    /// attempt of every deadline-bounded call and make the clamp a sleep that
+    /// buys nothing.
+    #[tokio::test]
+    async fn a_clamped_retry_still_dispatches_when_nothing_makes_it_wait() {
+        // Pacing off and auto-reaction off, so the 429 opens no episode and the
+        // bucket is never consulted — the fast path, which costs no time.
+        let (adapter, transport) = throttling_adapter(Pacer::new(
             1,
-            Some(at(base, 10)),
-            at(base, 1),
-            at(base, 9),
-        ));
-    }
+            std::time::Duration::from_secs(3600),
+            false,
+            false,
+        ))
+        .await;
 
-    /// `LLM_REQUEST_DEADLINE_SECONDS=0` disables the budget, and an unbounded
-    /// call must not be aborted by a long pacing wait.
-    #[test]
-    fn dispatch_wait_guard_is_silent_without_a_deadline() {
-        let base = std::time::Instant::now();
-        assert!(!dispatch_wait_spent_the_budget(
-            3,
-            None,
-            at(base, 1),
-            at(base, 9_999),
-        ));
-    }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(300);
+        let error = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            adapter.call_converse_before(&json!({"messages": []}), Some(deadline)),
+        )
+        .await
+        .expect("an unpaced ladder cannot outlive its own budget by seconds")
+        .expect_err("the provider only ever throttles");
 
-    /// The boundary: reaching the deadline exactly is spent, one tick short is
-    /// not. Off by one here either aborts a call with budget left or lets one
-    /// through with none.
-    #[test]
-    fn dispatch_wait_guard_treats_the_deadline_instant_as_spent() {
-        let base = std::time::Instant::now();
-        let deadline = at(base, 10);
-        assert!(dispatch_wait_spent_the_budget(
-            1,
-            Some(deadline),
-            at(base, 9),
-            deadline,
-        ));
-        assert!(!dispatch_wait_spent_the_budget(
-            1,
-            Some(deadline),
-            at(base, 9),
-            deadline - std::time::Duration::from_nanos(1),
-        ));
+        assert!(
+            matches!(&error, LlmError::Timeout(message) if message.contains("spent mid-retry")),
+            "expected the top-of-loop guard to end the ladder, got {error:?}",
+        );
+        assert_eq!(
+            transport.calls(),
+            2,
+            "the attempt the clamped backoff slept for must still have been sent",
+        );
     }
 }

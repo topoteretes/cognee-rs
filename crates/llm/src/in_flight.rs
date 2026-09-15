@@ -46,6 +46,7 @@
 //!   throttled never sleeps in the bucket holding a permit.
 
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
@@ -112,6 +113,34 @@ pub async fn acquire_in_flight() -> Option<OwnedSemaphorePermit> {
     }
 }
 
+/// The queue would have held the caller past the budget it had left.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QueueBudgetExceeded;
+
+/// [`acquire_in_flight`], bounded: give up rather than queue for longer than
+/// `budget`. `None` is unbounded and identical to [`acquire_in_flight`].
+///
+/// This queue is the second half of the wait an LLM attempt makes before it can
+/// send, and — unlike the pacer's bucket, whose wait is known up front — how
+/// long it will take is not knowable in advance, so the bound is a timeout. It
+/// is cancellation-safe: a caller that gives up while queued leaves no permit
+/// taken, and `tokio`'s semaphore hands a permit assigned at that instant
+/// straight to the next waiter.
+///
+/// A `budget` of [`Duration::ZERO`] still acquires a permit that is free right
+/// now — `tokio::time::timeout` polls the inner future before the deadline — so
+/// it means "only if you do not have to make me wait", not "never".
+pub async fn acquire_in_flight_within(
+    budget: Option<Duration>,
+) -> Result<Option<OwnedSemaphorePermit>, QueueBudgetExceeded> {
+    match budget {
+        None => Ok(acquire_in_flight().await),
+        Some(budget) => tokio::time::timeout(budget, acquire_in_flight())
+            .await
+            .map_err(|_| QueueBudgetExceeded),
+    }
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -146,6 +175,36 @@ mod tests {
         // Everything else passes through untouched.
         assert_eq!(permits_for(1), 1);
         assert_eq!(permits_for(DEFAULT_MAX_IN_FLIGHT), DEFAULT_MAX_IN_FLIGHT);
+    }
+
+    #[tokio::test]
+    async fn a_bounded_acquire_takes_a_free_permit_even_on_a_zero_budget() {
+        // The case a spent aggregate deadline relies on: the attempt may still
+        // dispatch when the queue is empty, because that costs it nothing.
+        assert!(
+            acquire_in_flight_within(Some(Duration::ZERO)).await.is_ok(),
+            "an unqueued acquire must not be refused for having no budget"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_bounded_acquire_gives_up_rather_than_queueing_past_the_budget() {
+        // Asserted on a local semaphore for the same reason as below: the
+        // process-global one is a `OnceLock` shared with every test in this
+        // binary. Mirrors what `acquire_in_flight_within` does with the global.
+        let semaphore = Arc::new(Semaphore::new(1));
+        let _held = Arc::clone(&semaphore).acquire_owned().await.unwrap();
+        let started = std::time::Instant::now();
+        let queued =
+            tokio::time::timeout(Duration::ZERO, Arc::clone(&semaphore).acquire_owned()).await;
+        assert!(queued.is_err(), "no permit is free, so the wait cannot fit");
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "the refusal must be immediate"
+        );
+        // And giving up leaves the permit for whoever comes next.
+        drop(_held);
+        assert_eq!(semaphore.available_permits(), 1);
     }
 
     #[tokio::test]
