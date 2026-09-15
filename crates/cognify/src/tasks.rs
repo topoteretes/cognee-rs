@@ -3525,11 +3525,14 @@ pub async fn cognify(
             .clone()
             .with_auto_chunk_size(embedding_engine.as_ref(), llm.as_ref());
         info!("Auto-calculated max_chunk_size: {}", cfg.chunk_size());
-        // Re-validate: the first `validate()` above runs while the size is still
-        // unset, so the `chunk_overlap < max_chunk_size` rule is only checkable
-        // once the auto value is known. A large overlap against a small
-        // engine-derived size (512 on the local ONNX/BGE engine) must fail here
-        // rather than reach the chunkers.
+        // Re-validate: the first `validate()` above runs while the size is
+        // still unset, so any rule keyed on the resolved size is only checkable
+        // here. There is no such rule at the moment — the `chunk_overlap <
+        // max_chunk_size` one was removed as a Python-parity fix (Python
+        // validates chunk_overlap nowhere, and nothing in Rust reads the field),
+        // and `fit_token_budget` clamps to >= 1 so `max_chunk_size != 0` cannot
+        // trip either. Kept so a future size-dependent rule is enforced on the
+        // auto path too, which is exactly where the last one was missed.
         cfg.validate()
             .map_err(|e| CognifyError::ConfigError(e.to_string()))?;
         cfg

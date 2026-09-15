@@ -116,10 +116,13 @@ pub struct CognifyConfig {
     /// chunk_strategy is RECURSIVE or LANGCHAIN", which was not true of any
     /// code path.)
     ///
-    /// The one thing that *does* read it is [`CognifyConfig::validate`], which
-    /// rejects `chunk_overlap >= max_chunk_size`. So an out-of-range value is
-    /// still an error even though an in-range one has no effect — worth knowing
-    /// before assuming the field is entirely unobservable.
+    /// Nothing reads it at all, [`CognifyConfig::validate`] included. That
+    /// validator used to reject `chunk_overlap >= max_chunk_size`, which made
+    /// an inert knob able to fail a whole pipeline — and Python has no such
+    /// rule anywhere. (The only upstream check is langchain's own, inside the
+    /// opt-in `LangchainChunker` against its own `chunk_size=1024`, and it is
+    /// `>` not `>=`.) The rule is gone, so this field is now genuinely
+    /// unobservable: any value parses, and none changes a chunk boundary.
     ///
     /// It is a faithful port of a knob that is dead in Python too — though dead
     /// by unreachability, not by absence. Python declares
@@ -694,19 +697,20 @@ impl CognifyConfig {
     pub fn validate(&self) -> Result<(), ConfigError> {
         // Only an *explicit* chunk size can be validated here: an auto-calculated
         // one is derived from the engines at pipeline time and is always >= 1.
-        if let Some(max_chunk_size) = self.max_chunk_size {
-            if max_chunk_size == 0 {
-                return Err(ConfigError::InvalidParameter(
-                    "max_chunk_size must be greater than 0".to_string(),
-                ));
-            }
-
-            if self.chunk_overlap >= max_chunk_size {
-                return Err(ConfigError::InvalidParameter(
-                    "chunk_overlap must be less than max_chunk_size".to_string(),
-                ));
-            }
+        if self.max_chunk_size == Some(0) {
+            return Err(ConfigError::InvalidParameter(
+                "max_chunk_size must be greater than 0".to_string(),
+            ));
         }
+        // No `chunk_overlap` rule here on purpose. Python validates
+        // `chunk_overlap` against a chunk size nowhere; the only such check
+        // upstream is langchain's own, inside the opt-in `LangchainChunker`
+        // against its own `chunk_size=1024`, and it is `>` not `>=`. The
+        // field is inert on both sides (see its doc comment), so the rule
+        // failed whole pipelines over a knob that moves no chunk boundary —
+        // most easily via an unset `max_chunk_size`, where
+        // `with_auto_chunk_size` puts the budget through `fit_token_budget`
+        // and a word counter turns 512 into 341.
 
         if self.chunks_per_batch == 0 {
             return Err(ConfigError::InvalidParameter(
@@ -977,19 +981,6 @@ mod tests {
     }
 
     #[test]
-    fn test_config_validation_overlap_too_large() {
-        let config = CognifyConfig {
-            max_chunk_size: Some(100),
-            chunk_overlap: 100,
-            ..Default::default()
-        };
-        assert!(matches!(
-            config.validate(),
-            Err(ConfigError::InvalidParameter(_))
-        ));
-    }
-
-    #[test]
     fn test_config_validation_zero_batch_sizes() {
         let config1 = CognifyConfig {
             chunks_per_batch: 0,
@@ -1129,22 +1120,42 @@ mod tests {
         );
     }
 
-    /// An auto-calculated (unset) chunk size must not trip the overlap check —
-    /// the real value is only known at pipeline time.
+    /// `chunk_overlap` is never validated against the chunk size, resolved or
+    /// not. Python has no such rule anywhere — the only upstream check lives in
+    /// the opt-in `LangchainChunker` against its own `chunk_size=1024` — and
+    /// nothing in Rust reads the field, so there is nothing to protect.
     #[test]
-    fn validation_skips_overlap_check_when_chunk_size_is_auto() {
-        let config = CognifyConfig {
-            max_chunk_size: None,
-            chunk_overlap: 100_000,
-            ..Default::default()
-        };
-        assert!(config.validate().is_ok());
+    fn an_overlap_larger_than_the_chunk_size_is_not_an_error() {
+        // Explicit size.
+        assert!(
+            CognifyConfig {
+                max_chunk_size: Some(100),
+                chunk_overlap: 100,
+                ..Default::default()
+            }
+            .validate()
+            .is_ok()
+        );
+        // Auto (unset) size.
+        assert!(
+            CognifyConfig {
+                max_chunk_size: None,
+                chunk_overlap: 100_000,
+                ..Default::default()
+            }
+            .validate()
+            .is_ok()
+        );
     }
 
-    /// ...but once resolved it must be enforced, which is why `cognify()`
-    /// re-validates after auto-calculation rather than only before.
+    /// The pipeline-breaking case: a caller leaves `max_chunk_size` unset and
+    /// sets `chunk_overlap = 400`. On the local ONNX/BGE path
+    /// `with_auto_chunk_size` runs the 512-token budget through
+    /// `fit_token_budget`, a word counter divides by 1.5 down to 341, and
+    /// `cognify()`'s post-auto-calc re-validate then failed the entire run over
+    /// a knob that moves no chunk boundary. It must survive.
     #[test]
-    fn validation_catches_a_too_large_overlap_once_the_size_is_resolved() {
+    fn a_400_token_overlap_survives_the_auto_calculated_chunk_size() {
         let embed = MockEmbedding { max_seq: 512 };
         let llm = MockLlm::with_ctx(4096);
         // Counter pinned explicitly. `Default::default()` reads
@@ -1154,18 +1165,18 @@ mod tests {
         // test binary happened to be built with.
         let resolved = CognifyConfig {
             max_chunk_size: None,
-            chunk_overlap: 100_000,
+            chunk_overlap: 400,
             token_counter_kind: TokenCounterKind::Word,
             ..Default::default()
         }
         .with_auto_chunk_size(&embed, &llm);
         // 512 TOKENS converted for a word counter at the pessimistic 1.50
-        // tokens/word: 512 * 100 / 150 = 341.
+        // tokens/word: 512 * 100 / 150 = 341 — i.e. below the 400 overlap.
         assert_eq!(resolved.max_chunk_size, Some(341));
-        assert!(matches!(
-            resolved.validate(),
-            Err(ConfigError::InvalidParameter(_))
-        ));
+        assert!(
+            resolved.validate().is_ok(),
+            "an inert knob must not fail the pipeline"
+        );
     }
 
     #[test]
