@@ -393,16 +393,22 @@ const fn rank(level: JsonSchemaSupport) -> u8 {
 /// hundred lines above; `openai_json_schema_mode.rs` pins the 400 spelling so a
 /// reformat there cannot silently switch this off.
 ///
-/// **The 400 arm is deliberately broad**: it does not check that the body names
-/// `response_format`, so a 400 caused by something else demotes too. Narrowing
-/// it would mean classifying provider error prose, which is inconsistent enough
-/// that a shape-rejecting server with an unhelpful message would then never
-/// demote and would re-probe on *every* call — the unbounded waste this ladder
-/// exists to prevent, and on a deployment that is otherwise working. The
-/// over-breadth costs little in return, because the constrained request differs
-/// from the cascade's only in `response_format`: a 400 caused by anything else
-/// (a bad budget, a malformed message) fails every other mode too, so that call
-/// fails whatever this returns, and the memo it poisons is process-local.
+/// **A 400 only counts when its body names the thing being refused.** An
+/// earlier revision took every 400, on the argument that the constrained request
+/// differs from the cascade's only in `response_format`, so a 400 from anything
+/// else fails every mode and loses that call regardless. That argument covers
+/// the failing call and misses the ones after it: a demotion is recorded against
+/// the *schema*, monotonically, for the life of the process. One oversized chunk
+/// answered `400 context_length_exceeded` in a long-lived server would therefore
+/// strip constrained decoding from every later extraction — smaller chunks that
+/// would have succeeded — which is a silent quality regression, not a lost call.
+///
+/// So an unrecognised 400 falls through to the cascade for that call and leaves
+/// the memo alone. The residual cost is the opposite failure: a server that
+/// refuses the shape with a body naming none of these tokens is re-probed on
+/// every call instead of once. That is the narrower risk of the two — the known
+/// refuser in this fleet answers **501**, which is typed and needs no prose
+/// matching at all.
 fn is_request_shape_rejection(error: &LlmError) -> bool {
     match error {
         // 501 Not Implemented.
@@ -410,9 +416,30 @@ fn is_request_shape_rejection(error: &LlmError) -> bool {
         // 400 Bad Request. The prefix is what the status mapping writes; the
         // variant alone is too broad, since it is also how a malformed *response*
         // surfaces.
-        LlmError::InvalidResponse(message) => message.starts_with("Bad request:"),
+        LlmError::InvalidResponse(message) => {
+            message.starts_with("Bad request:") && names_the_refused_shape(message)
+        }
         _ => false,
     }
+}
+
+/// Whether a provider's 400 body points at the constrained-output request shape.
+///
+/// A deliberately small vocabulary: the parameter, its two spellings, the
+/// keyword, and the word `schema` itself. `schema` is safe to include even
+/// though it is generic, because this is only ever consulted for a request whose
+/// sole distinguishing feature *is* a schema.
+fn names_the_refused_shape(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    [
+        "response_format",
+        "responseformat",
+        "json_schema",
+        "schema",
+        "strict",
+    ]
+    .iter()
+    .any(|needle| message.contains(needle))
 }
 
 #[derive(Clone)]
@@ -2195,49 +2222,69 @@ impl OpenAIAdapter {
             // path and the three cascade pins — none of which consult the memo —
             // do not pay a recursive hash of the schema on every call.
             let fingerprint = crate::schema::schema_fingerprint(json_schema);
-            // Reserve the discovery, so a wave of concurrent extractions sharing
-            // one schema costs one rejection rather than one per task. The
-            // reservation covers the *whole* ladder, not just its first rung:
-            // the owner records `NonStrictPending` while still holding it, and
-            // `is_discovering` keeps that a reserved state, so a caller arriving
-            // between the two rungs skips rather than duplicating the second
-            // probe. Released by `Drop` on every exit path.
-            let probe_guard = if self.json_schema_memo.level(fingerprint).is_discovering() {
-                self.json_schema_memo.try_begin_probe(fingerprint)
-            } else {
-                // Settled: nothing to coordinate, and concurrent callers should
-                // go out at full rate.
-                None
-            };
-            // Re-read rather than reusing the value above: the owner may have
-            // finished discovery while this call was asking for the
-            // reservation, in which case there is no reason to skip.
-            let skip_for_probe =
-                probe_guard.is_none() && self.json_schema_memo.level(fingerprint).is_discovering();
-            if skip_for_probe {
+            // Reason carried into the next attempt's corrective instruction, so
+            // a retry is never a byte-identical re-send. Separate from the
+            // cascade's `last_reason` below: a constrained-decoding failure says
+            // nothing useful to a tool-calling re-ask, and threading it there
+            // would open the fallback with an accusation about a request the
+            // model never saw.
+            let mut js_last_reason: Option<String> = None;
+            // The discovery reservation, taken lazily at the top of each rung
+            // and released by `Drop` on every exit from this block.
+            let mut probe_guard: Option<ProbeGuard> = None;
+            // A schema whose root is not an object cannot go in a
+            // `response_format.json_schema` at all — OpenAI and the compatible
+            // servers require an object root. Two HTTP routes ask for a bare
+            // `{"type": "string"}` (`routers::llm::string_response_schema`), and
+            // without this they would spend both rungs of the ladder on a
+            // request that is invalid by construction before reaching the
+            // cascade. Checked rather than demoted so the memo records nothing:
+            // there is no endpoint behaviour here to remember.
+            let object_root = json_schema
+                .get("type")
+                .and_then(Value::as_str)
+                .is_some_and(|t| t == "object")
+                || json_schema.get("properties").is_some();
+            if !object_root {
                 debug!(
-                    "another call is probing constrained decoding for this schema; using the \
-                     cascade for this one",
+                    "schema root is not an object, so it cannot travel in a json_schema \
+                     response format; using the tools/functions/json cascade",
                 );
             }
-            // Bound to a name so the reservation lives until the end of this
-            // block rather than being dropped at the end of the statement that
-            // created it.
-            let _probe_guard = probe_guard;
 
-            if !skip_for_probe {
-                // Reason carried into the next attempt's corrective instruction, so
-                // a retry is never a byte-identical re-send. Separate from the
-                // cascade's `last_reason` below: a constrained-decoding failure says
-                // nothing useful to a tool-calling re-ask, and threading it there
-                // would open the fallback with an accusation about a request the
-                // model never saw.
-                let mut js_last_reason: Option<String> = None;
+            if object_root {
                 // One iteration per rung, at most three (strict, non-strict, then
                 // the `Unsupported` exit). `loop` rather than a bounded `for`
                 // because the ladder advances where the rejection is seen, and
                 // `JsonSchemaMemo::record` is monotonic, so it terminates.
                 'levels: loop {
+                    // Reserve the discovery, so a wave of concurrent extractions
+                    // sharing one schema costs one rejection rather than one per
+                    // task. Re-checked every rung rather than once before the
+                    // loop, which covers two cases a pre-loop check misses: the
+                    // owner records `NonStrictPending` while still holding the
+                    // reservation, so a caller arriving between the rungs is kept
+                    // out; and a demotion *away from a settled state* — an Azure
+                    // api-version rollover, a gateway upgrade — is coordinated
+                    // too, where a pre-loop check let every concurrent caller
+                    // walk the whole ladder itself.
+                    //
+                    // A settled level takes no reservation at all, so the steady
+                    // state runs at full concurrency.
+                    if self.json_schema_memo.level(fingerprint).is_discovering()
+                        && probe_guard.is_none()
+                    {
+                        match self.json_schema_memo.try_begin_probe(fingerprint) {
+                            Some(guard) => probe_guard = Some(guard),
+                            None => {
+                                debug!(
+                                    "another call is probing constrained decoding for this \
+                                     schema; using the cascade for this one",
+                                );
+                                break 'levels;
+                            }
+                        }
+                    }
                     let strict = match self.json_schema_memo.level(fingerprint) {
                         // Never tried, or tried and accepted — same request either
                         // way; the two differ only in whether a probe is reserved.

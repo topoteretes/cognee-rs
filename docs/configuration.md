@@ -327,24 +327,34 @@ failing:
 3. on rejection again, out of the mode entirely: the `tools` → `functions` →
    `json` cascade runs exactly as under `auto`.
 
-Only an outright refusal of the request *shape* (HTTP 400 or 501) moves that
-ladder — a rate limit, any **other** 5xx, a network error or a bad answer does
-not — and each step is remembered per schema for the life of the process, so an
-endpoint that refuses constrained decoding pays one wasted request per distinct
-schema, once. Both statuses are terminal in the transport layer, so that request
-is not retried first, and the first probe for a given schema is single-flighted:
-a wave of concurrent extractions sharing one schema costs one rejection, not one
-per task. (Calls that arrive while that probe is in flight use the cascade for
-that call.)
+Only an outright refusal of the request *shape* moves that ladder — HTTP 501, or
+an HTTP 400 whose body names `response_format` / `json_schema` / `schema` /
+`strict`. A rate limit, any **other** 5xx, a network error, a model refusal, a
+bad answer, and a 400 about something else (an oversized prompt, say) all leave
+the memo untouched. That last exclusion matters more than it looks: the memo is
+monotonic and lives for the whole process, so demoting on an unrelated 400 would
+strip constrained decoding from every *later* extraction in a long-lived server,
+including the ones that would have succeeded. The trade is that a server which
+refuses the shape without naming it is re-probed on each call rather than once —
+the narrower risk, since the refusing backend this exists for answers 501, which
+needs no prose matching.
 
-One deliberate over-breadth: *any* HTTP 400 demotes, not only one whose body
-names `response_format`. Provider error text is too inconsistent to classify
-reliably, and the alternative — re-probing forever on a server whose 400 does not
-name the field — is the unbounded waste this ladder exists to prevent. The
-over-breadth is close to harmless because the constrained request differs from
-the cascade's only in `response_format`: a 400 caused by anything else (a bad
-budget, a malformed message) fails every other mode too, so the call was going to
-fail regardless, and the memo is process-local.
+Both statuses are terminal in the transport layer, so the probe costs one request
+rather than a retry ladder, and discovery is single-flighted per schema: a wave
+of concurrent extractions sharing one schema costs one rejection, not one per
+task. Calls arriving while a probe is in flight use the cascade for that call.
+Single-flighting covers the cold start and every rung after a demotion; what it
+cannot cover is an endpoint that *stops* accepting a shape it had already
+accepted (an Azure api-version rollover, a gateway upgrade), because there is no
+way to learn that except by sending. Every call in flight at that moment pays one
+rejection; from the demotion onwards the ladder is coordinated again.
+
+A schema whose root is not an object never enters the mode at all — a
+`response_format.json_schema` requires an object root, so there is nothing to
+discover — and a schema using a JSON Schema feature outside OpenAI's strict
+subset (a map field, `patternProperties`, `if`/`then`/`else`) is refused and
+demoted rather than being silently rewritten into something the provider would
+accept but that means something else.
 
 The Bedrock adapter does not read this knob. It has the equivalent of litellm's
 table (`crates/llm/src/adapters/bedrock/caps.rs`) and already picks Converse's

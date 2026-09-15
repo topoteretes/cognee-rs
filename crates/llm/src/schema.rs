@@ -187,12 +187,26 @@ IMPORTANT: Return ONLY the JSON object. No additional text before or after."#
 /// Apply `rewrite` to every **object node** of a JSON schema, in place of the
 /// three near-identical hand-rolled traversals this crate would otherwise carry.
 ///
-/// "Object node" means any JSON object in the schema document that can itself
-/// describe a value — the root, each entry of `properties`, `items`, each entry
-/// of `$defs` / `definitions`, and each branch of `anyOf` / `allOf` / `oneOf`.
-/// Children are rewritten before the node itself, so `rewrite` always sees
-/// already-rewritten descendants; none of the current callers depend on that,
-/// but a caller that reads a child's keys would.
+/// "Object node" means the root, each entry of `properties`, `items` (both the
+/// single-schema and tuple forms) and `prefixItems`, each entry of `$defs` /
+/// `definitions`, and each branch of `anyOf` / `allOf` / `oneOf`. Children are
+/// rewritten before the node itself, so `rewrite` always sees already-rewritten
+/// descendants; none of the current callers depend on that, but a caller that
+/// reads a child's keys would.
+///
+/// **That list is the covered set, not every position JSON Schema allows.**
+/// Subschemas under `patternProperties`, `not`, `if` / `then` / `else`,
+/// `contains`, `propertyNames`, `dependentSchemas` and the schema form of
+/// `additionalProperties` are left untouched. This is not an oversight to fix by
+/// widening the traversal: OpenAI's strict subset does not accept those keywords
+/// at all, so reaching into them could not make such a schema strict-valid — it
+/// would only change *which* part the provider refuses. A schema using them is
+/// meant to be refused and demoted to the cascade, which answers it correctly.
+/// See [`close_object_node`] for the one case where that distinction is
+/// load-bearing rather than cosmetic.
+///
+/// The Bedrock caller wants those positions closed and does not get them, which
+/// is a pre-existing gap this extraction preserves rather than introduces.
 ///
 /// Non-object input is returned unchanged rather than erroring: a schema
 /// fragment may legitimately be a bare `true` / `false` (JSON Schema's
@@ -325,10 +339,9 @@ pub fn strict_json_schema(schema: &Value) -> Value {
         // still has to be closed — returning early on the missing `properties`
         // map left it as the one node in the document outside the strict
         // subset, which is enough for the whole request to be rejected.
-        let is_object = node.get("type").and_then(Value::as_str) == Some("object");
         let Some(properties) = node.get("properties").and_then(Value::as_object) else {
-            if is_object {
-                node.insert("additionalProperties".to_string(), json!(false));
+            if declares_object(node) {
+                close_object_node(node);
             }
             return;
         };
@@ -343,12 +356,50 @@ pub fn strict_json_schema(schema: &Value) -> Value {
         } else {
             node.insert("required".to_string(), json!(required));
         }
-        node.insert("additionalProperties".to_string(), json!(false));
+        close_object_node(node);
     });
     if let Some(object) = out.as_object_mut() {
         object.remove("$schema");
     }
     out
+}
+
+/// Whether a node's `type` says it is an object.
+///
+/// Accepts the array form as well as the string one: schemars renders a
+/// nullable object as `{"type": ["object", "null"]}`, and reading only
+/// `as_str()` left such a node unclosed.
+fn declares_object(node: &Map<String, Value>) -> bool {
+    match node.get("type") {
+        Some(Value::String(one)) => one == "object",
+        Some(Value::Array(many)) => many.iter().any(|t| t.as_str() == Some("object")),
+        _ => false,
+    }
+}
+
+/// Set `additionalProperties: false` — **unless** the node is using the schema
+/// form of that keyword, which is how JSON Schema spells a map.
+///
+/// `{"type": "object", "additionalProperties": {"type": "string"}}` is a
+/// `HashMap<String, String>`. Overwriting it with `false` produces a schema the
+/// provider happily **accepts** and which forbids every key, so the model
+/// returns a valid, permanently empty map — wrong data, silently, with no
+/// rejection to demote on and nothing in the logs. Leaving the keyword alone
+/// means the node stays outside OpenAI's strict subset, the request is refused,
+/// and the ladder falls back to the cascade, which returns the right answer.
+/// Between a silent wrong result and a noisy fallback, take the fallback.
+///
+/// A boolean `additionalProperties` is still overwritten: `true` is not
+/// satisfiable alongside `strict`, and the alternative there is a rejection with
+/// nothing gained.
+fn close_object_node(node: &mut Map<String, Value>) {
+    if node
+        .get("additionalProperties")
+        .is_some_and(|existing| !existing.is_boolean())
+    {
+        return;
+    }
+    node.insert("additionalProperties".to_string(), json!(false));
 }
 
 /// A **process-local** fingerprint of a schema, insensitive to object-key order.
@@ -709,6 +760,53 @@ mod tests {
             strict["properties"]["bag"]["additionalProperties"],
             json!(false),
             "a property-less object node still has to be closed",
+        );
+    }
+
+    #[test]
+    fn strict_json_schema_never_clobbers_a_map() {
+        // `additionalProperties` holding a *schema* is how JSON Schema spells a
+        // map (`HashMap<String, String>`). Overwriting it with `false` yields a
+        // schema the provider **accepts** and which forbids every key, so the
+        // model returns a valid, permanently empty map — wrong data, silently,
+        // with no rejection to demote on. Leaving it means the node is refused
+        // and the cascade answers correctly, which is the outcome to prefer.
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "labels": {"type": "object", "additionalProperties": {"type": "string"}},
+                "open": {"type": "object", "additionalProperties": true},
+            },
+        });
+
+        let strict = strict_json_schema(&schema);
+
+        assert_eq!(
+            strict["properties"]["labels"]["additionalProperties"],
+            json!({"type": "string"}),
+            "a map's value schema must survive the strict rewrite",
+        );
+        // A *boolean* `true` is still overwritten: it is not satisfiable
+        // alongside `strict`, and keeping it buys nothing.
+        assert_eq!(
+            strict["properties"]["open"]["additionalProperties"],
+            json!(false),
+        );
+    }
+
+    #[test]
+    fn strict_json_schema_closes_a_nullable_object() {
+        // schemars renders a nullable object as a `type` *array*. Reading only
+        // `as_str()` left such a node unclosed, which is enough to put the
+        // document outside the strict subset.
+        let strict = strict_json_schema(&json!({
+            "type": "object",
+            "properties": {"maybe": {"type": ["object", "null"]}},
+        }));
+
+        assert_eq!(
+            strict["properties"]["maybe"]["additionalProperties"],
+            json!(false),
         );
     }
 

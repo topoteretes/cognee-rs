@@ -499,6 +499,142 @@ async fn a_refusal_is_not_an_empty_answer_and_does_not_demote() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_settled_schema_that_starts_being_refused_coordinates_its_second_rung() {
+    // The endpoint changing under a *discovered* schema — an Azure api-version
+    // rollover, a gateway upgrade. The reservation is not taken in a settled
+    // state (that is what lets the steady state run at full concurrency), so
+    // every in-flight caller sends the rung that has just started failing.
+    //
+    // That first burst is irreducible: nothing can know the endpoint changed
+    // until a request comes back refused. What the per-rung reservation buys is
+    // that the burst is not then *doubled* on the way down the ladder — the
+    // demotion moves the level into a discovering state, and from there exactly
+    // one caller continues while the rest fall through to the cascade.
+    let server = MockServer::start_async().await;
+    let accepting = strict_mock(&server, 200, USABLE).await;
+    let tools = tools_mock(&server, USABLE).await;
+    let llm = std::sync::Arc::new(adapter(&server, StructuredOutputMode::JsonSchema));
+
+    // Settle the schema at `Strict`.
+    llm.create_structured_output_raw("input text", "system prompt", &schema(), None)
+        .await
+        .unwrap();
+    assert_eq!(accepting.calls_async().await, 1);
+
+    // Now the endpoint stops accepting that shape.
+    accepting.delete_async().await;
+    let refusing = server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path("/chat/completions")
+                .body_includes("\"json_schema\"")
+                .body_includes("\"strict\":true");
+            then.status(501)
+                .header("content-type", "application/json")
+                .delay(std::time::Duration::from_millis(300))
+                .body("{}");
+        })
+        .await;
+    let non_strict = non_strict_mock(&server, 501, "{}").await;
+
+    let mut tasks = Vec::new();
+    for _ in 0..6 {
+        let llm = std::sync::Arc::clone(&llm);
+        tasks.push(tokio::spawn(async move {
+            llm.create_structured_output_raw("input text", "system prompt", &schema(), None)
+                .await
+        }));
+    }
+    for task in tasks {
+        assert_eq!(task.await.unwrap().unwrap(), json!({"foo": "bar"}));
+    }
+
+    assert_eq!(
+        refusing.calls_async().await,
+        6,
+        "the first rung's burst is irreducible — the change is only observable by sending",
+    );
+    assert_eq!(
+        non_strict.calls_async().await,
+        1,
+        "but the demoted rung is coordinated, so the burst is not doubled",
+    );
+    assert_eq!(
+        tools.calls_async().await,
+        6,
+        "all six are still answered; the settling call never needed the cascade",
+    );
+}
+
+#[tokio::test]
+async fn an_unrelated_bad_request_does_not_demote() {
+    // A 400 that says nothing about the request shape — an oversized chunk, a
+    // malformed message — must not be remembered as "this endpoint refuses
+    // constrained decoding". That call is lost either way, but the memo is
+    // monotonic and process-wide, so demoting on it would strip constrained
+    // decoding from every *later* extraction in a long-lived server, including
+    // the smaller chunks that would have succeeded. A silent quality
+    // regression, not a lost call.
+    let server = MockServer::start_async().await;
+    let strict = strict_mock(
+        &server,
+        400,
+        r#"{"error":{"message":"This model's maximum context length is 8192 tokens","code":"context_length_exceeded"}}"#,
+    )
+    .await;
+    let non_strict = non_strict_mock(&server, 200, USABLE).await;
+    let tools = tools_mock(&server, USABLE).await;
+    let llm = adapter(&server, StructuredOutputMode::JsonSchema);
+
+    for _ in 0..2 {
+        llm.create_structured_output_raw("input text", "system prompt", &schema(), None)
+            .await
+            .unwrap();
+    }
+
+    assert_eq!(
+        strict.calls_async().await,
+        2,
+        "the second call still asks for strict — nothing was learned about the shape",
+    );
+    assert_eq!(
+        non_strict.calls_async().await,
+        0,
+        "and the ladder never advanced",
+    );
+    assert_eq!(tools.calls_async().await, 2, "each call used the cascade");
+}
+
+#[tokio::test]
+async fn a_non_object_root_skips_the_mode_entirely() {
+    // `response_format.json_schema` requires an object root, so a bare
+    // `{"type": "string"}` — which two HTTP routes ask for — is invalid by
+    // construction. Spending both rungs discovering that is pure waste, and
+    // there is no endpoint behaviour to remember afterwards.
+    let server = MockServer::start_async().await;
+    let strict = strict_mock(&server, 200, USABLE).await;
+    let non_strict = non_strict_mock(&server, 200, USABLE).await;
+    let tools = tools_mock(&server, USABLE).await;
+
+    let result = adapter(&server, StructuredOutputMode::JsonSchema)
+        .create_structured_output_raw(
+            "input text",
+            "system prompt",
+            &json!({"type": "string"}),
+            None,
+        )
+        .await;
+
+    assert!(result.is_ok(), "the cascade answers: {result:?}");
+    assert_eq!(
+        strict.calls_async().await + non_strict.calls_async().await,
+        0,
+        "no constrained request is sent for a schema that cannot carry one",
+    );
+    assert_eq!(tools.calls_async().await, 1);
+}
+
 #[tokio::test]
 async fn a_non_shape_error_does_not_demote() {
     // 401 is terminal too, but it says nothing about whether the endpoint can
