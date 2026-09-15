@@ -364,6 +364,20 @@ pub fn strict_json_schema(schema: &Value) -> Value {
     out
 }
 
+/// Whether a schema's root *declares* itself an object.
+///
+/// Used to decide whether a schema can travel in a
+/// `response_format: {"type": "json_schema"}` at all, which requires an object
+/// root. Deliberately does **not** infer objecthood from the presence of
+/// `properties`: that keyword constrains an instance only *if* it is an object
+/// and asserts nothing on its own, so a schema relying on it would be rejected
+/// by the provider anyway — and synthesising the missing `type` would narrow a
+/// schema its author chose to leave open.
+#[must_use]
+pub fn declares_object_root(schema: &Value) -> bool {
+    schema.as_object().is_some_and(declares_object)
+}
+
 /// Whether a node's `type` says it is an object.
 ///
 /// Accepts the array form as well as the string one: schemars renders a
@@ -389,14 +403,16 @@ fn declares_object(node: &Map<String, Value>) -> bool {
 /// and the ladder falls back to the cascade, which returns the right answer.
 /// Between a silent wrong result and a noisy fallback, take the fallback.
 ///
-/// A boolean `additionalProperties` is still overwritten: `true` is not
-/// satisfiable alongside `strict`, and the alternative there is a rejection with
-/// nothing gained.
+/// An explicit `additionalProperties: true` is preserved for the same reason,
+/// which is the one place this differs from a first reading of "strict mode
+/// closes every object". `true` says the author *wants* keys beyond
+/// `properties`; rewriting it to `false` produces a schema the provider accepts
+/// and which drops exactly those keys — silent field loss, again with no
+/// rejection to demote on. Only an **absent** keyword is filled in, which is
+/// also what makes this identical to the Bedrock rewrite it shares a traversal
+/// with.
 fn close_object_node(node: &mut Map<String, Value>) {
-    if node
-        .get("additionalProperties")
-        .is_some_and(|existing| !existing.is_boolean())
-    {
+    if node.contains_key("additionalProperties") {
         return;
     }
     node.insert("additionalProperties".to_string(), json!(false));
@@ -786,11 +802,13 @@ mod tests {
             json!({"type": "string"}),
             "a map's value schema must survive the strict rewrite",
         );
-        // A *boolean* `true` is still overwritten: it is not satisfiable
-        // alongside `strict`, and keeping it buys nothing.
+        // An explicit `true` is preserved for the same reason: the author asked
+        // for keys beyond `properties`, and closing the node would produce a
+        // request the provider accepts while dropping exactly those keys.
         assert_eq!(
             strict["properties"]["open"]["additionalProperties"],
-            json!(false),
+            json!(true),
+            "an explicitly open object must not be silently closed",
         );
     }
 
@@ -880,10 +898,11 @@ mod tests {
         });
         let strict = strict_json_schema(&scalars);
         assert_eq!(strict["properties"]["n"], json!({"type": "integer"}));
-        // Strict mode overrides an explicit `additionalProperties: true`: it is
-        // not satisfiable alongside `strict`, so the alternative is a request
-        // the provider rejects.
-        assert_eq!(strict["additionalProperties"], json!(false));
+        // An explicit `additionalProperties: true` is left standing. Closing it
+        // would be accepted by the provider and would drop every key the author
+        // opened the object for — the same silent-loss shape as the map case
+        // above. Refusal and a fallback to the cascade is the better outcome.
+        assert_eq!(strict["additionalProperties"], json!(true));
     }
 
     #[test]

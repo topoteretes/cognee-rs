@@ -278,8 +278,22 @@ impl JsonSchemaSupport {
 /// endpoint, not a handle on it.
 #[derive(Debug, Default)]
 struct JsonSchemaMemo {
-    levels: Mutex<HashMap<u64, JsonSchemaSupport>>,
-    /// Fingerprints whose *first* probe is on the wire right now.
+    /// Both maps live under **one** lock, deliberately.
+    ///
+    /// They were separate, and reading the level and then reserving was two
+    /// acquisitions with a gap between them: a caller could read a settled
+    /// `Strict`, be descheduled while another caller recorded
+    /// `NonStrictPending` and took the reservation, then re-read
+    /// `NonStrictPending` and send a second, unreserved probe. Deciding the rung
+    /// needs the level and the reservation to move together, so they share a
+    /// lock and [`JsonSchemaMemo::begin_rung`] is the only way in.
+    state: Mutex<MemoState>,
+}
+
+#[derive(Debug, Default)]
+struct MemoState {
+    levels: HashMap<u64, JsonSchemaSupport>,
+    /// Fingerprints whose probe is on the wire right now.
     ///
     /// Without this the "one probe per schema" above is only true of a serial
     /// caller. Cognify extracts chunks concurrently through one shared adapter
@@ -291,10 +305,24 @@ struct JsonSchemaMemo {
     /// anyway if the probe fails. The cost when the probe *succeeds* is that the
     /// first wave misses constrained decoding once; every later call has the
     /// answer.
-    probing: Mutex<std::collections::HashSet<u64>>,
+    probing: std::collections::HashSet<u64>,
 }
 
-/// Releases a [`JsonSchemaMemo::try_begin_probe`] reservation.
+/// What a caller should do for one rung of the ladder, decided atomically.
+enum RungDecision {
+    /// Send this rung. `strict` picks the form; the guard, when present, is this
+    /// call's discovery reservation and must be held until the ladder is done.
+    Send {
+        strict: bool,
+        guard: Option<ProbeGuard>,
+    },
+    /// Another call is discovering this schema — use the cascade for this one.
+    Deferred,
+    /// The endpoint has refused constrained decoding for this schema.
+    Unsupported,
+}
+
+/// Releases a discovery reservation taken by [`JsonSchemaMemo::begin_rung`].
 ///
 /// A guard rather than a paired call because the probe's owner can leave by a
 /// dozen paths — a `?`, a `return Err`, a panic, a dropped future when the
@@ -313,43 +341,72 @@ impl Drop for ProbeGuard {
 }
 
 impl JsonSchemaMemo {
-    /// Take the levels lock, reading through a poisoning.
+    /// Distinct schemas remembered before the map is dropped and rebuilt.
+    ///
+    /// The memo is keyed on caller-supplied schemas, and
+    /// `create_structured_output_raw` takes an arbitrary `Value`, so a
+    /// long-lived multi-tenant service that opts into this mode could otherwise
+    /// grow it without bound. 1024 is ~200x any real workload — cognify uses a
+    /// handful — so the reset below is not something a genuine deployment
+    /// reaches.
+    const MAX_REMEMBERED_SCHEMAS: usize = 1024;
+
+    /// Take the lock, reading through a poisoning.
     ///
     /// A poisoned mutex here only means some other caller panicked while
     /// recording a demotion; the map is a cache of observations, so every entry
     /// in it is still true, and refusing to read it would cost a re-probe of
     /// every schema — strictly worse than the stale read. Same reasoning, and
     /// the same idiom, as `cognee_utils::pacing`'s token bucket.
-    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<u64, JsonSchemaSupport>> {
-        self.levels
+    fn lock(&self) -> std::sync::MutexGuard<'_, MemoState> {
+        self.state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// The level to send for `fingerprint`, defaulting to
-    /// [`JsonSchemaSupport::Unknown`].
+    /// The level recorded for `fingerprint`. Test/logging use — the ladder goes
+    /// through [`Self::begin_rung`], which also reserves.
+    #[cfg(test)]
     fn level(&self, fingerprint: u64) -> JsonSchemaSupport {
-        self.lock().get(&fingerprint).copied().unwrap_or_default()
+        self.lock()
+            .levels
+            .get(&fingerprint)
+            .copied()
+            .unwrap_or_default()
     }
 
-    /// Reserve the right to run the first probe for `fingerprint`, or `None` if
-    /// another call already holds it.
-    fn try_begin_probe(self: &Arc<Self>, fingerprint: u64) -> Option<ProbeGuard> {
-        let mut probing = self
-            .probing
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        probing.insert(fingerprint).then(|| ProbeGuard {
-            memo: Arc::clone(self),
-            fingerprint,
-        })
+    /// Read the level and, when discovery is incomplete, reserve it — in one
+    /// critical section, so no other call can change the level in between.
+    ///
+    /// `holding` says this call already owns the reservation from an earlier
+    /// rung, in which case it keeps it rather than contending with itself.
+    fn begin_rung(self: &Arc<Self>, fingerprint: u64, holding: bool) -> RungDecision {
+        let mut state = self.lock();
+        let level = state.levels.get(&fingerprint).copied().unwrap_or_default();
+        if matches!(level, JsonSchemaSupport::Unsupported) {
+            return RungDecision::Unsupported;
+        }
+        let mut guard = None;
+        if level.is_discovering() && !holding {
+            if !state.probing.insert(fingerprint) {
+                return RungDecision::Deferred;
+            }
+            guard = Some(ProbeGuard {
+                memo: Arc::clone(self),
+                fingerprint,
+            });
+        }
+        RungDecision::Send {
+            strict: matches!(
+                level,
+                JsonSchemaSupport::Unknown | JsonSchemaSupport::Strict
+            ),
+            guard,
+        }
     }
 
     fn end_probe(&self, fingerprint: u64) {
-        self.probing
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(&fingerprint);
+        self.lock().probing.remove(&fingerprint);
     }
 
     /// Record what this endpoint accepts for `fingerprint`.
@@ -359,8 +416,23 @@ impl JsonSchemaMemo {
     /// faster one has already seen refused, and the ladder can only ever move
     /// one way.
     fn record(&self, fingerprint: u64, level: JsonSchemaSupport) {
-        let mut levels = self.lock();
-        let entry = levels.entry(fingerprint).or_insert(level);
+        let mut state = self.lock();
+        // Bound the map rather than evict from it: there is no useful recency
+        // signal here (every entry is equally true), and dropping the lot costs
+        // only a re-probe of whatever is still in use. Skipped when the
+        // fingerprint is already present, so a steady workload never triggers it.
+        if state.levels.len() >= Self::MAX_REMEMBERED_SCHEMAS
+            && !state.levels.contains_key(&fingerprint)
+        {
+            warn!(
+                remembered = state.levels.len(),
+                "constrained-decoding memo hit its schema cap; clearing it and re-probing. \
+                 This means distinct schemas are being generated per request, which is \
+                 usually a caller bug",
+            );
+            state.levels.clear();
+        }
+        let entry = state.levels.entry(fingerprint).or_insert(level);
         if rank(level) > rank(*entry) {
             *entry = level;
         }
@@ -555,8 +627,15 @@ pub struct OpenAIAdapter {
     ///
     /// [`StructuredOutputMode::Auto`] — the default — runs the full cascade and
     /// leans on [`cascade_probe`](Self::cascade_probe) to stop paying for a mode
-    /// that never answers. Any other value pins one mode: the others are never
-    /// sent at all, and exhausting the pinned one is terminal.
+    /// that never answers. [`Tools`](StructuredOutputMode::Tools),
+    /// [`Functions`](StructuredOutputMode::Functions) and
+    /// [`Json`](StructuredOutputMode::Json) each pin one mode: the others are
+    /// never sent at all, and exhausting the pinned one is terminal.
+    ///
+    /// [`JsonSchema`](StructuredOutputMode::JsonSchema) is not a pin. It adds
+    /// constrained decoding *ahead* of the cascade and demotes back into it when
+    /// the endpoint refuses the shape, so every mode below stays reachable and
+    /// exhaustion is not terminal.
     ///
     /// The probe and the pin solve the same problem from opposite ends. The
     /// probe *learns* an endpoint's shape at the cost of a miss threshold per
@@ -2240,11 +2319,16 @@ impl OpenAIAdapter {
             // request that is invalid by construction before reaching the
             // cascade. Checked rather than demoted so the memo records nothing:
             // there is no endpoint behaviour here to remember.
-            let object_root = json_schema
-                .get("type")
-                .and_then(Value::as_str)
-                .is_some_and(|t| t == "object")
-                || json_schema.get("properties").is_some();
+            //
+            // The root must *declare* itself an object. Inferring it from the
+            // presence of `properties` was tempting — `validate_summary_schema`
+            // (`crates/cognify/src/config.rs`) deliberately accepts a custom
+            // schema with the type omitted — but `properties` without `type` does
+            // not assert the instance is an object, the strict rewrite preserves
+            // that omission, and the probe would be rejected anyway. Synthesising
+            // the type instead would silently narrow a schema the caller wrote,
+            // which is the mistake `close_object_node` exists to avoid.
+            let object_root = crate::schema::declares_object_root(json_schema);
             if !object_root {
                 debug!(
                     "schema root is not an object, so it cannot travel in a json_schema \
@@ -2258,9 +2342,8 @@ impl OpenAIAdapter {
                 // because the ladder advances where the rejection is seen, and
                 // `JsonSchemaMemo::record` is monotonic, so it terminates.
                 'levels: loop {
-                    // Reserve the discovery, so a wave of concurrent extractions
-                    // sharing one schema costs one rejection rather than one per
-                    // task. Re-checked every rung rather than once before the
+                    // Read the level and reserve the discovery in one critical
+                    // section. Re-decided every rung rather than once before the
                     // loop, which covers two cases a pre-loop check misses: the
                     // owner records `NonStrictPending` while still holding the
                     // reservation, so a caller arriving between the rungs is kept
@@ -2271,31 +2354,27 @@ impl OpenAIAdapter {
                     //
                     // A settled level takes no reservation at all, so the steady
                     // state runs at full concurrency.
-                    if self.json_schema_memo.level(fingerprint).is_discovering()
-                        && probe_guard.is_none()
+                    let strict = match self
+                        .json_schema_memo
+                        .begin_rung(fingerprint, probe_guard.is_some())
                     {
-                        match self.json_schema_memo.try_begin_probe(fingerprint) {
-                            Some(guard) => probe_guard = Some(guard),
-                            None => {
-                                debug!(
-                                    "another call is probing constrained decoding for this \
-                                     schema; using the cascade for this one",
-                                );
-                                break 'levels;
+                        RungDecision::Send { strict, guard } => {
+                            if guard.is_some() {
+                                probe_guard = guard;
                             }
+                            strict
                         }
-                    }
-                    let strict = match self.json_schema_memo.level(fingerprint) {
-                        // Never tried, or tried and accepted — same request either
-                        // way; the two differ only in whether a probe is reserved.
-                        JsonSchemaSupport::Unknown | JsonSchemaSupport::Strict => true,
-                        // Likewise: demoted-but-untried and demoted-and-working both
-                        // send the non-strict rung.
-                        JsonSchemaSupport::NonStrictPending | JsonSchemaSupport::NonStrict => false,
-                        JsonSchemaSupport::Unsupported => {
+                        RungDecision::Deferred => {
+                            debug!(
+                                "another call is probing constrained decoding for this \
+                                 schema; using the cascade for this one",
+                            );
+                            break 'levels;
+                        }
+                        RungDecision::Unsupported => {
                             debug!(
                                 "endpoint has refused constrained decoding for this schema; \
-                             using the tools/functions/json cascade",
+                                 using the tools/functions/json cascade",
                             );
                             break 'levels;
                         }
@@ -3539,6 +3618,98 @@ mod tests {
         reason = "test code — panics are acceptable"
     )]
     use super::*;
+
+    #[test]
+    fn begin_rung_reserves_discovery_and_lets_settled_levels_through() {
+        let memo = Arc::new(JsonSchemaMemo::default());
+
+        // Unknown: the first caller reserves, the second is deferred rather
+        // than sending a duplicate probe.
+        let first = memo.begin_rung(1, false);
+        let guard = match first {
+            RungDecision::Send { strict, guard } => {
+                assert!(strict, "an unprobed schema starts at the strict rung");
+                guard.expect("the first caller takes the reservation")
+            }
+            _ => panic!("expected Send"),
+        };
+        assert!(matches!(memo.begin_rung(1, false), RungDecision::Deferred));
+
+        // The owner stays in while it walks the ladder: the demotion moves the
+        // level to another *discovering* state, and `holding` keeps it from
+        // contending with its own reservation.
+        memo.record(1, JsonSchemaSupport::NonStrictPending);
+        assert!(matches!(memo.begin_rung(1, false), RungDecision::Deferred));
+        match memo.begin_rung(1, true) {
+            RungDecision::Send { strict, guard } => {
+                assert!(!strict, "the demoted rung is non-strict");
+                assert!(guard.is_none(), "the owner keeps the guard it already has");
+            }
+            _ => panic!("expected Send"),
+        }
+
+        // Releasing it reopens discovery.
+        drop(guard);
+        assert!(matches!(
+            memo.begin_rung(1, false),
+            RungDecision::Send { guard: Some(_), .. }
+        ));
+
+        // A settled level needs no reservation at all, so concurrent callers
+        // run at full rate.
+        memo.record(2, JsonSchemaSupport::Strict);
+        for _ in 0..3 {
+            assert!(matches!(
+                memo.begin_rung(2, false),
+                RungDecision::Send {
+                    strict: true,
+                    guard: None
+                }
+            ));
+        }
+
+        memo.record(3, JsonSchemaSupport::Unsupported);
+        assert!(matches!(
+            memo.begin_rung(3, false),
+            RungDecision::Unsupported
+        ));
+    }
+
+    #[test]
+    fn record_is_monotonic_and_bounded() {
+        let memo = Arc::new(JsonSchemaMemo::default());
+
+        // A slow caller's success cannot resurrect a shape a faster one already
+        // saw refused.
+        memo.record(7, JsonSchemaSupport::Unsupported);
+        memo.record(7, JsonSchemaSupport::Strict);
+        assert_eq!(memo.level(7), JsonSchemaSupport::Unsupported);
+
+        // The map is keyed on caller-supplied schemas, so it must not grow
+        // without bound. Past the cap it is dropped and rebuilt rather than
+        // evicted from: every entry is equally true, so there is no recency to
+        // order by, and the cost is only a re-probe.
+        // Fill to exactly the cap — entry 7 above is the first of them.
+        for i in 0..JsonSchemaMemo::MAX_REMEMBERED_SCHEMAS as u64 - 1 {
+            memo.record(1000 + i, JsonSchemaSupport::Unsupported);
+        }
+        assert_eq!(
+            memo.lock().levels.len(),
+            JsonSchemaMemo::MAX_REMEMBERED_SCHEMAS,
+            "filling up to the cap does not reset",
+        );
+        memo.record(u64::MAX, JsonSchemaSupport::Unsupported);
+        assert_eq!(
+            memo.lock().levels.len(),
+            1,
+            "the cap clears the map and keeps only the new entry"
+        );
+
+        // A fingerprint already present does not trip the cap, so a steady
+        // workload never resets.
+        memo.record(u64::MAX, JsonSchemaSupport::Unsupported);
+        assert_eq!(memo.lock().levels.len(), 1);
+    }
 
     #[test]
     fn mode_probe_tries_the_mode_until_the_miss_threshold() {

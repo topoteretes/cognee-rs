@@ -633,6 +633,29 @@ async fn a_non_object_root_skips_the_mode_entirely() {
         "no constrained request is sent for a schema that cannot carry one",
     );
     assert_eq!(tools.calls_async().await, 1);
+
+    // A root that merely *has* `properties` without declaring `type: "object"`
+    // is also skipped. `validate_summary_schema` accepts such a schema, and
+    // `properties` alone does not assert the instance is an object — the strict
+    // rewrite preserves the omission, so the probe would be refused anyway.
+    // Synthesising the missing type instead would narrow a schema its author
+    // chose to leave open.
+    let result = adapter(&server, StructuredOutputMode::JsonSchema)
+        .create_structured_output_raw(
+            "input text",
+            "system prompt",
+            &json!({"properties": {"foo": {"type": "string"}}}),
+            None,
+        )
+        .await;
+
+    assert!(result.is_ok(), "the cascade answers: {result:?}");
+    assert_eq!(
+        strict.calls_async().await + non_strict.calls_async().await,
+        0,
+        "an undeclared object root is not an object root",
+    );
+    assert_eq!(tools.calls_async().await, 2);
 }
 
 #[tokio::test]
