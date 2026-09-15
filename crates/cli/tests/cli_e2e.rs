@@ -1130,6 +1130,60 @@ fn run_sequence_refuses_vector_reindex_as_a_step() {
         );
 }
 
+/// `edge-reindex --dataset-id` labels the rows it writes; it does not scope the
+/// scan, and cannot. The flag name reads exactly like a filter, so the summary
+/// line `-h` prints has to say so on its own — the long `--help` prose does not
+/// reach an operator who typed `-h`, which is the habit this guards.
+///
+/// Asserted against `-h` specifically, and on the *absence* of a bare
+/// "stamped on the points this run writes" summary: a doc comment whose first
+/// line went back to describing the flag neutrally would still pass a loose
+/// `contains("dataset")`, which is what makes that version worthless here.
+#[test]
+fn edge_reindex_short_help_says_dataset_id_is_not_a_filter() {
+    let config_home = TempDir::new().expect("temp dir should be created");
+    make_cmd(&config_home)
+        .args(["edge-reindex", "-h"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("NOT a filter")
+                .and(predicate::str::contains("whole graph"))
+                .and(predicate::str::contains("--apply")),
+        );
+}
+
+/// `run-sequence` refuses `edge-reindex`, the same way it refuses
+/// `vector-reindex`: store maintenance is not a pipeline step, and here
+/// applying also bills an unbounded, data-dependent number of embeddings into
+/// the middle of a measured run.
+///
+/// Pinned end to end for the same reason as its neighbour — the arm is
+/// reachable only through the step parser, so a refusal that compiled but never
+/// fired would look identical in review. The step is the *first* one, so a run
+/// that fails to refuse proceeds to open the graph store instead of stopping,
+/// which the second predicate catches.
+#[test]
+fn run_sequence_refuses_edge_reindex_as_a_step() {
+    let config_home = TempDir::new().expect("temp dir should be created");
+    let workdir = TempDir::new().expect("temp dir should be created");
+    let sequence = workdir.path().join("edge_reindex_step.json");
+    std::fs::write(&sequence, r#"[{"command": ["edge-reindex"]}]"#)
+        .expect("sequence file should be written");
+
+    make_cmd_in(&config_home, workdir.path())
+        .args([
+            "run-sequence",
+            sequence.to_str().expect("temp path should be UTF-8"),
+        ])
+        .assert()
+        .failure()
+        .stdout(
+            predicate::str::contains("edge-reindex is not allowed inside run-sequence")
+                .and(predicate::str::contains("Scanning the whole graph").not()),
+        );
+}
+
 #[test]
 fn config_subcommand_help_flag_prints_usage() {
     let config_home = TempDir::new().expect("temp dir should be created");

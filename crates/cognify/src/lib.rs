@@ -4,6 +4,8 @@
 pub mod config;
 /// Dataset resolver module.
 pub mod dataset_resolver;
+/// Whole-graph repair for `EdgeType` vector rows a killed run never wrote.
+pub mod edge_reindex;
 /// Error types module.
 pub mod error;
 /// Fact extraction module.
@@ -37,6 +39,7 @@ pub mod triplet_creation;
 
 pub use config::{ChunkStrategy, CognifyConfig, ConfigError, CustomChunker, GraphBackendHandle};
 pub use dataset_resolver::{DatasetRef, DatasetResolver, cognify_dataset_refs, cognify_datasets};
+pub use edge_reindex::{EdgeReindexOptions, EdgeReindexReport, reindex_edge_types};
 pub use error::CognifyError;
 pub use fact_extraction::{Edge, FactExtractor, GraphModel, KnowledgeGraph, Node};
 pub use failure::{

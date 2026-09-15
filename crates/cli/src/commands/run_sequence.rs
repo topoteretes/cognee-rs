@@ -53,6 +53,17 @@ fn dispatch(command: Commands, cm: &Arc<ComponentManager>) -> Result<(), CliErro
              before or after the sequence"
                 .to_string(),
         )),
+        // Store maintenance, same as `vector-reindex`, and with a second reason
+        // on top of the timing one: applying embeds one row per missing edge
+        // type, so a sequence that included it would bill an unbounded and
+        // data-dependent amount of embedding into the middle of a measured run.
+        // Its report-only default is no better here — it would read as a step
+        // that ran while changing nothing.
+        Commands::EdgeReindex(_) => Err(CliError::Validation(
+            "edge-reindex is not allowed inside run-sequence — run it on its own \
+             before or after the sequence"
+                .to_string(),
+        )),
         Commands::Config(args) => config::run(args),
         Commands::RunSequence(_) => Err(CliError::Validation(
             "Nested run-sequence is not allowed".to_string(),

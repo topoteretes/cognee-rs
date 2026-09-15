@@ -24,6 +24,13 @@ html-loader = ["cognee-ingestion/html-loader"]
 image-loader = ["cognee-ingestion/image-loader"]
 audio-loader = ["cognee-ingestion/audio-loader"]
 
+# The file carries `#![cfg(feature = "testing")]`, which without this entry would
+# still build in a lane that does not enable the feature and report a green
+# `running 0 tests` — indistinguishable from a lane that actually ran them.
+[[test]]
+name = "edge_reindex_backfill"
+required-features = ["testing"]
+
 [dependencies]
 cognee-models = { path = "../models", version = "0.2.0" }
 cognee-storage = { path = "../storage", version = "0.2.0" }

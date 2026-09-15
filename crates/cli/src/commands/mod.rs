@@ -7,6 +7,7 @@ pub mod bench_telemetry;
 pub mod cognify;
 pub mod config;
 pub mod delete;
+pub mod edge_reindex;
 pub mod export;
 pub mod forget;
 pub mod improve;

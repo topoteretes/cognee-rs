@@ -334,6 +334,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `MaxRetriesExceeded`. HTTP defines 501 as the server lacking the capability, so
   no wait can make it succeed — and a retried one would have arrived as an error
   the cascade treats as fatal, which would have made the demotion unreachable.
+- **`cognee-cli edge-reindex` / `cognee_cognify::reindex_edge_types`: repair for
+  `EdgeType` vector rows a killed run never wrote.** Cognify commits extracted
+  edges to the graph a whole pipeline stage before it writes their
+  `EdgeType_relationship_name` vector points, so a process killed between the
+  two leaves graph edges with no vector row — and nothing repairs them. A retry
+  finds the edge already in the graph and routes it into the claim-only bucket,
+  which is never vector-indexed; the rollback sweeper is reached only from
+  in-process error paths, so a SIGKILL runs none of it. Those edges then take
+  the full `triplet_distance_penalty` in every retrieval lane that reads the
+  collection, silently and permanently.
+
+  This is a **robustness improvement over Python, not a parity fix** — Python
+  has the identical dead end, and a comment in `add_data_points.py` calling the
+  order "self-healing" on the same false in-process premise. What Python does
+  ship, and this is modelled on, is the whole-graph repair
+  `index_graph_edges(edges_data=None)`. Two deliberate differences: Python
+  re-embeds every row whether or not it was missing, whereas this establishes
+  the orphan set first with an id probe that embeds nothing and writes only
+  what is genuinely absent; and reporting is the default rather than
+  fire-and-forget, because the count is free and applying is billed per row.
+
+  Orphan-ness is per distinct *retrieval text*, not per edge — one row serves
+  every edge carrying that text. The reported count is deliberately not a
+  crash-damage count: cognify builds `EdgeType` rows from LLM-extracted edges
+  only, so the structural families (`is_part_of`, `contains`, `made_from`,
+  written by a separate `add_edges` after the counting) and the DLT foreign-key
+  edges have no row on a graph that never crashed either. Expect a small
+  constant floor there; applying writes it too, which makes those edges take a
+  real vector distance instead of the `triplet_distance_penalty` — again what
+  Python's whole-graph repair does, since it counts whatever `get_graph_data()`
+  returns. The CLI says so next to the number. `--limit` plus the reported `--resume-after`
+  cursor make a large repair restartable; both bound the embedding work only,
+  as the graph read is whole-graph and not streamed. `--dataset-id` labels the
+  written rows and deliberately does **not** scope the scan: the point id is
+  hashed from the retrieval text alone, so one row is shared by every dataset
+  holding an edge with that text and there is no per-dataset row to repair.
+  Refused inside `run-sequence`, like `vector-reindex`.
+
+  `EdgeType::point_id_for(edge_text, relationship_name)` is added to
+  `cognee-models` as the single `retrieval_text` → `deterministic_id`
+  derivation, replacing the copies each lane was restating; the search lane's
+  `edge_type_point_id` now delegates to it, unchanged in behaviour including
+  the blank-input → `None` convention.
+
 - **`cognee-cli vector-reindex`: an operator entry point for the pgvector ANN
   index backfill.** The pgvector HNSW index (#196, also unreleased — it ships in
   this same release) is built by `create_collection`, not by a migration, and

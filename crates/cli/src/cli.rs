@@ -31,6 +31,8 @@ pub enum Commands {
     PipelineUnblock(PipelineUnblockArgs),
     #[command(name = "vector-reindex")]
     VectorReindex(VectorReindexArgs),
+    #[command(name = "edge-reindex")]
+    EdgeReindex(EdgeReindexArgs),
     Config(ConfigArgs),
     #[command(name = "run-sequence")]
     RunSequence(RunSequenceArgs),
@@ -251,6 +253,82 @@ pub struct PipelineUnblockArgs {
 /// is a command rather than something startup does.
 #[derive(Debug, Args)]
 pub struct VectorReindexArgs {}
+
+/// Report, and optionally repair, graph edges whose `EdgeType` vector row is
+/// missing.
+///
+/// A run killed between cognify's graph write and its vector write leaves edges
+/// in the graph with no `EdgeType_relationship_name` point. Retrying does not
+/// fix it: the retry finds the edge already in the graph and routes it into the
+/// claim-only bucket, which is never vector-indexed. The rollback sweeper only
+/// runs on in-process failures, so a SIGKILL reaches none of it.
+///
+/// Distinct from `vector-reindex`, which shares only the word. That command
+/// builds the pgvector ANN *index structure* over rows that already exist: it
+/// embeds nothing, writes no rows, is pgvector-only, and is flagless because
+/// there is nothing for an operator to decide. This one creates rows that do not
+/// exist, on every backend, and bills an embedding per row — so the two differ in
+/// what they touch, what they cost, and who decides. Folding this in as a flag
+/// would have made a free structural rebuild and a metered re-embedding share one
+/// name.
+///
+/// Reporting is the default, and unlike `vector-reindex` that is not a wasted
+/// invocation: orphan-ness is decided by an id lookup, so the count costs a few
+/// key probes while applying costs an embedding per missing row.
+///
+/// The reported count is not a crash-damage count. It is every edge type the
+/// graph implies but the collection lacks, and cognify builds `EdgeType` rows
+/// only from LLM-extracted edges — so the structural families (`is_part_of`,
+/// `contains`, `made_from`) and the DLT foreign-key edges have no row on a graph
+/// that never crashed either. Expect a small constant floor, with real crash
+/// orphans (long, sentence-shaped edge descriptions) on top of it. `--apply`
+/// writes the floor too, which makes those edges rankable instead of always
+/// taking the distance penalty — the same end state as Python's whole-graph
+/// `index_graph_edges`.
+///
+/// The scan itself is always whole-graph and is not streamed — it loads every
+/// node and edge into memory before the first probe, in both modes. `--limit`
+/// and `--resume-after` bound the embedding work, not that read, so size a run
+/// on a large store by the graph, not by the limit.
+#[derive(Debug, Args)]
+pub struct EdgeReindexArgs {
+    /// Write the missing points. Without this, the command only reports.
+    #[arg(long = "apply", default_value_t = false)]
+    pub apply: bool,
+
+    /// NOT a filter: a label stamped on written points. The scan is always the
+    /// whole graph.
+    ///
+    /// The summary line above is the one `-h` shows, and it has to carry the
+    /// warning on its own: a `--dataset-id` that reads like a scope is the trap
+    /// this flag is one typo away from being, and an operator who believes it
+    /// scoped the scan would read a whole-graph orphan count as their dataset's.
+    ///
+    /// Narrowing is not achievable, not merely unimplemented. The graph store is
+    /// not partitioned by dataset, cognify's edge properties carry no dataset,
+    /// and the point id is hashed from the edge's retrieval text alone — so one
+    /// row is shared by every dataset holding an edge with that text, and there
+    /// is no per-dataset row to repair in the first place. Omit it to write the
+    /// rows dataset-less, which is what Python's whole-graph repair does.
+    #[arg(long = "dataset-id")]
+    pub dataset_id: Option<String>,
+
+    /// Stop after writing this many points, reporting the cursor to resume from.
+    ///
+    /// Bounds writes only, so it has no effect without `--apply` — a report
+    /// writes nothing to cap. It does not bound the graph read, which is
+    /// whole-graph either way.
+    #[arg(long = "limit")]
+    pub limit: Option<usize>,
+
+    /// Resume an interrupted run: skip every retrieval text up to and including
+    /// this one. Pass the cursor the previous run reported.
+    ///
+    /// It narrows the *report* as well as the writes, so a run carrying it
+    /// reports the orphans after the cursor, not the graph's total.
+    #[arg(long = "resume-after")]
+    pub resume_after: Option<String>,
+}
 
 #[derive(Debug, Args)]
 pub struct MemifyArgs {
