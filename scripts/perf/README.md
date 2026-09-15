@@ -19,6 +19,25 @@ This directory holds the offline (zero-API) benchmark harness for the
   the Rust `cognee-cli bench` in offline `--mock-llm` mode (deterministic mock
   embeddings + the committed cassette). See the script header for env-var
   overrides (`RUNS`, `COGNEE_PY`, `BENCH_BIN`, `CASSETTE`, `MEMORIES`, …).
+- `measure_retention.py` — sweeps `cognee-cli bench` over several
+  `--num-memories` sizes and fits the peak-RSS growth, producing the
+  bytes-per-document slope SDK-507 gates its streaming work on. Offline, no API
+  key. Full write-up, including what the number does and does not settle, in
+  [docs/performance/memory-retention.md](../../docs/performance/memory-retention.md).
+
+  ```sh
+  python3 scripts/perf/measure_retention.py \
+      --memories scripts/perf/fixtures/memories.json \
+      --cassette scripts/perf/fixtures/cassette.json \
+      --sizes 10,20,30,40,50
+  ```
+
+  It also flags the silent stale-cassette failure described below: a cassette
+  that no longer matches the prompts makes extraction return empty graphs while
+  the run still reports `success: true`, and the sweep prints a loud
+  structure-only banner rather than quietly fitting a slope with no entities in
+  it. **The `fixtures/large/` cassette is stale as of `c6bedef`** — it replays to
+  zero extracted edges.
 
 ## Running the offline benchmark (no API key)
 
