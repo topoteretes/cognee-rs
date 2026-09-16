@@ -351,6 +351,7 @@ mod tests {
             health: Some(Arc::new(checker)),
             spans: Arc::new(crate::observability::SpanBuffer::default()),
             sync: Arc::new(crate::sync::SyncRegistry::new()),
+            dataset_locks: Arc::new(cognee_ingestion::DatasetLocks::new()),
             #[cfg(feature = "telemetry")]
             telemetry_guard: None,
         };

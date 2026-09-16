@@ -7,10 +7,12 @@
 )]
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use cognee_database::{AclDb, DatabaseError};
+use tokio::sync::Notify;
 use uuid::Uuid;
 
 /// A `HashMap`-backed mock ACL database for unit and integration tests.
@@ -56,6 +58,48 @@ pub struct MockAclDb {
     /// When true, [`AclDb::revoke_permission`] fails as well — the realistic
     /// shape of an unreachable ACL store, where cleanup cannot succeed either.
     revokes_fail: bool,
+    /// When set, the *first* [`AclDb::grant_permission`] call parks until the
+    /// paired [`GrantGate`] releases it. See [`MockAclDb::with_gated_first_grant`].
+    grant_gate: Option<Arc<GateState>>,
+}
+
+/// Shared rendezvous behind [`MockAclDb::with_gated_first_grant`].
+#[derive(Debug, Default)]
+struct GateState {
+    /// Notified once a grant has parked, so a test can wait for the window to
+    /// be open instead of sleeping and hoping.
+    entered: Notify,
+    /// Notified by the test to let the parked grant continue.
+    release: Notify,
+    /// Only the first grant parks; later ones run straight through.
+    used: AtomicBool,
+}
+
+/// Test-side handle to a [`MockAclDb`] whose first grant parks.
+///
+/// Exists so a test can drive a *deterministic* interleaving of two requests
+/// through the window between a dataset row's insert and its ACL grant —
+/// the window SDK-636 is about. Racing two spawned requests and hoping they
+/// overlap would make the test prove nothing on the runs where they did not.
+#[derive(Clone, Debug)]
+pub struct GrantGate {
+    state: Arc<GateState>,
+}
+
+impl GrantGate {
+    /// Wait until a `grant_permission` call has parked inside the mock.
+    ///
+    /// Resolves immediately if one already has — the underlying `Notify`
+    /// stores the permit — so there is no ordering requirement between the
+    /// request being spawned and this being awaited.
+    pub async fn wait_until_parked(&self) {
+        self.state.entered.notified().await;
+    }
+
+    /// Let the parked grant continue.
+    pub fn release(&self) {
+        self.state.release.notify_one();
+    }
 }
 
 impl MockAclDb {
@@ -68,6 +112,7 @@ impl MockAclDb {
             grant_failure: None,
             grant_failure_only: None,
             revokes_fail: false,
+            grant_gate: None,
         }
     }
 
@@ -105,6 +150,21 @@ impl MockAclDb {
     pub fn with_failing_revokes(mut self) -> Self {
         self.revokes_fail = true;
         self
+    }
+
+    /// Park the first [`AclDb::grant_permission`] call until the returned
+    /// [`GrantGate`] releases it; later calls proceed normally.
+    ///
+    /// This is what makes the create-and-grant window observable. A dataset
+    /// row is written before its ACL rows and may still be rolled back, so
+    /// "what does a second request see in between?" is a real question with a
+    /// real wrong answer — and one that cannot be asked at all unless a test
+    /// can hold the first request inside the window. Composes with the failure
+    /// modes above: gate a `failing_grants` mock to drive the rollback arm.
+    pub fn with_gated_first_grant(mut self) -> (Self, GrantGate) {
+        let state = Arc::new(GateState::default());
+        self.grant_gate = Some(Arc::clone(&state));
+        (self, GrantGate { state })
     }
 
     /// Return the number of ACL grants currently stored.
@@ -233,6 +293,14 @@ impl AclDb for MockAclDb {
         dataset_id: Uuid,
         permission_name: &str,
     ) -> Result<(), DatabaseError> {
+        // Park before the failure branches, so gating a failing mock still
+        // holds the caller inside the window rather than failing it instantly.
+        if let Some(gate) = &self.grant_gate
+            && !gate.used.swap(true, Ordering::SeqCst)
+        {
+            gate.entered.notify_one();
+            gate.release.notified().await;
+        }
         if let Some(reason) = &self.grant_failure {
             return Err(DatabaseError::QueryError(reason.clone()));
         }

@@ -335,6 +335,13 @@ pub async fn post_add(
     if let Some(acl) = components.acl_db.clone() {
         pipeline = pipeline.with_acl_db(acl);
     }
+    // Share the server's dataset identity locks (SDK-636). The pipeline
+    // resolves the dataset by name and creates it when missing, which is the
+    // same create-and-grant sequence `POST /v1/datasets` runs; without a common
+    // lock this request can ingest into a row that handler's compensating
+    // rollback is about to delete, leaving the data attached to a dataset that
+    // no longer exists.
+    pipeline = pipeline.with_dataset_locks(Arc::clone(&state.dataset_locks));
 
     let params = AddParams {
         node_set: req.node_set.clone(),

@@ -15,6 +15,7 @@ use cognee_database::{
     DatabaseConnection, NoopPipelineRunRepository, PipelineRunRepository,
     SeaOrmPipelineRunRepository,
 };
+use cognee_ingestion::DatasetLocks;
 
 use crate::{
     auth_resolver::AuthResolver,
@@ -70,6 +71,20 @@ pub struct AppState {
     /// populated; the registry itself starts empty.
     pub sync: Arc<SyncRegistry>,
 
+    /// Per-dataset-identity locks serializing "look the dataset up, create it
+    /// if missing, grant the owner's ACL rows" against itself (SDK-636).
+    ///
+    /// Always populated and shared by every handler, which is the point: the
+    /// dataset row and its ACL rows cannot be written in one transaction, so
+    /// `POST /v1/datasets` compensates a failed grant by deleting the row it
+    /// just wrote. Without a common lock a concurrent `POST /v1/datasets` can
+    /// answer 200 for a row that rollback then removes, and a concurrent
+    /// `POST /v1/add` can ingest into it and have it deleted underneath.
+    ///
+    /// In-process only — see [`cognee_ingestion::DatasetLocks`] for what it
+    /// does and does not cover.
+    pub dataset_locks: Arc<DatasetLocks>,
+
     /// Flush-on-drop guard for the OpenTelemetry exporter (decision 9).
     /// Held only for its `Drop` side effect: the last `Arc` released calls
     /// `provider.force_flush()` + `provider.shutdown()`. `None` when built
@@ -114,6 +129,7 @@ impl AppState {
             health: None,
             spans: Arc::new(SpanBuffer::new(BufferConfig::from_env())),
             sync: Arc::new(SyncRegistry::new()),
+            dataset_locks: Arc::new(DatasetLocks::new()),
             #[cfg(feature = "telemetry")]
             telemetry_guard: None,
         })
@@ -176,6 +192,7 @@ impl AppState {
             health: None,
             spans: Arc::new(SpanBuffer::new(BufferConfig::from_env())),
             sync: Arc::new(SyncRegistry::new()),
+            dataset_locks: Arc::new(DatasetLocks::new()),
             #[cfg(feature = "telemetry")]
             telemetry_guard: None,
         })

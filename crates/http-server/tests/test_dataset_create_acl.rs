@@ -271,3 +271,131 @@ async fn create_dataset_succeeds_without_an_acl_db() {
         .expect("lookup");
     assert!(found.is_some(), "the dataset row must have been written");
 }
+
+// ─── SDK-636: the window between the insert and the grant ────────────────────
+//
+// The row and its ACL rows cannot share a transaction, so `create_new_dataset`
+// writes the row, grants second, and compensates a failed grant by deleting the
+// row again. That leaves a window in which the row exists but is not yet usable
+// and may still vanish. The tests above all drive it single-threaded, where the
+// window is invisible; these two hold a request inside it —
+// `MockAclDb::with_gated_first_grant` parks the first grant until released —
+// and ask what a second request sees.
+//
+// Both are about `POST /v1/datasets` against itself. The `POST /v1/add` half of
+// the same window is covered in `crates/ingestion/tests/dataset_create_locking.rs`,
+// where the ingest path takes the same lock.
+
+/// Scenario: two `POST /v1/datasets` for the same name overlap — the first is
+/// parked mid-grant when the second arrives.
+/// Expected: the second does not answer at all until the first has finished.
+/// The already-exists arm returns the row as-is and deliberately does not
+/// re-grant (re-granting would restore revoked permissions), so a second
+/// request that observes the row *during* the window answers 200 for a dataset
+/// that has no ACL rows yet — a success the caller cannot act on, and one that
+/// the rollback arm can invalidate outright.
+/// Verification: park request 1 inside its grant, start request 2, and assert
+/// request 2 is *still pending* while the window is open. That is the whole
+/// observable difference: unsynchronised, it completes immediately. Then
+/// release and assert it answers 200 for a fully-granted dataset.
+#[tokio::test]
+async fn a_concurrent_create_does_not_answer_from_inside_the_grant_window() {
+    let (mock, gate) = MockAclDb::new().with_gated_first_grant();
+    let mock = Arc::new(mock);
+    let acl: Arc<dyn AclDb> = Arc::clone(&mock) as Arc<dyn AclDb>;
+    let state = build_state_with_acl(acl).await;
+    let app = build_router(state).await.expect("router");
+
+    let first = tokio::spawn(oneshot_request(app.clone(), create_request("contended")));
+
+    // The first request is now inside the window: its row is written, its
+    // grants are not.
+    gate.wait_until_parked().await;
+
+    let mut second = tokio::spawn(oneshot_request(app, create_request("contended")));
+
+    let answered_early =
+        tokio::time::timeout(std::time::Duration::from_millis(250), &mut second).await;
+    assert!(
+        answered_early.is_err(),
+        "the second create answered while the first was still granting — it read a \
+         row whose ACL rows do not exist yet"
+    );
+
+    gate.release();
+
+    let first = first.await.expect("first request");
+    let second = second.await.expect("second request");
+    assert_eq!(first.status(), 200, "the first create must succeed");
+    assert_eq!(
+        second.status(),
+        200,
+        "the idempotent second create succeeds"
+    );
+
+    let dataset_id: uuid::Uuid = body_json(second)
+        .await
+        .get("id")
+        .and_then(|v| v.as_str())
+        .expect("response carries the dataset id")
+        .parse()
+        .expect("dataset id is a uuid");
+
+    let owner = default_test_user_id();
+    for perm in cognee_database::ops::acl::PERMISSION_NAMES {
+        assert!(
+            mock.has_grant(owner, dataset_id, perm),
+            "a 200 must describe a committed dataset, but '{perm}' is missing"
+        );
+    }
+}
+
+/// Scenario: the same overlap, but the first request's grant fails, so it rolls
+/// the row back.
+/// Expected: the second request never answers 200 for that row. This is the
+/// window's damaging arm: the second caller holds a success for a dataset the
+/// first request deletes a moment later, and every later request re-derives the
+/// same deterministic id and hits the same race.
+/// Verification: park request 1 inside a failing grant, start request 2,
+/// release, and assert neither succeeds and no row survives.
+#[tokio::test]
+async fn a_concurrent_create_does_not_succeed_on_a_row_that_rolls_back() {
+    let (mock, gate) = MockAclDb::failing_grants("acl backend is down").with_gated_first_grant();
+    let acl: Arc<dyn AclDb> = Arc::new(mock);
+    let state = build_state_with_acl(acl).await;
+    let db = state
+        .components()
+        .expect("components are wired")
+        .database
+        .clone();
+    let owner = default_test_user_id();
+    let app = build_router(state).await.expect("router");
+
+    let first = tokio::spawn(oneshot_request(app.clone(), create_request("doomed")));
+    gate.wait_until_parked().await;
+    let second = tokio::spawn(oneshot_request(app, create_request("doomed")));
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    gate.release();
+
+    let first = first.await.expect("first request");
+    let second = second.await.expect("second request");
+
+    assert!(
+        !first.status().is_success(),
+        "a failed owner grant must fail the create"
+    );
+    assert!(
+        !second.status().is_success(),
+        "the second create must not succeed on a row the first one deletes; got {} — \
+         it read the row from inside the grant window",
+        second.status()
+    );
+
+    let leftover = IngestDb::get_dataset_by_name(db.as_ref(), "doomed", owner, None)
+        .await
+        .expect("lookup");
+    assert!(
+        leftover.is_none(),
+        "both creates failed, so no row may survive"
+    );
+}

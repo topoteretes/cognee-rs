@@ -32,7 +32,7 @@ use cognee_llm::OpenAIAdapter;
 pub use cognee_graph::MockGraphDB;
 pub use cognee_storage::MockStorage;
 pub use cognee_vector::MockVectorDB;
-pub use mock_acl_db::MockAclDb;
+pub use mock_acl_db::{GrantGate, MockAclDb};
 pub use mock_llm::MockLlm;
 pub use mock_transcriber::MockTranscriber;
 pub use span_capture::{CapturedSpan, SpanCapture, SpanCaptureGuard};

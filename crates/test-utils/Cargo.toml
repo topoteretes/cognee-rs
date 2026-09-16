@@ -32,6 +32,8 @@ cognee-vector = { path = "../vector", features = ["testing"] }
 # `DatabaseConnection` impl and its runtime come from `cognee-database`, and
 # Cargo unifies this with that build.
 sea-orm = { version = "1.1", default-features = false }
+# `sync` only — the gated-grant rendezvous in `mock_acl_db` needs `Notify`.
+tokio.workspace = true
 url.workspace = true
 dotenv.workspace = true
 serde_json.workspace = true
