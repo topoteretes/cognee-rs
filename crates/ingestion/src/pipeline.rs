@@ -351,7 +351,7 @@ pub async fn persist_data(
     owner_id: Uuid,
     tenant_id: Option<Uuid>,
 ) -> Result<Data, Box<dyn std::error::Error>> {
-    persist_data_with_acl(
+    persist_data_with_acl_and_locks(
         processed,
         database,
         dataset_name,
@@ -366,6 +366,38 @@ pub async fn persist_data(
 
 /// Like [`persist_data`], but optionally grants all four ACL permissions
 /// (read, write, delete, share) to the owner when a new dataset is created.
+///
+/// Unsynchronised: equivalent to
+/// [`persist_data_with_acl_and_locks`] with no locks. Kept at its original
+/// seven-argument shape because it is public API re-exported from both
+/// `cognee_ingestion` and `cognee`, and no existing caller should have to
+/// change to say "I am the only writer" — which is what `None` means and what
+/// every single-caller embedder (the CLI, the library facade) wants. Serving
+/// concurrent requests? Use [`persist_data_with_acl_and_locks`].
+pub async fn persist_data_with_acl(
+    processed: &ProcessedInput,
+    database: &dyn IngestDb,
+    dataset_name: &str,
+    owner_id: Uuid,
+    tenant_id: Option<Uuid>,
+    acl_db: Option<&dyn AclDb>,
+    target_dataset_id: Option<Uuid>,
+) -> Result<Data, Box<dyn std::error::Error>> {
+    persist_data_with_acl_and_locks(
+        processed,
+        database,
+        dataset_name,
+        owner_id,
+        tenant_id,
+        acl_db,
+        target_dataset_id,
+        None,
+    )
+    .await
+}
+
+/// Like [`persist_data_with_acl`], but serializes the dataset
+/// create-and-grant against concurrent writers of the same dataset identity.
 ///
 /// When `acl_db` is `Some`, the owner is ensured as a principal and receives
 /// all permissions on newly created datasets, matching Python's
@@ -393,7 +425,7 @@ pub async fn persist_data(
               — the store, the identity, and three orthogonal opt-ins; bundling \
               them into a struct would only move the same list one level out"
 )]
-pub async fn persist_data_with_acl(
+pub async fn persist_data_with_acl_and_locks(
     processed: &ProcessedInput,
     database: &dyn IngestDb,
     dataset_name: &str,
@@ -955,7 +987,7 @@ fn make_persist_data_task_with_acl_and_params(
         let dataset_name = dataset_name.clone();
         let acl_db = acl_db.clone();
         Box::pin(async move {
-            persist_data_with_acl(
+            persist_data_with_acl_and_locks(
                 &processed,
                 &*database,
                 &dataset_name,

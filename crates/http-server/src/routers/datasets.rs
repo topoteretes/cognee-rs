@@ -430,10 +430,14 @@ pub async fn create_new_dataset(
     // deliberate: re-granting here would turn an idempotent create into an ACL
     // reset, letting an owner restore a deliberately revoked `read` grant just
     // by POSTing the same name again. The rollback below is what keeps that
-    // safe — it guarantees a row that exists is a row whose grants were
-    // written, so there is never a half-finished dataset needing repair. Do not
-    // close any concurrency gap by re-granting here (that was tried and
-    // reverted — it lets a revoked grant be restored by re-POSTing the name).
+    // safe — whenever the compensation *succeeds*, a row that exists is a row
+    // whose grants were written. It is not an absolute: when the revokes or the
+    // attached-data check fail, the branch below deliberately keeps a
+    // half-finished row and says so, because deleting it would be worse. That
+    // row needs the manual repair the error names; it is not something the
+    // already-exists arm can fix. Do not close any concurrency gap by
+    // re-granting here either (that was tried and reverted — it lets a revoked
+    // grant be restored by re-POSTing the name).
     if let Some(ds) = existing {
         return Ok(Json(dataset_to_dto(&ds)));
     }
@@ -520,18 +524,20 @@ pub async fn create_new_dataset(
         // orphan the links or destroy data whose caller was told the ingest
         // succeeded.
         if cleanup_errors.is_empty() {
-            match DeleteDb::get_dataset_data(&*db, created.id).await {
-                Ok(attached) if !attached.is_empty() => {
-                    cleanup_errors.push(format!(
-                        "{} data row(s) are attached (another writer ingested into it); \
-                         the row is kept rather than deleted",
-                        attached.len()
-                    ));
-                }
-                Ok(_) => {
+            // `count_dataset_data` is a `SELECT COUNT(*)`; `get_dataset_data`
+            // would materialise every linked row just to ask "any?", and this
+            // runs precisely when another writer may have attached a lot.
+            match DeleteDb::count_dataset_data(&*db, created.id).await {
+                Ok(0) => {
                     if let Err(e) = DeleteDb::delete_dataset(&*db, created.id).await {
                         cleanup_errors.push(format!("delete dataset row: {e}"));
                     }
+                }
+                Ok(attached) => {
+                    cleanup_errors.push(format!(
+                        "{attached} data row(s) are attached (another writer ingested \
+                         into it); the row is kept rather than deleted"
+                    ));
                 }
                 Err(e) => cleanup_errors.push(format!("check attached data: {e}")),
             }
@@ -614,6 +620,14 @@ pub async fn delete_all_datasets(
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {e}")))?;
 
     for ds in datasets {
+        // Take the identity lock for each dataset in turn (SDK-636). A create
+        // for this id may be parked between its insert and its grant, and that
+        // row is already visible to `list_datasets_by_owner` — so without the
+        // lock this loop deletes it mid-window and the create then answers 200
+        // for a dataset that no longer exists. One lock at a time, released
+        // before the next is taken, so this cannot deadlock against a handler
+        // holding a different identity.
+        let _identity_guard = state.dataset_locks.lock(ds.id).await;
         let request = DeleteRequest {
             scope: DeleteScope::Dataset {
                 owner_id: user.id,
@@ -653,6 +667,11 @@ pub async fn delete_dataset(
 
     let db = components.database.clone();
     let delete_service = components.delete_service.clone();
+
+    // Same identity lock as the create path (SDK-636): a create for this id may
+    // be parked between its insert and its grant, and deleting that row
+    // mid-window makes the create answer 200 for a dataset that is gone.
+    let _identity_guard = state.dataset_locks.lock(dataset_id).await;
 
     check_permission_via_handles(components, user.id, dataset_id, "delete")
         .await

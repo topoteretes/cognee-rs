@@ -38,7 +38,7 @@ pub mod add {
         AddParams, AddPipeline, ContentHasher, HashAlgorithm, IngestionError, ProcessedInput,
         build_add_pipeline, build_add_pipeline_with_acl, generate_data_id, generate_dataset_id,
         make_persist_data_task, make_persist_data_task_with_acl, make_process_input_task,
-        persist_data, persist_data_with_acl, process_input,
+        persist_data, persist_data_with_acl, persist_data_with_acl_and_locks, process_input,
     };
 }
 

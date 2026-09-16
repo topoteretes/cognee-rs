@@ -280,6 +280,17 @@ async fn add_by_id_is_locked_too() {
     // ingest fails loudly instead of silently writing into a deleted dataset.
     // Either outcome is acceptable — what is not is "reported success, and the
     // data is attached to a dataset that is gone".
+    //
+    // The failure must be *that* failure, though. Accepting any `Err` would let
+    // an unrelated pipeline breakage stand in for the lock working, and the
+    // test would keep passing after the protection was removed.
+    if let Err(ref e) = result {
+        let msg = e.to_string();
+        assert!(
+            msg.contains(&doomed_id.to_string()) && msg.contains("not found"),
+            "the only acceptable error is the rolled-back id failing to resolve, got: {msg}"
+        );
+    }
     if let Ok(ingested) = result {
         assert!(
             IngestDb::get_dataset_by_name(&*db, DATASET, owner, None)

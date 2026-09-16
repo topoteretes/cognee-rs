@@ -373,8 +373,21 @@ async fn a_concurrent_create_does_not_succeed_on_a_row_that_rolls_back() {
 
     let first = tokio::spawn(oneshot_request(app.clone(), create_request("doomed")));
     gate.wait_until_parked().await;
-    let second = tokio::spawn(oneshot_request(app, create_request("doomed")));
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let mut second = tokio::spawn(oneshot_request(app, create_request("doomed")));
+
+    // Assert the second request is *blocked*, not merely that it fails in the
+    // end. Without this it is not a regression test: released early, the
+    // unsynchronised handler also reaches a non-2xx — its own grant fails for
+    // the same reason — so `!is_success` alone passes either way. Being
+    // blocked here is what proves it never saw the doomed row.
+    let answered_early =
+        tokio::time::timeout(std::time::Duration::from_millis(250), &mut second).await;
+    assert!(
+        answered_early.is_err(),
+        "the second create answered while the first was still granting — it read the \
+         row that is about to be rolled back"
+    );
+
     gate.release();
 
     let first = first.await.expect("first request");
