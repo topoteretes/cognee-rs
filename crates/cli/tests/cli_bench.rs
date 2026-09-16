@@ -109,6 +109,53 @@ fn test_bench_mock_offline_smoke() {
     assert!(config["embedding_model"].is_string());
     assert!(config["embedding_dimensions"].is_number());
 
+    // Memory block (SDK-507). Present, self-consistent, and — on unix, where
+    // `getrusage` always answers — carrying real readings. Without this the
+    // block could be dropped or silently degraded to nulls and every other
+    // assertion here would still pass.
+    let memory = &v["memory"];
+    assert!(memory.is_object(), "memory block missing: {raw}");
+    assert_eq!(
+        memory["corpus_documents"].as_u64(),
+        Some(2),
+        "memory.corpus_documents: {raw}"
+    );
+    assert!(
+        memory["corpus_bytes"].as_u64().unwrap_or(0) > 0,
+        "memory.corpus_bytes must be non-zero: {raw}"
+    );
+    assert_eq!(
+        memory["cognify_chunks"].as_u64(),
+        Some(2),
+        "one chunk per tiny memory: {raw}"
+    );
+    if cfg!(unix) {
+        assert_eq!(
+            memory["peak_rss_supported"].as_bool(),
+            Some(true),
+            "unix must report a peak RSS: {raw}"
+        );
+        let baseline = memory["peak_rss_bytes_baseline"]
+            .as_u64()
+            .unwrap_or_else(|| panic!("no baseline peak: {raw}"));
+        let after_cognify = memory["peak_rss_bytes_after_cognify"]
+            .as_u64()
+            .unwrap_or_else(|| panic!("no post-cognify peak: {raw}"));
+        // A megabyte floor is what catches the kilobyte-vs-byte mix-up that
+        // `ru_maxrss` invites: on Linux an unconverted reading lands in the
+        // tens of thousands.
+        assert!(
+            baseline > 1024 * 1024,
+            "baseline peak {baseline} B is implausibly small — wrong unit? {raw}"
+        );
+        // `ru_maxrss` is a process-lifetime high-water mark, so later samples
+        // can never be below earlier ones.
+        assert!(
+            after_cognify >= baseline,
+            "peak RSS went backwards: {after_cognify} < {baseline}: {raw}"
+        );
+    }
+
     // Status block: every phase "success".
     let status = &v["status"];
     for phase in [

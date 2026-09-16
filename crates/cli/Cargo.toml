@@ -53,7 +53,7 @@ mock-llm      = ["cognee/mock-llm"]
 # `bench` adds the `bench` subcommand (perf orchestrator driver). Pulls no heavy
 # deps — just reuses the existing pipeline wiring + tempfile — so it is on by
 # default.
-bench         = ["dep:tempfile"]
+bench         = ["dep:tempfile", "dep:libc"]
 # `profiling` wires a SIGPROF sampling profiler (pprof-rs) into the bench
 # subcommand, emitting a per-phase flamegraph SVG with no `perf` permissions and
 # no root. Opt-in (NOT in default) so normal bench runs stay lean and CI can
@@ -123,6 +123,12 @@ tempfile = { workspace = true, optional = true }
 # Optional: only pulled in by the `profiling` feature. Pure-Rust SIGPROF
 # sampling profiler. Emits a per-phase flamegraph SVG, no `perf` or root needed.
 pprof = { version = "0.14", default-features = false, features = ["flamegraph"], optional = true }
+
+# Optional, unix-only: `getrusage(2)` for the bench memory report (SDK-507).
+# Pulled in by the `bench` feature only; `libc` is already in the workspace tree
+# (cognee-http-server) and has no dependencies of its own.
+[target.'cfg(unix)'.dependencies]
+libc = { version = "0.2", optional = true }
 
 [dev-dependencies]
 assert_cmd.workspace = true

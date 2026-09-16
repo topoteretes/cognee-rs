@@ -52,6 +52,7 @@ signatures.
 - **[observability/send_telemetry.md](observability/send_telemetry.md)** — opt-out product analytics.
 - **[performance/mock-benchmark.md](performance/mock-benchmark.md)** — offline mock-LLM benchmark (+ [rationale](performance/python-approach.md)).
 - **[performance/cpu-profiling.md](performance/cpu-profiling.md)** — CPU profiling findings: where the pipeline spends CPU + prioritised optimisations.
+- **[performance/memory-retention.md](performance/memory-retention.md)** — measuring cognify's peak-RSS slope (SDK-507): the instrument, the sweep, and the first numbers.
 
 ### Build & release
 - **[build/prerequisites.md](build/prerequisites.md)** — native build tools (`cmake`, `protoc`, compiler floors), which feature sets need them, and the GCC 11 workaround.
