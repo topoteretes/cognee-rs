@@ -11,11 +11,13 @@ use sophia_inmem::graph::FastGraph;
 use std::collections::{HashSet, VecDeque};
 use tracing::{debug, info};
 
-use crate::builder::build_lookup;
+use crate::builder::{build_lookup, collect_terms};
 use crate::error::{OntologyError, OntologyResult};
 use crate::loader::{OntologyFileInput, load_ontology_files};
 use crate::matching::{FuzzyMatchingStrategy, MatchingStrategy};
-use crate::models::{AttachedOntologyNode, NodeCategory, OntologyLookup, uri_to_key};
+use crate::models::{
+    AttachedOntologyNode, NodeCategory, OntologyLookup, OntologyTerms, uri_to_key,
+};
 use crate::traits::{OntologyEdge, OntologyResolver, OntologySubgraph};
 
 /// RDFLib-compatible ontology resolver.
@@ -168,6 +170,16 @@ impl OntologyResolver for RdfLibOntologyResolver {
 
     fn is_loaded(&self) -> bool {
         self.graph.is_some()
+    }
+
+    fn terms(&self) -> OntologyResult<OntologyTerms> {
+        // Deliberately uncached: `collect_terms` is index-driven, this is called
+        // once per pipeline run, and a cache field would cost every resolver —
+        // the overwhelmingly common case being one that never calls `terms()`.
+        match &self.graph {
+            Some(graph) => collect_terms(graph),
+            None => Ok(OntologyTerms::default()),
+        }
     }
 }
 

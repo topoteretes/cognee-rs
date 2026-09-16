@@ -79,7 +79,9 @@ pub use error::{OntologyError, OntologyResult};
 pub use loader::OntologyFileInput;
 pub use manager::{OntologyManager, OntologyMetadata};
 pub use matching::{FuzzyMatchingStrategy, MatchingStrategy};
-pub use models::{AttachedOntologyNode, NodeCategory, OntologyLookup, uri_to_key};
+pub use models::{
+    AttachedOntologyNode, NodeCategory, OntologyLookup, OntologyTerm, OntologyTerms, uri_to_key,
+};
 pub use noop::NoOpOntologyResolver;
 pub use rdflib::RdfLibOntologyResolver;
 pub use traits::OntologyResolver;

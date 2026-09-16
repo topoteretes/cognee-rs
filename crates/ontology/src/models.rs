@@ -102,6 +102,83 @@ impl OntologyLookup {
     }
 }
 
+/// One ontology term: an `owl:Class` or `owl:ObjectProperty` subject together
+/// with its raw `rdfs:label` and `rdfs:comment`.
+///
+/// Values are returned **exactly as they appear in the graph** — not trimmed,
+/// not lower-cased, not passed through [`uri_to_key`]. Normalisation is the
+/// caller's job, because different callers normalise differently: `uri_to_key`
+/// would turn `worksAt` into `worksat`, where a GLiNER schema needs
+/// `works_at`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OntologyTerm {
+    /// Full IRI of the subject, e.g. `http://example.org#worksAt`.
+    pub uri: String,
+    /// Raw lexical form of the subject's `rdfs:label`, un-trimmed.
+    ///
+    /// `None` **only** when the subject carries no `rdfs:label` triple. An
+    /// explicitly empty literal (`rdfs:label ""`) yields `Some(String::new())`
+    /// — the distinction is load-bearing: a caller falls back to the URI's
+    /// local name for `None`, but must **skip the term entirely** for
+    /// `Some("")`, which is what Python does.
+    ///
+    /// When several `rdfs:label` triples exist, the first in graph index order
+    /// is used. Python's `rdflib.Graph.value()` picks an arbitrary one; taking
+    /// the first is deterministic and therefore strictly better-defined.
+    ///
+    /// # Deliberate divergence from Python: non-literal objects
+    ///
+    /// A malformed ontology may point `rdfs:label` at something other than a
+    /// literal, e.g. `ex:Person rdfs:label ex:SomeIri .`. Python's
+    /// `graph.value(subject, RDFS.label)` returns whatever node it finds and
+    /// the caller `str()`s it, so the *full IRI* becomes the label. Here such
+    /// an object has no lexical form and is **treated as absent**: it is
+    /// skipped, a later literal label for the same subject may claim the slot,
+    /// and if none exists the field is `None`, so the caller falls back to the
+    /// local name.
+    ///
+    /// This is a choice, not an oversight. `rdfs:label` is defined to range
+    /// over literals; surfacing a stray IRI as a human-readable name produces
+    /// a nonsense entity type (`http_example_org_some_iri`) where the
+    /// local-name fallback produces a usable one. The divergence is
+    /// unreachable for any ontology that validates.
+    pub label: Option<String>,
+    /// Raw lexical form of the subject's `rdfs:comment`, un-trimmed.
+    ///
+    /// `None` **only** when the subject carries no `rdfs:comment` triple; a
+    /// whitespace-only comment is returned verbatim, so callers that treat a
+    /// blank description as absent must trim before testing. Multiple
+    /// comments resolve like multiple labels (first in index order), and a
+    /// non-literal object is treated as absent for the same reason and with
+    /// the same divergence from Python — see [`OntologyTerm::label`].
+    pub comment: Option<String>,
+}
+
+/// The `owl:Class` and `owl:ObjectProperty` terms of an ontology.
+///
+/// Both vectors are deduplicated by URI and sorted **ascending by full URI**,
+/// matching Python's `sorted(set(graph.subjects(RDF.type, …)), key=str)`. That
+/// order is part of the contract: a caller that folds terms into a
+/// `name -> description` map under a "first non-empty description wins" rule
+/// reproduces Python's result only if it consumes the vectors in this order.
+///
+/// The two vectors are independent pools — a subject typed both `owl:Class`
+/// and `owl:ObjectProperty` appears in both.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OntologyTerms {
+    /// `owl:Class` subjects, URI-sorted.
+    pub classes: Vec<OntologyTerm>,
+    /// `owl:ObjectProperty` subjects, URI-sorted.
+    pub object_properties: Vec<OntologyTerm>,
+}
+
+impl OntologyTerms {
+    /// `true` when the ontology yielded neither classes nor object properties.
+    pub fn is_empty(&self) -> bool {
+        self.classes.is_empty() && self.object_properties.is_empty()
+    }
+}
+
 /// Convert URI to normalized lookup key.
 ///
 /// Matches Python's RDFLibOntologyResolver._uri_to_key():

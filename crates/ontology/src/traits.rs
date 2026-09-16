@@ -4,7 +4,7 @@
 //! validating and enriching LLM-extracted entities with ontology knowledge.
 
 use crate::error::OntologyResult;
-use crate::models::AttachedOntologyNode;
+use crate::models::{AttachedOntologyNode, OntologyTerms};
 
 pub type OntologyEdge = (String, String, String);
 pub type OntologySubgraph = (
@@ -142,4 +142,33 @@ pub trait OntologyResolver: Send + Sync {
     /// }
     /// ```
     fn is_loaded(&self) -> bool;
+
+    /// Classes and object properties of the loaded ontology.
+    ///
+    /// Returns `owl:Class` and `owl:ObjectProperty` subjects with their raw
+    /// `rdfs:label` and `rdfs:comment`, URI-sorted — the raw material for
+    /// deriving a closed extraction schema from an ontology.
+    ///
+    /// # Default
+    ///
+    /// The default returns an empty [`OntologyTerms`], which is the right
+    /// answer for any resolver without an RDF graph.
+    ///
+    /// # Divergence from Python (deliberate)
+    ///
+    /// Python's `schema_from_ontology_resolver` *raises* when the resolver
+    /// exposes no graph, and separately returns an empty schema when
+    /// `graph is None`. Rust collapses both into "empty": there is no
+    /// `hasattr`-style distinction to make, every implementor answers this
+    /// call, and callers treat empty as "fall through to the label-bank
+    /// probe" — which is exactly what Python does for `graph is None`. The
+    /// raise exists in Python only to catch a duck-typing mistake that the
+    /// trait makes impossible. This is a decision, not an oversight.
+    ///
+    /// # Errors
+    ///
+    /// Implementations that walk a graph may fail; the default cannot.
+    fn terms(&self) -> OntologyResult<OntologyTerms> {
+        Ok(OntologyTerms::default())
+    }
 }

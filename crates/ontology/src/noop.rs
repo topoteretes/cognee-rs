@@ -85,6 +85,13 @@ mod tests {
     }
 
     #[test]
+    fn test_terms_returns_empty() {
+        // Inherits the trait's default body: no graph, no terms, no error.
+        let resolver = NoOpOntologyResolver::new();
+        assert!(resolver.terms().unwrap().is_empty());
+    }
+
+    #[test]
     fn test_get_subgraph_returns_empty() {
         let resolver = NoOpOntologyResolver::new();
         let (nodes, edges, root) = resolver.get_subgraph("car", "classes", true).unwrap();

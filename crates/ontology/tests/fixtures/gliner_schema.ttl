@@ -1,0 +1,70 @@
+# Hand-authored fixture for ontology term collection (stage 4).
+# Local names are chosen so that ASCII ordering of the FULL IRI is:
+#   ex:Organization < ex:Person < ex:Unnamed < ex:memberOf < ex:zPerson
+#     < zz:Alpha                                            (classes)
+#   ex:memberOf < ex:works-at < ex:worksAt < ex:works_at
+#     < ex:zzzEmployment                                    (object properties)
+# because '-'(0x2D) < 'A'(0x41) < '_'(0x5F) < 'a'(0x61) < 'm'(0x6D)
+#      < 'w'(0x77) < 'z'(0x7A), and uppercase sorts before lowercase.
+#
+# The `zz:` namespace exists so that sorting by FULL IRI and sorting by local
+# name DISAGREE: zz:Alpha is last by full IRI (`http://e…` < `http://z…`) but
+# would be first by local name. Do not move it into `ex:`.
+
+@prefix ex:   <http://example.org#> .
+@prefix zz:   <http://zz.example.org#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+### classes ###########################################################
+
+# label + comment, comment padded so the caller must trim
+ex:Organization rdf:type owl:Class ;
+    rdfs:label   "Organization" ;
+    rdfs:comment "  A company or institution.  " .
+
+# no rdfs:label at all -> label is None -> caller falls back to "Person"
+ex:Person rdf:type owl:Class .
+
+# explicit EMPTY label -> Some("") -> caller must SKIP, not fall back
+ex:Unnamed rdf:type owl:Class ;
+    rdfs:label "" .
+
+# normalises to the same name as ex:Person, sorts later, has a comment
+# -> "first non-empty description wins": this one supplies person's description
+ex:zPerson rdf:type owl:Class ;
+    rdfs:label   "Person" ;
+    rdfs:comment "A human being." .
+
+# blank-node class: dropped, no IRI
+[] rdf:type owl:Class .
+
+# second namespace: LAST by full IRI, FIRST by local name. Pins the sort key.
+zz:Alpha rdf:type owl:Class ;
+    rdfs:label "Alpha" .
+
+### object properties #################################################
+
+# (1) first in URI order, no label, no comment -> works_at with ""
+<http://example.org#works-at> rdf:type owl:ObjectProperty .
+
+# (2) whitespace-only comment -> strips to "" -> must NOT claim the slot
+ex:worksAt rdf:type owl:ObjectProperty ;
+    rdfs:comment "   " .
+
+# (3) first genuinely non-empty comment -> WINS
+ex:works_at rdf:type owl:ObjectProperty ;
+    rdfs:comment "Employment relation." .
+
+# (4) later, also non-empty -> must NOT override (3)
+ex:zzzEmployment rdf:type owl:ObjectProperty ;
+    rdfs:label   "works at" ;
+    rdfs:comment "MUST NOT OVERRIDE." .
+
+### typed as BOTH a class and an object property #######################
+
+# The two pools are independent: this subject must appear in each of them,
+# once, without either scan suppressing or duplicating it in the other.
+ex:memberOf rdf:type owl:Class, owl:ObjectProperty ;
+    rdfs:comment "Membership relation." .
