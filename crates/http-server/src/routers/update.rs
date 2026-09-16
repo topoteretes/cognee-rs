@@ -148,6 +148,7 @@ pub async fn patch_update(
     let dataset_id_for_run = dataset_id;
     let components_for_run = components_arc.clone();
     let server_chunk_size = state.config.chunk_size;
+    let dataset_locks = Arc::clone(&state.dataset_locks);
 
     let work = box_pipeline_future(async move {
         run_update_pipeline(
@@ -158,6 +159,7 @@ pub async fn patch_update(
             &dataset_name_for_run,
             inputs,
             server_chunk_size,
+            dataset_locks,
         )
         .await
     });
@@ -237,6 +239,12 @@ pub async fn patch_update(
 // ─── run_update_pipeline ─────────────────────────────────────────────────────
 
 /// Drive the soft-delete → re-ingest → re-cognify chain for a single update.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one detached re-ingest step; every argument is a separate handle or \
+              identifier lifted out of `AppState` because this runs after the \
+              response, and a bag struct would only move the same list one level out"
+)]
 async fn run_update_pipeline(
     components: &ComponentHandles,
     user: &AuthenticatedUser,
@@ -247,6 +255,11 @@ async fn run_update_pipeline(
     // Server-wide `COGNEE_CHUNK_SIZE`, threaded in because this runs detached
     // from `AppState`.
     server_chunk_size: Option<u32>,
+    // Dataset identity locks (SDK-636), threaded in for the same reason. The
+    // re-add below resolves the dataset by name and creates it when missing —
+    // the same create-and-grant sequence `POST /v1/datasets` runs, so it must
+    // contend on the same lock.
+    dataset_locks: Arc<cognee_ingestion::DatasetLocks>,
 ) -> Result<(), UpdateDispatchError> {
     // ── Step 1: soft-delete the old item ─────────────────────────────────────
     let scope = DeleteScope::Data {
@@ -292,6 +305,10 @@ async fn run_update_pipeline(
     if let Some(acl) = components.acl_db.clone() {
         pipeline = pipeline.with_acl_db(acl);
     }
+    // Share the server's dataset identity locks (SDK-636) — this pipeline
+    // resolves the dataset by name and creates it when missing, the same
+    // create-and-grant sequence `POST /v1/datasets` runs.
+    pipeline = pipeline.with_dataset_locks(dataset_locks);
 
     let params = AddParams::default();
     pipeline

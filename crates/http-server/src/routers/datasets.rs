@@ -495,28 +495,46 @@ pub async fn create_new_dataset(
         // partial permission set. Keeping the row instead leaves the damage
         // visible to `GET /v1/datasets` and to the operator this error names.
         //
-        // Rolled back through `delete_service`, not `DeleteDb::delete_dataset`.
-        // The raw row delete removes the dataset and nothing else, so anything
-        // attached to it is orphaned rather than swept — `dataset_data` links
-        // pointing at an id with no row. The identity lock above means no
-        // concurrent `add` should have attached anything by now, but a rollback
-        // whose correctness rests on "nothing else got in" is one assumption
-        // away from silent corruption, and the sweeping delete costs nothing on
-        // the empty dataset this normally is.
-        if cleanup_errors.is_empty()
-            && let Err(e) = components
-                .delete_service
-                .execute(&DeleteRequest {
-                    scope: DeleteScope::Dataset {
-                        owner_id: user.id,
-                        dataset_name: payload.name.clone(),
-                    },
-                    mode: DeleteMode::Hard,
-                    memory_only: false,
-                })
-                .await
-        {
-            cleanup_errors.push(format!("delete dataset row: {e}"));
+        // Deliberately **not** routed through `components.delete_service`, which
+        // SDK-636 proposed for its `dataset_data` sweeping. Two reasons, both
+        // verified in `crates/delete`:
+        //
+        //   * `DeleteScope::Dataset` resolves by *name*, and
+        //     `resolve_dataset_scope` passes `tenant_id: None` to
+        //     `get_dataset_by_name`, which then applies no tenant predicate and
+        //     takes `.one()` unordered. In a tenanted deployment where this
+        //     owner has a same-named dataset under another tenant, the rollback
+        //     could hard-delete *that* dataset instead of the row we just
+        //     wrote. Targeting `created.id` cannot misresolve.
+        //   * `DeleteMode::Hard` runs `sweep_orphan_nodes` /
+        //     `sweep_orphan_edge_types`, which are graph-*wide*
+        //     (`get_degree_one_nodes("Entity")`, no dataset scoping). One
+        //     failed grant on an empty new dataset would purge degree-one
+        //     entities belonging to every other dataset and user.
+        //
+        // The sweeping the ticket wanted is unnecessary here anyway: under the
+        // identity lock this row is ours alone and still empty, so a row delete
+        // orphans nothing. Verify instead of assuming — the lock is
+        // in-process, so a second replica over the same database can still have
+        // attached to it. If anything did, keep the row: deleting would either
+        // orphan the links or destroy data whose caller was told the ingest
+        // succeeded.
+        if cleanup_errors.is_empty() {
+            match DeleteDb::get_dataset_data(&*db, created.id).await {
+                Ok(attached) if !attached.is_empty() => {
+                    cleanup_errors.push(format!(
+                        "{} data row(s) are attached (another writer ingested into it); \
+                         the row is kept rather than deleted",
+                        attached.len()
+                    ));
+                }
+                Ok(_) => {
+                    if let Err(e) = DeleteDb::delete_dataset(&*db, created.id).await {
+                        cleanup_errors.push(format!("delete dataset row: {e}"));
+                    }
+                }
+                Err(e) => cleanup_errors.push(format!("check attached data: {e}")),
+            }
         }
 
         if !cleanup_errors.is_empty() {

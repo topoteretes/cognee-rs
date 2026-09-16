@@ -403,16 +403,29 @@ pub async fn persist_data_with_acl(
     target_dataset_id: Option<Uuid>,
     dataset_locks: Option<&DatasetLocks>,
 ) -> Result<Data, Box<dyn std::error::Error>> {
-    // Take the identity lock before looking anything up. Only the by-name
-    // branch needs it: targeting an existing dataset by id creates nothing and
-    // grants nothing, so there is no insert-to-grant window to protect.
+    // Take the identity lock before looking anything up, on *both* resolution
+    // paths.
     //
-    // Acquired here rather than inside the branch so the guard outlives both
+    // The by-id path needs it just as much as the by-name one, which is not
+    // obvious: it creates nothing and grants nothing, so there is no
+    // insert-to-grant window of its own. But the window this guards is not
+    // about what *this* call creates — it is about attaching data to a row
+    // somebody else is about to roll back. A caller can reach a half-created
+    // row by id: `uuid5(name, owner, tenant)` is derivable by anyone who knows
+    // the name, and `GET /v1/datasets` lists rows from ownership without
+    // requiring a live grant, so the id is observable mid-window. Resolving by
+    // id without the lock would walk straight into the case the by-name lock
+    // exists to prevent.
+    //
+    // Acquired here rather than inside the branches so the guard outlives both
     // the resolve and the grant below — releasing between them would reopen
     // exactly the window this closes.
-    let dataset_guard = match (dataset_locks, target_dataset_id) {
-        (Some(locks), None) => Some(locks.lock_for_name(dataset_name, owner_id, tenant_id).await),
-        _ => None,
+    let dataset_guard = match dataset_locks {
+        Some(locks) => Some(match target_dataset_id {
+            Some(ds_id) => locks.lock(ds_id).await,
+            None => locks.lock_for_name(dataset_name, owner_id, tenant_id).await,
+        }),
+        None => None,
     };
 
     // Resolve the dataset: prefer explicit UUID, fall back to name-based lookup.

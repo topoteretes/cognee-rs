@@ -128,6 +128,7 @@ pub async fn post_improve(
     let payload_for_run = payload.clone();
     let components = state.lib.clone();
     let server_chunk_size = state.config.chunk_size;
+    let dataset_locks = Arc::clone(&state.dataset_locks);
     let user_for_run = user.clone();
     let dataset_name_for_run = dataset_name.clone();
 
@@ -142,6 +143,7 @@ pub async fn post_improve(
             &dataset_name_for_run,
             &payload_for_run,
             server_chunk_size,
+            dataset_locks,
         )
         .await
     });
@@ -233,6 +235,11 @@ async fn run_real_improve(
     // Server-wide `COGNEE_CHUNK_SIZE`, threaded in because this runs detached
     // from `AppState`.
     server_chunk_size: Option<u32>,
+    // Dataset identity locks (SDK-636), threaded in for the same reason. Both
+    // session stages below build an `AddPipeline` that resolves the dataset by
+    // name and creates it when missing — the same create-and-grant sequence
+    // `POST /v1/datasets` runs, so they must contend on the same lock.
+    dataset_locks: Arc<cognee_ingestion::DatasetLocks>,
 ) -> Result<(), ImproveDispatchError> {
     let graph_db = components
         .graph_db
@@ -302,7 +309,8 @@ async fn run_real_improve(
                     .with_graph_db(graph_db.clone())
                     .with_vector_db(vector_db.clone())
                     .with_database(database.clone())
-                    .with_pipeline_run_repo(NoopPipelineRunRepository::arc());
+                    .with_pipeline_run_repo(NoopPipelineRunRepository::arc())
+                    .with_dataset_locks(Arc::clone(&dataset_locks));
 
                 let mut cognify_config =
                     CognifyConfig::default().with_chunk_strategy(ChunkStrategy::Paragraph);
@@ -361,7 +369,8 @@ async fn run_real_improve(
                     .with_graph_db(graph_db.clone())
                     .with_vector_db(vector_db.clone())
                     .with_database(database.clone())
-                    .with_pipeline_run_repo(NoopPipelineRunRepository::arc());
+                    .with_pipeline_run_repo(NoopPipelineRunRepository::arc())
+                    .with_dataset_locks(Arc::clone(&dataset_locks));
 
                 let mut cognify_config =
                     CognifyConfig::default().with_chunk_strategy(ChunkStrategy::Paragraph);

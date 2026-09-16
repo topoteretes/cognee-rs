@@ -297,6 +297,10 @@ pub async fn post_remember(
     if let Some(acl) = components.acl_db.clone() {
         pipeline = pipeline.with_acl_db(acl);
     }
+    // Share the server's dataset identity locks (SDK-636) — this pipeline
+    // resolves the dataset by name and creates it when missing, the same
+    // create-and-grant sequence `POST /v1/datasets` runs.
+    pipeline = pipeline.with_dataset_locks(Arc::clone(&state.dataset_locks));
 
     // Run add synchronously — errors map to 409 {"error": "An error occurred
     // during remember."} per Python parity (not {"detail": "..."}).

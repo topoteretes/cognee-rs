@@ -27,7 +27,7 @@ use std::time::Duration;
 use cognee_core::RayonThreadPool;
 use cognee_database::{DeleteDb, IngestDb, connect, initialize};
 use cognee_graph::MockGraphDB;
-use cognee_ingestion::{AddPipeline, DatasetLocks, generate_dataset_id};
+use cognee_ingestion::{AddParams, AddPipeline, DatasetLocks, generate_dataset_id};
 use cognee_models::{DataInput, Dataset};
 use cognee_storage::{LocalStorage, StorageTrait};
 use cognee_vector::MockVectorDB;
@@ -35,11 +35,14 @@ use tempfile::TempDir;
 use tokio::sync::Notify;
 use uuid::Uuid;
 
-/// How long the simulated create holds its half-finished row before rolling it
-/// back. Long enough for an *unsynchronised* `add` to resolve that row and
-/// attach to it — which is what makes the without-the-lock failure
-/// deterministic rather than a race the test might lose.
-const WINDOW: Duration = Duration::from_millis(400);
+/// How long the *locked* simulated create holds its half-finished row before
+/// rolling it back.
+///
+/// Only used on the wired path, where the ingest is blocked on the lock for
+/// exactly this long and the assertions do not depend on the duration — so a
+/// slow runner cannot change the outcome, only the wait. The unwired path does
+/// not use a clock at all; see [`Rollback`].
+const LOCKED_WINDOW: Duration = Duration::from_millis(200);
 
 const DATASET: &str = "contended_ds";
 
@@ -67,17 +70,30 @@ async fn make_pipeline(dir: &TempDir) -> (AddPipeline, Arc<cognee_database::Data
     (pipeline, db)
 }
 
+/// When the simulated create stops sitting in its grant and rolls the row back.
+enum Rollback {
+    /// After a fixed wait. Used only where the ingest is *blocked on the lock*
+    /// for that wait, so the duration decides how long the test takes and
+    /// nothing else.
+    After(Duration),
+    /// When signalled. Used where the ingest is *not* blocked, so "has it
+    /// reached the row yet?" is a real question — and one a wall clock answers
+    /// wrong on a loaded runner. Waiting for the signal makes the unwired case
+    /// deterministic instead of a race the test can lose.
+    OnSignal(Arc<Notify>),
+}
+
 /// Stand in for `create_new_dataset`'s failing path: take the identity lock,
-/// write the row, sit in the grant for `WINDOW`, then roll the row back.
+/// write the row, sit in the grant, then roll the row back.
 ///
-/// Uses the same raw row delete the handler's compensation used to, because the
-/// point being tested is the *visibility* of the row during the window, not how
-/// thoroughly it is swept afterwards.
+/// Uses a raw row delete, because the point being tested is the *visibility* of
+/// the row during the window, not how thoroughly it is swept afterwards.
 async fn simulated_failing_create(
     db: Arc<cognee_database::DatabaseConnection>,
     locks: Arc<DatasetLocks>,
     owner: Uuid,
     row_written: Arc<Notify>,
+    rollback: Rollback,
 ) {
     let id = generate_dataset_id(DATASET, owner, None);
     let _guard = locks.lock(id).await;
@@ -88,7 +104,10 @@ async fn simulated_failing_create(
     row_written.notify_one();
 
     // The grant is in flight here. The row exists and is not usable.
-    tokio::time::sleep(WINDOW).await;
+    match rollback {
+        Rollback::After(d) => tokio::time::sleep(d).await,
+        Rollback::OnSignal(signal) => signal.notified().await,
+    }
 
     DeleteDb::delete_dataset(&*db, id)
         .await
@@ -118,6 +137,7 @@ async fn add_does_not_ingest_into_a_dataset_that_is_being_rolled_back() {
         Arc::clone(&locks),
         owner,
         Arc::clone(&row_written),
+        Rollback::After(LOCKED_WINDOW),
     ));
 
     // Start the ingest only once the doomed row is visible — otherwise `add`
@@ -172,11 +192,15 @@ async fn without_locks_the_window_is_still_open() {
     // The creator still takes a lock; the pipeline just does not share it.
     let locks = Arc::new(DatasetLocks::new());
     let row_written = Arc::new(Notify::new());
+    // No clock here: the creator rolls back only once the ingest has actually
+    // finished attaching, so a slow runner cannot turn this into a pass.
+    let ingest_done = Arc::new(Notify::new());
     let creator = tokio::spawn(simulated_failing_create(
         Arc::clone(&db),
         locks,
         owner,
         Arc::clone(&row_written),
+        Rollback::OnSignal(Arc::clone(&ingest_done)),
     ));
 
     row_written.notified().await;
@@ -189,6 +213,7 @@ async fn without_locks_the_window_is_still_open() {
         )
         .await
         .expect("add reports success");
+    ingest_done.notify_one();
     creator.await.expect("simulated create");
 
     assert!(
@@ -199,4 +224,78 @@ async fn without_locks_the_window_is_still_open() {
         "precondition for the test above: unsynchronised, the ingest attaches to the \
          doomed row and the rollback takes the dataset with it"
     );
+}
+
+/// Scenario: the same interleaving, but the ingest targets the doomed dataset
+/// by **id** (`AddParams::dataset_id`) rather than by name.
+/// Expected: identical protection. The by-id path creates nothing and grants
+/// nothing, so it has no insert-to-grant window of its own — but the window
+/// being guarded is about attaching to a row someone else is rolling back, and
+/// a half-created row is reachable by id: `uuid5(name, owner, tenant)` is
+/// derivable from the name, and `GET /v1/datasets` lists rows from ownership
+/// without requiring a live grant. Skipping the lock here would walk straight
+/// into the case the by-name lock exists to prevent.
+/// Verification: resolve by id against the doomed row with locks wired, then
+/// assert the ingest's dataset and data both survive.
+#[tokio::test(flavor = "multi_thread")]
+async fn add_by_id_is_locked_too() {
+    let dir = TempDir::new().expect("tempdir");
+    let (pipeline, db) = make_pipeline(&dir).await;
+    let owner = Uuid::new_v4();
+
+    let locks = Arc::new(DatasetLocks::new());
+    let pipeline = pipeline.with_dataset_locks(Arc::clone(&locks));
+
+    let row_written = Arc::new(Notify::new());
+    let creator = tokio::spawn(simulated_failing_create(
+        Arc::clone(&db),
+        Arc::clone(&locks),
+        owner,
+        Arc::clone(&row_written),
+        Rollback::After(LOCKED_WINDOW),
+    ));
+
+    row_written.notified().await;
+
+    // The id a client can derive, or read out of `GET /v1/datasets`, while the
+    // row is still half-created.
+    let doomed_id = generate_dataset_id(DATASET, owner, None);
+    let params = AddParams {
+        dataset_id: Some(doomed_id),
+        ..AddParams::default()
+    };
+
+    let result = pipeline
+        .add_with_params(
+            vec![DataInput::Text("a document worth keeping".to_string())],
+            DATASET,
+            owner,
+            None,
+            &params,
+        )
+        .await;
+    creator.await.expect("simulated create");
+
+    // Blocked until the rollback finished, the id no longer resolves, so the
+    // ingest fails loudly instead of silently writing into a deleted dataset.
+    // Either outcome is acceptable — what is not is "reported success, and the
+    // data is attached to a dataset that is gone".
+    if let Ok(ingested) = result {
+        assert!(
+            IngestDb::get_dataset_by_name(&*db, DATASET, owner, None)
+                .await
+                .expect("lookup")
+                .is_some(),
+            "add reported success but its dataset is gone — the by-id path ingested \
+             into a row a concurrent create was about to roll back"
+        );
+        let data_id = ingested.first().expect("one data item").id;
+        assert!(
+            IngestDb::get_data(&*db, data_id)
+                .await
+                .expect("lookup")
+                .is_some(),
+            "the ingested data row must survive alongside its dataset"
+        );
+    }
 }
