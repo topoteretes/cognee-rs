@@ -93,3 +93,59 @@ reqwest = { workspace = true }
 serial_test = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "test-util"] }
+
+# Every `bedrock_*.rs` integration test is a whole file behind
+# `#![cfg(feature = "bedrock")]`, and `bedrock` is not a default feature. Without
+# a `required-features` entry cargo still BUILDS each of these targets in a lane
+# that forgot `--features bedrock` — the file compiles to nothing, the harness
+# prints `running 0 tests`, and the lane exits green having verified nothing.
+# That is issue #212, and it has already cost this repo a lane
+# (`pgvector-spans`) that reported green for its whole life. With these entries
+# such a lane skips the target explicitly instead.
+#
+# Autodiscovery still covers every other test file: declaring explicit `[[test]]`
+# targets does not disable it, and a name declared here simply wins over the
+# auto-discovered one.
+[[test]]
+name = "bedrock_converse_transform"
+required-features = ["bedrock"]
+
+[[test]]
+name = "bedrock_credentials_ladder"
+required-features = ["bedrock"]
+
+[[test]]
+name = "bedrock_integration"
+required-features = ["bedrock"]
+
+[[test]]
+name = "bedrock_model_id_normalisation"
+required-features = ["bedrock"]
+
+[[test]]
+name = "bedrock_pacing"
+required-features = ["bedrock"]
+
+[[test]]
+name = "bedrock_region_endpoint"
+required-features = ["bedrock"]
+
+[[test]]
+name = "bedrock_request_deadline"
+required-features = ["bedrock"]
+
+[[test]]
+name = "bedrock_retry_floor_excludes_queue_time"
+required-features = ["bedrock"]
+
+[[test]]
+name = "bedrock_sigv4_golden"
+required-features = ["bedrock"]
+
+[[test]]
+name = "bedrock_structured_output"
+required-features = ["bedrock"]
+
+[[test]]
+name = "bedrock_truncation_retry"
+required-features = ["bedrock"]

@@ -87,22 +87,50 @@ pub struct BedrockAdapter {
     /// reaches a log line (see the hand-written `Debug`).
     auth: Arc<aws::credentials::BedrockAuthProvider>,
     structured_output_retries: usize,
-    /// Transport attempts, as `0..=network_retries` — so this is `n + 1`
-    /// attempts, and `LLM_NETWORK_RETRIES=2` buys three.
+    /// Minimum transport attempts before the request may fail — a floor, not a
+    /// cap, and `n + 1` of them: `LLM_NETWORK_RETRIES=2` buys three.
     ///
-    /// ⚠️ Deliberately noted because it diverges from the other adapters, which
-    /// run the same knob through [`crate::retry::RetryBudget`] and stop at `n`
-    /// attempts once the `retry_min_elapsed` floor is also met. This adapter
-    /// carries no such floor, so `LLM_MIN_RETRY_SECONDS` does not reach it and
-    /// its ladder is a plain attempt count. Both differences predate
-    /// `LLM_NETWORK_RETRIES`.
+    /// ⚠️ The `+ 1` is the one thing here that still diverges from the other
+    /// adapters, which read the same knob as the attempt floor itself. It
+    /// predates `LLM_NETWORK_RETRIES`, it is preserved on purpose
+    /// (see [`retry_budget`](Self::retry_budget)), and it is why this adapter's
+    /// default of 3 means four HTTP attempts.
     ///
-    /// SDK-612 rewrote this loop to add pacing and left the divergence standing
-    /// on purpose: a `retry_min_elapsed` floor is a "keep retrying for at least
-    /// this long" guarantee, and adding one here would lengthen Bedrock calls
-    /// rather than bound them, which is the opposite of what the aggregate
-    /// deadline is for. Unify only with a reason to, not for symmetry.
+    /// The *other* historical divergence — no `retry_min_elapsed` floor at all,
+    /// so `LLM_MIN_RETRY_SECONDS` did not reach Bedrock — is gone; see
+    /// [`retry_min_elapsed`](Self::retry_min_elapsed) for why it took two
+    /// tickets to close.
     network_retries: usize,
+    /// Minimum elapsed time before the transport ladder may give up — the other
+    /// half of Python's dual-floor stop condition
+    /// (`stop_after_attempt(2) & stop_after_delay(240)`, `retry_config.py`, note
+    /// the `&`). `ZERO` reduces the ladder back to a plain attempt cap.
+    ///
+    /// # Why this exists now, having been declined before
+    ///
+    /// SDK-612 rewrote this loop to add pacing and deliberately left Bedrock
+    /// without a floor, reasoning that a floor is a "keep retrying for at least
+    /// this long" guarantee, so adding one would *lengthen* Bedrock calls rather
+    /// than bound them — the opposite of what the aggregate deadline is for —
+    /// and that we should unify only with a reason to, not for symmetry.
+    ///
+    /// That reasoning was written for a loop with no aggregate bound. SDK-624
+    /// gave this one a [`request_deadline`](Self::request_deadline), which
+    /// clamps every backoff and every pacer / in-flight wait in
+    /// [`call_converse_before`](Self::call_converse_before), so a floor added
+    /// today cannot run away: it is bounded above by the deadline exactly as on
+    /// [`OpenAIAdapter`](crate::OpenAIAdapter).
+    ///
+    /// And the reason to unify, rather than mere symmetry: without a floor the
+    /// ladder is four attempts over ~28-56s of backoff, after which it returns
+    /// `MaxRetriesExceeded` — which `structured_output_impl` treats as terminal.
+    /// Under the default `FailureStop::FailFast` + `RollbackScope::WholeRun`
+    /// one failed item then sweeps the entire run's output, so a transient
+    /// throttle window that OpenAI and Anthropic ride out (240s by default) can
+    /// roll back a whole dataset on Bedrock. Python applies the same
+    /// `stop_after_attempt(2) & stop_after_delay(240)` to Bedrock on both of its
+    /// paths.
+    retry_min_elapsed: std::time::Duration,
     /// Wall-clock ceiling on **one logical structured-output call** — spanning
     /// every corrective re-ask and every transport retry inside them. `None`
     /// leaves the call unbounded.
@@ -146,6 +174,14 @@ impl BedrockAdapter {
     pub const DEFAULT_STRUCTURED_OUTPUT_RETRIES: usize = 5;
     /// Default transient-network retries.
     pub const DEFAULT_NETWORK_RETRIES: usize = 3;
+    /// Default minimum retry window for transient failures, aliasing the OpenAI
+    /// adapter's so the two cannot drift — Python's `LLM_MIN_RETRY_SECONDS = 240`
+    /// (`retry_config.py`). Overridable with
+    /// [`with_min_retry_elapsed`](Self::with_min_retry_elapsed); this adapter
+    /// carried no such floor at all until the aggregate deadline (SDK-624) made
+    /// one safe — see the `retry_min_elapsed` field.
+    pub const DEFAULT_MIN_RETRY_ELAPSED: std::time::Duration =
+        crate::OpenAIAdapter::DEFAULT_MIN_RETRY_ELAPSED;
     /// Default output-token ceiling, aliasing the crate-wide
     /// [`crate::DEFAULT_MAX_COMPLETION_TOKENS`] so it moves in lockstep with the
     /// config and `GenerationOptions` defaults.
@@ -234,6 +270,7 @@ impl BedrockAdapter {
             auth,
             structured_output_retries: Self::DEFAULT_STRUCTURED_OUTPUT_RETRIES,
             network_retries: Self::DEFAULT_NETWORK_RETRIES,
+            retry_min_elapsed: Self::DEFAULT_MIN_RETRY_ELAPSED,
             request_deadline: None,
             max_completion_tokens: Self::DEFAULT_MAX_COMPLETION_TOKENS,
             default_temperature: None,
@@ -249,9 +286,42 @@ impl BedrockAdapter {
     }
 
     /// Configure transient network/server retry attempts.
+    ///
+    /// A floor, not a cap: the ladder also keeps retrying until
+    /// [`with_min_retry_elapsed`](Self::with_min_retry_elapsed) is satisfied.
+    /// `n` here buys `n + 1` attempts — see the `network_retries` field.
     pub fn with_network_retries(mut self, retries: u32) -> Self {
         self.network_retries = usize::try_from(retries).unwrap_or(usize::MAX);
         self
+    }
+
+    /// Configure the minimum time transient failures are retried for
+    /// (`LLM_MIN_RETRY_SECONDS`).
+    ///
+    /// [`std::time::Duration::ZERO`] reduces the stop condition to a plain
+    /// attempt cap, which is the documented `0` escape hatch. See
+    /// the `retry_min_elapsed` field for why this adapter has a floor at all.
+    #[must_use]
+    pub fn with_min_retry_elapsed(mut self, min_elapsed: std::time::Duration) -> Self {
+        self.retry_min_elapsed = min_elapsed;
+        self
+    }
+
+    /// The stop condition for this adapter's transient-failure retries.
+    ///
+    /// The `+ 1` preserves this adapter's historical `0..=network_retries`
+    /// attempt count, which is one more than the other adapters get from the
+    /// same knob. Dropping an attempt is not what adding the time floor is for,
+    /// and it would make the very failure this floor exists to survive slightly
+    /// more likely; the divergence is documented on
+    /// [`network_retries`](Self::network_retries) instead.
+    fn retry_budget(&self) -> crate::retry::RetryBudget {
+        crate::retry::RetryBudget::new(
+            u32::try_from(self.network_retries)
+                .unwrap_or(u32::MAX)
+                .saturating_add(1),
+            self.retry_min_elapsed,
+        )
     }
 
     /// Build the HTTP client used for every request.
@@ -524,9 +594,15 @@ impl BedrockAdapter {
     /// POST `request_body` to the Converse endpoint with a transient-retry
     /// ladder and exponential backoff.
     ///
+    /// The ladder stops on [`retry_budget`](Self::retry_budget)'s dual floor —
+    /// attempts made **and** elapsed time, both satisfied — so the attempt count
+    /// alone no longer ends it.
+    ///
     /// `deadline` is the caller's aggregate budget as an absolute instant, so it
-    /// already counts every earlier attempt in the same logical call. `None`
-    /// leaves the ladder unbounded.
+    /// already counts every earlier attempt in the same logical call, and it is
+    /// what bounds the floor from above: every backoff and every dispatch wait
+    /// below is clamped to what is left of it. `None` leaves the ladder bounded
+    /// only by the floor, exactly as on the OpenAI and Anthropic adapters.
     #[instrument(
         name = "llm.api_call",
         level = "info",
@@ -559,16 +635,24 @@ impl BedrockAdapter {
         })?;
 
         let mut last_error = LlmError::NetworkError("No attempt made".to_string());
-        // Only for the deadline messages below; the ladder itself is a plain
-        // attempt count, with no time floor to measure.
+        let budget = self.retry_budget();
+        // Wall clock for the whole ladder: what the deadline messages report,
+        // and — minus `queued_for_permit` below — what the retry floor is
+        // measured against.
         let started = std::time::Instant::now();
+        // Time this call has spent queued for an in-flight permit, subtracted
+        // from the elapsed time handed to `RetryBudget::is_exhausted`. See the
+        // note beside the queue below for why it must not be charged against the
+        // floor.
+        let mut queued_for_permit = std::time::Duration::ZERO;
         let pacer = self.pacer();
+        let mut attempt: u32 = 0;
 
-        for attempt in 0..=self.network_retries {
+        loop {
             if attempt > 0 {
                 // Shared jittered backoff (issue #19): a batch of concurrent
                 // requests that all throttle at once must not retry in lockstep.
-                let mut delay = crate::retry::retry_backoff(attempt as u32);
+                let mut delay = crate::retry::retry_backoff(attempt);
                 // The caller's aggregate budget outranks the retry ladder. Give
                 // up rather than start an attempt that cannot finish inside it,
                 // and never sleep past it — a 128s backoff against 5s of
@@ -604,12 +688,17 @@ impl BedrockAdapter {
             // the first admission already paced this attempt so no attempt ever
             // spends two tokens.
             //
-            // Unlike those two adapters there is no `queued_for_permit`
-            // bookkeeping: that subtraction protects a minimum-elapsed retry
-            // *floor*, and this ladder is a plain attempt count with no floor to
-            // protect. The aggregate *deadline* bounding the waits below is a
-            // different mechanism, and it does apply — Bedrock gained one in
-            // SDK-624.
+            // `queued_for_permit` below is the same bookkeeping those two carry,
+            // and it arrived with the retry floor: this loop used to omit it, on
+            // the grounds that the subtraction protects a minimum-elapsed floor
+            // and this ladder had none. The moment a floor exists it is
+            // mandatory — `RetryBudget::is_exhausted` is
+            // `attempts >= min && elapsed >= min_elapsed`, so a *larger* elapsed
+            // can only end the ladder earlier, and charging queue time against a
+            // "keep retrying for at least this long" guarantee silently shortens
+            // it. The aggregate *deadline* bounding the waits below is the
+            // opposite mechanism and is measured on its own absolute instant, so
+            // it is unaffected by this subtraction.
             //
             // Pacing and the in-flight queue can outlast the caller's aggregate
             // budget on their own — a 900s overload cooldown dwarfs the 1200s
@@ -624,9 +713,8 @@ impl BedrockAdapter {
             // zero left to an attempt whose backoff the top-of-loop guard
             // clamped, which keeps its right to dispatch but not to wait. See
             // `crate::retry::dispatch_budget`.
-            let dispatch_budget = || {
-                crate::retry::dispatch_budget(attempt as u32, deadline, std::time::Instant::now())
-            };
+            let dispatch_budget =
+                || crate::retry::dispatch_budget(attempt, deadline, std::time::Instant::now());
 
             let paced_before_queue = match pacer.as_deref() {
                 Some(pacer) => match pacer.admit_within(dispatch_budget()).await {
@@ -635,13 +723,14 @@ impl BedrockAdapter {
                         return Err(crate::retry::dispatch_budget_spent(
                             "Bedrock",
                             started.elapsed(),
-                            attempt as u32,
+                            attempt,
                             &last_error,
                         ));
                     }
                 },
                 None => false,
             };
+            let permit_queue_started = std::time::Instant::now();
             let _in_flight =
                 match crate::in_flight::acquire_in_flight_within(dispatch_budget()).await {
                     Ok(permit) => permit,
@@ -649,11 +738,12 @@ impl BedrockAdapter {
                         return Err(crate::retry::dispatch_budget_spent(
                             "Bedrock",
                             started.elapsed(),
-                            attempt as u32,
+                            attempt,
                             &last_error,
                         ));
                     }
                 };
+            queued_for_permit += permit_queue_started.elapsed();
             if !paced_before_queue
                 && let Some(pacer) = pacer.as_deref()
                 && pacer.admit_within(dispatch_budget()).await.is_none()
@@ -661,10 +751,15 @@ impl BedrockAdapter {
                 return Err(crate::retry::dispatch_budget_spent(
                     "Bedrock",
                     started.elapsed(),
-                    attempt as u32,
+                    attempt,
                     &last_error,
                 ));
             }
+
+            // Counted here, as in the OpenAI adapter: `dispatch_budget` above
+            // reads a 0-indexed attempt (the first attempt waits unbounded),
+            // while the stop condition below counts attempts *made*.
+            attempt += 1;
 
             let response = match self.transport.post_json(&url, payload.clone()).await {
                 Ok(response) => response,
@@ -681,6 +776,11 @@ impl BedrockAdapter {
                         return Err(error);
                     }
                     last_error = error;
+                    if budget
+                        .is_exhausted(attempt, started.elapsed().saturating_sub(queued_for_permit))
+                    {
+                        break;
+                    }
                     continue;
                 }
             };
@@ -704,6 +804,10 @@ impl BedrockAdapter {
                     return Err(error);
                 }
                 last_error = error;
+                if budget.is_exhausted(attempt, started.elapsed().saturating_sub(queued_for_permit))
+                {
+                    break;
+                }
                 continue;
             }
 
@@ -719,8 +823,9 @@ impl BedrockAdapter {
         }
 
         Err(LlmError::MaxRetriesExceeded(format!(
-            "Bedrock request failed after {} attempt(s): {}",
-            self.network_retries + 1,
+            "Bedrock request failed after {} attempt(s) over {:.1}s: {}",
+            attempt,
+            started.elapsed().as_secs_f64(),
             last_error
         )))
     }

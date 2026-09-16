@@ -3426,14 +3426,25 @@ impl OpenAIAdapter {
         let status = response.status();
 
         if !status.is_success() {
+            let code = status.as_u16();
             let error_body = response
                 .text()
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
 
-            return Err(match status.as_u16() {
+            // A 429 carrying quota/billing wording is terminal, not a rate
+            // limit: no wait makes an exhausted balance succeed. `call_api`
+            // classifies these the same way via `is_quota_or_billing_error`,
+            // and this path has to agree with it or the caller below retries a
+            // failure that can never clear.
+            let quota_exhausted =
+                code == 429 && crate::retry::is_quota_or_billing_error(&error_body);
+
+            return Err(match code {
                 401 => LlmError::AuthenticationError(error_body),
                 402 => LlmError::PaymentRequired(error_body),
+                404 => LlmError::ModelNotFound(error_body),
+                429 if quota_exhausted => LlmError::PaymentRequired(error_body),
                 429 => LlmError::RateLimitExceeded(error_body),
                 400 => LlmError::InvalidResponse(format!("Bad request: {error_body}")),
                 _ => LlmError::ApiError(format!("HTTP {status}: {error_body}")),
@@ -3526,10 +3537,17 @@ impl Transcriber for OpenAIAdapter {
                     });
                 }
                 Err(e) => {
-                    // Non-retryable errors: bad request or authentication failure.
+                    // Terminal failures, mirroring the set `call_api` refuses at
+                    // its own retry gate (HTTP 400..=402, 404, and a
+                    // quota-exhausted 429 — which `call_transcription_api` maps
+                    // to `PaymentRequired`). Retrying any of them only burns the
+                    // budget a recoverable error will need.
                     if matches!(
                         e,
-                        LlmError::InvalidResponse(_) | LlmError::AuthenticationError(_)
+                        LlmError::InvalidResponse(_)
+                            | LlmError::AuthenticationError(_)
+                            | LlmError::PaymentRequired(_)
+                            | LlmError::ModelNotFound(_)
                     ) {
                         return Err(e);
                     }

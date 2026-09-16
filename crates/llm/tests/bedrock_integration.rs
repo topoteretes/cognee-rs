@@ -50,6 +50,12 @@ async fn adapter(server: &MockServer, model: &str) -> BedrockAdapter {
         .expect("adapter builds offline under bearer auth")
         // One mocked exchange per test.
         .with_network_retries(0)
+        // The attempt count is only half the stop condition: the ladder also
+        // keeps retrying until `retry_min_elapsed` is met, which defaults to
+        // 240s. Every test here asserts on request *counts*, so the time floor
+        // is switched off rather than waited out — the same convention
+        // `retry_parity.rs` uses for the other adapters.
+        .with_min_retry_elapsed(std::time::Duration::ZERO)
         .with_structured_output_retries(1)
 }
 
