@@ -202,6 +202,7 @@ impl PipelineRunRepository for SeaOrmPipelineRunRepository {
             .column(pipeline_run::Column::PipelineName)
             .column(pipeline_run::Column::PipelineId)
             .column(pipeline_run::Column::DatasetId)
+            .column(pipeline_run::Column::RunInfo)
             .column_as(dataset::Column::Name, "dataset_name")
             .column_as(dataset::Column::OwnerId, "dataset_owner_id")
             .join(JoinType::LeftJoin, pipeline_run::Relation::Dataset.def())
@@ -221,6 +222,7 @@ impl PipelineRunRepository for SeaOrmPipelineRunRepository {
                 String,
                 String,
                 Option<String>,
+                Option<serde_json::Value>,
                 Option<String>,
                 Option<String>,
             )>()
@@ -239,6 +241,7 @@ impl PipelineRunRepository for SeaOrmPipelineRunRepository {
             pipeline_name,
             pipeline_id_hex,
             dataset_id_hex,
+            run_info,
             dataset_name,
             owner_id_hex,
         ) in raw
@@ -277,6 +280,7 @@ impl PipelineRunRepository for SeaOrmPipelineRunRepository {
                 dataset_name: dataset_name_field,
                 owner_id: owner_uuid,
                 owner_email: None,
+                run_info,
             });
         }
         Ok(rows)

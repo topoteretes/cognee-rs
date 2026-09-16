@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use cognee::cognify::{ChunkStrategy, CognifyConfig, cognify};
+use cognee::cognify::{ChunkStrategy, CognifyConfig, FailureReport, cognify};
 use cognee::database::{
     DatabaseConnection, PipelineRunRepository, SeaOrmPipelineRunRepository, ops,
 };
@@ -11,6 +11,89 @@ use uuid::Uuid;
 
 use crate::cli::{ChunkerArg, CognifyArgs};
 use crate::error::CliError;
+
+/// The distinctive prefix every failure summary carries.
+///
+/// Named rather than inlined because it is the string an operator greps for
+/// and the string the regression test asserts is *absent* after a clean run.
+const FAILURE_SUMMARY_MARKER: &str = "cognify completed with failures";
+
+/// How many failed data ids the summary lists before it switches to counting.
+///
+/// A run over 171 888 documents can fail thousands of them; the full set is on
+/// disk in `pipeline_runs.run_info.cognify_failures.failed_data_ids` and over
+/// HTTP at `GET /api/v1/activity/pipeline-runs?dataset_id=…`, so the console
+/// line only needs enough ids to start with.
+const FAILED_ID_PREVIEW: usize = 10;
+
+/// Render the operator-facing summary of a run that tolerated failures.
+///
+/// `None` for a clean run — the caller prints nothing at all in that case, so
+/// the success path keeps exactly the output it had before this existed.
+///
+/// The counts come straight from the [`FailureReport`] the pipeline returns,
+/// which is the same data
+/// `cognee_cognify::rollback::run_info_with_failures` persists under the
+/// `cognify_failures` key. Nothing here is recomputed.
+pub fn format_failure_summary(dataset_name: &str, report: &FailureReport) -> Option<String> {
+    if report.is_empty() {
+        return None;
+    }
+
+    let failed = report.failed_items();
+    let unreached = report.unreached_items();
+
+    let ids = if failed.is_empty() {
+        // No document was *failed* by what went wrong. Two ways to get here:
+        // everything outstanding went unreached (an early stop), or every
+        // recorded failure was a tolerated one — a summarization failure under
+        // `tolerate_summarization_failures`, which is counted but fails
+        // nothing. Saying "none" beats printing an empty list.
+        "none".to_string()
+    } else {
+        let preview: Vec<String> = failed
+            .iter()
+            .take(FAILED_ID_PREVIEW)
+            .map(Uuid::to_string)
+            .collect();
+        if failed.len() > FAILED_ID_PREVIEW {
+            format!(
+                "{} (first {} of {})",
+                preview.join(", "),
+                FAILED_ID_PREVIEW,
+                failed.len()
+            )
+        } else {
+            preview.join(", ")
+        }
+    };
+
+    // Whether anything is actually left to redo. This is the same condition
+    // `cognee_cognify::rollback` uses to decide whether to persist a
+    // `cognify_failures` record at all (`failed ∪ unreached`, non-empty), so
+    // the advice printed here cannot contradict what was written down.
+    //
+    // It matters because a report can be non-empty with nothing outstanding:
+    // under `tolerate_summarization_failures` a failed summary is recorded but
+    // fails no item, so every document still ends the run marked complete.
+    // Telling an operator to re-run in that case would be advice that does
+    // nothing — the completion markers make the next run a no-op.
+    let advice = if failed.is_empty() && unreached.is_empty() {
+        "No documents are outstanding; these failures were tolerated and a re-run would skip the dataset."
+    } else {
+        "Re-run cognify for this dataset to retry them."
+    };
+
+    Some(format!(
+        "Dataset '{dataset_name}': {FAILURE_SUMMARY_MARKER} — {} document(s) failed, \
+         {} never attempted, {} failure(s) recorded, chunk failure ratio {:.4}. \
+         Failed data ids: {ids}. {advice}",
+        failed.len(),
+        unreached.len(),
+        report.total(),
+        report.chunk_failure_ratio(),
+    ))
+}
 
 pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
     let settings = cm.settings();
@@ -198,6 +281,15 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
                     info!("Dataset '{dataset_name}': already complete; skipping cognify.");
                 }
                 continue;
+            }
+
+            // A run that reaches here completed; the policy tolerated whatever
+            // failed. Until now that verdict was visible only to an in-process
+            // caller reading `result.failures`, so an operator had no way to
+            // learn *which* documents were left behind short of reading
+            // `pipeline_runs.run_info` out of the database by hand.
+            if let Some(summary) = format_failure_summary(dataset_name, &result.failures) {
+                warn!("{summary}");
             }
 
             total_chunks += result.chunks.len();

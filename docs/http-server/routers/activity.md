@@ -30,6 +30,13 @@ Reads the **durable** observability tier — the `pipeline_runs` relational tabl
   - `owner_email: Option<String>` — joined from `users.email`.
   - `created_at: Option<String>` — ISO-8601, e.g. `"2026-04-24T18:30:00+00:00"`. `None` if NULL.
   - `pipeline_run_id: Option<Uuid>` — deterministic from `(pipeline_id, dataset_id)`; multiple rows can share this value across status transitions ([../pipelines.md §4.2](../pipelines.md#42-pipeline_run_id-deterministic-derived)).
+  - `cognify_failures: Option<CognifyFailuresDTO>` — **omitted from the JSON entirely** unless the row's `run_info` carries a `cognify_failures` object. Only a cognify run that *completed while tolerating per-document failures* writes one (`cognee_cognify::rollback::run_info_with_failures`), so every row Python could also produce — a clean run, any non-cognify pipeline, a row written by Python or predating the key — serializes exactly as it did before this field existed. Fields, verbatim from the persisted payload:
+    - `failed_data_ids: Vec<Uuid>` — documents at least one of whose failures failed the document. Never truncated: this is the set a re-run must cover.
+    - `unreached_data_ids: Vec<Uuid>` — documents the run never attempted because an earlier failure stopped it first. Not failures; simply not done.
+    - `failure_count: u64` — total failures recorded, including ones the in-process report's entry cap elided.
+    - `chunk_failure_ratio: f64` — item-failing chunk failures over the run's chunk count; `0.0` when the run produced no chunks.
+
+  Because rows come back ordered by `created_at DESC`, `GET /api/v1/activity/pipeline-runs?dataset_id=<id>` answers "which documents did this dataset's most recent run leave behind" from its first matching row. The same numbers reach an in-process caller on `CognifyResult::failures` and an operator on the CLI's cognify summary line.
 - **Error responses**:
 
   | Status | Body | Condition |
@@ -331,6 +338,24 @@ pub struct PipelineRunListItemDTO {
     /// `created_at.isoformat()`.
     pub created_at: Option<String>,
     pub pipeline_run_id: Option<Uuid>,
+    /// Additive, and absent by default: `skip_serializing_if` keeps the key
+    /// off the wire unless the row's `run_info` really carries it, so the
+    /// Python-mirrored shape above is unchanged for every run Python could
+    /// also produce.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cognify_failures: Option<CognifyFailuresDTO>,
+}
+
+/// The `run_info.cognify_failures` payload a tolerantly-completed cognify run
+/// persists, re-typed for the wire. No Python equivalent — Python has no
+/// "completed with tolerated failures" state.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct CognifyFailuresDTO {
+    pub failed_data_ids: Vec<Uuid>,
+    pub unreached_data_ids: Vec<Uuid>,
+    pub failure_count: u64,
+    pub chunk_failure_ratio: f64,
 }
 
 /// One trace returned by `GET /api/v1/activity/spans`.

@@ -27,6 +27,15 @@ pub struct PipelineRunWithAttributionRow {
     pub dataset_name: Option<String>,
     pub owner_id: Option<Uuid>,
     pub owner_email: Option<String>,
+    /// The row's `run_info` payload verbatim, or `None` when the column is
+    /// NULL.
+    ///
+    /// Carried here so the activity router can surface a tolerantly-completed
+    /// cognify run's `cognify_failures` summary (written by
+    /// `cognee_cognify::rollback::run_info_with_failures`) without a second
+    /// query per row. Nothing in this crate interprets it — the shape is
+    /// whatever the writing pipeline chose.
+    pub run_info: Option<serde_json::Value>,
 }
 
 /// Persistence abstraction for pipeline run status rows.
@@ -96,6 +105,7 @@ pub trait PipelineRunRepository: Send + Sync {
                 dataset_name: None,
                 owner_id: None,
                 owner_email: None,
+                run_info: r.run_info,
             })
             .collect())
     }

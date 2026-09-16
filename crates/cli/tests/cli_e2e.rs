@@ -1233,3 +1233,266 @@ fn invalid_command_name_returns_nonzero_exit_code() {
         .assert()
         .failure();
 }
+
+// ---------------------------------------------------------------------------
+// SDK-501 follow-on — the cognify failure summary an operator can act on
+//
+// `cognify()` already records, durably, exactly which documents failed: the
+// `FailureReport` on the `Ok` result, and the same numbers persisted under
+// `pipeline_runs.run_info.cognify_failures`. Until this summary existed the CLI
+// read neither, so a tolerantly-completed run over a large corpus reported only
+// "Cognify completed." and the operator had no way to learn what was missing.
+//
+// These cases drive `format_failure_summary` directly rather than a live run:
+// producing a *tolerated* failure end-to-end needs an LLM that fails for some
+// documents and not others, which no offline fixture can arrange. The function
+// is the whole of the decision — `run()` prints its `Some` and prints nothing
+// for its `None` — so pinning it pins the behaviour.
+// ---------------------------------------------------------------------------
+
+use cognee::cognify::{FailureReport, FailureStage, StageFailure};
+use cognee_cli::commands::cognify::format_failure_summary;
+
+/// One item-failing chunk failure against `data_id`.
+fn chunk_failure(data_id: uuid::Uuid) -> StageFailure {
+    StageFailure {
+        stage: FailureStage::GraphExtraction,
+        data_id,
+        chunk_id: Some(uuid::Uuid::from_u128(0xC0FFEE)),
+        error: "llm refused".to_string(),
+        fails_item: true,
+    }
+}
+
+#[test]
+fn cognify_failure_summary_reports_counts_ratio_and_failed_ids() {
+    let failed_a = uuid::Uuid::from_u128(1);
+    let failed_b = uuid::Uuid::from_u128(2);
+    let unreached = uuid::Uuid::from_u128(3);
+
+    let mut report = FailureReport::default();
+    report.record(chunk_failure(failed_a));
+    // A second chunk of the *same* document fails. This is what makes the
+    // three counts mutually distinguishable — 3 failures over 2 documents —
+    // so an assertion cannot pass by reading the wrong number: with all three
+    // equal, swapping `failed_items().len()` for `total()` in the summary went
+    // undetected.
+    report.record(chunk_failure(failed_a));
+    report.record(chunk_failure(failed_b));
+    report.mark_unreached(unreached);
+    // 3 item-failing chunk failures out of 12 chunks -> ratio 0.25.
+    report.note_totals(3, 12);
+
+    let summary = format_failure_summary("papers", &report)
+        .expect("a report with failures must produce a summary");
+
+    // Specific values, not substrings that could appear incidentally.
+    assert!(
+        summary.contains("Dataset 'papers': cognify completed with failures"),
+        "summary must name the dataset and the condition: {summary}"
+    );
+    assert!(
+        summary.contains("2 document(s) failed"),
+        "failed-document count wrong: {summary}"
+    );
+    assert!(
+        summary.contains("1 never attempted"),
+        "unreached count wrong: {summary}"
+    );
+    assert!(
+        summary.contains("3 failure(s) recorded"),
+        "total failure count wrong: {summary}"
+    );
+    assert!(
+        summary.contains("chunk failure ratio 0.2500"),
+        "chunk failure ratio wrong: {summary}"
+    );
+    // Both failed ids, and not the unreached one (it is counted, not listed).
+    assert!(
+        summary.contains(&failed_a.to_string()) && summary.contains(&failed_b.to_string()),
+        "both failed data ids must be listed: {summary}"
+    );
+    assert!(
+        !summary.contains(&unreached.to_string()),
+        "unreached ids are counted, not listed under `Failed data ids`: {summary}"
+    );
+}
+
+#[test]
+fn cognify_failure_summary_is_absent_for_a_clean_run() {
+    // Exactly what a clean run hands `run()`: the pipeline's default report.
+    let report = FailureReport::default();
+
+    let summary = format_failure_summary("papers", &report);
+
+    assert!(
+        summary.is_none(),
+        "a clean run must print nothing extra, got: {summary:?}"
+    );
+    // The negative assertion an incidental substring cannot satisfy: the
+    // distinctive marker must appear nowhere in what a clean run would print.
+    let printed = summary.unwrap_or_default();
+    assert!(
+        !printed.contains("cognify completed with failures"),
+        "clean run leaked the failure marker: {printed}"
+    );
+}
+
+#[test]
+fn cognify_failure_summary_truncates_a_large_failed_id_list() {
+    let mut report = FailureReport::default();
+    for i in 1..=12u128 {
+        report.record(chunk_failure(uuid::Uuid::from_u128(i)));
+    }
+    report.note_totals(12, 12);
+
+    let summary = format_failure_summary("papers", &report).expect("12 failures produce a summary");
+
+    assert!(
+        summary.contains("12 document(s) failed"),
+        "the count must be the true total, not the preview length: {summary}"
+    );
+    assert!(
+        summary.contains("(first 10 of 12)"),
+        "a long id list must say how many it is showing: {summary}"
+    );
+    // The 11th and 12th ids are past the preview window.
+    assert!(
+        !summary.contains(&uuid::Uuid::from_u128(11).to_string()),
+        "id 11 must be truncated away: {summary}"
+    );
+}
+
+/// Build a report whose only content is `n` item-failing chunk failures, one
+/// per document, with ids `from_u128(1..=n)` — which `BTreeSet` keeps in that
+/// order, so "the first ten" is `1..=10`.
+fn report_with_failed_documents(n: u128) -> FailureReport {
+    let mut report = FailureReport::default();
+    for i in 1..=n {
+        report.record(chunk_failure(uuid::Uuid::from_u128(i)));
+    }
+    let n_usize = usize::try_from(n).expect("test counts are small");
+    report.note_totals(n_usize, n_usize);
+    report
+}
+
+#[test]
+fn cognify_failure_summary_lists_exactly_ten_ids_without_a_truncation_note() {
+    // The boundary the truncation branch turns on. At exactly the preview
+    // width nothing is hidden, so claiming "(first 10 of 10)" would be a
+    // misleading operator report — and a `>` that should have been `>=`
+    // produces exactly that.
+    let summary = format_failure_summary("papers", &report_with_failed_documents(10))
+        .expect("10 failures produce a summary");
+
+    assert!(
+        !summary.contains("(first "),
+        "nothing was truncated at exactly the preview width: {summary}"
+    );
+    for i in 1..=10u128 {
+        assert!(
+            summary.contains(&uuid::Uuid::from_u128(i).to_string()),
+            "id {i} must be listed in full at the boundary: {summary}"
+        );
+    }
+    assert!(
+        summary.contains("10 document(s) failed"),
+        "failed-document count wrong: {summary}"
+    );
+}
+
+#[test]
+fn cognify_failure_summary_truncates_at_the_first_id_past_the_preview() {
+    // One past the boundary: the note appears, and names the true total.
+    let summary = format_failure_summary("papers", &report_with_failed_documents(11))
+        .expect("11 failures produce a summary");
+
+    assert!(
+        summary.contains("(first 10 of 11)"),
+        "the 11th id must trigger the truncation note: {summary}"
+    );
+    assert!(
+        !summary.contains(&uuid::Uuid::from_u128(11).to_string()),
+        "the 11th id itself must not be listed: {summary}"
+    );
+    assert!(
+        summary.contains(&uuid::Uuid::from_u128(10).to_string()),
+        "the 10th id is still inside the preview window: {summary}"
+    );
+}
+
+#[test]
+fn cognify_failure_summary_says_none_when_every_document_went_unreached() {
+    // A `FailFast` stop before any document was attempted: nothing *failed*,
+    // but work was left outstanding, so the run is still not clean.
+    let mut report = FailureReport::default();
+    report.mark_unreached(uuid::Uuid::from_u128(7));
+    report.mark_unreached(uuid::Uuid::from_u128(8));
+    report.note_totals(2, 0);
+
+    let summary = format_failure_summary("papers", &report)
+        .expect("outstanding work must still produce a summary");
+
+    assert!(
+        summary.contains("0 document(s) failed"),
+        "no document failed here: {summary}"
+    );
+    assert!(
+        summary.contains("2 never attempted"),
+        "unreached count wrong: {summary}"
+    );
+    assert!(
+        summary.contains("Failed data ids: none."),
+        "an empty failed set must read as `none`, not as an empty list: {summary}"
+    );
+    // A run with no chunks divides by zero unless the ratio guards it.
+    assert!(
+        summary.contains("chunk failure ratio 0.0000"),
+        "a chunkless run's ratio must be 0: {summary}"
+    );
+    // Unreached documents really are outstanding — they were excluded from the
+    // completion markers, so a re-run does pick them up.
+    assert!(
+        summary.contains("Re-run cognify for this dataset to retry them."),
+        "outstanding work must carry the retry advice: {summary}"
+    );
+}
+
+#[test]
+fn cognify_failure_summary_does_not_advise_a_pointless_re_run() {
+    // `tolerate_summarization_failures` records a failure that fails no item
+    // (`tasks.rs`: `fails_item: !config.tolerate_summarization_failures`), so
+    // the report is non-empty while every document still ends the run marked
+    // complete. `rollback` persists nothing for such a run — nothing is
+    // outstanding — and the console line must not contradict that by telling
+    // the operator to re-run a dataset the markers would make a no-op.
+    let mut report = FailureReport::default();
+    report.record(StageFailure {
+        stage: FailureStage::Summarization,
+        data_id: uuid::Uuid::from_u128(42),
+        chunk_id: Some(uuid::Uuid::from_u128(0xC0FFEE)),
+        error: "summary llm refused".to_string(),
+        fails_item: false,
+    });
+    report.note_totals(1, 4);
+
+    let summary = format_failure_summary("papers", &report)
+        .expect("a recorded failure is still worth reporting");
+
+    assert!(
+        summary.contains("1 failure(s) recorded"),
+        "the tolerated failure must still be counted: {summary}"
+    );
+    assert!(
+        summary.contains("0 document(s) failed") && summary.contains("0 never attempted"),
+        "a tolerated failure leaves no document behind: {summary}"
+    );
+    assert!(
+        !summary.contains("Re-run cognify"),
+        "a re-run would skip the dataset; advising one is false: {summary}"
+    );
+    assert!(
+        summary.contains("No documents are outstanding"),
+        "the line must say why there is nothing to do: {summary}"
+    );
+}

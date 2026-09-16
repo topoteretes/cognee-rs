@@ -29,8 +29,8 @@ use uuid::Uuid;
 
 use crate::auth::AuthenticatedUser;
 use crate::dto::activity::{
-    AgentDTO, PipelineRunListItemDTO, RecordedSpanDTO, SpansErrorEnvelopeDTO, TenantUserDTO,
-    TraceSummaryDTO,
+    AgentDTO, CognifyFailuresDTO, PipelineRunListItemDTO, RecordedSpanDTO, SpansErrorEnvelopeDTO,
+    TenantUserDTO, TraceSummaryDTO,
 };
 use crate::error::ApiError;
 use crate::observability::SpanStatus;
@@ -85,9 +85,41 @@ pub async fn get_pipeline_runs(
             owner_email: r.owner_email,
             created_at: Some(format_iso8601(r.created_at)),
             pipeline_run_id: Some(r.pipeline_run_id),
+            cognify_failures: extract_cognify_failures(r.run_info.as_ref()),
         })
         .collect();
     Ok(Json(dtos))
+}
+
+/// The `run_info` key a tolerantly-completed cognify run writes its failure
+/// summary under.
+///
+/// Duplicated from `cognee_cognify::rollback::RUN_INFO_FAILURES_KEY` rather
+/// than imported: this crate does not depend on `cognee-cognify`, and the key
+/// is a wire constant, not an implementation detail — it is equally part of
+/// Python's readable shape.
+const RUN_INFO_FAILURES_KEY: &str = "cognify_failures";
+
+/// Pull the `cognify_failures` object out of a row's `run_info`.
+///
+/// Returns `None` for every row that has no such key — a clean run, any
+/// non-cognify pipeline, a row written by Python, or a row written before the
+/// key existed — which is what keeps the added DTO field off the wire in all
+/// those cases. A malformed payload also yields `None` rather than an error:
+/// this is an observability listing, and one unparseable historical row must
+/// not take down the whole response.
+fn extract_cognify_failures(run_info: Option<&serde_json::Value>) -> Option<CognifyFailuresDTO> {
+    let failures = run_info?.get(RUN_INFO_FAILURES_KEY)?;
+    match serde_json::from_value::<CognifyFailuresDTO>(failures.clone()) {
+        Ok(dto) => Some(dto),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "pipeline_runs row carries an unreadable `{RUN_INFO_FAILURES_KEY}` payload; omitting it"
+            );
+            None
+        }
+    }
 }
 
 fn status_to_str(s: &cognee_database::PipelineRunStatus) -> String {

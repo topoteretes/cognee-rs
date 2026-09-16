@@ -82,6 +82,16 @@ cognee-cli search "what did we learn about X?" -t GRAPH_COMPLETION -d my_dataset
 cognee-cli search "what did we learn about X?" -t HYBRID_COMPLETION -d my_dataset -k 10
 ```
 
+A `cognify` run that the configured failure policy let *complete* despite
+per-document failures prints one extra `WARN` line per dataset, naming the
+counts and the first ten failed data ids (`… (first 10 of N)` beyond that), and
+saying whether a re-run would pick the outstanding documents up. A clean run
+prints nothing extra. The same numbers are persisted under
+`pipeline_runs.run_info.cognify_failures` and served — untruncated — by
+[`GET /api/v1/activity/pipeline-runs`](../http-server/routers/activity.md).
+Which failures are tolerated at all is the two-axis policy in
+[configuration.md](../configuration.md); the default errors the run instead.
+
 The full set of accepted `-t/--query-type` values is the `SearchType` enum
 documented in [`docs/http-server/routers/search.md`](../http-server/routers/search.md)
 (kept in one place to avoid duplicating the enum list). The hybrid retriever's

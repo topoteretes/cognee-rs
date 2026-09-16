@@ -5,7 +5,7 @@
 //! diverges from the OpenAPI `date-time` representation so the wire format is
 //! byte-equivalent across SDKs.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
@@ -27,6 +27,41 @@ pub struct PipelineRunListItemDTO {
     /// ISO-8601, e.g. `"2026-04-24T18:30:00+00:00"`.
     pub created_at: Option<String>,
     pub pipeline_run_id: Option<Uuid>,
+    /// Which documents a tolerantly-completed cognify run left behind.
+    ///
+    /// **Additive, and absent by default.** `skip_serializing_if` keeps the
+    /// key off the wire entirely unless the row's `run_info` actually carries
+    /// a `cognify_failures` object, so every response Python could also
+    /// produce — a clean run, any non-cognify pipeline, any row written before
+    /// this key existed — stays byte-identical to the shape documented above.
+    /// The only rows that gain the key describe a state Python has no
+    /// equivalent of: a run that completed while tolerating per-document
+    /// failures.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cognify_failures: Option<CognifyFailuresDTO>,
+}
+
+/// The `run_info.cognify_failures` payload a tolerantly-completed cognify run
+/// persists, re-typed for the wire.
+///
+/// Written by `cognee_cognify::rollback::run_info_with_failures`; the field
+/// names here match that payload exactly, because it is the durable record an
+/// operator would otherwise have to read out of `pipeline_runs` by hand.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct CognifyFailuresDTO {
+    /// Documents at least one of whose failures failed the document. Never
+    /// truncated — this is the set a re-run must cover.
+    pub failed_data_ids: Vec<Uuid>,
+    /// Documents the run never attempted because an earlier failure stopped
+    /// it first. Not failures; simply not done.
+    pub unreached_data_ids: Vec<Uuid>,
+    /// Total failures recorded, including ones the entry cap kept out of the
+    /// in-process report.
+    pub failure_count: u64,
+    /// Item-failing chunk failures over the run's chunk count; `0.0` when the
+    /// run produced no chunks.
+    pub chunk_failure_ratio: f64,
 }
 
 /// One trace returned by `GET /api/v1/activity/spans`.
