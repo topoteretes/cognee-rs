@@ -1322,7 +1322,9 @@ impl Default for Settings {
             // mean the configured value silently disagreed with the value used
             // by any consumer that does not thread it through (the HTTP routers
             // do not). See `DEFAULT_MAX_PARALLEL_EXTRACTIONS` for why this is
-            // 128 rather than Python's effectively-unbounded gather.
+            // 1000 on desktop — matching the ~1000 in-flight ceiling litellm's
+            // transport imposes on Python — and 128 on Android and iOS, where a
+            // 1024-descriptor budget is shared with every open store.
             llm_max_parallel_requests: cognee_cognify::config::DEFAULT_MAX_PARALLEL_EXTRACTIONS
                 as u32,
             llm_args: serde_json::Map::new(),

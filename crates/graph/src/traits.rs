@@ -679,6 +679,22 @@ pub trait GraphDBTrait: Send + Sync {
     ///
     /// Default implementation fetches the full graph and filters in memory.
     /// Backends may override this with a more efficient query.
+    ///
+    /// **This method has no production caller in this workspace** — only tests,
+    /// and comments explaining why callers avoid it. Do not read the in-memory
+    /// default as a live scaling hazard; triage passes have repeatedly
+    /// rediscovered it as one. The scoped read the search path actually uses is
+    /// [`GraphDBTrait::get_neighborhood`], which every real backend implements
+    /// as a single bounded query — see the rationale in
+    /// `cognee-search`'s `brute_force_triplet_search`, and commit `0d4fad7`
+    /// (#148), which moved the corpus path off the full graph load.
+    ///
+    /// Note the semantics differ from Python's same-named method: this one keeps
+    /// an edge only when **both** endpoints are in the id set (an induced
+    /// subgraph), whereas Python's Ladybug adapter matches on `n.id IN $ids OR
+    /// m.id IN $ids` (a 1-hop neighbourhood). Python's behavioural equivalent is
+    /// `get_neighborhood`, not this method — so "make it match Python" is not a
+    /// reason to override it here.
     async fn get_id_filtered_graph_data(
         &self,
         node_ids: &[String],
