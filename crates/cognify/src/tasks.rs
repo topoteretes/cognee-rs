@@ -52,7 +52,7 @@ use cognee_vector::{VectorDB, VectorPoint};
 use futures::StreamExt;
 use serde::Serialize;
 use serde_json::json;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use url::Url;
 use uuid::Uuid;
 
@@ -62,6 +62,7 @@ use crate::fact_extraction::{FactExtractor, KnowledgeGraph};
 use crate::failure::{
     FailurePolicy, FailureReport, FailureStage, FailureStop, RollbackScope, StageFailure,
 };
+use crate::graph_backend::{ChunkGraphExtractor, ChunkRef, ExtractionContext, GraphBackendError};
 use crate::graph_integration::{
     ArtifactProducers, GraphEdgePair, GraphNodePair, deduplicate_nodes_and_edges,
     expand_with_nodes_and_edges_with_stats, retrieve_existing_edges,
@@ -136,6 +137,18 @@ pub struct ExtractedGraphData {
     /// (artifact, data item). Not serialized anywhere — see
     /// [`ArtifactProducers`].
     pub producers: ArtifactProducers,
+    /// Summaries a [`crate::graph_backend::ChunkGraphExtractor`] produced from
+    /// the graphs above, in `chunks` order. Empty on the LLM path, and empty
+    /// whenever the configured backend does not report
+    /// [`ChunkGraphExtractor::summarizes_chunks`].
+    ///
+    /// They travel with the graphs rather than being produced by
+    /// [`summarize_text`] because that stage reads [`ExtractedChunks`] and runs
+    /// *concurrently* with this one — it can never see a per-chunk graph.
+    /// `merge_graph_and_summaries` folds these into
+    /// [`SummarizedData::summaries`], where they are indistinguishable from
+    /// LLM-produced ones.
+    pub backend_summaries: Vec<TextSummary>,
     pub dataset_id: Uuid,
     pub user_id: Option<Uuid>,
     pub tenant_id: Option<Uuid>,
@@ -650,6 +663,157 @@ fn chunk_entity_links(
     chunk_entity_map
 }
 
+/// What one backend-driven extraction pass produced.
+struct BackendExtraction {
+    /// `(chunk_id, graph)` for every chunk that succeeded, in input order.
+    graphs: Vec<(Uuid, KnowledgeGraph)>,
+    /// Backend-produced summaries, in input order. Empty unless the backend
+    /// reports `summarizes_chunks()`.
+    summaries: Vec<TextSummary>,
+    /// `Some(n)` once a FailFast abort fired, naming the first chunk index
+    /// (into `chunks`) that was never dispatched — same meaning as the LLM
+    /// loop's `aborted_at`.
+    aborted_at: Option<usize>,
+}
+
+/// Drive a [`ChunkGraphExtractor`] over `chunks`, mirroring the LLM loop's
+/// batching, ordering, failure recording and FailFast semantics.
+///
+/// Ordering needs no stream machinery here — the backend returns a `Vec` that
+/// is zipped positionally onto the batch — which is exactly why the arity check
+/// is load-bearing rather than defensive: a short or long result would attach
+/// graphs to the wrong chunks and nothing downstream would notice.
+///
+/// `enable_summarization` is the run's [`CognifyConfig::enable_summarization`]
+/// flag; a backend only summarizes when it reports
+/// [`ChunkGraphExtractor::summarizes_chunks`] *and* the flag is on.
+///
+/// A backend failure is charged to every chunk in the failing batch, as a
+/// [`StageFailure`] with `fails_item: true`, because the backend does not
+/// report per-chunk causes. That keeps the abort-time partition, the
+/// chunk-failure ratio and the item-scoped sweep behaving identically to an LLM
+/// run. An [`GraphBackendError::ArityMismatch`] is a backend defect rather than
+/// a data failure and returns `Err`: nothing has been persisted at this point
+/// in the stage.
+#[allow(clippy::too_many_arguments)]
+async fn extract_graphs_via_backend(
+    backend: &dyn ChunkGraphExtractor,
+    chunks: &[DocumentChunk],
+    documents: &[Document],
+    ontology: &dyn OntologyResolver,
+    dataset_id: Uuid,
+    batch_size: usize,
+    enable_summarization: bool,
+    failure_policy: &FailurePolicy,
+    failures: &mut FailureReport,
+) -> Result<BackendExtraction, CognifyError> {
+    let ctx = ExtractionContext {
+        documents,
+        ontology,
+        dataset_id,
+    };
+    // `enable_summarization` gates this exactly as it gates the LLM summarizer
+    // (`summarize_text`): a backend that *can* summarize still must not when the
+    // run has summarization switched off, or the caller pays to embed and index
+    // summaries it asked not to have.
+    let summarizes = enable_summarization && backend.summarizes_chunks();
+    let mut out = BackendExtraction {
+        graphs: Vec::with_capacity(chunks.len()),
+        summaries: Vec::new(),
+        aborted_at: None,
+    };
+
+    for (batch_idx, batch) in chunks.chunks(batch_size).enumerate() {
+        let refs: Vec<ChunkRef<'_>> = batch
+            .iter()
+            .map(|chunk| ChunkRef {
+                chunk_id: chunk.base.id,
+                document_id: chunk.document_id,
+                text: &chunk.text,
+            })
+            .collect();
+
+        let graphs = match backend.extract_graphs(&refs, &ctx).await {
+            Ok(graphs) => graphs,
+            Err(err @ GraphBackendError::ArityMismatch { .. }) => return Err(err.into()),
+            Err(err) => {
+                // Charged per chunk, exactly like an LLM extraction failure, so
+                // the partition below and the run-level policy see the same
+                // shape they see on the LLM path.
+                for chunk in batch {
+                    warn!(
+                        data_id = %chunk.document_id,
+                        chunk_id = %chunk.base.id,
+                        "graph backend failed for chunk: {err}"
+                    );
+                    failures.record(StageFailure {
+                        stage: FailureStage::GraphExtraction,
+                        data_id: chunk.document_id,
+                        chunk_id: Some(chunk.base.id),
+                        error: err.to_string(),
+                        fails_item: true,
+                    });
+                }
+                if failure_policy.stop == FailureStop::FailFast {
+                    out.aborted_at = Some((batch_idx + 1) * batch_size);
+                    break;
+                }
+                continue;
+            }
+        };
+
+        if graphs.len() != refs.len() {
+            return Err(GraphBackendError::ArityMismatch {
+                backend: backend.name().to_string(),
+                expected: refs.len(),
+                got: graphs.len(),
+            }
+            .into());
+        }
+
+        for (chunk, graph) in batch.iter().zip(graphs) {
+            if summarizes {
+                let chunk_ref = ChunkRef {
+                    chunk_id: chunk.base.id,
+                    document_id: chunk.document_id,
+                    text: &chunk.text,
+                };
+                let text = backend.summarize_chunk(&chunk_ref, &graph);
+                if text.trim().is_empty() {
+                    debug!(
+                        chunk_id = %chunk.base.id,
+                        "graph backend '{}' produced no summary for this chunk",
+                        backend.name()
+                    );
+                } else {
+                    // `TextSummary::new` derives uuid5(chunk_id, b"TextSummary"),
+                    // byte-identical to Python and to the LLM path.
+                    let mut summary =
+                        TextSummary::new(chunk.base.id, text, None, backend.name().to_string());
+                    // Parity with `SummaryExtractor::summarize_chunks`
+                    // (summarization/extractor.rs — summarize_text.py:79,81).
+                    // Without these two the summary loses its NodeSet scope and
+                    // drops out of every node_name-scoped search.
+                    summary.base.importance_weight = chunk.base.importance_weight;
+                    summary.base.belongs_to_set = chunk.base.belongs_to_set.clone();
+                    out.summaries.push(summary);
+                }
+            }
+            out.graphs.push((chunk.base.id, graph));
+        }
+
+        info!(
+            "Processed graph extraction batch {}/{} ({} chunks) via backend '{}'",
+            batch_idx + 1,
+            chunks.len().div_ceil(batch_size),
+            batch.len(),
+            backend.name()
+        );
+    }
+
+    Ok(out)
+}
+
 /// Extract knowledge graphs from chunks via LLM, then integrate (Task 3).
 ///
 /// For each chunk batch, calls the LLM to extract entities and relationships.
@@ -695,6 +859,7 @@ pub async fn extract_graph_from_data(
             entities: vec![],
             edges: vec![],
             producers: ArtifactProducers::default(),
+            backend_summaries: vec![],
             dataset_id: input.dataset_id,
             user_id: input.user_id,
             tenant_id: input.tenant_id,
@@ -733,6 +898,7 @@ pub async fn extract_graph_from_data(
             entities: vec![],
             edges: vec![],
             producers: ArtifactProducers::default(),
+            backend_summaries: vec![],
             dataset_id: input.dataset_id,
             user_id: input.user_id,
             tenant_id: input.tenant_id,
@@ -748,109 +914,134 @@ pub async fn extract_graph_from_data(
     let mut failures = input.failures.clone();
     let max_parallel = config.max_parallel_extractions.max(1);
     let mut all_graphs: Vec<(Uuid, KnowledgeGraph)> = Vec::new();
+    // Backend-produced summaries, in `chunks_for_extraction` order. Empty
+    // unless a graph backend reports `summarizes_chunks()`.
+    let mut backend_summaries: Vec<TextSummary> = Vec::new();
     // `Some(n)` once a FailFast abort has fired, naming the first chunk index
     // (into `chunks_for_extraction`) that was never dispatched.
     let mut aborted_at: Option<usize> = None;
 
-    for (batch_idx, batch) in chunks_for_extraction.chunks(batch_size).enumerate() {
-        let fact_extractor = FactExtractor::new(Arc::clone(&llm));
+    if let Some(backend) = config.graph_backend.as_ref() {
+        // LLM-free path. Same batching, the same ordering guarantee, the same
+        // per-chunk failure records and the same FailFast abort as the LLM
+        // loop below, so the abort-time partition and everything from
+        // `retrieve_existing_edges` down is reused unchanged.
+        let outcome = extract_graphs_via_backend(
+            backend.0.as_ref(),
+            &chunks_for_extraction,
+            &input.documents,
+            ontology_resolver.as_ref(),
+            input.dataset_id,
+            batch_size,
+            config.enable_summarization,
+            &failure_policy,
+            &mut failures,
+        )
+        .await?;
+        all_graphs = outcome.graphs;
+        backend_summaries = outcome.summaries;
+        aborted_at = outcome.aborted_at;
+    } else {
+        for (batch_idx, batch) in chunks_for_extraction.chunks(batch_size).enumerate() {
+            let fact_extractor = FactExtractor::new(Arc::clone(&llm));
 
-        // Pre-extract owned per-chunk inputs so the stream yields owned items.
-        // Mapping a stream over borrowed `&chunk` references trips a
-        // higher-ranked-lifetime inference bug when the surrounding future is
-        // boxed (same workaround as `SummaryExtractor::summarize_chunks`).
-        let inputs: Vec<(Uuid, String)> = batch
-            .iter()
-            .map(|chunk| (chunk.base.id, chunk.text.clone()))
-            .collect();
-        let chunk_ids: Vec<Uuid> = inputs.iter().map(|(id, _)| *id).collect();
-        // Parallel to `chunk_ids`: a failure is attributed to its file, and the
-        // stream items carry only the chunk id and text.
-        let chunk_documents: Vec<Uuid> = batch.iter().map(|chunk| chunk.document_id).collect();
+            // Pre-extract owned per-chunk inputs so the stream yields owned items.
+            // Mapping a stream over borrowed `&chunk` references trips a
+            // higher-ranked-lifetime inference bug when the surrounding future is
+            // boxed (same workaround as `SummaryExtractor::summarize_chunks`).
+            let inputs: Vec<(Uuid, String)> = batch
+                .iter()
+                .map(|chunk| (chunk.base.id, chunk.text.clone()))
+                .collect();
+            let chunk_ids: Vec<Uuid> = inputs.iter().map(|(id, _)| *id).collect();
+            // Parallel to `chunk_ids`: a failure is attributed to its file, and the
+            // stream items carry only the chunk id and text.
+            let chunk_documents: Vec<Uuid> = batch.iter().map(|chunk| chunk.document_id).collect();
 
-        // Bounded-concurrency pipeline: at most `max_parallel` extraction calls
-        // are in flight at once. `buffer_unordered`, not `buffered`: the latter's
-        // `FuturesOrdered` counts completed-but-undrained outputs against its
-        // limit, so a chunk stuck in the retry cascade pins its slot *and* every
-        // slot filled behind it until it returns — head-of-line blocking that
-        // stops the batch dead above `max_parallel` chunks. The `tokio::spawn`
-        // inside the mapped future keeps calls on the multi-threaded runtime,
-        // and `buffer_unordered` only polls up to `max_parallel` futures, so at
-        // most that many extraction tasks exist at once.
-        //
-        // Completion order is not input order, so each future carries its index
-        // and the batch is re-sorted below. Order still matters downstream:
-        // `all_graphs` feeds dedup in `retrieve_existing_edges`, and the failure
-        // records below must be deterministic for a given input. Same shape as
-        // `SummaryExtractor::summarize_chunks`.
-        //
-        // Peak duplicated text is still O(`chunks_per_batch`), not
-        // O(`max_parallel`): `inputs` above clones every chunk's text up front.
-        // Making that lazy would mean borrowing `&chunk` across the stream, which
-        // is the higher-ranked-lifetime case the comment there describes.
-        let mut indexed_results: Vec<_> = futures::stream::iter(inputs.into_iter().enumerate())
-            .map(|(index, (_, text))| {
-                let extractor = fact_extractor.clone();
-                let prompt = config.custom_extraction_prompt.clone();
-                async move {
-                    let result = tokio::spawn(async move {
-                        extractor.extract_facts(&text, prompt.as_deref()).await
-                    })
-                    .await;
-                    (index, result)
-                }
-            })
-            .buffer_unordered(max_parallel)
-            .collect()
-            .await;
-        indexed_results.sort_by_key(|(index, _)| *index);
-        let batch_results: Vec<_> = indexed_results
-            .into_iter()
-            .map(|(_, result)| result)
-            .collect();
+            // Bounded-concurrency pipeline: at most `max_parallel` extraction calls
+            // are in flight at once. `buffer_unordered`, not `buffered`: the latter's
+            // `FuturesOrdered` counts completed-but-undrained outputs against its
+            // limit, so a chunk stuck in the retry cascade pins its slot *and* every
+            // slot filled behind it until it returns — head-of-line blocking that
+            // stops the batch dead above `max_parallel` chunks. The `tokio::spawn`
+            // inside the mapped future keeps calls on the multi-threaded runtime,
+            // and `buffer_unordered` only polls up to `max_parallel` futures, so at
+            // most that many extraction tasks exist at once.
+            //
+            // Completion order is not input order, so each future carries its index
+            // and the batch is re-sorted below. Order still matters downstream:
+            // `all_graphs` feeds dedup in `retrieve_existing_edges`, and the failure
+            // records below must be deterministic for a given input. Same shape as
+            // `SummaryExtractor::summarize_chunks`.
+            //
+            // Peak duplicated text is still O(`chunks_per_batch`), not
+            // O(`max_parallel`): `inputs` above clones every chunk's text up front.
+            // Making that lazy would mean borrowing `&chunk` across the stream, which
+            // is the higher-ranked-lifetime case the comment there describes.
+            let mut indexed_results: Vec<_> = futures::stream::iter(inputs.into_iter().enumerate())
+                .map(|(index, (_, text))| {
+                    let extractor = fact_extractor.clone();
+                    let prompt = config.custom_extraction_prompt.clone();
+                    async move {
+                        let result = tokio::spawn(async move {
+                            extractor.extract_facts(&text, prompt.as_deref()).await
+                        })
+                        .await;
+                        (index, result)
+                    }
+                })
+                .buffer_unordered(max_parallel)
+                .collect()
+                .await;
+            indexed_results.sort_by_key(|(index, _)| *index);
+            let batch_results: Vec<_> = indexed_results
+                .into_iter()
+                .map(|(_, result)| result)
+                .collect();
 
-        // The whole batch is collected before any result is inspected, so a
-        // FailFast abort reports every failure in the batch that tripped it —
-        // not only the first one to come back.
-        let mut batch_failed = false;
-        for ((result, chunk_id), document_id) in batch_results
-            .into_iter()
-            .zip(chunk_ids)
-            .zip(chunk_documents)
-        {
-            let outcome = result
-                .map_err(|e| CognifyError::FactExtractionError(e.to_string()))
-                .and_then(|inner| inner);
-            match outcome {
-                Ok(graph) => all_graphs.push((chunk_id, graph)),
-                Err(e) => {
-                    warn!(
-                        data_id = %document_id,
-                        chunk_id = %chunk_id,
-                        "graph extraction failed for chunk: {e}"
-                    );
-                    failures.record(StageFailure {
-                        stage: FailureStage::GraphExtraction,
-                        data_id: document_id,
-                        chunk_id: Some(chunk_id),
-                        error: e.to_string(),
-                        fails_item: true,
-                    });
-                    batch_failed = true;
+            // The whole batch is collected before any result is inspected, so a
+            // FailFast abort reports every failure in the batch that tripped it —
+            // not only the first one to come back.
+            let mut batch_failed = false;
+            for ((result, chunk_id), document_id) in batch_results
+                .into_iter()
+                .zip(chunk_ids)
+                .zip(chunk_documents)
+            {
+                let outcome = result
+                    .map_err(|e| CognifyError::FactExtractionError(e.to_string()))
+                    .and_then(|inner| inner);
+                match outcome {
+                    Ok(graph) => all_graphs.push((chunk_id, graph)),
+                    Err(e) => {
+                        warn!(
+                            data_id = %document_id,
+                            chunk_id = %chunk_id,
+                            "graph extraction failed for chunk: {e}"
+                        );
+                        failures.record(StageFailure {
+                            stage: FailureStage::GraphExtraction,
+                            data_id: document_id,
+                            chunk_id: Some(chunk_id),
+                            error: e.to_string(),
+                            fails_item: true,
+                        });
+                        batch_failed = true;
+                    }
                 }
             }
-        }
 
-        info!(
-            "Processed graph extraction batch {}/{} ({} chunks)",
-            batch_idx + 1,
-            chunks_for_extraction.len().div_ceil(batch_size),
-            batch.len()
-        );
+            info!(
+                "Processed graph extraction batch {}/{} ({} chunks)",
+                batch_idx + 1,
+                chunks_for_extraction.len().div_ceil(batch_size),
+                batch.len()
+            );
 
-        if batch_failed && failure_policy.stop == FailureStop::FailFast {
-            aborted_at = Some((batch_idx + 1) * batch_size);
-            break;
+            if batch_failed && failure_policy.stop == FailureStop::FailFast {
+                aborted_at = Some((batch_idx + 1) * batch_size);
+                break;
+            }
         }
     }
 
@@ -1135,6 +1326,7 @@ pub async fn extract_graph_from_data(
         entities: dedup_result.unique_nodes,
         edges: dedup_result.unique_edges,
         producers,
+        backend_summaries,
         dataset_id: input.dataset_id,
         user_id: input.user_id,
         tenant_id: input.tenant_id,
@@ -1485,6 +1677,7 @@ pub async fn extract_custom_graph_from_data<M: crate::fact_extraction::GraphMode
             entities: vec![],
             edges: vec![],
             producers: ArtifactProducers::default(),
+            backend_summaries: vec![],
             dataset_id: input.dataset_id,
             user_id: input.user_id,
             tenant_id: input.tenant_id,
@@ -1520,6 +1713,7 @@ pub async fn extract_custom_graph_from_data<M: crate::fact_extraction::GraphMode
             entities: vec![],
             edges: vec![],
             producers: ArtifactProducers::default(),
+            backend_summaries: vec![],
             dataset_id: input.dataset_id,
             user_id: input.user_id,
             tenant_id: input.tenant_id,
@@ -1656,6 +1850,7 @@ pub async fn extract_custom_graph_from_data<M: crate::fact_extraction::GraphMode
         entities: vec![],
         edges: vec![],
         producers: ArtifactProducers::default(),
+        backend_summaries: vec![],
         dataset_id: input.dataset_id,
         user_id: input.user_id,
         tenant_id: input.tenant_id,
@@ -1709,6 +1904,35 @@ pub async fn summarize_text(
             input.chunks.len() - non_dlt_chunks.len(),
             non_dlt_chunks.len()
         );
+    }
+
+    // A graph backend that summarizes takes over this stage entirely: it
+    // produces each summary from that chunk's own extracted graph, inside the
+    // sibling extraction branch (see `ExtractedGraphData::backend_summaries`).
+    // Returning here is what makes the LLM-free path actually LLM-free — not
+    // one structured-output call is issued. The decision is per run, not per
+    // chunk, because this branch runs concurrently with extraction and cannot
+    // learn which chunks the backend declined.
+    //
+    // `enable_summarization` is read first, and the extraction branch reads it
+    // too (`extract_graphs_via_backend`): with the flag off neither seam
+    // summarizes, so the run falls through to the "Summarization disabled in
+    // config" path below and produces no summaries from either source.
+    //
+    // ⚠️ A pure `Ok`, deliberately: under the `try_parallel` in
+    // `make_extract_graph_and_summarize_task_with_rank` an `Err` from this
+    // branch drops the sibling mid-write. Never turn this into a `?`.
+    if config.enable_summarization
+        && config
+            .graph_backend
+            .as_ref()
+            .is_some_and(|backend| backend.0.summarizes_chunks())
+    {
+        info!("Summarization delegated to the graph backend; skipping the LLM summarizer");
+        return Ok(SummarizedChunks {
+            summaries: Vec::new(),
+            failures: FailureReport::with_policy(&config.failure_policy()),
+        });
     }
 
     let failure_policy = config.failure_policy();
@@ -5560,6 +5784,23 @@ pub fn make_extract_graph_task_with_rank(
                     rank,
                 );
             }
+            // Backend-produced summaries never pass through
+            // `make_summarize_text_task_with_rank`, so their stamp has to
+            // happen here. `source_task` is deliberately the *summarization*
+            // task name, not this one: the cross-SDK provenance parity harness
+            // keys `TextSummary` off `"summarize_text"`, and both halves of the
+            // fused stage share one rank (see
+            // `make_extract_graph_and_summarize_task_with_rank`), so the `rank`
+            // this factory already has is the right one.
+            for summary in &mut graph_data.backend_summaries {
+                stamp_provenance(
+                    &mut summary.base,
+                    COGNIFY_PIPELINE_STAMP_NAME,
+                    SUMMARIZE_TEXT_TASK_NAME,
+                    user_label.as_deref(),
+                    rank,
+                );
+            }
             for doc in &mut graph_data.documents {
                 stamp_provenance(
                     &mut doc.base,
@@ -5649,6 +5890,11 @@ fn merge_graph_and_summaries(
 ) -> SummarizedData {
     let surviving_chunks: BTreeSet<Uuid> = graph.chunks.iter().map(|c| c.base.id).collect();
     let mut summaries = summarized.summaries;
+    // Backend-produced summaries join the LLM ones here and are filtered by the
+    // same surviving-chunk rule below, which is what applies extraction's
+    // abort-time exclusions to them. When a backend summarizes, the sibling
+    // branch contributed none and this is the entire summary set.
+    summaries.extend(graph.backend_summaries);
     let before = summaries.len();
     // `made_from` is set at construction for every summary this stage produces;
     // an unattributable one is kept rather than guessed away.
@@ -8697,6 +8943,7 @@ mod tests {
             entities: vec![],
             edges: vec![],
             producers: ArtifactProducers::default(),
+            backend_summaries: vec![],
             dataset_id: Uuid::new_v4(),
             user_id: None,
             tenant_id: None,
@@ -8763,6 +9010,7 @@ mod tests {
             entities: vec![],
             edges: vec![],
             producers: ArtifactProducers::default(),
+            backend_summaries: vec![],
             dataset_id: Uuid::new_v4(),
             user_id: None,
             tenant_id: None,
@@ -8814,6 +9062,7 @@ mod tests {
             entities: vec![],
             edges: vec![],
             producers: ArtifactProducers::default(),
+            backend_summaries: vec![],
             dataset_id: Uuid::new_v4(),
             user_id: None,
             tenant_id: None,
@@ -8867,6 +9116,7 @@ mod tests {
             entities: vec![],
             edges: vec![],
             producers: ArtifactProducers::default(),
+            backend_summaries: vec![],
             dataset_id: Uuid::new_v4(),
             user_id: None,
             tenant_id: None,

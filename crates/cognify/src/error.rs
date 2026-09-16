@@ -110,6 +110,18 @@ impl From<cognee_graph::GraphDBError> for CognifyError {
     }
 }
 
+/// Convert a graph-backend failure into a cognify error.
+///
+/// Folded into the existing [`CognifyError::GraphExtractionError`] rather than
+/// given a variant of its own: to everything above the seam a backend failure
+/// *is* a graph-extraction failure, and the backend name is already in the
+/// message.
+impl From<crate::graph_backend::GraphBackendError> for CognifyError {
+    fn from(err: crate::graph_backend::GraphBackendError) -> Self {
+        CognifyError::GraphExtractionError(err.to_string())
+    }
+}
+
 /// Convert cognee_database::DatabaseError to CognifyError
 impl From<cognee_database::DatabaseError> for CognifyError {
     fn from(err: cognee_database::DatabaseError) -> Self {

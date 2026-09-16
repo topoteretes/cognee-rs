@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::failure::{FailurePolicy, FailureStop, RollbackScope};
+use crate::graph_backend::ChunkGraphExtractor;
 
 /// Chunks handed to the graph-extraction stage in one batch.
 ///
@@ -329,6 +330,18 @@ pub struct CognifyConfig {
     /// processing documents classified as audio type.
     #[serde(skip)]
     pub transcriber: Option<TranscriberHandle>,
+
+    /// Optional LLM-free graph backend.
+    ///
+    /// When `Some`, [`crate::tasks::extract_graph_from_data`] asks this backend
+    /// for one [`crate::KnowledgeGraph`] per chunk instead of calling the LLM.
+    /// When the backend also reports
+    /// [`ChunkGraphExtractor::summarizes_chunks`], it produces the chunk
+    /// summaries too and [`crate::tasks::summarize_text`] makes no LLM call at
+    /// all. Chunk filtering, failure policy, edge dedup, expansion and the
+    /// graph writes are unchanged.
+    #[serde(skip)]
+    pub graph_backend: Option<GraphBackendHandle>,
 }
 
 /// Opaque wrapper around a custom chunker callback.
@@ -355,6 +368,20 @@ pub struct TranscriberHandle(pub Arc<dyn Transcriber>);
 impl std::fmt::Debug for TranscriberHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("TranscriberHandle(…)")
+    }
+}
+
+/// Opaque wrapper around a [`ChunkGraphExtractor`] implementation.
+///
+/// Implements [`Debug`] (prints `"GraphBackendHandle(…)"`) and [`Clone`] (cheap
+/// `Arc` clone), keeping [`CognifyConfig`] derivable — `Arc<dyn Trait>` is not
+/// `Debug` on its own.
+#[derive(Clone)]
+pub struct GraphBackendHandle(pub Arc<dyn ChunkGraphExtractor>);
+
+impl std::fmt::Debug for GraphBackendHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("GraphBackendHandle(…)")
     }
 }
 
@@ -448,6 +475,7 @@ impl Default for CognifyConfig {
             summary_schema: None,
             custom_chunker: None,
             transcriber: None,
+            graph_backend: None,
         }
     }
 }
@@ -616,6 +644,12 @@ impl CognifyConfig {
     /// Set a transcriber for audio document processing.
     pub fn with_transcriber(mut self, transcriber: Arc<dyn Transcriber>) -> Self {
         self.transcriber = Some(TranscriberHandle(transcriber));
+        self
+    }
+
+    /// Set an LLM-free graph backend (see [`ChunkGraphExtractor`]).
+    pub fn with_graph_backend(mut self, backend: Arc<dyn ChunkGraphExtractor>) -> Self {
+        self.graph_backend = Some(GraphBackendHandle(backend));
         self
     }
 

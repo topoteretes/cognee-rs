@@ -10,6 +10,8 @@ pub mod error;
 pub mod fact_extraction;
 /// Failure-handling vocabulary (the two axes, the failure report).
 pub mod failure;
+/// LLM-free graph extraction backends.
+pub mod graph_backend;
 /// Graph extraction module.
 pub mod graph_extraction;
 /// Graph integration module.
@@ -33,12 +35,15 @@ pub use temporal_extraction::{TemporalEntityEnricher, TemporalEventExtractor};
 /// Triplet creation module.
 pub mod triplet_creation;
 
-pub use config::{ChunkStrategy, CognifyConfig, ConfigError, CustomChunker};
+pub use config::{ChunkStrategy, CognifyConfig, ConfigError, CustomChunker, GraphBackendHandle};
 pub use dataset_resolver::{DatasetRef, DatasetResolver, cognify_dataset_refs, cognify_datasets};
 pub use error::CognifyError;
 pub use fact_extraction::{Edge, FactExtractor, GraphModel, KnowledgeGraph, Node};
 pub use failure::{
     FailurePolicy, FailureReport, FailureStage, FailureStop, RollbackScope, StageFailure,
+};
+pub use graph_backend::{
+    ChunkGraphExtractor, ChunkRef, ExtractionContext, GraphBackendError, MockChunkGraphExtractor,
 };
 pub use graph_extraction::{GraphExtractable, Relationship, get_graph_from_model};
 pub use graph_integration::{
