@@ -91,7 +91,7 @@ pub fn run(args: EdgeReindexArgs, cm: Arc<ComponentManager>) -> Result<(), CliEr
             user_id: None,
             tenant_id: None,
             resume_after: args.resume_after.clone(),
-            limit: args.limit,
+            limit: args.limit.map(|n| n as usize),
         };
 
         let report = reindex_edge_types(

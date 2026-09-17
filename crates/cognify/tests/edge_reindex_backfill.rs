@@ -609,3 +609,65 @@ async fn dataset_id_is_metadata_only_and_not_part_of_the_id() {
         "the dataset still reaches the payload as metadata"
     );
 }
+
+/// Retrieval texts that differ only in case, spacing or apostrophes normalise
+/// to a single point id (`normalize_identifier`), and nothing upstream
+/// normalises `relationship_name` before it reaches the graph — so a corpus
+/// that names one relation inconsistently across chunks reaches this path with
+/// several texts and one id.
+///
+/// The batch must carry that id exactly once. pgvector writes a batch as one
+/// multi-row `INSERT ... ON CONFLICT (id) DO UPDATE`, which Postgres rejects
+/// outright when a row repeats (SQLSTATE 21000), so a duplicate here aborts a
+/// real `--apply` run and writes nothing for the batch.
+#[tokio::test]
+async fn texts_colliding_on_one_point_id_are_written_once_with_summed_counts() {
+    let graph = MockGraphDB::new();
+    let edges = vec![
+        edge("a", "b", "works at", None),
+        edge("a", "c", "Works At", None),
+        edge("a", "d", "works_at", None),
+        edge("e", "f", "knows", None),
+    ];
+    graph.add_edges(&edges).await.expect("seed edges");
+
+    let vector = MockVectorDB::new();
+    let embed = MockEmbeddingEngine::deterministic(DIM);
+
+    // The three spellings must really collapse, or the test proves nothing.
+    let collided = EdgeType::point_id_for(None, "works at").expect("id");
+    assert_eq!(
+        collided,
+        EdgeType::point_id_for(None, "Works At").expect("id")
+    );
+    assert_eq!(
+        collided,
+        EdgeType::point_id_for(None, "works_at").expect("id")
+    );
+
+    let options = EdgeReindexOptions {
+        apply: true,
+        ..Default::default()
+    };
+    let report = reindex_edge_types(&graph, &vector, &embed, &options)
+        .await
+        .expect("reindex must not fail on colliding texts");
+
+    assert_eq!(report.edges_scanned, 4);
+    assert_eq!(
+        report.distinct_texts, 2,
+        "three spellings of one relation are one point, plus `knows`"
+    );
+    assert_eq!(report.points_written, 2);
+
+    let stored = vector
+        .retrieve(DATA_TYPE, FIELD, &[collided])
+        .await
+        .expect("retrieve");
+    assert_eq!(stored.len(), 1, "exactly one row for the collapsed id");
+    assert_eq!(
+        stored[0].metadata.get("number_of_edges"),
+        Some(&json!(3)),
+        "the collapsed row must carry all three edges, not one spelling's share"
+    );
+}

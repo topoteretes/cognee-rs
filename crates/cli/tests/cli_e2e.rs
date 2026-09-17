@@ -1059,24 +1059,24 @@ fn vector_reindex_subcommand_help_flag_prints_usage() {
         .stdout(predicate::str::contains("Usage").or(predicate::str::contains("usage")));
 }
 
-/// The backfill is pgvector-only, and the runtime default is not pgvector. The
-/// command must then say *why* there is nothing to do — a bare "0 indexes" is
-/// indistinguishable from a pgvector store that was already fully indexed.
+/// A backend with no ANN index of its own must still say *why* there is nothing
+/// to do — a bare "0 indexes" is indistinguishable from a pgvector store that
+/// was already fully indexed — and it must name the backend it actually ran
+/// against.
 ///
-/// Also the wiring check: it exercises the dispatch arm end to end, and it can
-/// do so with no service container precisely because the provider check happens
-/// before any connection is opened.
+/// The command deliberately does **not** gate on the provider string. It
+/// dispatches through `VectorDB::create_missing_vector_indexes`, whose default
+/// answers `Ok(0)`, so an out-of-tree adapter that overrides the method gets a
+/// real backfill instead of being told it has none. That is why the assertions
+/// below pin the post-dispatch message rather than a pre-flight refusal.
 ///
 /// The assertions are deliberately specific. Bare `contains("lancedb")` and
-/// `contains("pgvector")` both hold *by accident* once the provider guard is
-/// gone: the LanceDB store logs its own `cognee.lancedb` path while opening,
-/// and the fallback "no collection was missing an index" line names pgvector
-/// itself — so the loose version passed with the guard mutated away, pinning
-/// nothing. Match the guard's own sentence instead, and assert the line the
-/// command prints just before touching the backend is *absent*, which is what
-/// "before any connection is opened" actually means.
+/// `contains("pgvector")` both hold *by accident*: the LanceDB store logs its
+/// own `cognee.lancedb` path while opening, and the summary line names pgvector
+/// itself — so a loose version would pin nothing. Match the summary's own
+/// sentence, and assert the run really reached the backend.
 #[test]
-fn vector_reindex_names_the_backend_when_it_is_not_pgvector() {
+fn vector_reindex_names_the_backend_when_it_has_no_index_to_build() {
     let config_home = TempDir::new().expect("temp dir should be created");
     let workdir = TempDir::new().expect("temp dir should be created");
     config_set(
@@ -1091,12 +1091,28 @@ fn vector_reindex_names_the_backend_when_it_is_not_pgvector() {
         .assert()
         .success()
         .stdout(
-            predicate::str::contains(
-                "Vector backend is 'lancedb', which has no ANN index to backfill",
-            )
-            .and(predicate::str::contains("VECTOR_DB_PROVIDER=pgvector"))
-            .and(predicate::str::contains("Building missing vector indexes").not()),
+            predicate::str::contains("No vector index was built")
+                .and(predicate::str::contains("'lancedb' backend"))
+                .and(predicate::str::contains("only pgvector does"))
+                .and(predicate::str::contains(
+                    "Building any missing vector indexes",
+                )),
         );
+}
+
+/// `--limit 0` is rejected by the parser rather than accepted as a no-op. A
+/// zero budget breaks out of the write loop before the resume cursor is ever
+/// set, so the run would report "stopped at the limit" with no cursor to resume
+/// from — a dead end the operator cannot continue from.
+#[test]
+fn edge_reindex_rejects_a_zero_limit() {
+    let config_home = TempDir::new().expect("temp dir should be created");
+
+    make_cmd(&config_home)
+        .args(["edge-reindex", "--apply", "--limit", "0"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("0").and(predicate::str::contains("not in")));
 }
 
 /// `run-sequence` refuses `vector-reindex`, the same way it refuses

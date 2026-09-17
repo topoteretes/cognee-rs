@@ -107,7 +107,7 @@
 //! streaming variant is a new trait method across all three adapters, which is
 //! deliberately out of scope here.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
@@ -195,8 +195,10 @@ pub struct EdgeReindexReport {
     /// Edges dropped for having neither `edge_text` nor `relationship_name` —
     /// cognify writes no `EdgeType` row for these, so they cannot be orphaned.
     pub edges_without_text: usize,
-    /// Distinct retrieval texts among the scanned edges, after the cursor.
-    /// This is the number of `EdgeType` rows the graph implies.
+    /// Distinct `EdgeType` points implied by the scanned edges, after the
+    /// cursor. Counted per point id, not per text: retrieval texts differing
+    /// only in case, spacing or apostrophes normalise to one id and are counted
+    /// once, with their edge counts summed.
     pub distinct_texts: usize,
     /// Distinct retrieval texts whose point is absent from the collection.
     /// **This is the orphan count**, and it is per text, not per edge.
@@ -271,8 +273,6 @@ pub async fn reindex_edge_types(
         counts_by_text = counts_by_text.split_off(cursor);
         counts_by_text.remove(cursor);
     }
-    report.distinct_texts = counts_by_text.len();
-
     if counts_by_text.is_empty() {
         info!(
             edges_scanned = report.edges_scanned,
@@ -285,10 +285,33 @@ pub async fn reindex_edge_types(
     // absent ids from its result rather than erroring, and answers a missing
     // collection with an empty vec, so "absent from the response" is exactly
     // "needs writing" in both cases.
-    let keyed: Vec<(String, Uuid, i32)> = counts_by_text
-        .into_iter()
-        .map(|(text, (id, count))| (text, id, count))
-        .collect();
+    // Two retrieval texts that differ only in case, spacing or apostrophes
+    // collapse to a single point id: `point_id_for` runs the text through
+    // `normalize_identifier`, and nothing upstream normalises
+    // `relationship_name` before it reaches the graph
+    // (`graph_integration/expansion.rs:893-898` stores the raw LLM string). The
+    // per-run writer never had to care, because it only ever holds one run's
+    // edges; this is the first path that aggregates over the whole graph, so
+    // the collision becomes reachable here.
+    //
+    // Collapse by id — keeping the first text in cursor order and summing the
+    // counts — so that no batch can carry the same id twice. pgvector writes a
+    // batch as one multi-row `INSERT ... ON CONFLICT (id) DO UPDATE`, which
+    // Postgres rejects outright when a row repeats (SQLSTATE 21000); the other
+    // backends would not error but would silently keep only one of them, with
+    // `number_of_edges` holding just that text's share of the count.
+    let mut first_seen: HashMap<Uuid, usize> = HashMap::new();
+    let mut keyed: Vec<(String, Uuid, i32)> = Vec::with_capacity(counts_by_text.len());
+    for (text, (id, count)) in counts_by_text {
+        match first_seen.get(&id) {
+            Some(&idx) => keyed[idx].2 += count,
+            None => {
+                first_seen.insert(id, keyed.len());
+                keyed.push((text, id, count));
+            }
+        }
+    }
+    report.distinct_texts = keyed.len();
 
     let mut present: HashSet<Uuid> = HashSet::new();
     for probe in keyed.chunks(PROBE_BATCH) {

@@ -32,9 +32,10 @@ pub(crate) fn edge_type_point_id(
     relationship_name: &str,
 ) -> Option<String> {
     // SDK-699: the derivation itself now lives in `cognee-models` as
-    // `EdgeType::point_id_for`, shared with the cognify writer and the
-    // edge-reindex backfill. This wrapper only adapts it to the `String` shape
-    // the retrieval lanes compare against.
+    // `EdgeType::point_id_for`, shared with the edge-reindex backfill. The
+    // cognify writer still reaches the same value the long way round, through
+    // `edge_retrieval_text` + `new_deterministic`. This wrapper only adapts it
+    // to the `String` shape the retrieval lanes compare against.
     EdgeType::point_id_for(edge_text, relationship_name).map(|id| id.to_string())
 }
 

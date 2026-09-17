@@ -34,26 +34,11 @@ use crate::error::CliError;
 
 /// Build the missing ANN indexes and report how many were built.
 pub fn run(_args: VectorReindexArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
-    // Read the provider before any async work, both so the settings read guard
-    // is dropped before the awaits below (clippy::await_holding_lock) and so
-    // the non-pgvector case never opens a connection it has no use for.
+    // Read the provider before any async work, so the settings read guard is
+    // dropped before the awaits below (clippy::await_holding_lock). It is only
+    // used to make the "nothing to do" message concrete — the decision itself
+    // belongs to the backend, not to this string.
     let provider = cm.settings().vector_db_provider.to_lowercase();
-
-    // Every other backend inherits the defaulted trait method, which returns
-    // `Ok(0)`. Reporting that as "0 indexes created" would be true and useless
-    // — indistinguishable from a pgvector store that was already fully indexed
-    // — so name the reason instead. The runtime default is `lancedb`, so this
-    // is the branch most invocations take.
-    if provider != "pgvector" {
-        info!(
-            "Vector backend is '{provider}', which has no ANN index to backfill — \
-             nothing to do. This command exists for the pgvector backend, whose \
-             index is built per collection and can be missing. Set \
-             VECTOR_DB_PROVIDER=pgvector (or `cognee-cli config set \
-             vector_db_provider '\"pgvector\"'`) to point it at one."
-        );
-        return Ok(());
-    }
 
     crate::teardown::run_command(Arc::clone(&cm), async move {
         let vector_db = cm
@@ -62,14 +47,20 @@ pub fn run(_args: VectorReindexArgs, cm: Arc<ComponentManager>) -> Result<(), Cl
             .map_err(|e| CliError::Runtime(format!("{e}")))?;
 
         info!(
-            "Building missing vector indexes. This runs online (CREATE INDEX \
-             CONCURRENTLY) and does not block reads or writes, but it can take a \
-             long time on a large collection."
+            "Building any missing vector indexes. On pgvector this runs online \
+             (CREATE INDEX CONCURRENTLY) and does not block reads or writes, but \
+             it can take a long time on a large collection."
         );
 
-        // Called directly on the trait object, with nothing wrapping it in a
-        // transaction: the adapter issues `CREATE INDEX CONCURRENTLY` on the
-        // pool, which Postgres rejects inside one.
+        // Dispatch through the trait rather than gating on the provider string.
+        // The defaulted method answers `Ok(0)` for a backend that has no ANN
+        // index to build, and an out-of-tree adapter registered through the
+        // component registry may override it. Comparing the provider name here
+        // would tell such a backend it has no repair path — precisely the gap
+        // this command exists to close. Called directly on the trait object,
+        // with nothing wrapping it in a transaction: the pgvector adapter
+        // issues `CREATE INDEX CONCURRENTLY` on the pool, which Postgres
+        // rejects inside one.
         let created = vector_db
             .create_missing_vector_indexes()
             .await
@@ -77,9 +68,12 @@ pub fn run(_args: VectorReindexArgs, cm: Arc<ComponentManager>) -> Result<(), Cl
 
         if created == 0 {
             info!(
-                "No vector collection was missing an index — every collection is \
-                 already indexed, or is too wide for pgvector to index (over 2000 \
-                 dimensions) and keeps its exact scan."
+                "No vector index was built. Either every collection on the \
+                 '{provider}' backend is already indexed, or that backend builds \
+                 no ANN index of its own — of the bundled backends only pgvector \
+                 does, and its index is per collection, so it can go missing. A \
+                 pgvector collection over 2000 dimensions also keeps its exact \
+                 scan and is skipped."
             );
         } else {
             info!("Built {created} missing vector index(es).");

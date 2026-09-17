@@ -318,8 +318,10 @@ pub struct EdgeReindexArgs {
     /// Bounds writes only, so it has no effect without `--apply` — a report
     /// writes nothing to cap. It does not bound the graph read, which is
     /// whole-graph either way.
-    #[arg(long = "limit")]
-    pub limit: Option<usize>,
+    /// A limit of `0` is rejected rather than silently doing nothing: it would
+    /// report no cursor to resume from, so there would be no way to continue.
+    #[arg(long = "limit", value_parser = clap::value_parser!(u64).range(1..))]
+    pub limit: Option<u64>,
 
     /// Resume an interrupted run: skip every retrieval text up to and including
     /// this one. Pass the cursor the previous run reported.
