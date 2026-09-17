@@ -444,8 +444,10 @@ pub async fn persist_data_with_acl_and_locks(
     // about what *this* call creates — it is about attaching data to a row
     // somebody else is about to roll back. A caller can reach a half-created
     // row by id: `uuid5(name, owner, tenant)` is derivable by anyone who knows
-    // the name, and `GET /v1/datasets` lists rows from ownership without
-    // requiring a live grant, so the id is observable mid-window. Resolving by
+    // the name, so the id needs no listing to be observable mid-window. (Until
+    // SDK-637 the listing handed it over too, because `GET /v1/datasets` read
+    // through to ownership when the ACL returned nothing; it now does that only
+    // with no `AclDb` wired, which is still every OSS deployment.) Resolving by
     // id without the lock would walk straight into the case the by-name lock
     // exists to prevent.
     //

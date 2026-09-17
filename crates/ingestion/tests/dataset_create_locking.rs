@@ -232,9 +232,11 @@ async fn without_locks_the_window_is_still_open() {
 /// nothing, so it has no insert-to-grant window of its own — but the window
 /// being guarded is about attaching to a row someone else is rolling back, and
 /// a half-created row is reachable by id: `uuid5(name, owner, tenant)` is
-/// derivable from the name, and `GET /v1/datasets` lists rows from ownership
-/// without requiring a live grant. Skipping the lock here would walk straight
-/// into the case the by-name lock exists to prevent.
+/// derivable from the name, so no listing is needed to observe it. (Before
+/// SDK-637 the listing handed it over as well — `GET /v1/datasets` read through
+/// to ownership when the ACL returned nothing — which it now does only with no
+/// `AclDb` wired.) Skipping the lock here would walk straight into the case the
+/// by-name lock exists to prevent.
 /// Verification: resolve by id against the doomed row with locks wired, then
 /// assert the ingest's dataset and data both survive.
 #[tokio::test(flavor = "multi_thread")]

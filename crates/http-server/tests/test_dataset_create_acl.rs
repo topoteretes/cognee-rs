@@ -13,8 +13,13 @@
 //! `SearchOrchestrator::readable_dataset_ids` consults
 //! `authorized_dataset_ids_with_roles(requester, "read")` and nothing else
 //! (correctly — Python requires a live grant too), while `GET /v1/datasets`
-//! falls back to ownership. A swallowed grant therefore produced a dataset the
+//! fell back to ownership. A swallowed grant therefore produced a dataset the
 //! owner could see in the listing and got a 403 for from `POST /v1/search`.
+//! SDK-637 has since removed that fallback from the listing under a live
+//! `AclDb` (see `test_dataset_listing_acl.rs`), so the two now agree — which
+//! makes a swallowed grant here a dataset the owner cannot reach *at all*
+//! rather than one that merely reads inconsistently, and makes the propagation
+//! this file pins more load-bearing, not less.
 //!
 //! The grant now goes through the same
 //! `cognee_database::ops::acl::grant_all_permissions_on_dataset_via_trait`

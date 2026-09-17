@@ -33,17 +33,41 @@ impl<T: IngestDb + DeleteDb + Send + Sync> DatasetDb for T {}
 pub struct DatasetManager {
     db: Arc<dyn DatasetDb>,
     acl_db: Option<Arc<dyn AclDb>>,
+    tenant_id: Option<Uuid>,
 }
 
 impl DatasetManager {
     /// Create a new `DatasetManager` without ACL enforcement.
     pub fn new(db: Arc<dyn DatasetDb>) -> Self {
-        Self { db, acl_db: None }
+        Self {
+            db,
+            acl_db: None,
+            tenant_id: None,
+        }
     }
 
     /// Enable ACL enforcement using the given ACL database.
     pub fn with_acl(mut self, acl_db: Arc<dyn AclDb>) -> Self {
         self.acl_db = Some(acl_db);
+        self
+    }
+
+    /// Scope the ownership listing path to one tenant.
+    ///
+    /// Only the no-ACL path consults this: once an `AclDb` is wired, the grants
+    /// already encode tenant membership (`authorized_dataset_ids_with_roles`
+    /// resolves direct, tenant and role grants), so a second predicate would be
+    /// redundant. `list_datasets_by_owner`, by contrast, spans every tenant the
+    /// owner appears in — the bindings let one handle write under several — so
+    /// without this the caller sees rows it will then be denied by any
+    /// ACL-aware or tenant-aware path.
+    ///
+    /// Left unset the listing is unscoped, which is today's behaviour and the
+    /// single-tenant default every OSS row is written under. Mirrors
+    /// `SearchOrchestrator::readable_dataset_ids` and Python's
+    /// `dataset.tenant_id == user.tenant_id` (SDK-637).
+    pub fn with_tenant(mut self, tenant_id: Option<Uuid>) -> Self {
+        self.tenant_id = tenant_id;
         self
     }
 
@@ -54,7 +78,9 @@ impl DatasetManager {
     /// List all datasets accessible to the given owner.
     ///
     /// When ACL is configured, only datasets the owner has "read" permission
-    /// on are returned. Without ACL, all datasets owned by the user are listed.
+    /// on are returned — the grants are the whole answer, including when they
+    /// are empty. Without ACL, the datasets owned by the user are listed,
+    /// filtered by [`with_tenant`](Self::with_tenant) when one is set.
     pub async fn list_datasets(&self, owner_id: Uuid) -> Result<Vec<Dataset>, DatasetError> {
         if let Some(acl) = &self.acl_db {
             let authorized_ids = acl
@@ -68,7 +94,11 @@ impl DatasetManager {
             }
             Ok(datasets)
         } else {
-            Ok(IngestDb::list_datasets_by_owner(self.db.as_ref(), owner_id).await?)
+            let owned = IngestDb::list_datasets_by_owner(self.db.as_ref(), owner_id).await?;
+            Ok(owned
+                .into_iter()
+                .filter(|ds| self.tenant_id.is_none_or(|t| ds.tenant_id == Some(t)))
+                .collect())
         }
     }
 

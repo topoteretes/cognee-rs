@@ -46,6 +46,40 @@ fn dataset_to_dto(ds: &Dataset) -> DatasetDTO {
     }
 }
 
+/// Log the one thing an operator needs when a dataset listing goes empty under
+/// a live `AclDb`: whether the caller owns rows the ACL does not grant them.
+///
+/// SDK-637 removed the ownership fallback that used to answer for those rows,
+/// which is correct — Python has no such fallback and search never had one —
+/// but it converts "the ACL was never backfilled" from invisible into a list
+/// that silently goes empty. This names the condition instead.
+///
+/// Deliberately best-effort: it runs only in the branch that already ran this
+/// exact query before the fix, only when the ACL returned nothing, and only
+/// logs when the two answers actually disagree — a caller who genuinely owns
+/// no datasets is silent. A failure here is a diagnostic that could not be
+/// produced, not a failed request, so the error is logged and dropped rather
+/// than turned into a 418 for a listing that is otherwise correct.
+async fn warn_on_ungranted_owned_datasets(db: &dyn IngestDb, user_id: Uuid) {
+    match IngestDb::list_datasets_by_owner(db, user_id).await {
+        Ok(owned) if !owned.is_empty() => tracing::warn!(
+            user_id = %user_id,
+            owned_datasets = owned.len(),
+            "GET /v1/datasets returned an empty list to a caller who owns \
+             datasets: an AclDb is wired and holds no 'read' grant for any of \
+             them. Either the grants were revoked, or these rows predate \
+             reliable owner grants and the ACL needs a backfill. POST /v1/search \
+             denies this caller the same datasets."
+        ),
+        Ok(_) => {}
+        Err(e) => tracing::debug!(
+            user_id = %user_id,
+            error = %e,
+            "could not check whether the caller owns ungranted datasets"
+        ),
+    }
+}
+
 // ─── 2.1  GET /  list_datasets ───────────────────────────────────────────────
 
 /// `GET /api/v1/datasets` — list all datasets the caller can read.
@@ -64,37 +98,63 @@ pub async fn list_datasets(
     })?;
     let db = components.database.clone();
 
-    // OSS deployments without an `acl_db` injected (single-user mode)
-    // skip the ACL query entirely and fall through to "all datasets
-    // owned by the caller" — matching Python's
-    // ENABLE_BACKEND_ACCESS_CONTROL=false default.
-    let dataset_ids: Vec<Uuid> = if let Some(acl) = components.acl_db.as_ref() {
-        acl.authorized_dataset_ids_with_roles(user.id, "read")
+    // Which source answers "what can this caller read?" is decided by whether
+    // an `AclDb` is wired — never by whether the ACL happened to return rows
+    // (SDK-637). The guard used to be `if datasets.is_empty()`, which let the
+    // ownership fallback fire *through* a live ACL: a caller whose `read`
+    // grants were revoked or never written got the full ownership listing
+    // here and a 403 from `POST /v1/search` for the same datasets.
+    //
+    // Python has no fallback at all — `get_datasets_router.py` returns
+    // whatever `get_all_user_permission_datasets(user, "read")` gives, the
+    // empty list included — and `SearchOrchestrator::readable_dataset_ids`
+    // has consulted the ACL and nothing else since PR 214. This now agrees
+    // with both.
+    let datasets: Vec<DatasetDTO> = if let Some(acl) = components.acl_db.as_ref() {
+        let dataset_ids: Vec<Uuid> = acl
+            .authorized_dataset_ids_with_roles(user.id, "read")
             .await
-            .map_err(|e| ApiError::Teapot(format!("Error retrieving datasets: {e}")))?
-    } else {
-        Vec::new()
-    };
+            .map_err(|e| ApiError::Teapot(format!("Error retrieving datasets: {e}")))?;
 
-    let mut datasets = Vec::new();
-    for id in dataset_ids {
-        if let Some(ds) = db
-            .get_dataset(id)
-            .await
-            .map_err(|e| ApiError::Teapot(format!("Error retrieving datasets: {e}")))?
-        {
-            datasets.push(dataset_to_dto(&ds));
+        let mut datasets = Vec::with_capacity(dataset_ids.len());
+        for id in dataset_ids {
+            if let Some(ds) = db
+                .get_dataset(id)
+                .await
+                .map_err(|e| ApiError::Teapot(format!("Error retrieving datasets: {e}")))?
+            {
+                datasets.push(dataset_to_dto(&ds));
+            }
         }
-    }
 
-    // If no ACL rows exist (fresh DB, or OSS single-user with no
-    // acl_db wired), fall back to listing by owner.
-    if datasets.is_empty() {
+        if datasets.is_empty() {
+            warn_on_ungranted_owned_datasets(&*db, user.id).await;
+        }
+        datasets
+    } else {
+        // OSS deployments without an `acl_db` injected (single-user mode) have
+        // no ACL to consult and list the caller's own datasets instead,
+        // matching Python's `ENABLE_BACKEND_ACCESS_CONTROL=false` default.
+        //
+        // Scoped to the caller's tenant: `list_datasets_by_owner` spans every
+        // tenant the owner appears in, and the bindings let one handle write
+        // under several, so without the predicate a caller scoped to tenant A
+        // sees tenant B's rows listed and then gets a 403 searching them by id
+        // (or a 422 `DatasetNotFound` by name). Mirrors Python's
+        // `dataset.tenant_id == user.tenant_id` in
+        // `get_all_user_permission_datasets` and the identical filter in
+        // `SearchOrchestrator::readable_dataset_ids`. A `None` tenant means the
+        // caller named no tenant and no filter applies — the single-tenant
+        // default every OSS row is written under.
         let owned = IngestDb::list_datasets_by_owner(&*db, user.id)
             .await
             .map_err(|e| ApiError::Teapot(format!("Error retrieving datasets: {e}")))?;
-        datasets = owned.iter().map(dataset_to_dto).collect();
-    }
+        owned
+            .iter()
+            .filter(|ds| user.tenant_id.is_none_or(|t| ds.tenant_id == Some(t)))
+            .map(dataset_to_dto)
+            .collect()
+    };
 
     let body = serde_json::to_string(&datasets)
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("serialization error: {e}")))?;
@@ -454,9 +514,9 @@ pub async fn create_new_dataset(
     //
     // The grant is NOT best-effort. Once an `acl_db` is wired, a dataset with
     // no owner `read` row is unreadable to every ACL-aware path — the
-    // `cognee::api::datasets` facade's `list_datasets`, and `search` by id or
-    // by name — while this router's own `GET /v1/datasets` still lists it from
-    // ownership. The grant loop is shared with
+    // `cognee::api::datasets` facade's `list_datasets`, `search` by id or by
+    // name, and (since SDK-637) this router's own `GET /v1/datasets`, which no
+    // longer reads through to ownership. The grant loop is shared with
     // `cognee::api::datasets::create_authorized_dataset` (this crate cannot
     // depend on `cognee` — see the NOTE in Cargo.toml) so the two create paths
     // cannot drift apart again.
