@@ -53,6 +53,45 @@ ladybug = ["dep:lbug"]
 postgres = ["dep:sea-orm", "dep:sea-orm-migration"]
 testing = []
 
+# Integration tests whose whole file is behind a `#![cfg(feature = ...)]`.
+# Without a `required-features` entry cargo still builds the target in a lane
+# that does not enable the feature, and it compiles to a green `running 0
+# tests` that is indistinguishable from a lane that really ran them. Declaring
+# the requirement makes cargo omit the target instead, and naming it explicitly
+# then fails with the feature to pass rather than reporting a green zero.
+# Every other test target here is still auto-discovered; listing these does not
+# opt out of that (`autotests` stays at its edition-2018+ default of `true`).
+
+[[test]]
+name = "formatted_graph_data"
+path = "tests/formatted_graph_data.rs"
+required-features = ["testing"]
+
+[[test]]
+name = "ladybug_close"
+path = "tests/ladybug_close.rs"
+required-features = ["ladybug"]
+
+[[test]]
+name = "ladybug_integration"
+path = "tests/ladybug_integration.rs"
+required-features = ["ladybug"]
+
+[[test]]
+name = "ladybug_span_instrumentation"
+path = "tests/ladybug_span_instrumentation.rs"
+required-features = ["ladybug"]
+
+[[test]]
+name = "pg_graph_close"
+path = "tests/pg_graph_close.rs"
+required-features = ["postgres"]
+
+[[test]]
+name = "pg_graph_integration"
+path = "tests/pg_graph_integration.rs"
+required-features = ["postgres"]
+
 [dev-dependencies]
 tempfile.workspace = true
 serial_test.workspace = true

@@ -56,6 +56,55 @@ once_cell    = { workspace = true, optional = true }
 dirs         = { workspace = true, optional = true }
 chrono       = { workspace = true, optional = true }
 
+# Integration tests whose whole file is behind a `#![cfg(feature = ...)]`.
+# Without a `required-features` entry cargo still builds the target in a lane
+# that does not enable the feature, and it compiles to a green `running 0
+# tests` that is indistinguishable from a lane that really ran them. Declaring
+# the requirement makes cargo omit the target instead, and naming it explicitly
+# then fails with the feature to pass rather than reporting a green zero.
+# Every other test target here is still auto-discovered; listing these does not
+# opt out of that (`autotests` stays at its edition-2018+ default of `true`).
+#
+# `tests/noop_fallback.rs` is deliberately absent, and is the one file in the
+# repo this mechanism cannot cover: it is gated on `cfg(not(feature =
+# "telemetry"))`, and `required-features` is a conjunction of features that must
+# be ON — it has no way to say "only when this one is OFF". So it keeps the
+# inverse of the defect the entries below fix: in any lane that *does* enable
+# `telemetry` (which workspace feature unification makes the common case) it
+# builds to a green `running 0 tests`.
+#
+# That is tolerable only because the file has a dedicated lane of its own that
+# passes `--no-default-features`, so it is really executed somewhere:
+# `scripts/check_all.sh` ("Test (telemetry crate noop fallback)") and the
+# matching `ci.yml` step both run `cargo test -p cognee-telemetry
+# --no-default-features`. Keep that lane: it is the only thing running this
+# test, and unlike the targets below, nothing here would fail if it went away.
+
+[[test]]
+name = "binding_arm_suppression"
+path = "tests/binding_arm_suppression.rs"
+required-features = ["telemetry"]
+
+[[test]]
+name = "byte_parity"
+path = "tests/byte_parity.rs"
+required-features = ["telemetry"]
+
+[[test]]
+name = "dispatch_with_mockito"
+path = "tests/dispatch_with_mockito.rs"
+required-features = ["telemetry"]
+
+[[test]]
+name = "flush_delivers_events"
+path = "tests/flush_delivers_events.rs"
+required-features = ["telemetry"]
+
+[[test]]
+name = "public_api"
+path = "tests/public_api.rs"
+required-features = ["telemetry"]
+
 [dev-dependencies]
 mockito = "1"
 regex = "1"

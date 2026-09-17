@@ -42,6 +42,30 @@ sea-orm-migration = { version = "1.1", features = ["runtime-tokio-rustls"], opti
 # redis backend (feature-gated)
 redis = { version = "0.29", features = ["aio", "tokio-comp", "connection-manager"], optional = true }
 
+# Integration tests whose whole file is behind a `#![cfg(feature = ...)]`.
+# Without a `required-features` entry cargo still builds the target in a lane
+# that does not enable the feature, and it compiles to a green `running 0
+# tests` that is indistinguishable from a lane that really ran them. Declaring
+# the requirement makes cargo omit the target instead, and naming it explicitly
+# then fails with the feature to pass rather than reporting a green zero.
+# Every other test target here is still auto-discovered; listing these does not
+# opt out of that (`autotests` stays at its edition-2018+ default of `true`).
+
+[[test]]
+name = "fs_store_tests"
+path = "tests/fs_store_tests.rs"
+required-features = ["fs"]
+
+[[test]]
+name = "sea_orm_store_tests"
+path = "tests/sea_orm_store_tests.rs"
+required-features = ["sea-orm-store"]
+
+[[test]]
+name = "test_session_manager_trace"
+path = "tests/test_session_manager_trace.rs"
+required-features = ["fs"]
+
 [dev-dependencies]
 tokio.workspace = true
 tempfile.workspace = true

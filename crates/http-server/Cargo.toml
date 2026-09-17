@@ -205,6 +205,20 @@ dotenv = { workspace = true, optional = true }
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# Integration tests whose whole file is behind a `#![cfg(feature = ...)]`.
+# Without a `required-features` entry cargo still builds the target in a lane
+# that does not enable the feature, and it compiles to a green `running 0
+# tests` that is indistinguishable from a lane that really ran them. Declaring
+# the requirement makes cargo omit the target instead, and naming it explicitly
+# then fails with the feature to pass rather than reporting a green zero.
+# Every other test target here is still auto-discovered; listing these does not
+# opt out of that (`autotests` stays at its edition-2018+ default of `true`).
+
+[[test]]
+name = "shutdown_releases_stores"
+path = "tests/shutdown_releases_stores.rs"
+required-features = ["ladybug"]
+
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 # A real listener + a real client, so `shutdown_releases_stores.rs` can prove that

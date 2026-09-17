@@ -82,6 +82,70 @@ aws-smithy-runtime-api = { workspace = true, optional = true }
 aws-smithy-runtime-api-macros = { workspace = true, optional = true }
 aws-smithy-types = { workspace = true, optional = true }
 
+# Integration tests whose whole file is behind a `#![cfg(feature = ...)]`.
+# Without a `required-features` entry cargo still builds the target in a lane
+# that does not enable the feature, and it compiles to a green `running 0
+# tests` that is indistinguishable from a lane that really ran them. Declaring
+# the requirement makes cargo omit the target instead, and naming it explicitly
+# then fails with the feature to pass rather than reporting a green zero.
+# Every other test target here is still auto-discovered; listing these does not
+# opt out of that (`autotests` stays at its edition-2018+ default of `true`).
+
+[[test]]
+name = "bedrock_converse_transform"
+path = "tests/bedrock_converse_transform.rs"
+required-features = ["bedrock"]
+
+[[test]]
+name = "bedrock_credentials_ladder"
+path = "tests/bedrock_credentials_ladder.rs"
+required-features = ["bedrock"]
+
+[[test]]
+name = "bedrock_integration"
+path = "tests/bedrock_integration.rs"
+required-features = ["bedrock"]
+
+[[test]]
+name = "bedrock_model_id_normalisation"
+path = "tests/bedrock_model_id_normalisation.rs"
+required-features = ["bedrock"]
+
+[[test]]
+name = "bedrock_pacing"
+path = "tests/bedrock_pacing.rs"
+required-features = ["bedrock"]
+
+[[test]]
+name = "bedrock_region_endpoint"
+path = "tests/bedrock_region_endpoint.rs"
+required-features = ["bedrock"]
+
+[[test]]
+name = "bedrock_request_deadline"
+path = "tests/bedrock_request_deadline.rs"
+required-features = ["bedrock"]
+
+[[test]]
+name = "bedrock_sigv4_golden"
+path = "tests/bedrock_sigv4_golden.rs"
+required-features = ["bedrock"]
+
+[[test]]
+name = "bedrock_structured_output"
+path = "tests/bedrock_structured_output.rs"
+required-features = ["bedrock"]
+
+[[test]]
+name = "bedrock_truncation_retry"
+path = "tests/bedrock_truncation_retry.rs"
+required-features = ["bedrock"]
+
+[[test]]
+name = "cassette_fixture"
+path = "tests/cassette_fixture.rs"
+required-features = ["mock"]
+
 [dev-dependencies]
 async-trait.workspace = true
 cognee-test-utils = { path = "../test-utils" }

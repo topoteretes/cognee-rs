@@ -44,6 +44,25 @@ tracing-opentelemetry = { workspace = true, optional = true }
 tonic = { version = "=0.14", default-features = false, optional = true }
 http = { version = "1", optional = true }
 
+# Integration tests whose whole file is behind a `#![cfg(feature = ...)]`.
+# Without a `required-features` entry cargo still builds the target in a lane
+# that does not enable the feature, and it compiles to a green `running 0
+# tests` that is indistinguishable from a lane that really ran them. Declaring
+# the requirement makes cargo omit the target instead, and naming it explicitly
+# then fails with the feature to pass rather than reporting a green zero.
+# Every other test target here is still auto-discovered; listing these does not
+# opt out of that (`autotests` stays at its edition-2018+ default of `true`).
+
+[[test]]
+name = "init"
+path = "tests/init.rs"
+required-features = ["telemetry"]
+
+[[test]]
+name = "otel_export"
+path = "tests/otel_export.rs"
+required-features = ["telemetry"]
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time", "sync", "net"] }
 tokio-stream = { version = "0.1", features = ["net"] }

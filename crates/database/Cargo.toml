@@ -46,6 +46,50 @@ serde_json.workspace = true
 # probe); gated behind the `sqlite` feature so non-sqlite builds don't link it.
 tokio = { workspace = true, optional = true }
 
+# Integration tests whose whole file is behind a `#![cfg(feature = ...)]`.
+# Without a `required-features` entry cargo still builds the target in a lane
+# that does not enable the feature, and it compiles to a green `running 0
+# tests` that is indistinguishable from a lane that really ran them. Declaring
+# the requirement makes cargo omit the target instead, and naming it explicitly
+# then fails with the feature to pass rather than reporting a green zero.
+# Every other test target here is still auto-discovered; listing these does not
+# opt out of that (`autotests` stays at its edition-2018+ default of `true`).
+
+[[test]]
+name = "audit_query_consolidation"
+path = "tests/audit_query_consolidation.rs"
+required-features = ["sqlite"]
+
+[[test]]
+name = "connection_pool"
+path = "tests/connection_pool.rs"
+required-features = ["sqlite"]
+
+[[test]]
+name = "data_update_last_accessed"
+path = "tests/data_update_last_accessed.rs"
+required-features = ["sqlite"]
+
+[[test]]
+name = "pipeline_status_key_compat"
+path = "tests/pipeline_status_key_compat.rs"
+required-features = ["sqlite"]
+
+[[test]]
+name = "provenance_run_scope"
+path = "tests/provenance_run_scope.rs"
+required-features = ["sqlite"]
+
+[[test]]
+name = "provenance_transaction"
+path = "tests/provenance_transaction.rs"
+required-features = ["sqlite"]
+
+[[test]]
+name = "relational_ops_span_instrumentation"
+path = "tests/relational_ops_span_instrumentation.rs"
+required-features = ["sqlite"]
+
 [dev-dependencies]
 cognee-test-utils = { path = "../test-utils" }
 serial_test.workspace = true

@@ -53,6 +53,45 @@ futures.workspace = true
 tracing.workspace = true
 url.workspace = true
 
+# Integration tests whose whole file is behind a `#![cfg(feature = ...)]`.
+# Without a `required-features` entry cargo still builds the target in a lane
+# that does not enable the feature, and it compiles to a green `running 0
+# tests` that is indistinguishable from a lane that really ran them. Declaring
+# the requirement makes cargo omit the target instead, and naming it explicitly
+# then fails with the feature to pass rather than reporting a green zero.
+# Every other test target here is still auto-discovered; listing these does not
+# opt out of that (`autotests` stays at its edition-2018+ default of `true`).
+
+[[test]]
+name = "e2e_memify"
+path = "tests/e2e_memify.rs"
+required-features = ["testing"]
+
+[[test]]
+name = "integration_memify"
+path = "tests/integration_memify.rs"
+required-features = ["testing"]
+
+[[test]]
+name = "memify_distill_sessions"
+path = "tests/memify_distill_sessions.rs"
+required-features = ["testing"]
+
+[[test]]
+name = "memify_feedback"
+path = "tests/memify_feedback.rs"
+required-features = ["testing"]
+
+[[test]]
+name = "memify_persist_sessions"
+path = "tests/memify_persist_sessions.rs"
+required-features = ["testing"]
+
+[[test]]
+name = "memify_sync_graph_session"
+path = "tests/memify_sync_graph_session.rs"
+required-features = ["testing"]
+
 [dev-dependencies]
 cognee-storage    = { path = "../storage", features = ["testing"] }
 cognee-embedding  = { path = "../embedding", features = ["onnx"] }

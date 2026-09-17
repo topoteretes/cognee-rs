@@ -13,6 +13,19 @@
 # notice. The `pgvector-spans` lane shipped in exactly that state and reported
 # green for its entire life. Both are checked below.
 #
+# The two halves are no longer equally load-bearing. SDK-666 gave every
+# feature-gated test target in the repo a `[[test]] required-features` entry, so
+# cargo now omits such a target rather than building it empty, and a lane that
+# names one without its feature fails outright. That closes the second failure
+# mode at the source — the `running 0 tests` check here is a backstop against
+# the declaration being dropped again, not the only thing standing between the
+# repo and a silent zero.
+#
+# The first failure mode is untouched and is why the floors stay. A suite that
+# returns early because its URL is unset has a real test count and a real `ok`;
+# no manifest can express "and it reached a database". Do not read the
+# `required-features` sweep as a reason to relax --min-tests.
+#
 # Called by the `pgvector-postgres`, `pggraph-postgres` and
 # `pg-single-db-postgres` lanes in .github/workflows/ci.yml and their mirrors in
 # .github/workflows/community.yml.
