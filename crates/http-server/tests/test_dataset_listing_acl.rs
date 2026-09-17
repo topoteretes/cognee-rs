@@ -23,8 +23,18 @@
 //!    user.tenant_id`.
 //!
 //! The tenant tests drive the no-ACL path on purpose: that is the only path
-//! that consults `user.tenant_id`. Once an `AclDb` is wired the grants already
-//! encode tenant membership, so a second predicate there would be redundant.
+//! that consults `user.tenant_id`. The ACL path is *not* tenant-filtered here,
+//! which is a known divergence from Python — `get_all_user_permission_datasets`
+//! applies `dataset.tenant_id == user.tenant_id` to the deduplicated union of
+//! direct, tenant and role grants — and it is shared with
+//! `SearchOrchestrator::readable_dataset_ids`. Closing it in this handler alone
+//! would make the listing stricter than search and re-open the same
+//! disagreement in the opposite direction, so it is tracked separately.
+//!
+//! Every test here is `#[serial]`. One of them overrides the process-global
+//! `REQUIRE_AUTHORIZATION`, and `serial_test` only serializes against *other*
+//! `#[serial]` tests — leaving the rest parallel let that override leak into a
+//! concurrently-running case and flip its result.
 
 mod support;
 
@@ -134,6 +144,7 @@ async fn listed_names(resp: axum::response::Response) -> Vec<String> {
 /// Verification: seed an owned dataset, grant nothing, assert the body is
 /// empty rather than listing the row from ownership.
 #[tokio::test]
+#[serial_test::serial]
 async fn listing_is_empty_when_the_acl_holds_no_grant() {
     let acl: Arc<dyn AclDb> = Arc::new(MockAclDb::new());
     let state = build_state_with_acl(Arc::clone(&acl)).await;
@@ -165,6 +176,7 @@ async fn listing_is_empty_when_the_acl_holds_no_grant() {
 /// (empty) — the `is_empty()` guard made the second listing return *both*
 /// datasets, which is more than the caller ever had access to.
 #[tokio::test]
+#[serial_test::serial]
 async fn revoking_read_removes_the_dataset_from_the_listing() {
     let mock = Arc::new(MockAclDb::new());
     let acl: Arc<dyn AclDb> = Arc::clone(&mock) as Arc<dyn AclDb>;
@@ -219,6 +231,7 @@ async fn revoking_read_removes_the_dataset_from_the_listing() {
 /// Verification: seed an ungranted owned dataset, assert `[]` from the
 /// listing and 403 from a search naming that id.
 #[tokio::test]
+#[serial_test::serial]
 async fn the_listing_and_search_agree_when_the_grant_is_missing() {
     let db = build_search_db().await;
     let owner = default_test_user_id();
@@ -292,6 +305,92 @@ async fn the_listing_and_search_agree_when_the_grant_is_missing() {
     );
 }
 
+/// Scenario: an `AclDb` is wired and holds no grant, but the operator set
+/// `REQUIRE_AUTHORIZATION=false` — this server's documented "do not enforce the
+/// ACL" switch, Python's `ENABLE_BACKEND_ACCESS_CONTROL=false` parity.
+/// Expected: the owned dataset is listed. `check_permission_via_handles`
+/// honours that switch on every other dataset route (status, data, graph, raw
+/// file, write, both deletes), so a listing that ignored it would hide
+/// datasets those routes still serve — the same two-endpoints-disagree bug this
+/// file exists to prevent, arriving from the other side. Gating the listing on
+/// the ACL alone regressed exactly this case, because the old `is_empty()`
+/// fallback happened to cover it.
+/// Verification: seed an ungranted owned dataset, disable authorization, and
+/// assert it is listed.
+#[tokio::test]
+#[serial_test::serial]
+async fn disabling_authorization_restores_the_ownership_listing() {
+    let acl: Arc<dyn AclDb> = Arc::new(MockAclDb::new());
+    let state = build_state_with_acl(Arc::clone(&acl)).await;
+    let db = state
+        .components()
+        .expect("components are wired")
+        .database
+        .clone();
+    seed_dataset_in_tenant(&db, "ungranted", default_test_user_id(), None).await;
+
+    // Process-global, hence `#[serial]`. Restored before the assertions so a
+    // panicking assert cannot leak the override into another test.
+    // SAFETY: `#[serial]` guarantees no other test in this binary runs
+    // concurrently, and nothing here spawns a thread that reads the env.
+    unsafe { std::env::set_var("REQUIRE_AUTHORIZATION", "false") };
+    let app = build_router(state).await.expect("router");
+    let resp = oneshot_get(app, "/api/v1/datasets").await;
+    let names = listed_names(resp).await;
+    // SAFETY: as above.
+    unsafe { std::env::remove_var("REQUIRE_AUTHORIZATION") };
+
+    assert_eq!(
+        names,
+        vec!["ungranted".to_string()],
+        "with REQUIRE_AUTHORIZATION=false the ACL is not enforced, so the \
+         listing must fall back to ownership — every other dataset route \
+         serves this dataset in that configuration"
+    );
+}
+
+/// Scenario: the ACL holds a `read` grant whose dataset row no longer exists —
+/// a stale grant, not a missing one.
+/// Expected: an empty list (there is nothing to list), and the diagnostic must
+/// not misreport it. The two states reach the same empty body but need opposite
+/// fixes: no grants means the ACL needs a backfill, stale grants mean the ACL
+/// needs sweeping, so the handler distinguishes them by grant count.
+/// Verification: grant `read` on an id with no row, plus a real owned dataset
+/// the caller was never granted, and assert the listing is empty rather than
+/// falling back.
+#[tokio::test]
+#[serial_test::serial]
+async fn a_grant_on_a_deleted_dataset_lists_nothing() {
+    let mock = Arc::new(MockAclDb::new());
+    let acl: Arc<dyn AclDb> = Arc::clone(&mock) as Arc<dyn AclDb>;
+    let state = build_state_with_acl(acl).await;
+    let db = state
+        .components()
+        .expect("components are wired")
+        .database
+        .clone();
+    let owner = default_test_user_id();
+    seed_dataset_in_tenant(&db, "owned_but_ungranted", owner, None).await;
+
+    let vanished = Uuid::new_v4();
+    AclDb::ensure_principal(mock.as_ref(), owner, "user")
+        .await
+        .expect("principal");
+    AclDb::grant_permission(mock.as_ref(), owner, vanished, "read")
+        .await
+        .expect("grant read on a dataset with no row");
+
+    let app = build_router(state).await.expect("router");
+    let resp = oneshot_get(app, "/api/v1/datasets").await;
+
+    assert_eq!(
+        listed_names(resp).await,
+        Vec::<String>::new(),
+        "a grant pointing at no row lists nothing, and must not re-open the \
+         ownership fallback for the dataset that was never granted"
+    );
+}
+
 // ─── 2. the ownership fallback is tenant-scoped ──────────────────────────────
 
 /// Scenario: no `AclDb` (OSS single-user), a caller scoped to tenant A, and
@@ -302,6 +401,7 @@ async fn the_listing_and_search_agree_when_the_grant_is_missing() {
 /// a listing entry that search answers 403 for.
 /// Verification: seed one row per tenant, assert the listing holds only A's.
 #[tokio::test]
+#[serial_test::serial]
 async fn the_ownership_fallback_excludes_other_tenants() {
     let owner = Uuid::new_v4();
     let tenant_a = Uuid::new_v4();
@@ -330,6 +430,7 @@ async fn the_ownership_fallback_excludes_other_tenants() {
 /// excludes it too — `None != Some(tenant_a)`.
 /// Verification: seed a NULL-tenant row, assert the listing is empty.
 #[tokio::test]
+#[serial_test::serial]
 async fn the_ownership_fallback_excludes_null_tenant_rows_from_a_tenanted_caller() {
     let owner = Uuid::new_v4();
     let tenant_a = Uuid::new_v4();
@@ -358,6 +459,7 @@ async fn the_ownership_fallback_excludes_null_tenant_rows_from_a_tenanted_caller
 /// and the whole cross-SDK suite runs as.
 /// Verification: seed a NULL-tenant and a tenanted row, assert both list.
 #[tokio::test]
+#[serial_test::serial]
 async fn an_untenanted_caller_still_sees_every_owned_dataset() {
     let owner = Uuid::new_v4();
     let (state, db) = build_oss_state_as(user_in_tenant(owner, None)).await;
@@ -384,6 +486,7 @@ async fn an_untenanted_caller_still_sees_every_owned_dataset() {
 /// than in place of it.
 /// Verification: seed a row under a different owner, assert it is absent.
 #[tokio::test]
+#[serial_test::serial]
 async fn the_ownership_fallback_still_excludes_other_owners() {
     let owner = Uuid::new_v4();
     let (state, db) = build_oss_state_as(user_in_tenant(owner, None)).await;

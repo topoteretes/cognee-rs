@@ -47,35 +47,54 @@ fn dataset_to_dto(ds: &Dataset) -> DatasetDTO {
 }
 
 /// Log the one thing an operator needs when a dataset listing goes empty under
-/// a live `AclDb`: whether the caller owns rows the ACL does not grant them.
+/// a live `AclDb`: whether the caller owns rows the ACL did not answer for.
 ///
 /// SDK-637 removed the ownership fallback that used to answer for those rows,
 /// which is correct — Python has no such fallback and search never had one —
 /// but it converts "the ACL was never backfilled" from invisible into a list
 /// that silently goes empty. This names the condition instead.
 ///
-/// Deliberately best-effort: it runs only in the branch that already ran this
-/// exact query before the fix, only when the ACL returned nothing, and only
-/// logs when the two answers actually disagree — a caller who genuinely owns
-/// no datasets is silent. A failure here is a diagnostic that could not be
+/// `grants` is how many ids `authorized_dataset_ids_with_roles` returned, which
+/// separates two states that produce the same empty body and need opposite
+/// fixes: **no grants** means the caller was never granted (or was revoked) and
+/// the ACL may need a backfill; **grants that resolved to nothing** means the
+/// ACL holds rows pointing at datasets that no longer exist, and it is the ACL
+/// that needs sweeping, not the datasets. Guarding on the resolved list rather
+/// than on `grants` is deliberate: the empty *body* is the symptom an operator
+/// reports, and it is reachable from either state.
+///
+/// Deliberately best-effort. It runs only in the branch that already ran this
+/// exact query before the fix, only when the response is empty, and only logs
+/// when the caller actually owns something — a caller who genuinely owns no
+/// datasets is silent. A failure here is a diagnostic that could not be
 /// produced, not a failed request, so the error is logged and dropped rather
 /// than turned into a 418 for a listing that is otherwise correct.
-async fn warn_on_ungranted_owned_datasets(db: &dyn IngestDb, user_id: Uuid) {
+async fn warn_on_empty_acl_listing(db: &dyn IngestDb, user_id: Uuid, grants: usize) {
     match IngestDb::list_datasets_by_owner(db, user_id).await {
+        Ok(owned) if !owned.is_empty() && grants == 0 => tracing::warn!(
+            user_id = %user_id,
+            owned_datasets = owned.len(),
+            grants,
+            "GET /v1/datasets returned an empty list to a caller who owns \
+             datasets: an AclDb is wired and holds no 'read' grant reaching any \
+             of them. Either the grants were revoked, or these rows predate \
+             reliable owner grants and the ACL needs a backfill. POST /v1/search \
+             denies this caller the same datasets."
+        ),
         Ok(owned) if !owned.is_empty() => tracing::warn!(
             user_id = %user_id,
             owned_datasets = owned.len(),
-            "GET /v1/datasets returned an empty list to a caller who owns \
-             datasets: an AclDb is wired and holds no 'read' grant for any of \
-             them. Either the grants were revoked, or these rows predate \
-             reliable owner grants and the ACL needs a backfill. POST /v1/search \
-             denies this caller the same datasets."
+            grants,
+            "GET /v1/datasets returned an empty list although the ACL holds \
+             'read' grants for this caller: every granted dataset id resolved \
+             to no row. The ACL carries grants for datasets that no longer \
+             exist and needs sweeping."
         ),
         Ok(_) => {}
         Err(e) => tracing::debug!(
             user_id = %user_id,
             error = %e,
-            "could not check whether the caller owns ungranted datasets"
+            "could not check whether the caller owns datasets the ACL did not answer for"
         ),
     }
 }
@@ -98,25 +117,39 @@ pub async fn list_datasets(
     })?;
     let db = components.database.clone();
 
-    // Which source answers "what can this caller read?" is decided by whether
-    // an `AclDb` is wired — never by whether the ACL happened to return rows
-    // (SDK-637). The guard used to be `if datasets.is_empty()`, which let the
-    // ownership fallback fire *through* a live ACL: a caller whose `read`
-    // grants were revoked or never written got the full ownership listing
-    // here and a 403 from `POST /v1/search` for the same datasets.
+    // Which source answers "what can this caller read?" is decided up front —
+    // never by whether the ACL happened to return rows (SDK-637). The guard
+    // used to be `if datasets.is_empty()`, which let the ownership fallback
+    // fire *through* a live ACL: a caller whose `read` grants were revoked or
+    // never written got the full ownership listing here and a 403 from
+    // `POST /v1/search` for the same datasets.
     //
-    // Python has no fallback at all — `get_datasets_router.py` returns
-    // whatever `get_all_user_permission_datasets(user, "read")` gives, the
-    // empty list included — and `SearchOrchestrator::readable_dataset_ids`
-    // has consulted the ACL and nothing else since PR 214. This now agrees
-    // with both.
-    let datasets: Vec<DatasetDTO> = if let Some(acl) = components.acl_db.as_ref() {
+    // Python has no such fallback — `get_datasets_router.py` returns whatever
+    // `get_all_user_permission_datasets(user, "read")` gives, the empty list
+    // included — and `SearchOrchestrator::readable_dataset_ids` has consulted
+    // the ACL and nothing else since PR 214. This now agrees with both.
+    //
+    // `is_authorization_required()` is part of the condition because
+    // `REQUIRE_AUTHORIZATION=false` is this server's documented "do not enforce
+    // the ACL" switch (Python's `ENABLE_BACKEND_ACCESS_CONTROL=false` parity),
+    // and `check_permission_via_handles` honours it on every other dataset
+    // route — status, data, graph, raw file, write and both deletes. A listing
+    // that ignored it would hand back an empty list for datasets every one of
+    // those routes still serves, which is the same two-endpoints-disagree bug
+    // in a new place. Consulting it here keeps the escape hatch whole.
+    let acl = components
+        .acl_db
+        .as_ref()
+        .filter(|_| crate::permissions::is_authorization_required());
+
+    let datasets: Vec<DatasetDTO> = if let Some(acl) = acl {
         let dataset_ids: Vec<Uuid> = acl
             .authorized_dataset_ids_with_roles(user.id, "read")
             .await
             .map_err(|e| ApiError::Teapot(format!("Error retrieving datasets: {e}")))?;
+        let grants = dataset_ids.len();
 
-        let mut datasets = Vec::with_capacity(dataset_ids.len());
+        let mut datasets = Vec::with_capacity(grants);
         for id in dataset_ids {
             if let Some(ds) = db
                 .get_dataset(id)
@@ -127,25 +160,43 @@ pub async fn list_datasets(
             }
         }
 
+        // ⚠️ KNOWN DIVERGENCE, shared with search and deliberately not fixed
+        // here. Python applies `dataset.tenant_id == user.tenant_id` to the
+        // *deduplicated union* of direct, tenant and role grants
+        // (`get_all_user_permission_datasets.py`) — i.e. on the ACL path too,
+        // unconditionally. Neither this handler nor
+        // `SearchOrchestrator::readable_dataset_ids` does, so a caller in
+        // tenant A holding a direct grant on a tenant-B row is listed here and
+        // dropped by Python. Adding the predicate to this handler alone would
+        // make the listing *stricter* than search and re-open the very
+        // disagreement SDK-637 closed, in the opposite direction; adding it to
+        // both means changing the authorization gate PR 214 settled. That is a
+        // separate change with its own blast radius, tracked as follow-up.
         if datasets.is_empty() {
-            warn_on_ungranted_owned_datasets(&*db, user.id).await;
+            warn_on_empty_acl_listing(&*db, user.id, grants).await;
         }
         datasets
     } else {
-        // OSS deployments without an `acl_db` injected (single-user mode) have
-        // no ACL to consult and list the caller's own datasets instead,
-        // matching Python's `ENABLE_BACKEND_ACCESS_CONTROL=false` default.
+        // No `acl_db` wired (OSS single-user), or the operator disabled
+        // enforcement: list the caller's own datasets, matching Python's
+        // `ENABLE_BACKEND_ACCESS_CONTROL=false` default.
         //
         // Scoped to the caller's tenant: `list_datasets_by_owner` spans every
         // tenant the owner appears in, and the bindings let one handle write
         // under several, so without the predicate a caller scoped to tenant A
         // sees tenant B's rows listed and then gets a 403 searching them by id
-        // (or a 422 `DatasetNotFound` by name). Mirrors Python's
-        // `dataset.tenant_id == user.tenant_id` in
-        // `get_all_user_permission_datasets` and the identical filter in
-        // `SearchOrchestrator::readable_dataset_ids`. A `None` tenant means the
-        // caller named no tenant and no filter applies — the single-tenant
-        // default every OSS row is written under.
+        // (or a 422 `DatasetNotFound` by name).
+        //
+        // This is the *same expression* `SearchOrchestrator::readable_dataset_ids`
+        // uses, which is what makes the two agree — but it is not Python's
+        // `==`. For a tenanted caller the two coincide (`None != Some(a)`
+        // excludes, as does `==`). For an untenanted one they do not: Python
+        // drops a tenanted row for a `tenant_id = None` caller, while
+        // `is_none_or` admits it. That is a deliberate OSS-compat choice, not
+        // an oversight — a `None` tenant here means "the caller named no
+        // tenant", the single-tenant default every OSS row is written under,
+        // and applying `==` would hide every tenanted row from the default
+        // user. Kept identical to search on purpose.
         let owned = IngestDb::list_datasets_by_owner(&*db, user.id)
             .await
             .map_err(|e| ApiError::Teapot(format!("Error retrieving datasets: {e}")))?;
