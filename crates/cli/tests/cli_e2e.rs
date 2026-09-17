@@ -1050,6 +1050,157 @@ fn export_rejects_a_format_python_cannot_reimport() {
 }
 
 #[test]
+fn vector_reindex_subcommand_help_flag_prints_usage() {
+    let config_home = TempDir::new().expect("temp dir should be created");
+    make_cmd(&config_home)
+        .args(["vector-reindex", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Usage").or(predicate::str::contains("usage")));
+}
+
+/// A backend with no ANN index of its own must still say *why* there is nothing
+/// to do — a bare "0 indexes" is indistinguishable from a pgvector store that
+/// was already fully indexed — and it must name the backend it actually ran
+/// against.
+///
+/// The command deliberately does **not** gate on the provider string. It
+/// dispatches through `VectorDB::create_missing_vector_indexes`, whose default
+/// answers `Ok(0)`, so an out-of-tree adapter that overrides the method gets a
+/// real backfill instead of being told it has none. That is why the assertions
+/// below pin the post-dispatch message rather than a pre-flight refusal.
+///
+/// The assertions are deliberately specific. Bare `contains("lancedb")` and
+/// `contains("pgvector")` both hold *by accident*: the LanceDB store logs its
+/// own `cognee.lancedb` path while opening, and the summary line names pgvector
+/// itself — so a loose version would pin nothing. Match the summary's own
+/// sentence, and assert the run really reached the backend.
+#[test]
+fn vector_reindex_names_the_backend_when_it_has_no_index_to_build() {
+    let config_home = TempDir::new().expect("temp dir should be created");
+    let workdir = TempDir::new().expect("temp dir should be created");
+    config_set(
+        &config_home,
+        workdir.path(),
+        "vector_db_provider",
+        "\"lancedb\"",
+    );
+
+    make_cmd_in(&config_home, workdir.path())
+        .args(["vector-reindex"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("No vector index was built")
+                .and(predicate::str::contains("'lancedb' backend"))
+                .and(predicate::str::contains("only pgvector does"))
+                .and(predicate::str::contains(
+                    "Building any missing vector indexes",
+                )),
+        );
+}
+
+/// `--limit 0` is rejected by the parser rather than accepted as a no-op. A
+/// zero budget breaks out of the write loop before the resume cursor is ever
+/// set, so the run would report "stopped at the limit" with no cursor to resume
+/// from — a dead end the operator cannot continue from.
+#[test]
+fn edge_reindex_rejects_a_zero_limit() {
+    let config_home = TempDir::new().expect("temp dir should be created");
+
+    make_cmd(&config_home)
+        .args(["edge-reindex", "--apply", "--limit", "0"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("0").and(predicate::str::contains("not in")));
+}
+
+/// `run-sequence` refuses `vector-reindex`, the same way it refuses
+/// `pipeline-unblock`: an HNSW build over an existing collection runs for an
+/// unbounded time and that time lands on the following step's measurement,
+/// which is the one thing a sequence file exists to produce.
+///
+/// Pinned end to end rather than by reading the match arm, because the arm is
+/// reachable only through the step parser — a refusal that compiled but never
+/// fired (a step name clap rejects first, say) would look identical in review.
+/// The step here is the *first* one, so a run that does not refuse proceeds to
+/// open the vector store instead of stopping.
+#[test]
+fn run_sequence_refuses_vector_reindex_as_a_step() {
+    let config_home = TempDir::new().expect("temp dir should be created");
+    let workdir = TempDir::new().expect("temp dir should be created");
+    let sequence = workdir.path().join("reindex_step.json");
+    std::fs::write(&sequence, r#"[{"command": ["vector-reindex"]}]"#)
+        .expect("sequence file should be written");
+
+    make_cmd_in(&config_home, workdir.path())
+        .args([
+            "run-sequence",
+            sequence.to_str().expect("temp path should be UTF-8"),
+        ])
+        .assert()
+        .failure()
+        .stdout(
+            predicate::str::contains("vector-reindex is not allowed inside run-sequence")
+                .and(predicate::str::contains("Building missing vector indexes").not()),
+        );
+}
+
+/// `edge-reindex --dataset-id` labels the rows it writes; it does not scope the
+/// scan, and cannot. The flag name reads exactly like a filter, so the summary
+/// line `-h` prints has to say so on its own — the long `--help` prose does not
+/// reach an operator who typed `-h`, which is the habit this guards.
+///
+/// Asserted against `-h` specifically, and on the *absence* of a bare
+/// "stamped on the points this run writes" summary: a doc comment whose first
+/// line went back to describing the flag neutrally would still pass a loose
+/// `contains("dataset")`, which is what makes that version worthless here.
+#[test]
+fn edge_reindex_short_help_says_dataset_id_is_not_a_filter() {
+    let config_home = TempDir::new().expect("temp dir should be created");
+    make_cmd(&config_home)
+        .args(["edge-reindex", "-h"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("NOT a filter")
+                .and(predicate::str::contains("whole graph"))
+                .and(predicate::str::contains("--apply")),
+        );
+}
+
+/// `run-sequence` refuses `edge-reindex`, the same way it refuses
+/// `vector-reindex`: store maintenance is not a pipeline step, and here
+/// applying also bills an unbounded, data-dependent number of embeddings into
+/// the middle of a measured run.
+///
+/// Pinned end to end for the same reason as its neighbour — the arm is
+/// reachable only through the step parser, so a refusal that compiled but never
+/// fired would look identical in review. The step is the *first* one, so a run
+/// that fails to refuse proceeds to open the graph store instead of stopping,
+/// which the second predicate catches.
+#[test]
+fn run_sequence_refuses_edge_reindex_as_a_step() {
+    let config_home = TempDir::new().expect("temp dir should be created");
+    let workdir = TempDir::new().expect("temp dir should be created");
+    let sequence = workdir.path().join("edge_reindex_step.json");
+    std::fs::write(&sequence, r#"[{"command": ["edge-reindex"]}]"#)
+        .expect("sequence file should be written");
+
+    make_cmd_in(&config_home, workdir.path())
+        .args([
+            "run-sequence",
+            sequence.to_str().expect("temp path should be UTF-8"),
+        ])
+        .assert()
+        .failure()
+        .stdout(
+            predicate::str::contains("edge-reindex is not allowed inside run-sequence")
+                .and(predicate::str::contains("Scanning the whole graph").not()),
+        );
+}
+
+#[test]
 fn config_subcommand_help_flag_prints_usage() {
     let config_home = TempDir::new().expect("temp dir should be created");
     make_cmd(&config_home)

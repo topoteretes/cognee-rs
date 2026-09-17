@@ -63,6 +63,41 @@ impl EdgeType {
         relationship_name.trim().to_string()
     }
 
+    /// Recompute the `EdgeType_relationship_name` vector-row point id for one
+    /// graph edge, straight from the two fields every edge shape can produce.
+    ///
+    /// This is [`Self::retrieval_text`] composed with [`Self::deterministic_id`]
+    /// — the exact pair [`Self::new_deterministic`] applies when cognify writes
+    /// the row, so a reader that calls this is guaranteed to land on the id the
+    /// writer produced. It exists because that composition is not optional
+    /// knowledge: cognify does **not** store `edge_type_id` on the graph edge
+    /// (neither does Python — `CogneeGraph.add_edge` stamps it onto the
+    /// in-memory edge at load time, `CogneeGraph.py:58-61`), so every lane that
+    /// wants to line a vector row up with its graph edge has to rederive it.
+    /// Four call sites were independently restating it (SDK-699); restating it
+    /// a fifth time is how the reader drifts from the writer and every lookup
+    /// silently misses.
+    ///
+    /// Returns `None` when both sources are blank — cognify skips such edges
+    /// when building `EdgeType` rows (`tasks.rs`: `if edge_text.is_empty() {
+    /// continue; }`), so there is no row to match and the caller should treat
+    /// the edge as having none.
+    ///
+    /// Note the id is derived from the retrieval text **alone**. The
+    /// `dataset_id` passed to [`Self::new_deterministic`] lands in
+    /// `belongs_to_set`, never in the hash, so one `EdgeType` row is shared by
+    /// every dataset whose graph holds an edge with that text — matching
+    /// Python, whose id is `uuid5(NAMESPACE_OID, "EdgeType:" + normalized_text)`
+    /// via `DataPoint.id_for` over `identity_fields = ["relationship_name"]`.
+    pub fn point_id_for(edge_text: Option<&str>, relationship_name: &str) -> Option<Uuid> {
+        let text = Self::retrieval_text(edge_text, relationship_name);
+        if text.is_empty() {
+            None
+        } else {
+            Some(Self::deterministic_id(&text))
+        }
+    }
+
     /// Create a new EdgeType with a random UUID.
     ///
     /// # Arguments

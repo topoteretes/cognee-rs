@@ -729,6 +729,17 @@ impl VectorDB for PgVectorAdapter {
         PgVectorAdapter::close(self).await
     }
 
+    /// Delegates to the inherent
+    /// [`PgVectorAdapter::create_missing_vector_indexes`], so a holder of an
+    /// `Arc<dyn VectorDB>` — the CLI's `vector-reindex`, which never learns
+    /// which backend it was handed — can run the backfill without downcasting.
+    /// The inherent function stays, and `cognee` re-exports the concrete type,
+    /// so an embedder that already has a `PgVectorAdapter` keeps calling it
+    /// directly.
+    async fn create_missing_vector_indexes(&self) -> VectorDBResult<usize> {
+        PgVectorAdapter::create_missing_vector_indexes(self).await
+    }
+
     async fn create_collection(
         &self,
         data_type: &str,
@@ -772,7 +783,8 @@ impl VectorDB for PgVectorAdapter {
         if let Err(e) = Self::create_vector_index(&self.db, &coll, dimension, false).await {
             warn!(
                 "collection {coll} was created without an ANN index, so its searches will \
-                 be sequential scans until create_missing_vector_indexes() runs: {e}"
+                 be sequential scans until the backfill runs — `cognee-cli vector-reindex`, \
+                 or create_missing_vector_indexes(): {e}"
             );
         }
 

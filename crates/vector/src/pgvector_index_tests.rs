@@ -154,6 +154,43 @@ async fn backfill_indexes_pre_existing_collections_and_is_idempotent() {
     .await;
 }
 
+/// The CLI holds an `Arc<dyn VectorDB>` and never learns which backend it was
+/// handed, so the backfill has to be reachable through the trait. Calling the
+/// inherent function is what every other case here does and would pass even if
+/// the trait method were left on its `Ok(0)` default — which would make
+/// `cognee-cli vector-reindex` silently report no work on every store.
+#[tokio::test]
+async fn backfill_is_reachable_through_the_trait_object() {
+    with_temp_db(
+        "backfill_is_reachable_through_the_trait_object",
+        |url| async move {
+            let adapter = PgVectorAdapter::new(&url, 8).await.unwrap();
+            adapter.create_collection("Dyn", "f", 8).await.unwrap();
+
+            let db = Database::connect(&url).await.unwrap();
+            // Simulate a collection whose best-effort index build failed.
+            db.execute_unprepared(r#"DROP INDEX "Dyn_f_vector_hnsw""#)
+                .await
+                .unwrap();
+            assert!(!index_present(&db, "Dyn_f_vector_hnsw").await);
+
+            // Erased exactly as the CLI holds it.
+            let erased: std::sync::Arc<dyn VectorDB> = std::sync::Arc::new(adapter);
+            let created = erased.create_missing_vector_indexes().await.unwrap();
+
+            assert_eq!(
+                created, 1,
+                "the trait method must delegate to the adapter, not return the Ok(0) default"
+            );
+            assert!(index_present(&db, "Dyn_f_vector_hnsw").await);
+
+            drop(db);
+            erased.close().await.unwrap();
+        },
+    )
+    .await;
+}
+
 /// An interrupted `CREATE INDEX CONCURRENTLY` leaves the index present but
 /// marked invalid. The planner ignores it and `IF NOT EXISTS` refuses to replace
 /// it, so a presence-only check would skip the collection on every later run and

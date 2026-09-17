@@ -38,11 +38,19 @@ Notes:
   `search_similar_filtered` deliberately forces the exact scan so its
   filter-then-limit guarantee holds — pgvector post-filters an index scan, which
   would return fewer rows than asked for.
-  Collections created *before* this existed have only their primary key;
-  `PgVectorAdapter::create_missing_vector_indexes()` backfills them with
-  `CREATE INDEX CONCURRENTLY` (online, idempotent, and it rebuilds an index left
-  invalid by an interrupted build). It is not automatic: building HNSW over a
-  large collection is expensive, so the caller chooses when.
+  Collections created *before* this existed have only their primary key, and so
+  does any collection whose index build failed — creation is best-effort (it
+  logs a warning and continues, because failing there would leave the table
+  created and unregistered), so pgvector too old for the `hnsw` access method, a
+  restricted role or too little `maintenance_work_mem` all yield a working,
+  silently sequential-scan collection. `cognee-cli vector-reindex` backfills
+  both cases with `CREATE INDEX CONCURRENTLY` (online, idempotent, and it
+  rebuilds an index left invalid by an interrupted build); embedders can call
+  `PgVectorAdapter::create_missing_vector_indexes()` directly, or reach it
+  through `VectorDB::create_missing_vector_indexes()` on any backend — it
+  defaults to a no-op returning `0` for the ones that have no such index. It is
+  not automatic: building HNSW over a large collection is expensive, so the
+  operator chooses when.
 - **Closed-source companions.** Embedded Qdrant (`cognee-vector-qdrant`) and
   on-device LiteRT inference (`cognee-llm-litert`, Android) live in the closed
   `cognee-cloud-rs` repository and are not part of OSS.
