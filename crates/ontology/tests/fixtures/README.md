@@ -16,7 +16,7 @@ These files are small RDF fixtures used by `cognee-ontology` integration tests: 
   - Source: https://raw.githubusercontent.com/pchampin/sophia_rs/main/resource/test/file5.rdf
   - Upstream project: `pchampin/sophia_rs` (Sophia parser test resources)
 
-- `gliner_schema.ttl`
+- `owl_terms.ttl`
   - Source: **hand-authored for this repository** (not downloaded).
   - Purpose: exercises `collect_terms` — URI ordering, blank-node subjects,
     absent vs. empty `rdfs:label`, whitespace-only `rdfs:comment`, a subject

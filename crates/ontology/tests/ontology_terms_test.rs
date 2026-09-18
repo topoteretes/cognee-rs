@@ -10,9 +10,10 @@
 //!    `_local_name` and `to_snake_case`.
 //!
 //! Layer 2 tests that the **ordering and raw-value contract of layer 1 is
-//! sufficient** to reproduce Python's result — it does *not* cover shipped
-//! normalisation code, which by design lives in the closed `cognee-gliner`
-//! crate (`normalize.rs`) and not here. A later reader should not mistake
+//! sufficient** to reproduce Python's result — it does *not* cover any shipped
+//! normalisation, because this crate deliberately ships none: `OntologyTerm`
+//! returns raw lexical forms and normalising them is the caller's job, since
+//! different callers normalise differently. A later reader should not mistake
 //! these assertions for coverage of an implementation in this crate: they
 //! guard a contract.
 
@@ -42,7 +43,7 @@ fn fixture_path(file_name: &str) -> PathBuf {
 }
 
 fn fixture_resolver() -> RdfLibOntologyResolver {
-    RdfLibOntologyResolver::new(fixture_path("gliner_schema.ttl")).expect("fixture should load")
+    RdfLibOntologyResolver::new(fixture_path("owl_terms.ttl")).expect("fixture should load")
 }
 
 fn fixture_terms() -> cognee_ontology::OntologyTerms {
@@ -251,11 +252,12 @@ fn resolver_without_graph_yields_empty_terms() {
 // ---------------------------------------------------------------------------
 // Layer 2 — Python's fold, reproduced from the contract above
 //
-// The helpers below are *test-local mirrors* of Python. The shipped
-// implementations live in the closed `cognee-gliner` crate's `normalize.rs`;
-// nothing here is exercised by production code. What these tests prove is that
-// the ordering and raw-value contract of layer 1 is sufficient to reproduce
-// Python's output — not that any shipped normalisation is correct.
+// The helpers below are *test-local mirrors* of Python. Normalisation is out
+// of scope for this crate by design and belongs to whoever consumes
+// `OntologyTerm`, so nothing here is exercised by production code. What these
+// tests prove is that the ordering and raw-value contract of layer 1 is
+// sufficient to reproduce Python's output — not that any shipped
+// normalisation is correct.
 // ---------------------------------------------------------------------------
 
 /// Mirrors Python `_local_name` (`schema.py`): rstrip `"/#"`, then
@@ -384,21 +386,4 @@ fn fold_reproduces_python_relation_types() {
         "four subjects collapse to one name; the whitespace-only comment counts \
          as absent, and the later non-empty comment must not override the first"
     );
-}
-
-#[test]
-fn to_snake_case_matches_python_docstring_examples() {
-    assert_eq!(to_snake_case("Person"), "person");
-    assert_eq!(to_snake_case("worksAt"), "works_at");
-    assert_eq!(to_snake_case("HTTP Server"), "http_server");
-    assert_eq!(to_snake_case("works-at"), "works_at");
-    assert_eq!(to_snake_case(""), "");
-}
-
-#[test]
-fn local_name_matches_python() {
-    assert_eq!(local_name("http://example.org#Person"), "Person");
-    assert_eq!(local_name("http://example.org/Vehicle"), "Vehicle");
-    assert_eq!(local_name("http://example.org/ns/"), "ns");
-    assert_eq!(local_name("urn:example:Thing"), "Thing");
 }

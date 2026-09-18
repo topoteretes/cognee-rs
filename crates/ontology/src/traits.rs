@@ -147,7 +147,8 @@ pub trait OntologyResolver: Send + Sync {
     ///
     /// Returns `owl:Class` and `owl:ObjectProperty` subjects with their raw
     /// `rdfs:label` and `rdfs:comment`, URI-sorted — the raw material for
-    /// deriving a closed extraction schema from an ontology.
+    /// deriving a closed-set extraction schema (a fixed list of entity and
+    /// relation types) from an ontology.
     ///
     /// # Default
     ///

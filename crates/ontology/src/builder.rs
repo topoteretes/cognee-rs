@@ -196,10 +196,7 @@ pub fn collect_terms(graph: &FastGraph) -> OntologyResult<OntologyTerms> {
             .collect()
     };
 
-    Ok(OntologyTerms {
-        classes: build(class_uris),
-        object_properties: build(property_uris),
-    })
+    Ok(OntologyTerms::new(build(class_uris), build(property_uris)))
 }
 
 /// IRI subjects of `?s rdf:type <type_term>`, deduplicated and sorted by URI.

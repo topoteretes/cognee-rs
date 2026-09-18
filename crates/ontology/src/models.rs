@@ -108,8 +108,8 @@ impl OntologyLookup {
 /// Values are returned **exactly as they appear in the graph** — not trimmed,
 /// not lower-cased, not passed through [`uri_to_key`]. Normalisation is the
 /// caller's job, because different callers normalise differently: `uri_to_key`
-/// would turn `worksAt` into `worksat`, where a GLiNER schema needs
-/// `works_at`.
+/// would turn `worksAt` into `worksat`, where a caller building snake_case
+/// schema names needs `works_at`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OntologyTerm {
     /// Full IRI of the subject, e.g. `http://example.org#worksAt`.
@@ -164,7 +164,20 @@ pub struct OntologyTerm {
 ///
 /// The two vectors are independent pools — a subject typed both `owl:Class`
 /// and `owl:ObjectProperty` appears in both.
+///
+/// # Stability
+///
+/// `#[non_exhaustive]`: `owl:DatatypeProperty` is the obvious next pool, and
+/// `owl:AnnotationProperty` after it, so this struct is expected to grow. It is
+/// returned from [`OntologyResolver::terms`](crate::OntologyResolver::terms),
+/// which out-of-tree resolvers do implement, so construction outside this crate
+/// is a supported use and the attribute is not free — [`Self::new`] exists to
+/// pay for it. That is the cheaper trade: with `new`, adding a pool leaves
+/// every existing caller compiling; with a bare struct literal, adding a pool
+/// breaks all of them. Reading fields, `Default`, `Clone` and pattern matching
+/// with `..` are unaffected.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct OntologyTerms {
     /// `owl:Class` subjects, URI-sorted.
     pub classes: Vec<OntologyTerm>,
@@ -173,6 +186,20 @@ pub struct OntologyTerms {
 }
 
 impl OntologyTerms {
+    /// Build the two pools directly.
+    ///
+    /// The supported way to construct this type outside `cognee-ontology` —
+    /// see the `Stability` note above. Both vectors are taken as given: this
+    /// does **not** sort or deduplicate them, so an implementor of
+    /// [`OntologyResolver::terms`](crate::OntologyResolver::terms) that builds
+    /// its own pools owes the URI ordering documented above.
+    pub fn new(classes: Vec<OntologyTerm>, object_properties: Vec<OntologyTerm>) -> Self {
+        Self {
+            classes,
+            object_properties,
+        }
+    }
+
     /// `true` when the ontology yielded neither classes nor object properties.
     pub fn is_empty(&self) -> bool {
         self.classes.is_empty() && self.object_properties.is_empty()
