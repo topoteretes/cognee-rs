@@ -9,6 +9,34 @@
 //! node/edge expansion, ownership rows, graph writes — is backend-neutral and
 //! shared with the LLM path.
 //!
+//! # The two failure granularities
+//!
+//! [`ChunkGraphExtractor::extract_graphs`] is handed a *batch* of chunks and
+//! returns `Result<Vec<`[`ChunkGraphResult`]`>, `[`GraphBackendError`]`>` —
+//! two nested levels of failure, and which one a backend reaches for decides
+//! how much of a run one problem destroys:
+//!
+//! - **Per chunk** — `Err(`[`ChunkExtractionError`]`)` in that chunk's slot.
+//!   One [`crate::failure::StageFailure`] against that chunk and its document;
+//!   every sibling in the batch still lands in the graph. This is the LLM
+//!   path's granularity, and it is the one almost every real failure wants.
+//! - **Whole batch** — an outer `Err(`[`GraphBackendError`]`)`. Charged to
+//!   every chunk in the batch. Reserved for failures that genuinely affect all
+//!   of them: the model will not load, the runtime is absent, the session is
+//!   gone.
+//!
+//! The distinction matters because a batch is large.
+//! [`CognifyConfig::chunks_per_batch`](crate::CognifyConfig::chunks_per_batch)
+//! defaults to 2000, so a realistic dataset is a *single* batch: a backend that
+//! reports one bad chunk as a whole-batch error marks every document in the run
+//! as failed, and leaves the abort-time partition below with nothing to
+//! preserve. Per-chunk results are what keep that partition meaningful.
+//!
+//! Arity is unaffected by either: the returned vector always holds exactly one
+//! entry per input chunk, in input order. A failed chunk occupies its slot with
+//! an `Err`; dropping it instead is
+//! [`GraphBackendError::ArityMismatch`], a backend defect.
+//!
 //! # Why summaries are produced here and not in `summarize_text`
 //!
 //! [`crate::tasks::summarize_text`] reads [`crate::tasks::ExtractedChunks`] and
@@ -73,7 +101,59 @@ use uuid::Uuid;
 
 use crate::fact_extraction::KnowledgeGraph;
 
-/// Errors a [`ChunkGraphExtractor`] can raise.
+/// Why one chunk's graph could not be extracted.
+///
+/// This is the **per-chunk** failure, returned inside the result vector of
+/// [`ChunkGraphExtractor::extract_graphs`]. The seam records it as one
+/// [`crate::failure::StageFailure`] against that chunk and its document, and
+/// the chunk's siblings in the same batch are unaffected — exactly what the LLM
+/// path does when one structured-output call fails. Anything that takes the
+/// whole batch down with it is a [`GraphBackendError`] instead.
+///
+/// # Stability
+///
+/// `#[non_exhaustive]`: backends **construct** this and the seam **reads** it,
+/// so [`Self::new`] is the supported constructor and stays source-compatible
+/// across a field being added (a retry hint and a source error are both
+/// plausible additions). The fields stay public so the seam — and a backend's
+/// own tests — can read them without an accessor.
+#[derive(Debug, Error)]
+#[error("graph backend '{backend}' failed for this chunk: {message}")]
+#[non_exhaustive]
+pub struct ChunkExtractionError {
+    /// [`ChunkGraphExtractor::name`] of the backend that failed this chunk.
+    pub backend: String,
+    /// Backend-specific failure detail.
+    pub message: String,
+}
+
+impl ChunkExtractionError {
+    /// Build a per-chunk failure from the backend's name and a reason.
+    pub fn new(backend: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            backend: backend.into(),
+            message: message.into(),
+        }
+    }
+}
+
+/// One chunk's extraction outcome: its graph, or why that one chunk failed.
+///
+/// The element type of the vector [`ChunkGraphExtractor::extract_graphs`]
+/// returns. The vector is still required to hold exactly one entry per input
+/// chunk, in input order — a failed chunk occupies its slot with an `Err`
+/// rather than being omitted, which is what keeps the positional pairing (and
+/// the arity check that guards it) intact.
+pub type ChunkGraphResult = Result<KnowledgeGraph, ChunkExtractionError>;
+
+/// Errors that take a whole [`ChunkGraphExtractor`] call down.
+///
+/// Distinct from [`ChunkExtractionError`] by design: this is "the batch could
+/// not be served at all" (the model will not load, the runtime is missing, the
+/// backend broke its contract), and the seam charges it to **every** chunk in
+/// the batch. A failure that belongs to one chunk must be reported as a
+/// [`ChunkExtractionError`] in that chunk's slot instead, or its siblings are
+/// failed along with it.
 ///
 /// # Stability
 ///
@@ -85,9 +165,14 @@ use crate::fact_extraction::KnowledgeGraph;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum GraphBackendError {
-    /// The backend could not extract graphs for a batch. Recorded per chunk as
-    /// a [`crate::failure::StageFailure`] by the extraction seam, exactly as an
-    /// LLM extraction failure is.
+    /// The backend could not serve the batch **at all** — nothing chunk-specific
+    /// went wrong, the call itself could not run. Recorded per chunk as a
+    /// [`crate::failure::StageFailure`] by the extraction seam, for every chunk
+    /// in the failing batch.
+    ///
+    /// Do not use this for a single bad chunk: that is
+    /// [`ChunkExtractionError`], and returning it here charges the chunk's
+    /// siblings for its failure.
     #[error("graph backend '{backend}' failed: {message}")]
     Extraction {
         /// [`ChunkGraphExtractor::name`] of the failing backend.
@@ -96,18 +181,22 @@ pub enum GraphBackendError {
         message: String,
     },
 
-    /// The backend broke the "exactly one graph per input, in input order"
+    /// The backend broke the "exactly one result per input, in input order"
     /// contract. Raised by the extraction seam, not by backends, and treated as
     /// a hard error rather than a per-chunk failure: it is a defect in the
     /// backend, and zipping a short or long result would attribute graphs to
     /// the wrong chunks with nothing downstream noticing.
+    ///
+    /// A chunk the backend could not handle still occupies its slot, as an
+    /// `Err(`[`ChunkExtractionError`]`)` — omitting it is an arity violation,
+    /// not a way to report a failure.
     #[error("graph backend '{backend}' returned {got} graphs for {expected} chunks")]
     ArityMismatch {
         /// [`ChunkGraphExtractor::name`] of the offending backend.
         backend: String,
         /// Number of chunks handed to the backend.
         expected: usize,
-        /// Number of graphs it returned.
+        /// Number of results it returned.
         got: usize,
     },
 
@@ -207,24 +296,37 @@ pub trait ChunkGraphExtractor: Send + Sync {
     /// Short, stable identifier used in logs and as `TextSummary::model`.
     fn name(&self) -> &str;
 
-    /// Extract one graph per chunk.
+    /// Extract one graph per chunk, reporting failure **per chunk**.
     ///
     /// # Contract
-    /// MUST return exactly `chunks.len()` graphs, in `chunks` order. The seam
-    /// checks this and fails the whole stage with
-    /// [`GraphBackendError::ArityMismatch`] rather than mis-pairing graphs with
-    /// chunks.
+    /// MUST return exactly `chunks.len()` [`ChunkGraphResult`]s, in `chunks`
+    /// order. That contract is unchanged and still load-bearing: the seam pairs
+    /// the results with the batch positionally, checks the length, and fails
+    /// the whole stage with [`GraphBackendError::ArityMismatch`] rather than
+    /// mis-pairing graphs with chunks.
+    ///
+    /// What changed is the *granularity of failure*, not the arity. A chunk the
+    /// backend could not handle keeps its slot and carries an
+    /// `Err(`[`ChunkExtractionError`]`)`; the seam records one
+    /// [`crate::failure::StageFailure`] for that chunk and its document, and
+    /// every sibling in the same batch still lands in the graph. This is what
+    /// the LLM path does — one failed structured-output call loses one chunk —
+    /// and a backend that collapses a single bad chunk into an `Err` for the
+    /// whole call fails up to [`crate::CognifyConfig::chunks_per_batch`] chunks
+    /// (2000 by default, i.e. typically the entire run) for one chunk's sake.
     ///
     /// # Errors
+    /// The outer `Err` is reserved for a genuine whole-batch failure:
     /// [`GraphBackendError::Extraction`] or
-    /// [`GraphBackendError::NotAvailable`] when the batch cannot be served. The
-    /// seam charges either one to every chunk in the batch as a
-    /// [`crate::failure::StageFailure`], exactly as it charges an LLM failure.
+    /// [`GraphBackendError::NotAvailable`] when the call could not be served at
+    /// all (model will not load, runtime missing, session gone). The seam
+    /// charges either one to every chunk in the batch, exactly as it charges an
+    /// LLM failure, so reach for it only when every chunk really is affected.
     async fn extract_graphs<'c, 'x>(
         &self,
         chunks: &[ChunkRef<'c>],
         ctx: &ExtractionContext<'x>,
-    ) -> Result<Vec<KnowledgeGraph>, GraphBackendError>;
+    ) -> Result<Vec<ChunkGraphResult>, GraphBackendError>;
 
     /// Whether this backend takes over chunk summarization entirely.
     ///

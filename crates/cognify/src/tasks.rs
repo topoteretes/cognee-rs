@@ -705,13 +705,26 @@ struct BackendExtraction {
 /// deliberately not applied here, since a backend is in-process and owns its
 /// own parallelism (see that field's docs).
 ///
-/// A backend failure is charged to every chunk in the failing batch, as a
-/// [`StageFailure`] with `fails_item: true`, because the backend does not
-/// report per-chunk causes. That keeps the abort-time partition, the
-/// chunk-failure ratio and the item-scoped sweep behaving identically to an LLM
-/// run. An [`GraphBackendError::ArityMismatch`] is a backend defect rather than
-/// a data failure and returns `Err`: nothing has been persisted at this point
-/// in the stage.
+/// Failures arrive at two granularities and are recorded at both, which is what
+/// makes a backend run fail the same way an LLM run does:
+///
+/// * A [`crate::graph_backend::ChunkExtractionError`] in one chunk's result
+///   slot becomes one [`StageFailure`] with `fails_item: true` against that
+///   chunk and its document. Its siblings in the same batch keep their graphs
+///   and are persisted — the LLM loop loses exactly one chunk in the same
+///   situation, and so does this.
+/// * An outer [`GraphBackendError`] is a whole-batch failure and is charged to
+///   every chunk in the batch. That is the right shape for "the model will not
+///   load", and the wrong shape for one bad chunk, which is why the trait
+///   documents the distinction so firmly: `chunks_per_batch` defaults to 2000,
+///   so a realistic run is one batch and a misfiled whole-batch error fails
+///   every document in it.
+///
+/// Either way the chunk-failure ratio, the abort-time partition and the
+/// item-scoped sweep see the same shape they see on the LLM path. A
+/// [`GraphBackendError::ArityMismatch`] is a backend defect rather than a data
+/// failure and returns `Err`: nothing has been persisted at this point in the
+/// stage.
 #[allow(clippy::too_many_arguments)]
 async fn extract_graphs_via_backend(
     backend: &dyn ChunkGraphExtractor,
@@ -742,13 +755,19 @@ async fn extract_graphs_via_backend(
             .map(|chunk| ChunkRef::new(chunk.base.id, chunk.document_id, &chunk.text))
             .collect();
 
-        let graphs = match backend.extract_graphs(&refs, &ctx).await {
-            Ok(graphs) => graphs,
+        // Set by either granularity of failure, and read once after the batch
+        // is fully accounted for — the same "collect the whole batch, then
+        // decide" shape the LLM loop uses, so a FailFast abort reports every
+        // failure in the batch that tripped it rather than only the first.
+        let mut batch_failed = false;
+
+        match backend.extract_graphs(&refs, &ctx).await {
             Err(err @ GraphBackendError::ArityMismatch { .. }) => return Err(err.into()),
             Err(err) => {
-                // Charged per chunk, exactly like an LLM extraction failure, so
-                // the partition below and the run-level policy see the same
-                // shape they see on the LLM path.
+                // Whole-batch failure: the call could not be served at all, so
+                // every chunk in it is charged. A backend that reports one bad
+                // chunk this way fails the whole batch for it — see the trait's
+                // docs; the seam cannot tell the two apart from out here.
                 for chunk in batch {
                     warn!(
                         data_id = %chunk.document_id,
@@ -763,57 +782,88 @@ async fn extract_graphs_via_backend(
                         fails_item: true,
                     });
                 }
-                if failure_policy.stop == FailureStop::FailFast {
-                    out.aborted_at = Some((batch_idx + 1) * batch_size);
-                    break;
+                batch_failed = true;
+            }
+            Ok(results) => {
+                if results.len() != refs.len() {
+                    return Err(GraphBackendError::ArityMismatch {
+                        backend: backend.name().to_string(),
+                        expected: refs.len(),
+                        got: results.len(),
+                    }
+                    .into());
                 }
-                continue;
-            }
-        };
 
-        if graphs.len() != refs.len() {
-            return Err(GraphBackendError::ArityMismatch {
-                backend: backend.name().to_string(),
-                expected: refs.len(),
-                got: graphs.len(),
+                for (chunk, result) in batch.iter().zip(results) {
+                    let graph = match result {
+                        Ok(graph) => graph,
+                        Err(err) => {
+                            // Per-chunk failure: exactly one `StageFailure`,
+                            // charged to this chunk's file. Everything else in
+                            // the batch carries on, which is what the LLM loop
+                            // does with a single failed extraction call.
+                            warn!(
+                                data_id = %chunk.document_id,
+                                chunk_id = %chunk.base.id,
+                                "graph backend failed for chunk: {err}"
+                            );
+                            failures.record(StageFailure {
+                                stage: FailureStage::GraphExtraction,
+                                data_id: chunk.document_id,
+                                chunk_id: Some(chunk.base.id),
+                                error: err.to_string(),
+                                fails_item: true,
+                            });
+                            batch_failed = true;
+                            continue;
+                        }
+                    };
+
+                    if summarizes {
+                        let chunk_ref =
+                            ChunkRef::new(chunk.base.id, chunk.document_id, &chunk.text);
+                        let text = backend.summarize_chunk(&chunk_ref, &graph);
+                        if text.trim().is_empty() {
+                            debug!(
+                                chunk_id = %chunk.base.id,
+                                "graph backend '{}' produced no summary for this chunk",
+                                backend.name()
+                            );
+                        } else {
+                            // `TextSummary::new` derives uuid5(chunk_id, b"TextSummary"),
+                            // byte-identical to Python and to the LLM path.
+                            let mut summary = TextSummary::new(
+                                chunk.base.id,
+                                text,
+                                None,
+                                backend.name().to_string(),
+                            );
+                            // Parity with `SummaryExtractor::summarize_chunks`
+                            // (summarization/extractor.rs — summarize_text.py:79,81).
+                            // Without these two the summary loses its NodeSet scope and
+                            // drops out of every node_name-scoped search.
+                            summary.base.importance_weight = chunk.base.importance_weight;
+                            summary.base.belongs_to_set = chunk.base.belongs_to_set.clone();
+                            out.summaries.push(summary);
+                        }
+                    }
+                    out.graphs.push((chunk.base.id, graph));
+                }
+
+                info!(
+                    "Processed graph extraction batch {}/{} ({} chunks) via backend '{}'",
+                    batch_idx + 1,
+                    chunks.len().div_ceil(batch_size),
+                    batch.len(),
+                    backend.name()
+                );
             }
-            .into());
         }
 
-        for (chunk, graph) in batch.iter().zip(graphs) {
-            if summarizes {
-                let chunk_ref = ChunkRef::new(chunk.base.id, chunk.document_id, &chunk.text);
-                let text = backend.summarize_chunk(&chunk_ref, &graph);
-                if text.trim().is_empty() {
-                    debug!(
-                        chunk_id = %chunk.base.id,
-                        "graph backend '{}' produced no summary for this chunk",
-                        backend.name()
-                    );
-                } else {
-                    // `TextSummary::new` derives uuid5(chunk_id, b"TextSummary"),
-                    // byte-identical to Python and to the LLM path.
-                    let mut summary =
-                        TextSummary::new(chunk.base.id, text, None, backend.name().to_string());
-                    // Parity with `SummaryExtractor::summarize_chunks`
-                    // (summarization/extractor.rs — summarize_text.py:79,81).
-                    // Without these two the summary loses its NodeSet scope and
-                    // drops out of every node_name-scoped search.
-                    summary.base.importance_weight = chunk.base.importance_weight;
-                    summary.base.belongs_to_set = chunk.base.belongs_to_set.clone();
-                    out.summaries.push(summary);
-                }
-            }
-            out.graphs.push((chunk.base.id, graph));
+        if batch_failed && failure_policy.stop == FailureStop::FailFast {
+            out.aborted_at = Some((batch_idx + 1) * batch_size);
+            break;
         }
-
-        info!(
-            "Processed graph extraction batch {}/{} ({} chunks) via backend '{}'",
-            batch_idx + 1,
-            chunks.len().div_ceil(batch_size),
-            batch.len(),
-            backend.name()
-        );
     }
 
     Ok(out)

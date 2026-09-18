@@ -43,7 +43,8 @@ pub use failure::{
     FailurePolicy, FailureReport, FailureStage, FailureStop, RollbackScope, StageFailure,
 };
 pub use graph_backend::{
-    ChunkGraphExtractor, ChunkRef, ExtractionContext, GraphBackendError, MockChunkGraphExtractor,
+    ChunkExtractionError, ChunkGraphExtractor, ChunkGraphResult, ChunkRef, ExtractionContext,
+    GraphBackendError, MockChunkGraphExtractor,
 };
 pub use graph_extraction::{GraphExtractable, Relationship, get_graph_from_model};
 pub use graph_integration::{

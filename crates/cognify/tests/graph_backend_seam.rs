@@ -26,6 +26,14 @@
 //! the backend through the *existing* loop's machinery is that a backend run and
 //! an LLM run fail identically: per-chunk `StageFailure`s, `FailFast`, the
 //! abort-time partition. Only a broken arity contract is a hard error.
+//!
+//! Failure comes at two granularities and both are pinned here. A
+//! `ChunkExtractionError` in one chunk's result slot fails **that chunk only**
+//! (T11) — the granularity the LLM path has always had, and the one that makes
+//! the abort-time partition able to preserve anything, since
+//! `chunks_per_batch` defaults to 2000 and a realistic run is a single batch.
+//! An outer `GraphBackendError` is the whole-batch failure and is charged to
+//! every chunk in the batch (T7).
 
 use std::sync::Arc;
 
@@ -569,12 +577,17 @@ async fn aborted_files_lose_their_backend_summaries() {
 
 // ── T7 ─────────────────────────────────────────────────────────────────────
 
-/// A backend failure is data, not an error: it becomes one `StageFailure` per
-/// chunk of the failing batch, charged to that chunk's file, and the stage
-/// still returns `Ok`. That is what keeps `RollbackScope`, the chunk-failure
-/// ratio and the item-scoped sweep behaving identically to an LLM run.
+/// A **whole-batch** backend failure — the outer `Err`, the "model will not
+/// load" shape — is data, not an error: it becomes one `StageFailure` per chunk
+/// of the failing batch, charged to that chunk's file, and the stage still
+/// returns `Ok`. That is what keeps `RollbackScope`, the chunk-failure ratio and
+/// the item-scoped sweep behaving identically to an LLM run.
+///
+/// Charging the whole batch is correct *here* precisely because the error says
+/// the call could not be served at all. A failure that belongs to one chunk
+/// must not take this route — see T11.
 #[tokio::test]
-async fn backend_failure_is_recorded_per_chunk() {
+async fn whole_batch_backend_failure_is_charged_to_every_chunk() {
     let input = two_file_input();
     let chunk_ids: Vec<Uuid> = input.chunks.iter().map(|c| c.base.id).collect();
     let doc_ids: Vec<Uuid> = input.chunks.iter().map(|c| c.document_id).collect();
@@ -811,4 +824,171 @@ async fn disabled_summarization_silences_a_summarizing_backend() {
         "a summary that survives the merge is a summary that gets embedded and indexed"
     );
     assert!(!out.entities.is_empty(), "the graphs still survive");
+}
+
+// ── T11 ────────────────────────────────────────────────────────────────────
+
+/// **The per-chunk granularity.** One chunk fails; its siblings — in the *same
+/// batch* — still reach the graph, and only the failing chunk's file is
+/// charged.
+///
+/// This is the review finding the trait signature changed for. `extract_graphs`
+/// used to return one `Result` for the whole batch, and
+/// `chunks_per_batch` defaults to 2000, so a realistic dataset is a single
+/// batch: one transient error marked every document in the run as failed, where
+/// the LLM path loses exactly one chunk. The default batch size is deliberately
+/// left alone here — that is the point. Three files, one batch, one bad chunk.
+#[tokio::test]
+async fn one_failing_chunk_does_not_fail_its_batch() {
+    let doc_a = Uuid::new_v4();
+    let doc_b = Uuid::new_v4();
+    let doc_c = Uuid::new_v4();
+    let doomed = chunk(doc_b, "Beta is the one bad chunk.");
+    let doomed_id = doomed.base.id;
+    let input = input_from(
+        vec![
+            chunk(doc_a, "Alpha survives its sibling's failure."),
+            doomed,
+            chunk(doc_c, "Gamma survives it too."),
+        ],
+        vec![
+            text_document(doc_a),
+            text_document(doc_b),
+            text_document(doc_c),
+        ],
+    );
+
+    let backend = Arc::new(MockChunkGraphExtractor::new().failing_chunk(doomed_id));
+    let db = seeded_db(input.dataset_id).await;
+    // Default `chunks_per_batch` (2000): all three chunks go out in one call.
+    let config = config()
+        .with_failure_stop(FailureStop::RunToEnd)
+        .with_graph_backend(backend.clone());
+
+    let result = extract_graph_from_data(
+        &input,
+        Arc::new(MockLlm::empty()),
+        graph_db(),
+        Arc::new(NoOpOntologyResolver::new()),
+        &db,
+        None,
+        &config,
+        None,
+        None,
+    )
+    .await
+    .expect("a per-chunk failure must not be returned as an Err");
+
+    assert_eq!(
+        backend.extract_calls(),
+        1,
+        "all three chunks must share one batch, or the test is not testing \
+         batch-granularity at all"
+    );
+
+    assert_eq!(
+        result.failures.entries().len(),
+        1,
+        "exactly one chunk failed, so exactly one StageFailure: {:?}",
+        result.failures.entries()
+    );
+    let entry = &result.failures.entries()[0];
+    assert_eq!(entry.stage, FailureStage::GraphExtraction);
+    assert_eq!(entry.chunk_id, Some(doomed_id));
+    assert_eq!(entry.data_id, doc_b);
+    assert!(entry.fails_item);
+    assert!(
+        entry.error.contains("failed for this chunk"),
+        "the per-chunk error must be the one recorded: {}",
+        entry.error
+    );
+    assert_eq!(
+        result
+            .failures
+            .failed_items()
+            .iter()
+            .copied()
+            .collect::<Vec<_>>(),
+        vec![doc_b],
+        "only the failing chunk's file is charged"
+    );
+
+    let names = entity_names(&result);
+    assert!(
+        names.iter().any(|n| n.contains("alpha")),
+        "the sibling before the failure must still land in the graph: {names:?}"
+    );
+    assert!(
+        names.iter().any(|n| n.contains("gamma")),
+        "the sibling after the failure must still land in the graph: {names:?}"
+    );
+    assert!(
+        !names.iter().any(|n| n.contains("beta")),
+        "the failing chunk must contribute nothing: {names:?}"
+    );
+}
+
+// ── T12 ────────────────────────────────────────────────────────────────────
+
+/// The abort-time partition can now actually preserve something.
+///
+/// Same single batch as T11, under `FailFast` + `FailedItems`: the file owning
+/// the bad chunk is dropped and the other two are kept. With batch-granularity
+/// failure this partition was unreachable in the common case — every file in
+/// the batch was failed, so "complete" was always empty and the three-way split
+/// the seam advertises had nothing to split.
+#[tokio::test]
+async fn the_abort_partition_keeps_the_batch_siblings() {
+    let doc_a = Uuid::new_v4();
+    let doc_b = Uuid::new_v4();
+    let doc_c = Uuid::new_v4();
+    let doomed = chunk(doc_b, "Beta is the one bad chunk.");
+    let doomed_id = doomed.base.id;
+    let input = input_from(
+        vec![
+            chunk(doc_a, "Alpha survives its sibling's failure."),
+            doomed,
+            chunk(doc_c, "Gamma survives it too."),
+        ],
+        vec![
+            text_document(doc_a),
+            text_document(doc_b),
+            text_document(doc_c),
+        ],
+    );
+
+    let backend = Arc::new(MockChunkGraphExtractor::new().failing_chunk(doomed_id));
+    let db = seeded_db(input.dataset_id).await;
+    let config = config()
+        .with_failure_stop(FailureStop::FailFast)
+        .with_rollback_scope(RollbackScope::FailedItems)
+        .with_graph_backend(backend.clone());
+
+    let result = extract_graph_from_data(
+        &input,
+        Arc::new(MockLlm::empty()),
+        graph_db(),
+        Arc::new(NoOpOntologyResolver::new()),
+        &db,
+        None,
+        &config,
+        None,
+        None,
+    )
+    .await
+    .expect("FailedItems collects rather than propagates");
+
+    let kept: Vec<Uuid> = result.chunks.iter().map(|c| c.document_id).collect();
+    assert_eq!(
+        kept.len(),
+        2,
+        "the two complete files survive the abort: {kept:?}"
+    );
+    assert!(kept.contains(&doc_a) && kept.contains(&doc_c));
+    assert!(!kept.contains(&doc_b), "the failed file is dropped");
+    assert!(result.failures.failed_items().contains(&doc_b));
+
+    let names = entity_names(&result);
+    assert!(names.iter().any(|n| n.contains("alpha")));
+    assert!(names.iter().any(|n| n.contains("gamma")));
 }

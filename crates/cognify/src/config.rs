@@ -346,12 +346,13 @@ pub struct CognifyConfig {
     /// Optional LLM-free graph backend.
     ///
     /// When `Some`, [`crate::tasks::extract_graph_from_data`] asks this backend
-    /// for one [`crate::KnowledgeGraph`] per chunk instead of calling the LLM.
-    /// When the backend also reports
-    /// [`ChunkGraphExtractor::summarizes_chunks`], it produces the chunk
-    /// summaries too and [`crate::tasks::summarize_text`] makes no LLM call at
-    /// all. Chunk filtering, failure policy, edge dedup, expansion and the
-    /// graph writes are unchanged.
+    /// for one [`crate::KnowledgeGraph`] per chunk instead of calling the LLM,
+    /// and records a [`crate::graph_backend::ChunkExtractionError`] from any
+    /// single chunk as that chunk's failure alone. When the backend also
+    /// reports [`ChunkGraphExtractor::summarizes_chunks`], it produces the
+    /// chunk summaries too and [`crate::tasks::summarize_text`] makes no LLM
+    /// call at all. Chunk filtering, failure policy, edge dedup, expansion and
+    /// the graph writes are unchanged.
     #[serde(skip)]
     pub graph_backend: Option<GraphBackendHandle>,
 }

@@ -34,7 +34,10 @@ use std::sync::Mutex;
 use async_trait::async_trait;
 use uuid::Uuid;
 
-use super::{ChunkGraphExtractor, ChunkRef, ExtractionContext, GraphBackendError};
+use super::{
+    ChunkExtractionError, ChunkGraphExtractor, ChunkGraphResult, ChunkRef, ExtractionContext,
+    GraphBackendError,
+};
 use crate::fact_extraction::{KnowledgeGraph, Node};
 
 /// A mock graph backend.
@@ -42,7 +45,8 @@ use crate::fact_extraction::{KnowledgeGraph, Node};
 /// By default it derives a one-node [`KnowledgeGraph`] from each chunk's first
 /// word and does **not** summarize. Builders switch on canned graphs
 /// ([`Self::with_graphs`]), summarization ([`Self::with_summary`]), an arity
-/// violation ([`Self::breaking_arity`]) and failure injection
+/// violation ([`Self::breaking_arity`]) and failure injection — per chunk
+/// ([`Self::failing_chunk`]) or for the whole call
 /// ([`Self::set_failure_after`]); the counters record what the seam actually
 /// dispatched.
 pub struct MockChunkGraphExtractor {
@@ -57,8 +61,13 @@ pub struct MockChunkGraphExtractor {
     /// Chunk ids the backend returns an empty summary for even when `summary`
     /// is set — the seam records no `TextSummary` for those.
     declines: HashSet<Uuid>,
-    /// `Some(n)` ⇒ the `n+1`-th `extract_graphs` call and every later one fails.
+    /// `Some(n)` ⇒ the `n+1`-th `extract_graphs` call and every later one fails
+    /// **as a whole batch**, with [`GraphBackendError::Extraction`].
     failure_after: Mutex<Option<usize>>,
+    /// Chunk ids the backend returns an `Err(ChunkExtractionError)` for, in
+    /// that chunk's own slot — the per-chunk granularity, which leaves the
+    /// chunk's siblings untouched.
+    failing_chunks: HashSet<Uuid>,
     extract_calls: Mutex<usize>,
     chunks_seen: Mutex<usize>,
     summarize_calls: Mutex<usize>,
@@ -82,6 +91,7 @@ impl MockChunkGraphExtractor {
             summary: None,
             declines: HashSet::new(),
             failure_after: Mutex::new(None),
+            failing_chunks: HashSet::new(),
             extract_calls: Mutex::new(0),
             chunks_seen: Mutex::new(0),
             summarize_calls: Mutex::new(0),
@@ -136,9 +146,21 @@ impl MockChunkGraphExtractor {
         self
     }
 
+    /// Fail `chunk_id` **on its own**: the backend still returns a full-length
+    /// result vector, with an `Err(`[`ChunkExtractionError`]`)` in this chunk's
+    /// slot and a graph in every sibling's. This is the granularity a real
+    /// backend should use for a chunk it cannot handle.
+    #[must_use]
+    pub fn failing_chunk(mut self, chunk_id: Uuid) -> Self {
+        self.failing_chunks.insert(chunk_id);
+        self
+    }
+
     /// Make the `n+1`-th [`ChunkGraphExtractor::extract_graphs`] call, and
-    /// every call after it, fail with [`GraphBackendError::Extraction`].
-    /// `set_failure_after(0)` fails the very first call.
+    /// every call after it, fail **as a whole batch** with
+    /// [`GraphBackendError::Extraction`] — the "model will not load" shape, not
+    /// the "this chunk is bad" one. `set_failure_after(0)` fails the very first
+    /// call.
     #[allow(clippy::unwrap_used, reason = "lock poison is unrecoverable")]
     pub fn set_failure_after(&self, n: usize) {
         // lock poison is unrecoverable
@@ -197,7 +219,7 @@ impl ChunkGraphExtractor for MockChunkGraphExtractor {
         &self,
         chunks: &[ChunkRef<'c>],
         _ctx: &ExtractionContext<'x>,
-    ) -> Result<Vec<KnowledgeGraph>, GraphBackendError> {
+    ) -> Result<Vec<ChunkGraphResult>, GraphBackendError> {
         let call_index = {
             // lock poison is unrecoverable
             let mut calls = self.extract_calls.lock().unwrap();
@@ -227,9 +249,18 @@ impl ChunkGraphExtractor for MockChunkGraphExtractor {
 
         let mut graphs = Vec::with_capacity(take);
         for chunk in chunks.iter().take(take) {
+            if self.failing_chunks.contains(&chunk.chunk_id) {
+                // The slot is still occupied — omitting it would be an arity
+                // violation, not a failure report.
+                graphs.push(Err(ChunkExtractionError::new(
+                    self.name.clone(),
+                    format!("injected per-chunk failure for {}", chunk.chunk_id),
+                )));
+                continue;
+            }
             // lock poison is unrecoverable
             let canned = self.canned.lock().unwrap().pop_front();
-            graphs.push(canned.unwrap_or_else(|| Self::derive(chunk)));
+            graphs.push(Ok(canned.unwrap_or_else(|| Self::derive(chunk))));
         }
         Ok(graphs)
     }
@@ -273,7 +304,7 @@ mod tests {
     async fn run<'a>(
         backend: &MockChunkGraphExtractor,
         chunks: &[ChunkRef<'a>],
-    ) -> Result<Vec<KnowledgeGraph>, GraphBackendError> {
+    ) -> Result<Vec<ChunkGraphResult>, GraphBackendError> {
         let ontology = NoOpOntologyResolver::new();
         let ctx = ExtractionContext {
             documents: &[],
@@ -292,7 +323,10 @@ mod tests {
             chunk_ref("gamma three", Uuid::new_v4()),
         ];
         let graphs = run(&backend, &chunks).await.unwrap();
-        let names: Vec<&str> = graphs.iter().map(|g| g.nodes[0].name.as_str()).collect();
+        let names: Vec<String> = graphs
+            .iter()
+            .map(|g| g.as_ref().unwrap().nodes[0].name.clone())
+            .collect();
         assert_eq!(names, ["alpha", "beta", "gamma"]);
         assert_eq!(backend.extract_calls(), 1);
         assert_eq!(backend.chunks_seen(), 3);
@@ -317,7 +351,10 @@ mod tests {
             chunk_ref("gamma", Uuid::new_v4()),
         ];
         let graphs = run(&backend, &chunks).await.unwrap();
-        let names: Vec<&str> = graphs.iter().map(|g| g.nodes[0].name.as_str()).collect();
+        let names: Vec<String> = graphs
+            .iter()
+            .map(|g| g.as_ref().unwrap().nodes[0].name.clone())
+            .collect();
         // The queue runs out on the third chunk, which falls back to derived —
         // so a short queue never breaks the arity contract.
         assert_eq!(names, ["first", "second", "gamma"]);
@@ -341,6 +378,26 @@ mod tests {
         let chunks = vec![chunk_ref("alpha", Uuid::new_v4())];
         assert!(run(&backend, &chunks).await.is_ok());
         assert!(run(&backend, &chunks).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn a_failing_chunk_does_not_take_its_siblings_down() {
+        let doomed = Uuid::new_v4();
+        let backend = MockChunkGraphExtractor::new().failing_chunk(doomed);
+        let chunks = vec![
+            chunk_ref("alpha", Uuid::new_v4()),
+            chunk_ref("beta", doomed),
+            chunk_ref("gamma", Uuid::new_v4()),
+        ];
+        let results = run(&backend, &chunks).await.unwrap();
+        // The failed chunk keeps its slot, so the arity contract still holds.
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].as_ref().unwrap().nodes[0].name, "alpha");
+        assert!(results[1].is_err());
+        assert_eq!(results[2].as_ref().unwrap().nodes[0].name, "gamma");
+        let err = results[1].as_ref().unwrap_err();
+        assert_eq!(err.backend, "mock");
+        assert!(err.message.contains(&doomed.to_string()));
     }
 
     #[tokio::test]
