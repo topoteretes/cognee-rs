@@ -125,7 +125,19 @@ pub struct ExtractedChunks {
 
 /// Output of [`extract_graph_from_data`]: chunks plus extracted entities and edges
 /// (already stored in graph DB).
+///
+/// # Stability
+///
+/// `#[non_exhaustive]`: this is a stage output the pipeline **produces** and
+/// callers **read**; constructing one outside this crate is not a supported
+/// use, and nothing outside does (the only out-of-crate mention is a doc
+/// comment). It gains `backend_summaries` in the same change that adds this
+/// attribute — taking the break once, here, is cheaper than taking it again on
+/// the next field. Reading fields and `Clone` are unaffected, and every
+/// in-crate struct literal keeps compiling because `#[non_exhaustive]` binds
+/// only outside the defining crate.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct ExtractedGraphData {
     pub chunks: Vec<DocumentChunk>,
     /// Classified documents — carried forward for DLT FK edge extraction.
@@ -688,6 +700,11 @@ struct BackendExtraction {
 /// flag; a backend only summarizes when it reports
 /// [`ChunkGraphExtractor::summarizes_chunks`] *and* the flag is on.
 ///
+/// Batches are dispatched **sequentially**, one `extract_graphs` call at a
+/// time: [`CognifyConfig::max_parallel_extractions`] bounds the LLM path and is
+/// deliberately not applied here, since a backend is in-process and owns its
+/// own parallelism (see that field's docs).
+///
 /// A backend failure is charged to every chunk in the failing batch, as a
 /// [`StageFailure`] with `fails_item: true`, because the backend does not
 /// report per-chunk causes. That keeps the abort-time partition, the
@@ -707,11 +724,7 @@ async fn extract_graphs_via_backend(
     failure_policy: &FailurePolicy,
     failures: &mut FailureReport,
 ) -> Result<BackendExtraction, CognifyError> {
-    let ctx = ExtractionContext {
-        documents,
-        ontology,
-        dataset_id,
-    };
+    let ctx = ExtractionContext::new(documents, ontology, dataset_id);
     // `enable_summarization` gates this exactly as it gates the LLM summarizer
     // (`summarize_text`): a backend that *can* summarize still must not when the
     // run has summarization switched off, or the caller pays to embed and index
@@ -726,11 +739,7 @@ async fn extract_graphs_via_backend(
     for (batch_idx, batch) in chunks.chunks(batch_size).enumerate() {
         let refs: Vec<ChunkRef<'_>> = batch
             .iter()
-            .map(|chunk| ChunkRef {
-                chunk_id: chunk.base.id,
-                document_id: chunk.document_id,
-                text: &chunk.text,
-            })
+            .map(|chunk| ChunkRef::new(chunk.base.id, chunk.document_id, &chunk.text))
             .collect();
 
         let graphs = match backend.extract_graphs(&refs, &ctx).await {
@@ -773,11 +782,7 @@ async fn extract_graphs_via_backend(
 
         for (chunk, graph) in batch.iter().zip(graphs) {
             if summarizes {
-                let chunk_ref = ChunkRef {
-                    chunk_id: chunk.base.id,
-                    document_id: chunk.document_id,
-                    text: &chunk.text,
-                };
+                let chunk_ref = ChunkRef::new(chunk.base.id, chunk.document_id, &chunk.text);
                 let text = backend.summarize_chunk(&chunk_ref, &graph);
                 if text.trim().is_empty() {
                     debug!(

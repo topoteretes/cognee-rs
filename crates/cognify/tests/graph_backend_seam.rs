@@ -23,7 +23,7 @@
 //!    still calls the LLM and still produces the same shapes.
 //!
 //! Failure semantics get their own coverage because the whole point of routing
-//! the backend through the *existing* loop's machinery is that a GLiNER run and
+//! the backend through the *existing* loop's machinery is that a backend run and
 //! an LLM run fail identically: per-chunk `StageFailure`s, `FailFast`, the
 //! abort-time partition. Only a broken arity contract is a hard error.
 
@@ -205,6 +205,9 @@ async fn backend_extraction_runs_without_the_llm() {
 
     // `contains` is written from the deduplicated producers map, so a non-empty
     // value proves expansion → dedup → chunk_entity_links all ran unchanged.
+    // The length is pinned first so the loop cannot go vacuously green if the
+    // stage ever dropped every chunk.
+    assert_eq!(result.chunks.len(), 2);
     for chunk in &result.chunks {
         assert!(
             !chunk.contains.is_empty(),
@@ -277,7 +280,7 @@ async fn backend_summary_is_uuid5_and_carries_chunk_scope() {
     let llm = Arc::new(MockLlm::empty());
     let backend = Arc::new(
         MockChunkGraphExtractor::new()
-            .with_name("gliner-mock")
+            .with_name("mock-backend")
             .with_summary("canned"),
     );
     let db = seeded_db(input.dataset_id).await;
@@ -308,7 +311,7 @@ async fn backend_summary_is_uuid5_and_carries_chunk_scope() {
     assert_eq!(summary.made_from, Some(chunk_id));
     assert_eq!(summary.source_chunk_id, Some(chunk_id));
     assert_eq!(summary.text, "canned");
-    assert_eq!(summary.model, "gliner-mock");
+    assert_eq!(summary.model, "mock-backend");
     assert_eq!(
         summary.base.importance_weight,
         Some(0.9),
@@ -423,7 +426,7 @@ async fn fused_stage_delivers_backend_summaries() {
     );
     let backend = Arc::new(
         MockChunkGraphExtractor::new()
-            .with_name("gliner-mock")
+            .with_name("mock-backend")
             .with_summary("canned"),
     );
     let (_handle, ctx, db) = test_task_context().await;
@@ -467,7 +470,7 @@ async fn fused_stage_delivers_backend_summaries() {
     for (summary, chunk_id) in out.summaries.iter().zip(&chunk_ids) {
         assert_eq!(summary.base.id, Uuid::new_v5(chunk_id, b"TextSummary"));
         assert_eq!(summary.made_from, Some(*chunk_id));
-        assert_eq!(summary.model, "gliner-mock");
+        assert_eq!(summary.model, "mock-backend");
         assert_eq!(
             summary.base.source_task.as_deref(),
             Some(SUMMARIZE_TEXT_TASK_NAME),
@@ -725,7 +728,7 @@ async fn disabled_summarization_silences_a_summarizing_backend() {
     let input = two_file_input();
     let backend = Arc::new(
         MockChunkGraphExtractor::new()
-            .with_name("gliner-mock")
+            .with_name("mock-backend")
             .with_summary("canned"),
     );
     let config = config()

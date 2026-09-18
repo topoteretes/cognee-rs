@@ -176,6 +176,18 @@ pub struct CognifyConfig {
     ///
     /// Defaults to [`DEFAULT_MAX_PARALLEL_EXTRACTIONS`], which documents why that
     /// number tracks Python's connection-pool ceiling rather than its batch size.
+    ///
+    /// # Applies to the LLM path only
+    ///
+    /// This bounds concurrent *LLM* calls. A run configured with a
+    /// [`Self::graph_backend`] does not use it: the backend seam hands the
+    /// backend one batch at a time, strictly sequentially, because a backend is
+    /// in-process and typically batches internally — an ONNX session or a rule
+    /// engine is not helped by caller-side fan-out and can be actively hurt by
+    /// it (each concurrent batch is another set of intermediate tensors
+    /// resident at once). A backend that wants parallelism owns that decision
+    /// inside [`ChunkGraphExtractor::extract_graphs`], where it can size it
+    /// against its own runtime. Summarization is unaffected either way.
     pub max_parallel_extractions: usize,
 
     /// Custom prompt for entity/relationship extraction.

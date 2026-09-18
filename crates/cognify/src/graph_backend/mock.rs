@@ -1,13 +1,32 @@
 //! A deterministic, in-process [`ChunkGraphExtractor`] for tests and examples.
 //!
-//! Unconditionally compiled, mirroring `cognee_embedding::mock` — a backend
-//! seam nothing outside `#[cfg(test)]` can reach is a seam that rots.
-
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    reason = "mock infrastructure — panics are acceptable"
-)]
+//! # Why this is compiled unconditionally
+//!
+//! Mirroring `cognee_embedding::mock`, and unlike `cognee_graph::mock`, this is
+//! not behind `feature = "testing"`. A backend seam nothing outside
+//! `#[cfg(test)]` can reach is a seam that rots, and this is the crate's only
+//! implementor of [`ChunkGraphExtractor`], so it is also the only worked
+//! example a reader has of what implementing one looks like.
+//!
+//! The `testing` feature is not a free alternative here. This crate's own
+//! `tests/graph_backend_seam.rs` drives the whole extraction stage through this
+//! mock, and gating the mock leaves only two ways to keep that suite
+//! compiling, both worse:
+//!
+//! 1. Declare `required-features = ["testing"]` on the suite — which takes the
+//!    seam's only end-to-end coverage out of a plain
+//!    `cargo test -p cognee-cognify`. A test that does not run by default is
+//!    not coverage.
+//! 2. Turn `testing` on for the whole test build (a self dev-dependency) —
+//!    which also arms the six `required-features = ["testing"]` suites this
+//!    crate's `Cargo.toml` deliberately keeps off by default.
+//!
+//! The cost of the present arrangement is one extra public type in release
+//! builds of dependents. That is the cheaper side of the trade.
+//!
+//! Lint note: `unwrap_used` is allowed per function below rather than
+//! file-wide, so the guardrail stays on for future edits. Every allowed site is
+//! a `Mutex::lock()`; the test module keeps a module-scoped allow.
 
 use std::collections::{HashSet, VecDeque};
 use std::sync::Mutex;
@@ -81,6 +100,7 @@ impl MockChunkGraphExtractor {
     /// Serve these graphs, in order, instead of the derived ones. Once the
     /// queue is exhausted the derived graph is used again, so a short queue
     /// never breaks the arity contract.
+    #[allow(clippy::unwrap_used, reason = "lock poison is unrecoverable")]
     #[must_use]
     pub fn with_graphs(self, graphs: Vec<KnowledgeGraph>) -> Self {
         {
@@ -119,24 +139,28 @@ impl MockChunkGraphExtractor {
     /// Make the `n+1`-th [`ChunkGraphExtractor::extract_graphs`] call, and
     /// every call after it, fail with [`GraphBackendError::Extraction`].
     /// `set_failure_after(0)` fails the very first call.
+    #[allow(clippy::unwrap_used, reason = "lock poison is unrecoverable")]
     pub fn set_failure_after(&self, n: usize) {
         // lock poison is unrecoverable
         *self.failure_after.lock().unwrap() = Some(n);
     }
 
     /// How many `extract_graphs` calls (batches) this backend has served.
+    #[allow(clippy::unwrap_used, reason = "lock poison is unrecoverable")]
     pub fn extract_calls(&self) -> usize {
         // lock poison is unrecoverable
         *self.extract_calls.lock().unwrap()
     }
 
     /// How many chunks this backend has been handed across all calls.
+    #[allow(clippy::unwrap_used, reason = "lock poison is unrecoverable")]
     pub fn chunks_seen(&self) -> usize {
         // lock poison is unrecoverable
         *self.chunks_seen.lock().unwrap()
     }
 
     /// How many times `summarize_chunk` has been called.
+    #[allow(clippy::unwrap_used, reason = "lock poison is unrecoverable")]
     pub fn summarize_calls(&self) -> usize {
         // lock poison is unrecoverable
         *self.summarize_calls.lock().unwrap()
@@ -168,6 +192,7 @@ impl ChunkGraphExtractor for MockChunkGraphExtractor {
         &self.name
     }
 
+    #[allow(clippy::unwrap_used, reason = "lock poison is unrecoverable")]
     async fn extract_graphs<'c, 'x>(
         &self,
         chunks: &[ChunkRef<'c>],
@@ -213,6 +238,7 @@ impl ChunkGraphExtractor for MockChunkGraphExtractor {
         self.summary.is_some()
     }
 
+    #[allow(clippy::unwrap_used, reason = "lock poison is unrecoverable")]
     fn summarize_chunk(&self, chunk: &ChunkRef<'_>, _graph: &KnowledgeGraph) -> String {
         {
             // lock poison is unrecoverable
@@ -227,6 +253,12 @@ impl ChunkGraphExtractor for MockChunkGraphExtractor {
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        reason = "unit test code — panics are acceptable failures"
+    )]
+
     use super::*;
     use cognee_ontology::NoOpOntologyResolver;
 
@@ -330,11 +362,11 @@ mod tests {
         let chunk_id = Uuid::new_v4();
         let declined = Uuid::new_v4();
         let summarizing = MockChunkGraphExtractor::new()
-            .with_name("gliner-mock")
+            .with_name("mock-backend")
             .with_summary("canned summary")
             .declining(declined);
         assert!(summarizing.summarizes_chunks());
-        assert_eq!(summarizing.name(), "gliner-mock");
+        assert_eq!(summarizing.name(), "mock-backend");
 
         let graph = KnowledgeGraph {
             nodes: vec![],

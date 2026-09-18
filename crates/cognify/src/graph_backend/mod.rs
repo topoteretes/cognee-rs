@@ -23,6 +23,42 @@
 //! The trait lives in `cognee-cognify` rather than its own crate because it
 //! speaks [`KnowledgeGraph`] / [`crate::Node`] / [`crate::Edge`], which are
 //! defined here.
+//!
+//! # Why this ships with no in-tree implementor — and must not be deleted
+//!
+//! [`ChunkGraphExtractor`] is an **extension point**. It is implemented in this
+//! repository only by [`MockChunkGraphExtractor`], and that is deliberate: the
+//! trait exists for implementations that live outside this crate, present and
+//! future. It is not an unfinished feature, and it is **not dead code** —
+//! please do not remove it while tidying up.
+//!
+//! The gap it closes is a real one in this crate. Graph extraction in
+//! [`crate::tasks::extract_graph_from_data`] is otherwise hard-wired to
+//! [`crate::FactExtractor`]: one structured-output LLM call per chunk, with no
+//! way to substitute anything else. That single hard-wiring is what makes the
+//! cognify pipeline impossible to run offline, impossible to run where a
+//! data-residency rule forbids sending chunk text to a third party, and
+//! expensive at volume — embeddings are the only other network cost and they
+//! are far cheaper per chunk. Swapping in a local NER/relation model, an
+//! on-device runtime, a rule engine or even a regex pass meant forking
+//! `tasks.rs` and re-implementing the abort-time partition, the per-chunk
+//! failure accounting, the DB-aware edge dedup, the ownership rows and the
+//! graph writes alongside it. This seam removes that fork: only extraction is
+//! replaced, and everything after it stays shared and stays tested once.
+//!
+//! An extension point earns its keep only if it is actually reachable, which is
+//! why [`MockChunkGraphExtractor`] is a first-class, exercised implementor
+//! rather than a `#[cfg(test)]` fixture: `tests/graph_backend_seam.rs` drives
+//! the entire stage — summaries, failures, arity violations, DLT filtering,
+//! abort partitions — through it, so the seam cannot silently rot.
+//!
+//! The distinction worth holding on to is *unreachable* versus *implemented
+//! elsewhere*. This crate already carries an example of the first:
+//! [`CognifyConfig::custom_chunker`](crate::CognifyConfig::custom_chunker) is a
+//! public field with a public builder and **no read site anywhere in the
+//! workspace** — configuration that silently does nothing. A seam with a
+//! working implementor and an integration suite is the opposite case, and the
+//! comment you are reading exists so the two do not get confused.
 
 /// Deterministic in-process backend for tests and examples.
 mod mock;
@@ -38,7 +74,16 @@ use uuid::Uuid;
 use crate::fact_extraction::KnowledgeGraph;
 
 /// Errors a [`ChunkGraphExtractor`] can raise.
+///
+/// # Stability
+///
+/// `#[non_exhaustive]` on the enum, not on its variants: backends construct
+/// [`Self::Extraction`] and [`Self::NotAvailable`] by struct literal and must
+/// keep being able to, but a `match` outside this crate must not go exhaustive.
+/// `Timeout`, `ModelLoad` and `Cancelled` are all foreseeable additions, and
+/// each one would otherwise be a breaking change for every downstream `match`.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum GraphBackendError {
     /// The backend could not extract graphs for a batch. Recorded per chunk as
     /// a [`crate::failure::StageFailure`] by the extraction seam, exactly as an
@@ -73,7 +118,19 @@ pub enum GraphBackendError {
 }
 
 /// A borrowed view of one document chunk handed to a backend.
+///
+/// # Stability
+///
+/// `#[non_exhaustive]`: the seam **produces** this and backends **read** it, so
+/// in production it is constructed in exactly one place —
+/// [`crate::tasks::extract_graph_from_data`]. `chunk_index`, `token_count` and
+/// chunk metadata are all plausible additions, and because the type is `Copy` a
+/// future non-`Copy` field would be a second break on top of the field
+/// addition. Out-of-tree backends still need to build one to unit-test their
+/// own [`ChunkGraphExtractor::extract_graphs`], so [`Self::new`] is the
+/// supported constructor and stays source-compatible across such an addition.
 #[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
 pub struct ChunkRef<'a> {
     /// `DocumentChunk::base.id`.
     pub chunk_id: Uuid,
@@ -83,8 +140,28 @@ pub struct ChunkRef<'a> {
     pub text: &'a str,
 }
 
+impl<'a> ChunkRef<'a> {
+    /// Build a chunk view from its three identifying parts.
+    pub fn new(chunk_id: Uuid, document_id: Uuid, text: &'a str) -> Self {
+        Self {
+            chunk_id,
+            document_id,
+            text,
+        }
+    }
+}
+
 /// Run-level context shared by every chunk in one extraction call.
+///
+/// # Stability
+///
+/// `#[non_exhaustive]`, for the same reason as [`ChunkRef`]: the seam builds it
+/// once per call and backends only read it. A cancellation token, the run
+/// config and the user/tenant identity are all plausible additions. Use
+/// [`Self::new`] to construct one — out-of-tree backends need to for their own
+/// tests, and it survives a field being added.
 #[derive(Clone, Copy)]
+#[non_exhaustive]
 pub struct ExtractionContext<'a> {
     /// The classified documents of this run, for per-document schema sketches.
     pub documents: &'a [Document],
@@ -92,6 +169,21 @@ pub struct ExtractionContext<'a> {
     pub ontology: &'a dyn OntologyResolver,
     /// The dataset being cognified.
     pub dataset_id: Uuid,
+}
+
+impl<'a> ExtractionContext<'a> {
+    /// Build a run context from the documents, ontology and dataset in force.
+    pub fn new(
+        documents: &'a [Document],
+        ontology: &'a dyn OntologyResolver,
+        dataset_id: Uuid,
+    ) -> Self {
+        Self {
+            documents,
+            ontology,
+            dataset_id,
+        }
+    }
 }
 
 impl std::fmt::Debug for ExtractionContext<'_> {
@@ -104,6 +196,12 @@ impl std::fmt::Debug for ExtractionContext<'_> {
 }
 
 /// An LLM-free per-chunk knowledge-graph extractor.
+///
+/// This is the crate's extension point for replacing the hard-wired
+/// [`crate::FactExtractor`] call with something local, offline or on-device.
+/// [`MockChunkGraphExtractor`] is the only implementor in this repository, by
+/// design — see the [module docs](self#why-this-ships-with-no-in-tree-implementor--and-must-not-be-deleted)
+/// before concluding it is dead code.
 #[async_trait]
 pub trait ChunkGraphExtractor: Send + Sync {
     /// Short, stable identifier used in logs and as `TextSummary::model`.
