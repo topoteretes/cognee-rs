@@ -206,22 +206,25 @@ impl Llm for RendezvousLlm {
 
 // ─────────────────────────────── fixtures ───────────────────────────────────
 
-/// One chunk, one document. The rendezvous needs only that both kinds of call
-/// exist; more chunks would add fan-out without adding evidence.
-fn one_chunk_input() -> ExtractedChunks {
-    let document_id = Uuid::new_v4();
-    let text = "Ada Lovelace wrote the first algorithm for the Analytical Engine.".to_string();
-    let chunk = DocumentChunk::new(
-        Uuid::new_v4(),
-        text.clone(),
-        text.split_whitespace().count(),
-        0,
-        "paragraph_end".to_string(),
-        document_id,
-    );
+/// `count` chunks, each its own document.
+fn chunks_input(count: usize) -> ExtractedChunks {
+    let chunks = (0..count)
+        .map(|index| {
+            let text =
+                format!("Chunk {index}. Ada Lovelace wrote the first algorithm for the engine.");
+            DocumentChunk::new(
+                Uuid::new_v4(),
+                text.clone(),
+                text.split_whitespace().count(),
+                index,
+                "paragraph_end".to_string(),
+                Uuid::new_v4(),
+            )
+        })
+        .collect();
 
     ExtractedChunks {
-        chunks: vec![chunk],
+        chunks,
         // No `Document`s: nothing here is a DLT row, and web-page node creation
         // is switched off in `stage_config`, so the stage never looks for one.
         documents: vec![],
@@ -230,6 +233,12 @@ fn one_chunk_input() -> ExtractedChunks {
         tenant_id: None,
         failures: Default::default(),
     }
+}
+
+/// One chunk, one document. The rendezvous needs only that both kinds of call
+/// exist; more chunks would add fan-out without adding evidence.
+fn one_chunk_input() -> ExtractedChunks {
+    chunks_input(1)
 }
 
 /// Summarization on (it is the stage under test) and web-page nodes off (they
@@ -421,20 +430,32 @@ struct Span {
 /// An `Llm` that answers immediately but records when each call started and
 /// finished, so the test can inspect the same intervals a span exporter would.
 ///
-/// Each call sleeps for [`Self::DWELL`] so the spans have width; with zero-width
-/// spans "overlap" is not a well-defined question.
+/// Each call sleeps before answering so the spans have width; with zero-width
+/// spans "overlap" is not a well-defined question. The dwell is per-kind so a
+/// test can drive the two halves at deliberately different speeds.
 struct RecordingLlm {
     epoch: Instant,
     spans: Mutex<Vec<Span>>,
+    graph_dwell: Duration,
+    summary_dwell: Duration,
 }
 
 impl RecordingLlm {
     const DWELL: Duration = Duration::from_millis(60);
 
+    /// Both halves equally slow — for asking whether they overlap at all.
     fn new() -> Self {
+        Self::with_dwells(Self::DWELL, Self::DWELL)
+    }
+
+    /// Deliberately lopsided — for asking whether the fast half is held back by
+    /// the slow one.
+    fn with_dwells(graph_dwell: Duration, summary_dwell: Duration) -> Self {
         Self {
             epoch: Instant::now(),
             spans: Mutex::new(Vec::new()),
+            graph_dwell,
+            summary_dwell,
         }
     }
 
@@ -471,7 +492,11 @@ impl Llm for RecordingLlm {
         };
         let start_ms = self.epoch.elapsed().as_millis();
 
-        tokio::time::sleep(Self::DWELL).await;
+        tokio::time::sleep(match kind {
+            CallKind::Graph => self.graph_dwell,
+            CallKind::Summary => self.summary_dwell,
+        })
+        .await;
 
         let end_ms = self.epoch.elapsed().as_millis();
         self.spans.lock().expect("span lock").push(Span {
@@ -689,6 +714,101 @@ async fn full_cognify_overlaps_graph_and_summary_llm_calls() {
         "the two halves together spanned {union}ms, which is not less than the \
          {sum_of_parts}ms they would cost end to end — they did not overlap in \
          any meaningful amount.{}",
+        render_timeline(&spans)
+    );
+}
+
+// ───────────────────────────────── test 4 ───────────────────────────────────
+
+/// Neither half is gated on the other — the fast one runs to completion while
+/// the slow one is still working.
+///
+/// Overlap (test 3) is necessary but not sufficient. A stage could dispatch
+/// both halves and *still* hold one of them behind the other: a shared
+/// semaphore the branches draw from, a lock taken across an await, or a
+/// per-batch barrier that only releases when the slowest call in the batch
+/// returns. Every one of those shows up as "they overlapped" while summarization
+/// actually finished no earlier than extraction.
+///
+/// So this drives the two halves at deliberately lopsided speeds — graph calls
+/// 20x slower than summary calls — and asserts the strong form: **every**
+/// summary call had already finished before the **first** graph call finished.
+/// That holds only if summarization never waited on extraction for anything:
+/// not for an input, not for a permit, not for a batch boundary.
+///
+/// The margin is an order of magnitude (all summaries land ~25ms, the first
+/// graph call cannot land before 400ms), so this does not become a stopwatch
+/// test in disguise — no plausible scheduling delay closes a 375ms gap.
+#[tokio::test(flavor = "multi_thread")]
+async fn summarization_finishes_without_waiting_for_slow_extraction() {
+    const CHUNKS: usize = 6;
+    const GRAPH_DWELL: Duration = Duration::from_millis(400);
+    const SUMMARY_DWELL: Duration = Duration::from_millis(20);
+
+    let llm = Arc::new(RecordingLlm::with_dwells(GRAPH_DWELL, SUMMARY_DWELL));
+    let (_cancel, ctx) = task_ctx().await;
+    let input = chunks_input(CHUNKS);
+
+    let task = make_extract_graph_and_summarize_task(
+        Arc::clone(&llm) as Arc<dyn Llm>,
+        Arc::new(MockGraphDB::new()) as Arc<dyn GraphDBTrait>,
+        Arc::new(NoOpOntologyResolver::new()),
+        Arc::clone(&ctx.database),
+        stage_config(),
+    );
+
+    let output: Box<SummarizedData> = tokio::time::timeout(
+        RENDEZVOUS_TIMEOUT,
+        call_task(task, &input, Arc::clone(&ctx)),
+    )
+    .await
+    .expect("the fused stage must finish well inside the timeout");
+
+    assert_eq!(
+        output.summaries.len(),
+        CHUNKS,
+        "every chunk should have been summarized"
+    );
+
+    let spans = llm.spans();
+    let last_summary_end = spans
+        .iter()
+        .filter(|s| s.kind == CallKind::Summary)
+        .map(|s| s.end_ms)
+        .max()
+        .expect("summarization must have been dispatched");
+    let first_graph_end = spans
+        .iter()
+        .filter(|s| s.kind == CallKind::Graph)
+        .map(|s| s.end_ms)
+        .min()
+        .expect("graph extraction must have been dispatched");
+
+    assert!(
+        last_summary_end < first_graph_end,
+        "GATED: the last summarization call finished at {last_summary_end}ms, not \
+         before the first graph-extraction call finished at {first_graph_end}ms.\n\
+         Summarization needs nothing from extraction, so with calls 20x faster it \
+         should have drained long before extraction returned its first result. \
+         Finishing no earlier means something serialised the two halves — a \
+         shared permit, a lock held across an await, or a batch barrier.{}",
+        render_timeline(&spans)
+    );
+
+    // The whole stage should cost about one slow call, not one per chunk: the
+    // six graph calls are themselves concurrent, and summarization is free.
+    let stage_end = spans.iter().map(|s| s.end_ms).max().unwrap_or(0);
+    let serial_cost = (GRAPH_DWELL.as_millis() + SUMMARY_DWELL.as_millis()) * CHUNKS as u128;
+    assert!(
+        stage_end < serial_cost / 2,
+        "the stage took {stage_end}ms; a fully serialised run of the same work \
+         would be about {serial_cost}ms, so this is not showing real fan-out.{}",
+        render_timeline(&spans)
+    );
+
+    println!(
+        "independence: {CHUNKS} chunks, last summary end {last_summary_end}ms, \
+         first graph end {first_graph_end}ms, whole stage {stage_end}ms{}",
         render_timeline(&spans)
     );
 }
