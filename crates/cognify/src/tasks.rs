@@ -150,9 +150,28 @@ pub struct ExtractedGraphData {
     /// [`ArtifactProducers`].
     pub producers: ArtifactProducers,
     /// Summaries a [`crate::graph_backend::ChunkGraphExtractor`] produced from
-    /// the graphs above, in `chunks` order. Empty on the LLM path, and empty
-    /// whenever the configured backend does not report
+    /// the graphs above. Empty on the LLM path, and empty whenever the
+    /// configured backend does not report
     /// [`ChunkGraphExtractor::summarizes_chunks`].
+    ///
+    /// # Ordering — **not** positionally parallel to [`Self::chunks`]
+    ///
+    /// This is a *sparse* list, not a per-chunk one. It is ordered by the chunk
+    /// each summary came from, in the order those chunks were handed to the
+    /// backend, but three kinds of chunk in [`Self::chunks`] contribute no
+    /// entry at all:
+    ///
+    /// * DLT chunks, which are filtered out above the extraction branch and
+    ///   never reach the backend;
+    /// * chunks whose extraction failed, which have no graph to summarize;
+    /// * chunks the backend declined — [`ChunkGraphExtractor::summarize_chunk`]
+    ///   returning empty or whitespace records no `TextSummary`.
+    ///
+    /// So `backend_summaries.len() <= chunks.len()`, and zipping the two would
+    /// silently attribute summaries to the wrong chunks. Associate a summary
+    /// with its chunk through [`TextSummary::made_from`], which carries that
+    /// chunk's id (and `TextSummary::base.id` is `uuid5(chunk_id,
+    /// b"TextSummary")`, so the id alone identifies the pairing too).
     ///
     /// They travel with the graphs rather than being produced by
     /// [`summarize_text`] because that stage reads [`ExtractedChunks`] and runs
@@ -679,8 +698,10 @@ fn chunk_entity_links(
 struct BackendExtraction {
     /// `(chunk_id, graph)` for every chunk that succeeded, in input order.
     graphs: Vec<(Uuid, KnowledgeGraph)>,
-    /// Backend-produced summaries, in input order. Empty unless the backend
-    /// reports `summarizes_chunks()`.
+    /// Backend-produced summaries, ordered by the chunk each came from but
+    /// **sparse**: a failed chunk and a chunk the backend declined contribute
+    /// none, so this is shorter than the input whenever either happens. Empty
+    /// unless the backend reports `summarizes_chunks()`.
     summaries: Vec<TextSummary>,
     /// `Some(n)` once a FailFast abort fired, naming the first chunk index
     /// (into `chunks`) that was never dispatched — same meaning as the LLM
@@ -969,8 +990,10 @@ pub async fn extract_graph_from_data(
     let mut failures = input.failures.clone();
     let max_parallel = config.max_parallel_extractions.max(1);
     let mut all_graphs: Vec<(Uuid, KnowledgeGraph)> = Vec::new();
-    // Backend-produced summaries, in `chunks_for_extraction` order. Empty
-    // unless a graph backend reports `summarizes_chunks()`.
+    // Backend-produced summaries, ordered by their chunk within
+    // `chunks_for_extraction` but not one per chunk — see
+    // `ExtractedGraphData::backend_summaries`. Empty unless a graph backend
+    // reports `summarizes_chunks()`.
     let mut backend_summaries: Vec<TextSummary> = Vec::new();
     // `Some(n)` once a FailFast abort has fired, naming the first chunk index
     // (into `chunks_for_extraction`) that was never dispatched.
