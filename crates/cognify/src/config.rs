@@ -353,6 +353,14 @@ pub struct CognifyConfig {
     /// chunk summaries too and [`crate::tasks::summarize_text`] makes no LLM
     /// call at all. Chunk filtering, failure policy, edge dedup, expansion and
     /// the graph writes are unchanged.
+    ///
+    /// This field means "**this run's extraction stage is the backend**", and
+    /// [`crate::tasks::extract_graph_from_data`] is the only reader. Setting it
+    /// on a pipeline that does not run that stage configures a backend nothing
+    /// drives — and if the backend summarizes, it also switches the LLM
+    /// summarizer off for a run in which nothing then produces a summary. See
+    /// [`crate::tasks::make_summarize_text_task`] for the pairings this
+    /// supports.
     #[serde(skip)]
     pub graph_backend: Option<GraphBackendHandle>,
 }

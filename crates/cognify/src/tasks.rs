@@ -1955,6 +1955,25 @@ pub async fn extract_custom_graph_from_data<M: crate::fact_extraction::GraphMode
 /// first failure returns. The files whose chunks went undispatched are marked
 /// unreached, which keeps them out of the completion markers and inside the
 /// item-scoped sweep.
+///
+/// # Delegation to a summarizing graph backend
+///
+/// When `config.graph_backend` reports
+/// [`ChunkGraphExtractor::summarizes_chunks`] and
+/// [`CognifyConfig::enable_summarization`] is on, this function returns **no
+/// summaries and makes no LLM call**: the backend produces each chunk's summary
+/// from that chunk's own graph, inside
+/// [`extract_graph_from_data`], and they arrive
+/// as [`ExtractedGraphData::backend_summaries`].
+///
+/// That makes the run's *extraction* stage a precondition of this one, not an
+/// option. The rule is: **a run that sets `graph_backend` must be a run whose
+/// extraction stage uses it.** `config.graph_backend` means "this run's
+/// extraction stage is the backend", and it is read nowhere else. Configure a
+/// summarizing backend on a pipeline that never calls
+/// [`extract_graph_from_data`] and the summaries are not moved, they are gone —
+/// this branch stands down and nothing takes over. `make_summarize_text_task`
+/// therefore documents the two pairings it supports, and no others.
 pub async fn summarize_text(
     input: &ExtractedChunks,
     llm: Arc<dyn Llm>,
@@ -1992,6 +2011,15 @@ pub async fn summarize_text(
     // chunk, because this branch runs concurrently with extraction and cannot
     // learn which chunks the backend declined.
     //
+    // The precondition — and it is a precondition, not an assumption this
+    // branch can check — is that the run's extraction stage is the one driving
+    // this same backend. `config.graph_backend` is read by
+    // `extract_graph_from_data` and nowhere else, so a pipeline that sets it
+    // without running that stage loses every summary here with nothing
+    // producing a replacement. The rustdoc on this function and on
+    // `make_summarize_text_task` state the supported pairings; do not widen
+    // them without giving this branch a way to know its sibling.
+    //
     // `enable_summarization` is read first, and the extraction branch reads it
     // too (`extract_graphs_via_backend`): with the flag off neither seam
     // summarizes, so the run falls through to the "Summarization disabled in
@@ -2006,7 +2034,16 @@ pub async fn summarize_text(
             .as_ref()
             .is_some_and(|backend| backend.0.summarizes_chunks())
     {
-        info!("Summarization delegated to the graph backend; skipping the LLM summarizer");
+        info!(
+            backend = config
+                .graph_backend
+                .as_ref()
+                .map_or("<none>", |backend| backend.0.name()),
+            chunks = non_dlt_chunks.len(),
+            "Summarization delegated to the graph backend; skipping the LLM summarizer. \
+             The extraction stage must be running this same backend, or these chunks get \
+             no summary from anywhere"
+        );
         return Ok(SummarizedChunks {
             summaries: Vec::new(),
             failures: FailureReport::with_policy(&config.failure_policy()),
@@ -5898,8 +5935,27 @@ pub fn make_extract_graph_task_with_rank(
 /// Reads the *same* [`ExtractedChunks`] graph extraction reads, so the two can
 /// be fused by [`make_extract_graph_and_summarize_task`]. On its own it is not
 /// a pipeline stage any more — nothing downstream consumes a bare
-/// [`SummarizedChunks`] — but it stays public because a custom pipeline can
-/// fuse it against a different sibling.
+/// [`SummarizedChunks`] — but it stays public so a custom pipeline can run the
+/// two halves as separate stages (independent retry boundaries, say) and merge
+/// them itself.
+///
+/// # Its sibling is the graph-extraction branch
+///
+/// Exactly two pairings are supported, and both put this task alongside
+/// [`extract_graph_from_data`]: fused by
+/// [`make_extract_graph_and_summarize_task`], or run as a separate stage
+/// next to [`make_extract_graph_task`].
+///
+/// Pairing it with anything *else* is only safe while
+/// [`CognifyConfig::graph_backend`] is `None` or its backend does not
+/// summarize. A summarizing backend switches the LLM summarizer off for the
+/// whole run — [`summarize_text`] returns nothing by design, because the
+/// backend produces the summaries inside the extraction branch — so a pipeline
+/// that configures one and then omits that branch produces no summaries at all
+/// and logs a single `info!` about delegating them to a backend it never ran.
+/// The earlier wording here advertised "fuse it against a different sibling"
+/// without that caveat; it is withdrawn. If the sibling is not extraction,
+/// leave `graph_backend` unset on the config this task is built from.
 ///
 /// In-body provenance stamping: stamps every emitted `TextSummary`
 /// with `source_task = "summarize_text"`. Nothing else is stamped here: the
