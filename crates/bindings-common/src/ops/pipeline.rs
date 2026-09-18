@@ -18,6 +18,18 @@
 //! Supported variants: `text`, `file`, `url`, `binary` (`name` required).
 //! `s3` and recursive `dataItem` return [`SdkError::Unsupported`].
 //!
+//! ## Graph backend selection
+//!
+//! `cognify`/`add_and_cognify` opts may carry `"graphBackend"` — either a kind
+//! string or `{"kind": …, …}` — naming a [`ChunkGraphExtractor`] to use instead
+//! of the LLM fact extractor. The name is resolved through
+//! [`crate::graph_backend`], which nothing in this repository registers into, so
+//! the key is unservable here and any use of it is an error rather than a quiet
+//! fall back to the LLM. See that module for how an out-of-tree backend crate
+//! plugs itself in.
+//!
+//! [`ChunkGraphExtractor`]: cognee::cognify::ChunkGraphExtractor
+//!
 //! ## Result marshalling
 //!
 //! `Data` is `Serialize` and crosses back directly. `CognifyResult` is **not**
@@ -33,6 +45,7 @@ use cognee::cognify::cognify as cognee_cognify;
 use cognee::database::ops;
 use cognee::models::{Data, Dataset};
 
+use crate::graph_backend::{check_graph_backend_registered, graph_backend_from_opts};
 use crate::wire::{cognify_result_json, marshal_inputs};
 use crate::{CogneeServices, HandleState, SdkError};
 
@@ -65,10 +78,21 @@ pub fn opts_tenant(opts: &serde_json::Value) -> Result<Option<Uuid>, SdkError> {
 
 /// Build a per-call `CognifyConfig` by cloning the cached config and applying
 /// any `opts` overrides on top (rather than mutating the cached one).
-pub fn cognify_config_with_opts(
+///
+/// `"graphBackend"` is resolved through [`crate::graph_backend`], which is why
+/// this is `async` and fallible: building a backend can do I/O, and a kind
+/// nothing is registered under is an error rather than a silent fall back to
+/// the LLM extractor. With an empty registry — every build in this repository —
+/// the only opts that can reach either path are ones that name a backend no
+/// build here can serve, so this is inert for existing callers.
+///
+/// # Errors
+/// [`SdkError::Validation`] for a malformed or unregistered `graphBackend`
+/// selection, or whatever the registered factory returns.
+pub async fn cognify_config_with_opts(
     svc: &CogneeServices,
     opts: &serde_json::Value,
-) -> cognee::cognify::CognifyConfig {
+) -> Result<cognee::cognify::CognifyConfig, SdkError> {
     let mut cfg = svc.cognify_config.clone();
     if let Some(n) = opts.get("chunkSize").and_then(|v| v.as_u64()) {
         cfg = cfg.with_chunk_size(n as usize);
@@ -85,7 +109,10 @@ pub fn cognify_config_with_opts(
     if let Some(b) = opts.get("triplet").and_then(|v| v.as_bool()) {
         cfg = cfg.with_triplet_embeddings(b);
     }
-    cfg
+    if let Some(backend) = graph_backend_from_opts(opts).await? {
+        cfg = cfg.with_graph_backend(backend);
+    }
+    Ok(cfg)
 }
 
 // ---------------------------------------------------------------------------
@@ -196,7 +223,7 @@ pub async fn run_cognify_on_items(
     }
 
     let user_email = best_effort_user_email(svc, owner_id).await;
-    let config = cognify_config_with_opts(svc, opts);
+    let config = cognify_config_with_opts(svc, opts).await?;
 
     cognee_cognify(
         data_items,
@@ -293,6 +320,10 @@ pub async fn add_and_cognify(
 ) -> Result<serde_json::Value, SdkError> {
     let inputs = marshal_inputs(&inputs_json)?;
     let tenant_id = opts_tenant(opts)?;
+    // Before the add, not after: a caller who named a backend this build cannot
+    // serve should not have their documents ingested by a call that was always
+    // going to fail at the cognify half.
+    check_graph_backend_registered(opts)?;
 
     let svc = state.services().await?;
     let owner_id = state.owner_id().await?;

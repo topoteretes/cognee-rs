@@ -6,6 +6,7 @@
 //! | Module | Contents |
 //! |---|---|
 //! | [`error`] | [`SdkError`] enum + [`SdkError::code()`] — portable, no neon/FFI imports |
+//! | [`graph_backend`] | name-keyed registry letting a linked-in crate serve the `graphBackend` cognify opt |
 //! | [`handle`] | [`HandleState`] struct — shareable inner state of the SDK handle |
 //! | [`services`] | [`CogneeServices`] struct — fully-wired engine + service bundle |
 //! | [`wire`] | neon-free JSON helpers: `cognify_result_json`, `marshal_inputs`, `marshal_one`, `marshal_bytes` |
@@ -19,6 +20,7 @@
 //! `cognee-ts-neon`. FFI helpers (`CgSdk`, `cg_sdk_*`) stay in `cognee-capi`.
 
 pub mod error;
+pub mod graph_backend;
 pub mod handle;
 pub mod ops;
 pub mod redact;
@@ -27,6 +29,7 @@ pub mod wire;
 
 // Top-level re-exports for ergonomic `use cognee_bindings_common::SdkError` etc.
 pub use error::SdkError;
+pub use graph_backend::{GraphBackendFactory, register_graph_backend};
 pub use handle::{DefaultUserBootstrap, HandleState};
 pub use redact::redact_config_json;
 pub use services::CogneeServices;
