@@ -3356,7 +3356,7 @@ fn edge_retrieval_text(edge_pair: &GraphEdgePair) -> String {
 
 /// Fold a run's edge retrieval texts into one [`EdgeType`] DataPoint per
 /// **derived point id**, summing the counts of every text that collapses onto
-/// that id (port of Python's `create_edge_type_datapoints`, SDK-708).
+/// that id (port of Python's `create_edge_type_datapoints`, SDK-778).
 ///
 /// Counting by raw text alone is not enough. `EdgeType::deterministic_id` runs
 /// the text through `normalize_identifier` (lower-case, spaces→underscores,
@@ -5532,7 +5532,7 @@ async fn index_data_points(
             //
             // The lookup is keyed on the EdgeType's **derived point id**, not
             // on its `relationship_name`, because `build_edge_types` folds
-            // spellings that normalize alike onto one DataPoint (SDK-708):
+            // spellings that normalize alike onto one DataPoint (SDK-778):
             // only one of `"is a"` / `"Is A"` / `"is_a"` survives into
             // `edge_types`, so a raw-text key would miss for every edge that
             // spelled the relation differently from the survivor and silently
@@ -6756,7 +6756,7 @@ mod tests {
     use cognee_models::{DataPoint, Entity, EntityType};
     use cognee_storage::MockStorage;
 
-    /// SDK-708: retrieval texts that differ only in case, spacing or
+    /// SDK-778: retrieval texts that differ only in case, spacing or
     /// apostrophes collapse onto one `EdgeType` point id, and the counts of
     /// every spelling must be **summed** onto the survivor.
     ///

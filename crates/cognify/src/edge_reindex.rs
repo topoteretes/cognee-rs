@@ -314,7 +314,7 @@ pub async fn reindex_edge_types(
     // (`graph_integration/expansion.rs:893-898` stores the raw LLM string).
     // The cognify writer had the same hazard — one run spans many chunks, so
     // two chunks spelling a relation differently collided there as well — and
-    // it is now fixed to match (SDK-708): `build_edge_types` in `tasks.rs`
+    // it is now fixed to match (SDK-778): `build_edge_types` in `tasks.rs`
     // performs the identical fold. The two must stay in agreement on both the
     // surviving text and the count, because this pass repairs rows that writer
     // failed to write; a repair that picked a different spelling or a different

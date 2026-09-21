@@ -11,7 +11,7 @@ use uuid::Uuid;
 use crate::graph_integration::{GraphEdgePair, GraphNodePair};
 
 /// Fold a list of freshly built triplets down to one per **point id**, picking
-/// the survivor deterministically (SDK-708, the `Triplet_text` half).
+/// the survivor deterministically (SDK-778, the `Triplet_text` half).
 ///
 /// `Triplet::new` hashes `source_id + relationship_name + target_id` through
 /// the same lower-case / spaces→underscores / strip-apostrophes normalization
@@ -208,7 +208,7 @@ mod tests {
         }
     }
 
-    /// SDK-708 (`Triplet_text` half): edges whose `relationship_name` differs
+    /// SDK-778 (`Triplet_text` half): edges whose `relationship_name` differs
     /// only in case, spacing or apostrophes collapse onto one triplet point id,
     /// so exactly one triplet may leave the producer — and which one must not
     /// depend on the order the edges happen to arrive in.

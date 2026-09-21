@@ -496,7 +496,7 @@ async fn test_memify_with_type_and_names_filter_and() {
     );
 }
 
-/// SDK-708: custom triplets whose relation differs only in spelling share one
+/// SDK-778: custom triplets whose relation differs only in spelling share one
 /// point id, so memify must fold them before indexing — and pick the same
 /// survivor (smallest `text`, here the `"Works At"` spelling) whatever order the caller supplied them in.
 #[tokio::test]
