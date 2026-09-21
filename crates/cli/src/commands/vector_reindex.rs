@@ -61,22 +61,40 @@ pub fn run(_args: VectorReindexArgs, cm: Arc<ComponentManager>) -> Result<(), Cl
         // with nothing wrapping it in a transaction: the pgvector adapter
         // issues `CREATE INDEX CONCURRENTLY` on the pool, which Postgres
         // rejects inside one.
-        let created = vector_db
+        let report = vector_db
             .create_missing_vector_indexes()
             .await
             .map_err(|error| CliError::Runtime(format!("Vector reindex failed: {error}")))?;
 
-        if created == 0 {
+        if report.built > 0 {
+            info!("Built {} missing vector index(es).", report.built);
+        }
+
+        // A zero build count on its own is ambiguous: it is what a healthy,
+        // fully-indexed store reports and equally what a store reports when
+        // every build failed. Reporting the latter as success would tell an
+        // operator their only repair path worked when it repaired nothing, so
+        // the failures decide the exit status.
+        if report.failed > 0 {
+            return Err(CliError::Runtime(format!(
+                "{} collection(s) still have no vector index — each was logged \
+                 above with its reason. Common causes: the configured role \
+                 cannot CREATE INDEX, or maintenance_work_mem is too small for \
+                 the build. Fix the cause and re-run; the pass is idempotent, \
+                 so the collections that did succeed are not rebuilt.",
+                report.failed
+            )));
+        }
+
+        if report.built == 0 {
             info!(
-                "No vector index was built. Either every collection on the \
-                 '{provider}' backend is already indexed, or that backend builds \
-                 no ANN index of its own — of the bundled backends only pgvector \
-                 does, and its index is per collection, so it can go missing. A \
-                 pgvector collection over 2000 dimensions also keeps its exact \
-                 scan and is skipped."
+                "No vector index needed building. Either every collection on \
+                 the '{provider}' backend is already indexed, or that backend \
+                 builds no ANN index of its own — of the bundled backends only \
+                 pgvector does, and its index is per collection, so it can go \
+                 missing. A pgvector collection over 2000 dimensions also keeps \
+                 its exact scan and is skipped."
             );
-        } else {
-            info!("Built {created} missing vector index(es).");
         }
 
         Ok(())

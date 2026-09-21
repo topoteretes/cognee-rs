@@ -43,7 +43,7 @@ use cognee_utils::tracing_keys::{
 
 use crate::error::{VectorDBError, VectorDBResult};
 use crate::models::{SearchResult, VectorPoint};
-use crate::vector_db_trait::VectorDB;
+use crate::vector_db_trait::{VectorDB, VectorIndexBackfill};
 use crate::zero_norm::{warn_zero_norm_points, warn_zero_norm_query, warn_zero_norm_query_batch};
 
 #[cfg(test)]
@@ -496,7 +496,7 @@ impl PgVectorAdapter {
     /// table before deleting its bookkeeping row and not in one transaction, so
     /// an interrupted delete leaves an orphan row whose `CREATE INDEX` fails
     /// with `relation does not exist`.
-    pub async fn create_missing_vector_indexes(&self) -> VectorDBResult<usize> {
+    pub async fn create_missing_vector_indexes(&self) -> VectorDBResult<VectorIndexBackfill> {
         let query = Query::select()
             .columns([VColl::CollectionName, VColl::Dimension])
             .from(VColl::Table)
@@ -508,20 +508,40 @@ impl PgVectorAdapter {
             .await
             .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
 
-        let mut created = 0usize;
+        let mut report = VectorIndexBackfill::default();
         for row in &rows {
-            let coll: String = row
-                .try_get("", "collection_name")
-                .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
-            let dimension: i32 = row
-                .try_get("", "dimension")
-                .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
+            // Skip a malformed bookkeeping row rather than propagating, so one
+            // bad entry cannot leave every collection after it unindexed —
+            // that is what this method's contract promises, and returning
+            // `Err` here broke it.
+            let coll: String = match row.try_get("", "collection_name") {
+                Ok(coll) => coll,
+                Err(e) => {
+                    warn!(
+                        "could not read a collection name from vector_collections, skipping that row: {e}"
+                    );
+                    report.failed += 1;
+                    continue;
+                }
+            };
+            let dimension: i32 = match row.try_get("", "dimension") {
+                Ok(dim) => dim,
+                Err(e) => {
+                    warn!("could not read the dimension for collection {coll}, skipping it: {e}");
+                    report.failed += 1;
+                    continue;
+                }
+            };
 
             // A row in the bookkeeping table came from `create_collection`, which
             // validated the name before creating the table — but re-validate
             // rather than trust the table, since this name is interpolated into
             // DDL and the table is reachable by anything with the connection.
-            Self::validate_identifier(&coll)?;
+            if let Err(e) = Self::validate_identifier(&coll) {
+                warn!("collection name {coll} is not a safe identifier, skipping it: {e}");
+                report.failed += 1;
+                continue;
+            }
 
             // Check first rather than leaning on `IF NOT EXISTS`, so the count
             // reports work actually done and an already-indexed collection is
@@ -531,6 +551,7 @@ impl PgVectorAdapter {
                 Ok(state) => state,
                 Err(e) => {
                     warn!("could not read index state for collection {coll}, skipping it: {e}");
+                    report.failed += 1;
                     continue;
                 }
             };
@@ -551,19 +572,23 @@ impl PgVectorAdapter {
                     .await
                 {
                     warn!("could not drop invalid index {index}, skipping {coll}: {e}");
+                    report.failed += 1;
                     continue;
                 }
             }
 
             match Self::create_vector_index(&self.db, &coll, dimension.max(0) as usize, true).await
             {
-                Ok(true) => created += 1,
+                Ok(true) => report.built += 1,
                 Ok(false) => {}
-                Err(e) => warn!("could not index collection {coll}, skipping it: {e}"),
+                Err(e) => {
+                    warn!("could not index collection {coll}, skipping it: {e}");
+                    report.failed += 1;
+                }
             }
         }
 
-        Ok(created)
+        Ok(report)
     }
 
     /// Format a vector as pgvector text literal: `[1.0,2.0,3.0]`
@@ -736,7 +761,7 @@ impl VectorDB for PgVectorAdapter {
     /// The inherent function stays, and `cognee` re-exports the concrete type,
     /// so an embedder that already has a `PgVectorAdapter` keeps calling it
     /// directly.
-    async fn create_missing_vector_indexes(&self) -> VectorDBResult<usize> {
+    async fn create_missing_vector_indexes(&self) -> VectorDBResult<VectorIndexBackfill> {
         PgVectorAdapter::create_missing_vector_indexes(self).await
     }
 

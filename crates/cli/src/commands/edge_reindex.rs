@@ -44,10 +44,21 @@ pub fn run(args: EdgeReindexArgs, cm: Arc<ComponentManager>) -> Result<(), CliEr
             .vector_db()
             .await
             .map_err(|e| CliError::Runtime(format!("{e}")))?;
-        let embedding_engine = cm
-            .embedding_engine()
-            .await
-            .map_err(|e| CliError::Runtime(format!("{e}")))?;
+        // Resolved only under `--apply`. `dimension()`/`batch_size()` are
+        // needed to write, never to probe, and `ComponentManager`'s accessor
+        // eagerly initialises the engine — so resolving it up front made the
+        // advertised "a few key probes" report fail outright on a host with no
+        // LLM key or no local model, which is exactly the host an operator
+        // triaging a crashed run tends to be on.
+        let embedding_engine = if args.apply {
+            Some(
+                cm.embedding_engine()
+                    .await
+                    .map_err(|e| CliError::Runtime(format!("{e}")))?,
+            )
+        } else {
+            None
+        };
 
         if args.apply {
             info!(
@@ -97,7 +108,7 @@ pub fn run(args: EdgeReindexArgs, cm: Arc<ComponentManager>) -> Result<(), CliEr
         let report = reindex_edge_types(
             graph_db.as_ref(),
             vector_db.as_ref(),
-            embedding_engine.as_ref(),
+            embedding_engine.as_deref(),
             &options,
         )
         .await
@@ -112,6 +123,13 @@ pub fn run(args: EdgeReindexArgs, cm: Arc<ComponentManager>) -> Result<(), CliEr
              no usable text and have no row by design.",
             report.edges_scanned, report.distinct_texts, report.edges_without_text
         );
+
+        if report.cursor_consumed_everything {
+            return Err(CliError::Runtime(
+                "--resume-after skipped every edge type, so nothing was checked. If that                  cursor did not come from a previous pass that stopped at its --limit, it                  is wrong — re-run without it to scan the whole graph."
+                    .to_string(),
+            ));
+        }
 
         if report.orphaned_texts == 0 {
             info!("Every edge type already has a vector row — nothing to repair.");

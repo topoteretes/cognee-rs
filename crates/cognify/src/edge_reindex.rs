@@ -217,6 +217,10 @@ pub struct EdgeReindexReport {
     pub resume_cursor: Option<String>,
     /// Whether this pass wrote anything, echoing the option back.
     pub applied: bool,
+    /// Set when [`EdgeReindexOptions::resume_after`] skipped every edge type,
+    /// so the all-zero counts above mean "nothing was examined", not "nothing
+    /// is wrong". A mistyped cursor lands here.
+    pub cursor_consumed_everything: bool,
 }
 
 /// Find — and with [`EdgeReindexOptions::apply`], repair — `EdgeType` vector
@@ -230,7 +234,7 @@ pub struct EdgeReindexReport {
 pub async fn reindex_edge_types(
     graph_db: &dyn GraphDBTrait,
     vector_db: &dyn VectorDB,
-    embedding_engine: &dyn EmbeddingEngine,
+    embedding_engine: Option<&dyn EmbeddingEngine>,
     options: &EdgeReindexOptions,
 ) -> Result<EdgeReindexReport, CognifyError> {
     let mut report = EdgeReindexReport {
@@ -274,10 +278,24 @@ pub async fn reindex_edge_types(
         counts_by_text.remove(cursor);
     }
     if counts_by_text.is_empty() {
-        info!(
-            edges_scanned = report.edges_scanned,
-            "Edge re-index: no edge types to check"
-        );
+        // Distinguish "the graph has nothing to check" from "the cursor
+        // skipped everything". A mistyped `--resume-after`, or one that sorts
+        // after every text in the graph, otherwise returns all-zeroes and the
+        // CLI reports the graph fully repaired without having probed a single
+        // point.
+        if let Some(cursor) = options.resume_after.as_deref() {
+            warn!(
+                edges_scanned = report.edges_scanned,
+                cursor,
+                "Edge re-index: the resume cursor skipped every edge type, so nothing was                  checked. If this was not the end of a previous pass, the cursor is wrong —                  re-run without `--resume-after` to scan the whole graph."
+            );
+            report.cursor_consumed_everything = true;
+        } else {
+            info!(
+                edges_scanned = report.edges_scanned,
+                "Edge re-index: no edge types to check"
+            );
+        }
         return Ok(report);
     }
 
@@ -290,9 +308,11 @@ pub async fn reindex_edge_types(
     // `normalize_identifier`, and nothing upstream normalises
     // `relationship_name` before it reaches the graph
     // (`graph_integration/expansion.rs:893-898` stores the raw LLM string). The
-    // per-run writer never had to care, because it only ever holds one run's
-    // edges; this is the first path that aggregates over the whole graph, so
-    // the collision becomes reachable here.
+    // The cognify writer has the same hazard and is **not** fixed: its
+    // `edge_type_counts` (`tasks.rs`) is keyed on the raw text too, and one run
+    // spans many chunks, so two chunks spelling a relation differently collide
+    // there as well. Tracked as SDK-708; do not read this collapse as evidence
+    // the writer is safe.
     //
     // Collapse by id — keeping the first text in cursor order and summing the
     // counts — so that no batch can carry the same id twice. pgvector writes a
@@ -347,6 +367,15 @@ pub async fn reindex_edge_types(
         return Ok(report);
     }
 
+    // Only the write path needs an engine, which is why the parameter is
+    // optional: a report probes ids and embeds nothing, so a caller triaging a
+    // crashed run need not have a working embedding backend to get one.
+    let embedding_engine = embedding_engine.ok_or_else(|| {
+        CognifyError::EmbeddingError(
+            "edge re-index cannot apply without an embedding engine".to_string(),
+        )
+    })?;
+
     let dimension = embedding_engine.dimension();
     if !vector_db
         .has_collection(EDGE_TYPE_DATA_TYPE, EDGE_TYPE_FIELD)
@@ -373,10 +402,26 @@ pub async fn reindex_edge_types(
         let batch = &batch[..take];
 
         let texts: Vec<&str> = batch.iter().map(|(text, _, _)| text.as_str()).collect();
-        let vectors = embedding_engine
-            .embed(&texts)
-            .await
-            .map_err(|e| CognifyError::EmbeddingError(e.to_string()))?;
+        let vectors = match embedding_engine.embed(&texts).await {
+            Ok(vectors) => vectors,
+            Err(e) => {
+                // The report — and with it the cursor — is discarded by `?`,
+                // and a transient 429 partway through a large `--apply` is
+                // exactly when an operator needs it. Log it before propagating
+                // so the run is resumable rather than restartable.
+                match &report.resume_cursor {
+                    Some(cursor) => warn!(
+                        written = report.points_written,
+                        cursor,
+                        "Edge re-index failed while embedding; re-run with                          `--resume-after` set to the reported cursor to continue from the                          last batch that landed"
+                    ),
+                    None => warn!(
+                        "Edge re-index failed while embedding the first batch; nothing was                          written, so re-run without `--resume-after`"
+                    ),
+                }
+                return Err(CognifyError::EmbeddingError(e.to_string()));
+            }
+        };
 
         let points: Vec<VectorPoint> = batch
             .iter()

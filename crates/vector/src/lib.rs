@@ -35,7 +35,7 @@ pub use error::{VectorDBError, VectorDBResult};
 pub use models::{
     CollectionConfig, DATASET_ID_KEY, DATASET_IDS_KEY, DistanceMetric, SearchResult, VectorPoint,
 };
-pub use vector_db_trait::VectorDB;
+pub use vector_db_trait::{VectorDB, VectorIndexBackfill};
 
 #[cfg(feature = "pgvector")]
 pub use pgvector_adapter::PgVectorAdapter;

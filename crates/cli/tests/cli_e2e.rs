@@ -1091,7 +1091,7 @@ fn vector_reindex_names_the_backend_when_it_has_no_index_to_build() {
         .assert()
         .success()
         .stdout(
-            predicate::str::contains("No vector index was built")
+            predicate::str::contains("No vector index needed building")
                 .and(predicate::str::contains("'lancedb' backend"))
                 .and(predicate::str::contains("only pgvector does"))
                 .and(predicate::str::contains(
@@ -1383,4 +1383,49 @@ fn invalid_command_name_returns_nonzero_exit_code() {
         .args(["invalid_command"])
         .assert()
         .failure();
+}
+
+/// A report probes ids and embeds nothing, so it must run on a host with no
+/// embedding backend configured. The engine is resolved only under `--apply`;
+/// resolving it up front made the advertised "a few key probes" report fail
+/// before the scan started, on exactly the host an operator triaging a crashed
+/// run tends to be on.
+#[test]
+fn edge_reindex_report_runs_without_an_embedding_backend() {
+    let config_home = TempDir::new().expect("temp dir should be created");
+    let workdir = TempDir::new().expect("temp dir should be created");
+    config_set(
+        &config_home,
+        workdir.path(),
+        "embedding_provider",
+        "\"openai\"",
+    );
+
+    // No key, no local model: resolving an engine here would fail.
+    make_cmd_in(&config_home, workdir.path())
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("OPENAI_KEY")
+        .env_remove("LLM_API_KEY")
+        .args(["edge-reindex"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("report only"));
+}
+
+/// A `--resume-after` that skips every edge type must fail rather than print
+/// "every edge type already has a vector row" — the counts are all zero either
+/// way, and a mistyped cursor would otherwise read as a repaired graph.
+#[test]
+fn edge_reindex_rejects_a_cursor_that_skips_everything() {
+    let config_home = TempDir::new().expect("temp dir should be created");
+    let workdir = TempDir::new().expect("temp dir should be created");
+
+    make_cmd_in(&config_home, workdir.path())
+        .args(["edge-reindex", "--resume-after", "zzzzzzzz"])
+        .assert()
+        .failure()
+        // `console_stream_for` routes this command's tracing output to stdout,
+        // and `main` reports a `CliError` through `error!`, so the message
+        // lands there rather than on stderr.
+        .stdout(predicate::str::contains("skipped every edge type"));
 }

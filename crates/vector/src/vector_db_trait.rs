@@ -19,6 +19,22 @@ use uuid::Uuid;
 /// this constant and are exact at any size.
 pub const NODE_FILTER_RECALL_FETCH_CAP: usize = 4096;
 
+/// What a [`VectorDB::create_missing_vector_indexes`] pass actually did.
+///
+/// Two counts rather than one, because `built == 0` alone is ambiguous: it is
+/// what a fully-indexed store reports and equally what a store reports when
+/// every single build failed. An operator running the only repair path there
+/// is needs those told apart.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct VectorIndexBackfill {
+    /// Indexes actually built by this call. Excludes collections that already
+    /// had a usable one.
+    pub built: usize,
+    /// Collections that needed an index and did not get one. Each was logged
+    /// at `warn` with its reason and the pass continued past it.
+    pub failed: usize,
+}
+
 /// Vector database trait
 #[async_trait]
 pub trait VectorDB: Send + Sync {
@@ -319,13 +335,17 @@ pub trait VectorDB: Send + Sync {
     ///
     /// Contract for an implementor:
     /// - **Idempotent.** A collection that already has a usable index is
-    ///   skipped and *not* counted, so a second run reports `0`.
+    ///   skipped and counted nowhere, so a second run reports all zeroes.
     /// - **Online.** It must not block reads or writes, and must not be
     ///   wrapped in a transaction by its caller — pgvector's implementation
     ///   issues `CREATE INDEX CONCURRENTLY`, which Postgres rejects inside one.
     /// - **Per-collection failures are logged and skipped**, not propagated, so
-    ///   one bad entry cannot leave every collection after it unindexed. The
-    ///   returned count is therefore work actually done, not collections seen.
+    ///   one bad entry cannot leave every collection after it unindexed. That
+    ///   includes a malformed bookkeeping row, not just a failed build. Each
+    ///   one is counted in [`VectorIndexBackfill::failed`], so a caller can
+    ///   tell "nothing needed doing" from "nothing could be done" — the two
+    ///   are indistinguishable from the built count alone, and conflating them
+    ///   reports success to an operator whose only repair path just failed.
     /// - **Never automatic.** Building an ANN index over a large collection is
     ///   expensive; the caller chooses when.
     ///
@@ -335,8 +355,8 @@ pub trait VectorDB: Send + Sync {
     /// own indexing). Only the pgvector adapter overrides it. A backend that
     /// grows a lazily-created index must override it too, or operators get no
     /// way to repair one.
-    async fn create_missing_vector_indexes(&self) -> VectorDBResult<usize> {
-        Ok(0)
+    async fn create_missing_vector_indexes(&self) -> VectorDBResult<VectorIndexBackfill> {
+        Ok(VectorIndexBackfill::default())
     }
 
     /// Perform multiple vector similarity searches in sequence.
@@ -429,12 +449,13 @@ mod default_index_backfill_tests {
 
         assert_eq!(
             db.create_missing_vector_indexes().await.unwrap(),
-            0,
-            "a backend with nothing to index must report zero, not fail"
+            VectorIndexBackfill::default(),
+            "a backend with nothing to index must report zero built and zero \
+             failed, not fail"
         );
         assert_eq!(
             db.create_missing_vector_indexes().await.unwrap(),
-            0,
+            VectorIndexBackfill::default(),
             "and stay at zero on a second run"
         );
 

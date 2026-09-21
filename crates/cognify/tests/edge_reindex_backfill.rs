@@ -102,7 +102,7 @@ async fn apply_writes_one_point_per_distinct_retrieval_text() {
     let report = reindex_edge_types(
         &graph,
         &vector,
-        &embed,
+        Some(&embed),
         &EdgeReindexOptions {
             apply: true,
             ..Default::default()
@@ -186,9 +186,14 @@ async fn dry_run_writes_nothing_and_embeds_nothing() {
     let embed = MockEmbeddingEngine::deterministic(DIM);
 
     // Default options: `apply` is false.
-    let report = reindex_edge_types(&graph, &vector, &embed, &EdgeReindexOptions::default())
-        .await
-        .expect("reindex");
+    let report = reindex_edge_types(
+        &graph,
+        &vector,
+        Some(&embed),
+        &EdgeReindexOptions::default(),
+    )
+    .await
+    .expect("reindex");
 
     assert_eq!(
         report.orphaned_texts, 3,
@@ -228,9 +233,14 @@ async fn orphan_count_is_per_distinct_text_not_per_edge() {
     let vector = MockVectorDB::new();
     let embed = MockEmbeddingEngine::deterministic(DIM);
 
-    let report = reindex_edge_types(&graph, &vector, &embed, &EdgeReindexOptions::default())
-        .await
-        .expect("reindex");
+    let report = reindex_edge_types(
+        &graph,
+        &vector,
+        Some(&embed),
+        &EdgeReindexOptions::default(),
+    )
+    .await
+    .expect("reindex");
 
     assert_eq!(report.edges_scanned, 6);
     assert_eq!(
@@ -255,7 +265,7 @@ async fn second_run_is_a_no_op() {
         ..Default::default()
     };
 
-    let first = reindex_edge_types(&graph, &vector, &embed, &options)
+    let first = reindex_edge_types(&graph, &vector, Some(&embed), &options)
         .await
         .expect("first reindex");
     assert_eq!(first.points_written, 3);
@@ -265,7 +275,7 @@ async fn second_run_is_a_no_op() {
     let writes_after_first = vector.index_points_call_count();
     assert_eq!(texts_after_first, 3, "the first run embeds the three texts");
 
-    let second = reindex_edge_types(&graph, &vector, &embed, &options)
+    let second = reindex_edge_types(&graph, &vector, Some(&embed), &options)
         .await
         .expect("second reindex");
 
@@ -331,7 +341,7 @@ async fn only_the_missing_point_is_written() {
     let report = reindex_edge_types(
         &graph,
         &vector,
-        &embed,
+        Some(&embed),
         &EdgeReindexOptions {
             apply: true,
             ..Default::default()
@@ -376,9 +386,14 @@ async fn textless_edges_are_excluded_from_the_orphan_count() {
     let vector = MockVectorDB::new();
     let embed = MockEmbeddingEngine::deterministic(DIM);
 
-    let report = reindex_edge_types(&graph, &vector, &embed, &EdgeReindexOptions::default())
-        .await
-        .expect("reindex");
+    let report = reindex_edge_types(
+        &graph,
+        &vector,
+        Some(&embed),
+        &EdgeReindexOptions::default(),
+    )
+    .await
+    .expect("reindex");
 
     assert_eq!(report.edges_scanned, 3);
     assert_eq!(
@@ -405,7 +420,7 @@ async fn a_limited_pass_resumes_from_its_cursor_without_redoing_work() {
     let first = reindex_edge_types(
         &graph,
         &vector,
-        &embed,
+        Some(&embed),
         &EdgeReindexOptions {
             apply: true,
             limit: Some(2),
@@ -426,7 +441,7 @@ async fn a_limited_pass_resumes_from_its_cursor_without_redoing_work() {
     let second = reindex_edge_types(
         &graph,
         &vector,
-        &embed,
+        Some(&embed),
         &EdgeReindexOptions {
             apply: true,
             resume_after: first.resume_cursor.clone(),
@@ -467,7 +482,7 @@ async fn written_ids_match_the_shared_derivation() {
     reindex_edge_types(
         &graph,
         &vector,
-        &embed,
+        Some(&embed),
         &EdgeReindexOptions {
             apply: true,
             ..Default::default()
@@ -535,9 +550,14 @@ async fn structural_edge_kinds_are_reported_even_on_an_uncrashed_graph() {
     let vector = MockVectorDB::new();
     let embed = MockEmbeddingEngine::deterministic(DIM);
 
-    let report = reindex_edge_types(&graph, &vector, &embed, &EdgeReindexOptions::default())
-        .await
-        .expect("reindex");
+    let report = reindex_edge_types(
+        &graph,
+        &vector,
+        Some(&embed),
+        &EdgeReindexOptions::default(),
+    )
+    .await
+    .expect("reindex");
 
     assert_eq!(
         report.orphaned_texts, 3,
@@ -555,7 +575,7 @@ async fn structural_edge_kinds_are_reported_even_on_an_uncrashed_graph() {
     let applied = reindex_edge_types(
         &graph,
         &vector,
-        &embed,
+        Some(&embed),
         &EdgeReindexOptions {
             apply: true,
             ..Default::default()
@@ -585,7 +605,7 @@ async fn dataset_id_is_metadata_only_and_not_part_of_the_id() {
     reindex_edge_types(
         &graph,
         &vector,
-        &embed,
+        Some(&embed),
         &EdgeReindexOptions {
             apply: true,
             dataset_id: Some(dataset_id),
@@ -649,7 +669,7 @@ async fn texts_colliding_on_one_point_id_are_written_once_with_summed_counts() {
         apply: true,
         ..Default::default()
     };
-    let report = reindex_edge_types(&graph, &vector, &embed, &options)
+    let report = reindex_edge_types(&graph, &vector, Some(&embed), &options)
         .await
         .expect("reindex must not fail on colliding texts");
 
@@ -669,5 +689,88 @@ async fn texts_colliding_on_one_point_id_are_written_once_with_summed_counts() {
         stored[0].metadata.get("number_of_edges"),
         Some(&json!(3)),
         "the collapsed row must carry all three edges, not one spelling's share"
+    );
+}
+
+/// A cursor that sorts after every text in the graph must not read as a clean
+/// bill of health. The counts are all zero either way, so without the flag the
+/// CLI prints "every edge type already has a vector row" for a mistyped
+/// `--resume-after` — the graph unexamined and the operator reassured.
+#[tokio::test]
+async fn a_cursor_past_every_text_is_reported_not_mistaken_for_a_healthy_graph() {
+    let graph = seeded_graph().await;
+    let vector = MockVectorDB::new();
+    let embed = MockEmbeddingEngine::deterministic(DIM);
+
+    let options = EdgeReindexOptions {
+        resume_after: Some("zzzzzz".to_string()),
+        ..Default::default()
+    };
+    let report = reindex_edge_types(&graph, &vector, Some(&embed), &options)
+        .await
+        .expect("reindex");
+
+    assert_eq!(report.edges_scanned, 6, "the graph is still read");
+    assert_eq!(report.distinct_texts, 0);
+    assert_eq!(report.orphaned_texts, 0);
+    assert!(
+        report.cursor_consumed_everything,
+        "all-zero counts after a cursor must be distinguishable from a healthy graph"
+    );
+}
+
+/// The no-cursor empty case must *not* set the flag — an genuinely empty graph
+/// is healthy, and conflating the two would turn a normal run into an error.
+#[tokio::test]
+async fn an_empty_graph_without_a_cursor_is_not_flagged() {
+    let graph = MockGraphDB::new();
+    let vector = MockVectorDB::new();
+    let embed = MockEmbeddingEngine::deterministic(DIM);
+
+    let report = reindex_edge_types(
+        &graph,
+        &vector,
+        Some(&embed),
+        &EdgeReindexOptions::default(),
+    )
+    .await
+    .expect("reindex");
+
+    assert_eq!(report.orphaned_texts, 0);
+    assert!(!report.cursor_consumed_everything);
+}
+
+/// A report probes ids and embeds nothing, so it must not require an embedding
+/// engine at all. The CLI relies on this to stay usable on a host with no LLM
+/// key — which is the host an operator triaging a crashed run tends to be on.
+#[tokio::test]
+async fn a_report_needs_no_embedding_engine() {
+    let graph = seeded_graph().await;
+    let vector = MockVectorDB::new();
+
+    let report = reindex_edge_types(&graph, &vector, None, &EdgeReindexOptions::default())
+        .await
+        .expect("a report must not need an engine");
+
+    assert_eq!(report.orphaned_texts, 3);
+    assert_eq!(report.points_written, 0);
+}
+
+/// ...but `--apply` does, and must say so rather than panicking.
+#[tokio::test]
+async fn apply_without_an_embedding_engine_is_an_error_not_a_panic() {
+    let graph = seeded_graph().await;
+    let vector = MockVectorDB::new();
+
+    let options = EdgeReindexOptions {
+        apply: true,
+        ..Default::default()
+    };
+    let err = reindex_edge_types(&graph, &vector, None, &options)
+        .await
+        .expect_err("apply cannot write without an engine");
+    assert!(
+        format!("{err}").contains("embedding engine"),
+        "the error must name what is missing, got: {err}"
     );
 }
