@@ -12,9 +12,12 @@
 //! factory had nothing to call — so `LLM_REQUEST_DEADLINE_SECONDS`,
 //! `LLM_REQUEST_TIMEOUT_SECONDS` and `LLM_CONNECT_TIMEOUT_SECONDS` were silently
 //! inert on `LLM_PROVIDER=bedrock`, which is the provider the runaway was
-//! measured on. The unbounded product they cap is
+//! measured on. The unbounded product they cap was
 //! `structured_output_retries x (network_retries + 1) x request_timeout` — five
-//! hours at this adapter's own defaults.
+//! hours at this adapter's own defaults. Since the retry floor landed the
+//! transport ladder is no longer bounded by `network_retries + 1` either: it
+//! also runs until `retry_min_elapsed` (240s by default), so the product the
+//! deadline has to cap is strictly larger than that figure.
 //!
 //! These pin the bound that replaces it:
 //!
@@ -529,11 +532,20 @@ async fn the_aggregate_deadline_still_outranks_the_retry_floor() {
         "a deadline that outranks the floor must surface as Timeout so callers \
          can classify on it; got: {err:?}"
     );
-    assert_eq!(
-        endpoint.calls_async().await,
-        2,
+    // A range, not `== 2`: the deadline instant is taken at
+    // `structured_output_impl` entry, so on a loaded runner the first
+    // round-trip plus signing can itself exceed the 500ms budget and the
+    // top-of-loop guard abandons after one request. Both outcomes prove the
+    // deadline outranks the floor — the ordering this test exists for — and
+    // widening the budget instead would make the 4-8s first backoff
+    // indistinguishable, which is the other half of what the elapsed bound
+    // above pins.
+    let calls = endpoint.calls_async().await;
+    assert!(
+        (1..=2).contains(&calls),
         "the top-of-loop guard clamps the first backoff to what is left of the \
          budget and lets the attempt it slept for run, then abandons: one \
-         attempt plus the clamped retry"
+         attempt plus at most the clamped retry, never the 600s floor's worth; \
+         got {calls}"
     );
 }

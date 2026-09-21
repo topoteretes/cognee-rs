@@ -317,3 +317,38 @@ async fn transcription_5xx_still_retries() {
         "a 5xx is transient and must use the whole budget"
     );
 }
+
+/// An endpoint that does not implement `/audio/transcriptions` at all answers
+/// 501, and re-asking cannot change that. This is the case `call_api` already
+/// had a 501 arm for; without the matching arm here the error fell to the
+/// catch-all `ApiError`, which the retry gate does not treat as terminal, so
+/// every attempt was spent with 8s/16s/32s backoffs — ~30-60s per audio file —
+/// before failing anyway. The classification is what makes it one request, so
+/// the call count is the assertion that matters.
+#[tokio::test]
+async fn transcription_501_is_terminal_after_one_request() {
+    let server = MockServer::start_async().await;
+    let mock = server
+        .mock_async(|when, then| {
+            when.method(POST).path("/audio/transcriptions");
+            then.status(501).body(
+                r#"{"error":{"message":"transcription is not supported by this deployment"}}"#,
+            );
+        })
+        .await;
+
+    let err = retry_adapter(&server, 3)
+        .transcribe_audio(b"fake-audio", "mp3", None, None)
+        .await
+        .expect_err("a 501 must surface as an error");
+
+    assert!(
+        matches!(err, LlmError::FeatureNotSupported(_)),
+        "a 501 means the endpoint has no such feature, not a transient API fault; got {err:?}"
+    );
+    assert_eq!(
+        mock.calls_async().await,
+        1,
+        "a server that has said it cannot answer is terminal: exactly one request"
+    );
+}

@@ -3447,6 +3447,12 @@ impl OpenAIAdapter {
                 429 if quota_exhausted => LlmError::PaymentRequired(error_body),
                 429 => LlmError::RateLimitExceeded(error_body),
                 400 => LlmError::InvalidResponse(format!("Bad request: {error_body}")),
+                // An endpoint that does not implement /audio/transcriptions at
+                // all — the case `call_api`'s own 501 arm exists for. Without
+                // this it falls to `ApiError`, which the retry gate below does
+                // not treat as terminal, so every attempt is spent re-asking a
+                // server that has already said it cannot answer.
+                501 => LlmError::FeatureNotSupported(error_body),
                 _ => LlmError::ApiError(format!("HTTP {status}: {error_body}")),
             });
         }
@@ -3538,7 +3544,7 @@ impl Transcriber for OpenAIAdapter {
                 }
                 Err(e) => {
                     // Terminal failures, mirroring the set `call_api` refuses at
-                    // its own retry gate (HTTP 400..=402, 404, and a
+                    // its own retry gate (HTTP 400..=402, 404, 501, and a
                     // quota-exhausted 429 — which `call_transcription_api` maps
                     // to `PaymentRequired`). Retrying any of them only burns the
                     // budget a recoverable error will need.
@@ -3548,6 +3554,7 @@ impl Transcriber for OpenAIAdapter {
                             | LlmError::AuthenticationError(_)
                             | LlmError::PaymentRequired(_)
                             | LlmError::ModelNotFound(_)
+                            | LlmError::FeatureNotSupported(_)
                     ) {
                         return Err(e);
                     }

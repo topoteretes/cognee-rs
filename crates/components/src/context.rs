@@ -142,8 +142,17 @@ pub struct LlmInputs {
     /// dual-floor stop condition, so the ladder also keeps retrying until the
     /// time floor is met.
     ///
-    /// ⚠️ **Bedrock counts one attempt more.** Every adapter now runs the dual
-    /// floor through `retry::RetryBudget` — `attempts >= N && elapsed >=
+    /// ⚠️ **Audio transcription ignores the time floor.**
+    /// `OpenAIAdapter::transcribe_audio` is still a plain
+    /// `for attempt in 0..=network_retries` ladder — the last one in
+    /// `crates/llm/src` — so it reads this field as a bare cap, with no
+    /// `RetryBudget` and no `min_retry_seconds`. Setting
+    /// `LLM_MIN_RETRY_SECONDS` to ride out a throttle window buys that on chat
+    /// but not on audio ingestion, which still gives up after ~30-60s.
+    /// Tracked as SDK-704; only the error *classification* was unified.
+    ///
+    /// ⚠️ **Bedrock counts one attempt more.** Every *chat* adapter runs the
+    /// dual floor through `retry::RetryBudget` — `attempts >= N && elapsed >=
     /// min_retry_seconds` — but `BedrockAdapter::retry_budget` passes
     /// `network_retries + 1` as its attempt floor, preserving the
     /// `0..=network_retries` ladder that predates this knob: `2` buys **three**
