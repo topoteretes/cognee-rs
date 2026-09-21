@@ -307,12 +307,12 @@ pub async fn reindex_edge_types(
     // collapse to a single point id: `point_id_for` runs the text through
     // `normalize_identifier`, and nothing upstream normalises
     // `relationship_name` before it reaches the graph
-    // (`graph_integration/expansion.rs:893-898` stores the raw LLM string). The
+    // (`graph_integration/expansion.rs:893-898` stores the raw LLM string).
     // The cognify writer has the same hazard and is **not** fixed: its
-    // `edge_type_counts` (`tasks.rs`) is keyed on the raw text too, and one run
-    // spans many chunks, so two chunks spelling a relation differently collide
-    // there as well. Tracked as SDK-708; do not read this collapse as evidence
-    // the writer is safe.
+    // `edge_type_counts` (`tasks.rs:1971`) is keyed on the raw text too, and
+    // one run spans many chunks, so two chunks spelling a relation differently
+    // collide there as well. Tracked as SDK-778; do not read this collapse as
+    // evidence the writer is safe.
     //
     // Collapse by id — keeping the first text in cursor order and summing the
     // counts — so that no batch can carry the same id twice. pgvector writes a
