@@ -1,5 +1,7 @@
 # Router: forget
 
+> **Moved.** `cognee-http-server` now lives in the closed [`cognee-cloud-rs`](https://github.com/topoteretes/cognee-cloud-rs) repo at `crates/cognee-http-server`. This page is kept as the wire-contract reference; any `crates/http-server/...` path it cites is historical and does not resolve in this repository.
+
 Single-endpoint router that exposes the unified deletion command — the v2 replacement for the older `prune` / `empty_dataset` / `delete_data` triplet. The body has three modes (data item, whole dataset, or everything) selected by which fields are populated. The cross-field rule is: **exactly one of `data_id` / `dataset` / `everything=true` must indicate a target**, with two exceptions documented below.
 
 Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../tenants.md](../tenants.md), [delete.md](delete.md), [datasets.md](datasets.md).

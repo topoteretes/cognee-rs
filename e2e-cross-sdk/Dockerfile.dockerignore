@@ -36,12 +36,13 @@
 # Release binaries built on the runner (see .github/workflows/http-parity.yml)
 # or by hand for a local build. NOT excluded — the harness stage COPYs these.
 !cognee-rust/dist/cognee-cli
-!cognee-rust/dist/cognee-http-server
 !cognee-rust/dist/cognee-telemetry-emit
 
-# Harness: pytest suite, entrypoint scripts, fixtures.
+# Harness: pytest suite and fixtures. `e2e-cross-sdk/bin` is NOT listed: the
+# Dockerfile no longer COPYs it (the dual-server entrypoint left with
+# cognee-http-server), and telemetry_proxy.py reaches its own container through
+# a compose bind mount rather than this build context.
 !cognee-rust/e2e-cross-sdk/harness
-!cognee-rust/e2e-cross-sdk/bin
 !cognee-rust/e2e-cross-sdk/test_data
 
 # ── Python side (cognee/, the sibling repo) ──────────────────────────────────

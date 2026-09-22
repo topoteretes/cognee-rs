@@ -224,8 +224,9 @@ panel are rendered from the same six JS view modules Python uses, vendored verba
 
 The HTTP parity harness ships. Follow-ups noted in its (now-removed) design doc:
 
-- **Per-endpoint OpenAPI snapshots** — only an informational `openapi.python.json` reference snapshot
-  is committed; per-endpoint golden snapshots are a follow-up.
+- **Per-endpoint OpenAPI snapshots** — an informational `openapi.python.json` reference snapshot
+  used to be committed here; it moved to `cognee-cloud-rs` with the rest of the HTTP parity lane, and
+  per-endpoint golden snapshots remain a follow-up there.
 - **`--quick` LLM-mock mode** — LLM-dependent parity tests can take 60s+; a mocked fast mode was
   proposed but not built.
 - **TLS path testing** — the suite runs over plain HTTP only.
