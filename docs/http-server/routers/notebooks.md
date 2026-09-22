@@ -1,5 +1,7 @@
 # Router: notebooks
 
+> **Moved.** `cognee-http-server` now lives in the closed [`cognee-cloud-rs`](https://github.com/topoteretes/cognee-cloud-rs) repo at `crates/cognee-http-server`. This page is kept as the wire-contract reference; any `crates/http-server/...` path it cites is historical and does not resolve in this repository.
+
 The `notebooks` router exposes a per-user, server-stored Jupyter-like notebook surface used by the cognee-frontend's "Notebooks" panel. Each notebook is a list of typed cells (`markdown` or `code`) persisted in the relational DB; users can list, create, update, and delete them. A separate `POST /{notebook_id}/{cell_id}/run` endpoint executes a single Python code cell inside a process-local sandbox — this is the only piece that's *not* a CRUD operation.
 
 **Status: implemented.** CRUD, first-call tutorial seeding (`seed_tutorials_if_first_call`), and cell execution are all shipped. Cell execution uses a `SubprocessRunner` wired in when the runtime config flag `notebook_runner_enabled` is set; when it is unset (embedders that disable code execution) `/run` returns `501 Not Implemented` with a documented JSON body.

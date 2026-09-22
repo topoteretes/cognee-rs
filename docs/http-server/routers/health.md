@@ -1,5 +1,7 @@
 # Router: health
 
+> **Moved.** `cognee-http-server` now lives in the closed [`cognee-cloud-rs`](https://github.com/topoteretes/cognee-cloud-rs) repo at `crates/cognee-http-server`. This page is kept as the wire-contract reference; any `crates/http-server/...` path it cites is historical and does not resolve in this repository.
+
 Liveness/readiness probes for the cognee HTTP server. Two unauthenticated GET endpoints — one cheap (`GET /health`) intended for k8s/load-balancer probes, and one expensive (`GET /health/detailed`) that fans out to every backend (relational DB, vector DB, graph DB, file storage, optionally LLM and embedding service) and returns a structured per-component report. The router is the only public, no-auth endpoint other than `/` and the auth-login routes; everything else in the `/api/v1` tree gates on the `AuthenticatedUser` extractor.
 
 Companion docs: [../architecture.md](../architecture.md), [../observability.md](../observability.md).

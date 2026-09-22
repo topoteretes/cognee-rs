@@ -1,5 +1,7 @@
 # Router: llm
 
+> **Moved.** `cognee-http-server` now lives in the closed [`cognee-cloud-rs`](https://github.com/topoteretes/cognee-cloud-rs) repo at `crates/cognee-http-server`. This page is kept as the wire-contract reference; any `crates/http-server/...` path it cites is historical and does not resolve in this repository.
+
 The `/api/v1/llm` router exposes two thin LLM-utility endpoints used by the cognee frontend's "Schema Builder" UI: `POST /custom-prompt` synthesizes a custom extraction prompt from a JSON-Schema-style graph model, and `POST /infer-schema` proposes a graph model from sample text. Both delegate directly to `cognee-llm` adapters via two prompt templates in `cognee-cognify`'s prompt library; neither touches the relational DB, vector DB, or graph DB. The endpoints exist purely to let the frontend bootstrap a `graph_model` argument for `/api/v1/cognify`.
 
 Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../observability.md](../observability.md).

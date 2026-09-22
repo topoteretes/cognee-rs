@@ -1,5 +1,7 @@
 # Router: update
 
+> **Moved.** `cognee-http-server` now lives in the closed [`cognee-cloud-rs`](https://github.com/topoteretes/cognee-cloud-rs) repo at `crates/cognee-http-server`. This page is kept as the wire-contract reference; any `crates/http-server/...` path it cites is historical and does not resolve in this repository.
+
 Multipart `PATCH` endpoint that replaces an existing document in a dataset by deleting it and re-adding the new payload, then re-running cognify on the affected dataset. Distinct from `/add` (which appends) and `/datasets/{id}/data/{did}` `DELETE` (which only deletes); `update` chains delete → add → cognify in a single call.
 
 Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../tenants.md](../tenants.md), [../pipelines.md](../pipelines.md), [add.md](add.md).

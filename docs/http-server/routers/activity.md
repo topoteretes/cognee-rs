@@ -1,5 +1,7 @@
 # Router: activity
 
+> **Moved.** `cognee-http-server` now lives in the closed [`cognee-cloud-rs`](https://github.com/topoteretes/cognee-cloud-rs) repo at `crates/cognee-http-server`. This page is kept as the wire-contract reference; any `crates/http-server/...` path it cites is historical and does not resolve in this repository.
+
 Activity & telemetry endpoints. Powers the frontend's activity timeline, trace viewer, agent registry, and dataset memory export. Five endpoints with very different shapes: a JOIN query against `pipeline_runs` (durable observability), a read of the in-memory span buffer (live observability), a tenant-scoped user listing, an agent listing derived from `@cognee.agent` email suffixes, and a Markdown report builder for a single dataset.
 
 Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../pipelines.md](../pipelines.md), [../observability.md](../observability.md), [../tenants.md](../tenants.md).

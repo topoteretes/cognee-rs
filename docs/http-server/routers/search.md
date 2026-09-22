@@ -1,5 +1,7 @@
 # Router: search
 
+> **Moved.** `cognee-http-server` now lives in the closed [`cognee-cloud-rs`](https://github.com/topoteretes/cognee-cloud-rs) repo at `crates/cognee-http-server`. This page is kept as the wire-contract reference; any `crates/http-server/...` path it cites is historical and does not resolve in this repository.
+
 The `/api/v1/search` router is the primary read-path entry point. `POST /` runs a semantic search across the user's knowledge graph using one of sixteen `SearchType` strategies and persists the question/answer pair to the search history. `GET /` returns the last 50 history rows. Compared to `/api/v1/recall`, this router does **not** auto-route the query type (the caller picks one explicitly via `search_type`) and does **not** perform session-first lookup; recall layers both on top of the same underlying `SearchOrchestrator`.
 
 Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../tenants.md](../tenants.md), [../observability.md](../observability.md).

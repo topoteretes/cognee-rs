@@ -1,5 +1,7 @@
 # HTTP server — router reference
 
+> **Moved.** `cognee-http-server` now lives in the closed [`cognee-cloud-rs`](https://github.com/topoteretes/cognee-cloud-rs) repo at `crates/cognee-http-server`. This page is kept as the wire-contract reference; any `crates/http-server/...` path it cites is historical and does not resolve in this repository.
+
 One reference doc per router, each covering its mount, endpoints, DTOs,
 cross-cutting behavior, and Python-parity notes. **20 routers live in OSS**
 (documented in full below) and **11 routers live in the closed

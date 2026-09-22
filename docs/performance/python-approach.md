@@ -221,9 +221,11 @@ The orchestrator only needs *one process that runs all phases and writes the
 JSON*. `cognee-cli` already is that single-process entry point (it wires up
 `ComponentManager`, config, and the add/cognify/search pipelines). So the bench
 driver becomes a **`cognee-cli bench` subcommand**, not a new binary — reusing all
-existing bootstrapping. (The existing Criterion bench at
-[`crates/bench/benches/batch_add_cognify.rs`](../../crates/bench/benches/batch_add_cognify.rs)
-stays as-is for its HTTP / real-LLM scenario.)
+existing bootstrapping. (The Criterion bench `batch_add_cognify` — formerly a
+crate of its own in this workspace — covered the HTTP / real-LLM scenario by spawning the
+`cognee-http-server` binary; it moved to the closed
+[`cognee-cloud-rs`](https://github.com/topoteretes/cognee-cloud-rs) repo along
+with that server and is no longer part of this workspace.)
 
 ### 5.5 What we deliberately do not port
 

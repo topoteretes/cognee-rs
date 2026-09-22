@@ -1,5 +1,7 @@
 # Router: recall
 
+> **Moved.** `cognee-http-server` now lives in the closed [`cognee-cloud-rs`](https://github.com/topoteretes/cognee-cloud-rs) repo at `crates/cognee-http-server`. This page is kept as the wire-contract reference; any `crates/http-server/...` path it cites is historical and does not resolve in this repository.
+
 The `/api/v1/recall` router is the memory-oriented companion to `/api/v1/search`. It accepts the same wire DTO and the same `SearchType` enum, but layers two behaviors on top: (1) **session-first retrieval** — when the caller passes a `session_id` without explicit `datasets`, Q&A entries cached on the session are searched by keyword overlap before falling through to the graph; and (2) **automatic query-type routing** — when `query_type` is omitted (or supplied with `auto_route=true`), the rule-based `route_query()` classifier picks one of the 15 `SearchType` values from the natural-language query without an LLM call. Both behaviors are already implemented at the library layer; this doc specs the HTTP wrapper.
 
 Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../observability.md](../observability.md), [routers/search.md](search.md).

@@ -7,8 +7,8 @@
 
 # ─── Stage 1: prebuilt Rust binaries (built on the runner, not here) ────────
 #
-# The Rust CLI/server/telemetry binaries used to be compiled by a builder stage
-# in this file. They are now built on the CI runner and copied in from
+# The Rust CLI and telemetry binaries used to be compiled by a builder stage in
+# this file. They are now built on the CI runner and copied in from
 # cognee-rust/dist/ — see .github/workflows/http-parity.yml.
 #
 # Why: the builder stage recompiled ~741 crates on every run (~34 min of a
@@ -28,11 +28,8 @@
 # To build the image outside CI, produce the binaries first — run these from
 # the cognee-rust repo root, so they land in cognee-rust/dist/ as the COPYs
 # below expect (the build context is the monorepo root above it):
-#   cargo build --release -p cognee-cli -p cognee-http-server \
-#     -p cognee-telemetry-emit \
-#     --features cognee-http-server/bin,cognee-http-server/dev-mock
+#   cargo build --release -p cognee-cli -p cognee-telemetry-emit
 #   mkdir -p dist && cp target/release/cognee-cli \
-#     target/release/cognee-http-server \
 #     target/release/cognee-telemetry-emit dist/
 
 
@@ -77,7 +74,8 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # `cognee_db_workers` is not optional: the Ladybug adapter does a top-level
 # `import cognee_db_workers`, and cognee/__init__ reaches it through
 # add -> ingest_data -> ... -> graph/config, so omitting it makes `import
-# cognee` itself fail and `start_servers.sh` aborts on create_database().
+# cognee` itself fail — which means every Python-CLI invocation in the harness
+# dies before it does anything.
 # (`kuzu` is listed too but is only a ladybug shim for `import kuzu`, which
 # the PyPI install below already satisfies; `distributed` is copied because
 # older pins packaged it and the directory is harmless when they do not.)
@@ -90,9 +88,9 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # kuzu is an optional cognee backend not pulled in by the default `uv sync`,
 # but cognee's alembic migration `b9274c27a25a_kuzu_11_migration.py` does a
 # top-level `import kuzu`. alembic loads every version module to build the
-# revision graph (even for `stamp head`), so a missing kuzu aborts the harness
-# startup with ModuleNotFoundError. Install it so the module is importable; the
-# migration body never runs under `stamp`, so any importable version suffices.
+# revision graph, so a missing kuzu aborts Python-side DB setup with
+# ModuleNotFoundError. Install it so the module is importable; the migration
+# body never runs here, so any importable version suffices.
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --python /build/.venv kuzu
 
@@ -111,7 +109,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Prebuilt Rust binaries. `cognee-cli` is renamed on the way in so it does not
 # collide with the Python CLI symlinked below as cognee-cli-python.
 COPY cognee-rust/dist/cognee-cli /usr/local/bin/cognee-cli-rust
-COPY cognee-rust/dist/cognee-http-server /usr/local/bin/cognee-http-server
 COPY cognee-rust/dist/cognee-telemetry-emit /usr/local/bin/cognee-telemetry-emit
 
 # ONNX embedding models (needed by the Rust CLI for cognify). Fetched here
@@ -144,11 +141,12 @@ COPY cognee-rust/e2e-cross-sdk/test_data/ /test_data/
 # Copy harness code
 COPY cognee-rust/e2e-cross-sdk/harness/ /harness/
 
-# Copy dual-server entrypoint scripts
-COPY cognee-rust/e2e-cross-sdk/bin/ /usr/local/bin/
-
-# Make scripts executable
-RUN chmod +x /usr/local/bin/start_servers.sh /harness/wait_for_health.sh
+# NOTE: e2e-cross-sdk/bin/ is deliberately NOT copied. It held the dual-server
+# entrypoint (start_servers.sh) for the HTTP parity lane, which moved to
+# cognee-cloud-rs along with cognee-http-server. What is left in that directory
+# is telemetry_emit.rs (a crate source file) and telemetry_proxy.py, which the
+# telemetry-proxy compose service bind-mounts from the host into its own
+# python:3.11-slim image — neither belongs in this image.
 
 WORKDIR /workspace
 

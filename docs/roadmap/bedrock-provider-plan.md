@@ -329,7 +329,8 @@ pub fn aws_inputs_from_env() -> AwsInputs { /* §1.2 / §1.3 names, trimmed, emp
 
 `LlmInputs` and `EmbeddingInputs` each gain `pub aws: AwsInputs`, populated by
 `aws_inputs_from_env()` at both lowering sites
-(`crates/lib/src/config.rs:850` and `crates/http-server/src/config.rs:700`).
+(`crates/lib/src/config.rs:850` and, in the closed `cognee-cloud-rs` repo,
+`crates/cognee-http-server/src/config.rs:700`).
 
 This matters for scope: because Python resolves these from the environment and
 never threads them through its LLM config (§1.0 — the default path does not even
@@ -433,7 +434,7 @@ bedrock = ["cognee-llm/bedrock"]
 default = [..., "bedrock"]
 bedrock = ["cognee-llm/bedrock", "cognee-embedding/bedrock"]
 
-# crates/lib/Cargo.toml and crates/http-server/Cargo.toml
+# crates/lib/Cargo.toml and, in cognee-cloud-rs, crates/cognee-http-server/Cargo.toml
 default = [..., "bedrock"]
 bedrock = ["cognee-components/bedrock", "cognee-llm/bedrock", "cognee-embedding/bedrock"]
 ```
@@ -515,7 +516,7 @@ role" (`base_aws_llm.py:1076+`).
 
 ### R2 — ✅ landed (`c81a049f`) — `AwsInputs` on the context, populated at both lowering sites
 `crates/components/src/context.rs` (struct + `aws_inputs_from_env()`),
-`crates/lib/src/config.rs:850`, `crates/http-server/src/config.rs:700`.
+`crates/lib/src/config.rs:850`, and in cognee-cloud-rs `crates/cognee-http-server/src/config.rs:700`.
 Additive in behaviour but **not** free to compile: `LlmInputs` /
 `EmbeddingInputs` have no `Default` and are exhaustive struct literals in eight
 places (§2.1) — expect `E0063` at each and fix them in this step. Adding

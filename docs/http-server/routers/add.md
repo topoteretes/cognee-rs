@@ -1,5 +1,7 @@
 # Router: add
 
+> **Moved.** `cognee-http-server` now lives in the closed [`cognee-cloud-rs`](https://github.com/topoteretes/cognee-cloud-rs) repo at `crates/cognee-http-server`. This page is kept as the wire-contract reference; any `crates/http-server/...` path it cites is historical and does not resolve in this repository.
+
 Multipart ingest endpoint that takes a list of files (or URL/file-path strings packed as parts) and adds them to a dataset, kicking off the `add_pipeline`. This is the front door of the cognee write path — it is *not* responsible for knowledge-graph extraction (that is `cognify`); it stores raw bytes, hashes them, and registers `Data` rows under the target dataset. For HTTP(S) URL inputs, the add pipeline fetches the resource, routes by response MIME type, stores URL metadata, and leaves web provenance graph nodes to the later cognify step.
 
 Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../tenants.md](../tenants.md), [../pipelines.md](../pipelines.md), [../observability.md](../observability.md).

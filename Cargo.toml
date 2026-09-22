@@ -30,9 +30,6 @@ members = [
     "crates/test-utils",
     "crates/visualization",
     "crates/migration",
-    "crates/http-server",
-    # Criterion benchmarks for the Rust HTTP server and pipelines
-    "crates/bench",
     "crates/observability",
     "crates/telemetry",
     "python",

@@ -1,5 +1,7 @@
 # Router: delete (deprecated)
 
+> **Moved.** `cognee-http-server` now lives in the closed [`cognee-cloud-rs`](https://github.com/topoteretes/cognee-cloud-rs) repo at `crates/cognee-http-server`. This page is kept as the wire-contract reference; any `crates/http-server/...` path it cites is historical and does not resolve in this repository.
+
 A deprecated single-endpoint router that aliases the canonical `DELETE /api/v1/datasets/{dataset_id}/data/{data_id}` (see [datasets.md §2.11](datasets.md#211-delete-apiv1datasetsdataset_iddatadata_id--delete-one-data-item)). Kept for backwards compatibility with clients pinned to cognee ≤ 0.3.8; new clients should use the canonical route.
 
 Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../tenants.md](../tenants.md), [datasets.md](datasets.md), [forget.md](forget.md).

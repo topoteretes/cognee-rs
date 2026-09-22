@@ -1183,7 +1183,7 @@ product analytics. The **deep references** are
 
 ## HTTP server
 
-The server binary reads its own env surface ([`crates/http-server/src/config.rs`](../crates/http-server/src/config.rs)) —
+The server binary — now in the closed [`cognee-cloud-rs`](https://github.com/topoteretes/cognee-cloud-rs) repo, at `crates/cognee-http-server/src/config.rs` — reads its own env surface:
 host/port, auth, body limits, pipeline registry, notebooks, health probes. See
 [tools/http-server.md](tools/http-server.md) and
 [http-server/architecture.md §config](http-server/architecture.md). Note that

@@ -1,5 +1,7 @@
 # HTTP Server — Pipeline Runs & Background Tasks
 
+> **Moved.** `cognee-http-server` now lives in the closed [`cognee-cloud-rs`](https://github.com/topoteretes/cognee-cloud-rs) repo at `crates/cognee-http-server`. This page is kept as the wire-contract reference; any `crates/http-server/...` path it cites is historical and does not resolve in this repository.
+
 This document specifies how the Rust HTTP server tracks long-running pipeline operations (`/cognify`, `/memify`, `/remember`, `/improve`, `/sync`, `/add`) when the caller passes `run_in_background=true`. The component that owns this lifecycle is **`cognee_core::PipelineRunRegistry`** — a runtime-agnostic registry that hosts a per-run in-memory event channel, satisfies the existing `cognee_core::PipelineWatcher` trait so library functions can publish lifecycle events without knowing about it, and persists durable status rows via an injected `PipelineRunRepository` trait. The HTTP server consumes the registry through `AppState` and binds it as the `PipelineWatcher` in every `TaskContext` it builds.
 
 Library functions in `cognee` stay synchronous (callers `.await` them to completion). The `run_in_background` flag is purely a **hosting concern**: the HTTP server decides whether to await the future inline or hand it to the registry's spawn path. There is no `run_in_background` flag in the library API.

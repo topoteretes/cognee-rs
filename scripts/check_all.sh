@@ -118,15 +118,26 @@ cargo test -p cognee-ingestion --no-default-features --features pdf-pure-rust \
 
 echo ""
 echo "================================================================"
-echo "=== Rust: Compilation check (Postgres-only server: no onnx/ladybug/lancedb) ==="
+echo "=== Rust: Compilation check (Postgres-only backends: no onnx/ladybug/lancedb) ==="
 echo "================================================================"
 # Guards the seam a downstream consumer uses to drop the embedded backends —
 # ort (onnx), bundled ladybug C++, and the Arrow + lance stack — and run every
 # store on Postgres instead. Without a lane like this the `#[cfg(feature = ...)]`
 # paths behind those features rot and the seam silently stops building.
-# Scoped to cognee-http-server to stay cheap.
-cargo check -p cognee-http-server --no-default-features --all-targets \
-  --features telemetry,html-loader,pgvector,pggraph
+#
+# This used to be spelled `-p cognee-http-server`. That crate moved to the closed
+# cognee-cloud-rs repo, which now runs the original spelling against its own copy.
+# The seams it guards live in cognee-components / -vector / -graph / -embedding,
+# all of which stay in OSS, so grade them directly.
+#
+# MIRROR of the "Compilation check (Postgres-only backends)" step in
+# .github/workflows/ci.yml. Keep the two spellings identical — this repo has
+# already been burned by the local gate and CI silently disagreeing about what
+# they grade.
+cargo check -p cognee-components --no-default-features --all-targets \
+  --features pgvector,pggraph
+cargo check -p cognee --no-default-features --all-targets \
+  --features telemetry,html-loader,pgvector,pggraph,postgres,sqlite
 
 echo ""
 echo "================================================================"

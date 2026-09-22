@@ -1,5 +1,22 @@
 # HTTP Server — Architecture Decisions
 
+> **Moved — do not follow the build instructions on this page in this repo.**
+> `cognee-http-server` left OSS for the closed
+> [`cognee-cloud-rs`](https://github.com/topoteretes/cognee-cloud-rs) repo, where
+> it is `crates/cognee-http-server`. There is no `crates/http-server/` here, so
+> every `cargo install --path crates/http-server`, `cargo build -p
+> cognee-http-server` and `path = "../http-server"` recipe below describes
+> `cognee-cloud-rs`, not this workspace. The page is kept as the **design record**
+> for how the server is assembled — the decisions it locks in are still the ones
+> the closed crate implements — and every `crates/http-server/...` path in it
+> should be read as `cognee-cloud-rs:crates/cognee-http-server/...`.
+>
+> Two decisions on this page are also superseded by the move itself: the `server`
+> feature on `cognee` (§3, §5) was never added and `crates/lib` has no such
+> feature today, and the crate's own manifest now lives in the closed workspace
+> with its `cognee-*` dependencies resolved through the OSS git submodule rather
+> than by workspace path.
+
 This document locks in the structural decisions for the Rust HTTP server port of [`cognee/api/client.py`](https://github.com/topoteretes/cognee/blob/main/cognee/api/client.py). Scope here is *how the server is assembled*: crates, libraries, runtime, middleware stack, configuration, lifecycle. Endpoint-by-endpoint specs, auth internals, and pipeline-job details live in their own sub-documents in this folder (`auth.md`, `pipelines.md`, `routers/*.md`, etc.).
 
 ## 1. Goals & non-goals
@@ -137,7 +154,7 @@ clap                 = { workspace = true, features = ["derive", "env"], optiona
 dotenv               = { workspace = true, optional = true }
 ```
 
-Library consumers do `cognee-http-server = { path = "../http-server" }`. To install the binary: `cargo install --path crates/http-server --features bin`, or in workspace builds `cargo build -p cognee-http-server --features bin --bin cognee-http-server`.
+Library consumers depend on the crate by path within the closed workspace (`cognee-http-server = { path = "../cognee-http-server" }`). To install the binary, from a `cognee-cloud-rs` checkout: `cargo install --path crates/cognee-http-server --features bin`, or in workspace builds `cargo build -p cognee-http-server --features bin --bin cognee-http-server`. **None of these work from this repository** — see the banner at the top.
 
 ### Re-export through `cognee` is feature-gated
 
@@ -543,7 +560,7 @@ fn init_tracing() {
 
 ## 18. Testing architecture
 
-Four layers, all in `crates/http-server/tests/`:
+Four layers, all in the crate's `tests/` directory (`cognee-cloud-rs:crates/cognee-http-server/tests/`):
 
 1. **Unit tests** (`#[cfg(test)]` inline): DTO serialization, error → response mapping, JWT encode/decode.
 2. **Router tests** (no socket): build the router, drive it via `tower::ServiceExt::oneshot`:
@@ -557,7 +574,7 @@ Four layers, all in `crates/http-server/tests/`:
 3. **Integration tests** (bound socket): launch `axum::serve` on `127.0.0.1:0`, hit it with `reqwest`. Reserved for WebSocket and streaming-download tests.
 4. **Cross-SDK HTTP parity** (future): a new suite under `e2e-cross-sdk/` that runs Python uvicorn + Rust binary side-by-side and diffs responses. Reuses the Docker harness pattern from `test_add_parity.py`.
 
-Test DTOs, fixtures, and helpers live in `crates/http-server/tests/support/` — not in `cognee-test-utils`, because they are HTTP-specific.
+Test DTOs, fixtures, and helpers live in the crate's `tests/support/` — not in `cognee-test-utils`, because they are HTTP-specific.
 
 ## 19. Background task registry
 
