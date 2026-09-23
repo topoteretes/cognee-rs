@@ -2116,13 +2116,22 @@ impl Llm for OpenAIAdapter {
     }
 
     fn max_context_length(&self) -> u32 {
-        // Context windows for OpenAI model families, most specific prefix first.
+        // Input-token limits for OpenAI model families, most specific prefix
+        // first. Hardcoded because the API has nowhere to ask: the `/v1/models`
+        // object carries only `id`, `created`, `object` and `owned_by`. The
+        // numbers are litellm's `max_input_tokens`
+        // (`model_prices_and_context_window.json`), the table Python cognee
+        // reads its model limits from.
+        //
+        // The input limit, not the total window: gpt-5's 400k window is 272k
+        // in + 128k out, and a prompt sized against the total is rejected.
+        //
         // The hybrid retriever budgets its context against this number, so an
         // under-report trims the context of a model that could have read it
         // all: every current family must be listed before the `gpt-4` catch-all.
         let model = self.model.to_lowercase();
         match model.as_str() {
-            m if m.starts_with("gpt-5") => 400_000,
+            m if m.starts_with("gpt-5") => 272_000,
             m if m.starts_with("gpt-4.1") => 1_047_576,
             m if m.starts_with("gpt-4o") => 128_000,
             m if m.starts_with("o1") || m.starts_with("o3") || m.starts_with("o4") => 200_000,
@@ -4477,7 +4486,7 @@ mod tests {
 
         // Current families must not fall through to the `gpt-4` / default arms.
         for (model, window) in [
-            ("gpt-5-mini", 400_000),
+            ("gpt-5-mini", 272_000),
             ("gpt-4.1-mini", 1_047_576),
             ("gpt-4o-mini", 128_000),
             ("gpt-4o", 128_000),
