@@ -113,17 +113,30 @@ pub(crate) async fn build_entities(
 /// Resolve a single entity hit into an [`EntityResult`] with empty edges.
 ///
 /// Port of `_entity_from_result` (`entities.py:86-98`). `name` falls back
-/// `name` → `text` → `id`, never empty.
+/// `name` → `text` → `metadata.original_node_id` → `id`, never empty.
+///
+/// The `metadata.original_node_id` step is what makes this work at all on a
+/// row written by the Rust cognify. A vector row's payload is
+/// `DataPoint::vector_metadata()` — the *base* struct — plus a few keys the
+/// indexer adds; `Entity`'s own `name`, `is_a` and `description` live on the
+/// outer struct and never reach it. So neither `name` nor `text` is present
+/// and every entity used to render as its bare UUID. What *is* present is the
+/// extractor's own node id, `"<type>:<name>"` (`node_id_for`), so the name is
+/// recovered from its second half.
 fn entity_from_result(item: &SearchItem) -> EntityResult {
     let result_payload = payload(item);
     let entity_id = result_id(item).unwrap_or_default();
 
+    let original_node_name = original_node_id(result_payload).map(Value::String);
     let id_value = Value::String(entity_id.clone());
     let mut name_candidates: Vec<&Value> = Vec::new();
     if let Some(value) = result_payload.get("name") {
         name_candidates.push(value);
     }
     if let Some(value) = result_payload.get("text") {
+        name_candidates.push(value);
+    }
+    if let Some(value) = original_node_name.as_ref() {
         name_candidates.push(value);
     }
     name_candidates.push(&id_value);
@@ -138,21 +151,57 @@ fn entity_from_result(item: &SearchItem) -> EntityResult {
     }
 }
 
+/// The name half of the extractor's `original_node_id`, looked up either
+/// directly on `container` or one level down under `metadata`.
+///
+/// The id is `"<normalized type>:<normalized name>"` — `"person:alice"` — so
+/// the part after the first colon is the entity's name. A value with no colon
+/// is taken whole; an empty name half is no name at all.
+fn original_node_id(container: &Value) -> Option<String> {
+    let raw = container
+        .get("original_node_id")
+        .or_else(|| {
+            container
+                .get("metadata")
+                .and_then(|metadata| metadata.get("original_node_id"))
+        })
+        .and_then(display_value)?;
+    let name = match raw.split_once(':') {
+        Some((_, name)) => name.trim(),
+        None => raw.trim(),
+    };
+    (!name.is_empty()).then(|| name.to_string())
+}
+
 /// Resolve an entity's domain type from a payload/entity object.
 ///
 /// Port of `_entity_type` (`entities.py:122-127`): the first nonblank
-/// `display_value` of `is_a` then `type`, suppressing the literal
-/// `"IndexSchema"` structural type; else `None`.
+/// `display_value` of `entity_type`, `is_a` then `type`, suppressing the
+/// structural types the schema itself uses; else `None`.
+///
+/// `entity_type` comes first because it is the only one of the three that
+/// holds a *domain* type on a Rust-written row: the indexer writes the
+/// EntityType's display name there (`"person"`), while `type` holds the
+/// DataPoint's structural class (`"Entity"`) and `is_a`, when present at all,
+/// is a UUID. Rendering `### Alice (Entity)` told the model nothing; `###
+/// Alice (person)` tells it something.
 fn entity_type(result_payload: &Value) -> Option<String> {
-    for key in ["is_a", "type"] {
+    for key in ["entity_type", "is_a", "type"] {
         if let Some(value) = result_payload.get(key)
             && let Some(entity_type) = display_value(value)
-            && entity_type != "IndexSchema"
+            && !matches!(entity_type.as_str(), "IndexSchema" | "Entity")
+            && !is_uuid(&entity_type)
         {
             return Some(entity_type);
         }
     }
     None
+}
+
+/// Whether a rendered value is a bare UUID, i.e. an id that leaked into a
+/// slot meant for something a reader (or a model) can use.
+fn is_uuid(value: &str) -> bool {
+    uuid::Uuid::parse_str(value).is_ok()
 }
 
 /// Rebuild per-entity `(source, edge, target)` connection triples from the flat
@@ -379,9 +428,15 @@ fn nested_edge_text(edge: &EdgeLite) -> Option<String> {
         .and_then(display_value)
 }
 
-/// A node's display label: its `name`, then its `id`.
+/// A node's display label: its `name`, then its `id`, then
+/// `metadata.original_node_id` — but never a bare UUID.
 ///
-/// Port of `_node_label` (`entities.py:231-233`).
+/// Port of `_node_label` (`entities.py:231-233`), with the UUID guard added.
+/// A neighbourhood hop lands on structural nodes as well as entities, and a
+/// `DocumentChunk` has no `name`: labelling it by id turned a bullet into
+/// `49f4a659-… -- contains -- Alice`, which spends tokens telling the model a
+/// UUID. A node nobody can name is better left out of the sentence, so the
+/// bullet is dropped instead.
 fn node_label(node: &NodeLite) -> Option<String> {
     let mut candidates: Vec<&Value> = Vec::new();
     if let Some(value) = node.get("name") {
@@ -390,7 +445,10 @@ fn node_label(node: &NodeLite) -> Option<String> {
     if let Some(value) = node.get("id") {
         candidates.push(value);
     }
-    first_display_value(&candidates)
+    if let Some(label) = first_display_value(&candidates).filter(|label| !is_uuid(label)) {
+        return Some(label);
+    }
+    original_node_id(node)
 }
 
 /// Render the entity blocks as the "Relevant entities" markdown section.
@@ -416,7 +474,7 @@ pub(crate) fn format_entities(entities: &[EntityResult]) -> String {
 /// `"### {name} ({type})"` or `"### {name}"` (the `IndexSchema` structural type
 /// is suppressed), followed by the description line if present and one
 /// `"- {text}"` per edge with nonblank text.
-fn format_entity(entity: &EntityResult) -> String {
+pub(crate) fn format_entity(entity: &EntityResult) -> String {
     let name = entity.name.trim();
     if name.is_empty() {
         return String::new();
@@ -469,6 +527,79 @@ mod tests {
             score: None,
             payload,
         }
+    }
+
+    /// A row written by the Rust/GLiNER cognify: no top-level `name`, no
+    /// `text`, a structural `"type": "Entity"`, and the two usable values
+    /// tucked into `metadata.original_node_id` and `entity_type`.
+    fn gliner_entity_hit() -> SearchItem {
+        SearchItem {
+            id: "53105ee7-4467-5f5e-a959-5632b495e0c6".parse().ok(),
+            score: None,
+            payload: json!({
+                "id": "53105ee7-4467-5f5e-a959-5632b495e0c6",
+                "type": "Entity",
+                "entity_type": "person",
+                "metadata": { "index_fields": ["name"], "original_node_id": "person:alice" },
+            }),
+        }
+    }
+
+    #[test]
+    fn entity_name_falls_back_to_the_extractor_node_id_not_the_uuid() {
+        let entity = entity_from_result(&gliner_entity_hit());
+        assert_eq!(entity.name, "alice");
+    }
+
+    #[test]
+    fn entity_type_prefers_the_domain_type_over_the_structural_one() {
+        let entity = entity_from_result(&gliner_entity_hit());
+        assert_eq!(entity.entity_type.as_deref(), Some("person"));
+    }
+
+    #[test]
+    fn a_top_level_name_still_wins_over_the_extractor_node_id() {
+        let entity = entity_from_result(&entity_hit(json!({
+            "id": "53105ee7-4467-5f5e-a959-5632b495e0c6",
+            "name": "Alice",
+            "entity_type": "person",
+            "metadata": { "original_node_id": "person:alice" },
+        })));
+        assert_eq!(entity.name, "Alice");
+    }
+
+    #[test]
+    fn an_entity_with_nothing_usable_still_renders_as_its_id() {
+        let entity = entity_from_result(&entity_hit(json!({
+            "id": "53105ee7-4467-5f5e-a959-5632b495e0c6",
+        })));
+        assert_eq!(entity.name, "53105ee7-4467-5f5e-a959-5632b495e0c6");
+        assert_eq!(entity.entity_type, None);
+    }
+
+    #[test]
+    fn node_label_refuses_a_bare_uuid() {
+        // A DocumentChunk in the neighbourhood: an id and nothing to call it.
+        assert_eq!(
+            node_label(&json!({ "id": "49f4a659-b7b9-5489-bb78-5a56d264fd2d" })),
+            None
+        );
+        assert_eq!(
+            node_label(&json!({ "id": "49f4a659-b7b9-5489-bb78-5a56d264fd2d", "name": "Alice" })),
+            Some("Alice".to_string())
+        );
+        assert_eq!(
+            node_label(&json!({
+                "id": "49f4a659-b7b9-5489-bb78-5a56d264fd2d",
+                "metadata": { "original_node_id": "person:alice" },
+            })),
+            Some("alice".to_string())
+        );
+        // A non-UUID id is a name somebody chose; keep it.
+        assert_eq!(
+            node_label(&json!({ "id": "person:alice" })),
+            Some("person:alice".to_string())
+        );
     }
 
     fn edge_hit(text: &str) -> SearchItem {
