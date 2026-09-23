@@ -185,6 +185,15 @@ fn fact_display_text(text: &str) -> String {
 /// dropped; if none remain the result is the empty string, otherwise a
 /// `"## Related facts"` header followed by one `"- {text}"` bullet per fact,
 /// newline-joined.
+/// One `"- {text}"` bullet per nonblank fact, in rank order.
+pub(crate) fn fact_bullets(facts: &[FactResult]) -> Vec<String> {
+    facts
+        .iter()
+        .filter(|fact| !fact.text.is_empty())
+        .map(|fact| format!("- {}", fact.text))
+        .collect()
+}
+
 pub(crate) fn format_facts(facts: &[FactResult]) -> String {
     let texts: Vec<&str> = facts
         .iter()

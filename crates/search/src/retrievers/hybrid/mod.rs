@@ -13,10 +13,12 @@
 //! wired to `SearchType::HybridCompletion`; the chunk-ranking spine lives in the
 //! private submodules below and is orchestrated via [`retrieve_hybrid_chunks`].
 
+mod budget;
 mod chunks;
 mod context;
 mod entities;
 mod facts;
+mod overflow;
 mod pairs;
 mod ranking;
 mod results;
@@ -42,9 +44,10 @@ use cognee_truth_subspace::align::query_coords;
 use cognee_truth_subspace::{DEFAULT_K, load_centroids, pad_coords};
 use cognee_vector::VectorDB;
 
-use self::context::{format_hybrid_context, format_passages};
-use self::entities::{EdgeBullet, EntityResult};
-use self::facts::FactResult;
+use self::budget::{context_budget_chars, graph_budget_chars, section_cost, take_blocks_within};
+use self::context::{format_hybrid_context, format_passages, format_passages_within_budget};
+use self::entities::{EdgeBullet, EntityResult, format_entity};
+use self::facts::{FactResult, fact_bullets};
 use self::results::result_id;
 use crate::retrievers::SearchRetriever;
 use crate::types::{
@@ -378,7 +381,102 @@ impl HybridRetriever {
         .await?;
         Ok(hits.iter().filter_map(result_id).collect())
     }
+
+    /// Render the three lanes into the sectioned context the model is shown,
+    /// spending the model's input window in the order the sections earn it.
+    ///
+    /// Above the window the sections are rendered whole, exactly as before —
+    /// a hosted model with a 128k-token window has no reason to pay for this.
+    /// Below it the budget decides: the graph sections first, because they say
+    /// more per token than the prose they were built from, then whole raw
+    /// passages best-ranked first for whatever is left. See [`budget`] for the
+    /// measurements behind that order and [`format_passages_within_budget`]
+    /// for why the chunk summaries are not part of it.
+    fn assemble_context(
+        &self,
+        chunks: &[SearchItem],
+        chunk_summaries: &HashMap<String, String>,
+        entities: &[EntityResult],
+        facts: &[FactResult],
+        overhead_chars: usize,
+        overflow_summaries: &HashMap<String, String>,
+    ) -> (String, bool, Vec<String>) {
+        let unbudgeted = format_hybrid_context(
+            None,
+            &format_passages(chunks, chunk_summaries),
+            &format_entities(entities),
+            &format_facts(facts),
+        );
+
+        let budget = context_budget_chars(
+            self.llm.max_context_length(),
+            self.completion_reserve_tokens(),
+            overhead_chars,
+        );
+        if unbudgeted.len() <= budget {
+            return (unbudgeted, false, Vec::new());
+        }
+
+        let graph_budget = graph_budget_chars(budget);
+        let entities_section = take_blocks_within(
+            "## Relevant entities",
+            entities.iter().map(format_entity),
+            "\n\n",
+            graph_budget,
+        );
+        let facts_section = take_blocks_within(
+            "## Related facts",
+            fact_bullets(facts),
+            "\n",
+            graph_budget.saturating_sub(section_cost(&entities_section, SECTION_SEPARATOR)),
+        );
+
+        let graph_spend = section_cost(&entities_section, SECTION_SEPARATOR)
+            + section_cost(&facts_section, SECTION_SEPARATOR);
+        let (passages, unsummarized) = format_passages_within_budget(
+            chunks,
+            budget.saturating_sub(graph_spend),
+            overflow_summaries,
+        );
+
+        let entities_section = entities_section.unwrap_or_default();
+        let facts_section = facts_section.unwrap_or_default();
+        let context = format_hybrid_context(None, &passages, &entities_section, &facts_section);
+        debug!(
+            was = unbudgeted.len(),
+            now = context.len(),
+            budget,
+            "Hybrid context budgeted to the model's input window"
+        );
+        (context, true, unsummarized)
+    }
+
+    /// Tokens held back from the window for the answer itself.
+    ///
+    /// **This number and the adapter's own output cap are one decision, and
+    /// they must agree.** The reserve is how much of the window the prompt
+    /// leaves unspent; the output cap is how much of it the decoder is allowed
+    /// to use. Reserve less than the decoder may write and a long answer runs
+    /// off the end of the window mid-generation, which is not a truncated
+    /// answer but a hard rejection. `cognee-llm-litert`'s
+    /// `DEFAULT_MAX_OUTPUT_TOKENS` is the other half of this pair; change one
+    /// and change the other.
+    ///
+    /// 512 tokens is roughly 380 words — ample for a RAG answer — and on a
+    /// 4096-token window buying it back from a quarter-window reserve is worth
+    /// about one more whole passage of context.
+    fn completion_reserve_tokens(&self) -> u32 {
+        COMPLETION_RESERVE_TOKENS
+    }
 }
+
+/// What [`format_hybrid_context`] costs to put one more section in: the
+/// `"\n\n"` it joins them with.
+const SECTION_SEPARATOR: usize = 2;
+
+/// Window tokens kept for the answer. Paired with the LLM adapter's own
+/// output cap — see [`HybridRetriever::completion_reserve_tokens`].
+const COMPLETION_RESERVE_TOKENS: u32 = 512;
 
 /// Tag a chunk lane [`SearchItem`] with `"kind": "chunk"` and carry its paired
 /// summary onto the item's own payload so `get_completion` can reconstruct
@@ -685,32 +783,79 @@ impl SearchRetriever for HybridRetriever {
             })
             .collect();
 
-        let passages = format_passages(&chunks, &chunk_summaries);
-        let entities_section = format_entities(&entities);
-        let facts_section = format_facts(&facts);
-        let context_text =
-            format_hybrid_context(None, &passages, &entities_section, &facts_section);
+        // Whether anything was configured explicitly. When nothing was, the
+        // budgeted path is free to swap in its own wording; when the caller
+        // or the request named a prompt, that is what they get either way.
+        let configured_system_prompt = params
+            .system_prompt
+            .as_deref()
+            .or(self.system_prompt.as_deref());
+        let configured_system_prompt_path = params
+            .system_prompt_path
+            .as_deref()
+            .or(self.system_prompt_path.as_deref());
+        let default_system_prompt =
+            resolve_system_prompt(configured_system_prompt, configured_system_prompt_path)?;
 
-        let system_prompt = resolve_system_prompt(
-            params
-                .system_prompt
-                .as_deref()
-                .or(self.system_prompt.as_deref()),
-            params
-                .system_prompt_path
-                .as_deref()
-                .or(self.system_prompt_path.as_deref()),
-        )?;
+        // Everything the prompt costs before a single retrieved item is
+        // added: the system prompt, the template and the question.
+        let overhead = default_system_prompt.len()
+            + render_user_prompt(Some(DEFAULT_HYBRID_USER_PROMPT_TEMPLATE), query, "").len()
+            + session.formatted_history.len();
 
-        let user_prompt = render_user_prompt(
-            Some(
-                self.user_prompt_template
-                    .as_deref()
-                    .unwrap_or(DEFAULT_HYBRID_USER_PROMPT_TEMPLATE),
-            ),
-            query,
-            &context_text,
+        let mut overflow_summaries = overflow::known();
+        let (mut context_text, budgeted, unsummarized) = self.assemble_context(
+            &chunks,
+            &chunk_summaries,
+            &entities,
+            &facts,
+            overhead,
+            &overflow_summaries,
         );
+
+        // Passages that did not fit and have no summary yet: ask the answering
+        // model for one, then rebuild the context with them in. Only the
+        // passages this question actually pushed out are summarized, and only
+        // once each — `overflow::known()` above already carries everything
+        // earlier questions paid for.
+        if budgeted && !unsummarized.is_empty() && overflow::summarization_enabled() {
+            let to_summarize: Vec<(String, String)> = unsummarized
+                .iter()
+                .filter_map(|id| {
+                    let chunk = chunks
+                        .iter()
+                        .find(|chunk| result_id(chunk).as_deref() == Some(id))?;
+                    let text = payload_str_opt(&chunk.payload, "text")?;
+                    Some((id.clone(), text))
+                })
+                .collect();
+            if !to_summarize.is_empty() {
+                let produced =
+                    overflow::summarize(self.llm.as_ref(), &to_summarize, overflow::batch_size())
+                        .await;
+                if !produced.is_empty() {
+                    overflow_summaries.extend(produced);
+                    let (rebuilt, _, _) = self.assemble_context(
+                        &chunks,
+                        &chunk_summaries,
+                        &entities,
+                        &facts,
+                        overhead,
+                        &overflow_summaries,
+                    );
+                    context_text = rebuilt;
+                }
+            }
+        }
+        let context_text = context_text;
+
+        let system_prompt = default_system_prompt;
+        let template = self
+            .user_prompt_template
+            .as_deref()
+            .unwrap_or(DEFAULT_HYBRID_USER_PROMPT_TEMPLATE);
+
+        let user_prompt = render_user_prompt(Some(template), query, &context_text);
 
         debug!(
             context_items = completion_context.len(),
