@@ -9,6 +9,48 @@ pub const DEFAULT_RAG_USER_PROMPT_TEMPLATE: &str =
 pub const DEFAULT_GRAPH_USER_PROMPT_TEMPLATE: &str = "The question is: `{question}`\nand here is the context provided with a set of relationships from a knowledge graph separated by \\n---\\n each represented as node1 -- relation -- node2 triplet: `{context}`";
 pub const DEFAULT_HYBRID_USER_PROMPT_TEMPLATE: &str = "The question is: `{question}`\nAnswer using this sectioned context. Keep the answer brief and do not use information outside the context.\n\nContext:\n`{context}`";
 
+/// The hybrid answer prompt for a model whose window the context had to be
+/// budgeted against.
+///
+/// Identical to [`DEFAULT_HYBRID_USER_PROMPT_TEMPLATE`] but with the question
+/// repeated **after** the context, and the repetition is load-bearing on a
+/// small model. The context is the whole prompt by volume, so with the
+/// question only at the top, generation begins thousands of tokens away from
+/// anything that says what is being asked. Measured on Gemma 3 1B with ~2,500
+/// tokens of context: asked "Who is Alice" over four passages of Alice
+/// dialogue and a graph section, it described the graph section — the text
+/// nearest the answer — instead of answering the question. Restating the
+/// question immediately before the answer is the standard fix and costs a few
+/// tokens.
+///
+/// It also **drops the "Keep the answer brief" instruction**, which the
+/// default carries and which stacks with the system prompt's own "Be as brief
+/// as possible". Two brevity instructions plus a restated question is enough
+/// to talk a 1B model out of answering at all: asked "Who is Alice" over four
+/// passages of dialogue it replied, in full, `Alice`. One instruction about
+/// length is a preference; two is a competition the content loses.
+///
+/// Kept separate rather than folded into the default so the unbudgeted path
+/// stays verbatim-identical to Python's `hybrid_context_for_question.txt`: a
+/// hosted model with a large window has neither the problem nor a reason to
+/// diverge.
+pub const HYBRID_SMALL_WINDOW_USER_PROMPT_TEMPLATE: &str = "The question is: `{question}`\nAnswer using this sectioned context. Do not use information outside the context.\n\nContext:\n`{context}`\n\nNow answer this question in two or three sentences, using only the context above: `{question}`";
+
+/// The system prompt that goes with
+/// [`HYBRID_SMALL_WINDOW_USER_PROMPT_TEMPLATE`].
+///
+/// [`DEFAULT_RAG_SYSTEM_PROMPT`] is shared with every other retriever and with
+/// the cloud path, and a parity test pins it to Python's wording, so the half
+/// of the doubled brevity instruction that lives there cannot be changed
+/// where it stands. This replaces it for the budgeted path only. The
+/// difference that matters is the last sentence: told merely to be brief, the
+/// model answers `Alice`; told to answer from the context and to say when the
+/// context does not contain the answer, it has something to do other than be
+/// short.
+pub const HYBRID_SMALL_WINDOW_SYSTEM_PROMPT: &str = "Answer the question using only the provided context. Quote or paraphrase \
+     the context rather than adding what you already know. If the context does \
+     not contain the answer, say so.";
+
 pub fn resolve_system_prompt(
     system_prompt: Option<&str>,
     system_prompt_path: Option<&str>,

@@ -53,7 +53,8 @@ use crate::types::{
     SearchContext, SearchError, SearchItem, SearchOutput, SearchParams, SearchType,
 };
 use crate::utils::{
-    DEFAULT_HYBRID_USER_PROMPT_TEMPLATE, build_messages_with_history, render_user_prompt,
+    DEFAULT_HYBRID_USER_PROMPT_TEMPLATE, HYBRID_SMALL_WINDOW_SYSTEM_PROMPT,
+    HYBRID_SMALL_WINDOW_USER_PROMPT_TEMPLATE, build_messages_with_history, render_user_prompt,
     resolve_system_prompt,
 };
 
@@ -785,27 +786,42 @@ impl SearchRetriever for HybridRetriever {
             }
         }
 
-        let system_prompt = resolve_system_prompt(
-            params
-                .system_prompt
-                .as_deref()
-                .or(self.system_prompt.as_deref()),
-            params
-                .system_prompt_path
-                .as_deref()
-                .or(self.system_prompt_path.as_deref()),
-        )?;
-        let template = self
-            .user_prompt_template
+        let configured_system_prompt = params
+            .system_prompt
             .as_deref()
-            .unwrap_or(DEFAULT_HYBRID_USER_PROMPT_TEMPLATE);
+            .or(self.system_prompt.as_deref());
+        let configured_system_prompt_path = params
+            .system_prompt_path
+            .as_deref()
+            .or(self.system_prompt_path.as_deref());
+        let configured_template = self.user_prompt_template.as_deref();
+        let default_system_prompt =
+            resolve_system_prompt(configured_system_prompt, configured_system_prompt_path)?;
 
         // Everything the prompt costs before a single retrieved item is added:
         // the system prompt, the template actually in use with the question
-        // filled in, and the session history.
-        let overhead = system_prompt.len()
-            + render_user_prompt(Some(template), query, "").len()
-            + session.formatted_history.len();
+        // filled in, and the session history. Which wording is used is not
+        // settled yet -- budgeting is what selects it -- so with nothing
+        // configured both candidates are costed and the longer one wins, and
+        // the budget is never optimistic.
+        let overhead_system =
+            if configured_system_prompt.is_none() && configured_system_prompt_path.is_none() {
+                default_system_prompt
+                    .len()
+                    .max(HYBRID_SMALL_WINDOW_SYSTEM_PROMPT.len())
+            } else {
+                default_system_prompt.len()
+            };
+        let overhead_template = match configured_template {
+            Some(template) => render_user_prompt(Some(template), query, "").len(),
+            None => render_user_prompt(Some(DEFAULT_HYBRID_USER_PROMPT_TEMPLATE), query, "")
+                .len()
+                .max(
+                    render_user_prompt(Some(HYBRID_SMALL_WINDOW_USER_PROMPT_TEMPLATE), query, "")
+                        .len(),
+                ),
+        };
+        let overhead = overhead_system + overhead_template + session.formatted_history.len();
 
         let mut overflow_summaries = overflow::known(&chunks);
         let (mut context_text, budgeted, unsummarized) =
@@ -854,6 +870,25 @@ impl SearchRetriever for HybridRetriever {
                 }
             }
         }
+        let context_text = context_text;
+
+        // A context that had to be budgeted is a context long enough to lose
+        // the question in, and a model with a window that small is the one
+        // that reads two brevity instructions as an instruction to say
+        // nothing. That is the case the second pair of prompts exists for.
+        let use_small_window = budgeted
+            && configured_system_prompt.is_none()
+            && configured_system_prompt_path.is_none();
+        let system_prompt = if use_small_window {
+            HYBRID_SMALL_WINDOW_SYSTEM_PROMPT.to_string()
+        } else {
+            default_system_prompt
+        };
+        let template = configured_template.unwrap_or(if budgeted {
+            HYBRID_SMALL_WINDOW_USER_PROMPT_TEMPLATE
+        } else {
+            DEFAULT_HYBRID_USER_PROMPT_TEMPLATE
+        });
 
         let user_prompt = render_user_prompt(Some(template), query, &context_text);
 
