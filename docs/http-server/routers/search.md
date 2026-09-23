@@ -238,7 +238,7 @@ The wire-facing `WireSearchType` enum is defined locally in [`crates/http-server
 | `"FEEDBACK"` | `Feedback` (core enum only) | (no Python equivalent) | Not on the wire | The core `cognee_search::types::SearchType` has a `Feedback` variant, but `WireSearchType` **does not** include it: posting `"FEEDBACK"` deserializes as a validation error (`test_feedback_variant_is_dropped_from_wire`). Library callers reach `SearchType::Feedback` via the core enum directly. **See §6 Q1.** |
 | `"CODING_RULES"` | `CodingRules` | `CODING_RULES` | Implemented | Returns a `Vec<RulePayload>` matching the `Rule {node_set, text}` schema. Used by IDE plugins. |
 | `"CHUNKS_LEXICAL"` | `ChunksLexical` | `CHUNKS_LEXICAL` | Implemented | BM25 / lexical chunk retrieval (no embedding). Returns `Vec<ChunkPayload>`. |
-| `"HYBRID_COMPLETION"` | `HybridCompletion` | `HYBRID_COMPLETION` | Implemented | Per-query BM25 lexical pass over chunks + vector search over chunks/entities/edge-facts + 1-hop graph-neighborhood expansion around matched entities, answered via LLM completion. `search_result` is a `String`. Tuning knobs are `SearchParams` / `retriever_specific_config` keys, **not** wire fields — see the note below and configuration.md §Search. |
+| `"HYBRID_COMPLETION"` | `HybridCompletion` | `HYBRID_COMPLETION` | Implemented | Vector search over chunks/summaries/entities/edge-facts + 1-hop graph-neighborhood expansion around matched entities, answered via LLM completion. `search_result` is a `String`. Tuning knobs are `SearchParams` / `retriever_specific_config` keys, **not** wire fields — see the note below and configuration.md §Search. |
 
 Per the project guide, **9 of the 15** wire variants are covered by the E2E search-matrix test. The remaining 6 (`Cypher`, `NaturalLanguage`, `FeelingLucky`, `CodingRules`, `ChunksLexical`, and `HybridCompletion`) have unit-level coverage but no cross-SDK comparison yet (`HybridCompletion` is backed by `HybridRetriever` with unit + integration coverage, but no cross-SDK comparison yet — that is Phase 2+ scope). Cross-SDK parity tests for the missing types should land in the same PR as the HTTP server (see §5 task list).
 
@@ -323,7 +323,7 @@ migration ships for any of them — Phase 1 locked decision):
    `source_chunk_id`, so the summary-**rank** channel drops them; however the
    chunk the summary was made from can still recover the summary **text** via the
    `uuid5(chunk_id, "TextSummary")` id-derivation fallback once that chunk ranks
-   by BM25 / vector alone. Old datasets therefore see reduced ranking signal, not
+   by vector similarity alone. Old datasets therefore see reduced ranking signal, not
    missing summaries.
 
 Beyond these degradations, `HYBRID_COMPLETION` also **does not support query
@@ -339,7 +339,6 @@ rather than falling back to a per-query loop — matching the Python retriever.
 - Python `SearchResult`: [`cognee/modules/search/types/SearchResult.py`](https://github.com/topoteretes/cognee/blob/main/cognee/modules/search/types/SearchResult.py).
 - Python `SearchType`: [`cognee/modules/search/types/SearchType.py`](https://github.com/topoteretes/cognee/blob/main/cognee/modules/search/types/SearchType.py).
 - Python `HybridRetriever`: [`cognee/modules/retrieval/hybrid_retriever.py`](https://github.com/topoteretes/cognee/blob/main/cognee/modules/retrieval/hybrid_retriever.py), plus the hybrid lanes [`hybrid/pairs.py`](https://github.com/topoteretes/cognee/blob/main/cognee/modules/retrieval/hybrid/pairs.py), [`hybrid/chunks.py`](https://github.com/topoteretes/cognee/blob/main/cognee/modules/retrieval/hybrid/chunks.py), [`hybrid/results.py`](https://github.com/topoteretes/cognee/blob/main/cognee/modules/retrieval/hybrid/results.py).
-- Python BM25 lane: [`cognee/modules/retrieval/bm25_retriever.py`](https://github.com/topoteretes/cognee/blob/main/cognee/modules/retrieval/bm25_retriever.py), [`utils/stop_words.py`](https://github.com/topoteretes/cognee/blob/main/cognee/modules/retrieval/utils/stop_words.py).
 - Python global-context util (not yet ported): [`cognee/modules/retrieval/utils/global_context.py`](https://github.com/topoteretes/cognee/blob/main/cognee/modules/retrieval/utils/global_context.py).
 - Python `ErrorResponse`: [`cognee/api/DTO.py`](https://github.com/topoteretes/cognee/blob/main/cognee/api/DTO.py).
 - Rust `SearchType`: [`crates/search/src/types/search_type.rs`](../../../crates/search/src/types/search_type.rs).

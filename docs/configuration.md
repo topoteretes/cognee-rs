@@ -914,23 +914,20 @@ a populated `retriever_specific_config`. They are **not** wire fields on
 [`http-server/routers/search.md`](http-server/routers/search.md)).
 
 When a knob is unset the retriever falls back through a three-layer resolution:
-`retriever_specific_config.<knob>` → `SearchRequest.top_k` → the
-`HybridRetriever::new` constructor default. The effective defaults are:
+`retriever_specific_config.<knob>` → `SearchRequest.top_k` capped at 10 → the
+`HybridRetriever::new` constructor default (Python's `_hybrid_lane_top_k`; an
+explicit per-lane knob is never capped). The effective defaults are:
 
 | `SearchParams` field | `retriever_specific_config` JSON key | Effective Rust default | Python parity |
 |---|---|---|---|
-| `chunks_top_k` | `chunks_top_k` | `top_k`, else `15` | `chunks_top_k` (derives from `top_k`) |
-| `entities_top_k` | `entities_top_k` | `top_k`, else `15` | `entities_top_k` |
-| `facts_top_k` | `facts_top_k` | `top_k`, else `15` | `facts_top_k` |
+| `chunks_top_k` | `chunks_top_k` | `min(top_k, 10)`, else `5` | `chunks_top_k` (derives from `top_k`) |
+| `entities_top_k` | `entities_top_k` | `min(top_k, 10)`, else `5` | `entities_top_k` |
+| `facts_top_k` | `facts_top_k` | `min(top_k, 10)`, else `5` | `facts_top_k` |
 | `max_edges_per_entity` | `max_edges_per_entity` | `10` | `max_edges_per_entity=10` |
 | `text_summaries_top_k` | `text_summaries_top_k` | `None` (no fallback) | `text_summaries_top_k=None` |
 | `use_importance_weight` | `use_importance_weight` | `true` | `use_importance_weight=True` |
 | `node_name` | `node_name` | `None` | reused query node filter |
 | `node_name_filter_operator` | `node_name_filter_operator` | `"OR"` | `"OR"` / `"AND"` |
-
-(NB: the `chunks_top_k` / `entities_top_k` / `facts_top_k` code comments in
-`search_params.rs` still say `unwrap_or(10)` — that is a stale comment; the
-constructor uses `DEFAULT_TOP_K = 15`.)
 
 **Reserved (Phase 2, inert).** These keys are parsed and stored but have no
 effect in Phase 1 — passing `true` must behave identically to the default:

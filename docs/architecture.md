@@ -75,7 +75,7 @@ cognee-rs/
 
 **cognee-cognify** — Knowledge-graph extraction pipeline: classify documents, chunk text, extract entities/relationships via LLM, summarize, store to graph and vector DBs. Entry points: `cognify()` / `cognify_datasets()`; main types: `CognifyConfig`, `CognifyInput`, `CognifyResult`, `FactExtractor`, `SummaryExtractor`. Run orchestration's failure policy — which scope a finished run sweeps, which items it marks complete, and what its run record says — lives in the `rollback` module and calls into `cognee-delete`'s `RunSweeper`. Also houses the **memify** sub-module (`MemifyConfig`, `MemifyResult`, `memify()`): reads the existing graph, creates triplet embeddings, indexes them for `SearchType::TripletCompletion`.
 
-**cognee-search** — Unified search orchestration across multiple retrieval strategies. Main types: `SearchBuilder`, `SearchOrchestrator`. `SearchType` enum defines 16 search modes with corresponding retriever implementations; the newest, `HybridCompletion`, blends a per-query BM25 lexical pass, vector search over chunks/entities/edge-facts, and 1-hop graph-neighborhood expansion, then answers via LLM completion.
+**cognee-search** — Unified search orchestration across multiple retrieval strategies. Main types: `SearchBuilder`, `SearchOrchestrator`. `SearchType` enum defines 16 search modes with corresponding retriever implementations; the newest, `HybridCompletion`, blends vector search over chunks/summaries/entities/edge-facts, and 1-hop graph-neighborhood expansion, then answers via LLM completion.
 
 **cognee-session** — Session management and QA-history storage. Trait: `SessionStore`. Impls: `FsSessionStore`, `RedisSessionStore`, `SeaOrmSessionStore`.
 

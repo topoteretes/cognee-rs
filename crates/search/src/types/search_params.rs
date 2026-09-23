@@ -69,16 +69,16 @@ pub struct SearchParams {
     /// Number of initial seed nodes for neighborhood expansion.
     pub neighborhood_seed_top_k: Option<usize>,
 
-    /// (HybridCompletion) Max chunks for the BM25 lexical lane.
-    /// Target default when `None`: `.or(top_k).unwrap_or(10)`.
+    /// (HybridCompletion) Max chunks for the chunk lane.
+    /// When `None`: `top_k` capped at 10, else 5 (Python `_hybrid_lane_top_k`).
     pub chunks_top_k: Option<usize>,
 
     /// (HybridCompletion) Max entities for the graph lane.
-    /// Target default when `None`: `.or(top_k).unwrap_or(10)`.
+    /// When `None`: `top_k` capped at 10, else 5 (Python `_hybrid_lane_top_k`).
     pub entities_top_k: Option<usize>,
 
     /// (HybridCompletion) Max facts/triplets for the graph lane.
-    /// Target default when `None`: `.or(top_k).unwrap_or(10)`.
+    /// When `None`: `top_k` capped at 10, else 5 (Python `_hybrid_lane_top_k`).
     pub facts_top_k: Option<usize>,
 
     /// (HybridCompletion) Max edges expanded per entity.

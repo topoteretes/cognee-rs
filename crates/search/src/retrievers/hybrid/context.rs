@@ -20,33 +20,19 @@ use crate::types::SearchItem;
 
 /// Render the ranked chunks as the "Relevant passages" markdown section.
 ///
-/// Port of `format_passages` (`context.py:61-77`). Each chunk contributes its
-/// raw `text` (skipped when blank); when a nonempty summary is paired to the
-/// chunk (looked up by [`result_id`] in `chunk_summaries`) the entry becomes
-/// `"[Passage Summary]: {summary}\n[Raw Passage]: {text}"`, otherwise the raw
-/// text alone. Entries join with `"\n---\n"` under a `"## Relevant passages"`
-/// header; an empty result yields `""`.
-pub(crate) fn format_passages(
-    chunks: &[SearchItem],
-    chunk_summaries: &HashMap<String, String>,
-) -> String {
-    let mut texts: Vec<String> = Vec::new();
-    for chunk in chunks {
-        let Some(text) = payload(chunk).get("text").and_then(display_value) else {
-            continue;
-        };
-
-        let summary = result_id(chunk).and_then(|id| chunk_summaries.get(&id));
-        match summary {
-            Some(summary) if !summary.is_empty() => {
-                texts.push(format!(
-                    "[Passage Summary]: {summary}\n[Raw Passage]: {text}"
-                ));
-            }
-            _ => texts.push(text),
-        }
-    }
-
+/// Port of `format_passages` (`context.py:75-80`). Each chunk contributes its
+/// raw `text` (skipped when blank), joined with `"\n---\n"` under a
+/// `"## Relevant passages"` header; an empty result yields `""`.
+///
+/// The paired `TextSummary` is not rendered: Python stopped prefixing passages
+/// with `[Passage Summary]` in SDK-322 (#4611). On the LLM-free extraction path
+/// those summaries are entity-and-relation digests that repeat `## Relevant
+/// entities`, and a small model copies them into its answer verbatim.
+pub(crate) fn format_passages(chunks: &[SearchItem]) -> String {
+    let texts: Vec<String> = chunks
+        .iter()
+        .filter_map(|chunk| payload(chunk).get("text").and_then(display_value))
+        .collect();
     if texts.is_empty() {
         return String::new();
     }
@@ -71,16 +57,9 @@ pub(crate) fn format_passages(
 /// them; with no summaries available the passages take it all, exactly as
 /// before.
 ///
-/// **Not every summary is worth this.** The `TextSummary` rows cognee already
-/// writes are, on the LLM-free GLiNER path, entity-and-relation digests
-/// (`"Alice collaborates_with father William\nanimal: Caterpillar; concept:
-/// butterfly …"`), and feeding those here was measured to be actively harmful:
-/// they duplicate `## Relevant entities`, and a 1B model *copies* them —
-/// asked "Who is Alice" it answered with one digest's relation line, and in
-/// another run reproduced a whole digest verbatim, `technology: Internet` and
-/// all. What belongs here is prose: declarative sentences naming who did what.
-/// The caller decides which it has; this function only renders what it is
-/// given.
+/// The summaries come from [`super::overflow`], never from cognee's own
+/// `TextSummary` rows, for the reason [`format_passages`] gives.
+///
 /// Returns the rendered section and the ids of the chunks that overflowed
 /// with **no summary available** — what a caller would have to summarize to
 /// represent the whole retrieved set.
@@ -348,15 +327,12 @@ mod tests {
     }
 
     #[test]
-    fn format_passages_summary_vs_raw_branch() {
+    fn format_passages_renders_raw_text_only() {
+        // Python SDK-322: the paired summary is not part of the prompt.
         let chunks = vec![chunk_item("c1", "raw one"), chunk_item("c2", "raw two")];
-        let mut summaries = HashMap::new();
-        summaries.insert("c1".to_string(), "summary one".to_string());
-
-        let rendered = format_passages(&chunks, &summaries);
         assert_eq!(
-            rendered,
-            "## Relevant passages\n[Passage Summary]: summary one\n[Raw Passage]: raw one\n---\nraw two"
+            format_passages(&chunks),
+            "## Relevant passages\nraw one\n---\nraw two"
         );
     }
 
@@ -367,19 +343,8 @@ mod tests {
             score: None,
             payload: json!({ "kind": "chunk", "id": "c1" }),
         }];
-        assert_eq!(format_passages(&chunks, &HashMap::new()), "");
-        assert_eq!(format_passages(&[], &HashMap::new()), "");
-    }
-
-    #[test]
-    fn format_passages_blank_summary_falls_back_to_raw() {
-        let chunks = vec![chunk_item("c1", "raw one")];
-        let mut summaries = HashMap::new();
-        summaries.insert("c1".to_string(), String::new());
-        assert_eq!(
-            format_passages(&chunks, &summaries),
-            "## Relevant passages\nraw one"
-        );
+        assert_eq!(format_passages(&chunks), "");
+        assert_eq!(format_passages(&[]), "");
     }
 
     #[test]

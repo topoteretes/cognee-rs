@@ -21,20 +21,17 @@ pub(crate) struct ChunkSummaryPair {
     pub summary_id: Option<String>,
     pub summary_text: Option<String>,
     pub chunk: Option<SearchItem>,
-    pub bm25_rank: Option<usize>,
     pub vector_rank: Option<usize>,
     pub summary_rank: Option<usize>,
 }
 
-/// Build chunk↔summary pairs from the three lanes.
+/// Build chunk↔summary pairs from the two vector lanes.
 ///
-/// Port of `chunk_summary_pairs` (`pairs.py:15-65`): a two-phase loop over the
-/// BM25 then vector chunks (first-rank-wins per lane, with id-adoption when a
-/// text-merged id-less BM25 payload later matches a vector chunk), then a
-/// summary loop keyed strictly by `source_chunk_id` (node-filtered; hits with
-/// no `source_chunk_id` are dropped with a warning).
+/// Port of `chunk_summary_pairs` (`pairs.py:15-57`): a loop over the vector
+/// chunks (first rank wins; chunks merge by id, else by text), then a summary
+/// loop keyed strictly by `source_chunk_id` (node-filtered; hits with no
+/// `source_chunk_id` are dropped with a warning).
 pub(crate) fn chunk_summary_pairs(
-    bm25_chunks: &[SearchItem],
     vector_chunks: &[SearchItem],
     summary_hits: &[SearchItem],
     node_name: Option<&[String]>,
@@ -42,42 +39,28 @@ pub(crate) fn chunk_summary_pairs(
 ) -> Vec<ChunkSummaryPair> {
     let mut pairs: Vec<ChunkSummaryPair> = Vec::new();
 
-    for (is_bm25, chunks) in [(true, bm25_chunks), (false, vector_chunks)] {
-        for (rank, chunk) in chunks.iter().enumerate() {
-            let chunk_id = result_id(chunk);
-            let chunk_text = chunk.payload.get("text").and_then(display_value);
-            if chunk_id.is_none() && chunk_text.is_none() {
-                continue;
-            }
+    for (rank, chunk) in vector_chunks.iter().enumerate() {
+        let chunk_id = result_id(chunk);
+        let chunk_text = chunk.payload.get("text").and_then(display_value);
+        if chunk_id.is_none() && chunk_text.is_none() {
+            continue;
+        }
 
-            let index =
-                match find_chunk_summary_pair(&pairs, chunk_id.as_deref(), chunk_text.as_deref()) {
-                    Some(index) => index,
-                    None => {
-                        pairs.push(new_chunk_summary_pair(chunk_id.clone(), chunk_text.clone()));
-                        pairs.len() - 1
-                    }
-                };
-
-            let pair = &mut pairs[index];
-            if pair.chunk.is_none() {
-                set_pair_chunk(pair, chunk);
-            } else if pair.chunk_id.is_none() {
-                // Text-merged onto an id-less chunk (e.g. BM25 payload without
-                // id): adopt the id so summary hits can pair by source_chunk_id.
-                if let Some(id) = chunk_id.clone() {
-                    pair.chunk_id = Some(id);
+        let index =
+            match find_chunk_summary_pair(&pairs, chunk_id.as_deref(), chunk_text.as_deref()) {
+                Some(index) => index,
+                None => {
+                    pairs.push(new_chunk_summary_pair(chunk_id.clone(), chunk_text.clone()));
+                    pairs.len() - 1
                 }
-            }
-
-            let rank_slot = if is_bm25 {
-                &mut pair.bm25_rank
-            } else {
-                &mut pair.vector_rank
             };
-            if rank_slot.is_none() {
-                *rank_slot = Some(rank);
-            }
+
+        let pair = &mut pairs[index];
+        if pair.chunk.is_none() {
+            set_pair_chunk(pair, chunk);
+        }
+        if pair.vector_rank.is_none() {
+            pair.vector_rank = Some(rank);
         }
     }
 
@@ -243,38 +226,37 @@ mod tests {
     }
 
     #[test]
-    fn bm25_and_vector_hit_for_same_id_merge() {
+    fn vector_hit_pairs_with_its_summary_by_id() {
         let id = Uuid::new_v4().to_string();
-        let bm25 = vec![item(json!({"id": id, "text": "hello world"}))];
         let vector = vec![item(json!({"id": id, "text": "hello world"}))];
-        let pairs = chunk_summary_pairs(&bm25, &vector, &[], None, "OR");
+        let summaries = vec![item(json!({
+            "id": "s1",
+            "text": "a summary",
+            "source_chunk_id": id,
+        }))];
+        let pairs = chunk_summary_pairs(&vector, &summaries, None, "OR");
         assert_eq!(pairs.len(), 1);
-        assert_eq!(pairs[0].bm25_rank, Some(0));
         assert_eq!(pairs[0].vector_rank, Some(0));
+        assert_eq!(pairs[0].summary_rank, Some(0));
         assert_eq!(pairs[0].chunk_id.as_deref(), Some(id.as_str()));
     }
 
     #[test]
-    fn idless_bm25_hit_adopts_id_from_vector() {
-        let id = Uuid::new_v4().to_string();
-        // BM25 payload with no id, matched by text.
-        let bm25 = vec![item(json!({"text": "shared text"}))];
-        let vector = vec![item(json!({"id": id, "text": "shared text"}))];
-        let pairs = chunk_summary_pairs(&bm25, &vector, &[], None, "OR");
+    fn idless_vector_hits_merge_by_text() {
+        let vector = vec![
+            item(json!({"text": "shared text"})),
+            item(json!({"text": "shared text"})),
+        ];
+        let pairs = chunk_summary_pairs(&vector, &[], None, "OR");
         assert_eq!(pairs.len(), 1, "text-merge collapses into one pair");
-        assert_eq!(pairs[0].bm25_rank, Some(0));
         assert_eq!(pairs[0].vector_rank, Some(0));
-        assert_eq!(
-            pairs[0].chunk_id.as_deref(),
-            Some(id.as_str()),
-            "id adopted from the vector chunk"
-        );
+        assert!(pairs[0].chunk_id.is_none());
     }
 
     #[test]
     fn summary_without_source_chunk_id_is_dropped() {
         let summaries = vec![item(json!({"id": "s1", "text": "a summary"}))];
-        let pairs = chunk_summary_pairs(&[], &[], &summaries, None, "OR");
+        let pairs = chunk_summary_pairs(&[], &summaries, None, "OR");
         assert!(pairs.is_empty());
     }
 
@@ -286,7 +268,7 @@ mod tests {
             "text": "the summary",
             "source_chunk_id": chunk_id,
         }))];
-        let pairs = chunk_summary_pairs(&[], &[], &summaries, None, "OR");
+        let pairs = chunk_summary_pairs(&[], &summaries, None, "OR");
         assert_eq!(pairs.len(), 1);
         assert_eq!(pairs[0].chunk_id.as_deref(), Some(chunk_id.as_str()));
         assert_eq!(pairs[0].summary_rank, Some(0));
@@ -320,7 +302,7 @@ mod tests {
             "text": "sum",
             "source_chunk_id": chunk_id,
         }))];
-        let pairs = chunk_summary_pairs(&[], &[], &summaries, None, "OR");
+        let pairs = chunk_summary_pairs(&[], &summaries, None, "OR");
         let to_load = source_chunk_ids_to_load(&pairs);
         assert_eq!(to_load, vec![chunk_id]);
     }
@@ -334,7 +316,7 @@ mod tests {
             "text": "the summary",
             "source_chunk_id": chunk_id,
         }))];
-        let mut pairs = chunk_summary_pairs(&[], &[], &summaries, None, "OR");
+        let mut pairs = chunk_summary_pairs(&[], &summaries, None, "OR");
         assert_eq!(pairs.len(), 1);
         assert!(pairs[0].chunk.is_none(), "no chunk before backfill");
 
@@ -407,7 +389,7 @@ mod tests {
             })),
         ];
         let keep = vec!["keep".to_string()];
-        let pairs = chunk_summary_pairs(&[], &[], &summaries, Some(&keep), "OR");
+        let pairs = chunk_summary_pairs(&[], &summaries, Some(&keep), "OR");
         assert_eq!(pairs.len(), 1, "only the 'keep' summary passes the filter");
         assert_eq!(pairs[0].chunk_id.as_deref(), Some(keep_chunk.as_str()));
 
@@ -422,9 +404,9 @@ mod tests {
             "belongs_to_set": ["keep"],
         }))];
         let request = vec!["keep".to_string(), "extra".to_string()];
-        let or_pairs = chunk_summary_pairs(&[], &[], &single, Some(&request), "OR");
+        let or_pairs = chunk_summary_pairs(&[], &single, Some(&request), "OR");
         assert_eq!(or_pairs.len(), 1, "OR matches on the shared 'keep' entry");
-        let and_pairs = chunk_summary_pairs(&[], &[], &single, Some(&request), "AND");
+        let and_pairs = chunk_summary_pairs(&[], &single, Some(&request), "AND");
         assert!(
             and_pairs.is_empty(),
             "AND requires the full request to be a subset -> no pair"
@@ -433,16 +415,16 @@ mod tests {
 
     #[test]
     fn duplicate_hit_in_lane_keeps_first_rank() {
-        // BM25 lane: the same id appears twice; first-rank-wins collapses to one
-        // pair whose bm25_rank stays at the first occurrence.
+        // Vector lane: the same id appears twice; first-rank-wins collapses to
+        // one pair whose vector_rank stays at the first occurrence.
         let id = Uuid::new_v4().to_string();
-        let bm25 = vec![
+        let vector = vec![
             item(json!({"id": id, "text": "hello"})),
             item(json!({"id": id, "text": "hello"})),
         ];
-        let pairs = chunk_summary_pairs(&bm25, &[], &[], None, "OR");
+        let pairs = chunk_summary_pairs(&vector, &[], None, "OR");
         assert_eq!(pairs.len(), 1);
-        assert_eq!(pairs[0].bm25_rank, Some(0));
+        assert_eq!(pairs[0].vector_rank, Some(0));
 
         // Summary lane: two summaries share one source_chunk_id; summary_rank and
         // the recorded summary_id/text stay at the first hit.
@@ -459,7 +441,7 @@ mod tests {
                 "source_chunk_id": chunk_id,
             })),
         ];
-        let pairs = chunk_summary_pairs(&[], &[], &summaries, None, "OR");
+        let pairs = chunk_summary_pairs(&[], &summaries, None, "OR");
         assert_eq!(pairs.len(), 1);
         assert_eq!(pairs[0].summary_rank, Some(0));
         assert_eq!(pairs[0].summary_id.as_deref(), Some("first-summary"));

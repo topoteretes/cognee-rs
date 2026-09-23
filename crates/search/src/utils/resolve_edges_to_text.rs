@@ -8,8 +8,6 @@ use crate::types::SearchContext;
 /// English stop words matching Python's `DEFAULT_STOP_WORDS` from
 /// `cognee/modules/retrieval/utils/stop_words.py`.
 ///
-/// `pub(crate)` so the BM25 lexical lane (`crate::retrievers::bm25`) can reuse
-/// the single canonical 66-word list instead of duplicating it.
 pub(crate) static DEFAULT_STOP_WORDS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
     [
         "a", "an", "the", "and", "or", "but", "is", "are", "was", "were", "in", "on", "at", "to",
