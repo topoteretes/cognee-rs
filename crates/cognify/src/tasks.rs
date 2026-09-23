@@ -5142,8 +5142,17 @@ async fn index_data_points(
                 }
 
                 // 2. Context-specific keys not present on the DataPoint.
+                //    `text` is the indexed value, as Python's `IndexSchema`
+                //    writes it for every collection (`text=getattr(dp,
+                //    index_field)`). `name` lives on the outer `Entity`, not
+                //    the base, so step 1 never carries it; without `text` the
+                //    hybrid retriever has nothing to call the entity but its id.
                 point = point
                     .with_metadata("field", json!("name"))
+                    .with_metadata(
+                        "text",
+                        serde_json::Value::String(entity.entity.name.clone()),
+                    )
                     .with_metadata("dataset_id", json!(dataset_id.to_string()))
                     .with_metadata("entity_type", json!(entity.entity_type.name.clone()));
                 if let Some(uid) = user_id {
@@ -5207,8 +5216,10 @@ async fn index_data_points(
                     }
 
                     // 2. Context-specific keys not present on the DataPoint.
+                    //    `text` as for `Entity` above: Python's `IndexSchema`.
                     point = point
                         .with_metadata("field", json!("name"))
+                        .with_metadata("text", serde_json::Value::String(et.name.clone()))
                         .with_metadata("dataset_id", json!(dataset_id.to_string()));
                     if let Some(uid) = user_id {
                         point = point.with_metadata("user_id", json!(uid.to_string()));
@@ -8148,6 +8159,54 @@ mod tests {
         assert_eq!(payload.get("chunk_id"), Some(&expected));
         assert_eq!(payload.get("source_chunk_id"), Some(&expected));
         assert_eq!(payload.get("chunk_id"), payload.get("source_chunk_id"));
+    }
+
+    // Entity and EntityType vector payloads carry the indexed name as `text`,
+    // as Python's `IndexSchema` does. The hybrid retriever names an entity from
+    // this key; without it every entity rendered as its bare UUID.
+    #[tokio::test]
+    async fn entity_payloads_carry_the_indexed_name_as_text() {
+        use cognee_embedding::MockEmbeddingEngine;
+        use cognee_vector::MockVectorDB;
+
+        let engine: Arc<dyn EmbeddingEngine> = Arc::new(MockEmbeddingEngine::new(8));
+        let mock = Arc::new(MockVectorDB::new());
+        let vector: Arc<dyn VectorDB> = mock.clone();
+
+        let type_id = Uuid::new_v4();
+        let entities = vec![test_entity("Apple Inc.", type_id)];
+        let entity_id = entities[0].entity.base.id;
+
+        let embeddings = generate_embeddings(&[], &entities, &[], engine.clone())
+            .await
+            .unwrap();
+        index_data_points(
+            &[],
+            &entities,
+            &[],
+            &[],
+            &[],
+            &[],
+            Uuid::new_v4(),
+            None,
+            None,
+            engine,
+            vector,
+            &CognifyConfig::default(),
+            &embeddings,
+        )
+        .await
+        .unwrap();
+
+        let entity_payload = mock
+            .get_payload("Entity", "name", entity_id)
+            .expect("entity point must be indexed");
+        assert_eq!(entity_payload.get("text"), Some(&json!("Apple Inc.")));
+
+        let type_payload = mock
+            .get_payload("EntityType", "name", type_id)
+            .expect("entity type point must be indexed");
+        assert_eq!(type_payload.get("text"), Some(&json!("Generic")));
     }
 
     // Prints a before/after embedding-work comparison for a realistic fixture.
