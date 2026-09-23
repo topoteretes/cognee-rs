@@ -2116,8 +2116,16 @@ impl Llm for OpenAIAdapter {
     }
 
     fn max_context_length(&self) -> u32 {
-        // Context lengths for common OpenAI models
-        match self.model.as_str() {
+        // Context windows for OpenAI model families, most specific prefix first.
+        // The hybrid retriever budgets its context against this number, so an
+        // under-report trims the context of a model that could have read it
+        // all: every current family must be listed before the `gpt-4` catch-all.
+        let model = self.model.to_lowercase();
+        match model.as_str() {
+            m if m.starts_with("gpt-5") => 400_000,
+            m if m.starts_with("gpt-4.1") => 1_047_576,
+            m if m.starts_with("gpt-4o") => 128_000,
+            m if m.starts_with("o1") || m.starts_with("o3") || m.starts_with("o4") => 200_000,
             m if m.starts_with("gpt-4-turbo") => 128_000,
             m if m.starts_with("gpt-4-32k") => 32_768,
             m if m.starts_with("gpt-4") => 8_192,
@@ -4466,6 +4474,19 @@ mod tests {
 
         let adapter = OpenAIAdapter::new("gpt-3.5-turbo-16k", "key", None).unwrap();
         assert_eq!(adapter.max_context_length(), 16_384);
+
+        // Current families must not fall through to the `gpt-4` / default arms.
+        for (model, window) in [
+            ("gpt-5-mini", 400_000),
+            ("gpt-4.1-mini", 1_047_576),
+            ("gpt-4o-mini", 128_000),
+            ("gpt-4o", 128_000),
+            ("o3-mini", 200_000),
+            ("o4-mini", 200_000),
+        ] {
+            let adapter = OpenAIAdapter::new(model, "key", None).unwrap();
+            assert_eq!(adapter.max_context_length(), window, "{model}");
+        }
     }
 
     #[test]

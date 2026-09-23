@@ -47,6 +47,9 @@ use std::sync::{Mutex, OnceLock, PoisonError};
 
 use cognee_llm::{Llm, Message};
 
+use super::results::{display_value, payload, result_id};
+use crate::types::SearchItem;
+
 /// Points at a JSON object mapping chunk id → summary sentence. Unset, there
 /// are no overflow summaries and a passage that does not fit is simply left
 /// out, which is the behaviour this is being measured against.
@@ -70,13 +73,25 @@ const SUMMARY_SYSTEM_PROMPT: &str = "Summarize the passage in two short sentence
      people explicitly instead of writing he, she or they. Do not comment on \
      the passage or mention that it is a passage.";
 
-/// Summaries already produced in this process, keyed by chunk id.
+/// Most summaries the process-wide cache holds before it starts over.
+///
+/// A summary is ~300 bytes and its key the passage it summarizes (~2 kB), so
+/// this bounds the cache at roughly a megabyte.
+const CACHE_CAPACITY: usize = 512;
+
+/// Summaries already produced in this process, keyed by the passage text they
+/// summarize.
 ///
 /// The cache is what makes this affordable at all: summarizing is a second
 /// generation pass over text the model would otherwise never have read, and
 /// paying it on every question would double the cost of a demo. Paying it once
-/// per chunk means the first question about a document is slow and the rest
+/// per passage means the first question about a document is slow and the rest
 /// are not.
+///
+/// Keyed by text rather than chunk id because the cache outlives any one
+/// request, user or dataset: a summary is a pure function of its passage, so a
+/// lookup by text can only ever return a summary of text the caller already
+/// retrieved — no cross-tenant read is possible, whatever the id scheme.
 fn cache() -> &'static Mutex<HashMap<String, String>> {
     static CACHE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
@@ -89,19 +104,25 @@ pub(crate) fn summarization_enabled() -> bool {
         .unwrap_or(false)
 }
 
-/// Everything already known, from the cache and from the sideload file.
-pub(crate) fn known() -> HashMap<String, String> {
+/// Everything already known for `chunks`, by chunk id: the sideload file,
+/// then the in-process cache (which wins where both have one).
+pub(crate) fn known(chunks: &[SearchItem]) -> HashMap<String, String> {
     let mut summaries = load();
     // A poisoned lock means some other thread panicked mid-write. The cache is
     // a memo, not state anything depends on, so recovering the guard and
     // carrying on is strictly better than propagating the panic.
-    summaries.extend(
-        cache()
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .iter()
-            .map(|(id, summary)| (id.clone(), summary.clone())),
-    );
+    let cache = cache().lock().unwrap_or_else(PoisonError::into_inner);
+    for chunk in chunks {
+        let (Some(id), Some(text)) = (
+            result_id(chunk),
+            payload(chunk).get("text").and_then(display_value),
+        ) else {
+            continue;
+        };
+        if let Some(summary) = cache.get(&text) {
+            summaries.insert(id, summary.clone());
+        }
+    }
     summaries
 }
 
@@ -197,8 +218,14 @@ pub(crate) async fn summarize(
     }
 
     let mut cache = cache().lock().unwrap_or_else(PoisonError::into_inner);
-    for (id, summary) in &produced {
-        cache.insert(id.clone(), summary.clone());
+    for (id, text) in passages {
+        let Some(summary) = produced.get(id) else {
+            continue;
+        };
+        if cache.len() >= CACHE_CAPACITY {
+            cache.clear();
+        }
+        cache.insert(text.clone(), summary.clone());
     }
     produced
 }

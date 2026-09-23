@@ -1,8 +1,8 @@
 //! Fitting the hybrid context into a model's input window.
 //!
 //! The hybrid retriever emits whatever its three lanes rank highest — by
-//! default 15 passages, 15 entity blocks and 15 facts. Against a real corpus
-//! that is ~30 kB of markdown, which is fine for a hosted model with a
+//! default up to 10 passages, 10 entity blocks and 10 facts (Python's lane
+//! cap). Against a real corpus that is tens of kB of markdown, which is fine for a hosted model with a
 //! 128k-token window and impossible for an on-device one with 4096. Something
 //! has to choose what to leave out, and the only place that knows *what the
 //! items are* is here; by the time the context is a single string, every cut
@@ -20,8 +20,13 @@
 //!    the budget lasts. Nothing else in the context can support a sentence
 //!    the model did not find pre-written.
 //!
-//! The precomputed `TextSummary` per chunk looks like it belongs between the
-//! two and does not; see [`super::context::format_passages_within_budget`].
+//! The precomputed `TextSummary` per chunk is not rendered on either path;
+//! see [`super::context::format_passages`].
+//!
+//! When everything fits, none of this runs and the context is byte-identical
+//! to Python's. Every size here counts UTF-8 bytes (`str::len`), which
+//! over-counts non-ASCII text and so errs on the same safe side as
+//! [`CHARS_PER_TOKEN`].
 //!
 //! Nothing here is cut mid-item: an entity block, a fact bullet or a passage
 //! is either rendered whole or left out, so the model never has to reason
@@ -41,10 +46,10 @@ pub(crate) const CHARS_PER_TOKEN: usize = 3;
 /// Share of the input budget the graph sections may take before passages get
 /// a look in.
 ///
-/// Without a ceiling, 15 entity blocks with 10 edges each can fill a 4096-token
+/// Without a ceiling, 10 entity blocks with 10 edges each can fill a 4096-token
 /// window on their own and the answer is built from a relationship dump with no
 /// prose behind it. Two thirds leaves the graph room to be the backbone and
-/// still guarantees the summaries a third of the budget.
+/// still guarantees the passages a third of the budget.
 const GRAPH_SECTION_SHARE: f64 = 2.0 / 3.0;
 
 /// Overrides the window the budget is computed from.
