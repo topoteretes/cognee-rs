@@ -26,7 +26,7 @@ use std::collections::{HashMap, HashSet};
 use cognee_graph::{EdgeData, GraphDBTrait, GraphNode};
 use serde_json::{Map, Value};
 
-use super::facts::{EdgeLite, connection_edge_type_id};
+use super::facts::{CONTAINS_FACT_PREFIX, EdgeLite, connection_edge_type_id};
 use super::results::{
     display_value, first_display_value, payload, payload_matches_node_filter, result_id,
 };
@@ -46,6 +46,11 @@ pub(crate) struct EntityResult {
     pub description: Option<String>,
     pub entity_type: Option<String>,
     pub edges: Vec<EdgeBullet>,
+    /// `EdgeType` ids of connections the block expresses without a bullet of
+    /// their own — a chunk-mention edge repeating the description line. The
+    /// facts lane excludes them like the bullets' ids
+    /// ([`super::facts::select_facts_for_entities`]). Rust-only.
+    pub covered_edge_type_ids: Vec<String>,
 }
 
 /// A single rendered edge bullet for an entity.
@@ -122,7 +127,12 @@ pub(crate) async fn build_entities(
             .get(&entity.id)
             .map(Vec::as_slice)
             .unwrap_or(&[]);
-        entity.edges = edge_bullets_from_connections(connections, max_edges_per_entity, edge_ranks);
+        (entity.edges, entity.covered_edge_type_ids) = edge_bullets_from_connections(
+            connections,
+            max_edges_per_entity,
+            edge_ranks,
+            entity.description.as_deref(),
+        );
     }
     (entities, reachable_edge_type_ids)
 }
@@ -192,7 +202,9 @@ fn reachable_edge_type_ids(connections_by_entity_id: &Connections) -> HashSet<St
 /// Port of `_entity_from_result` (`entities.py:165-177`). `name` falls back
 /// `name` → `text` → `id`, never empty. `text` is where the indexer puts the
 /// entity's name, as Python's `IndexSchema` does; a row written before the
-/// indexer carried it resolves to its id.
+/// indexer carried it resolves to its id. `description` is read as Python
+/// reads it, but only Rust's indexer writes it (Python's `IndexSchema` row has
+/// no such key), so on a Python-written store it is always empty.
 fn entity_from_result(item: &SearchItem) -> EntityResult {
     let result_payload = payload(item);
     let entity_id = result_id(item).unwrap_or_default();
@@ -214,6 +226,7 @@ fn entity_from_result(item: &SearchItem) -> EntityResult {
         description: result_payload.get("description").and_then(display_value),
         entity_type: entity_type(result_payload),
         edges: vec![],
+        covered_edge_type_ids: vec![],
     }
 }
 
@@ -337,23 +350,43 @@ fn id_only_object(id: &str) -> Map<String, Value> {
 /// and a text-only set — a keyed bullet is never checked against the text set
 /// or vice versa. A **stable** sort by [`edge_sort_key`] preserves connection
 /// order among equal keys, then the list is truncated to `max_edges`.
+///
+/// Diverging from Python, chunk-mention bullets (see [`is_chunk_mention`]) are
+/// thinned before the cut: one repeating `description` — the line the block
+/// already prints under its header — is dropped, its `EdgeType` id returned
+/// as the second value so the facts lane does not print it a third time; and
+/// of several with the same text, one is kept. Rust cognify gives every
+/// chunk's edge to an entity the same text, so without this a much-mentioned
+/// entity's block is the same sentence once per chunk, filling the cut.
 fn edge_bullets_from_connections(
     connections: &[(NodeLite, EdgeLite, NodeLite)],
     max_edges: usize,
     edge_ranks: &HashMap<String, usize>,
-) -> Vec<EdgeBullet> {
+    description: Option<&str>,
+) -> (Vec<EdgeBullet>, Vec<String>) {
     if max_edges == 0 {
-        return vec![];
+        return (vec![], vec![]);
     }
 
     let mut edges: Vec<EdgeBullet> = Vec::new();
+    let mut covered_edge_type_ids: Vec<String> = Vec::new();
     let mut seen_keys: HashSet<(String, String, String)> = HashSet::new();
     let mut seen_texts: HashSet<String> = HashSet::new();
+    let mut seen_mentions: HashSet<String> = HashSet::new();
 
     for (source, edge, target) in connections {
         let Some(bullet) = edge_bullet(source, edge, target) else {
             continue;
         };
+        if is_chunk_mention(&bullet) {
+            if description.is_some_and(|description| mention_repeats(&bullet.text, description)) {
+                covered_edge_type_ids.extend(bullet.edge_type_id.clone());
+                continue;
+            }
+            if !seen_mentions.insert(bullet.text.clone()) {
+                continue;
+            }
+        }
 
         let dedupe_key = edge_dedupe_key(&bullet);
         match &dedupe_key {
@@ -374,7 +407,27 @@ fn edge_bullets_from_connections(
 
     edges.sort_by_key(|edge| edge_sort_key(edge, edge_ranks));
     edges.truncate(max_edges);
-    edges
+    (edges, covered_edge_type_ids)
+}
+
+/// Whether a bullet is a chunk→entity `contains` edge carrying the
+/// `"Document chunk mentions {name}: {description}"` text.
+fn is_chunk_mention(bullet: &EdgeBullet) -> bool {
+    bullet
+        .relationship
+        .as_deref()
+        .is_some_and(|relationship| relationship.trim().eq_ignore_ascii_case("contains"))
+        && bullet.text.starts_with(CONTAINS_FACT_PREFIX)
+}
+
+/// Whether a chunk-mention text's description part is `description`.
+fn mention_repeats(text: &str, description: &str) -> bool {
+    let description = description.trim();
+    !description.is_empty()
+        && text
+            .trim_end()
+            .strip_suffix(description)
+            .is_some_and(|head| head.ends_with(": "))
 }
 
 /// Sort key: type edges first, then query-ranked edges, then legacy order.
@@ -393,28 +446,27 @@ fn edge_sort_key(edge: &EdgeBullet, edge_ranks: &HashMap<String, usize>) -> (u8,
 
 /// Render a single connection triple into an [`EdgeBullet`], or `None` to drop.
 ///
-/// Port of `_edge_bullet` (`entities.py:262-281`), diverging deliberately in
-/// two ways that only affect *rendering*, not the byte-identical prompt
-/// *template* (see the module docs and `format_entities`/`format_entity`):
+/// Port of `_edge_bullet` (`entities.py:262-281`). Text prefers the top-level
+/// `edge_text` (absent from graph triples in practice, kept for fidelity),
+/// then the nested `properties.edge_text`. Both SDKs' cognify now stamp an
+/// `edge_text` on every edge they write (`ensure_default_edge_properties`,
+/// `crates/cognify/src/graph_extraction/edge_text.rs`), so what follows only
+/// runs for edges written without one — rows from before that stamping, or
+/// from a writer that skips it. For those this diverges deliberately from
+/// Python, in rendering only, not in the byte-identical prompt *template*:
 ///
 /// 1. A structural chunk→entity `contains` edge whose source carries no name
 ///    is dropped outright — see [`is_unnamed_contains_edge`].
-/// 2. The synthesized fallback (no `edge_text` on the edge) reads as a
-///    sentence, e.g. `"Alice is a person."`, via [`render_edge_sentence`],
-///    instead of the `"{source} -- {relationship} -- {target}"` triple both
-///    SDKs used to emit.
+/// 2. The synthesized fallback reads as a sentence, e.g. `"Alice is a
+///    person."`, via [`render_edge_sentence`], instead of Python's
+///    `"{source} -- {relationship} -- {target}"` triple — the same shape the
+///    write-time stamp gives the edges that have text.
 ///
-/// Text otherwise prefers the top-level `edge_text` (absent from graph
-/// triples in practice, kept for fidelity), then the nested
-/// `properties.edge_text`; if nothing is renderable the bullet is dropped.
-/// `edge_type_id` is recomputed via [`connection_edge_type_id`] (edge-text-first),
-/// never from the raw relationship name.
+/// If nothing is renderable the bullet is dropped. `edge_type_id` is
+/// recomputed via [`connection_edge_type_id`] (edge-text-first), never from
+/// the raw relationship name.
 fn edge_bullet(source: &NodeLite, edge: &EdgeLite, target: &NodeLite) -> Option<EdgeBullet> {
     let relationship = edge.relationship_name.as_ref().and_then(display_value);
-    if is_unnamed_contains_edge(source, relationship.as_deref()) {
-        return None;
-    }
-
     let source_label = node_label(source);
     let target_label = node_label(target);
 
@@ -423,6 +475,9 @@ fn edge_bullet(source: &NodeLite, edge: &EdgeLite, target: &NodeLite) -> Option<
         .as_ref()
         .and_then(display_value)
         .or_else(|| nested_edge_text(edge));
+    if text.is_none() && is_unnamed_contains_edge(source, relationship.as_deref()) {
+        return None;
+    }
     if text.is_none()
         && let (Some(source_label), Some(relationship), Some(target_label)) =
             (&source_label, &relationship, &target_label)
@@ -447,29 +502,29 @@ fn edge_bullet(source: &NodeLite, edge: &EdgeLite, target: &NodeLite) -> Option<
 }
 
 /// Whether `(source, relationship)` is a structural chunk→entity `contains`
-/// edge whose source carries no name — pure noise for the prompt.
+/// edge whose source carries no name. [`edge_bullet`] drops such an edge
+/// only when it also has no `edge_text` — noise for the prompt.
 ///
 /// `DocumentChunk::relationships()` (`crates/cognify/src/graph_extraction/extractable.rs`)
-/// emits a `contains` edge from every chunk to every entity it mentions, and
-/// `get_graph_from_model` (`extractable.rs:184-207`) stamps it with only an
-/// `updated_at` property — no `edge_text`. `DocumentChunk` has no `name`
-/// field (`crates/models/src/document_chunk.rs`), so [`node_label`] falls
-/// back to the chunk's id, and the synthesized bullet used to assert that one
-/// UUID "contains" an entity:
-/// `ecb1240e-1b45-54cf-bdca-0cfca21971e9 -- contains -- Alice`. The chunk's
-/// full text already sits in `## Relevant passages`, directly above this
-/// section, so the bullet is zero-information noise even rendered well —
-/// drop it rather than merely relabeling it.
+/// emits a `contains` edge from every chunk to every entity it mentions.
+/// `DocumentChunk` has no `name` field (`crates/models/src/document_chunk.rs`),
+/// so [`node_label`] falls back to the chunk's id. Before cognify stamped
+/// `edge_text` on these edges, the synthesized bullet asserted that one UUID
+/// "contains" an entity: `ecb1240e-1b45-54cf-bdca-0cfca21971e9 contains
+/// Alice.` Relabelling the chunk would not rescue it either — a chunk preview
+/// followed by "contains Alice" is not a fact the model can answer from — so
+/// the bullet is dropped.
 ///
-/// A prior guard (cognee-rs#245, commit `bd67c69`) took the relabeling
-/// approach instead: it made [`node_label`] itself refuse any bare-UUID
-/// label, network-wide. That guard was reverted wholesale two commits later
-/// (`46ac788`) — not because it missed this path, but because it was bundled
-/// with an unrelated `entity_type` header change the team wanted to revert
-/// for Python parity, and reverting the commit took the UUID guard with it.
-/// This time the fix is scoped to exactly the noisy case (`contains` +
-/// unnamed source) instead of a blanket node-label rule, so it cannot again
-/// be an unintended casualty of an unrelated revert.
+/// An edge that *does* carry `edge_text` is kept. Python writes
+/// `"Document chunk mentions {name}: {description}"` there, and so does Rust
+/// cognify now; for a Python-written store (the cross-read case) that line
+/// may be the only one carrying the entity's description.
+///
+/// cognee-rs#245 first made [`node_label`] refuse any bare-UUID label, then
+/// deliberately removed that guard before merging, keeping UUID-labelled
+/// bullets on the grounds that Python rendered them the same way. It does
+/// not: Python stamps an `edge_text` on every edge at write time, so its
+/// `contains` bullets carry a sentence, never a chunk's UUID.
 fn is_unnamed_contains_edge(source: &NodeLite, relationship: Option<&str>) -> bool {
     let is_contains = relationship
         .is_some_and(|relationship| relationship.trim().eq_ignore_ascii_case("contains"));
@@ -479,14 +534,15 @@ fn is_unnamed_contains_edge(source: &NodeLite, relationship: Option<&str>) -> bo
 /// Render a synthesized `(source, relationship, target)` triple as a
 /// period-terminated sentence, e.g. `"Alice is a person."`.
 ///
-/// Applies the sentence-rendering convention already used for chunk-contains
-/// facts ([`super::facts::CONTAINS_FACT_PREFIX`], a port of Python's
-/// `facts.py:10`) to the entity-edge path, where it was previously unused —
-/// the dash-triple fallback (`"{source} -- {relationship} -- {target}"`) is
-/// harder for a small on-device model to read than prose. The relationship
-/// label is normalized the same way [`is_type_relationship`] already does
-/// (lowercase, `_`/`-` → space, whitespace-collapsed); labels are rendered
-/// as-is.
+/// The read-time counterpart of the sentence cognify stamps as `edge_text`
+/// at write time (Python `_build_fallback_edge_text`,
+/// `prepare_edges_for_storage.py:85-98`), used for edges written without
+/// one — prose is easier for a small on-device model to read than the
+/// `"{source} -- {relationship} -- {target}"` triple Python renders here.
+/// The relationship label is normalized the same way [`is_type_relationship`]
+/// does (lowercase, `_`/`-` → space, whitespace-collapsed); Python's
+/// write-time sentence only maps `_` and keeps case, which is identical for
+/// cognify's snake_case names. Labels are rendered as-is.
 fn render_edge_sentence(source: &str, relationship: &str, target: &str) -> String {
     let relationship_words = relationship
         .to_lowercase()
@@ -511,15 +567,19 @@ fn edge_dedupe_key(edge: &EdgeBullet) -> Option<(String, String, String)> {
 
 /// Whether a bullet is an `is a` / type edge.
 ///
-/// Port of `_is_type_edge` (`entities.py:300-304`). The relationship is
-/// normalized (lowercase, `_`/`-` → space, trimmed) and compared to `"is a"`;
-/// otherwise the bullet text (lowercased and padded) is scanned for `" is a "`.
+/// Port of `_is_type_edge` (`entities.py:300-304`), minus its text fallback:
+/// only the relationship decides, via [`is_type_relationship`] — the same
+/// test [`connection_in_scope`] applies. Python also pins any bullet whose
+/// text contains `" is a "`. Every real type edge is already caught by its
+/// `is_a` relationship (`Entity::relationships`, the ontology expansion), so
+/// the text test only ever adds false positives: `is_a_member_of` edges,
+/// whose stamped sentence reads "Alice is a member of Club.", or
+/// LLM-written text such as "Acme is a subsidiary of Globex." on a
+/// `subsidiary_of` edge. Pinned ahead of the query-ranked bullets, those
+/// crowd them out of the `max_edges` cut on exactly the hub entities most
+/// often retrieved.
 fn is_type_edge(edge: &EdgeBullet) -> bool {
-    if is_type_relationship(edge.relationship.as_deref()) {
-        return true;
-    }
-    let padded = format!(" {} ", edge.text.to_lowercase());
-    padded.contains(" is a ")
+    is_type_relationship(edge.relationship.as_deref())
 }
 
 /// Whether a relationship label names an `is a` / type edge.
@@ -1210,8 +1270,9 @@ mod tests {
     #[tokio::test]
     async fn a_chunk_contains_edge_with_an_unnamed_source_is_dropped() {
         // The real-world shape: a DocumentChunk node (no `name`, only `id` and
-        // `text`) structurally `contains` an entity, with no edge_text — the
-        // bullet would otherwise read "<chunk-uuid> -- contains -- Alice".
+        // `text`) structurally `contains` an entity, with no edge_text (a row
+        // written before cognify stamped one) — the bullet would otherwise
+        // read "<chunk-uuid> contains Alice.".
         let graph = MockGraphDB::new();
         add_node(&graph, "alice-id", "Alice").await;
         graph
@@ -1234,6 +1295,109 @@ mod tests {
         let (entities, _) = build_entities(&graph, &hits, 5, &HashMap::new(), None, "OR").await;
         assert_eq!(entities[0].name, "Alice");
         assert!(entities[0].edges.is_empty(), "{:?}", entities[0].edges);
+    }
+
+    #[tokio::test]
+    async fn a_chunk_contains_edge_with_edge_text_is_kept() {
+        // The Python-written shape (and Rust's since cognify stamps
+        // edge_text): the unnamed chunk source is irrelevant once the edge
+        // carries text, which here is the only line holding the description.
+        let mentions = "Document chunk mentions Alice: A curious girl.";
+        let graph = MockGraphDB::new();
+        add_node(&graph, "alice-id", "Alice").await;
+        graph
+            .add_node_raw(json!({
+                "id": "ecb1240e-1b45-54cf-bdca-0cfca21971e9",
+                "type": "DocumentChunk",
+                "text": "Alice sat by the March Hare.",
+            }))
+            .await
+            .unwrap();
+        add_edge(
+            &graph,
+            "ecb1240e-1b45-54cf-bdca-0cfca21971e9",
+            "alice-id",
+            "contains",
+            Some(mentions),
+        )
+        .await;
+        let hits = vec![entity_hit(json!({"id": "alice-id", "name": "Alice"}))];
+        let (entities, _) = build_entities(&graph, &hits, 5, &HashMap::new(), None, "OR").await;
+        let bullets: Vec<&str> = entities[0].edges.iter().map(|e| e.text.as_str()).collect();
+        assert_eq!(bullets, [mentions]);
+    }
+
+    /// Three chunks, each `contains` Alice under the same mention text — the
+    /// shape Rust cognify writes for a much-mentioned entity.
+    async fn graph_with_repeated_mentions(mention: &str) -> MockGraphDB {
+        let graph = MockGraphDB::new();
+        add_node(&graph, "alice-id", "Alice").await;
+        add_node(&graph, "acme-id", "Acme").await;
+        for chunk in ["chunk-1", "chunk-2", "chunk-3"] {
+            graph
+                .add_node_raw(json!({"id": chunk, "type": "DocumentChunk"}))
+                .await
+                .unwrap();
+            add_edge(&graph, chunk, "alice-id", "contains", Some(mention)).await;
+        }
+        add_edge(
+            &graph,
+            "alice-id",
+            "acme-id",
+            "works_at",
+            Some("Alice works at Acme."),
+        )
+        .await;
+        graph
+    }
+
+    #[tokio::test]
+    async fn repeated_chunk_mentions_collapse_to_one_bullet() {
+        let mention = "Document chunk mentions Alice: A curious girl.";
+        let graph = graph_with_repeated_mentions(mention).await;
+        let hits = vec![entity_hit(json!({"id": "alice-id", "name": "Alice"}))];
+
+        let (entities, _) = build_entities(&graph, &hits, 5, &HashMap::new(), None, "OR").await;
+        let bullets: Vec<&str> = entities[0].edges.iter().map(|e| e.text.as_str()).collect();
+        assert_eq!(bullets, [mention, "Alice works at Acme."]);
+        assert!(entities[0].covered_edge_type_ids.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_chunk_mention_repeating_the_description_line_is_covered_not_shown() {
+        let mention = "Document chunk mentions Alice: A curious girl.";
+        let graph = graph_with_repeated_mentions(mention).await;
+        let hits = vec![entity_hit(json!({
+            "id": "alice-id",
+            "name": "Alice",
+            "description": "A curious girl.",
+        }))];
+
+        let (entities, _) = build_entities(&graph, &hits, 5, &HashMap::new(), None, "OR").await;
+        let bullets: Vec<&str> = entities[0].edges.iter().map(|e| e.text.as_str()).collect();
+        assert_eq!(bullets, ["Alice works at Acme."]);
+        // Its id is reported once per dropped edge; the facts lane only needs it
+        // in the set, so repeats are harmless.
+        let mention_id = cognee_models::EdgeType::deterministic_id(mention).to_string();
+        assert!(
+            entities[0]
+                .covered_edge_type_ids
+                .iter()
+                .all(|id| *id == mention_id)
+        );
+        assert!(!entities[0].covered_edge_type_ids.is_empty());
+        assert_eq!(
+            format_entity(&entities[0]),
+            "### Alice\nA curious girl.\n- Alice works at Acme."
+        );
+    }
+
+    #[test]
+    fn mention_repeats_compares_the_whole_description_after_the_colon() {
+        let text = "Document chunk mentions Alice: A curious girl.";
+        assert!(mention_repeats(text, " A curious girl. "));
+        assert!(!mention_repeats(text, "girl."));
+        assert!(!mention_repeats(text, "   "));
     }
 
     #[tokio::test]
@@ -1273,6 +1437,7 @@ mod tests {
                 name: "Alice".to_string(),
                 description: None,
                 entity_type: None,
+                covered_edge_type_ids: vec![],
                 edges: vec![],
             }]
         );
@@ -1322,9 +1487,14 @@ mod tests {
     }
 
     #[test]
-    fn is_type_edge_detects_text_and_dash_relationship() {
-        // (a) No relationship, but the text reads " is a " once padded.
-        assert!(is_type_edge(&type_edge_bullet(None, "Alice is a person")));
+    fn is_type_edge_is_decided_by_the_relationship_alone() {
+        // (a) Text reading " is a " no longer makes a type edge — with no
+        // relationship, or with a non-type one (Python pins both).
+        assert!(!is_type_edge(&type_edge_bullet(None, "Alice is a person")));
+        assert!(!is_type_edge(&type_edge_bullet(
+            Some("subsidiary_of"),
+            "Acme is a subsidiary of Globex."
+        )));
         // (b) A dash/upper "IS-A" relationship normalizes to "is a".
         assert!(is_type_edge(&type_edge_bullet(Some("IS-A"), "")));
         // (c) A non-type relationship whose text lacks " is a ".
@@ -1332,11 +1502,37 @@ mod tests {
             Some("plays"),
             "Alice plays tennis"
         )));
-        // (d) "is about" must NOT match " is a " (trailing-space guard).
+        // (d) An `is_a_*` relationship is not `is_a`.
         assert!(!is_type_edge(&type_edge_bullet(
-            None,
-            "this is about a thing"
+            Some("is_a_member_of"),
+            "Alice is a member of Club."
         )));
+    }
+
+    #[tokio::test]
+    async fn an_is_a_member_of_edge_does_not_evict_a_query_ranked_edge() {
+        // With no edge_text the fallback renders "Alice is a member of Club.",
+        // which reads " is a ". It must stay unpinned, below the ranked edge.
+        let ranked_bullet = "Alice works at Acme.";
+        let graph = MockGraphDB::new();
+        add_node(&graph, "alice-id", "Alice").await;
+        add_node(&graph, "club-id", "Club").await;
+        add_node(&graph, "acme-id", "Acme").await;
+        add_edge(&graph, "alice-id", "club-id", "is_a_member_of", None).await;
+        add_edge(
+            &graph,
+            "alice-id",
+            "acme-id",
+            "works_at",
+            Some(ranked_bullet),
+        )
+        .await;
+        let edge_ranks = edge_rank_by_id(&[edge_hit(ranked_bullet)]);
+        let hits = vec![entity_hit(json!({"id": "alice-id", "name": "Alice"}))];
+
+        let (entities, _) = build_entities(&graph, &hits, 1, &edge_ranks, None, "OR").await;
+        let bullets: Vec<&str> = entities[0].edges.iter().map(|e| e.text.as_str()).collect();
+        assert_eq!(bullets, [ranked_bullet]);
     }
 
     #[tokio::test]
@@ -1384,6 +1580,7 @@ mod tests {
             name: "Entity".to_string(),
             description: None,
             entity_type: None,
+            covered_edge_type_ids: vec![],
             edges: vec![],
         };
         assert_eq!(
@@ -1397,6 +1594,7 @@ mod tests {
             name: "lisbon office logistics intelligence project".to_string(),
             description: None,
             entity_type: Some("IndexSchema".to_string()),
+            covered_edge_type_ids: vec![],
             edges: vec![],
         };
         assert_eq!(
@@ -1410,6 +1608,7 @@ mod tests {
             name: "Alice".to_string(),
             description: Some("An engineer.".to_string()),
             entity_type: Some("Person".to_string()),
+            covered_edge_type_ids: vec![],
             edges: vec![EdgeBullet {
                 text: "Alice works at Acme.".to_string(),
                 source: Some("Alice".to_string()),
@@ -1431,6 +1630,7 @@ mod tests {
             name: "   ".to_string(),
             description: None,
             entity_type: None,
+            covered_edge_type_ids: vec![],
             edges: vec![],
         };
         assert_eq!(format_entities(&[blank]), "");

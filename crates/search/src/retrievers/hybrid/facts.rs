@@ -25,10 +25,13 @@ use crate::utils::edge_type_point_id;
 /// standalone fact.
 pub(crate) const MIN_FACT_WORD_COUNT: usize = 3;
 
-/// Fixed template used for chunk→entity "contains" edges in
-/// `expand_with_nodes_and_edges`.
+/// Fixed prefix of the `edge_text` on a chunk→entity "contains" edge whose
+/// entity has a description: `"Document chunk mentions {name}: {description}"`.
 ///
-/// Port of `facts.py:10`. Exact literal including the trailing space.
+/// Port of `facts.py:10`. Exact literal including the trailing space. Python
+/// writes that text in `expand_with_nodes_and_edges` (`_link_chunk_to_entity`);
+/// Rust writes it in cognify's `add_data_points`, through
+/// `crates/cognify/src/graph_extraction/edge_text.rs`.
 pub(crate) const CONTAINS_FACT_PREFIX: &str = "Document chunk mentions ";
 
 /// Intermediate edge shape shared between the fact and entity lanes.
@@ -146,8 +149,13 @@ pub(crate) fn select_facts_for_entities(
     }
     let bullet_ids: HashSet<String> = entities
         .iter()
-        .flat_map(|entity| entity.edges.iter())
-        .filter_map(|edge| edge.edge_type_id.clone())
+        .flat_map(|entity| {
+            entity
+                .edges
+                .iter()
+                .filter_map(|edge| edge.edge_type_id.clone())
+                .chain(entity.covered_edge_type_ids.iter().cloned())
+        })
         .collect();
     if node_scoped {
         let candidates: Vec<SearchItem> = edge_hits
@@ -292,6 +300,7 @@ mod tests {
             name: "Alice".to_string(),
             description: None,
             entity_type: None,
+            covered_edge_type_ids: vec![],
             edges: vec![super::super::entities::EdgeBullet {
                 text: "bullet".to_string(),
                 source: None,
@@ -344,6 +353,15 @@ mod tests {
         let facts = select_facts_for_entities(&[hit(text)], &[entity], &HashSet::new(), 5, false);
         assert!(facts.is_empty());
         assert!(select_facts_for_entities(&[hit(text)], &[], &HashSet::new(), 0, false).is_empty());
+    }
+
+    #[test]
+    fn a_fact_the_entity_block_covers_without_a_bullet_is_not_repeated() {
+        let text = "Document chunk mentions Alice: A curious girl.";
+        let mut entity = entity_with_bullet("unrelated");
+        entity.covered_edge_type_ids = vec![edge_id(text)];
+        let facts = select_facts_for_entities(&[hit(text)], &[entity], &HashSet::new(), 5, false);
+        assert!(facts.is_empty(), "{facts:?}");
     }
 
     #[test]

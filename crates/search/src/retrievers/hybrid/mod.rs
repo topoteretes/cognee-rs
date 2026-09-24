@@ -628,6 +628,8 @@ fn item_to_entity(item: &SearchItem) -> EntityResult {
         description: payload_str_opt(payload, "description"),
         entity_type: payload_str_opt(payload, "type"),
         edges,
+        // Only fact selection reads it, and that runs before serialization.
+        covered_edge_type_ids: vec![],
     }
 }
 
