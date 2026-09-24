@@ -48,9 +48,23 @@ impl EvokoaVectorAdapter {
     }
 
     fn vector_literal(vector: &[f32]) -> String {
+        // pgContext 0.3.0 treats small-but-nonzero vectors as zero during
+        // cosine normalization (observed at squared norm 5.97e-10). Scaling to
+        // unit length is cosine-invariant and avoids that numeric threshold.
+        let norm = vector
+            .iter()
+            .map(|value| f64::from(*value).powi(2))
+            .sum::<f64>()
+            .sqrt();
         let body = vector
             .iter()
-            .map(f32::to_string)
+            .map(|value| {
+                if norm > 0.0 {
+                    (f64::from(*value) / norm).to_string()
+                } else {
+                    value.to_string()
+                }
+            })
             .collect::<Vec<_>>()
             .join(",");
         format!("[{body}]")

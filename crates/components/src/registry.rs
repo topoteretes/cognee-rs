@@ -70,6 +70,8 @@ impl ComponentRegistry {
         reg.register_vector(Arc::new(crate::builtins::vector::LanceDbFactory));
         #[cfg(feature = "pgvector")]
         reg.register_vector(Arc::new(crate::builtins::vector::PgVectorFactory));
+        #[cfg(feature = "evokoa")]
+        reg.register_vector(Arc::new(crate::builtins::vector::EvokoaVectorFactory));
         #[cfg(feature = "testing")]
         reg.register_vector(Arc::new(crate::builtins::vector::MockVectorFactory));
 
@@ -92,6 +94,8 @@ impl ComponentRegistry {
                 "postgresql",
             )));
         }
+        #[cfg(feature = "evokoa")]
+        reg.register_graph(Arc::new(crate::builtins::graph::EvokoaGraphFactory));
         #[cfg(feature = "testing")]
         reg.register_graph(Arc::new(crate::builtins::graph::MockGraphFactory));
 

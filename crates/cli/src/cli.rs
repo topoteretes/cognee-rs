@@ -161,6 +161,11 @@ pub struct BenchArgs {
     /// the graph is non-empty.
     #[arg(long = "min-graph-nodes", default_value_t = 0)]
     pub min_graph_nodes: u64,
+
+    /// Keep the populated dataset after the benchmark so follow-up CLI search
+    /// commands can inspect it. The delete phase is reported as skipped.
+    #[arg(long = "keep-data", default_value_t = false)]
+    pub keep_data: bool,
 }
 
 /// Arguments for `cognee-cli export` — write the graph as a COGX archive.

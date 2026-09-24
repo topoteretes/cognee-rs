@@ -354,12 +354,22 @@ pub fn run(args: BenchArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
     // so the bench would run against (and clobber) the real configured backends
     // and fail when the DB lacks `?mode=rwc`. Redirect every on-disk backend
     // explicitly so each invocation is fully self-contained.
-    cm.config()
-        .set_relational_db_url(&format!("sqlite://{root_str}/cognee.db?mode=rwc"));
-    cm.config()
-        .set_graph_file_path(&format!("{root_str}/system/graph.ladybug"));
-    cm.config()
-        .set_vector_db_url(&format!("{root_str}/system/vectors"));
+    let uses_evokoa = cm
+        .settings()
+        .graph_database_provider
+        .eq_ignore_ascii_case("evokoa")
+        || cm
+            .settings()
+            .vector_db_provider
+            .eq_ignore_ascii_case("evokoa");
+    if !uses_evokoa {
+        cm.config()
+            .set_relational_db_url(&format!("sqlite://{root_str}/cognee.db?mode=rwc"));
+        cm.config()
+            .set_graph_file_path(&format!("{root_str}/system/graph.ladybug"));
+        cm.config()
+            .set_vector_db_url(&format!("{root_str}/system/vectors"));
+    }
 
     let owner_id = Uuid::parse_str(&cm.settings().default_user_id).map_err(|error| {
         CliError::Validation(format!(
@@ -388,6 +398,7 @@ pub fn run(args: BenchArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
             &memories,
             args.profile_dir.as_deref(),
             args.min_graph_nodes,
+            args.keep_data,
             BenchConfig {
                 llm_model,
                 embedding_model,
@@ -424,6 +435,7 @@ async fn run_phases(
     memories: &[Memory],
     profile_dir: Option<&str>,
     min_graph_nodes: u64,
+    keep_data: bool,
     config: BenchConfig,
 ) -> BenchResult {
     let n = memories.len();
@@ -563,24 +575,31 @@ async fn run_phases(
     // ── Dataset delete (populated) ───────────────────────────────────────
     // Runs last, so it measures deletion with nodes, edges and vectors all
     // present — the meaningful case, and what Python's Phase 4 measures.
-    eprintln!("Phase 4: Deleting the populated dataset...");
-    let (t_dataset_delete, dataset_delete_res) = timed_phase(
-        profile_dir,
-        "dataset_delete",
-        phase_dataset_delete(cm, owner_id, dataset_name),
-    )
-    .await;
-    if let Err(msg) = dataset_delete_res {
-        warn!("Dataset delete FAILED: {msg}");
-        status.dataset_delete = format!("failed: {msg}");
-    }
+    let t_dataset_delete = if keep_data {
+        eprintln!("Phase 4: Keeping populated dataset for follow-up searches.");
+        status.dataset_delete = "skipped (--keep-data)".to_string();
+        0.0
+    } else {
+        eprintln!("Phase 4: Deleting the populated dataset...");
+        let (elapsed, dataset_delete_res) = timed_phase(
+            profile_dir,
+            "dataset_delete",
+            phase_dataset_delete(cm, owner_id, dataset_name),
+        )
+        .await;
+        if let Err(msg) = dataset_delete_res {
+            warn!("Dataset delete FAILED: {msg}");
+            status.dataset_delete = format!("failed: {msg}");
+        }
+        elapsed
+    };
 
     let success = status.prune == PHASE_OK
         && status.db_setup == PHASE_OK
         && status.add == PHASE_OK
         && status.cognify == PHASE_OK
         && status.search == PHASE_OK
-        && status.dataset_delete == PHASE_OK;
+        && (status.dataset_delete == PHASE_OK || keep_data);
 
     BenchResult {
         memories_count: n,
