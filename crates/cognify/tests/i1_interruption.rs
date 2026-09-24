@@ -542,7 +542,10 @@ impl I1Audit {
             }
         }
 
-        // Edges: (source, target, relationship) ↔ ownership edge row.
+        // Edges: (source, target, relationship) ↔ ownership edge row. A
+        // `contains` row keys `relationship_name` on the edge's text and keeps
+        // the relationship in `label` (Python `upsert_edges`), so `label`
+        // wins where set.
         let owned_edges: HashSet<(String, String, String)> = self
             .ledger_edges
             .iter()
@@ -551,7 +554,9 @@ impl I1Audit {
                 (
                     row.source_node_id.to_string(),
                     row.destination_node_id.to_string(),
-                    row.relationship_name.clone(),
+                    row.label
+                        .clone()
+                        .unwrap_or_else(|| row.relationship_name.clone()),
                 )
             })
             .collect();

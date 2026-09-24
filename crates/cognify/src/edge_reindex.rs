@@ -65,25 +65,29 @@
 //!
 //! "Every edge type the graph implies but the collection lacks" is what this
 //! measures, and a killed run is only one way to get there. Cognify builds its
-//! `EdgeType` rows from `input.edges` alone (`tasks.rs`, the `edge_type_counts`
-//! loop). Two other edge families reach the graph and are never in that set:
+//! `EdgeType` rows from the edges `add_data_points` writes — the extracted
+//! `input.edges` and the structural edges `get_graph_from_model` discovers
+//! (`is_part_of`, `contains`, `made_from`, `is_a`), both stamped with Python's
+//! default `edge_text` sentence first (`graph_extraction::edge_text`). Three
+//! families reach the graph without a row:
 //!
-//! - **Structural edges** — `get_graph_from_model` discovers `is_part_of`,
-//!   `contains`, `made_from` and friends, and `add_data_points` writes them with
-//!   a separate `graph_db.add_edges(&structural_edges)` *after* the edge-type
-//!   counting. They carry no `edge_text`, so their retrieval text is the bare
-//!   relation name.
+//! - **Edges written before that stamping.** Structural edges then carried no
+//!   `edge_text` and got no row, so their retrieval text is the bare relation
+//!   name. Re-cognifying rewrites them with text; until then they are the
+//!   same small, roughly constant floor of one text per relation name.
+//! - **Edges with an endpoint outside the batch.** The stamp needs both
+//!   endpoints' labels and leaves such an edge bare (its text is the relation
+//!   name). A structural one gets no row.
 //! - **DLT foreign-key edges** — `extract_dlt_fk_edges` runs after
 //!   `add_data_points` entirely and writes its own edges with an `edge_text`.
 //!
-//! So a graph that never crashed still reports a nonzero orphan count: a small,
-//! roughly constant floor of one text per structural/DLT relation name. **Do not
-//! read the count as crash damage.** Crash orphans are LLM-extracted edge
-//! descriptions — long, sentence-shaped texts, one per described relation — and
+//! So a graph that never crashed can still report a nonzero orphan count.
+//! **Do not read the count as crash damage.** Crash orphans are
+//! sentence-shaped texts — LLM edge descriptions and stamped defaults — and
 //! they sit on top of that floor.
 //!
-//! Applying therefore also writes rows for the structural families, which makes
-//! those edges take a real vector distance in the retrieval lanes instead of the
+//! Applying therefore also writes rows for those families, which makes those
+//! edges take a real vector distance in the retrieval lanes instead of the
 //! `triplet_distance_penalty` they take today. That is a ranking change, not
 //! only a repair, and it is deliberate: it is exactly what Python's
 //! `index_graph_edges(edges_data=None)` does, since it too counts whatever

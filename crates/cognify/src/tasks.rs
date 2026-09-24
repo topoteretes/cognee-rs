@@ -1311,7 +1311,13 @@ pub async fn extract_graph_from_data(
     );
 
     // Final deduplication pass (in-memory only after DB filtering)
-    let dedup_result = deduplicate_nodes_and_edges(nodes, edges);
+    let mut dedup_result = deduplicate_nodes_and_edges(nodes, edges);
+    // Python fills a blank `edge_text` in `add_data_points`; Rust writes these
+    // edges here, so it stamps them here — before the ledger and graph writes
+    // below, which must both see the text the `EdgeType` row is keyed on.
+    // Edges an earlier run already wrote (`claimed_existing_edges`) keep the
+    // text they were written with.
+    stamp_extracted_edge_text(&mut dedup_result);
 
     // Build chunk_id → entity IDs mapping from the deduplicated nodes.
     let chunk_entity_map = chunk_entity_links(&dedup_result.unique_nodes, &producers);
@@ -2210,7 +2216,10 @@ pub async fn add_data_points(
         extractable_items.push(&pair.entity_type as &dyn crate::graph_extraction::GraphExtractable);
     }
 
-    let structural_edges = crate::graph_extraction::get_graph_from_model(&extractable_items);
+    let mut structural_edges = crate::graph_extraction::get_graph_from_model(&extractable_items);
+    // Before the ledger write, so the ownership rows carry the same `edge_text`
+    // the graph edges and their `EdgeType` rows are keyed on.
+    stamp_structural_edge_text(&mut structural_edges, input);
 
     upsert_provenance(
         db,
@@ -2307,9 +2316,25 @@ pub async fn add_data_points(
     // else dropped. `generate_edge_id(edge_id=text)` then derives the ID from
     // that text. We mirror that here so EdgeType UUIDs and the
     // EdgeType_relationship_name vector inputs match Python (B2.5).
+    //
+    // Python counts every edge `add_data_points` writes, structural ones
+    // included (`add_data_points.py:346` → `create_edge_type_datapoints`), so
+    // the structural edges' stamped sentences get rows here too — which is
+    // what lets a `"Document chunk mentions …"` edge be query-ranked and
+    // surface as a fact.
     let mut edge_type_counts: HashMap<String, i32> = HashMap::new();
-    for edge_pair in &input.edges {
-        let edge_text = edge_retrieval_text(edge_pair);
+    let structural_texts = structural_edges.iter().map(|(_, _, relationship, props)| {
+        EdgeType::retrieval_text(
+            props.get("edge_text").and_then(serde_json::Value::as_str),
+            relationship,
+        )
+    });
+    for edge_text in input
+        .edges
+        .iter()
+        .map(edge_retrieval_text)
+        .chain(structural_texts)
+    {
         if edge_text.is_empty() {
             continue;
         }
@@ -3265,6 +3290,76 @@ pub async fn add_temporal_data_points(
 /// (prepare_edges_for_storage.py:26-28 via index_graph_edges.py:33-53):
 /// prefer the nonblank `edge_text` property, fall back to the nonblank
 /// `relationship_name`, else return an empty string (caller drops empties).
+/// Stamp the default `edge_text` on extracted edges that have none — an LLM
+/// edge with a blank description, or an ontology edge (Python
+/// `ensure_default_edge_properties` over the same edges).
+fn stamp_extracted_edge_text(dedup_result: &mut crate::graph_integration::DeduplicationResult) {
+    use crate::graph_extraction::{EdgeLabels, ensure_default_edge_text_for_pairs};
+
+    let mut labels = EdgeLabels::default();
+    for pair in &dedup_result.unique_nodes {
+        labels.insert(pair.entity.base.id, &pair.entity.name);
+        labels.insert(pair.entity_type.base.id, &pair.entity_type.name);
+    }
+    let unlabelled = ensure_default_edge_text_for_pairs(&mut dedup_result.unique_edges, &labels);
+    if unlabelled > 0 {
+        debug!(
+            unlabelled,
+            "Extracted edges left without edge_text: an endpoint is not in this batch"
+        );
+    }
+}
+
+/// Give each structural edge the `edge_text` Python's `add_data_points` does:
+/// `"Document chunk mentions {name}: {description}"` on a chunk→entity
+/// `contains` edge whose entity has a description, else the generic
+/// `"{source} {relationship} {target}."` (see
+/// [`crate::graph_extraction::ensure_default_edge_text`]).
+///
+/// Python takes the description from the chunk's own extraction of the
+/// entity; Rust has one deduplicated `Entity` per id by this stage, so every
+/// chunk's `contains` edge to it carries that entity's description.
+fn stamp_structural_edge_text(structural_edges: &mut [EdgeData], input: &SummarizedData) {
+    use crate::graph_extraction::{EdgeLabels, chunk_mentions_text, ensure_default_edge_text};
+
+    let mut labels = EdgeLabels::default();
+    for chunk in &input.chunks {
+        labels.insert(chunk.base.id, &chunk.text);
+    }
+    for summary in &input.summaries {
+        labels.insert(summary.base.id, &summary.text);
+    }
+    for document in &input.documents {
+        labels.insert(document.base.id, &document.name);
+    }
+    let mut mentions: HashMap<String, String> = HashMap::new();
+    for pair in &input.entities {
+        labels.insert(pair.entity.base.id, &pair.entity.name);
+        labels.insert(pair.entity_type.base.id, &pair.entity_type.name);
+        if let Some(text) = chunk_mentions_text(&pair.entity.name, &pair.entity.description) {
+            mentions.insert(pair.entity.base.id.to_string(), text);
+        }
+    }
+
+    for (_, target_id, relationship, properties) in structural_edges.iter_mut() {
+        if relationship == "contains"
+            && let Some(text) = mentions.get(target_id.as_str())
+        {
+            properties.insert(
+                Cow::Borrowed("edge_text"),
+                serde_json::Value::String(text.clone()),
+            );
+        }
+    }
+    let unlabelled = ensure_default_edge_text(structural_edges, &labels);
+    if unlabelled > 0 {
+        debug!(
+            unlabelled,
+            "Structural edges left without edge_text: an endpoint is not in this batch"
+        );
+    }
+}
+
 fn edge_retrieval_text(edge_pair: &GraphEdgePair) -> String {
     EdgeType::retrieval_text(
         edge_pair.properties.get("edge_text").map(String::as_str),
@@ -4877,6 +4972,22 @@ async fn upsert_provenance(
         // hand a NUL-bearing structural edge a different deterministic id than
         // Python produces for the same input.
         let rel_name = sanitize_str(rel_name);
+        // Python's `upsert_edges` keys a `contains` edge on its `edge_text`
+        // (`upsert_edges.py:39-44`), as the semantic branch above does. Every
+        // structural `contains` edge has one since
+        // `stamp_structural_edge_text`, and two files' chunks can share it
+        // ("Document chunk mentions alice: …"). The run sweep only spares an
+        // `EdgeType` row whose text another run's row claims *in this
+        // column*, so it must hold the text, not the bare name.
+        let edge_text = properties
+            .get("edge_text")
+            .and_then(serde_json::Value::as_str)
+            .filter(|_| rel_name == "contains")
+            .map(|text| Cow::Owned(sanitize_string(text.to_string())));
+        let (row_text, label) = match edge_text {
+            Some(text) => (text, Some(rel_name.into_owned())),
+            None => (rel_name, None),
+        };
 
         prov_edges.push(GraphEdge {
             // The nil `data_id` is folded into the id like every other edge's,
@@ -4887,18 +4998,18 @@ async fn upsert_provenance(
                 dataset_id,
                 Uuid::nil(),
                 source_id,
-                &rel_name,
+                &row_text,
                 target_id,
             ),
-            slug: edge_slug(&rel_name),
+            slug: edge_slug(&row_text),
             user_id,
             data_id: Uuid::nil(), // structural edges span multiple DataPoints
             dataset_id,
             pipeline_run_id,
             source_node_id: source_id,
             destination_node_id: target_id,
-            relationship_name: rel_name.into_owned(),
-            label: None,
+            relationship_name: row_text.into_owned(),
+            label,
             attributes: attrs,
             created_at: Utc::now(),
         });
@@ -5155,6 +5266,18 @@ async fn index_data_points(
                     )
                     .with_metadata("dataset_id", json!(dataset_id.to_string()))
                     .with_metadata("entity_type", json!(entity.entity_type.name.clone()));
+                // `description` diverges from Python, whose `IndexSchema` row
+                // carries only `text`. The hybrid retriever renders it as the
+                // line under `### {name}` — a slot the prompt template keeps
+                // but neither SDK filled, so an entity's description reached
+                // the prompt only as repeated per-chunk "Document chunk
+                // mentions …" bullets (Python) or not at all (Rust). Skipped
+                // when it merely repeats the name, as an ontology
+                // individual's does.
+                let description = entity.entity.description.trim();
+                if !description.is_empty() && description != entity.entity.name.trim() {
+                    point = point.with_metadata("description", json!(description));
+                }
                 if let Some(uid) = user_id {
                     point = point.with_metadata("user_id", json!(uid.to_string()));
                 }
@@ -8464,6 +8587,62 @@ mod tests {
         assert_eq!(edge_text, "Alice founded Acme");
     }
 
+    /// An extracted edge with no description leaves the extraction stage with
+    /// Python's default sentence as its `edge_text`, not the empty string.
+    #[tokio::test]
+    async fn an_undescribed_extracted_edge_gets_the_default_sentence() {
+        use crate::fact_extraction::{Edge, KnowledgeGraph, Node};
+        use cognee_ontology::NoOpOntologyResolver;
+
+        let node = |id: &str, name: &str| Node {
+            id: id.to_string(),
+            name: name.to_string(),
+            node_type: "PERSON".to_string(),
+            description: String::new(),
+        };
+        let graph = KnowledgeGraph {
+            nodes: vec![node("alice", "Alice"), node("bob", "Bob")],
+            edges: vec![Edge {
+                source_node_id: "alice".to_string(),
+                target_node_id: "bob".to_string(),
+                relationship_name: "is_a_friend_of".to_string(),
+                description: None,
+            }],
+        };
+
+        let (nodes, edges, _claimed_edges, _producers) = expand_with_nodes_and_edges(
+            vec![(Uuid::new_v4(), graph)],
+            Uuid::new_v4(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            &NoOpOntologyResolver::new(),
+            None,
+            None,
+        )
+        .await;
+        let mut dedup_result = deduplicate_nodes_and_edges(nodes, edges);
+        stamp_extracted_edge_text(&mut dedup_result);
+
+        let name_of = |id: Uuid| {
+            dedup_result
+                .unique_nodes
+                .iter()
+                .find(|pair| pair.entity.base.id == id)
+                .map(|pair| pair.entity.name.clone())
+                .expect("endpoint is an extracted entity")
+        };
+        let edge = &dedup_result.unique_edges[0];
+        assert_eq!(
+            edge.properties["edge_text"],
+            format!(
+                "{} is a friend of {}.",
+                name_of(edge.source_entity_id),
+                name_of(edge.target_entity_id)
+            )
+        );
+    }
+
     #[test]
     fn cognify_config_creates_web_page_nodes_by_default() {
         assert!(CognifyConfig::default().create_web_page_nodes);
@@ -10048,6 +10227,125 @@ mod tests {
                 && edges.iter().all(|row| row.pipeline_run_id == Some(run_id)),
             "every row names the run that was writing it, so the sweep can find it"
         );
+    }
+
+    /// Structural edges leave `add_data_points` carrying the `edge_text`
+    /// Python's `ensure_default_edge_properties` gives them — in the graph and
+    /// in the ledger rows alike, since the delete path derives `EdgeType` ids
+    /// from the latter — and each sentence gets an `EdgeType` row. The
+    /// `Entity_name` row carries the entity's description.
+    #[tokio::test]
+    async fn add_data_points_stamps_structural_edge_text_and_indexes_it() {
+        use cognee_database::ops::graph_storage::get_edges_by_dataset;
+        use cognee_embedding::MockEmbeddingEngine;
+        use cognee_vector::MockVectorDB;
+
+        let dataset_id = Uuid::new_v4();
+        let doc_id = Uuid::new_v4();
+        let db = ledger_db(dataset_id).await;
+        let graph = Arc::new(cognee_graph::MockGraphDB::new());
+        let vector = Arc::new(MockVectorDB::new());
+
+        let entity_type = EntityType::from_node_type("Person", Some(dataset_id));
+        let entity = Entity::from_node(
+            "alice_1",
+            "Alice",
+            "A curious girl.",
+            entity_type.base.id,
+            None,
+        );
+        let (entity_id, name, type_name) = (
+            entity.base.id,
+            entity.name.clone(),
+            entity_type.name.clone(),
+        );
+        let mut chunk = test_chunk(Uuid::new_v4(), doc_id, "Alice   sat by\nthe March Hare.");
+        chunk.contains = vec![json!(entity_id.to_string())];
+        let input = SummarizedData {
+            chunks: vec![chunk],
+            documents: vec![test_document_with_metadata(doc_id, None)],
+            entities: vec![GraphNodePair {
+                entity,
+                entity_type,
+            }],
+            edges: vec![],
+            producers: ArtifactProducers::default(),
+            summaries: vec![],
+            dataset_id,
+            user_id: Some(Uuid::new_v4()),
+            tenant_id: None,
+            failures: FailureReport::default(),
+        };
+
+        let result = add_data_points(
+            &input,
+            Arc::clone(&graph) as Arc<dyn GraphDBTrait>,
+            Arc::clone(&vector) as Arc<dyn VectorDB>,
+            Arc::new(MockEmbeddingEngine::new(8)),
+            &db,
+            Some(Uuid::new_v4()),
+            &CognifyConfig::default(),
+        )
+        .await
+        .expect("add_data_points must succeed");
+
+        let expected = HashMap::from([
+            (
+                "contains",
+                format!("Document chunk mentions {name}: A curious girl."),
+            ),
+            (
+                "is_part_of",
+                "Alice sat by the March Hare. is part of test.txt.".to_string(),
+            ),
+            ("is_a", format!("{name} is a {type_name}.")),
+        ]);
+
+        let (_, graph_edges) = graph.get_graph_data().await.expect("graph data");
+        let ledger_edges = get_edges_by_dataset(&db, dataset_id).await.expect("query");
+        for (relationship, text) in &expected {
+            let graph_text = graph_edges
+                .iter()
+                .find(|edge| edge.2 == *relationship)
+                .and_then(|edge| edge.3.get("edge_text"))
+                .and_then(serde_json::Value::as_str);
+            assert_eq!(graph_text, Some(text.as_str()), "graph {relationship}");
+
+            // A `contains` row is keyed on its text, the bare name moving to
+            // `label` (Python `upsert_edges`); the others keep the name.
+            let row = ledger_edges
+                .iter()
+                .find(|row| {
+                    row.relationship_name == *relationship
+                        || row.label.as_deref() == Some(*relationship)
+                })
+                .expect("a ledger row per structural edge");
+            let keyed_on = if *relationship == "contains" {
+                text.as_str()
+            } else {
+                relationship
+            };
+            assert_eq!(row.relationship_name, keyed_on, "ledger key {relationship}");
+            let ledger_text = row
+                .attributes
+                .as_ref()
+                .and_then(|attributes| attributes.get("edge_text"))
+                .and_then(serde_json::Value::as_str);
+            assert_eq!(ledger_text, Some(text.as_str()), "ledger {relationship}");
+
+            assert!(
+                result
+                    .edge_types
+                    .iter()
+                    .any(|edge_type| edge_type.relationship_name == *text),
+                "no EdgeType row for {text:?}"
+            );
+        }
+
+        let payload = vector
+            .get_payload("Entity", "name", entity_id)
+            .expect("Entity_name row");
+        assert_eq!(payload["description"], json!("A curious girl."));
     }
 
     /// A semantic edge's ledger row must hash the *sanitized* relationship
