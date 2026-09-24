@@ -393,17 +393,27 @@ fn edge_sort_key(edge: &EdgeBullet, edge_ranks: &HashMap<String, usize>) -> (u8,
 
 /// Render a single connection triple into an [`EdgeBullet`], or `None` to drop.
 ///
-/// Port of `_edge_bullet` (`entities.py:262-281`). Text prefers the top-level
-/// `edge_text` (absent from graph triples in practice, kept for fidelity), then
-/// the nested `properties.edge_text`, then a synthesized
-/// `"{source} -- {relationship} -- {target}"` when all three labels are present;
-/// if still empty the bullet is dropped. `edge_type_id` is recomputed via
-/// [`connection_edge_type_id`] (edge-text-first), never from the raw
-/// relationship name.
+/// Port of `_edge_bullet` (`entities.py:262-281`), diverging deliberately in
+/// one way that only affects *rendering*, not the byte-identical prompt
+/// *template* (see the module docs and `format_entities`/`format_entity`): a
+/// structural chunk→entity `contains` edge whose source carries no name is
+/// dropped outright — see [`is_unnamed_contains_edge`].
+///
+/// Text otherwise prefers the top-level `edge_text` (absent from graph
+/// triples in practice, kept for fidelity), then the nested
+/// `properties.edge_text`, then a synthesized
+/// `"{source} -- {relationship} -- {target}"` when all three labels are
+/// present; if still empty the bullet is dropped. `edge_type_id` is
+/// recomputed via [`connection_edge_type_id`] (edge-text-first), never from
+/// the raw relationship name.
 fn edge_bullet(source: &NodeLite, edge: &EdgeLite, target: &NodeLite) -> Option<EdgeBullet> {
+    let relationship = edge.relationship_name.as_ref().and_then(display_value);
+    if is_unnamed_contains_edge(source, relationship.as_deref()) {
+        return None;
+    }
+
     let source_label = node_label(source);
     let target_label = node_label(target);
-    let relationship = edge.relationship_name.as_ref().and_then(display_value);
 
     let mut text = edge
         .edge_text
@@ -429,6 +439,36 @@ fn edge_bullet(source: &NodeLite, edge: &EdgeLite, target: &NodeLite) -> Option<
         target_id: target.get("id").and_then(display_value),
         edge_type_id: connection_edge_type_id(edge),
     })
+}
+
+/// Whether `(source, relationship)` is a structural chunk→entity `contains`
+/// edge whose source carries no name — pure noise for the prompt.
+///
+/// `DocumentChunk::relationships()` (`crates/cognify/src/graph_extraction/extractable.rs`)
+/// emits a `contains` edge from every chunk to every entity it mentions, and
+/// `get_graph_from_model` (`extractable.rs:184-207`) stamps it with only an
+/// `updated_at` property — no `edge_text`. `DocumentChunk` has no `name`
+/// field (`crates/models/src/document_chunk.rs`), so [`node_label`] falls
+/// back to the chunk's id, and the synthesized bullet used to assert that one
+/// UUID "contains" an entity:
+/// `ecb1240e-1b45-54cf-bdca-0cfca21971e9 -- contains -- Alice`. The chunk's
+/// full text already sits in `## Relevant passages`, directly above this
+/// section, so the bullet is zero-information noise even rendered well —
+/// drop it rather than merely relabeling it.
+///
+/// A prior guard (cognee-rs#245, commit `bd67c69`) took the relabeling
+/// approach instead: it made [`node_label`] itself refuse any bare-UUID
+/// label, network-wide. That guard was reverted wholesale two commits later
+/// (`46ac788`) — not because it missed this path, but because it was bundled
+/// with an unrelated `entity_type` header change the team wanted to revert
+/// for Python parity, and reverting the commit took the UUID guard with it.
+/// This time the fix is scoped to exactly the noisy case (`contains` +
+/// unnamed source) instead of a blanket node-label rule, so it cannot again
+/// be an unintended casualty of an unrelated revert.
+fn is_unnamed_contains_edge(source: &NodeLite, relationship: Option<&str>) -> bool {
+    let is_contains = relationship
+        .is_some_and(|relationship| relationship.trim().eq_ignore_ascii_case("contains"));
+    is_contains && source.get("name").and_then(display_value).is_none()
 }
 
 /// The dedupe key for a bullet, or `None` when any component is blank.
@@ -1139,6 +1179,48 @@ mod tests {
         let (entities, _) = build_entities(&graph, &hits, 5, &HashMap::new(), None, "OR").await;
         assert_eq!(entities[0].name, "Entity");
         assert_eq!(entities[0].edges[0].text, "Source -- REL -- target-1");
+    }
+
+    #[tokio::test]
+    async fn a_chunk_contains_edge_with_an_unnamed_source_is_dropped() {
+        // The real-world shape: a DocumentChunk node (no `name`, only `id` and
+        // `text`) structurally `contains` an entity, with no edge_text — the
+        // bullet would otherwise read "<chunk-uuid> -- contains -- Alice".
+        let graph = MockGraphDB::new();
+        add_node(&graph, "alice-id", "Alice").await;
+        graph
+            .add_node_raw(json!({
+                "id": "ecb1240e-1b45-54cf-bdca-0cfca21971e9",
+                "type": "DocumentChunk",
+                "text": "Alice sat by the March Hare.",
+            }))
+            .await
+            .unwrap();
+        add_edge(
+            &graph,
+            "ecb1240e-1b45-54cf-bdca-0cfca21971e9",
+            "alice-id",
+            "contains",
+            None,
+        )
+        .await;
+        let hits = vec![entity_hit(json!({"id": "alice-id", "name": "Alice"}))];
+        let (entities, _) = build_entities(&graph, &hits, 5, &HashMap::new(), None, "OR").await;
+        assert_eq!(entities[0].name, "Alice");
+        assert!(entities[0].edges.is_empty(), "{:?}", entities[0].edges);
+    }
+
+    #[tokio::test]
+    async fn a_contains_edge_with_a_named_source_still_renders() {
+        // The drop guard is scoped to an unnamed source, not to the
+        // "contains" relationship itself.
+        let graph = MockGraphDB::new();
+        add_node(&graph, "alice-id", "Alice").await;
+        add_node(&graph, "box-id", "Toolbox").await;
+        add_edge(&graph, "box-id", "alice-id", "contains", None).await;
+        let hits = vec![entity_hit(json!({"id": "alice-id", "name": "Alice"}))];
+        let (entities, _) = build_entities(&graph, &hits, 5, &HashMap::new(), None, "OR").await;
+        assert_eq!(entities[0].edges[0].text, "Toolbox -- contains -- Alice");
     }
 
     #[tokio::test]
