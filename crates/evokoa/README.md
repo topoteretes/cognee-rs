@@ -23,8 +23,8 @@ upgrade, migration, and operational policies are decided.
 
 pgContext's filter grammar compares a JSONB array as one value. In 0.3.0,
 scalar `match`, `match.value`, and `match.any` cannot express “this stored array
-contains this requested dataset ID.” Cognee requires OR/AND membership over the
-accumulated `metadata.dataset_ids` array.
+contains this requested set name.” Cognee requires OR/AND membership over the
+mixed string/object entries in `metadata.belongs_to_set`.
 
 The POC therefore implements `search_similar_filtered` as an exact PostgreSQL
 JSONB `?|`/`?&` filter-before-limit query. This is correct but does not use

@@ -2,8 +2,11 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 
 use async_trait::async_trait;
-use cognee_graph::{EdgeData, GraphDBResult, GraphDBTrait, GraphNode, NodeData, PgGraphAdapter};
-use sea_orm::{ConnectionTrait, DatabaseConnection};
+use cognee_graph::{
+    EdgeData, EdgeKey, GraphDBError, GraphDBResult, GraphDBTrait, GraphNode, NodeData,
+    NodeTruthState, PgGraphAdapter,
+};
+use sea_orm::{ConnectionTrait, Database, DatabaseConnection};
 use serde_json::Value;
 
 /// pgGraph-accelerated graph adapter.
@@ -17,6 +20,13 @@ pub struct EvokoaGraphAdapter {
 }
 
 impl EvokoaGraphAdapter {
+    pub async fn new(database_url: &str) -> GraphDBResult<Self> {
+        let db = Database::connect(database_url)
+            .await
+            .map_err(|e| GraphDBError::ConnectionError(e.to_string()))?;
+        Self::from_connection(db).await
+    }
+
     pub async fn from_connection(db: DatabaseConnection) -> GraphDBResult<Self> {
         let inner = PgGraphAdapter::from_connection(db.clone()).await?;
         Ok(Self { inner, db })
@@ -234,6 +244,45 @@ impl GraphDBTrait for EvokoaGraphAdapter {
         node_ids: &[String],
     ) -> GraphDBResult<(Vec<GraphNode>, Vec<EdgeData>)> {
         self.inner.get_id_filtered_graph_data(node_ids).await
+    }
+    async fn get_node_feedback_weights(
+        &self,
+        node_ids: &[String],
+    ) -> GraphDBResult<HashMap<String, f64>> {
+        self.inner.get_node_feedback_weights(node_ids).await
+    }
+    async fn set_node_feedback_weights(
+        &self,
+        updates: &HashMap<String, f64>,
+    ) -> GraphDBResult<HashMap<String, bool>> {
+        self.inner.set_node_feedback_weights(updates).await
+    }
+    async fn get_node_truth_state(
+        &self,
+        node_ids: &[String],
+    ) -> GraphDBResult<HashMap<String, NodeTruthState>> {
+        self.inner.get_node_truth_state(node_ids).await
+    }
+    async fn set_node_truth_state(
+        &self,
+        updates: &HashMap<String, NodeTruthState>,
+    ) -> GraphDBResult<HashMap<String, bool>> {
+        self.inner.set_node_truth_state(updates).await
+    }
+    async fn get_edge_feedback_weights(
+        &self,
+        edge_keys: &[EdgeKey],
+    ) -> GraphDBResult<HashMap<EdgeKey, f64>> {
+        self.inner.get_edge_feedback_weights(edge_keys).await
+    }
+    async fn set_edge_feedback_weights(
+        &self,
+        updates: &HashMap<EdgeKey, f64>,
+    ) -> GraphDBResult<HashMap<EdgeKey, bool>> {
+        self.inner.set_edge_feedback_weights(updates).await
+    }
+    async fn get_candidate_nodes_by_label(&self, needle: &str) -> GraphDBResult<Vec<GraphNode>> {
+        self.inner.get_candidate_nodes_by_label(needle).await
     }
     async fn get_neighborhood(
         &self,

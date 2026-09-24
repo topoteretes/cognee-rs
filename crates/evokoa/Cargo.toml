@@ -11,6 +11,7 @@ workspace = true
 
 [dependencies]
 async-trait.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 uuid.workspace = true
@@ -23,9 +24,12 @@ sea-orm = { version = "1.1", features = [
 ] }
 cognee-graph = { path = "../graph", features = ["postgres"] }
 cognee-vector = { path = "../vector" }
+cognee-utils = { path = "../utils" }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+serial_test.workspace = true
+cognee-test-utils = { path = "../test-utils" }
 
 [[test]]
 name = "live_smoke"

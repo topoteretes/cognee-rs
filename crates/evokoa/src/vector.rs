@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 
 use async_trait::async_trait;
+use cognee_utils::sanitize::sanitize_json;
 use cognee_vector::{SearchResult, VectorDB, VectorDBError, VectorDBResult, VectorPoint};
-use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
+use sea_orm::{ConnectionTrait, Database, DatabaseBackend, DatabaseConnection, Statement};
 use serde_json::Value as JsonValue;
 use uuid::Uuid;
 
@@ -14,6 +15,11 @@ pub struct EvokoaVectorAdapter {
 }
 
 impl EvokoaVectorAdapter {
+    pub async fn new(database_url: &str) -> VectorDBResult<Self> {
+        let db = Database::connect(database_url).await.map_err(storage)?;
+        Self::from_connection(db).await
+    }
+
     pub async fn from_connection(db: DatabaseConnection) -> VectorDBResult<Self> {
         db.execute_unprepared(
             "CREATE EXTENSION IF NOT EXISTS pgcontext; \
@@ -51,12 +57,12 @@ impl EvokoaVectorAdapter {
     }
 
     fn metadata_json(metadata: &HashMap<String, JsonValue>) -> JsonValue {
-        JsonValue::Object(
+        sanitize_json(JsonValue::Object(
             metadata
                 .iter()
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect(),
-        )
+        ))
     }
 
     fn row_result(row: &sea_orm::QueryResult, score: f32) -> VectorDBResult<SearchResult> {
@@ -156,7 +162,10 @@ impl EvokoaVectorAdapter {
             return Err(VectorDBError::CollectionNotFound(coll));
         }
         let sql = format!(
-            "SELECT s.source_key, s.score, t.metadata FROM pgcontext.search($1, 'embedding', $2::pgcontext.vector, $3) s JOIN \"{coll}\" t ON t.id::text=s.source_key"
+            "SELECT s.source_key, s.score, t.metadata \
+             FROM pgcontext.search($1, 'embedding', $2::pgcontext.vector, $3) s \
+             JOIN \"{coll}\" t ON t.id::text=s.source_key \
+             ORDER BY s.score ASC, s.point_id ASC"
         );
         let rows = self
             .db
@@ -194,7 +203,7 @@ impl VectorDB for EvokoaVectorAdapter {
     ) -> VectorDBResult<()> {
         let coll = Self::collection_name(data_type, field_name)?;
         if self.has_collection(data_type, field_name).await? {
-            return Ok(());
+            return Err(VectorDBError::CollectionExists(coll));
         }
         self.db.execute_unprepared(&format!(
             "CREATE TABLE \"{coll}\" (id uuid PRIMARY KEY, embedding pgcontext.vector({dimension}) NOT NULL, metadata jsonb NOT NULL DEFAULT '{{}}');"
@@ -288,20 +297,37 @@ impl VectorDB for EvokoaVectorAdapter {
         };
         // pgContext 0.3.0's Qdrant-style grammar compares JSON arrays as whole
         // values; it has no contains-element/contains-all predicate. Cognee's
-        // `dataset_ids` contract therefore uses an exact source-table scan until
+        // `belongs_to_set` contract therefore uses an exact source-table scan until
         // the extension grows that operator. This preserves filter-before-limit
         // correctness instead of silently losing recall through post-filtering.
         let coll = Self::collection_name(data_type, field_name)?;
-        let membership_op = if op.eq_ignore_ascii_case("AND") {
-            "?&"
+        let membership_predicate = if op == "AND" {
+            "NOT EXISTS (\
+               SELECT 1 FROM unnest($2::text[]) requested(name) \
+               WHERE NOT EXISTS (\
+                 SELECT 1 \
+                 FROM jsonb_array_elements(COALESCE(metadata->'belongs_to_set', '[]'::jsonb)) entry \
+                 WHERE CASE jsonb_typeof(entry) \
+                   WHEN 'string' THEN entry #>> '{}' \
+                   WHEN 'object' THEN entry->>'name' \
+                 END = requested.name\
+               )\
+             )"
         } else {
-            "?|"
+            "EXISTS (\
+               SELECT 1 \
+               FROM jsonb_array_elements(COALESCE(metadata->'belongs_to_set', '[]'::jsonb)) entry \
+               WHERE CASE jsonb_typeof(entry) \
+                 WHEN 'string' THEN entry #>> '{}' \
+                 WHEN 'object' THEN entry->>'name' \
+               END = ANY($2::text[])\
+             )"
         };
         let sql = format!(
             "SELECT id::text AS source_key, \
                     pgcontext.cosine_distance(embedding, $1::pgcontext.vector)::real AS score, metadata \
              FROM \"{coll}\" \
-             WHERE COALESCE(metadata->'dataset_ids', '[]'::jsonb) {membership_op} $2::text[] \
+             WHERE {membership_predicate} \
              ORDER BY score ASC, id LIMIT $3"
         );
         let rows = self
@@ -363,7 +389,13 @@ impl VectorDB for EvokoaVectorAdapter {
             return Ok(());
         }
         let coll = Self::collection_name(data_type, field_name)?;
-        let keys = point_ids.iter().map(Uuid::to_string).collect::<Vec<_>>();
+        // Pipeline cleanup may name the same point through multiple graph
+        // relationships. pgContext rejects duplicate source keys in one batch,
+        // so normalize the trait input before calling the extension.
+        let mut unique_ids = point_ids.to_vec();
+        unique_ids.sort_unstable();
+        unique_ids.dedup();
+        let keys = unique_ids.iter().map(Uuid::to_string).collect::<Vec<_>>();
         self.db
             .execute(Statement::from_sql_and_values(
                 DatabaseBackend::Postgres,
@@ -376,7 +408,7 @@ impl VectorDB for EvokoaVectorAdapter {
             .execute(Statement::from_sql_and_values(
                 DatabaseBackend::Postgres,
                 format!("DELETE FROM \"{coll}\" WHERE id = ANY($1::uuid[])"),
-                [point_ids.to_vec().into()],
+                [unique_ids.into()],
             ))
             .await
             .map_err(storage)?;

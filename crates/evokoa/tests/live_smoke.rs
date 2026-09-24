@@ -42,7 +42,7 @@ async fn graph_vector_and_combined_query_round_trip() {
             "Entity",
             "name",
             &[VectorPoint::new(alice, vec![1.0, 0.0, 0.0])
-                .with_metadata("dataset_ids", json!(["test"]))],
+                .with_metadata("belongs_to_set", json!(["test"]))],
         )
         .await
         .expect("point");
