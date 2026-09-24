@@ -151,15 +151,41 @@ impl EvokoaVectorAdapter {
                     .await
                     .map_err(storage)?;
             }
-            let keys = chunk.iter().map(|p| p.id.to_string()).collect::<Vec<_>>();
-            self.db
-                .execute(Statement::from_sql_and_values(
-                    DatabaseBackend::Postgres,
-                    "SELECT pgcontext.upsert_points($1, $2::text[])",
-                    [coll.clone().into(), keys.into()],
-                ))
-                .await
-                .map_err(storage)?;
+            let (indexable, zero): (Vec<_>, Vec<_>) = chunk
+                .iter()
+                .partition(|point| point.vector.iter().any(|value| *value != 0.0));
+            if !indexable.is_empty() {
+                let keys = indexable
+                    .iter()
+                    .map(|point| point.id.to_string())
+                    .collect::<Vec<_>>();
+                self.db
+                    .execute(Statement::from_sql_and_values(
+                        DatabaseBackend::Postgres,
+                        "SELECT pgcontext.upsert_points($1, $2::text[])",
+                        [coll.clone().into(), keys.into()],
+                    ))
+                    .await
+                    .map_err(storage)?;
+            }
+            if !zero.is_empty() {
+                // pgContext 0.3.0 aborts every cosine search in a collection
+                // containing even one zero vector. Keep the source row for
+                // retrieve/size semantics, but ensure it is absent from the
+                // derived index (including nonzero -> zero overwrites).
+                let keys = zero
+                    .iter()
+                    .map(|point| point.id.to_string())
+                    .collect::<Vec<_>>();
+                self.db
+                    .execute(Statement::from_sql_and_values(
+                        DatabaseBackend::Postgres,
+                        "SELECT pgcontext.delete_points($1, $2::text[])",
+                        [coll.clone().into(), keys.into()],
+                    ))
+                    .await
+                    .map_err(storage)?;
+            }
         }
         Ok(())
     }
