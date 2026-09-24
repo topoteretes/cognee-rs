@@ -1,6 +1,7 @@
 package ai.cognee;
 
 import java.util.List;
+import java.util.Map;
 
 /** Per-call options for {@link Cognee#search}. */
 public final class SearchOptions extends Options {
@@ -23,4 +24,16 @@ public final class SearchOptions extends Options {
     public SearchOptions verbose(boolean b) { put("verbose", b); return this; }
     public SearchOptions saveInteraction(boolean b) { put("saveInteraction", b); return this; }
     public SearchOptions autoFeedbackDetection(boolean b) { put("autoFeedbackDetection", b); return this; }
+    /**
+     * Per-retriever knobs, forwarded verbatim to the retriever the search
+     * resolves to. Keys are snake_case and retriever-defined; a key the chosen
+     * retriever does not know is ignored, not an error.
+     *
+     * <p>The hybrid retriever reads {@code text_summaries_top_k} here — how
+     * many {@code TextSummary} candidates its chunk lane fuses against the
+     * {@code DocumentChunk} lane, defaulting to the chunk lane's own top-k.
+     *
+     * @param c snake_case knob names to JSON-serializable values
+     */
+    public SearchOptions retrieverSpecificConfig(Map<String, Object> c) { put("retrieverSpecificConfig", c); return this; }
 }

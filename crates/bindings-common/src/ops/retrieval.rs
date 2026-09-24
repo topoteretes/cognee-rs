@@ -295,6 +295,20 @@ pub fn build_search_request(
             .unwrap_or(true),
     );
     let auto_feedback_detection = opts.get("autoFeedbackDetection").and_then(|v| v.as_bool());
+    // Per-retriever knobs, forwarded verbatim. `SearchRequest` documents these
+    // as caller-defined and silently ignores unknown keys, so the binding has
+    // no table to keep in step — it only has to stop dropping the object. Until
+    // it was wired, a knob like the hybrid retriever's `text_summaries_top_k`
+    // was reachable from the HTTP API and from Rust but not from any SDK
+    // binding, and a caller setting it saw no error and no effect.
+    let retriever_specific_config = opts
+        .get("retrieverSpecificConfig")
+        .and_then(|v| v.as_object())
+        .map(|map| {
+            map.iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect()
+        });
 
     Ok(SearchRequest {
         query_text: query.to_string(),
@@ -324,7 +338,7 @@ pub fn build_search_request(
         tenant_id,
         verbose,
         feedback_influence: None,
-        retriever_specific_config: None,
+        retriever_specific_config,
         response_schema: None,
         custom_search_type: None,
         auto_feedback_detection,
@@ -647,6 +661,34 @@ mod tests {
         let req = build_search_request("q", &opts, owner).unwrap();
         assert_eq!(req.dataset_ids, Some(vec![Uuid::parse_str(ID_A).unwrap()]));
         assert_eq!(req.user_id, Some(owner));
+    }
+
+    /// Per-retriever knobs must survive the camelCase hop verbatim: the
+    /// retriever reads them out of `retriever_specific_config` by name, so a
+    /// binding that parses the object into a typed subset would silently drop
+    /// every knob it had not heard of. `text_summaries_top_k` is the one the
+    /// hybrid retriever's chunk lane reads; the nonsense key alongside it
+    /// asserts the pass-through is not a whitelist.
+    #[test]
+    fn build_search_request_carries_retriever_specific_config() {
+        let opts = json!({
+            "retrieverSpecificConfig": { "text_summaries_top_k": 3, "not_a_real_knob": "x" }
+        });
+        let req = build_search_request("q", &opts, Uuid::new_v4()).unwrap();
+        let config = req
+            .retriever_specific_config
+            .expect("retrieverSpecificConfig must reach the request");
+        assert_eq!(config.get("text_summaries_top_k"), Some(&json!(3)));
+        assert_eq!(config.get("not_a_real_knob"), Some(&json!("x")));
+    }
+
+    /// Absent, the field stays `None` rather than becoming an empty map — the
+    /// retrievers branch on `Option`, and an empty map is a different statement
+    /// ("caller sent an empty config") from "caller sent none".
+    #[test]
+    fn build_search_request_leaves_retriever_specific_config_unset() {
+        let req = build_search_request("q", &json!({}), Uuid::new_v4()).unwrap();
+        assert_eq!(req.retriever_specific_config, None);
     }
 
     /// The regression this ticket exists for: `recall` parsed nothing for

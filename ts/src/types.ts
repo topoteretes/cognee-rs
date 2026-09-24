@@ -162,6 +162,16 @@ export interface CogneeSearchOptions {
   saveInteraction?: boolean;
   /** Detect feedback about the previous response before searching. */
   autoFeedbackDetection?: boolean;
+  /**
+   * Per-retriever knobs, forwarded verbatim to the retriever the search
+   * resolves to. Keys are snake_case and retriever-defined; a key the chosen
+   * retriever does not know is ignored rather than rejected.
+   *
+   * The hybrid retriever reads `text_summaries_top_k` here — how many
+   * `TextSummary` candidates its chunk lane fuses against the `DocumentChunk`
+   * lane, defaulting to the chunk lane's own top-k.
+   */
+  retrieverSpecificConfig?: Record<string, unknown>;
   /** User UUID override (defaults to the handle's owner). */
   userId?: string;
 }
