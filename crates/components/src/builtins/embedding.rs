@@ -154,6 +154,11 @@ pub fn build_embedding_config(inputs: &EmbeddingInputs) -> EmbeddingConfig {
     }
     #[cfg(feature = "onnx")]
     {
+        // Pooling and the query instruction are not knobs a caller picks: they
+        // are what the named model was trained with, so they are derived from
+        // the name rather than taken from `EmbeddingInputs`.
+        let (pooling, query_instruction) =
+            cognee_embedding::OnnxEmbeddingConfig::recipe_for(&inputs.onnx_model_name);
         config.onnx = cognee_embedding::OnnxEmbeddingConfig {
             model_path: inputs.onnx_model_path.clone(),
             tokenizer_path: inputs.onnx_tokenizer_path.clone(),
@@ -161,6 +166,8 @@ pub fn build_embedding_config(inputs: &EmbeddingInputs) -> EmbeddingConfig {
             dimensions: inputs.onnx_dimensions,
             max_sequence_length: inputs.onnx_max_sequence_length,
             batch_size: inputs.onnx_batch_size,
+            pooling,
+            query_instruction,
         };
     }
     config

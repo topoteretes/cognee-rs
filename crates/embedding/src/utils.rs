@@ -46,6 +46,25 @@ pub fn mean_pool(
     pooled
 }
 
+/// `[CLS]`-token pooling: the first token's hidden state.
+///
+/// The pooling BGE v1.5 is trained with (`1_Pooling/config.json` sets
+/// `pooling_mode_cls_token`); the reference implementation on the model card is
+/// `model_output[0][:, 0]`. `[CLS]` is always the first position and always
+/// unmasked, so no attention mask is needed.
+///
+/// `output_data` is one sample's `last_hidden_state`, laid out row-major as
+/// `[seq_len, hidden_dim]`; the first `output_dim` values of row 0 are the
+/// embedding. A short row yields a short vector rather than reading past the
+/// end — the caller L2-normalizes either way.
+pub fn cls_pool(output_data: &[f32], hidden_dim: usize, output_dim: usize) -> Vec<f32> {
+    output_data
+        .iter()
+        .take(hidden_dim.min(output_dim))
+        .copied()
+        .collect()
+}
+
 /// L2 normalize a vector to unit length
 ///
 /// Ported from examples/embeddings.rs l2_normalize() function.

@@ -255,7 +255,7 @@ impl TemporalRetriever {
             .has_collection(TEMPORAL_DATA_TYPE, TEMPORAL_FIELD_NAME)
             .await?
         {
-            let query_embeddings = self.embedding_engine.embed(&[query]).await?;
+            let query_embeddings = self.embedding_engine.embed_query(query).await?;
             let query_vector = query_embeddings.into_iter().next().ok_or_else(|| {
                 SearchError::InvalidInput("embedding engine returned no vectors".to_string())
             })?;

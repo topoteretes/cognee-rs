@@ -104,6 +104,33 @@ fn dimensions_for_key(key: &str) -> Option<usize> {
     Some(dim)
 }
 
+/// The instruction BGE v1.5 retrieval models are trained to see on a **query**,
+/// and never on a passage (`BAAI/bge-*-en-v1.5` model card, "Model List").
+#[cfg(feature = "onnx")]
+pub const BGE_QUERY_INSTRUCTION: &str = "Represent this sentence for searching relevant passages: ";
+
+/// How a transformer's `last_hidden_state` is reduced to a single vector.
+///
+/// This is a property of the *model*, not a tuning preference: a
+/// sentence-transformer is trained with exactly one pooling head and its
+/// embedding space is only calibrated for that one. The pooling a model expects
+/// is published in its `1_Pooling/config.json` — BGE sets
+/// `pooling_mode_cls_token`, all-MiniLM-L6-v2 sets `pooling_mode_mean_tokens`.
+///
+/// **Changing this invalidates an existing index.** Stored vectors were produced
+/// with whatever pooling was configured when they were written; a query pooled
+/// differently lands in a different subspace and ranks by noise. Rebuild the
+/// vector collections (re-cognify) after changing it.
+#[cfg(feature = "onnx")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OnnxPooling {
+    /// The `[CLS]` token's hidden state — BGE v1.5.
+    Cls,
+    /// Mean of the unmasked tokens' hidden states — all-MiniLM, GTE, E5.
+    Mean,
+}
+
 /// ONNX-specific configuration.
 ///
 /// Only used when `EmbeddingConfig::provider` is `Onnx` or `Fastembed`.
@@ -128,6 +155,21 @@ pub struct OnnxEmbeddingConfig {
 
     /// Batch size for ONNX inference (max texts per inference call)
     pub batch_size: usize,
+
+    /// How `last_hidden_state` is reduced to one vector — see [`OnnxPooling`].
+    ///
+    /// Must match what the model was trained with, and must not be changed
+    /// without rebuilding every vector collection written with the old value.
+    pub pooling: OnnxPooling,
+
+    /// Instruction prepended to a **query** before embedding it, and never to a
+    /// passage.
+    ///
+    /// Retrieval models in the BGE/E5 families are trained asymmetrically: the
+    /// query carries a short task instruction, the passage does not. Applied by
+    /// [`crate::engine::EmbeddingEngine::embed_query`] only, so it costs nothing
+    /// on the indexing side and does not invalidate a stored index.
+    pub query_instruction: Option<String>,
 }
 
 #[cfg(feature = "onnx")]
@@ -139,11 +181,45 @@ impl Default for OnnxEmbeddingConfig {
 
 #[cfg(feature = "onnx")]
 impl OnnxEmbeddingConfig {
+    /// The pooling head and query instruction a model was trained with, from its
+    /// name.
+    ///
+    /// Callers that point the ONNX engine at an arbitrary local file (the
+    /// `EMBEDDING_ONNX_*` path) still get the right recipe for a recognised
+    /// family instead of silently inheriting BGE's. Families:
+    ///
+    /// * **BGE** (`bge-*`) — CLS pooling; the English models additionally take
+    ///   [`BGE_QUERY_INSTRUCTION`] on queries.
+    /// * **E5** (`e5-*`, `multilingual-e5-*`) — mean pooling, and its own
+    ///   `"query: "` / `"passage: "` asymmetry; only the query side is ours to
+    ///   apply.
+    /// * **Everything else** — mean pooling and no instruction, which is the
+    ///   sentence-transformers default and what all-MiniLM, GTE and
+    ///   nomic-embed use.
+    ///
+    /// Unknown names fall to mean/none deliberately: mean pooling on a
+    /// CLS-trained model degrades ranking, while CLS on a mean-trained model
+    /// reads one arbitrary token and destroys it.
+    pub fn recipe_for(model_name: &str) -> (OnnxPooling, Option<String>) {
+        let name = model_name.to_lowercase();
+        if name.contains("bge") {
+            let instruction = name
+                .contains("-en")
+                .then(|| BGE_QUERY_INSTRUCTION.to_string());
+            (OnnxPooling::Cls, instruction)
+        } else if name.contains("e5-") {
+            (OnnxPooling::Mean, Some("query: ".to_string()))
+        } else {
+            (OnnxPooling::Mean, None)
+        }
+    }
+
     /// Create config for BGE-Small-v1.5 model
     pub fn bge_small(model_dir: impl Into<PathBuf>) -> Self {
         let base = model_dir.into();
         let model_path = base.join("BGE-Small-v1.5-model_quantized.onnx");
         let tokenizer_path = base.join("bge-small-tokenizer.json");
+        let (pooling, query_instruction) = Self::recipe_for("bge-small-en-v1.5");
         Self {
             model_path,
             tokenizer_path,
@@ -151,6 +227,8 @@ impl OnnxEmbeddingConfig {
             dimensions: 384,
             max_sequence_length: 512,
             batch_size: 32,
+            pooling,
+            query_instruction,
         }
     }
 
@@ -159,6 +237,7 @@ impl OnnxEmbeddingConfig {
         let base = model_dir.into();
         let model_path = base.join("all-MiniLM-L6-v2.onnx");
         let tokenizer_path = base.join("minilm-l6-tokenizer.json");
+        let (pooling, query_instruction) = Self::recipe_for("all-MiniLM-L6-v2");
         Self {
             model_path,
             tokenizer_path,
@@ -166,6 +245,8 @@ impl OnnxEmbeddingConfig {
             dimensions: 384,
             max_sequence_length: 256,
             batch_size: 32,
+            pooling,
+            query_instruction,
         }
     }
 }
@@ -758,6 +839,67 @@ mod tests {
         assert_eq!(cfg.dimensions, 384);
         assert_eq!(cfg.max_sequence_length, 256);
         assert_eq!(cfg.model_name, "all-MiniLM-L6-v2");
+    }
+
+    /// `recipe_for` keys off the model family, so an operator who points
+    /// `EMBEDDING_ONNX_MODEL_PATH` at some other export does not silently
+    /// inherit BGE's recipe. Unknown names must land on mean/none — the
+    /// sentence-transformers default — rather than on CLS, which on a
+    /// mean-trained model reads one arbitrary token.
+    #[test]
+    #[cfg(feature = "onnx")]
+    fn recipe_for_keys_off_the_model_family() {
+        use OnnxPooling::{Cls, Mean};
+
+        for name in ["bge-small-en-v1.5", "BGE-Base-EN-v1.5", "bge-large-en-v1.5"] {
+            let (pooling, instruction) = OnnxEmbeddingConfig::recipe_for(name);
+            assert_eq!(pooling, Cls, "{name}");
+            assert_eq!(
+                instruction.as_deref(),
+                Some("Represent this sentence for searching relevant passages: "),
+                "{name}"
+            );
+        }
+
+        // A non-English BGE still pools with CLS, but the English instruction
+        // is not its instruction.
+        let (pooling, instruction) = OnnxEmbeddingConfig::recipe_for("bge-small-zh-v1.5");
+        assert_eq!(pooling, Cls);
+        assert_eq!(instruction, None);
+
+        let (pooling, instruction) = OnnxEmbeddingConfig::recipe_for("multilingual-e5-base");
+        assert_eq!(pooling, Mean);
+        assert_eq!(instruction.as_deref(), Some("query: "));
+
+        for name in ["all-MiniLM-L6-v2", "gte-base", "nomic-embed-text-v1.5", ""] {
+            let (pooling, instruction) = OnnxEmbeddingConfig::recipe_for(name);
+            assert_eq!(pooling, Mean, "{name}");
+            assert_eq!(instruction, None, "{name}");
+        }
+    }
+
+    /// Each model's pooling head and query instruction are the ones it was
+    /// trained with, read off its own published `1_Pooling/config.json` and
+    /// model card — not a preference. BGE-small-en-v1.5 sets
+    /// `pooling_mode_cls_token: true` and lists
+    /// "Represent this sentence for searching relevant passages: " as its
+    /// retrieval query instruction; all-MiniLM-L6-v2 sets
+    /// `pooling_mode_mean_tokens: true` and has no instruction. Getting either
+    /// wrong ranks by noise on exactly the queries that share no vocabulary
+    /// with their answer, so both are pinned here.
+    #[test]
+    #[cfg(feature = "onnx")]
+    fn onnx_configs_pin_each_model_to_its_own_pooling_and_instruction() {
+        let bge = OnnxEmbeddingConfig::bge_small("/models");
+        assert_eq!(bge.pooling, OnnxPooling::Cls);
+        assert_eq!(
+            bge.query_instruction.as_deref(),
+            Some("Represent this sentence for searching relevant passages: ")
+        );
+
+        let minilm = OnnxEmbeddingConfig::minilm_l6("/models");
+        assert_eq!(minilm.pooling, OnnxPooling::Mean);
+        assert_eq!(minilm.query_instruction, None);
     }
 
     // ── known_model_dimensions unit tests ──────────────────────────────────

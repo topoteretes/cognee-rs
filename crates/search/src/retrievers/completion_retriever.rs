@@ -74,7 +74,7 @@ impl SearchRetriever for CompletionRetriever {
             ));
         }
 
-        let embeddings = self.embedding_engine.embed(&[query]).await?;
+        let embeddings = self.embedding_engine.embed_query(query).await?;
         let query_vector = embeddings.into_iter().next().ok_or_else(|| {
             SearchError::InvalidInput("embedding engine returned no vectors".to_string())
         })?;

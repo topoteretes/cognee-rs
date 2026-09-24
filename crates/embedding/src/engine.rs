@@ -29,6 +29,25 @@ pub trait EmbeddingEngine: Send + Sync {
     /// ```
     async fn embed(&self, texts: &[&str]) -> EmbeddingResult<Vec<Vec<f32>>>;
 
+    /// Embed a single **query**, applying whatever asymmetric query handling the
+    /// engine's model needs.
+    ///
+    /// Retrieval models in the BGE/E5 families are trained asymmetrically: the
+    /// query is prefixed with a short task instruction and the passage never is.
+    /// Embedding a query through [`EmbeddingEngine::embed`] therefore projects it
+    /// as if it were a passage, which costs ranking quality on exactly the
+    /// queries that share no vocabulary with their answer.
+    ///
+    /// The default implementation is [`EmbeddingEngine::embed`], so an engine
+    /// whose model is symmetric (OpenAI, Ollama, the mock) needs no override and
+    /// behaves exactly as before.
+    ///
+    /// # Errors
+    /// * Returns whatever [`EmbeddingEngine::embed`] would return.
+    async fn embed_query(&self, query: &str) -> EmbeddingResult<Vec<Vec<f32>>> {
+        self.embed(&[query]).await
+    }
+
     /// Get the dimensionality of embeddings produced by this engine
     ///
     /// # Returns

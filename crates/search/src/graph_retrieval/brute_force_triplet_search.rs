@@ -149,7 +149,7 @@ pub async fn brute_force_triplet_search(
         )));
     }
 
-    let query_vectors = embedding_engine.embed(&[query]).await?;
+    let query_vectors = embedding_engine.embed_query(query).await?;
     let query_vector = query_vectors.into_iter().next().ok_or_else(|| {
         SearchError::InvalidInput("embedding engine returned no vectors".to_string())
     })?;

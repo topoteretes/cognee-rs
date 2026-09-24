@@ -42,7 +42,7 @@ pub use utils::{handle_embedding_response, is_embeddable, sanitize_embedding_inp
 pub use bedrock::{BedrockEmbeddingEngine, BedrockEmbeddingFamily};
 
 #[cfg(feature = "onnx")]
-pub use config::OnnxEmbeddingConfig;
+pub use config::{BGE_QUERY_INSTRUCTION, OnnxEmbeddingConfig, OnnxPooling};
 #[cfg(feature = "onnx")]
 pub use download::{ModelUrls, download_model, ensure_model_exists, ensure_tokenizer_exists};
 #[cfg(feature = "onnx")]
