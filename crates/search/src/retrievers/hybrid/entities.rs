@@ -394,18 +394,21 @@ fn edge_sort_key(edge: &EdgeBullet, edge_ranks: &HashMap<String, usize>) -> (u8,
 /// Render a single connection triple into an [`EdgeBullet`], or `None` to drop.
 ///
 /// Port of `_edge_bullet` (`entities.py:262-281`), diverging deliberately in
-/// one way that only affects *rendering*, not the byte-identical prompt
-/// *template* (see the module docs and `format_entities`/`format_entity`): a
-/// structural chunk→entity `contains` edge whose source carries no name is
-/// dropped outright — see [`is_unnamed_contains_edge`].
+/// two ways that only affect *rendering*, not the byte-identical prompt
+/// *template* (see the module docs and `format_entities`/`format_entity`):
+///
+/// 1. A structural chunk→entity `contains` edge whose source carries no name
+///    is dropped outright — see [`is_unnamed_contains_edge`].
+/// 2. The synthesized fallback (no `edge_text` on the edge) reads as a
+///    sentence, e.g. `"Alice is a person."`, via [`render_edge_sentence`],
+///    instead of the `"{source} -- {relationship} -- {target}"` triple both
+///    SDKs used to emit.
 ///
 /// Text otherwise prefers the top-level `edge_text` (absent from graph
 /// triples in practice, kept for fidelity), then the nested
-/// `properties.edge_text`, then a synthesized
-/// `"{source} -- {relationship} -- {target}"` when all three labels are
-/// present; if still empty the bullet is dropped. `edge_type_id` is
-/// recomputed via [`connection_edge_type_id`] (edge-text-first), never from
-/// the raw relationship name.
+/// `properties.edge_text`; if nothing is renderable the bullet is dropped.
+/// `edge_type_id` is recomputed via [`connection_edge_type_id`] (edge-text-first),
+/// never from the raw relationship name.
 fn edge_bullet(source: &NodeLite, edge: &EdgeLite, target: &NodeLite) -> Option<EdgeBullet> {
     let relationship = edge.relationship_name.as_ref().and_then(display_value);
     if is_unnamed_contains_edge(source, relationship.as_deref()) {
@@ -424,8 +427,10 @@ fn edge_bullet(source: &NodeLite, edge: &EdgeLite, target: &NodeLite) -> Option<
         && let (Some(source_label), Some(relationship), Some(target_label)) =
             (&source_label, &relationship, &target_label)
     {
-        text = Some(format!(
-            "{source_label} -- {relationship} -- {target_label}"
+        text = Some(render_edge_sentence(
+            source_label,
+            relationship,
+            target_label,
         ));
     }
     let text = text?;
@@ -469,6 +474,27 @@ fn is_unnamed_contains_edge(source: &NodeLite, relationship: Option<&str>) -> bo
     let is_contains = relationship
         .is_some_and(|relationship| relationship.trim().eq_ignore_ascii_case("contains"));
     is_contains && source.get("name").and_then(display_value).is_none()
+}
+
+/// Render a synthesized `(source, relationship, target)` triple as a
+/// period-terminated sentence, e.g. `"Alice is a person."`.
+///
+/// Applies the sentence-rendering convention already used for chunk-contains
+/// facts ([`super::facts::CONTAINS_FACT_PREFIX`], a port of Python's
+/// `facts.py:10`) to the entity-edge path, where it was previously unused —
+/// the dash-triple fallback (`"{source} -- {relationship} -- {target}"`) is
+/// harder for a small on-device model to read than prose. The relationship
+/// label is normalized the same way [`is_type_relationship`] already does
+/// (lowercase, `_`/`-` → space, whitespace-collapsed); labels are rendered
+/// as-is.
+fn render_edge_sentence(source: &str, relationship: &str, target: &str) -> String {
+    let relationship_words = relationship
+        .to_lowercase()
+        .replace(['_', '-'], " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!("{source} {relationship_words} {target}.")
 }
 
 /// The dedupe key for a bullet, or `None` when any component is blank.
@@ -968,7 +994,7 @@ mod tests {
         add_node(&graph2, "target-1", "Target").await;
         add_edge(&graph2, "entity-1", "target-1", "REL", None).await;
         let (entities, _) = build_entities(&graph2, &hits, 5, &HashMap::new(), None, "OR").await;
-        assert_eq!(entities[0].edges[0].text, "Source -- REL -- Target");
+        assert_eq!(entities[0].edges[0].text, "Source rel Target.");
     }
 
     #[tokio::test]
@@ -1079,7 +1105,7 @@ mod tests {
         let bullets: Vec<&str> = entities[0].edges.iter().map(|e| e.text.as_str()).collect();
         assert_eq!(
             bullets,
-            ["Alice -- is_a -- Person", ranked_bullet, unranked_bullet]
+            ["Alice is a Person.", ranked_bullet, unranked_bullet]
         );
     }
 
@@ -1123,7 +1149,7 @@ mod tests {
             build_entities(&graph, &hits, 5, &HashMap::new(), Some(&keep), "OR").await;
         let bullets: Vec<&str> = entities[0].edges.iter().map(|e| e.text.as_str()).collect();
         assert!(bullets.contains(&"Alice works at Acme."), "{bullets:?}");
-        assert!(bullets.contains(&"Alice -- is_a -- Person"), "{bullets:?}");
+        assert!(bullets.contains(&"Alice is a Person."), "{bullets:?}");
         assert!(
             !bullets.contains(&"Alice works at Umbrella."),
             "{bullets:?}"
@@ -1178,7 +1204,7 @@ mod tests {
         let hits = vec![entity_hit(json!({"id": "entity-1", "name": "Entity"}))];
         let (entities, _) = build_entities(&graph, &hits, 5, &HashMap::new(), None, "OR").await;
         assert_eq!(entities[0].name, "Entity");
-        assert_eq!(entities[0].edges[0].text, "Source -- REL -- target-1");
+        assert_eq!(entities[0].edges[0].text, "Source rel target-1.");
     }
 
     #[tokio::test]
@@ -1220,7 +1246,19 @@ mod tests {
         add_edge(&graph, "box-id", "alice-id", "contains", None).await;
         let hits = vec![entity_hit(json!({"id": "alice-id", "name": "Alice"}))];
         let (entities, _) = build_entities(&graph, &hits, 5, &HashMap::new(), None, "OR").await;
-        assert_eq!(entities[0].edges[0].text, "Toolbox -- contains -- Alice");
+        assert_eq!(entities[0].edges[0].text, "Toolbox contains Alice.");
+    }
+
+    #[test]
+    fn render_edge_sentence_normalizes_the_relationship_into_words() {
+        assert_eq!(
+            render_edge_sentence("Alice", "is_a", "person"),
+            "Alice is a person."
+        );
+        assert_eq!(
+            render_edge_sentence("Alice", "WORKS-AT", "Acme"),
+            "Alice works at Acme."
+        );
     }
 
     #[tokio::test]
@@ -1317,7 +1355,7 @@ mod tests {
 
         assert_eq!(entities[0].edges.len(), 1);
         let bullet = &entities[0].edges[0];
-        assert_eq!(bullet.text, "Entity1 -- REL2 -- NA");
+        assert_eq!(bullet.text, "Entity1 rel2 NA.");
         assert_eq!(bullet.target_id.as_deref(), Some("n-a"));
         // The n-a -> n-b edge must not have leaked into the seed's bullets.
         assert!(entities[0].edges.iter().all(|e| {
