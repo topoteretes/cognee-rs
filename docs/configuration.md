@@ -445,6 +445,10 @@ Supported providers:
   setting `vector_db_url = ":memory:"`.
 - `pgvector` — Postgres + the `pgvector` extension; requires the `pgvector`
   Cargo feature on the binary build.
+- `evokoa` — Postgres + pgContext 0.3.0; requires the `evokoa` Cargo feature.
+  Source rows remain authoritative, while pgContext supplies the similarity
+  index. See [`crates/evokoa/README.md`](../crates/evokoa/README.md) for database
+  and role requirements.
 
 Qdrant lives in closed `cognee-cloud-rs` as the `cognee-vector-qdrant` crate
 and is not part of OSS. See [tools/backends.md](tools/backends.md).
@@ -462,7 +466,10 @@ initialization in OSS (it returns a config error rather than falling back).
 | `GRAPH_DATABASE_NAME` / `GRAPH_DATABASE_KEY` | … | _(empty)_ |
 | `GRAPH_DATABASE_USERNAME` / `GRAPH_DATABASE_PASSWORD` | … | _(empty)_ |
 
-Supported providers: `ladybug`/`kuzu` (embedded), `postgres` (feature `pggraph`).
+Supported providers: `ladybug`/`kuzu` (embedded), `postgres` (feature
+`pggraph`), and `evokoa` (feature `evokoa`). The Evokoa provider keeps the
+ordinary Postgres graph tables authoritative and uses pgGraph 1.2.1+ for graph
+traversal and connected-component metrics.
 
 The default is **derived from the graph backends the binary was compiled with**,
 not hardcoded. In order:
@@ -487,7 +494,7 @@ config (see [roadmap/cognify-compatibility-plan.md](roadmap/cognify-compatibilit
 > above describes the SDK `Settings` surface, where the component-form
 > `GRAPH_DATABASE_HOST`/`PORT`/`NAME`/`USERNAME`/`PASSWORD` variables and the
 > `DB_*` fallback are assembled into a connection string. The server does not
-> assemble one — with `GRAPH_DATABASE_PROVIDER=postgres` it requires
+> assemble one — with `GRAPH_DATABASE_PROVIDER=postgres` or `evokoa` it requires
 > `GRAPH_DATABASE_URL` (a `postgres://…` or `postgresql://…` string) and fails
 > at startup otherwise. See [tools/http-server.md](tools/http-server.md).
 

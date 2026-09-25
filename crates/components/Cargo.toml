@@ -33,6 +33,7 @@ ladybug      = ["cognee-graph/ladybug"]
 lancedb      = ["cognee-vector/lancedb"]
 pgvector     = ["cognee-vector/pgvector", "dep:url"]
 pggraph      = ["cognee-graph/postgres", "dep:url"]
+evokoa       = ["dep:cognee-evokoa", "dep:url"]
 # Record/replay cassette-based mock LLM (MOCK_LLM / COGNEE_RECORD_LLM).
 mock-llm     = ["cognee-llm/mock"]
 # AWS Bedrock provider. Default-on (plan §2.3, §6.2): it registers the
@@ -54,6 +55,7 @@ cognee-storage = { path = "../storage", version = "0.2.0" }
 # Dispatch pacing primitives shared with the LLM/embedding adapters.
 cognee-utils = { path = "../utils", version = "0.2.0" }
 cognee-vector = { path = "../vector", version = "0.2.0" }
+cognee-evokoa = { path = "../evokoa", version = "0.2.0", optional = true }
 async-trait.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

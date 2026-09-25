@@ -31,6 +31,7 @@ default = [
     "lancedb",
     "pgvector",
     "pggraph",
+    "evokoa",
     "sqlite",
     "postgres",
     "hf-tokenizer",
@@ -69,6 +70,7 @@ ladybug       = ["cognee/ladybug"]
 lancedb       = ["cognee/lancedb"]
 pgvector      = ["cognee/pgvector"]
 pggraph       = ["cognee/pggraph"]
+evokoa        = ["cognee/evokoa"]
 sqlite        = ["cognee/sqlite"]
 postgres      = ["cognee/postgres"]
 hf-tokenizer  = ["cognee/hf-tokenizer"]
