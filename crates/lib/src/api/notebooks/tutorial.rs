@@ -3,7 +3,9 @@
 //! The actual implementation (including the `include_dir!` bundling of cell
 //! assets) lives in `cognee_database::ops::tutorial_seeder` so that both
 //! `cognee` AND `cognee-http-server` can invoke the seeder without
-//! introducing a dependency on `cognee` from the HTTP server.
+//! introducing a dependency on `cognee` from the HTTP server. The HTTP
+//! server now lives in the closed `cognee-cloud-rs` repository and consumes
+//! `cognee-database` as a published crate.
 
 pub use cognee_database::{
     TUTORIAL_BASICS_ID, TUTORIAL_PYTHON_DEV_ID, seed_tutorials_if_first_call,

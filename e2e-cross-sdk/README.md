@@ -23,7 +23,6 @@ isolated tmpfs workspaces and compares the resulting SQLite state.
 ```bash
 cd cognee-rust/e2e-cross-sdk
 touch ../.env                         # stub required by docker-compose env_file
-cargo generate-lockfile --manifest-path ../Cargo.toml  # Cargo.lock is gitignored
 
 # Build the binaries the image expects, from the cognee-rust repo root:
 #   cargo build --release -p cognee-cli -p cognee-telemetry-emit

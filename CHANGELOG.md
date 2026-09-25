@@ -300,6 +300,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   this workspace and in the C/Python/TS/Java bindings is internal to
   `cognee-cognify`.
 
+- **`cognee-http-server` and `cognee-bench` are removed from this workspace.**
+  The HTTP server moved to the closed `cognee-cloud-rs` repository, taking the
+  28 `test_http_*.py` cross-SDK files, their fixtures, the dual-server
+  entrypoint and the locust suite with it; `e2e-cross-sdk` keeps only the
+  CLI/DB lane, and the `http-parity` workflow now runs that lane alone.
+  `cognee-bench` and its two driver scripts went with it (`cognee-bench` was
+  never published; the `cognee-cli` `bench` subcommand is unaffected).
+
+  **Migration.** Nothing in the library API changes — no `cognee`,
+  `cognee-database`, `cognee-search`, `cognee-llm`, `cognee-logging` or
+  `cognee-observability` item is added, removed or re-typed by this. Only
+  users who built the `cognee-http-server` binary from this repository are
+  affected, and they should track `cognee-cloud-rs` instead.
+  `cognee-http-server` 0.1.0 (published 2026-06-26, the only non-yanked
+  release; the crate has carried `publish = false` ever since) is scheduled
+  for yank on crates.io, since it can no longer be built from this source
+  tree.
+
 ### Added
 
 - **`LLM_STRUCTURED_OUTPUT_MODE=json_schema` — constrained decoding on

@@ -61,7 +61,6 @@ keywords = ["ai", "knowledge-graph", "memory", "rag", "embeddings"]
 categories = ["science", "database", "text-processing"]
 
 [workspace.dependencies]
-anyhow = "1"
 base64 = "0.22"
 assert_cmd = "2.0"
 async-trait = "0.1.89"

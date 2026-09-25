@@ -15,9 +15,13 @@ name: Cross-SDK Parity
 # ci.yml) and skip cleanly when absent (fork-safe).
 #
 # The workflow file name, the job id `http-parity` and the concurrency group are
-# deliberately UNCHANGED: the job has no `name:` key, so `http-parity` is the
-# required-status-check context on main and renaming it would silently un-gate
-# the branch.
+# deliberately UNCHANGED even though the HTTP half is gone, so that run history,
+# branch-filter queries and any bookmark to this lane keep resolving. `main`
+# carries no required status checks today (protection is a single approving
+# review; no rulesets), so nothing is gated on this name right now — but the job
+# has no `name:` key, so if a required context is ever configured for this lane
+# it will be `http-parity`, and a rename would then have to be made on both
+# sides at once.
 on:
   push:
     branches: [ main, master ]
@@ -247,8 +251,12 @@ jobs:
       # Why nothing was reused is still unexplained — the source was byte
       # identical and the dependency resolution was stable (the rust-cache dep
       # hash held at c4307474 across the same window). Worth understanding
-      # before any further attempt; the likely suspects are the regenerated
-      # Cargo.lock in the build context and the cache-mount RUN steps.
+      # before any further attempt; the likely suspect is the cache-mount RUN
+      # steps. (An earlier version of this note also blamed the regenerated
+      # Cargo.lock in the build context. That cannot have been a factor: the
+      # Rust build left the image for the runner in #133, and
+      # Dockerfile.dockerignore is an allowlist that never re-includes
+      # Cargo.lock, so the lockfile does not enter the build context at all.)
       #
       # ── Telemetry parity: cross-SDK identity-layer comparison ────────────
       # Asserts api_key_tracking_id and persistent_id parity between the
