@@ -1,7 +1,5 @@
 # Router: remember
 
-> **Moved.** `cognee-http-server` now lives in the closed [`cognee-cloud-rs`](https://github.com/topoteretes/cognee-cloud-rs) repo at `crates/cognee-http-server`. This page is kept as the wire-contract reference; any `crates/http-server/...` path it cites is historical and does not resolve in this repository.
-
 The remember router is the one-shot "ingest + cognify" endpoint: it accepts a multipart upload of files, persists them as data, and immediately runs the cognify pipeline against the resulting dataset. It is the highest-level write endpoint Cognee exposes, designed for clients that want a single round-trip from raw bytes to a queryable knowledge graph.
 
 It distinguishes itself from `/api/v1/add` (multipart upload only — no graph extraction) and `/api/v1/cognify` (graph extraction only — no upload). Internally it calls both in sequence; the response shape comes from `cognee.api.v1.remember.remember.RememberResult.to_dict()`.

@@ -1,7 +1,5 @@
 # Router: sessions
 
-> **Moved.** `cognee-http-server` now lives in the closed [`cognee-cloud-rs`](https://github.com/topoteretes/cognee-cloud-rs) repo at `crates/cognee-http-server`. This page is kept as the wire-contract reference; any `crates/http-server/...` path it cites is historical and does not resolve in this repository.
-
 Session-management dashboard endpoints. Powers the frontend's "Sessions" panel: a paginated session list, aggregate stat cards, a per-model spend breakdown, and a single-session detail view (record + the trailing QA / trace history). All four endpoints are read-only and share the same visibility model — the caller's own sessions plus sessions attached to a dataset the caller has `read` permission on.
 
 This router belongs to the v2 memory-API effort; its handlers cite "Decision N / divergence D-N" rationale notes that live alongside the broader v2 wire-shape conventions.

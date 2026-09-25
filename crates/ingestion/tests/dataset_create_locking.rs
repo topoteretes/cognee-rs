@@ -19,10 +19,7 @@
 //! committed dataset or finds nothing and creates its own.
 //!
 //! The create side of the same window — two `POST /v1/datasets` racing — is
-//! covered by `tests/test_dataset_create_acl.rs` in the HTTP server crate,
-//! which moved to the closed `cognee-cloud-rs` repo
-//! (`crates/cognee-http-server/tests/test_dataset_create_acl.rs`). That
-//! coverage still exists; it is just not on this repo's board any more.
+//! covered in `crates/http-server/tests/test_dataset_create_acl.rs`.
 
 use std::sync::Arc;
 use std::time::Duration;

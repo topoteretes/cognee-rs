@@ -18,11 +18,10 @@ workspace = true
 
 [[bin]]
 name = "cognee-telemetry-emit"
-# Source lives under e2e-cross-sdk/bin/ alongside the other harness helper
-# (telemetry_proxy.py) so they stay in one directory. The Cargo manifest
-# stays in this sibling crate dir to keep it out of the production crates/
-# tree. (start_servers.sh used to live there too; it left with the HTTP
-# parity lane.)
+# Source lives under e2e-cross-sdk/bin/ alongside the harness shell scripts
+# (telemetry_proxy.py, start_servers.sh) so all harness helpers live in one
+# directory. The Cargo manifest stays in this sibling crate dir to keep it
+# out of the production crates/ tree.
 path = "../bin/telemetry_emit.rs"
 
 [dependencies]

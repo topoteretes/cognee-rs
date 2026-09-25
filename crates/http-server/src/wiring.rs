@@ -1,0 +1,798 @@
+//! Construct default standalone backend handles for the HTTP server binary.
+//!
+//! Backend construction is delegated to the shared `cognee-components`
+//! registry; this module owns the eager `ComponentHandles` assembly and the
+//! server-specific policies (required-vs-optional downgrade, the pgvector
+//! coherence guard, session / search / responses wiring).
+
+use std::path::Path;
+use std::sync::Arc;
+
+use anyhow::anyhow;
+use cognee_components::{ComponentRegistry, build_database, build_storage};
+use cognee_core::{CpuPool, RayonThreadPool};
+use cognee_database::{
+    AclDb, CheckpointStore, DatabaseConnection, DeleteDb, IngestDb, SeaOrmCheckpointStore,
+    SearchHistoryDb,
+};
+use cognee_delete::DeleteService;
+use cognee_embedding::EmbeddingEngine;
+use cognee_graph::GraphDBTrait;
+use cognee_llm::{Llm, OpenAIResponsesClient, ResponsesClient, Transcriber};
+use cognee_ontology::{OntologyManager, OntologyResolver};
+use cognee_search::{
+    SeaOrmSessionStore, SearchBuilder, SearchOrchestrator, SessionManager, SessionStore,
+};
+use cognee_vector::VectorDB;
+use secrecy::ExposeSecret;
+
+use crate::components::ComponentHandles;
+use crate::config::HttpServerConfig;
+use crate::error::ServerError;
+use crate::notebook_runner::SubprocessRunner;
+
+fn ensure_dir(path: &Path) -> Result<(), ServerError> {
+    std::fs::create_dir_all(path)
+        .map_err(|e| ServerError::Other(anyhow!("create_dir_all({}): {e}", path.display())))
+}
+
+/// Wire the default standalone backends using the OSS built-in registry.
+pub async fn wire_default_backends(
+    cfg: &HttpServerConfig,
+) -> Result<ComponentHandles, ServerError> {
+    wire_default_backends_with(cfg, &ComponentRegistry::with_builtins()).await
+}
+
+/// Wire the default standalone backends using a caller-supplied registry.
+///
+/// Closed/embedding entry points call this with a registry that has external
+/// adapter factories registered (e.g. qdrant / litert) so a configured
+/// `vector_provider="qdrant"` resolves without editing OSS.
+pub async fn wire_default_backends_with(
+    cfg: &HttpServerConfig,
+    registry: &ComponentRegistry,
+) -> Result<ComponentHandles, ServerError> {
+    ensure_dir(&cfg.data_root_directory)?;
+    ensure_dir(&cfg.system_root_directory)?;
+
+    let ctx = cfg.backend_context();
+
+    // Required backends — a failure here aborts startup.
+    let storage = build_storage(&ctx).await?;
+    let database = build_database(&ctx).await?;
+    let graph_db = wire_graph_db(cfg, registry, &ctx).await?;
+    let vector_db = wire_vector_db(cfg, registry, &ctx).await?;
+
+    // Optional backends — a failure downgrades to `None` (handlers surface a
+    // 500-level envelope at runtime), preserving the historical behavior.
+    let embedding_engine = wire_embedding_engine(registry, &ctx).await;
+    let llm = wire_llm(registry, &ctx).await;
+    let transcriber = wire_transcriber(registry, &ctx).await;
+
+    let thread_pool: Option<Arc<dyn CpuPool>> = Some(Arc::new(
+        RayonThreadPool::with_default_threads()
+            .map_err(|e| ServerError::Other(anyhow!("rayon thread pool init failed: {e}")))?,
+    ));
+
+    let ontology_manager = Arc::new(OntologyManager::new(
+        cfg.data_root_directory.join("ontology"),
+    ));
+    let ontology_resolver: Option<Arc<dyn OntologyResolver>> = None;
+
+    let delete_service = Arc::new(DeleteService::new(
+        Arc::clone(&storage),
+        Arc::clone(&database) as Arc<dyn DeleteDb>,
+    ));
+
+    let checkpoint_store = Some(
+        Arc::new(SeaOrmCheckpointStore::new(Arc::clone(&database))) as Arc<dyn CheckpointStore>
+    );
+
+    let (session_store, session_manager) = wire_session(cfg, Arc::clone(&database)).await;
+
+    // OSS ships no production `AclDb` impl — the `DatabaseConnection` blanket
+    // impl lives in the closed `cognee-access-control` crate — so this is
+    // `None` here. It is threaded into the search orchestrator anyway so that
+    // a build which does supply one gets ACL-based `dataset_ids`
+    // authorization from the same handle the routers already consult.
+    let acl_db: Option<Arc<dyn AclDb>> = None;
+
+    let search_orchestrator = wire_search_orchestrator(
+        Arc::clone(&database),
+        acl_db.clone(),
+        llm.clone(),
+        Arc::clone(&graph_db),
+        Arc::clone(&vector_db),
+        embedding_engine.clone(),
+        session_manager.clone(),
+    );
+
+    let responses_client = wire_responses_client(cfg);
+
+    let notebook_runner = if cfg.notebook_runner_enabled {
+        Some(SubprocessRunner::new().into_dyn())
+    } else {
+        None
+    };
+
+    Ok(ComponentHandles {
+        database,
+        acl_db,
+        storage,
+        delete_service,
+        cloud_client: None,
+        ontology_manager,
+        search_orchestrator,
+        llm,
+        transcriber,
+        graph_db: Some(graph_db),
+        vector_db: Some(vector_db),
+        thread_pool,
+        embedding_engine,
+        ontology_resolver,
+        session_store,
+        session_manager,
+        checkpoint_store,
+        responses_client,
+        notebook_runner,
+    })
+}
+
+/// Validate the Postgres graph configuration, mirroring
+/// [`validate_vector_config`]. Kept here rather than in the factory so the
+/// operator gets a message naming the env var, before any connection attempt.
+///
+/// Skipped when no factory is registered for the provider: the registry then
+/// produces a strictly better diagnosis for `GRAPH_DATABASE_PROVIDER=postgres`
+/// — "Rebuild with the `pggraph` crate feature to enable it." Validating first
+/// would replace it with "GRAPH_DATABASE_URL … is required", sending the
+/// operator off to provision a database that cannot help, and they would only
+/// discover they need a different binary on the next boot.
+///
+/// Keyed off actual registration rather than this crate's `pggraph` feature.
+/// Registration is driven by `cognee-components/pggraph`, and the two features
+/// diverge in any multi-package build: `crates/lib`'s `pggraph` feature enables
+/// `cognee-components/pggraph`, so both `--workspace` and
+/// `cargo tree -p cognee-cli -p cognee-http-server` (the http-parity and e2e
+/// build recipe) resolve components *with* pggraph and this crate *without* it.
+/// Gating on the crate feature compiled the validator out of exactly those
+/// builds while `PgGraphFactory` stayed registered.
+fn validate_graph_config(
+    cfg: &HttpServerConfig,
+    registry: &ComponentRegistry,
+) -> Result<(), ServerError> {
+    let provider = cfg.graph_provider.to_ascii_lowercase();
+    if !crate::config::is_postgres_graph(&provider) {
+        return Ok(());
+    }
+    if !registry.graph_providers().iter().any(|p| p == &provider) {
+        return Ok(());
+    }
+    validate_graph_url(cfg)
+}
+
+/// The URL half of [`validate_graph_config`], split out so it is testable
+/// without a registry and compiles in every feature configuration.
+fn validate_graph_url(cfg: &HttpServerConfig) -> Result<(), ServerError> {
+    let provider = cfg.graph_provider.to_ascii_lowercase();
+    if !crate::config::is_postgres_graph(&provider) {
+        return Ok(());
+    }
+    let url = cfg.graph_db_url.trim();
+    if url.is_empty() {
+        return Err(ServerError::Other(anyhow!(
+            "GRAPH_DATABASE_URL (postgres connection string) is required when \
+             GRAPH_DATABASE_PROVIDER={provider}. The standalone server reads only \
+             GRAPH_DATABASE_URL; it does not assemble one from the component-form \
+             GRAPH_DATABASE_HOST/PORT/NAME/USERNAME/PASSWORD variables (the SDK \
+             does)."
+        )));
+    }
+    if !(url.starts_with("postgres://") || url.starts_with("postgresql://")) {
+        return Err(ServerError::Other(anyhow!(
+            "GRAPH_DATABASE_PROVIDER={provider} requires a postgres connection \
+             string in GRAPH_DATABASE_URL (postgres://… or postgresql://…), but \
+             got {found}. The value is not echoed here because connection \
+             strings can carry credentials.",
+            found = describe_scheme(url)
+        )));
+    }
+    Ok(())
+}
+
+async fn wire_graph_db(
+    cfg: &HttpServerConfig,
+    registry: &ComponentRegistry,
+    ctx: &cognee_components::BackendBuildContext,
+) -> Result<Arc<dyn GraphDBTrait>, ServerError> {
+    validate_graph_config(cfg, registry)?;
+    // Delegate to the registry (like wire_vector_db): it already errors with an
+    // actionable "registered providers: [...]" message for anything it doesn't
+    // know, and — crucially — this keeps the extension seam intact so a
+    // caller-registered graph factory (and the built-in `kuzu` alias) is
+    // reachable, instead of a hardcoded ladybug-only guard rejecting them.
+    Ok(registry.build_graph(ctx).await?)
+}
+
+/// Describe a rejected connection string without echoing it.
+///
+/// Connection strings routinely carry credentials, so a startup validation
+/// failure must not put the raw value into logs. The scheme is the part the
+/// operator actually needs in order to see what went wrong, and it cannot
+/// contain a password.
+fn describe_scheme(url: &str) -> String {
+    match url.split_once("://") {
+        Some((scheme, _)) if !scheme.is_empty() => format!("scheme '{scheme}://'"),
+        _ => "a value with no URL scheme".to_string(),
+    }
+}
+
+/// Validate the pgvector configuration. Kept in the server wrapper (not the
+/// shared factory) so `cognee`'s empty-URL→localhost synthesis is
+/// unaffected.
+fn validate_vector_config(cfg: &HttpServerConfig) -> Result<(), ServerError> {
+    let provider = cfg.vector_provider.to_ascii_lowercase();
+    if provider != "pgvector" {
+        return Ok(());
+    }
+    let url = cfg.vector_db_url.trim();
+    if url.is_empty() {
+        return Err(ServerError::Other(anyhow!(
+            "VECTOR_DB_URL (postgres connection string) is required when \
+             VECTOR_DB_PROVIDER=pgvector"
+        )));
+    }
+    // Guard against the incoherent default (VECTOR_DB_PROVIDER unset → pgvector,
+    // VECTOR_DB_URL unset → derived from SYSTEM_ROOT_DIRECTORY, i.e. a
+    // filesystem path). Without this, pgvector reports a cryptic "connection
+    // string '…/vectors' cannot be parsed". Point the operator at the actual
+    // misconfiguration instead.
+    if !(url.starts_with("postgres://") || url.starts_with("postgresql://")) {
+        return Err(ServerError::Other(anyhow!(
+            "VECTOR_DB_PROVIDER=pgvector requires a postgres connection string in \
+             VECTOR_DB_URL (postgres://… or postgresql://…), but got {found}. If you \
+             did not intend to use pgvector, set VECTOR_DB_PROVIDER explicitly (e.g. \
+             'mock' in a dev-mock build); the default derives this value from \
+             SYSTEM_ROOT_DIRECTORY, which is not a valid Postgres URL. The value is \
+             not echoed here because connection strings can carry credentials.",
+            found = describe_scheme(url)
+        )));
+    }
+    Ok(())
+}
+
+async fn wire_vector_db(
+    cfg: &HttpServerConfig,
+    registry: &ComponentRegistry,
+    ctx: &cognee_components::BackendBuildContext,
+) -> Result<Arc<dyn VectorDB>, ServerError> {
+    validate_vector_config(cfg)?;
+    Ok(registry.build_vector(ctx).await?)
+}
+
+/// Downgrade a required-backend build error to `None` with a warning — the
+/// standalone server's policy for the optional (search/llm/audio) backends,
+/// which surface a 500-level envelope at runtime when unwired.
+fn downgrade<T>(result: Result<T, cognee_components::ComponentError>, what: &str) -> Option<T> {
+    match result {
+        Ok(v) => Some(v),
+        Err(err) => {
+            tracing::warn!("{what} not wired: {err}");
+            None
+        }
+    }
+}
+
+async fn wire_embedding_engine(
+    registry: &ComponentRegistry,
+    ctx: &cognee_components::BackendBuildContext,
+) -> Option<Arc<dyn EmbeddingEngine>> {
+    downgrade(registry.build_embedding(ctx).await, "embedding engine")
+}
+
+async fn wire_llm(
+    registry: &ComponentRegistry,
+    ctx: &cognee_components::BackendBuildContext,
+) -> Option<Arc<dyn Llm>> {
+    downgrade(registry.build_llm(ctx).await, "llm")
+}
+
+async fn wire_transcriber(
+    registry: &ComponentRegistry,
+    ctx: &cognee_components::BackendBuildContext,
+) -> Option<Arc<dyn Transcriber>> {
+    // `build_transcriber` already yields `Ok(None)` for providers without audio
+    // support; a hard error (bad credentials) downgrades to None as before.
+    downgrade(registry.build_transcriber(ctx).await, "transcriber").flatten()
+}
+
+async fn wire_session(
+    cfg: &HttpServerConfig,
+    database: Arc<DatabaseConnection>,
+) -> (Option<Arc<dyn SessionStore>>, Option<Arc<SessionManager>>) {
+    if !cfg.session_store_backend.eq_ignore_ascii_case("seaorm") {
+        tracing::warn!(
+            "session store backend '{}' unsupported in standalone wiring; session disabled",
+            cfg.session_store_backend
+        );
+        return (None, None);
+    }
+
+    match SeaOrmSessionStore::new(database).await {
+        Ok(store_impl) => {
+            let store: Arc<dyn SessionStore> = Arc::new(store_impl);
+            let manager = Arc::new(SessionManager::new(Arc::clone(&store)));
+            (Some(store), Some(manager))
+        }
+        Err(err) => {
+            tracing::warn!("session store wiring failed, wiring as None: {err}");
+            (None, None)
+        }
+    }
+}
+
+fn wire_search_orchestrator(
+    database: Arc<DatabaseConnection>,
+    acl_db: Option<Arc<dyn AclDb>>,
+    llm: Option<Arc<dyn Llm>>,
+    graph_db: Arc<dyn GraphDBTrait>,
+    vector_db: Arc<dyn VectorDB>,
+    embedding_engine: Option<Arc<dyn EmbeddingEngine>>,
+    session_manager: Option<Arc<SessionManager>>,
+) -> Option<Arc<SearchOrchestrator>> {
+    let (Some(llm), Some(embedding_engine)) = (llm, embedding_engine) else {
+        tracing::warn!(
+            "search orchestrator not wired: requires llm + embedding engine, one or more missing"
+        );
+        return None;
+    };
+
+    let mut builder = SearchBuilder::new(
+        vector_db,
+        embedding_engine,
+        graph_db,
+        llm,
+        Arc::clone(&database) as Arc<dyn SearchHistoryDb>,
+    )
+    .with_dataset_resolver(Arc::clone(&database) as Arc<dyn IngestDb>);
+
+    if let Some(acl) = acl_db {
+        builder = builder.with_acl_db(acl);
+    }
+
+    if let Some(sm) = session_manager {
+        builder = builder.with_session_manager(sm);
+    }
+
+    Some(Arc::new(builder.build()))
+}
+
+fn wire_responses_client(cfg: &HttpServerConfig) -> Option<Arc<dyn ResponsesClient>> {
+    if !cfg.responses_client_enabled {
+        return None;
+    }
+
+    // The OpenAI Responses client speaks the OpenAI /responses convention
+    // (Authorization: Bearer, no api-version). Allowlist the providers that use
+    // that convention *and* can serve a /responses route: openai (empty means the
+    // openai default), plus the Bearer-auth OpenAI-compatible gateways — LiteLLM
+    // proxy and vLLM (>=0.9) expose an OpenAI-style /responses route and are
+    // typically configured as `custom` / `openai_compatible`. Excluded because
+    // they would 401/404 on every POST /api/v1/responses: Azure (api-key +
+    // api-version), Anthropic (no /responses route), and the ollama / mistral /
+    // gemini gateways (no /responses route). The feature is already opt-in via
+    // `responses_client_enabled` (config.rs), so a `custom` gateway that does not
+    // implement the route only 404s when its operator explicitly enables and
+    // calls it — add/cognify/search are unaffected either way.
+    let provider = cfg.llm_provider.to_ascii_lowercase();
+    if !matches!(
+        provider.as_str(),
+        "openai" | "" | "custom" | "openai_compatible"
+    ) {
+        // Reaching here means the operator *explicitly* enabled the responses
+        // client (the disabled case returned above), so warn rather than info:
+        // POST /api/v1/responses will 500 ("responses client is not wired") until
+        // they either drop the flag or switch to `custom`/`openai_compatible`
+        // (which keeps Bearer auth + a custom endpoint, so an OpenAI-style
+        // gateway fronting this provider still works).
+        tracing::warn!(
+            "responses client enabled but not wired for provider '{provider}': \
+             it is not on the OpenAI /responses allowlist \
+             (openai / custom / openai_compatible). POST /api/v1/responses will be \
+             unavailable; set LLM_PROVIDER=custom if your gateway serves /responses."
+        );
+        return None;
+    }
+
+    let api_key = cfg.llm_api_key.expose_secret().to_string();
+    if api_key.is_empty() {
+        tracing::warn!("responses client enabled but llm api key is missing; wiring as None");
+        return None;
+    }
+
+    let endpoint = if cfg.llm_endpoint.trim().is_empty() {
+        None
+    } else {
+        Some(cfg.llm_endpoint.clone())
+    };
+
+    // Honour the configured retry budget. Without this the client falls back to
+    // its own defaults, including the 240s minimum retry window — which would
+    // block an HTTP request handler for four minutes on a provider 429 and make
+    // both the retry count and the LLM_MIN_RETRY_SECONDS=0 fail-fast escape
+    // hatch inert on this path. `LLM_NETWORK_RETRIES`, not `LLM_MAX_RETRIES`:
+    // this client has no structured-output repair loop, so the transport ladder
+    // is the only one it runs (SDK-624).
+    match OpenAIResponsesClient::new(api_key, endpoint).map(|client| {
+        client
+            .with_network_retries(cfg.llm_network_retries)
+            .with_min_retry_elapsed(std::time::Duration::from_secs(u64::from(
+                cfg.llm_min_retry_seconds,
+            )))
+    }) {
+        Ok(client) => Some(Arc::new(client) as Arc<dyn ResponsesClient>),
+        Err(err) => {
+            tracing::warn!("responses client wiring failed, wiring as None: {err}");
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn rejected_urls_are_described_without_echoing_credentials() {
+        // A validation failure must never put the raw connection string into
+        // logs. Scheme only — it cannot contain a password.
+        assert_eq!(
+            describe_scheme("postgres://user:hunter2@db.internal:5432/x"),
+            "scheme 'postgres://'"
+        );
+        assert_eq!(
+            describe_scheme("/srv/.cognee_system/graph"),
+            "a value with no URL scheme"
+        );
+
+        let cfg = HttpServerConfig {
+            graph_provider: "postgres".to_string(),
+            graph_db_url: "mysql://user:hunter2@db.internal/x".to_string(),
+            ..Default::default()
+        };
+        let msg = match validate_graph_url(&cfg) {
+            Ok(()) => String::new(),
+            Err(err) => err.to_string(),
+        };
+        assert!(
+            !msg.contains("hunter2"),
+            "password leaked into error: {msg}"
+        );
+        assert!(
+            !msg.contains("db.internal"),
+            "host leaked into error: {msg}"
+        );
+        assert!(msg.contains("mysql://"), "scheme should be reported: {msg}");
+    }
+
+    #[test]
+    fn describe_scheme_never_reveals_credentials() {
+        assert_eq!(
+            describe_scheme("postgres://user:hunter2@db.internal:5432/x"),
+            "scheme 'postgres://'"
+        );
+        assert_eq!(
+            describe_scheme("/srv/.cognee_system/graph"),
+            "a value with no URL scheme"
+        );
+        // libpq keyword DSNs and bare user:pass@host have no "://" and must not
+        // fall through to echoing the value.
+        assert_eq!(
+            describe_scheme("host=db user=u password=hunter2"),
+            "a value with no URL scheme"
+        );
+    }
+
+    #[test]
+    fn vector_rejected_urls_are_described_without_echoing_credentials() {
+        let cfg = HttpServerConfig {
+            vector_provider: "pgvector".to_string(),
+            vector_db_url: "mysql://user:hunter2@db.internal/x".to_string(),
+            ..Default::default()
+        };
+        let msg = match validate_vector_config(&cfg) {
+            Ok(()) => String::new(),
+            Err(err) => err.to_string(),
+        };
+        assert!(
+            !msg.contains("hunter2"),
+            "password leaked into error: {msg}"
+        );
+        assert!(msg.contains("mysql://"), "scheme should be reported: {msg}");
+    }
+
+    #[test]
+    fn validate_graph_config_ladybug_ignores_graph_db_url() {
+        // The embedded graph is file-backed; a stray GRAPH_DATABASE_URL must not
+        // make the default provider fail to boot.
+        let cfg = HttpServerConfig {
+            graph_provider: "ladybug".to_string(),
+            graph_db_url: "not-a-url".to_string(),
+            ..Default::default()
+        };
+        assert!(validate_graph_url(&cfg).is_ok());
+    }
+
+    #[test]
+    fn validate_graph_config_postgres_requires_a_url() {
+        // Regression: graph_postgres_url used to be hardcoded to None, so
+        // GRAPH_DATABASE_PROVIDER=postgres failed deep inside PgGraphFactory with
+        // "requires a resolved Postgres URL" and no hint at which env var was
+        // missing — because none existed. Fail here instead, naming it.
+        let cfg = HttpServerConfig {
+            graph_provider: "postgres".to_string(),
+            graph_db_url: String::new(),
+            ..Default::default()
+        };
+        let msg = match validate_graph_url(&cfg) {
+            Ok(()) => String::new(),
+            Err(err) => err.to_string(),
+        };
+        assert!(
+            msg.contains("GRAPH_DATABASE_URL") && msg.contains("GRAPH_DATABASE_PROVIDER"),
+            "expected an actionable pggraph error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn validate_graph_config_postgres_rejects_non_postgres_url() {
+        let cfg = HttpServerConfig {
+            graph_provider: "postgresql".to_string(),
+            graph_db_url: "/srv/.cognee_system/graph".to_string(),
+            ..Default::default()
+        };
+        let msg = match validate_graph_url(&cfg) {
+            Ok(()) => String::new(),
+            Err(err) => err.to_string(),
+        };
+        assert!(
+            msg.contains("postgres connection string"),
+            "expected an actionable pggraph error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn validate_graph_config_skips_when_no_factory_is_registered() {
+        // Nothing registered for "postgres", so the registry owns the error
+        // ("Rebuild with the `pggraph` crate feature to enable it.") and
+        // pre-validation must stand aside even though the URL is unusable.
+        let cfg = HttpServerConfig {
+            graph_provider: "postgres".to_string(),
+            graph_db_url: String::new(),
+            ..Default::default()
+        };
+        assert!(validate_graph_config(&cfg, &ComponentRegistry::empty()).is_ok());
+    }
+
+    #[test]
+    fn validate_graph_config_validates_when_a_factory_is_registered() {
+        // Registered by a *stub*, so this holds regardless of which crate's
+        // `pggraph` feature is enabled. Gating the validator on this crate's
+        // feature compiled it out of every build where
+        // `cognee-components/pggraph` was on and this crate's was not, while
+        // `PgGraphFactory` stayed registered.
+        struct StubPgGraphFactory;
+        #[async_trait::async_trait]
+        impl cognee_components::GraphDbFactory for StubPgGraphFactory {
+            fn provider(&self) -> &str {
+                "postgres"
+            }
+            async fn build(
+                &self,
+                _ctx: &cognee_components::BackendBuildContext,
+            ) -> Result<Arc<dyn GraphDBTrait>, cognee_components::ComponentError> {
+                unreachable!("validation must reject the config before the factory is built")
+            }
+        }
+
+        let mut registry = ComponentRegistry::empty();
+        registry.register_graph(Arc::new(StubPgGraphFactory));
+
+        let cfg = HttpServerConfig {
+            graph_provider: "postgres".to_string(),
+            graph_db_url: String::new(),
+            ..Default::default()
+        };
+        let msg = match validate_graph_config(&cfg, &registry) {
+            Ok(()) => String::new(),
+            Err(err) => err.to_string(),
+        };
+        assert!(
+            msg.contains("GRAPH_DATABASE_URL") && msg.contains("GRAPH_DATABASE_PROVIDER"),
+            "expected the env-var-naming error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn backend_context_resolves_graph_postgres_url_for_both_spellings() {
+        // The core of the fix: the context must carry the URL through, or
+        // PgGraphFactory rejects the build. Both registered spellings resolve.
+        for provider in ["postgres", "postgresql"] {
+            let cfg = HttpServerConfig {
+                graph_provider: provider.to_string(),
+                graph_db_url: "  postgres://u:p@h:5432/db  ".to_string(),
+                ..Default::default()
+            };
+            let ctx = cfg.backend_context();
+            assert_eq!(
+                ctx.graph_postgres_url,
+                Some(Ok("postgres://u:p@h:5432/db".to_string())),
+                "{provider} must resolve a trimmed URL"
+            );
+        }
+    }
+
+    #[test]
+    fn backend_context_leaves_graph_postgres_url_unset_for_ladybug() {
+        let cfg = HttpServerConfig {
+            graph_provider: "ladybug".to_string(),
+            graph_db_url: "postgres://u:p@h:5432/db".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(cfg.backend_context().graph_postgres_url, None);
+    }
+
+    #[test]
+    fn backend_context_applies_explicit_onnx_asset_paths() {
+        let cfg = HttpServerConfig {
+            embedding_provider: "onnx".to_string(),
+            embedding_model_name: "custom-bge".to_string(),
+            embedding_dimensions: 768,
+            embedding_model_path: Some(PathBuf::from("/tmp/model.onnx")),
+            embedding_tokenizer_path: Some(PathBuf::from("/tmp/tokenizer.json")),
+            ..Default::default()
+        };
+
+        let ctx = cfg.backend_context();
+
+        assert_eq!(ctx.embedding.provider, "onnx");
+        assert_eq!(ctx.embedding.model, "custom-bge");
+        assert_eq!(ctx.embedding.dimensions, 768);
+        assert_eq!(ctx.embedding.onnx_model_name, "custom-bge");
+        assert_eq!(ctx.embedding.onnx_dimensions, 768);
+        assert_eq!(
+            ctx.embedding.onnx_model_path,
+            PathBuf::from("/tmp/model.onnx")
+        );
+        assert_eq!(
+            ctx.embedding.onnx_tokenizer_path,
+            PathBuf::from("/tmp/tokenizer.json")
+        );
+    }
+
+    // Gated on `onnx` because the fallback asserted below only exists in an
+    // `onnx` build. `cognee_components::onnx_asset_defaults()` reads
+    // `cognee_embedding::OnnxEmbeddingConfig::default()` under
+    // `cognee-components`'s own `onnx` cfg and returns inert (empty) paths
+    // otherwise — deliberately, because `build_embedding_config` populates
+    // `EmbeddingConfig::onnx` under that same cfg and so never reads them. The
+    // `./target/models` default is therefore unobservable *and* unused without
+    // `onnx`, which makes this a test of ONNX-build behaviour, not a bug.
+    // This crate's `onnx` forwards to `cognee-components/onnx`, so the gate is
+    // sufficient: under feature unification it can only skip the test (when our
+    // `onnx` is off but the dependency's is unified on), never fail it.
+    #[cfg(feature = "onnx")]
+    #[test]
+    fn backend_context_defaults_onnx_paths_when_unset() {
+        let cfg = HttpServerConfig {
+            embedding_provider: "onnx".to_string(),
+            embedding_model_path: None,
+            embedding_tokenizer_path: None,
+            ..Default::default()
+        };
+        let ctx = cfg.backend_context();
+        // Normalize separators so the assertion holds on Windows too (PathBuf
+        // stringifies with `\`).
+        let model_path = ctx
+            .embedding
+            .onnx_model_path
+            .to_string_lossy()
+            .replace('\\', "/");
+        assert!(
+            model_path.contains("target/models"),
+            "unset ONNX model path must fall back to the ./target/models default, got {model_path}"
+        );
+    }
+
+    #[tokio::test]
+    async fn wire_default_backends_fails_on_invalid_database_url() {
+        let mut cfg = HttpServerConfig::default();
+        let temp = tempfile::tempdir().expect("tempdir");
+        cfg.data_root_directory = temp.path().join("data");
+        cfg.system_root_directory = temp.path().join("system");
+        cfg.graph_file_path = cfg.system_root_directory.join("graph");
+        cfg.vector_db_url = cfg
+            .system_root_directory
+            .join("vectors")
+            .display()
+            .to_string();
+        cfg.relational_db_url = "not-a-valid-db-url".to_string();
+
+        let result = wire_default_backends(&cfg).await;
+        assert!(result.is_err());
+
+        let msg = match result {
+            Ok(_) => String::new(),
+            Err(err) => err.to_string(),
+        };
+        assert!(
+            msg.contains("initialization failed") || msg.contains("component error"),
+            "expected a database init failure, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn validate_vector_config_pgvector_rejects_non_postgres_url() {
+        // The incoherent default (VECTOR_DB_PROVIDER unset → pgvector, plus a
+        // VECTOR_DB_URL derived from SYSTEM_ROOT_DIRECTORY → a filesystem path)
+        // must fail with an actionable message, not the cryptic connection-
+        // string parse error the pgvector driver would otherwise emit.
+        let cfg = HttpServerConfig {
+            vector_provider: "pgvector".to_string(),
+            vector_db_url: "/srv/.cognee_system/vectors".to_string(),
+            ..Default::default()
+        };
+
+        let msg = match validate_vector_config(&cfg) {
+            Ok(()) => String::new(),
+            Err(err) => err.to_string(),
+        };
+        assert!(
+            msg.contains("postgres connection string") && msg.contains("VECTOR_DB_PROVIDER"),
+            "expected actionable pgvector error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn wire_responses_client_allowlist_covers_bearer_compatible_gateways() {
+        use secrecy::SecretString;
+
+        let cfg_for = |provider: &str| HttpServerConfig {
+            llm_provider: provider.to_string(),
+            llm_api_key: SecretString::new("sk-test".to_string().into()),
+            responses_client_enabled: true,
+            ..Default::default()
+        };
+
+        // openai plus the Bearer-auth OpenAI-compatible gateways (LiteLLM / vLLM,
+        // configured as custom / openai_compatible) can serve the /responses route.
+        for provider in ["openai", "", "custom", "openai_compatible"] {
+            assert!(
+                wire_responses_client(&cfg_for(provider)).is_some(),
+                "provider '{provider}' should wire a responses client"
+            );
+        }
+
+        // api-key auth (azure) or no /responses route (anthropic / ollama /
+        // mistral / gemini) stay excluded.
+        for provider in ["azure", "anthropic", "ollama", "mistral", "gemini"] {
+            assert!(
+                wire_responses_client(&cfg_for(provider)).is_none(),
+                "provider '{provider}' must not wire a responses client"
+            );
+        }
+
+        // The opt-in flag still gates an allowlisted provider.
+        let disabled = HttpServerConfig {
+            responses_client_enabled: false,
+            ..cfg_for("openai")
+        };
+        assert!(wire_responses_client(&disabled).is_none());
+    }
+}

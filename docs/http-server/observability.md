@@ -1,7 +1,5 @@
 # HTTP Server — Observability
 
-> **Moved.** `cognee-http-server` now lives in the closed [`cognee-cloud-rs`](https://github.com/topoteretes/cognee-cloud-rs) repo at `crates/cognee-http-server`. This page is kept as the wire-contract reference; any `crates/http-server/...` path it cites is historical and does not resolve in this repository.
-
 Specification for the Rust HTTP server's tracing, span buffering, and access-log strategy. Drives the implementation of `/api/v1/activity/spans`, the structured logs ingested by deployments, and the per-handler tracing that feeds both. Pipeline-run history (the *durable* observability tier) is covered in [pipelines.md](pipelines.md); this doc is the *live* tier.
 
 Companion docs: [architecture.md](architecture.md), [pipelines.md](pipelines.md).

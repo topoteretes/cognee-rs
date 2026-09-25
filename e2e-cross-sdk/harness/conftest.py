@@ -5,6 +5,17 @@ The core flow:
 2. Extract owner_id and tenant_id from the Python SQLite database.
 3. Configure the Rust CLI to use those same IDs.
 4. Run Rust ``add`` with ``--tenant-id`` so UUID5 inputs match Python exactly.
+
+HTTP fixture hygiene notes
+--------------------------
+The ``/py`` and ``/rs`` tmpfs workspaces are wiped per ``docker compose run``
+invocation but NOT between tests within a single run.  Tests must not rely on
+a clean DB between test functions — use ``unique_dataset_name`` to avoid
+cross-test contamination, and add explicit teardown when the test creates
+persistent state (API keys, named datasets, etc.).
+
+The Python-side DB migrations are run once at container start (via
+``start_servers.sh``).  The Rust server runs its own migrations on first boot.
 """
 
 import os
@@ -192,3 +203,171 @@ def both_cognified(tmp_path):
     assert result.returncode == 0, f"Rust cognify failed:\n{result.stdout}\n{result.stderr}"
 
     return py_ws, rust_ws
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# HTTP parity fixtures
+# ─────────────────────────────────────────────────────────────────────────────
+# These fixtures are used exclusively by test_http_*.py files and drive two
+# live HTTP servers (Python uvicorn on :8000, Rust cognee-http-server on :8001)
+# that are started by the e2e-http-tests Compose service's entrypoint.
+# ─────────────────────────────────────────────────────────────────────────────
+
+import httpx
+import uuid as _uuid
+
+PY_BASE = "http://127.0.0.1:8000"
+RS_BASE = "http://127.0.0.1:8001"
+
+
+@pytest.fixture
+def py_client():
+    """httpx.Client pre-configured for the Python uvicorn server."""
+    with httpx.Client(base_url=PY_BASE, timeout=60.0) as c:
+        yield c
+
+
+@pytest.fixture
+def rs_client():
+    """httpx.Client pre-configured for the Rust cognee-http-server."""
+    with httpx.Client(base_url=RS_BASE, timeout=60.0) as c:
+        yield c
+
+
+@pytest.fixture
+def both_clients(py_client, rs_client):
+    """Dict with both clients keyed by 'py' and 'rs'."""
+    return {"py": py_client, "rs": rs_client}
+
+
+# Tests skipped because a server exposes no /api/v1/auth/* surface. Collected so
+# the run can state the count instead of burying it in per-test skip reasons: a
+# suite reporting "120 passed, 40 skipped" reads as healthy, and the reason those
+# 40 did not run is the single most important fact about the run.
+_AUTH_SKIPPED: list[str] = []
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    """State the auth-skip count prominently at the end of the run."""
+    if not _AUTH_SKIPPED:
+        return
+    terminalreporter.write_sep("=", "cross-SDK parity: auth-gated tests skipped")
+    terminalreporter.write_line(
+        f"{len(_AUTH_SKIPPED)} test(s) did not execute because a server exposes "
+        "no /api/v1/auth/* routes."
+    )
+    terminalreporter.write_line(
+        "The OSS cognee-http-server ships no auth router (only the "
+        "AuthenticatedUser extractor), and bin/start_servers.sh launches exactly "
+        "that binary — so these tests never run in the default configuration."
+    )
+    terminalreporter.write_line(
+        "To make them count: boot a closed cognee-http-cloud binary, or set "
+        "COGNEE_PARITY_REQUIRE_AUTH=1 to turn these skips into failures."
+    )
+
+
+@pytest.fixture(scope="session")
+def auth_endpoints_available() -> dict:
+    """Probe each server for the closed-cloud ``/api/v1/auth/*`` surface.
+
+    The auth routes (``/register``, ``/login``, ``/me``, ``/logout``) live in
+    the closed ``cognee-cloud-rust/crates/cognee-http-cloud`` crate and are NOT
+    exposed by the OSS ``cognee-http-server`` (plan §6.1). The probe is a
+    cheap unauthenticated ``GET /api/v1/auth/me`` per server:
+
+    * Closed-cloud build → 401 (route present, just unauthenticated).
+    * OSS build         → 404 (route absent entirely).
+    * Network/timeout   → treated as missing so we skip rather than hang.
+
+    Returns a ``{"py": bool, "rs": bool}`` dict so callers can distinguish
+    asymmetric deployments (e.g. closed Python server vs OSS Rust server)
+    and produce targeted skip messages.
+    """
+    out: dict = {}
+    for name, base in (("py", PY_BASE), ("rs", RS_BASE)):
+        try:
+            r = httpx.get(f"{base}/api/v1/auth/me", timeout=2.0)
+            out[name] = r.status_code != 404
+        except (httpx.RequestError, httpx.TimeoutException):
+            out[name] = False
+    return out
+
+
+@pytest.fixture
+def authed_clients(both_clients, auth_endpoints_available):
+    """Register + login on both servers; return clients with auth cookies/headers set.
+
+    Register uses JSON with ``email``; login uses OAuth2 form with ``username``
+    (matching e2e-parity.md §4 and FastAPI-users behaviour).
+
+    Skipped against the OSS ``cognee-http-server`` build: the
+    ``/api/v1/auth/*`` routes were moved to the closed
+    ``cognee-cloud-rust/crates/cognee-http-cloud`` crate in T3-move (plan
+    §6.1) and are absent from the OSS server. The session-scoped
+    ``auth_endpoints_available`` probe distinguishes the two builds.
+    """
+    missing = [name for name, ok in auth_endpoints_available.items() if not ok]
+    if missing:
+        _AUTH_SKIPPED.append(", ".join(missing))
+        message = (
+            "Cognee server(s) do not expose /api/v1/auth/* "
+            f"(missing on: {', '.join(missing)}) — likely an OSS build. "
+            "These tests cover the closed cognee-http-cloud auth surface; run them "
+            "against a closed cognee-cloud-rust deployment (plan §6.1)."
+        )
+        # Opt-in strictness. The default remains a skip, because the OSS server
+        # genuinely has no auth router and failing every one of these on an OSS
+        # build would be noise rather than signal. But a skip is invisible, and
+        # this fixture gates ~20 of the harness's files — the whole of CI phases
+        # 1, 2 and 2b — so a run that believes it is checking auth-gated parity
+        # needs a way to insist. Set COGNEE_PARITY_REQUIRE_AUTH=1 (e.g. in a job
+        # that boots a closed cognee-http-cloud binary) to turn the skip into a
+        # failure.
+        if os.environ.get("COGNEE_PARITY_REQUIRE_AUTH", "").lower() in {"1", "true", "yes"}:
+            pytest.fail(
+                "COGNEE_PARITY_REQUIRE_AUTH is set, but " + message,
+                pytrace=False,
+            )
+        pytest.skip(message)
+    creds = {"username": "test@example.com", "password": "test_password_123"}
+    for name, c in both_clients.items():
+        # Bootstrap user — ignore 409 / 422 "already exists" on re-runs.
+        c.post(
+            "/api/v1/auth/register",
+            json={
+                "email": creds["username"],
+                "password": creds["password"],
+                "is_verified": True,
+            },
+        )
+        r = c.post("/api/v1/auth/login", data=creds)
+        assert r.status_code == 200, f"{name} login failed: {r.text}"
+    return both_clients
+
+
+# ── Data-hygiene fixtures ──────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def unique_dataset_name(request):
+    """Return a function-scoped unique dataset name to avoid cross-test contamination."""
+    return f"test_{request.node.name}_{_uuid.uuid4().hex[:8]}"
+
+
+@pytest.fixture
+def cleanup_api_keys(both_clients):
+    """Collect issued API-key IDs and DELETE them at teardown.
+
+    Usage::
+
+        def test_create_key(authed_clients, cleanup_api_keys):
+            r = authed_clients["py"].post("/api/v1/api-keys", json={"name": "k"})
+            cleanup_api_keys["py"].append(r.json()["id"])
+    """
+    issued: dict = {"py": [], "rs": []}
+    yield issued
+    for side, ids in issued.items():
+        c = both_clients[side]
+        for key_id in ids:
+            c.delete(f"/api/v1/api-keys/{key_id}")

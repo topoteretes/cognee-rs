@@ -10,8 +10,8 @@
 //! canonical answer to "does this URL name a database only this process can
 //! see". `cognee-utils` is a dependency *of* this crate, so it cannot reach
 //! that predicate; every caller that needs this one — `cognee`,
-//! `cognee-bindings-common`, and `cognee-http-server` from the closed
-//! `cognee-cloud-rs` repo — already depends on `cognee-database`.
+//! `cognee-http-server`, `cognee-bindings-common` — already depends on
+//! `cognee-database`.
 
 use crate::connection::sqlite_url_is_in_memory;
 

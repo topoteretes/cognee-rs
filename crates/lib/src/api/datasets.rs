@@ -280,9 +280,8 @@ impl DatasetManager {
         // The same helper backs `POST /v1/datasets`
         // (`cognee_http_server::routers::datasets::create_new_dataset`), which
         // cannot call this facade — `cognee-http-server` deliberately does not
-        // depend on `cognee`. That crate now lives in the closed
-        // `cognee-cloud-rs` repo, so the two create paths are kept from
-        // drifting across repo boundaries by this one grant implementation.
+        // depend on `cognee`. One grant implementation is what keeps the two
+        // create paths from drifting.
         grant_all_permissions_on_dataset_via_trait(acl.as_ref(), owner_id, ds.id).await?;
         if let Some(parent) = parent_user_id
             && parent != owner_id

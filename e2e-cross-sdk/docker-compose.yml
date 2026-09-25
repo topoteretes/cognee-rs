@@ -1,10 +1,10 @@
 services:
   e2e-tests:
-    # Shared image tag: e2e-tests and e2e-telemetry both build the SAME image
-    # from the same Dockerfile+context. Naming it makes Compose build it once and
-    # reuse it across services — otherwise each `docker compose run` triggers a
-    # fresh per-service build, and the duplicate Rust release build (lbug's heavy
-    # C++) can OOM the runner.
+    # Shared image tag: e2e-tests / e2e-http-tests / e2e-telemetry all build the
+    # SAME image from the same Dockerfile+context. Naming it makes Compose build
+    # it once and reuse it across services — otherwise each `docker compose run`
+    # triggers a fresh per-service build, and the duplicate Rust release build
+    # (lbug's heavy C++) can OOM the runner.
     image: cognee-e2e-cross-sdk:latest
     build:
       context: ../..                              # /home/dmytro/dev/cognee/ (monorepo root)
@@ -24,9 +24,9 @@ services:
       #   docker compose run --rm -e OPENAI_TOKEN="$OPENAI_TOKEN" e2e-tests ...
       # See the COGX steps in .github/workflows/http-parity.yml.
       #
-      # EMBEDDING_* must NOT be forwarded to this service at all: it drives
-      # the CLIs, and the Rust CLI embeds locally through the ONNX model
-      # baked into the image at /opt/models
+      # EMBEDDING_* must NOT be forwarded to this service at all, unlike in
+      # e2e-http-tests: this one drives the CLIs, and the Rust CLI embeds
+      # locally through the ONNX model baked into the image at /opt/models
       # (write_rust_config's embedding_model_path). Overriding it sends the
       # litellm-style `openai/text-embedding-3-small` — correct for Python,
       # which strips the provider prefix — straight to the OpenAI API, which
@@ -34,6 +34,40 @@ services:
     tmpfs:
       - /workspace                                # ephemeral workspace per run
     command: ["pytest", "-vs", "/harness/"]
+
+  e2e-http-tests:
+    image: cognee-e2e-cross-sdk:latest           # shared build — see e2e-tests
+    build:
+      context: ../..                              # /home/dmytro/dev/cognee/ (monorepo root)
+      dockerfile: cognee-rust/e2e-cross-sdk/Dockerfile
+    env_file:
+      - ../.env                                   # cognee-rust/.env (OPENAI_TOKEN, OPENAI_MODEL, etc.)
+    environment:
+      - LLM_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      # Forward LLM/embedding config from the host (CI step env / local shell)
+      # into the container so start_servers.sh can configure BOTH servers.
+      # Bare names pass the host value through when set, and fall back to the
+      # env_file (../.env) for local dev when the host var is unset. Python's
+      # /add needs a working LLM/embedding provider (it raises
+      # LLMAPIKeyNotSetError otherwise), so the key-gated phases set these.
+      - OPENAI_TOKEN
+      - OPENAI_URL
+      - OPENAI_MODEL
+      - LLM_API_KEY
+      - LLM_API_ENDPOINT
+      - LLM_PROVIDER
+      - EMBEDDING_PROVIDER
+      - EMBEDDING_MODEL
+      - EMBEDDING_ENDPOINT
+      - EMBEDDING_API_KEY
+      - EMBEDDING_DIMENSIONS
+      - MOCK_EMBEDDING
+      - COGNEE_SKIP_CONNECTION_TEST
+    tmpfs:
+      - /py                                       # ephemeral Python server workspace
+      - /rs                                       # ephemeral Rust server workspace
+    entrypoint: ["/usr/local/bin/start_servers.sh"]
+    command: ["pytest", "-vs", "/harness/", "-k", "test_http_"]
 
   # Mock proxy for the cross-SDK telemetry parity test. Captures every
   # POST body to a shared volume so the pytest can read both the Python

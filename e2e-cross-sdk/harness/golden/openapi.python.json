@@ -1,0 +1,9 @@
+{
+  "_note": "This is a placeholder snapshot. Regenerate with test_http_openapi.py::_write_golden_snapshot against a running Python server.",
+  "info": {
+    "title": "Cognee API",
+    "version": "1.0.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {}
+}

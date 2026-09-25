@@ -1,7 +1,5 @@
 # Router: datasets
 
-> **Moved.** `cognee-http-server` now lives in the closed [`cognee-cloud-rs`](https://github.com/topoteretes/cognee-cloud-rs) repo at `crates/cognee-http-server`. This page is kept as the wire-contract reference; any `crates/http-server/...` path it cites is historical and does not resolve in this repository.
-
 The CRUD-and-everything-else router for datasets and the `Data` rows inside them. Eleven endpoints: list/create/delete the dataset itself, list/delete data items inside, fetch the rendered knowledge graph, fetch and update the per-dataset graph schema, query pipeline status, and stream the original raw bytes back to the client. This is the biggest router in the API by surface area.
 
 Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../tenants.md](../tenants.md), [../observability.md](../observability.md), [delete.md](delete.md), [add.md](add.md).

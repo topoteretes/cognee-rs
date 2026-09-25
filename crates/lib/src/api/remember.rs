@@ -659,9 +659,8 @@ async fn remember_session(
 /// Mirrors Python's `_dispatch_session_entry` at
 /// `cognee/api/v1/remember/remember.py:190-313`. The `entry_type` /
 /// `entry_id` fields on the returned [`RememberResult`] are populated for
-/// **all three** branches; the HTTP DTO (E-02) carries them through to the
-/// wire — it lives in the closed `cognee-cloud-rs` repo at
-/// `crates/cognee-http-server/src/dto/`.
+/// **all three** branches; the HTTP DTO at `crates/http-server/src/dto/`
+/// (E-02) carries them through to the wire.
 ///
 /// **Behavior**:
 /// - Empty `session_id` returns `Err(ApiError::InvalidArgument)` (Python

@@ -240,31 +240,12 @@ jobs:
       # no-default target dir to keep these odd feature sets out of the main cache
       # (it shares little with the `-p cognee` lane above — different package and
       # features — but both are small check-only trees).
-      #
-      # This lane used to be spelled `-p cognee-http-server`. That crate moved to
-      # the closed cognee-cloud-rs repo, which now runs the original spelling
-      # against its own copy (closed-ci.yml, the cognee-http-server Postgres-only
-      # seam canary). The seams the lane actually guards live in
-      # cognee-components / -vector / -graph / -embedding, and all of those stay
-      # in OSS, so grade them directly here.
-      #
-      # NOT a like-for-like swap, and worth saying so: the old lane compiled a
-      # real server consumer, so it also covered breakages that only appear when
-      # these features are combined the way a server binary combines them. That
-      # coverage still exists — it is just on the closed board now, not this one.
-      #
-      # MIRRORED, character-for-character, by the "Compilation check
-      # (Postgres-only backends)" block in scripts/check_all.sh. Change both or
-      # neither: this repo has already been burned by the local gate and CI
-      # silently disagreeing about what they grade.
-      - name: Compilation check (Postgres-only backends)
+      - name: Compilation check (Postgres-only server)
         env:
           CARGO_TARGET_DIR: target/no-default
         run: |
-          cargo check -p cognee-components --no-default-features --all-targets \
-            --features pgvector,pggraph
-          cargo check -p cognee --no-default-features --all-targets \
-            --features telemetry,html-loader,pgvector,pggraph,postgres,sqlite
+          cargo check -p cognee-http-server --no-default-features --all-targets \
+            --features telemetry,html-loader,pgvector,pggraph
 
       # crates/cli reaches `cognee` with `default-features = false`, so its own
       # feature list can actually subtract. Guard both ends of that seam: the

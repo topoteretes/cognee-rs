@@ -1,6 +1,6 @@
 # cognee-cli
 
-Single-user, local command-line interface over the cognee pipeline (`add` → `cognify` → `search` and the higher-level memory ops). It drives the embedded engine directly against your local databases — there is **no HTTP server** here (no `serve`, no `disconnect`); for the networked API use the `cognee-http-server` crate, which lives in the closed [`cognee-cloud-rs`](https://github.com/topoteretes/cognee-cloud-rs) repo.
+Single-user, local command-line interface over the cognee pipeline (`add` → `cognify` → `search` and the higher-level memory ops). It drives the embedded engine directly against your local databases — there is **no HTTP server** here (no `serve`, no `disconnect`); for the networked API use the `cognee-http-server` crate instead.
 
 ## Commands
 

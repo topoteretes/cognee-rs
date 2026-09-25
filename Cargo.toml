@@ -30,6 +30,9 @@ members = [
     "crates/test-utils",
     "crates/visualization",
     "crates/migration",
+    "crates/http-server",
+    # Criterion benchmarks for the Rust HTTP server and pipelines
+    "crates/bench",
     "crates/observability",
     "crates/telemetry",
     "python",
@@ -61,6 +64,7 @@ keywords = ["ai", "knowledge-graph", "memory", "rag", "embeddings"]
 categories = ["science", "database", "text-processing"]
 
 [workspace.dependencies]
+anyhow = "1"
 base64 = "0.22"
 assert_cmd = "2.0"
 async-trait = "0.1.89"

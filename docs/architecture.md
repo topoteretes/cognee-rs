@@ -34,6 +34,7 @@ cognee-rs/
 │   ├── ontology/               # Ontology resolution (RDF/JSON-LD loader, NoOp resolver)
 │   ├── delete/                 # Dataset/data deletion across all backends
 │   ├── core/                   # Task pipeline orchestration framework
+│   ├── http-server/            # axum HTTP server (library + cognee-http-server binary)
 │   ├── visualization/          # Single-file multi-tab HTML knowledge-graph visualization (d3.js)
 │   ├── migration/              # COGX export — portable archives importable by Python cognee
 │   ├── observability/          # OpenTelemetry tracing pipeline (OTLP exporter, telemetry feature)
@@ -43,6 +44,7 @@ cognee-rs/
 │   ├── cognee-lib/             # Deprecated re-export shim keeping the old `cognee-lib` crate name
 │   ├── bindings-common/        # Shared SDK facade for the JS (Neon) + C-API bindings
 │   ├── cli/                    # CLI binary (cognee-cli)
+│   ├── bench/                  # Criterion benchmarks (add + cognify + search pipeline)
 │   ├── utils/                  # Shared utilities
 │   └── test-utils/             # Mock implementations (MockStorage, MockGraphDB, MockVectorDB)
 ├── capi/                       # C API bindings (FFI)
@@ -91,7 +93,9 @@ cognee-rs/
 
 **cognee-core** — Async runtime, task scheduling, and pipeline-execution primitives. Traits: `PipelineWatcher`, `ExecStatusManager`. Impls: `NoopWatcher`, `RayonThreadPool`, `NoopExecStatusManager`.
 
-**cognee-components** — Shared backend construction. Owns `ComponentError`, the `BackendBuildContext` (the resolved, env-free input both callers lower their config into), the adapter factory traits (`VectorDbFactory`, `GraphDbFactory`, `LlmFactory`, `EmbeddingFactory`), and the `ComponentRegistry` (provider-id → factory) with `with_builtins()`. Sits below `cognee` and below the closed `cognee-http-server`; both delegate their backend construction here, so the two paths can't drift. The registry is the explicit-DI extension seam — external adapters (closed `cognee-vector-qdrant` / `cognee-llm-litert`) implement a factory trait and `register_*` it at their binary entry point. See [operations.md](operations.md).
+**cognee-components** — Shared backend construction. Owns `ComponentError`, the `BackendBuildContext` (the resolved, env-free input both callers lower their config into), the adapter factory traits (`VectorDbFactory`, `GraphDbFactory`, `LlmFactory`, `EmbeddingFactory`), and the `ComponentRegistry` (provider-id → factory) with `with_builtins()`. Sits below `cognee` and `cognee-http-server`; both delegate their backend construction here, so the two paths can't drift. The registry is the explicit-DI extension seam — external adapters (closed `cognee-vector-qdrant` / `cognee-llm-litert`) implement a factory trait and `register_*` it at their binary entry point. See [operations.md](operations.md).
+
+**cognee-http-server** — `axum`-based HTTP server. Library exposes `build_router`, `run`, and `AppState`; also builds the `cognee-http-server` binary. Routers mirror the Python FastAPI surface under `/api/v1/*`. See [http-server/](http-server/README.md).
 
 **cognee-visualization** — Single-file HTML knowledge-graph visualization (d3.js v7) with four tabs — Graph, Schema, Memory, Semantic — plus a node inspector. `preprocessor` derives the whole payload (node/link normalization, stage + `topological_rank` layout, colour maps, memory map, type-schema graph, operation layer); `html` substitutes it into the frontend assets under `assets/`, which are vendored **verbatim** from Python and must never be hand-edited (see `assets/README.md`). Entry points: `visualize`/`render`/`render_multi_user`. Surfaces via the CLI `visualize` subcommand. Payload gaps in [roadmap/not-implemented.md](roadmap/not-implemented.md#visualization).
 
@@ -102,6 +106,8 @@ cognee-rs/
 **cognee-telemetry** — Product-analytics client (`send_telemetry`). Fire-and-forget POST to `https://test.prometh.ai` per public API call; opt out with `TELEMETRY_DISABLED`, `ENV=test|dev`, or `--no-default-features`. See [observability/send_telemetry.md](observability/send_telemetry.md).
 
 **cognee-logging** — Shared file-based logging: rotation, the Python-compatible plain-text formatter, and a noise-suppressing `EnvFilter`. Entry point: `init_logging`, called by the CLI and HTTP server. Env-var surface documented in [configuration.md §logging](configuration.md#logging).
+
+**cognee-bench** — Criterion benchmark crate (`batch_add_cognify`) exercising the add + cognify + search pipeline.
 
 **cognee-bindings-common** — Shared SDK facade for the Neon JS, C-API, and Java (JNI) bindings: `SdkError` (+ `code()`), `HandleState`, `CogneeServices`, and neon-free JSON wire helpers. Not a new user-facing Rust API — that remains `cognee::api`.
 
@@ -146,7 +152,8 @@ cognee-rs/
 | `tokenizers` / `tiktoken-rs` | Tokenization (embedding + chunking token counters) |
 | `tracing` / `tracing-subscriber` | Structured logging + instrumentation |
 | `opentelemetry` / `opentelemetry-otlp` / `tracing-opentelemetry` | OTLP trace export (`telemetry` feature) |
-| `async-trait` / `thiserror` / `clap` | Trait async / errors / CLI |
+| `axum` / `tower` / `tower-http` | HTTP server |
+| `async-trait` / `thiserror` / `clap` / `criterion` | Trait async / errors / CLI / benchmarks |
 | `pyo3` / `neon` / `jni` | Python / JavaScript / Java bindings |
 
 ## Browsing the API docs (rustdoc)
@@ -178,3 +185,4 @@ from `cognee` (the facade) and follow the re-exports.
 | Graph | `cognee-graph` | `GraphDBTrait`, `LadybugAdapter` |
 | Vector | `cognee-vector` | `VectorDB`, `BruteForceVectorDB`, `PgVectorAdapter` |
 | Delete | `cognee-delete` | `DeleteService` |
+| HTTP server | `cognee-http-server` | `build_router`, `run`, `AppState` |

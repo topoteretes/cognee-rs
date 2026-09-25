@@ -1,7 +1,5 @@
 # Router: settings
 
-> **Moved.** `cognee-http-server` now lives in the closed [`cognee-cloud-rs`](https://github.com/topoteretes/cognee-cloud-rs) repo at `crates/cognee-http-server`. This page is kept as the wire-contract reference; any `crates/http-server/...` path it cites is historical and does not resolve in this repository.
-
 The `/api/v1/settings` router is the LLM/vector-DB settings panel that the Cognee frontend reads
 on load and writes when an operator changes a provider, model, endpoint, or API key. Two endpoints
 only: `GET` returns the current snapshot together with the list of selectable providers/models,

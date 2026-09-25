@@ -1,7 +1,5 @@
 # HTTP Server — Multi-Tenant Schema & Permission Model
 
-> **Moved.** `cognee-http-server` now lives in the closed [`cognee-cloud-rs`](https://github.com/topoteretes/cognee-cloud-rs) repo at `crates/cognee-http-server`. This page is kept as the wire-contract reference; any `crates/http-server/...` path it cites is historical and does not resolve in this repository.
-
 > **Moved to closed.** The multi-tenant schema (principals/users/tenants/roles
 > polymorphic tables, per-dataset ACLs, tenant ownership semantics) and the
 > permission-resolution logic that backs `/api/v1/permissions/*` were

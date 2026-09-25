@@ -10,7 +10,7 @@ How you invoke the pipeline. All cover the same operations
 
 - **[cli.md](cli.md)** — `cognee-cli`: subcommands, flags, `config`, retries, logging.
 - **[bindings.md](bindings.md)** — Python / C / JavaScript / Java SDKs (shared `bindings-common`) + config-setter ergonomics.
-- **[http-server.md](http-server.md)** — stub: `cognee-http-server` moved to the closed [`cognee-cloud-rs`](https://github.com/topoteretes/cognee-cloud-rs) repo. The endpoint/wire specs stay under [../http-server/](../http-server/README.md).
+- **[http-server.md](http-server.md)** — `cognee-http-server`: launch the binary or embed the library. Endpoint specs under [../http-server/](../http-server/README.md).
 
 ## Backends
 

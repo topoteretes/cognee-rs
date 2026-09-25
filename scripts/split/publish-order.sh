@@ -15,7 +15,7 @@
 # it never reaches crates.io and is excluded by design. If we ever publish a
 # capi member, extend this script to cover that sub-workspace.
 #
-# Crates with `publish = false` (cli, examples, python, test-utils,
+# Crates with `publish = false` (cli, examples, python, bench, test-utils,
 # bindings-common, telemetry-emit) are filtered out via the cargo-metadata
 # `publish: []` representation.
 #

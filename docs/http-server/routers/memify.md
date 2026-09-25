@@ -1,7 +1,5 @@
 # Router: memify
 
-> **Moved.** `cognee-http-server` now lives in the closed [`cognee-cloud-rs`](https://github.com/topoteretes/cognee-cloud-rs) repo at `crates/cognee-http-server`. This page is kept as the wire-contract reference; any `crates/http-server/...` path it cites is historical and does not resolve in this repository.
-
 The memify router runs Cognee's enrichment pipeline on top of an existing knowledge graph. Where `/api/v1/cognify` *creates* a graph from ingested data, `/api/v1/memify` reads the existing graph and re-embeds its triplets. The Rust pipeline embeds existing triplets into the `Triplet:text` vector collection so that `SearchType::TripletCompletion` works end-to-end.
 
 > **Current Rust scope.** The Rust `MemifyPayloadDTO` accepts only dataset selection (`dataset_id` / `dataset_name`) and `run_in_background`. It does **not** accept Python's richer task/data surface (`extraction_tasks`, `enrichment_tasks`, `node_name`, `node_type`, `data`); the handler builds `MemifyConfig::default()` regardless (see the handler comment at `crates/http-server/src/routers/memify.rs:88-93`). Sections below describe only what the Rust code actually does today.

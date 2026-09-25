@@ -10,8 +10,7 @@
 //!
 //! The JSON-walking variant `redact_attributes` lives in
 //! `cognee-http-server` because it is specific to the observability
-//! HTTP API; that crate is no longer part of this workspace and now
-//! lives in the closed `cognee-cloud-rs` repository.
+//! HTTP API.
 
 use std::borrow::Cow;
 use std::sync::OnceLock;

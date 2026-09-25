@@ -1,7 +1,5 @@
 # Router: improve
 
-> **Moved.** `cognee-http-server` now lives in the closed [`cognee-cloud-rs`](https://github.com/topoteretes/cognee-cloud-rs) repo at `crates/cognee-http-server`. This page is kept as the wire-contract reference; any `crates/http-server/...` path it cites is historical and does not resolve in this repository.
-
 The improve router is a memory-oriented alias for `/api/v1/memify`. The HTTP surface and the underlying pipeline are nearly identical to memify; the difference lives one layer down in the Rust delegate (`cognee::api::improve::improve`), which adds three optional session-bridging stages on top of the memify enrichment when `session_ids` is supplied. (Note: the Python HTTP router does not currently expose `session_ids` — it forwards to `cognee_improve(...)` without it. The capability is reserved for future extension and parity with the Python `cognee.improve()` SDK.)
 
 It distinguishes itself from `/api/v1/memify` (same enrichment pipeline, no session bridging) by:

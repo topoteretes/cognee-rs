@@ -1,7 +1,5 @@
 # Router: responses
 
-> **Moved.** `cognee-http-server` now lives in the closed [`cognee-cloud-rs`](https://github.com/topoteretes/cognee-cloud-rs) repo at `crates/cognee-http-server`. This page is kept as the wire-contract reference; any `crates/http-server/...` path it cites is historical and does not resolve in this repository.
-
 The `responses` router exposes an **OpenAI-compatible Responses API** in front of the cognee tool surface (`add`, `cognify`, `search`, `prune`). A client posts a natural-language `input` plus a tools schema; the server forwards the request to OpenAI's [`/v1/responses` endpoint](https://platform.openai.com/docs/api-reference/responses/create), then dispatches any returned `function_call` items into the matching cognee Python function and folds the results back into an OpenAI-shaped `ResponseBody`. This lets ChatGPT-flavored clients (and tools that already speak the Responses API) drive cognee operations through tool calls without bespoke integration code.
 
 **Status: implemented.** The router calls the configured `ResponsesClient` (OpenAI Responses API), dispatches returned `function_call` items into the matching cognee operation (`search` / `cognify`) via [`responses_dispatch.rs`](../../../crates/http-server/src/responses_dispatch.rs), and folds the results back into the OpenAI-shaped `ResponseBodyDTO`. There is no `501` stub path — a regression test (`responses_no_longer_returns_501`) guards against reintroducing one. The sections below document the wire contract and dispatch behavior as shipped.

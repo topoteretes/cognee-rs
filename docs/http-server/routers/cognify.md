@@ -1,7 +1,5 @@
 # Router: cognify
 
-> **Moved.** `cognee-http-server` now lives in the closed [`cognee-cloud-rs`](https://github.com/topoteretes/cognee-cloud-rs) repo at `crates/cognee-http-server`. This page is kept as the wire-contract reference; any `crates/http-server/...` path it cites is historical and does not resolve in this repository.
-
 The cognify router transforms previously-ingested data into a structured knowledge graph and exposes a live progress feed for the resulting pipeline run. It is the entry point to Cognee's "intelligence layer": classification, chunking, LLM-driven entity/relationship extraction, summarisation, vector indexing, and (optionally) DLT foreign-key edge extraction. It distinguishes itself from `/api/v1/memify` (which enriches an existing graph) and `/api/v1/remember` (which combines `add` + `cognify` in one call) by operating only on already-ingested datasets.
 
 The router exposes two endpoints:

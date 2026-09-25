@@ -71,9 +71,8 @@ Its only live consumers today are:
 
 - **Dataset-config persistence** — stored/retrieved via
   [`crates/database/src/ops/dataset_configurations.rs`](../../crates/database/src/ops/dataset_configurations.rs).
-- **HTTP server** — accepted on dataset-config payloads in the closed
-  [`cognee-cloud-rs`](https://github.com/topoteretes/cognee-cloud-rs) repo, at
-  `crates/cognee-http-server/src/routers/datasets.rs`
+- **HTTP server** — accepted on dataset-config payloads in
+  [`crates/http-server/src/routers/datasets.rs`](../../crates/http-server/src/routers/datasets.rs)
   (and validated by `graph_schema_to_graph_model` in
   [`crates/llm/src/dynamic_model.rs`](../../crates/llm/src/dynamic_model.rs)).
 

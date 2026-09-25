@@ -1,35 +1,24 @@
-name: Cross-SDK Parity
+name: HTTP Parity
 
-# Cross-SDK parity between the Python and Rust cognee SDKs, driven through the
-# two CLIs and the on-disk databases they produce.
-#
-# The HTTP half of this lane is GONE from OSS. `cognee-http-server` moved to the
-# closed cognee-cloud-rs repo, taking the 28 `test_http_*.py` files, their
-# fixtures and the dual-server entrypoint with it; the HTTP parity phases now
-# run on the closed board. What is left here is the CLI/DB lane: the COGX
-# import + roundtrip contracts, telemetry parity, provenance parity and logging
-# parity.
-#
-# The telemetry-parity and COGX-import steps need no secrets and are the
-# unconditional release gate. LLM-gated steps use secrets.OPENAI_KEY (same as
-# ci.yml) and skip cleanly when absent (fork-safe).
-#
-# The workflow file name, the job id `http-parity` and the concurrency group are
-# deliberately UNCHANGED even though the HTTP half is gone, so that run history,
-# branch-filter queries and any bookmark to this lane keep resolving. `main`
-# carries no required status checks today (protection is a single approving
-# review; no rulesets), so nothing is gated on this name right now — but the job
-# has no `name:` key, so if a required context is ever configured for this lane
-# it will be `http-parity`, and a rename would then have to be made on both
-# sides at once.
+# Re-enabled on push/PR (task 12): the Python alembic chain on a virgin SQLite
+# DB is fixed via Option B1 in e2e-cross-sdk/bin/start_servers.sh — the
+# harness pre-creates all ORM tables via create_database() and stamps alembic
+# to head before uvicorn starts, so the lifespan migration is a no-op delta.
+# Phase-1 deterministic checks + telemetry parity run without any secrets.
+# LLM-gated phases use secrets.OPENAI_KEY (same as ci.yml) and skip cleanly
+# when absent (fork-safe). Phase-3 specialty tests remain workflow_dispatch-only.
 on:
   push:
     branches: [ main, master ]
   pull_request:
     branches: [ main, master ]
-  # Kept so the lane can still be re-run by hand. The `run_phase3` input it used
-  # to carry is gone: phase 3 was entirely `test_http_*` specialty tests.
   workflow_dispatch:
+    inputs:
+      run_phase3:
+        description: "Run phase-3 specialty tests (websocket, sync, permissions, visualize)"
+        required: false
+        default: "false"
+        type: boolean
 
 concurrency:
   group: http-parity-${{ github.ref }}
@@ -190,7 +179,7 @@ jobs:
           # under target/ is what lets the cache above pick it up.
           ORT_CACHE_DIR: ${{ github.workspace }}/cognee-rust/target/ort-cache
           CARGO_INCREMENTAL: "0"
-          # Strip debug info for these binaries only. The workspace
+          # Strip debug info for these three binaries only. The workspace
           # release profile is `debug = "line-tables-only"`, which is right for
           # shipped artifacts but is a large share of the target dir — and this
           # cache is the single biggest addition to a 10 GB repo quota that is
@@ -206,22 +195,25 @@ jobs:
           # read off a stack trace.
           CARGO_PROFILE_RELEASE_DEBUG: "0"
         run: |
-          # One invocation for both: separate `cargo build -p X` calls resolve
-          # features per-subgraph and build duplicate variants of shared deps
-          # (that cost 44 min before it was fixed). No `--features` here — the
-          # `bin` and `dev-mock` flags this line used to carry belonged to
-          # cognee-http-server, which has moved to cognee-cloud-rs.
+          # One invocation for all three: separate `cargo build -p X` calls
+          # resolve features per-subgraph and build duplicate variants of
+          # shared deps (that cost 44 min before it was fixed). `bin` gates the
+          # http-server entry point; `dev-mock` gives the in-memory vector
+          # store the single-node harness needs.
           cargo build --release \
             -p cognee-cli \
-            -p cognee-telemetry-emit
+            -p cognee-http-server \
+            -p cognee-telemetry-emit \
+            --features cognee-http-server/bin,cognee-http-server/dev-mock
           mkdir -p dist
           cp target/release/cognee-cli \
+             target/release/cognee-http-server \
              target/release/cognee-telemetry-emit \
              dist/
           ls -la dist/
           # A real gate: catch a copy that silently did not happen here,
           # rather than at container start.
-          for b in cognee-cli cognee-telemetry-emit; do
+          for b in cognee-cli cognee-http-server cognee-telemetry-emit; do
             test -x "dist/$b" || { echo "error: dist/$b missing or not executable" >&2; exit 1; }
           done
           # Informational only. This runs on the runner, so it cannot prove the
@@ -229,7 +221,7 @@ jobs:
           # what verify that. It is here so a newly-introduced dynamic
           # dependency is visible in the log instead of surfacing as an opaque
           # container start failure.
-          ldd dist/cognee-cli
+          ldd dist/cognee-http-server
 
       # NOTE on layer caching — measured and rejected, do not re-add blindly.
       #
@@ -251,13 +243,88 @@ jobs:
       # Why nothing was reused is still unexplained — the source was byte
       # identical and the dependency resolution was stable (the rust-cache dep
       # hash held at c4307474 across the same window). Worth understanding
-      # before any further attempt; the likely suspect is the cache-mount RUN
-      # steps. (An earlier version of this note also blamed the regenerated
-      # Cargo.lock in the build context. That cannot have been a factor: the
-      # Rust build left the image for the runner in #133, and
-      # Dockerfile.dockerignore is an allowlist that never re-includes
-      # Cargo.lock, so the lockfile does not enter the build context at all.)
+      # before any further attempt; the likely suspects are the regenerated
+      # Cargo.lock in the build context and the cache-mount RUN steps.
       #
+      # ── Phase-1a: no LLM required (unconditional release gate) ─────────────
+      # Excludes add/forget/search: the Python `/add` endpoint instantiates an
+      # LLM client and raises LLMAPIKeyNotSetError without a key, so add (and
+      # the forget/search tests that seed via add) need a key — they run in
+      # Phase-1b. Running datasets without add in the same session also keeps
+      # the dataset-list assertions free of add-created pollution.
+      - name: Phase-1a — health, auth, datasets, openapi, errors (no LLM)
+        run: >-
+          docker compose
+          -f cognee-rust/e2e-cross-sdk/docker-compose.yml
+          run --rm e2e-http-tests
+          pytest -vs /harness/
+          -k "test_http_health or test_http_auth or test_http_datasets or test_http_openapi or test_http_errors or test_http_self"
+          --tb=short
+
+      # ── Phase-1a-settings: /settings parity, needs a NON-EMPTY key ─────────
+      # Still unconditional (no secrets), so it keeps gating fork PRs — but it
+      # cannot share the step above, because Python's GET /api/v1/settings 500s
+      # outright when no LLM key is configured. At the pinned SHA,
+      # `LLMConfig.api_key` is a required `str` while the masking expression
+      # yields `None` for a falsy key, so `SettingsDict.model_validate` raises:
+      #
+      #   pydantic_core.ValidationError: 1 validation error for SettingsDict
+      #   llm.api_key  Input should be a valid string [input_value=None]
+      #
+      # (Fixed upstream after the pin — `api_key` is `Optional[str]` on `dev` —
+      # so this step can fold back into Phase-1a when the SHA is next bumped.)
+      #
+      # The key only has to be non-empty: these tests read server-rendered
+      # provider/model lists and never call an LLM. A deliberately fake value is
+      # used so nothing can mistake it for a live credential; both SDKs mask it
+      # in the response, and `apiKey` is in the test's ignore set regardless.
+      # Servers start fresh per `docker compose run`, so this cannot perturb the
+      # keyless assertions in the step above.
+      - name: Phase-1a — settings parity (fake key, no LLM calls)
+        env:
+          LLM_API_KEY: sk-parity-fake-key-never-used-for-calls
+        run: >-
+          docker compose
+          -f cognee-rust/e2e-cross-sdk/docker-compose.yml
+          run --rm e2e-http-tests
+          pytest -vs /harness/
+          -k "test_http_settings"
+          --tb=short
+
+      # ── Phase-1b: add + forget + search (needs a key — Python /add does) ───
+      # The `secrets` context does NOT populate job-level `env:` here (despite
+      # the OPENAI_KEY secret existing, the HAS_OPENAI_KEY gate evaluated false
+      # and this step always skipped). Secrets ARE available in a step's own
+      # `env:`, so read the key there and gate inside the script instead of via
+      # an `if:` expression (which cannot see step-level env).
+      - name: Phase-1b — add, forget, search (LLM-gated)
+        env:
+          OPENAI_TOKEN: ${{ secrets.OPENAI_KEY }}
+          OPENAI_URL: https://api.openai.com/v1
+          OPENAI_MODEL: gpt-4o-mini
+          LLM_PROVIDER: openai
+          # Embedding config mirrors e2e-cross-sdk/harness/helpers.py (the proven
+          # CLI cross-SDK setup). COGNEE_SKIP_CONNECTION_TEST bypasses Python's
+          # 30s embedding-endpoint pre-check at /add time — ingestion does not
+          # embed (that happens in cognify), so the check is unnecessary here.
+          EMBEDDING_PROVIDER: openai
+          EMBEDDING_MODEL: openai/text-embedding-3-small
+          EMBEDDING_DIMENSIONS: "1536"
+          EMBEDDING_API_KEY: ${{ secrets.OPENAI_KEY }}
+          EMBEDDING_ENDPOINT: https://api.openai.com/v1
+          COGNEE_SKIP_CONNECTION_TEST: "true"
+        run: |
+          if [ -z "${OPENAI_TOKEN}" ]; then
+            echo "OPENAI_KEY not available — skipping LLM-gated add/forget/search parity."
+            exit 0
+          fi
+          docker compose \
+            -f cognee-rust/e2e-cross-sdk/docker-compose.yml \
+            run --rm e2e-http-tests \
+            pytest -vs /harness/ \
+            -k "test_http_add or test_http_forget or test_http_search" \
+            --tb=short
+
       # ── Telemetry parity: cross-SDK identity-layer comparison ────────────
       # Asserts api_key_tracking_id and persistent_id parity between the
       # Python and Rust SDKs. Uses the local `telemetry-proxy` service
@@ -271,6 +338,23 @@ jobs:
           docker compose
           -f cognee-rust/e2e-cross-sdk/docker-compose.yml
           run --rm e2e-telemetry
+
+      # ── Phase-2: LLM-gated (requires OPENAI_KEY secret) ──────────────────
+      # `env.HAS_OPENAI_KEY` is set at job level (see job env: block above).
+      # Step-level `if:` can read job-level env; it cannot read step-level env.
+      - name: Phase-2 — cognify, remember, recall, memify, improve, llm, hybrid (LLM-gated)
+        if: ${{ env.HAS_OPENAI_KEY == 'true' }}
+        env:
+          OPENAI_TOKEN: ${{ secrets.OPENAI_KEY }}
+          OPENAI_URL: https://api.openai.com/v1
+          OPENAI_MODEL: gpt-4o-mini
+        run: >-
+          docker compose
+          -f cognee-rust/e2e-cross-sdk/docker-compose.yml
+          run --rm e2e-http-tests
+          pytest -vs /harness/
+          -k "test_http_cognify or test_http_remember or test_http_recall or test_http_memify or test_http_improve or test_http_llm or test_http_hybrid"
+          --tb=short
 
       # ── COGX import contract (no LLM, unconditional release gate) ────────
       # Python cognee imports a COGX archive written by the Rust exporter
@@ -353,8 +437,7 @@ jobs:
       # does not require OpenAI; we keep the HAS_OPENAI_KEY gate so this
       # step gracefully skips on forks/keyless pushes without the secret
       # (the build cost is only justified alongside the LLM-gated phases).
-      # Telemetry parity + the COGX import contract remain the unconditional
-      # release gate.
+      # Phase-1 + telemetry parity remain the unconditional release gate.
       - name: Logging parity (no LLM needed)
         if: ${{ env.HAS_OPENAI_KEY == 'true' }}
         run: >-
@@ -364,3 +447,17 @@ jobs:
           pytest -vs /harness/test_logging_parity.py
           --tb=short
 
+      # ── Phase-3: specialty (manual via workflow_dispatch only) ────────────
+      - name: Phase-3 — websocket, sync, permissions, visualize (manual only)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_phase3 == 'true' }}
+        env:
+          OPENAI_TOKEN: ${{ secrets.OPENAI_KEY }}
+          OPENAI_URL: https://api.openai.com/v1
+          OPENAI_MODEL: gpt-4o-mini
+        run: >-
+          docker compose
+          -f cognee-rust/e2e-cross-sdk/docker-compose.yml
+          run --rm e2e-http-tests
+          pytest -vs /harness/
+          -k "test_http_websocket or test_http_sync or test_http_permissions or test_http_visualize"
+          --tb=short

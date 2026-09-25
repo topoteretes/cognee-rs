@@ -2,11 +2,10 @@
 //!
 //! `cognee-logging` is the single home of file-based logging with
 //! rotation, the Python-compatible plain text formatter, and the
-//! default library-noise-suppressing `EnvFilter`. Binaries and bindings
-//! (Python / JS / C) call `init_logging` to install a global subscriber;
-//! library crates **must not** depend on this crate. In this workspace the
-//! binary is `cognee-cli`; `cognee-http-server` does the same from the
-//! closed `cognee-cloud-rs` repo.
+//! default library-noise-suppressing `EnvFilter`. Binaries
+//! (`cognee-cli`, `cognee-http-server`) and bindings (Python / JS /
+//! C) call `init_logging` to install a global subscriber; library
+//! crates **must not** depend on this crate.
 
 #![deny(missing_docs)]
 

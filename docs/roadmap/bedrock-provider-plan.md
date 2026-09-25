@@ -23,10 +23,8 @@ both shipped earlier).
 
 **Why this doc stays in the roadmap folder.** P1 is still outstanding upstream,
 and it is the tracker that `docs/http-server/routers/settings.md` §6.4 and the
-`xfail(strict=True)` case `test_settings_post_bedrock_accepted_by_python` both
-point at. (That case lived in `e2e-cross-sdk/harness/test_http_settings.py`,
-which left this repo with `cognee-http-server` and now runs in the closed
-`cognee-cloud-rs` repo.) Several source files
+`xfail(strict=True)` case `test_settings_post_bedrock_accepted_by_python` in
+`e2e-cross-sdk/harness/test_http_settings.py` both point at. Several source files
 also cite this path — including a user-visible `LlmError` message in
 `crates/llm/src/adapters/bedrock/mod.rs` (§6.7) — so §1 (the wire spec) and §6
 (decisions and caveats) are load-bearing references, not historical notes. Delete
@@ -331,8 +329,7 @@ pub fn aws_inputs_from_env() -> AwsInputs { /* §1.2 / §1.3 names, trimmed, emp
 
 `LlmInputs` and `EmbeddingInputs` each gain `pub aws: AwsInputs`, populated by
 `aws_inputs_from_env()` at both lowering sites
-(`crates/lib/src/config.rs:850` and, in the closed `cognee-cloud-rs` repo,
-`crates/cognee-http-server/src/config.rs:700`).
+(`crates/lib/src/config.rs:850` and `crates/http-server/src/config.rs:700`).
 
 This matters for scope: because Python resolves these from the environment and
 never threads them through its LLM config (§1.0 — the default path does not even
@@ -436,7 +433,7 @@ bedrock = ["cognee-llm/bedrock"]
 default = [..., "bedrock"]
 bedrock = ["cognee-llm/bedrock", "cognee-embedding/bedrock"]
 
-# crates/lib/Cargo.toml and, in cognee-cloud-rs, crates/cognee-http-server/Cargo.toml
+# crates/lib/Cargo.toml and crates/http-server/Cargo.toml
 default = [..., "bedrock"]
 bedrock = ["cognee-components/bedrock", "cognee-llm/bedrock", "cognee-embedding/bedrock"]
 ```
@@ -518,7 +515,7 @@ role" (`base_aws_llm.py:1076+`).
 
 ### R2 — ✅ landed (`c81a049f`) — `AwsInputs` on the context, populated at both lowering sites
 `crates/components/src/context.rs` (struct + `aws_inputs_from_env()`),
-`crates/lib/src/config.rs:850`, and in cognee-cloud-rs `crates/cognee-http-server/src/config.rs:700`.
+`crates/lib/src/config.rs:850`, `crates/http-server/src/config.rs:700`.
 Additive in behaviour but **not** free to compile: `LlmInputs` /
 `EmbeddingInputs` have no `Default` and are exhaustive struct literals in eight
 places (§2.1) — expect `E0063` at each and fix them in this step. Adding
@@ -668,14 +665,11 @@ comment at :163, open question §6.4, and the planned
 `e2e-cross-sdk/harness/test_http_settings.py` is referenced by
 `settings.md` §5.8 but **was never written**. Add it: GET byte-equality modulo
 the API-key mask, and `POST provider: "bedrock"` accepted on both SDKs. This is
-what keeps P1/P2/P3 from re-diverging. (Both that file and `test_http_openapi.py`
-have since moved to the closed `cognee-cloud-rs` repo along with
-`cognee-http-server`; they no longer exist in this repo.)
+what keeps P1/P2/P3 from re-diverging.
 
-*(No CI gate blocks P1–P3 today: `test_http_openapi.py` compared path, method,
+*(No CI gate blocks P1–P3 today: `test_http_openapi.py` compares path, method,
 security-scheme, and `components.schemas` **key sets** only — per-schema field
-diff was explicitly deferred there — so an enum-value change did not trip it,
-and it no longer runs on this repo's board at all.)*
+diff is explicitly deferred there — so an enum-value change does not trip it.)*
 
 ### P5 — ✅ satisfied by R3/R4 — Behavioural parity checklist for the adapter
 The acceptance criteria for R3/R4, each traceable to §1:

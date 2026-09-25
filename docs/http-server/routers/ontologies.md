@@ -1,7 +1,5 @@
 # Router: ontologies
 
-> **Moved.** `cognee-http-server` now lives in the closed [`cognee-cloud-rs`](https://github.com/topoteretes/cognee-cloud-rs) repo at `crates/cognee-http-server`. This page is kept as the wire-contract reference; any `crates/http-server/...` path it cites is historical and does not resolve in this repository.
-
 Multipart endpoint for uploading and listing OWL/RDF ontology files. Ontologies are user-scoped and stored under a per-user directory; the upload validates the `.owl` extension and the user-provided `ontology_key` for shape, then writes the file plus a JSON metadata index. Cognify pipelines can later reference these files by key (the ontology integration is described in [`cognee-ontology`](../../../crates/ontology/) and is out of scope for this doc).
 
 Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../tenants.md](../tenants.md), [../observability.md](../observability.md).
