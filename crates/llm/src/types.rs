@@ -42,7 +42,8 @@ impl Message {
 }
 
 /// Default output-token ceiling (`llm_max_completion_tokens`) shared across the
-/// SDK: the config defaults in `cognee-lib` and `cognee-http-server`, the
+/// SDK: the config defaults in `cognee-lib` and in `cognee-http-server` (now in
+/// the closed `cognee-cloud-rs` repo, consuming this crate published), the
 /// Anthropic adapter's fallback, and the cap the OpenAI adapter substitutes on
 /// *option-less* structured-output calls. Kept in one place so all of them move
 /// in lockstep. The per-request value is still clamped to each model's

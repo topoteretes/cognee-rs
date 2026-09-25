@@ -95,7 +95,8 @@ pub fn setup_telemetry() -> PyResult<()> {
 ///
 /// The user's explicit env var always wins — this only patches the
 /// default so dashboards can distinguish embedded use from
-/// `cognee-cli` / `cognee-http-server` traces. Gap 07 decision 8.
+/// `cognee-cli` traces, or from `cognee-http-server` traces (that server
+/// now ships from the closed `cognee-cloud-rs` repo). Gap 07 decision 8.
 fn apply_default_service_name(default: &str) {
     let current = std::env::var("OTEL_SERVICE_NAME").unwrap_or_default();
     if current.is_empty() {

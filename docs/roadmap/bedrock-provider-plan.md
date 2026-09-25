@@ -23,8 +23,10 @@ both shipped earlier).
 
 **Why this doc stays in the roadmap folder.** P1 is still outstanding upstream,
 and it is the tracker that `docs/http-server/routers/settings.md` §6.4 and the
-`xfail(strict=True)` case `test_settings_post_bedrock_accepted_by_python` in
-`e2e-cross-sdk/harness/test_http_settings.py` both point at. Several source files
+`xfail(strict=True)` case `test_settings_post_bedrock_accepted_by_python` both
+point at. (That case lived in `e2e-cross-sdk/harness/test_http_settings.py`,
+which left this repo with `cognee-http-server` and now runs in the closed
+`cognee-cloud-rs` repo.) Several source files
 also cite this path — including a user-visible `LlmError` message in
 `crates/llm/src/adapters/bedrock/mod.rs` (§6.7) — so §1 (the wire spec) and §6
 (decisions and caveats) are load-bearing references, not historical notes. Delete
@@ -666,11 +668,14 @@ comment at :163, open question §6.4, and the planned
 `e2e-cross-sdk/harness/test_http_settings.py` is referenced by
 `settings.md` §5.8 but **was never written**. Add it: GET byte-equality modulo
 the API-key mask, and `POST provider: "bedrock"` accepted on both SDKs. This is
-what keeps P1/P2/P3 from re-diverging.
+what keeps P1/P2/P3 from re-diverging. (Both that file and `test_http_openapi.py`
+have since moved to the closed `cognee-cloud-rs` repo along with
+`cognee-http-server`; they no longer exist in this repo.)
 
-*(No CI gate blocks P1–P3 today: `test_http_openapi.py` compares path, method,
+*(No CI gate blocks P1–P3 today: `test_http_openapi.py` compared path, method,
 security-scheme, and `components.schemas` **key sets** only — per-schema field
-diff is explicitly deferred there — so an enum-value change does not trip it.)*
+diff was explicitly deferred there — so an enum-value change did not trip it,
+and it no longer runs on this repo's board at all.)*
 
 ### P5 — ✅ satisfied by R3/R4 — Behavioural parity checklist for the adapter
 The acceptance criteria for R3/R4, each traceable to §1:

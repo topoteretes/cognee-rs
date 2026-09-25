@@ -1,6 +1,7 @@
 //! Recall-scope primitives and source helpers, lifted from
-//! `cognee::api::recall` so that `cognee-http-server` can consume them
-//! directly without triggering the http-server -> lib cycle. See
+//! `cognee::api::recall` so that `cognee-http-server` — since moved to the
+//! closed `cognee-cloud-rs` repo — can consume them directly without
+//! triggering the http-server -> lib cycle. See
 //! `docs/http-api-v2/tasks/lib-08-recall-scope-lift.md` (Decision 18).
 //!
 //! This is a pure relocation of the LIB-07 work — no behavior change. The

@@ -297,7 +297,8 @@ and in-cluster Collectors).
 
 Cognee writes structured logs to **stdout** and (when a writable directory is
 available) to a rotating file, owned by the [`cognee-logging`](crates/logging/)
-crate (`cognee_logging::init_logging`, called by the CLI and HTTP server).
+crate (`cognee_logging::init_logging`, called by the CLI here and by the HTTP
+server in the closed `cognee-cloud-rs` repo).
 `cognee-cli` logs to **stderr** instead whenever its stdout is machine-readable
 (`-f json` / `-f simple`, and `export`/`visualize`/`bench`), so that output stays
 parseable. The

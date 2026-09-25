@@ -12,7 +12,8 @@ mod traits;
 mod types;
 pub mod uuid_hex;
 
-// Re-export tutorial seeder for use by cognee-http-server (which can't depend on cognee).
+// Re-export tutorial seeder for use by cognee-http-server (which can't depend on
+// cognee). That crate now lives in the closed cognee-cloud-rs repo, not here.
 pub use ops::tutorial_seeder::{
     TUTORIAL_BASICS_ID, TUTORIAL_PYTHON_DEV_ID, seed_tutorials_if_first_call,
 };
