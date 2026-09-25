@@ -27,9 +27,9 @@ sea-orm = { version = "1.1", features = [
     "with-uuid",
     "postgres-array",
 ] }
-cognee-graph = { path = "../graph", features = ["postgres"] }
-cognee-vector = { path = "../vector" }
-cognee-utils = { path = "../utils" }
+cognee-graph = { path = "../graph", version = "0.2.0", features = ["postgres"] }
+cognee-vector = { path = "../vector", version = "0.2.0" }
+cognee-utils = { path = "../utils", version = "0.2.0" }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
