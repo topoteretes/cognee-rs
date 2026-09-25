@@ -49,6 +49,7 @@ use self::entities::{ENTITIES_SECTION_HEADER, EdgeBullet, EntityResult, format_e
 use self::facts::{
     FACTS_SECTION_HEADER, FactResult, fact_bullets, resolve_facts_top_k, select_facts_for_entities,
 };
+use self::ranking::{ChunkLaneFusion, DEFAULT_SUMMARY_LANE_WEIGHT};
 use self::results::result_id;
 use crate::retrievers::SearchRetriever;
 use crate::types::{
@@ -85,6 +86,30 @@ const DEFAULT_MAX_EDGES_PER_ENTITY: usize = 10;
 const DEFAULT_GLOBAL_CONTEXT_INDEX_TOP_K: usize = 3;
 /// Default node-name filter operator.
 const DEFAULT_NODE_NAME_FILTER_OPERATOR: &str = "OR";
+
+/// Resolve the chunk-lane fusion for one request.
+///
+/// `chunk_lane_fusion` selects the strategy (`"relative_score"`, the default,
+/// or `"reciprocal_rank"` for Python's rank-only RRF) and `summary_lane_weight`
+/// tunes the former. An unrecognised strategy name is logged and ignored rather
+/// than failing the search — a knob nobody can spell must not cost an answer.
+/// A weight sent alongside `"reciprocal_rank"` is inert, because rank-only
+/// fusion has no score to weight.
+fn chunk_lane_fusion(params: &SearchParams) -> ChunkLaneFusion {
+    let relative = ChunkLaneFusion::RelativeScore {
+        summary_lane_weight: params
+            .summary_lane_weight
+            .unwrap_or(DEFAULT_SUMMARY_LANE_WEIGHT),
+    };
+    match params.chunk_lane_fusion.as_deref() {
+        None | Some("relative_score") => relative,
+        Some("reciprocal_rank") => ChunkLaneFusion::ReciprocalRank,
+        Some(unknown) => {
+            debug!("unknown chunk_lane_fusion {unknown:?}; using relative_score");
+            relative
+        }
+    }
+}
 
 const ENTITY_DATA_TYPE: &str = "Entity";
 const ENTITY_FIELD: &str = "name";
@@ -718,6 +743,7 @@ impl SearchRetriever for HybridRetriever {
                 text_summaries_top_k,
                 node_name,
                 node_name_filter_operator,
+                chunk_lane_fusion(params),
                 use_importance_weight,
                 &query_vector,
                 use_truth_weight,
@@ -1793,6 +1819,36 @@ mod retriever_tests {
             Some(user_prompt_template.to_string()),
             None,
         )
+    }
+
+    #[test]
+    fn chunk_lane_fusion_resolves_from_the_request() {
+        use super::{ChunkLaneFusion, DEFAULT_SUMMARY_LANE_WEIGHT, chunk_lane_fusion};
+
+        let with = |fusion: Option<&str>, weight: Option<f64>| {
+            chunk_lane_fusion(&SearchParams {
+                chunk_lane_fusion: fusion.map(str::to_string),
+                summary_lane_weight: weight,
+                ..SearchParams::default()
+            })
+        };
+        let relative = |weight| ChunkLaneFusion::RelativeScore {
+            summary_lane_weight: weight,
+        };
+
+        assert_eq!(with(None, None), relative(DEFAULT_SUMMARY_LANE_WEIGHT));
+        assert_eq!(with(Some("relative_score"), Some(0.25)), relative(0.25));
+        assert_eq!(with(None, Some(0.0)), relative(0.0));
+        assert_eq!(
+            with(Some("reciprocal_rank"), Some(0.25)),
+            ChunkLaneFusion::ReciprocalRank,
+            "a weight is inert when there is no score to weight"
+        );
+        assert_eq!(
+            with(Some("nonsense"), None),
+            relative(DEFAULT_SUMMARY_LANE_WEIGHT),
+            "an unspellable knob must not cost an answer"
+        );
     }
 
     #[test]

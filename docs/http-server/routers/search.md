@@ -207,7 +207,8 @@ pub struct ErrorResponseDTO {
 
 > **`HYBRID_COMPLETION` tuning knobs are not wire fields.** The hybrid
 > retriever's per-request knobs (`chunks_top_k`, `entities_top_k`, `facts_top_k`,
-> `max_edges_per_entity`, `text_summaries_top_k`, `use_importance_weight`,
+> `max_edges_per_entity`, `text_summaries_top_k`, `chunk_lane_fusion`,
+> `summary_lane_weight`, `use_importance_weight`,
 > plus the reserved `use_truth_weight` / `include_global_context_index` /
 > `global_context_index_top_k`) are **not** added to `SearchPayloadDTO`. They are
 > typed fields on the library-side `SearchParams`, populated from the snake_case
