@@ -11,6 +11,7 @@ use cognee_evokoa::EvokoaGraphAdapter;
 use cognee_graph::GraphDBTrait;
 use cognee_test_utils::create_temp_postgres_db;
 use sea_orm::Database;
+use serde_json::json;
 
 fn test_url() -> Option<String> {
     std::env::var("EVOKOA_TEST_DATABASE_URL")
@@ -91,3 +92,47 @@ graph_contract_test!(test_edge_feedback_weight_round_trip);
 graph_contract_test!(test_property_writes_tolerate_nul_in_value);
 graph_contract_test!(test_edge_feedback_weight_rejects_non_finite);
 graph_contract_test!(test_nul_bytes_in_text_are_persistable);
+
+#[tokio::test]
+async fn native_metrics_report_components_and_optional_values() {
+    let Some(base_url) = test_url() else {
+        eprintln!("EVOKOA_TEST_DATABASE_URL not set — skipping native metrics test");
+        return;
+    };
+    let tmp = create_temp_postgres_db(&base_url)
+        .await
+        .expect("temporary database creation");
+    let url = tmp.url().to_string();
+    let outcome = tokio::spawn(async move {
+        let db = Database::connect(&url).await.expect("SeaORM connection");
+        let adapter = EvokoaGraphAdapter::from_connection(db)
+            .await
+            .expect("pgGraph adapter");
+        adapter.initialize().await.expect("pgGraph initialization");
+        for id in ["a", "b", "c", "d"] {
+            adapter
+                .add_node_raw(json!({"id": id, "name": id, "type": "Test"}))
+                .await
+                .expect("node");
+        }
+        adapter.add_edge("a", "b", "ab", None).await.expect("ab");
+        adapter.add_edge("c", "d", "cd", None).await.expect("cd");
+        adapter
+            .add_edge("d", "d", "loop", None)
+            .await
+            .expect("self-loop");
+
+        let metrics = adapter.get_graph_metrics(true).await.expect("metrics");
+        assert_eq!(metrics["node_count"], json!(4));
+        assert_eq!(metrics["edge_count"], json!(3));
+        assert_eq!(metrics["num_connected_components"], json!(2));
+        assert_eq!(metrics["sizes_of_connected_components"], json!([2, 2]));
+        assert_eq!(metrics["num_selfloops"], json!(1));
+    })
+    .await;
+    tmp.cleanup().await;
+    if let Err(error) = outcome {
+        assert!(error.is_panic(), "contract task was cancelled: {error}");
+        std::panic::resume_unwind(error.into_panic());
+    }
+}

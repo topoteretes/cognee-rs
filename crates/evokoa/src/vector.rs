@@ -47,6 +47,12 @@ impl EvokoaVectorAdapter {
         Ok(name)
     }
 
+    pub(crate) fn pg_limit(value: usize, name: &str) -> VectorDBResult<i32> {
+        i32::try_from(value).map_err(|_| {
+            VectorDBError::StorageError(format!("{name} exceeds PostgreSQL's integer limit"))
+        })
+    }
+
     fn vector_literal(vector: &[f32]) -> String {
         // pgContext 0.3.0 treats small-but-nonzero vectors as zero during
         // cosine normalization (observed at squared norm 5.97e-10). Scaling to
@@ -201,6 +207,7 @@ impl EvokoaVectorAdapter {
         if !self.has_collection(data_type, field_name).await? {
             return Err(VectorDBError::CollectionNotFound(coll));
         }
+        let top_k = Self::pg_limit(top_k, "top_k")?;
         let sql = format!(
             "SELECT s.source_key, s.score, t.metadata \
              FROM pgcontext.search($1, 'embedding', $2::pgcontext.vector, $3) s \
@@ -215,7 +222,7 @@ impl EvokoaVectorAdapter {
                 [
                     coll.into(),
                     Self::vector_literal(query_vector).into(),
-                    (top_k as i32).into(),
+                    top_k.into(),
                 ],
             ))
             .await
@@ -242,6 +249,12 @@ impl VectorDB for EvokoaVectorAdapter {
         dimension: usize,
     ) -> VectorDBResult<()> {
         let coll = Self::collection_name(data_type, field_name)?;
+        let dimension = Self::pg_limit(dimension, "vector dimension")?;
+        if dimension == 0 {
+            return Err(VectorDBError::StorageError(
+                "vector dimension must be greater than zero".to_string(),
+            ));
+        }
         if self.has_collection(data_type, field_name).await? {
             return Err(VectorDBError::CollectionExists(coll));
         }
@@ -260,7 +273,7 @@ impl VectorDB for EvokoaVectorAdapter {
             .execute(Statement::from_sql_and_values(
                 DatabaseBackend::Postgres,
                 "SELECT pgcontext.register_vector($1, 'embedding', 'embedding', $2, 'cosine')",
-                [coll.clone().into(), (dimension as i32).into()],
+                [coll.clone().into(), dimension.into()],
             ))
             .await
             .map_err(storage)?;
@@ -276,7 +289,7 @@ impl VectorDB for EvokoaVectorAdapter {
                     coll.into(),
                     data_type.into(),
                     field_name.into(),
-                    (dimension as i32).into(),
+                    dimension.into(),
                 ],
             ))
             .await
@@ -370,6 +383,9 @@ impl VectorDB for EvokoaVectorAdapter {
              WHERE {membership_predicate} \
              ORDER BY score ASC, id LIMIT $3"
         );
+        let top_k = i64::try_from(top_k).map_err(|_| {
+            VectorDBError::StorageError("top_k exceeds PostgreSQL's bigint limit".to_string())
+        })?;
         let rows = self
             .db
             .query_all(Statement::from_sql_and_values(
@@ -378,7 +394,7 @@ impl VectorDB for EvokoaVectorAdapter {
                 [
                     Self::vector_literal(query_vector).into(),
                     names.to_vec().into(),
-                    (top_k as i64).into(),
+                    top_k.into(),
                 ],
             ))
             .await
@@ -478,16 +494,18 @@ impl VectorDB for EvokoaVectorAdapter {
         }
         let row = self
             .db
-            .query_one(Statement::from_sql_and_values(
+            .query_one(Statement::from_string(
                 DatabaseBackend::Postgres,
-                "SELECT pgcontext.count($1) AS count",
-                [coll.into()],
+                format!("SELECT count(*) AS count FROM \"{coll}\""),
             ))
             .await
             .map_err(storage)?;
-        Ok(row
-            .and_then(|r| r.try_get::<i64>("", "count").ok())
-            .unwrap_or(0) as usize)
+        let count = row
+            .ok_or_else(|| VectorDBError::StorageError("collection count returned no row".into()))?
+            .try_get::<i64>("", "count")
+            .map_err(storage)?;
+        usize::try_from(count)
+            .map_err(|_| VectorDBError::StorageError(format!("invalid collection count: {count}")))
     }
 
     async fn list_collections(&self) -> VectorDBResult<Vec<(String, String)>> {

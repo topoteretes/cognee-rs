@@ -6,8 +6,8 @@ use cognee_graph::{
     EdgeData, EdgeKey, GraphDBError, GraphDBResult, GraphDBTrait, GraphNode, NodeData,
     NodeTruthState, PgGraphAdapter,
 };
-use sea_orm::{ConnectionTrait, Database, DatabaseConnection};
-use serde_json::Value;
+use sea_orm::{ConnectionTrait, Database, DatabaseBackend, DatabaseConnection, Statement};
+use serde_json::{Value, json};
 
 /// pgGraph-accelerated graph adapter.
 ///
@@ -48,6 +48,27 @@ impl EvokoaGraphAdapter {
                     "pgGraph installation failed: {e}"
                 ))
             })?;
+        let components_available: bool = self
+            .db
+            .query_one(Statement::from_string(
+                DatabaseBackend::Postgres,
+                "SELECT to_regprocedure('graph.components(integer,integer)') IS NOT NULL AS available"
+                    .to_string(),
+            ))
+            .await
+            .map_err(|e| {
+                GraphDBError::InitializationError(format!(
+                    "pgGraph capability check failed: {e}"
+                ))
+            })?
+            .and_then(|row| row.try_get("", "available").ok())
+            .unwrap_or(false);
+        if !components_available {
+            return Err(GraphDBError::InitializationError(
+                "pgGraph 1.2.1 or newer is required: graph.components(integer, integer) is missing"
+                    .to_string(),
+            ));
+        }
         let registration = r#"
             DO $cognee$
             BEGIN
@@ -193,7 +214,108 @@ impl GraphDBTrait for EvokoaGraphAdapter {
         &self,
         include_optional: bool,
     ) -> GraphDBResult<HashMap<Cow<'static, str>, Value>> {
-        self.inner.get_graph_metrics(include_optional).await
+        let counts = self
+            .db
+            .query_one(Statement::from_string(
+                DatabaseBackend::Postgres,
+                "SELECT (SELECT count(*) FROM graph_node) AS node_count, \
+                        (SELECT count(*) FROM graph_edge) AS edge_count"
+                    .to_string(),
+            ))
+            .await
+            .map_err(|e| GraphDBError::QueryError(format!("graph metric counts failed: {e}")))?
+            .ok_or_else(|| {
+                GraphDBError::QueryError("graph metric counts returned no row".to_string())
+            })?;
+        let num_nodes: i64 = counts
+            .try_get("", "node_count")
+            .map_err(|e| GraphDBError::QueryError(format!("invalid graph node count: {e}")))?;
+        let num_edges: i64 = counts
+            .try_get("", "edge_count")
+            .map_err(|e| GraphDBError::QueryError(format!("invalid graph edge count: {e}")))?;
+
+        let component_sizes = if num_nodes == 0 {
+            Vec::new()
+        } else {
+            let max_components = i32::try_from(num_nodes).map_err(|_| {
+                GraphDBError::QueryError(format!(
+                    "graph has {num_nodes} nodes, exceeding pgGraph's component row limit"
+                ))
+            })?;
+            self.db
+                .query_all(Statement::from_sql_and_values(
+                    DatabaseBackend::Postgres,
+                    "SELECT component_size FROM graph.components($1, 0) ORDER BY rank",
+                    [max_components.into()],
+                ))
+                .await
+                .map_err(|e| {
+                    GraphDBError::QueryError(format!(
+                        "pgGraph connected-components calculation failed: {e}"
+                    ))
+                })?
+                .iter()
+                .map(|row| {
+                    row.try_get::<i64>("", "component_size")
+                        .map(|size| json!(size))
+                        .map_err(|e| {
+                            GraphDBError::QueryError(format!("invalid pgGraph component size: {e}"))
+                        })
+                })
+                .collect::<GraphDBResult<Vec<_>>>()?
+        };
+
+        let mut metrics = HashMap::from([
+            (Cow::Borrowed("node_count"), json!(num_nodes)),
+            (Cow::Borrowed("edge_count"), json!(num_edges)),
+            (
+                Cow::Borrowed("mean_degree"),
+                json!(if num_nodes > 0 {
+                    2.0 * num_edges as f64 / num_nodes as f64
+                } else {
+                    0.0
+                }),
+            ),
+            (
+                Cow::Borrowed("edge_density"),
+                json!(if num_nodes > 1 {
+                    num_edges as f64 / (num_nodes as f64 * (num_nodes - 1) as f64)
+                } else {
+                    0.0
+                }),
+            ),
+            (
+                Cow::Borrowed("num_connected_components"),
+                json!(component_sizes.len()),
+            ),
+            (
+                Cow::Borrowed("sizes_of_connected_components"),
+                Value::Array(component_sizes),
+            ),
+        ]);
+
+        if include_optional {
+            let row = self
+                .db
+                .query_one(Statement::from_string(
+                    DatabaseBackend::Postgres,
+                    "SELECT count(*) AS count FROM graph_edge WHERE source_id = target_id"
+                        .to_string(),
+                ))
+                .await
+                .map_err(|e| {
+                    GraphDBError::QueryError(format!("self-loop metric calculation failed: {e}"))
+                })?
+                .ok_or_else(|| {
+                    GraphDBError::QueryError("self-loop metric returned no row".to_string())
+                })?;
+            let self_loops: i64 = row
+                .try_get("", "count")
+                .map_err(|e| GraphDBError::QueryError(format!("invalid self-loop count: {e}")))?;
+            metrics.insert(Cow::Borrowed("num_selfloops"), json!(self_loops));
+        }
+
+        Ok(metrics)
     }
     async fn get_filtered_graph_data(
         &self,

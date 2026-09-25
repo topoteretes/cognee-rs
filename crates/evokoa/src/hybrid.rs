@@ -50,9 +50,9 @@ impl EvokoaHybridAdapter {
     /// Search a pgContext collection and expand every hit through pgGraph in
     /// one PostgreSQL statement and one MVCC snapshot.
     ///
-    /// This POC assumes vector source keys are also `graph_node.id`, which is
-    /// true for Cognee entity collections. Chunk collections should instead
-    /// join through their metadata's graph/entity identifier.
+    /// Vector source keys must also be `graph_node.id`, as they are for Cognee
+    /// entity collections. Callers must not use this operation for chunk
+    /// collections, whose point IDs do not identify graph nodes.
     pub async fn search_graph_with_vectors(
         &self,
         data_type: &str,
@@ -62,6 +62,9 @@ impl EvokoaHybridAdapter {
         neighbors_per_hit: usize,
     ) -> VectorDBResult<Vec<HybridGraphVectorHit>> {
         let coll = EvokoaVectorAdapter::collection_name(data_type, field_name)?;
+        let top_k = EvokoaVectorAdapter::pg_limit(top_k, "top_k")?;
+        let neighbors_per_hit =
+            EvokoaVectorAdapter::pg_limit(neighbors_per_hit, "neighbors_per_hit")?;
         let vector = format!(
             "[{}]",
             query_vector
@@ -97,8 +100,8 @@ impl EvokoaHybridAdapter {
                 [
                     coll.into(),
                     vector.into(),
-                    (top_k as i32).into(),
-                    (neighbors_per_hit as i32).into(),
+                    top_k.into(),
+                    neighbors_per_hit.into(),
                 ],
             ))
             .await

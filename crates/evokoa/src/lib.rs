@@ -1,4 +1,4 @@
-//! Experimental adapters for Evokoa's PostgreSQL extensions.
+//! Database adapters for Evokoa's PostgreSQL extensions.
 //!
 //! The extensions are accelerators over ordinary PostgreSQL source tables. The
 //! graph adapter therefore delegates authoritative CRUD to `PgGraphAdapter` and

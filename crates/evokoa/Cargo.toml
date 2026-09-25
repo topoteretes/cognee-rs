@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Experimental pgGraph + pgContext adapters for cognee"
+description = "pgGraph and pgContext database adapters for cognee"
 
 [lints]
 workspace = true

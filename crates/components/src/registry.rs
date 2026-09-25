@@ -660,11 +660,21 @@ mod tests {
             derived, "postgres",
             "a `pggraph`-only build must default to a provider it registers"
         );
+        #[cfg(all(not(feature = "ladybug"), not(feature = "pggraph"), feature = "evokoa"))]
+        assert_eq!(
+            derived, "evokoa",
+            "an `evokoa`-only build must default to its registered provider"
+        );
 
         // Whatever the feature set, the default has to be registered -- except
         // when there is no graph feature at all, where the fallback is what
         // produces the "rebuild with the `ladybug` crate feature" diagnosis.
-        #[cfg(any(feature = "ladybug", feature = "pggraph", feature = "testing"))]
+        #[cfg(any(
+            feature = "ladybug",
+            feature = "pggraph",
+            feature = "evokoa",
+            feature = "testing"
+        ))]
         {
             let registered = ComponentRegistry::with_builtins().graph_providers();
             assert!(
@@ -672,7 +682,12 @@ mod tests {
                 "derived default '{derived}' is not registered; have {registered:?}"
             );
         }
-        #[cfg(not(any(feature = "ladybug", feature = "pggraph", feature = "testing")))]
+        #[cfg(not(any(
+            feature = "ladybug",
+            feature = "pggraph",
+            feature = "evokoa",
+            feature = "testing"
+        )))]
         assert_eq!(derived, GRAPH_PROVIDER_FALLBACK);
     }
 

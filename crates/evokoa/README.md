@@ -1,7 +1,7 @@
-# Evokoa PostgreSQL adapter POC
+# Evokoa PostgreSQL adapters
 
-This experimental crate evaluates pgGraph 1.2.1 and pgContext 0.3.0 against
-Cognee's `GraphDBTrait` and `VectorDB` contracts.
+This crate implements Cognee's `GraphDBTrait` and `VectorDB` contracts using
+pgGraph 1.2.1 and pgContext 0.3.0.
 
 ## Shape
 
@@ -15,9 +15,22 @@ Cognee's `GraphDBTrait` and `VectorDB` contracts.
   `search_graph_with_vectors` performs pgContext similarity search and pgGraph
   one-hop expansion in one SQL statement and one PostgreSQL snapshot.
 
-This is intentionally not registered in `ComponentRegistry` yet. Selecting it
-globally would turn an extension experiment into a supported provider before
-upgrade, migration, and operational policies are decided.
+Both adapters are registered in `ComponentRegistry` as the `evokoa` provider.
+Set `GRAPH_DATABASE_PROVIDER=evokoa` and/or `VECTOR_DB_PROVIDER=evokoa`; both
+providers use the configured PostgreSQL connection settings.
+
+## Requirements
+
+- PostgreSQL 17 or 18.
+- pgGraph 1.2.1 or newer. Initialization checks for the native components API.
+- pgContext 0.3.0.
+- A database role permitted to install the extensions and initialize their
+  schemas. pgGraph component metrics additionally require superuser privileges
+  or `CREATE` on the `graph` schema, plus access to the registered source tables.
+
+The graph adapter uses pgGraph's native, database-side union-find implementation
+for connected-component metrics. It intentionally returns pgGraph errors rather
+than falling back to the generic recursive PostgreSQL query.
 
 ## Known compatibility gap
 
