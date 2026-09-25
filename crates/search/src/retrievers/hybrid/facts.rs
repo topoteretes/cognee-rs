@@ -241,18 +241,28 @@ fn fact_display_text(text: &str) -> String {
     }
 }
 
-/// Render the selected facts as the "Related facts" markdown section.
+/// The header of the fact section.
+///
+/// It used to read `"## Related facts"` — a claim these bullets cannot
+/// support. They are `EdgeType_relationship_name` vector hits, i.e. the same
+/// extraction pass's relation head that [`super::entities::ENTITIES_SECTION_HEADER`]
+/// describes, and calling them facts is exactly what a small model then does
+/// with them.
+pub(crate) const FACTS_SECTION_HEADER: &str =
+    "## Automatically extracted relationship hints (may be inaccurate)";
+
+/// Render the selected facts as the fact markdown section.
 ///
 /// Port of `format_facts` (`facts.py:106-110`). Facts with empty text are
 /// dropped; if none remain the result is the empty string, otherwise a
-/// `"## Related facts"` header followed by one `"- {text}"` bullet per fact,
-/// newline-joined.
+/// [`FACTS_SECTION_HEADER`] header followed by one `"- {text}"` bullet per
+/// fact, newline-joined.
 pub(crate) fn format_facts(facts: &[FactResult]) -> String {
     let bullets = fact_bullets(facts);
     if bullets.is_empty() {
         return String::new();
     }
-    format!("## Related facts\n{}", bullets.join("\n"))
+    format!("{FACTS_SECTION_HEADER}\n{}", bullets.join("\n"))
 }
 
 /// One `"- {text}"` bullet per nonblank fact, in rank order.
@@ -539,7 +549,7 @@ mod tests {
         ];
         assert_eq!(
             format_facts(&facts),
-            "## Related facts\n- Alice works at Acme.\n- Bob founded Initech."
+            format!("{FACTS_SECTION_HEADER}\n- Alice works at Acme.\n- Bob founded Initech.")
         );
     }
 }

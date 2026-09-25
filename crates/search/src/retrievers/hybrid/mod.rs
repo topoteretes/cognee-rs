@@ -45,8 +45,10 @@ use cognee_vector::VectorDB;
 
 use self::budget::{context_budget_chars, graph_budget_chars, section_cost, take_blocks_within};
 use self::context::{format_hybrid_context, format_passages, format_passages_within_budget};
-use self::entities::{EdgeBullet, EntityResult, format_entity};
-use self::facts::{FactResult, fact_bullets, resolve_facts_top_k, select_facts_for_entities};
+use self::entities::{ENTITIES_SECTION_HEADER, EdgeBullet, EntityResult, format_entity};
+use self::facts::{
+    FACTS_SECTION_HEADER, FactResult, fact_bullets, resolve_facts_top_k, select_facts_for_entities,
+};
 use self::results::result_id;
 use crate::retrievers::SearchRetriever;
 use crate::types::{
@@ -432,13 +434,13 @@ impl HybridRetriever {
 
         let graph_budget = graph_budget_chars(budget);
         let entities_section = take_blocks_within(
-            "## Relevant entities",
+            ENTITIES_SECTION_HEADER,
             entities.iter().map(format_entity),
             "\n\n",
             graph_budget,
         );
         let facts_section = take_blocks_within(
-            "## Related facts",
+            FACTS_SECTION_HEADER,
             fact_bullets(facts),
             "\n",
             graph_budget.saturating_sub(section_cost(&entities_section, SECTION_SEPARATOR)),
@@ -972,6 +974,8 @@ mod retriever_tests {
     use cognee_session::SessionContext;
 
     use super::HybridRetriever;
+    use super::entities::ENTITIES_SECTION_HEADER;
+    use super::facts::FACTS_SECTION_HEADER;
     use crate::retrievers::SearchRetriever;
     use crate::types::{SearchContext, SearchError, SearchItem, SearchOutput, SearchParams};
     use crate::utils::DEFAULT_RAG_SYSTEM_PROMPT;
@@ -1306,8 +1310,8 @@ mod retriever_tests {
         let user = &messages[1].content;
         assert!(user.contains("what happened?"));
         assert!(user.contains("## Relevant passages"));
-        assert!(user.contains("## Relevant entities"));
-        assert!(user.contains("## Related facts"));
+        assert!(user.contains(ENTITIES_SECTION_HEADER));
+        assert!(user.contains(FACTS_SECTION_HEADER));
         assert!(user.contains(CHUNK_TEXT));
         assert!(user.contains(FACT_TEXT));
     }
@@ -1753,8 +1757,8 @@ mod retriever_tests {
         // section joined to the next by exactly one blank line.
         let expected = format!(
             "## Relevant passages\n{CHUNK_TEXT}\n\n\
-             ## Relevant entities\n### {ENTITY_NAME}\n- {BULLET_TEXT}\n\n\
-             ## Related facts\n- {FACT_TEXT}"
+             {ENTITIES_SECTION_HEADER}\n### {ENTITY_NAME}\n- {BULLET_TEXT}\n\n\
+             {FACTS_SECTION_HEADER}\n- {FACT_TEXT}"
         );
         assert!(
             user.contains(&expected),

@@ -617,11 +617,30 @@ fn node_label(node: &NodeLite) -> Option<String> {
     first_display_value(&candidates)
 }
 
-/// Render the entity blocks as the "Relevant entities" markdown section.
+/// The header of the entity section.
+///
+/// It used to read `"## Relevant entities"`. What the bullets under it
+/// actually are is an extraction pass's opinion — an LLM's or, on the
+/// extractor-only path, a relation head that pairs type-compatible entities by
+/// salience and whose precision on `born_in`-style labels is near zero. So
+/// what the section offers is a list of names worth looking for in the
+/// passages, not a set of established facts, and the header now says so.
+///
+/// Measured on Gemma 3 1B and Gemma 4 E2B over the Alice corpus: with the old
+/// header, "Where was Alice born?" was answered confidently from a bogus
+/// `born_in` edge; with this one, both models answer "the provided context
+/// does not state where Alice was born." The caveat has to travel with the
+/// content, because the model reads this section thousands of tokens away from
+/// the system prompt — saying the same thing in the system prompt instead
+/// changed nothing.
+pub(crate) const ENTITIES_SECTION_HEADER: &str =
+    "## Automatically extracted entity hints (may be inaccurate)";
+
+/// Render the entity blocks as the entity markdown section.
 ///
 /// Port of `format_entities` (`entities.py:158-166`). Empty if no entity yields a
-/// nonempty block; otherwise a `"## Relevant entities"` header followed by the
-/// blocks joined by a blank line.
+/// nonempty block; otherwise an [`ENTITIES_SECTION_HEADER`] header followed by
+/// the blocks joined by a blank line.
 pub(crate) fn format_entities(entities: &[EntityResult]) -> String {
     let blocks: Vec<String> = entities
         .iter()
@@ -631,7 +650,7 @@ pub(crate) fn format_entities(entities: &[EntityResult]) -> String {
     if blocks.is_empty() {
         return String::new();
     }
-    format!("## Relevant entities\n{}", blocks.join("\n\n"))
+    format!("{ENTITIES_SECTION_HEADER}\n{}", blocks.join("\n\n"))
 }
 
 /// Render a single entity block, or `""` when its name is blank.
@@ -1585,7 +1604,7 @@ mod tests {
         };
         assert_eq!(
             format_entities(&[minimal]),
-            "## Relevant entities\n### Entity"
+            format!("{ENTITIES_SECTION_HEADER}\n### Entity")
         );
 
         // IndexSchema type is suppressed from the header.
@@ -1599,7 +1618,7 @@ mod tests {
         };
         assert_eq!(
             format_entities(&[index_schema]),
-            "## Relevant entities\n### lisbon office logistics intelligence project"
+            format!("{ENTITIES_SECTION_HEADER}\n### lisbon office logistics intelligence project")
         );
 
         // Domain type + a description + an edge bullet.
@@ -1621,7 +1640,9 @@ mod tests {
         };
         assert_eq!(
             format_entities(&[full]),
-            "## Relevant entities\n### Alice (Person)\nAn engineer.\n- Alice works at Acme."
+            format!(
+                "{ENTITIES_SECTION_HEADER}\n### Alice (Person)\nAn engineer.\n- Alice works at Acme."
+            )
         );
 
         // A blank-name entity yields no block, so the whole section is empty.
