@@ -109,6 +109,11 @@ fn dimensions_for_key(key: &str) -> Option<usize> {
 #[cfg(feature = "onnx")]
 pub const BGE_QUERY_INSTRUCTION: &str = "Represent this sentence for searching relevant passages: ";
 
+/// The Chinese counterpart of [`BGE_QUERY_INSTRUCTION`], for `BAAI/bge-*-zh-v1.5`
+/// (same model card).
+#[cfg(feature = "onnx")]
+pub const BGE_ZH_QUERY_INSTRUCTION: &str = "为这个句子生成表示以用于检索相关文章：";
+
 /// How a transformer's `last_hidden_state` is reduced to a single vector.
 ///
 /// This is a property of the *model*, not a tuning preference: a
@@ -188,8 +193,14 @@ impl OnnxEmbeddingConfig {
     /// `EMBEDDING_ONNX_*` path) still get the right recipe for a recognised
     /// family instead of silently inheriting BGE's. Families:
     ///
-    /// * **BGE** (`bge-*`) — CLS pooling; the English models additionally take
-    ///   [`BGE_QUERY_INSTRUCTION`] on queries.
+    /// * **BGE** (`bge-*`) — CLS pooling, and a query instruction chosen per
+    ///   model:
+    ///   * `bge-*-zh*` — [`BGE_ZH_QUERY_INSTRUCTION`];
+    ///   * `bge-m3` — none: it is trained without one;
+    ///   * every other BGE — [`BGE_QUERY_INSTRUCTION`]. That includes names with
+    ///     no language marker at all: `BGE-Small-v1.5`, the name the Android
+    ///     default and the demo scripts use, *is* `bge-small-en-v1.5` (the
+    ///     same aliasing [`known_model_dimensions`] applies).
     /// * **E5** (`e5-*`, `multilingual-e5-*`) — mean pooling, and its own
     ///   `"query: "` / `"passage: "` asymmetry; only the query side is ours to
     ///   apply.
@@ -201,12 +212,22 @@ impl OnnxEmbeddingConfig {
     /// CLS-trained model degrades ranking, while CLS on a mean-trained model
     /// reads one arbitrary token and destroys it.
     pub fn recipe_for(model_name: &str) -> (OnnxPooling, Option<String>) {
-        let name = model_name.to_lowercase();
+        // Same normalisation as `known_model_dimensions`: drop an org / provider
+        // prefix (`BAAI/bge-…`) and compare case-insensitively.
+        let name = model_name
+            .rsplit('/')
+            .next()
+            .unwrap_or(model_name)
+            .to_lowercase();
         if name.contains("bge") {
-            let instruction = name
-                .contains("-en")
-                .then(|| BGE_QUERY_INSTRUCTION.to_string());
-            (OnnxPooling::Cls, instruction)
+            let instruction = if name.contains("-zh") {
+                Some(BGE_ZH_QUERY_INSTRUCTION)
+            } else if name.contains("bge-m3") {
+                None
+            } else {
+                Some(BGE_QUERY_INSTRUCTION)
+            };
+            (OnnxPooling::Cls, instruction.map(str::to_string))
         } else if name.contains("e5-") {
             (OnnxPooling::Mean, Some("query: ".to_string()))
         } else {
@@ -851,7 +872,17 @@ mod tests {
     fn recipe_for_keys_off_the_model_family() {
         use OnnxPooling::{Cls, Mean};
 
-        for name in ["bge-small-en-v1.5", "BGE-Base-EN-v1.5", "bge-large-en-v1.5"] {
+        // `BGE-Small-v1.5` carries no language marker, but it is the English
+        // model — it is the name the Android default (`Settings::default()`)
+        // and the demo scripts configure, so it must not fall through to "no
+        // instruction". An org prefix must not change the answer either.
+        for name in [
+            "bge-small-en-v1.5",
+            "BGE-Base-EN-v1.5",
+            "bge-large-en-v1.5",
+            "BGE-Small-v1.5",
+            "BAAI/bge-small-en-v1.5",
+        ] {
             let (pooling, instruction) = OnnxEmbeddingConfig::recipe_for(name);
             assert_eq!(pooling, Cls, "{name}");
             assert_eq!(
@@ -861,9 +892,19 @@ mod tests {
             );
         }
 
-        // A non-English BGE still pools with CLS, but the English instruction
-        // is not its instruction.
-        let (pooling, instruction) = OnnxEmbeddingConfig::recipe_for("bge-small-zh-v1.5");
+        // A Chinese BGE still pools with CLS, but takes its own instruction.
+        for name in ["bge-small-zh-v1.5", "BAAI/bge-large-zh-v1.5"] {
+            let (pooling, instruction) = OnnxEmbeddingConfig::recipe_for(name);
+            assert_eq!(pooling, Cls, "{name}");
+            assert_eq!(
+                instruction.as_deref(),
+                Some("为这个句子生成表示以用于检索相关文章："),
+                "{name}"
+            );
+        }
+
+        // BGE-M3 pools with CLS and is trained without a query instruction.
+        let (pooling, instruction) = OnnxEmbeddingConfig::recipe_for("BAAI/bge-m3");
         assert_eq!(pooling, Cls);
         assert_eq!(instruction, None);
 
