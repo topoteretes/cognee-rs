@@ -127,6 +127,11 @@ path = "tests/bedrock_request_deadline.rs"
 required-features = ["bedrock"]
 
 [[test]]
+name = "bedrock_retry_floor_excludes_queue_time"
+path = "tests/bedrock_retry_floor_excludes_queue_time.rs"
+required-features = ["bedrock"]
+
+[[test]]
 name = "bedrock_sigv4_golden"
 path = "tests/bedrock_sigv4_golden.rs"
 required-features = ["bedrock"]

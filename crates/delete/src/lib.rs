@@ -6,12 +6,16 @@
 //! Main types: [`DeleteService`] and [`AuthorizedDeleteService`] (the
 //! permission-checked wrapper), plus [`RunSweeper`] — the same artifact
 //! deletion path selected by *pipeline run* rather than by dataset, which is
-//! how a failed cognify run is rolled back.
+//! how a failed cognify run is rolled back — and
+//! [`sweep_orphaned_run_artifacts`], which applies that same rollback at
+//! startup to the runs a killed process never got to fail.
 
 mod authorized;
+mod startup_recovery;
 mod sweep;
 
 pub use authorized::AuthorizedDeleteService;
+pub use startup_recovery::{OrphanArtifactSweep, sweep_orphaned_run_artifacts};
 pub use sweep::{RunSweeper, SweepOutcome, SweepScope};
 
 use std::collections::{HashMap, HashSet};

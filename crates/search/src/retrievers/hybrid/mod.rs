@@ -1,22 +1,23 @@
 //! Hybrid-retrieval retriever ([`HybridRetriever`], `SearchType::HybridCompletion`).
 //!
 //! Port of Python cognee's `cognee/modules/retrieval/hybrid_retriever.py` and
-//! `cognee/modules/retrieval/hybrid/{results,pairs,ranking,chunks}.py`. The
-//! retriever fuses three lanes into a single completion context: a chunk lane
-//! that merges a per-query Okapi BM25 lexical channel (landed separately as
-//! [`crate::retrievers::bm25_scored_chunks`]) with the vector
+//! `cognee/modules/retrieval/hybrid/*.py`. The retriever fuses three lanes into
+//! a single completion context: a chunk lane that merges the vector
 //! `DocumentChunk_text` / `TextSummary_text` channels via Reciprocal Rank
 //! Fusion (RRF, with optional importance-weight boosting), an entity lane, and a
-//! standalone-facts lane.
+//! standalone-facts lane. (Python dropped its per-query BM25 channel from the
+//! chunk lane in SDK-322; so does this port.)
 //!
 //! [`HybridRetriever`] implements the crate's `SearchRetriever` trait and is
 //! wired to `SearchType::HybridCompletion`; the chunk-ranking spine lives in the
 //! private submodules below and is orchestrated via [`retrieve_hybrid_chunks`].
 
+mod budget;
 mod chunks;
 mod context;
 mod entities;
 mod facts;
+mod overflow;
 mod pairs;
 mod ranking;
 mod results;
@@ -24,14 +25,14 @@ mod results;
 pub(crate) use chunks::{HybridChunksResult, retrieve_hybrid_chunks, search_collection};
 pub(crate) use context::extract_used_ids;
 pub(crate) use entities::{build_entities, format_entities};
-pub(crate) use facts::{edge_rank_by_id, format_facts, select_facts};
+pub(crate) use facts::{edge_rank_by_id, format_facts};
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::{Value, json};
-use tracing::debug;
+use tracing::{debug, warn};
 use uuid::Uuid;
 
 use cognee_embedding::EmbeddingEngine;
@@ -42,27 +43,40 @@ use cognee_truth_subspace::align::query_coords;
 use cognee_truth_subspace::{DEFAULT_K, load_centroids, pad_coords};
 use cognee_vector::VectorDB;
 
-use self::context::{format_hybrid_context, format_passages};
-use self::entities::{EdgeBullet, EntityResult};
-use self::facts::FactResult;
+use self::budget::{context_budget_chars, graph_budget_chars, section_cost, take_blocks_within};
+use self::context::{format_hybrid_context, format_passages, format_passages_within_budget};
+use self::entities::{EdgeBullet, EntityResult, format_entity};
+use self::facts::{FactResult, fact_bullets, resolve_facts_top_k, select_facts_for_entities};
 use self::results::result_id;
 use crate::retrievers::SearchRetriever;
 use crate::types::{
     SearchContext, SearchError, SearchItem, SearchOutput, SearchParams, SearchType,
 };
 use crate::utils::{
-    DEFAULT_HYBRID_USER_PROMPT_TEMPLATE, build_messages_with_history, render_user_prompt,
+    DEFAULT_HYBRID_USER_PROMPT_TEMPLATE, HYBRID_SMALL_WINDOW_SYSTEM_PROMPT,
+    HYBRID_SMALL_WINDOW_USER_PROMPT_TEMPLATE, build_messages_with_history, render_user_prompt,
     resolve_system_prompt,
 };
 
-/// Effective top-k default for the chunks/entities/facts lanes when neither a
-/// request-level knob nor `top_k` is supplied.
+/// Top-k for the chunks/entities/facts lanes when neither a per-lane knob nor
+/// `top_k` is supplied — Python's `HybridRetriever.__init__` default.
+const DEFAULT_TOP_K: usize = 5;
+/// Ceiling a request-level `top_k` is clamped to before it feeds the lanes.
 ///
-/// Python's class default is 5, but the search factory overrides all three with
-/// `retriever_specific_config.get(key, top_k)` where `top_k` defaults to 15 in
-/// `cognee.search()`. The class default is therefore unreachable through the
-/// search API; Rust uses 15 so no-args behavior matches Python end-to-end.
-const DEFAULT_TOP_K: usize = 15;
+/// Port of `_hybrid_lane_top_k` / `DEFAULT_HYBRID_LANE_TOP_K`
+/// (`get_search_type_retriever_instance.py:41-51`): Python caps it "so default
+/// context stays small" — `cognee.search()` defaults `top_k` to 15, so every
+/// default Python search runs 10 per lane. An explicit per-lane knob is not
+/// capped.
+const DEFAULT_HYBRID_LANE_TOP_K: usize = 10;
+
+/// Resolve one lane's top-k: per-lane knob, else `top_k` capped at
+/// [`DEFAULT_HYBRID_LANE_TOP_K`], else the constructor default.
+fn lane_top_k(lane_knob: Option<usize>, top_k: Option<usize>, default: usize) -> usize {
+    lane_knob
+        .or(top_k.map(|top_k| top_k.min(DEFAULT_HYBRID_LANE_TOP_K)))
+        .unwrap_or(default)
+}
 /// Default max edges expanded per entity (`HybridRetriever.__init__`).
 const DEFAULT_MAX_EDGES_PER_ENTITY: usize = 10;
 /// Default global-context-index top-k (inert in Phase 1).
@@ -166,11 +180,16 @@ impl HybridRetriever {
     }
 
     /// Entity/facts lane: the Rust equivalent of Python's
-    /// `_retrieve_entities_and_facts` (`hybrid_retriever.py:167-198`) plus
-    /// `_select_facts` (`:200-211`). Runs the `Entity_name` search (node filter
-    /// applied) and the `EdgeType_relationship_name` search (node filter NOT
-    /// applied) concurrently, builds ranked entity edge bullets, then gates facts
-    /// off for scoped searches.
+    /// `_retrieve_entities_and_facts` (`hybrid_retriever.py:157-201`). Runs the
+    /// `Entity_name` search (node filter applied) and the
+    /// `EdgeType_relationship_name` search (node filter NOT applied)
+    /// concurrently, builds ranked entity edge bullets scoped to the requested
+    /// node set, then selects facts ([`resolve_facts_top_k`],
+    /// [`select_facts_for_entities`]).
+    ///
+    /// An `Entity_name` search failure is not fatal: Python's `search_entities`
+    /// logs it and continues without entities (`entities.py:17-40`), which in
+    /// turn hands the entity lane's edge budget to the facts lane.
     #[allow(clippy::too_many_arguments)]
     async fn retrieve_entities_and_facts(
         &self,
@@ -181,9 +200,8 @@ impl HybridRetriever {
         node_name: Option<&[String]>,
         node_name_filter_operator: &str,
     ) -> Result<(Vec<EntityResult>, Vec<FactResult>), SearchError> {
-        let edge_limit = entities_top_k
-            .saturating_mul(max_edges_per_entity)
-            .saturating_add(facts_top_k);
+        let max_ranked_bullets = entities_top_k.saturating_mul(max_edges_per_entity);
+        let edge_limit = max_ranked_bullets.saturating_add(facts_top_k);
 
         let entity_future = search_collection(
             &self.vector_db,
@@ -193,10 +211,9 @@ impl HybridRetriever {
             entities_top_k,
             node_name,
             node_name_filter_operator,
-            false,
         );
         // Python passes `apply_node_filter=False` for the edge lane
-        // (`hybrid_retriever.py:188`); the Rust equivalent is `node_name=None`.
+        // (`hybrid_retriever.py:173-182`); the Rust equivalent is `node_name=None`.
         let edge_future = search_collection(
             &self.vector_db,
             EDGE_TYPE_DATA_TYPE,
@@ -204,33 +221,34 @@ impl HybridRetriever {
             query_vector,
             edge_limit,
             None,
-            node_name_filter_operator,
-            false,
+            DEFAULT_NODE_NAME_FILTER_OPERATOR,
         );
 
-        let (entity_hits, edge_hits) = tokio::try_join!(entity_future, edge_future)?;
+        let (entity_result, edge_result) = tokio::join!(entity_future, edge_future);
+        let entity_hits = entity_result.unwrap_or_else(|error| {
+            warn!(%error, "Entity_name search failed; continuing without entities");
+            Vec::new()
+        });
+        let edge_hits = edge_result?;
 
-        let edge_ranks = edge_rank_by_id(&edge_hits);
-        let entities = build_entities(
+        let (entities, reachable_ids) = build_entities(
             self.graph_db.as_ref(),
             &entity_hits,
             max_edges_per_entity,
-            &edge_ranks,
+            &edge_rank_by_id(&edge_hits),
+            node_name,
+            node_name_filter_operator,
         )
         .await;
 
-        // Facts are gated off for scoped searches: EdgeType rows carry no
-        // node-set fields (Python `_select_facts`, `hybrid_retriever.py:200-211`).
-        let facts = if facts_top_k == 0 || node_name.is_some_and(|names| !names.is_empty()) {
-            Vec::new()
-        } else {
-            let exclude_ids: HashSet<String> = entities
-                .iter()
-                .flat_map(|entity| entity.edges.iter())
-                .filter_map(|edge| edge.edge_type_id.clone())
-                .collect();
-            select_facts(&edge_hits, &exclude_ids, facts_top_k)
-        };
+        let node_scoped = node_name.is_some_and(|names| !names.is_empty());
+        let facts = select_facts_for_entities(
+            &edge_hits,
+            &entities,
+            &reachable_ids,
+            resolve_facts_top_k(&entities, node_scoped, facts_top_k, max_ranked_bullets),
+            node_scoped,
+        );
 
         Ok((entities, facts))
     }
@@ -346,7 +364,7 @@ impl HybridRetriever {
     /// batch-fetches (Python `_candidate_chunk_ids`, `hybrid_retriever.py:145-165`).
     ///
     /// Reuses the same [`search_collection`] entry point and candidate window
-    /// (`chunks_top_k * 2`, `required = false`) as the chunk lane so the truth
+    /// (`chunks_top_k * 2`) as the chunk lane so the truth
     /// coords map covers exactly the chunks ranking can surface. `chunks_top_k`
     /// is the request-resolved value threaded down from `get_context`, not the
     /// constructor default, so a per-request `chunks_top_k`/`top_k` override
@@ -373,16 +391,109 @@ impl HybridRetriever {
             candidate_limit,
             node_name,
             node_name_filter_operator,
-            false,
         )
         .await?;
         Ok(hits.iter().filter_map(result_id).collect())
     }
+
+    /// Render the three lanes into the sectioned context the model is shown,
+    /// spending the model's input window in the order the sections earn it.
+    ///
+    /// When the whole context fits the window it is rendered exactly as
+    /// Python's `format_hybrid_context` renders it (`context.py:8-27`) — a
+    /// hosted model with a 128k-token window pays nothing for this. When it
+    /// does not fit, the budget decides: the graph sections first, because they
+    /// say more per token than the prose they were built from, then whole raw
+    /// passages best-ranked first for whatever is left. See [`budget`] for the
+    /// measurements behind that order.
+    fn assemble_context(
+        &self,
+        chunks: &[SearchItem],
+        entities: &[EntityResult],
+        facts: &[FactResult],
+        overhead_chars: usize,
+        overflow_summaries: &HashMap<String, String>,
+    ) -> (String, bool, Vec<String>) {
+        let unbudgeted = format_hybrid_context(
+            None,
+            &format_passages(chunks),
+            &format_entities(entities),
+            &format_facts(facts),
+        );
+
+        let budget = context_budget_chars(
+            self.llm.max_context_length(),
+            self.completion_reserve_tokens(),
+            overhead_chars,
+        );
+        if unbudgeted.len() <= budget {
+            return (unbudgeted, false, Vec::new());
+        }
+
+        let graph_budget = graph_budget_chars(budget);
+        let entities_section = take_blocks_within(
+            "## Relevant entities",
+            entities.iter().map(format_entity),
+            "\n\n",
+            graph_budget,
+        );
+        let facts_section = take_blocks_within(
+            "## Related facts",
+            fact_bullets(facts),
+            "\n",
+            graph_budget.saturating_sub(section_cost(&entities_section, SECTION_SEPARATOR)),
+        );
+
+        let graph_spend = section_cost(&entities_section, SECTION_SEPARATOR)
+            + section_cost(&facts_section, SECTION_SEPARATOR);
+        let (passages, unsummarized) = format_passages_within_budget(
+            chunks,
+            budget.saturating_sub(graph_spend),
+            overflow_summaries,
+        );
+
+        let entities_section = entities_section.unwrap_or_default();
+        let facts_section = facts_section.unwrap_or_default();
+        let context = format_hybrid_context(None, &passages, &entities_section, &facts_section);
+        debug!(
+            was = unbudgeted.len(),
+            now = context.len(),
+            budget,
+            "Hybrid context budgeted to the model's input window"
+        );
+        (context, true, unsummarized)
+    }
+
+    /// Tokens held back from the window for the answer itself.
+    ///
+    /// **This number and the adapter's own output cap are one decision, and
+    /// they must agree.** The reserve is how much of the window the prompt
+    /// leaves unspent; the output cap is how much of it the decoder is allowed
+    /// to use. Reserve less than the decoder may write and a long answer runs
+    /// off the end of the window mid-generation, which is not a truncated
+    /// answer but a hard rejection. `cognee-llm-litert`'s
+    /// `DEFAULT_MAX_OUTPUT_TOKENS` is the other half of this pair; change one
+    /// and change the other.
+    ///
+    /// 512 tokens is roughly 380 words — ample for a RAG answer — and on a
+    /// 4096-token window buying it back from a quarter-window reserve is worth
+    /// about one more whole passage of context.
+    fn completion_reserve_tokens(&self) -> u32 {
+        COMPLETION_RESERVE_TOKENS
+    }
 }
 
+/// What [`format_hybrid_context`] costs to put one more section in: the
+/// `"\n\n"` it joins them with.
+const SECTION_SEPARATOR: usize = 2;
+
+/// Window tokens kept for the answer. Paired with the LLM adapter's own
+/// output cap — see [`HybridRetriever::completion_reserve_tokens`].
+const COMPLETION_RESERVE_TOKENS: u32 = 512;
+
 /// Tag a chunk lane [`SearchItem`] with `"kind": "chunk"` and carry its paired
-/// summary onto the item's own payload so `get_completion` can reconstruct
-/// passages without the side-channel `chunk_summaries` map.
+/// summary onto the item's own payload — Python's `chunk_summaries` map, which
+/// it keeps on the retrieved objects but no longer renders into the prompt.
 fn tag_chunk_item(mut item: SearchItem, chunk_summaries: &HashMap<String, String>) -> SearchItem {
     let summary = result_id(&item).and_then(|id| chunk_summaries.get(&id).cloned());
     if let Value::Object(map) = &mut item.payload {
@@ -539,20 +650,11 @@ impl SearchRetriever for HybridRetriever {
         query: &str,
         params: &SearchParams,
     ) -> Result<SearchContext, SearchError> {
-        // Three-layer resolution for the top-k family: request knob -> top_k ->
-        // constructor default.
-        let chunks_top_k = params
-            .chunks_top_k
-            .or(params.top_k)
-            .unwrap_or(self.chunks_top_k);
-        let entities_top_k = params
-            .entities_top_k
-            .or(params.top_k)
-            .unwrap_or(self.entities_top_k);
-        let facts_top_k = params
-            .facts_top_k
-            .or(params.top_k)
-            .unwrap_or(self.facts_top_k);
+        // Three-layer resolution for the top-k family: request knob -> capped
+        // top_k -> constructor default (see [`lane_top_k`]).
+        let chunks_top_k = lane_top_k(params.chunks_top_k, params.top_k, self.chunks_top_k);
+        let entities_top_k = lane_top_k(params.entities_top_k, params.top_k, self.entities_top_k);
+        let facts_top_k = lane_top_k(params.facts_top_k, params.top_k, self.facts_top_k);
         let max_edges_per_entity = params
             .max_edges_per_entity
             .unwrap_or(self.max_edges_per_entity);
@@ -575,6 +677,17 @@ impl SearchRetriever for HybridRetriever {
                  Phase 1; no global-context section will be produced"
             );
         }
+        // Python raises `NoDataError` here (`hybrid_retriever.py:102-109`,
+        // SDK-270): an empty graph is a state problem, not a query miss, and
+        // this is the default search type — it must not answer a fresh install
+        // with an empty context while the other completion types report it.
+        if self.graph_db.is_empty().await? {
+            return Err(SearchError::NotFound(
+                "The knowledge graph is empty. Ingest data through Cognee before searching."
+                    .to_string(),
+            ));
+        }
+
         // Embed the query once and share the vector across both lanes.
         let embeddings = self.embedding_engine.embed(&[query]).await?;
         let query_vector = embeddings.into_iter().next().ok_or_else(|| {
@@ -597,8 +710,6 @@ impl SearchRetriever for HybridRetriever {
         let (chunk_result, (entities, facts)) = tokio::try_join!(
             retrieve_hybrid_chunks(
                 &self.vector_db,
-                &self.graph_db,
-                query,
                 chunks_top_k,
                 text_summaries_top_k,
                 node_name,
@@ -675,42 +786,111 @@ impl SearchRetriever for HybridRetriever {
             }
         }
 
-        // Reconstruct the chunk-summary map from the chunk items' own payloads.
-        let chunk_summaries: HashMap<String, String> = chunks
-            .iter()
-            .filter_map(|item| {
-                let id = result_id(item)?;
-                let summary = item.payload.get("chunk_summary").and_then(Value::as_str)?;
-                Some((id, summary.to_string()))
-            })
-            .collect();
+        let configured_system_prompt = params
+            .system_prompt
+            .as_deref()
+            .or(self.system_prompt.as_deref());
+        let configured_system_prompt_path = params
+            .system_prompt_path
+            .as_deref()
+            .or(self.system_prompt_path.as_deref());
+        let configured_template = self.user_prompt_template.as_deref();
+        let default_system_prompt =
+            resolve_system_prompt(configured_system_prompt, configured_system_prompt_path)?;
 
-        let passages = format_passages(&chunks, &chunk_summaries);
-        let entities_section = format_entities(&entities);
-        let facts_section = format_facts(&facts);
-        let context_text =
-            format_hybrid_context(None, &passages, &entities_section, &facts_section);
+        // Everything the prompt costs before a single retrieved item is added:
+        // the system prompt, the template actually in use with the question
+        // filled in, and the session history. Which wording is used is not
+        // settled yet -- budgeting is what selects it -- so with nothing
+        // configured both candidates are costed and the longer one wins, and
+        // the budget is never optimistic.
+        let overhead_system =
+            if configured_system_prompt.is_none() && configured_system_prompt_path.is_none() {
+                default_system_prompt
+                    .len()
+                    .max(HYBRID_SMALL_WINDOW_SYSTEM_PROMPT.len())
+            } else {
+                default_system_prompt.len()
+            };
+        let overhead_template = match configured_template {
+            Some(template) => render_user_prompt(Some(template), query, "").len(),
+            None => render_user_prompt(Some(DEFAULT_HYBRID_USER_PROMPT_TEMPLATE), query, "")
+                .len()
+                .max(
+                    render_user_prompt(Some(HYBRID_SMALL_WINDOW_USER_PROMPT_TEMPLATE), query, "")
+                        .len(),
+                ),
+        };
+        let overhead = overhead_system + overhead_template + session.formatted_history.len();
 
-        let system_prompt = resolve_system_prompt(
-            params
-                .system_prompt
-                .as_deref()
-                .or(self.system_prompt.as_deref()),
-            params
-                .system_prompt_path
-                .as_deref()
-                .or(self.system_prompt_path.as_deref()),
-        )?;
+        let mut overflow_summaries = overflow::known(&chunks);
+        let (mut context_text, budgeted, unsummarized) =
+            self.assemble_context(&chunks, &entities, &facts, overhead, &overflow_summaries);
 
-        let user_prompt = render_user_prompt(
-            Some(
-                self.user_prompt_template
-                    .as_deref()
-                    .unwrap_or(DEFAULT_HYBRID_USER_PROMPT_TEMPLATE),
-            ),
-            query,
-            &context_text,
-        );
+        // Python's `skip_completion_on_empty_context` (`hybrid_retriever.py:52,
+        // 246-253`, SDK-270): search is not an LLM gateway, and with every
+        // section empty the only possible answer is a "no context provided"
+        // deflection. No completion, no session turn — `Texts([])` is not the
+        // `Text` the orchestrator records a QA turn for.
+        if context_text.is_empty() {
+            warn!("Empty context: skipping LLM completion, returning no results");
+            return Ok(SearchOutput::Texts(Vec::new()));
+        }
+
+        // Passages that did not fit and have no summary yet: ask the answering
+        // model for one, then rebuild the context with them in. Only the
+        // passages this question actually pushed out are summarized, and only
+        // once each — `overflow::known()` above already carries everything
+        // earlier questions paid for.
+        if budgeted && !unsummarized.is_empty() && overflow::summarization_enabled() {
+            let to_summarize: Vec<(String, String)> = unsummarized
+                .iter()
+                .filter_map(|id| {
+                    let chunk = chunks
+                        .iter()
+                        .find(|chunk| result_id(chunk).as_deref() == Some(id))?;
+                    let text = payload_str_opt(&chunk.payload, "text")?;
+                    Some((id.clone(), text))
+                })
+                .collect();
+            if !to_summarize.is_empty() {
+                let produced =
+                    overflow::summarize(self.llm.as_ref(), &to_summarize, overflow::batch_size())
+                        .await;
+                if !produced.is_empty() {
+                    overflow_summaries.extend(produced);
+                    let (rebuilt, _, _) = self.assemble_context(
+                        &chunks,
+                        &entities,
+                        &facts,
+                        overhead,
+                        &overflow_summaries,
+                    );
+                    context_text = rebuilt;
+                }
+            }
+        }
+        let context_text = context_text;
+
+        // A context that had to be budgeted is a context long enough to lose
+        // the question in, and a model with a window that small is the one
+        // that reads two brevity instructions as an instruction to say
+        // nothing. That is the case the second pair of prompts exists for.
+        let use_small_window = budgeted
+            && configured_system_prompt.is_none()
+            && configured_system_prompt_path.is_none();
+        let system_prompt = if use_small_window {
+            HYBRID_SMALL_WINDOW_SYSTEM_PROMPT.to_string()
+        } else {
+            default_system_prompt
+        };
+        let template = configured_template.unwrap_or(if budgeted {
+            HYBRID_SMALL_WINDOW_USER_PROMPT_TEMPLATE
+        } else {
+            DEFAULT_HYBRID_USER_PROMPT_TEMPLATE
+        });
+
+        let user_prompt = render_user_prompt(Some(template), query, &context_text);
 
         debug!(
             context_items = completion_context.len(),
@@ -822,6 +1002,8 @@ mod retriever_tests {
         last_messages: Mutex<Vec<Message>>,
         response_text: String,
         structured_response: Option<Value>,
+        /// Reported window; `None` keeps the trait default.
+        max_context: Option<u32>,
     }
 
     #[async_trait]
@@ -859,6 +1041,10 @@ mod retriever_tests {
 
         fn model(&self) -> &str {
             "test-model"
+        }
+
+        fn max_context_length(&self) -> u32 {
+            self.max_context.unwrap_or(4096)
         }
     }
 
@@ -1394,7 +1580,13 @@ mod retriever_tests {
         .unwrap();
 
         let vector_db: Arc<dyn VectorDB> = Arc::new(db);
-        let graph_db: Arc<dyn GraphDBTrait> = Arc::new(MockGraphDB::new());
+        // Any node at all: an empty graph is rejected before the lanes run.
+        let graph = MockGraphDB::new();
+        graph
+            .add_node_raw(json!({"id": Uuid::new_v4().to_string(), "name": "seed"}))
+            .await
+            .unwrap();
+        let graph_db: Arc<dyn GraphDBTrait> = Arc::new(graph);
         let llm = Arc::new(CapturingLlm::default());
         let retriever = retriever(vector_db, graph_db, llm);
 
@@ -1566,6 +1758,202 @@ mod retriever_tests {
             user.contains(&expected),
             "user prompt must contain the ordered section block:\n{expected}\n---\nGOT:\n{user}"
         );
+    }
+
+    fn retriever_with_template(
+        vector_db: Arc<dyn VectorDB>,
+        graph_db: Arc<dyn GraphDBTrait>,
+        llm: Arc<dyn Llm>,
+        user_prompt_template: &str,
+    ) -> HybridRetriever {
+        HybridRetriever::new(
+            vector_db,
+            Arc::new(AlignedEmbedding),
+            graph_db,
+            llm,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(user_prompt_template.to_string()),
+            None,
+        )
+    }
+
+    #[test]
+    fn lane_top_k_caps_top_k_but_not_an_explicit_knob() {
+        // Python `_hybrid_lane_top_k`: explicit knob verbatim, else
+        // min(top_k, 10), else the constructor default.
+        assert_eq!(super::lane_top_k(Some(25), Some(15), 5), 25);
+        assert_eq!(super::lane_top_k(None, Some(15), 5), 10);
+        assert_eq!(super::lane_top_k(None, Some(3), 5), 3);
+        assert_eq!(super::lane_top_k(None, None, 5), 5);
+    }
+
+    #[tokio::test]
+    async fn an_empty_graph_is_an_error_not_an_empty_context() {
+        let (vector_db, _graph_db, _alice) = populated_dbs().await;
+        let empty_graph: Arc<dyn GraphDBTrait> = Arc::new(MockGraphDB::new());
+        let retriever = retriever(vector_db, empty_graph, Arc::new(CapturingLlm::default()));
+
+        let result = retriever
+            .get_context("query", &SearchParams::default())
+            .await;
+        assert!(
+            matches!(result, Err(SearchError::NotFound(ref message)) if message.contains("knowledge graph is empty")),
+            "got {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_empty_context_never_reaches_the_llm() {
+        let (vector_db, graph_db, _alice) = populated_dbs().await;
+        let llm = Arc::new(CapturingLlm::default());
+        let retriever = retriever(vector_db, graph_db, Arc::clone(&llm) as Arc<dyn Llm>);
+
+        let output = retriever
+            .get_completion(
+                "what happened?",
+                Some(Vec::new()),
+                &SessionContext::default(),
+                &SearchParams::default(),
+            )
+            .await
+            .unwrap();
+
+        assert!(matches!(output, SearchOutput::Texts(ref texts) if texts.is_empty()));
+        assert!(llm.last_messages.lock().unwrap().is_empty(), "no LLM call");
+    }
+
+    #[tokio::test]
+    async fn a_paired_summary_is_carried_but_not_rendered() {
+        let (vector_db, graph_db, _alice) = populated_dbs().await;
+        let chunk_id = Uuid::parse_str(
+            vector_db
+                .search_similar("DocumentChunk", "text", &[1.0, 0.0], 1)
+                .await
+                .unwrap()[0]
+                .id
+                .to_string()
+                .as_str(),
+        )
+        .unwrap();
+        const SUMMARY: &str = "a digest the model would copy verbatim";
+        vector_db
+            .create_collection("TextSummary", "text", 2)
+            .await
+            .unwrap();
+        let summary_id = Uuid::new_v5(&chunk_id, b"TextSummary");
+        vector_db
+            .index_points(
+                "TextSummary",
+                "text",
+                &[VectorPoint::new(summary_id, vec![1.0, 0.0])
+                    .with_metadata("id", json!(summary_id.to_string()))
+                    .with_metadata("text", json!(SUMMARY))
+                    .with_metadata("source_chunk_id", json!(chunk_id.to_string()))],
+            )
+            .await
+            .unwrap();
+
+        let llm = Arc::new(CapturingLlm {
+            response_text: "answer".to_string(),
+            ..Default::default()
+        });
+        let retriever = retriever(vector_db, graph_db, Arc::clone(&llm) as Arc<dyn Llm>);
+        let context = retriever
+            .get_context("what happened?", &SearchParams::default())
+            .await
+            .unwrap();
+        assert!(
+            context
+                .iter()
+                .any(|item| item.payload.get("chunk_summary") == Some(&json!(SUMMARY))),
+            "the summary is paired onto the chunk item"
+        );
+
+        retriever
+            .get_completion(
+                "what happened?",
+                Some(context),
+                &SessionContext::default(),
+                &SearchParams::default(),
+            )
+            .await
+            .unwrap();
+        let user = llm.last_messages.lock().unwrap()[1].content.clone();
+        // Python SDK-322: raw passages only.
+        assert!(!user.contains(SUMMARY), "{user}");
+        assert!(!user.contains("[Passage Summary]"), "{user}");
+        assert!(
+            user.contains(&format!("## Relevant passages\n{CHUNK_TEXT}")),
+            "{user}"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_budget_counts_the_template_actually_in_use() {
+        // (1000 - 512 reserved) * 3 chars = 1464 chars for the whole prompt.
+        // The default template leaves room for this small context; a template
+        // that alone costs more than that leaves none, so nothing fits and the
+        // empty context is not sent.
+        let (vector_db, graph_db, _alice) = populated_dbs().await;
+        let small_window = || {
+            Arc::new(CapturingLlm {
+                response_text: "answer".to_string(),
+                max_context: Some(1000),
+                ..Default::default()
+            })
+        };
+
+        let llm = small_window();
+        let output = retriever(
+            Arc::clone(&vector_db),
+            Arc::clone(&graph_db),
+            Arc::clone(&llm) as Arc<dyn Llm>,
+        )
+        .get_completion(
+            "what happened?",
+            None,
+            &SessionContext::default(),
+            &SearchParams::default(),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(output, SearchOutput::Text(_)));
+        assert!(
+            llm.last_messages.lock().unwrap()[1]
+                .content
+                .contains(CHUNK_TEXT)
+        );
+
+        let llm = small_window();
+        let long_template = format!("{}\n{{question}}\n{{context}}", "x".repeat(2000));
+        let output = retriever_with_template(
+            vector_db,
+            graph_db,
+            Arc::clone(&llm) as Arc<dyn Llm>,
+            &long_template,
+        )
+        .get_completion(
+            "what happened?",
+            None,
+            &SessionContext::default(),
+            &SearchParams::default(),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(output, SearchOutput::Texts(ref texts) if texts.is_empty()));
+        assert!(llm.last_messages.lock().unwrap().is_empty());
     }
 }
 

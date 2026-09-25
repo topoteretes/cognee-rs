@@ -100,10 +100,46 @@ pub trait PipelineRunRepository: Send + Sync {
             .collect())
     }
 
+    /// The runs [`Self::reset_orphans`] would retire, *before* it retires
+    /// them: the latest row per `pipeline_run_id` that is still `INITIATED` /
+    /// `STARTED` with no more recent successor.
+    ///
+    /// # Why this is separate from the reset
+    ///
+    /// Retiring the status row is only half of recovering a killed run. The
+    /// other half is rolling back what the dead run wrote into the graph and
+    /// vector stores — the ownership-ledger rows keyed by its
+    /// `pipeline_run_id` — because a cognify completion marker is written
+    /// only on success, so the next run re-processes every item and extracts
+    /// those entities a second time alongside the ones the corpse left behind.
+    ///
+    /// That rollback lives in `cognee_delete::RunSweeper`, in a crate *above*
+    /// this one (`cognee-delete` depends on `cognee-database`, so the
+    /// dependency cannot be inverted). Splitting "find" from "retire" is what
+    /// lets the caller interleave the two: list, sweep each listed run, then
+    /// reset. `cognee_delete::sweep_orphaned_run_artifacts` is the intended
+    /// consumer, and `Settings::resolved_single_process` is the assertion the
+    /// whole sequence is gated on.
+    ///
+    /// The returned rows carry both ids a sweep needs: `pipeline_run_id` (the
+    /// ownership-ledger key — *not* `id`, which keys this one status
+    /// transition) and `dataset_id`.
+    ///
+    /// The default implementation reports no orphans, matching the
+    /// implementations that persist nothing and therefore never strand one.
+    async fn list_orphan_runs(&self) -> Result<Vec<PipelineRunRow>, DbError> {
+        Ok(Vec::new())
+    }
+
     /// Restart-orphan reset: rewrite any row stuck in `INITIATED` / `STARTED`
     /// without a more recent successor to `ERRORED` with the given `reason`.
     ///
     /// Returns the number of rows rewritten.
+    ///
+    /// Selects exactly what [`Self::list_orphan_runs`] returns. A startup
+    /// sweep rolls back the listed runs' artifacts and then calls this; a row
+    /// retired here that the list did not name would have its dataset
+    /// re-opened with a dead run's artifacts still in the graph.
     async fn reset_orphans(&self, reason: &str) -> Result<u64, DbError>;
 
     /// Upsert a single payload field for a run. Concurrent calls with the
@@ -244,8 +280,11 @@ pub trait PipelineRunRepository: Send + Sync {
     ///
     /// Named `try_` rather than `force_` on purpose: it removes nothing unless
     /// `claim_id` still holds the pair, so a caller that does not have the
-    /// holder's id cannot use it to clear a claim. There is deliberately no
-    /// holder-unscoped variant — see the TOCTOU the scoping prevents.
+    /// holder's id cannot use it to clear a claim. The only holder-unscoped
+    /// variant is [`Self::release_all_pipeline_run_claims`], which is sound
+    /// solely at startup in a single-process deployment — see the TOCTOU the
+    /// scoping here prevents, which that one avoids by there being no peer
+    /// whose claim it could stomp.
     ///
     /// The default implementation reports nothing released.
     async fn try_release_pipeline_run_claim(
@@ -255,6 +294,56 @@ pub trait PipelineRunRepository: Send + Sync {
         _claim_id: Uuid,
     ) -> Result<bool, DbError> {
         Ok(false)
+    }
+
+    /// Drop **every** exclusive-run claim, returning how many went.
+    ///
+    /// # Only sound where one process per database is asserted
+    ///
+    /// Unlike every other release above, this is unscoped: it does not know
+    /// whose claims it is dropping. That is safe in exactly one situation — a
+    /// process starting up that is the *only* process using this database.
+    /// Every claim it finds was then written by a previous incarnation of
+    /// itself, and every one of those holders is dead by definition, because
+    /// the process that would have held them is the one now starting.
+    ///
+    /// In a multi-process or multi-replica deployment the same call would drop
+    /// a *live* peer's claim and re-admit a concurrent run into it — precisely
+    /// the failure the claim exists to prevent. Callers MUST gate it on
+    /// [`crate::single_process::resolve_single_process`] (or
+    /// `Settings::resolved_single_process`, which wraps it), and MUST call it
+    /// only before any run of their own has taken a claim.
+    ///
+    /// Note what that predicate does **not** grant: a SQLite *file* is shared
+    /// by every process opened against it, so only in-memory SQLite qualifies
+    /// on its own and everything else needs an explicit
+    /// `COGNEE_SINGLE_PROCESS=1`.
+    ///
+    /// # Why it is needed
+    ///
+    /// A claim is released only by its holder
+    /// ([`Self::release_pipeline_run_claim`] filters on `claim_id`), so a
+    /// process killed mid-run — SIGKILL, OOM, an Android process kill — cannot
+    /// release. Liveness is then inferred purely from the age of `claimed_at`,
+    /// against a deliberately generous staleness window (a day), so the pair
+    /// refuses every new run until that window expires.
+    ///
+    /// # Pair it with [`Self::reset_orphans`]
+    ///
+    /// A killed run leaves *two* blockers and the claim is the second of them.
+    /// `check_pipeline_run_qualification` reads the latest `pipeline_runs` row
+    /// first and rejects one left at `Started`, before any claim is consulted —
+    /// and unlike the claim that row never expires. Clearing only the claim
+    /// therefore changes nothing the caller can observe. `cognee-cli
+    /// pipeline-unblock` clears both for this reason; a startup sweep must too.
+    ///
+    /// `reason` is recorded on the log line emitted per released pair, so the
+    /// audit trail says what was dropped and why.
+    ///
+    /// The default implementation releases nothing, matching the default
+    /// [`Self::try_claim_pipeline_run`], which never records a claim.
+    async fn release_all_pipeline_run_claims(&self, _reason: &str) -> Result<u64, DbError> {
+        Ok(0)
     }
 
     /// Retire the orphaned `Initiated`/`Started` row whose primary key is

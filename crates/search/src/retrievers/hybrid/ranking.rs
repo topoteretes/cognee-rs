@@ -50,7 +50,7 @@ pub(crate) fn importance_factor(chunk_payload: &Value) -> f64 {
 ///
 /// Port of `rank_chunk_summary_pairs` (`ranking.py:7-48`). For each pair
 /// carrying a `chunk`, collect the present ranks from
-/// `(bm25_rank, vector_rank, summary_rank)` (skip if none), compute
+/// `(vector_rank, summary_rank)` (skip if none), compute
 /// `rrf_score = Σ 1/(k + rank + 1)`, multiply by `importance_factor` when
 /// `use_importance_weight`, then multiply by `truth_factor` when the truth-weight
 /// gate holds, and sort by `(-final, -rrf, min_rank, chunk_id)` (float legs via
@@ -86,7 +86,7 @@ pub(crate) fn rank_chunk_summary_pairs(
             continue;
         };
 
-        let ranks: Vec<usize> = [pair.bm25_rank, pair.vector_rank, pair.summary_rank]
+        let ranks: Vec<usize> = [pair.vector_rank, pair.summary_rank]
             .into_iter()
             .flatten()
             .collect();
@@ -167,7 +167,6 @@ mod tests {
 
     fn pair(
         id: &str,
-        bm25: Option<usize>,
         vector: Option<usize>,
         summary: Option<usize>,
         importance: Option<f64>,
@@ -178,7 +177,6 @@ mod tests {
             summary_id: None,
             summary_text: None,
             chunk: Some(chunk_item(id, importance)),
-            bm25_rank: bm25,
             vector_rank: vector,
             summary_rank: summary,
         }
@@ -218,37 +216,37 @@ mod tests {
 
     #[test]
     fn limit_zero_returns_empty() {
-        let pairs = vec![pair("a", Some(0), Some(0), Some(0), None)];
+        let pairs = vec![pair("a", Some(0), Some(0), None)];
         assert!(baseline(pairs, 0, false).is_empty());
     }
 
     #[test]
     fn pair_without_ranks_is_skipped() {
-        let pairs = vec![pair("a", None, None, None, None)];
+        let pairs = vec![pair("a", None, None, None)];
         assert!(baseline(pairs, 5, false).is_empty());
     }
 
     #[test]
-    fn all_three_lanes_outrank_single_lane() {
+    fn both_lanes_outrank_single_lane() {
         // Same rank slot value but different lane counts.
-        let three = pair("three", Some(1), Some(1), Some(1), None);
-        let one = pair("one", Some(0), None, None, None);
-        let ranked = baseline(vec![one, three], 5, false);
+        let two = pair("two", Some(1), Some(1), None);
+        let one = pair("one", Some(0), None, None);
+        let ranked = baseline(vec![one, two], 5, false);
         assert_eq!(ranked.len(), 2);
-        assert_eq!(ranked[0].chunk_id.as_deref(), Some("three"));
+        assert_eq!(ranked[0].chunk_id.as_deref(), Some("two"));
     }
 
     #[test]
     fn importance_weight_can_reorder() {
         // Identical ranks; the higher importance weight wins when enabled.
-        let low = pair("low", Some(0), None, None, Some(0.0));
-        let high = pair("high", Some(0), None, None, Some(1.0));
+        let low = pair("low", Some(0), None, Some(0.0));
+        let high = pair("high", Some(0), None, Some(1.0));
         let ranked = baseline(vec![low, high], 5, true);
         assert_eq!(ranked[0].chunk_id.as_deref(), Some("high"));
 
         // With importance off, tie-break falls to chunk_id string order.
-        let low = pair("low", Some(0), None, None, Some(0.0));
-        let high = pair("high", Some(0), None, None, Some(1.0));
+        let low = pair("low", Some(0), None, Some(0.0));
+        let high = pair("high", Some(0), None, Some(1.0));
         let ranked = baseline(vec![low, high], 5, false);
         assert_eq!(ranked[0].chunk_id.as_deref(), Some("high")); // "high" < "low"
     }
@@ -256,8 +254,8 @@ mod tests {
     #[test]
     fn tie_break_by_chunk_id() {
         // Identical scores/ranks -> ascending chunk_id string.
-        let b = pair("bbb", Some(0), None, None, None);
-        let a = pair("aaa", Some(0), None, None, None);
+        let b = pair("bbb", Some(0), None, None);
+        let a = pair("aaa", Some(0), None, None);
         let ranked = baseline(vec![b, a], 5, false);
         assert_eq!(ranked[0].chunk_id.as_deref(), Some("aaa"));
         assert_eq!(ranked[1].chunk_id.as_deref(), Some("bbb"));
@@ -265,11 +263,11 @@ mod tests {
 
     #[test]
     fn hand_computed_rrf_score_orders_by_min_rank_on_tie() {
-        // limit=5 -> k=30. Pair X: ranks {bm25:0} -> 1/(30+0+1) = 1/31.
+        // limit=5 -> k=30. Pair X: ranks {vector:0} -> 1/(30+0+1) = 1/31.
         // Pair Y: ranks {vector:0, summary:2} -> 1/31 + 1/33.
         // Y has a higher rrf sum, so ranks first.
-        let x = pair("x", Some(0), None, None, None);
-        let y = pair("y", None, Some(0), Some(2), None);
+        let x = pair("x", Some(0), None, None);
+        let y = pair("y", Some(0), Some(2), None);
         let ranked = baseline(vec![x, y], 5, false);
         assert_eq!(ranked[0].chunk_id.as_deref(), Some("y"));
     }
@@ -277,9 +275,9 @@ mod tests {
     #[test]
     fn truncates_to_limit() {
         let pairs = vec![
-            pair("a", Some(0), None, None, None),
-            pair("b", Some(1), None, None, None),
-            pair("c", Some(2), None, None, None),
+            pair("a", Some(0), None, None),
+            pair("b", Some(1), None, None),
+            pair("c", Some(2), None, None),
         ];
         let ranked = baseline(pairs, 2, false);
         assert_eq!(ranked.len(), 2);
@@ -310,8 +308,8 @@ mod tests {
     /// `[boost, hi]`. Any spurious factor above ~1.032 flips it.
     fn flip_pairs() -> Vec<ChunkSummaryPair> {
         vec![
-            pair(HI_ID, Some(0), None, None, Some(0.5)),
-            pair(BOOST_ID, Some(1), None, None, Some(0.5)),
+            pair(HI_ID, Some(0), None, Some(0.5)),
+            pair(BOOST_ID, Some(1), None, Some(0.5)),
         ]
     }
 
@@ -348,9 +346,9 @@ mod tests {
         // rrf: hi 1/31 = 0.032258, mid 1/32 = 0.031250, lo 1/33 = 0.030303.
         let mk = || {
             vec![
-                pair("hi", Some(0), None, None, Some(0.5)),
-                pair("mid", Some(1), None, None, Some(0.5)),
-                pair("lo", Some(2), None, None, Some(0.5)),
+                pair("hi", Some(0), None, Some(0.5)),
+                pair("mid", Some(1), None, Some(0.5)),
+                pair("lo", Some(2), None, Some(0.5)),
             ]
         };
 
@@ -524,8 +522,8 @@ mod tests {
 
         // Identical importance (0.5) and identical single-lane rank 0 so the only
         // differentiator is the truth factor.
-        let a = pair("a", Some(0), None, None, Some(0.5));
-        let b = pair("b", Some(0), None, None, Some(0.5));
+        let a = pair("a", Some(0), None, Some(0.5));
+        let b = pair("b", Some(0), None, Some(0.5));
 
         // Baseline (truth off): tie resolves to chunk_id order -> "a" first, "b"
         // second (they carry equal scores).
@@ -649,8 +647,8 @@ mod tests {
 
         let mk = || {
             vec![
-                pair("plain", Some(0), None, None, Some(0.5)),
-                pair("boost", Some(12), None, None, Some(1.0)),
+                pair("plain", Some(0), None, Some(0.5)),
+                pair("boost", Some(12), None, Some(1.0)),
             ]
         };
         let boost_first = vec![Some("boost".to_string()), Some("plain".to_string())];
@@ -721,8 +719,8 @@ mod tests {
 
         let mk = || {
             vec![
-                pair("stale", Some(0), None, None, Some(0.5)),
-                pair("current", Some(1), None, None, Some(0.5)),
+                pair("stale", Some(0), None, Some(0.5)),
+                pair("current", Some(1), None, Some(0.5)),
             ]
         };
 

@@ -360,6 +360,14 @@ impl LlmFactory for BedrockLlmFactory {
                 .map_err(|e| ComponentError::Llm(e.to_string()))?
                 .with_structured_output_retries(ctx.llm.max_retries)
                 .with_network_retries(ctx.llm.network_retries)
+                // `LLM_MIN_RETRY_SECONDS` reached every other provider but this
+                // one, because the adapter had no floor to set: its ladder was a
+                // plain attempt count, ~28-56s at the defaults, after which a
+                // throttle window the other adapters ride out for 240s surfaced
+                // as a terminal failure and — under the default whole-run
+                // rollback — swept the run. It is also what makes
+                // `request_deadline`'s warning above truthful here.
+                .with_min_retry_elapsed(min_retry_elapsed(ctx))
                 .with_max_completion_tokens(ctx.llm.max_completion_tokens)
                 .with_default_temperature(ctx.llm.temperature)
                 .with_extra_args(ctx.llm.llm_args.clone())

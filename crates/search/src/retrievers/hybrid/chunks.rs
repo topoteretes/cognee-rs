@@ -1,9 +1,7 @@
-//! Three-lane orchestration for the hybrid chunk retriever.
+//! Two-lane orchestration for the hybrid chunk retriever.
 //!
-//! Port of `cognee/modules/retrieval/hybrid/chunks.py` (Phase-1 subset). Fans a
-//! query out to the BM25 lexical lane
-//! ([`crate::retrievers::bm25_scored_chunks`]) and the vector
-//! `DocumentChunk_text` / `TextSummary_text` lanes, merges them into
+//! Port of `cognee/modules/retrieval/hybrid/chunks.py`. Fans a query out to the
+//! vector `DocumentChunk_text` / `TextSummary_text` lanes, merges them into
 //! chunk↔summary pairs, ranks with RRF, backfills source chunks and summary
 //! text, and returns the top chunks plus a `chunk_id -> summary_text` map.
 //!
@@ -15,9 +13,8 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use cognee_graph::{GraphDBTrait, NodeTruthState};
+use cognee_graph::NodeTruthState;
 use cognee_vector::VectorDB;
-use serde_json::Value;
 use uuid::Uuid;
 
 use crate::retrievers::context_items::search_results_to_context;
@@ -26,9 +23,7 @@ use crate::retrievers::hybrid::pairs::{
     summary_id_for_chunk, summary_text_by_chunk_id,
 };
 use crate::retrievers::hybrid::ranking::rank_chunk_summary_pairs;
-use crate::retrievers::hybrid::results::{
-    display_value, payload_matches_node_filter, result_id, scored_payload,
-};
+use crate::retrievers::hybrid::results::{display_value, payload_matches_node_filter, result_id};
 use crate::types::{SearchError, SearchItem};
 
 const DOCUMENT_CHUNK_TYPE: &str = "DocumentChunk";
@@ -65,9 +60,8 @@ pub(crate) fn summary_candidate_limit(
 /// `node_name`/`operator` into [`VectorDB::search_similar_filtered`], so the
 /// filter is applied inside the adapter rather than after an over-fetch here.
 ///
-/// A missing collection is a hard [`SearchError::NotFound`] when `required`
-/// (Python raises `NoDataError`; Rust reuses `NotFound`, matching
-/// `ChunksRetriever` / `SummariesRetriever`), otherwise an empty channel.
+/// A missing collection is an empty channel, never an error: Python catches
+/// `CollectionNotFoundError` and returns `[]` for every lane (`chunks.py:140-142`).
 ///
 /// # Recall parity
 ///
@@ -91,18 +85,13 @@ pub(crate) async fn search_collection(
     limit: usize,
     node_name: Option<&[String]>,
     node_name_filter_operator: &str,
-    required: bool,
 ) -> Result<Vec<SearchItem>, SearchError> {
     if limit == 0 {
         return Ok(vec![]);
     }
 
     if !vector_db.has_collection(data_type, field).await? {
-        if required {
-            return Err(SearchError::NotFound(format!(
-                "missing vector collection: {data_type}_{field}"
-            )));
-        }
+        tracing::debug!("{data_type}_{field} collection not found; using empty channel");
         return Ok(vec![]);
     }
 
@@ -130,44 +119,6 @@ pub(crate) async fn search_collection(
             search_results_to_context(results)
         }
     }
-}
-
-/// Score the BM25 lexical lane and shape it into node-filtered [`SearchItem`]s.
-///
-/// Port of `search_bm25_chunks` (`chunks.py:112-140`). The BM25 lane already
-/// landed as the free function [`crate::retrievers::bm25_scored_chunks`], which
-/// handles `limit == 0`, the fresh-per-call corpus rebuild, truncate-then-drop
-/// ordering, and fail-open behavior (never `Err`). This wrapper only shapes its
-/// `(payload, score)` output into [`SearchItem`]s and applies the node filter.
-async fn search_bm25_chunks(
-    graph_db: &Arc<dyn GraphDBTrait>,
-    query: &str,
-    limit: usize,
-    node_name: Option<&[String]>,
-    node_name_filter_operator: &str,
-) -> Vec<SearchItem> {
-    let scored = crate::retrievers::bm25_scored_chunks(graph_db, query, limit).await;
-    scored
-        .into_iter()
-        .filter_map(|item| {
-            let (payload, score) = scored_payload(item);
-            if score <= 0.0 {
-                return None;
-            }
-            let id = payload
-                .get("id")
-                .and_then(Value::as_str)
-                .and_then(|raw| Uuid::parse_str(raw).ok());
-            Some(SearchItem {
-                id,
-                score: Some(score),
-                payload,
-            })
-        })
-        .filter(|item| {
-            payload_matches_node_filter(&item.payload, node_name, node_name_filter_operator)
-        })
-        .collect()
 }
 
 /// Fetch `DocumentChunk_text` rows by id for summary-only pairs, dropping any
@@ -306,17 +257,14 @@ async fn load_summary_text_for_ranked_pairs(
 
 /// Retrieve, merge, and rank hybrid chunks for `query`.
 ///
-/// Port of `retrieve_hybrid_chunks` (`chunks.py:27-103`, Phase-1 subset). Runs
-/// the three lanes concurrently (BM25 is infallible; the required
-/// `DocumentChunk_text` vector lane propagates a `NotFound`; the summary lane is
-/// optional), builds pairs, backfills source chunks for summary-only pairs,
+/// Port of `retrieve_hybrid_chunks` (`chunks.py:23-98`). Runs the two vector
+/// lanes concurrently (a missing collection is an empty channel, as in
+/// Python), builds pairs, backfills source chunks for summary-only pairs,
 /// ranks, backfills summary text on the **ranked** pairs, and returns the top
 /// chunks plus their summaries.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn retrieve_hybrid_chunks(
     vector_db: &Arc<dyn VectorDB>,
-    graph_db: &Arc<dyn GraphDBTrait>,
-    query: &str,
     chunks_top_k: usize,
     text_summaries_top_k: Option<usize>,
     node_name: Option<&[String]>,
@@ -331,13 +279,6 @@ pub(crate) async fn retrieve_hybrid_chunks(
     let candidate_limit = chunks_top_k.saturating_mul(2);
     let summary_limit = summary_candidate_limit(chunks_top_k, text_summaries_top_k);
 
-    let bm25_future = search_bm25_chunks(
-        graph_db,
-        query,
-        candidate_limit,
-        node_name,
-        node_name_filter_operator,
-    );
     let vector_future = search_collection(
         vector_db,
         DOCUMENT_CHUNK_TYPE,
@@ -346,7 +287,6 @@ pub(crate) async fn retrieve_hybrid_chunks(
         candidate_limit,
         node_name,
         node_name_filter_operator,
-        true,
     );
     let summary_future = search_collection(
         vector_db,
@@ -356,16 +296,13 @@ pub(crate) async fn retrieve_hybrid_chunks(
         summary_limit,
         node_name,
         node_name_filter_operator,
-        false,
     );
 
-    let (bm25_chunks, vector_result, summary_result) =
-        tokio::join!(bm25_future, vector_future, summary_future);
+    let (vector_result, summary_result) = tokio::join!(vector_future, summary_future);
     let vector_chunks = vector_result?;
     let summary_hits = summary_result?;
 
     let mut pairs = chunk_summary_pairs(
-        &bm25_chunks,
         &vector_chunks,
         &summary_hits,
         node_name,
@@ -424,14 +361,11 @@ pub(crate) async fn retrieve_hybrid_chunks(
 mod tests {
     use std::sync::Arc;
 
-    use cognee_graph::{GraphDBTrait, GraphDBTraitExt, MockGraphDB};
     use cognee_vector::{MockVectorDB, VectorDB, VectorPoint};
-    use serde::Serialize;
     use serde_json::json;
     use uuid::Uuid;
 
     use super::*;
-    use crate::types::SearchError;
 
     fn dyn_vector(db: MockVectorDB) -> Arc<dyn VectorDB> {
         Arc::new(db)
@@ -492,53 +426,12 @@ mod tests {
             .unwrap();
     }
 
-    #[derive(Serialize)]
-    struct ChunkNode {
-        id: String,
-        #[serde(rename = "type")]
-        kind: String,
-        text: String,
-    }
-
-    #[derive(Serialize)]
-    struct ChunkNodeWithSet {
-        id: String,
-        #[serde(rename = "type")]
-        kind: String,
-        text: String,
-        belongs_to_set: Vec<String>,
-    }
-
-    async fn add_graph_chunk(graph: &MockGraphDB, id: Uuid, text: &str) {
-        let node = ChunkNode {
-            id: id.to_string(),
-            kind: DOCUMENT_CHUNK_TYPE.to_string(),
-            text: text.to_string(),
-        };
-        graph.add_node(&node).await.unwrap();
-    }
-
-    /// Add a graph DocumentChunk carrying a `belongs_to_set` tag, so the BM25
-    /// lane's node filter sees the membership on the raw graph payload.
-    async fn add_graph_chunk_with_set(graph: &MockGraphDB, id: Uuid, text: &str, sets: &[&str]) {
-        let node = ChunkNodeWithSet {
-            id: id.to_string(),
-            kind: DOCUMENT_CHUNK_TYPE.to_string(),
-            text: text.to_string(),
-            belongs_to_set: sets.iter().map(|s| s.to_string()).collect(),
-        };
-        graph.add_node(&node).await.unwrap();
-    }
-
     #[tokio::test]
-    async fn missing_document_chunk_collection_is_not_found() {
+    async fn missing_document_chunk_collection_is_an_empty_channel() {
         let vector_db = dyn_vector(MockVectorDB::new());
-        let graph_db: Arc<dyn GraphDBTrait> = Arc::new(MockGraphDB::new());
 
         let result = retrieve_hybrid_chunks(
             &vector_db,
-            &graph_db,
-            "query",
             3,
             None,
             None,
@@ -550,9 +443,12 @@ mod tests {
             None,
             None,
         )
-        .await;
+        .await
+        .unwrap();
 
-        assert!(matches!(result, Err(SearchError::NotFound(_))));
+        // Python catches `CollectionNotFoundError` on every lane (`chunks.py:140-142`).
+        assert!(result.chunks.is_empty());
+        assert!(result.chunk_summaries.is_empty());
     }
 
     #[tokio::test]
@@ -564,12 +460,9 @@ mod tests {
         let chunk_id = Uuid::new_v4();
         index_chunk(&db, chunk_id, "rust ownership model", None, vec![1.0, 0.0]).await;
         let vector_db = dyn_vector(db);
-        let graph_db: Arc<dyn GraphDBTrait> = Arc::new(MockGraphDB::new());
 
         let result = retrieve_hybrid_chunks(
             &vector_db,
-            &graph_db,
-            "query",
             3,
             None,
             None,
@@ -601,13 +494,10 @@ mod tests {
         index_chunk(&db, keep_b, "text b", Some(vec!["keep"]), vec![1.0, 0.0]).await;
         index_chunk(&db, drop_c, "text c", Some(vec!["drop"]), vec![1.0, 0.0]).await;
         let vector_db = dyn_vector(db);
-        let graph_db: Arc<dyn GraphDBTrait> = Arc::new(MockGraphDB::new());
 
         let node_name = vec!["keep".to_string()];
         let result = retrieve_hybrid_chunks(
             &vector_db,
-            &graph_db,
-            "query",
             3,
             None,
             Some(&node_name),
@@ -663,13 +553,10 @@ mod tests {
         index_chunk(&db, keep_b, "in set b", Some(vec!["keep"]), vec![0.8, 0.6]).await;
 
         let vector_db = dyn_vector(db);
-        let graph_db: Arc<dyn GraphDBTrait> = Arc::new(MockGraphDB::new());
 
         let node_name = vec!["keep".to_string()];
         let result = retrieve_hybrid_chunks(
             &vector_db,
-            &graph_db,
-            "query",
             2,
             None,
             Some(&node_name),
@@ -737,12 +624,9 @@ mod tests {
         .await;
 
         let vector_db = dyn_vector(db);
-        let graph_db: Arc<dyn GraphDBTrait> = Arc::new(MockGraphDB::new());
 
         let result = retrieve_hybrid_chunks(
             &vector_db,
-            &graph_db,
-            "query",
             2,
             None,
             None,
@@ -804,12 +688,9 @@ mod tests {
         index_summary(&db, loser_summary, "loser summary", loser, vec![0.2, 1.0]).await;
 
         let vector_db = dyn_vector(db);
-        let graph_db: Arc<dyn GraphDBTrait> = Arc::new(MockGraphDB::new());
 
         let result = retrieve_hybrid_chunks(
             &vector_db,
-            &graph_db,
-            "query",
             1,
             None,
             None,
@@ -834,58 +715,6 @@ mod tests {
             Some("winner summary")
         );
         assert!(!result.chunk_summaries.contains_key(&loser.to_string()));
-    }
-
-    #[tokio::test]
-    async fn bm25_lane_contributes_graph_chunks() {
-        // No vector DocumentChunk hits aligned with the query, but a graph
-        // DocumentChunk node feeds the BM25 lane.
-        let db = MockVectorDB::new();
-        db.create_collection(DOCUMENT_CHUNK_TYPE, TEXT_FIELD, 2)
-            .await
-            .unwrap();
-        let chunk_id = Uuid::new_v4();
-        // Present in the vector collection so retrieve/search can see it, and in
-        // the graph so BM25 scores it.
-        index_chunk(
-            &db,
-            chunk_id,
-            "ownership borrow checker",
-            None,
-            vec![1.0, 0.0],
-        )
-        .await;
-        let vector_db = dyn_vector(db);
-
-        let mock_graph = MockGraphDB::new();
-        add_graph_chunk(&mock_graph, chunk_id, "ownership borrow checker").await;
-        let graph_db: Arc<dyn GraphDBTrait> = Arc::new(mock_graph);
-
-        let result = retrieve_hybrid_chunks(
-            &vector_db,
-            &graph_db,
-            "ownership borrow",
-            3,
-            None,
-            None,
-            "OR",
-            false,
-            &[1.0, 0.0],
-            false,
-            None,
-            None,
-            None,
-        )
-        .await
-        .unwrap();
-
-        assert!(!result.chunks.is_empty());
-        assert!(
-            result
-                .chunks
-                .iter()
-                .any(|c| c.payload.get("id") == Some(&json!(chunk_id.to_string())))
-        );
     }
 
     #[test]
@@ -921,12 +750,9 @@ mod tests {
         index_summary(&db, summary_id, "the summary", chunk_id, vec![1.0, 0.0]).await;
 
         let vector_db = dyn_vector(db);
-        let graph_db: Arc<dyn GraphDBTrait> = Arc::new(MockGraphDB::new());
 
         let result = retrieve_hybrid_chunks(
             &vector_db,
-            &graph_db,
-            "query",
             3,
             Some(0),
             None,
@@ -941,7 +767,7 @@ mod tests {
         .await
         .unwrap();
 
-        // The chunk still comes through the (required) DocumentChunk lane...
+        // The chunk still comes through the DocumentChunk lane...
         assert_eq!(result.chunks.len(), 1);
         // ...but the summary lane is fully disabled.
         assert!(result.chunk_summaries.is_empty());
@@ -985,13 +811,10 @@ mod tests {
         .await;
 
         let vector_db = dyn_vector(db);
-        let graph_db: Arc<dyn GraphDBTrait> = Arc::new(MockGraphDB::new());
 
         let node_name = vec!["keep".to_string()];
         let result = retrieve_hybrid_chunks(
             &vector_db,
-            &graph_db,
-            "query",
             3,
             None,
             Some(&node_name),
@@ -1064,13 +887,10 @@ mod tests {
         .await;
 
         let vector_db = dyn_vector(db);
-        let graph_db: Arc<dyn GraphDBTrait> = Arc::new(MockGraphDB::new());
 
         let node_name = vec!["keep".to_string()];
         let result = retrieve_hybrid_chunks(
             &vector_db,
-            &graph_db,
-            "query",
             2,
             None,
             Some(&node_name),
@@ -1096,79 +916,6 @@ mod tests {
         assert!(
             !result.chunk_summaries.contains_key(&chunk_c_str),
             "its summary must not survive either (the pair has no chunk)"
-        );
-    }
-
-    #[tokio::test]
-    async fn bm25_out_of_set_graph_chunk_is_filtered() {
-        // Two lexically-matching graph DocumentChunks feed the BM25 lane: one
-        // tagged ["keep"], one ["drop"]. With node_name = ["keep"], the BM25
-        // lane's node filter (over the raw graph payload) must drop the ["drop"]
-        // chunk while keeping the ["keep"] one. The keep chunk is also indexed
-        // in the vector collection (required lane) so it carries the tag there.
-        let db = MockVectorDB::new();
-        db.create_collection(DOCUMENT_CHUNK_TYPE, TEXT_FIELD, 2)
-            .await
-            .unwrap();
-        let keep_chunk = Uuid::new_v4();
-        let drop_chunk = Uuid::new_v4();
-        index_chunk(
-            &db,
-            keep_chunk,
-            "ownership borrow checker",
-            Some(vec!["keep"]),
-            vec![1.0, 0.0],
-        )
-        .await;
-        let vector_db = dyn_vector(db);
-
-        let mock_graph = MockGraphDB::new();
-        add_graph_chunk_with_set(
-            &mock_graph,
-            keep_chunk,
-            "ownership borrow checker",
-            &["keep"],
-        )
-        .await;
-        add_graph_chunk_with_set(&mock_graph, drop_chunk, "ownership borrow model", &["drop"])
-            .await;
-        let graph_db: Arc<dyn GraphDBTrait> = Arc::new(mock_graph);
-
-        let node_name = vec!["keep".to_string()];
-        let result = retrieve_hybrid_chunks(
-            &vector_db,
-            &graph_db,
-            "ownership borrow",
-            3,
-            None,
-            Some(&node_name),
-            "OR",
-            false,
-            &[1.0, 0.0],
-            false,
-            None,
-            None,
-            None,
-        )
-        .await
-        .unwrap();
-
-        let keep_str = keep_chunk.to_string();
-        let drop_str = drop_chunk.to_string();
-        assert_eq!(result.chunks.len(), 1, "only the in-set chunk survives");
-        assert!(
-            result
-                .chunks
-                .iter()
-                .any(|c| c.payload.get("id") == Some(&json!(keep_str))),
-            "the ['keep'] graph chunk must survive the BM25-lane node filter"
-        );
-        assert!(
-            !result
-                .chunks
-                .iter()
-                .any(|c| c.payload.get("id") == Some(&json!(drop_str))),
-            "the ['drop'] graph chunk must be filtered out of the BM25 lane"
         );
     }
 }

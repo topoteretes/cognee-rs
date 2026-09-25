@@ -500,6 +500,132 @@ config (see [roadmap/cognify-compatibility-plan.md](roadmap/cognify-compatibilit
 | `DB_HOST` / `DB_PORT` | `db_host` / `db_port` | `localhost` / `5432` |
 | `DB_NAME` | `db_name` | `cognee_db` |
 | `DB_USERNAME` / `DB_PASSWORD` | … | _(empty)_ |
+| `COGNEE_SINGLE_PROCESS` | `single_process` | _(unset — see below; effectively off)_ |
+
+### `single_process` / `COGNEE_SINGLE_PROCESS` — does one process own this database?
+
+**In practice this is an opt-in: startup recovery does nothing until you turn
+it on.** The setting is tri-state, and the derived answer is only ever useful
+in the negative:
+
+| value | meaning |
+|---|---|
+| unset / `null` | derive it — see below |
+| `true` (`1`, `yes`, `on`) | one process owns this database; enable startup recovery |
+| any other non-blank value | explicitly not; leave everything alone |
+
+`null` restores the derived answer the way it does for `chunk_size`. The env
+var is parsed by the same code as the config key, so the two cannot disagree —
+a blank or whitespace-only value means "derive", not `false`, and `1` / `0`
+mean what `true` / `false` mean whether they arrive as a string, a JSON number
+or a shell value.
+
+#### Which surfaces read it
+
+Not every entry point runs startup recovery, so not every entry point consults
+this setting. Assert it the way your deployment is actually started:
+
+| how you run cognee | how to assert it | what happens |
+|---|---|---|
+| a binding — Python, JS, C API, Java/Android | `set_config("single_process", true)`, `ConfigManager::set_single_process(true)`, or `COGNEE_SINGLE_PROCESS=1` | recovery runs on the first operation |
+| `cognee-http-server` | `COGNEE_SINGLE_PROCESS=1` **only** | recovery runs at server startup |
+| `cognee-cli cognify` / `memify` | — | **no startup recovery at all**; use `cognee-cli pipeline-unblock --clear` |
+
+The two gaps are deliberate, not oversights:
+
+- The HTTP server never loads the `cognee config` file (that file is CLI-only —
+  see [How configuration resolves](#how-configuration-resolves)) and builds no
+  `Settings`, so `cognee config set single_process true` cannot reach it. Its
+  environment is the only channel there is.
+- The CLI runs no sweep on any command. Every invocation is its own process,
+  and two concurrent `cognee-cli cognify` runs against one SQLite file are
+  exactly the case the claim exists to catch — so sweeping on each invocation
+  would be the wrong default even where this setting says it is safe.
+  `cognee-cli pipeline-unblock --clear` is the supported way to clear a wedged
+  dataset from the CLI, and it clears both gates.
+
+#### Set it before the first operation
+
+The setting is read **once per relational database per process**, on the first
+operation that opens that database. Flipping it on afterwards is ignored for
+the rest of that process's life — deliberately: by then the process may have
+runs of its own in flight, whose rows and claims a sweep cannot tell apart
+from a dead predecessor's, and rolling those back would delete a live run's
+graph artifacts. A binding that notices the flip logs a `WARN` saying so;
+restart to recover a dataset that is already wedged.
+
+The derivation resolves `true` for **only an in-memory SQLite URL**
+(`sqlite::memory:`, `?mode=memory`) and `false` for everything else — Postgres,
+and **file-backed SQLite including the shipped default
+`sqlite:./cognee.db?mode=rwc`**, which every cognee process started in that
+directory opens. Since an in-memory database dies with its process, it can
+never hold a leftover from a dead run, so the derived `true` gives the sweep
+nothing to do. The derivation earns its place through the `false` half, which
+is what stops a SQLite *file* from being mistaken for a private one.
+
+#### What asserting it turns on
+
+Startup recovery for a run killed mid-flight — SIGKILL, an OOM kill, Android
+killing the app process. A run that fails while its process is alive cleans up
+after itself; a killed one leaves three things behind, in the order recovery
+deals with them:
+
+1. **What it had already written** into the graph and vector stores, recorded
+   in the ownership ledger against its `pipeline_run_id`. A live failure rolls
+   this back through the same `RunSweeper` the `forget` path uses; a killed
+   process never reaches that code, so the artifacts survive attributed to a
+   run that will never finish, and no later sweep selects them again.
+2. **The `pipeline_runs` row left at `Started`** — read first by the run gate
+   and **never** expiring.
+3. **The exclusive-run claim** on `(dataset, pipeline)` — released only by its
+   holder, otherwise expiring 24 h later.
+
+The order matters: retiring the status row is what makes the dataset runnable
+again, so it happens *after* the rollback, never before. (Python does the same
+— `cognify_rollback_handler` runs ahead of the status reset in
+`modules/cognify/recovery.py`.) The rollback is scoped strictly to the dead
+run in its own dataset; it is never a blanket delete, and artifacts another
+run also claims are kept.
+
+With one process per database, all three leftovers present at startup belong
+to a dead predecessor, so all three are cleared and the dataset is runnable
+again. With more than one, any of them may belong to a live peer, so nothing
+is touched and the claim keeps excluding concurrent runs across processes
+exactly as before.
+
+A rollback that fails is logged and the status row is retired anyway. The
+ownership rows survive as the record of what still needs deleting, whereas
+leaving the status row would wedge the dataset permanently — that gate never
+expires, and for an embedded consumer this is the only thing that clears it.
+
+##### A divergence from Python worth knowing about
+
+Retiring an orphan writes a **new `Errored` row** in Rust, where Python's
+recovery resets the run to `INITIATED`. Both resolve to "you may run" at the
+gate, and both are recorded rather than deleted, so nothing downstream
+behaves differently — but a status poller does see different things after the
+same crash: on Rust the run reads as a *failed build*, on Python as one that
+*never started*. Rust's answer is the truthful one (the run did start, and it
+did not finish) and it keeps the new-row-per-transition audit trail intact, so
+it is deliberate. Note that Rust's own `reset_pipeline_run_status` API writes
+`INITIATED`, matching Python; only the orphan sweep differs.
+
+#### Who needs to set it
+
+Any single-process deployment on a **file-backed** database: an Android app, a
+desktop app, a one-process service, a CLI-only setup. The URL cannot show this
+— the very same URL is what two `cognee-cli` invocations, or an HTTP server
+restarting beside a running CLI, would use, and sweeping there would delete a
+live sibling's claim and admit the concurrent run the claim exists to prevent.
+
+Without the opt-in nothing regresses; you simply keep today's behaviour. The
+claim still ages out after 24 h, and the orphaned row is still cleared by
+`cognee-cli pipeline-unblock --clear` or by an HTTP-server restart. What you
+do not get either way is the artifact rollback: nothing but this recovery ever
+removes what a killed run wrote, so those nodes stay in the graph.
+
+Set it to `false` to refuse the recovery outright — useful to pin the safe
+behaviour in a config file so a later environment change cannot switch it on.
 
 ## Chunking & tokenizer
 
@@ -788,23 +914,20 @@ a populated `retriever_specific_config`. They are **not** wire fields on
 [`http-server/routers/search.md`](http-server/routers/search.md)).
 
 When a knob is unset the retriever falls back through a three-layer resolution:
-`retriever_specific_config.<knob>` → `SearchRequest.top_k` → the
-`HybridRetriever::new` constructor default. The effective defaults are:
+`retriever_specific_config.<knob>` → `SearchRequest.top_k` capped at 10 → the
+`HybridRetriever::new` constructor default (Python's `_hybrid_lane_top_k`; an
+explicit per-lane knob is never capped). The effective defaults are:
 
 | `SearchParams` field | `retriever_specific_config` JSON key | Effective Rust default | Python parity |
 |---|---|---|---|
-| `chunks_top_k` | `chunks_top_k` | `top_k`, else `15` | `chunks_top_k` (derives from `top_k`) |
-| `entities_top_k` | `entities_top_k` | `top_k`, else `15` | `entities_top_k` |
-| `facts_top_k` | `facts_top_k` | `top_k`, else `15` | `facts_top_k` |
+| `chunks_top_k` | `chunks_top_k` | `min(top_k, 10)`, else `5` | `chunks_top_k` (derives from `top_k`) |
+| `entities_top_k` | `entities_top_k` | `min(top_k, 10)`, else `5` | `entities_top_k` |
+| `facts_top_k` | `facts_top_k` | `min(top_k, 10)`, else `5` | `facts_top_k` |
 | `max_edges_per_entity` | `max_edges_per_entity` | `10` | `max_edges_per_entity=10` |
 | `text_summaries_top_k` | `text_summaries_top_k` | `None` (no fallback) | `text_summaries_top_k=None` |
 | `use_importance_weight` | `use_importance_weight` | `true` | `use_importance_weight=True` |
 | `node_name` | `node_name` | `None` | reused query node filter |
 | `node_name_filter_operator` | `node_name_filter_operator` | `"OR"` | `"OR"` / `"AND"` |
-
-(NB: the `chunks_top_k` / `entities_top_k` / `facts_top_k` code comments in
-`search_params.rs` still say `unwrap_or(10)` — that is a stale comment; the
-constructor uses `DEFAULT_TOP_K = 15`.)
 
 **Reserved (Phase 2, inert).** These keys are parsed and stored but have no
 effect in Phase 1 — passing `true` must behave identically to the default:
@@ -884,13 +1007,17 @@ These knobs form one resilience stack, matching Python cognee's:
   could only ever end the ladder earlier, and a call that waited minutes for a
   slot would give up having barely retried at all.
 
-  ⚠️ **Bedrock does not run this dual floor.** Its transport ladder is a plain
-  attempt count looping `0..=LLM_NETWORK_RETRIES` — so `2` buys three attempts
-  there against two elsewhere — and it holds no time floor at all, so
-  `LLM_MIN_RETRY_SECONDS` does not reach it. Both differences predate
-  `LLM_NETWORK_RETRIES`; unifying them is tracked with the Bedrock pacing work,
-  which rewrites the same loop. On Bedrock, read this knob as "at least N
-  attempts" and nothing more. The aggregate deadline below *does* bind there.
+  ⚠️ **Bedrock makes one attempt more.** Its attempt floor is
+  `LLM_NETWORK_RETRIES + 1` — so `2` buys three attempts there against two
+  elsewhere — preserving the `0..=LLM_NETWORK_RETRIES` ladder that predates this
+  knob. The time floor now applies there like everywhere else: Bedrock used to
+  hold none at all, so `LLM_MIN_RETRY_SECONDS` did not reach it and a throttle
+  window the other providers ride out for 240s failed the item after ~30-60s,
+  which under the default whole-run rollback discards the run. That was left
+  standing deliberately until the aggregate deadline below reached this adapter,
+  since the floor is a "keep retrying" guarantee and needs something to bound it
+  from above; the deadline outranks it, as on every other provider. Bedrock does
+  still ignore `Retry-After`, so its gaps are always the 8s-to-128s ladder.
 - **Three timeouts, three scopes.** `LLM_CONNECT_TIMEOUT_SECONDS` bounds the TCP
   handshake (`reqwest` sets none by default, so a black-holed connect used to
   burn the whole request timeout without sending a byte).

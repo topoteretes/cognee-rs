@@ -13,6 +13,7 @@ use std::collections::{HashMap, HashSet};
 
 use serde_json::Value;
 
+use super::entities::EntityResult;
 use super::results::{display_value, first_display_value, payload, result_id};
 use crate::types::SearchItem;
 use crate::utils::edge_type_point_id;
@@ -106,9 +107,62 @@ pub(crate) fn edge_rank_by_id(edge_hits: &[SearchItem]) -> HashMap<String, usize
     ranks
 }
 
+/// How many facts to select.
+///
+/// Port of `resolve_facts_top_k` (`facts.py:37-51`). When the entity lane came
+/// back empty and the search is unscoped, the facts lane spends the entity
+/// lane's edge budget (`entities_top_k * max_edges_per_entity`) instead of
+/// `facts_top_k`. Node-scoped searches stay at `facts_top_k` so unscoped
+/// `EdgeType` hits cannot leak in when there are no scoped entities to pin
+/// them to.
+pub(crate) fn resolve_facts_top_k(
+    entities: &[EntityResult],
+    node_scoped: bool,
+    facts_top_k: usize,
+    entity_edge_budget: usize,
+) -> usize {
+    if !entities.is_empty() || node_scoped {
+        return facts_top_k;
+    }
+    entity_edge_budget
+}
+
+/// Select the facts for a hybrid context, excluding what the entity bullets
+/// already say.
+///
+/// Port of `select_facts_for_entities` (`facts.py:54-75`). `EdgeType` rows
+/// carry no node-set membership, so a node-scoped search keeps only the hits
+/// whose id is in `reachable_edge_type_ids` — facts actually expressed by an
+/// edge on a scoped entity — before [`select_facts`] runs.
+pub(crate) fn select_facts_for_entities(
+    edge_hits: &[SearchItem],
+    entities: &[EntityResult],
+    reachable_edge_type_ids: &HashSet<String>,
+    facts_top_k: usize,
+    node_scoped: bool,
+) -> Vec<FactResult> {
+    if facts_top_k == 0 {
+        return Vec::new();
+    }
+    let bullet_ids: HashSet<String> = entities
+        .iter()
+        .flat_map(|entity| entity.edges.iter())
+        .filter_map(|edge| edge.edge_type_id.clone())
+        .collect();
+    if node_scoped {
+        let candidates: Vec<SearchItem> = edge_hits
+            .iter()
+            .filter(|hit| result_id(hit).is_some_and(|id| reachable_edge_type_ids.contains(&id)))
+            .cloned()
+            .collect();
+        return select_facts(&candidates, &bullet_ids, facts_top_k);
+    }
+    select_facts(edge_hits, &bullet_ids, facts_top_k)
+}
+
 /// Select up to `facts_top_k` facts from the edge hits in hit order.
 ///
-/// Port of `select_facts` (`facts.py:37-54`). `used_ids` starts as a clone of
+/// Port of `select_facts` (`facts.py:78-95`). `used_ids` starts as a clone of
 /// `exclude_ids` (typically the ids already shown as entity bullets). The
 /// length check happens *before* each hit, so `facts_top_k == 0` yields `[]`
 /// immediately. A hit is skipped when its id is blank, its text is blank, its
@@ -162,7 +216,7 @@ pub(crate) fn select_facts(
 
 /// Rewrite a contains-edge fact text into a readable glossary entry.
 ///
-/// Port of `_fact_display_text` (`facts.py:57-62`). If `text` does not start
+/// Port of `_fact_display_text` (`facts.py:98-103`). If `text` does not start
 /// with [`CONTAINS_FACT_PREFIX`] it is returned unchanged; otherwise the prefix
 /// is stripped and only the first remaining character is upper-cased
 /// (`stripped[:1].upper() + stripped[1:]`), leaving the rest untouched.
@@ -181,25 +235,28 @@ fn fact_display_text(text: &str) -> String {
 
 /// Render the selected facts as the "Related facts" markdown section.
 ///
-/// Port of `format_facts` (`facts.py:65-69`). Facts with empty text are
+/// Port of `format_facts` (`facts.py:106-110`). Facts with empty text are
 /// dropped; if none remain the result is the empty string, otherwise a
 /// `"## Related facts"` header followed by one `"- {text}"` bullet per fact,
 /// newline-joined.
 pub(crate) fn format_facts(facts: &[FactResult]) -> String {
-    let texts: Vec<&str> = facts
-        .iter()
-        .filter(|fact| !fact.text.is_empty())
-        .map(|fact| fact.text.as_str())
-        .collect();
-    if texts.is_empty() {
+    let bullets = fact_bullets(facts);
+    if bullets.is_empty() {
         return String::new();
     }
-    let bullets = texts
+    format!("## Related facts\n{}", bullets.join("\n"))
+}
+
+/// One `"- {text}"` bullet per nonblank fact, in rank order.
+///
+/// The unit [`format_facts`] joins, exposed so the budgeted context can take
+/// facts whole, one at a time.
+pub(crate) fn fact_bullets(facts: &[FactResult]) -> Vec<String> {
+    facts
         .iter()
-        .map(|text| format!("- {text}"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    format!("## Related facts\n{bullets}")
+        .filter(|fact| !fact.text.is_empty())
+        .map(|fact| format!("- {}", fact.text))
+        .collect()
 }
 
 #[cfg(test)]
@@ -227,6 +284,66 @@ mod tests {
             score: None,
             payload: json!({ "text": text }),
         }
+    }
+
+    fn entity_with_bullet(edge_type_id: &str) -> EntityResult {
+        EntityResult {
+            id: "e1".to_string(),
+            name: "Alice".to_string(),
+            description: None,
+            entity_type: None,
+            edges: vec![super::super::entities::EdgeBullet {
+                text: "bullet".to_string(),
+                source: None,
+                target: None,
+                source_id: None,
+                relationship: None,
+                target_id: None,
+                edge_type_id: Some(edge_type_id.to_string()),
+            }],
+        }
+    }
+
+    #[test]
+    fn an_empty_unscoped_entity_lane_hands_its_edge_budget_to_facts() {
+        // Python `resolve_facts_top_k` (facts.py:37-51).
+        let entity = entity_with_bullet("x");
+        assert_eq!(resolve_facts_top_k(&[], false, 5, 100), 100);
+        assert_eq!(resolve_facts_top_k(&[], true, 5, 100), 5);
+        assert_eq!(
+            resolve_facts_top_k(std::slice::from_ref(&entity), false, 5, 100),
+            5
+        );
+    }
+
+    #[test]
+    fn a_scoped_search_keeps_only_facts_its_entities_reach() {
+        let reachable = "Alice founded Acme in Paris.";
+        let unreachable = "Bob sold Initech to Umbrella.";
+        let hits = vec![hit(unreachable), hit(reachable)];
+        let reachable_ids: HashSet<String> = [edge_id(reachable)].into_iter().collect();
+
+        let scoped = select_facts_for_entities(&hits, &[], &reachable_ids, 5, true);
+        assert_eq!(
+            scoped
+                .iter()
+                .map(|fact| fact.text.as_str())
+                .collect::<Vec<_>>(),
+            [reachable]
+        );
+
+        // Unscoped, reachability does not matter.
+        let unscoped = select_facts_for_entities(&hits, &[], &reachable_ids, 5, false);
+        assert_eq!(unscoped.len(), 2);
+    }
+
+    #[test]
+    fn a_fact_already_shown_as_an_entity_bullet_is_not_repeated() {
+        let text = "Alice founded Acme in Paris.";
+        let entity = entity_with_bullet(&edge_id(text));
+        let facts = select_facts_for_entities(&[hit(text)], &[entity], &HashSet::new(), 5, false);
+        assert!(facts.is_empty());
+        assert!(select_facts_for_entities(&[hit(text)], &[], &HashSet::new(), 0, false).is_empty());
     }
 
     #[test]

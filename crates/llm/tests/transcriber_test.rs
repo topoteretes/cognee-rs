@@ -162,3 +162,193 @@ fn generate_silent_wav(sample_rate: u32, duration_secs: u32) -> Vec<u8> {
 
     buf
 }
+
+// ── Retry classification parity with `call_api` ─────────────────────────────
+//
+// The Whisper path runs its own retry loop, so it needs the same terminal set as
+// `OpenAIAdapter::call_api`: HTTP 400..=402 and 404 are terminal, as is a 429
+// whose body reports an exhausted quota rather than a per-minute limit. A plain
+// 429 or a 5xx stays transient. These assert on *exact* request counts, since
+// the point is that a terminal failure costs one request rather than the full
+// ladder.
+//
+// The transient cases deliberately use `with_network_retries(1)`: the
+// transcription path does not honour `Retry-After`, so every retry pays a real
+// 4-8s backoff and one is enough to prove the ladder still runs.
+
+/// Build an adapter pointed at the mock server with an explicit retry budget.
+fn retry_adapter(server: &MockServer, retries: u32) -> OpenAIAdapter {
+    OpenAIAdapter::new("gpt-4", "test-key", Some(server.base_url()))
+        .expect("adapter builds from a mock base URL")
+        .with_network_retries(retries)
+}
+
+#[tokio::test]
+async fn transcription_402_is_terminal_after_one_request() {
+    let server = MockServer::start_async().await;
+    let mock = server
+        .mock_async(|when, then| {
+            when.method(POST).path("/audio/transcriptions");
+            then.status(402)
+                .body(r#"{"error":{"message":"Payment required"}}"#);
+        })
+        .await;
+
+    let err = retry_adapter(&server, 3)
+        .transcribe_audio(b"fake-audio", "mp3", None, None)
+        .await
+        .expect_err("a 402 must surface as an error");
+
+    assert!(
+        matches!(err, LlmError::PaymentRequired(_)),
+        "expected PaymentRequired, got {err:?}"
+    );
+    assert_eq!(
+        mock.calls_async().await,
+        1,
+        "a 402 is terminal: it must cost exactly one request"
+    );
+}
+
+#[tokio::test]
+async fn transcription_404_is_terminal_after_one_request() {
+    let server = MockServer::start_async().await;
+    let mock = server
+        .mock_async(|when, then| {
+            when.method(POST).path("/audio/transcriptions");
+            then.status(404)
+                .body(r#"{"error":{"message":"The model `whisper-9` does not exist"}}"#);
+        })
+        .await;
+
+    let err = retry_adapter(&server, 3)
+        .transcribe_audio(b"fake-audio", "mp3", None, None)
+        .await
+        .expect_err("a 404 must surface as an error");
+
+    assert!(
+        matches!(err, LlmError::ModelNotFound(_)),
+        "expected ModelNotFound, got {err:?}"
+    );
+    assert_eq!(
+        mock.calls_async().await,
+        1,
+        "an unknown transcription model is terminal: exactly one request"
+    );
+}
+
+#[tokio::test]
+async fn transcription_quota_exhausted_429_is_terminal_after_one_request() {
+    let server = MockServer::start_async().await;
+    let mock = server
+        .mock_async(|when, then| {
+            when.method(POST).path("/audio/transcriptions");
+            then.status(429).body(
+                r#"{"error":{"message":"You exceeded your current quota","type":"insufficient_quota"}}"#,
+            );
+        })
+        .await;
+
+    let err = retry_adapter(&server, 3)
+        .transcribe_audio(b"fake-audio", "mp3", None, None)
+        .await
+        .expect_err("an exhausted quota must surface as an error");
+
+    assert!(
+        matches!(err, LlmError::PaymentRequired(_)),
+        "an `insufficient_quota` 429 is a billing failure, not a rate limit; got {err:?}"
+    );
+    assert_eq!(
+        mock.calls_async().await,
+        1,
+        "no wait clears an exhausted quota: exactly one request"
+    );
+}
+
+#[tokio::test]
+async fn transcription_plain_429_still_retries() {
+    let server = MockServer::start_async().await;
+    let mock = server
+        .mock_async(|when, then| {
+            when.method(POST).path("/audio/transcriptions");
+            then.status(429)
+                .body(r#"{"error":{"message":"Rate limit reached for whisper-1"}}"#);
+        })
+        .await;
+
+    let err = retry_adapter(&server, 1)
+        .transcribe_audio(b"fake-audio", "mp3", None, None)
+        .await
+        .expect_err("an exhausted retry budget must surface an error");
+
+    assert!(
+        matches!(err, LlmError::MaxRetriesExceeded(_)),
+        "expected MaxRetriesExceeded, got {err:?}"
+    );
+    assert_eq!(
+        mock.calls_async().await,
+        2,
+        "a plain rate limit is transient and must use the whole budget"
+    );
+}
+
+#[tokio::test]
+async fn transcription_5xx_still_retries() {
+    let server = MockServer::start_async().await;
+    let mock = server
+        .mock_async(|when, then| {
+            when.method(POST).path("/audio/transcriptions");
+            then.status(503).body("service unavailable");
+        })
+        .await;
+
+    let err = retry_adapter(&server, 1)
+        .transcribe_audio(b"fake-audio", "mp3", None, None)
+        .await
+        .expect_err("an exhausted retry budget must surface an error");
+
+    assert!(
+        matches!(err, LlmError::MaxRetriesExceeded(_)),
+        "expected MaxRetriesExceeded, got {err:?}"
+    );
+    assert_eq!(
+        mock.calls_async().await,
+        2,
+        "a 5xx is transient and must use the whole budget"
+    );
+}
+
+/// An endpoint that does not implement `/audio/transcriptions` at all answers
+/// 501, and re-asking cannot change that. This is the case `call_api` already
+/// had a 501 arm for; without the matching arm here the error fell to the
+/// catch-all `ApiError`, which the retry gate does not treat as terminal, so
+/// every attempt was spent with 8s/16s/32s backoffs — ~30-60s per audio file —
+/// before failing anyway. The classification is what makes it one request, so
+/// the call count is the assertion that matters.
+#[tokio::test]
+async fn transcription_501_is_terminal_after_one_request() {
+    let server = MockServer::start_async().await;
+    let mock = server
+        .mock_async(|when, then| {
+            when.method(POST).path("/audio/transcriptions");
+            then.status(501).body(
+                r#"{"error":{"message":"transcription is not supported by this deployment"}}"#,
+            );
+        })
+        .await;
+
+    let err = retry_adapter(&server, 3)
+        .transcribe_audio(b"fake-audio", "mp3", None, None)
+        .await
+        .expect_err("a 501 must surface as an error");
+
+    assert!(
+        matches!(err, LlmError::FeatureNotSupported(_)),
+        "a 501 means the endpoint has no such feature, not a transient API fault; got {err:?}"
+    );
+    assert_eq!(
+        mock.calls_async().await,
+        1,
+        "a server that has said it cannot answer is terminal: exactly one request"
+    );
+}

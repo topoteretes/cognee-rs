@@ -6,6 +6,7 @@ pub mod entities;
 pub mod migrator;
 pub mod ops;
 pub mod pipelines;
+pub mod single_process;
 pub mod sync;
 mod traits;
 mod types;
@@ -17,6 +18,10 @@ pub use ops::tutorial_seeder::{
 };
 
 pub use connection::{close, connect, initialize, sqlite_url_is_in_memory};
+pub use single_process::{
+    SINGLE_PROCESS_ENV, parse_single_process_override, resolve_single_process,
+    single_process_default, single_process_from_env, single_process_override_from_env,
+};
 
 /// Generic backend-label helper shared by the concrete public fn below and the
 /// transaction-scoped internals in `ops::graph_storage` (a `DatabaseTransaction`

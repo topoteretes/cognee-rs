@@ -1,8 +1,8 @@
 //! Payload / display / id helpers and the node-set filter predicate.
 //!
 //! Port of `cognee/modules/retrieval/hybrid/results.py`. Python's duck-typed
-//! `Any` collapses to [`SearchItem`] here: every hybrid lane (BM25, vector,
-//! summary) is normalized to a [`SearchItem`] at its call site, so these helpers
+//! `Any` collapses to [`SearchItem`] here: every hybrid lane (chunk vector,
+//! summary, entity, edge) is normalized to a [`SearchItem`] at its call site, so these helpers
 //! operate on `&SearchItem` / `&serde_json::Value` directly.
 
 use std::collections::HashSet;
@@ -47,21 +47,6 @@ pub(crate) fn result_id(item: &SearchItem) -> Option<String> {
         .get("id")
         .and_then(display_value)
         .or_else(|| item.id.map(|id| id.to_string()))
-}
-
-/// Defensively clamp a `(payload, score)` pair's score.
-///
-/// Port of `results.py:26-32`. Rust's BM25 lane is statically typed, so the
-/// dynamic-shape guard is vestigial; this only clamps a `NaN`/negative score to
-/// `0.0` for parity, called from `search_bm25_chunks`.
-pub(crate) fn scored_payload(item: (Value, f32)) -> (Value, f32) {
-    let (payload, score) = item;
-    let score = if score.is_nan() || score < 0.0 {
-        0.0
-    } else {
-        score
-    };
-    (payload, score)
 }
 
 /// Whether `result_payload` satisfies the requested node-set filter.
@@ -172,13 +157,6 @@ mod tests {
 
         let neither = item(json!({"text": "x"}), None);
         assert_eq!(result_id(&neither), None);
-    }
-
-    #[test]
-    fn scored_payload_clamps_bad_scores() {
-        assert_eq!(scored_payload((json!({}), -1.0)).1, 0.0);
-        assert_eq!(scored_payload((json!({}), f32::NAN)).1, 0.0);
-        assert_eq!(scored_payload((json!({}), 2.5)).1, 2.5);
     }
 
     #[test]

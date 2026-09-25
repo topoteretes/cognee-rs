@@ -2116,8 +2116,25 @@ impl Llm for OpenAIAdapter {
     }
 
     fn max_context_length(&self) -> u32 {
-        // Context lengths for common OpenAI models
-        match self.model.as_str() {
+        // Input-token limits for OpenAI model families, most specific prefix
+        // first. Hardcoded because the API has nowhere to ask: the `/v1/models`
+        // object carries only `id`, `created`, `object` and `owned_by`. The
+        // numbers are litellm's `max_input_tokens`
+        // (`model_prices_and_context_window.json`), the table Python cognee
+        // reads its model limits from.
+        //
+        // The input limit, not the total window: gpt-5's 400k window is 272k
+        // in + 128k out, and a prompt sized against the total is rejected.
+        //
+        // The hybrid retriever budgets its context against this number, so an
+        // under-report trims the context of a model that could have read it
+        // all: every current family must be listed before the `gpt-4` catch-all.
+        let model = self.model.to_lowercase();
+        match model.as_str() {
+            m if m.starts_with("gpt-5") => 272_000,
+            m if m.starts_with("gpt-4.1") => 1_047_576,
+            m if m.starts_with("gpt-4o") => 128_000,
+            m if m.starts_with("o1") || m.starts_with("o3") || m.starts_with("o4") => 200_000,
             m if m.starts_with("gpt-4-turbo") => 128_000,
             m if m.starts_with("gpt-4-32k") => 32_768,
             m if m.starts_with("gpt-4") => 8_192,
@@ -3426,16 +3443,33 @@ impl OpenAIAdapter {
         let status = response.status();
 
         if !status.is_success() {
+            let code = status.as_u16();
             let error_body = response
                 .text()
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
 
-            return Err(match status.as_u16() {
+            // A 429 carrying quota/billing wording is terminal, not a rate
+            // limit: no wait makes an exhausted balance succeed. `call_api`
+            // classifies these the same way via `is_quota_or_billing_error`,
+            // and this path has to agree with it or the caller below retries a
+            // failure that can never clear.
+            let quota_exhausted =
+                code == 429 && crate::retry::is_quota_or_billing_error(&error_body);
+
+            return Err(match code {
                 401 => LlmError::AuthenticationError(error_body),
                 402 => LlmError::PaymentRequired(error_body),
+                404 => LlmError::ModelNotFound(error_body),
+                429 if quota_exhausted => LlmError::PaymentRequired(error_body),
                 429 => LlmError::RateLimitExceeded(error_body),
                 400 => LlmError::InvalidResponse(format!("Bad request: {error_body}")),
+                // An endpoint that does not implement /audio/transcriptions at
+                // all — the case `call_api`'s own 501 arm exists for. Without
+                // this it falls to `ApiError`, which the retry gate below does
+                // not treat as terminal, so every attempt is spent re-asking a
+                // server that has already said it cannot answer.
+                501 => LlmError::FeatureNotSupported(error_body),
                 _ => LlmError::ApiError(format!("HTTP {status}: {error_body}")),
             });
         }
@@ -3526,10 +3560,18 @@ impl Transcriber for OpenAIAdapter {
                     });
                 }
                 Err(e) => {
-                    // Non-retryable errors: bad request or authentication failure.
+                    // Terminal failures, mirroring the set `call_api` refuses at
+                    // its own retry gate (HTTP 400..=402, 404, 501, and a
+                    // quota-exhausted 429 — which `call_transcription_api` maps
+                    // to `PaymentRequired`). Retrying any of them only burns the
+                    // budget a recoverable error will need.
                     if matches!(
                         e,
-                        LlmError::InvalidResponse(_) | LlmError::AuthenticationError(_)
+                        LlmError::InvalidResponse(_)
+                            | LlmError::AuthenticationError(_)
+                            | LlmError::PaymentRequired(_)
+                            | LlmError::ModelNotFound(_)
+                            | LlmError::FeatureNotSupported(_)
                     ) {
                         return Err(e);
                     }
@@ -4441,6 +4483,19 @@ mod tests {
 
         let adapter = OpenAIAdapter::new("gpt-3.5-turbo-16k", "key", None).unwrap();
         assert_eq!(adapter.max_context_length(), 16_384);
+
+        // Current families must not fall through to the `gpt-4` / default arms.
+        for (model, window) in [
+            ("gpt-5-mini", 272_000),
+            ("gpt-4.1-mini", 1_047_576),
+            ("gpt-4o-mini", 128_000),
+            ("gpt-4o", 128_000),
+            ("o3-mini", 200_000),
+            ("o4-mini", 200_000),
+        ] {
+            let adapter = OpenAIAdapter::new(model, "key", None).unwrap();
+            assert_eq!(adapter.max_context_length(), window, "{model}");
+        }
     }
 
     #[test]

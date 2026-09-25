@@ -213,6 +213,7 @@ pub fn known_keys() -> Vec<&'static str> {
         "db_name",
         "db_username",
         "db_password",
+        "single_process",
         "default_system_prompt_path",
         "embedding_model_path",
         "embedding_tokenizer_path",
@@ -370,6 +371,9 @@ pub fn as_flat_map(settings: &Settings) -> BTreeMap<&'static str, Value> {
         ("db_name", Value::String(settings.db_name.clone())),
         ("db_username", Value::String(settings.db_username.clone())),
         ("db_password", Value::String(settings.db_password.clone())),
+        // `null` = derived from the relational URL, which is not the same
+        // answer as `false` (an operator refusing the startup sweep).
+        ("single_process", Value::from(settings.single_process)),
         (
             "default_system_prompt_path",
             Value::String(settings.default_system_prompt_path.clone()),
@@ -473,6 +477,27 @@ pub fn set_value(settings: &mut Settings, key: &str, value: Value) -> Result<(),
         "db_name" => settings.db_name = expect_string(key, value)?,
         "db_username" => settings.db_username = expect_string(key, value)?,
         "db_password" => settings.db_password = expect_string(key, value)?,
+        // `null` restores the derivation, like `chunk_size` above. A string
+        // *or a JSON number* goes through the same parser
+        // `COGNEE_SINGLE_PROCESS` uses, so `cognee config set single_process 1`
+        // and the env var cannot mean different things — and a blank string
+        // means "derive", not `false`.
+        //
+        // The number case is not hypothetical. `commands::config::handle_set`
+        // JSON-parses the raw argument before it gets here, so the `1` the
+        // docs list as accepted arrives as `Value::Number`, not
+        // `Value::String("1")`. Without this arm it fell through to
+        // `expect_bool` and was rejected with "expects true/false" — the
+        // documented spelling failing on the documented value.
+        "single_process" if value.is_null() => settings.single_process = None,
+        "single_process" if value.is_string() || value.is_number() => {
+            let raw = value
+                .as_str()
+                .map(str::to_owned)
+                .unwrap_or_else(|| value.to_string());
+            settings.single_process = cognee::database::parse_single_process_override(&raw);
+        }
+        "single_process" => settings.single_process = Some(expect_bool(key, value)?),
         "default_system_prompt_path" => {
             settings.default_system_prompt_path = expect_string(key, value)?
         }
@@ -562,6 +587,7 @@ pub fn unset_key(settings: &mut Settings, key: &str) -> Result<(), CliError> {
         "db_name" => settings.db_name = defaults.db_name,
         "db_username" => settings.db_username = defaults.db_username,
         "db_password" => settings.db_password = defaults.db_password,
+        "single_process" => settings.single_process = defaults.single_process,
         "default_system_prompt_path" => {
             settings.default_system_prompt_path = defaults.default_system_prompt_path
         }
@@ -728,5 +754,106 @@ mod tests {
         };
         migrate_document(&mut document);
         assert_eq!(document.settings.llm_temperature, Some(0.7));
+    }
+
+    /// `single_process` must be a first-class CLI key on every surface the
+    /// others use: listable, settable, readable back, and unsettable.
+    ///
+    /// It shipped in review reachable only through `COGNEE_SINGLE_PROCESS`,
+    /// which left `cognee config set single_process true` answering "unknown
+    /// key" while the docs told people to set it.
+    #[test]
+    fn single_process_is_a_first_class_cli_key() {
+        assert!(
+            known_keys().contains(&"single_process"),
+            "`cognee config list` must show the key"
+        );
+
+        let mut settings = Settings::default();
+        assert_eq!(settings.single_process, None);
+
+        set_value(&mut settings, "single_process", Value::Bool(true)).expect("set true");
+        assert_eq!(settings.single_process, Some(true));
+        assert_eq!(
+            as_flat_map(&settings).get("single_process"),
+            Some(&Value::Bool(true)),
+            "`cognee config get` must read back what was set"
+        );
+
+        // A CLI argument arrives as a string, and must mean what the same text
+        // means in the env var — including blank meaning "derive".
+        set_value(&mut settings, "single_process", Value::String("0".into())).expect("set \"0\"");
+        assert_eq!(settings.single_process, Some(false));
+        set_value(&mut settings, "single_process", Value::String("1".into())).expect("set \"1\"");
+        assert_eq!(settings.single_process, Some(true));
+        set_value(&mut settings, "single_process", Value::String("  ".into())).expect("blank");
+        assert_eq!(
+            settings.single_process, None,
+            "a blank value means derive, not an explicit false"
+        );
+
+        set_value(&mut settings, "single_process", Value::Bool(true)).expect("set true again");
+        unset_key(&mut settings, "single_process").expect("unset");
+        assert_eq!(
+            settings.single_process, None,
+            "`cognee config unset` must restore the derived answer"
+        );
+    }
+
+    /// `cognee config set single_process 1` must work, because the
+    /// documentation lists `1` as an accepted value.
+    ///
+    /// The bug this pins: `commands::config::handle_set` JSON-parses the raw
+    /// argument before calling [`set_value`], so the bare `1` an operator
+    /// types never arrives as `Value::String("1")` — it arrives as
+    /// `Value::Number(1)`, which fell through to `expect_bool` and was
+    /// rejected with "expects true/false". The existing coverage above only
+    /// used the string form, which the CLI can never actually produce for a
+    /// bare digit, so the suite was green while the documented invocation
+    /// failed.
+    #[test]
+    fn a_json_number_sets_single_process_the_way_the_docs_promise() {
+        // Exactly what `handle_set` hands to `set_value` for these arguments.
+        let parse = |raw: &str| {
+            serde_json::from_str::<Value>(raw).unwrap_or_else(|_| Value::String(raw.to_string()))
+        };
+        assert!(
+            parse("1").is_number(),
+            "the premise: the CLI's own parse turns `1` into a number, not a string"
+        );
+
+        let mut settings = Settings::default();
+
+        set_value(&mut settings, "single_process", parse("1")).expect("`config set … 1`");
+        assert_eq!(settings.single_process, Some(true));
+
+        set_value(&mut settings, "single_process", parse("0")).expect("`config set … 0`");
+        assert_eq!(settings.single_process, Some(false));
+
+        // And the spellings that already worked must keep working, through the
+        // same parser, so no two of them can disagree.
+        for (raw, expected) in [
+            ("true", Some(true)),
+            ("false", Some(false)),
+            ("yes", Some(true)),
+            ("no", Some(false)),
+            ("on", Some(true)),
+            ("null", None),
+        ] {
+            set_value(&mut settings, "single_process", parse(raw)).expect(raw);
+            assert_eq!(settings.single_process, expected, "`config set … {raw}`");
+        }
+    }
+
+    /// The flat map is what `cognee config get` prints, and `null` there means
+    /// "derived" — reporting `false` would say the sweep was refused when
+    /// nobody had answered.
+    #[test]
+    fn unset_single_process_prints_as_null_not_false() {
+        let settings = Settings::default();
+        assert_eq!(
+            as_flat_map(&settings).get("single_process"),
+            Some(&Value::Null)
+        );
     }
 }

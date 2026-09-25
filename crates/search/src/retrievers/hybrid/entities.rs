@@ -27,7 +27,9 @@ use cognee_graph::{EdgeData, GraphDBTrait, GraphNode};
 use serde_json::{Map, Value};
 
 use super::facts::{EdgeLite, connection_edge_type_id};
-use super::results::{display_value, first_display_value, payload, result_id};
+use super::results::{
+    display_value, first_display_value, payload, payload_matches_node_filter, result_id,
+};
 use crate::types::SearchItem;
 
 /// A node in a rebuilt connection triple: a JSON object carrying at least an
@@ -36,7 +38,7 @@ type NodeLite = Value;
 
 /// A resolved entity plus its ranked edge bullets.
 ///
-/// Port of the Python entity dict (`_entity_from_result`, `entities.py:86-98`).
+/// Port of the Python entity dict (`_entity_from_result`, `entities.py:165-177`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct EntityResult {
     pub id: String,
@@ -48,7 +50,7 @@ pub(crate) struct EntityResult {
 
 /// A single rendered edge bullet for an entity.
 ///
-/// Port of the Python edge dict (`_edge_bullet`, `entities.py:183-201`).
+/// Port of the Python edge dict (`_edge_bullet`, `entities.py:262-281`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct EdgeBullet {
     pub text: String,
@@ -62,20 +64,30 @@ pub(crate) struct EdgeBullet {
 
 /// Build the entity blocks for the given `Entity_name` hits.
 ///
-/// Port of `build_entities` (`entities.py:15-44`). Returns `[]` for no hits.
-/// Builds one entity per hit; if no hit has a nonempty id, returns the entities
-/// unedited (no neighborhood call). Otherwise fetches the one-hop neighborhood
-/// and attaches ranked edge bullets. **Fail-open:** a `get_neighborhood` error
-/// is logged and the entities are returned with empty edges — the error is
-/// never propagated (mirrors Python's `try/except` returning bare entities).
+/// Port of `build_entities` (`entities.py:43-81`). Returns `([], {})` for no
+/// hits. Builds one entity per hit; if no hit has a nonempty id, returns the
+/// entities unedited (no neighborhood call). Otherwise fetches the one-hop
+/// neighborhood, drops neighbours outside the requested node set (see
+/// [`keep_scoped_connections`]) and attaches ranked edge bullets.
+///
+/// The second value is the set of `EdgeType` row ids expressed by the kept
+/// connections — taken before the per-entity `max_edges` cut — which is what a
+/// node-scoped search may draw facts from
+/// ([`super::facts::select_facts_for_entities`]).
+///
+/// **Fail-open:** a `get_neighborhood` error is logged and the entities are
+/// returned with empty edges — the error is never propagated (mirrors Python's
+/// `try/except` returning bare entities).
 pub(crate) async fn build_entities(
     graph: &dyn GraphDBTrait,
     entity_hits: &[SearchItem],
     max_edges_per_entity: usize,
     edge_ranks: &HashMap<String, usize>,
-) -> Vec<EntityResult> {
+    node_name: Option<&[String]>,
+    node_name_filter_operator: &str,
+) -> (Vec<EntityResult>, HashSet<String>) {
     if entity_hits.is_empty() {
-        return vec![];
+        return (vec![], HashSet::new());
     }
 
     let mut entities: Vec<EntityResult> = entity_hits.iter().map(entity_from_result).collect();
@@ -85,7 +97,7 @@ pub(crate) async fn build_entities(
         .map(|entity| entity.id.clone())
         .collect();
     if entity_ids.is_empty() {
-        return entities;
+        return (entities, HashSet::new());
     }
 
     let (nodes, edges) = match graph.get_neighborhood(&entity_ids, 1).await {
@@ -95,11 +107,16 @@ pub(crate) async fn build_entities(
                 %error,
                 "Graph neighborhood retrieval failed; returning entities without edges"
             );
-            return entities;
+            return (entities, HashSet::new());
         }
     };
 
-    let connections_by_entity_id = partition_neighborhood(&entity_ids, nodes, edges);
+    let connections_by_entity_id = keep_scoped_connections(
+        partition_neighborhood(&entity_ids, nodes, edges),
+        node_name,
+        node_name_filter_operator,
+    );
+    let reachable_edge_type_ids = reachable_edge_type_ids(&connections_by_entity_id);
     for entity in &mut entities {
         let connections = connections_by_entity_id
             .get(&entity.id)
@@ -107,13 +124,75 @@ pub(crate) async fn build_entities(
             .unwrap_or(&[]);
         entity.edges = edge_bullets_from_connections(connections, max_edges_per_entity, edge_ranks);
     }
-    entities
+    (entities, reachable_edge_type_ids)
+}
+
+type Connections = HashMap<String, Vec<(NodeLite, EdgeLite, NodeLite)>>;
+
+/// Drop 1-hop neighbours that are not in the requested node set.
+///
+/// Port of `_keep_scoped_connections` (`entities.py:112-131`). `is a` type
+/// edges stay: EntityType nodes usually have no `belongs_to_set`. Unscoped
+/// searches are unchanged.
+fn keep_scoped_connections(
+    connections_by_entity_id: Connections,
+    node_name: Option<&[String]>,
+    node_name_filter_operator: &str,
+) -> Connections {
+    let Some(names) = node_name.filter(|names| !names.is_empty()) else {
+        return connections_by_entity_id;
+    };
+    connections_by_entity_id
+        .into_iter()
+        .map(|(entity_id, triples)| {
+            let kept = triples
+                .into_iter()
+                .filter(|triple| {
+                    connection_in_scope(&entity_id, triple, names, node_name_filter_operator)
+                })
+                .collect();
+            (entity_id, kept)
+        })
+        .collect()
+}
+
+/// Port of `_connection_in_scope` (`entities.py:134-144`): a type edge is always
+/// in scope; otherwise the neighbour — the endpoint that is not `entity_id` —
+/// must pass the node filter.
+fn connection_in_scope(
+    entity_id: &str,
+    (source, edge, target): &(NodeLite, EdgeLite, NodeLite),
+    node_name: &[String],
+    node_name_filter_operator: &str,
+) -> bool {
+    let relationship = edge.relationship_name.as_ref().and_then(display_value);
+    if is_type_relationship(relationship.as_deref()) {
+        return true;
+    }
+    let source_id = source.get("id").and_then(display_value);
+    let neighbor = if source_id.as_deref() == Some(entity_id) {
+        target
+    } else {
+        source
+    };
+    payload_matches_node_filter(neighbor, Some(node_name), node_name_filter_operator)
+}
+
+/// Port of `_reachable_edge_type_ids` (`entities.py:147-155`).
+fn reachable_edge_type_ids(connections_by_entity_id: &Connections) -> HashSet<String> {
+    connections_by_entity_id
+        .values()
+        .flatten()
+        .filter_map(|(_, edge, _)| connection_edge_type_id(edge))
+        .collect()
 }
 
 /// Resolve a single entity hit into an [`EntityResult`] with empty edges.
 ///
-/// Port of `_entity_from_result` (`entities.py:86-98`). `name` falls back
-/// `name` → `text` → `id`, never empty.
+/// Port of `_entity_from_result` (`entities.py:165-177`). `name` falls back
+/// `name` → `text` → `id`, never empty. `text` is where the indexer puts the
+/// entity's name, as Python's `IndexSchema` does; a row written before the
+/// indexer carried it resolves to its id.
 fn entity_from_result(item: &SearchItem) -> EntityResult {
     let result_payload = payload(item);
     let entity_id = result_id(item).unwrap_or_default();
@@ -140,14 +219,20 @@ fn entity_from_result(item: &SearchItem) -> EntityResult {
 
 /// Resolve an entity's domain type from a payload/entity object.
 ///
-/// Port of `_entity_type` (`entities.py:122-127`): the first nonblank
-/// `display_value` of `is_a` then `type`, suppressing the literal
-/// `"IndexSchema"` structural type; else `None`.
+/// Port of `_entity_type` (`entities.py:201-206`): the first nonblank
+/// `display_value` of `is_a` then `type`, suppressing the payload's structural
+/// type; else `None`.
+///
+/// Python suppresses `"IndexSchema"`, the class every one of its vector rows
+/// is written as. A Rust row's `type` is the indexed DataPoint's class instead
+/// — `"Entity"` on `Entity_name` — so that is suppressed too. Neither side's
+/// payload carries a domain type under these keys, so the header is
+/// `### {name}` on both.
 fn entity_type(result_payload: &Value) -> Option<String> {
     for key in ["is_a", "type"] {
         if let Some(value) = result_payload.get(key)
             && let Some(entity_type) = display_value(value)
-            && entity_type != "IndexSchema"
+            && !is_structural_type(&entity_type)
         {
             return Some(entity_type);
         }
@@ -155,10 +240,16 @@ fn entity_type(result_payload: &Value) -> Option<String> {
     None
 }
 
+/// Whether `value` names the vector row's schema class rather than a domain
+/// type — see [`entity_type`].
+fn is_structural_type(value: &str) -> bool {
+    matches!(value, "IndexSchema" | "Entity")
+}
+
 /// Rebuild per-entity `(source, edge, target)` connection triples from the flat
 /// one-hop subgraph.
 ///
-/// Port of `_partition_neighborhood` (`entities.py:47-72`). Each seed id gets an
+/// Port of `_partition_neighborhood` (`entities.py:80-105`). Each seed id gets an
 /// (initially empty) connection list. A triple is pushed onto its `source_id`'s
 /// list (when that id is a seed) and onto its `target_id`'s list (when that id
 /// is a seed **and** differs from `source_id`, deduping self-loops). Edges with
@@ -240,7 +331,7 @@ fn id_only_object(id: &str) -> Map<String, Value> {
 
 /// Build ranked, deduped, capped edge bullets for one entity's connections.
 ///
-/// Port of `_edge_bullets_from_connections` (`entities.py:130-161`). `max_edges
+/// Port of `_edge_bullets_from_connections` (`entities.py:209-240`). `max_edges
 /// == 0` yields `[]`. Empty-text bullets are skipped. Dedupe runs on two
 /// **independent** tracks: a keyed `(source_id, relationship, target_id)` set
 /// and a text-only set — a keyed bullet is never checked against the text set
@@ -288,7 +379,7 @@ fn edge_bullets_from_connections(
 
 /// Sort key: type edges first, then query-ranked edges, then legacy order.
 ///
-/// Port of `_edge_sort_key` (`entities.py:164-171`): `(0, 0)` for a type edge;
+/// Port of `_edge_sort_key` (`entities.py:243-250`): `(0, 0)` for a type edge;
 /// `(1, rank)` when the edge's `edge_type_id` is in `edge_ranks`; else `(2, 0)`.
 fn edge_sort_key(edge: &EdgeBullet, edge_ranks: &HashMap<String, usize>) -> (u8, usize) {
     if is_type_edge(edge) {
@@ -302,7 +393,7 @@ fn edge_sort_key(edge: &EdgeBullet, edge_ranks: &HashMap<String, usize>) -> (u8,
 
 /// Render a single connection triple into an [`EdgeBullet`], or `None` to drop.
 ///
-/// Port of `_edge_bullet` (`entities.py:183-201`). Text prefers the top-level
+/// Port of `_edge_bullet` (`entities.py:262-281`). Text prefers the top-level
 /// `edge_text` (absent from graph triples in practice, kept for fidelity), then
 /// the nested `properties.edge_text`, then a synthesized
 /// `"{source} -- {relationship} -- {target}"` when all three labels are present;
@@ -342,7 +433,7 @@ fn edge_bullet(source: &NodeLite, edge: &EdgeLite, target: &NodeLite) -> Option<
 
 /// The dedupe key for a bullet, or `None` when any component is blank.
 ///
-/// Port of `_edge_dedupe_key` (`entities.py:204-210`).
+/// Port of `_edge_dedupe_key` (`entities.py:284-290`).
 fn edge_dedupe_key(edge: &EdgeBullet) -> Option<(String, String, String)> {
     match (&edge.source_id, &edge.relationship, &edge.target_id) {
         (Some(source_id), Some(relationship), Some(target_id)) => {
@@ -354,23 +445,30 @@ fn edge_dedupe_key(edge: &EdgeBullet) -> Option<(String, String, String)> {
 
 /// Whether a bullet is an `is a` / type edge.
 ///
-/// Port of `_is_type_edge` (`entities.py:213-221`). The relationship is
+/// Port of `_is_type_edge` (`entities.py:300-304`). The relationship is
 /// normalized (lowercase, `_`/`-` → space, trimmed) and compared to `"is a"`;
 /// otherwise the bullet text (lowercased and padded) is scanned for `" is a "`.
 fn is_type_edge(edge: &EdgeBullet) -> bool {
-    if let Some(relationship) = edge.relationship.as_deref() {
-        let normalized = relationship.to_lowercase().replace(['_', '-'], " ");
-        if normalized.trim() == "is a" {
-            return true;
-        }
+    if is_type_relationship(edge.relationship.as_deref()) {
+        return true;
     }
     let padded = format!(" {} ", edge.text.to_lowercase());
     padded.contains(" is a ")
 }
 
+/// Whether a relationship label names an `is a` / type edge.
+///
+/// Port of `_is_type_relationship` (`entities.py:297-301`): lowercase, `_`/`-`
+/// → space, trimmed, compared to `"is a"`.
+fn is_type_relationship(relationship: Option<&str>) -> bool {
+    relationship.is_some_and(|relationship| {
+        relationship.to_lowercase().replace(['_', '-'], " ").trim() == "is a"
+    })
+}
+
 /// The nested `properties.edge_text` of an edge, or `None`.
 ///
-/// Port of `_nested_edge_text` (`entities.py:224-228`).
+/// Port of `_nested_edge_text` (`entities.py:307-311`).
 fn nested_edge_text(edge: &EdgeLite) -> Option<String> {
     edge.properties
         .as_ref()
@@ -381,7 +479,7 @@ fn nested_edge_text(edge: &EdgeLite) -> Option<String> {
 
 /// A node's display label: its `name`, then its `id`.
 ///
-/// Port of `_node_label` (`entities.py:231-233`).
+/// Port of `_node_label` (`entities.py:314-315`).
 fn node_label(node: &NodeLite) -> Option<String> {
     let mut candidates: Vec<&Value> = Vec::new();
     if let Some(value) = node.get("name") {
@@ -395,7 +493,7 @@ fn node_label(node: &NodeLite) -> Option<String> {
 
 /// Render the entity blocks as the "Relevant entities" markdown section.
 ///
-/// Port of `format_entities` (`entities.py:75-83`). Empty if no entity yields a
+/// Port of `format_entities` (`entities.py:158-166`). Empty if no entity yields a
 /// nonempty block; otherwise a `"## Relevant entities"` header followed by the
 /// blocks joined by a blank line.
 pub(crate) fn format_entities(entities: &[EntityResult]) -> String {
@@ -412,11 +510,11 @@ pub(crate) fn format_entities(entities: &[EntityResult]) -> String {
 
 /// Render a single entity block, or `""` when its name is blank.
 ///
-/// Port of `_format_entity` (`entities.py:101-119`). Header is
-/// `"### {name} ({type})"` or `"### {name}"` (the `IndexSchema` structural type
+/// Port of `_format_entity` (`entities.py:184-202`). Header is
+/// `"### {name} ({type})"` or `"### {name}"` (a structural type, see [`is_structural_type`],
 /// is suppressed), followed by the description line if present and one
 /// `"- {text}"` per edge with nonblank text.
-fn format_entity(entity: &EntityResult) -> String {
+pub(crate) fn format_entity(entity: &EntityResult) -> String {
     let name = entity.name.trim();
     if name.is_empty() {
         return String::new();
@@ -426,7 +524,7 @@ fn format_entity(entity: &EntityResult) -> String {
         .entity_type
         .as_deref()
         .map(str::trim)
-        .filter(|value| !value.is_empty() && *value != "IndexSchema");
+        .filter(|value| !value.is_empty() && !is_structural_type(value));
     let header = match entity_type {
         Some(entity_type) => format!("### {name} ({entity_type})"),
         None => format!("### {name}"),
@@ -469,6 +567,45 @@ mod tests {
             score: None,
             payload,
         }
+    }
+
+    /// An `Entity_name` row as the Rust indexer writes it: the base
+    /// DataPoint's keys (structural `"type": "Entity"`, `metadata`), plus
+    /// `text` holding the entity's name and the indexer's own `entity_type`.
+    fn rust_entity_hit() -> SearchItem {
+        SearchItem {
+            id: "53105ee7-4467-5f5e-a959-5632b495e0c6".parse().ok(),
+            score: None,
+            payload: json!({
+                "id": "53105ee7-4467-5f5e-a959-5632b495e0c6",
+                "type": "Entity",
+                "field": "name",
+                "text": "Alice",
+                "entity_type": "person",
+                "metadata": { "index_fields": ["name"], "original_node_id": "person:alice" },
+            }),
+        }
+    }
+
+    /// Renders as Python renders its `IndexSchema` row for the same entity:
+    /// the name from `text`, and no type, since neither payload holds a domain
+    /// type under `is_a`/`type`.
+    #[test]
+    fn a_rust_written_row_renders_as_python_renders_it() {
+        let entity = entity_from_result(&rust_entity_hit());
+        assert_eq!(entity.name, "Alice");
+        assert_eq!(entity.entity_type, None);
+        assert_eq!(format_entity(&entity), "### Alice");
+    }
+
+    #[test]
+    fn an_entity_with_nothing_usable_still_renders_as_its_id() {
+        let entity = entity_from_result(&entity_hit(json!({
+            "id": "53105ee7-4467-5f5e-a959-5632b495e0c6",
+            "type": "Entity",
+        })));
+        assert_eq!(entity.name, "53105ee7-4467-5f5e-a959-5632b495e0c6");
+        assert_eq!(entity.entity_type, None);
     }
 
     fn edge_hit(text: &str) -> SearchItem {
@@ -771,6 +908,9 @@ mod tests {
 
         let domain = json!({"id": "e", "type": "Office"});
         assert_eq!(entity_type(&domain), Some("Office".to_string()));
+
+        let only_entity = json!({"id": "e", "type": "Entity"});
+        assert_eq!(entity_type(&only_entity), None);
     }
 
     #[tokio::test]
@@ -780,14 +920,14 @@ mod tests {
         add_node(&graph, "target-1", "Target").await;
         add_edge(&graph, "entity-1", "target-1", "REL", Some("Edge text")).await;
         let hits = vec![entity_hit(json!({"id": "entity-1", "name": "Entity"}))];
-        let entities = build_entities(&graph, &hits, 5, &HashMap::new()).await;
+        let (entities, _) = build_entities(&graph, &hits, 5, &HashMap::new(), None, "OR").await;
         assert_eq!(entities[0].edges[0].text, "Edge text");
 
         let graph2 = MockGraphDB::new();
         add_node(&graph2, "entity-1", "Source").await;
         add_node(&graph2, "target-1", "Target").await;
         add_edge(&graph2, "entity-1", "target-1", "REL", None).await;
-        let entities = build_entities(&graph2, &hits, 5, &HashMap::new()).await;
+        let (entities, _) = build_entities(&graph2, &hits, 5, &HashMap::new(), None, "OR").await;
         assert_eq!(entities[0].edges[0].text, "Source -- REL -- Target");
     }
 
@@ -804,7 +944,7 @@ mod tests {
         add_edge(&graph, "entity-1", "t2", "", Some("same")).await;
         add_edge(&graph, "entity-1", "t3", "", Some("other")).await;
         let hits = vec![entity_hit(json!({"id": "entity-1", "name": "Entity"}))];
-        let entities = build_entities(&graph, &hits, 1, &HashMap::new()).await;
+        let (entities, _) = build_entities(&graph, &hits, 1, &HashMap::new(), None, "OR").await;
         let texts: Vec<&str> = entities[0].edges.iter().map(|e| e.text.as_str()).collect();
         assert_eq!(texts, ["same"]);
     }
@@ -821,7 +961,7 @@ mod tests {
         add_edge(&graph, "entity-1", "t2", "REL", Some("related")).await;
         add_edge(&graph, "entity-1", "t1", "REL", Some("related")).await;
         let hits = vec![entity_hit(json!({"id": "entity-1", "name": "Entity"}))];
-        let entities = build_entities(&graph, &hits, 5, &HashMap::new()).await;
+        let (entities, _) = build_entities(&graph, &hits, 5, &HashMap::new(), None, "OR").await;
         let target_ids: Vec<&str> = entities[0]
             .edges
             .iter()
@@ -854,7 +994,7 @@ mod tests {
         )
         .await;
         let hits = vec![entity_hit(json!({"id": "entity-1", "name": "Entity"}))];
-        let entities = build_entities(&graph, &hits, 1, &HashMap::new()).await;
+        let (entities, _) = build_entities(&graph, &hits, 1, &HashMap::new(), None, "OR").await;
         let texts: Vec<&str> = entities[0].edges.iter().map(|e| e.text.as_str()).collect();
         assert_eq!(texts, ["Lisbon office is a Office"]);
     }
@@ -894,13 +1034,70 @@ mod tests {
         ];
         let edge_ranks = edge_rank_by_id(&edge_hits);
         let hits = vec![entity_hit(json!({"id": "entity-1", "name": "Alice"}))];
-        let entities = build_entities(&graph, &hits, 5, &edge_ranks).await;
+        let (entities, _) = build_entities(&graph, &hits, 5, &edge_ranks, None, "OR").await;
 
         let bullets: Vec<&str> = entities[0].edges.iter().map(|e| e.text.as_str()).collect();
         assert_eq!(
             bullets,
             ["Alice -- is_a -- Person", ranked_bullet, unranked_bullet]
         );
+    }
+
+    #[tokio::test]
+    async fn a_scoped_search_drops_out_of_set_neighbours_but_keeps_type_edges() {
+        // Python `_keep_scoped_connections` (entities.py:112-144).
+        let graph = MockGraphDB::new();
+        add_node(&graph, "alice-id", "Alice").await;
+        graph
+            .add_node_raw(json!({"id": "acme-id", "name": "Acme", "belongs_to_set": ["keep"]}))
+            .await
+            .unwrap();
+        graph
+            .add_node_raw(
+                json!({"id": "umbrella-id", "name": "Umbrella", "belongs_to_set": ["drop"]}),
+            )
+            .await
+            .unwrap();
+        add_node(&graph, "person-id", "Person").await;
+        add_edge(
+            &graph,
+            "alice-id",
+            "acme-id",
+            "works_at",
+            Some("Alice works at Acme."),
+        )
+        .await;
+        add_edge(
+            &graph,
+            "alice-id",
+            "umbrella-id",
+            "works_at",
+            Some("Alice works at Umbrella."),
+        )
+        .await;
+        add_edge(&graph, "alice-id", "person-id", "is_a", None).await;
+        let hits = vec![entity_hit(json!({"id": "alice-id", "name": "Alice"}))];
+        let keep = vec!["keep".to_string()];
+
+        let (entities, reachable) =
+            build_entities(&graph, &hits, 5, &HashMap::new(), Some(&keep), "OR").await;
+        let bullets: Vec<&str> = entities[0].edges.iter().map(|e| e.text.as_str()).collect();
+        assert!(bullets.contains(&"Alice works at Acme."), "{bullets:?}");
+        assert!(bullets.contains(&"Alice -- is_a -- Person"), "{bullets:?}");
+        assert!(
+            !bullets.contains(&"Alice works at Umbrella."),
+            "{bullets:?}"
+        );
+        assert!(reachable.contains(
+            &cognee_models::EdgeType::deterministic_id("Alice works at Acme.").to_string()
+        ));
+        assert!(!reachable.contains(
+            &cognee_models::EdgeType::deterministic_id("Alice works at Umbrella.").to_string()
+        ));
+
+        // Unscoped, the out-of-set neighbour is a bullet like any other.
+        let (entities, _) = build_entities(&graph, &hits, 5, &HashMap::new(), None, "OR").await;
+        assert_eq!(entities[0].edges.len(), 3);
     }
 
     #[tokio::test]
@@ -920,7 +1117,7 @@ mod tests {
             entity_hit(json!({"id": "alice-id", "name": "Alice"})),
             entity_hit(json!({"id": "acme-id", "name": "Acme"})),
         ];
-        let entities = build_entities(&graph, &hits, 5, &HashMap::new()).await;
+        let (entities, _) = build_entities(&graph, &hits, 5, &HashMap::new(), None, "OR").await;
         let bullet_texts: Vec<Vec<&str>> = entities
             .iter()
             .map(|e| e.edges.iter().map(|b| b.text.as_str()).collect())
@@ -939,7 +1136,7 @@ mod tests {
         add_node(&graph, "entity-1", "Source").await;
         add_edge(&graph, "entity-1", "target-1", "REL", None).await;
         let hits = vec![entity_hit(json!({"id": "entity-1", "name": "Entity"}))];
-        let entities = build_entities(&graph, &hits, 5, &HashMap::new()).await;
+        let (entities, _) = build_entities(&graph, &hits, 5, &HashMap::new(), None, "OR").await;
         assert_eq!(entities[0].name, "Entity");
         assert_eq!(entities[0].edges[0].text, "Source -- REL -- target-1");
     }
@@ -948,7 +1145,7 @@ mod tests {
     async fn build_entities_fails_open_on_neighborhood_error() {
         let graph = FailingGraphDB::new();
         let hits = vec![entity_hit(json!({"id": "entity-1", "name": "Alice"}))];
-        let entities = build_entities(&graph, &hits, 5, &HashMap::new()).await;
+        let (entities, _) = build_entities(&graph, &hits, 5, &HashMap::new(), None, "OR").await;
         assert_eq!(
             entities,
             vec![EntityResult {
@@ -964,7 +1161,7 @@ mod tests {
     #[tokio::test]
     async fn build_entities_returns_empty_for_no_hits() {
         let graph = MockGraphDB::new();
-        let entities = build_entities(&graph, &[], 5, &HashMap::new()).await;
+        let (entities, _) = build_entities(&graph, &[], 5, &HashMap::new(), None, "OR").await;
         assert!(entities.is_empty());
     }
 
@@ -998,7 +1195,7 @@ mod tests {
         let edge_hits = vec![edge_hit(knows), edge_hit(works_at)];
         let edge_ranks = edge_rank_by_id(&edge_hits);
         let hits = vec![entity_hit(json!({"id": "entity-1", "name": "Alice"}))];
-        let entities = build_entities(&graph, &hits, 5, &edge_ranks).await;
+        let (entities, _) = build_entities(&graph, &hits, 5, &edge_ranks, None, "OR").await;
 
         let bullets: Vec<&str> = entities[0].edges.iter().map(|e| e.text.as_str()).collect();
         assert_eq!(bullets, [knows, works_at, met, saw]);
@@ -1034,7 +1231,7 @@ mod tests {
         add_edge(&graph, "n-a", "n-b", "REL", None).await;
         add_edge(&graph, "entity-1", "n-a", "REL2", None).await;
         let hits = vec![entity_hit(json!({"id": "entity-1", "name": "Entity1"}))];
-        let entities = build_entities(&graph, &hits, 5, &HashMap::new()).await;
+        let (entities, _) = build_entities(&graph, &hits, 5, &HashMap::new(), None, "OR").await;
 
         assert_eq!(entities[0].edges.len(), 1);
         let bullet = &entities[0].edges[0];
@@ -1053,7 +1250,7 @@ mod tests {
         // bare entity WITHOUT ever awaiting get_neighborhood (which panics here).
         let graph = PanicOnNeighborhoodGraphDB::new();
         let hits = vec![entity_hit(json!({"name": "X"}))];
-        let entities = build_entities(&graph, &hits, 5, &HashMap::new()).await;
+        let (entities, _) = build_entities(&graph, &hits, 5, &HashMap::new(), None, "OR").await;
         assert_eq!(entities.len(), 1);
         assert_eq!(entities[0].name, "X");
         assert!(entities[0].edges.is_empty());

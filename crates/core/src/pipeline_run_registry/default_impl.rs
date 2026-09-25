@@ -81,12 +81,78 @@ impl DefaultPipelineRunRegistry {
     /// Create a new registry and reset orphan rows on startup.
     ///
     /// Calls `repo.reset_orphans("server_restart_orphan")` once before
-    /// returning, per §12 of the spec (crash & restart recovery).
+    /// returning, per §12 of the spec (crash & restart recovery). That covers
+    /// the *status-row* gate: a row left at `Initiated`/`Started` by a killed
+    /// process, which `check_pipeline_run_qualification` would otherwise read
+    /// as a run still in flight.
+    ///
+    /// `sweep_claims` additionally drops every row in `pipeline_run_claims`,
+    /// which is the *second* gate and the one with no other recovery path from
+    /// an embedded consumer. Pass `true` **only** where the deployment asserts
+    /// one process per relational database (see `Settings::resolved_single_process`
+    /// / `COGNEE_SINGLE_PROCESS`): only then is every claim present at startup
+    /// known to belong to a dead predecessor rather than a live peer, whose
+    /// claim this would silently drop — re-admitting the concurrent run the
+    /// claim exists to prevent. With `false` the claim behaves exactly as
+    /// before: released by its holder, or reclaimed once it ages out.
+    ///
+    /// Both steps run before the registry exists, so no run of this process
+    /// can have taken a claim yet.
+    ///
+    /// # What this deliberately does *not* do
+    ///
+    /// It does not roll back what those killed runs wrote into the graph and
+    /// vector stores. That is `cognee_delete::sweep_orphaned_run_artifacts`,
+    /// and it must run **before** this call: retiring the status row is what
+    /// makes the dataset runnable again, so doing it first opens a window in
+    /// which a fresh run starts while the rollback is still deleting the dead
+    /// run's nodes.
+    ///
+    /// It is not called from here because it cannot be — `cognee-delete`
+    /// depends on `cognee-core`, so the dependency cannot be inverted.
+    /// `PipelineRunRepository::list_orphan_runs` exists precisely so a caller
+    /// that can see both crates (`cognee-http-server`,
+    /// `cognee-bindings-common`) can interleave them in the right order; see
+    /// `AppState::build_with_db_and_backends` for the shape.
+    ///
+    /// They are also attempted **independently**. A dataset wedged by a kill
+    /// is refused by both gates at once, so clearing one and skipping the
+    /// other leaves it wedged either way; letting a transient failure on the
+    /// first suppress the second would turn a recoverable database blip into
+    /// exactly the outcome this is here to prevent. Each outcome is logged on
+    /// its own, and the first error is returned once both have been tried.
     pub async fn new_with_orphan_reset(
         repo: Arc<dyn PipelineRunRepository>,
         cfg: RegistryConfig,
+        sweep_claims: bool,
     ) -> Result<Arc<Self>, RegistryError> {
-        repo.reset_orphans("server_restart_orphan").await?;
+        let orphan_reset = repo.reset_orphans("server_restart_orphan").await;
+        match &orphan_reset {
+            Ok(reset) if *reset > 0 => tracing::warn!(
+                reset,
+                "startup retired pipeline-run rows left in flight by a previous process"
+            ),
+            Ok(_) => {}
+            Err(e) => tracing::warn!("startup orphan-run reset failed: {e}"),
+        }
+
+        let claim_sweep = if sweep_claims {
+            repo.release_all_pipeline_run_claims("startup_sweep_single_process")
+                .await
+        } else {
+            Ok(0)
+        };
+        match &claim_sweep {
+            Ok(released) if *released > 0 => tracing::warn!(
+                released,
+                "startup released pipeline-run claims left by a previous process"
+            ),
+            Ok(_) => {}
+            Err(e) => tracing::warn!("startup pipeline-run claim sweep failed: {e}"),
+        }
+
+        orphan_reset?;
+        claim_sweep?;
         Ok(Self::new(repo, cfg))
     }
 
@@ -669,6 +735,31 @@ impl PipelineRunRegistry for DefaultPipelineRunRegistry {
         Some(slot.phase_tx.borrow().clone())
     }
 
+    /// # Known limitation: the aborted run's exclusive claim leaks
+    ///
+    /// `handle.abort()` drops the run's future at its next await point, so the
+    /// `release_pipeline_run_claim` that `cognee_cognify::cognify` performs
+    /// after its work block never executes — `Drop` cannot await, so there is
+    /// no RAII fallback. The `pipeline_run_claims` row therefore survives
+    /// until it ages out (`CLAIM_STALE_AFTER`, a day), and since the only
+    /// caller of `abort` is [`Self::shutdown`], which the HTTP server runs on
+    /// SIGTERM, a rolling restart with a background cognify in flight wedges
+    /// that dataset for up to 24 h. `cognee-cli pipeline-unblock --clear`
+    /// clears it, and so does a restart where `COGNEE_SINGLE_PROCESS` is
+    /// asserted.
+    ///
+    /// Not fixed here, because the contained version is wrong in two ways.
+    /// The registry does not know the `claim_id` (it is a function-local in
+    /// `cognify`), so it would have to read the claim and then delete it —
+    /// reintroducing exactly the TOCTOU that
+    /// `PipelineRunRepository::try_release_pipeline_run_claim` is holder-scoped
+    /// to prevent, and stomping a new holder's claim if the old one had aged
+    /// out in between. And the registry's `pipeline_name` is the caller's
+    /// (`"cognify_pipeline"`), whereas a temporal run claims under
+    /// `"temporal-cognify"`, so the release would silently miss that case. The
+    /// correct fix carries the claim id out of `cognify` into the run slot so
+    /// `abort` can release the exact token it knows about; that is a
+    /// cross-crate change and belongs in its own PR.
     async fn abort(&self, run_id: Uuid) -> Result<(), RegistryError> {
         let (abort_handle, event_tx, phase_tx) = {
             let runs = self.runs.read().await;
