@@ -151,11 +151,25 @@ pub async fn classify_intent(state: &HandleState, message: &str) -> Result<Value
         Message::system(SYSTEM_PROMPT),
         Message::user(format!("Message:\n{truncated}")),
     ];
-    // A verdict is two tokens of JSON. The cap is a backstop against an
-    // adapter that ignores the schema and starts writing prose.
+    // The verdict itself is two tokens of JSON; the cap is not sized for the
+    // verdict, it is sized for what the adapter makes the model write to get
+    // there.
+    //
+    // `create_structured_output_with_messages_raw` appends the whole schema to
+    // the prompt as an instruction, and a small model answers that by
+    // restating the schema before it gets to the value. Measured on device:
+    // `{"type":"object","properties":{"intent":{"type":"string","enum":
+    // ["question","note"]},"required":["intent"],"additionalProperties":false},
+    // "intent":"question` — a correct verdict inside a well-formed object,
+    // sliced mid-string by a 32-token cap and therefore unparseable. The
+    // adapter then retried, and its retry text names `nodes` and `edges`
+    // whatever the caller asked for, so the second answer was worse than the
+    // first. One cap, two wasted generations and no verdict.
+    //
+    // 256 is room for the echo plus the value, and still far short of prose.
     let options = GenerationOptions {
         temperature: Some(0.0),
-        max_tokens: Some(32),
+        max_tokens: Some(256),
         ..Default::default()
     };
 
