@@ -48,6 +48,8 @@ public final class Native {
 
     public static native void ownerId(long handle, CompletableFuture<String> future);
 
+    public static native void flush(long handle, CompletableFuture<String> future);
+
     public static native void add(long handle, String inputsJson, String datasetName,
             String optsJson, CompletableFuture<String> future);
 

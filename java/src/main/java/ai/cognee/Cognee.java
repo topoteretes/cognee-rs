@@ -143,6 +143,33 @@ public final class Cognee implements AutoCloseable {
         return f.thenApply(s -> null);
     }
 
+    /**
+     * Make what has been written durable, without closing anything.
+     *
+     * <p>The counterpart to {@link #close()}, and deliberately not a substitute
+     * for it in either direction. An embedded graph store keeps committed
+     * transactions in an un-checkpointed write-ahead log and only folds them
+     * into its database file at a checkpoint; until then a process that dies
+     * without replaying that log comes back with an empty graph. This forces
+     * the checkpoint. The handle stays warm and every component keeps serving.
+     *
+     * <p>Safe on a UI lifecycle callback. It never builds the engine — a handle
+     * that was never warmed completes immediately having touched nothing — and
+     * it never reports a skipped checkpoint as a failure, because a caller that
+     * merely backgrounded an app can do nothing about one. The returned JSON is
+     * {@code {"flushed":bool,"warm":bool,"ms":long}}; a caller that does not
+     * care need not wait on the future at all.
+     *
+     * <p>Use this, not {@code close()}, for "the app is going away for now".
+     * Closing a handle out from under an in-flight pipeline shuts the database
+     * pool beneath it and can leave that run's dataset claimed for 24 hours.
+     */
+    public CompletableFuture<String> flush() {
+        CompletableFuture<String> f = new CompletableFuture<>();
+        dispatchVoid(h -> Native.flush(h, f));
+        return f;
+    }
+
     /** The email-derived owner id (warms lazily if needed). */
     public CompletableFuture<String> ownerId() {
         CompletableFuture<String> f = new CompletableFuture<>();
