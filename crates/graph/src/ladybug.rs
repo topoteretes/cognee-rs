@@ -290,6 +290,71 @@ impl LadybugAdapter {
         })
     }
 
+    /// Checkpoint the `.wal` into the main database file **without closing**.
+    ///
+    /// The graph twin of `QdrantAdapter::flush_shard`, and it exists for exactly
+    /// the same failure: a store that is visibly full in-session and reloads
+    /// knowing about nothing.
+    ///
+    /// lbug only folds the `.wal` into the main file at a checkpoint, and a
+    /// checkpoint only happens in three places: an explicit `CHECKPOINT`, the
+    /// `Database` destructor, and the auto-checkpoint that fires when the `.wal`
+    /// passes `checkpoint_threshold` (16 MB). On a phone none of the three is
+    /// reliable — the destructor never runs when Android kills a backgrounded
+    /// process, and an auto-checkpoint mid-pipeline is the racy one (it waits for
+    /// active transactions to leave, then releases that lock *before* writing, so
+    /// a concurrent read can make it either time out or tear). Everything written
+    /// since the last checkpoint then rests entirely on the `.wal` being replayed
+    /// at the next open, which is one unlucky truncation away from being gone.
+    ///
+    /// Calling this at a quiet point — the end of a cognify, an app going to the
+    /// background — makes the data durable *there*, where nothing is in flight,
+    /// instead of at a moment lbug picks.
+    ///
+    /// **Never fails the caller.** An explicit `CHECKPOINT` legitimately fails on
+    /// a read-only or in-memory database, and it fails with "Timeout waiting for
+    /// active transactions to leave the system" whenever a read happens to be in
+    /// flight. Neither is a reason to fail the cognify that just succeeded, so a
+    /// failed checkpoint is downgraded to a warning: the state that leaves behind
+    /// is the state every write was already in before this method existed.
+    ///
+    /// Unlike [`Self::close`] the handle stays in the slot, so the pool is intact
+    /// and the next query serves normally. On a closed adapter this is a no-op.
+    pub async fn flush(&self) -> GraphDBResult<()> {
+        // A closed adapter has already checkpointed in `close`; nothing to do.
+        let Ok(db) = self.db() else {
+            return Ok(());
+        };
+        let path = self.db_path.clone();
+        // The guard is taken *inside* the blocking task, never held across the
+        // await: `write_lock` is a `std::sync::Mutex`, and this is the same shape
+        // `QdrantAdapter::update_and_flush` uses to keep a flush from racing a
+        // write without parking a runtime worker on a blocking lock.
+        let write_lock = Arc::clone(&self.write_lock);
+        tokio::task::spawn_blocking(move || {
+            // Poisoned means a previous writer panicked mid-query. There is
+            // nothing to recover and a checkpoint is still worth attempting, so
+            // take the guard anyway rather than skipping the flush.
+            let _write_guard = match write_lock.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            match Connection::new(&db).and_then(|conn| conn.query("CHECKPOINT")) {
+                Ok(_) => tracing::debug!(path = %path, "ladybug checkpoint complete"),
+                Err(e) => tracing::warn!(
+                    error = %e,
+                    path = %path,
+                    "ladybug checkpoint skipped; nodes and edges written since the last \
+                     successful checkpoint may not survive a process kill"
+                ),
+            }
+        })
+        .await
+        .map_err(|e| {
+            GraphDBError::ConnectionError(format!("the ladybug checkpoint task panicked: {e}"))
+        })
+    }
+
     /// Execute a query and convert results to JSON values.
     ///
     /// Helper method that executes a Cypher query and converts the QueryResult
@@ -798,6 +863,13 @@ impl GraphDBTrait for LadybugAdapter {
     /// downcasting.
     async fn close(&self) -> GraphDBResult<()> {
         LadybugAdapter::close(self).await
+    }
+
+    /// Delegates to the inherent [`LadybugAdapter::flush`], so a pipeline holding
+    /// an `Arc<dyn GraphDBTrait>` can checkpoint the WAL at a quiet point without
+    /// downcasting — and without closing the store it is still using.
+    async fn flush(&self) -> GraphDBResult<()> {
+        LadybugAdapter::flush(self).await
     }
 
     async fn is_empty(&self) -> GraphDBResult<bool> {

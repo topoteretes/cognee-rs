@@ -73,6 +73,11 @@ path = "tests/ladybug_close.rs"
 required-features = ["ladybug"]
 
 [[test]]
+name = "ladybug_flush"
+path = "tests/ladybug_flush.rs"
+required-features = ["ladybug"]
+
+[[test]]
 name = "ladybug_integration"
 path = "tests/ladybug_integration.rs"
 required-features = ["ladybug"]

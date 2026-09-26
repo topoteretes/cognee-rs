@@ -186,6 +186,30 @@ pub trait GraphDBTrait: Send + Sync {
         Ok(())
     }
 
+    /// Make everything written so far durable, **without** closing.
+    ///
+    /// The graph counterpart of the flush the vector store already does after
+    /// every write. An embedded, file-backed graph (ladybug) keeps recent writes
+    /// in an un-checkpointed `.wal` and only folds them into the main database
+    /// file at a checkpoint; until then the data is visible to this process and
+    /// nowhere else. A server-backed adapter has already committed, so for it
+    /// this is nothing.
+    ///
+    /// Contract:
+    /// - **Idempotent**, and cheap when there is nothing to flush.
+    /// - **Not a close.** The handle stays usable: callers flush at a quiet point
+    ///   (the end of a pipeline, an app being backgrounded) and keep working.
+    ///   This is the distinction that matters on mobile, where closing the store
+    ///   under an in-flight pipeline is its own, worse failure.
+    /// - **Best effort — it must not fail the work that preceded it.** An
+    ///   implementor reports a skipped flush by logging, not by returning `Err`;
+    ///   an `Err` here means the flush could not even be attempted.
+    /// - The **default body is a no-op**, meaning "this backend has nothing
+    ///   buffered that a restart would lose".
+    async fn flush(&self) -> GraphDBResult<()> {
+        Ok(())
+    }
+
     /// Check if the database is empty (no nodes).
     ///
     async fn is_empty(&self) -> GraphDBResult<bool>;
