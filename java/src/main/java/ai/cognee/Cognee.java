@@ -225,6 +225,23 @@ public final class Cognee implements AutoCloseable {
         return f.thenApply(json -> new RecallResult(ai.cognee.internal.Json.tree(json)));
     }
 
+    // --- classifyIntent ---
+    /**
+     * Ask the configured LLM whether {@code message} is a question to answer
+     * or a note to keep.
+     *
+     * <p>Uses the structured-output path rather than tool calling, because
+     * the {@code Llm} trait this binding sits on has no tool-calling surface.
+     * The verdict is checked against the two permitted values on the Rust
+     * side; see {@link IntentResult} for what happens when the model returns
+     * something else.
+     */
+    public CompletableFuture<IntentResult> classifyIntent(String message) {
+        CompletableFuture<String> f = new CompletableFuture<>();
+        dispatchVoid(h -> Native.classifyIntent(h, message, f));
+        return f.thenApply(json -> new IntentResult(ai.cognee.internal.Json.tree(json)));
+    }
+
     // --- remember ---
     /** Composite ingest + extract (with an optional self-improvement pass). */
     public CompletableFuture<RememberResult> remember(

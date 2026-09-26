@@ -8,6 +8,7 @@
 pub mod admin;
 pub mod data;
 pub mod datasets;
+pub mod intent;
 pub mod memory;
 pub mod migration;
 pub mod pipeline;

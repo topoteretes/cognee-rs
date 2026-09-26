@@ -15,6 +15,7 @@ mod runtime;
 mod sdk_admin;
 mod sdk_data;
 mod sdk_datasets;
+mod sdk_intent;
 mod sdk_lifecycle;
 mod sdk_memory;
 mod sdk_migration;
