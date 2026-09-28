@@ -1361,4 +1361,354 @@ mod tests {
         assert_eq!(normalized(f64::NAN, (0.8, 0.8)), 0.0);
         assert_eq!(normalized(f64::INFINITY, (0.2, 0.9)), 0.0);
     }
+
+    // ---- Importance and truth weighting under the DEFAULT fusion ----
+    //
+    // Every weighting test above goes through `baseline`, which pins
+    // `ChunkLaneFusion::ReciprocalRank`. That was the fusion the two
+    // multiplicative factors were tuned against, and it is no longer the one
+    // any deployment runs: `ChunkLaneFusion::default()` is `RelativeScore`.
+    //
+    // The bands differ in kind, not just in scale. RRF's single-lane score sits
+    // in `1/(k+1) … 1/(k+limit)` — never zero, spanning at most ~1.9x — so a
+    // 1.25x factor always had something to scale and was always worth several
+    // rank slots. A relative score is `[0, 1 + summary_lane_weight]` with a
+    // per-lane minimum of exactly `0.0`, so the same factor buys a lot at the
+    // head of a lane and literally nothing at its floor.
+    //
+    // These four cases pin both ends of that.
+
+    /// Like [`scored_pair`], but carrying an importance weight.
+    fn scored_pair_weighted(
+        id: &str,
+        vector: Option<(usize, f32)>,
+        summary: Option<(usize, f32)>,
+        importance: f64,
+    ) -> ChunkSummaryPair {
+        ChunkSummaryPair {
+            chunk: Some(chunk_item(id, Some(importance))),
+            ..scored_pair(id, vector, summary)
+        }
+    }
+
+    /// Relative-score fusion with the weighting switches exposed.
+    fn relative_weighted(
+        pairs: Vec<ChunkSummaryPair>,
+        limit: usize,
+        use_importance_weight: bool,
+        use_truth_weight: bool,
+        q_coords: Option<&[f64]>,
+        truth_state_by_id: Option<&HashMap<String, NodeTruthState>>,
+        current_truth_epoch: Option<i64>,
+    ) -> Vec<ChunkSummaryPair> {
+        rank_chunk_summary_pairs(
+            pairs,
+            limit,
+            ChunkLaneFusion::default(),
+            use_importance_weight,
+            use_truth_weight,
+            q_coords,
+            truth_state_by_id,
+            current_truth_epoch,
+        )
+    }
+
+    /// The importance factor still reorders under the default fusion.
+    ///
+    /// The chunk lane spans `0.60 … 0.72`, so `lo` normalises to `1.0`, `hi` to
+    /// `(0.70 - 0.60) / 0.12 = 0.8333` and `floor` to `0.0`. Weighting off, `lo`
+    /// leads on similarity alone. Weighting on, `lo` takes the 0.0 importance
+    /// factor (0.75 -> 0.75) and `hi` the 1.0 one (1.25 -> 1.0417), and `hi`
+    /// overtakes. Both orders are score-driven, not tie-breaks: the scores are
+    /// far apart in either direction.
+    #[test]
+    fn importance_weight_can_reorder_under_relative_score() {
+        let pairs = || {
+            vec![
+                scored_pair_weighted("lo", Some((0, 0.72)), None, 0.0),
+                scored_pair_weighted("hi", Some((1, 0.70)), None, 1.0),
+                scored_pair_weighted("floor", Some((2, 0.60)), None, 0.5),
+            ]
+        };
+
+        assert_eq!(
+            ids(&relative_weighted(
+                pairs(),
+                3,
+                false,
+                false,
+                None,
+                None,
+                None
+            )),
+            vec![
+                Some("lo".to_string()),
+                Some("hi".to_string()),
+                Some("floor".to_string()),
+            ],
+            "without importance the lane's own similarity order stands"
+        );
+        assert_eq!(
+            ids(&relative_weighted(
+                pairs(),
+                3,
+                true,
+                false,
+                None,
+                None,
+                None
+            )),
+            vec![
+                Some("hi".to_string()),
+                Some("lo".to_string()),
+                Some("floor".to_string()),
+            ],
+            "importance must still be able to reorder a relative-score ranking"
+        );
+    }
+
+    /// The truth multiplier still reorders under the default fusion.
+    ///
+    /// Same lane shape, with the 1.25 truth factor standing in for the
+    /// importance one: `aligned` normalises to `0.8333` and is lifted to
+    /// `1.0417`, past `plain`'s `1.0`.
+    #[test]
+    fn truth_weight_can_reorder_under_relative_score() {
+        let q_coords = vec![1.0, 0.0];
+        let epoch = 7;
+        let mut states = HashMap::new();
+        states.insert(
+            "aligned".to_string(),
+            NodeTruthState {
+                truth_alignment: vec![1.0, 0.0],
+                truth_epoch: epoch,
+            },
+        );
+        assert!((truth_factor(&[1.0, 0.0], &q_coords) - 1.25).abs() < 1e-12);
+
+        let pairs = || {
+            vec![
+                scored_pair("plain", Some((0, 0.72)), None),
+                scored_pair("aligned", Some((1, 0.70)), None),
+                scored_pair("floor", Some((2, 0.60)), None),
+            ]
+        };
+
+        assert_eq!(
+            ids(&relative_weighted(
+                pairs(),
+                3,
+                false,
+                false,
+                None,
+                None,
+                None
+            )),
+            vec![
+                Some("plain".to_string()),
+                Some("aligned".to_string()),
+                Some("floor".to_string()),
+            ],
+            "precondition: without the multiplier the lane order is plain, aligned, floor"
+        );
+        assert_eq!(
+            ids(&relative_weighted(
+                pairs(),
+                3,
+                false,
+                true,
+                Some(&q_coords),
+                Some(&states),
+                Some(epoch),
+            )),
+            vec![
+                Some("aligned".to_string()),
+                Some("plain".to_string()),
+                Some("floor".to_string()),
+            ],
+            "the truth multiplier must still be able to reorder a relative-score ranking"
+        );
+    }
+
+    /// Both factors compose under the default fusion, and only the full product
+    /// wins — the relative-score twin of
+    /// [`final_score_composes_importance_then_truth`].
+    ///
+    /// Chunk lane spans `0.60 … 0.80`, so `plain` normalises to `1.0`, `boost`
+    /// to `0.75` and `floor` to `0.0`.
+    ///   both     : 0.75 * 1.25 * 1.25 = 1.171875 > 1.0  => boost wins
+    ///   importance only: 0.75 * 1.25  = 0.9375   < 1.0  => plain wins
+    ///   truth only     : 0.75 * 1.25  = 0.9375   < 1.0  => plain wins
+    ///   neither        : 0.75                    < 1.0  => plain wins
+    #[test]
+    fn relative_score_composes_importance_then_truth() {
+        let q_coords = vec![1.0, 0.0];
+        let epoch = 3;
+        let mut states = HashMap::new();
+        states.insert(
+            "boost".to_string(),
+            NodeTruthState {
+                truth_alignment: vec![1.0, 0.0],
+                truth_epoch: epoch,
+            },
+        );
+
+        let pairs = || {
+            vec![
+                scored_pair_weighted("plain", Some((0, 0.80)), None, 0.5),
+                scored_pair_weighted("boost", Some((1, 0.75)), None, 1.0),
+                scored_pair_weighted("floor", Some((2, 0.60)), None, 0.5),
+            ]
+        };
+        let head = |ranked: &[ChunkSummaryPair]| ids(ranked)[0].clone();
+
+        assert_eq!(
+            head(&relative_weighted(
+                pairs(),
+                3,
+                true,
+                true,
+                Some(&q_coords),
+                Some(&states),
+                Some(epoch),
+            )),
+            Some("boost".to_string()),
+            "the full importance x truth product must lift boost over plain"
+        );
+        assert_eq!(
+            head(&relative_weighted(
+                pairs(),
+                3,
+                true,
+                false,
+                None,
+                None,
+                None
+            )),
+            Some("plain".to_string()),
+            "importance alone is not enough"
+        );
+        assert_eq!(
+            head(&relative_weighted(
+                pairs(),
+                3,
+                false,
+                true,
+                Some(&q_coords),
+                Some(&states),
+                Some(epoch),
+            )),
+            Some("plain".to_string()),
+            "the truth factor alone is not enough"
+        );
+        assert_eq!(
+            head(&relative_weighted(
+                pairs(),
+                3,
+                false,
+                false,
+                None,
+                None,
+                None
+            )),
+            Some("plain".to_string()),
+            "and neither factor leaves the lane order alone"
+        );
+    }
+
+    /// At a lane's floor both multiplicative factors are inert, and under RRF
+    /// they were not. This is the concrete shape of the fusion change's stated
+    /// risk, pinned rather than endorsed.
+    ///
+    /// It is a consequence of the normalisation, not of the weighting code: a
+    /// relative score is min–max over the lane's own candidates, so the lane's
+    /// worst hit scores exactly `0.0` — documented, and the whole point of
+    /// calling the score relative — and `0.0 * anything` is `0.0`. Nothing can
+    /// lift that candidate, and the residual order is decided by `min_rank` and
+    /// then `chunk_id`.
+    ///
+    /// The same three pairs under rank-only RRF put `rich` *first*: its
+    /// `1/33 = 0.0303` floor is non-zero, so the 1.5625 product takes it to
+    /// `0.0474`, past `top`'s `1/31 = 0.0323`. Anything tuned against that band
+    /// — a weight, a threshold, a truth epoch policy — is tuned against
+    /// behaviour the default fusion no longer has in the tail of a lane.
+    ///
+    /// Only the tail: [`relative_score_composes_importance_then_truth`] above
+    /// shows the same two factors reordering freely where a lane has headroom.
+    #[test]
+    fn at_a_lanes_floor_both_factors_are_inert_under_relative_score() {
+        let q_coords = vec![1.0, 0.0];
+        let epoch = 5;
+        let mut states = HashMap::new();
+        states.insert(
+            "rich".to_string(),
+            NodeTruthState {
+                truth_alignment: vec![1.0, 0.0],
+                truth_epoch: epoch,
+            },
+        );
+
+        // `poor` and `rich` tie at the chunk lane's minimum similarity, so both
+        // normalise to 0.0 however they are weighted.
+        let pairs = || {
+            vec![
+                scored_pair_weighted("top", Some((0, 0.90)), None, 0.5),
+                scored_pair_weighted("poor", Some((1, 0.50)), None, 0.0),
+                scored_pair_weighted("rich", Some((2, 0.50)), None, 1.0),
+            ]
+        };
+        let floor_order = vec![
+            Some("top".to_string()),
+            Some("poor".to_string()),
+            Some("rich".to_string()),
+        ];
+
+        assert_eq!(
+            ids(&relative_weighted(
+                pairs(),
+                3,
+                false,
+                false,
+                None,
+                None,
+                None
+            )),
+            floor_order,
+            "precondition: unweighted, the two floor pairs fall to the min_rank tie-break"
+        );
+        assert_eq!(
+            ids(&relative_weighted(
+                pairs(),
+                3,
+                true,
+                true,
+                Some(&q_coords),
+                Some(&states),
+                Some(epoch),
+            )),
+            floor_order,
+            "a 0.0 fusion score absorbs every multiplicative factor: the full \
+             1.25 x 1.25 product cannot move a lane's worst hit"
+        );
+
+        // The same inputs under the fusion the factors were tuned against.
+        assert_eq!(
+            ids(&rank_chunk_summary_pairs(
+                pairs(),
+                3,
+                ChunkLaneFusion::ReciprocalRank,
+                true,
+                true,
+                Some(&q_coords),
+                Some(&states),
+                Some(epoch),
+            )),
+            vec![
+                Some("rich".to_string()),
+                Some("top".to_string()),
+                Some("poor".to_string()),
+            ],
+            "under RRF the same product lifts the same chunk from last to first"
+        );
+    }
 }
