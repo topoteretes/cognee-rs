@@ -9,7 +9,8 @@ use lbug::{Connection, Database, SystemConfig, Value as LbugValue};
 use serde_json::{Value, json};
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, RwLock, TryLockError};
+use std::sync::{Arc, RwLock, TryLockError};
+use tokio::sync::Mutex;
 use tracing::{Span, instrument};
 
 /// Default max database size: 1 GiB.
@@ -156,8 +157,27 @@ pub struct LadybugAdapter {
     /// immediately), and a tokio lock would force the accessor to be `async` and
     /// churn all ten query sites for no gain.
     db: std::sync::RwLock<Option<Arc<Database>>>,
-    // Single-process assumption: this lock serializes overlapping writes
-    // within one process. Cross-process locking is intentionally out of scope.
+    /// Serializes overlapping writes within one process. Single-process
+    /// assumption: cross-process locking is intentionally out of scope.
+    ///
+    /// `tokio::sync::Mutex`, not `std::sync::Mutex`, and the reason is
+    /// [`Self::flush`] rather than anything the write paths do themselves.
+    /// Nothing awaits while holding this guard, so a blocking mutex would be
+    /// correct — but a flush holds it for the whole of a CHECKPOINT (~1.5 s for
+    /// a 660 KB WAL, and real stores are larger), and with a blocking mutex
+    /// every writer that arrives in that window parks a *runtime worker* on
+    /// `lock()` for the duration. A cognify writing while the app is
+    /// backgrounded is exactly that case. An async lock lets the waiting writer
+    /// yield instead, so the checkpoint costs the graph its serialization point
+    /// and nothing else.
+    ///
+    /// It is behind an `Arc` so `flush` can take an `OwnedMutexGuard` and hand
+    /// it to the `spawn_blocking` task that runs the CHECKPOINT — acquired on
+    /// the async side, released when that task ends.
+    ///
+    /// The lbug query under the guard still runs inline on the calling task;
+    /// that is true of every query in this adapter (reads included) and is not
+    /// what this lock type is about.
     write_lock: Arc<Mutex<()>>,
     /// Held *shared* for the whole of every read query, and taken *exclusively*
     /// — and only ever with `try_write` — by [`Self::flush`].
@@ -185,7 +205,7 @@ pub struct LadybugAdapter {
 ///
 /// Reads are short; a flush arriving next to one usually only has to let it
 /// finish. The product is the worst case a flush can cost when readers never go
-/// quiet (~200 ms on a `spawn_blocking` thread, never on a caller's thread),
+/// quiet (~200 ms, spent in `tokio::time::sleep` and so on no thread at all),
 /// which is two orders of magnitude below the 5 s stall this avoids.
 const FLUSH_QUIESCE_ATTEMPTS: u32 = 5;
 const FLUSH_QUIESCE_BACKOFF: std::time::Duration = std::time::Duration::from_millis(50);
@@ -368,80 +388,106 @@ impl LadybugAdapter {
     /// # Returns
     ///
     /// `Ok(true)` when the store is checkpointed (including the closed case,
-    /// where it already was), `Ok(false)` when no checkpoint happened. `Err`
-    /// only when the checkpoint task could not be joined at all.
+    /// where it already was), `Ok(false)` when no checkpoint happened — a
+    /// read-only store, a failed CHECKPOINT, readers that never went quiet, or
+    /// a poisoned handle lock. `Err` only when the checkpoint task could not be
+    /// joined at all.
     pub async fn flush(&self) -> GraphDBResult<bool> {
-        // A closed adapter has already checkpointed in `close`; nothing to do.
-        let Ok(db) = self.db() else {
-            return Ok(true);
+        // Deliberately not `self.db()`: its one error type conflates two very
+        // different states. Closed means `close` already checkpointed, so
+        // reporting `Ok(true)` is honest. Poisoned means a writer panicked
+        // holding the handle lock — nothing has been checkpointed, and claiming
+        // otherwise would silently disable every flush for the rest of the
+        // process while each one reported success.
+        let db = {
+            let guard = match self.db.read() {
+                Ok(guard) => guard,
+                Err(_) => {
+                    tracing::warn!(
+                        path = %self.db_path,
+                        "ladybug checkpoint skipped: the database handle lock is poisoned, so \
+                         the store cannot be reached; nodes and edges written since the last \
+                         successful checkpoint may not survive a process kill"
+                    );
+                    return Ok(false);
+                }
+            };
+            match guard.as_ref() {
+                Some(db) => Arc::clone(db),
+                // A closed adapter has already checkpointed in `close`.
+                None => return Ok(true),
+            }
         };
         let path = self.db_path.clone();
-        // The guards are taken *inside* the blocking task, never held across the
-        // await: `write_lock` is a `std::sync::Mutex`, and this is the same shape
-        // `QdrantAdapter::update_and_flush` uses to keep a flush from racing a
-        // write without parking a runtime worker on a blocking lock.
-        let write_lock = Arc::clone(&self.write_lock);
-        let read_gate = Arc::clone(&self.read_gate);
-        tokio::task::spawn_blocking(move || {
-            for attempt in 1..=FLUSH_QUIESCE_ATTEMPTS {
-                // Order matters, and only in this direction. A writer holds
-                // `write_lock` and *then* takes `read_gate` shared (some write
-                // paths read first); taking `write_lock` first here means the
-                // two never form a cycle. `read_gate` is additionally only ever
-                // tried, never waited on, so this thread cannot be the tail of
-                // one either.
-                //
-                // Poisoned means a previous holder panicked mid-query. There is
-                // nothing to recover and a checkpoint is still worth attempting,
-                // so take the guard anyway rather than skipping the flush.
-                let _write_guard = match write_lock.lock() {
-                    Ok(guard) => guard,
-                    Err(poisoned) => poisoned.into_inner(),
-                };
+
+        for attempt in 1..=FLUSH_QUIESCE_ATTEMPTS {
+            // Order matters, and only in this direction. A writer holds
+            // `write_lock` and *then* takes `read_gate` shared (some write paths
+            // read first); taking `write_lock` first here means the two never
+            // form a cycle. `read_gate` is additionally only ever tried, never
+            // waited on, so this side cannot be the tail of one either.
+            //
+            // Awaited, not blocked on: the wait for a writer to finish belongs
+            // to the task, not to a thread. An `OwnedMutexGuard` is what lets
+            // the guard acquired here travel into the blocking task below, so
+            // the lock is still held for the whole CHECKPOINT.
+            let write_guard = Arc::clone(&self.write_lock).lock_owned().await;
+            let read_gate = Arc::clone(&self.read_gate);
+            let db = Arc::clone(&db);
+            let path = path.clone();
+
+            // Only the CHECKPOINT itself needs a thread: it is synchronous and
+            // file-bound, and inline it would block a worker (and, on a
+            // current-thread runtime, the timer with it).
+            let outcome = tokio::task::spawn_blocking(move || {
+                let _write_guard = write_guard;
                 let _read_guard = match read_gate.try_write() {
                     Ok(guard) => guard,
                     Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
-                    Err(TryLockError::WouldBlock) => {
-                        // Readers are active. Drop `write_lock` before sleeping
-                        // so a genuine writer is not parked behind a flush that
-                        // is only waiting.
-                        drop(_write_guard);
-                        std::thread::sleep(FLUSH_QUIESCE_BACKOFF);
-                        continue;
-                    }
+                    // Readers are active. Give the guard back by returning: it
+                    // drops with this closure, so a genuine writer is not parked
+                    // behind a flush that is only waiting out the backoff.
+                    Err(TryLockError::WouldBlock) => return None,
                 };
 
-                return match Connection::new(&db).and_then(|conn| conn.query("CHECKPOINT")) {
-                    Ok(_) => {
-                        tracing::debug!(path = %path, attempt, "ladybug checkpoint complete");
-                        true
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            error = %e,
-                            path = %path,
-                            "ladybug checkpoint failed; nodes and edges written since the last \
-                             successful checkpoint may not survive a process kill"
-                        );
-                        false
-                    }
-                };
+                Some(
+                    match Connection::new(&db).and_then(|conn| conn.query("CHECKPOINT")) {
+                        Ok(_) => {
+                            tracing::debug!(path = %path, attempt, "ladybug checkpoint complete");
+                            true
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                path = %path,
+                                "ladybug checkpoint failed; nodes and edges written since the \
+                                 last successful checkpoint may not survive a process kill"
+                            );
+                            false
+                        }
+                    },
+                )
+            })
+            .await
+            .map_err(|e| {
+                GraphDBError::ConnectionError(format!("the ladybug checkpoint task panicked: {e}"))
+            })?;
+
+            if let Some(flushed) = outcome {
+                return Ok(flushed);
             }
+            tokio::time::sleep(FLUSH_QUIESCE_BACKOFF).await;
+        }
 
-            tracing::warn!(
-                path = %path,
-                attempts = FLUSH_QUIESCE_ATTEMPTS,
-                "ladybug checkpoint skipped: graph reads stayed in flight, and starting a \
-                 CHECKPOINT under one stalls every query for five seconds and then fails \
-                 anyway; nodes and edges written since the last successful checkpoint may \
-                 not survive a process kill"
-            );
-            false
-        })
-        .await
-        .map_err(|e| {
-            GraphDBError::ConnectionError(format!("the ladybug checkpoint task panicked: {e}"))
-        })
+        tracing::warn!(
+            path = %path,
+            attempts = FLUSH_QUIESCE_ATTEMPTS,
+            "ladybug checkpoint skipped: graph reads stayed in flight, and starting a \
+             CHECKPOINT under one stalls every query for five seconds and then fails \
+             anyway; nodes and edges written since the last successful checkpoint may \
+             not survive a process kill"
+        );
+        Ok(false)
     }
 
     /// Execute a query and convert results to JSON values.
@@ -1005,9 +1051,7 @@ impl GraphDBTrait for LadybugAdapter {
     async fn delete_graph(&self) -> GraphDBResult<()> {
         // Two destructive statements that must not interleave with a concurrent
         // upsert, and the last write path here that was not taking the lock.
-        let _write_guard = self.write_lock.lock().map_err(|_| {
-            GraphDBError::ConnectionError("Ladybug write lock poisoned".to_string())
-        })?;
+        let _write_guard = self.write_lock.lock().await;
         let db = self.db()?;
         let conn = Connection::new(&db).map_err(|e| {
             GraphDBError::ConnectionError(format!("Failed to create connection: {e}"))
@@ -1045,9 +1089,7 @@ impl GraphDBTrait for LadybugAdapter {
 
     async fn add_node_raw(&self, node: Value) -> GraphDBResult<()> {
         let props = self.serialize_to_node_props(&node)?;
-        let _write_guard = self.write_lock.lock().map_err(|_| {
-            GraphDBError::ConnectionError("Ladybug write lock poisoned".to_string())
-        })?;
+        let _write_guard = self.write_lock.lock().await;
         let db = self.db()?;
         let conn = Connection::new(&db).map_err(|e| {
             GraphDBError::ConnectionError(format!("Failed to create connection: {e}"))
@@ -1065,9 +1107,7 @@ impl GraphDBTrait for LadybugAdapter {
             return Ok(());
         }
 
-        let _write_guard = self.write_lock.lock().map_err(|_| {
-            GraphDBError::ConnectionError("Ladybug write lock poisoned".to_string())
-        })?;
+        let _write_guard = self.write_lock.lock().await;
 
         let db = self.db()?;
         let conn = Connection::new(&db).map_err(|e| {
@@ -1117,9 +1157,7 @@ impl GraphDBTrait for LadybugAdapter {
         // `DETACH DELETE` is a write, so it serializes on the same lock as the
         // node/edge upserts. Without it a delete could interleave with a
         // concurrent upsert despite the adapter's write-serialization intent.
-        let _write_guard = self.write_lock.lock().map_err(|_| {
-            GraphDBError::ConnectionError("Ladybug write lock poisoned".to_string())
-        })?;
+        let _write_guard = self.write_lock.lock().await;
         let db = self.db()?;
         let conn = Connection::new(&db).map_err(|e| {
             GraphDBError::ConnectionError(format!("Failed to create connection: {e}"))
@@ -1147,9 +1185,7 @@ impl GraphDBTrait for LadybugAdapter {
             return Ok(());
         }
 
-        let _write_guard = self.write_lock.lock().map_err(|_| {
-            GraphDBError::ConnectionError("Ladybug write lock poisoned".to_string())
-        })?;
+        let _write_guard = self.write_lock.lock().await;
         let db = self.db()?;
         let conn = Connection::new(&db).map_err(|e| {
             GraphDBError::ConnectionError(format!("Failed to create connection: {e}"))
@@ -1369,9 +1405,7 @@ impl GraphDBTrait for LadybugAdapter {
         relationship_name: &str,
         properties: Option<HashMap<Cow<'static, str>, serde_json::Value>>,
     ) -> GraphDBResult<()> {
-        let _write_guard = self.write_lock.lock().map_err(|_| {
-            GraphDBError::ConnectionError("Ladybug write lock poisoned".to_string())
-        })?;
+        let _write_guard = self.write_lock.lock().await;
         let db = self.db()?;
         let conn = Connection::new(&db).map_err(|e| {
             GraphDBError::ConnectionError(format!("Failed to create connection: {e}"))
@@ -1395,9 +1429,7 @@ impl GraphDBTrait for LadybugAdapter {
             return Ok(());
         }
 
-        let _write_guard = self.write_lock.lock().map_err(|_| {
-            GraphDBError::ConnectionError("Ladybug write lock poisoned".to_string())
-        })?;
+        let _write_guard = self.write_lock.lock().await;
         let db = self.db()?;
         let conn = Connection::new(&db).map_err(|e| {
             GraphDBError::ConnectionError(format!("Failed to create connection: {e}"))
@@ -2103,9 +2135,7 @@ impl GraphDBTrait for LadybugAdapter {
         // read and the write and lose this update entirely. Nothing in the body
         // awaits, so holding the guard across it is safe, and no locked path
         // calls back into here.
-        let _write_guard = self.write_lock.lock().map_err(|_| {
-            GraphDBError::ConnectionError("Ladybug write lock poisoned".to_string())
-        })?;
+        let _write_guard = self.write_lock.lock().await;
         let read_query = format!(
             "MATCH (n:Node) WHERE n.id = '{}' RETURN n.properties AS properties",
             node_id.replace('\\', "\\\\").replace('\'', "\\'")
@@ -2155,9 +2185,7 @@ impl GraphDBTrait for LadybugAdapter {
         // Same read-modify-write of a whole `properties` blob as
         // `update_node_property`, against `add_edges`' full-blob `ON MATCH SET`
         // — so the lock spans both halves here too.
-        let _write_guard = self.write_lock.lock().map_err(|_| {
-            GraphDBError::ConnectionError("Ladybug write lock poisoned".to_string())
-        })?;
+        let _write_guard = self.write_lock.lock().await;
         let src_esc = source_id.replace('\\', "\\\\").replace('\'', "\\'");
         let tgt_esc = target_id.replace('\\', "\\\\").replace('\'', "\\'");
         let rel_esc = relationship_name.replace('\\', "\\\\").replace('\'', "\\'");
@@ -3987,5 +4015,114 @@ mod tests {
             observer.join().unwrap(),
             "execute_query must hold read_gate for the life of its transaction"
         );
+    }
+
+    /// A flush that could not reach the store at all must not report a
+    /// checkpoint.
+    ///
+    /// `db()` returns the same `ConnectionError` for two states that are
+    /// nothing alike: closed (where `close` has already checkpointed, so
+    /// `Ok(true)` is the truth) and poisoned (where a writer panicked holding
+    /// the handle lock and nothing has been checkpointed). Treating the second
+    /// as the first is the worse half: one earlier panic disables every
+    /// checkpoint for the rest of the process while each flush claims it ran,
+    /// and `checkpoint_graph_after` logs "graph checkpointed" the whole time.
+    #[tokio::test]
+    #[serial]
+    async fn a_poisoned_handle_lock_reports_no_checkpoint_rather_than_success() {
+        let (adapter, _dir) = setup_adapter().await;
+        let adapter = Arc::new(adapter);
+        adapter
+            .add_node_raw(json!({"id": "n", "name": "N", "type": "T"}))
+            .await
+            .unwrap();
+
+        // Poison the handle lock exactly as a writer panicking mid-query does.
+        // The panic is expected, so keep it out of the test log.
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let poisoner = Arc::clone(&adapter);
+        let joined = std::thread::spawn(move || {
+            let _guard = poisoner.db.write().unwrap();
+            panic!("poisoning the handle lock on purpose");
+        })
+        .join();
+        std::panic::set_hook(previous);
+        assert!(
+            joined.is_err(),
+            "precondition: the poisoning thread panicked"
+        );
+        assert!(
+            adapter.db.read().is_err(),
+            "precondition: the handle lock is poisoned"
+        );
+
+        assert!(
+            !adapter.flush().await.expect("flush must not be an Err"),
+            "a flush that never reached the store must report false, not the closed adapter's \
+             'already checkpointed' true"
+        );
+    }
+
+    /// A writer that arrives while `write_lock` is held must not park the
+    /// runtime worker it is running on.
+    ///
+    /// [`LadybugAdapter::flush`] holds `write_lock` for the whole of a
+    /// CHECKPOINT — ~1.5 s for a 660 KB WAL, and real stores are larger. While
+    /// that lock was a `std::sync::Mutex`, every write path took it *inline on
+    /// its async task*, so a cognify writing while the app was backgrounded
+    /// parked a tokio worker on `lock()` for that whole window: not a deadlock,
+    /// but a worker that can run nothing else — no other task, and on a
+    /// current-thread runtime not even the timers.
+    ///
+    /// A current-thread runtime is exactly one worker, which makes the
+    /// difference observable rather than statistical: with a blocking lock the
+    /// 50 ms timer below cannot fire until the holder lets go, so `elapsed`
+    /// comes out at the full hold.
+    #[tokio::test(flavor = "current_thread")]
+    #[serial]
+    async fn a_writer_waiting_on_the_write_lock_does_not_park_the_runtime_worker() {
+        const HOLD: std::time::Duration = std::time::Duration::from_millis(500);
+
+        let (adapter, _dir) = setup_adapter().await;
+        let adapter = Arc::new(adapter);
+
+        // Stands in for a flush's checkpoint: the same lock, held the same way,
+        // for as long as one would hold it.
+        let held = Arc::clone(&adapter.write_lock).lock_owned().await;
+        let releaser = tokio::spawn(async move {
+            tokio::time::sleep(HOLD).await;
+            drop(held);
+        });
+
+        let writer = tokio::spawn({
+            let adapter = Arc::clone(&adapter);
+            async move {
+                adapter
+                    .add_node_raw(json!({"id": "w", "name": "W", "type": "T"}))
+                    .await
+            }
+        });
+
+        let started = std::time::Instant::now();
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let elapsed = started.elapsed();
+
+        assert!(
+            elapsed < HOLD / 2,
+            "the runtime kept running while a writer waited for the write lock, so a 50 ms \
+             timer must fire in about 50 ms; it took {elapsed:?}, which is the writer \
+             blocking this worker for the whole hold"
+        );
+        assert!(
+            !writer.is_finished(),
+            "precondition: the writer must still be waiting on the held write lock"
+        );
+
+        // And the write still lands once the lock is free — the waiting writer
+        // was queued, not dropped.
+        releaser.await.unwrap();
+        writer.await.unwrap().unwrap();
+        assert!(adapter.has_node("w").await.unwrap());
     }
 }

@@ -277,3 +277,85 @@ async fn flushing_next_to_live_reads_never_stalls_or_lies() {
         .await
         .expect("close");
 }
+
+/// Flushing next to live *writes*: no deadlock, no lost write.
+///
+/// The read race above is only half of it. A flush holds `write_lock` for the
+/// whole CHECKPOINT, and every graph write takes that same lock — so a cognify
+/// writing while Android's `onPause` flushes is two sides contending on it,
+/// with the flush additionally taking `read_gate` (`try_write` only) while a
+/// writer may take it shared from inside its own read-modify-write. Only one
+/// lock order exists (`write_lock` -> `read_gate`) and the flush never waits on
+/// the gate, which is what keeps that from being a cycle; this pins it.
+///
+/// It is a safety net, not a regression test: the shape it forbids was a stall
+/// under the previous blocking lock, not a hang. What it does catch is a future
+/// change that introduces the opposite order, or a flush that starts waiting on
+/// the gate.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial]
+async fn flushing_next_to_live_writes_never_deadlocks_or_loses_a_write() {
+    const WRITERS: usize = 4;
+    const PER_WRITER: usize = 25;
+
+    let (adapter, db_path, _dir) = warm().await;
+    let main_before = len(&db_path);
+    let adapter = std::sync::Arc::new(adapter);
+
+    let writers: Vec<_> = (0..WRITERS)
+        .map(|w| {
+            let adapter = std::sync::Arc::clone(&adapter);
+            tokio::spawn(async move {
+                for i in 0..PER_WRITER {
+                    adapter
+                        .add_node_raw(serde_json::json!({
+                            "id": format!("w{w}-{i}"),
+                            "name": format!("w{w}-{i}"),
+                            "type": "Concurrent",
+                        }))
+                        .await
+                        .expect("write");
+                }
+            })
+        })
+        .collect();
+
+    // Flush in a loop for as long as the writers are running, so the checkpoint
+    // and the writes really do overlap.
+    let started = std::time::Instant::now();
+    while !writers.iter().all(tokio::task::JoinHandle::is_finished) {
+        adapter.flush().await.expect("flush must never be an Err");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(60),
+            "a flush racing concurrent writers must not deadlock"
+        );
+    }
+    for writer in writers {
+        writer.await.expect("writer task");
+    }
+
+    assert!(
+        adapter.flush().await.expect("final flush"),
+        "a quiet flush after the writes must go through"
+    );
+    assert!(
+        len(&db_path) > main_before,
+        "the data must be checkpointed by the end"
+    );
+    for w in 0..WRITERS {
+        for i in 0..PER_WRITER {
+            let id = format!("w{w}-{i}");
+            assert!(
+                adapter.has_node(&id).await.expect("has_node"),
+                "write {id} was lost across the concurrent flushes"
+            );
+        }
+    }
+
+    std::sync::Arc::try_unwrap(adapter)
+        .map_err(|_| "a writer still holds the adapter")
+        .expect("sole owner")
+        .close()
+        .await
+        .expect("close");
+}
