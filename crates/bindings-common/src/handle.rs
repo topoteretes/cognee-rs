@@ -225,6 +225,30 @@ impl HandleState {
         self.closed.load(Ordering::Acquire)
     }
 
+    /// The cached services if there are any at all, **regardless of config
+    /// version** — and, like [`services_if_warm`](Self::services_if_warm), never
+    /// the build path.
+    ///
+    /// The one caller that wants this rather than `services_if_warm` is
+    /// [`flush`](crate::ops::lifecycle::flush). `services_if_warm` deliberately
+    /// treats a bundle whose config version has moved as "not warm", because for
+    /// a *working* caller that bundle is stale and about to be replaced. A flush
+    /// is not a working caller: the stale bundle is still cached, still holds the
+    /// live graph adapter, and still holds whatever that adapter has written but
+    /// not checkpointed. Skipping it is skipping the one bundle most in need of
+    /// a checkpoint — it is about to be dropped next to a fresh instance opening
+    /// on the same file.
+    ///
+    /// Still `None` for a closed handle and for a never-warmed one: neither has
+    /// written anything.
+    pub async fn services_if_cached(&self) -> Option<Arc<CogneeServices>> {
+        if self.is_closed() {
+            return None;
+        }
+        let guard = self.services.lock().await;
+        guard.as_ref().map(|(_, svc)| Arc::clone(svc))
+    }
+
     /// Whether this handle currently holds built services — i.e. whether a
     /// teardown would have anything to release.
     ///

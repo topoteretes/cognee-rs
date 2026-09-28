@@ -49,7 +49,7 @@ use self::entities::{ENTITIES_SECTION_HEADER, EdgeBullet, EntityResult, format_e
 use self::facts::{
     FACTS_SECTION_HEADER, FactResult, fact_bullets, resolve_facts_top_k, select_facts_for_entities,
 };
-use self::ranking::{ChunkLaneFusion, DEFAULT_SUMMARY_LANE_WEIGHT};
+use self::ranking::{ChunkLaneFusion, DEFAULT_SUMMARY_LANE_WEIGHT, SUMMARY_LANE_WEIGHT_RANGE};
 use self::results::result_id;
 use crate::retrievers::SearchRetriever;
 use crate::types::{
@@ -95,11 +95,34 @@ const DEFAULT_NODE_NAME_FILTER_OPERATOR: &str = "OR";
 /// than failing the search — a knob nobody can spell must not cost an answer.
 /// A weight sent alongside `"reciprocal_rank"` is inert, because rank-only
 /// fusion has no score to weight.
+///
+/// The weight is clamped to [`SUMMARY_LANE_WEIGHT_RANGE`] and the clamp is
+/// logged, for the same reason an unknown strategy name is: a mis-set knob is
+/// reported, not obeyed and not fatal. A negative weight would make a *better*
+/// summary hit lower the pair's score, and an enormous one would erase the chunk
+/// lane altogether — neither is a ranking anybody meant to ask for. (JSON cannot
+/// carry NaN or infinity, so only finite values ever arrive here; `clamp` would
+/// panic on a NaN bound, never on a NaN input against finite bounds, and a NaN
+/// input is unreachable.)
 fn chunk_lane_fusion(params: &SearchParams) -> ChunkLaneFusion {
+    let summary_lane_weight = match params.summary_lane_weight {
+        None => DEFAULT_SUMMARY_LANE_WEIGHT,
+        Some(weight) => {
+            let clamped = weight.clamp(
+                *SUMMARY_LANE_WEIGHT_RANGE.start(),
+                *SUMMARY_LANE_WEIGHT_RANGE.end(),
+            );
+            if clamped != weight {
+                debug!(
+                    "summary_lane_weight {weight} is outside {:?}; using {clamped}",
+                    SUMMARY_LANE_WEIGHT_RANGE
+                );
+            }
+            clamped
+        }
+    };
     let relative = ChunkLaneFusion::RelativeScore {
-        summary_lane_weight: params
-            .summary_lane_weight
-            .unwrap_or(DEFAULT_SUMMARY_LANE_WEIGHT),
+        summary_lane_weight,
     };
     match params.chunk_lane_fusion.as_deref() {
         None | Some("relative_score") => relative,
@@ -1849,6 +1872,21 @@ mod retriever_tests {
             relative(DEFAULT_SUMMARY_LANE_WEIGHT),
             "an unspellable knob must not cost an answer"
         );
+
+        // Symmetry with the strategy name above: a weight outside the sane band
+        // is clamped and logged, not obeyed and not fatal. A negative weight
+        // would make a *better* summary hit lower the pair's score, and an
+        // enormous one would erase the chunk lane, which always weighs 1.0.
+        use super::SUMMARY_LANE_WEIGHT_RANGE;
+        let (min, max) = (
+            *SUMMARY_LANE_WEIGHT_RANGE.start(),
+            *SUMMARY_LANE_WEIGHT_RANGE.end(),
+        );
+        assert_eq!(with(None, Some(-1.0)), relative(min));
+        assert_eq!(with(None, Some(1e9)), relative(max));
+        // The edges themselves are inside the band, not clamped away.
+        assert_eq!(with(None, Some(min)), relative(min));
+        assert_eq!(with(None, Some(max)), relative(max));
     }
 
     #[test]

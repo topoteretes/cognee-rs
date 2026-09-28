@@ -9,7 +9,7 @@ use lbug::{Connection, Database, SystemConfig, Value as LbugValue};
 use serde_json::{Value, json};
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock, TryLockError};
 use tracing::{Span, instrument};
 
 /// Default max database size: 1 GiB.
@@ -159,7 +159,36 @@ pub struct LadybugAdapter {
     // Single-process assumption: this lock serializes overlapping writes
     // within one process. Cross-process locking is intentionally out of scope.
     write_lock: Arc<Mutex<()>>,
+    /// Held *shared* for the whole of every read query, and taken *exclusively*
+    /// — and only ever with `try_write` — by [`Self::flush`].
+    ///
+    /// This is not a correctness lock for lbug; it is the in-process knowledge
+    /// lbug does not have. `TransactionManager::checkpoint()` takes lbug's own
+    /// `mtxForSerializingPublicFunctionCalls` and holds it while it waits for
+    /// every active transaction to leave — but a read-only transaction leaves
+    /// via `commit()`, which needs that same mutex. A read that is already in
+    /// flight when a CHECKPOINT starts therefore *cannot* leave: the checkpoint
+    /// spins for the full `DEFAULT_CHECKPOINT_WAIT_TIMEOUT_IN_MICROS` (5 s),
+    /// every new query blocks behind the mutex for that whole time, and the
+    /// checkpoint then throws anyway. Five seconds of frozen graph, for nothing.
+    ///
+    /// So the decision is made on this side, before lbug is asked: if a read is
+    /// in flight, do not start a checkpoint at all. `flush` never *blocks* on
+    /// this gate (`try_write` only), which is what makes the ordering
+    /// `write_lock` → `read_gate` deadlock-free even though a writer holding
+    /// `write_lock` may go on to take the gate shared inside `execute_query`.
+    read_gate: Arc<RwLock<()>>,
 }
+
+/// How many times [`LadybugAdapter::flush`] re-checks for a quiet moment before
+/// giving up, and how long it waits between the attempts.
+///
+/// Reads are short; a flush arriving next to one usually only has to let it
+/// finish. The product is the worst case a flush can cost when readers never go
+/// quiet (~200 ms on a `spawn_blocking` thread, never on a caller's thread),
+/// which is two orders of magnitude below the 5 s stall this avoids.
+const FLUSH_QUIESCE_ATTEMPTS: u32 = 5;
+const FLUSH_QUIESCE_BACKOFF: std::time::Duration = std::time::Duration::from_millis(50);
 
 impl LadybugAdapter {
     /// Number of columns in node query: id, name, type, properties
@@ -189,6 +218,7 @@ impl LadybugAdapter {
             db_path: db_path.to_string(),
             db: std::sync::RwLock::new(Some(Arc::new(db))),
             write_lock: Arc::new(Mutex::new(())),
+            read_gate: Arc::new(RwLock::new(())),
         })
     }
 
@@ -312,42 +342,101 @@ impl LadybugAdapter {
     /// instead of at a moment lbug picks.
     ///
     /// **Never fails the caller.** An explicit `CHECKPOINT` legitimately fails on
-    /// a read-only or in-memory database, and it fails with "Timeout waiting for
-    /// active transactions to leave the system" whenever a read happens to be in
-    /// flight. Neither is a reason to fail the cognify that just succeeded, so a
-    /// failed checkpoint is downgraded to a warning: the state that leaves behind
-    /// is the state every write was already in before this method existed.
+    /// a read-only or in-memory database. That is not a reason to fail the
+    /// cognify that just succeeded, so a failed checkpoint is downgraded to a
+    /// warning: the state that leaves behind is the state every write was
+    /// already in before this method existed. It is, however, *reported* —
+    /// `Ok(false)` means "no checkpoint happened", and the caller is expected to
+    /// pass that on rather than claim a durability it did not get.
+    ///
+    /// **It also refuses to start while a read is in flight**, and that refusal
+    /// is the point rather than a limitation. lbug's `checkpoint()` holds
+    /// `mtxForSerializingPublicFunctionCalls` while it waits for active
+    /// transactions to leave, and a read-only transaction leaves via `commit()`,
+    /// which needs that same mutex — so an in-flight read cannot leave, the
+    /// checkpoint burns its full 5 s timeout with the whole store blocked behind
+    /// the mutex, and then throws. [`Self::read_gate`] lets this side see that
+    /// coming: a flush that finds readers active waits a few short beats for
+    /// them to drain and otherwise returns `Ok(false)` without ever calling
+    /// CHECKPOINT. A skipped flush leaves exactly the state the data was already
+    /// in; a 5 s frozen graph does not.
     ///
     /// Unlike [`Self::close`] the handle stays in the slot, so the pool is intact
-    /// and the next query serves normally. On a closed adapter this is a no-op.
-    pub async fn flush(&self) -> GraphDBResult<()> {
+    /// and the next query serves normally. On a closed adapter this is a no-op
+    /// that reports `Ok(true)`: `close` has already checkpointed.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(true)` when the store is checkpointed (including the closed case,
+    /// where it already was), `Ok(false)` when no checkpoint happened. `Err`
+    /// only when the checkpoint task could not be joined at all.
+    pub async fn flush(&self) -> GraphDBResult<bool> {
         // A closed adapter has already checkpointed in `close`; nothing to do.
         let Ok(db) = self.db() else {
-            return Ok(());
+            return Ok(true);
         };
         let path = self.db_path.clone();
-        // The guard is taken *inside* the blocking task, never held across the
+        // The guards are taken *inside* the blocking task, never held across the
         // await: `write_lock` is a `std::sync::Mutex`, and this is the same shape
         // `QdrantAdapter::update_and_flush` uses to keep a flush from racing a
         // write without parking a runtime worker on a blocking lock.
         let write_lock = Arc::clone(&self.write_lock);
+        let read_gate = Arc::clone(&self.read_gate);
         tokio::task::spawn_blocking(move || {
-            // Poisoned means a previous writer panicked mid-query. There is
-            // nothing to recover and a checkpoint is still worth attempting, so
-            // take the guard anyway rather than skipping the flush.
-            let _write_guard = match write_lock.lock() {
-                Ok(guard) => guard,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            match Connection::new(&db).and_then(|conn| conn.query("CHECKPOINT")) {
-                Ok(_) => tracing::debug!(path = %path, "ladybug checkpoint complete"),
-                Err(e) => tracing::warn!(
-                    error = %e,
-                    path = %path,
-                    "ladybug checkpoint skipped; nodes and edges written since the last \
-                     successful checkpoint may not survive a process kill"
-                ),
+            for attempt in 1..=FLUSH_QUIESCE_ATTEMPTS {
+                // Order matters, and only in this direction. A writer holds
+                // `write_lock` and *then* takes `read_gate` shared (some write
+                // paths read first); taking `write_lock` first here means the
+                // two never form a cycle. `read_gate` is additionally only ever
+                // tried, never waited on, so this thread cannot be the tail of
+                // one either.
+                //
+                // Poisoned means a previous holder panicked mid-query. There is
+                // nothing to recover and a checkpoint is still worth attempting,
+                // so take the guard anyway rather than skipping the flush.
+                let _write_guard = match write_lock.lock() {
+                    Ok(guard) => guard,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
+                let _read_guard = match read_gate.try_write() {
+                    Ok(guard) => guard,
+                    Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+                    Err(TryLockError::WouldBlock) => {
+                        // Readers are active. Drop `write_lock` before sleeping
+                        // so a genuine writer is not parked behind a flush that
+                        // is only waiting.
+                        drop(_write_guard);
+                        std::thread::sleep(FLUSH_QUIESCE_BACKOFF);
+                        continue;
+                    }
+                };
+
+                return match Connection::new(&db).and_then(|conn| conn.query("CHECKPOINT")) {
+                    Ok(_) => {
+                        tracing::debug!(path = %path, attempt, "ladybug checkpoint complete");
+                        true
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            path = %path,
+                            "ladybug checkpoint failed; nodes and edges written since the last \
+                             successful checkpoint may not survive a process kill"
+                        );
+                        false
+                    }
+                };
             }
+
+            tracing::warn!(
+                path = %path,
+                attempts = FLUSH_QUIESCE_ATTEMPTS,
+                "ladybug checkpoint skipped: graph reads stayed in flight, and starting a \
+                 CHECKPOINT under one stalls every query for five seconds and then fails \
+                 anyway; nodes and edges written since the last successful checkpoint may \
+                 not survive a process kill"
+            );
+            false
         })
         .await
         .map_err(|e| {
@@ -389,6 +478,18 @@ impl LadybugAdapter {
         Span::current().record(COGNEE_DB_QUERY, redact(truncated).as_ref());
 
         let db = self.db()?;
+
+        // Held for the whole read — connection, query and the row materialisation
+        // that still has the transaction open — and for no other reason than to
+        // tell a concurrent `flush` that this read exists. See `read_gate`:
+        // lbug's CHECKPOINT cannot make an in-flight read leave, so the only
+        // cheap fix is to not start one. Poison is unrecoverable and a read is
+        // still worth attempting, so it is taken anyway.
+        let _read_guard = match self.read_gate.read() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
         let conn = Connection::new(&db).map_err(|e| {
             GraphDBError::ConnectionError(format!("Failed to create connection: {e}"))
         })?;
@@ -868,7 +969,7 @@ impl GraphDBTrait for LadybugAdapter {
     /// Delegates to the inherent [`LadybugAdapter::flush`], so a pipeline holding
     /// an `Arc<dyn GraphDBTrait>` can checkpoint the WAL at a quiet point without
     /// downcasting — and without closing the store it is still using.
-    async fn flush(&self) -> GraphDBResult<()> {
+    async fn flush(&self) -> GraphDBResult<bool> {
         LadybugAdapter::flush(self).await
     }
 
@@ -3766,5 +3867,125 @@ mod tests {
 
         // Empty input is a no-op, not an error.
         adapter.delete_nodes(&[]).await.unwrap();
+    }
+
+    /// The reason [`LadybugAdapter::read_gate`] exists, pinned.
+    ///
+    /// lbug's `TransactionManager::checkpoint()` holds
+    /// `mtxForSerializingPublicFunctionCalls` while it waits for active
+    /// transactions to leave, and a read-only transaction leaves via `commit()`,
+    /// which needs that same mutex. A CHECKPOINT started under an in-flight read
+    /// therefore cannot succeed: it spins for its full 5 s timeout with every
+    /// other query blocked behind the mutex, and then throws. The flush must see
+    /// that coming and decline — quickly, and out loud.
+    ///
+    /// The guard here is the exact one `execute_query` holds for the life of its
+    /// transaction, so "a read is in flight" is reproduced rather than simulated.
+    #[tokio::test]
+    #[serial]
+    async fn flush_declines_instead_of_stalling_while_a_read_is_in_flight() {
+        let (adapter, _dir) = setup_adapter().await;
+        adapter
+            .add_node_raw(json!({"id": "n", "name": "N", "type": "T"}))
+            .await
+            .unwrap();
+
+        // A reader parked on another thread, exactly as a slow query would be.
+        let gate = Arc::clone(&adapter.read_gate);
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel::<()>();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let reader = std::thread::spawn(move || {
+            let _read_guard = gate.read().unwrap();
+            ready_tx.send(()).unwrap();
+            let _ = release_rx.recv();
+        });
+        ready_rx.recv().unwrap();
+
+        let started = std::time::Instant::now();
+        let flushed = adapter.flush().await.expect("flush must not be an Err");
+        let elapsed = started.elapsed();
+
+        assert!(
+            !flushed,
+            "a flush that never reached CHECKPOINT must report false, not claim durability"
+        );
+        // The whole point: bounded by the quiesce budget, not by lbug's 5 s
+        // checkpoint timeout. Generous here so a loaded CI box cannot flake it,
+        // while still failing loudly if the 5 s stall ever comes back.
+        assert!(
+            elapsed < std::time::Duration::from_secs(2),
+            "a flush under an in-flight read must decline quickly, took {elapsed:?}"
+        );
+
+        release_tx.send(()).unwrap();
+        reader.join().unwrap();
+
+        // And the next one still happens: a decline is a skip, not a latch.
+        assert!(
+            adapter.flush().await.expect("flush must not be an Err"),
+            "once the reader has left, the flush must go through"
+        );
+    }
+
+    /// A flush with nothing in its way reports the checkpoint it actually did.
+    ///
+    /// The half that keeps the honesty from being vacuous: if `flush` simply
+    /// always returned `false` the test above would still pass.
+    #[tokio::test]
+    #[serial]
+    async fn flush_reports_true_when_the_checkpoint_runs() {
+        let (adapter, _dir) = setup_adapter().await;
+        adapter
+            .add_node_raw(json!({"id": "n", "name": "N", "type": "T"}))
+            .await
+            .unwrap();
+
+        assert!(
+            adapter.flush().await.expect("flush must not be an Err"),
+            "an unobstructed checkpoint must report true"
+        );
+        // Still serving, which is what separates this from a close.
+        assert!(adapter.has_node("n").await.unwrap());
+    }
+
+    /// A real read really does take the gate — the wiring, not just the field.
+    ///
+    /// Without this, `execute_query` could quietly lose its guard and every
+    /// assertion above would keep passing while the 5 s stall came back.
+    #[tokio::test]
+    #[serial]
+    async fn a_read_in_progress_holds_the_gate() {
+        let (adapter, _dir) = setup_adapter().await;
+        assert!(
+            adapter.read_gate.try_write().is_ok(),
+            "precondition: the gate is free when nothing is reading"
+        );
+
+        let gate = Arc::clone(&adapter.read_gate);
+        // `execute_query` is synchronous and holds the gate for its whole body,
+        // so observe it from another thread while the read is under way.
+        let observer = std::thread::spawn(move || {
+            let mut seen_held = false;
+            for _ in 0..2_000 {
+                if matches!(gate.try_write(), Err(TryLockError::WouldBlock)) {
+                    seen_held = true;
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_micros(50));
+            }
+            seen_held
+        });
+
+        // Enough reads that the observer cannot miss every one of them.
+        for _ in 0..2_000 {
+            adapter
+                .execute_query("MATCH (n:Node) RETURN COUNT(n)")
+                .unwrap();
+        }
+
+        assert!(
+            observer.join().unwrap(),
+            "execute_query must hold read_gate for the life of its transaction"
+        );
     }
 }

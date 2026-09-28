@@ -98,6 +98,15 @@ pub(crate) fn importance_factor(chunk_payload: &Value) -> f64 {
 /// lowering gold-passage-in-context in any of them. See the module docs.
 pub(crate) const DEFAULT_SUMMARY_LANE_WEIGHT: f64 = 0.75;
 
+/// The range a caller-supplied `summary_lane_weight` is clamped into.
+///
+/// Not a tuning opinion — a sanity bound. Below `0.0` a better summary match
+/// would *lower* a pair's fused score, inverting the lane; above `4.0` the
+/// summary lane swamps the chunk lane, which always weighs `1.0`, and the
+/// fusion stops being a fusion. The measured useful band is `[0.6, 0.9]`
+/// (see [`DEFAULT_SUMMARY_LANE_WEIGHT`]); this is only the fence around it.
+pub(crate) const SUMMARY_LANE_WEIGHT_RANGE: std::ops::RangeInclusive<f64> = 0.0..=4.0;
+
 /// How the chunk lane and the summary lane are fused into one ranking.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum ChunkLaneFusion {
@@ -146,6 +155,13 @@ type LaneBounds = Option<(f64, f64)>;
 
 /// Min–max bounds of one lane's scores over the pairs it both ranked and
 /// scored. `None` when the lane ranked nothing.
+///
+/// Non-finite similarities are excluded. `f64::min`/`max` return the *other*
+/// operand when one is NaN, so folding a NaN in leaves the bounds silently
+/// unchanged while the pair carrying it still normalises against them — and
+/// `(NaN - low) / span` is NaN, which the descending `total_cmp` sort then ranks
+/// above `+inf`. [`lanes_are_scored`] already keeps such a lane out of
+/// relative-score fusion entirely; this is the second lock on the same door.
 fn lane_bounds(
     pairs: &[ChunkSummaryPair],
     rank_of: impl Fn(&ChunkSummaryPair) -> Option<usize>,
@@ -155,6 +171,7 @@ fn lane_bounds(
         .iter()
         .filter(|pair| rank_of(pair).is_some())
         .filter_map(score_of)
+        .filter(|score| score.is_finite())
         .fold(None, |bounds, score| {
             let score = f64::from(score);
             Some(match bounds {
@@ -164,26 +181,56 @@ fn lane_bounds(
         })
 }
 
-/// Whether every pair a lane ranked also carries that lane's score.
+/// Whether every pair a lane ranked also carries a *usable* score for that lane
+/// — present, and finite.
 ///
 /// A vector adapter that does not report similarities must fall back to
 /// rank-only fusion rather than silently rank its hits as the lane's worst.
+///
+/// A non-finite similarity is treated the same way, and for a sharper reason: a
+/// NaN or infinity does not merely misrank the pair carrying it, it corrupts the
+/// whole ranking. NaN propagates through the min–max normalisation into the
+/// fused sum, and the descending `total_cmp` sort orders `+NaN` above `+inf` and
+/// above every real score — so one degenerate row would take the top slot and
+/// push the real answer out of the truncation. Falling the whole call back to
+/// rank-only fusion keeps the two lanes under one rule and costs only the score
+/// calibration, which is exactly the thing that row could not supply.
+///
+/// Narrow in practice: Qdrant returns `0.0` for a zero-norm row and LanceDB
+/// filters non-finite rows out, so this is reachable on pgvector, where a
+/// zero-norm embedding yields NaN cosine distance and a collection smaller than
+/// `LIMIT` lets it through.
 fn lanes_are_scored(pairs: &[ChunkSummaryPair]) -> bool {
+    let usable = |score: Option<f32>| score.is_some_and(f32::is_finite);
     pairs.iter().all(|pair| {
-        (pair.vector_rank.is_none() || pair.vector_score.is_some())
-            && (pair.summary_rank.is_none() || pair.summary_score.is_some())
+        (pair.vector_rank.is_none() || usable(pair.vector_score))
+            && (pair.summary_rank.is_none() || usable(pair.summary_score))
     })
 }
 
 /// A lane score mapped onto `[0, 1]` against that lane's own spread.
 ///
-/// A lane whose candidates are all equally similar (one hit, or an exact tie)
-/// has no spread to normalise against; every candidate is then the lane's best
-/// hit and scores `1.0`, which keeps a single-hit lane from being silently
-/// discarded.
+/// A lane whose candidates are all equally similar — one hit, or a tie within
+/// the resolution of the f32 similarities it was handed — has no spread to
+/// normalise against; every candidate is then the lane's best hit and scores
+/// `1.0`, which keeps a single-hit lane from being silently discarded.
+///
+/// The tie threshold is relative, not `f64::EPSILON`. These spans come from f32
+/// cosine similarities, whose ULP around a typical `0.7` is ~6e-8 — some 300
+/// million times `f64::EPSILON`. An absolute `f64::EPSILON` guard therefore only
+/// ever fired on bitwise-identical values, and let a one-ULP spread — f32
+/// rounding noise, not signal — be stretched across the entire `[0, 1]` range
+/// and then dominate the fusion sum.
+///
+/// A non-finite score cannot reach here through [`rank_chunk_summary_pairs`]
+/// (see [`lanes_are_scored`]); if one ever did it scores `0.0` — the lane's
+/// worst — rather than poisoning the sort.
 fn normalized(score: f64, (low, high): (f64, f64)) -> f64 {
+    if !score.is_finite() {
+        return 0.0;
+    }
     let span = high - low;
-    if span <= f64::EPSILON {
+    if span <= high.abs().max(1.0) * f64::from(f32::EPSILON) {
         1.0
     } else {
         (score - low) / span
@@ -1189,5 +1236,129 @@ mod tests {
             }
         );
         assert_eq!(DEFAULT_SUMMARY_LANE_WEIGHT, 0.75);
+    }
+
+    /// A single non-finite similarity must not be able to take the top slot.
+    ///
+    /// `f64::min`/`max` return the non-NaN operand, so a NaN score left the
+    /// lane's min–max bounds untouched while the pair carrying it still
+    /// normalised against them — `(NaN - low) / span` is NaN, the fused sum is
+    /// NaN, and the descending `total_cmp` sort orders `+NaN` above `+inf` and
+    /// above every real score. The degenerate row would win the ranking and
+    /// push the real answer out of the truncation.
+    ///
+    /// Reachable on pgvector, where a zero-norm embedding yields a NaN cosine
+    /// distance and a collection smaller than `LIMIT` lets the row through.
+    /// (Qdrant returns `0.0` for such a row and LanceDB filters it out, so the
+    /// Android and default-LanceDB paths never see it — the guard is cheap and
+    /// the corruption is total, so it is guarded anyway.)
+    #[test]
+    fn a_non_finite_similarity_cannot_win_the_ranking() {
+        for poison in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let ranked = relative(
+                vec![
+                    scored_pair("good", Some((0, 0.9)), None),
+                    scored_pair("mid", Some((1, 0.5)), None),
+                    scored_pair("poison", Some((2, poison)), None),
+                ],
+                3,
+            );
+            assert_eq!(
+                ids(&ranked),
+                vec![
+                    Some("good".to_string()),
+                    Some("mid".to_string()),
+                    Some("poison".to_string()),
+                ],
+                "a {poison} similarity must not outrank a real one"
+            );
+        }
+    }
+
+    /// The fallback is whole-call, not per-pair: one unusable similarity puts
+    /// the *entire* ranking back on rank-only RRF rather than mixing two lanes
+    /// under different rules.
+    ///
+    /// This is the same rule a missing similarity already follows — a lane that
+    /// cannot supply a usable score cannot be score-calibrated, and half-applying
+    /// the calibration is worse than not applying it.
+    #[test]
+    fn one_non_finite_similarity_falls_the_whole_call_back_to_rrf() {
+        let poisoned = vec![
+            scored_pair("a", Some((0, 0.2)), Some((1, 0.9))),
+            scored_pair("b", Some((1, f32::NAN)), Some((0, 0.1))),
+        ];
+        let rank_only = vec![
+            pair("a", Some(0), Some(1), None),
+            pair("b", Some(1), Some(0), None),
+        ];
+        assert_eq!(
+            ids(&relative(poisoned, 2)),
+            ids(&rank_chunk_summary_pairs(
+                rank_only,
+                2,
+                ChunkLaneFusion::ReciprocalRank,
+                false,
+                false,
+                None,
+                None,
+                None,
+            )),
+            "a NaN in either lane must produce exactly the rank-only ranking"
+        );
+    }
+
+    /// `lanes_are_scored` is the gate that makes the fallback happen, so pin it
+    /// directly: present-but-unusable must read the same as absent.
+    #[test]
+    fn lanes_are_scored_rejects_non_finite_similarities() {
+        assert!(lanes_are_scored(&[scored_pair("a", Some((0, 0.5)), None)]));
+        assert!(!lanes_are_scored(&[scored_pair(
+            "a",
+            Some((0, f32::NAN)),
+            None
+        )]));
+        assert!(!lanes_are_scored(&[scored_pair(
+            "a",
+            None,
+            Some((0, f32::INFINITY))
+        )]));
+        // A lane the pair was never ranked in is not required to score it, and
+        // a lane that ranked it but reported nothing is still unusable.
+        assert!(lanes_are_scored(&[scored_pair("a", None, Some((0, 0.5)))]));
+        assert!(!lanes_are_scored(&[pair("a", Some(0), None, None)]));
+    }
+
+    /// The equal-scores guard is relative, because the spans it judges come from
+    /// f32 similarities.
+    ///
+    /// One f32 ULP near `0.7` is ~6e-8 — about 3e8 times `f64::EPSILON`, the
+    /// threshold this used to compare against. So the old guard only ever fired
+    /// on bitwise-identical values, and a one-ULP spread (f32 rounding noise,
+    /// not signal) was stretched across the whole `[0, 1]` range and then
+    /// dominated the fused sum.
+    #[test]
+    fn a_one_ulp_spread_counts_as_a_tie() {
+        let low = 0.7_f32;
+        let high = f32::from_bits(low.to_bits() + 1);
+        assert!(high > low, "precondition: the two values really differ");
+
+        let (low, high) = (f64::from(low), f64::from(high));
+        assert_eq!(normalized(low, (low, high)), 1.0);
+        assert_eq!(normalized(high, (low, high)), 1.0);
+
+        // A real spread still normalises, and still spans the full range.
+        assert_eq!(normalized(0.4, (0.4, 0.9)), 0.0);
+        assert_eq!(normalized(0.9, (0.4, 0.9)), 1.0);
+    }
+
+    /// A single-hit lane scores `1.0` — but only when that hit is real. The
+    /// `1.0` short-circuit used to be reached with a NaN score too, making the
+    /// degenerate row the lane's best.
+    #[test]
+    fn a_non_finite_score_is_the_lanes_worst_not_its_best() {
+        assert_eq!(normalized(0.8, (0.8, 0.8)), 1.0);
+        assert_eq!(normalized(f64::NAN, (0.8, 0.8)), 0.0);
+        assert_eq!(normalized(f64::INFINITY, (0.2, 0.9)), 0.0);
     }
 }

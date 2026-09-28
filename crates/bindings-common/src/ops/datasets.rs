@@ -153,6 +153,8 @@ pub async fn empty_dataset(
         .await
         .map_err(|e| SdkError::Runtime(format!("empty_dataset failed: {e}")))?;
 
+    crate::ops::lifecycle::checkpoint_graph_after(svc.as_ref(), "empty_dataset").await;
+
     serde_json::to_value(&result)
         .map_err(|e| SdkError::Runtime(format!("failed to serialize DeleteResult: {e}")))
 }
@@ -205,6 +207,8 @@ pub async fn delete_data(
         .await
         .map_err(|e| SdkError::Runtime(format!("delete_data failed: {e}")))?;
 
+    crate::ops::lifecycle::checkpoint_graph_after(svc.as_ref(), "delete_data").await;
+
     serde_json::to_value(&result)
         .map_err(|e| SdkError::Runtime(format!("failed to serialize DeleteResult: {e}")))
 }
@@ -221,6 +225,8 @@ pub async fn delete_all_datasets(state: &HandleState) -> Result<serde_json::Valu
         .delete_all(owner_id, svc.delete_service.as_ref())
         .await
         .map_err(|e| SdkError::Runtime(format!("delete_all failed: {e}")))?;
+
+    crate::ops::lifecycle::checkpoint_graph_after(svc.as_ref(), "delete_all_datasets").await;
 
     serde_json::to_value(&results)
         .map_err(|e| SdkError::Runtime(format!("failed to serialize DeleteResult[]: {e}")))

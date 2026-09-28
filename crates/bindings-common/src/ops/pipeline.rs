@@ -263,14 +263,8 @@ pub async fn run_cognify_on_items(
     // guarantee, and the end of a cognify is the natural quiet point for it.
     //
     // Deliberately *after* the result is in hand and deliberately not fallible:
-    // `flush` downgrades a skipped checkpoint to a warning, and a cognify that
-    // did all its work must not be reported as failed because the checkpoint
-    // that followed it could not run. It is also explicitly not a close — the
-    // handle stays warm, because closing the store under a live pipeline is the
-    // worse bug this must not reintroduce.
-    if let Err(e) = svc.graph_db.flush().await {
-        tracing::warn!(error = %e, "could not checkpoint the graph after cognify");
-    }
+    // see [`checkpoint_graph_after`], which every graph-mutating op shares.
+    crate::ops::lifecycle::checkpoint_graph_after(svc, "cognify").await;
 
     Ok(result)
 }

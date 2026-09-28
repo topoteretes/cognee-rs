@@ -261,6 +261,8 @@ pub async fn run_remember(
     .await
     .map_err(|e| SdkError::Runtime(format!("remember failed: {e}")))?;
 
+    crate::ops::lifecycle::checkpoint_graph_after(svc.as_ref(), "remember").await;
+
     serde_json::to_value(&result)
         .map_err(|e| SdkError::Runtime(format!("failed to serialize RememberResult: {e}")))
 }
@@ -420,6 +422,8 @@ pub async fn run_improve(
     })
     .await
     .map_err(|e| SdkError::Runtime(format!("improve failed: {e}")))?;
+
+    crate::ops::lifecycle::checkpoint_graph_after(svc.as_ref(), "improve").await;
 
     let memify_json = result
         .memify_result

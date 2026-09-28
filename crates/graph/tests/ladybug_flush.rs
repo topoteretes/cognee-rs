@@ -88,7 +88,10 @@ async fn flush_checkpoints_without_closing() {
         "precondition: writes must leave an un-checkpointed WAL"
     );
 
-    adapter.flush().await.expect("flush must succeed");
+    assert!(
+        adapter.flush().await.expect("flush must not be an Err"),
+        "an unobstructed checkpoint must report that it happened"
+    );
 
     let main_after = len(&db_path);
     assert!(
@@ -123,7 +126,10 @@ async fn flush_checkpoints_without_closing() {
 #[serial]
 async fn flushed_data_does_not_depend_on_the_wal() {
     let (adapter, db_path, _dir) = warm().await;
-    adapter.flush().await.expect("flush");
+    assert!(
+        adapter.flush().await.expect("flush"),
+        "the checkpoint under test must actually have run"
+    );
 
     // The process dies without a close: no destructor, no second checkpoint.
     std::mem::forget(adapter);
@@ -148,10 +154,10 @@ async fn flushed_data_does_not_depend_on_the_wal() {
 #[serial]
 async fn flush_is_idempotent() {
     let (adapter, db_path, _dir) = warm().await;
-    adapter.flush().await.expect("first flush");
+    assert!(adapter.flush().await.expect("first flush"));
     let main_after_first = len(&db_path);
-    adapter.flush().await.expect("second flush");
-    adapter.flush().await.expect("third flush");
+    assert!(adapter.flush().await.expect("second flush"));
+    assert!(adapter.flush().await.expect("third flush"));
     assert_eq!(
         len(&db_path),
         main_after_first,
@@ -167,10 +173,13 @@ async fn flush_is_idempotent() {
 async fn flush_after_close_is_a_no_op() {
     let (adapter, _db_path, _dir) = warm().await;
     adapter.close().await.expect("close");
-    adapter
-        .flush()
-        .await
-        .expect("flush on a closed adapter must be Ok, not an error");
+    assert!(
+        adapter
+            .flush()
+            .await
+            .expect("flush on a closed adapter must be Ok, not an error"),
+        "a closed adapter was checkpointed by the close itself, so it is durable"
+    );
 }
 
 /// The trait object route — what `ComponentManager` and the cognify op hold —
@@ -182,11 +191,89 @@ async fn flush_through_the_trait_object() {
     let main_before = len(&db_path);
 
     let erased: std::sync::Arc<dyn GraphDBTrait> = std::sync::Arc::new(adapter);
-    erased.flush().await.expect("flush via GraphDBTrait");
+    assert!(
+        erased.flush().await.expect("flush via GraphDBTrait"),
+        "the trait method must report the outcome, not just dispatch"
+    );
 
     assert!(
         len(&db_path) > main_before,
         "the trait method must not be the default no-op for ladybug"
     );
     erased.close().await.expect("close");
+}
+
+/// Flushing next to live reads: never a stall, never a false claim.
+///
+/// This is the end-to-end shape of the two sites this PR adds — the end of a
+/// cognify and Android's `onPause` — both of which land at moments when an Ask
+/// is plausibly mid-flight. lbug cannot checkpoint under an in-flight read:
+/// `TransactionManager::checkpoint()` holds the mutex a read-only transaction
+/// needs in order to `commit()`, so it waits out its full 5 s timeout with every
+/// query blocked behind it and then throws. The adapter therefore declines
+/// rather than starting one.
+///
+/// Whether any individual attempt here hits that path is a race, so it is not
+/// asserted. What is asserted holds either way, and is what a caller depends on:
+/// no call stalls, no call returns `Err`, and the data is checkpointed by the
+/// end. The deterministic `false` case is pinned by the unit test
+/// `flush_declines_instead_of_stalling_while_a_read_is_in_flight`, which holds
+/// the gate directly.
+#[tokio::test]
+#[serial]
+async fn flushing_next_to_live_reads_never_stalls_or_lies() {
+    let (adapter, db_path, _dir) = warm().await;
+    let main_before = len(&db_path);
+
+    // `get_graph_data` over 500 nodes on a background task, hammered so that a
+    // read is in flight across the flush. The adapter's gate is private, so
+    // this goes through the public API exactly as a concurrent Ask would.
+    let adapter = std::sync::Arc::new(adapter);
+    let reader = {
+        let adapter = std::sync::Arc::clone(&adapter);
+        tokio::task::spawn_blocking(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .build()
+                .expect("runtime");
+            for _ in 0..200 {
+                rt.block_on(adapter.get_graph_data()).expect("read");
+            }
+        })
+    };
+
+    // Whatever each individual attempt found, none of them may have stalled and
+    // none may have lied: every `true` must come with a checkpoint that really
+    // landed, and the call must always return.
+    let mut declined = false;
+    let started = std::time::Instant::now();
+    while !reader.is_finished() {
+        if !adapter.flush().await.expect("flush must never be an Err") {
+            declined = true;
+        }
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(30),
+            "flushes under concurrent reads must not stall"
+        );
+    }
+    reader.await.expect("reader");
+
+    // The run is not required to hit the declining path — that is a race — but
+    // when it does, the store must not have claimed durability, and either way
+    // a final quiet flush must succeed and land.
+    if declined {
+        assert!(
+            adapter.flush().await.expect("final flush"),
+            "a quiet flush after the reads must go through"
+        );
+    }
+    assert!(
+        len(&db_path) > main_before,
+        "the data must be checkpointed by the end regardless"
+    );
+    std::sync::Arc::try_unwrap(adapter)
+        .map_err(|_| "reader still holds the adapter")
+        .expect("sole owner")
+        .close()
+        .await
+        .expect("close");
 }

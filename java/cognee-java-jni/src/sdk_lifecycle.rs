@@ -58,6 +58,11 @@ pub extern "system" fn Java_ai_cognee_internal_Native_ownerId<'l>(
 /// a skipped checkpoint in the payload rather than as a failure. The work itself
 /// runs on the SDK runtime, not on the calling thread — the Java side gets a
 /// future and is free to not wait for it.
+///
+/// `"flushed"` is the outcome, not the dispatch: it is `true` only when the
+/// store really is checkpointed, and `false` when the checkpoint was skipped
+/// (a read in flight, a read-only store) or failed. The future still completes
+/// normally in both cases — a caller that wants to know must read the field.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_ai_cognee_internal_Native_flush<'l>(
     mut env: JNIEnv<'l>,
