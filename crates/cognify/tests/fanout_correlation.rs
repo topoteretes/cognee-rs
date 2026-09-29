@@ -292,7 +292,10 @@ async fn graph_extraction_attributes_each_graph_to_its_own_chunk() {
     );
 
     for (index, chunk_id) in chunk_ids.iter().enumerate() {
-        let expected = format!("MARKER-{index:04}");
+        // Entity names are stored normalized (lowercased, apostrophes
+        // stripped), mirroring Python's `generate_node_name`, so the marker the
+        // fixture emits as `MARKER-0000` lands in the graph as `marker-0000`.
+        let expected = format!("MARKER-{index:04}").to_lowercase();
         let pair = result
             .entities
             .iter()

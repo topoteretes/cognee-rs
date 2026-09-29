@@ -106,7 +106,8 @@ async fn test_ontology_round_trip_with_real_resolver() {
     // TechCorp's type "Organization" should fuzzy-match ontology class "Organisation"
     let tc_node = nodes
         .iter()
-        .find(|n| n.entity.name == "TechCorp")
+        // Stored names are normalized (Python `generate_node_name`).
+        .find(|n| n.entity.name == "techcorp")
         .expect("TechCorp entity should exist");
     assert!(
         tc_node.entity_type.is_ontology_valid(),
@@ -116,7 +117,7 @@ async fn test_ontology_round_trip_with_real_resolver() {
     // Alice's type "Person" should match ontology class "Person"
     let alice_node = nodes
         .iter()
-        .find(|n| n.entity.name == "Alice")
+        .find(|n| n.entity.name == "alice")
         .expect("Alice entity should exist");
     assert!(
         alice_node.entity_type.is_ontology_valid(),
@@ -126,7 +127,7 @@ async fn test_ontology_round_trip_with_real_resolver() {
     // DeepSort's type "Algorithm" should match ontology class "Algorithm"
     let algo_node = nodes
         .iter()
-        .find(|n| n.entity.name == "DeepSort")
+        .find(|n| n.entity.name == "deepsort")
         .expect("DeepSort entity should exist");
     assert!(
         algo_node.entity_type.is_ontology_valid(),
@@ -185,8 +186,8 @@ async fn test_ontology_unmatched_type_not_validated() {
 
     assert_eq!(nodes.len(), 1);
     let gadget = &nodes[0];
-    assert_eq!(gadget.entity.name, "Widget");
-    assert_eq!(gadget.entity_type.name, "Gadget");
+    assert_eq!(gadget.entity.name, "widget");
+    assert_eq!(gadget.entity_type.name, "gadget");
     assert!(
         !gadget.entity_type.is_ontology_valid(),
         "Gadget should NOT be ontology-valid (not in ontology)"

@@ -10,7 +10,7 @@ use cognee_core::{HasDataPoint, ProvenanceContext, stamp_tree};
 use cognee_models::{Entity, EntityType};
 use cognee_ontology::traits::OntologyEdge;
 use cognee_ontology::{AttachedOntologyNode, NodeCategory, OntologyResolver};
-use cognee_utils::{generate_edge_name, normalize_identifier};
+use cognee_utils::{generate_edge_name, generate_node_name, normalize_identifier};
 use tracing::{debug, warn};
 
 use crate::fact_extraction::{KnowledgeGraph, Node};
@@ -492,7 +492,24 @@ pub async fn expand_with_nodes_and_edges_with_stats(
 
         for node in graph.nodes {
             // Step 1: Create or get EntityType (with ontology subgraph expansion)
-            let type_key = format!("{}_type", node.node_type);
+            //
+            // The *stored* type name is normalized (lowercase, apostrophes
+            // stripped) exactly as Python does at
+            // `expand_with_nodes_and_edges.py:30`
+            // (`normalized_type_name = generate_node_name(extracted_type)`).
+            // Without this Rust persists the model's raw title-case, so the two
+            // SDKs write `Organization` and `organization` for the same type.
+            // The id is unaffected — `EntityType::id_for` already normalizes —
+            // but the name is an `index_fields` value, so the raw form is what
+            // reaches the vector index and every rendered context string.
+            //
+            // The dedup key is normalized for the same reason Python keys on
+            // `str(EntityType.id_for(extracted_type))`: two chunks spelling one
+            // type differently must land on one map entry, otherwise they
+            // produce two entries carrying the same (normalization-insensitive)
+            // id.
+            let normalized_type_name = generate_node_name(&node.node_type);
+            let type_key = format!("{normalized_type_name}_type");
 
             // Check if this key was already remapped to a canonical form
             let effective_key = key_mapping
@@ -501,7 +518,7 @@ pub async fn expand_with_nodes_and_edges_with_stats(
                 .unwrap_or_else(|| type_key.clone());
 
             if !type_map.contains_key(&effective_key) {
-                let mut et = EntityType::from_node_type(&node.node_type, Some(dataset_id));
+                let mut et = EntityType::from_node_type(&normalized_type_name, Some(dataset_id));
                 // Python: `importance_weight=data_chunk.importance_weight`
                 // (expand_with_nodes_and_edges.py:163).
                 et.base.importance_weight = Some(chunk_importance_weight);
@@ -510,7 +527,12 @@ pub async fn expand_with_nodes_and_edges_with_stats(
                 if ontology_resolver.is_loaded() {
                     match ontology_resolver.get_subgraph(&node.node_type, "classes", true) {
                         Ok((onto_nodes, onto_edges, Some(root_node))) => {
-                            let canonical_name = root_node.name.clone();
+                            // Python normalizes the ontology-supplied name too
+                            // before storing it
+                            // (`construct_data_points_and_edges_with_ontology.py:223`),
+                            // while deriving the id from the raw name — the two
+                            // agree because `id_for` normalizes anyway.
+                            let canonical_name = generate_node_name(&root_node.name);
 
                             // Canonicalize: rename + regenerate deterministic ID
                             et.mark_ontology_valid(Some(canonical_name.clone()));
@@ -619,7 +641,10 @@ pub async fn expand_with_nodes_and_edges_with_stats(
                 if ontology_resolver.is_loaded() {
                     match ontology_resolver.get_subgraph(&node.name, "individuals", true) {
                         Ok((ont_nodes, ont_edges, Some(root_individual))) => {
-                            let canonical_name = root_individual.name.clone();
+                            // Normalized for the same reason as the class
+                            // canonical name above
+                            // (`construct_data_points_and_edges_with_ontology.py:223`).
+                            let canonical_name = generate_node_name(&root_individual.name);
 
                             // Store original name in metadata
                             entity_pair.entity.base.set_metadata(
@@ -1018,9 +1043,21 @@ fn create_entity_node(
     chunk_belongs_to_set: Option<&Vec<serde_json::Value>>,
     importance_weight: f64,
 ) -> GraphNodePair {
+    // The *stored* entity name is normalized (lowercase, apostrophes stripped),
+    // mirroring Python's `name=generate_node_name(extracted_node.name)`
+    // (expand_with_nodes_and_edges.py:55). The lowercase form is Python's
+    // canonical stored value, not LLM noise, and `name` is an `index_fields`
+    // value — so leaving the model's raw title-case here is what made the two
+    // SDKs embed and render `Machine Learning` against `machine learning`.
+    //
+    // The description is deliberately left untouched: Python passes
+    // `description=extracted_node.description` through unnormalized (line 57).
+    //
+    // The id does not move — `Entity::from_node` derives it from `node.id`,
+    // and `Entity::id_for` normalizes its input regardless.
     let entity = Entity::from_node(
         &node.id,
-        &node.name,
+        generate_node_name(&node.name),
         &node.description,
         entity_type.base.id,
         Some(dataset_id),
@@ -1079,11 +1116,19 @@ fn process_ontology_nodes(
     for node in ontology_nodes {
         match node.category {
             NodeCategory::Classes => {
-                // Python: `EntityType.id_for(name)` for ontology class nodes.
+                // Python: `EntityType.id_for(name)` for ontology class nodes —
+                // derived from the raw name, which is equivalent because
+                // `id_for` normalizes its input.
                 let node_id = EntityType::id_for(&node.name);
+                // Python stores the *normalized* name and uses it as the
+                // description as well
+                // (`construct_data_points_and_edges_with_ontology.py:223-231`).
+                let normalized_name = generate_node_name(&node.name);
                 let dedup_key = format!("{node_id}_type");
-                // Skip if the LLM already extracted this type (check by name-based key)
-                let llm_type_key = format!("{}_type", node.name);
+                // Skip if the LLM already extracted this type (check by
+                // name-based key — normalized, matching how `type_map` is keyed
+                // in the main loop).
+                let llm_type_key = format!("{normalized_name}_type");
                 if type_map.contains_key(&llm_type_key)
                     || ontology_types_map.contains_key(&dedup_key)
                 {
@@ -1095,7 +1140,7 @@ fn process_ontology_nodes(
                     continue;
                 }
 
-                let mut et = EntityType::new(&node.name, &node.name, Some(dataset_id));
+                let mut et = EntityType::new(&normalized_name, &normalized_name, Some(dataset_id));
                 et.base.id = node_id;
                 et.base.set_ontology_valid(true);
                 // Python: `importance_weight=data_chunk.importance_weight`
@@ -1105,8 +1150,13 @@ fn process_ontology_nodes(
                 ontology_types_map.insert(dedup_key, et);
             }
             NodeCategory::Individuals => {
-                // Python: `Entity.id_for(name)` for ontology individual nodes.
+                // Python: `Entity.id_for(name)` for ontology individual nodes —
+                // raw name in, normalized inside `id_for`.
                 let node_id = Entity::id_for(&node.name);
+                // Python stores the normalized name as both name and
+                // description
+                // (`construct_data_points_and_edges_with_ontology.py:232-240`).
+                let normalized_name = generate_node_name(&node.name);
                 let dedup_key = format!("{node_id}_entity");
                 // Skip if already present in either map
                 if node_map.contains_key(&dedup_key)
@@ -1115,7 +1165,8 @@ fn process_ontology_nodes(
                     continue;
                 }
 
-                let mut entity = Entity::new(&node.name, None, &node.name, Some(dataset_id));
+                let mut entity =
+                    Entity::new(&normalized_name, None, &normalized_name, Some(dataset_id));
                 entity.base.id = node_id;
                 entity.base.set_ontology_valid(true);
                 // Python: `importance_weight=data_chunk.importance_weight`
@@ -1157,12 +1208,27 @@ fn process_ontology_edges(
     // endpoint that names a class resolves via `EntityType::id_for`, otherwise
     // `Entity::id_for` (expand_with_nodes_and_edges.py:84-89). Endpoints not in
     // the node list default to Entity, as in Python.
-    let is_class: HashMap<&str, bool> = ontology_nodes
+    //
+    // Keyed on `generate_edge_name(node.name)` on both sides, as Python does
+    // (`construct_data_points_and_edges_with_ontology.py:251-255`), so an edge
+    // endpoint whose spelling differs from the node declaration only in case or
+    // spacing still finds its category instead of silently defaulting to
+    // Entity.
+    let is_class: HashMap<String, bool> = ontology_nodes
         .iter()
-        .map(|n| (n.name.as_str(), matches!(n.category, NodeCategory::Classes)))
+        .map(|n| {
+            (
+                generate_edge_name(&n.name),
+                matches!(n.category, NodeCategory::Classes),
+            )
+        })
         .collect();
     let endpoint_id = |name: &str| -> Uuid {
-        if is_class.get(name).copied().unwrap_or(false) {
+        if is_class
+            .get(&generate_edge_name(name))
+            .copied()
+            .unwrap_or(false)
+        {
             EntityType::id_for(name)
         } else {
             Entity::id_for(name)
@@ -1257,9 +1323,11 @@ mod tests {
         assert_eq!(edges[0].relationship_name, "works_at");
 
         // Verify node names
+        // Names are stored normalized (Python `generate_node_name`), so the
+        // expected values are lowercase.
         let names: Vec<String> = nodes.iter().map(|n| n.entity.name.clone()).collect();
-        assert!(names.contains(&"TechCorp".to_string()));
-        assert!(names.contains(&"Alice".to_string()));
+        assert!(names.contains(&"techcorp".to_string()));
+        assert!(names.contains(&"alice".to_string()));
     }
 
     #[tokio::test]
@@ -1444,8 +1512,8 @@ mod tests {
 
         // Verify types
         let types: Vec<String> = nodes.iter().map(|n| n.entity_type.name.clone()).collect();
-        assert!(types.contains(&"Organization".to_string()));
-        assert!(types.contains(&"Person".to_string()));
+        assert!(types.contains(&"organization".to_string()));
+        assert!(types.contains(&"person".to_string()));
     }
 
     #[tokio::test]
@@ -1813,7 +1881,7 @@ mod tests {
         // name also normalises to "mercury".
         let planet_id = nodes
             .iter()
-            .find(|p| p.entity.name == "Mercury the planet")
+            .find(|p| p.entity.name == "mercury the planet")
             .map(|p| p.entity.base.id)
             .expect("planet node is present");
         assert_eq!(edges[0].source_entity_id, planet_id);
@@ -2099,7 +2167,7 @@ mod tests {
         // not to the re-declaring node.
         let nova_corp_id = nodes
             .iter()
-            .find(|p| p.entity.name == "Nova")
+            .find(|p| p.entity.name == "nova")
             .map(|p| p.entity.base.id)
             .expect("the chunk-0 `nova_corp` node is present");
         assert_eq!(edges[0].source_entity_id, nova_corp_id);
@@ -2357,13 +2425,13 @@ mod tests {
                 .get_metadata("chunk_id")
                 .expect("chunk_id metadata should be present");
 
-            if node_pair.entity.name == "Alice" {
+            if node_pair.entity.name == "alice" {
                 assert_eq!(
                     chunk_ref.as_str().unwrap(),
                     chunk_id_a.to_string(),
                     "Alice should be tagged with chunk_id_a"
                 );
-            } else if node_pair.entity.name == "Bob" {
+            } else if node_pair.entity.name == "bob" {
                 assert_eq!(
                     chunk_ref.as_str().unwrap(),
                     chunk_id_b.to_string(),
@@ -2485,8 +2553,8 @@ mod tests {
         let llm_nodes: Vec<_> = nodes
             .iter()
             .filter(|n| {
-                n.entity.name == "TechCorp"
-                    || n.entity.name == "Alice"
+                n.entity.name == "techcorp"
+                    || n.entity.name == "alice"
                     || n.entity.name == "alice_canonical"
             })
             .collect();
@@ -2501,7 +2569,7 @@ mod tests {
                 node_pair.entity_type.name
             );
 
-            if node_pair.entity.name == "TechCorp" {
+            if node_pair.entity.name == "techcorp" {
                 // "Organization" → canonical "organisation" (lowercase from uri_to_key)
                 assert_eq!(node_pair.entity_type.name, "organisation");
             } else if node_pair.entity.name == "alice_canonical" {
@@ -2512,10 +2580,14 @@ mod tests {
                     node_pair.entity.base.ontology_valid,
                     "Entity 'alice_canonical' should be ontology-valid"
                 );
-                // Original name stored in metadata
+                // Original name stored in metadata. This records the name the
+                // entity carried *before ontology canonicalisation*, which is
+                // now the normalized extracted name rather than the model's raw
+                // title-case — the normalisation happens first, in
+                // `create_entity_node`.
                 assert_eq!(
                     node_pair.entity.base.get_metadata("original_name"),
-                    Some(&serde_json::json!("Alice")),
+                    Some(&serde_json::json!("alice")),
                 );
             }
         }
@@ -2629,7 +2701,7 @@ mod tests {
 
         let vehicle_et = &ontology_types_map[&vehicle_key];
         assert_eq!(vehicle_et.base.id, EntityType::id_for("Vehicle"));
-        assert_eq!(vehicle_et.name, "Vehicle");
+        assert_eq!(vehicle_et.name, "vehicle");
     }
 
     #[test]
@@ -2644,9 +2716,11 @@ mod tests {
         let node_map = HashMap::new();
         // Pre-populate type_map with an "Organization" entry (as if LLM already extracted it)
         let mut type_map = HashMap::new();
+        // `type_map` is keyed on the *normalized* type name, matching how the
+        // main expansion loop builds `type_key`.
         type_map.insert(
-            "Organization_type".to_string(),
-            EntityType::new("Organization", "A type", Some(dataset_id)),
+            "organization_type".to_string(),
+            EntityType::new("organization", "A type", Some(dataset_id)),
         );
 
         let mut ontology_types_map = HashMap::new();
@@ -2703,7 +2777,7 @@ mod tests {
         let pair = &ontology_entities_map[&dedup_key];
         assert!(pair.entity.base.ontology_valid);
         assert_eq!(pair.entity.base.id, Entity::id_for("MyCar"));
-        assert_eq!(pair.entity.name, "MyCar");
+        assert_eq!(pair.entity.name, "mycar");
         // Placeholder type
         assert_eq!(pair.entity_type.name, "OntologyIndividual");
         assert_eq!(
@@ -2949,7 +3023,7 @@ mod tests {
             .expect("Alice should be canonicalized to 'alice_canonical'");
         let techcorp = nodes
             .iter()
-            .find(|n| n.entity.name == "TechCorp")
+            .find(|n| n.entity.name == "techcorp")
             .expect("TechCorp entity should exist");
 
         // Edge endpoints must match the entity UUIDs
@@ -3002,12 +3076,12 @@ mod tests {
         .await;
 
         // Both entities should exist
-        assert!(nodes.iter().any(|n| n.entity.name == "TechCorp"));
-        assert!(nodes.iter().any(|n| n.entity.name == "AcmeCorp"));
+        assert!(nodes.iter().any(|n| n.entity.name == "techcorp"));
+        assert!(nodes.iter().any(|n| n.entity.name == "acmecorp"));
 
         // Both should share the same EntityType (canonicalized to "organisation")
-        let tc = nodes.iter().find(|n| n.entity.name == "TechCorp").unwrap();
-        let ac = nodes.iter().find(|n| n.entity.name == "AcmeCorp").unwrap();
+        let tc = nodes.iter().find(|n| n.entity.name == "techcorp").unwrap();
+        let ac = nodes.iter().find(|n| n.entity.name == "acmecorp").unwrap();
         assert_eq!(tc.entity_type.base.id, ac.entity_type.base.id);
 
         // There should be exactly 1 legalentity derived node (not duplicated)
@@ -3066,10 +3140,10 @@ mod tests {
         .await;
 
         // Both entities should exist
-        let tc = nodes.iter().find(|n| n.entity.name == "TechCorp").unwrap();
+        let tc = nodes.iter().find(|n| n.entity.name == "techcorp").unwrap();
         let qt = nodes
             .iter()
-            .find(|n| n.entity.name == "QuantumTheory")
+            .find(|n| n.entity.name == "quantumtheory")
             .unwrap();
 
         // Organization type is canonicalized and validated
@@ -3078,7 +3152,7 @@ mod tests {
 
         // Concept type is NOT in the ontology
         assert!(!qt.entity_type.is_ontology_valid());
-        assert_eq!(qt.entity_type.name, "Concept");
+        assert_eq!(qt.entity_type.name, "concept");
     }
 
     #[tokio::test]
