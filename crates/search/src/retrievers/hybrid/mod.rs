@@ -45,8 +45,11 @@ use cognee_vector::VectorDB;
 
 use self::budget::{context_budget_chars, graph_budget_chars, section_cost, take_blocks_within};
 use self::context::{format_hybrid_context, format_passages, format_passages_within_budget};
-use self::entities::{EdgeBullet, EntityResult, format_entity};
-use self::facts::{FactResult, fact_bullets, resolve_facts_top_k, select_facts_for_entities};
+use self::entities::{ENTITIES_SECTION_HEADER, EdgeBullet, EntityResult, format_entity};
+use self::facts::{
+    FACTS_SECTION_HEADER, FactResult, fact_bullets, resolve_facts_top_k, select_facts_for_entities,
+};
+use self::ranking::{ChunkLaneFusion, DEFAULT_SUMMARY_LANE_WEIGHT, SUMMARY_LANE_WEIGHT_RANGE};
 use self::results::result_id;
 use crate::retrievers::SearchRetriever;
 use crate::types::{
@@ -83,6 +86,53 @@ const DEFAULT_MAX_EDGES_PER_ENTITY: usize = 10;
 const DEFAULT_GLOBAL_CONTEXT_INDEX_TOP_K: usize = 3;
 /// Default node-name filter operator.
 const DEFAULT_NODE_NAME_FILTER_OPERATOR: &str = "OR";
+
+/// Resolve the chunk-lane fusion for one request.
+///
+/// `chunk_lane_fusion` selects the strategy (`"relative_score"`, the default,
+/// or `"reciprocal_rank"` for Python's rank-only RRF) and `summary_lane_weight`
+/// tunes the former. An unrecognised strategy name is logged and ignored rather
+/// than failing the search — a knob nobody can spell must not cost an answer.
+/// A weight sent alongside `"reciprocal_rank"` is inert, because rank-only
+/// fusion has no score to weight.
+///
+/// The weight is clamped to [`SUMMARY_LANE_WEIGHT_RANGE`] and the clamp is
+/// logged, for the same reason an unknown strategy name is: a mis-set knob is
+/// reported, not obeyed and not fatal. A negative weight would make a *better*
+/// summary hit lower the pair's score, and an enormous one would erase the chunk
+/// lane altogether — neither is a ranking anybody meant to ask for. (JSON cannot
+/// carry NaN or infinity, so only finite values ever arrive here; `clamp` would
+/// panic on a NaN bound, never on a NaN input against finite bounds, and a NaN
+/// input is unreachable.)
+fn chunk_lane_fusion(params: &SearchParams) -> ChunkLaneFusion {
+    let summary_lane_weight = match params.summary_lane_weight {
+        None => DEFAULT_SUMMARY_LANE_WEIGHT,
+        Some(weight) => {
+            let clamped = weight.clamp(
+                *SUMMARY_LANE_WEIGHT_RANGE.start(),
+                *SUMMARY_LANE_WEIGHT_RANGE.end(),
+            );
+            if clamped != weight {
+                debug!(
+                    "summary_lane_weight {weight} is outside {:?}; using {clamped}",
+                    SUMMARY_LANE_WEIGHT_RANGE
+                );
+            }
+            clamped
+        }
+    };
+    let relative = ChunkLaneFusion::RelativeScore {
+        summary_lane_weight,
+    };
+    match params.chunk_lane_fusion.as_deref() {
+        None | Some("relative_score") => relative,
+        Some("reciprocal_rank") => ChunkLaneFusion::ReciprocalRank,
+        Some(unknown) => {
+            debug!("unknown chunk_lane_fusion {unknown:?}; using relative_score");
+            relative
+        }
+    }
+}
 
 const ENTITY_DATA_TYPE: &str = "Entity";
 const ENTITY_FIELD: &str = "name";
@@ -432,13 +482,13 @@ impl HybridRetriever {
 
         let graph_budget = graph_budget_chars(budget);
         let entities_section = take_blocks_within(
-            "## Relevant entities",
+            ENTITIES_SECTION_HEADER,
             entities.iter().map(format_entity),
             "\n\n",
             graph_budget,
         );
         let facts_section = take_blocks_within(
-            "## Related facts",
+            FACTS_SECTION_HEADER,
             fact_bullets(facts),
             "\n",
             graph_budget.saturating_sub(section_cost(&entities_section, SECTION_SEPARATOR)),
@@ -716,6 +766,7 @@ impl SearchRetriever for HybridRetriever {
                 text_summaries_top_k,
                 node_name,
                 node_name_filter_operator,
+                chunk_lane_fusion(params),
                 use_importance_weight,
                 &query_vector,
                 use_truth_weight,
@@ -972,6 +1023,8 @@ mod retriever_tests {
     use cognee_session::SessionContext;
 
     use super::HybridRetriever;
+    use super::entities::ENTITIES_SECTION_HEADER;
+    use super::facts::FACTS_SECTION_HEADER;
     use crate::retrievers::SearchRetriever;
     use crate::types::{SearchContext, SearchError, SearchItem, SearchOutput, SearchParams};
     use crate::utils::DEFAULT_RAG_SYSTEM_PROMPT;
@@ -1306,8 +1359,8 @@ mod retriever_tests {
         let user = &messages[1].content;
         assert!(user.contains("what happened?"));
         assert!(user.contains("## Relevant passages"));
-        assert!(user.contains("## Relevant entities"));
-        assert!(user.contains("## Related facts"));
+        assert!(user.contains(ENTITIES_SECTION_HEADER));
+        assert!(user.contains(FACTS_SECTION_HEADER));
         assert!(user.contains(CHUNK_TEXT));
         assert!(user.contains(FACT_TEXT));
     }
@@ -1753,8 +1806,8 @@ mod retriever_tests {
         // section joined to the next by exactly one blank line.
         let expected = format!(
             "## Relevant passages\n{CHUNK_TEXT}\n\n\
-             ## Relevant entities\n### {ENTITY_NAME}\n- {BULLET_TEXT}\n\n\
-             ## Related facts\n- {FACT_TEXT}"
+             {ENTITIES_SECTION_HEADER}\n### {ENTITY_NAME}\n- {BULLET_TEXT}\n\n\
+             {FACTS_SECTION_HEADER}\n- {FACT_TEXT}"
         );
         assert!(
             user.contains(&expected),
@@ -1789,6 +1842,51 @@ mod retriever_tests {
             Some(user_prompt_template.to_string()),
             None,
         )
+    }
+
+    #[test]
+    fn chunk_lane_fusion_resolves_from_the_request() {
+        use super::{ChunkLaneFusion, DEFAULT_SUMMARY_LANE_WEIGHT, chunk_lane_fusion};
+
+        let with = |fusion: Option<&str>, weight: Option<f64>| {
+            chunk_lane_fusion(&SearchParams {
+                chunk_lane_fusion: fusion.map(str::to_string),
+                summary_lane_weight: weight,
+                ..SearchParams::default()
+            })
+        };
+        let relative = |weight| ChunkLaneFusion::RelativeScore {
+            summary_lane_weight: weight,
+        };
+
+        assert_eq!(with(None, None), relative(DEFAULT_SUMMARY_LANE_WEIGHT));
+        assert_eq!(with(Some("relative_score"), Some(0.25)), relative(0.25));
+        assert_eq!(with(None, Some(0.0)), relative(0.0));
+        assert_eq!(
+            with(Some("reciprocal_rank"), Some(0.25)),
+            ChunkLaneFusion::ReciprocalRank,
+            "a weight is inert when there is no score to weight"
+        );
+        assert_eq!(
+            with(Some("nonsense"), None),
+            relative(DEFAULT_SUMMARY_LANE_WEIGHT),
+            "an unspellable knob must not cost an answer"
+        );
+
+        // Symmetry with the strategy name above: a weight outside the sane band
+        // is clamped and logged, not obeyed and not fatal. A negative weight
+        // would make a *better* summary hit lower the pair's score, and an
+        // enormous one would erase the chunk lane, which always weighs 1.0.
+        use super::SUMMARY_LANE_WEIGHT_RANGE;
+        let (min, max) = (
+            *SUMMARY_LANE_WEIGHT_RANGE.start(),
+            *SUMMARY_LANE_WEIGHT_RANGE.end(),
+        );
+        assert_eq!(with(None, Some(-1.0)), relative(min));
+        assert_eq!(with(None, Some(1e9)), relative(max));
+        // The edges themselves are inside the band, not clamped away.
+        assert_eq!(with(None, Some(min)), relative(min));
+        assert_eq!(with(None, Some(max)), relative(max));
     }
 
     #[test]

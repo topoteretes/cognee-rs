@@ -225,7 +225,7 @@ pub async fn run_cognify_on_items(
     let user_email = best_effort_user_email(svc, owner_id).await;
     let config = cognify_config_with_opts(svc, opts).await?;
 
-    cognee_cognify(
+    let result = cognee_cognify(
         data_items,
         dataset.id,
         Some(owner_id),
@@ -243,7 +243,30 @@ pub async fn run_cognify_on_items(
         &config,
     )
     .await
-    .map_err(|e| SdkError::Runtime(format!("cognify failed: {e}")))
+    .map_err(|e| SdkError::Runtime(format!("cognify failed: {e}")))?;
+
+    // Make the graph durable here, while nothing is in flight.
+    //
+    // An embedded graph (ladybug) keeps a run's nodes and edges in an
+    // un-checkpointed `.wal` and only folds them into the main database file at
+    // a checkpoint. Nothing in an embedded deployment reliably reaches one: the
+    // `Database` destructor never runs when a phone's OS kills a backgrounded
+    // process, and the auto-checkpoint fires at a moment the pipeline does not
+    // choose. Until a checkpoint happens the entire graph rests on that one
+    // sidecar being replayable at the next open — which is true right up until
+    // it is not, and the failure is silent and total: the store reloads knowing
+    // about nothing while its documents, vectors and relational rows are all
+    // still there.
+    //
+    // The vector store already flushes after every write for exactly this
+    // reason (`QdrantAdapter::flush_shard`); this is the graph's half of that
+    // guarantee, and the end of a cognify is the natural quiet point for it.
+    //
+    // Deliberately *after* the result is in hand and deliberately not fallible:
+    // see [`checkpoint_graph_after`], which every graph-mutating op shares.
+    crate::ops::lifecycle::checkpoint_graph_after(svc, "cognify").await;
+
+    Ok(result)
 }
 
 // ---------------------------------------------------------------------------

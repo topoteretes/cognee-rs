@@ -145,6 +145,8 @@ pub async fn forget(
     let delete_result_json = serde_json::to_value(&result.delete_result)
         .map_err(|e| SdkError::Runtime(format!("failed to serialize DeleteResult: {e}")))?;
 
+    crate::ops::lifecycle::checkpoint_graph_after(svc.as_ref(), "forget").await;
+
     Ok(json!({
         "target": result.target,
         "deleteResult": delete_result_json,
@@ -245,6 +247,8 @@ pub async fn update(
         .map(cognify_result_json)
         .unwrap_or(serde_json::Value::Null);
 
+    crate::ops::lifecycle::checkpoint_graph_after(svc.as_ref(), "update").await;
+
     Ok(json!({
         "deletedDataId": result.deleted_data_id.to_string(),
         "deleteResult": delete_result_json,
@@ -307,6 +311,10 @@ pub async fn prune_system(
     )
     .await
     .map_err(|e| SdkError::Runtime(format!("prune_system failed: {e}")))?;
+
+    if result.graph_pruned {
+        crate::ops::lifecycle::checkpoint_graph_after(svc.as_ref(), "prune_system").await;
+    }
 
     Ok(json!({
         "dataPruned": result.data_pruned,

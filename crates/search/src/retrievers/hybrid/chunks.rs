@@ -22,7 +22,7 @@ use crate::retrievers::hybrid::pairs::{
     ChunkSummaryPair, attach_source_chunks, chunk_summary_pairs, source_chunk_ids_to_load,
     summary_id_for_chunk, summary_text_by_chunk_id,
 };
-use crate::retrievers::hybrid::ranking::rank_chunk_summary_pairs;
+use crate::retrievers::hybrid::ranking::{ChunkLaneFusion, rank_chunk_summary_pairs};
 use crate::retrievers::hybrid::results::{display_value, payload_matches_node_filter, result_id};
 use crate::types::{SearchError, SearchItem};
 
@@ -269,6 +269,7 @@ pub(crate) async fn retrieve_hybrid_chunks(
     text_summaries_top_k: Option<usize>,
     node_name: Option<&[String]>,
     node_name_filter_operator: &str,
+    fusion: ChunkLaneFusion,
     use_importance_weight: bool,
     query_vector: &[f32],
     use_truth_weight: bool,
@@ -324,6 +325,7 @@ pub(crate) async fn retrieve_hybrid_chunks(
     let mut ranked_pairs = rank_chunk_summary_pairs(
         pairs,
         chunks_top_k,
+        fusion,
         use_importance_weight,
         use_truth_weight,
         q_coords,
@@ -436,6 +438,7 @@ mod tests {
             None,
             None,
             "OR",
+            ChunkLaneFusion::default(),
             false,
             &[1.0, 0.0],
             false,
@@ -467,6 +470,7 @@ mod tests {
             None,
             None,
             "OR",
+            ChunkLaneFusion::default(),
             false,
             &[1.0, 0.0],
             false,
@@ -502,6 +506,7 @@ mod tests {
             None,
             Some(&node_name),
             "OR",
+            ChunkLaneFusion::default(),
             false,
             &[1.0, 0.0],
             false,
@@ -561,6 +566,7 @@ mod tests {
             None,
             Some(&node_name),
             "OR",
+            ChunkLaneFusion::default(),
             false,
             &[1.0, 0.0],
             false,
@@ -584,6 +590,13 @@ mod tests {
         // with the query push the orthogonal source chunk C out of the vector
         // lane's top-4, so C only reaches the pipeline via the summary hit's
         // source_chunk_id and must be backfilled by retrieve-by-id.
+        //
+        // Pinned to rank-only fusion, which this fixture was built for: the
+        // five fillers are *exact* matches for the query, and under the default
+        // relative-score fusion an orthogonal chunk whose only merit is a
+        // summary hit rightly does not outrank two of them. The default's own
+        // behaviour on a backfilled pair is
+        // `a_backfilled_summary_only_chunk_still_ranks_under_relative_score`.
         let db = MockVectorDB::new();
         db.create_collection(DOCUMENT_CHUNK_TYPE, TEXT_FIELD, 2)
             .await
@@ -631,6 +644,7 @@ mod tests {
             None,
             None,
             "OR",
+            ChunkLaneFusion::ReciprocalRank,
             false,
             &[1.0, 0.0],
             false,
@@ -649,6 +663,81 @@ mod tests {
                 .iter()
                 .any(|c| c.payload.get("id") == Some(&json!(chunk_c_str))),
             "backfilled source chunk should appear in ranked chunks"
+        );
+        assert_eq!(
+            result.chunk_summaries.get(&chunk_c_str).map(String::as_str),
+            Some("the paired summary")
+        );
+    }
+
+    /// The default fusion's side of the same mechanism. A pair the chunk lane
+    /// never returned scores nothing from it, so a backfilled summary-only
+    /// chunk carries exactly `summary_lane_weight` when its summary is the
+    /// summary lane's best hit — enough to pass every chunk-lane hit scoring
+    /// below three quarters of that lane's own spread, and no more.
+    #[tokio::test]
+    async fn a_backfilled_summary_only_chunk_still_ranks_under_relative_score() {
+        let db = MockVectorDB::new();
+        db.create_collection(DOCUMENT_CHUNK_TYPE, TEXT_FIELD, 2)
+            .await
+            .unwrap();
+        db.create_collection(TEXT_SUMMARY_TYPE, TEXT_FIELD, 2)
+            .await
+            .unwrap();
+
+        // One exact match for the query and three that fall away fast, so the
+        // chunk lane's runner-up normalises well under 0.75.
+        for vector in [
+            vec![1.0, 0.0],
+            vec![1.0, 2.29],
+            vec![1.0, 3.18],
+            vec![1.0, 4.90],
+        ] {
+            index_chunk(&db, Uuid::new_v4(), "filler", None, vector).await;
+        }
+        // chunks_top_k = 2 -> candidate_limit = 4, so the orthogonal source
+        // chunk never enters the chunk lane and can only be backfilled.
+        let chunk_c = Uuid::new_v4();
+        index_chunk(
+            &db,
+            chunk_c,
+            "backfilled source chunk",
+            None,
+            vec![0.0, 1.0],
+        )
+        .await;
+        index_summary(
+            &db,
+            Uuid::new_v5(&chunk_c, b"TextSummary"),
+            "the paired summary",
+            chunk_c,
+            vec![1.0, 0.0],
+        )
+        .await;
+
+        let result = retrieve_hybrid_chunks(
+            &dyn_vector(db),
+            2,
+            None,
+            None,
+            "OR",
+            ChunkLaneFusion::default(),
+            false,
+            &[1.0, 0.0],
+            false,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let chunk_c_str = chunk_c.to_string();
+        assert_eq!(result.chunks.len(), 2);
+        assert_eq!(
+            result.chunks[1].payload.get("id"),
+            Some(&json!(chunk_c_str)),
+            "the backfilled chunk should rank second, behind the exact match"
         );
         assert_eq!(
             result.chunk_summaries.get(&chunk_c_str).map(String::as_str),
@@ -695,6 +784,7 @@ mod tests {
             None,
             None,
             "OR",
+            ChunkLaneFusion::default(),
             false,
             &[1.0, 0.0],
             false,
@@ -757,6 +847,7 @@ mod tests {
             Some(0),
             None,
             "OR",
+            ChunkLaneFusion::default(),
             false,
             &[1.0, 0.0],
             false,
@@ -819,6 +910,7 @@ mod tests {
             None,
             Some(&node_name),
             "OR",
+            ChunkLaneFusion::default(),
             false,
             &[1.0, 0.0],
             false,
@@ -895,6 +987,7 @@ mod tests {
             None,
             Some(&node_name),
             "OR",
+            ChunkLaneFusion::default(),
             false,
             &[1.0, 0.0],
             false,

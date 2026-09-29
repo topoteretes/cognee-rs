@@ -89,6 +89,16 @@ pub struct SearchParams {
     /// Target default when `None`: `None` (no fallback — matches Python).
     pub text_summaries_top_k: Option<usize>,
 
+    /// (HybridCompletion) How the chunk lane and the summary lane are fused:
+    /// `"relative_score"` (default) or `"reciprocal_rank"` for Python's
+    /// rank-only RRF. Unrecognised values fall back to the default.
+    pub chunk_lane_fusion: Option<String>,
+
+    /// (HybridCompletion) Weight of the summary lane under
+    /// `"relative_score"` fusion; the chunk lane always weighs `1.0`.
+    /// Target default when `None`: `0.75`. Inert under `"reciprocal_rank"`.
+    pub summary_lane_weight: Option<f64>,
+
     /// (HybridCompletion) Whether to weight results by `DataPoint` importance.
     /// Target default when `None`: `true`.
     pub use_importance_weight: Option<bool>,
@@ -188,6 +198,17 @@ impl From<&SearchRequest> for SearchParams {
                 .and_then(|c| c.get("text_summaries_top_k"))
                 .and_then(|v| v.as_u64())
                 .map(|v| v as usize),
+            chunk_lane_fusion: req
+                .retriever_specific_config
+                .as_ref()
+                .and_then(|c| c.get("chunk_lane_fusion"))
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            summary_lane_weight: req
+                .retriever_specific_config
+                .as_ref()
+                .and_then(|c| c.get("summary_lane_weight"))
+                .and_then(serde_json::Value::as_f64),
             use_importance_weight: req
                 .retriever_specific_config
                 .as_ref()
@@ -266,6 +287,8 @@ mod tests {
                 "facts_top_k": 7,
                 "max_edges_per_entity": 8,
                 "text_summaries_top_k": 9,
+                "chunk_lane_fusion": "reciprocal_rank",
+                "summary_lane_weight": 0.5,
                 "use_importance_weight": false,
                 "use_truth_weight": true,
                 "include_global_context_index": true,
@@ -279,6 +302,8 @@ mod tests {
         assert_eq!(params.facts_top_k, Some(7));
         assert_eq!(params.max_edges_per_entity, Some(8));
         assert_eq!(params.text_summaries_top_k, Some(9));
+        assert_eq!(params.chunk_lane_fusion.as_deref(), Some("reciprocal_rank"));
+        assert_eq!(params.summary_lane_weight, Some(0.5));
         assert_eq!(params.use_importance_weight, Some(false));
         assert_eq!(params.use_truth_weight, Some(true));
         assert_eq!(params.include_global_context_index, Some(true));
@@ -298,6 +323,8 @@ mod tests {
         assert_eq!(params.facts_top_k, None);
         assert_eq!(params.max_edges_per_entity, None);
         assert_eq!(params.text_summaries_top_k, None);
+        assert_eq!(params.chunk_lane_fusion, None);
+        assert_eq!(params.summary_lane_weight, None);
         assert_eq!(params.use_importance_weight, None);
         assert_eq!(params.use_truth_weight, None);
         assert_eq!(params.include_global_context_index, None);

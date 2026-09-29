@@ -22,7 +22,16 @@ pub(crate) struct ChunkSummaryPair {
     pub summary_text: Option<String>,
     pub chunk: Option<SearchItem>,
     pub vector_rank: Option<usize>,
+    /// Similarity of the chunk to the query as the chunk lane scored it.
+    ///
+    /// Set only where `vector_rank` is, i.e. never on a chunk that was
+    /// back-filled for a summary-only pair: such a chunk was never scored by
+    /// the chunk lane and must not be treated as if it had been.
+    pub vector_score: Option<f32>,
     pub summary_rank: Option<usize>,
+    /// Similarity of the paired summary to the query, as the summary lane
+    /// scored it. Set only where `summary_rank` is.
+    pub summary_score: Option<f32>,
 }
 
 /// Build chunk↔summary pairs from the two vector lanes.
@@ -61,6 +70,7 @@ pub(crate) fn chunk_summary_pairs(
         }
         if pair.vector_rank.is_none() {
             pair.vector_rank = Some(rank);
+            pair.vector_score = chunk.score;
         }
     }
 
@@ -92,6 +102,7 @@ pub(crate) fn chunk_summary_pairs(
         let pair = &mut pairs[index];
         if pair.summary_rank.is_none() {
             pair.summary_rank = Some(rank);
+            pair.summary_score = summary.score;
             pair.summary_id = result_id(summary);
             pair.summary_text = summary.payload.get("text").and_then(display_value);
         }

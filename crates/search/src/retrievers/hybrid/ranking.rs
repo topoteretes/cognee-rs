@@ -1,4 +1,4 @@
-//! Reciprocal Rank Fusion (RRF) + importance-weight scoring.
+//! Chunk-lane fusion + importance-weight scoring.
 //!
 //! Port of `cognee/modules/retrieval/hybrid/ranking.py`, **Phase-1 subset
 //! only**. The Python function also threads `use_truth_weight` / `q_coords` /
@@ -6,6 +6,42 @@
 //! boost; per the locked Phase-2 deferral those parameters are intentionally
 //! absent here and will be added by the Phase-2 task without touching this
 //! code path.
+//!
+//! # Divergence: the default fusion is no longer rank-only RRF
+//!
+//! Python fuses the chunk lane and the `TextSummary` lane with Reciprocal Rank
+//! Fusion over **ranks only**; the similarities both lanes computed are thrown
+//! away. RRF's constant `k` is calibrated for candidate lists of thousands, and
+//! these lists are 20 and 5 long: with `k = 40` the whole chunk lane spans
+//! `1/41 … 1/60`, so the difference between its best and worst hit is smaller
+//! than the bonus for merely appearing in the other lane. The ranking that
+//! results is "present in both lanes" first and "actually similar to the query"
+//! second.
+//!
+//! Measured on Project Gutenberg's *Alice in Wonderland*, 15 probe questions
+//! with the gold passage located by literal string match, scored on the passage
+//! set the model is actually shown after the context budget fills — two
+//! chunkings (76 × ~2 kB chunks with extractor-generated digests as summaries;
+//! 138 × ~1 kB chunks with LLM summaries) × two summary-lane widths (5, and the
+//! `chunks_top_k` default):
+//!
+//! | corpus / summary lane | MRR RRF → relative | gold-in-context RRF → relative |
+//! |---|---|---|
+//! | 76 chunks, digests, k=5  | 0.537 → 0.557 | 0.80 → 0.80 |
+//! | 76 chunks, digests, k=10 | 0.488 → 0.528 | 0.67 → 0.80 |
+//! | 138 chunks, summaries, k=5  | 0.422 → 0.478 | 0.80 → 0.87 |
+//! | 138 chunks, summaries, k=10 | 0.350 → 0.471 | 0.80 → 0.80 |
+//!
+//! The concrete failure that started this: asked "Why does Alice follow the
+//! White Rabbit", the chunk lane ranked the opening paragraph — the one that
+//! says "burning with curiosity, she ran across the field after it" — second of
+//! 76, and rank-only fusion pushed it to fifth, past the context budget, behind
+//! three chunks the summary lane liked and the chunk lane had ranked 3rd, 8th
+//! and 14th. No model ever answered from it. Under relative-score fusion it is
+//! shown.
+//!
+//! Set `chunk_lane_fusion = "reciprocal_rank"` in `retriever_specific_config`
+//! to get Python's ranking back verbatim.
 
 use std::collections::HashMap;
 
@@ -45,16 +81,177 @@ pub(crate) fn importance_factor(chunk_payload: &Value) -> f64 {
     0.75 + 0.5 * importance
 }
 
-/// Rank chunk↔summary pairs by RRF (optionally importance-weighted) and
-/// truncate to `limit`.
+/// Default weight of the summary lane in [`ChunkLaneFusion::RelativeScore`].
 ///
-/// Port of `rank_chunk_summary_pairs` (`ranking.py:7-48`). For each pair
-/// carrying a `chunk`, collect the present ranks from
-/// `(vector_rank, summary_rank)` (skip if none), compute
-/// `rrf_score = Σ 1/(k + rank + 1)`, multiply by `importance_factor` when
-/// `use_importance_weight`, then multiply by `truth_factor` when the truth-weight
-/// gate holds, and sort by `(-final, -rrf, min_rank, chunk_id)` (float legs via
-/// `f64::total_cmp`, per the locked total-ordering decision).
+/// The two lanes are not equally informative. The chunk lane searches the
+/// prose the answer has to be quoted from; the summary lane searches a
+/// *derivative* of that same prose — an LLM summary, or on the extractor-only
+/// path an entity-and-relation digest — and so contributes no evidence the
+/// chunk lane could not also have found. Its vote is a second opinion on the
+/// same documents, not an independent channel, and is weighted accordingly.
+///
+/// `0.75` is the centre of the plateau measured on the Alice corpus over two
+/// chunkings (76 × ~2 kB with extractor digests, 138 × ~1 kB with LLM
+/// summaries) and both summary-lane widths (5 and `chunks_top_k`): every
+/// weight in `[0.6, 0.9]` behaves the same on the three probe questions, and
+/// `0.75` is the only value that raised MRR in all four configurations without
+/// lowering gold-passage-in-context in any of them. See the module docs.
+pub(crate) const DEFAULT_SUMMARY_LANE_WEIGHT: f64 = 0.75;
+
+/// The range a caller-supplied `summary_lane_weight` is clamped into.
+///
+/// Not a tuning opinion — a sanity bound. Below `0.0` a better summary match
+/// would *lower* a pair's fused score, inverting the lane; above `4.0` the
+/// summary lane swamps the chunk lane, which always weighs `1.0`, and the
+/// fusion stops being a fusion. The measured useful band is `[0.6, 0.9]`
+/// (see [`DEFAULT_SUMMARY_LANE_WEIGHT`]); this is only the fence around it.
+pub(crate) const SUMMARY_LANE_WEIGHT_RANGE: std::ops::RangeInclusive<f64> = 0.0..=4.0;
+
+/// How the chunk lane and the summary lane are fused into one ranking.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum ChunkLaneFusion {
+    /// Reciprocal Rank Fusion over ranks only — Python's
+    /// `rank_chunk_summary_pairs` verbatim. Kept as an opt-in so a deployment
+    /// can reproduce the Python ranking byte for byte.
+    ReciprocalRank,
+    /// Per-lane min–max normalised similarity, summed with a lane weight.
+    ///
+    /// The default, because RRF's rank-only score is miscalibrated for lanes
+    /// this short. With `k = rrf_k(10) = 40` and a 20-long chunk lane, the
+    /// whole lane spans `1/41 … 1/60` — a 1.46× spread — while being present
+    /// in the second lane at all is worth up to another 1.0×. Presence in both
+    /// lanes therefore outranks similarity in either: on the Alice corpus a
+    /// chunk the summary lane ranked first and the chunk lane ranked
+    /// *fourteenth* beat the chunk lane's own second-best hit, which was the
+    /// paragraph that introduces the protagonist. Classic RRF is calibrated
+    /// for candidate lists of thousands, where the intra-lane spread dwarfs
+    /// the cross-lane bonus; it degenerates at these lengths.
+    ///
+    /// Normalising each lane's own similarities to `[0, 1]` over its own
+    /// candidates restores the missing information — *how much* better a hit
+    /// is than its neighbours — without comparing raw scores across lanes,
+    /// whose scales differ. (This is why it is not the max-of-raw-cosines
+    /// fusion that was tried first and measured a dead zero against RRF: that
+    /// variant compares two lanes' absolute similarities directly, so an
+    /// offset between the lanes' score distributions decides the ranking. Here
+    /// each lane is compared only with itself.)
+    RelativeScore {
+        /// Weight of the summary lane's normalised score in the sum. The chunk
+        /// lane always weighs `1.0`; see [`DEFAULT_SUMMARY_LANE_WEIGHT`].
+        summary_lane_weight: f64,
+    },
+}
+
+impl Default for ChunkLaneFusion {
+    fn default() -> Self {
+        Self::RelativeScore {
+            summary_lane_weight: DEFAULT_SUMMARY_LANE_WEIGHT,
+        }
+    }
+}
+
+/// Lowest and highest similarity a lane assigned across its own candidates.
+type LaneBounds = Option<(f64, f64)>;
+
+/// Min–max bounds of one lane's scores over the pairs it both ranked and
+/// scored. `None` when the lane ranked nothing.
+///
+/// Non-finite similarities are excluded. `f64::min`/`max` return the *other*
+/// operand when one is NaN, so folding a NaN in leaves the bounds silently
+/// unchanged while the pair carrying it still normalises against them — and
+/// `(NaN - low) / span` is NaN, which the descending `total_cmp` sort then ranks
+/// above `+inf`. [`lanes_are_scored`] already keeps such a lane out of
+/// relative-score fusion entirely; this is the second lock on the same door.
+fn lane_bounds(
+    pairs: &[ChunkSummaryPair],
+    rank_of: impl Fn(&ChunkSummaryPair) -> Option<usize>,
+    score_of: impl Fn(&ChunkSummaryPair) -> Option<f32>,
+) -> LaneBounds {
+    pairs
+        .iter()
+        .filter(|pair| rank_of(pair).is_some())
+        .filter_map(score_of)
+        .filter(|score| score.is_finite())
+        .fold(None, |bounds, score| {
+            let score = f64::from(score);
+            Some(match bounds {
+                None => (score, score),
+                Some((low, high)) => (low.min(score), high.max(score)),
+            })
+        })
+}
+
+/// Whether every pair a lane ranked also carries a *usable* score for that lane
+/// — present, and finite.
+///
+/// A vector adapter that does not report similarities must fall back to
+/// rank-only fusion rather than silently rank its hits as the lane's worst.
+///
+/// A non-finite similarity is treated the same way, and for a sharper reason: a
+/// NaN or infinity does not merely misrank the pair carrying it, it corrupts the
+/// whole ranking. NaN propagates through the min–max normalisation into the
+/// fused sum, and the descending `total_cmp` sort orders `+NaN` above `+inf` and
+/// above every real score — so one degenerate row would take the top slot and
+/// push the real answer out of the truncation. Falling the whole call back to
+/// rank-only fusion keeps the two lanes under one rule and costs only the score
+/// calibration, which is exactly the thing that row could not supply.
+///
+/// Narrow in practice: Qdrant returns `0.0` for a zero-norm row and LanceDB
+/// filters non-finite rows out, so this is reachable on pgvector, where a
+/// zero-norm embedding yields NaN cosine distance and a collection smaller than
+/// `LIMIT` lets it through.
+fn lanes_are_scored(pairs: &[ChunkSummaryPair]) -> bool {
+    let usable = |score: Option<f32>| score.is_some_and(f32::is_finite);
+    pairs.iter().all(|pair| {
+        (pair.vector_rank.is_none() || usable(pair.vector_score))
+            && (pair.summary_rank.is_none() || usable(pair.summary_score))
+    })
+}
+
+/// A lane score mapped onto `[0, 1]` against that lane's own spread.
+///
+/// A lane whose candidates are all equally similar — one hit, or a tie within
+/// the resolution of the f32 similarities it was handed — has no spread to
+/// normalise against; every candidate is then the lane's best hit and scores
+/// `1.0`, which keeps a single-hit lane from being silently discarded.
+///
+/// The tie threshold is relative, not `f64::EPSILON`. These spans come from f32
+/// cosine similarities, whose ULP around a typical `0.7` is ~6e-8 — some 300
+/// million times `f64::EPSILON`. An absolute `f64::EPSILON` guard therefore only
+/// ever fired on bitwise-identical values, and let a one-ULP spread — f32
+/// rounding noise, not signal — be stretched across the entire `[0, 1]` range
+/// and then dominate the fusion sum.
+///
+/// A non-finite score cannot reach here through [`rank_chunk_summary_pairs`]
+/// (see [`lanes_are_scored`]); if one ever did it scores `0.0` — the lane's
+/// worst — rather than poisoning the sort.
+fn normalized(score: f64, (low, high): (f64, f64)) -> f64 {
+    if !score.is_finite() {
+        return 0.0;
+    }
+    let span = high - low;
+    if span <= high.abs().max(1.0) * f64::from(f32::EPSILON) {
+        1.0
+    } else {
+        (score - low) / span
+    }
+}
+
+/// Rank chunk↔summary pairs and truncate to `limit`.
+///
+/// Port of `rank_chunk_summary_pairs` (`ranking.py:7-48`), with the fusion
+/// itself made a parameter — see [`ChunkLaneFusion`] for why the default is no
+/// longer Python's rank-only RRF. For each pair carrying a `chunk`, collect the
+/// present ranks from `(vector_rank, summary_rank)` (skip if none), compute the
+/// fusion score, multiply by `importance_factor` when `use_importance_weight`,
+/// then multiply by `truth_factor` when the truth-weight gate holds, and sort
+/// by `(-final, -fusion, min_rank, chunk_id)` (float legs via `f64::total_cmp`,
+/// per the locked total-ordering decision).
+///
+/// [`ChunkLaneFusion::RelativeScore`] needs a similarity on every ranked pair;
+/// where the vector adapter reported none, the call falls back to
+/// [`ChunkLaneFusion::ReciprocalRank`] for the whole ranking so the two lanes
+/// are never mixed under different rules.
 ///
 /// The truth-subspace boost (`ranking.py:39-44`) is applied strictly AFTER the
 /// importance factor and only when `use_truth_weight`, `q_coords` is non-empty,
@@ -63,11 +260,13 @@ pub(crate) fn importance_factor(chunk_payload: &Value) -> f64 {
 /// "never scored" sentinel), so a stale/sentinel epoch or a chunk id missing
 /// from the map both fall through to no multiplier — identical to Python's
 /// `None`-vs-int comparison. When the gate is false the `final_score` is exactly
-/// the Phase-1 value, so default-off (`use_truth_weight == false`) ranking is
+/// the unboosted value, so default-off (`use_truth_weight == false`) ranking is
 /// byte-identical to a call with no truth context.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn rank_chunk_summary_pairs(
     pairs: Vec<ChunkSummaryPair>,
     limit: usize,
+    fusion: ChunkLaneFusion,
     use_importance_weight: bool,
     use_truth_weight: bool,
     q_coords: Option<&[f64]>,
@@ -79,6 +278,27 @@ pub(crate) fn rank_chunk_summary_pairs(
     }
 
     let k = rrf_k(limit);
+    // `Some(..)` selects relative-score fusion and carries what it needs: each
+    // lane's own spread, plus the summary lane's weight. `None` is rank-only
+    // RRF — either because it was asked for, or because a lane reported hits
+    // with no similarity attached.
+    let relative: Option<(LaneBounds, LaneBounds, f64)> = match fusion {
+        ChunkLaneFusion::ReciprocalRank => None,
+        ChunkLaneFusion::RelativeScore {
+            summary_lane_weight,
+        } if lanes_are_scored(&pairs) => Some((
+            lane_bounds(&pairs, |pair| pair.vector_rank, |pair| pair.vector_score),
+            lane_bounds(&pairs, |pair| pair.summary_rank, |pair| pair.summary_score),
+            summary_lane_weight,
+        )),
+        ChunkLaneFusion::RelativeScore { .. } => {
+            tracing::debug!(
+                "a hybrid chunk lane reported hits with no similarity score; \
+                 falling back to reciprocal-rank fusion"
+            );
+            None
+        }
+    };
     let mut ranked: Vec<(f64, f64, usize, String, ChunkSummaryPair)> = Vec::new();
 
     for pair in pairs {
@@ -94,11 +314,27 @@ pub(crate) fn rank_chunk_summary_pairs(
             continue;
         }
 
-        let rrf_score: f64 = ranks.iter().map(|rank| 1.0 / (k + rank + 1) as f64).sum();
+        let fusion_score: f64 = match relative {
+            None => ranks.iter().map(|rank| 1.0 / (k + rank + 1) as f64).sum(),
+            Some((chunk_bounds, summary_bounds, summary_lane_weight)) => {
+                // A lane the pair is absent from contributes nothing; a lane's
+                // own worst hit contributes nothing either, which is what makes
+                // this a *relative* score.
+                let chunk_part = match (pair.vector_score, chunk_bounds) {
+                    (Some(score), Some(bounds)) => normalized(f64::from(score), bounds),
+                    _ => 0.0,
+                };
+                let summary_part = match (pair.summary_score, summary_bounds) {
+                    (Some(score), Some(bounds)) => normalized(f64::from(score), bounds),
+                    _ => 0.0,
+                };
+                chunk_part + summary_lane_weight * summary_part
+            }
+        };
         let mut final_score = if use_importance_weight {
-            rrf_score * importance_factor(payload(chunk))
+            fusion_score * importance_factor(payload(chunk))
         } else {
-            rrf_score
+            fusion_score
         };
         let min_rank = ranks.iter().copied().min().unwrap_or(0);
         let chunk_id = pair
@@ -121,7 +357,7 @@ pub(crate) fn rank_chunk_summary_pairs(
             final_score *= truth_factor(&truth_state.truth_alignment, coords);
         }
 
-        ranked.push((final_score, rrf_score, min_rank, chunk_id, pair));
+        ranked.push((final_score, fusion_score, min_rank, chunk_id, pair));
     }
 
     ranked.sort_by(|left, right| {
@@ -178,8 +414,39 @@ mod tests {
             summary_text: None,
             chunk: Some(chunk_item(id, importance)),
             vector_rank: vector,
+            vector_score: None,
             summary_rank: summary,
+            summary_score: None,
         }
+    }
+
+    /// Like [`pair`] but with the lane similarities relative-score fusion needs.
+    fn scored_pair(
+        id: &str,
+        vector: Option<(usize, f32)>,
+        summary: Option<(usize, f32)>,
+    ) -> ChunkSummaryPair {
+        ChunkSummaryPair {
+            vector_rank: vector.map(|(rank, _)| rank),
+            vector_score: vector.map(|(_, score)| score),
+            summary_rank: summary.map(|(rank, _)| rank),
+            summary_score: summary.map(|(_, score)| score),
+            ..pair(id, None, None, None)
+        }
+    }
+
+    /// Relative-score fusion at the default weight.
+    fn relative(pairs: Vec<ChunkSummaryPair>, limit: usize) -> Vec<ChunkSummaryPair> {
+        rank_chunk_summary_pairs(
+            pairs,
+            limit,
+            ChunkLaneFusion::default(),
+            false,
+            false,
+            None,
+            None,
+            None,
+        )
     }
 
     #[test]
@@ -211,7 +478,16 @@ mod tests {
         limit: usize,
         use_importance_weight: bool,
     ) -> Vec<ChunkSummaryPair> {
-        rank_chunk_summary_pairs(pairs, limit, use_importance_weight, false, None, None, None)
+        rank_chunk_summary_pairs(
+            pairs,
+            limit,
+            ChunkLaneFusion::ReciprocalRank,
+            use_importance_weight,
+            false,
+            None,
+            None,
+            None,
+        )
     }
 
     #[test]
@@ -356,6 +632,7 @@ mod tests {
         let with_ctx_off = rank_chunk_summary_pairs(
             mk(),
             5,
+            ChunkLaneFusion::ReciprocalRank,
             true,
             false, // use_truth_weight OFF
             Some(&q_coords),
@@ -363,7 +640,16 @@ mod tests {
             Some(epoch),
         );
         // No truth context at all.
-        let no_ctx = rank_chunk_summary_pairs(mk(), 5, true, false, None, None, None);
+        let no_ctx = rank_chunk_summary_pairs(
+            mk(),
+            5,
+            ChunkLaneFusion::ReciprocalRank,
+            true,
+            false,
+            None,
+            None,
+            None,
+        );
 
         // Full ordering identical, and equal to the pure rrf x importance
         // baseline [hi, mid, lo].
@@ -383,6 +669,7 @@ mod tests {
         let with_ctx_on = rank_chunk_summary_pairs(
             mk(),
             5,
+            ChunkLaneFusion::ReciprocalRank,
             true,
             true,
             Some(&q_coords),
@@ -420,6 +707,7 @@ mod tests {
         let applied = rank_chunk_summary_pairs(
             flip_pairs(),
             5,
+            ChunkLaneFusion::ReciprocalRank,
             true,
             true,
             Some(&q_coords),
@@ -436,6 +724,7 @@ mod tests {
         let c1 = rank_chunk_summary_pairs(
             flip_pairs(),
             5,
+            ChunkLaneFusion::ReciprocalRank,
             true,
             false,
             Some(&q_coords),
@@ -450,6 +739,7 @@ mod tests {
         let c2 = rank_chunk_summary_pairs(
             flip_pairs(),
             5,
+            ChunkLaneFusion::ReciprocalRank,
             true,
             true,
             Some(&empty),
@@ -461,6 +751,7 @@ mod tests {
         let c3 = rank_chunk_summary_pairs(
             flip_pairs(),
             5,
+            ChunkLaneFusion::ReciprocalRank,
             true,
             true,
             None,
@@ -472,6 +763,7 @@ mod tests {
         let c4 = rank_chunk_summary_pairs(
             flip_pairs(),
             5,
+            ChunkLaneFusion::ReciprocalRank,
             true,
             true,
             Some(&q_coords),
@@ -484,6 +776,7 @@ mod tests {
         let c5 = rank_chunk_summary_pairs(
             flip_pairs(),
             5,
+            ChunkLaneFusion::ReciprocalRank,
             true,
             true,
             Some(&q_coords),
@@ -527,8 +820,16 @@ mod tests {
 
         // Baseline (truth off): tie resolves to chunk_id order -> "a" first, "b"
         // second (they carry equal scores).
-        let base =
-            rank_chunk_summary_pairs(vec![b.clone(), a.clone()], 5, true, false, None, None, None);
+        let base = rank_chunk_summary_pairs(
+            vec![b.clone(), a.clone()],
+            5,
+            ChunkLaneFusion::ReciprocalRank,
+            true,
+            false,
+            None,
+            None,
+            None,
+        );
         assert_eq!(base[0].chunk_id.as_deref(), Some("a"));
         assert_eq!(base[1].chunk_id.as_deref(), Some("b"));
 
@@ -536,6 +837,7 @@ mod tests {
         let ranked = rank_chunk_summary_pairs(
             vec![b, a],
             5,
+            ChunkLaneFusion::ReciprocalRank,
             true,
             true,
             Some(&q_coords),
@@ -570,6 +872,7 @@ mod tests {
         let applied = rank_chunk_summary_pairs(
             flip_pairs(),
             5,
+            ChunkLaneFusion::ReciprocalRank,
             true,
             true,
             Some(&q_coords),
@@ -589,6 +892,7 @@ mod tests {
         let stale_ranked = rank_chunk_summary_pairs(
             flip_pairs(),
             5,
+            ChunkLaneFusion::ReciprocalRank,
             true,
             true,
             Some(&q_coords),
@@ -603,6 +907,7 @@ mod tests {
         let missing_ranked = rank_chunk_summary_pairs(
             flip_pairs(),
             5,
+            ChunkLaneFusion::ReciprocalRank,
             true,
             true,
             Some(&q_coords),
@@ -658,6 +963,7 @@ mod tests {
         let both = rank_chunk_summary_pairs(
             mk(),
             5,
+            ChunkLaneFusion::ReciprocalRank,
             true,
             true,
             Some(&q_coords),
@@ -667,13 +973,23 @@ mod tests {
         assert_eq!(ids(&both), boost_first);
 
         // Importance only (truth off): 1.25 alone is not enough -> plain first.
-        let imp_only = rank_chunk_summary_pairs(mk(), 5, true, false, None, None, None);
+        let imp_only = rank_chunk_summary_pairs(
+            mk(),
+            5,
+            ChunkLaneFusion::ReciprocalRank,
+            true,
+            false,
+            None,
+            None,
+            None,
+        );
         assert_eq!(ids(&imp_only), plain_first);
 
         // Truth only (importance off): 1.25 alone is not enough -> plain first.
         let truth_only = rank_chunk_summary_pairs(
             mk(),
             5,
+            ChunkLaneFusion::ReciprocalRank,
             false,
             true,
             Some(&q_coords),
@@ -683,7 +999,16 @@ mod tests {
         assert_eq!(ids(&truth_only), plain_first);
 
         // Neither factor: pure rrf -> plain first.
-        let neither = rank_chunk_summary_pairs(mk(), 5, false, false, None, None, None);
+        let neither = rank_chunk_summary_pairs(
+            mk(),
+            5,
+            ChunkLaneFusion::ReciprocalRank,
+            false,
+            false,
+            None,
+            None,
+            None,
+        );
         assert_eq!(ids(&neither), plain_first);
     }
 
@@ -725,7 +1050,16 @@ mod tests {
         };
 
         // Positive control: with truth OFF the higher-rrf stale chunk wins.
-        let base = rank_chunk_summary_pairs(mk(), 5, false, false, None, None, None);
+        let base = rank_chunk_summary_pairs(
+            mk(),
+            5,
+            ChunkLaneFusion::ReciprocalRank,
+            false,
+            false,
+            None,
+            None,
+            None,
+        );
         assert_eq!(
             ids(&base),
             vec![Some("stale".to_string()), Some("current".to_string())]
@@ -735,6 +1069,7 @@ mod tests {
         let ranked = rank_chunk_summary_pairs(
             mk(),
             5,
+            ChunkLaneFusion::ReciprocalRank,
             false, // use_importance_weight
             true,  // use_truth_weight
             Some(&q_coords),
@@ -744,6 +1079,636 @@ mod tests {
         assert_eq!(
             ids(&ranked),
             vec![Some("current".to_string()), Some("stale".to_string())]
+        );
+    }
+
+    /// The regression this fusion exists for, modelled on the measured lanes
+    /// of "Why does Alice follow the White Rabbit": the chunk lane's top hits
+    /// are near-tied, the summary lane likes the third of them, and it also
+    /// likes a chunk the chunk lane put fifth.
+    ///
+    /// Rank-only RRF makes presence in both lanes worth more than similarity in
+    /// either, so `weak-chunk` — the chunk lane's fifth — lands ahead of its
+    /// first and second, and the gold passage falls out of the top three.
+    /// Relative-score fusion scales each lane's vote by how much better its hit
+    /// is than that lane's own other hits, so `weak-chunk` is still lifted (it
+    /// ends ahead of the equally-ranked `d`, which has no summary hit) but no
+    /// longer displaces the head of the chunk lane.
+    #[test]
+    fn a_weak_chunk_no_longer_rides_the_summary_lane_past_the_best_chunks() {
+        let pairs = || {
+            vec![
+                scored_pair("best-chunk", Some((0, 0.712)), None),
+                scored_pair("gold", Some((1, 0.709)), None),
+                scored_pair("also-summarised", Some((2, 0.697)), Some((0, 0.708))),
+                scored_pair("d", Some((3, 0.690)), None),
+                scored_pair("weak-chunk", Some((4, 0.640)), Some((1, 0.698))),
+                scored_pair("f", Some((5, 0.600)), None),
+                scored_pair("x", None, Some((2, 0.683))),
+                scored_pair("y", None, Some((3, 0.671))),
+                scored_pair("z", None, Some((4, 0.662))),
+            ]
+        };
+        let names = |ranked: &[ChunkSummaryPair]| {
+            ranked
+                .iter()
+                .map(|pair| pair.chunk_id.clone().unwrap_or_default())
+                .collect::<Vec<_>>()
+        };
+
+        let by_rank = rank_chunk_summary_pairs(
+            pairs(),
+            9,
+            ChunkLaneFusion::ReciprocalRank,
+            false,
+            false,
+            None,
+            None,
+            None,
+        );
+        assert_eq!(
+            names(&by_rank),
+            [
+                "also-summarised",
+                "weak-chunk",
+                "best-chunk",
+                "gold",
+                "x",
+                "d",
+                "y",
+                "z",
+                "f"
+            ]
+        );
+
+        assert_eq!(
+            names(&relative(pairs(), 9)),
+            [
+                "also-summarised",
+                "best-chunk",
+                "gold",
+                "weak-chunk",
+                "d",
+                "x",
+                "y",
+                "z",
+                "f"
+            ]
+        );
+    }
+
+    #[test]
+    fn the_summary_lane_still_breaks_a_chunk_lane_near_tie() {
+        // Two chunks the chunk lane cannot separate against the spread of its
+        // own candidates; only one of them is summarised.
+        let pairs = vec![
+            scored_pair("unsummarised", Some((0, 0.700)), None),
+            scored_pair("summarised", Some((1, 0.699)), Some((0, 0.9))),
+            scored_pair("c", Some((2, 0.650)), Some((1, 0.5))),
+            scored_pair("d", Some((3, 0.620)), None),
+            scored_pair("e", Some((4, 0.600)), None),
+        ];
+        assert_eq!(
+            ids(&relative(pairs, 5))[0],
+            Some("summarised".to_string()),
+            "a lane that adds information must still be able to reorder a tie"
+        );
+    }
+
+    #[test]
+    fn a_lane_weight_of_zero_is_the_chunk_lane_alone() {
+        let pairs = vec![
+            scored_pair("chunk-best", Some((0, 0.70)), None),
+            scored_pair("summary-best", Some((5, 0.60)), Some((0, 0.99))),
+        ];
+        let ranked = rank_chunk_summary_pairs(
+            pairs,
+            2,
+            ChunkLaneFusion::RelativeScore {
+                summary_lane_weight: 0.0,
+            },
+            false,
+            false,
+            None,
+            None,
+            None,
+        );
+        assert_eq!(ids(&ranked)[0], Some("chunk-best".to_string()));
+    }
+
+    /// A lane whose hits carry no similarity cannot be normalised, and ranking
+    /// them all as that lane's worst hit would silently bury them. The whole
+    /// call falls back to rank-only fusion instead.
+    #[test]
+    fn unscored_lanes_fall_back_to_reciprocal_rank() {
+        let unscored = || {
+            vec![
+                pair("two", Some(1), Some(1), None),
+                pair("one", Some(0), None, None),
+            ]
+        };
+        assert_eq!(
+            ids(&relative(unscored(), 5)),
+            ids(&baseline(unscored(), 5, false))
+        );
+    }
+
+    /// A single-hit lane has no spread to normalise against; its one hit is
+    /// that lane's best and must score as such, not as its worst.
+    #[test]
+    fn a_single_hit_lane_scores_full_marks() {
+        assert_eq!(normalized(0.4, (0.4, 0.4)), 1.0);
+        let pairs = vec![
+            scored_pair("only-chunk", Some((0, 0.5)), None),
+            scored_pair("only-summary", None, Some((0, 0.5))),
+        ];
+        // Both lanes hold exactly one hit, so both normalise to 1.0 and the
+        // summary lane's weight decides — it is the weaker lane, so it loses.
+        assert_eq!(ids(&relative(pairs, 2))[0], Some("only-chunk".to_string()));
+    }
+
+    #[test]
+    fn the_default_fusion_is_relative_score_at_the_documented_weight() {
+        assert_eq!(
+            ChunkLaneFusion::default(),
+            ChunkLaneFusion::RelativeScore {
+                summary_lane_weight: DEFAULT_SUMMARY_LANE_WEIGHT
+            }
+        );
+        assert_eq!(DEFAULT_SUMMARY_LANE_WEIGHT, 0.75);
+    }
+
+    /// A single non-finite similarity must not be able to take the top slot.
+    ///
+    /// `f64::min`/`max` return the non-NaN operand, so a NaN score left the
+    /// lane's min–max bounds untouched while the pair carrying it still
+    /// normalised against them — `(NaN - low) / span` is NaN, the fused sum is
+    /// NaN, and the descending `total_cmp` sort orders `+NaN` above `+inf` and
+    /// above every real score. The degenerate row would win the ranking and
+    /// push the real answer out of the truncation.
+    ///
+    /// Reachable on pgvector, where a zero-norm embedding yields a NaN cosine
+    /// distance and a collection smaller than `LIMIT` lets the row through.
+    /// (Qdrant returns `0.0` for such a row and LanceDB filters it out, so the
+    /// Android and default-LanceDB paths never see it — the guard is cheap and
+    /// the corruption is total, so it is guarded anyway.)
+    #[test]
+    fn a_non_finite_similarity_cannot_win_the_ranking() {
+        for poison in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let ranked = relative(
+                vec![
+                    scored_pair("good", Some((0, 0.9)), None),
+                    scored_pair("mid", Some((1, 0.5)), None),
+                    scored_pair("poison", Some((2, poison)), None),
+                ],
+                3,
+            );
+            assert_eq!(
+                ids(&ranked),
+                vec![
+                    Some("good".to_string()),
+                    Some("mid".to_string()),
+                    Some("poison".to_string()),
+                ],
+                "a {poison} similarity must not outrank a real one"
+            );
+        }
+    }
+
+    /// The fallback is whole-call, not per-pair: one unusable similarity puts
+    /// the *entire* ranking back on rank-only RRF rather than mixing two lanes
+    /// under different rules.
+    ///
+    /// This is the same rule a missing similarity already follows — a lane that
+    /// cannot supply a usable score cannot be score-calibrated, and half-applying
+    /// the calibration is worse than not applying it.
+    #[test]
+    fn one_non_finite_similarity_falls_the_whole_call_back_to_rrf() {
+        let poisoned = vec![
+            scored_pair("a", Some((0, 0.2)), Some((1, 0.9))),
+            scored_pair("b", Some((1, f32::NAN)), Some((0, 0.1))),
+        ];
+        let rank_only = vec![
+            pair("a", Some(0), Some(1), None),
+            pair("b", Some(1), Some(0), None),
+        ];
+        assert_eq!(
+            ids(&relative(poisoned, 2)),
+            ids(&rank_chunk_summary_pairs(
+                rank_only,
+                2,
+                ChunkLaneFusion::ReciprocalRank,
+                false,
+                false,
+                None,
+                None,
+                None,
+            )),
+            "a NaN in either lane must produce exactly the rank-only ranking"
+        );
+    }
+
+    /// `lanes_are_scored` is the gate that makes the fallback happen, so pin it
+    /// directly: present-but-unusable must read the same as absent.
+    #[test]
+    fn lanes_are_scored_rejects_non_finite_similarities() {
+        assert!(lanes_are_scored(&[scored_pair("a", Some((0, 0.5)), None)]));
+        assert!(!lanes_are_scored(&[scored_pair(
+            "a",
+            Some((0, f32::NAN)),
+            None
+        )]));
+        assert!(!lanes_are_scored(&[scored_pair(
+            "a",
+            None,
+            Some((0, f32::INFINITY))
+        )]));
+        // A lane the pair was never ranked in is not required to score it, and
+        // a lane that ranked it but reported nothing is still unusable.
+        assert!(lanes_are_scored(&[scored_pair("a", None, Some((0, 0.5)))]));
+        assert!(!lanes_are_scored(&[pair("a", Some(0), None, None)]));
+    }
+
+    /// The equal-scores guard is relative, because the spans it judges come from
+    /// f32 similarities.
+    ///
+    /// One f32 ULP near `0.7` is ~6e-8 — about 3e8 times `f64::EPSILON`, the
+    /// threshold this used to compare against. So the old guard only ever fired
+    /// on bitwise-identical values, and a one-ULP spread (f32 rounding noise,
+    /// not signal) was stretched across the whole `[0, 1]` range and then
+    /// dominated the fused sum.
+    #[test]
+    fn a_one_ulp_spread_counts_as_a_tie() {
+        let low = 0.7_f32;
+        let high = f32::from_bits(low.to_bits() + 1);
+        assert!(high > low, "precondition: the two values really differ");
+
+        let (low, high) = (f64::from(low), f64::from(high));
+        assert_eq!(normalized(low, (low, high)), 1.0);
+        assert_eq!(normalized(high, (low, high)), 1.0);
+
+        // A real spread still normalises, and still spans the full range.
+        assert_eq!(normalized(0.4, (0.4, 0.9)), 0.0);
+        assert_eq!(normalized(0.9, (0.4, 0.9)), 1.0);
+    }
+
+    /// A single-hit lane scores `1.0` — but only when that hit is real. The
+    /// `1.0` short-circuit used to be reached with a NaN score too, making the
+    /// degenerate row the lane's best.
+    #[test]
+    fn a_non_finite_score_is_the_lanes_worst_not_its_best() {
+        assert_eq!(normalized(0.8, (0.8, 0.8)), 1.0);
+        assert_eq!(normalized(f64::NAN, (0.8, 0.8)), 0.0);
+        assert_eq!(normalized(f64::INFINITY, (0.2, 0.9)), 0.0);
+    }
+
+    // ---- Importance and truth weighting under the DEFAULT fusion ----
+    //
+    // Every weighting test above goes through `baseline`, which pins
+    // `ChunkLaneFusion::ReciprocalRank`. That was the fusion the two
+    // multiplicative factors were tuned against, and it is no longer the one
+    // any deployment runs: `ChunkLaneFusion::default()` is `RelativeScore`.
+    //
+    // The bands differ in kind, not just in scale. RRF's single-lane score sits
+    // in `1/(k+1) … 1/(k+limit)` — never zero, spanning at most ~1.9x — so a
+    // 1.25x factor always had something to scale and was always worth several
+    // rank slots. A relative score is `[0, 1 + summary_lane_weight]` with a
+    // per-lane minimum of exactly `0.0`, so the same factor buys a lot at the
+    // head of a lane and literally nothing at its floor.
+    //
+    // These four cases pin both ends of that.
+
+    /// Like [`scored_pair`], but carrying an importance weight.
+    fn scored_pair_weighted(
+        id: &str,
+        vector: Option<(usize, f32)>,
+        summary: Option<(usize, f32)>,
+        importance: f64,
+    ) -> ChunkSummaryPair {
+        ChunkSummaryPair {
+            chunk: Some(chunk_item(id, Some(importance))),
+            ..scored_pair(id, vector, summary)
+        }
+    }
+
+    /// Relative-score fusion with the weighting switches exposed.
+    fn relative_weighted(
+        pairs: Vec<ChunkSummaryPair>,
+        limit: usize,
+        use_importance_weight: bool,
+        use_truth_weight: bool,
+        q_coords: Option<&[f64]>,
+        truth_state_by_id: Option<&HashMap<String, NodeTruthState>>,
+        current_truth_epoch: Option<i64>,
+    ) -> Vec<ChunkSummaryPair> {
+        rank_chunk_summary_pairs(
+            pairs,
+            limit,
+            ChunkLaneFusion::default(),
+            use_importance_weight,
+            use_truth_weight,
+            q_coords,
+            truth_state_by_id,
+            current_truth_epoch,
+        )
+    }
+
+    /// The importance factor still reorders under the default fusion.
+    ///
+    /// The chunk lane spans `0.60 … 0.72`, so `lo` normalises to `1.0`, `hi` to
+    /// `(0.70 - 0.60) / 0.12 = 0.8333` and `floor` to `0.0`. Weighting off, `lo`
+    /// leads on similarity alone. Weighting on, `lo` takes the 0.0 importance
+    /// factor (0.75 -> 0.75) and `hi` the 1.0 one (1.25 -> 1.0417), and `hi`
+    /// overtakes. Both orders are score-driven, not tie-breaks: the scores are
+    /// far apart in either direction.
+    #[test]
+    fn importance_weight_can_reorder_under_relative_score() {
+        let pairs = || {
+            vec![
+                scored_pair_weighted("lo", Some((0, 0.72)), None, 0.0),
+                scored_pair_weighted("hi", Some((1, 0.70)), None, 1.0),
+                scored_pair_weighted("floor", Some((2, 0.60)), None, 0.5),
+            ]
+        };
+
+        assert_eq!(
+            ids(&relative_weighted(
+                pairs(),
+                3,
+                false,
+                false,
+                None,
+                None,
+                None
+            )),
+            vec![
+                Some("lo".to_string()),
+                Some("hi".to_string()),
+                Some("floor".to_string()),
+            ],
+            "without importance the lane's own similarity order stands"
+        );
+        assert_eq!(
+            ids(&relative_weighted(
+                pairs(),
+                3,
+                true,
+                false,
+                None,
+                None,
+                None
+            )),
+            vec![
+                Some("hi".to_string()),
+                Some("lo".to_string()),
+                Some("floor".to_string()),
+            ],
+            "importance must still be able to reorder a relative-score ranking"
+        );
+    }
+
+    /// The truth multiplier still reorders under the default fusion.
+    ///
+    /// Same lane shape, with the 1.25 truth factor standing in for the
+    /// importance one: `aligned` normalises to `0.8333` and is lifted to
+    /// `1.0417`, past `plain`'s `1.0`.
+    #[test]
+    fn truth_weight_can_reorder_under_relative_score() {
+        let q_coords = vec![1.0, 0.0];
+        let epoch = 7;
+        let mut states = HashMap::new();
+        states.insert(
+            "aligned".to_string(),
+            NodeTruthState {
+                truth_alignment: vec![1.0, 0.0],
+                truth_epoch: epoch,
+            },
+        );
+        assert!((truth_factor(&[1.0, 0.0], &q_coords) - 1.25).abs() < 1e-12);
+
+        let pairs = || {
+            vec![
+                scored_pair("plain", Some((0, 0.72)), None),
+                scored_pair("aligned", Some((1, 0.70)), None),
+                scored_pair("floor", Some((2, 0.60)), None),
+            ]
+        };
+
+        assert_eq!(
+            ids(&relative_weighted(
+                pairs(),
+                3,
+                false,
+                false,
+                None,
+                None,
+                None
+            )),
+            vec![
+                Some("plain".to_string()),
+                Some("aligned".to_string()),
+                Some("floor".to_string()),
+            ],
+            "precondition: without the multiplier the lane order is plain, aligned, floor"
+        );
+        assert_eq!(
+            ids(&relative_weighted(
+                pairs(),
+                3,
+                false,
+                true,
+                Some(&q_coords),
+                Some(&states),
+                Some(epoch),
+            )),
+            vec![
+                Some("aligned".to_string()),
+                Some("plain".to_string()),
+                Some("floor".to_string()),
+            ],
+            "the truth multiplier must still be able to reorder a relative-score ranking"
+        );
+    }
+
+    /// Both factors compose under the default fusion, and only the full product
+    /// wins — the relative-score twin of
+    /// [`final_score_composes_importance_then_truth`].
+    ///
+    /// Chunk lane spans `0.60 … 0.80`, so `plain` normalises to `1.0`, `boost`
+    /// to `0.75` and `floor` to `0.0`.
+    ///   both     : 0.75 * 1.25 * 1.25 = 1.171875 > 1.0  => boost wins
+    ///   importance only: 0.75 * 1.25  = 0.9375   < 1.0  => plain wins
+    ///   truth only     : 0.75 * 1.25  = 0.9375   < 1.0  => plain wins
+    ///   neither        : 0.75                    < 1.0  => plain wins
+    #[test]
+    fn relative_score_composes_importance_then_truth() {
+        let q_coords = vec![1.0, 0.0];
+        let epoch = 3;
+        let mut states = HashMap::new();
+        states.insert(
+            "boost".to_string(),
+            NodeTruthState {
+                truth_alignment: vec![1.0, 0.0],
+                truth_epoch: epoch,
+            },
+        );
+
+        let pairs = || {
+            vec![
+                scored_pair_weighted("plain", Some((0, 0.80)), None, 0.5),
+                scored_pair_weighted("boost", Some((1, 0.75)), None, 1.0),
+                scored_pair_weighted("floor", Some((2, 0.60)), None, 0.5),
+            ]
+        };
+        let head = |ranked: &[ChunkSummaryPair]| ids(ranked)[0].clone();
+
+        assert_eq!(
+            head(&relative_weighted(
+                pairs(),
+                3,
+                true,
+                true,
+                Some(&q_coords),
+                Some(&states),
+                Some(epoch),
+            )),
+            Some("boost".to_string()),
+            "the full importance x truth product must lift boost over plain"
+        );
+        assert_eq!(
+            head(&relative_weighted(
+                pairs(),
+                3,
+                true,
+                false,
+                None,
+                None,
+                None
+            )),
+            Some("plain".to_string()),
+            "importance alone is not enough"
+        );
+        assert_eq!(
+            head(&relative_weighted(
+                pairs(),
+                3,
+                false,
+                true,
+                Some(&q_coords),
+                Some(&states),
+                Some(epoch),
+            )),
+            Some("plain".to_string()),
+            "the truth factor alone is not enough"
+        );
+        assert_eq!(
+            head(&relative_weighted(
+                pairs(),
+                3,
+                false,
+                false,
+                None,
+                None,
+                None
+            )),
+            Some("plain".to_string()),
+            "and neither factor leaves the lane order alone"
+        );
+    }
+
+    /// At a lane's floor both multiplicative factors are inert, and under RRF
+    /// they were not. This is the concrete shape of the fusion change's stated
+    /// risk, pinned rather than endorsed.
+    ///
+    /// It is a consequence of the normalisation, not of the weighting code: a
+    /// relative score is min–max over the lane's own candidates, so the lane's
+    /// worst hit scores exactly `0.0` — documented, and the whole point of
+    /// calling the score relative — and `0.0 * anything` is `0.0`. Nothing can
+    /// lift that candidate, and the residual order is decided by `min_rank` and
+    /// then `chunk_id`.
+    ///
+    /// The same three pairs under rank-only RRF put `rich` *first*: its
+    /// `1/33 = 0.0303` floor is non-zero, so the 1.5625 product takes it to
+    /// `0.0474`, past `top`'s `1/31 = 0.0323`. Anything tuned against that band
+    /// — a weight, a threshold, a truth epoch policy — is tuned against
+    /// behaviour the default fusion no longer has in the tail of a lane.
+    ///
+    /// Only the tail: [`relative_score_composes_importance_then_truth`] above
+    /// shows the same two factors reordering freely where a lane has headroom.
+    #[test]
+    fn at_a_lanes_floor_both_factors_are_inert_under_relative_score() {
+        let q_coords = vec![1.0, 0.0];
+        let epoch = 5;
+        let mut states = HashMap::new();
+        states.insert(
+            "rich".to_string(),
+            NodeTruthState {
+                truth_alignment: vec![1.0, 0.0],
+                truth_epoch: epoch,
+            },
+        );
+
+        // `poor` and `rich` tie at the chunk lane's minimum similarity, so both
+        // normalise to 0.0 however they are weighted.
+        let pairs = || {
+            vec![
+                scored_pair_weighted("top", Some((0, 0.90)), None, 0.5),
+                scored_pair_weighted("poor", Some((1, 0.50)), None, 0.0),
+                scored_pair_weighted("rich", Some((2, 0.50)), None, 1.0),
+            ]
+        };
+        let floor_order = vec![
+            Some("top".to_string()),
+            Some("poor".to_string()),
+            Some("rich".to_string()),
+        ];
+
+        assert_eq!(
+            ids(&relative_weighted(
+                pairs(),
+                3,
+                false,
+                false,
+                None,
+                None,
+                None
+            )),
+            floor_order,
+            "precondition: unweighted, the two floor pairs fall to the min_rank tie-break"
+        );
+        assert_eq!(
+            ids(&relative_weighted(
+                pairs(),
+                3,
+                true,
+                true,
+                Some(&q_coords),
+                Some(&states),
+                Some(epoch),
+            )),
+            floor_order,
+            "a 0.0 fusion score absorbs every multiplicative factor: the full \
+             1.25 x 1.25 product cannot move a lane's worst hit"
+        );
+
+        // The same inputs under the fusion the factors were tuned against.
+        assert_eq!(
+            ids(&rank_chunk_summary_pairs(
+                pairs(),
+                3,
+                ChunkLaneFusion::ReciprocalRank,
+                true,
+                true,
+                Some(&q_coords),
+                Some(&states),
+                Some(epoch),
+            )),
+            vec![
+                Some("rich".to_string()),
+                Some("top".to_string()),
+                Some("poor".to_string()),
+            ],
+            "under RRF the same product lifts the same chunk from last to first"
         );
     }
 }

@@ -925,9 +925,35 @@ explicit per-lane knob is never capped). The effective defaults are:
 | `facts_top_k` | `facts_top_k` | `min(top_k, 10)`, else `5` | `facts_top_k` |
 | `max_edges_per_entity` | `max_edges_per_entity` | `10` | `max_edges_per_entity=10` |
 | `text_summaries_top_k` | `text_summaries_top_k` | `None` (no fallback) | `text_summaries_top_k=None` |
+| `chunk_lane_fusion` | `chunk_lane_fusion` | `"relative_score"` | **diverges** — Python is rank-only RRF (`"reciprocal_rank"`) |
+| `summary_lane_weight` | `summary_lane_weight` | `0.75` | no Python equivalent |
 | `use_importance_weight` | `use_importance_weight` | `true` | `use_importance_weight=True` |
 | `node_name` | `node_name` | `None` | reused query node filter |
 | `node_name_filter_operator` | `node_name_filter_operator` | `"OR"` | `"OR"` / `"AND"` |
+
+**Chunk-lane fusion.** `chunk_lane_fusion` chooses how the `DocumentChunk_text`
+lane and the `TextSummary_text` lane are combined:
+
+- `"relative_score"` (the default) normalises each lane's own similarities to
+  `[0, 1]` against that lane's own candidates and adds them, the summary lane
+  weighted by `summary_lane_weight`.
+- `"reciprocal_rank"` is Python's `rank_chunk_summary_pairs` verbatim — RRF over
+  ranks only, with the similarities discarded.
+
+The default diverges from Python deliberately. RRF's constant `k` is calibrated
+for candidate lists of thousands; these lists are `2 * chunks_top_k` and
+`text_summaries_top_k` long, so the spread across a whole lane is smaller than
+the bonus for appearing in the other one, and "present in both lanes" outranks
+"similar to the query". Measured over 15 probe questions on *Alice in
+Wonderland* across two chunkings and two summary-lane widths, relative-score
+fusion at the default weight raised MRR in all four configurations (0.35–0.54 →
+0.47–0.56) and lowered gold-passage-in-context in none. Set
+`chunk_lane_fusion = "reciprocal_rank"` to get the Python ranking back.
+
+`summary_lane_weight` applies only to `"relative_score"`; the chunk lane always
+weighs `1.0`. The default of `0.75` is the centre of the measured plateau — the
+summary lane searches a *derivative* of the same documents the chunk lane
+searches, so it is a second opinion rather than an independent channel.
 
 **Reserved (Phase 2, inert).** These keys are parsed and stored but have no
 effect in Phase 1 — passing `true` must behave identically to the default:

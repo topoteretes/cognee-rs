@@ -143,6 +143,51 @@ public final class Cognee implements AutoCloseable {
         return f.thenApply(s -> null);
     }
 
+    /**
+     * Make what has been written durable, without closing anything.
+     *
+     * <p>The counterpart to {@link #close()}, and deliberately not a substitute
+     * for it in either direction. An embedded graph store keeps committed
+     * transactions in an un-checkpointed write-ahead log and only folds them
+     * into its database file at a checkpoint; until then a process that dies
+     * without replaying that log comes back with an empty graph. This forces
+     * the checkpoint. The handle stays warm and every component keeps serving.
+     *
+     * <p>Safe on a UI lifecycle callback, and unlike every other op that is
+     * meant literally. It never builds the engine — a handle that was never
+     * warmed completes immediately having touched nothing — it never reports a
+     * skipped checkpoint as a failure, because a caller that merely backgrounded
+     * an app can do nothing about one, and it is <em>the one op that does not
+     * throw after {@link #close()}</em>: a closed handle completes with
+     * {@code {"flushed":false,"warm":false}} rather than an
+     * {@code IllegalStateException}, exactly as the Rust op does for a closed
+     * handle it can see. A lifecycle callback racing a teardown is the normal
+     * case here, not a programming error, and it must not have to guard for it.
+     *
+     * <p>The returned JSON is {@code {"flushed":bool,"warm":bool,"ms":long}}; a
+     * caller that does not care need not wait on the future at all. Read
+     * {@code flushed} rather than "the future completed": it is {@code true}
+     * only when the store really is checkpointed, and {@code false} — with no
+     * exception — whenever the checkpoint was skipped or failed.
+     *
+     * <p>Use this, not {@code close()}, for "the app is going away for now".
+     * Closing a handle out from under an in-flight pipeline shuts the database
+     * pool beneath it and can leave that run's dataset claimed for 24 hours.
+     */
+    public CompletableFuture<String> flush() {
+        CompletableFuture<String> f = new CompletableFuture<>();
+        try {
+            dispatchVoid(h -> Native.flush(h, f));
+        } catch (IllegalStateException closed) {
+            // The handle is gone, so nothing is buffered behind it and there is
+            // nothing to checkpoint — the same soft answer the Rust op gives for
+            // a handle it can see is closed, rather than a throw the caller
+            // would have to catch on a callback that must not fail.
+            f.complete("{\"flushed\":false,\"warm\":false,\"ms\":0}");
+        }
+        return f;
+    }
+
     /** The email-derived owner id (warms lazily if needed). */
     public CompletableFuture<String> ownerId() {
         CompletableFuture<String> f = new CompletableFuture<>();
@@ -223,6 +268,23 @@ public final class Cognee implements AutoCloseable {
         CompletableFuture<String> f = new CompletableFuture<>();
         dispatchVoid(h -> Native.recall(h, query, Options.jsonOf(opts), f));
         return f.thenApply(json -> new RecallResult(ai.cognee.internal.Json.tree(json)));
+    }
+
+    // --- classifyIntent ---
+    /**
+     * Ask the configured LLM whether {@code message} is a question to answer
+     * or a note to keep.
+     *
+     * <p>Uses the structured-output path rather than tool calling, because
+     * the {@code Llm} trait this binding sits on has no tool-calling surface.
+     * The verdict is checked against the two permitted values on the Rust
+     * side; see {@link IntentResult} for what happens when the model returns
+     * something else.
+     */
+    public CompletableFuture<IntentResult> classifyIntent(String message) {
+        CompletableFuture<String> f = new CompletableFuture<>();
+        dispatchVoid(h -> Native.classifyIntent(h, message, f));
+        return f.thenApply(json -> new IntentResult(ai.cognee.internal.Json.tree(json)));
     }
 
     // --- remember ---
