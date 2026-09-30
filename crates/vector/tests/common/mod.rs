@@ -117,6 +117,121 @@ pub async fn test_upsert_overwrites(db: &dyn VectorDB) {
     assert_eq!(results[0].metadata.get("v"), Some(&json!(2)));
 }
 
+/// Regression test for the in-batch duplicate-id upsert failure.
+///
+/// Point ids are content-addressed (UUID v5 of the content) and the cognify
+/// indexer emits **one point per occurrence** — one per edge for the
+/// `EdgeType_relationship_name` index. A corpus with thousands of edges over a
+/// small relationship vocabulary therefore hands `index_points` a list in which
+/// the same id appears many times. The pgvector adapter batched that list into
+/// 100-row `INSERT … ON CONFLICT (id) DO UPDATE` statements without folding the
+/// repeats, and Postgres aborts any statement whose conflict target is touched
+/// twice:
+///
+/// ```text
+/// Storage error: Execution Error: error returned from database:
+/// ON CONFLICT DO UPDATE command cannot affect row a second time
+/// ```
+///
+/// Observed in production on `Storage=aurora` cells cognifying *Alice's
+/// Adventures in Wonderland*: extraction produced 800 nodes / 2166 edges, the
+/// index write threw, and the pipeline's rollback sweep deleted all of it —
+/// every later search then answered from an empty graph. The same corpus on
+/// LanceDB passed, so the divergence was purely in the vector write.
+///
+/// The list below is deliberately larger than the adapter's `BATCH_SIZE` (100)
+/// and repeats ids **both inside a single chunk and across chunk boundaries**:
+/// 250 points over 60 distinct ids means id *k* appears at indices *k*, *k*+60,
+/// *k*+120, *k*+180 (and *k*+240 for *k* < 10), so chunk 0 alone (indices 0..99)
+/// already contains ids 0..39 twice. A duplicate pair in a five-point list would
+/// never reach the failing statement.
+///
+/// Each occurrence carries a different `dataset_id`, so the assertions also pin
+/// the folding *semantics*: one row per distinct id, with the duplicates'
+/// dataset membership unioned rather than last-one-wins. Run against every
+/// adapter, since the three must agree on this input.
+pub async fn test_index_points_folds_duplicate_ids_within_a_batch(db: &dyn VectorDB) {
+    const DISTINCT: usize = 60;
+    const TOTAL: usize = 250;
+
+    db.create_collection("DupBatch", "text", 3).await.unwrap();
+
+    // Same id ⇒ same content ⇒ same vector, as the content-addressed caller
+    // would produce; only the dataset tag varies between occurrences.
+    let vector_for = |k: usize| {
+        let f = k as f32;
+        vec![1.0 + f, 2.0 + f, 3.0 + f]
+    };
+    let id_for = |k: usize| Uuid::from_u128(0xD0_0000 + k as u128);
+
+    let points: Vec<VectorPoint> = (0..TOTAL)
+        .map(|i| {
+            let k = i % DISTINCT;
+            let occurrence = i / DISTINCT;
+            VectorPoint::new(id_for(k), vector_for(k))
+                .with_metadata("text", json!(format!("relationship-{k}")))
+                .with_metadata("dataset_id", json!(format!("dup-batch-ds-{occurrence}")))
+        })
+        .collect();
+
+    // On the unfixed adapter this is where it blows up.
+    db.index_points("DupBatch", "text", &points)
+        .await
+        .expect("a batch repeating content-addressed ids must upsert, not abort");
+
+    assert_eq!(
+        db.collection_size("DupBatch", "text").await.unwrap(),
+        DISTINCT,
+        "{TOTAL} points over {DISTINCT} distinct ids must collapse to {DISTINCT} rows"
+    );
+
+    let ids: Vec<Uuid> = (0..DISTINCT).map(id_for).collect();
+    let rows = db.retrieve("DupBatch", "text", &ids).await.unwrap();
+    assert_eq!(
+        rows.len(),
+        DISTINCT,
+        "every distinct id must be retrievable"
+    );
+
+    for row in &rows {
+        let k = ids
+            .iter()
+            .position(|id| *id == row.id)
+            .expect("retrieve must not invent ids that were never indexed");
+        assert_eq!(
+            row.metadata.get("text"),
+            Some(&json!(format!("relationship-{k}"))),
+            "row {k} kept the wrong point's metadata"
+        );
+
+        // id k occurs once per full sweep of the 60 distinct ids; the tail of
+        // the list gives the first 10 ids a fifth occurrence.
+        let occurrences = if k < TOTAL % DISTINCT {
+            TOTAL / DISTINCT + 1
+        } else {
+            TOTAL / DISTINCT
+        };
+        let expected: Vec<String> = (0..occurrences)
+            .map(|o| format!("dup-batch-ds-{o}"))
+            .collect();
+        let members: Vec<String> = row
+            .metadata
+            .get("dataset_ids")
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert_eq!(
+            members, expected,
+            "row {k} must carry the union of every duplicate's dataset membership, \
+             oldest first — a naive last-one-wins fold would leave only the last"
+        );
+    }
+}
+
 // -- search -----------------------------------------------------------------
 
 pub async fn test_index_and_search(db: &dyn VectorDB) {

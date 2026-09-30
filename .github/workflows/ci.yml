@@ -945,10 +945,11 @@ jobs:
       - name: Assert the suite really executed
         run: |
           bash scripts/ci/assert_pg_suite_ran.sh --label PgVector \
-            --log pgvector-integration.log --min-tests 21 \
+            --log pgvector-integration.log --min-tests 22 \
             --log pgvector-lib.log         --min-tests 1 \
             --log pgvector-spans.log       --min-tests 1 \
             --log pgvector-close.log --min-tests 2 \
+            --require-test test_index_points_folds_duplicate_ids_within_a_batch \
             --require-test pgvector_coexists_with_relational_migrator_in_shared_db \
             --require-test pgvector_purges_legacy_row_from_default_table_on_upgrade \
             --require-test upsert_emits_pgvector_span \

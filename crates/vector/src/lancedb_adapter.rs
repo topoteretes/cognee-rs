@@ -37,7 +37,7 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::error::{VectorDBError, VectorDBResult};
-use crate::models::{SearchResult, VectorPoint};
+use crate::models::{SearchResult, VectorPoint, dedup_points_by_id, dedup_points_by_id_last_wins};
 use crate::vector_db_trait::VectorDB;
 use crate::zero_norm::{warn_zero_norm_points, warn_zero_norm_query};
 
@@ -319,6 +319,13 @@ impl VectorDB for LanceDbAdapter {
             .execute()
             .await
             .map_err(map_lance_err)?;
+        // Fold repeated ids first. This upsert is delete-then-add and the table
+        // has no primary key, so a repeated id would land as several physical
+        // rows sharing one id — the same input pgvector rejects outright.
+        // Folding keeps the three adapters agreeing on one row per distinct id,
+        // with the duplicates' dataset membership unioned rather than dropped.
+        let points = &dedup_points_by_id(points);
+
         // Upsert by id so re-indexing existing points replaces them.
         let id_values: Vec<String> = points
             .iter()
@@ -411,7 +418,9 @@ impl VectorDB for LanceDbAdapter {
 
         // By-id delete + add = full replace. Unlike `index_points`, we do NOT
         // read + union prior dataset membership; each raw point is written
-        // verbatim (its id already scopes it).
+        // verbatim (its id already scopes it) — hence the last-wins fold, which
+        // still keeps a repeated id from landing as two physical rows.
+        let points = &dedup_points_by_id_last_wins(points);
         let id_values: Vec<String> = points
             .iter()
             .map(|p| {
@@ -839,6 +848,57 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].id, id);
         assert_eq!(results[0].metadata.get("kind").unwrap(), &json!("v2"));
+    }
+
+    /// Parity with the pgvector in-batch duplicate-id fix. LanceDB tables have
+    /// no primary key and this upsert is delete-then-add, so before the fold an
+    /// id repeated in one call landed as several physical rows sharing that id
+    /// — no error, just a silently corrupt table — where pgvector aborted the
+    /// statement outright. Both must now end at one row per distinct id with
+    /// the duplicates' dataset membership unioned.
+    #[tokio::test]
+    async fn index_points_folds_ids_repeated_within_one_batch() {
+        let (adapter, _dir) = fresh_adapter().await;
+        adapter.create_collection("Chunk", "text", 2).await.unwrap();
+
+        let id = Uuid::new_v4();
+        let other = Uuid::new_v4();
+        let tagged = |id: Uuid, ds: &str| {
+            point(id, vec![1.0, 0.0], "v1").with_metadata("dataset_id", json!(ds))
+        };
+        adapter
+            .index_points(
+                "Chunk",
+                "text",
+                &[
+                    tagged(id, "ds-a"),
+                    tagged(other, "ds-a"),
+                    tagged(id, "ds-b"),
+                    tagged(id, "ds-c"),
+                ],
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            adapter.collection_size("Chunk", "text").await.unwrap(),
+            2,
+            "three occurrences of one id must not become three rows"
+        );
+
+        let rows = adapter.retrieve("Chunk", "text", &[id]).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        let members: Vec<String> = rows[0]
+            .metadata
+            .get(crate::models::DATASET_IDS_KEY)
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert_eq!(members, vec!["ds-a", "ds-b", "ds-c"]);
     }
 
     #[tokio::test]

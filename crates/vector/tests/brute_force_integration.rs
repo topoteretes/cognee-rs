@@ -117,6 +117,16 @@ async fn brute_force_end_to_end_search_and_prune() {
     assert!(db.list_collections().await.unwrap().is_empty());
 }
 
+// -- duplicate-id batch contract (shared helper) ----------------------------
+
+/// Parity check for the pgvector in-batch duplicate-id fix: the default OSS
+/// adapter must reach the same end state on the same input. Runs on every lane
+/// (no Postgres, no network).
+#[tokio::test]
+async fn brute_force_index_points_folds_duplicate_ids_within_a_batch() {
+    common::test_index_points_folds_duplicate_ids_within_a_batch(&BruteForceVectorDB::new()).await;
+}
+
 // -- retrieve contract (shared helpers) -------------------------------------
 
 #[tokio::test]

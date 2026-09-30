@@ -42,7 +42,7 @@ use cognee_utils::tracing_keys::{
 };
 
 use crate::error::{VectorDBError, VectorDBResult};
-use crate::models::{SearchResult, VectorPoint};
+use crate::models::{SearchResult, VectorPoint, dedup_points_by_id, dedup_points_by_id_last_wins};
 use crate::vector_db_trait::{VectorDB, VectorIndexBackfill};
 use crate::zero_norm::{warn_zero_norm_points, warn_zero_norm_query, warn_zero_norm_query_batch};
 
@@ -914,6 +914,20 @@ impl VectorDB for PgVectorAdapter {
         // rows score and sort unusably once written.
         warn_zero_norm_points("pgvector", &coll, points);
 
+        // Fold repeated ids together BEFORE chunking. Point ids are
+        // content-addressed and the caller emits one point per occurrence (one
+        // per edge for `EdgeType_relationship_name`), so a corpus with many
+        // edges over a small relationship vocabulary repeats an id inside a
+        // single chunk — and Postgres aborts the whole statement with
+        // "ON CONFLICT DO UPDATE command cannot affect row a second time" when
+        // the conflict target is touched twice in one command. Folding before
+        // `chunks()` (rather than per chunk) also collapses ids that straddle a
+        // chunk boundary, so each distinct id is written exactly once.
+        // `dedup_points_by_id` unions the duplicates' dataset membership rather
+        // than letting the last one win outright; the union against what is
+        // already stored happens below, per chunk.
+        let points = dedup_points_by_id(points);
+
         // Batch upsert in chunks to stay within parameter limits.
         for chunk in points.chunks(BATCH_SIZE) {
             // Point IDs are content-addressed, so the same point is re-indexed
@@ -1030,6 +1044,14 @@ impl VectorDB for PgVectorAdapter {
             self.create_collection(data_type, field_name, expected_dim)
                 .await?;
         }
+
+        // Same in-batch fold as `index_points`: a repeated id inside one
+        // multi-row INSERT makes Postgres abort the statement with "ON CONFLICT
+        // DO UPDATE command cannot affect row a second time". Raw upsert writes
+        // system-owned collections whose ids are far less likely to repeat, but
+        // the statement shape is identical, so the exposure is too. Last-wins
+        // rather than the unioning fold: this path stores metadata verbatim.
+        let points = dedup_points_by_id_last_wins(points);
 
         // Batched upsert. Unlike `index_points`, we do NOT read + union prior
         // dataset membership via `fetch_metadata`; the incoming metadata is

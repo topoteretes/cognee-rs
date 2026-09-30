@@ -75,6 +75,7 @@ pgvector_test!(test_index_and_collection_size);
 pgvector_test!(test_empty_points_index);
 pgvector_test!(test_dimension_validation);
 pgvector_test!(test_upsert_overwrites);
+pgvector_test!(test_index_points_folds_duplicate_ids_within_a_batch);
 pgvector_test!(test_index_and_search);
 pgvector_test!(test_search_returns_top_k);
 pgvector_test!(test_metadata_preserved);
