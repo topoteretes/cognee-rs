@@ -10,6 +10,42 @@ use uuid::Uuid;
 
 use crate::graph_integration::{GraphEdgePair, GraphNodePair};
 
+/// Fold a list of freshly built triplets down to one per **point id**, picking
+/// the survivor deterministically (SDK-708, the `Triplet_text` half).
+///
+/// `Triplet::new` hashes `source_id + relationship_name + target_id` through
+/// the same lower-case / spaces→underscores / strip-apostrophes normalization
+/// the other content-addressed ids use, but the embedded `text` keeps the
+/// relation's **raw** spelling. Nothing upstream normalizes it either: the edge
+/// dedup key (`GraphEdgePair::dedup_key`) is the raw triple, so
+/// `(A, B, "works at")` and `(A, B, "Works At")` both survive as edges and yield
+/// two triplets carrying one identical id — with *different* embedding vectors,
+/// `text` and `relationship` metadata.
+///
+/// Emitting both into one `index_points` batch is the id-collision hazard:
+/// pgvector rejects a multi-row `INSERT … ON CONFLICT (id) DO UPDATE` that
+/// touches a row twice, and since the adapter-side fold landed (#256) one of the
+/// two is instead dropped silently, with batch order deciding which. Folding
+/// here makes the choice the producer's, and makes it reproducible.
+///
+/// Survivor rule: lexicographically smallest `text`, tie-broken on
+/// `relationship_name` — the same "smallest spelling wins" rule
+/// `build_edge_types` applies to `EdgeType`, so the two collections agree about
+/// which spelling of a relation is canonical. The sort also removes the
+/// non-determinism inherited from the input order, which reaches here from a
+/// `HashMap::into_values()` upstream.
+pub(crate) fn fold_triplets_by_id(mut triplets: Vec<Triplet>) -> Vec<Triplet> {
+    triplets.sort_by(|a, b| {
+        a.id.cmp(&b.id)
+            .then_with(|| a.text.cmp(&b.text))
+            .then_with(|| a.relationship_name.cmp(&b.relationship_name))
+    });
+    // Equal ids are now adjacent; `dedup_by` keeps the first of each run, which
+    // the sort above made the smallest `(text, relationship_name)`.
+    triplets.dedup_by(|a, b| a.id == b.id);
+    triplets
+}
+
 /// Create triplets from graph nodes and edges.
 ///
 /// Each triplet combines:
@@ -137,7 +173,9 @@ pub fn create_triplets_from_graph(
         );
     }
 
-    triplets
+    // One row per point id before the caller batches these into
+    // `index_points("Triplet", "text", …)` — see [`fold_triplets_by_id`].
+    fold_triplets_by_id(triplets)
 }
 
 #[cfg(test)]
@@ -168,6 +206,82 @@ mod tests {
             entity,
             entity_type,
         }
+    }
+
+    /// SDK-708 (`Triplet_text` half): edges whose `relationship_name` differs
+    /// only in case, spacing or apostrophes collapse onto one triplet point id,
+    /// so exactly one triplet may leave the producer — and which one must not
+    /// depend on the order the edges happen to arrive in.
+    ///
+    /// Before the fold, all three edges below produced a triplet carrying the
+    /// id `uuid5(OID, "{src}works_at{tgt}")`, and all three went into one
+    /// `index_points("Triplet", "text", …)` batch with *different* embedding
+    /// text. pgvector rejected the batch outright; every other backend kept
+    /// whichever the batch order left last.
+    #[test]
+    fn triplets_fold_on_derived_id_deterministically() {
+        let source = create_test_entity("Alice", "A person");
+        let target = create_test_entity("Wonderland Ltd", "A company");
+        let nodes = [source.clone(), target.clone()];
+
+        let spellings = ["works at", "Works At", "works_at"];
+        let make_edges = |rotation: usize| -> Vec<GraphEdgePair> {
+            (0..spellings.len())
+                .map(|i| GraphEdgePair {
+                    source_entity_id: source.entity.base.id,
+                    target_entity_id: target.entity.base.id,
+                    relationship_name: spellings[(i + rotation) % spellings.len()].to_string(),
+                    properties: HashMap::new(),
+                })
+                .collect()
+        };
+
+        let mut survivors = std::collections::HashSet::new();
+        for rotation in 0..spellings.len() {
+            let triplets = create_triplets_from_graph(&nodes, &make_edges(rotation));
+
+            assert_eq!(
+                triplets.len(),
+                1,
+                "three spellings of one relation must yield one triplet, got {:?}",
+                triplets
+                    .iter()
+                    .map(|t| (t.id, t.text.as_str()))
+                    .collect::<Vec<_>>()
+            );
+            survivors.insert(triplets[0].text.clone());
+        }
+
+        assert_eq!(
+            survivors.len(),
+            1,
+            "edge arrival order changed the embedded triplet text: {survivors:?}"
+        );
+        // Lexicographically smallest text wins, matching `build_edge_types`.
+        assert_eq!(
+            survivors.iter().next().map(String::as_str),
+            Some("Alice: A person-\u{203a}Works At-\u{203a}Wonderland Ltd: A company")
+        );
+    }
+
+    /// Relations that normalize *differently* must keep their own triplets —
+    /// the fold collapses collisions, it does not merge distinct relations.
+    #[test]
+    fn triplets_with_distinct_relations_are_not_folded() {
+        let source = create_test_entity("Alice", "A person");
+        let target = create_test_entity("Wonderland Ltd", "A company");
+        let edges: Vec<GraphEdgePair> = ["works at", "founded"]
+            .iter()
+            .map(|rel| GraphEdgePair {
+                source_entity_id: source.entity.base.id,
+                target_entity_id: target.entity.base.id,
+                relationship_name: (*rel).to_string(),
+                properties: HashMap::new(),
+            })
+            .collect();
+
+        let triplets = create_triplets_from_graph(&[source, target], &edges);
+        assert_eq!(triplets.len(), 2);
     }
 
     #[test]

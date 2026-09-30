@@ -2322,33 +2322,20 @@ pub async fn add_data_points(
     // the structural edges' stamped sentences get rows here too — which is
     // what lets a `"Document chunk mentions …"` edge be query-ranked and
     // surface as a fact.
-    let mut edge_type_counts: HashMap<String, i32> = HashMap::new();
     let structural_texts = structural_edges.iter().map(|(_, _, relationship, props)| {
         EdgeType::retrieval_text(
             props.get("edge_text").and_then(serde_json::Value::as_str),
             relationship,
         )
     });
-    for edge_text in input
-        .edges
-        .iter()
-        .map(edge_retrieval_text)
-        .chain(structural_texts)
-    {
-        if edge_text.is_empty() {
-            continue;
-        }
-        *edge_type_counts.entry(edge_text).or_insert(0) += 1;
-    }
-
-    let mut edge_types: Vec<EdgeType> = edge_type_counts
-        .into_iter()
-        .map(|(text, count)| {
-            let mut et = EdgeType::new_deterministic(&text, Some(input.dataset_id));
-            et.set_count(count);
-            et
-        })
-        .collect();
+    let mut edge_types = build_edge_types(
+        input
+            .edges
+            .iter()
+            .map(edge_retrieval_text)
+            .chain(structural_texts),
+        input.dataset_id,
+    );
 
     // Pre-stamp freshly-built EdgeType DataPoints at construction time so the
     // `source_*` provenance keys are populated before they are vector-indexed
@@ -3365,6 +3352,86 @@ fn edge_retrieval_text(edge_pair: &GraphEdgePair) -> String {
         edge_pair.properties.get("edge_text").map(String::as_str),
         &edge_pair.relationship_name,
     )
+}
+
+/// Fold a run's edge retrieval texts into one [`EdgeType`] DataPoint per
+/// **derived point id**, summing the counts of every text that collapses onto
+/// that id (port of Python's `create_edge_type_datapoints`, SDK-708).
+///
+/// Counting by raw text alone is not enough. `EdgeType::deterministic_id` runs
+/// the text through `normalize_identifier` (lower-case, spaces→underscores,
+/// apostrophes stripped), and nothing upstream normalises the LLM's
+/// `relationship_name` before it reaches the graph
+/// (`graph_integration/expansion.rs` stores the raw string). One cognify run
+/// spans many chunks, so `"is a"`, `"Is A"` and `"is_a"` routinely arrive from
+/// different chunks of the same document and produce **three** DataPoints
+/// carrying **one** id, all handed to a single `index_points` batch:
+///
+/// * pgvector writes a batch as one multi-row `INSERT … ON CONFLICT (id) DO
+///   UPDATE`, which Postgres rejects outright when a row repeats (SQLSTATE
+///   21000, "ON CONFLICT DO UPDATE command cannot affect row a second time").
+///   That aborted the whole upsert and, upstream, rolled the run's graph writes
+///   back.
+/// * Since the adapter-side fold landed (#256) nothing errors, but only one
+///   occurrence survives on every backend and `number_of_edges` then holds just
+///   that one spelling's share of the count instead of the total.
+///
+/// So the fold happens here, at the producer, where the counts are still
+/// available to add up. This mirrors the `first_seen` collapse in
+/// [`crate::edge_reindex`] — the other writer of
+/// `EdgeType_relationship_name` — deliberately: the backfill tool repairs rows
+/// this writer failed to write, so the two must agree on both the surviving
+/// text and the count, or a repair would silently rewrite a row to a different
+/// value than cognify produced.
+///
+/// Determinism: counts accumulate in a `BTreeMap`, so the texts are folded in
+/// lexicographic order and the surviving `relationship_name` is the
+/// lexicographically smallest spelling — never `HashMap` iteration order, which
+/// would let the persisted name and the embedded vector vary from run to run
+/// over identical input.
+///
+/// Divergence from Python, stated deliberately: Python's
+/// `create_edge_type_datapoints` (`index_graph_edges.py`) counts with
+/// `Counter(edge_texts)` keyed on the raw text and has the same collision;
+/// whichever spelling its adapter-side `deduped_by_id` loop happens to overwrite
+/// last is the count that persists. `number_of_edges` is write-only in both
+/// SDKs (no retriever, scorer or search path reads it), so summing costs no
+/// observable parity, while matching Python would put this writer at odds with
+/// `edge_reindex`. See the PR for the full argument.
+fn build_edge_types<I>(texts: I, dataset_id: Uuid) -> Vec<EdgeType>
+where
+    I: IntoIterator<Item = String>,
+{
+    let mut counts_by_text: BTreeMap<String, i32> = BTreeMap::new();
+    for edge_text in texts {
+        if edge_text.is_empty() {
+            continue;
+        }
+        *counts_by_text.entry(edge_text).or_insert(0) += 1;
+    }
+
+    // `slot_of` maps a derived id to the index it already occupies in `folded`.
+    // The index is recorded as the entry is pushed and `folded` only ever grows,
+    // so every stored index stays in bounds — no lookup here can panic.
+    let mut slot_of: HashMap<Uuid, usize> = HashMap::with_capacity(counts_by_text.len());
+    let mut folded: Vec<EdgeType> = Vec::with_capacity(counts_by_text.len());
+    for (text, count) in counts_by_text {
+        let id = EdgeType::deterministic_id(&text);
+        match slot_of.get(&id) {
+            Some(&idx) => {
+                let existing: &mut EdgeType = &mut folded[idx];
+                existing.set_count(existing.count().saturating_add(count));
+            }
+            None => {
+                slot_of.insert(id, folded.len());
+                let mut edge_type = EdgeType::new_deterministic(&text, Some(dataset_id));
+                edge_type.set_count(count);
+                folded.push(edge_type);
+            }
+        }
+    }
+
+    folded
 }
 
 /// Build minimal edge properties for graph storage.
@@ -5462,10 +5529,18 @@ async fn index_data_points(
             // edge's retrieval text via the source edges, then look up the
             // EdgeType by that text — so the provenance copy survives the
             // Part-3 keying change even when edges carry a description.
-            let edge_type_by_text: std::collections::HashMap<&str, &EdgeType> = edge_types
-                .iter()
-                .map(|et| (et.relationship_name.as_str(), et))
-                .collect();
+            //
+            // The lookup is keyed on the EdgeType's **derived point id**, not
+            // on its `relationship_name`, because `build_edge_types` folds
+            // spellings that normalize alike onto one DataPoint (SDK-708):
+            // only one of `"is a"` / `"Is A"` / `"is_a"` survives into
+            // `edge_types`, so a raw-text key would miss for every edge that
+            // spelled the relation differently from the survivor and silently
+            // drop that triplet's `source_*` provenance. Routing both sides
+            // through `deterministic_id` makes the lookup follow the same
+            // collapse the writer applied.
+            let edge_type_by_id: std::collections::HashMap<Uuid, &EdgeType> =
+                edge_types.iter().map(|et| (et.base.id, et)).collect();
             let edge_text_by_triple: std::collections::HashMap<(Uuid, Uuid, &str), String> = edges
                 .iter()
                 .map(|e| {
@@ -5501,7 +5576,8 @@ async fn index_data_points(
                             triplet.target_entity_id,
                             triplet.relationship_name.as_str(),
                         ))
-                        .and_then(|text| edge_type_by_text.get(text.as_str()));
+                        .filter(|text| !text.is_empty())
+                        .and_then(|text| edge_type_by_id.get(&EdgeType::deterministic_id(text)));
                     if let Some(edge_type) = edge_type {
                         for (k, v) in edge_type.base.vector_metadata() {
                             if matches!(
@@ -6679,6 +6755,164 @@ mod tests {
     use crate::graph_integration::expand_with_nodes_and_edges;
     use cognee_models::{DataPoint, Entity, EntityType};
     use cognee_storage::MockStorage;
+
+    /// SDK-708: retrieval texts that differ only in case, spacing or
+    /// apostrophes collapse onto one `EdgeType` point id, and the counts of
+    /// every spelling must be **summed** onto the survivor.
+    ///
+    /// Before the producer-side fold, `edge_type_counts` was a
+    /// `HashMap<String, i32>` keyed on the raw text, so these five spellings
+    /// produced five DataPoints carrying one identical UUID. pgvector aborted
+    /// the batch outright (SQLSTATE 21000) and every other backend kept exactly
+    /// one of them, leaving `number_of_edges` holding that spelling's share —
+    /// `3`, `2`, `4`, `1` or `5` depending on iteration order — instead of the
+    /// true `15`.
+    #[test]
+    fn edge_types_fold_on_derived_id_and_sum_counts() {
+        let dataset = Uuid::new_v4();
+        let mut texts: Vec<String> = Vec::new();
+        for (text, count) in [
+            ("is a", 3),
+            ("Is A", 2),
+            ("is_a", 4),
+            ("IS  A", 1), // two spaces: normalizes to `is__a`, a *different* id
+            ("Is a", 5),
+        ] {
+            for _ in 0..count {
+                texts.push(text.to_string());
+            }
+        }
+
+        let edge_types = build_edge_types(texts, dataset);
+
+        // `is a` / `Is A` / `is_a` / `Is a` all normalize to `is_a`; the
+        // double-spaced spelling normalizes to `is__a` and stays separate.
+        assert_eq!(
+            edge_types.len(),
+            2,
+            "expected one EdgeType per derived id, got {:?}",
+            edge_types
+                .iter()
+                .map(|et| (et.relationship_name.as_str(), et.count()))
+                .collect::<Vec<_>>()
+        );
+
+        let folded = edge_types
+            .iter()
+            .find(|et| et.base.id == EdgeType::deterministic_id("is a"))
+            .expect("the four `is_a` spellings must produce exactly one EdgeType");
+        assert_eq!(
+            folded.count(),
+            3 + 2 + 4 + 5,
+            "number_of_edges must be the sum over every spelling that collapses \
+             onto this id, not one spelling's share"
+        );
+
+        let distinct = edge_types
+            .iter()
+            .find(|et| et.base.id == EdgeType::deterministic_id("IS  A"))
+            .expect("a text that normalizes differently keeps its own EdgeType");
+        assert_eq!(distinct.count(), 1);
+
+        // No id may repeat: the whole vec goes into one `index_points` batch,
+        // and pgvector writes that as a single multi-row upsert.
+        let mut ids: Vec<Uuid> = edge_types.iter().map(|et| et.base.id).collect();
+        ids.sort();
+        let distinct_ids = ids.len();
+        ids.dedup();
+        assert_eq!(ids.len(), distinct_ids, "an id repeated within one batch");
+    }
+
+    /// The surviving spelling must be picked deterministically, so the
+    /// persisted `relationship_name` — and therefore the embedded vector of the
+    /// `EdgeType_relationship_name` row — is reproducible across runs over
+    /// identical input. `HashMap` iteration order would not be.
+    #[test]
+    fn edge_type_fold_picks_a_deterministic_surviving_text() {
+        let dataset = Uuid::new_v4();
+        let spellings = ["Is A", "is a", "IS_A", "is_A"];
+
+        // Every permutation of arrival order must yield the same survivor.
+        let mut survivors: HashSet<String> = HashSet::new();
+        for rotation in 0..spellings.len() {
+            let texts: Vec<String> = (0..spellings.len())
+                .map(|i| spellings[(i + rotation) % spellings.len()].to_string())
+                .collect();
+            let edge_types = build_edge_types(texts, dataset);
+            assert_eq!(edge_types.len(), 1);
+            survivors.insert(edge_types[0].relationship_name.clone());
+            assert_eq!(edge_types[0].count(), 4);
+        }
+
+        assert_eq!(
+            survivors.len(),
+            1,
+            "arrival order changed the persisted relationship_name: {survivors:?}"
+        );
+        // Lexicographically smallest, mirroring `edge_reindex`'s cursor order.
+        assert_eq!(
+            survivors.iter().next().map(String::as_str),
+            Some("IS_A"),
+            "the survivor must be the lexicographically first spelling"
+        );
+    }
+
+    /// The triplet-provenance lookup in `generate_embeddings` must survive the
+    /// fold.
+    ///
+    /// That lookup maps a triplet's edge back to the `EdgeType` whose `source_*`
+    /// keys it inherits. It used to key on `EdgeType::relationship_name`, which
+    /// was safe only while *every* spelling had its own DataPoint. Once
+    /// `build_edge_types` collapses them, a raw-text key misses for every edge
+    /// that spelled the relation differently from the survivor, and the
+    /// triplet's provenance is silently dropped. Keying on the derived id
+    /// instead makes the lookup follow the same collapse — which is what this
+    /// pins.
+    #[test]
+    fn every_edge_text_resolves_to_its_folded_edge_type() {
+        let dataset = Uuid::new_v4();
+        let texts = ["Alice knows Bob", "alice knows bob", "ALICE KNOWS BOB"];
+        let edge_types = build_edge_types(texts.iter().map(|t| t.to_string()), dataset);
+        assert_eq!(edge_types.len(), 1, "all three spellings share one id");
+
+        let by_id: HashMap<Uuid, &EdgeType> =
+            edge_types.iter().map(|et| (et.base.id, et)).collect();
+        let by_text: HashMap<&str, &EdgeType> = edge_types
+            .iter()
+            .map(|et| (et.relationship_name.as_str(), et))
+            .collect();
+
+        for text in texts {
+            assert!(
+                by_id.contains_key(&EdgeType::deterministic_id(text)),
+                "id-keyed lookup must resolve {text:?} to the folded EdgeType"
+            );
+        }
+        // The old raw-text key resolves only the surviving spelling — the other
+        // two would silently lose their provenance.
+        assert_eq!(
+            texts.iter().filter(|t| by_text.contains_key(**t)).count(),
+            1,
+            "raw-text keying is expected to miss after the fold; that is why \
+             the lookup was moved onto the derived id"
+        );
+    }
+
+    /// Blank retrieval texts are dropped rather than counted, matching Python's
+    /// `create_edge_type_datapoints` (`if edge_text:`).
+    #[test]
+    fn edge_type_fold_drops_blank_texts() {
+        let dataset = Uuid::new_v4();
+        let texts = vec![
+            String::new(),
+            "knows".to_string(),
+            String::new(),
+            "knows".to_string(),
+        ];
+        let edge_types = build_edge_types(texts, dataset);
+        assert_eq!(edge_types.len(), 1);
+        assert_eq!(edge_types[0].count(), 2);
+    }
 
     /// Provenance edge ids must be derived from *sanitized* edge text.
     ///

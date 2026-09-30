@@ -89,7 +89,10 @@ pub async fn extract_triplets_from_graph_db(
         warn!(skipped, "Skipped edges (missing nodes or empty text)");
     }
 
-    Ok(triplets)
+    // memify writes into the same `Triplet`/`text` collection as cognify, so it
+    // needs the same producer-side fold — see
+    // [`crate::triplet_creation::fold_triplets_by_id`].
+    Ok(crate::triplet_creation::fold_triplets_by_id(triplets))
 }
 
 /// Read graph data, applying filters from config if present.
