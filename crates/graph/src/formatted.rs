@@ -16,6 +16,8 @@
 
 use uuid::Uuid;
 
+use std::{borrow::Cow, collections::HashMap};
+
 use crate::{GraphDBResult, GraphDBTrait};
 
 /// Fetch the formatted graph snapshot for a dataset.
@@ -45,9 +47,15 @@ pub async fn get_formatted_graph_data(
     dataset_id: Uuid,
     user_id: Uuid,
 ) -> GraphDBResult<serde_json::Value> {
-    let _ = (dataset_id, user_id);
+    let mut filters: HashMap<Cow<'static, str>, Vec<serde_json::Value>> = HashMap::new();
+    filters.insert(
+        Cow::Borrowed("dataset_id"),
+        vec![serde_json::json!(dataset_id.to_string())],
+    );
 
-    let (nodes, edges) = graph_db.get_graph_data().await?;
+    let (nodes, edges) = graph_db.get_filtered_graph_data(&filters).await?;
+
+    let _ = user_id;
 
     let node_values: Vec<serde_json::Value> = nodes
         .into_iter()
