@@ -16,8 +16,6 @@
 
 use uuid::Uuid;
 
-use std::{borrow::Cow, collections::HashMap};
-
 use crate::{GraphDBResult, GraphDBTrait};
 
 /// Fetch the formatted graph snapshot for a dataset.
@@ -28,8 +26,8 @@ use crate::{GraphDBResult, GraphDBTrait};
 /// branch — the Rust `GraphDBTrait` instance is already scoped to the caller's
 /// owner/tenant by construction (per `tenants.md §3`). The `dataset_id` and
 /// `user_id` parameters are accepted for API parity with the Python helper but
-/// are currently unused in the read path (matching how Python's helper also
-/// relies on the global context, not the parameters, to scope the query).
+/// only `dataset_id` is used here to select graph rows whose stored
+/// `belongs_to_set` membership includes that dataset.
 ///
 /// # Shape
 ///
@@ -47,23 +45,29 @@ pub async fn get_formatted_graph_data(
     dataset_id: Uuid,
     user_id: Uuid,
 ) -> GraphDBResult<serde_json::Value> {
-    let mut filters: HashMap<Cow<'static, str>, Vec<serde_json::Value>> = HashMap::new();
-    filters.insert(
-        Cow::Borrowed("dataset_id"),
-        vec![serde_json::json!(dataset_id.to_string())],
-    );
-
-    let (nodes, edges) = graph_db.get_filtered_graph_data(&filters).await?;
+    let (nodes, edges) = graph_db.get_graph_data().await?;
 
     let _ = user_id;
 
-    let node_values: Vec<serde_json::Value> = nodes
+    let dataset_id = dataset_id.to_string();
+    let filtered_nodes: Vec<_> = nodes
+        .into_iter()
+        .filter(|(_, node)| node_belongs_to_dataset(node, &dataset_id))
+        .collect();
+
+    let node_ids: std::collections::HashSet<String> = filtered_nodes
+        .iter()
+        .map(|(node_id, _)| node_id.clone())
+        .collect();
+
+    let node_values: Vec<serde_json::Value> = filtered_nodes
         .into_iter()
         .map(|(node_id, props)| format_node(&node_id, &props))
         .collect();
 
     let edge_values: Vec<serde_json::Value> = edges
         .into_iter()
+        .filter(|(source, target, _, _)| node_ids.contains(source) && node_ids.contains(target))
         .map(|(source, target, relationship_name, _props)| {
             serde_json::json!({
                 "source": source,
@@ -116,5 +120,25 @@ fn format_node(node_id: &str, props: &crate::NodeData) -> serde_json::Value {
         "label": label,
         "type": type_str,
         "properties": serde_json::Value::Object(properties_map),
+    })
+}
+
+fn node_belongs_to_dataset(node: &crate::NodeData, dataset_id: &str) -> bool {
+    let Some(serde_json::Value::Array(entries)) = node.get("belongs_to_set") else {
+        return false;
+    };
+
+    entries.iter().any(|entry| match entry {
+        serde_json::Value::String(value) => value == dataset_id,
+        serde_json::Value::Object(map) => {
+            map.get("id")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|value| value == dataset_id)
+                || map
+                    .get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|value| value == dataset_id)
+        }
+        _ => false,
     })
 }
