@@ -964,7 +964,10 @@ impl Settings {
         let graph_postgres_url = {
             #[cfg(feature = "pggraph")]
             {
-                if matches!(graph_provider.as_str(), "postgres" | "postgresql") {
+                if matches!(
+                    graph_provider.as_str(),
+                    "postgres" | "postgresql" | "evokoa"
+                ) {
                     Some(self.resolved_graph_postgres_url())
                 } else {
                     None
@@ -980,7 +983,7 @@ impl Settings {
         let vector_postgres_url = {
             #[cfg(feature = "pgvector")]
             {
-                if vector_provider == "pgvector" {
+                if matches!(vector_provider.as_str(), "pgvector" | "evokoa") {
                     Some(self.resolved_vector_postgres_url())
                 } else {
                     None

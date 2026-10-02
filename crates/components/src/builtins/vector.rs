@@ -9,6 +9,33 @@ use crate::context::BackendBuildContext;
 use crate::error::ComponentError;
 use crate::traits::VectorDbFactory;
 
+#[cfg(feature = "evokoa")]
+pub struct EvokoaVectorFactory;
+
+#[cfg(feature = "evokoa")]
+#[async_trait]
+impl VectorDbFactory for EvokoaVectorFactory {
+    fn provider(&self) -> &str {
+        "evokoa"
+    }
+
+    async fn build(&self, ctx: &BackendBuildContext) -> Result<Arc<dyn VectorDB>, ComponentError> {
+        let url = match ctx.vector_postgres_url.as_ref() {
+            Some(Ok(url)) => url,
+            Some(Err(cause)) => return Err(ComponentError::Config(cause.clone())),
+            None => {
+                return Err(ComponentError::Config(
+                    "vector_db_provider=evokoa requires a resolved PostgreSQL URL".into(),
+                ));
+            }
+        };
+        let adapter = cognee_evokoa::EvokoaVectorAdapter::new(url)
+            .await
+            .map_err(|e| ComponentError::VectorDb(format!("Evokoa pgContext init failed: {e}")))?;
+        Ok(Arc::new(adapter))
+    }
+}
+
 /// Postgres + pgvector backend. Consumes the caller-resolved
 /// [`BackendBuildContext::vector_postgres_url`].
 #[cfg(feature = "pgvector")]

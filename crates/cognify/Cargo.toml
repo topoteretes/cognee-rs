@@ -107,6 +107,7 @@ cognee-vector     = { path = "../vector", features = ["testing"] }
 cognee-database   = { path = "../database", features = ["sqlite"] }
 cognee-search     = { path = "../search" }
 cognee-test-utils = { path = "../test-utils" }
+cognee-evokoa     = { path = "../evokoa" }
 # `mock` enables the cassette record/replay clients (ReplayLlm/RecordingLlm) the
 # integration tests use to run offline against committed cassettes. Cargo unifies
 # this dev-dep with the mock-less [dependencies] entry into one test build, so

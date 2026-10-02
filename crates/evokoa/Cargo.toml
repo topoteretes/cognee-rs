@@ -1,0 +1,41 @@
+[package]
+name = "cognee-evokoa"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "pgGraph and pgContext database adapters for cognee"
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+sea-orm = { version = "1.1", features = [
+    "runtime-tokio-rustls",
+    "sqlx-postgres",
+    "with-json",
+    "with-uuid",
+    "postgres-array",
+] }
+cognee-graph = { path = "../graph", version = "0.2.0", features = ["postgres"] }
+cognee-vector = { path = "../vector", version = "0.2.0" }
+cognee-utils = { path = "../utils", version = "0.2.0" }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+serial_test.workspace = true
+cognee-test-utils = { path = "../test-utils" }
+
+[[test]]
+name = "live_smoke"
+path = "tests/live_smoke.rs"

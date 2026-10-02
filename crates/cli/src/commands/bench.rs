@@ -209,7 +209,7 @@ fn round3(value: f64) -> f64 {
 /// "N nodes < floor" message, while unreadable metrics fail the run with a
 /// distinct "metrics unreadable" message — rather than being coerced to a
 /// fabricated 0-node count that a parity comparison would read as real.
-async fn graph_counts(cm: &Arc<ComponentManager>) -> Option<(i64, i64)> {
+async fn graph_counts(cm: &Arc<ComponentManager>) -> Option<(i64, i64, usize)> {
     let graph_db = match cm.graph_db().await {
         Ok(db) => db,
         Err(error) => {
@@ -220,7 +220,20 @@ async fn graph_counts(cm: &Arc<ComponentManager>) -> Option<(i64, i64)> {
     match graph_db.get_graph_metrics(false).await {
         Ok(metrics) => {
             let get = |k: &str| metrics.get(k).and_then(|v| v.as_i64()).unwrap_or(0);
-            Some((get("node_count"), get("edge_count")))
+            let semantic_nodes = graph_db
+                .get_graph_data()
+                .await
+                .ok()?
+                .0
+                .iter()
+                .filter(|(_, properties)| {
+                    !matches!(
+                        properties.get("type").and_then(serde_json::Value::as_str),
+                        Some("TextDocument" | "DocumentChunk" | "TextSummary")
+                    )
+                })
+                .count();
+            Some((get("node_count"), get("edge_count"), semantic_nodes))
         }
         Err(error) => {
             warn!("graph metrics query failed: {error}");
@@ -294,6 +307,29 @@ pub fn run(args: BenchArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
         let cassette = args.mock_memories.clone().ok_or_else(|| {
             CliError::Validation("--mock-llm requires --mock-memories <cassette path>".to_string())
         })?;
+        let cassette_json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&cassette).map_err(|error| {
+                CliError::Runtime(format!(
+                    "Failed to read mock cassette '{cassette}': {error}"
+                ))
+            })?)
+            .map_err(|error| {
+                CliError::Validation(format!(
+                    "mock cassette '{cassette}' is invalid JSON: {error}"
+                ))
+            })?;
+        if let Some(recorded_model) = cassette_json.get("model").and_then(|value| value.as_str()) {
+            if let Some(requested_model) = args.llm_model.as_deref()
+                && requested_model != recorded_model
+            {
+                return Err(CliError::Validation(format!(
+                    "--llm-model '{requested_model}' does not match cassette model \
+                     '{recorded_model}'; mismatched models change automatic chunking and make \
+                     every replay lookup miss"
+                )));
+            }
+            cm.config().set_llm_model(recorded_model);
+        }
         cm.config().set_llm_mock(true);
         cm.config().set_llm_cassette(&cassette);
         // Deterministic mock embeddings (T5) so search is meaningful offline.
@@ -354,12 +390,22 @@ pub fn run(args: BenchArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
     // so the bench would run against (and clobber) the real configured backends
     // and fail when the DB lacks `?mode=rwc`. Redirect every on-disk backend
     // explicitly so each invocation is fully self-contained.
-    cm.config()
-        .set_relational_db_url(&format!("sqlite://{root_str}/cognee.db?mode=rwc"));
-    cm.config()
-        .set_graph_file_path(&format!("{root_str}/system/graph.ladybug"));
-    cm.config()
-        .set_vector_db_url(&format!("{root_str}/system/vectors"));
+    let uses_evokoa = cm
+        .settings()
+        .graph_database_provider
+        .eq_ignore_ascii_case("evokoa")
+        || cm
+            .settings()
+            .vector_db_provider
+            .eq_ignore_ascii_case("evokoa");
+    if !uses_evokoa {
+        cm.config()
+            .set_relational_db_url(&format!("sqlite://{root_str}/cognee.db?mode=rwc"));
+        cm.config()
+            .set_graph_file_path(&format!("{root_str}/system/graph.ladybug"));
+        cm.config()
+            .set_vector_db_url(&format!("{root_str}/system/vectors"));
+    }
 
     let owner_id = Uuid::parse_str(&cm.settings().default_user_id).map_err(|error| {
         CliError::Validation(format!(
@@ -388,6 +434,7 @@ pub fn run(args: BenchArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
             &memories,
             args.profile_dir.as_deref(),
             args.min_graph_nodes,
+            args.keep_data,
             BenchConfig {
                 llm_model,
                 embedding_model,
@@ -424,6 +471,7 @@ async fn run_phases(
     memories: &[Memory],
     profile_dir: Option<&str>,
     min_graph_nodes: u64,
+    keep_data: bool,
     config: BenchConfig,
 ) -> BenchResult {
     let n = memories.len();
@@ -489,8 +537,11 @@ async fn run_phases(
     // loudly instead of reporting a silent "success" over nothing.
     let counts = graph_counts(cm).await;
     match counts {
-        Some((node_count, edge_count)) => {
-            eprintln!("Graph after cognify: {node_count} nodes, {edge_count} edges");
+        Some((node_count, edge_count, semantic_nodes)) => {
+            eprintln!(
+                "Graph after cognify: {node_count} nodes, {edge_count} edges, \
+                 {semantic_nodes} extracted semantic nodes"
+            );
         }
         None => eprintln!("Graph after cognify: metrics unavailable"),
     }
@@ -499,7 +550,7 @@ async fn run_phases(
         match counts {
             // Genuinely-empty (or below-floor) graph: a stale cassette fell
             // through to the empty-graph fallback. Fail loudly.
-            Some((node_count, _)) if (node_count as u64) < floor => {
+            Some((node_count, _, _)) if (node_count as u64) < floor => {
                 let msg = format!(
                     "graph sanity: {node_count} nodes < floor {floor} (stale cassette / empty-graph fallback?)"
                 );
@@ -507,6 +558,13 @@ async fn run_phases(
                 status.cognify = format!("failed: {msg}");
             }
             // Healthy graph — guard passes.
+            Some((_, _, 0)) => {
+                let msg = "graph sanity: zero extracted semantic nodes; graph contains only \
+                           document/chunk/summary scaffold (stale cassette replay)"
+                    .to_string();
+                warn!("{msg}");
+                status.cognify = format!("failed: {msg}");
+            }
             Some(_) => {}
             // Metrics unreadable: we cannot confirm cognify produced a
             // non-empty graph. Fail rather than emit a fabricated 0/0 count
@@ -523,7 +581,7 @@ async fn run_phases(
     // `BenchResult` requires integer counts (Python parity schema). Unreadable
     // metrics are reported as 0/0, but the guard above has already flipped
     // cognify to "failed" in that case, so 0/0 never coincides with success.
-    let (node_count, edge_count) = counts.unwrap_or((0, 0));
+    let (node_count, edge_count, _) = counts.unwrap_or((0, 0, 0));
 
     // ── Search ───────────────────────────────────────────────────────────
     eprintln!("Phase 3: Running search query...");
@@ -563,24 +621,31 @@ async fn run_phases(
     // ── Dataset delete (populated) ───────────────────────────────────────
     // Runs last, so it measures deletion with nodes, edges and vectors all
     // present — the meaningful case, and what Python's Phase 4 measures.
-    eprintln!("Phase 4: Deleting the populated dataset...");
-    let (t_dataset_delete, dataset_delete_res) = timed_phase(
-        profile_dir,
-        "dataset_delete",
-        phase_dataset_delete(cm, owner_id, dataset_name),
-    )
-    .await;
-    if let Err(msg) = dataset_delete_res {
-        warn!("Dataset delete FAILED: {msg}");
-        status.dataset_delete = format!("failed: {msg}");
-    }
+    let t_dataset_delete = if keep_data {
+        eprintln!("Phase 4: Keeping populated dataset for follow-up searches.");
+        status.dataset_delete = "skipped (--keep-data)".to_string();
+        0.0
+    } else {
+        eprintln!("Phase 4: Deleting the populated dataset...");
+        let (elapsed, dataset_delete_res) = timed_phase(
+            profile_dir,
+            "dataset_delete",
+            phase_dataset_delete(cm, owner_id, dataset_name),
+        )
+        .await;
+        if let Err(msg) = dataset_delete_res {
+            warn!("Dataset delete FAILED: {msg}");
+            status.dataset_delete = format!("failed: {msg}");
+        }
+        elapsed
+    };
 
     let success = status.prune == PHASE_OK
         && status.db_setup == PHASE_OK
         && status.add == PHASE_OK
         && status.cognify == PHASE_OK
         && status.search == PHASE_OK
-        && status.dataset_delete == PHASE_OK;
+        && (status.dataset_delete == PHASE_OK || keep_data);
 
     BenchResult {
         memories_count: n,
