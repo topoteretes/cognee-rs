@@ -430,4 +430,13 @@ mod tests {
 
         assert!(matches!(err, UrlFetcherError::HttpStatus(404, _)));
     }
+
+    #[tokio::test]
+    async fn loopback_urls_are_rejected() {
+        let err = resolve_url_input("http://127.0.0.1:1234/")
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, UrlFetcherError::InvalidUrl(_)));
+    }
 }
