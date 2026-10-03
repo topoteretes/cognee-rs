@@ -36,7 +36,7 @@ use crate::types::{EdgeData, GraphNode, NodeData, parse_audit_timestamp};
 const BATCH_SIZE: usize = 100;
 
 /// Only these column names may appear in dynamic WHERE clauses to prevent SQL injection.
-const ALLOWED_FILTER_ATTRS: &[&str] = &["id", "name", "type", "dataset_id"];
+const ALLOWED_FILTER_ATTRS: &[&str] = &["id", "name", "type"];
 
 // ---------------------------------------------------------------------------
 // Table / column identifiers for sea_query

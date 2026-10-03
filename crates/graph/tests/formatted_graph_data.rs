@@ -104,14 +104,33 @@ async fn formats_nodes_and_edges_in_python_shape() {
         "alice",
         "bob",
         "KNOWS",
-        Some(HashMap::from([(Cow::Borrowed("weight"), json!(0.9))])),
+        Some(HashMap::from([
+            (Cow::Borrowed("weight"), json!(0.9)),
+            (Cow::Borrowed("belongs_to_set"), json!([dataset_id_str])),
+        ])),
     )
     .await
     .expect("add edge");
-    mock.add_edge("alice", "anon-1", "AUTHORED", None)
-        .await
-        .expect("add edge 2");
-    mock.add_edge("alice", "outsider", "BLOCKED", None)
+    mock.add_edge(
+        "alice",
+        "anon-1",
+        "AUTHORED",
+        Some(HashMap::from([(
+            Cow::Borrowed("belongs_to_set"),
+            json!([dataset_id_str]),
+        )])),
+    )
+    .await
+    .expect("add edge 2");
+    mock.add_edge(
+        "alice",
+        "outsider",
+        "BLOCKED",
+        Some(HashMap::from([(
+            Cow::Borrowed("belongs_to_set"),
+            json!([other_dataset_id_str]),
+        )])),
+    )
         .await
         .expect("add edge 3");
 
@@ -272,5 +291,35 @@ async fn label_falls_back_when_name_is_empty_string() {
     assert_eq!(
         nodes[0]["label"], "Thing_x",
         "empty name must fall back to '{{type}}_{{id}}'"
+    );
+}
+
+#[tokio::test]
+async fn nodeset_object_entries_do_not_match_dataset_scope() {
+    let mock = MockGraphDB::new();
+    let dataset_id = Uuid::new_v4();
+
+    mock.add_node_raw(json!({
+        "id": "x",
+        "type": "Thing",
+        "name": "NodeSet-only",
+        "belongs_to_set": [
+            {
+                "id": dataset_id.to_string(),
+                "name": dataset_id.to_string(),
+                "type": "NodeSet"
+            }
+        ],
+    }))
+    .await
+    .expect("add x");
+
+    let snap = get_formatted_graph_data(&mock, dataset_id, Uuid::new_v4())
+        .await
+        .expect("get_formatted_graph_data");
+    let nodes = snap.get("nodes").and_then(|v| v.as_array()).unwrap();
+    assert!(
+        nodes.is_empty(),
+        "NodeSet object memberships must not authorize dataset scope"
     );
 }

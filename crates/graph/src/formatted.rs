@@ -67,7 +67,11 @@ pub async fn get_formatted_graph_data(
 
     let edge_values: Vec<serde_json::Value> = edges
         .into_iter()
-        .filter(|(source, target, _, _)| node_ids.contains(source) && node_ids.contains(target))
+        .filter(|(source, target, _, props)| {
+            node_ids.contains(source)
+                && node_ids.contains(target)
+                && edge_belongs_to_dataset(props, &dataset_id)
+        })
         .map(|(source, target, relationship_name, _props)| {
             serde_json::json!({
                 "source": source,
@@ -128,17 +132,20 @@ fn node_belongs_to_dataset(node: &crate::NodeData, dataset_id: &str) -> bool {
         return false;
     };
 
-    entries.iter().any(|entry| match entry {
-        serde_json::Value::String(value) => value == dataset_id,
-        serde_json::Value::Object(map) => {
-            map.get("id")
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|value| value == dataset_id)
-                || map
-                    .get("name")
-                    .and_then(serde_json::Value::as_str)
-                    .is_some_and(|value| value == dataset_id)
-        }
-        _ => false,
-    })
+    entries
+        .iter()
+        .any(|entry| entry.as_str().is_some_and(|value| value == dataset_id))
+}
+
+fn edge_belongs_to_dataset(
+    props: &std::collections::HashMap<std::borrow::Cow<'static, str>, serde_json::Value>,
+    dataset_id: &str,
+) -> bool {
+    let Some(serde_json::Value::Array(entries)) = props.get("belongs_to_set") else {
+        return false;
+    };
+
+    entries
+        .iter()
+        .any(|entry| entry.as_str().is_some_and(|value| value == dataset_id))
 }

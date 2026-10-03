@@ -37,7 +37,6 @@ struct RobotsCacheEntry {
 
 /// HTTP fetcher for downloading web content
 pub struct UrlFetcher {
-    client: Client,
     config: FetcherConfig,
     /// Per-domain robots.txt cache. Key is the domain origin (e.g. `"https://example.com"`).
     robots_cache: Arc<Mutex<HashMap<String, RobotsCacheEntry>>>,
@@ -53,7 +52,7 @@ impl UrlFetcher {
 
     /// Create new fetcher with custom config
     pub fn with_config(config: FetcherConfig) -> Result<Self, UrlFetcherError> {
-        let client = Client::builder()
+        Client::builder()
             .timeout(config.timeout)
             .user_agent(&config.user_agent)
             .redirect(reqwest::redirect::Policy::none())
@@ -61,7 +60,6 @@ impl UrlFetcher {
             .map_err(|e| UrlFetcherError::HttpError(e.to_string()))?;
 
         Ok(Self {
-            client,
             config,
             robots_cache: Arc::new(Mutex::new(HashMap::new())),
             last_fetch: Arc::new(Mutex::new(HashMap::new())),
@@ -226,20 +224,25 @@ impl UrlFetcher {
     /// permissive `Robot` that allows all URLs — matching Python behaviour.
     /// Also returns the (capped) crawl delay if one is present.
     async fn fetch_robots_txt(&self, origin: &str) -> (Robot, Option<Duration>) {
-        let robots_url = format!("{origin}/robots.txt");
-
-        let body =
-            match tokio::time::timeout(ROBOTS_FETCH_TIMEOUT, self.client.get(&robots_url).send())
+        let body = if let Ok(origin_url) = Url::parse(origin) {
+            if let Ok(robots_url) = origin_url.join("/robots.txt") {
+                match tokio::time::timeout(
+                    ROBOTS_FETCH_TIMEOUT,
+                    self.send_with_redirects(reqwest::Method::GET, robots_url, origin),
+                )
                 .await
-            {
-                Ok(Ok(resp)) if resp.status().is_success() => {
-                    resp.bytes().await.map(|b| b.to_vec()).unwrap_or_default()
+                {
+                    Ok(Ok((resp, _final_url))) if resp.status().is_success() => {
+                        resp.bytes().await.map(|b| b.to_vec()).unwrap_or_default()
+                    }
+                    _ => Vec::new(),
                 }
-                _ => {
-                    // Fetch failed or non-200 — treat as empty (allow all).
-                    Vec::new()
-                }
-            };
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
 
         // `Robot::new` can fail on malformed input; treat as permissive.
         let robot = Robot::new(&self.config.user_agent, &body).unwrap_or_else(|_| {
