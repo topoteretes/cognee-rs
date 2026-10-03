@@ -2,9 +2,11 @@ use super::config::FetcherConfig;
 use super::error::UrlFetcherError;
 use reqwest::Client;
 use std::collections::HashMap;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use texting_robots::Robot;
+use tokio::net::lookup_host;
 use tokio::sync::Mutex;
 use url::Url;
 
@@ -35,7 +37,6 @@ struct RobotsCacheEntry {
 
 /// HTTP fetcher for downloading web content
 pub struct UrlFetcher {
-    client: Arc<Client>,
     config: FetcherConfig,
     /// Per-domain robots.txt cache. Key is the domain origin (e.g. `"https://example.com"`).
     robots_cache: Arc<Mutex<HashMap<String, RobotsCacheEntry>>>,
@@ -51,19 +52,14 @@ impl UrlFetcher {
 
     /// Create new fetcher with custom config
     pub fn with_config(config: FetcherConfig) -> Result<Self, UrlFetcherError> {
-        let client = Client::builder()
+        Client::builder()
             .timeout(config.timeout)
             .user_agent(&config.user_agent)
-            .redirect(if config.follow_redirects {
-                reqwest::redirect::Policy::limited(config.max_redirects)
-            } else {
-                reqwest::redirect::Policy::none()
-            })
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|e| UrlFetcherError::HttpError(e.to_string()))?;
 
         Ok(Self {
-            client: Arc::new(client),
             config,
             robots_cache: Arc::new(Mutex::new(HashMap::new())),
             last_fetch: Arc::new(Mutex::new(HashMap::new())),
@@ -78,6 +74,8 @@ impl UrlFetcher {
     pub async fn fetch_with_metadata(&self, url: &str) -> Result<FetchResult, UrlFetcherError> {
         let parsed_url = Url::parse(url)?;
 
+        self.validate_target_url(&parsed_url).await?;
+
         if self.config.respect_robots_txt {
             self.check_robots_txt(&parsed_url).await?;
         }
@@ -90,7 +88,6 @@ impl UrlFetcher {
             jitter_factor: None,
         };
 
-        let client = Arc::clone(&self.client);
         let url_owned = url.to_string();
         let parsed_for_rate = parsed_url.clone();
         let fetcher = self;
@@ -98,27 +95,13 @@ impl UrlFetcher {
         cognee_utils::retry_with_backoff(
             retry_config,
             || {
-                let client = Arc::clone(&client);
                 let url = url_owned.clone();
                 let parsed = parsed_for_rate.clone();
                 async move {
-                    fetcher.respect_rate_limit(&parsed).await;
+                    let (response, final_url) = fetcher
+                        .send_with_redirects(reqwest::Method::GET, parsed, &url)
+                        .await?;
 
-                    let response = client
-                        .get(&url)
-                        .send()
-                        .await
-                        .map_err(UrlFetcherError::from)?;
-
-                    let status = response.status();
-                    if !status.is_success() {
-                        return Err(UrlFetcherError::HttpStatus(
-                            status.as_u16(),
-                            format!("Failed to fetch URL: {url}"),
-                        ));
-                    }
-
-                    let final_url = response.url().to_string();
                     let content_type = response
                         .headers()
                         .get(reqwest::header::CONTENT_TYPE)
@@ -166,21 +149,15 @@ impl UrlFetcher {
 
         let parsed_url = Url::parse(url)?;
 
+        self.validate_target_url(&parsed_url).await?;
+
         if self.config.respect_robots_txt {
             self.check_robots_txt(&parsed_url).await?;
         }
 
-        self.respect_rate_limit(&parsed_url).await;
-
-        let response = self.client.get(url).send().await?;
-
-        let status = response.status();
-        if !status.is_success() {
-            return Err(UrlFetcherError::HttpStatus(
-                status.as_u16(),
-                format!("Failed to fetch URL: {url}"),
-            ));
-        }
+        let (response, _final_url) = self
+            .send_with_redirects(reqwest::Method::GET, parsed_url, url)
+            .await?;
 
         let mut stream = response.bytes_stream();
         while let Some(chunk_result) = stream.next().await {
@@ -247,20 +224,25 @@ impl UrlFetcher {
     /// permissive `Robot` that allows all URLs — matching Python behaviour.
     /// Also returns the (capped) crawl delay if one is present.
     async fn fetch_robots_txt(&self, origin: &str) -> (Robot, Option<Duration>) {
-        let robots_url = format!("{origin}/robots.txt");
-
-        let body =
-            match tokio::time::timeout(ROBOTS_FETCH_TIMEOUT, self.client.get(&robots_url).send())
+        let body = if let Ok(origin_url) = Url::parse(origin) {
+            if let Ok(robots_url) = origin_url.join("/robots.txt") {
+                match tokio::time::timeout(
+                    ROBOTS_FETCH_TIMEOUT,
+                    self.send_with_redirects(reqwest::Method::GET, robots_url, origin),
+                )
                 .await
-            {
-                Ok(Ok(resp)) if resp.status().is_success() => {
-                    resp.bytes().await.map(|b| b.to_vec()).unwrap_or_default()
+                {
+                    Ok(Ok((resp, _final_url))) if resp.status().is_success() => {
+                        resp.bytes().await.map(|b| b.to_vec()).unwrap_or_default()
+                    }
+                    _ => Vec::new(),
                 }
-                _ => {
-                    // Fetch failed or non-200 — treat as empty (allow all).
-                    Vec::new()
-                }
-            };
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
 
         // `Robot::new` can fail on malformed input; treat as permissive.
         let robot = Robot::new(&self.config.user_agent, &body).unwrap_or_else(|_| {
@@ -308,7 +290,12 @@ impl UrlFetcher {
 
     /// Get MIME type from URL (helper for metadata extraction)
     pub async fn get_content_type(&self, url: &str) -> Result<String, UrlFetcherError> {
-        let response = self.client.head(url).send().await?;
+        let parsed_url = Url::parse(url)?;
+        self.validate_target_url(&parsed_url).await?;
+
+        let (response, _) = self
+            .send_with_redirects(reqwest::Method::HEAD, parsed_url, url)
+            .await?;
 
         Ok(response
             .headers()
@@ -316,6 +303,178 @@ impl UrlFetcher {
             .and_then(|v| v.to_str().ok())
             .unwrap_or("text/html")
             .to_string())
+    }
+}
+
+impl UrlFetcher {
+    /// Validate a URL before issuing a request.
+    async fn validate_target_url(&self, url: &Url) -> Result<SocketAddr, UrlFetcherError> {
+        match url.scheme() {
+            "http" | "https" => {}
+            other => {
+                return Err(UrlFetcherError::InvalidUrl(format!(
+                    "unsupported URL scheme: {other}"
+                )));
+            }
+        }
+
+        let host = url
+            .host_str()
+            .ok_or_else(|| UrlFetcherError::InvalidUrl(format!("URL is missing a host: {url}")))?;
+        let port = url
+            .port_or_known_default()
+            .ok_or_else(|| UrlFetcherError::InvalidUrl(format!("URL is missing a port: {url}")))?;
+
+        let addrs = lookup_host((host, port)).await.map_err(|e| {
+            UrlFetcherError::InvalidUrl(format!("failed to resolve host {host}: {e}"))
+        })?;
+
+        let mut selected_addr = None;
+        let allow_private_hosts = {
+            #[cfg(test)]
+            {
+                self.config.allow_private_hosts_for_tests
+            }
+            #[cfg(not(test))]
+            {
+                false
+            }
+        };
+
+        for addr in addrs {
+            let normalized = normalize_ip(addr.ip());
+            if is_blocked_address(normalized) && !allow_private_hosts {
+                continue;
+            }
+            if selected_addr.is_none() {
+                selected_addr = Some(SocketAddr::new(normalized, port));
+            }
+        }
+
+        if let Some(addr) = selected_addr {
+            Ok(addr)
+        } else {
+            return Err(UrlFetcherError::InvalidUrl(format!(
+                "host did not resolve to any allowed address: {host}"
+            )));
+        }
+    }
+
+    fn build_pinned_client(
+        &self,
+        host: &str,
+        resolved_addr: SocketAddr,
+    ) -> Result<Client, UrlFetcherError> {
+        Client::builder()
+            .timeout(self.config.timeout)
+            .user_agent(&self.config.user_agent)
+            .redirect(reqwest::redirect::Policy::none())
+            .resolve(host, resolved_addr)
+            .build()
+            .map_err(|e| UrlFetcherError::HttpError(e.to_string()))
+    }
+
+    /// Send one request and manually follow redirects after validating each hop.
+    async fn send_with_redirects(
+        &self,
+        method: reqwest::Method,
+        start_url: Url,
+        original_url: &str,
+    ) -> Result<(reqwest::Response, String), UrlFetcherError> {
+        let mut current_url = start_url;
+        let mut redirects_followed = 0usize;
+
+        loop {
+            let resolved_addr = self.validate_target_url(&current_url).await?;
+            self.respect_rate_limit(&current_url).await;
+
+            let host = current_url.host_str().ok_or_else(|| {
+                UrlFetcherError::InvalidUrl(format!("URL is missing a host: {current_url}"))
+            })?;
+            let pinned_client = self.build_pinned_client(host, resolved_addr)?;
+
+            let response = pinned_client
+                .request(method.clone(), current_url.as_str())
+                .send()
+                .await
+                .map_err(UrlFetcherError::from)?;
+
+            let status = response.status();
+            if status.is_redirection() {
+                if !self.config.follow_redirects {
+                    return Err(UrlFetcherError::HttpStatus(
+                        status.as_u16(),
+                        format!("Failed to fetch URL: {original_url}"),
+                    ));
+                }
+
+                if redirects_followed >= self.config.max_redirects {
+                    return Err(UrlFetcherError::HttpStatus(
+                        status.as_u16(),
+                        format!("Too many redirects while fetching URL: {original_url}"),
+                    ));
+                }
+
+                let Some(location) = response.headers().get(reqwest::header::LOCATION) else {
+                    return Err(UrlFetcherError::HttpStatus(
+                        status.as_u16(),
+                        format!(
+                            "Redirect response missing Location header for URL: {original_url}"
+                        ),
+                    ));
+                };
+
+                let location = location.to_str().map_err(|e| {
+                    UrlFetcherError::InvalidUrl(format!("invalid redirect Location header: {e}"))
+                })?;
+                current_url = current_url.join(location).map_err(|e| {
+                    UrlFetcherError::InvalidUrl(format!(
+                        "invalid redirect target {location:?}: {e}"
+                    ))
+                })?;
+                redirects_followed += 1;
+                continue;
+            }
+
+            if !status.is_success() {
+                return Err(UrlFetcherError::HttpStatus(
+                    status.as_u16(),
+                    format!("Failed to fetch URL: {original_url}"),
+                ));
+            }
+
+            return Ok((response, current_url.to_string()));
+        }
+    }
+}
+
+fn is_blocked_address(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            v4.is_private()
+                || v4.is_loopback()
+                || v4.is_link_local()
+                || v4.is_multicast()
+                || v4.is_unspecified()
+                || v4.octets()[0] == 100 && (64..=127).contains(&v4.octets()[1])
+        }
+        IpAddr::V6(v6) => {
+            v6.is_loopback()
+                || v6.is_unique_local()
+                || v6.is_unicast_link_local()
+                || v6.is_multicast()
+                || v6.is_unspecified()
+        }
+    }
+}
+
+fn normalize_ip(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V6(v6) => v6
+            .to_ipv4_mapped()
+            .map(IpAddr::V4)
+            .unwrap_or(IpAddr::V6(v6)),
+        IpAddr::V4(v4) => IpAddr::V4(v4),
     }
 }
 

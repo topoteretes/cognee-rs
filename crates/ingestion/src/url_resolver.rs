@@ -29,7 +29,7 @@ pub struct UrlMetadata {
 /// Resolve a URL into a streamable [`DataInput`] and canonical URL metadata.
 #[cfg(feature = "html-loader")]
 pub async fn resolve_url_input(url: &str) -> Result<ResolvedUrlInput, UrlFetcherError> {
-    let fetch_result = UrlFetcher::new()?.fetch_with_metadata(url).await?;
+    let fetch_result = resolve_url_fetcher()?.fetch_with_metadata(url).await?;
     let raw_essence = mime_essence(&fetch_result.content_type);
     let url_mime = mime_from_url_path(&fetch_result.url);
     let essence = if raw_essence.is_empty() {
@@ -113,6 +113,21 @@ pub async fn resolve_url_input(url: &str) -> Result<ResolvedUrlInput, UrlFetcher
             title,
         },
     })
+}
+
+#[cfg(feature = "html-loader")]
+fn resolve_url_fetcher() -> Result<UrlFetcher, UrlFetcherError> {
+    #[cfg(test)]
+    {
+        let mut config = crate::url_crawler::FetcherConfig::default();
+        config.allow_private_hosts_for_tests = true;
+        UrlFetcher::with_config(config)
+    }
+
+    #[cfg(not(test))]
+    {
+        UrlFetcher::new()
+    }
 }
 
 /// Extract the MIME essence (e.g. `"text/html"`) from a full Content-Type
@@ -411,6 +426,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn content_type_probe_follows_redirects() {
+        let mut server = server_with_robots().await;
+        let start_url = format!("{}/start", server.url());
+        let _redirect = server
+            .mock("HEAD", "/start")
+            .with_status(302)
+            .with_header("location", "/final")
+            .create_async()
+            .await;
+        let _final = server
+            .mock("HEAD", "/final")
+            .with_header("content-type", "text/plain")
+            .create_async()
+            .await;
+
+        let mut config = crate::url_crawler::FetcherConfig::default();
+        config.allow_private_hosts_for_tests = true;
+        let fetcher = UrlFetcher::with_config(config).expect("UrlFetcher::with_config");
+        let content_type = fetcher.get_content_type(&start_url).await.unwrap();
+
+        assert_eq!(content_type, "text/plain");
+    }
+
+    #[tokio::test]
     async fn invalid_url_is_surfaced() {
         let err = resolve_url_input("not a url").await.unwrap_err();
         assert!(matches!(err, UrlFetcherError::InvalidUrl(_)));
@@ -429,5 +468,27 @@ mod tests {
         let err = resolve_url_input(&url).await.unwrap_err();
 
         assert!(matches!(err, UrlFetcherError::HttpStatus(404, _)));
+    }
+
+    #[tokio::test]
+    async fn loopback_urls_are_rejected() {
+        let fetcher = UrlFetcher::new().expect("UrlFetcher::new");
+        let err = fetcher
+            .fetch_with_metadata("http://127.0.0.1:1234/")
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, UrlFetcherError::InvalidUrl(_)));
+    }
+
+    #[tokio::test]
+    async fn ipv4_mapped_ipv6_loopback_urls_are_rejected() {
+        let fetcher = UrlFetcher::new().expect("UrlFetcher::new");
+        let err = fetcher
+            .fetch_with_metadata("http://[::ffff:127.0.0.1]:1234/")
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, UrlFetcherError::InvalidUrl(_)));
     }
 }

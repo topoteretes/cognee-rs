@@ -18,6 +18,10 @@ pub struct FetcherConfig {
     /// Check robots.txt before fetching
     pub respect_robots_txt: bool,
 
+    /// Test-only escape hatch for localhost-based HTTP fixtures.
+    #[cfg(test)]
+    pub allow_private_hosts_for_tests: bool,
+
     /// Minimum delay between requests to the same domain (default 500ms,
     /// matching Python's `crawl_delay`).
     pub crawl_delay: Duration,
@@ -35,6 +39,8 @@ impl Default for FetcherConfig {
             follow_redirects: true,
             max_redirects: 5,
             respect_robots_txt: true,
+            #[cfg(test)]
+            allow_private_hosts_for_tests: false,
             crawl_delay: Duration::from_millis(500),
             max_crawl_delay: Duration::from_secs(10),
         }

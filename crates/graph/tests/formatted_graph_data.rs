@@ -40,33 +40,100 @@ fn build_node(id: &str, type_str: &str, name: Option<&str>, extra: &str) -> serd
     serde_json::Value::Object(obj)
 }
 
+fn build_scoped_node(
+    id: &str,
+    type_str: &str,
+    name: Option<&str>,
+    extra: &str,
+    dataset_id: &str,
+) -> serde_json::Value {
+    let mut node = build_node(id, type_str, name, extra);
+    node.as_object_mut()
+        .expect("node object")
+        .insert("belongs_to_set".into(), json!([dataset_id]));
+    node
+}
+
 #[tokio::test]
 async fn formats_nodes_and_edges_in_python_shape() {
     let mock = MockGraphDB::new();
-    mock.add_node_raw(build_node("alice", "Person", Some("Alice"), "engineer"))
-        .await
-        .expect("add alice");
-    mock.add_node_raw(build_node("bob", "Person", Some("Bob"), "scientist"))
-        .await
-        .expect("add bob");
+    let dataset_id = Uuid::new_v4();
+    let other_dataset_id = Uuid::new_v4();
+    let dataset_id_str = dataset_id.to_string();
+    let other_dataset_id_str = other_dataset_id.to_string();
+
+    mock.add_node_raw(build_scoped_node(
+        "alice",
+        "Person",
+        Some("Alice"),
+        "engineer",
+        &dataset_id_str,
+    ))
+    .await
+    .expect("add alice");
+    mock.add_node_raw(build_scoped_node(
+        "bob",
+        "Person",
+        Some("Bob"),
+        "scientist",
+        &dataset_id_str,
+    ))
+    .await
+    .expect("add bob");
     // Anonymous node — label must fall back to "{type}_{id}".
-    mock.add_node_raw(build_node("anon-1", "Document", None, "no-name"))
-        .await
-        .expect("add anon");
+    mock.add_node_raw(build_scoped_node(
+        "anon-1",
+        "Document",
+        None,
+        "no-name",
+        &dataset_id_str,
+    ))
+    .await
+    .expect("add anon");
+    mock.add_node_raw(build_scoped_node(
+        "outsider",
+        "Person",
+        Some("Mallory"),
+        "external",
+        &other_dataset_id_str,
+    ))
+    .await
+    .expect("add outsider");
 
     mock.add_edge(
         "alice",
         "bob",
         "KNOWS",
-        Some(HashMap::from([(Cow::Borrowed("weight"), json!(0.9))])),
+        Some(HashMap::from([
+            (Cow::Borrowed("weight"), json!(0.9)),
+            (Cow::Borrowed("belongs_to_set"), json!([dataset_id_str])),
+        ])),
     )
     .await
     .expect("add edge");
-    mock.add_edge("alice", "anon-1", "AUTHORED", None)
+    mock.add_edge(
+        "alice",
+        "anon-1",
+        "AUTHORED",
+        Some(HashMap::from([(
+            Cow::Borrowed("belongs_to_set"),
+            json!([dataset_id_str]),
+        )])),
+    )
+    .await
+    .expect("add edge 2");
+    mock.add_edge(
+        "alice",
+        "outsider",
+        "BLOCKED",
+        Some(HashMap::from([(
+            Cow::Borrowed("belongs_to_set"),
+            json!([other_dataset_id_str]),
+        )])),
+    )
         .await
-        .expect("add edge 2");
+        .expect("add edge 3");
 
-    let dataset_id = Uuid::new_v4();
     let user_id = Uuid::new_v4();
     let snap = get_formatted_graph_data(&mock, dataset_id, user_id)
         .await
@@ -83,7 +150,12 @@ async fn formats_nodes_and_edges_in_python_shape() {
         .and_then(|v| v.as_array())
         .expect("edges array");
 
-    assert_eq!(nodes.len(), 3, "expected 3 nodes, got {}", nodes.len());
+    assert_eq!(
+        nodes.len(),
+        3,
+        "expected 3 scoped nodes, got {}",
+        nodes.len()
+    );
     assert_eq!(edges.len(), 2, "expected 2 edges, got {}", edges.len());
 
     // Each node must have exactly {id, label, type, properties}.
@@ -150,6 +222,32 @@ async fn formats_nodes_and_edges_in_python_shape() {
         .expect("KNOWS edge");
     assert_eq!(knows["source"], "alice");
     assert_eq!(knows["target"], "bob");
+
+    assert!(
+        nodes.iter().all(|node| node["id"] != "outsider"),
+        "nodes from other datasets must be excluded"
+    );
+    assert!(
+        edges.iter().all(|edge| edge["label"] != "BLOCKED"),
+        "edges touching other datasets must be excluded"
+    );
+}
+
+#[tokio::test]
+async fn nodes_without_belongs_to_set_are_excluded() {
+    let mock = MockGraphDB::new();
+    mock.add_node_raw(build_node("orphan", "Thing", Some("Orphan"), "note"))
+        .await
+        .expect("add orphan");
+
+    let snap = get_formatted_graph_data(&mock, Uuid::new_v4(), Uuid::new_v4())
+        .await
+        .expect("get_formatted_graph_data");
+
+    let nodes = snap.get("nodes").and_then(|v| v.as_array()).unwrap();
+    let edges = snap.get("edges").and_then(|v| v.as_array()).unwrap();
+    assert!(nodes.is_empty(), "unscoped nodes must be excluded");
+    assert!(edges.is_empty(), "unscoped edges must be excluded");
 }
 
 #[tokio::test]
@@ -175,15 +273,17 @@ async fn empty_graph_returns_empty_arrays() {
 async fn label_falls_back_when_name_is_empty_string() {
     let mock = MockGraphDB::new();
     // Empty-string name — matches Python's `node[1]["name"] != ""` branch.
+    let dataset_id = Uuid::new_v4();
     mock.add_node_raw(json!({
         "id": "x",
         "type": "Thing",
         "name": "",
+        "belongs_to_set": [dataset_id.to_string()],
     }))
     .await
     .expect("add x");
 
-    let snap = get_formatted_graph_data(&mock, Uuid::new_v4(), Uuid::new_v4())
+    let snap = get_formatted_graph_data(&mock, dataset_id, Uuid::new_v4())
         .await
         .expect("get_formatted_graph_data");
     let nodes = snap.get("nodes").and_then(|v| v.as_array()).unwrap();
@@ -191,5 +291,35 @@ async fn label_falls_back_when_name_is_empty_string() {
     assert_eq!(
         nodes[0]["label"], "Thing_x",
         "empty name must fall back to '{{type}}_{{id}}'"
+    );
+}
+
+#[tokio::test]
+async fn nodeset_object_entries_do_not_match_dataset_scope() {
+    let mock = MockGraphDB::new();
+    let dataset_id = Uuid::new_v4();
+
+    mock.add_node_raw(json!({
+        "id": "x",
+        "type": "Thing",
+        "name": "NodeSet-only",
+        "belongs_to_set": [
+            {
+                "id": dataset_id.to_string(),
+                "name": dataset_id.to_string(),
+                "type": "NodeSet"
+            }
+        ],
+    }))
+    .await
+    .expect("add x");
+
+    let snap = get_formatted_graph_data(&mock, dataset_id, Uuid::new_v4())
+        .await
+        .expect("get_formatted_graph_data");
+    let nodes = snap.get("nodes").and_then(|v| v.as_array()).unwrap();
+    assert!(
+        nodes.is_empty(),
+        "NodeSet object memberships must not authorize dataset scope"
     );
 }
