@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use texting_robots::Robot;
 use tokio::net::lookup_host;
 use tokio::sync::Mutex;
-use url::Url;
+use url::{Host, Url};
 
 /// Result of fetching a URL, carrying raw bytes and metadata.
 #[derive(Debug, Clone)]
@@ -325,9 +325,21 @@ impl UrlFetcher {
             .port_or_known_default()
             .ok_or_else(|| UrlFetcherError::InvalidUrl(format!("URL is missing a port: {url}")))?;
 
-        let addrs = lookup_host((host, port)).await.map_err(|e| {
-            UrlFetcherError::InvalidUrl(format!("failed to resolve host {host}: {e}"))
-        })?;
+        let mut candidates: Vec<SocketAddr> = match url.host() {
+            Some(Host::Domain(domain)) => {
+                let addrs = lookup_host((domain, port)).await.map_err(|e| {
+                    UrlFetcherError::InvalidUrl(format!("failed to resolve host {domain}: {e}"))
+                })?;
+                addrs.collect()
+            }
+            Some(Host::Ipv4(ip)) => vec![SocketAddr::new(IpAddr::V4(ip), port)],
+            Some(Host::Ipv6(ip)) => vec![SocketAddr::new(IpAddr::V6(ip), port)],
+            None => {
+                return Err(UrlFetcherError::InvalidUrl(format!(
+                    "URL is missing a host: {url}"
+                )));
+            }
+        };
 
         let mut selected_addr = None;
         let allow_private_hosts = {
@@ -341,7 +353,7 @@ impl UrlFetcher {
             }
         };
 
-        for addr in addrs {
+        for addr in candidates.drain(..) {
             let normalized = normalize_ip(addr.ip());
             if is_blocked_address(normalized) && !allow_private_hosts {
                 continue;
@@ -354,9 +366,9 @@ impl UrlFetcher {
         if let Some(addr) = selected_addr {
             Ok(addr)
         } else {
-            return Err(UrlFetcherError::InvalidUrl(format!(
+            Err(UrlFetcherError::InvalidUrl(format!(
                 "host did not resolve to any allowed address: {host}"
-            )));
+            )))
         }
     }
 
@@ -388,10 +400,15 @@ impl UrlFetcher {
             let resolved_addr = self.validate_target_url(&current_url).await?;
             self.respect_rate_limit(&current_url).await;
 
-            let host = current_url.host_str().ok_or_else(|| {
+            let host = current_url.host().ok_or_else(|| {
                 UrlFetcherError::InvalidUrl(format!("URL is missing a host: {current_url}"))
             })?;
-            let pinned_client = self.build_pinned_client(host, resolved_addr)?;
+            let host_for_resolve = match host {
+                Host::Domain(domain) => domain.to_string(),
+                Host::Ipv4(ip) => ip.to_string(),
+                Host::Ipv6(ip) => ip.to_string(),
+            };
+            let pinned_client = self.build_pinned_client(&host_for_resolve, resolved_addr)?;
 
             let response = pinned_client
                 .request(method.clone(), current_url.as_str())
@@ -507,5 +524,30 @@ fn should_retry(err: &UrlFetcherError) -> cognee_utils::RetryDecision {
         | UrlFetcherError::InvalidUrl(_)
         | UrlFetcherError::ParseError(_)
         | UrlFetcherError::IoError(_) => cognee_utils::RetryDecision::Abort,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn public_ipv6_literal_validates() {
+        let fetcher = match UrlFetcher::new() {
+            Ok(v) => v,
+            Err(e) => panic!("UrlFetcher::new failed: {e}"),
+        };
+        let url = match Url::parse("http://[2606:4700:4700::1111]/") {
+            Ok(v) => v,
+            Err(e) => panic!("valid IPv6 URL parse failed: {e}"),
+        };
+
+        let resolved = match fetcher.validate_target_url(&url).await {
+            Ok(v) => v,
+            Err(e) => panic!("public IPv6 literal should validate: {e}"),
+        };
+
+        assert_eq!(resolved.ip().to_string(), "2606:4700:4700::1111");
+        assert_eq!(resolved.port(), 80);
     }
 }

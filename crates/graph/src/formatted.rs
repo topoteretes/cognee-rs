@@ -141,11 +141,16 @@ fn edge_belongs_to_dataset(
     props: &std::collections::HashMap<std::borrow::Cow<'static, str>, serde_json::Value>,
     dataset_id: &str,
 ) -> bool {
-    let Some(serde_json::Value::Array(entries)) = props.get("belongs_to_set") else {
-        return false;
+    let Some(value) = props.get("belongs_to_set") else {
+        // Legacy edges do not always carry membership metadata.
+        return true;
     };
 
-    entries
-        .iter()
-        .any(|entry| entry.as_str().is_some_and(|value| value == dataset_id))
+    match value {
+        serde_json::Value::String(s) => s == dataset_id,
+        serde_json::Value::Array(entries) => entries
+            .iter()
+            .any(|entry| entry.as_str().is_some_and(|value| value == dataset_id)),
+        _ => false,
+    }
 }

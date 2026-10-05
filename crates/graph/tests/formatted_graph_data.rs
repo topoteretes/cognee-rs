@@ -131,8 +131,11 @@ async fn formats_nodes_and_edges_in_python_shape() {
             json!([other_dataset_id_str]),
         )])),
     )
+    .await
+    .expect("add edge 3");
+    mock.add_edge("bob", "anon-1", "LEGACY", None)
         .await
-        .expect("add edge 3");
+        .expect("add legacy edge");
 
     let user_id = Uuid::new_v4();
     let snap = get_formatted_graph_data(&mock, dataset_id, user_id)
@@ -156,7 +159,7 @@ async fn formats_nodes_and_edges_in_python_shape() {
         "expected 3 scoped nodes, got {}",
         nodes.len()
     );
-    assert_eq!(edges.len(), 2, "expected 2 edges, got {}", edges.len());
+    assert_eq!(edges.len(), 3, "expected 3 edges, got {}", edges.len());
 
     // Each node must have exactly {id, label, type, properties}.
     for node in nodes {
@@ -222,6 +225,13 @@ async fn formats_nodes_and_edges_in_python_shape() {
         .expect("KNOWS edge");
     assert_eq!(knows["source"], "alice");
     assert_eq!(knows["target"], "bob");
+
+    let legacy = edges
+        .iter()
+        .find(|e| e["label"] == "LEGACY")
+        .expect("LEGACY edge");
+    assert_eq!(legacy["source"], "bob");
+    assert_eq!(legacy["target"], "anon-1");
 
     assert!(
         nodes.iter().all(|node| node["id"] != "outsider"),

@@ -119,8 +119,10 @@ pub async fn resolve_url_input(url: &str) -> Result<ResolvedUrlInput, UrlFetcher
 fn resolve_url_fetcher() -> Result<UrlFetcher, UrlFetcherError> {
     #[cfg(test)]
     {
-        let mut config = crate::url_crawler::FetcherConfig::default();
-        config.allow_private_hosts_for_tests = true;
+        let config = crate::url_crawler::FetcherConfig {
+            allow_private_hosts_for_tests: true,
+            ..crate::url_crawler::FetcherConfig::default()
+        };
         UrlFetcher::with_config(config)
     }
 
@@ -441,8 +443,10 @@ mod tests {
             .create_async()
             .await;
 
-        let mut config = crate::url_crawler::FetcherConfig::default();
-        config.allow_private_hosts_for_tests = true;
+        let config = crate::url_crawler::FetcherConfig {
+            allow_private_hosts_for_tests: true,
+            ..crate::url_crawler::FetcherConfig::default()
+        };
         let fetcher = UrlFetcher::with_config(config).expect("UrlFetcher::with_config");
         let content_type = fetcher.get_content_type(&start_url).await.unwrap();
 
