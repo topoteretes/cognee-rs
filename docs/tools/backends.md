@@ -9,8 +9,8 @@ swapped via configuration. Pick providers with the env vars / config keys in
 |---|---|---|---|
 | **LLM** | `Llm` ([`cognee-llm`](../../crates/llm/)) | `OpenAIAdapter` (OpenAI/Ollama/vLLM/llama.cpp), `MockLlm` (`testing`) | `LLM_PROVIDER`, `LLM_MODEL`, `LLM_ENDPOINT` |
 | **Embeddings** | `EmbeddingEngine` ([`cognee-embedding`](../../crates/embedding/)) | `OnnxEmbeddingEngine` (local BGE-Small), `OpenAICompatibleEmbeddingEngine`, `OllamaEmbeddingEngine`, `MockEmbeddingEngine` | `EMBEDDING_PROVIDER` (+ `MOCK_EMBEDDING`) |
-| **Vector DB** | `VectorDB` ([`cognee-vector`](../../crates/vector/)) | `LanceDbAdapter` (on disk, feature `lancedb`, default provider), `BruteForceVectorDB` (in-memory), `PgVectorAdapter` (feature `pgvector`), `MockVectorDB` (`testing`) | `VECTOR_DB_PROVIDER` (`lancedb`/`brute-force`/`pgvector`) |
-| **Graph DB** | `GraphDBTrait` ([`cognee-graph`](../../crates/graph/)) | `LadybugAdapter` (embedded), `PgGraphAdapter` (feature `postgres`) | `GRAPH_DATABASE_PROVIDER` (`ladybug`/`kuzu`/`postgres`) |
+| **Vector DB** | `VectorDB` ([`cognee-vector`](../../crates/vector/)) | `LanceDbAdapter` (on disk, feature `lancedb`, default provider), `BruteForceVectorDB` (in-memory), `PgVectorAdapter` (feature `pgvector`), `EvokoaVectorAdapter` (feature `evokoa`), `MockVectorDB` (`testing`) | `VECTOR_DB_PROVIDER` (`lancedb`/`brute-force`/`pgvector`/`evokoa`) |
+| **Graph DB** | `GraphDBTrait` ([`cognee-graph`](../../crates/graph/)) | `LadybugAdapter` (embedded), `PgGraphAdapter` (feature `postgres`), `EvokoaGraphAdapter` (feature `evokoa`) | `GRAPH_DATABASE_PROVIDER` (`ladybug`/`kuzu`/`postgres`/`evokoa`) |
 | **Relational DB** | `IngestDb`/`SearchHistoryDb`/`DeleteDb` ([`cognee-database`](../../crates/database/)) | `DatabaseConnection` — SQLite / Postgres via SeaORM | `DB_PROVIDER`, `DATABASE_URL` |
 | **File storage** | `StorageTrait` ([`cognee-storage`](../../crates/storage/)) | `LocalStorage` (`file://`), `MockStorage` | `STORAGE_BACKEND` |
 | **Session store** | `SessionStore` ([`cognee-session`](../../crates/session/)) | `FsSessionStore`, `RedisSessionStore`, `SeaOrmSessionStore` | `COGNEE_SESSION_STORE` (server) |
@@ -22,7 +22,7 @@ Notes:
 - **Embedded by default.** A plain build runs entirely locally: in-memory
   brute-force vector index, embedded Ladybug (graph), SQLite (relational),
   local file storage. No native vector-store dependencies are required.
-- **Feature gates.** `lancedb`, `pgvector`, `pggraph`/`postgres`, `onnx`,
+- **Feature gates.** `lancedb`, `pgvector`, `pggraph`/`postgres`, `evokoa`, `onnx`,
   `ladybug`, and the `hf-tokenizer`/`tiktoken` counters are cargo features, on by
   default in `cognee`/`cognee-cli` (`pggraph` excepted) — see
   [architecture.md §feature strategy](../architecture.md#architecture-patterns).

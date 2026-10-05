@@ -23,6 +23,7 @@ use cognee_database::{
 };
 use cognee_delete::{DeleteMode, DeleteRequest, DeleteScope, DeleteService};
 use cognee_embedding::EmbeddingEngine;
+use cognee_evokoa::{EvokoaGraphAdapter, EvokoaVectorAdapter};
 use cognee_graph::{GraphDBTrait, LadybugAdapter};
 use cognee_ingestion::AddPipeline;
 use cognee_llm::Llm;
@@ -109,17 +110,25 @@ async fn test_readd_and_recognify_after_delete() {
     initialize(&db).await.expect("initialize");
     let database: Arc<DatabaseConnection> = Arc::new(db);
 
-    // Ladybug graph database
-    let graph_path = temp_dir.path().join("graph").to_string_lossy().to_string();
-    let graph_db: Arc<dyn GraphDBTrait> = Arc::new(
-        LadybugAdapter::new(&graph_path)
-            .await
-            .expect("LadybugAdapter::new"),
-    );
+    // Reuse this established lifecycle test against Evokoa when a PostgreSQL
+    // URL is supplied; otherwise retain its fast default test backends.
+    let (graph_db, vector_db): (Arc<dyn GraphDBTrait>, Arc<dyn VectorDB>) =
+        if let Ok(url) = std::env::var("COGNEE_EVOKOA_TEST_DATABASE_URL") {
+            let graph = EvokoaGraphAdapter::new(&url)
+                .await
+                .expect("EvokoaGraphAdapter::new");
+            let vector = EvokoaVectorAdapter::new(&url)
+                .await
+                .expect("EvokoaVectorAdapter::new");
+            (Arc::new(graph), Arc::new(vector))
+        } else {
+            let graph_path = temp_dir.path().join("graph").to_string_lossy().to_string();
+            let graph = LadybugAdapter::new(&graph_path)
+                .await
+                .expect("LadybugAdapter::new");
+            (Arc::new(graph), Arc::new(MockVectorDB::new()))
+        };
     graph_db.initialize().await.expect("graph_db.initialize");
-
-    // In-memory mock vector DB (qdrant extracted to closed cognee-vector-qdrant).
-    let vector_db: Arc<dyn VectorDB> = Arc::new(MockVectorDB::new());
 
     // LLM via cassette (replay/record/real) — see test_utils::create_llm_from_env.
     let Some(llm) = create_llm_from_env("lifecycle_loop") else {

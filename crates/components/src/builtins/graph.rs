@@ -10,20 +10,83 @@
 // `pggraph` too warned on a `pggraph`-without-`ladybug` build.
 #[cfg(feature = "ladybug")]
 use std::path::Path;
-#[cfg(any(feature = "ladybug", feature = "pggraph", feature = "testing"))]
+#[cfg(any(
+    feature = "ladybug",
+    feature = "pggraph",
+    feature = "evokoa",
+    feature = "testing"
+))]
 use std::sync::Arc;
 
-#[cfg(any(feature = "ladybug", feature = "pggraph", feature = "testing"))]
+#[cfg(any(
+    feature = "ladybug",
+    feature = "pggraph",
+    feature = "evokoa",
+    feature = "testing"
+))]
 use async_trait::async_trait;
-#[cfg(any(feature = "ladybug", feature = "pggraph", feature = "testing"))]
+#[cfg(any(
+    feature = "ladybug",
+    feature = "pggraph",
+    feature = "evokoa",
+    feature = "testing"
+))]
 use cognee_graph::GraphDBTrait;
 
-#[cfg(any(feature = "ladybug", feature = "pggraph", feature = "testing"))]
+#[cfg(any(
+    feature = "ladybug",
+    feature = "pggraph",
+    feature = "evokoa",
+    feature = "testing"
+))]
 use crate::context::BackendBuildContext;
-#[cfg(any(feature = "ladybug", feature = "pggraph", feature = "testing"))]
+#[cfg(any(
+    feature = "ladybug",
+    feature = "pggraph",
+    feature = "evokoa",
+    feature = "testing"
+))]
 use crate::error::ComponentError;
-#[cfg(any(feature = "ladybug", feature = "pggraph", feature = "testing"))]
+#[cfg(any(
+    feature = "ladybug",
+    feature = "pggraph",
+    feature = "evokoa",
+    feature = "testing"
+))]
 use crate::traits::GraphDbFactory;
+
+#[cfg(feature = "evokoa")]
+pub struct EvokoaGraphFactory;
+
+#[cfg(feature = "evokoa")]
+#[async_trait]
+impl GraphDbFactory for EvokoaGraphFactory {
+    fn provider(&self) -> &str {
+        "evokoa"
+    }
+
+    async fn build(
+        &self,
+        ctx: &BackendBuildContext,
+    ) -> Result<Arc<dyn GraphDBTrait>, ComponentError> {
+        let url = match ctx.graph_postgres_url.as_ref() {
+            Some(Ok(url)) => url,
+            Some(Err(cause)) => return Err(ComponentError::Config(cause.clone())),
+            None => {
+                return Err(ComponentError::Config(
+                    "graph_database_provider=evokoa requires a resolved PostgreSQL URL".into(),
+                ));
+            }
+        };
+        let adapter = cognee_evokoa::EvokoaGraphAdapter::new(url)
+            .await
+            .map_err(|e| ComponentError::GraphDb(format!("Evokoa pgGraph init failed: {e}")))?;
+        adapter.initialize().await.map_err(|e| {
+            ComponentError::GraphDb(format!("Evokoa pgGraph schema init failed: {e}"))
+        })?;
+        Ok(Arc::new(adapter))
+    }
+}
 
 /// Embedded ladybug/kuzu graph backend, stored at a local file path.
 #[cfg(feature = "ladybug")]
