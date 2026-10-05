@@ -149,7 +149,6 @@ assert_cmd.workspace = true
 # runtime plus serialisation (it sets telemetry env vars, which are process-global).
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 serial_test.workspace = true
-md-5.workspace = true
 mockito = "1"
 predicates.workspace = true
 rusqlite = "0.32"
