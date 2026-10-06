@@ -96,48 +96,10 @@ Shipped in task 20 as sanctioned partials for 0.1.0:
 
 ## HTTP server
 
-All routers ship (see [http-server/routers/README.md](../http-server/routers/README.md)). The
-remaining gaps are operational/feature-flagged rather than missing endpoints:
-
-- **Multi-replica WebSocket fan-out** — the pipeline-run registry is process-local and does not fan
-  out across replicas. Multi-replica deployments need sticky-session WS routing or a Redis-backed
-  channel. Documented and deferred. ([pipelines.md §15](../http-server/pipelines.md))
-- **OTLP export from the HTTP-server span buffer** — the in-memory span buffer is trait-wrapped so an
-  OTLP exporter can be slotted in, but that exporter is not wired. Deferred to a later phase.
-  ([observability.md](../http-server/observability.md))
-- **Per-user LLM cost quotas** — any authenticated user can trigger paid LLM calls via `/llm` and
-  `/responses`; there is no quota layer. Out of scope. ([routers/llm.md](../http-server/routers/llm.md))
-- **Streaming `/llm` custom-prompt output (SSE)** — both `/llm` endpoints are blocking. Streaming is
-  out of scope. ([routers/llm.md](../http-server/routers/llm.md))
-- **WebSocket dataset-ownership authorization** — the subscribe handshake authenticates the user but
-  does not verify the user owns the dataset behind the `pipeline_run_id`. Documented gap, not fixed.
-  ([websocket.md](../http-server/websocket.md))
-- **WebSocket query-string token auth** — only cookie auth is accepted on the WS handshake. A
-  `?token=…` fallback for non-browser clients is a future addition behind a feature flag.
-  ([websocket.md](../http-server/websocket.md))
-
-### Notebook execution (`/notebooks/.../run`)
-
-The endpoint is implemented (`SubprocessRunner`, gated by the `notebook_runner_enabled` config
-flag), but the surrounding deployment story is not solved:
-
-- **`cognee` Python package in the sandbox** — for `await cognee.add(...)` to work inside a cell, the
-  subprocess needs `pip install cognee`. Bundling CPython + the wheel vs. operator-provided is
-  undecided.
-- **Sandbox auth / state propagation** — a cell that calls cognee needs scoped credentials so it
-  can't use the operator's keys against another tenant. Not implemented.
-
-See [routers/notebooks.md §6](../http-server/routers/notebooks.md).
-
-## Auth
-
-From [http-server/auth.md](../http-server/auth.md):
-
-- **OAuth2 / OIDC providers** (Google, GitHub, …) — deferred; only cookie + bearer + API-key auth
-  ships.
-- **JWT denylist / revocation** — logout invalidates the cookie, not the underlying JWT. A leaked
-  token can only be revoked by rotating `FASTAPI_USERS_JWT_SECRET`.
-- **Multi-key JWT secret rotation** (`kid` header + secret map) — single secret only today.
+`cognee-http-server` is not in this repository: it lives in the closed
+[`cognee-cloud-rs`](https://github.com/topoteretes/cognee-cloud-rs) repo, and its known gaps
+(server, notebook execution, auth) and open design questions moved with it to
+`docs/http-server/roadmap.md` there.
 
 ## Telemetry / observability
 

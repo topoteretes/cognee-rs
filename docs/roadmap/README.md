@@ -3,15 +3,15 @@
 This folder is the single home for every doc that describes **outstanding work**
 in cognee-rust: known gaps, deferred features, unresolved design decisions, and
 active implementation plans. Docs that describe *already-shipped* components live
-elsewhere (`../http-server/`, `../observability/`, `../cli/`, `../performance/`,
+elsewhere (`../observability/`, `../cli/`, `../performance/`,
 etc.) — this folder is only for things still to be done.
 
 ## Gaps & open decisions
 
 | Doc | What it tracks |
 |-----|----------------|
-| [not-implemented.md](not-implemented.md) | Capabilities intentionally deferred, out of scope, or stubbed (S3, legacy binary office formats, partial `improve()` stages, multi-replica WS fan-out, …). Verified against the code. |
-| [open-questions.md](open-questions.md) | Cross-cutting design *decisions* that are still open (auth params, tenancy/RBAC scope, sampling, …) — choices to be made, not missing features. |
+| [not-implemented.md](not-implemented.md) | Capabilities intentionally deferred, out of scope, or stubbed (S3, legacy binary office formats, partial `improve()` stages, …). Verified against the code. |
+| [open-questions.md](open-questions.md) | Cross-cutting design *decisions* that are still open — choices to be made, not missing features. Currently empty: the HTTP-server questions moved to `cognee-cloud-rs`. |
 
 ## Implementation plans
 
@@ -28,7 +28,7 @@ Each plan has an index doc plus one sub-document per remaining work item.
 
 | Doc | Role |
 |-----|------|
-| [bedrock-provider-plan.md](bedrock-provider-plan.md) | The last tier of issue #17. **All of the Rust work (R1–R8) and the in-repo parity work (P2, P3, P4) have landed**; the doc stays for the one item that has not — **§5 P1**, adding `Literal["bedrock"]` to Python's `LLMConfigInputDTO.provider` in `topoteretes/cognee`, which cannot land from this repository — plus the optional **§5 P6**. Its §1 (wire spec) and §6 (decisions/caveats) remain the reference that the Bedrock source comments, `docs/http-server/routers/settings.md` and the cross-SDK parity test link into, so it is not deleted until P1 lands and those references are re-pointed. |
+| [bedrock-provider-plan.md](bedrock-provider-plan.md) | The last tier of issue #17. **All of the Rust work (R1–R8) and the in-repo parity work (P2, P3, P4) have landed**; the doc stays for the one item that has not — **§5 P1**, adding `Literal["bedrock"]` to Python's `LLMConfigInputDTO.provider` in `topoteretes/cognee`, which cannot land from this repository — plus the optional **§5 P6**. Its §1 (wire spec) and §6 (decisions/caveats) remain the reference that the Bedrock source comments, the HTTP server's settings-router docs (now in `cognee-cloud-rs`) and the cross-SDK parity test link into, so it is not deleted until P1 lands and those references are re-pointed. |
 
 ## Conventions
 

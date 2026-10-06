@@ -226,5 +226,6 @@ These live in the [`cognee`](../crates/lib/) `api` module (and `DatasetManager`)
 | export | `cognee-cli export` | _(none yet)_ | — |
 
 CLI flags and feature gates: [tools/cli.md](tools/cli.md). HTTP request/response
-shapes: [http-server/routers/](http-server/routers/README.md). Binding method
+shapes: documented with the server in the closed `cognee-cloud-rs` repo (see
+[tools/http-server.md](tools/http-server.md)). Binding method
 names per language: [tools/bindings.md](tools/bindings.md).

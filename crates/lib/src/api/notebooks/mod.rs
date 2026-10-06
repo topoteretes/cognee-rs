@@ -1,7 +1,8 @@
 //! `cognee::notebooks` — per-user notebook CRUD facade.
 //!
 //! Wraps `cognee_database::NotebookDb` with tutorial seeding and the Python
-//! truthiness-bug compat notes documented in `docs/http-server/routers/notebooks.md`.
+//! truthiness-bug compat notes documented in `docs/http-server/routers/notebooks.md`
+//! in the closed `cognee-cloud-rs` repo, which hosts the HTTP server.
 
 pub mod tutorial;
 

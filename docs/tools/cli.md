@@ -84,9 +84,10 @@ cognee-cli search "what did we learn about X?" -t GRAPH_COMPLETION -d my_dataset
 cognee-cli search "what did we learn about X?" -t HYBRID_COMPLETION -d my_dataset -k 10
 ```
 
-The full set of accepted `-t/--query-type` values is the `SearchType` enum
-documented in [`docs/http-server/routers/search.md`](../http-server/routers/search.md)
-(kept in one place to avoid duplicating the enum list). The hybrid retriever's
+The full set of accepted `-t/--query-type` values is the `QueryTypeArg` enum in
+[`crates/cli/src/cli.rs`](../../crates/cli/src/cli.rs), which maps onto the
+library's [`SearchType`](../../crates/search/src/types/search_type.rs) (see also
+`cognee-cli search --help`). The hybrid retriever's
 tuning knobs are not exposed as CLI flags in Phase 1 — see
 [configuration.md §Search — hybrid retriever knobs](../configuration.md#search--hybrid-retriever-knobs).
 

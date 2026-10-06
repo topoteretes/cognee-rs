@@ -40,12 +40,9 @@ signatures.
 ### Tools
 - **[tools/cli.md](tools/cli.md)** — the `cognee-cli` binary.
 - **[tools/bindings.md](tools/bindings.md)** — Python / C / JavaScript SDKs.
-- **[tools/http-server.md](tools/http-server.md)** — stub: `cognee-http-server` moved to the closed [`cognee-cloud-rs`](https://github.com/topoteretes/cognee-cloud-rs) repo.
+- **[tools/http-server.md](tools/http-server.md)** — note: `cognee-http-server` and its docs live in the closed [`cognee-cloud-rs`](https://github.com/topoteretes/cognee-cloud-rs) repo.
 - **[tools/backends.md](tools/backends.md)** — pluggable providers.
 - **[tools/README.md](tools/README.md)** — index, incl. dev/ops tooling (observability, benchmarking, visualization, release).
-
-### HTTP server (detail)
-- **[http-server/](http-server/README.md)** — the HTTP **wire contract**, kept here after the server crate moved to `cognee-cloud-rs`: architecture, auth, pipelines, websocket, tenancy, observability, and a [per-router reference](http-server/routers/README.md).
 
 ### Observability & performance
 - **[observability/opentelemetry.md](observability/opentelemetry.md)** — OTLP tracing.
@@ -61,4 +58,4 @@ signatures.
 - **[RELEASE.md](RELEASE.md)** — release runbook.
 
 ### Roadmap
-- **[roadmap/](roadmap/README.md)** — gaps ([not-implemented](roadmap/not-implemented.md)), open design decisions ([open-questions](roadmap/open-questions.md)), and active implementation plans.
+- **[roadmap/](roadmap/README.md)** — gaps ([not-implemented](roadmap/not-implemented.md)), open design decisions ([open-questions](roadmap/open-questions.md); the HTTP-server ones live in `cognee-cloud-rs`), and active implementation plans.

@@ -20,7 +20,7 @@ the public docs — single source of truth:
   breakdown, architecture patterns, key dependencies, `cargo doc` guide.
 - **[docs/operations.md](../docs/operations.md)** — what `add`/`cognify`/`memify`/`search` and the lifecycle ops do.
 - **[docs/configuration.md](../docs/configuration.md)** — full env-var / `Settings` / `ConfigManager` reference.
-- **[docs/tools/](../docs/tools/README.md)** — CLI, bindings, HTTP server, pluggable backends.
+- **[docs/tools/](../docs/tools/README.md)** — CLI, bindings, pluggable backends (the HTTP server and its docs live in the closed `cognee-cloud-rs` repo).
 - **[docs/README.md](../docs/README.md)** — documentation hub / index.
 
 Keep `docs/architecture.md` updated when crates are added or change — do not

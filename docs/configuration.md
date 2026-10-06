@@ -489,7 +489,8 @@ config (see [roadmap/cognify-compatibility-plan.md](roadmap/cognify-compatibilit
 > `DB_*` fallback are assembled into a connection string. The server does not
 > assemble one — with `GRAPH_DATABASE_PROVIDER=postgres` it requires
 > `GRAPH_DATABASE_URL` (a `postgres://…` or `postgresql://…` string) and fails
-> at startup otherwise. See [tools/http-server.md](tools/http-server.md).
+> at startup otherwise. The server lives in the closed `cognee-cloud-rs` repo;
+> see [tools/http-server.md](tools/http-server.md).
 
 ## Relational database
 
@@ -902,16 +903,17 @@ page, these are **library / orchestrator-only** — they are typed
 `impl From<&SearchRequest>` from the **snake_case JSON keys** inside
 `SearchRequest.retriever_specific_config`. They have no env binding.
 
-**Phase-1 reachability gap.** Every external adapter currently hardcodes
-`retriever_specific_config: None` (`http-server/src/routers/search.rs`,
-`http-server/src/responses_dispatch.rs`, `cli/src/commands/search.rs`,
-`bindings-common/src/ops/retrieval.rs`), so in Phase 1 these knobs are reachable
-**only by a direct Rust library caller** that constructs a `SearchRequest` with
-a populated `retriever_specific_config`. They are **not** wire fields on
-`SearchPayloadDTO` and are not exposed over HTTP, CLI, or the language bindings
-— the same class as `neighborhood_depth` and the other orchestrator-only
-`SearchParams` knobs (see the wire-passthrough open question in
-[`http-server/routers/search.md`](http-server/routers/search.md)).
+**Reachability.** These knobs are reachable from a direct Rust library caller
+that constructs a `SearchRequest` with a populated `retriever_specific_config`,
+and from the **language bindings**, which forward a `retrieverSpecificConfig`
+search option verbatim
+([`bindings-common/src/ops/retrieval.rs`](../crates/bindings-common/src/ops/retrieval.rs)).
+The **CLI** still hardcodes `retriever_specific_config: None`
+([`cli/src/commands/search.rs`](../crates/cli/src/commands/search.rs)), and so
+does the HTTP server, which lives in the closed `cognee-cloud-rs` repo (its
+search, recall and responses handlers): the knobs are **not** wire fields on
+`SearchPayloadDTO` — the same class as `neighborhood_depth` and the other
+orchestrator-only `SearchParams` knobs.
 
 When a knob is unset the retriever falls back through a three-layer resolution:
 `retriever_specific_config.<knob>` → `SearchRequest.top_k` capped at 10 → the
@@ -966,8 +968,8 @@ effect in Phase 1 — passing `true` must behave identically to the default:
   on a `GlobalContextSummary` node type and global-context utilities not yet
   ported to Rust.
 
-See [`http-server/routers/search.md` §7 Known limitations](http-server/routers/search.md)
-for the full degradation notes.
+The HTTP-facing degradation notes live with the server's search-router docs in
+the closed `cognee-cloud-rs` repo.
 
 ## Ontology
 
@@ -1210,12 +1212,12 @@ product analytics. The **deep references** are
 ## HTTP server
 
 The server binary — now in the closed [`cognee-cloud-rs`](https://github.com/topoteretes/cognee-cloud-rs) repo, at `crates/cognee-http-server/src/config.rs` — reads its own env surface:
-host/port, auth, body limits, pipeline registry, notebooks, health probes. See
-[tools/http-server.md](tools/http-server.md) and
-[http-server/architecture.md §config](http-server/architecture.md). Note that
-the `HYBRID_COMPLETION` tuning knobs are **not** part of the HTTP wire surface
-in Phase 1 — see [Search — hybrid retriever knobs](#search--hybrid-retriever-knobs)
-and [`http-server/routers/search.md`](http-server/routers/search.md).
+host/port, auth, body limits, pipeline registry, notebooks, health probes. That
+env surface, and the rest of the server's documentation, is maintained in
+`cognee-cloud-rs` (`docs/http-server/`); see
+[tools/http-server.md](tools/http-server.md). Note that the `HYBRID_COMPLETION`
+tuning knobs are **not** part of the HTTP wire surface — see
+[Search — hybrid retriever knobs](#search--hybrid-retriever-knobs).
 
 ## Cloud
 

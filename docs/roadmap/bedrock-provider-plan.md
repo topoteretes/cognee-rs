@@ -22,7 +22,7 @@ both shipped earlier).
 | P6 — raise Python's `transcribe_image` to match Rust (§6.5) | ⬜ optional, not required for parity |
 
 **Why this doc stays in the roadmap folder.** P1 is still outstanding upstream,
-and it is the tracker that `docs/http-server/routers/settings.md` §6.4 and the
+and it is the tracker that `docs/http-server/routers/settings.md` (now in `cognee-cloud-rs`) and the
 `xfail(strict=True)` case `test_settings_post_bedrock_accepted_by_python` both
 point at. (That case lived in `e2e-cross-sdk/harness/test_http_settings.py`,
 which left this repo with `cognee-http-server` and now runs in the closed
@@ -804,7 +804,7 @@ correctly sequenced.
 > not landable from this repository. R7 shipped ahead of it, which inverts the
 > documented replication in exactly the direction §5 P1 warned about — Rust now
 > accepts a payload Python rejects. That inversion is documented in
-> `docs/http-server/routers/settings.md` §6.4 and guarded by the
+> `docs/http-server/routers/settings.md` (now in `cognee-cloud-rs`) and guarded by the
 > `xfail(strict=True)` case in P4's test, which turns red the moment upstream
 > accepts the value.
 

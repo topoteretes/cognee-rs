@@ -12,7 +12,8 @@
 //! ```
 //!
 //! Field ordering matches the Python helper exactly — the WS frame is part
-//! of the cross-SDK wire contract, see [`docs/http-server/websocket.md`].
+//! of the cross-SDK wire contract, documented in `docs/http-server/websocket.md`
+//! in the closed `cognee-cloud-rs` repo, which hosts the HTTP server.
 
 use uuid::Uuid;
 
