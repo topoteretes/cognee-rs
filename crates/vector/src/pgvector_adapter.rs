@@ -140,7 +140,7 @@ const HNSW_EF_SEARCH_MAX: usize = 1000;
 
 /// Batches of at least this many points into an HNSW-indexed collection are
 /// candidates for [`PgVectorAdapter::upsert_rebuilding_index`].
-const HNSW_REBUILD_MIN_ROWS: usize = 1000;
+const HNSW_REBUILD_MIN_ROWS: usize = 200;
 
 /// Rebuild the HNSW index around a batch that would insert at least this
 /// fraction of the collection's current rows into it (see
