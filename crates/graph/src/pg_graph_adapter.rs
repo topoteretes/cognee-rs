@@ -18,7 +18,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sea_orm::sea_query::{Alias, Cond, Expr, Iden, Query};
 use sea_orm::{
-    ConnectOptions, ConnectionTrait, Database, DatabaseBackend, DatabaseConnection, Statement,
+    ConnectOptions, ConnectionTrait, Database, DatabaseBackend, DatabaseConnection, DbErr,
+    ExecResult, QueryResult, Statement, TransactionTrait,
 };
 use sea_orm_migration::MigratorTrait;
 use serde_json::{Value, json};
@@ -40,6 +41,21 @@ const WRITE_BATCH: usize = 5000;
 
 /// Ids per `= ANY($1::text[])` array parameter on the read/delete paths.
 const ID_BATCH: usize = 20_000;
+
+/// `plan_cache_mode = force_custom_plan`, as a `SET LOCAL`.
+///
+/// The `SET LOCAL` twin of the connection option [`PgGraphAdapter::new`] puts on
+/// the pool it opens itself; that constructor's comment carries the measurement
+/// (1.2 ms custom vs 10.9 ms generic for a 5-entity `get_neighborhood` on a 10k
+/// store, the generic plan having fallen back to a sequential scan of
+/// `graph_edge`). This is the form [`PgGraphAdapter::from_connection`] has to
+/// use, because the pool is the caller's — in the single-shared-Postgres layout
+/// it is the relational store's — so its `ConnectOptions` are not ours to
+/// change. Keep the two in step.
+///
+/// `plan_cache_mode` is core Postgres and needs no version gate, unlike the
+/// `hnsw.*` settings the vector adapter carries the same way.
+const PLAN_CACHE_LOCAL: &str = "SET LOCAL plan_cache_mode = force_custom_plan";
 
 /// Nodes of the materialized id-set CTE `ids` plus the edges induced on it:
 /// each id's outgoing edges through the source-side index (a `LATERAL`
@@ -240,6 +256,14 @@ pub struct PgGraphAdapter {
     /// failing with a closed pool. Neither in-tree factory takes that path today,
     /// but both constructors are public API.
     owns_pool: bool,
+    /// Whether every pooled connection was opened with [`Self::new`]'s session
+    /// options — today just `plan_cache_mode = force_custom_plan`.
+    ///
+    /// `false` for [`Self::from_connection`], where the parameterised
+    /// statements carry the same setting themselves as a `SET LOCAL` (see
+    /// [`Self::tuned_locals`]), so an adapter answers and plans the same
+    /// whichever constructor built it — only the round trip differs.
+    tuned_sessions: bool,
 }
 
 impl PgGraphAdapter {
@@ -274,12 +298,21 @@ impl PgGraphAdapter {
         Ok(Self {
             db,
             owns_pool: true,
+            tuned_sessions: true,
         })
     }
 
     /// Wrap an existing SeaORM `DatabaseConnection` (must be Postgres).
     ///
     /// Only the graph tables are created if missing (via migration).
+    ///
+    /// The session tuning [`Self::new`] puts in its pool's connection options
+    /// cannot be applied here — the pool is the caller's, and in the
+    /// single-shared-Postgres layout that caller is the relational store — so
+    /// the parameterised statements carry it per statement instead
+    /// (`tuned_sessions: false`; see [`Self::tuned_locals`]). This is the
+    /// constructor that layout actually uses, so it is the one where the
+    /// generic-plan cliff `new()` measures would otherwise be hit.
     pub async fn from_connection(db: DatabaseConnection) -> GraphDBResult<Self> {
         cleanup_legacy_seaql_migrations(&db).await?;
         migrator::Migrator::up(&db, None).await.map_err(|e| {
@@ -289,6 +322,7 @@ impl PgGraphAdapter {
         Ok(Self {
             db,
             owns_pool: false,
+            tuned_sessions: false,
         })
     }
 
@@ -387,6 +421,71 @@ impl PgGraphAdapter {
         {
             debug!("ANALYZE {table} failed: {e}");
         }
+    }
+
+    /// The `SET LOCAL` a statement has to carry on a connection this adapter
+    /// did not open, or `None` on one of its own pools.
+    ///
+    /// Applied to the **parameterised** statements only, and that is the whole
+    /// scope of the setting: a generic plan can differ from a custom one only
+    /// where there is a parameter to be costed blind. The unparameterised
+    /// statements here — the `count(*)`s, `is_empty`, `get_graph_data`,
+    /// `get_all_relationship_names`, the `reltuples` probe — plan identically
+    /// either way, so wrapping them would buy a transaction and a round trip
+    /// for nothing. `ANALYZE` could not take it at all: it cannot run inside a
+    /// transaction block.
+    ///
+    /// A plain `SET` would be worse than nothing: it outlives the statement and
+    /// leaks to whatever borrows that pooled connection next, which on a
+    /// caller-owned pool is the relational store's own queries.
+    ///
+    /// Pure in `tuned_sessions` so the decision is testable without a server.
+    fn tuned_locals(tuned_sessions: bool) -> Option<&'static str> {
+        (!tuned_sessions).then_some(PLAN_CACHE_LOCAL)
+    }
+
+    /// [`ConnectionTrait::query_all`] with [`Self::tuned_locals`] applied, in
+    /// the transaction that makes a `SET LOCAL` mean anything — outside one it
+    /// is a no-op with a warning — and that scopes it to this statement so it
+    /// cannot leak to the next borrower of a pooled connection.
+    ///
+    /// One plain statement on this adapter's own pools, where the connection
+    /// options already carry the setting.
+    async fn query_all_tuned(&self, stmt: Statement) -> Result<Vec<QueryResult>, DbErr> {
+        let Some(locals) = Self::tuned_locals(self.tuned_sessions) else {
+            return self.db.query_all(stmt).await;
+        };
+        let txn = self.db.begin().await?;
+        txn.execute_unprepared(locals).await?;
+        let rows = txn.query_all(stmt).await?;
+        txn.commit().await?;
+        Ok(rows)
+    }
+
+    /// [`Self::query_all_tuned`] for a single-row read.
+    async fn query_one_tuned(&self, stmt: Statement) -> Result<Option<QueryResult>, DbErr> {
+        let Some(locals) = Self::tuned_locals(self.tuned_sessions) else {
+            return self.db.query_one(stmt).await;
+        };
+        let txn = self.db.begin().await?;
+        txn.execute_unprepared(locals).await?;
+        let row = txn.query_one(stmt).await?;
+        txn.commit().await?;
+        Ok(row)
+    }
+
+    /// [`Self::query_all_tuned`] for a write. The write paths need it too: a
+    /// `DELETE … WHERE id = ANY($1::text[])` costed without the array is the
+    /// same sequential scan the read paths fall into.
+    async fn execute_tuned(&self, stmt: Statement) -> Result<ExecResult, DbErr> {
+        let Some(locals) = Self::tuned_locals(self.tuned_sessions) else {
+            return self.db.execute(stmt).await;
+        };
+        let txn = self.db.begin().await?;
+        txn.execute_unprepared(locals).await?;
+        let out = txn.execute(stmt).await?;
+        txn.commit().await?;
+        Ok(out)
     }
 
     /// Build a SeaORM [`Statement`] from a `sea_query` query.
@@ -498,8 +597,7 @@ impl PgGraphAdapter {
         values: Vec<sea_orm::Value>,
     ) -> GraphDBResult<Vec<GraphNode>> {
         let rows = self
-            .db
-            .query_all(Statement::from_sql_and_values(
+            .query_all_tuned(Statement::from_sql_and_values(
                 DatabaseBackend::Postgres,
                 sql,
                 values,
@@ -529,8 +627,7 @@ impl PgGraphAdapter {
         values: Vec<sea_orm::Value>,
     ) -> GraphDBResult<(Vec<GraphNode>, Vec<EdgeData>)> {
         let rows = self
-            .db
-            .query_all(Statement::from_sql_and_values(
+            .query_all_tuned(Statement::from_sql_and_values(
                 DatabaseBackend::Postgres,
                 sql,
                 values,
@@ -659,8 +756,7 @@ impl GraphDBTrait for PgGraphAdapter {
             .to_owned();
 
         let row = self
-            .db
-            .query_one(self.build(&query))
+            .query_one_tuned(self.build(&query))
             .await
             .map_err(|e| GraphDBError::QueryError(e.to_string()))?;
 
@@ -717,25 +813,24 @@ impl GraphDBTrait for PgGraphAdapter {
                 created.push(row.created_at.to_rfc3339());
                 updated.push(row.updated_at.to_rfc3339());
             }
-            self.db
-                .execute(Statement::from_sql_and_values(
-                    DatabaseBackend::Postgres,
-                    "INSERT INTO graph_node (id, name, type, properties, created_at, updated_at) \
+            self.execute_tuned(Statement::from_sql_and_values(
+                DatabaseBackend::Postgres,
+                "INSERT INTO graph_node (id, name, type, properties, created_at, updated_at) \
                      SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::jsonb[], \
                                           $5::text[]::timestamptz[], $6::text[]::timestamptz[]) \
                      ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, type = EXCLUDED.type, \
                        properties = EXCLUDED.properties, updated_at = CURRENT_TIMESTAMP",
-                    [
-                        sea_orm::Value::from(ids),
-                        sea_orm::Value::from(names),
-                        sea_orm::Value::from(types),
-                        sea_orm::Value::from(props),
-                        sea_orm::Value::from(created),
-                        sea_orm::Value::from(updated),
-                    ],
-                ))
-                .await
-                .map_err(|e| GraphDBError::NodeError(format!("Failed to upsert nodes: {e}")))?;
+                [
+                    sea_orm::Value::from(ids),
+                    sea_orm::Value::from(names),
+                    sea_orm::Value::from(types),
+                    sea_orm::Value::from(props),
+                    sea_orm::Value::from(created),
+                    sea_orm::Value::from(updated),
+                ],
+            ))
+            .await
+            .map_err(|e| GraphDBError::NodeError(format!("Failed to upsert nodes: {e}")))?;
         }
         if order.len() >= ANALYZE_MIN_ROWS {
             self.analyze_if_never_analyzed("graph_node").await;
@@ -750,8 +845,7 @@ impl GraphDBTrait for PgGraphAdapter {
             .and_where(Expr::col(GNode::Id).eq(node_id))
             .to_owned();
 
-        self.db
-            .execute(self.build(&query))
+        self.execute_tuned(self.build(&query))
             .await
             .map_err(|e| GraphDBError::NodeError(format!("Failed to delete node: {e}")))?;
         Ok(())
@@ -762,14 +856,13 @@ impl GraphDBTrait for PgGraphAdapter {
         // statement text, and no ceiling at PostgreSQL's 65 535 bind
         // parameters (the per-id `IN ($1, …)` list failed past it).
         for chunk in node_ids.chunks(ID_BATCH) {
-            self.db
-                .execute(Statement::from_sql_and_values(
-                    DatabaseBackend::Postgres,
-                    "DELETE FROM graph_node WHERE id = ANY($1::text[])",
-                    [chunk.to_vec().into()],
-                ))
-                .await
-                .map_err(|e| GraphDBError::NodeError(format!("Failed to delete nodes: {e}")))?;
+            self.execute_tuned(Statement::from_sql_and_values(
+                DatabaseBackend::Postgres,
+                "DELETE FROM graph_node WHERE id = ANY($1::text[])",
+                [chunk.to_vec().into()],
+            ))
+            .await
+            .map_err(|e| GraphDBError::NodeError(format!("Failed to delete nodes: {e}")))?;
         }
         Ok(())
     }
@@ -782,8 +875,7 @@ impl GraphDBTrait for PgGraphAdapter {
             .to_owned();
 
         let row = self
-            .db
-            .query_one(self.build(&query))
+            .query_one_tuned(self.build(&query))
             .await
             .map_err(|e| GraphDBError::QueryError(e.to_string()))?;
 
@@ -798,8 +890,7 @@ impl GraphDBTrait for PgGraphAdapter {
         let mut out = Vec::with_capacity(node_ids.len());
         for chunk in node_ids.chunks(ID_BATCH) {
             let rows = self
-                .db
-                .query_all(Statement::from_sql_and_values(
+                .query_all_tuned(Statement::from_sql_and_values(
                     DatabaseBackend::Postgres,
                     "SELECT id, name, type, properties FROM graph_node WHERE id = ANY($1::text[])",
                     [chunk.to_vec().into()],
@@ -1025,8 +1116,7 @@ impl GraphDBTrait for PgGraphAdapter {
             .to_owned();
 
         let row = self
-            .db
-            .query_one(self.build(&query))
+            .query_one_tuned(self.build(&query))
             .await
             .map_err(|e| GraphDBError::QueryError(e.to_string()))?;
 
@@ -1070,8 +1160,7 @@ impl GraphDBTrait for PgGraphAdapter {
         let rels: Vec<_> = keys.iter().map(|k| k.2.clone()).collect();
 
         let rows = self
-            .db
-            .query_all(Statement::from_sql_and_values(
+            .query_all_tuned(Statement::from_sql_and_values(
                 DatabaseBackend::Postgres,
                 "SELECT v.s, v.t, v.r \
                  FROM unnest($1::text[], $2::text[], $3::text[]) AS v(s, t, r) \
@@ -1150,8 +1239,7 @@ impl GraphDBTrait for PgGraphAdapter {
         let target_id = sanitize_str(target_id).into_owned();
         let relationship_name = sanitize_str(relationship_name).into_owned();
         let result = self
-            .db
-            .execute(Statement::from_sql_and_values(
+            .execute_tuned(Statement::from_sql_and_values(
                 DatabaseBackend::Postgres,
                 "UPDATE graph_edge \
                  SET properties = COALESCE(properties, '{}'::jsonb) || $4::jsonb, \
@@ -1207,8 +1295,7 @@ impl GraphDBTrait for PgGraphAdapter {
         let rels: Vec<String> = keys.iter().map(|k| k.2.clone()).collect();
 
         let rows = self
-            .db
-            .query_all(Statement::from_sql_and_values(
+            .query_all_tuned(Statement::from_sql_and_values(
                 DatabaseBackend::Postgres,
                 "SELECT e.source_id AS s, e.target_id AS t, e.relationship_name AS r, \
                         e.properties -> 'feedback_weight' AS w \
@@ -1310,8 +1397,7 @@ impl GraphDBTrait for PgGraphAdapter {
         }
 
         let rows = self
-            .db
-            .query_all(Statement::from_sql_and_values(
+            .query_all_tuned(Statement::from_sql_and_values(
                 DatabaseBackend::Postgres,
                 "UPDATE graph_edge e \
                  SET properties = COALESCE(e.properties, '{}'::jsonb) \
@@ -1417,8 +1503,8 @@ impl GraphDBTrait for PgGraphAdapter {
                 dst.push(std::mem::take(&mut key.1));
                 rel.push(std::mem::take(&mut key.2));
             }
-            self.db
-                .execute(Statement::from_sql_and_values(
+            self
+                .execute_tuned(Statement::from_sql_and_values(
                     DatabaseBackend::Postgres,
                     "INSERT INTO graph_edge (source_id, target_id, relationship_name, properties, \
                                              created_at, updated_at) \
@@ -1460,8 +1546,7 @@ impl GraphDBTrait for PgGraphAdapter {
             .to_owned();
 
         let rows = self
-            .db
-            .query_all(self.build(&query))
+            .query_all_tuned(self.build(&query))
             .await
             .map_err(|e| GraphDBError::QueryError(e.to_string()))?;
 
@@ -1478,8 +1563,7 @@ impl GraphDBTrait for PgGraphAdapter {
         // Two directed index probes unioned into the id set, instead of one
         // `source_id = $1 OR target_id = $1` scan joined through a CASE.
         let rows = self
-            .db
-            .query_all(Statement::from_sql_and_values(
+            .query_all_tuned(Statement::from_sql_and_values(
                 DatabaseBackend::Postgres,
                 "SELECT m.id, m.name, m.type, m.properties FROM graph_node m \
                  WHERE m.id IN (SELECT target_id FROM graph_edge WHERE source_id = $1 \
@@ -1497,8 +1581,7 @@ impl GraphDBTrait for PgGraphAdapter {
         node_id: &str,
     ) -> GraphDBResult<Vec<(NodeData, HashMap<Cow<'static, str>, Value>, NodeData)>> {
         let rows = self
-            .db
-            .query_all(Statement::from_sql_and_values(
+            .query_all_tuned(Statement::from_sql_and_values(
                 DatabaseBackend::Postgres,
                 "SELECT \
                      n.id AS src_id, n.name AS src_name, n.type AS src_type, n.properties AS src_props, \
@@ -1789,8 +1872,7 @@ impl GraphDBTrait for PgGraphAdapter {
         );
 
         let rows = self
-            .db
-            .query_all(Statement::from_sql_and_values(
+            .query_all_tuned(Statement::from_sql_and_values(
                 DatabaseBackend::Postgres,
                 &sql,
                 [sea_orm::Value::from(needle.to_lowercase())],
@@ -1998,8 +2080,7 @@ impl GraphDBTrait for PgGraphAdapter {
                     break;
                 }
                 let rows = self
-                    .db
-                    .query_all(Statement::from_sql_and_values(
+                    .query_all_tuned(Statement::from_sql_and_values(
                         DatabaseBackend::Postgres,
                         "WITH f AS (SELECT DISTINCT unnest($1::text[]) AS id) \
                          SELECT e.target_id AS id FROM graph_edge e JOIN f ON e.source_id = f.id \
@@ -2427,7 +2508,9 @@ mod shared_db_migration_tests {
     /// `JoinError` instead of unwinding past the drop. `TempPostgresDb::cleanup`
     /// is `async`, so it cannot be a `Drop` impl; without this the database would
     /// leak on every red run. The panic is re-raised unchanged afterwards.
-    async fn with_temp_db<F, Fut>(what: &str, body: F)
+    /// `pub(super)` only so the sibling `session_tuning_tests` module can reuse
+    /// it rather than copy it; nothing outside the test modules can see it.
+    pub(super) async fn with_temp_db<F, Fut>(what: &str, body: F)
     where
         F: FnOnce(String) -> Fut + Send + 'static,
         Fut: std::future::Future<Output = ()> + Send + 'static,
@@ -2690,5 +2773,153 @@ mod sanitize_tests {
             row.properties["text"],
             json!("no nulls — just an em dash and 日本語")
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Session-tuning tests
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
+mod session_tuning_tests {
+    use super::shared_db_migration_tests::with_temp_db;
+    use super::{PLAN_CACHE_LOCAL, PgGraphAdapter};
+    use crate::traits::GraphDBTrait;
+    use sea_orm::{
+        ConnectOptions, ConnectionTrait, Database, DatabaseBackend, DatabaseConnection, Statement,
+    };
+    use serde_json::json;
+
+    /// The decision itself, with no server: a pool this adapter opened carries
+    /// the setting in its connection options and must not pay a transaction to
+    /// repeat it; one it did not open has no such hook and every parameterised
+    /// statement has to bring it.
+    #[test]
+    fn only_a_caller_owned_connection_carries_the_setting_per_statement() {
+        assert_eq!(PgGraphAdapter::tuned_locals(true), None);
+        assert_eq!(
+            PgGraphAdapter::tuned_locals(false),
+            Some(PLAN_CACHE_LOCAL),
+            "from_connection has no ConnectOptions hook, so the statements must \
+             carry what new()'s pool gets as an option"
+        );
+    }
+
+    /// What only a server can answer: that the `SET LOCAL` is accepted and in
+    /// force for the statement, that it does not outlive it, and that every
+    /// parameterised path still works now that it runs inside a transaction.
+    ///
+    /// The caller's pool is capped at one connection so the leak check is exact
+    /// rather than probabilistic — a plain `SET` would leak to the next borrower
+    /// of that connection, which in the single-shared-Postgres layout is the
+    /// relational store's own queries.
+    #[tokio::test]
+    async fn a_caller_owned_connection_runs_its_statements_with_a_custom_plan() {
+        with_temp_db(
+            "a_caller_owned_connection_runs_its_statements_with_a_custom_plan",
+            |url| async move {
+                let mut opts = ConnectOptions::new(url.clone());
+                opts.max_connections(1);
+                let caller_pool: DatabaseConnection = Database::connect(opts).await.unwrap();
+                let shared = PgGraphAdapter::from_connection(caller_pool.clone())
+                    .await
+                    .unwrap();
+                assert!(
+                    !shared.tuned_sessions,
+                    "from_connection wraps a pool whose options it never chose"
+                );
+
+                // In force for the statement — read back through the adapter's
+                // own helper, on a statement that actually has a parameter.
+                let row = shared
+                    .query_one_tuned(Statement::from_sql_and_values(
+                        DatabaseBackend::Postgres,
+                        "SELECT current_setting('plan_cache_mode') AS pc, $1::text AS echo",
+                        ["probe".into()],
+                    ))
+                    .await
+                    .unwrap()
+                    .expect("one row");
+                assert_eq!(
+                    row.try_get::<String>("", "pc").unwrap(),
+                    "force_custom_plan",
+                    "without this the generic plan cannot see a bound id array \
+                     and costs a neighbourhood read like any other — 10.9 ms \
+                     against 1.2 ms, per new()'s measurement"
+                );
+                assert_eq!(row.try_get::<String>("", "echo").unwrap(), "probe");
+
+                // And gone again: the caller's next query on that same, single
+                // connection must see the server default.
+                let after = caller_pool
+                    .query_one(Statement::from_string(
+                        DatabaseBackend::Postgres,
+                        "SELECT current_setting('plan_cache_mode') AS pc".to_string(),
+                    ))
+                    .await
+                    .unwrap()
+                    .expect("one row");
+                assert_eq!(
+                    after.try_get::<String>("", "pc").unwrap(),
+                    "auto",
+                    "a setting that outlives its statement leaks to whatever \
+                     borrows this pooled connection next"
+                );
+
+                // An owned pool keeps the plain single-statement path, and gets
+                // the same setting from its connection options.
+                let owned = PgGraphAdapter::new(&url).await.unwrap();
+                assert!(owned.tuned_sessions);
+                assert_eq!(
+                    owned
+                        .query_one_tuned(Statement::from_sql_and_values(
+                            DatabaseBackend::Postgres,
+                            "SELECT current_setting('plan_cache_mode') AS pc, $1::text AS echo",
+                            ["probe".into()],
+                        ))
+                        .await
+                        .unwrap()
+                        .expect("one row")
+                        .try_get::<String>("", "pc")
+                        .unwrap(),
+                    "force_custom_plan"
+                );
+
+                // Every kind of parameterised statement still answers now that
+                // it runs inside a transaction: an array read, an `unnest`
+                // insert, a single-row read, an edge read and an `ANY` delete.
+                shared
+                    .add_nodes_raw(vec![
+                        json!({"id": "a", "name": "A", "type": "Entity"}),
+                        json!({"id": "b", "name": "B", "type": "Entity"}),
+                    ])
+                    .await
+                    .unwrap();
+                shared.add_edge("a", "b", "knows", None).await.unwrap();
+                assert!(shared.has_node("a").await.unwrap());
+                assert_eq!(
+                    shared
+                        .get_nodes(&["a".to_string(), "b".to_string()])
+                        .await
+                        .unwrap()
+                        .len(),
+                    2
+                );
+                assert!(shared.get_node("a").await.unwrap().is_some());
+                assert_eq!(shared.get_edges("a").await.unwrap().len(), 1);
+                assert_eq!(shared.get_neighbors("a").await.unwrap().len(), 1);
+                shared.delete_nodes(&["a".to_string()]).await.unwrap();
+                assert!(!shared.has_node("a").await.unwrap());
+
+                owned.close().await.unwrap();
+                drop(shared);
+                caller_pool.close().await.unwrap();
+            },
+        )
+        .await;
     }
 }

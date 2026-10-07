@@ -155,3 +155,76 @@ pggraph_test!(test_property_writes_tolerate_nul_in_value);
 pggraph_test!(test_edge_feedback_weight_rejects_non_finite);
 pggraph_test!(test_nul_bytes_in_text_are_persistable);
 pggraph_test!(test_get_neighborhood_scoped_cap_is_deterministic);
+
+/// The same shared cases through [`PgGraphAdapter::from_connection`] — the
+/// constructor the single-shared-Postgres layout actually uses, and the one
+/// whose parameterised statements now each run inside a transaction so they can
+/// carry `plan_cache_mode = force_custom_plan` (which `new()` gets as a
+/// connection option).
+///
+/// `new()` runs first only to migrate; the adapter under test wraps a pool
+/// whose connect options nobody set, which is the asymmetry being closed.
+///
+/// A subset rather than all 42: what this adds over the `new()` runs is that
+/// wrapping a statement in a transaction did not change its answer, so the
+/// cases chosen are one of each statement shape — the `unnest` bulk insert, the
+/// `= ANY(array)` read and delete, a single-row read, an edge read, the
+/// `LATERAL` induced subgraph, and the recursive neighbourhood. The per-statement
+/// settings themselves are pinned by
+/// `session_tuning_tests::a_caller_owned_connection_runs_its_statements_with_a_custom_plan`.
+macro_rules! pggraph_from_connection_test {
+    ($name:ident) => {
+        #[tokio::test]
+        async fn $name() {
+            let Some(tmp) = temp_db().await else {
+                eprintln!("PGGRAPH_TEST_URL not set — skipping {}", stringify!($name));
+                return;
+            };
+            let url = tmp.url().to_string();
+            let outcome = tokio::spawn(async move {
+                // Migrate through the owning constructor, then hand the tables
+                // to an adapter over a pool it did not open.
+                let migrator = PgGraphAdapter::new(&url)
+                    .await
+                    .expect("PGGRAPH_TEST_URL is set, so the adapter must connect and migrate");
+                migrator.close().await.expect("close the migrating pool");
+                let caller_owned = sea_orm::Database::connect(&url)
+                    .await
+                    .expect("the caller's own pool must connect");
+                let db = PgGraphAdapter::from_connection(caller_owned.clone())
+                    .await
+                    .expect("from_connection must accept a migrated database");
+                common::$name(&db).await;
+                drop(db);
+                // The caller owns this pool, so the caller closes it — the
+                // adapter's own `close` is a no-op here by design.
+                caller_owned.close().await.expect("close the caller's pool");
+            })
+            .await;
+            tmp.cleanup().await;
+            if let Err(join_err) = outcome {
+                assert!(
+                    join_err.is_panic(),
+                    "the case task was cancelled instead of panicking, which this harness never does: {join_err}"
+                );
+                std::panic::resume_unwind(join_err.into_panic());
+            }
+        }
+    };
+}
+
+mod from_connection {
+    use super::{common, temp_db};
+    use cognee_graph::PgGraphAdapter;
+
+    pggraph_from_connection_test!(test_add_nodes_batch);
+    pggraph_from_connection_test!(test_get_nodes_batch);
+    pggraph_from_connection_test!(test_delete_nodes_batch);
+    pggraph_from_connection_test!(test_add_edges_batch);
+    pggraph_from_connection_test!(test_get_edges);
+    pggraph_from_connection_test!(test_get_connections);
+    pggraph_from_connection_test!(test_get_nodeset_subgraph_or);
+    pggraph_from_connection_test!(test_get_neighborhood_multiple_seeds);
+    pggraph_from_connection_test!(test_get_filtered_graph_data);
+    pggraph_from_connection_test!(test_get_candidate_nodes_by_label);
+}

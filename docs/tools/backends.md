@@ -159,6 +159,14 @@ Notes:
   expected and supported. A migration additionally sets per-table autovacuum
   scale factors (`vacuum 0.05`, `insert 0.05`, `analyze 0.02`) on both tables;
   it touches no server setting.
+  Both constructors run with `plan_cache_mode = force_custom_plan`, by different
+  means: `PgGraphAdapter::new` sets it as a connection option on the pool it
+  opens, and `from_connection` — the constructor the shared-Postgres layout uses,
+  where the pool belongs to the caller — sends it as a `SET LOCAL` with each
+  **parameterised** statement, in a transaction so it cannot leak to the next
+  borrower of that pooled connection. Only the parameterised statements: a
+  generic plan can differ from a custom one only where there is a parameter to be
+  costed blind, and the `count(*)`-style statements plan identically either way.
 - **Not in OSS.** Embedded Qdrant and on-device LiteRT inference (Android) are
   not part of this repository.
 - **Full Postgres stack** (relational + graph + vector on one Postgres) is the
