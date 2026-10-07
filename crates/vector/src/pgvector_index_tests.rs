@@ -1820,3 +1820,119 @@ async fn a_failed_end_of_load_build_stays_queued_and_the_next_one_repairs_it() {
     )
     .await;
 }
+
+/// The build *window*: `CREATE INDEX` takes only a `SHARE` lock, so searches
+/// run while it builds (209k rows took 17.9 s here), and for that whole window
+/// the collection genuinely has no index. Draining the queue before the build
+/// made `is_deferred` answer `false` from the first poll of `end_bulk_load`, so
+/// exactly the searches most likely to land — a query right after a cognify
+/// run on the HTTP server — were ordered in fp16 and planned without
+/// [`PgVectorAdapter::exact_scan_locals`].
+///
+/// `SHARE UPDATE EXCLUSIVE` from another connection is what makes this
+/// deterministic: it conflicts with the build's `SHARE` and so holds it in a
+/// lock wait, while `ACCESS SHARE` — what a search takes — conflicts with
+/// neither and is granted straight through. The wait itself is confirmed in
+/// `pg_locks` rather than assumed from a sleep.
+///
+/// The reverse window needs no test: `bulk_should_defer` records the collection
+/// *before* the `DROP INDEX` runs, so there a search believes the index is gone
+/// while it is still there — which only costs the exact scan it already asked
+/// for.
+#[tokio::test]
+async fn a_search_during_the_end_of_load_build_still_sees_an_indexless_collection() {
+    with_temp_db(
+        "a_search_during_the_end_of_load_build_still_sees_an_indexless_collection",
+        |url| async move {
+            let adapter = PgVectorAdapter::new(&url, 8).await.unwrap();
+            adapter.create_collection("Window", "f", 8).await.unwrap();
+            let db = Database::connect(&url).await.unwrap();
+            let index = PgVectorAdapter::vector_index_name("Window_f", adapter.halfvec);
+
+            let point = |i: usize| {
+                let jitter = f64::from(i as u32) * 1e-5;
+                #[allow(clippy::cast_possible_truncation)]
+                let v = vec![1.0, jitter as f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+                crate::models::VectorPoint::new(uuid::Uuid::from_u128(0x3_0000 + i as u128), v)
+            };
+            let points: Vec<_> = (0..600).map(point).collect();
+
+            adapter.begin_bulk_load().await.unwrap();
+            adapter.index_points("Window", "f", &points).await.unwrap();
+            assert!(!index_present(&db, &index).await);
+
+            // Hold the build in a lock wait.
+            let blocker = Database::connect(&url).await.unwrap();
+            let held = <DatabaseConnection as sea_orm::TransactionTrait>::begin(&blocker)
+                .await
+                .unwrap();
+            held.execute_unprepared(r#"LOCK TABLE "Window_f" IN SHARE UPDATE EXCLUSIVE MODE"#)
+                .await
+                .unwrap();
+
+            let observe = async {
+                // The premise: the build really is waiting on that lock. Polled
+                // rather than slept for, so the test cannot go green on a build
+                // that had not started.
+                let mut waiting = false;
+                for _ in 0..600 {
+                    let row = db
+                        .query_one(Statement::from_string(
+                            DatabaseBackend::Postgres,
+                            r#"SELECT count(*) AS n FROM pg_locks
+                                WHERE relation = '"Window_f"'::regclass
+                                  AND mode = 'ShareLock' AND NOT granted"#
+                                .to_string(),
+                        ))
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    if row.try_get::<i64>("", "n").unwrap() > 0 {
+                        waiting = true;
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                }
+                assert!(waiting, "the end-of-load build never reached its lock wait");
+
+                let during_deferred = adapter.is_deferred("Window_f");
+                let during_present = index_present(&db, &index).await;
+                // A search in the window is served, and served as the
+                // indexless search it is.
+                let hits = adapter
+                    .search_similar("Window", "f", &[1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], 50)
+                    .await
+                    .unwrap();
+                held.commit().await.unwrap();
+                (during_deferred, during_present, hits.len())
+            };
+
+            let (ended, (during_deferred, during_present, hit_count)) =
+                tokio::join!(adapter.end_bulk_load(), observe);
+            ended.unwrap();
+
+            assert!(
+                !during_present,
+                "the premise fails: the index was already visible, so there was \
+                 no window to observe"
+            );
+            assert!(
+                during_deferred,
+                "while the build is in flight the collection has no index, so a \
+                 search must still be ordered and planned as indexless"
+            );
+            assert_eq!(hit_count, 50, "and it must still answer");
+
+            assert!(index_present(&db, &index).await);
+            assert!(
+                !adapter.is_deferred("Window_f"),
+                "once the build commits the collection is indexed again"
+            );
+
+            drop(blocker);
+            drop(db);
+            adapter.close().await.unwrap();
+        },
+    )
+    .await;
+}

@@ -1443,6 +1443,15 @@ impl PgVectorAdapter {
     /// [`BULK_DEFER_RATIO`] note explains). It reproduces what the per-batch
     /// `count(*)` returned in the all-new case exactly: `w >= 0.25 (base + w)`,
     /// i.e. a third of the collection's starting rows.
+    ///
+    /// The collection is recorded here, *before* the caller's `DROP INDEX`
+    /// runs, so there is a window in which a search believes the index is gone
+    /// while it is still there. That direction is harmless and does not need
+    /// closing: the search is then ordered in full precision and planned with
+    /// the index paths off, which is the exact scan it would have got a
+    /// moment later anyway. The opposite direction — believing the index is
+    /// there while it is not — is the one that changes results, and
+    /// [`Self::take_deferred`] is where it is kept shut.
     #[allow(clippy::expect_used, reason = "lock poison is unrecoverable")]
     fn bulk_should_defer(
         &self,
