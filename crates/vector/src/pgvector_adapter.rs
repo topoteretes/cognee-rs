@@ -1280,6 +1280,31 @@ impl PgVectorAdapter {
 
     /// Deferred index builds to run now: all of them when `force` (close) or
     /// when the last open scope just ended.
+    ///
+    /// **Read, not drained.** An entry leaves `BulkLoad::deferred` only when its
+    /// `CREATE INDEX` has committed, in [`Self::build_deferred`], and that is
+    /// load-bearing twice over. Draining here made [`Self::is_deferred`] answer
+    /// `false` from the moment the build *started*:
+    ///
+    /// - For the ~18 s a 209k-row build takes (measured; see
+    ///   [`BULK_DEFER_RATIO`]) the collection has no index and no search knows
+    ///   it, so every concurrent search would be ordered in fp16 over a
+    ///   sequential scan and served without [`Self::exact_scan_locals`] — the
+    ///   two deviations the indexless path exists to prevent, in the window
+    ///   where a post-cognify search is most likely. The build takes only a
+    ///   `SHARE` lock, so those searches do run rather than waiting for it.
+    /// - If the build *fails* — `ENOSPC`, `statement_timeout`, a lock wait, or
+    ///   the `finish()` future dropped mid-build by a client disconnect, which
+    ///   closes the connection and cancels the build — the collection was left
+    ///   with no index and nothing recorded. The next bulk load would not
+    ///   re-defer it (`vector_index_state` answers `None`, so
+    ///   [`Self::upsert_points`] skips that branch), [`Self::close`] would have
+    ///   nothing left to build, and only a manual `vector-reindex` could
+    ///   repair it. Keeping the entry makes the next scope's end, or `close`,
+    ///   try again.
+    ///
+    /// `force` still zeroes the depth, because a `close` ends every open scope
+    /// whether or not its builds succeed.
     #[allow(clippy::expect_used, reason = "lock poison is unrecoverable")]
     fn take_deferred(&self, force: bool) -> Vec<(String, usize)> {
         // lock poison is unrecoverable
@@ -1290,9 +1315,24 @@ impl PgVectorAdapter {
         if force {
             b.depth = 0;
         }
-        let mut out: Vec<(String, usize)> = b.deferred.drain().collect();
+        let mut out: Vec<(String, usize)> = b
+            .deferred
+            .iter()
+            .map(|(coll, dim)| (coll.clone(), *dim))
+            .collect();
         out.sort();
         out
+    }
+
+    /// Forget `coll`'s deferred build, now that its index is back.
+    #[allow(clippy::expect_used, reason = "lock poison is unrecoverable")]
+    fn clear_deferred(&self, coll: &str) {
+        // lock poison is unrecoverable
+        self.bulk
+            .lock()
+            .expect("bulk-load state lock")
+            .deferred
+            .remove(coll);
     }
 
     /// Collections written in the bulk-load scopes that just ended (all
@@ -1331,6 +1371,13 @@ impl PgVectorAdapter {
     /// first error is returned (a collection left unindexed still answers
     /// every search by exact scan, and `create_missing_vector_indexes`
     /// repairs it).
+    ///
+    /// A collection is struck off [`BulkLoad::deferred`] only once its
+    /// `CREATE INDEX` has **committed** — see [`Self::take_deferred`] for why
+    /// both the failure and the in-flight case need that. Until then
+    /// [`Self::is_deferred`] keeps answering `true`, so a search that lands
+    /// during the build is still ordered and planned as the indexless search it
+    /// is.
     async fn build_deferred(&self, pending: Vec<(String, usize)>) -> VectorDBResult<()> {
         let storage = |e: sea_orm::DbErr| VectorDBError::StorageError(e.to_string());
         let mut first_err = None;
@@ -1364,12 +1411,19 @@ impl PgVectorAdapter {
                 .await
                 .map_err(storage)?;
                 txn.commit().await.map_err(storage)?;
+                // After the commit, never before: the index is visible to
+                // every other backend from here on, and only now is it true
+                // that this collection is no longer indexless.
+                self.clear_deferred(&coll);
                 debug!("bulk load: built HNSW index on {coll} ({rows} rows)");
                 Ok(())
             }
             .await;
             if let Err(e) = res {
-                warn!("bulk load: HNSW build on {coll} failed: {e}");
+                warn!(
+                    "bulk load: HNSW build on {coll} failed, leaving it queued for \
+                     the next scope end or close(): {e}"
+                );
                 first_err.get_or_insert(e);
             }
         }

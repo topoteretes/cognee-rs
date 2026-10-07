@@ -1740,3 +1740,83 @@ async fn the_backfill_reclaims_the_superseded_full_precision_index() {
     )
     .await;
 }
+
+/// A failed end-of-load index build must stay queued, not be forgotten.
+///
+/// `take_deferred` used to *drain* the queue before `build_deferred` ran, so a
+/// `CREATE INDEX` that failed — `ENOSPC`, `statement_timeout`, a lock wait, or
+/// the `finish()` future dropped mid-build by a client disconnect, which closes
+/// the connection and makes Postgres cancel the build — left the collection
+/// permanently unindexed *and* unrecorded: `is_deferred` answered `false`, so
+/// searches went back to fp16 ordering over a sequential scan; the next bulk
+/// load would not re-defer it (`vector_index_state` answers `None`, so
+/// `upsert_points` skips that branch); `close()` had nothing left to build; and
+/// the caller only ever saw a `warn!`. A manual `vector-reindex` was the only
+/// repair.
+///
+/// Renaming the table away is the cheapest deterministic stand-in for those
+/// failures — what is pinned is the bookkeeping, and that does not depend on
+/// *why* the build failed.
+#[tokio::test]
+async fn a_failed_end_of_load_build_stays_queued_and_the_next_one_repairs_it() {
+    with_temp_db(
+        "a_failed_end_of_load_build_stays_queued_and_the_next_one_repairs_it",
+        |url| async move {
+            let adapter = PgVectorAdapter::new(&url, 8).await.unwrap();
+            adapter.create_collection("Requeue", "f", 8).await.unwrap();
+            let db = Database::connect(&url).await.unwrap();
+            let index = PgVectorAdapter::vector_index_name("Requeue_f", adapter.halfvec);
+
+            let point = |i: usize| {
+                let jitter = f64::from(i as u32) * 1e-5;
+                #[allow(clippy::cast_possible_truncation)]
+                let v = vec![1.0, jitter as f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+                crate::models::VectorPoint::new(uuid::Uuid::from_u128(0x2_0000 + i as u128), v)
+            };
+            let points: Vec<_> = (0..600).map(point).collect();
+
+            adapter.begin_bulk_load().await.unwrap();
+            adapter.index_points("Requeue", "f", &points).await.unwrap();
+            assert!(
+                !index_present(&db, &index).await,
+                "the scope must have dropped the index, or there is nothing to test"
+            );
+
+            // Make the build fail, deterministically, without losing a row.
+            db.execute_unprepared(r#"ALTER TABLE "Requeue_f" RENAME TO "Requeue_f_hidden""#)
+                .await
+                .unwrap();
+            assert!(
+                adapter.end_bulk_load().await.is_err(),
+                "a build against a missing relation has to be reported"
+            );
+            assert!(
+                adapter.is_deferred("Requeue_f"),
+                "a build that did not commit must leave the collection recorded \
+                 as indexless — otherwise nothing ever builds it again and every \
+                 search is silently ordered in fp16 over a sequential scan"
+            );
+
+            // The repair is the ordinary one: the next scope end (or close())
+            // picks the queued build up.
+            db.execute_unprepared(r#"ALTER TABLE "Requeue_f_hidden" RENAME TO "Requeue_f""#)
+                .await
+                .unwrap();
+            adapter.begin_bulk_load().await.unwrap();
+            adapter.end_bulk_load().await.unwrap();
+            assert!(
+                index_present(&db, &index).await,
+                "the queued build must run at the next scope end"
+            );
+            assert!(
+                !adapter.is_deferred("Requeue_f"),
+                "and only then may a search stop treating it as indexless"
+            );
+            assert_eq!(adapter.collection_size("Requeue", "f").await.unwrap(), 600);
+
+            drop(db);
+            adapter.close().await.unwrap();
+        },
+    )
+    .await;
+}
