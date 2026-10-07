@@ -100,12 +100,17 @@ const MERGED_METADATA: &str = "COALESCE((
   ) d
   HAVING count(*) > 0), EXCLUDED.metadata)";
 
-/// HNSW graph degree. pgvector's own default; raising it trades build time and
-/// index size for recall.
-const HNSW_M: u32 = 16;
+/// HNSW graph degree. Above pgvector's default of 16: with m = 16 /
+/// ef_construction = 64 a 209k-row EdgeType index (clustered, low intrinsic
+/// dimension) left whole clusters unreachable — recall@100 0.883 with two of
+/// 20 queries near 0.02-0.06 at any ef_search <= 200 — and m = 24 /
+/// ef_construction = 128 raised it to 0.9985 for ~1.75x the build time at
+/// the same index size.
+const HNSW_M: u32 = 24;
 
-/// HNSW build-time candidate list size. pgvector's own default.
-const HNSW_EF_CONSTRUCTION: u32 = 64;
+/// HNSW build-time candidate list size (pgvector's default is 64); see
+/// [`HNSW_M`].
+const HNSW_EF_CONSTRUCTION: u32 = 128;
 
 /// pgvector cannot index a `vector` wider than 2000 dimensions — the index
 /// tuple would not fit in a page. `text-embedding-3-large` at 3072 is over the
@@ -473,7 +478,7 @@ impl PgVectorAdapter {
                 ))
                 .await
                 .map_err(storage)?;
-                txn.execute_unprepared(&Self::vector_index_ddl(&coll, false))
+                txn.execute_unprepared(&Self::vector_index_ddl(&coll, dimension, false))
                     .await
                     .map_err(storage)?;
                 txn.commit().await.map_err(storage)?;
@@ -628,7 +633,12 @@ impl PgVectorAdapter {
     /// themselves — they are table names under the same limit — so it is not
     /// introduced here.
     fn vector_index_name(coll: &str) -> String {
-        let mut name = format!("{coll}_vector_hnsw");
+        // `_halfvec_hnsw`: an expression index over `vector::halfvec(dim)`
+        // (see [`Self::vector_index_ddl`]); the new name makes
+        // `create_missing_vector_indexes` build it on stores that still carry
+        // the full-precision `_vector_hnsw` index, which the halfvec-ordered
+        // searches no longer use.
+        let mut name = format!("{coll}_halfvec_hnsw");
         name.truncate(PG_MAX_IDENTIFIER_BYTES);
         name
     }
@@ -740,7 +750,7 @@ impl PgVectorAdapter {
         }
 
         let index = Self::vector_index_name(coll);
-        let ddl = Self::vector_index_ddl(coll, concurrently);
+        let ddl = Self::vector_index_ddl(coll, dimension, concurrently);
 
         db.execute_unprepared(&ddl)
             .await
@@ -772,12 +782,20 @@ impl PgVectorAdapter {
     }
 
     /// `CREATE INDEX` for `coll`'s HNSW index (see [`Self::create_vector_index`]).
-    fn vector_index_ddl(coll: &str, concurrently: bool) -> String {
+    ///
+    /// The index is over `vector::halfvec(dimension)` — half-precision copies
+    /// of the stored vectors — while the column keeps its `vector` type (the
+    /// schema the Python SDK reads and writes). Searches order by the same
+    /// expression to use it and score with the full-precision distance, then
+    /// re-sort, so only candidate selection sees fp16 (~0.1% of the distance).
+    /// Measured on a 209k-row 384-d EdgeType index: 233 MB vs 408 MB and
+    /// ~25% faster top-100 scans.
+    fn vector_index_ddl(coll: &str, dimension: usize, concurrently: bool) -> String {
         let index = Self::vector_index_name(coll);
         let concurrent_kw = if concurrently { " CONCURRENTLY" } else { "" };
         format!(
             r#"CREATE INDEX{concurrent_kw} IF NOT EXISTS "{index}"
-               ON "{coll}" USING hnsw (vector vector_cosine_ops)
+               ON "{coll}" USING hnsw ((vector::halfvec({dimension})) halfvec_cosine_ops)
                WITH (m = {HNSW_M}, ef_construction = {HNSW_EF_CONSTRUCTION})"#
         )
     }
@@ -1167,7 +1185,7 @@ impl PgVectorAdapter {
         ))
         .await
         .map_err(storage)?;
-        txn.execute_unprepared(&Self::vector_index_ddl(coll, false))
+        txn.execute_unprepared(&Self::vector_index_ddl(coll, dimension, false))
             .await
             .map_err(storage)?;
         txn.commit().await.map_err(storage)?;
@@ -1690,13 +1708,14 @@ impl VectorDB for PgVectorAdapter {
         // literal keeps the generic plan on the index. `top_k` is a `usize`,
         // so interpolating it carries no injection risk.
         let limit = i64::try_from(top_k).unwrap_or(i64::MAX);
+        let dim = query_vector.len();
         // The outer ORDER BY restores exact distance order over the (at most
         // `top_k`) rows an iterative `relaxed_order` scan returns.
         let sql = format!(
             r#"SELECT id, score, metadata FROM (
                  SELECT id, 1 - (vector <=> $1::vector) AS score, metadata
                  FROM "{coll}"
-                 ORDER BY vector <=> $1::vector
+                 ORDER BY vector::halfvec({dim}) <=> $1::halfvec({dim})
                  LIMIT {limit}) r
                ORDER BY score DESC"#
         );
@@ -1905,6 +1924,7 @@ impl VectorDB for PgVectorAdapter {
         // search for each via a LATERAL join. Vector literals and `top_k` are
         // numeric-only, so inlining them carries no injection risk (same approach
         // as `search_similar`; `coll` is a validated identifier).
+        let dim = query_vectors.first().map_or(self.dimension, Vec::len);
         let array_literal = query_vectors
             .iter()
             .map(|v| format!("'{}'::vector", Self::format_vector(v)))
@@ -1917,7 +1937,7 @@ impl VectorDB for PgVectorAdapter {
                CROSS JOIN LATERAL (
                    SELECT id, 1 - (vector <=> q.vec) AS score, metadata
                    FROM "{coll}"
-                   ORDER BY vector <=> q.vec
+                   ORDER BY vector::halfvec({dim}) <=> q.vec::halfvec({dim})
                    LIMIT {top_k}
                ) t
                ORDER BY q.idx, t.score DESC"#

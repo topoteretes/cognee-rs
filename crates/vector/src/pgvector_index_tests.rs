@@ -64,7 +64,7 @@ async fn create_collection_builds_an_hnsw_index() {
 
         let db = Database::connect(&url).await.unwrap();
         assert!(
-            index_present(&db, "Idx_f_vector_hnsw").await,
+            index_present(&db, "Idx_f_halfvec_hnsw").await,
             "create_collection must build the ANN index, or every search is a seq scan"
         );
 
@@ -73,15 +73,15 @@ async fn create_collection_builds_an_hnsw_index() {
         let row = db
             .query_one(Statement::from_string(
                 DatabaseBackend::Postgres,
-                "SELECT indexdef FROM pg_indexes WHERE indexname = 'Idx_f_vector_hnsw'",
+                "SELECT indexdef FROM pg_indexes WHERE indexname = 'Idx_f_halfvec_hnsw'",
             ))
             .await
             .unwrap()
             .expect("the index just asserted present must have a definition");
         let def: String = row.try_get("", "indexdef").unwrap();
         assert!(
-            def.contains("hnsw") && def.contains("vector_cosine_ops"),
-            "index must be HNSW over vector_cosine_ops, got: {def}"
+            def.contains("hnsw") && def.contains("halfvec_cosine_ops"),
+            "index must be HNSW over halfvec_cosine_ops, got: {def}"
         );
 
         drop(db);
@@ -102,7 +102,7 @@ async fn a_collection_over_the_dimension_ceiling_is_left_unindexed() {
 
             let db = Database::connect(&url).await.unwrap();
             assert!(
-                !index_present(&db, "Wide_f_vector_hnsw").await,
+                !index_present(&db, "Wide_f_halfvec_hnsw").await,
                 "pgvector cannot index past 2000 dimensions — creating it would error"
             );
             assert!(
@@ -128,17 +128,17 @@ async fn backfill_indexes_pre_existing_collections_and_is_idempotent() {
 
             let db = Database::connect(&url).await.unwrap();
             // Simulate a collection created before indexing existed.
-            db.execute_unprepared(r#"DROP INDEX "Old_f_vector_hnsw""#)
+            db.execute_unprepared(r#"DROP INDEX "Old_f_halfvec_hnsw""#)
                 .await
                 .unwrap();
-            assert!(!index_present(&db, "Old_f_vector_hnsw").await);
+            assert!(!index_present(&db, "Old_f_halfvec_hnsw").await);
 
             let created = adapter.create_missing_vector_indexes().await.unwrap().built;
             assert_eq!(
                 created, 1,
                 "only the indexable collection counts — the 3072-d one is skipped"
             );
-            assert!(index_present(&db, "Old_f_vector_hnsw").await);
+            assert!(index_present(&db, "Old_f_halfvec_hnsw").await);
 
             // Idempotent: nothing left to do, and nothing recounted.
             let again = adapter.create_missing_vector_indexes().await.unwrap().built;
@@ -169,10 +169,10 @@ async fn backfill_is_reachable_through_the_trait_object() {
 
             let db = Database::connect(&url).await.unwrap();
             // Simulate a collection whose best-effort index build failed.
-            db.execute_unprepared(r#"DROP INDEX "Dyn_f_vector_hnsw""#)
+            db.execute_unprepared(r#"DROP INDEX "Dyn_f_halfvec_hnsw""#)
                 .await
                 .unwrap();
-            assert!(!index_present(&db, "Dyn_f_vector_hnsw").await);
+            assert!(!index_present(&db, "Dyn_f_halfvec_hnsw").await);
 
             // Erased exactly as the CLI holds it.
             let erased: std::sync::Arc<dyn VectorDB> = std::sync::Arc::new(adapter);
@@ -182,7 +182,7 @@ async fn backfill_is_reachable_through_the_trait_object() {
                 created, 1,
                 "the trait method must delegate to the adapter, not return the Ok(0) default"
             );
-            assert!(index_present(&db, "Dyn_f_vector_hnsw").await);
+            assert!(index_present(&db, "Dyn_f_halfvec_hnsw").await);
 
             drop(db);
             erased.close().await.unwrap();
@@ -211,7 +211,7 @@ async fn backfill_replaces_an_invalid_index_left_by_a_failed_build() {
             db.execute_unprepared(
                 "UPDATE pg_index SET indisvalid = false
                    WHERE indexrelid = (
-                     SELECT oid FROM pg_class WHERE relname = 'Broken_f_vector_hnsw'
+                     SELECT oid FROM pg_class WHERE relname = 'Broken_f_halfvec_hnsw'
                    )",
             )
             .await
@@ -222,21 +222,21 @@ async fn backfill_replaces_an_invalid_index_left_by_a_failed_build() {
             );
 
             assert_eq!(
-                PgVectorAdapter::vector_index_state(&db, "Broken_f_vector_hnsw")
+                PgVectorAdapter::vector_index_state(&db, "Broken_f_halfvec_hnsw")
                     .await
                     .unwrap(),
                 Some(false),
                 "the forged invalid state must be visible to the state probe"
             );
             assert!(
-                !index_present(&db, "Broken_f_vector_hnsw").await,
+                !index_present(&db, "Broken_f_halfvec_hnsw").await,
                 "an invalid index must not count as usable — the planner ignores it"
             );
 
             let created = adapter.create_missing_vector_indexes().await.unwrap().built;
             assert_eq!(created, 1, "the invalid index must be rebuilt, not skipped");
             assert!(
-                index_present(&db, "Broken_f_vector_hnsw").await,
+                index_present(&db, "Broken_f_halfvec_hnsw").await,
                 "after the rebuild the index must be valid and usable"
             );
 
@@ -331,7 +331,7 @@ async fn a_collection_name_past_the_identifier_limit_is_still_tracked() {
             adapter.create_collection(&data_type, "f", 8).await.unwrap();
 
             let expected = {
-                let mut n = format!("{data_type}_f_vector_hnsw");
+                let mut n = format!("{data_type}_f_halfvec_hnsw");
                 n.truncate(63);
                 n
             };
