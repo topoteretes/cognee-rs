@@ -2531,9 +2531,15 @@ impl VectorDB for PgVectorAdapter {
                 .map_err(|e| VectorDBError::StorageError(e.to_string()))
             {
                 Ok(rows) => rows,
-                // Dropped since `has_collection` (cached) said it exists:
-                // the same "missing → empty" answer as the pre-check.
-                Err(e) if self.forget_if_missing(&coll, &e) => return Ok(vec![]),
+                // Dropped since `has_collection` (cached) said it exists: the
+                // same "missing → empty" answer as the pre-check — but only
+                // for the ids this call had not reached yet. Earlier `ID_BATCH`
+                // chunks really did find their rows, and `vec![]` reported that
+                // partial success as total absence, which reads to a caller as
+                // "none of these ids exist" rather than "the collection went
+                // away mid-read". Returning what was found keeps the documented
+                // "ids not present are silently absent" semantics.
+                Err(e) if self.forget_if_missing(&coll, &e) => return Ok(results),
                 Err(e) => return Err(e),
             };
             for row in &rows {
