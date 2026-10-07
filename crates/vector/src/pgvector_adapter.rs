@@ -32,8 +32,9 @@ use sea_orm::{
     TransactionTrait,
 };
 use sea_orm_migration::MigratorTrait;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
+use std::sync::RwLock;
 use tracing::{Span, debug, instrument, warn};
 use uuid::Uuid;
 
@@ -244,6 +245,12 @@ pub struct PgVectorAdapter {
     /// ANN search with `top_k` up to that runs as one plain statement instead
     /// of `BEGIN; SET LOCAL …; SELECT; COMMIT`.
     tuned_sessions: bool,
+    /// Collections known to exist, so `has_collection` — called before every
+    /// search and upsert by the retrievers and the indexer — is a lookup
+    /// instead of a round trip. Only positive answers are cached; a
+    /// collection dropped behind this adapter's back (another process) is
+    /// evicted on the first "relation does not exist" error.
+    known: RwLock<HashSet<String>>,
 }
 
 impl PgVectorAdapter {
@@ -276,6 +283,7 @@ impl PgVectorAdapter {
             dimension,
             owns_pool: true,
             tuned_sessions: true,
+            known: RwLock::new(HashSet::new()),
         })
     }
 
@@ -295,6 +303,7 @@ impl PgVectorAdapter {
             dimension,
             owns_pool: false,
             tuned_sessions: false,
+            known: RwLock::new(HashSet::new()),
         })
     }
 
@@ -323,6 +332,44 @@ impl PgVectorAdapter {
             .close_by_ref()
             .await
             .map_err(|e| VectorDBError::StorageError(format!("PGVector pool close failed: {e}")))
+    }
+
+    #[allow(clippy::expect_used, reason = "lock poison is unrecoverable")]
+    fn is_known(&self, coll: &str) -> bool {
+        // lock poison is unrecoverable
+        self.known
+            .read()
+            .expect("collection cache lock")
+            .contains(coll)
+    }
+
+    #[allow(clippy::expect_used, reason = "lock poison is unrecoverable")]
+    fn remember(&self, coll: &str) {
+        // lock poison is unrecoverable
+        self.known
+            .write()
+            .expect("collection cache lock")
+            .insert(coll.to_string());
+    }
+
+    #[allow(clippy::expect_used, reason = "lock poison is unrecoverable")]
+    fn forget(&self, coll: &str) {
+        // lock poison is unrecoverable
+        self.known
+            .write()
+            .expect("collection cache lock")
+            .remove(coll);
+    }
+
+    /// Whether `e` says `coll`'s table is gone; if so, evict it from the
+    /// collection cache so the next `has_collection` asks the database.
+    fn forget_if_missing(&self, coll: &str, e: &VectorDBError) -> bool {
+        let msg = e.to_string();
+        let missing = msg.contains("does not exist") && msg.contains(coll);
+        if missing {
+            self.forget(coll);
+        }
+        missing
     }
 
     /// Returns the default vector dimension this adapter was configured with.
@@ -1093,17 +1140,21 @@ impl VectorDB for PgVectorAdapter {
             .await
             .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
 
+        self.remember(&coll);
         debug!("created collection {coll} (dim={dimension})");
         Ok(())
     }
 
     async fn has_collection(&self, data_type: &str, field_name: &str) -> VectorDBResult<bool> {
         let coll = Self::collection_name(data_type, field_name)?;
+        if self.is_known(&coll) {
+            return Ok(true);
+        }
 
         let inner = Query::select()
             .expr(Expr::val(1))
             .from(VColl::Table)
-            .and_where(Expr::col(VColl::CollectionName).eq(coll))
+            .and_where(Expr::col(VColl::CollectionName).eq(coll.clone()))
             .to_owned();
 
         let query = Query::select()
@@ -1116,15 +1167,16 @@ impl VectorDB for PgVectorAdapter {
             .await
             .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
 
-        match row {
-            Some(r) => {
-                let exists: bool = r
-                    .try_get("", "exists")
-                    .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
-                Ok(exists)
-            }
-            None => Ok(false),
+        let exists = match row {
+            Some(r) => r
+                .try_get::<bool>("", "exists")
+                .map_err(|e| VectorDBError::StorageError(e.to_string()))?,
+            None => false,
+        };
+        if exists {
+            self.remember(&coll);
         }
+        Ok(exists)
     }
 
     #[instrument(
@@ -1172,7 +1224,10 @@ impl VectorDB for PgVectorAdapter {
         // would drop earlier datasets' `dataset_id` (cross-dataset dedup bug),
         // so the stored membership is unioned in, mirroring the in-memory /
         // lancedb adapters and Python's union semantics.
-        self.upsert_points(&coll, points, true).await?;
+        if let Err(e) = self.upsert_points(&coll, points, true).await {
+            self.forget_if_missing(&coll, &e);
+            return Err(e);
+        }
 
         Span::current().record(COGNEE_DB_ROW_COUNT, points.len() as i64);
         Ok(())
@@ -1228,7 +1283,10 @@ impl VectorDB for PgVectorAdapter {
 
         // Unlike `index_points`, prior dataset membership is NOT unioned in;
         // the incoming metadata is written verbatim (full replace on conflict).
-        self.upsert_points(&coll, points, false).await?;
+        if let Err(e) = self.upsert_points(&coll, points, false).await {
+            self.forget_if_missing(&coll, &e);
+            return Err(e);
+        }
 
         Span::current().record(COGNEE_DB_ROW_COUNT, points.len() as i64);
         Ok(())
@@ -1283,7 +1341,10 @@ impl VectorDB for PgVectorAdapter {
                 self.ann_search_locals(top_k),
                 Statement::from_sql_and_values(DatabaseBackend::Postgres, &sql, [vec_str.into()]),
             )
-            .await?;
+            .await
+            .inspect_err(|e| {
+                self.forget_if_missing(&coll, e);
+            })?;
 
         let mut results = Vec::with_capacity(rows.len());
         for row in &rows {
@@ -1425,7 +1486,7 @@ impl VectorDB for PgVectorAdapter {
                 placeholders.join(", ")
             );
             let values: Vec<sea_orm::Value> = chunk.iter().map(|id| (*id).into()).collect();
-            let rows = self
+            let rows = match self
                 .db
                 .query_all(Statement::from_sql_and_values(
                     DatabaseBackend::Postgres,
@@ -1433,7 +1494,14 @@ impl VectorDB for PgVectorAdapter {
                     values,
                 ))
                 .await
-                .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
+                .map_err(|e| VectorDBError::StorageError(e.to_string()))
+            {
+                Ok(rows) => rows,
+                // Dropped since `has_collection` (cached) said it exists:
+                // the same "missing → empty" answer as the pre-check.
+                Err(e) if self.forget_if_missing(&coll, &e) => return Ok(vec![]),
+                Err(e) => return Err(e),
+            };
             for row in &rows {
                 results.push(Self::row_to_retrieve_result(row)?);
             }
@@ -1501,7 +1569,10 @@ impl VectorDB for PgVectorAdapter {
                 self.ann_search_locals(top_k),
                 Statement::from_string(DatabaseBackend::Postgres, sql),
             )
-            .await?;
+            .await
+            .inspect_err(|e| {
+                self.forget_if_missing(&coll, e);
+            })?;
 
         // Pre-size one bucket per query; `idx` (1-based ordinality) routes each row
         // back to its query, and queries with no hits keep their empty bucket.
@@ -1536,6 +1607,9 @@ impl VectorDB for PgVectorAdapter {
         let coll = Self::collection_name(data_type, field_name)?;
         Span::current().record(COGNEE_VECTOR_COLLECTION, coll.as_str());
 
+        // Evicted first: whatever happens below, the next `has_collection`
+        // asks the database.
+        self.forget(&coll);
         let drop = Table::drop()
             .table(Alias::new(&coll))
             .if_exists()
