@@ -351,6 +351,156 @@ $fn$";
 /// Postgres truncates any identifier past this many bytes (`NAMEDATALEN - 1`).
 const PG_MAX_IDENTIFIER_BYTES: usize = 63;
 
+/// Lowest `vector` extension version that has the `halfvec` type and the
+/// `halfvec_cosine_ops` opclass (pgvector 0.7.0, May 2024).
+///
+/// Below it the half-precision index and the `vector::halfvec(n)` ordering both
+/// fail outright with `type "halfvec" does not exist` — not a slow fallback, an
+/// error on every similarity search — and nothing in the setup would catch it:
+/// the migration only runs `CREATE EXTENSION IF NOT EXISTS vector`, which is a
+/// no-op against a database that already carries 0.5.x or 0.6.x. So the version
+/// is probed once per adapter and the full-precision path used below it; see
+/// [`halfvec_in_extversion`] and [`probe_halfvec_support`].
+const HALFVEC_MIN_VERSION: (u32, u32) = (0, 7);
+
+/// Whether `extversion` (the `pg_extension.extversion` string of the `vector`
+/// extension, e.g. `"0.8.2"`) is at least [`HALFVEC_MIN_VERSION`].
+///
+/// Only the first two components are compared: `halfvec` arrived in 0.7.0, so
+/// no patch release is on the boundary. An unparseable version answers `false`,
+/// because the full-precision path is correct on every version while the
+/// half-precision one is correct on none below 0.7 — the safe side of a guess
+/// is the slower index, not a store whose every search errors.
+fn halfvec_in_extversion(extversion: &str) -> bool {
+    let mut parts = extversion.trim().split('.');
+    let (Some(major), Some(minor)) = (parts.next(), parts.next()) else {
+        return false;
+    };
+    // A suffix like `0.8.0-dev` or `0.7` is fine: only the leading digits of
+    // each of the first two components are read.
+    let num = |s: &str| {
+        s.chars()
+            .take_while(char::is_ascii_digit)
+            .collect::<String>()
+            .parse::<u32>()
+            .ok()
+    };
+    match (num(major), num(minor)) {
+        (Some(major), Some(minor)) => (major, minor) >= HALFVEC_MIN_VERSION,
+        _ => false,
+    }
+}
+
+/// Probe the installed `vector` extension once and say whether the
+/// half-precision index and ordering can be used.
+///
+/// Called from both constructors, after the migration has run
+/// `CREATE EXTENSION IF NOT EXISTS vector`, so the row is expected to be there.
+/// A missing row or a failed query answers `false` and logs: the adapter stays
+/// usable on the full-precision path either way, and degrading loudly beats
+/// erroring on every search.
+async fn probe_halfvec_support(db: &DatabaseConnection) -> bool {
+    let row = db
+        .query_one(Statement::from_string(
+            DatabaseBackend::Postgres,
+            "SELECT extversion FROM pg_extension WHERE extname = 'vector'",
+        ))
+        .await;
+    let extversion = match row {
+        Ok(Some(row)) => row.try_get::<String>("", "extversion").ok(),
+        Ok(None) => None,
+        Err(e) => {
+            warn!(
+                error = %e,
+                "could not read the installed pgvector version — using the \
+                 full-precision HNSW index and ordering"
+            );
+            return false;
+        }
+    };
+    match extversion {
+        Some(v) if halfvec_in_extversion(&v) => {
+            debug!("pgvector {v}: using the half-precision HNSW index and ordering");
+            true
+        }
+        Some(v) => {
+            warn!(
+                "pgvector {v} is older than {}.{} and has no `halfvec` type: falling back \
+                 to the full-precision index and ordering (larger index, slower scans, \
+                 identical results). `ALTER EXTENSION vector UPDATE` after installing a \
+                 newer pgvector binary, then `cognee-cli vector-reindex`, switches to the \
+                 half-precision index.",
+                HALFVEC_MIN_VERSION.0, HALFVEC_MIN_VERSION.1,
+            );
+            false
+        }
+        None => {
+            warn!(
+                "the `vector` extension reported no version — using the \
+                 full-precision HNSW index and ordering"
+            );
+            false
+        }
+    }
+}
+
+/// Cases for the pgvector version gate.
+///
+/// `cfg(test)` alone, with no feature and no database: what has to be pinned is
+/// the *decision*, and that is a pure function of the `extversion` string.
+///
+/// # Verifying the degraded path against a real old extension
+/// Not done here, and not claimed: there is no pgvector 0.6 to hand, and the
+/// floating `pgvector/pgvector:pg16` tag CI uses resolves to 0.8.x, which is
+/// exactly why this defect reached review. To check it end to end:
+///
+/// ```text
+/// docker run -e POSTGRES_PASSWORD=pg -p 5432:5432 pgvector/pgvector:0.6.2-pg16
+/// PGVECTOR_TEST_URL=postgres://postgres:pg@localhost/postgres \
+///   cargo test -p cognee-vector --features pgvector -- --test-threads 1
+/// ```
+///
+/// Expected: the `pgvector 0.6.2 is older than 0.7` warning once per adapter,
+/// `<coll>_vector_hnsw` instead of `<coll>_halfvec_hnsw` (the index-name
+/// assertions in `pgvector_index_tests` are written for the modern name and
+/// will fail on that image — they pin the 0.7+ shape deliberately), and every
+/// similarity search returning the same rows it does on 0.8.
+#[cfg(test)]
+mod halfvec_gate_tests {
+    use super::halfvec_in_extversion;
+
+    /// 0.7.0 is the boundary, and an unreadable version must land on the
+    /// full-precision side — the one that works on every version. Getting the
+    /// `false` direction wrong makes every similarity search fail with
+    /// `type "halfvec" does not exist`; getting `true` wrong only costs index
+    /// size and scan time.
+    #[test]
+    fn the_gate_opens_at_0_7_and_closes_on_anything_unreadable() {
+        for (raw, want) in [
+            ("0.8.2", true),
+            ("0.7.0", true),
+            ("0.7", true),
+            (" 0.8.0 ", true),
+            ("0.8.0-dev", true),
+            ("1.0.0", true),
+            ("0.10.0", true),
+            ("0.6.2", false),
+            ("0.6", false),
+            ("0.5.1", false),
+            ("", false),
+            ("0", false),
+            ("unknown", false),
+            ("0.x", false),
+        ] {
+            assert_eq!(
+                halfvec_in_extversion(raw),
+                want,
+                "pgvector {raw:?} must resolve to halfvec = {want}"
+            );
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Table / column identifiers for sea_query (`_vector_collections`)
 // ---------------------------------------------------------------------------
@@ -454,6 +604,16 @@ pub struct PgVectorAdapter {
     known: RwLock<HashSet<String>>,
     /// Bulk-load scope state (see [`VectorDB::begin_bulk_load`]).
     bulk: std::sync::Mutex<BulkLoad>,
+    /// Whether the installed `vector` extension has the `halfvec` type, probed
+    /// once at construction (see [`probe_halfvec_support`]).
+    ///
+    /// `false` puts both the index and the search ordering back on
+    /// full-precision `vector`: correct on every pgvector version, just a
+    /// larger index and a slower scan. It is not a tuning knob — below
+    /// [`HALFVEC_MIN_VERSION`] the half-precision expression does not parse,
+    /// so every similarity search would fail with `type "halfvec" does not
+    /// exist`.
+    halfvec: bool,
 }
 
 /// Open bulk-load scopes, and per collection the points written in them and
@@ -510,6 +670,7 @@ impl PgVectorAdapter {
             .map_err(|e| VectorDBError::StorageError(format!("PGVector migration failed: {e}")))?;
 
         debug!("PgVectorAdapter initialised (dimension={dimension})");
+        let halfvec = probe_halfvec_support(&db).await;
         Ok(Self {
             db,
             dimension,
@@ -517,6 +678,7 @@ impl PgVectorAdapter {
             tuned_sessions: true,
             known: RwLock::new(HashSet::new()),
             bulk: std::sync::Mutex::new(BulkLoad::default()),
+            halfvec,
         })
     }
 
@@ -531,6 +693,7 @@ impl PgVectorAdapter {
             .await
             .map_err(|e| VectorDBError::StorageError(format!("PGVector migration failed: {e}")))?;
 
+        let halfvec = probe_halfvec_support(&db).await;
         Ok(Self {
             db,
             dimension,
@@ -538,6 +701,7 @@ impl PgVectorAdapter {
             tuned_sessions: false,
             known: RwLock::new(HashSet::new()),
             bulk: std::sync::Mutex::new(BulkLoad::default()),
+            halfvec,
         })
     }
 
@@ -648,9 +812,14 @@ impl PgVectorAdapter {
                 ))
                 .await
                 .map_err(storage)?;
-                txn.execute_unprepared(&Self::vector_index_ddl(&coll, dimension, false))
-                    .await
-                    .map_err(storage)?;
+                txn.execute_unprepared(&Self::vector_index_ddl(
+                    &coll,
+                    dimension,
+                    false,
+                    self.halfvec,
+                ))
+                .await
+                .map_err(storage)?;
                 txn.commit().await.map_err(storage)?;
                 debug!("bulk load: built HNSW index on {coll} ({rows} rows)");
                 Ok(())
@@ -812,13 +981,27 @@ impl PgVectorAdapter {
     /// collide on one index name. That is inherited from the collection names
     /// themselves — they are table names under the same limit — so it is not
     /// introduced here.
-    fn vector_index_name(coll: &str) -> String {
+    ///
+    /// `halfvec` picks which of the two index shapes is being named, and the
+    /// names must differ because the *definitions* do: a `_halfvec_hnsw` built
+    /// against the old full-precision ordering would never be used, and
+    /// `CREATE INDEX IF NOT EXISTS` would see the name and leave it. On a
+    /// pgvector older than [`HALFVEC_MIN_VERSION`] the name is the legacy
+    /// `_vector_hnsw` — which is also exactly the index such a store already
+    /// carries from before the half-precision change, so it is reused rather
+    /// than rebuilt.
+    fn vector_index_name(coll: &str, halfvec: bool) -> String {
         // `_halfvec_hnsw`: an expression index over `vector::halfvec(dim)`
         // (see [`Self::vector_index_ddl`]); the new name makes
         // `create_missing_vector_indexes` build it on stores that still carry
         // the full-precision `_vector_hnsw` index, which the halfvec-ordered
         // searches no longer use.
-        let mut name = format!("{coll}_halfvec_hnsw");
+        let suffix = if halfvec {
+            "halfvec_hnsw"
+        } else {
+            "vector_hnsw"
+        };
+        let mut name = format!("{coll}_{suffix}");
         name.truncate(PG_MAX_IDENTIFIER_BYTES);
         name
     }
@@ -866,6 +1049,25 @@ impl PgVectorAdapter {
         }
     }
 
+    /// The `ORDER BY` expression an ANN similarity search selects candidates
+    /// with, over `coll`'s `dim`-dimensional vectors, against the bound query
+    /// vector `param` (`"$1"`, or a correlated column on the batch path).
+    ///
+    /// Half-precision when the installed pgvector has `halfvec`: it matches the
+    /// `halfvec_cosine_ops` index and costs ~0.1% of the distance, which only
+    /// candidate *selection* sees (the score is always the full-precision
+    /// `<=>`). Below [`HALFVEC_MIN_VERSION`] there is no `halfvec` type at all,
+    /// so the expression has to be the plain `vector` one — matching the
+    /// `vector_cosine_ops` index [`Self::vector_index_ddl`] builds on that
+    /// version — or every search fails to parse.
+    fn candidate_order_expr(&self, param: &str, dim: usize) -> String {
+        if self.halfvec {
+            format!("vector::halfvec({dim}) <=> {param}::halfvec({dim})")
+        } else {
+            format!("vector <=> {param}::vector")
+        }
+    }
+
     /// `SET LOCAL` statements that force an exact scan, for the paths whose
     /// correctness depends on it.
     fn exact_scan_locals() -> &'static str {
@@ -905,10 +1107,13 @@ impl PgVectorAdapter {
     /// Create the HNSW index over `coll`'s `vector` column, if the collection is
     /// narrow enough to index.
     ///
-    /// The opclass is `vector_cosine_ops` because every search site orders by
-    /// the cosine operator `<=>`; an opclass that does not match the operator in
-    /// the `ORDER BY` is simply never used by the planner, which would leave the
-    /// sequential scan in place while looking like it had been fixed.
+    /// The opclass is a cosine one because every search site orders by the
+    /// cosine operator `<=>`; an opclass that does not match the operator *and
+    /// the expression* in the `ORDER BY` is simply never used by the planner,
+    /// which would leave the sequential scan in place while looking like it had
+    /// been fixed. `halfvec` picks which pair — `halfvec_cosine_ops` over
+    /// `vector::halfvec(n)`, or `vector_cosine_ops` over the column — and must
+    /// be the caller's `self.halfvec`, so that the index and the searches agree.
     ///
     /// `concurrently` builds without taking a write lock, at the cost of not
     /// being runnable inside a transaction. Pass `false` from
@@ -920,6 +1125,7 @@ impl PgVectorAdapter {
         coll: &str,
         dimension: usize,
         concurrently: bool,
+        halfvec: bool,
     ) -> VectorDBResult<bool> {
         if dimension > MAX_INDEXABLE_DIMENSION {
             debug!(
@@ -929,8 +1135,8 @@ impl PgVectorAdapter {
             return Ok(false);
         }
 
-        let index = Self::vector_index_name(coll);
-        let ddl = Self::vector_index_ddl(coll, dimension, concurrently);
+        let index = Self::vector_index_name(coll, halfvec);
+        let ddl = Self::vector_index_ddl(coll, dimension, concurrently, halfvec);
 
         db.execute_unprepared(&ddl)
             .await
@@ -970,12 +1176,26 @@ impl PgVectorAdapter {
     /// re-sort, so only candidate selection sees fp16 (~0.1% of the distance).
     /// Measured on a 209k-row 384-d EdgeType index: 233 MB vs 408 MB and
     /// ~25% faster top-100 scans.
-    fn vector_index_ddl(coll: &str, dimension: usize, concurrently: bool) -> String {
-        let index = Self::vector_index_name(coll);
+    ///
+    /// `halfvec = false` — a `vector` extension older than
+    /// [`HALFVEC_MIN_VERSION`], where the type does not exist — builds the
+    /// full-precision index under the legacy `_vector_hnsw` name instead, which
+    /// is what [`Self::candidate_order_expr`] orders by on that version.
+    fn vector_index_ddl(coll: &str, dimension: usize, concurrently: bool, halfvec: bool) -> String {
+        let index = Self::vector_index_name(coll, halfvec);
         let concurrent_kw = if concurrently { " CONCURRENTLY" } else { "" };
+        // Without `halfvec` (pgvector < 0.7) the half-precision cast does not
+        // even parse, so the index goes over the column itself with
+        // `vector_cosine_ops` — matching the `vector <=> $1::vector` ordering
+        // the searches use on that version.
+        let column = if halfvec {
+            format!("(vector::halfvec({dimension})) halfvec_cosine_ops")
+        } else {
+            "vector vector_cosine_ops".to_string()
+        };
         format!(
             r#"CREATE INDEX{concurrent_kw} IF NOT EXISTS "{index}"
-               ON "{coll}" USING hnsw ((vector::halfvec({dimension})) halfvec_cosine_ops)
+               ON "{coll}" USING hnsw ({column})
                WITH (m = {m}, ef_construction = {ef})"#,
             m = tuning::hnsw_m(),
             ef = tuning::hnsw_ef_construction(),
@@ -1114,7 +1334,7 @@ impl PgVectorAdapter {
             // Check first rather than leaning on `IF NOT EXISTS`, so the count
             // reports work actually done and an already-indexed collection is
             // not handed a redundant CONCURRENTLY build.
-            let index = Self::vector_index_name(&coll);
+            let index = Self::vector_index_name(&coll, self.halfvec);
             let state = match Self::vector_index_state(&self.db, &index).await {
                 Ok(state) => state,
                 Err(e) => {
@@ -1145,7 +1365,14 @@ impl PgVectorAdapter {
                 }
             }
 
-            match Self::create_vector_index(&self.db, &coll, dimension.max(0) as usize, true).await
+            match Self::create_vector_index(
+                &self.db,
+                &coll,
+                dimension.max(0) as usize,
+                true,
+                self.halfvec,
+            )
+            .await
             {
                 Ok(true) => report.built += 1,
                 Ok(false) => {}
@@ -1258,7 +1485,7 @@ impl PgVectorAdapter {
         if dimension <= MAX_INDEXABLE_DIMENSION
             && self.bulk.lock().map(|b| b.depth > 0).unwrap_or(false)
         {
-            let index = Self::vector_index_name(coll);
+            let index = Self::vector_index_name(coll, self.halfvec);
             if Self::vector_index_state(&self.db, &index).await? == Some(true) {
                 let total = self
                     .db
@@ -1286,7 +1513,7 @@ impl PgVectorAdapter {
             }
         }
         if points.len() >= HNSW_REBUILD_MIN_ROWS && dimension <= MAX_INDEXABLE_DIMENSION {
-            let index = Self::vector_index_name(coll);
+            let index = Self::vector_index_name(coll, self.halfvec);
             if Self::vector_index_state(&self.db, &index).await? == Some(true) {
                 return self
                     .upsert_rebuilding_index(coll, &index, points, merge_membership)
@@ -1369,9 +1596,14 @@ impl PgVectorAdapter {
         ))
         .await
         .map_err(storage)?;
-        txn.execute_unprepared(&Self::vector_index_ddl(coll, dimension, false))
-            .await
-            .map_err(storage)?;
+        txn.execute_unprepared(&Self::vector_index_ddl(
+            coll,
+            dimension,
+            false,
+            self.halfvec,
+        ))
+        .await
+        .map_err(storage)?;
         txn.commit().await.map_err(storage)?;
         debug!(
             "rebuilt HNSW index {index} on {coll} after a {incoming}-point load ({rows_after} rows)"
@@ -1688,7 +1920,9 @@ impl VectorDB for PgVectorAdapter {
         // `maintenance_work_mem`) must degrade to the sequential scan, which is
         // exactly the behaviour before this index existed. The backfill picks it
         // up later.
-        if let Err(e) = Self::create_vector_index(&self.db, &coll, dimension, false).await {
+        if let Err(e) =
+            Self::create_vector_index(&self.db, &coll, dimension, false, self.halfvec).await
+        {
             warn!(
                 "collection {coll} was created without an ANN index, so its searches will \
                  be sequential scans until the backfill runs — `cognee-cli vector-reindex`, \
@@ -1927,11 +2161,12 @@ impl VectorDB for PgVectorAdapter {
         let dim = query_vector.len();
         // The outer ORDER BY restores exact distance order over the (at most
         // `top_k`) rows an iterative `relaxed_order` scan returns.
+        let order = self.candidate_order_expr("$1", dim);
         let sql = format!(
             r#"SELECT id, score, metadata FROM (
                  SELECT id, 1 - (vector <=> $1::vector) AS score, metadata
                  FROM "{coll}"
-                 ORDER BY vector::halfvec({dim}) <=> $1::halfvec({dim})
+                 ORDER BY {order}
                  LIMIT {limit}) r
                ORDER BY score DESC"#
         );
@@ -2146,6 +2381,7 @@ impl VectorDB for PgVectorAdapter {
             .map(|v| format!("'{}'::vector", Self::format_vector(v)))
             .collect::<Vec<_>>()
             .join(", ");
+        let order = self.candidate_order_expr("q.vec", dim);
 
         let sql = format!(
             r#"SELECT q.idx AS idx, t.id AS id, t.score AS score, t.metadata AS metadata
@@ -2153,7 +2389,7 @@ impl VectorDB for PgVectorAdapter {
                CROSS JOIN LATERAL (
                    SELECT id, 1 - (vector <=> q.vec) AS score, metadata
                    FROM "{coll}"
-                   ORDER BY vector::halfvec({dim}) <=> q.vec::halfvec({dim})
+                   ORDER BY {order}
                    LIMIT {top_k}
                ) t
                ORDER BY q.idx, t.score DESC"#

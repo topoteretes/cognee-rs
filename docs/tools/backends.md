@@ -36,6 +36,21 @@ Notes:
   larger `LIMIT` is otherwise silently unmet) and runs with
   `hnsw.iterative_scan = relaxed_order`, which keeps scanning until the `LIMIT`
   is met over dead tuples and tightly clustered vectors.
+  **Two pgvector version floors, and only one of them is harmless.**
+  `hnsw.iterative_scan` needs pgvector 0.8+, but it is a plain GUC name: an
+  older server ignores the unknown placeholder setting and simply does not
+  iterate. `halfvec` is not like that — the *type* arrives in pgvector 0.7.0,
+  and below it `vector::halfvec(n)` does not parse, so the index build fails
+  and every similarity search errors with `type "halfvec" does not exist`.
+  `CREATE EXTENSION IF NOT EXISTS vector` does not help, because it is a no-op
+  against a database that already carries 0.5.x or 0.6.x. So the adapter probes
+  `pg_extension.extversion` once when it connects and, below 0.7.0, logs a
+  warning and puts both the index and the search ordering back on
+  full-precision `vector` / `vector_cosine_ops` (under the legacy
+  `<coll>_vector_hnsw` name) — a larger index and slower scans, identical
+  results. To move such a store onto the half-precision index, install a
+  pgvector 0.7+ binary, run `ALTER EXTENSION vector UPDATE`, and then
+  `cognee-cli vector-reindex`.
   Two exceptions: collections wider than 2000 dimensions cannot be indexed by
   pgvector and keep the exact scan, and a `top_k` above 1000 exceeds the largest
   `ef_search` pgvector accepts and so also falls back to the exact scan.
