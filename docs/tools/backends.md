@@ -26,18 +26,38 @@ Notes:
   `ladybug`, and the `hf-tokenizer`/`tiktoken` counters are cargo features, on by
   default in `cognee`/`cognee-cli` (`pggraph` excepted) — see
   [architecture.md §feature strategy](../architecture.md#architecture-patterns).
-- **pgvector indexing.** Each collection gets an HNSW index over its `vector`
-  column (`vector_cosine_ops`, matching the `<=>` the searches order by) when the
-  collection is created, so similarity search is not a sequential scan. Each
-  search raises `hnsw.ef_search` to cover its own `top_k`, because an HNSW scan
-  returns at most `ef_search` rows (default 40) and then stops — a larger
-  `LIMIT` is otherwise silently unmet.
-  Three exceptions: collections wider than 2000 dimensions cannot be indexed by
-  pgvector and keep the exact scan; a `top_k` above 1000 exceeds the largest
-  `ef_search` pgvector accepts and so also falls back to the exact scan; and
-  `search_similar_filtered` deliberately forces the exact scan so its
-  filter-then-limit guarantee holds — pgvector post-filters an index scan, which
-  would return fewer rows than asked for.
+- **pgvector indexing.** Each collection gets an HNSW index when it is created,
+  over `vector::halfvec(dim)` with `halfvec_cosine_ops` and
+  `m = 24, ef_construction = 128`, so similarity search is not a sequential
+  scan. The column itself stays `vector` (the Python SDK's schema): only
+  candidate *selection* sees fp16, and scores are the full-precision distance,
+  re-sorted. Each search raises `hnsw.ef_search` to cover its own `top_k` (an
+  HNSW scan returns at most `ef_search` rows, default 40, and then stops — a
+  larger `LIMIT` is otherwise silently unmet) and runs with
+  `hnsw.iterative_scan = relaxed_order`, which keeps scanning until the `LIMIT`
+  is met over dead tuples and tightly clustered vectors.
+  Two exceptions: collections wider than 2000 dimensions cannot be indexed by
+  pgvector and keep the exact scan, and a `top_k` above 1000 exceeds the largest
+  `ef_search` pgvector accepts and so also falls back to the exact scan.
+  `search_similar_filtered` stays **exact** filter-then-limit, but no longer by
+  disabling index scans: each collection carries a GIN index over
+  `cognee_vector_set_names(metadata)`, an `IMMUTABLE` function with
+  `node_filter`'s exact semantics, and the filter is `&&` (OR) / `@>` (AND)
+  against it, so the membership predicate is an index lookup while the ordering
+  keeps the HNSW post-filtering scan out.
+- **pgvector bulk loads.** `VectorDB::begin_bulk_load` / `end_bulk_load` (a
+  nestable, no-op-by-default hint that cognify wraps a pipeline run in) let the
+  adapter stop maintaining an HNSW index row by row during a load: once a
+  collection has taken 25% of its rows inside the scope its index is dropped,
+  and it is built once — in parallel, under a sized `maintenance_work_mem` —
+  when the last scope ends, followed by an `ANALYZE` of every collection
+  written. **A collection without its index is still correct**: the planner
+  falls back to an exact scan, which returns the true top k. So an interrupted
+  load (a crash, a process killed between `begin` and `end`) leaves every
+  written row in place and searchable, and the one repair is
+  `cognee-cli vector-reindex` / `create_missing_vector_indexes()`, which is
+  idempotent. The knobs are under *Vector database* in
+  [configuration.md](../configuration.md).
   Collections created *before* this existed have only their primary key, and so
   does any collection whose index build failed — creation is best-effort (it
   logs a warning and continues, because failing there would leave the table
@@ -51,6 +71,17 @@ Notes:
   defaults to a no-op returning `0` for the ones that have no such index. It is
   not automatic: building HNSW over a large collection is expensive, so the
   operator chooses when.
+- **Postgres graph tables.** `PgGraphAdapter` creates `graph_node` /
+  `graph_edge` with their key columns `COLLATE "C"` (they are only ever
+  compared for equality, and the locale collation costs a `strcoll` per btree
+  insert, lookup and FK check) and without the redundant source-side covering
+  index, which held exactly the primary key's columns in the primary key's
+  order. **Both apply to new tables only** — `CREATE TABLE IF NOT EXISTS` never
+  rewrites one that exists — so a store created by an older build keeps the
+  locale collation and the extra index, and keeps working; a mixed estate is
+  expected and supported. A migration additionally sets per-table autovacuum
+  scale factors (`vacuum 0.05`, `insert 0.05`, `analyze 0.02`) on both tables;
+  it touches no server setting.
 - **Not in OSS.** Embedded Qdrant and on-device LiteRT inference (Android) are
   not part of this repository.
 - **Full Postgres stack** (relational + graph + vector on one Postgres) is the

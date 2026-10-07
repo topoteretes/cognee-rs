@@ -450,6 +450,42 @@ Qdrant is not part of OSS. See [tools/backends.md](tools/backends.md).
 Setting `vector_db_provider` to `qdrant` is rejected at component
 initialization in OSS (it returns a config error rather than falling back).
 
+### pgvector index tuning
+
+Four optional overrides for the `pgvector` adapter's HNSW build, read once per
+process and clamped to the range shown. **Leave them unset** unless a
+measurement says otherwise: the defaults are calibrated against a 100k-point
+corpus of 384-d embeddings, and the two that cost server resources exist so
+they can be turned *down* on a small or shared Postgres without patching the
+crate.
+
+| Env var | Default | Range | Effect |
+|---|---|---|---|
+| `COGNEE_PGVECTOR_HNSW_M` | `24` | 2–100 | `m` of every HNSW index built from now on |
+| `COGNEE_PGVECTOR_HNSW_EF_CONSTRUCTION` | `128` | `2 × m` – 1000 | `ef_construction` of those builds |
+| `COGNEE_PGVECTOR_MAINTENANCE_WORKERS` | `4` mid-load rebuild / `7` end-of-bulk-load build | 0–64 | `max_parallel_maintenance_workers` for a build; when set, overrides both defaults |
+| `COGNEE_PGVECTOR_MAINTENANCE_WORK_MEM_MB` | `2048` | 64–65536 | ceiling of the per-build `maintenance_work_mem` (the adapter sizes each build from the row count and dimension and clamps to this) |
+
+Notes:
+
+- `m` / `ef_construction` apply to indexes **built after** the change. One
+  already on disk keeps the parameters it was built with until it is rebuilt —
+  `create_missing_vector_indexes()` (`cognee-cli vector-reindex`) only builds a
+  *missing* or invalid index, never a valid one — so raising `m` on an existing
+  store is a `DROP INDEX` + reindex, done deliberately.
+- `ef_construction`'s floor follows `m` because pgvector requires
+  `ef_construction >= 2 × m`; no combination of these two can produce a
+  `CREATE INDEX` that fails.
+- Asking for more parallel maintenance workers than the server can start is
+  **not** an error. `max_parallel_maintenance_workers` is a plain per-session
+  setting; Postgres launches as many as the server's `max_parallel_workers` /
+  `max_worker_processes` still allow, down to zero (a serial build). The only
+  cost of over-asking is a slower build, so no server-side configuration is
+  required to adopt the defaults.
+- A blank, negative or non-numeric value falls back to the default rather than
+  failing the connection — a typo in a deployment environment should not take
+  the store down.
+
 ## Graph database
 
 | Env var | `Settings` field | Default |
@@ -890,6 +926,32 @@ other way round. Callers who want both graphs over one dataset must set
 
 Set `with_incremental_loading(false)` to restore the previous behaviour and
 reprocess everything on every run.
+
+## Search — triplet retriever hub cap
+
+| Env var | Default | Effect |
+|---|---|---|
+| `COGNEE_TRIPLET_NEIGHBOR_CAP` | _(unset — uncapped)_ | Per vector-search seed, keep every neighbour that is itself a seed plus at most `n` other neighbours (the smallest ids in byte order), then score the subgraph induced on what is kept. |
+
+**Opt-in, and it changes results.** Unset — the default, and what every
+deployment runs unless it says otherwise — the triplet retriever loads the full
+depth-1 neighbourhood of its seeds, which is result-identical to loading the
+whole graph. A cap truncates hub fan-out: edges from a hub seed to its dropped
+neighbours never reach the ranking. They carry the non-seed distance penalty
+and so rank below seed-to-seed edges, but they can still make the top *k*.
+
+Measured on the synthetic 100k corpus, a cap of 100 keeps a Jaccard similarity
+of 0.93–0.96 against the uncapped result set, with a worst query at 0.67; a cap
+of 200 keeps 0.92–0.93 but has a worst query at 0.18. At 10k a cap of 100
+measures 0.985 / worst 0.82. The latency it buys is small on a uniform corpus
+(≈ no change at 100k) and large on real hub-heavy text: in the growth corpus a
+`graph_completion` search went from 332 ms to 76 ms by document 11. Treat it as
+a knob for a corpus with known hubs, measured on that corpus, not as a default.
+
+`PgGraphAdapter` applies the cap in SQL; every other backend gets the same
+semantics from `GraphDBTrait::get_neighborhood_scoped`'s client-side default,
+and `test_get_neighborhood_scoped_cap_is_deterministic` pins the two to the
+same neighbour set.
 
 ## Search — hybrid retriever knobs
 
