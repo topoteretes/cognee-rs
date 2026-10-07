@@ -1105,12 +1105,27 @@ impl VectorDB for PgVectorAdapter {
         }
 
         // Create the vector table.
+        //
+        // Vectors are kept in the heap row rather than TOASTed: pgvector gives
+        // the column `EXTERNAL` storage, so a 384-d vector (1.5 kB) next to a
+        // chunk's text in `metadata` crosses the 2 kB TOAST threshold and is
+        // moved out of line. Every sequential scan (the exact filtered search,
+        // and plain searches of small collections, which the planner rightly
+        // serves by scan + sort) then fetches each vector from the TOAST table,
+        // and the planner, which does not cost detoasting, cannot see it:
+        // measured on 8.6k Entity rows, a scan + top-100 sort took 14-16 ms
+        // TOASTed vs 3.7-4.8 ms inline, and an HNSW build 1.6 s vs 0.66 s.
+        // `toast_tuple_target = 8160` (the maximum) leaves any row that fits
+        // in a page alone; `STORAGE MAIN` makes the vector the last thing moved
+        // out when a row does not. Sent as one simple-query string, so the two
+        // statements commit or fail together.
         let ddl = format!(
             r#"CREATE TABLE "{coll}" (
                 id UUID PRIMARY KEY,
                 vector vector({dimension}),
                 metadata JSONB NOT NULL DEFAULT '{{}}'
-            )"#
+            ) WITH (toast_tuple_target = 8160);
+            ALTER TABLE "{coll}" ALTER COLUMN vector SET STORAGE MAIN"#
         );
         self.db
             .execute_unprepared(&ddl)
