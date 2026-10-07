@@ -351,7 +351,17 @@ pub async fn create_temp_postgres_db(base_url: &str) -> Result<TempPostgresDb, s
 
     // Unique db name; `_`-separated so it is a bare identifier — quoting is
     // trivially safe (the value is ours, never user input).
-    let name = format!("cognee_test_{}", uuid::Uuid::new_v4().simple());
+    // `COGNEE_TEST_DB_PREFIX` lets a shared server keep scratch databases under
+    // a caller-chosen, identifier-safe prefix (default `cognee_test_`).
+    let prefix = std::env::var("COGNEE_TEST_DB_PREFIX")
+        .ok()
+        .filter(|p| {
+            !p.is_empty()
+                && p.chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+        })
+        .unwrap_or_else(|| "cognee_test_".to_string());
+    let name = format!("{prefix}{}", uuid::Uuid::new_v4().simple());
 
     // Maintenance URL: same server, the always-present `postgres` database.
     let mut maintenance = parse(base_url)?;
