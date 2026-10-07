@@ -1371,12 +1371,17 @@ fn edge_reindex_rejects_a_cursor_that_skips_everything() {
 use cognee::cognify::{FailureReport, FailureStage, StageFailure};
 use cognee_cli::commands::cognify::format_failure_summary;
 
-/// One item-failing chunk failure against `data_id`.
-fn chunk_failure(data_id: uuid::Uuid) -> StageFailure {
+/// One item-failing failure of chunk `chunk_id` of document `data_id`.
+///
+/// The chunk id is a parameter, not a constant: `FailureReport` counts the
+/// ratio numerator as *distinct* chunk ids (a set since #229, so a chunk that
+/// fails twice is charged once). A shared constant id collapses every failure
+/// onto one chunk and silently turns "3 failed chunks" into 1.
+fn chunk_failure(data_id: uuid::Uuid, chunk_id: u128) -> StageFailure {
     StageFailure {
         stage: FailureStage::GraphExtraction,
         data_id,
-        chunk_id: Some(uuid::Uuid::from_u128(0xC0FFEE)),
+        chunk_id: Some(uuid::Uuid::from_u128(0x00C0_FFEE_0000 + chunk_id)),
         error: "llm refused".to_string(),
         fails_item: true,
     }
@@ -1389,16 +1394,16 @@ fn cognify_failure_summary_reports_counts_ratio_and_failed_ids() {
     let unreached = uuid::Uuid::from_u128(3);
 
     let mut report = FailureReport::default();
-    report.record(chunk_failure(failed_a));
+    report.record(chunk_failure(failed_a, 1));
     // A second chunk of the *same* document fails. This is what makes the
     // three counts mutually distinguishable — 3 failures over 2 documents —
     // so an assertion cannot pass by reading the wrong number: with all three
     // equal, swapping `failed_items().len()` for `total()` in the summary went
     // undetected.
-    report.record(chunk_failure(failed_a));
-    report.record(chunk_failure(failed_b));
+    report.record(chunk_failure(failed_a, 2));
+    report.record(chunk_failure(failed_b, 3));
     report.mark_unreached(unreached);
-    // 3 item-failing chunk failures out of 12 chunks -> ratio 0.25.
+    // 3 distinct item-failing chunks out of 12 chunks -> ratio 0.25.
     report.note_totals(3, 12);
 
     let summary = format_failure_summary("papers", &report)
@@ -1460,7 +1465,7 @@ fn cognify_failure_summary_is_absent_for_a_clean_run() {
 fn cognify_failure_summary_truncates_a_large_failed_id_list() {
     let mut report = FailureReport::default();
     for i in 1..=12u128 {
-        report.record(chunk_failure(uuid::Uuid::from_u128(i)));
+        report.record(chunk_failure(uuid::Uuid::from_u128(i), i));
     }
     report.note_totals(12, 12);
 
@@ -1487,7 +1492,7 @@ fn cognify_failure_summary_truncates_a_large_failed_id_list() {
 fn report_with_failed_documents(n: u128) -> FailureReport {
     let mut report = FailureReport::default();
     for i in 1..=n {
-        report.record(chunk_failure(uuid::Uuid::from_u128(i)));
+        report.record(chunk_failure(uuid::Uuid::from_u128(i), i));
     }
     let n_usize = usize::try_from(n).expect("test counts are small");
     report.note_totals(n_usize, n_usize);
