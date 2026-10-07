@@ -56,7 +56,9 @@ const INDUCED_SUBGRAPH: &str = "\
     SELECT 'node' AS kind, n.id, n.name, n.type, n.properties, \
            NULL::text AS source_id, NULL::text AS target_id, \
            NULL::text AS relationship_name, NULL::jsonb AS edge_properties \
-    FROM ids JOIN graph_node n ON n.id = ids.id \
+    FROM ids CROSS JOIN LATERAL \
+         (SELECT x.id, x.name, x.type, x.properties FROM graph_node x \
+          WHERE x.id = ids.id OFFSET 0) n \
     UNION ALL \
     SELECT 'edge', NULL, NULL, NULL, NULL, \
            e.source_id, e.target_id, e.relationship_name, e.properties \
@@ -64,6 +66,12 @@ const INDUCED_SUBGRAPH: &str = "\
          (SELECT * FROM graph_edge x WHERE x.source_id = a.id OFFSET 0) e \
     WHERE e.target_id IN (SELECT id FROM ids)";
 
+/// The node half is a per-id primary-key probe (`LATERAL`, fenced with
+/// `OFFSET 0`) in both forms: as a plain join the planner, unable to size the
+/// materialized id set, priced the probes as random IO and hashed all of
+/// `graph_node` instead — a 2 GB temp-file spill per 24 triplet queries at
+/// 100k, 143 ms per call against ~30 ms for nested probes.
+///
 /// [`INDUCED_SUBGRAPH`] with the edge half as two `IN (SELECT id FROM ids)`
 /// semi-joins. For large id sets (hundreds of seeds, thousands of ids) the
 /// explicit double join plans as a merge join that spends most of its time
@@ -74,7 +82,9 @@ const INDUCED_SUBGRAPH_SEMI: &str = "\
     SELECT 'node' AS kind, n.id, n.name, n.type, n.properties, \
            NULL::text AS source_id, NULL::text AS target_id, \
            NULL::text AS relationship_name, NULL::jsonb AS edge_properties \
-    FROM ids JOIN graph_node n ON n.id = ids.id \
+    FROM ids CROSS JOIN LATERAL \
+         (SELECT x.id, x.name, x.type, x.properties FROM graph_node x \
+          WHERE x.id = ids.id OFFSET 0) n \
     UNION ALL \
     SELECT 'edge', NULL, NULL, NULL, NULL, \
            e.source_id, e.target_id, e.relationship_name, e.properties \
