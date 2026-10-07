@@ -81,6 +81,11 @@ const INDUCED_SUBGRAPH_SEMI: &str = "\
     FROM graph_edge e \
     WHERE e.source_id IN (SELECT id FROM ids) AND e.target_id IN (SELECT id FROM ids)";
 
+/// A bulk write of at least this many rows into a graph table that has never
+/// been analysed runs `ANALYZE` on it (see
+/// [`PgGraphAdapter::analyze_if_never_analyzed`]).
+const ANALYZE_MIN_ROWS: usize = 1000;
+
 /// Id-set size from which `get_neighborhood` uses [`INDUCED_SUBGRAPH_SEMI`].
 const SEMI_JOIN_MIN_SEEDS: usize = 64;
 
@@ -342,6 +347,37 @@ impl PgGraphAdapter {
         &self.db
     }
     // -- helpers -------------------------------------------------------------
+
+    /// `ANALYZE table` if it has never been analysed (`reltuples = -1`).
+    ///
+    /// Autovacuum analyses a table only after its naptime (60 s) and once
+    /// enough rows changed, so a store searched right after its first
+    /// cognify — every 10k-tier run here — plans the neighbourhood reads
+    /// with no statistics at all: hash joins over guessed sizes, 9.4 ms per
+    /// hybrid entity neighbourhood against 0.8 ms once analysed. One cheap
+    /// catalog probe per bulk write; failures are logged (the write already
+    /// succeeded).
+    async fn analyze_if_never_analyzed(&self, table: &str) {
+        let probe = self
+            .db
+            .query_one(Statement::from_string(
+                DatabaseBackend::Postgres,
+                format!(
+                    "SELECT (reltuples < 0) AS never FROM pg_class WHERE oid = '{table}'::regclass"
+                ),
+            ))
+            .await;
+        let never =
+            matches!(probe, Ok(Some(ref r)) if r.try_get::<bool>("", "never").unwrap_or(false));
+        if never
+            && let Err(e) = self
+                .db
+                .execute_unprepared(&format!("ANALYZE {table}"))
+                .await
+        {
+            debug!("ANALYZE {table} failed: {e}");
+        }
+    }
 
     /// Build a SeaORM [`Statement`] from a `sea_query` query.
     fn build<S: sea_orm::StatementBuilder>(&self, query: &S) -> Statement {
@@ -690,6 +726,9 @@ impl GraphDBTrait for PgGraphAdapter {
                 ))
                 .await
                 .map_err(|e| GraphDBError::NodeError(format!("Failed to upsert nodes: {e}")))?;
+        }
+        if order.len() >= ANALYZE_MIN_ROWS {
+            self.analyze_if_never_analyzed("graph_node").await;
         }
 
         Ok(())
@@ -1387,6 +1426,9 @@ impl GraphDBTrait for PgGraphAdapter {
                 ))
                 .await
                 .map_err(|e| GraphDBError::EdgeError(format!("Failed to upsert edges: {e}")))?;
+        }
+        if order.len() >= ANALYZE_MIN_ROWS {
+            self.analyze_if_never_analyzed("graph_edge").await;
         }
         Ok(())
     }
@@ -2104,7 +2146,48 @@ mod migrator {
         }
 
         fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-            vec![Box::new(CreateGraphTables)]
+            vec![Box::new(CreateGraphTables), Box::new(GraphAutovacuum)]
+        }
+    }
+
+    /// Per-table autovacuum thresholds for the graph tables: the server
+    /// defaults (vacuum at 20% dead, analyze at 10% changed) leave a table
+    /// that grows by cognify batches with stale statistics for most of a
+    /// load, and a `graph_edge` of 500k rows accumulates 100k dead tuples
+    /// before a vacuum. Reloptions only — no server setting is touched.
+    struct GraphAutovacuum;
+
+    impl MigrationName for GraphAutovacuum {
+        fn name(&self) -> &str {
+            "m20250930_000002_graph_autovacuum"
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MigrationTrait for GraphAutovacuum {
+        async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            let conn = manager.get_connection();
+            for t in ["graph_node", "graph_edge"] {
+                conn.execute_unprepared(&format!(
+                    "ALTER TABLE {t} SET (autovacuum_vacuum_scale_factor = 0.05, \
+                     autovacuum_vacuum_insert_scale_factor = 0.05, \
+                     autovacuum_analyze_scale_factor = 0.02)"
+                ))
+                .await?;
+            }
+            Ok(())
+        }
+
+        async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            let conn = manager.get_connection();
+            for t in ["graph_node", "graph_edge"] {
+                conn.execute_unprepared(&format!(
+                    "ALTER TABLE {t} RESET (autovacuum_vacuum_scale_factor, \
+                     autovacuum_vacuum_insert_scale_factor, autovacuum_analyze_scale_factor)"
+                ))
+                .await?;
+            }
+            Ok(())
         }
     }
 

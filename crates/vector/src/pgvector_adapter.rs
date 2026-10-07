@@ -444,10 +444,36 @@ impl PgVectorAdapter {
         if force {
             b.depth = 0;
         }
-        b.written.clear();
         let mut out: Vec<(String, usize)> = b.deferred.drain().collect();
         out.sort();
         out
+    }
+
+    /// Collections written in the bulk-load scopes that just ended (all
+    /// open scopes when `force`), for the end-of-load `ANALYZE`.
+    #[allow(clippy::expect_used, reason = "lock poison is unrecoverable")]
+    fn take_written(&self, force: bool) -> Vec<String> {
+        // lock poison is unrecoverable
+        let mut b = self.bulk.lock().expect("bulk-load state lock");
+        if !force && b.depth > 0 {
+            return Vec::new();
+        }
+        let mut out: Vec<String> = b.written.drain().map(|(k, _)| k).collect();
+        out.sort();
+        out
+    }
+
+    /// `ANALYZE` each of `colls`: a collection filled faster than
+    /// autovacuum's naptime is otherwise planned with `reltuples = -1` or a
+    /// count from its first batch.
+    async fn analyze(&self, colls: Vec<String>) -> VectorDBResult<()> {
+        for coll in colls {
+            self.db
+                .execute_unprepared(&format!(r#"ANALYZE "{coll}""#))
+                .await
+                .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
+        }
+        Ok(())
     }
 
     /// Build the HNSW index of every collection whose index a bulk load
@@ -521,6 +547,16 @@ impl PgVectorAdapter {
             return Some(true);
         }
         Some(false)
+    }
+
+    /// Remember `coll` as written inside the open bulk-load scope, if any.
+    #[allow(clippy::expect_used, reason = "lock poison is unrecoverable")]
+    fn note_bulk_write(&self, coll: &str) {
+        // lock poison is unrecoverable
+        let mut b = self.bulk.lock().expect("bulk-load state lock");
+        if b.depth > 0 {
+            b.written.entry(coll.to_string()).or_insert(0);
+        }
     }
 
     #[allow(clippy::expect_used, reason = "lock poison is unrecoverable")]
@@ -1066,6 +1102,7 @@ impl PgVectorAdapter {
         };
 
         let dimension = points.first().map_or(0, |p| p.vector.len());
+        self.note_bulk_write(coll);
         if dimension <= MAX_INDEXABLE_DIMENSION && self.is_deferred(coll) {
             // Index dropped for the rest of this bulk load.
             return self
@@ -1413,8 +1450,11 @@ impl VectorDB for PgVectorAdapter {
             let mut b = self.bulk.lock().expect("bulk-load state lock");
             b.depth = b.depth.saturating_sub(1);
         }
+        let written = self.take_written(false);
         let pending = self.take_deferred(false);
-        self.build_deferred(pending).await
+        let built = self.build_deferred(pending).await;
+        let analyzed = self.analyze(written).await;
+        built.and(analyzed)
     }
 
     async fn create_collection(
