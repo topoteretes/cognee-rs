@@ -125,6 +125,20 @@ const HNSW_EF_SEARCH_DEFAULT: usize = 40;
 /// back to the exact scan — see [`PgVectorAdapter::ann_search_locals`].
 const HNSW_EF_SEARCH_MAX: usize = 1000;
 
+/// Batches of at least this many points into an HNSW-indexed collection are
+/// candidates for [`PgVectorAdapter::upsert_rebuilding_index`].
+const HNSW_REBUILD_MIN_ROWS: usize = 1000;
+
+/// Rebuild the HNSW index around a batch that would insert at least this
+/// fraction of the collection's current rows into it (see
+/// [`PgVectorAdapter::upsert_rebuilding_index`]).
+const HNSW_REBUILD_RATIO: f64 = 0.25;
+
+/// Lower / upper bound of the `maintenance_work_mem` (kB) an index rebuild
+/// runs under: pgvector's default, and 2 GB.
+const HNSW_BUILD_BUDGET_MIN_KB: i64 = 64 * 1024;
+const HNSW_BUILD_BUDGET_MAX_KB: i64 = 2 * 1024 * 1024;
+
 /// Postgres truncates any identifier past this many bytes (`NAMEDATALEN - 1`).
 const PG_MAX_IDENTIFIER_BYTES: usize = 63;
 
@@ -441,12 +455,7 @@ impl PgVectorAdapter {
         }
 
         let index = Self::vector_index_name(coll);
-        let concurrent_kw = if concurrently { " CONCURRENTLY" } else { "" };
-        let ddl = format!(
-            r#"CREATE INDEX{concurrent_kw} IF NOT EXISTS "{index}"
-               ON "{coll}" USING hnsw (vector vector_cosine_ops)
-               WITH (m = {HNSW_M}, ef_construction = {HNSW_EF_CONSTRUCTION})"#
-        );
+        let ddl = Self::vector_index_ddl(coll, concurrently);
 
         db.execute_unprepared(&ddl)
             .await
@@ -457,6 +466,17 @@ impl PgVectorAdapter {
         // backfills race — and claiming a creation would misreport that.
         debug!("ensured HNSW index {index} on {coll} (dim={dimension})");
         Ok(true)
+    }
+
+    /// `CREATE INDEX` for `coll`'s HNSW index (see [`Self::create_vector_index`]).
+    fn vector_index_ddl(coll: &str, concurrently: bool) -> String {
+        let index = Self::vector_index_name(coll);
+        let concurrent_kw = if concurrently { " CONCURRENTLY" } else { "" };
+        format!(
+            r#"CREATE INDEX{concurrent_kw} IF NOT EXISTS "{index}"
+               ON "{coll}" USING hnsw (vector vector_cosine_ops)
+               WITH (m = {HNSW_M}, ef_construction = {HNSW_EF_CONSTRUCTION})"#
+        )
     }
 
     /// State of the index named `index`: `None` if it does not exist, else
@@ -720,15 +740,123 @@ impl PgVectorAdapter {
         // The shared in-batch fold (`crate::models`), which the LanceDB
         // adapter uses too: one point per distinct id, first-appearance order,
         // last occurrence winning, with `index_points` additionally unioning
-        // the duplicates' dataset membership. Folding here — before
-        // `chunks()`, not per chunk — also collapses ids that straddle a
-        // batch boundary, so each distinct id is written exactly once.
-        let points = if merge_membership {
+        // the duplicates' dataset membership. It runs here, before the
+        // rebuild decision and before `write_points` batches, so the row
+        // counts the decision is made on are the rows actually written and an
+        // id repeated across a batch boundary is still written exactly once.
+        let points = &if merge_membership {
             dedup_points_by_id(points)
         } else {
             dedup_points_by_id_last_wins(points)
         };
 
+        let dimension = points.first().map_or(0, |p| p.vector.len());
+        if points.len() >= HNSW_REBUILD_MIN_ROWS && dimension <= MAX_INDEXABLE_DIMENSION {
+            let index = Self::vector_index_name(coll);
+            if Self::vector_index_state(&self.db, &index).await? == Some(true) {
+                return self
+                    .upsert_rebuilding_index(coll, &index, points, merge_membership)
+                    .await;
+            }
+        }
+        Self::write_points(&self.db, coll, points, merge_membership).await
+    }
+
+    /// [`Self::write_points`] for a large batch into an HNSW-indexed
+    /// collection: if the batch would add at least [`HNSW_REBUILD_RATIO`] x
+    /// the collection's current rows to the index, drop the index, write the
+    /// rows, and build it again — all in one transaction.
+    ///
+    /// An incremental HNSW insert is a graph search plus neighbour-page
+    /// rewrites per row (~1.7 ms at 20k 384-d rows here), while `CREATE
+    /// INDEX` builds in memory and in parallel (~0.15 ms per row), so for a
+    /// bulk load a rebuild is ~10x cheaper. The rebuild holds an `ACCESS
+    /// EXCLUSIVE` lock on the collection until commit, so concurrent searches
+    /// of *this* collection wait for the load instead of reading a
+    /// half-indexed table; a failure rolls the whole thing back, index
+    /// included. The index is rebuilt under the same name and parameters.
+    async fn upsert_rebuilding_index(
+        &self,
+        coll: &str,
+        index: &str,
+        points: &[VectorPoint],
+        merge_membership: bool,
+    ) -> VectorDBResult<()> {
+        let storage = |e: sea_orm::DbErr| VectorDBError::StorageError(e.to_string());
+        let ids: Vec<Uuid> = points.iter().map(|p| p.id).collect();
+        let row = self
+            .db
+            .query_one(Statement::from_sql_and_values(
+                DatabaseBackend::Postgres,
+                format!(
+                    r#"SELECT (SELECT count(*) FROM "{coll}") AS total,
+                              (SELECT count(*) FROM "{coll}" WHERE id = ANY($1::uuid[])) AS present"#
+                ),
+                [ids.into()],
+            ))
+            .await
+            .map_err(storage)?;
+        let (total, present) = match row {
+            Some(r) => (
+                r.try_get::<i64>("", "total").map_err(storage)?,
+                r.try_get::<i64>("", "present").map_err(storage)?,
+            ),
+            None => (0, 0),
+        };
+        // Index inserts this batch can cause: every new row plus, as an upper
+        // bound, every existing row it rewrites (an update writes a new tuple
+        // and so a new index entry). A row whose vector and metadata are
+        // unchanged is skipped by `write_points` and costs none, so this
+        // over-counts re-indexed points; the ratio leaves room for that.
+        let incoming = i64::try_from(points.len()).unwrap_or(i64::MAX);
+        if (incoming as f64) < HNSW_REBUILD_RATIO * total as f64 {
+            return Self::write_points(&self.db, coll, points, merge_membership).await;
+        }
+
+        let rows_after = total.saturating_add(incoming.saturating_sub(present));
+        let dimension = points.first().map_or(0, |p| p.vector.len());
+        let txn = self.db.begin().await.map_err(storage)?;
+        txn.execute_unprepared(&format!(r#"DROP INDEX "{index}""#))
+            .await
+            .map_err(storage)?;
+        Self::write_points(&txn, coll, points, merge_membership).await?;
+        txn.execute_unprepared(&format!(
+            "SET LOCAL maintenance_work_mem = '{}kB'",
+            Self::hnsw_build_budget_kb(rows_after, dimension)
+        ))
+        .await
+        .map_err(storage)?;
+        txn.execute_unprepared(&Self::vector_index_ddl(coll, false))
+            .await
+            .map_err(storage)?;
+        txn.commit().await.map_err(storage)?;
+        debug!(
+            "rebuilt HNSW index {index} on {coll} after a {incoming}-point load ({rows_after} rows)"
+        );
+        Ok(())
+    }
+
+    /// `maintenance_work_mem` (kB) for an in-memory HNSW build of `rows`
+    /// `dimension`-d vectors: the vector plus `2 * m` neighbour slots and
+    /// element overhead per row, with headroom, clamped to
+    /// [`HNSW_BUILD_BUDGET_MIN_KB`, `HNSW_BUILD_BUDGET_MAX_KB`]. A build that
+    /// outgrows the budget does not fail — pgvector finishes it on disk, much
+    /// more slowly — so this only has to be roughly right.
+    fn hnsw_build_budget_kb(rows: i64, dimension: usize) -> i64 {
+        let per_row = (dimension as i64) * 4 + i64::from(HNSW_M) * 2 * 10 + 200;
+        let bytes = rows.max(0).saturating_mul(per_row).saturating_mul(3) / 2;
+        (bytes / 1024).clamp(HNSW_BUILD_BUDGET_MIN_KB, HNSW_BUILD_BUDGET_MAX_KB)
+    }
+
+    /// Write `points` into `coll` (see [`Self::upsert_points`]) on `conn`.
+    /// `points` must already be folded to one entry per distinct id —
+    /// [`Self::upsert_points`] does that for every caller.
+    async fn write_points<C: ConnectionTrait>(
+        conn: &C,
+        coll: &str,
+        points: &[VectorPoint],
+        merge_membership: bool,
+    ) -> VectorDBResult<()> {
         let metadata = if merge_membership {
             MERGED_METADATA
         } else {
@@ -765,14 +893,13 @@ impl PgVectorAdapter {
                 );
             }
             sql.push_str(&on_conflict);
-            self.db
-                .execute(Statement::from_sql_and_values(
-                    DatabaseBackend::Postgres,
-                    &sql,
-                    values,
-                ))
-                .await
-                .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
+            conn.execute(Statement::from_sql_and_values(
+                DatabaseBackend::Postgres,
+                &sql,
+                values,
+            ))
+            .await
+            .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
         }
         Ok(())
     }
