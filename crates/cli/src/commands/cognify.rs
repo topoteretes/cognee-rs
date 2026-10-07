@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use cognee::cognify::{ChunkStrategy, CognifyConfig, FailureReport, cognify};
+use cognee::cognify::{ChunkStrategy, CognifyConfig, CognifyResult, FailureReport, cognify};
 use cognee::database::{
     DatabaseConnection, PipelineRunRepository, SeaOrmPipelineRunRepository, ops,
 };
@@ -92,6 +92,58 @@ pub fn format_failure_summary(dataset_name: &str, report: &FailureReport) -> Opt
         report.total(),
         report.chunk_failure_ratio(),
     ))
+}
+
+/// What one dataset's `cognify()` result means for the run-wide totals.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DatasetOutcome {
+    /// The pipeline did work; its counts belong in the totals.
+    Ran,
+    /// The pipeline short-circuited on an already-complete dataset; every
+    /// payload vector is empty and there is nothing to add.
+    AlreadyComplete,
+}
+
+/// Print everything the console says about one dataset's `cognify()` result.
+///
+/// Split out of [`run`] so it can be driven without a live pipeline: the
+/// per-dataset reporting used to be inline in `run()`'s loop, where deleting
+/// the failure-summary `warn!` left the whole suite green (SDK-700 gap 1).
+/// The `report_dataset_outcome_*` tests below capture the tracing events this
+/// emits, so dropping the `warn!` — or the summary it carries — now fails a
+/// named test.
+fn report_dataset_outcome(dataset_name: &str, result: &CognifyResult) -> DatasetOutcome {
+    // Gap 08-08: surface the short-circuit verdict (Python parity).
+    if result.already_completed {
+        if let Some(prior) = result.prior_pipeline_run_id {
+            info!(
+                "Dataset '{dataset_name}': already complete (prior pipeline_run_id={prior}); skipping cognify."
+            );
+        } else {
+            info!("Dataset '{dataset_name}': already complete; skipping cognify.");
+        }
+        return DatasetOutcome::AlreadyComplete;
+    }
+
+    // A run that reaches here completed; the policy tolerated whatever
+    // failed. Until now that verdict was visible only to an in-process
+    // caller reading `result.failures`, so an operator had no way to
+    // learn *which* documents were left behind short of reading
+    // `pipeline_runs.run_info` out of the database by hand.
+    if let Some(summary) = format_failure_summary(dataset_name, &result.failures) {
+        warn!("{summary}");
+    }
+
+    debug!(
+        "Dataset '{}' -> chunks={}, entities={}, edges={}, summaries={}, embeddings={}",
+        dataset_name,
+        result.chunks.len(),
+        result.entities.len(),
+        result.edges.len(),
+        result.summaries.len(),
+        result.embeddings.len()
+    );
+    DatasetOutcome::Ran
 }
 
 pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
@@ -269,25 +321,8 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
                 ))
             })?;
 
-            // Gap 08-08: surface the short-circuit verdict (Python parity).
-            if result.already_completed {
-                if let Some(prior) = result.prior_pipeline_run_id {
-                    info!(
-                        "Dataset '{dataset_name}': already complete (prior pipeline_run_id={prior}); skipping cognify."
-                    );
-                } else {
-                    info!("Dataset '{dataset_name}': already complete; skipping cognify.");
-                }
+            if report_dataset_outcome(dataset_name, &result) == DatasetOutcome::AlreadyComplete {
                 continue;
-            }
-
-            // A run that reaches here completed; the policy tolerated whatever
-            // failed. Until now that verdict was visible only to an in-process
-            // caller reading `result.failures`, so an operator had no way to
-            // learn *which* documents were left behind short of reading
-            // `pipeline_runs.run_info` out of the database by hand.
-            if let Some(summary) = format_failure_summary(dataset_name, &result.failures) {
-                warn!("{summary}");
             }
 
             total_chunks += result.chunks.len();
@@ -295,16 +330,6 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
             total_edges += result.edges.len();
             total_summaries += result.summaries.len();
             total_embeddings += result.embeddings.len();
-
-            debug!(
-                "Dataset '{}' -> chunks={}, entities={}, edges={}, summaries={}, embeddings={}",
-                dataset_name,
-                result.chunks.len(),
-                result.entities.len(),
-                result.edges.len(),
-                result.summaries.len(),
-                result.embeddings.len()
-            );
         }
 
         info!(
@@ -340,4 +365,134 @@ pub(crate) async fn resolve_dataset_names(
     }
 
     Ok(datasets.into_iter().map(|dataset| dataset.name).collect())
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
+mod tests {
+    //! SDK-700 gap 1: the per-dataset console reporting is wired, not just
+    //! formatted. `cli_e2e.rs` pins what `format_failure_summary` renders;
+    //! these pin that `report_dataset_outcome` actually emits it at `WARN`,
+    //! by capturing the tracing events it produces.
+
+    use std::sync::{Arc, Mutex};
+
+    use cognee::cognify::{FailureStage, StageFailure};
+    use tracing::field::{Field, Visit};
+    use tracing::{Event, Level, Subscriber};
+    use tracing_subscriber::Registry;
+    use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
+
+    use super::*;
+
+    /// Every event emitted while a capture is installed, as `(level, message)`.
+    #[derive(Clone, Default)]
+    struct Captured(Arc<Mutex<Vec<(Level, String)>>>);
+
+    struct MessageVisitor(String);
+
+    impl Visit for MessageVisitor {
+        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+            if field.name() == "message" {
+                self.0 = format!("{value:?}");
+            }
+        }
+    }
+
+    impl<S: Subscriber> Layer<S> for Captured {
+        fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
+            let mut visitor = MessageVisitor(String::new());
+            event.record(&mut visitor);
+            self.0
+                .lock()
+                .unwrap()
+                .push((*event.metadata().level(), visitor.0));
+        }
+    }
+
+    /// Run `report_dataset_outcome` under a capturing subscriber.
+    fn report_captured(
+        dataset_name: &str,
+        result: &CognifyResult,
+    ) -> (DatasetOutcome, Vec<(Level, String)>) {
+        let captured = Captured::default();
+        let subscriber = Registry::default().with(captured.clone());
+        let outcome = tracing::subscriber::with_default(subscriber, || {
+            report_dataset_outcome(dataset_name, result)
+        });
+        let events = captured.0.lock().unwrap().clone();
+        (outcome, events)
+    }
+
+    fn warnings(events: &[(Level, String)]) -> Vec<&str> {
+        events
+            .iter()
+            .filter(|(level, _)| *level == Level::WARN)
+            .map(|(_, message)| message.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn report_dataset_outcome_warns_the_failure_summary_for_a_tolerated_failure() {
+        let mut result = CognifyResult::empty();
+        result.failures.record(StageFailure {
+            stage: FailureStage::GraphExtraction,
+            data_id: Uuid::from_u128(1),
+            chunk_id: Some(Uuid::from_u128(0xC0FFEE)),
+            error: "llm refused".to_string(),
+            fails_item: true,
+        });
+        result.failures.note_totals(4, 8);
+        let expected = format_failure_summary("papers", &result.failures)
+            .expect("a recorded failure renders a summary");
+
+        let (outcome, events) = report_captured("papers", &result);
+
+        assert_eq!(outcome, DatasetOutcome::Ran);
+        assert_eq!(
+            warnings(&events),
+            [expected.as_str()],
+            "exactly one WARN, carrying the failure summary; got events: {events:?}"
+        );
+    }
+
+    #[test]
+    fn report_dataset_outcome_does_not_warn_for_a_clean_run() {
+        let (outcome, events) = report_captured("papers", &CognifyResult::empty());
+
+        assert_eq!(outcome, DatasetOutcome::Ran);
+        assert!(
+            warnings(&events).is_empty(),
+            "a clean run must not warn; got events: {events:?}"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|(_, message)| message.contains(FAILURE_SUMMARY_MARKER)),
+            "a clean run leaked the failure marker: {events:?}"
+        );
+    }
+
+    #[test]
+    fn report_dataset_outcome_skips_an_already_complete_dataset() {
+        let prior = Uuid::from_u128(0xABC);
+        let (outcome, events) = report_captured("papers", &CognifyResult::already_completed(prior));
+
+        assert_eq!(outcome, DatasetOutcome::AlreadyComplete);
+        assert!(
+            events.iter().any(|(level, message)| *level == Level::INFO
+                && message.contains(&format!(
+                    "Dataset 'papers': already complete (prior pipeline_run_id={prior})"
+                ))),
+            "the short-circuit verdict must be reported; got events: {events:?}"
+        );
+        assert!(
+            warnings(&events).is_empty(),
+            "an already-complete dataset has nothing to warn about: {events:?}"
+        );
+    }
 }
