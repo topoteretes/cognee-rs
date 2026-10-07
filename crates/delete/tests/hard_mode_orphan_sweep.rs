@@ -107,7 +107,7 @@ async fn setup_infrastructure(
     graph_db.initialize().await.expect("graph_db.initialize");
 
     // Qdrant vector database
-    // In-memory mock vector DB (qdrant extracted to closed cognee-vector-qdrant).
+    // In-memory mock vector DB.
     let vector_db: Arc<dyn VectorDB> = Arc::new(MockVectorDB::new());
 
     // LLM via cassette (replay/record/real) — see create_llm_from_env above.

@@ -41,5 +41,5 @@ pub use temporal_event::*;
 pub use triplet::Triplet;
 pub use user::User;
 
-// `Role` and `Tenant` moved to the closed `cognee-access-control::models`
-// module.
+// `Role` and `Tenant` are not part of this crate; a downstream ACL
+// implementation owns them.

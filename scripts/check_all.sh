@@ -125,9 +125,8 @@ echo "================================================================"
 # store on Postgres instead. Without a lane like this the `#[cfg(feature = ...)]`
 # paths behind those features rot and the seam silently stops building.
 #
-# This used to be spelled `-p cognee-http-server`. That crate moved to the closed
-# cognee-cloud-rs repo, which now runs the original spelling against its own copy.
-# The seams it guards live in cognee-components / -vector / -graph / -embedding,
+# This used to be spelled `-p cognee-http-server`. That crate moved out of this
+# repository. The seams it guards live in cognee-components / -vector / -graph / -embedding,
 # all of which stay in OSS, so grade them directly.
 #
 # MIRROR of the "Compilation check (Postgres-only backends)" step in

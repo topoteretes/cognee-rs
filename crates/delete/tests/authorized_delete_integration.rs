@@ -24,8 +24,8 @@ use uuid::Uuid;
 // ---------------------------------------------------------------------------
 
 /// Create an in-memory SQLite database, run migrations, and return it
-/// alongside a `MockStorage` and a fresh `MockAclDb` (the OSS test ACL
-/// backend that replaces the closed `cognee-access-control::AccessControl`).
+/// alongside a `MockStorage` and a fresh `MockAclDb` (the in-memory test
+/// ACL backend).
 async fn setup() -> (Arc<DatabaseConnection>, Arc<MockStorage>, Arc<MockAclDb>) {
     let db = database::connect("sqlite::memory:").await.unwrap();
     database::initialize(&db).await.unwrap();

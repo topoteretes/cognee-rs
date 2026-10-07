@@ -151,7 +151,7 @@ async fn e2e_ontology_pipeline_add_cognify_search() {
     };
     let embedding_engine: Arc<dyn EmbeddingEngine> = embedding_engine;
 
-    // In-memory mock vector DB (qdrant extracted to closed cognee-vector-qdrant).
+    // In-memory mock vector DB.
     let vector_db: Arc<dyn VectorDB> = Arc::new(MockVectorDB::new());
 
     // Real OpenAI-compatible adapter (endpoint/key/model from env). Guarded
@@ -317,7 +317,7 @@ async fn e2e_ontology_pipeline_multi_ontology_add_cognify_search() {
     );
     graph_db.initialize().await.expect("graph_db.initialize");
 
-    // In-memory mock vector DB (qdrant extracted to closed cognee-vector-qdrant).
+    // In-memory mock vector DB.
     let vector_db: Arc<dyn VectorDB> = Arc::new(MockVectorDB::new());
 
     let embedding_engine: Arc<dyn EmbeddingEngine> = Arc::new(MockEmbeddingEngine::new(8));

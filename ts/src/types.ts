@@ -355,8 +355,7 @@ export interface CogneeRememberItemInfo {
  * `cognify` — because `remember` deliberately preserves Python-SDK wire parity:
  * Python's `RememberResult.to_dict()` is a plain-class dict, not a pydantic
  * alias-converted model, so it emits snake_case keys. The HTTP v2 `remember`
- * DTO makes the same carve-out (`crates/cognee-http-server/src/dto/remember.rs`
- * in the closed cognee-cloud-rs repo), and this binding matches it. See
+ * DTO makes the same carve-out, and this binding matches it. See
  * issue #46.
  *
  * Both the file/text path (`remember`) and the typed-entry path
@@ -615,5 +614,5 @@ export interface CogneeVisualizeOptions {
 }
 
 // Cloud-related types (`CogneeServeOptions`, `CogneeServeResult`,
-// `CogneeDisconnectOptions`) live in the closed `cognee-ts-cloud` package
-// (T15e) alongside the `serve` / `disconnect` functions that consume them.
+// `CogneeDisconnectOptions`) are not part of this package, along with the
+// `serve` / `disconnect` functions that consume them.

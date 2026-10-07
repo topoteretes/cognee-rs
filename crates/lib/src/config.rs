@@ -1425,8 +1425,8 @@ impl Default for Settings {
             // (their defaults don't enable the `pgvector` Cargo feature), so
             // `"lancedb"` remains the lowest-friction default — but note it is now
             // itself behind the `lancedb` feature (default-on in `cognee`, in
-            // every binding, and in `cognee-http-server` over in the closed
-            // `cognee-cloud-rs` repo). A consumer that drops that
+            // every binding, and in `cognee-http-server`). A consumer that
+            // drops that
             // feature MUST set `vector_db_provider` explicitly; the registry's
             // unsupported-provider error names the feature to rebuild with.
             //

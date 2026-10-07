@@ -246,7 +246,7 @@ impl ComponentRegistry {
             return Ok(key);
         }
         // Only degrade the one id that is unbuildable on this platform by
-        // construction, and only after a real lookup miss -- so a closed
+        // construction, and only after a real lookup miss -- so an external
         // `lancedb` adapter registered via `register_vector` still wins, and
         // every other unregistered provider keeps the loud error.
         if android_lancedb_fallback
@@ -451,7 +451,7 @@ fn unsupported_msg(field: &str, provider: &str, supported: &[String]) -> String 
     };
     format!(
         "Unsupported {field} '{provider}'. Registered providers: [{}].{hint} \
-         Closed adapters (e.g. qdrant, litert) must be registered via \
+         External adapters must be registered via \
          ComponentRegistry::register_* at the binary entry point.",
         supported.join(", ")
     )
@@ -508,7 +508,7 @@ mod tests {
         assert!(reg.resolve_vector_key("nonsense", true).is_err());
     }
 
-    // The fallback fires only on a real lookup miss, so a closed `lancedb`
+    // The fallback fires only on a real lookup miss, so an external `lancedb`
     // adapter registered at the binary entry point still wins on Android --
     // `register_vector` stays the documented override.
     #[test]

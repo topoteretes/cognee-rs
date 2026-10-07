@@ -1,6 +1,6 @@
 # cognee-cli
 
-Single-user, local command-line interface over the cognee pipeline (`add` → `cognify` → `search` and the higher-level memory ops). It drives the embedded engine directly against your local databases — there is **no HTTP server** here (no `serve`, no `disconnect`); for the networked API use the `cognee-http-server` crate, which lives in the closed [`cognee-cloud-rs`](https://github.com/topoteretes/cognee-cloud-rs) repo.
+Single-user, local command-line interface over the cognee pipeline (`add` → `cognify` → `search` and the higher-level memory ops). It drives the embedded engine directly against your local databases — there is **no HTTP server** here (no `serve`, no `disconnect`).
 
 ## Commands
 
@@ -21,7 +21,7 @@ Single-user, local command-line interface over the cognee pipeline (`add` → `c
 
 ## Library target
 
-In addition to the `cognee-cli` binary, the crate exposes a `cognee_cli` library target re-exporting the `cli`, `commands`, `config_store`, and `error` modules, so downstream consumers (such as the closed cloud superset binary) can reuse the command handlers and argument structs unchanged.
+In addition to the `cognee-cli` binary, the crate exposes a `cognee_cli` library target re-exporting the `cli`, `commands`, `config_store`, and `error` modules, so downstream binaries can reuse the command handlers and argument structs unchanged.
 
 Part of [cognee-rs](https://github.com/topoteretes/cognee-rs) — see the [project README](../../README.md) for an architecture overview and how the pieces fit together.
 

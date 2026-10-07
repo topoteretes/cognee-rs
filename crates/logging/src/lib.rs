@@ -5,8 +5,7 @@
 //! default library-noise-suppressing `EnvFilter`. Binaries and bindings
 //! (Python / JS / C) call `init_logging` to install a global subscriber;
 //! library crates **must not** depend on this crate. In this workspace the
-//! binary is `cognee-cli`; `cognee-http-server` does the same from the
-//! closed `cognee-cloud-rs` repo.
+//! binary is `cognee-cli`.
 
 #![deny(missing_docs)]
 

@@ -198,10 +198,8 @@ async fn migration_preserves_existing_data_pg() {
 async fn baseline_creates_full_table_set_sqlite() {
     // Auth tables (principals, permissions, acls, tenants, users, roles,
     // user_tenants, user_roles, user_api_key, role/user/tenant_default_permissions,
-    // principal_configuration) live in the closed `cognee-access-control`
-    // crate's migration. The OSS baseline creates only the 17 non-auth
-    // tables; the closed Migrator composes OSS core + auth migrations and
-    // is exercised in cognee-cloud-rs's integration tests.
+    // principal_configuration) are not part of the OSS schema. The OSS
+    // baseline creates only the 17 non-auth tables.
     let db = connect("sqlite::memory:").await.expect("connect");
     initialize(&db).await.expect("initialize");
     let tables = table_names(&db).await;

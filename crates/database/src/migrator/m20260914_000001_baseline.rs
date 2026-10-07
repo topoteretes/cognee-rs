@@ -417,9 +417,9 @@ impl MigrationTrait for Migration {
             .await?;
 
         // ── Auth tables (principals, permissions, acls, tenants, users,
-        //    roles, user_tenants, user_roles) moved to the closed
-        //    `cognee-access-control::Migrator`. The closed
-        //    migration runs after this baseline via the composed Migrator.
+        //    roles, user_tenants, user_roles) are not created here. A
+        //    downstream crate that needs them registers its own migration,
+        //    which runs after this baseline via the composed Migrator.
 
         // ── graph_sync_checkpoints ────────────────────────────────────────────
         manager
@@ -443,8 +443,8 @@ impl MigrationTrait for Migration {
             .await?;
 
         // ── Auth-adjacent tables (user_api_key, role/user/tenant_default_permissions,
-        //    principal_configuration) moved to the closed
-        //    `cognee-access-control::Migrator`.
+        //    principal_configuration) are likewise left to a downstream
+        //    migration.
 
         // ── sync_operations ───────────────────────────────────────────────────
         manager
@@ -840,8 +840,7 @@ impl MigrationTrait for Migration {
             .await?;
 
         // Auth-table seeding (permissions, principals, acls, default user)
-        // moved to the closed `cognee-access-control` auth migration
-        //.
+        // belongs to the downstream auth migration, not this baseline.
         Ok(())
     }
 
@@ -869,9 +868,8 @@ impl MigrationTrait for Migration {
         manager
             .drop_table(Table::drop().table(SyncOperations::Table).to_owned())
             .await?;
-        // Auth-table drops moved to the closed `cognee-access-control`
-        // auth migration. The closed Migrator runs those
-        // drops before this baseline's drops (since the composed migration
+        // Auth-table drops belong to the downstream auth migration, which
+        // runs those drops before this baseline's drops (since the composed migration
         // list adds the auth migration after the baseline; sea-orm's down
         // walks the list in reverse).
         manager
@@ -1060,7 +1058,7 @@ enum GraphMetrics {
 // Auth idens (Principals, Permissions, Acls, Tenants, Users, Roles,
 // UserTenants, UserRoles, UserApiKey, RoleDefaultPermissions,
 // UserDefaultPermissions, TenantDefaultPermissions, PrincipalConfiguration)
-// moved to the closed `cognee-access-control` auth migration.
+// are not defined here; they belong to the downstream auth migration.
 
 #[derive(DeriveIden)]
 enum GraphSyncCheckpoints {

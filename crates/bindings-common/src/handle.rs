@@ -36,13 +36,13 @@ const TELEMETRY_FLUSH_TIMEOUT: std::time::Duration = std::time::Duration::from_m
 /// OSS has no `users`-table writer, so the default binding behaviour is
 /// **DB-free** (`HandleState`'s hook is `None` → the in-memory
 /// `cognee::api::get_or_create_default_user` UUID5 derivation is used,
-/// with no DB write). The closed cloud build attaches an implementation that
-/// upserts a real `users` row through `cognee-access-control`, so warm/admin
-/// paths persist the default user for downstream ACL / API-key FK integrity.
+/// with no DB write). A downstream build can attach an implementation that
+/// upserts a real `users` row, so warm/admin paths persist the default user
+/// for downstream ACL / API-key FK integrity.
 ///
 /// This is the OSS-local analogue of the `with_*` builder convention used
-/// elsewhere (e.g. `DatasetManager::with_acl`): the trait lives in OSS so the
-/// closed crate can implement it, but OSS itself never provides an impl.
+/// elsewhere (e.g. `DatasetManager::with_acl`): the trait lives in OSS so a
+/// downstream crate can implement it, but OSS itself never provides an impl.
 #[async_trait::async_trait]
 pub trait DefaultUserBootstrap: Send + Sync {
     /// Resolve (and optionally persist) the default user, returning the row.
@@ -66,7 +66,7 @@ pub struct HandleState {
     #[allow(dead_code)] // consumed by SDK ops in later phases
     tenant_id: Option<Uuid>,
     /// Optional DB-backed default-user bootstrap hook. `None` (the OSS default)
-    /// keeps the DB-free in-memory derivation; the closed cloud build attaches
+    /// keeps the DB-free in-memory derivation; a downstream build can attach
     /// an impl that persists the `users` row.
     bootstrap: Option<Arc<dyn DefaultUserBootstrap>>,
     /// Set by [`HandleState::close`] (the *explicit* teardown). Once set,
@@ -92,9 +92,9 @@ impl HandleState {
 
     /// Construct from `Settings` with an explicit component registry.
     ///
-    /// This is the injection seam for external adapters: a closed cloud build
-    /// registers its qdrant / litert factories on a `ComponentRegistry` and
-    /// passes it here so a configured `vector_provider="qdrant"` (etc.)
+    /// This is the injection seam for external adapters: a downstream build
+    /// registers its own adapter factories on a `ComponentRegistry` and
+    /// passes it here so a configured external `vector_provider`
     /// resolves through the same construction path the py/ts/c SDKs use. With
     /// the OSS built-in registry this is byte-for-byte equivalent to
     /// [`from_settings`](Self::from_settings).
@@ -122,8 +122,8 @@ impl HandleState {
     ///
     /// With a hook set, the warm path and the admin op resolve the owner via
     /// `hook.bootstrap(db, email)` — persisting the `users` row — instead of
-    /// the DB-free in-memory derivation. The closed cloud build uses this to
-    /// restore the original monorepo's persisted default-user behaviour.
+    /// the DB-free in-memory derivation, restoring a persisted default-user
+    /// behaviour.
     pub fn with_default_user_bootstrap(mut self, hook: Arc<dyn DefaultUserBootstrap>) -> Self {
         self.bootstrap = Some(hook);
         self
@@ -170,7 +170,7 @@ impl HandleState {
         let (svc, owner_id) = CogneeServices::build(&self.cm).await?;
         let svc = Arc::new(svc);
 
-        // When a DB-backed bootstrap hook is attached (closed cloud build),
+        // When a DB-backed bootstrap hook is attached (downstream build),
         // resolve the owner through it so the `users` row is persisted. The
         // hook is keyed on the same email and yields the same UUID5 id, but
         // additionally writes the row. With no hook (OSS default), keep the

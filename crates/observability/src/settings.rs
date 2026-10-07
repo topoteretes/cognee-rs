@@ -32,8 +32,8 @@ pub trait SettingsView: Send + Sync {
 // Defaults mirror `cognee::Settings::default()` (config.rs lines 644-651).
 // Kept here so callers that don't depend on `cognee` still get the same
 // defaults; a unit test below pins the two views together. The original such
-// caller, `cognee-http-server`, now lives in the closed `cognee-cloud-rs` repo
-// and depends on this crate from outside this workspace.
+// caller, `cognee-http-server`, is not part of this repository and depends
+// on this crate from outside this workspace.
 pub(crate) const DEFAULT_TRACING_ENABLED: bool = false;
 pub(crate) const DEFAULT_SERVICE_NAME: &str = "cognee";
 pub(crate) const DEFAULT_OTLP_ENDPOINT: &str = "";

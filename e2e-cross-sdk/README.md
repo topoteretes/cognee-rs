@@ -3,8 +3,8 @@
 Docker-based harness that verifies parity between the Python and Rust cognee
 SDKs by driving both CLIs and comparing the databases they produce.
 
-> **The HTTP lane has moved.** `cognee-http-server` now lives in the closed
-> `cognee-cloud-rs` repository, and the 28 `test_http_*.py` files, their
+> **The HTTP lane has moved.** `cognee-http-server` no longer lives in this
+> repository, and the 28 `test_http_*.py` files, their
 > fixtures (`http_helpers.py`, `seed.py`, the `py_client`/`rs_client`/
 > `authed_clients` fixtures), the dual-server entrypoint
 > (`bin/start_servers.sh`, `harness/wait_for_health.sh`), the

@@ -290,7 +290,7 @@ impl CogneeServices {
     ///
     /// Owner id is the OSS default user materialised by
     /// `get_or_create_default_user(&settings)`: it is the parsed
-    /// `settings.default_user_id` UUID. The closed cloud build replaces this
+    /// `settings.default_user_id` UUID. A downstream build may replace this
     /// helper with a DB-backed equivalent that upserts a row in the `users`
     /// table; the call shape is identical, so this assembly path is unchanged.
     ///

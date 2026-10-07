@@ -117,7 +117,7 @@ async fn cognify_e2e_stamps_with_expected_task_names() {
     };
     let embedding_engine: Arc<dyn EmbeddingEngine> = embedding_engine;
 
-    // In-memory mock vector DB (qdrant extracted to closed cognee-vector-qdrant).
+    // In-memory mock vector DB.
     let vector_db: Arc<dyn VectorDB> = Arc::new(MockVectorDB::new());
 
     // Route through the production factory (provider from env, default `openai`)

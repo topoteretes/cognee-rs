@@ -446,8 +446,7 @@ Supported providers:
 - `pgvector` — Postgres + the `pgvector` extension; requires the `pgvector`
   Cargo feature on the binary build.
 
-Qdrant lives in closed `cognee-cloud-rs` as the `cognee-vector-qdrant` crate
-and is not part of OSS. See [tools/backends.md](tools/backends.md).
+Qdrant is not part of OSS. See [tools/backends.md](tools/backends.md).
 Setting `vector_db_provider` to `qdrant` is rejected at component
 initialization in OSS (it returns a config error rather than falling back).
 
@@ -489,8 +488,7 @@ config (see [roadmap/cognify-compatibility-plan.md](roadmap/cognify-compatibilit
 > `DB_*` fallback are assembled into a connection string. The server does not
 > assemble one — with `GRAPH_DATABASE_PROVIDER=postgres` it requires
 > `GRAPH_DATABASE_URL` (a `postgres://…` or `postgresql://…` string) and fails
-> at startup otherwise. The server lives in the closed `cognee-cloud-rs` repo;
-> see [tools/http-server.md](tools/http-server.md).
+> at startup otherwise. The server is not part of this repository; see [tools/http-server.md](tools/http-server.md).
 
 ## Relational database
 
@@ -910,8 +908,8 @@ search option verbatim
 ([`bindings-common/src/ops/retrieval.rs`](../crates/bindings-common/src/ops/retrieval.rs)).
 The **CLI** still hardcodes `retriever_specific_config: None`
 ([`cli/src/commands/search.rs`](../crates/cli/src/commands/search.rs)), and so
-does the HTTP server, which lives in the closed `cognee-cloud-rs` repo (its
-search, recall and responses handlers): the knobs are **not** wire fields on
+does the HTTP server, which is not part of this repository (its search,
+recall and responses handlers): the knobs are **not** wire fields on
 `SearchPayloadDTO` — the same class as `neighborhood_depth` and the other
 orchestrator-only `SearchParams` knobs.
 
@@ -968,8 +966,8 @@ effect in Phase 1 — passing `true` must behave identically to the default:
   on a `GlobalContextSummary` node type and global-context utilities not yet
   ported to Rust.
 
-The HTTP-facing degradation notes live with the server's search-router docs in
-the closed `cognee-cloud-rs` repo.
+The HTTP-facing degradation notes live with the server's search-router docs,
+which are not part of this repository.
 
 ## Ontology
 
@@ -1211,10 +1209,9 @@ product analytics. The **deep references** are
 
 ## HTTP server
 
-The server binary — now in the closed [`cognee-cloud-rs`](https://github.com/topoteretes/cognee-cloud-rs) repo, at `crates/cognee-http-server/src/config.rs` — reads its own env surface:
-host/port, auth, body limits, pipeline registry, notebooks, health probes. That
-env surface, and the rest of the server's documentation, is maintained in
-`cognee-cloud-rs` (`docs/http-server/`); see
+The server binary is not part of this repository. It reads its own env surface
+(host/port, auth, body limits, pipeline registry, notebooks, health probes),
+which is documented with the server rather than here; see
 [tools/http-server.md](tools/http-server.md). Note that the `HYBRID_COMPLETION`
 tuning knobs are **not** part of the HTTP wire surface — see
 [Search — hybrid retriever knobs](#search--hybrid-retriever-knobs).
@@ -1222,8 +1219,7 @@ tuning knobs are **not** part of the HTTP wire surface — see
 ## Cloud
 
 Cloud/Auth0 configuration (`COGNEE_CLOUD_URL`, `COGNEE_AUTH0_*`) and the
-`serve()`/`disconnect()` flow live in the closed `cognee-cloud-rs` product
-(the `cognee-cloud` crate) and are not part of OSS.
+`serve()`/`disconnect()` flow are not part of OSS.
 
 ## Runtime configuration API
 

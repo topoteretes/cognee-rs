@@ -18,10 +18,6 @@ pub mod mock_llm;
 pub mod mock_transcriber;
 pub mod span_capture;
 
-// `mock_user_db`, `mock_role_db`, `mock_tenant_db` moved to the closed
-// `cognee-access-control::test_utils` module
-//.
-
 use std::{path::PathBuf, sync::Arc};
 
 use cognee_core::{CancellationHandle, RayonThreadPool, TaskContext, TaskContextBuilder};

@@ -223,9 +223,8 @@ JSON*. `cognee-cli` already is that single-process entry point (it wires up
 driver becomes a **`cognee-cli bench` subcommand**, not a new binary — reusing all
 existing bootstrapping. (The Criterion bench `batch_add_cognify` — formerly a
 crate of its own in this workspace — covered the HTTP / real-LLM scenario by spawning the
-`cognee-http-server` binary; it moved to the closed
-[`cognee-cloud-rs`](https://github.com/topoteretes/cognee-cloud-rs) repo along
-with that server and is no longer part of this workspace.)
+`cognee-http-server` binary; it left along with that server and is no longer
+part of this workspace.)
 
 ### 5.5 What we deliberately do not port
 

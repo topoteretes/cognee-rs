@@ -11,5 +11,5 @@ pub mod session_lifecycle;
 pub mod task_runs;
 pub mod tutorial_seeder;
 
-// `ops::user`, `ops::role`, `ops::tenant` moved to the closed
-// `cognee-access-control` crate.
+// `ops::user`, `ops::role`, `ops::tenant` are not part of this crate; a
+// downstream ACL implementation owns them.

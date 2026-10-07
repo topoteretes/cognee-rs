@@ -19,8 +19,7 @@ crate-type = ["cdylib"]
 
 [features]
 # visualization mirrors cognee defaults. The former `cloud` feature was
-# lifted to the closed `cognee-ts-cloud` cdylib (T15e) which depends on
-# `cognee-bindings-cloud`; this OSS cdylib intentionally omits it.
+# removed (T15e); this OSS cdylib intentionally omits cloud support.
 default = [
     "visualization",
     # engine features — unchanged from Phase 0–5

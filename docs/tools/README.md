@@ -10,7 +10,7 @@ How you invoke the pipeline. All cover the same operations
 
 - **[cli.md](cli.md)** — `cognee-cli`: subcommands, flags, `config`, retries, logging.
 - **[bindings.md](bindings.md)** — Python / C / JavaScript / Java SDKs (shared `bindings-common`) + config-setter ergonomics.
-- **[http-server.md](http-server.md)** — note: `cognee-http-server` **and its documentation** (architecture, auth, pipelines, per-router endpoint reference) live in the closed [`cognee-cloud-rs`](https://github.com/topoteretes/cognee-cloud-rs) repo, under `docs/http-server/`.
+- **[http-server.md](http-server.md)** — note: `cognee-http-server` **and its documentation** (architecture, auth, pipelines, per-router endpoint reference) are not part of this repository.
 
 ## Backends
 

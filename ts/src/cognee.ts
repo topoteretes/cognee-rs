@@ -46,9 +46,8 @@ import type {
 } from "./types";
 import { wrapNativeError } from "./errors";
 
-// Cloud module-level functions (`serve` / `disconnect`) live in the closed
-// `cognee-ts-cloud` package (T15e). The OSS `cognee` package does not
-// expose them.
+// Cloud module-level functions (`serve` / `disconnect`) are not part of the
+// OSS `cognee` package, which does not expose them.
 
 /** Convert a single `snake_case` key to `camelCase`. */
 function snakeToCamel(key: string): string {

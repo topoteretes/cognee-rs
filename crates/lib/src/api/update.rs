@@ -119,8 +119,8 @@ pub async fn update(
 
     // ── Step 3: Re-cognify (if data was added) ───────────────────────────────
     let cognify_result = if !data_items.is_empty() {
-        // OSS build has no DB-backed user lookup (the `users` table is owned
-        // by the closed cloud build), so we always fall back to `None`.
+        // OSS build has no DB-backed user lookup (there is no `users` table
+        // in the OSS schema), so we always fall back to `None`.
         // `cognify()` then uses `user_id.to_string()` as the provenance
         // stamp.
         let user_email: Option<String> = None;

@@ -58,8 +58,8 @@ from the docs is correct). The four memory-API CLI verbs (`remember` / `recall` 
     feature), mock.
   - Vector stores: Python adds ChromaDB, Neptune Analytics, Redis, FalkorDB; Rust covers
     LanceDB (embedded, default on non-Android), pgvector, and an in-memory brute-force store
-    (Android default + `vector_db_url = ":memory:"` escape hatch). The embedded Qdrant adapter
-    lives in the closed `cognee-vector-qdrant` crate.
+    (Android default + `vector_db_url = ":memory:"` escape hatch). An embedded Qdrant adapter
+    is not part of this repository.
   - Graph stores: Python adds Neo4j, Neptune, Memgraph; Rust covers Ladybug/Kuzu (embedded) and
     Postgres (`pggraph`).
 - **Structured-output backends** — Python lets you choose LiteLLM + Instructor or BAML for structured
@@ -96,10 +96,8 @@ Shipped in task 20 as sanctioned partials for 0.1.0:
 
 ## HTTP server
 
-`cognee-http-server` is not in this repository: it lives in the closed
-[`cognee-cloud-rs`](https://github.com/topoteretes/cognee-cloud-rs) repo, and its known gaps
-(server, notebook execution, auth) and open design questions moved with it to
-`docs/http-server/roadmap.md` there.
+`cognee-http-server` is not in this repository; its known gaps (server, notebook
+execution, auth) and open design questions left with it.
 
 ## Telemetry / observability
 
@@ -184,13 +182,13 @@ panel are rendered from the same six JS view modules Python uses, vendored verba
 
 ## Cross-SDK parity harness
 
-The HTTP parity harness shipped, then moved to `cognee-cloud-rs` with
+The HTTP parity harness shipped, then left this repository with
 `cognee-http-server`; what remains here is the CLI/DB lane. Follow-ups noted in its
 (now-removed) design doc:
 
 - **Per-endpoint OpenAPI snapshots** — an informational `openapi.python.json` reference snapshot
-  used to be committed here; it moved to `cognee-cloud-rs` with the rest of the HTTP parity lane, and
-  per-endpoint golden snapshots remain a follow-up there.
+  used to be committed here; it left with the rest of the HTTP parity lane, and
+  per-endpoint golden snapshots are no longer tracked here.
 - **`--quick` LLM-mock mode** — LLM-dependent parity tests can take 60s+; a mocked fast mode was
   proposed but not built.
 - **TLS path testing** — the suite runs over plain HTTP only.

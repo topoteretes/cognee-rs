@@ -115,7 +115,7 @@ pub struct EmbeddingInputs {
 #[derive(Clone, Default)]
 pub struct LlmInputs {
     /// Lowercase provider string (`openai` | `ollama` | `mistral` | `gemini` |
-    /// `custom` | `openai_compatible` | `mock` | closed providers).
+    /// `custom` | `openai_compatible` | `mock` | externally registered providers).
     pub provider: String,
     pub model: String,
     pub api_key: String,

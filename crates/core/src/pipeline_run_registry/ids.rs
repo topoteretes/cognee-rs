@@ -3,10 +3,8 @@
 //! Shared between the HTTP server's `dispatch_pipeline` and library-level
 //! callers such as the reset helpers in `cognee`. Promoted out of
 //! the HTTP server's `src/pipelines/dispatch.rs` (action item 08-05 §4.0)
-//! so `cognee` can call them without depending on `cognee-http-server`.
-//! That server now lives in the closed `cognee-cloud-rs` repo, at
-//! `crates/cognee-http-server/`, and consumes this crate through the OSS
-//! submodule — so the rationale above still holds, the path just is not here.
+//! so `cognee` can call them without depending on `cognee-http-server`
+//! (which is not part of this repository).
 //!
 //! Both helpers produce byte-identical values to the Python utilities:
 //!

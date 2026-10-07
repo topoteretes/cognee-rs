@@ -79,7 +79,7 @@ async fn test_shared_entity_graph_delete() {
     );
     graph_db.initialize().await.expect("graph_db.initialize");
 
-    // In-memory mock vector DB (qdrant extracted to closed cognee-vector-qdrant).
+    // In-memory mock vector DB.
     let vector_db: Arc<dyn VectorDB> = Arc::new(MockVectorDB::new());
 
     let Some(llm) = create_llm_from_env("shared_entity_graph_delete") else {

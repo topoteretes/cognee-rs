@@ -9,9 +9,9 @@ use crate::types::DatabaseError;
 /// for principals (users, roles, tenants). All implementations must be
 /// thread-safe for async multi-threaded usage.
 ///
-/// The blanket `impl AclDb for DatabaseConnection` moved to the closed
-/// `cognee-access-control` crate. OSS callers wire ACL through `MockAclDb` (tests) or through the
-/// closed `AccessControl` newtype (production cloud builds).
+/// This crate provides no `impl AclDb for DatabaseConnection`. Callers wire
+/// ACL through `MockAclDb` (tests) or through a downstream implementation
+/// (production deployments that provide their own `AclDb`).
 #[async_trait]
 pub trait AclDb: Send + Sync {
     /// Check if a principal has a specific permission on a dataset.

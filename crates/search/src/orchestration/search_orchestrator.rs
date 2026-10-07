@@ -138,8 +138,7 @@ pub struct SearchOrchestrator {
     database: Option<Arc<dyn SearchHistoryDb>>,
     dataset_resolver: Option<Arc<dyn IngestDb>>,
     /// ACL backend used to authorize caller-supplied `dataset_ids`. `None` in
-    /// OSS builds (no production `AclDb` impl ships outside the closed
-    /// `cognee-access-control` crate), in which case authorization degrades
+    /// OSS builds (this workspace ships no production `AclDb` impl), in which case authorization degrades
     /// to the ownership check — see the `dataset_ids` block in [`Self::search`].
     acl_db: Option<Arc<dyn AclDb>>,
     session_manager: Option<Arc<SessionManager>>,
@@ -266,8 +265,7 @@ impl SearchOrchestrator {
     ///
     /// **No ACL wired (OSS degradation)** — the datasets the requester owns,
     /// via `IngestDb::list_datasets_by_owner`. OSS ships no production `AclDb`
-    /// impl (the `DatabaseConnection` blanket impl lives in the closed
-    /// `cognee-access-control` crate), so ownership is the only signal
+    /// impl (there is no `DatabaseConnection` blanket impl here), so ownership is the only signal
     /// available. It under-approximates Python in every "shared" case: a
     /// dataset granted `read` to the caller directly, to the caller's tenant,
     /// or to a role the caller holds is readable in Python but denied here.

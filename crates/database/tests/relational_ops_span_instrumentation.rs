@@ -11,12 +11,11 @@
 //! used for the test backend).
 #![cfg(feature = "sqlite")]
 
-// `RoleDb`/`TenantDb`/`UserDb` moved to the closed `cognee-access-control`
-// crate. The smoke tests that
-// asserted spans for their direct-DB impls (`role_list_roles_in_tenant_*`,
-// `tenant_list_tenants_for_user_*`, `user_list_users_*`,
-// `acl_authorized_dataset_ids_*`) moved with them. The OSS surface here
-// retains spans for the remaining ops modules only.
+// `RoleDb`/`TenantDb`/`UserDb` and their direct-DB impls are not part of
+// this crate, so there are no span smoke tests for them here
+// (`role_list_roles_in_tenant_*`, `tenant_list_tenants_for_user_*`,
+// `user_list_users_*`, `acl_authorized_dataset_ids_*`). This file covers
+// the remaining ops modules only.
 use cognee_database::{
     CostByModelRow, DatabaseConnection, NotebookDb, SearchHistoryDb, SessionLifecycleDb, connect,
     initialize, ops, seed_tutorials_if_first_call,
@@ -41,8 +40,7 @@ fn assert_relational_span(spans: &[CapturedSpan], expected: &str) {
     );
 }
 
-// ─── ops/acl.rs: direct-DB span coverage moved to the closed
-//     cognee-access-control crate's tests. The trait-only
+// ─── ops/acl.rs: no direct-DB impl here. The trait-only
 //     helper `grant_all_permissions_on_dataset_via_trait` retains no
 //     own span (it wraps trait methods whose spans are emitted by the
 //     concrete impl).
@@ -134,8 +132,6 @@ async fn pipeline_runs_get_pipeline_run_emits_span() {
     );
 }
 
-// ─── ops/role.rs: moved to cognee-access-control.
-
 // ─── ops/search_history.rs ───────────────────────────────────────────────────
 
 #[tokio::test]
@@ -188,8 +184,6 @@ async fn task_runs_update_task_run_status_emits_span() {
     );
 }
 
-// ─── ops/tenant.rs: moved to cognee-access-control.
-
 // ─── ops/tutorial_seeder.rs ──────────────────────────────────────────────────
 
 #[tokio::test]
@@ -214,8 +208,6 @@ async fn tutorial_seeder_emits_span() {
         spans.iter().map(|s| &s.name).collect::<Vec<_>>(),
     );
 }
-
-// ─── ops/user.rs: moved to cognee-access-control.
 
 // ─── compile-time export sanity ──────────────────────────────────────────────
 

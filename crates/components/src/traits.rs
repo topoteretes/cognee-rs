@@ -2,9 +2,8 @@
 //!
 //! Each trait maps a lowercase provider id to a constructor over a
 //! [`BackendBuildContext`]. OSS registers built-in factories in
-//! [`crate::ComponentRegistry::with_builtins`]; external crates (e.g. the
-//! closed `cognee-vector-qdrant` / `cognee-llm-litert`) implement these traits
-//! and register their factories at their own binary entry points.
+//! [`crate::ComponentRegistry::with_builtins`]; external adapter crates
+//! implement these traits and register their factories at their own binary entry points.
 //!
 //! All traits are `Send + Sync` and use `#[async_trait]` so that
 //! `Arc<dyn XFactory>` is dyn-compatible and the holding `ComponentManager`

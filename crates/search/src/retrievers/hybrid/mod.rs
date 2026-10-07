@@ -521,9 +521,8 @@ impl HybridRetriever {
     /// leaves unspent; the output cap is how much of it the decoder is allowed
     /// to use. Reserve less than the decoder may write and a long answer runs
     /// off the end of the window mid-generation, which is not a truncated
-    /// answer but a hard rejection. `cognee-llm-litert`'s
-    /// `DEFAULT_MAX_OUTPUT_TOKENS` is the other half of this pair; change one
-    /// and change the other.
+    /// answer but a hard rejection. An on-device adapter's output-token cap
+    /// is the other half of this pair; change one and change the other.
     ///
     /// 512 tokens is roughly 380 words — ample for a RAG answer — and on a
     /// 4096-token window buying it back from a quarter-window reserve is worth

@@ -17,5 +17,5 @@ pub use session_lifecycle_db::{
     SessionStats,
 };
 
-// `RoleDb`, `TenantDb`, `UserDb` moved to the closed `cognee-access-control`
-// crate.
+// `RoleDb`, `TenantDb`, `UserDb` are not part of this crate; a downstream ACL
+// implementation owns them.

@@ -72,7 +72,7 @@ async fn test_search_updates_last_accessed_timestamp() {
     );
     graph_db.initialize().await.expect("graph_db.initialize");
 
-    // In-memory mock vector DB (qdrant extracted to closed cognee-vector-qdrant).
+    // In-memory mock vector DB.
     let vector_db: Arc<dyn VectorDB> = Arc::new(MockVectorDB::new());
 
     let Some(llm) = create_llm_from_env("last_accessed_update") else {

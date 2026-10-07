@@ -691,8 +691,8 @@ async fn phase_cognify(
         .await
         .map_err(|e| e.to_string())?;
 
-    // OSS build has no DB-backed user lookup (the `users` table is owned by
-    // the closed cloud build), so `user_email` always falls back to `None`.
+    // OSS build has no DB-backed user lookup (there is no `users` table),
+    // so `user_email` always falls back to `None`.
     let user_email: Option<String> = None;
 
     let thread_pool: Arc<dyn cognee::core::CpuPool> =

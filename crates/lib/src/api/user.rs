@@ -8,9 +8,8 @@ use uuid::Uuid;
 
 /// Materialise the OSS default user **without** touching the database.
 ///
-/// The OSS build does not implement authentication (the `users` table is
-/// touched only by the closed cloud build via its own DB-backed
-/// `get_or_create_default_user`), so this function constructs an in-memory
+/// The OSS build does not implement authentication (there is no `users`
+/// table in the OSS schema), so this function constructs an in-memory
 /// [`User`] record from the configured `default_user_email`.
 ///
 /// The id is `Uuid::new_v5(&NAMESPACE_OID, default_user_email.as_bytes())`
@@ -25,8 +24,8 @@ use uuid::Uuid;
 /// then `.await` — `std::sync::RwLockReadGuard` is `!Send` and would
 /// otherwise poison the surrounding future's `Send` bound.
 ///
-/// Kept `async` and fallible so call sites stay uniform with the
-/// closed-build replacement (which performs real DB I/O and can fail).
+/// Kept `async` and fallible so call sites stay uniform with a DB-backed
+/// replacement (which performs real DB I/O and can fail).
 pub async fn get_or_create_default_user(default_user_email: &str) -> Result<User, DatabaseError> {
     let id = Uuid::new_v5(&Uuid::NAMESPACE_OID, default_user_email.as_bytes());
     Ok(User {

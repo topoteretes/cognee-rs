@@ -66,7 +66,7 @@ async fn test_delete_preview_counts_match_execution() {
     );
     graph_db.initialize().await.expect("graph_db.initialize");
 
-    // In-memory mock vector DB (qdrant extracted to closed cognee-vector-qdrant).
+    // In-memory mock vector DB.
     let vector_db: Arc<dyn VectorDB> = Arc::new(MockVectorDB::new());
 
     // LLM via cassette (replay/record/real) — see test_utils::create_llm_from_env.

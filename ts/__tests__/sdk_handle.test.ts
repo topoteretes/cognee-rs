@@ -93,14 +93,12 @@ describe("Phase-1 SDK handle & facade", () => {
   });
 
   // Note: a former test asserted that a `users` row was created after warm by
-  // directly inspecting the SQLite `users` table. T2-move relocated the
-  // `users` table to the closed cognee-access-control crate
-  // (cognee-cloud-rust/crates/access-control/src/migrator/m20260914_000002_auth.rs);
-  // the OSS baseline migration no longer creates a `users` table at all
+  // directly inspecting the SQLite `users` table. T2-move moved the `users`
+  // table out of this repository; the OSS baseline migration no longer
+  // creates a `users` table at all
   // (crates/database/src/migrator/m20260914_000001_baseline.rs). The uuid5
   // parity test above ("resolves owner id lazily without an explicit warm")
-  // is the load-bearing default-user assertion in OSS. Closed bindings (T15)
-  // will restore the users-row test on the closed side.
+  // is the load-bearing default-user assertion in OSS.
   it("resolves owner id lazily without an explicit warm (idempotent)", async () => {
     const handle = native.cogneeNew(makeSettings());
     // No cogneeWarm() — cogneeOwnerId warms on demand.

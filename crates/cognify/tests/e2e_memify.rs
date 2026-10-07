@@ -131,7 +131,7 @@ async fn test_memify_e2e_real_embedding_real_qdrant() {
     };
     let embedding_engine: Arc<dyn EmbeddingEngine> = embedding_engine;
 
-    // In-memory mock vector DB (qdrant extracted to closed cognee-vector-qdrant).
+    // In-memory mock vector DB.
     let vector_db: Arc<dyn VectorDB> = Arc::new(MockVectorDB::new());
 
     // Embedded Ladybug.

@@ -8,9 +8,8 @@
 //!
 //! ## Extension
 //!
-//! External adapter crates (e.g. the closed `cognee-vector-qdrant` /
-//! `cognee-llm-litert`) implement [`VectorDbFactory`] / [`GraphDbFactory`] /
-//! [`LlmFactory`] / [`EmbeddingFactory`] and register them via explicit
+//! External adapter crates implement [`VectorDbFactory`] / [`GraphDbFactory`]
+//! / [`LlmFactory`] / [`EmbeddingFactory`] and register them via explicit
 //! dependency injection:
 //!
 //! ```ignore

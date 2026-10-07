@@ -13,8 +13,7 @@ exposes the same flow: `warm()` → `add()` → `cognify()` → `search()`.
 | **Java** (JNI/jni-rs) | [java/README.md](../../java/README.md) | `Cognee` (`import ai.cognee.Cognee`) | `CompletableFuture<T>` |
 
 Module-level helpers exist in each binding for logging/telemetry setup. The
-`serve()` / `disconnect()` cloud helpers live in the closed companion packages,
-not in the OSS bindings. The full per-language method list lives in each
+`serve()` / `disconnect()` cloud helpers are not part of the OSS bindings. The full per-language method list lives in each
 binding's README and its generated docs.
 
 ## Configuration

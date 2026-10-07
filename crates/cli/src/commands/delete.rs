@@ -44,8 +44,7 @@ pub fn run(args: DeleteArgs, cm: Arc<cognee::ComponentManager>) -> Result<(), Cl
 
         if enforce_acl {
             return Err(CliError::Validation(
-                "--enforce-acl requires the closed cognee-cloud-rs build (cognee-cli-cloud)"
-                    .to_string(),
+                "--enforce-acl is not supported by this build".to_string(),
             ));
         }
 

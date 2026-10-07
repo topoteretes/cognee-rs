@@ -308,9 +308,8 @@ export interface NativeBindings {
     opts?: CogneeVisualizeOptions
   ): Promise<string>;
 
-  // Cloud ops (`cogneeServe` / `cogneeDisconnect`) live in the closed
-  // `cognee-ts-cloud` cdylib (T15e). The OSS `cognee-ts-neon` native module
-  // does not export them.
+  // Cloud ops (`cogneeServe` / `cogneeDisconnect`) are not part of the OSS
+  // `cognee-ts-neon` native module, which does not export them.
 
   // Config surface (Phase 2). Granular setters are synchronous and return
   // `void`; each bumps the config version, which version-invalidates the

@@ -5,7 +5,7 @@
 //!
 //! A dataset row and its ACL rows cannot be written in one transaction:
 //! [`AclDb`](cognee_database::AclDb) is a separate trait over a possibly
-//! separate store, and the production implementation is a closed newtype that
+//! separate store, and a production implementation is a downstream type that
 //! may not share a database with the metadata. Every create path therefore
 //! writes the row first and grants second, and compensates a failed grant by
 //! revoking what landed and dropping the row again.

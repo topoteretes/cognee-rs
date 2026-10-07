@@ -121,8 +121,7 @@ int main(void)
      * `cognee_vector::MockVectorDB` adapter (registered behind the
      * `testing` Cargo feature, enabled by the C-API default features).
      * This keeps the smoke test hermetic post-T4 (Qdrant adapter moved
-     * to the closed cognee-vector-qdrant crate; pgvector requires a
-     * real Postgres). T5 introduces a brute-force adapter and flips
+     * out of this repository; pgvector requires a real Postgres). T5 introduces a brute-force adapter and flips
      * the default to it so this overlay becomes optional. */
     const char* settings_json =
         "{"

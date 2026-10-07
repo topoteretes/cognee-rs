@@ -111,8 +111,7 @@ endif()
 # Default build: sdk_feature_smoke links the full feature set and verifies
 #   that cg_sdk_visualize / cg_sdk_visualize_to_file fire their callbacks,
 #   and that cg_json_string_decode round-trips correctly. Cloud ops
-#   (cg_sdk_serve / cg_sdk_disconnect) moved to closed `cognee-c-cloud` in
-#   T15a and have their own smoke coverage in the closed repo.
+#   (cg_sdk_serve / cg_sdk_disconnect) moved out of this repository in T15a.
 #
 # Slim build (built in a separate CMake dir by check.sh with
 #   -DCOGNEE_CAPI_NO_DEFAULT_FEATURES=ON -DCOGNEE_CAPI_CARGO_FEATURES=sqlite,testing):

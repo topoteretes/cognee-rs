@@ -3,10 +3,9 @@ name: Cross-SDK Parity
 # Cross-SDK parity between the Python and Rust cognee SDKs, driven through the
 # two CLIs and the on-disk databases they produce.
 #
-# The HTTP half of this lane is GONE from OSS. `cognee-http-server` moved to the
-# closed cognee-cloud-rs repo, taking the 28 `test_http_*.py` files, their
-# fixtures and the dual-server entrypoint with it; the HTTP parity phases now
-# run on the closed board. What is left here is the CLI/DB lane: the COGX
+# The HTTP half of this lane is GONE from OSS. `cognee-http-server` moved out
+# of this repository, taking the 28 `test_http_*.py` files, their fixtures and
+# the dual-server entrypoint with it. What is left here is the CLI/DB lane: the COGX
 # import + roundtrip contracts, telemetry parity, provenance parity and logging
 # parity.
 #
@@ -210,7 +209,7 @@ jobs:
           # features per-subgraph and build duplicate variants of shared deps
           # (that cost 44 min before it was fixed). No `--features` here — the
           # `bin` and `dev-mock` flags this line used to carry belonged to
-          # cognee-http-server, which has moved to cognee-cloud-rs.
+          # cognee-http-server, which has moved out of this repository.
           cargo build --release \
             -p cognee-cli \
             -p cognee-telemetry-emit

@@ -144,7 +144,7 @@ async fn test_search_returns_empty_for_deleted_doc_and_non_empty_for_remaining()
     );
     graph_db.initialize().await.expect("graph_db.initialize");
 
-    // In-memory mock vector DB (qdrant extracted to closed cognee-vector-qdrant).
+    // In-memory mock vector DB.
     let vector_db: Arc<dyn VectorDB> = Arc::new(MockVectorDB::new());
 
     let llm: Arc<dyn Llm> = cognee_test_utils::create_openai_adapter_from_env();

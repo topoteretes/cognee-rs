@@ -940,6 +940,5 @@ def setup_telemetry_analytics() -> None:
     """
     ...
 
-# Cloud ops (`serve` / `disconnect`) are exposed by the closed Python cdylib
-# `cognee-py-cloud` (T15e) which wraps `cognee-bindings-cloud`. The OSS
-# `cognee-py` _native module does not export them.
+# Cloud ops (`serve` / `disconnect`) are not part of the OSS `cognee-py`
+# package; the _native module does not export them.

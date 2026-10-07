@@ -22,11 +22,10 @@ both shipped earlier).
 | P6 — raise Python's `transcribe_image` to match Rust (§6.5) | ⬜ optional, not required for parity |
 
 **Why this doc stays in the roadmap folder.** P1 is still outstanding upstream,
-and it is the tracker that `docs/http-server/routers/settings.md` (now in `cognee-cloud-rs`) and the
+and it is the tracker that the HTTP server's settings-router docs (no longer in this repository) and the
 `xfail(strict=True)` case `test_settings_post_bedrock_accepted_by_python` both
 point at. (That case lived in `e2e-cross-sdk/harness/test_http_settings.py`,
-which left this repo with `cognee-http-server` and now runs in the closed
-`cognee-cloud-rs` repo.) Several source files
+which left this repo with `cognee-http-server`.) Several source files
 also cite this path — including a user-visible `LlmError` message in
 `crates/llm/src/adapters/bedrock/mod.rs` (§6.7) — so §1 (the wire spec) and §6
 (decisions and caveats) are load-bearing references, not historical notes. Delete
@@ -331,8 +330,8 @@ pub fn aws_inputs_from_env() -> AwsInputs { /* §1.2 / §1.3 names, trimmed, emp
 
 `LlmInputs` and `EmbeddingInputs` each gain `pub aws: AwsInputs`, populated by
 `aws_inputs_from_env()` at both lowering sites
-(`crates/lib/src/config.rs:850` and, in the closed `cognee-cloud-rs` repo,
-`crates/cognee-http-server/src/config.rs:700`).
+(`crates/lib/src/config.rs:850` and the HTTP server's config lowering, which
+is no longer part of this repository).
 
 This matters for scope: because Python resolves these from the environment and
 never threads them through its LLM config (§1.0 — the default path does not even
@@ -436,7 +435,7 @@ bedrock = ["cognee-llm/bedrock"]
 default = [..., "bedrock"]
 bedrock = ["cognee-llm/bedrock", "cognee-embedding/bedrock"]
 
-# crates/lib/Cargo.toml and, in cognee-cloud-rs, crates/cognee-http-server/Cargo.toml
+# crates/lib/Cargo.toml (and the HTTP server's manifest, outside this repository)
 default = [..., "bedrock"]
 bedrock = ["cognee-components/bedrock", "cognee-llm/bedrock", "cognee-embedding/bedrock"]
 ```
@@ -476,9 +475,7 @@ swapping in `aws-sdk-bedrockruntime` later touches one file.
 
 Workspace note: `hyper 1.10.1` is already in the graph via `reqwest 0.12`
 (`Cargo.lock:4281`), so adding a hyper-1 consumer is not new; no `aws-*` crate is
-in the lock today. (The closed `cognee-cloud-rust` workspace also carries a
-`hyper 0.14` qdrant fork under `[patch.crates-io]`; the two already coexist
-there, so this does not disturb the closed build either.)
+in the lock today.
 
 **MSRV ceiling — [R1].** `aws-config` ≥ 1.9.0 and `aws-sigv4` 1.5.x require
 rustc **1.94.1**. The newest compatible line is `aws-config 1.8.18` /
@@ -518,7 +515,7 @@ role" (`base_aws_llm.py:1076+`).
 
 ### R2 — ✅ landed (`c81a049f`) — `AwsInputs` on the context, populated at both lowering sites
 `crates/components/src/context.rs` (struct + `aws_inputs_from_env()`),
-`crates/lib/src/config.rs:850`, and in cognee-cloud-rs `crates/cognee-http-server/src/config.rs:700`.
+`crates/lib/src/config.rs:850`, and the HTTP server's config lowering (outside this repository).
 Additive in behaviour but **not** free to compile: `LlmInputs` /
 `EmbeddingInputs` have no `Default` and are exhaustive struct literals in eight
 places (§2.1) — expect `E0063` at each and fix them in this step. Adding
@@ -669,8 +666,7 @@ comment at :163, open question §6.4, and the planned
 `settings.md` §5.8 but **was never written**. Add it: GET byte-equality modulo
 the API-key mask, and `POST provider: "bedrock"` accepted on both SDKs. This is
 what keeps P1/P2/P3 from re-diverging. (Both that file and `test_http_openapi.py`
-have since moved to the closed `cognee-cloud-rs` repo along with
-`cognee-http-server`; they no longer exist in this repo.)
+have since left this repo along with `cognee-http-server`.)
 
 *(No CI gate blocks P1–P3 today: `test_http_openapi.py` compared path, method,
 security-scheme, and `components.schemas` **key sets** only — per-schema field
@@ -804,7 +800,7 @@ correctly sequenced.
 > not landable from this repository. R7 shipped ahead of it, which inverts the
 > documented replication in exactly the direction §5 P1 warned about — Rust now
 > accepts a payload Python rejects. That inversion is documented in
-> `docs/http-server/routers/settings.md` (now in `cognee-cloud-rs`) and guarded by the
+> the HTTP server's settings-router docs (no longer in this repository) and guarded by the
 > `xfail(strict=True)` case in P4's test, which turns red the moment upstream
 > accepts the value.
 

@@ -40,9 +40,7 @@ feature-gated).
 The feature-gated commands are enabled in the default build of `cognee-cli`
 (except platform-specific ones). See [architecture.md §feature strategy](../architecture.md#architecture-patterns).
 
-Cloud `serve` / `disconnect` are not part of OSS — they ship in the
-closed-source `cognee-cli-cloud` binary (`cognee-cli-cloud serve --url …` /
-`cognee-cli-cloud disconnect`).
+Cloud `serve` / `disconnect` are not part of OSS.
 
 ## Memory API
 

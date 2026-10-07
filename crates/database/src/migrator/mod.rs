@@ -23,8 +23,7 @@ static EXTRA_MIGRATIONS: OnceLock<ExtraMigrations> = OnceLock::new();
 /// ("Migration file of version '…' is missing, this migration has been applied
 /// but its file is missing"). A downstream crate that adds tables must therefore
 /// extend the migrator that [`crate::initialize`] runs, rather than applying its
-/// own migrator afterwards — the closed `cognee-access-control` auth tables are
-/// the motivating case.
+/// own migrator afterwards — downstream auth tables are the motivating case.
 ///
 /// Call before the first connection is initialized; a second call is ignored and
 /// reports `Err`. OSS-only builds never call it and are unaffected.
@@ -32,9 +31,8 @@ pub fn set_extra_migrations(supplier: ExtraMigrations) -> Result<(), ExtraMigrat
     EXTRA_MIGRATIONS.set(supplier)
 }
 
-/// OSS core migrations, exposed so closed downstream crates (e.g. the
-/// closed `cognee-access-control::Migrator`) can compose this list with
-/// their own additional migrations and register the merged set.
+/// OSS core migrations, exposed so downstream crates (e.g. one that adds
+/// auth tables) can compose this list with their own additional migrations and register the merged set.
 ///
 /// The OSS [`Migrator`] simply delegates to this accessor so behaviour is
 /// unchanged for OSS-only builds.

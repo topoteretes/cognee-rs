@@ -199,11 +199,10 @@ pub async fn resolve_dataset(
 
 /// Best-effort `User.email` lookup for cognify provenance stamping.
 ///
-/// OSS build: the `users` table is owned by the closed cloud build, so this
-/// always returns `None`. `cognify()` then uses `user_id.to_string()` as the
-/// provenance stamp. The signature is preserved so call sites remain stable
-/// when the closed build is swapped in (which will re-introduce the
-/// DB-backed lookup).
+/// OSS has no `users` table, so this always returns `None`. `cognify()` then
+/// uses `user_id.to_string()` as the provenance stamp. The signature is
+/// preserved so call sites remain stable should a DB-backed lookup be
+/// re-introduced.
 pub async fn best_effort_user_email(_svc: &CogneeServices, _owner_id: Uuid) -> Option<String> {
     None
 }

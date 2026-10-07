@@ -99,9 +99,8 @@ from cognee_py._native import (
     setup_telemetry,
     setup_telemetry_analytics,
 )
-# Cloud ops (`serve` / `disconnect`) live in the closed Python cdylib
-# (`cognee-py-cloud`, T15e). The OSS `cognee-py` package does not
-# expose them; importers needing cloud should install `cognee-py-cloud`.
+# Cloud ops (`serve` / `disconnect`) are not part of the OSS `cognee-py`
+# package, which does not expose them.
 
 class Watcher:
     """A pipeline watcher that forwards events to Python callbacks.

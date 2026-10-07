@@ -16,7 +16,7 @@ workspace = "../../bindings"
 
 [lib]
 name = "cognee_java"
-# `rlib` in addition to `cdylib` so a closed cloud binding can link this crate
+# `rlib` in addition to `cdylib` so a downstream binding can link this crate
 # and re-export its JNI entry points instead of forking ~2k lines of glue. The
 # cdylib output is unchanged for OSS consumers.
 crate-type = ["cdylib", "rlib"]

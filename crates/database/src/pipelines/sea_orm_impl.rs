@@ -232,10 +232,9 @@ impl PipelineRunRepository for SeaOrmPipelineRunRepository {
 
         // SeaORM JOIN — uses the relationships defined on the entities. We
         // perform a single LEFT JOIN to `datasets`. Owner-email attribution
-        // requires the `users` table which now lives in the closed
-        // `cognee-access-control` crate; OSS callers receive `owner_email =
-        // None` and are expected to resolve emails out-of-band (or via the
-        // closed `cognee-access-control::auth::UserAuthRepository`). The
+        // requires the `users` table, which is not part of this schema; callers
+        // receive `owner_email = None` and are expected to resolve emails
+        // out-of-band (e.g. through a downstream user repository). The
         // dataset/owner_id columns continue to flow through this query so
         // downstream UIs can render attribution without the email.
         let mut query = pipeline_run::Entity::find()

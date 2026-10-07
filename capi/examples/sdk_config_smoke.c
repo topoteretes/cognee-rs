@@ -118,8 +118,7 @@ int main(void)
 
     /* Build a handle with mock embedding so no network/models are needed.
      * vector_db_provider=mock selects MockVectorDB (testing feature)
-     * since T4 moved the Qdrant adapter to the closed
-     * cognee-vector-qdrant crate. T5 will introduce a brute-force default. */
+     * since T4 moved the Qdrant adapter out of this repository. T5 will introduce a brute-force default. */
     const char* base_settings =
         "{"
         "  \"embedding_provider\": \"mock\","
@@ -221,7 +220,7 @@ int main(void)
     /* ── Test 6: cg_sdk_config_set_vector_db_config bulk setter ──────────── */
     printf("=== Test 6: cg_sdk_config_set_vector_db_config bulk setter ===\n");
 
-    /* Use `mock` instead of `qdrant` post-T4 (Qdrant moved closed).
+    /* Use `mock` instead of `qdrant` post-T4 (Qdrant moved out of OSS).
      * The bulk-set + get round-trip is what's under test here, not the
      * provider value itself. */
     const char* vec_cfg =

@@ -23,8 +23,8 @@ pub mod run_handle;
 pub mod runtime;
 pub mod sdk;
 pub mod sdk_admin;
-// Cloud ops (`cg_sdk_serve` / `cg_sdk_disconnect`) live in the closed
-// `cognee-c-cloud` cdylib (T15e), not in this OSS `cognee-capi` crate.
+// Cloud ops (`cg_sdk_serve` / `cg_sdk_disconnect`) are not part of this
+// OSS `cognee-capi` crate.
 pub mod sdk_config;
 pub mod sdk_data;
 pub mod sdk_datasets;

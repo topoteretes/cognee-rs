@@ -25,9 +25,8 @@ mod telemetry_otlp;
 mod value;
 mod watcher;
 
-// Cloud ops (`serve` / `disconnect`) live in the closed Python cdylib
-// `cognee-py-cloud` (T15e) which wraps `cognee-bindings-cloud`. The OSS
-// `cognee-py` package does not expose them.
+// Cloud ops (`serve` / `disconnect`) are not part of the OSS `cognee-py`
+// package, which does not expose them.
 
 /// Python bindings for the cognee-core pipeline engine.
 #[pymodule]
@@ -78,9 +77,6 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Register SDK-tier exception types (CogneeError hierarchy).
     sdk_error::register(m)?;
-
-    // Cloud ops (`serve` / `disconnect`) are registered by the closed
-    // `cognee-py-cloud` cdylib (T15e), not by the OSS `cognee-py`.
 
     Ok(())
 }

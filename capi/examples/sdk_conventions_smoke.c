@@ -316,8 +316,7 @@ int main(void)
     /* ── Create SDK handle (mock embedding, no network) ──────────────────── */
     /* snake_case to match cognee ConfigManager dispatch keys.
      * vector_db_provider=mock selects MockVectorDB (testing feature)
-     * since T4 moved the Qdrant adapter to the closed cognee-vector-qdrant
-     * crate. T5 will introduce a brute-force default. */
+     * since T4 moved the Qdrant adapter out of this repository. T5 will introduce a brute-force default. */
     const char* settings_json =
         "{"
         "  \"embedding_provider\": \"mock\","

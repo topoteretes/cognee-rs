@@ -199,7 +199,7 @@ jobs:
       # used in CI (no GPU), but it bloats the cache and can produce a stale
       # rustc-link-search path that breaks the link step in the test job.
       # The former `--features android-litert,server` invocation was dropped
-      # in T16: the `android-litert` LiteRT adapter moved to closed in T4 and
+      # in T16: the `android-litert` LiteRT adapter moved out of OSS in T4 and
       # the `server` feature moved with the cloud commands in T15f, so OSS
       # no longer defines either feature.
       - name: clippy
@@ -241,17 +241,15 @@ jobs:
       # (it shares little with the `-p cognee` lane above — different package and
       # features — but both are small check-only trees).
       #
-      # This lane used to be spelled `-p cognee-http-server`. That crate moved to
-      # the closed cognee-cloud-rs repo, which now runs the original spelling
-      # against its own copy (closed-ci.yml, the cognee-http-server Postgres-only
-      # seam canary). The seams the lane actually guards live in
+      # This lane used to be spelled `-p cognee-http-server`. That crate moved
+      # out of this repository. The seams the lane actually guards live in
       # cognee-components / -vector / -graph / -embedding, and all of those stay
       # in OSS, so grade them directly here.
       #
       # NOT a like-for-like swap, and worth saying so: the old lane compiled a
       # real server consumer, so it also covered breakages that only appear when
       # these features are combined the way a server binary combines them. That
-      # coverage still exists — it is just on the closed board now, not this one.
+      # coverage is no longer provided by this repository.
       #
       # MIRRORED, character-for-character, by the "Compilation check
       # (Postgres-only backends)" block in scripts/check_all.sh. Change both or

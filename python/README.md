@@ -431,7 +431,7 @@ path = await cognee.visualize_to_file({"destination_path": "/tmp/graph.html"})
 
 Requires the `visualization` feature compiled into the native extension.
 
-Cloud `serve` / `disconnect` are provided by the closed `cognee-py-cloud` package, not the OSS `cognee_py` package.
+Cloud `serve` / `disconnect` are not part of the OSS `cognee_py` package.
 
 ## Initialisation and observability
 

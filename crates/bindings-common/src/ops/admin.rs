@@ -90,7 +90,7 @@ pub async fn run_get_or_create_default_user(
         let settings = state.cm.settings();
         settings.default_user_email.clone()
     };
-    // When a DB-backed bootstrap hook is attached (closed cloud build), resolve
+    // When a DB-backed bootstrap hook is attached (downstream build), resolve
     // (and persist) the user through it; otherwise use the DB-free OSS path.
     let user = if let Some(hook) = state.default_user_bootstrap() {
         let svc = state.services().await?;

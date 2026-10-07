@@ -5,6 +5,5 @@ not missing features — for the latter, see [not-implemented.md](not-implemente
 
 **There are currently no open design questions tracked for the OSS crates.** Every item that used to
 be listed here concerned the HTTP server (auth, tenancy/RBAC, observability, pipelines, the
-responses and notebooks routers, server architecture). `cognee-http-server` lives in the closed
-[`cognee-cloud-rs`](https://github.com/topoteretes/cognee-cloud-rs) repo, and those questions moved
-with its docs to `docs/http-server/roadmap.md` there.
+responses and notebooks routers, server architecture). `cognee-http-server` is not part of this repository,
+and those questions left with it.

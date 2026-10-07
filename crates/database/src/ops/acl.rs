@@ -1,8 +1,7 @@
 //! ACL trait-level helper operations.
 //!
 //! The direct-`DatabaseConnection` implementations that backed the
-//! `AclDb` blanket impl moved into the closed `cognee-access-control`
-//! crate: the auth entities
+//! `AclDb` blanket impl are not part of this crate: the auth entities
 //! they depended on (`acl`, `permission`, `principal`, `user_role`,
 //! `user_tenant`) no longer exist on the OSS schema.
 //!
@@ -23,8 +22,9 @@ pub const PERMISSION_NAMES: &[&str] = &["read", "write", "delete", "share"];
 ///
 /// Used by the ingestion pipeline to bless the dataset owner on every
 /// `add` of a freshly-created dataset. Works with any `&dyn AclDb`
-/// implementation, so OSS callers can pair it with `MockAclDb` (tests)
-/// or with the closed `AccessControl` newtype (production cloud builds).
+/// implementation, so callers can pair it with `MockAclDb` (tests) or with
+/// a downstream ACL implementation (production deployments that provide
+/// their own `AclDb`).
 #[instrument(
     name = "cognee.db.relational.acl.grant_all_permissions_on_dataset_via_trait",
     level = "info",

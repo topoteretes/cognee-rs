@@ -3497,9 +3497,8 @@ mod tests {
 
     /// Helper to create an AuthorizedDeleteService backed by a real SQLite DB.
     ///
-    /// The closed `AccessControl` (`impl AclDb for ...`) lives in the
-    /// closed `cognee-access-control` crate. OSS tests drive ACL decisions
-    /// through `MockAclDb`; this helper grants all four permissions on
+    /// This crate has no `impl AclDb` backed by the database, so tests drive
+    /// ACL decisions through `MockAclDb`; this helper grants all four permissions on
     /// every dataset by default so behavioural assertions keep passing.
     async fn make_authorized_service() -> (
         AuthorizedDeleteService,
@@ -3528,8 +3527,8 @@ mod tests {
 
     /// Grant the four canonical permissions on `dataset_id` to `principal_id`
     /// through the supplied `MockAclDb`, matching the production semantics
-    /// of `ops::acl::grant_all_permissions_on_dataset` (which a closed
-    /// `AccessControl` would persist into the real `acls` table).
+    /// of `ops::acl::grant_all_permissions_on_dataset` (which a database-backed
+    /// `AclDb` would persist into a real `acls` table).
     async fn mock_grant_all_perms(
         acl: &Arc<cognee_test_utils::MockAclDb>,
         principal_id: Uuid,
@@ -3689,16 +3688,12 @@ mod tests {
     async fn delete_cascades_acl_entries() {
         // This test used to verify FK CASCADE on `acls.dataset_id` through
         // the real `ops::acl::*` standalone functions. With the `acls` table
-        // moved to the closed `cognee-access-control` migration,
-        // OSS cannot exercise the production CASCADE — that is now covered
-        // by integration tests in the closed crate. To keep the OSS test
+        // no longer part of the OSS schema, OSS cannot exercise the
+        // production CASCADE. To keep the OSS test
         // surface meaningful we drive the in-memory `MockAclDb` and verify
         // the grant + delete-dataset interaction at the trait level: the
         // grant exists before and is unaffected by deleting the OSS
         // `datasets` row (the mock has no FK cascade).
-        //
-        // TODO: replicate FK CASCADE verification in the closed
-        // `cognee-access-control` integration tests.
         use cognee_database::AclDb;
         let db = connect("sqlite::memory:").await.unwrap();
         initialize(&db).await.unwrap();
@@ -3723,16 +3718,14 @@ mod tests {
             .await
             .unwrap();
 
-        // The mock has no FK cascade — the grant is still present. The
-        // production CASCADE is exercised in the closed crate's tests.
+        // The mock has no FK cascade — the grant is still present.
         let has_delete_after = acl_dyn
             .has_permission(owner, dataset_id, "delete")
             .await
             .unwrap();
         assert!(
             has_delete_after,
-            "MockAclDb does not cascade — production CASCADE coverage moved to \
-             cognee-access-control integration tests."
+            "MockAclDb does not cascade, so the grant must survive the dataset delete"
         );
     }
 

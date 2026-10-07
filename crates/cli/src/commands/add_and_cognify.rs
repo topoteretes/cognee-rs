@@ -168,10 +168,9 @@ pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), Cli
             args.dataset_name
         );
 
-        // OSS build has no DB-backed user lookup (the `users` table is owned
-        // by the closed cloud build), so `user_email` always falls back to
-        // `None`. `cognify()` then uses `user_id.to_string()` as the
-        // provenance stamp.
+        // OSS build has no DB-backed user lookup (there is no `users`
+        // table), so `user_email` always falls back to `None`. `cognify()` then
+        // uses `user_id.to_string()` as the provenance stamp.
         let user_email: Option<String> = None;
 
         let thread_pool: Arc<dyn cognee::core::CpuPool> = Arc::new(

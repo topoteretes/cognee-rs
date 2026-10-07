@@ -51,9 +51,8 @@ Notes:
   defaults to a no-op returning `0` for the ones that have no such index. It is
   not automatic: building HNSW over a large collection is expensive, so the
   operator chooses when.
-- **Closed-source companions.** Embedded Qdrant (`cognee-vector-qdrant`) and
-  on-device LiteRT inference (`cognee-llm-litert`, Android) live in the closed
-  `cognee-cloud-rs` repository and are not part of OSS.
+- **Not in OSS.** Embedded Qdrant and on-device LiteRT inference (Android) are
+  not part of this repository.
 - **Full Postgres stack** (relational + graph + vector on one Postgres) is the
   one remaining adapter milestone — see [roadmap/](../roadmap/README.md).
 

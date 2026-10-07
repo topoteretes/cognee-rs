@@ -340,7 +340,7 @@ async fn temporal_cognify_populates_event_name_vector_collection() {
     };
     let embedding_engine: Arc<dyn cognee_embedding::engine::EmbeddingEngine> = embedding_engine;
 
-    // In-memory mock vector DB (qdrant extracted to closed cognee-vector-qdrant).
+    // In-memory mock vector DB.
     let vector_db = Arc::new(MockVectorDB::new());
 
     let data_item = ingest_text(BIOGRAPHY_TEXT, &storage, owner_id).await;

@@ -125,9 +125,8 @@ fn main(mut cx: ModuleContext) -> NeonResult<()> {
         sdk_visualization::cognee_visualize_to_file,
     )?;
 
-    // Cloud ops (`cogneeServe` / `cogneeDisconnect`) are exposed by the
-    // closed `cognee-ts-cloud` cdylib (T15e), not by this OSS `cognee-ts-neon`
-    // binding. The closed cdylib depends on `cognee-bindings-cloud`.
+    // Cloud ops (`cogneeServe` / `cogneeDisconnect`) are not exposed by this
+    // OSS `cognee-ts-neon` binding.
 
     // Config surface (Phase 2): granular + bulk + generic setters, read-back.
     // LLM

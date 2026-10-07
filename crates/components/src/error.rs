@@ -1,7 +1,7 @@
 //! Error type shared by all component factories.
 //!
 //! This type is re-exported by `cognee` as `cognee::ComponentError`, so
-//! it stays the identical type across the OSS crates and the closed cloud repo.
+//! it stays the identical type across the OSS crates and downstream consumers.
 
 use thiserror::Error;
 

@@ -243,7 +243,7 @@ async fn test_recognify_after_content_update() {
     let graph_db: Arc<dyn GraphDBTrait> = Arc::new(MockGraphDB::new());
     graph_db.initialize().await.expect("graph_db.initialize");
 
-    // In-memory mock vector DB (qdrant extracted to closed cognee-vector-qdrant).
+    // In-memory mock vector DB.
     let vector_db: Arc<dyn VectorDB> = Arc::new(MockVectorDB::new());
 
     let llm: Arc<dyn Llm> = Arc::new(UpdateFixtureLlm);

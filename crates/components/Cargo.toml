@@ -27,8 +27,8 @@ ort-cuda     = ["cognee-embedding/ort-cuda"]
 ort-tensorrt = ["cognee-embedding/ort-tensorrt"]
 ladybug      = ["cognee-graph/ladybug"]
 # Embedded LanceDB vector store. Gated because the Arrow + lance native stack is
-# one of the largest builds in the workspace and a consumer on pgvector (or a
-# closed adapter) does not need it; `with_builtins()` registers the `lancedb`
+# one of the largest builds in the workspace and a consumer on pgvector (or an
+# external adapter) does not need it; `with_builtins()` registers the `lancedb`
 # provider only when this is on.
 lancedb      = ["cognee-vector/lancedb"]
 pgvector     = ["cognee-vector/pgvector", "dep:url"]

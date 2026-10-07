@@ -63,8 +63,7 @@ default = [
 # (TELEMETRY_DISABLED / ENV / COGNEE_HOST_SDK) — see telemetry_analytics.rs.
 telemetry     = ["cognee/telemetry"]
 visualization = ["cognee/visualization",         "cognee-bindings-common/visualization"]
-# The closed `cognee-c-cloud` cdylib (T15e) re-adds cloud via
-# `cognee-bindings-cloud`; this OSS cdylib intentionally omits it.
+# This OSS cdylib intentionally omits cloud support.
 ladybug       = ["cognee/ladybug",               "cognee-bindings-common/ladybug"]
 lancedb       = ["cognee/lancedb",               "cognee-bindings-common/lancedb"]
 onnx          = ["cognee/onnx",                  "cognee-bindings-common/onnx"]

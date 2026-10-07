@@ -1239,9 +1239,8 @@ void cg_sdk_visualize_to_file(const CgSdk*        sdk,
 
 /* ── Cloud ops ─────────────────────────────────────────────────────────────── */
 /*
- * Cloud ops (cg_sdk_serve / cg_sdk_disconnect) live in the closed
- * `cognee-c-cloud` cdylib (T15e), which ships a sibling header alongside
- * this one. This OSS `cognee-capi` build intentionally does not expose them.
+ * Cloud ops (cg_sdk_serve / cg_sdk_disconnect) are not part of this OSS
+ * `cognee-capi` build, which intentionally does not expose them.
  */
 
 /* ── JSON utility (Phase 7, not feature-gated) ────────────────────────────── */

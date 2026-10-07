@@ -353,8 +353,8 @@ async fn run_permanent_inner(
     // synthesize one per-call to preserve Python API parity.
     let pipeline_run_id = Uuid::new_v4();
 
-    // OSS build has no DB-backed user lookup (the `users` table is owned by
-    // the closed cloud build), so we always fall back to `None`. `cognify()`
+    // OSS build has no DB-backed user lookup (there is no `users` table in
+    // the OSS schema), so we always fall back to `None`. `cognify()`
     // then uses `user_id.to_string()` as the provenance stamp, matching
     // Python's unauthenticated-run behaviour.
     let user_email: Option<String> = None;
@@ -660,8 +660,7 @@ async fn remember_session(
 /// `cognee/api/v1/remember/remember.py:190-313`. The `entry_type` /
 /// `entry_id` fields on the returned [`RememberResult`] are populated for
 /// **all three** branches; the HTTP DTO (E-02) carries them through to the
-/// wire — it lives in the closed `cognee-cloud-rs` repo at
-/// `crates/cognee-http-server/src/dto/`.
+/// wire.
 ///
 /// **Behavior**:
 /// - Empty `session_id` returns `Err(ApiError::InvalidArgument)` (Python

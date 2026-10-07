@@ -148,7 +148,7 @@ fi
 echo ">>> Step 1: Building workspace for ${TARGET} (${PROFILE})..."
 echo ""
 
-# On-device LLM (LiteRT) is a closed feature in the cognee-cloud distribution.
+# On-device LLM (LiteRT) is not part of the OSS build.
 FEATURES="cognee-cli/android-default"
 
 cargo build \

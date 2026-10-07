@@ -43,8 +43,7 @@ bench = false
 # Mirror cognee-ts-neon's default feature set (ts/cognee-ts-neon/Cargo.toml).
 default = [
     "visualization",
-    # The closed Python cdylib (T15e — `cognee-py-cloud`) re-adds cloud via
-    # `cognee-bindings-cloud`; this OSS cdylib intentionally omits it.
+    # This OSS cdylib intentionally omits cloud support.
     "ladybug",
     "lancedb",
     "onnx",

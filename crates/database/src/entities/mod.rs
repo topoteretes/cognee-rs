@@ -31,6 +31,5 @@ pub mod session_record;
 
 // Auth-related entities (acl, permission, principal, principal_configuration,
 // role, role_default_permission, tenant, tenant_default_permission, user,
-// user_api_key, user_default_permission, user_role, user_tenant) moved to
-// the closed `cognee-access-control` crate
-//.
+// user_api_key, user_default_permission, user_role, user_tenant) are not part
+// of this crate; a downstream ACL implementation owns them.

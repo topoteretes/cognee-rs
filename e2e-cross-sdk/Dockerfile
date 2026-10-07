@@ -142,8 +142,8 @@ COPY cognee-rust/e2e-cross-sdk/test_data/ /test_data/
 COPY cognee-rust/e2e-cross-sdk/harness/ /harness/
 
 # NOTE: e2e-cross-sdk/bin/ is deliberately NOT copied. It held the dual-server
-# entrypoint (start_servers.sh) for the HTTP parity lane, which moved to
-# cognee-cloud-rs along with cognee-http-server. What is left in that directory
+# entrypoint (start_servers.sh) for the HTTP parity lane, which moved out of
+# this repository along with cognee-http-server. What is left in that directory
 # is telemetry_emit.rs (a crate source file) and telemetry_proxy.py, which the
 # telemetry-proxy compose service bind-mounts from the host into its own
 # python:3.11-slim image — neither belongs in this image.

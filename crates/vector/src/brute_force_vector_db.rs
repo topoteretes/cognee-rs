@@ -11,8 +11,7 @@
 //! `vector_db_provider="pgvector"`.
 //!
 //! **Memory:** O(n × dim). At ~6 GB for 1M × 1536-dim, this is a
-//! soft cap — beyond that, pgvector (or the closed `cognee-vector-qdrant`)
-//! is the correct choice.
+//! soft cap — beyond that, pgvector is the correct choice.
 //!
 //! **Distance metric:** every collection uses cosine similarity
 //! (higher = more similar). The `VectorDB` trait's

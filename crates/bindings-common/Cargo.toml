@@ -24,8 +24,7 @@ workspace = true
 [features]
 # Default features mirror the cognee bindings (full): visualization plus all
 # engine features. A slim embedded build can override with
-# --no-default-features --features sqlite,testing. The former `cloud` feature
-# was lifted to closed `cognee-bindings-cloud` per T15a / plan §6.1.
+# --no-default-features --features sqlite,testing.
 default = [
     "visualization",
     "ladybug",

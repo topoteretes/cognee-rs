@@ -2,8 +2,8 @@
  * sdk_feature_smoke.c — Phase 7 Tier-A deterministic smoke tests for feature-
  * gated visualization ops and the cg_json_string_decode utility.
  *
- * Cloud ops (cg_sdk_serve / cg_sdk_disconnect) moved to closed
- * `cognee-c-cloud` in T15a; this OSS smoke binary no longer exercises them.
+ * Cloud ops (cg_sdk_serve / cg_sdk_disconnect) moved out of this repository
+ * in T15a; this OSS smoke binary no longer exercises them.
  *
  * This test is intentionally designed to pass whether or not the visualization
  * feature is compiled in:
@@ -236,9 +236,8 @@ static void test_visualize(const CgSdk *sdk)
 
 /* ── Cloud ops smoke removed in T15a ──────────────────────────────────────── */
 /*
- * cg_sdk_serve / cg_sdk_disconnect live in the closed `cognee-c-cloud` cdylib
- * (T15e), so the OSS `cognee-capi` smoke binary no longer exercises them.
- * The closed cdylib carries its own equivalent smoke test.
+ * cg_sdk_serve / cg_sdk_disconnect are not part of the OSS `cognee-capi`
+ * cdylib, so this smoke binary no longer exercises them.
  */
 
 /* ── main ─────────────────────────────────────────────────────────────────── */
@@ -291,8 +290,6 @@ int main(void)
 
     printf("\n--- Testing visualization ops ---\n");
     test_visualize(sdk);
-
-    /* Cloud ops moved to closed `cognee-c-cloud` in T15a. */
 
     cg_sdk_destroy(sdk);
 

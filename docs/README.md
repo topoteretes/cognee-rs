@@ -40,7 +40,7 @@ signatures.
 ### Tools
 - **[tools/cli.md](tools/cli.md)** — the `cognee-cli` binary.
 - **[tools/bindings.md](tools/bindings.md)** — Python / C / JavaScript SDKs.
-- **[tools/http-server.md](tools/http-server.md)** — note: `cognee-http-server` and its docs live in the closed [`cognee-cloud-rs`](https://github.com/topoteretes/cognee-cloud-rs) repo.
+- **[tools/http-server.md](tools/http-server.md)** — note: `cognee-http-server` and its docs are not part of this repository.
 - **[tools/backends.md](tools/backends.md)** — pluggable providers.
 - **[tools/README.md](tools/README.md)** — index, incl. dev/ops tooling (observability, benchmarking, visualization, release).
 
@@ -58,4 +58,4 @@ signatures.
 - **[RELEASE.md](RELEASE.md)** — release runbook.
 
 ### Roadmap
-- **[roadmap/](roadmap/README.md)** — gaps ([not-implemented](roadmap/not-implemented.md)), open design decisions ([open-questions](roadmap/open-questions.md); the HTTP-server ones live in `cognee-cloud-rs`), and active implementation plans.
+- **[roadmap/](roadmap/README.md)** — gaps ([not-implemented](roadmap/not-implemented.md)), open design decisions ([open-questions](roadmap/open-questions.md); the HTTP-server ones are not tracked here), and active implementation plans.

@@ -3,7 +3,7 @@
 //! Construction logic lives in `cognee-components`; this type owns the
 //! version-keyed cache and delegates each backend build to a
 //! [`ComponentRegistry`]. Supply a custom registry via [`ComponentManager::with_registry`]
-//! to plug in external adapters (e.g. the closed qdrant / litert factories);
+//! to plug in external adapter factories;
 //! [`ComponentManager::new`] uses [`ComponentRegistry::with_builtins`].
 
 use std::sync::Arc;

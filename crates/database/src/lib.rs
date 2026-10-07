@@ -12,8 +12,8 @@ mod traits;
 mod types;
 pub mod uuid_hex;
 
-// Re-export tutorial seeder for use by cognee-http-server (which can't depend on
-// cognee). That crate now lives in the closed cognee-cloud-rs repo, not here.
+// Re-export tutorial seeder for use by an HTTP server that can't depend on
+// `cognee` directly.
 pub use ops::tutorial_seeder::{
     TUTORIAL_BASICS_ID, TUTORIAL_PYTHON_DEV_ID, seed_tutorials_if_first_call,
 };
@@ -73,6 +73,6 @@ pub use types::{
 // The `auth`, `permissions`, `UserDb`/`RoleDb`/`TenantDb`,
 // `SeaOrmUserAuthRepository`, `SeaOrmApiKeyRepository`, `ApiKey`, `AuthUser`,
 // `CreateUserPayload`, `UpdateUserPayload`, `ActiveUserWithApiKeyCount` items
-// moved to the closed `cognee-access-control` crate
-//. The `types` module deliberately remains private —
-// closed callers reach `DatabaseError` via the top-level re-export above.
+// are not part of this crate; a downstream ACL implementation owns them. The
+// `types` module deliberately remains private — downstream callers reach
+// `DatabaseError` via the top-level re-export above.

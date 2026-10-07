@@ -280,9 +280,8 @@ impl DatasetManager {
         // The same helper backs `POST /v1/datasets`
         // (`cognee_http_server::routers::datasets::create_new_dataset`), which
         // cannot call this facade — `cognee-http-server` deliberately does not
-        // depend on `cognee`. That crate now lives in the closed
-        // `cognee-cloud-rs` repo, so the two create paths are kept from
-        // drifting across repo boundaries by this one grant implementation.
+        // depend on `cognee` — so the two create paths are kept from
+        // drifting by sharing this one grant implementation.
         grant_all_permissions_on_dataset_via_trait(acl.as_ref(), owner_id, ds.id).await?;
         if let Some(parent) = parent_user_id
             && parent != owner_id
@@ -489,9 +488,9 @@ mod tests {
             .await
             .expect("create_dataset");
 
-        // Grant read permission to owner only (via ACL). The OSS test path
-        // uses `MockAclDb` because the closed `cognee-access-control` crate
-        // (which provides `AclDb for DatabaseConnection`) is not present.
+        // Grant read permission to owner only (via ACL). The test path uses
+        // `MockAclDb` because this workspace provides no
+        // `AclDb for DatabaseConnection`.
         let acl: Arc<dyn AclDb> = Arc::new(cognee_test_utils::MockAclDb::new());
         acl.ensure_principal(owner_id, "user")
             .await

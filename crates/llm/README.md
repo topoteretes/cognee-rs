@@ -224,8 +224,5 @@ Implemented:
   and therefore **exceeds** Python parity, where
   `BedrockAdapter.transcribe_image` raises `NotImplementedError`.
 
-On-device LiteRT inference (Android) ships in the closed companion crate
-`cognee-llm-litert`.
-
 Planned:
 - Streaming support: real-time token streaming for all adapters
