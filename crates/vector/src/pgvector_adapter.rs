@@ -273,6 +273,20 @@ mod tuning {
             .unwrap_or(default)
     }
 
+    /// Ceiling of the per-build `maintenance_work_mem`, in kB.
+    pub fn build_budget_max_kb() -> i64 {
+        static CACHE: OnceLock<i64> = OnceLock::new();
+        *CACHE.get_or_init(|| {
+            let default_mb = (super::HNSW_BUILD_BUDGET_MAX_KB / 1024) as u64;
+            (env_u64(
+                "COGNEE_PGVECTOR_MAINTENANCE_WORK_MEM_MB",
+                default_mb,
+                (super::HNSW_BUILD_BUDGET_MIN_KB / 1024) as u64,
+                64 * 1024,
+            ) * 1024) as i64
+        })
+    }
+
     #[cfg(test)]
     #[allow(
         clippy::unwrap_used,
@@ -316,20 +330,6 @@ mod tuning {
             }
             unsafe { std::env::remove_var(VAR) };
         }
-    }
-
-    /// Ceiling of the per-build `maintenance_work_mem`, in kB.
-    pub fn build_budget_max_kb() -> i64 {
-        static CACHE: OnceLock<i64> = OnceLock::new();
-        *CACHE.get_or_init(|| {
-            let default_mb = (super::HNSW_BUILD_BUDGET_MAX_KB / 1024) as u64;
-            (env_u64(
-                "COGNEE_PGVECTOR_MAINTENANCE_WORK_MEM_MB",
-                default_mb,
-                (super::HNSW_BUILD_BUDGET_MIN_KB / 1024) as u64,
-                64 * 1024,
-            ) * 1024) as i64
-        })
     }
 }
 

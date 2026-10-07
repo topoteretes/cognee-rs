@@ -357,3 +357,360 @@ async fn a_collection_name_past_the_identifier_limit_is_still_tracked() {
     )
     .await;
 }
+
+/// A bulk-load scope must drop the HNSW index once it is cheaper to rebuild it
+/// at the end — and the collection must stay *correct* the whole time.
+///
+/// The three things this pins, in order of what breaks worst if they regress:
+/// searches inside the scope still return the right rows (an unindexed
+/// collection is an exact scan, not an error and not a short result); the index
+/// is back and valid when the last scope ends; and `end_bulk_load` is what does
+/// it, not the next write.
+#[tokio::test]
+async fn a_bulk_load_scope_defers_the_index_and_rebuilds_it_at_the_end() {
+    with_temp_db(
+        "a_bulk_load_scope_defers_the_index_and_rebuilds_it_at_the_end",
+        |url| async move {
+            let adapter = PgVectorAdapter::new(&url, 8).await.unwrap();
+            adapter.create_collection("Bulk", "f", 8).await.unwrap();
+            let db = Database::connect(&url).await.unwrap();
+            assert!(index_present(&db, "Bulk_f_halfvec_hnsw").await);
+
+            let point = |i: usize| {
+                let jitter = f64::from(i as u32) * 1e-6;
+                #[allow(clippy::cast_possible_truncation)]
+                let v = vec![1.0, jitter as f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+                crate::models::VectorPoint::new(uuid::Uuid::from_u128(0xB0 + i as u128), v)
+            };
+            let points: Vec<_> = (0..2000).map(point).collect();
+
+            adapter.begin_bulk_load().await.unwrap();
+            // Nested, to pin that scopes are counted rather than boolean: the
+            // inner end must not trigger the build.
+            adapter.begin_bulk_load().await.unwrap();
+            for batch in points.chunks(500) {
+                adapter.index_points("Bulk", "f", batch).await.unwrap();
+            }
+            assert!(
+                !index_present(&db, "Bulk_f_halfvec_hnsw").await,
+                "a 2000-point load into an empty collection is past the defer \
+                 ratio, so the index must have been dropped"
+            );
+
+            // Unindexed is not degraded: the planner falls back to an exact
+            // scan, which returns the true top k.
+            let query = vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+            let mid = adapter
+                .search_similar("Bulk", "f", &query, 50)
+                .await
+                .unwrap();
+            assert_eq!(
+                mid.len(),
+                50,
+                "a search inside the scope must still be answered, exactly"
+            );
+
+            adapter.end_bulk_load().await.unwrap();
+            assert!(
+                !index_present(&db, "Bulk_f_halfvec_hnsw").await,
+                "the inner scope ending must not run the deferred build"
+            );
+            adapter.end_bulk_load().await.unwrap();
+            assert!(
+                index_present(&db, "Bulk_f_halfvec_hnsw").await,
+                "the outermost end_bulk_load must rebuild the index, valid"
+            );
+
+            assert_eq!(
+                adapter.collection_size("Bulk", "f").await.unwrap(),
+                2000,
+                "the deferred load must have written every row"
+            );
+            let after = adapter
+                .search_similar("Bulk", "f", &query, 50)
+                .await
+                .unwrap();
+            assert_eq!(after.len(), 50);
+            assert_eq!(
+                after.iter().map(|h| h.id).collect::<Vec<_>>(),
+                mid.iter().map(|h| h.id).collect::<Vec<_>>(),
+                "the rebuilt index must agree with the exact scan it replaced"
+            );
+
+            drop(db);
+            adapter.close().await.unwrap();
+        },
+    )
+    .await;
+}
+
+/// Crash safety of the bulk-load scope: a process that dies mid-load never
+/// calls `end_bulk_load` or `close`, so the index stays dropped. That must be a
+/// *correct* state — exact scans, every row present — and
+/// `create_missing_vector_indexes` must be the one operator action that
+/// restores the index.
+///
+/// Dropping the adapter without `close()` is the closest in-process stand-in
+/// for the crash: `close()` is the path that would have run the deferred build.
+#[tokio::test]
+async fn an_interrupted_bulk_load_leaves_correct_rows_that_the_backfill_reindexes() {
+    with_temp_db(
+        "an_interrupted_bulk_load_leaves_correct_rows_that_the_backfill_reindexes",
+        |url| async move {
+            let query = vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+            let point = |i: usize| {
+                let jitter = f64::from(i as u32) * 1e-6;
+                #[allow(clippy::cast_possible_truncation)]
+                let v = vec![1.0, jitter as f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+                crate::models::VectorPoint::new(uuid::Uuid::from_u128(0xC0 + i as u128), v)
+            };
+
+            let interrupted = {
+                let adapter = PgVectorAdapter::new(&url, 8).await.unwrap();
+                adapter.create_collection("Crash", "f", 8).await.unwrap();
+                adapter.begin_bulk_load().await.unwrap();
+                let points: Vec<_> = (0..2000).map(point).collect();
+                for batch in points.chunks(500) {
+                    adapter.index_points("Crash", "f", batch).await.unwrap();
+                }
+                let hits = adapter
+                    .search_similar("Crash", "f", &query, 50)
+                    .await
+                    .unwrap();
+                // No end_bulk_load, no close: the deferred build never runs.
+                drop(adapter);
+                hits
+            };
+
+            let db = Database::connect(&url).await.unwrap();
+            assert!(
+                !index_present(&db, "Crash_f_halfvec_hnsw").await,
+                "the interrupted load must have left the index dropped — \
+                 otherwise this test is not exercising the repair path"
+            );
+
+            let reopened = PgVectorAdapter::new(&url, 8).await.unwrap();
+            assert_eq!(
+                reopened.collection_size("Crash", "f").await.unwrap(),
+                2000,
+                "every row written before the interruption must be there: the \
+                 index is deferred, the heap writes are not"
+            );
+            let before_repair = reopened
+                .search_similar("Crash", "f", &query, 50)
+                .await
+                .unwrap();
+            assert_eq!(
+                before_repair.iter().map(|h| h.id).collect::<Vec<_>>(),
+                interrupted.iter().map(|h| h.id).collect::<Vec<_>>(),
+                "an unindexed collection answers exactly, so the results must \
+                 not change across the interruption"
+            );
+
+            let backfill = reopened.create_missing_vector_indexes().await.unwrap();
+            assert_eq!(
+                backfill.built, 1,
+                "the backfill is the documented repair for a load that never \
+                 finished; it must find exactly the one missing index"
+            );
+            assert!(index_present(&db, "Crash_f_halfvec_hnsw").await);
+            assert_eq!(
+                reopened
+                    .create_missing_vector_indexes()
+                    .await
+                    .unwrap()
+                    .built,
+                0,
+                "and it must be idempotent"
+            );
+
+            drop(db);
+            reopened.close().await.unwrap();
+        },
+    )
+    .await;
+}
+
+/// The GIN membership prefilter runs through `cognee_vector_set_names`, which
+/// replaces a `jsonb_array_elements` scan. An expression index is only as
+/// correct as that function: every row shape the corpus can produce has to map
+/// to the same verdict `node_filter`'s client-side predicate gives, including
+/// the shapes that are *not* an array of strings.
+///
+/// `belongs_to_set` in the wild is written by two SDKs over several schema
+/// generations, so a row can carry JSON `null`, a bare scalar where an array
+/// belongs, objects with and without a string `name`, or nothing at all. Under
+/// the old scan those rows simply failed the `EXISTS`; under a STRICT
+/// IMMUTABLE function feeding a GIN index, getting one of them wrong either
+/// drops in-set rows or invents them — and the index would happily cache the
+/// wrong answer.
+#[tokio::test]
+async fn the_membership_prefilter_handles_null_and_scalar_belongs_to_set() {
+    with_temp_db(
+        "the_membership_prefilter_handles_null_and_scalar_belongs_to_set",
+        |url| async move {
+            use serde_json::json;
+            let adapter = PgVectorAdapter::new(&url, 2).await.unwrap();
+            adapter.create_collection("Odd", "f", 2).await.unwrap();
+
+            // Every shape, paired with whether a request for ["alpha"] keeps it.
+            let shapes: Vec<(&str, serde_json::Value, bool)> = vec![
+                ("array-of-strings", json!(["alpha", "beta"]), true),
+                ("array-other-string", json!(["beta"]), false),
+                ("named-objects", json!([{"name": "alpha"}]), true),
+                ("object-without-name", json!([{"id": "alpha"}]), false),
+                ("object-nonstring-name", json!([{"name": 7}]), false),
+                ("mixed", json!([7, null, {"name": "alpha"}, "beta"]), true),
+                ("empty-array", json!([]), false),
+                ("json-null", serde_json::Value::Null, false),
+                ("bare-scalar-string", json!("alpha"), false),
+                ("bare-scalar-number", json!(3), false),
+                ("object-not-array", json!({"name": "alpha"}), false),
+            ];
+
+            let mut expected_in_set: Vec<uuid::Uuid> = Vec::new();
+            let mut points = Vec::new();
+            for (i, (label, value, in_set)) in shapes.iter().enumerate() {
+                let id = uuid::Uuid::from_u128(0xF0_0000 + i as u128);
+                if *in_set {
+                    expected_in_set.push(id);
+                }
+                points.push(
+                    crate::models::VectorPoint::new(id, vec![1.0, 0.0])
+                        .with_metadata("belongs_to_set", value.clone())
+                        .with_metadata("shape", json!(label)),
+                );
+            }
+            // A row with no `belongs_to_set` key at all.
+            points.push(crate::models::VectorPoint::new(
+                uuid::Uuid::from_u128(0xF0_FFFF),
+                vec![1.0, 0.0],
+            ));
+            adapter.index_points("Odd", "f", &points).await.unwrap();
+
+            for op in ["OR", "AND"] {
+                let hits = adapter
+                    .search_similar_filtered(
+                        "Odd",
+                        "f",
+                        &[1.0, 0.0],
+                        50,
+                        Some(&["alpha".to_string()]),
+                        op,
+                    )
+                    .await
+                    .unwrap();
+                let mut got: Vec<uuid::Uuid> = hits.iter().map(|h| h.id).collect();
+                got.sort_unstable();
+                let mut want = expected_in_set.clone();
+                want.sort_unstable();
+                assert_eq!(
+                    got, want,
+                    "the {op} prefilter must keep exactly the rows \
+                     node_filter's client-side predicate keeps; the shapes \
+                     that are not an array of names contribute nothing"
+                );
+            }
+
+            // The index over the function exists and the backfill agrees it is
+            // already there — a filtered search that fell back to a scan would
+            // still be correct, so the index has to be asserted separately.
+            let db = Database::connect(&url).await.unwrap();
+            let row = db
+                .query_one(Statement::from_string(
+                    DatabaseBackend::Postgres,
+                    "SELECT indexdef FROM pg_indexes WHERE indexname = 'Odd_f_set_names'",
+                ))
+                .await
+                .unwrap()
+                .expect("create_collection must build the membership GIN index");
+            let def: String = row.try_get("", "indexdef").unwrap();
+            assert!(
+                def.contains("cognee_vector_set_names"),
+                "the GIN index must be over the function the filter calls, got {def}"
+            );
+
+            drop(db);
+            adapter.close().await.unwrap();
+        },
+    )
+    .await;
+}
+
+/// The in-batch duplicate fold and the server-side membership merge are two
+/// different unions, and both have to survive in the batched upsert: the fold
+/// collapses ids repeated inside one call, the `ON CONFLICT` expression unions
+/// in whatever the stored row already had. Each was added for its own bug —
+/// an aborted statement (#256) and the cross-dataset dedup bug — and the
+/// batched path rewrote the statement they both live in, so this pins them
+/// holding *together*: a re-index whose batch repeats an id under two new
+/// datasets, against rows that already carry two.
+#[tokio::test]
+async fn an_in_batch_duplicate_fold_unions_with_the_membership_already_stored() {
+    with_temp_db(
+        "an_in_batch_duplicate_fold_unions_with_the_membership_already_stored",
+        |url| async move {
+            use serde_json::json;
+            let adapter = PgVectorAdapter::new(&url, 2).await.unwrap();
+            adapter.create_collection("Merge", "f", 2).await.unwrap();
+
+            let id = uuid::Uuid::from_u128(0xED_0001);
+            let tagged = |ds: &str| {
+                crate::models::VectorPoint::new(id, vec![1.0, 0.0])
+                    .with_metadata("text", json!("relationship"))
+                    .with_metadata("dataset_id", json!(ds))
+            };
+
+            // First, the state in the database: two datasets, written one at a
+            // time so the stored row carries a real `dataset_ids` array.
+            adapter
+                .index_points("Merge", "f", &[tagged("ds-1")])
+                .await
+                .unwrap();
+            adapter
+                .index_points("Merge", "f", &[tagged("ds-2")])
+                .await
+                .unwrap();
+
+            // Then one call that repeats the id twice more under two further
+            // datasets. Without the fold Postgres aborts the statement;
+            // without the server-side merge ds-1 and ds-2 are lost.
+            adapter
+                .index_points("Merge", "f", &[tagged("ds-3"), tagged("ds-4")])
+                .await
+                .unwrap();
+
+            assert_eq!(
+                adapter.collection_size("Merge", "f").await.unwrap(),
+                1,
+                "one content-addressed id is one row"
+            );
+            let rows = adapter.retrieve("Merge", "f", &[id]).await.unwrap();
+            assert_eq!(rows.len(), 1);
+            let members: Vec<String> = rows[0]
+                .metadata
+                .get("dataset_ids")
+                .and_then(|v| v.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default();
+            assert_eq!(
+                members,
+                vec!["ds-1", "ds-2", "ds-3", "ds-4"],
+                "membership must be the union of what was stored and every \
+                 duplicate in the incoming batch, oldest first"
+            );
+            assert_eq!(
+                rows[0].metadata.get("text"),
+                Some(&json!("relationship")),
+                "ordinary metadata is still last-wins, not unioned"
+            );
+
+            adapter.close().await.unwrap();
+        },
+    )
+    .await;
+}
