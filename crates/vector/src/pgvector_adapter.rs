@@ -310,6 +310,13 @@ impl PgVectorAdapter {
                 // order) instead of silently returning fewer rows. Older
                 // pgvector ignores the unknown placeholder setting.
                 ("hnsw.iterative_scan", "strict_order".to_string()),
+                // Custom plans: sqlx caches each prepared statement per
+                // connection, and a generic plan cannot see the NodeSet
+                // array of `search_similar_filtered`, so it costs the GIN
+                // prefilter blind and fell back to a sequential scan of every
+                // wide chunk row — 40 ms p50 for a 2k-of-14k-row filter at
+                // 100k, where the custom plan's bitmap scan takes 4.4 ms.
+                ("plan_cache_mode", "force_custom_plan".to_string()),
             ])
         });
         let db = Database::connect(opts)
