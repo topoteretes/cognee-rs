@@ -95,6 +95,15 @@ Notes:
   dropped automatically**: it stays on disk and keeps costing an HNSW insert per
   upsert, so drop it once the new one is in place:
   `DROP INDEX IF EXISTS "<coll>_vector_hnsw"`. Leaving it is safe, just wasteful.
+  The same applies, for the same reason, to a collection whose **name is longer
+  than 50 bytes**: index names now reserve room for their suffix and trim the
+  collection part, rather than appending and truncating the result, so such a
+  collection's index name changes. (Truncating the result let the HNSW and the
+  GIN membership index land on the *same* name at 62 and 63 bytes, where
+  `CREATE INDEX IF NOT EXISTS` reports a taken name as a NOTICE and the second
+  index was silently never built.) `cognee-cli vector-reindex` builds the index
+  under the new name; the old one is likewise left on disk for the operator to
+  drop.
 - **Postgres graph tables.** `PgGraphAdapter` creates `graph_node` /
   `graph_edge` with their key columns `COLLATE "C"` (they are only ever
   compared for equality, and the locale collation costs a `strcoll` per btree

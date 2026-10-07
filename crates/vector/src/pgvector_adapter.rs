@@ -367,6 +367,13 @@ $fn$";
 /// Postgres truncates any identifier past this many bytes (`NAMEDATALEN - 1`).
 const PG_MAX_IDENTIFIER_BYTES: usize = 63;
 
+/// Index-name suffixes. Each is kept whole by [`PgVectorAdapter::index_name`],
+/// so two *kinds* of index on one collection can never truncate onto the same
+/// name however long the collection name is.
+const HNSW_HALFVEC_SUFFIX: &str = "_halfvec_hnsw";
+const HNSW_VECTOR_SUFFIX: &str = "_vector_hnsw";
+const SET_NAMES_SUFFIX: &str = "_set_names";
+
 /// Leading `ORDER BY` key that keeps a `NaN` similarity score *last* rather
 /// than first, for a `score DESC` ordering over the `score` alias.
 ///
@@ -529,6 +536,66 @@ mod halfvec_gate_tests {
                 want,
                 "pgvector {raw:?} must resolve to halfvec = {want}"
             );
+        }
+    }
+}
+
+/// Cases for index naming at the identifier-length limit.
+///
+/// No feature and no database: the names are pure functions of the collection
+/// name, and what has to hold is that the two *kinds* of index on one
+/// collection never land on the same name. They used to, silently: a 62-byte
+/// collection gave both `coll + "_"`, a 63-byte one gave both the table's own
+/// name, and `CREATE INDEX IF NOT EXISTS` reports a taken name as a NOTICE
+/// rather than an error.
+#[cfg(test)]
+mod index_name_tests {
+    use super::{
+        HNSW_HALFVEC_SUFFIX, HNSW_VECTOR_SUFFIX, PG_MAX_IDENTIFIER_BYTES, PgVectorAdapter,
+        SET_NAMES_SUFFIX,
+    };
+
+    #[test]
+    fn the_index_kinds_never_collide_however_long_the_collection_name_is() {
+        // Short names are unaffected; the lengths that used to collide are 62
+        // and 63, and the suffix starts being trimmed around 50.
+        for len in [1, 10, 49, 50, 51, 57, 61, 62, 63, 64, 200] {
+            let coll = "c".repeat(len);
+            let hnsw = PgVectorAdapter::vector_index_name(&coll, true);
+            let legacy = PgVectorAdapter::vector_index_name(&coll, false);
+            let gin = PgVectorAdapter::set_names_index_name(&coll);
+
+            for (what, name, suffix) in [
+                ("halfvec hnsw", &hnsw, HNSW_HALFVEC_SUFFIX),
+                ("full-precision hnsw", &legacy, HNSW_VECTOR_SUFFIX),
+                ("set-names gin", &gin, SET_NAMES_SUFFIX),
+            ] {
+                assert!(
+                    name.len() <= PG_MAX_IDENTIFIER_BYTES,
+                    "{what} at collection length {len} must fit the identifier \
+                     limit, or Postgres truncates it and `vector_index_state` \
+                     looks for a name that was never created: {name}"
+                );
+                assert!(
+                    name.ends_with(suffix),
+                    "{what} at collection length {len} must keep its whole \
+                     suffix — that is what makes a collision impossible: {name}"
+                );
+            }
+
+            assert_ne!(
+                hnsw, gin,
+                "the HNSW and GIN indexes of one {len}-byte collection must \
+                 have different names, or the second CREATE INDEX IF NOT \
+                 EXISTS silently no-ops against the first"
+            );
+            assert_ne!(legacy, gin, "and so must the full-precision HNSW index");
+            assert_ne!(
+                hnsw, coll,
+                "an index must never be named after its own table, or \
+                 CREATE INDEX IF NOT EXISTS no-ops for ever"
+            );
+            assert_ne!(gin, coll);
         }
     }
 }
@@ -1169,7 +1236,7 @@ impl PgVectorAdapter {
     /// never be dropped or rebuilt. Slicing bytes is safe because the name is
     /// ASCII by construction.
     ///
-    /// Two collections whose names agree in their first 51 characters therefore
+    /// Two collections whose names agree in their first 50 characters therefore
     /// collide on one index name. That is inherited from the collection names
     /// themselves — they are table names under the same limit — so it is not
     /// introduced here.
@@ -1188,13 +1255,38 @@ impl PgVectorAdapter {
         // `create_missing_vector_indexes` build it on stores that still carry
         // the full-precision `_vector_hnsw` index, which the halfvec-ordered
         // searches no longer use.
-        let suffix = if halfvec {
-            "halfvec_hnsw"
-        } else {
-            "vector_hnsw"
-        };
-        let mut name = format!("{coll}_{suffix}");
-        name.truncate(PG_MAX_IDENTIFIER_BYTES);
+        Self::index_name(
+            coll,
+            if halfvec {
+                HNSW_HALFVEC_SUFFIX
+            } else {
+                HNSW_VECTOR_SUFFIX
+            },
+        )
+    }
+
+    /// `coll` plus `suffix`, cut to [`PG_MAX_IDENTIFIER_BYTES`] by trimming the
+    /// *collection* part — never the suffix.
+    ///
+    /// Appending first and truncating afterwards ate the suffix instead, and
+    /// the two suffixes this adapter uses then met: at a 62-byte collection
+    /// name both the HNSW and the GIN index came out as `coll + "_"`, and at 63
+    /// bytes both came out as the table's own name. The consequences are
+    /// silent, because `CREATE INDEX IF NOT EXISTS` only reports a *NOTICE*
+    /// when the name is taken — the GIN membership index is simply never built,
+    /// every filtered search scans, and `backfill_set_names_index` probing the
+    /// same name finds the valid HNSW index, answers `Some(true)` and so
+    /// `create_missing_vector_indexes` can never repair it. (At 63 bytes the
+    /// name collides with the table, so neither index is ever built.)
+    ///
+    /// Reserving the suffix instead makes a collision between two *kinds* of
+    /// index impossible by construction: each name ends in its own suffix.
+    /// Slicing bytes is safe because [`Self::validate_identifier`] has already
+    /// restricted the name to ASCII `[A-Za-z0-9_]`.
+    fn index_name(coll: &str, suffix: &str) -> String {
+        let mut name = coll.to_string();
+        name.truncate(PG_MAX_IDENTIFIER_BYTES.saturating_sub(suffix.len()));
+        name.push_str(suffix);
         name
     }
 
@@ -1359,11 +1451,10 @@ impl PgVectorAdapter {
     }
 
     /// Name of the GIN index over `cognee_vector_set_names(metadata)`,
-    /// truncated like [`Self::vector_index_name`].
+    /// trimmed like [`Self::vector_index_name`] — see [`Self::index_name`] for
+    /// why the suffix is the part that must survive.
     fn set_names_index_name(coll: &str) -> String {
-        let mut name = format!("{coll}_set_names");
-        name.truncate(PG_MAX_IDENTIFIER_BYTES);
-        name
+        Self::index_name(coll, SET_NAMES_SUFFIX)
     }
 
     /// `CREATE INDEX` for `coll`'s NodeSet-membership GIN index.

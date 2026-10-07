@@ -313,13 +313,16 @@ async fn a_search_returns_top_k_rows_even_above_the_default_ef_search() {
     .await;
 }
 
-/// Postgres truncates identifiers at 63 bytes. The index name adds 12 characters
-/// to the collection name, so a collection over 51 characters gets an index
-/// whose real name is shorter than the one we computed — and the state probe
-/// compares the name as *data*, so it would never match. That silently breaks
-/// both guarantees the probe exists for: the backfill would re-issue
-/// `CREATE INDEX` and re-count it forever, and an index left invalid by a failed
-/// build would read as absent and so never be rebuilt.
+/// Postgres truncates identifiers at 63 bytes. The index name adds 13 characters
+/// to the collection name, so a collection over 50 characters gets an index name
+/// the adapter has had to trim — and the state probe compares the name as
+/// *data*, so a mismatch would never show up. That silently breaks both
+/// guarantees the probe exists for: the backfill would re-issue `CREATE INDEX`
+/// and re-count it forever, and an index left invalid by a failed build would
+/// read as absent and so never be rebuilt.
+///
+/// The trimming takes the bytes off the *collection* part, so the `_halfvec_hnsw`
+/// suffix survives — see `index_name_tests` for why that matters.
 #[tokio::test]
 async fn a_collection_name_past_the_identifier_limit_is_still_tracked() {
     with_temp_db(
@@ -331,8 +334,10 @@ async fn a_collection_name_past_the_identifier_limit_is_still_tracked() {
             adapter.create_collection(&data_type, "f", 8).await.unwrap();
 
             let expected = {
-                let mut n = format!("{data_type}_f_halfvec_hnsw");
-                n.truncate(63);
+                // 63 bytes total, with the 13-byte suffix kept whole.
+                let mut n = format!("{data_type}_f");
+                n.truncate(63 - "_halfvec_hnsw".len());
+                n.push_str("_halfvec_hnsw");
                 n
             };
 
@@ -526,6 +531,62 @@ async fn an_interrupted_bulk_load_leaves_correct_rows_that_the_backfill_reindexe
 
             drop(db);
             reopened.close().await.unwrap();
+        },
+    )
+    .await;
+}
+
+/// The length at which both index names used to meet: a 62-byte collection gave
+/// `coll + "_"` for the HNSW index *and* for the GIN membership index, and a
+/// 63-byte one gave the table's own name for both. `CREATE INDEX IF NOT EXISTS`
+/// reports a taken name as a NOTICE, not an error, so the second index was
+/// simply never built — filtered searches scanned, and the backfill probing the
+/// same name found the first index, answered "valid" and never repaired it.
+///
+/// Both have to exist, and the collection has to work.
+#[tokio::test]
+async fn both_indexes_exist_on_a_collection_at_the_identifier_limit() {
+    with_temp_db(
+        "both_indexes_exist_on_a_collection_at_the_identifier_limit",
+        |url| async move {
+            let adapter = PgVectorAdapter::new(&url, 4).await.unwrap();
+            let db = Database::connect(&url).await.unwrap();
+
+            // 62 and 63 bytes: `<data_type>_f` is the collection name.
+            for len in [60usize, 61] {
+                let data_type = "L".repeat(len);
+                adapter.create_collection(&data_type, "f", 4).await.unwrap();
+                let coll = format!("{data_type}_f");
+
+                let hnsw = PgVectorAdapter::vector_index_name(&coll, true);
+                let gin = PgVectorAdapter::set_names_index_name(&coll);
+                assert_ne!(
+                    hnsw,
+                    gin,
+                    "the two names must differ at {} bytes",
+                    coll.len()
+                );
+                assert!(
+                    index_present(&db, &hnsw).await,
+                    "the {}-byte collection must have its HNSW index ({hnsw})",
+                    coll.len()
+                );
+                assert!(
+                    index_present(&db, &gin).await,
+                    "and its GIN membership index ({gin}) — this is the one the \
+                     name collision silently swallowed"
+                );
+
+                // And the backfill must agree there is nothing left to do.
+                assert_eq!(
+                    adapter.create_missing_vector_indexes().await.unwrap().built,
+                    0,
+                    "both indexes are in place, so the repair pass must find no work"
+                );
+            }
+
+            drop(db);
+            adapter.close().await.unwrap();
         },
     )
     .await;
