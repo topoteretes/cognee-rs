@@ -193,20 +193,33 @@ pub async fn brute_force_triplet_search(
     // recomputes the id with the shared `edge_type_point_id` helper.
     let mut edge_type_distances = HashMap::<String, f32>::new();
 
-    for (data_type, field_name) in SEARCH_COLLECTIONS {
-        if !vector_db.has_collection(data_type, field_name).await? {
-            debug!("vector collection {data_type}/{field_name} does not exist — skipping");
-            continue;
+    // The per-collection searches are independent: run them concurrently
+    // (one pooled connection each), then merge in the fixed collection order
+    // below so the outcome — including first-wins `node_dataset_ids` — is
+    // exactly the sequential one.
+    let searches = SEARCH_COLLECTIONS.map(|(data_type, field_name)| {
+        let query_vector = &query_vector;
+        async move {
+            if !vector_db.has_collection(data_type, field_name).await? {
+                debug!("vector collection {data_type}/{field_name} does not exist — skipping");
+                return Ok::<_, SearchError>(None);
+            }
+            let results = vector_db
+                .search_similar(
+                    data_type,
+                    field_name,
+                    query_vector,
+                    config.wide_search_top_k,
+                )
+                .await?;
+            Ok(Some(results))
         }
-
-        let results = vector_db
-            .search_similar(
-                data_type,
-                field_name,
-                &query_vector,
-                config.wide_search_top_k,
-            )
-            .await?;
+    });
+    let searched = futures::future::join_all(searches).await;
+    for ((data_type, field_name), results) in SEARCH_COLLECTIONS.into_iter().zip(searched) {
+        let Some(results) = results? else {
+            continue;
+        };
 
         for result in results {
             // Convert Qdrant cosine similarity to cosine distance: distance = 1 - similarity

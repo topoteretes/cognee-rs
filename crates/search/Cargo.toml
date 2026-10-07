@@ -19,6 +19,7 @@ default = []
 telemetry = ["cognee-telemetry/telemetry"]
 
 [dependencies]
+futures.workspace = true
 cognee-embedding = { path = "../embedding", version = "0.2.0" }
 cognee-database = { path = "../database", version = "0.2.0" }
 cognee-graph = { path = "../graph", version = "0.2.0" }
