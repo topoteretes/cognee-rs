@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use cognee_embedding::EmbeddingEngine;
-use cognee_graph::GraphDBTrait;
+use cognee_graph::{GraphDBTrait, NeighborhoodScope};
 use cognee_vector::VectorDB;
 use tracing::debug;
 
@@ -63,6 +63,21 @@ const SEARCH_COLLECTIONS: [(&str, &str); 6] = [
     ("EdgeType", "relationship_name"),
     ("Triplet", "text"),
 ];
+
+/// Opt-in hub-expansion cap: `COGNEE_TRIPLET_NEIGHBOR_CAP=<n>` keeps, per
+/// vector-search seed, every neighbour that is itself a seed plus at most `n`
+/// other neighbours (see [`NeighborhoodScope::max_neighbors_per_seed`]).
+/// Unset (the default) keeps the full depth-1 neighbourhood, which is
+/// result-identical to a full-graph load. A cap truncates hub fan-out and so
+/// CHANGES results: edges from a hub seed to its dropped neighbours never
+/// reach the ranking (they carry the non-seed penalty, so they rank below
+/// seed-to-seed edges, but they can still make the top k).
+fn neighbor_cap() -> Option<usize> {
+    std::env::var("COGNEE_TRIPLET_NEIGHBOR_CAP")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|n| *n > 0)
+}
 
 #[derive(Debug, Clone)]
 pub struct GraphRetrievalConfig {
@@ -293,9 +308,22 @@ pub async fn brute_force_triplet_search(
         // Postgres CTE has no ORDER BY).
         let mut seed_ids: Vec<String> = candidate_node_ids.iter().cloned().collect();
         seed_ids.sort_unstable();
-        graph_db
-            .get_neighborhood(&seed_ids, NEIGHBORHOOD_DEPTH)
-            .await?
+        match neighbor_cap() {
+            None => {
+                graph_db
+                    .get_neighborhood(&seed_ids, NEIGHBORHOOD_DEPTH)
+                    .await?
+            }
+            Some(cap) => {
+                let scope = NeighborhoodScope {
+                    max_neighbors_per_seed: Some(cap),
+                    ..NeighborhoodScope::default()
+                };
+                graph_db
+                    .get_neighborhood_scoped(&seed_ids, NEIGHBORHOOD_DEPTH, &scope)
+                    .await?
+            }
+        }
     };
 
     // Extract name, text, description, and (optionally) feedback_weight from each node.

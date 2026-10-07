@@ -30,7 +30,7 @@ use tracing::debug;
 use cognee_utils::sanitize::{sanitize_json, sanitize_str, sanitize_string};
 
 use crate::error::{GraphDBError, GraphDBResult};
-use crate::traits::GraphDBTrait;
+use crate::traits::{GraphDBTrait, NeighborhoodScope, apply_neighborhood_scope};
 use crate::types::{EdgeData, GraphNode, NodeData, parse_audit_timestamp};
 
 /// Rows per bulk upsert statement. Columns bind as one array parameter each,
@@ -1932,6 +1932,54 @@ impl GraphDBTrait for PgGraphAdapter {
     /// induced edges come from index scans on `source_id` joined against the
     /// set. Deeper walks expand the frontier level by level (one round trip
     /// each, never revisiting a node) and then read the induced subgraph.
+    /// With a per-seed neighbour cap at depth 1 the cap is applied in the
+    /// query: each seed's non-seed neighbours are read from the edge indexes
+    /// (a `LATERAL` per seed) and only the `cap` smallest ids (`COLLATE "C"`,
+    /// i.e. byte order, as the trait default sorts) join the id set, so the
+    /// hub fan-out never reaches the induced-subgraph join. Property
+    /// narrowing, if any, is then applied client-side.
+    async fn get_neighborhood_scoped(
+        &self,
+        node_ids: &[String],
+        depth: usize,
+        scope: &NeighborhoodScope,
+    ) -> GraphDBResult<(Vec<GraphNode>, Vec<EdgeData>)> {
+        let (Some(cap), 1) = (scope.max_neighbors_per_seed, depth) else {
+            let (nodes, edges) = self.get_neighborhood(node_ids, depth).await?;
+            return Ok(apply_neighborhood_scope(
+                node_ids, depth, nodes, edges, scope,
+            ));
+        };
+        if node_ids.is_empty() {
+            return Ok((vec![], vec![]));
+        }
+        let induced = if node_ids.len() >= SEMI_JOIN_MIN_SEEDS {
+            INDUCED_SUBGRAPH_SEMI
+        } else {
+            INDUCED_SUBGRAPH
+        };
+        let sql = format!(
+            "WITH seeds AS MATERIALIZED (SELECT DISTINCT unnest($1::text[]) AS id), \
+             nb AS (SELECT c.nbr FROM seeds s CROSS JOIN LATERAL ( \
+                 SELECT u.nbr FROM ( \
+                     SELECT e.target_id AS nbr FROM graph_edge e WHERE e.source_id = s.id \
+                     UNION SELECT e.source_id FROM graph_edge e WHERE e.target_id = s.id) u \
+                 WHERE NOT EXISTS (SELECT 1 FROM seeds s2 WHERE s2.id = u.nbr) \
+                 ORDER BY u.nbr COLLATE \"C\" LIMIT {cap}) c), \
+             ids AS MATERIALIZED (SELECT id FROM seeds UNION SELECT nbr FROM nb) {induced}"
+        );
+        let (nodes, edges) = self
+            .subgraph_query(&sql, vec![node_ids.to_vec().into()])
+            .await?;
+        let rest = NeighborhoodScope {
+            max_neighbors_per_seed: None,
+            ..scope.clone()
+        };
+        Ok(apply_neighborhood_scope(
+            node_ids, depth, nodes, edges, &rest,
+        ))
+    }
+
     async fn get_neighborhood(
         &self,
         node_ids: &[String],
