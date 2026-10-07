@@ -17,7 +17,9 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sea_orm::sea_query::{Alias, Cond, Expr, Iden, Query};
-use sea_orm::{ConnectionTrait, Database, DatabaseBackend, DatabaseConnection, Statement};
+use sea_orm::{
+    ConnectOptions, ConnectionTrait, Database, DatabaseBackend, DatabaseConnection, Statement,
+};
 use sea_orm_migration::MigratorTrait;
 use serde_json::{Value, json};
 use std::borrow::Cow;
@@ -222,7 +224,20 @@ impl PgGraphAdapter {
     /// The database must already exist. Use [`Self::from_connection`] to share
     /// a connection that was established elsewhere (e.g. by the database crate).
     pub async fn new(database_url: &str) -> GraphDBResult<Self> {
-        let db = Database::connect(database_url)
+        // Custom plans for every statement on this adapter's own pool. The
+        // graph reads bind their id sets as one `text[]`, and sqlx caches each
+        // prepared statement per connection; after five executions Postgres
+        // may switch it to a generic plan, which cannot see the array's size
+        // and so costs a 5-seed neighbourhood like any other. Measured on a
+        // 10k store: the hybrid lane's 5-entity `get_neighborhood` ran 1.2 ms
+        // with a custom plan and 10.9 ms with the generic one (a sequential
+        // scan of `graph_edge` for the induced edges). Planning these
+        // statements costs well under a millisecond.
+        let mut opts = ConnectOptions::new(database_url.to_string());
+        opts.map_sqlx_postgres_opts(|o| {
+            o.options([("plan_cache_mode", "force_custom_plan".to_string())])
+        });
+        let db = Database::connect(opts)
             .await
             .map_err(|e| GraphDBError::ConnectionError(format!("PgGraph connect failed: {e}")))?;
 
@@ -2098,11 +2113,22 @@ mod migrator {
             let conn = manager.get_connection();
 
             // -- graph_node table --
+            //
+            // Key columns use the "C" collation: they are only ever compared
+            // for equality (ids are UUIDs / normalized identifiers, `type` and
+            // `relationship_name` are labels), and every btree insert, lookup,
+            // FK check and merge join on them otherwise goes through the
+            // database's locale collation (`strcoll`). Measured on a 10k-node
+            // store: 30.8k edge inserts 685 ms -> 382 ms, 8k node inserts
+            // 75 ms -> 37 ms. Equality semantics are identical (both are
+            // deterministic), so queries and other SDKs are unaffected; this
+            // applies to newly created tables only (`IF NOT EXISTS`), existing
+            // ones keep their collation.
             conn.execute_unprepared(
                 "CREATE TABLE IF NOT EXISTS graph_node ( \
-                     id         VARCHAR PRIMARY KEY, \
+                     id         VARCHAR COLLATE \"C\" PRIMARY KEY, \
                      name       VARCHAR NOT NULL DEFAULT '', \
-                     type       VARCHAR NOT NULL DEFAULT '', \
+                     type       VARCHAR COLLATE \"C\" NOT NULL DEFAULT '', \
                      properties JSONB NOT NULL DEFAULT '{}', \
                      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), \
                      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW() \
@@ -2118,9 +2144,9 @@ mod migrator {
             // -- graph_edge table --
             conn.execute_unprepared(
                 "CREATE TABLE IF NOT EXISTS graph_edge ( \
-                     source_id         VARCHAR NOT NULL REFERENCES graph_node(id) ON DELETE CASCADE, \
-                     target_id         VARCHAR NOT NULL REFERENCES graph_node(id) ON DELETE CASCADE, \
-                     relationship_name VARCHAR NOT NULL, \
+                     source_id         VARCHAR COLLATE \"C\" NOT NULL REFERENCES graph_node(id) ON DELETE CASCADE, \
+                     target_id         VARCHAR COLLATE \"C\" NOT NULL REFERENCES graph_node(id) ON DELETE CASCADE, \
+                     relationship_name VARCHAR COLLATE \"C\" NOT NULL, \
                      properties        JSONB NOT NULL DEFAULT '{}', \
                      created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(), \
                      updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(), \
@@ -2129,13 +2155,13 @@ mod migrator {
             )
             .await?;
 
-            // Covering indexes for efficient neighbor lookups without heap reads.
-            conn.execute_unprepared(
-                "CREATE INDEX IF NOT EXISTS idx_graph_edge_source_cover \
-                 ON graph_edge(source_id) INCLUDE (target_id, relationship_name)",
-            )
-            .await?;
-
+            // Covering index for target-side neighbour lookups without heap
+            // reads. Source-side lookups need none: the primary key
+            // `(source_id, target_id, relationship_name)` already answers
+            // `source_id = x` with an index-only scan returning both other
+            // columns, so the former `idx_graph_edge_source_cover` duplicated
+            // it and only cost every edge write a fourth btree insert. Tables
+            // that already carry it keep it (harmless).
             conn.execute_unprepared(
                 "CREATE INDEX IF NOT EXISTS idx_graph_edge_target_cover \
                  ON graph_edge(target_id) INCLUDE (source_id, relationship_name)",
