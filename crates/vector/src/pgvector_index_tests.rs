@@ -531,6 +531,76 @@ async fn an_interrupted_bulk_load_leaves_correct_rows_that_the_backfill_reindexe
     .await;
 }
 
+/// Incremental re-cognify: small batches into a collection that is already
+/// large. The deferral decision needs the collection's size, and reading it per
+/// batch used to mean a `count(*)` — a scan-sized read — for every one of them,
+/// in the scenario the bulk-load scope exists to speed up. The size is now
+/// counted once per collection per load and carried forward by the points
+/// written since.
+///
+/// What has to stay true is the *decision*, since that is what the cheaper
+/// accounting could silently change: batches that do not add up to a third of
+/// the starting rows must leave the index in place and maintained, and the
+/// batch that crosses the line must drop it — at the same point the per-batch
+/// count would have.
+#[tokio::test]
+async fn small_batches_into_a_large_collection_defer_at_the_same_point() {
+    with_temp_db(
+        "small_batches_into_a_large_collection_defer_at_the_same_point",
+        |url| async move {
+            let adapter = PgVectorAdapter::new(&url, 8).await.unwrap();
+            adapter.create_collection("Incr", "f", 8).await.unwrap();
+            let db = Database::connect(&url).await.unwrap();
+
+            let point = |i: usize| {
+                let jitter = f64::from(i as u32) * 1e-6;
+                #[allow(clippy::cast_possible_truncation)]
+                let v = vec![1.0, jitter as f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+                crate::models::VectorPoint::new(uuid::Uuid::from_u128(0x1000 + i as u128), v)
+            };
+
+            // 900 rows outside any scope, so the index is live and the load
+            // below starts against a real base.
+            let seed: Vec<_> = (0..900).map(point).collect();
+            for chunk in seed.chunks(300) {
+                adapter.index_points("Incr", "f", chunk).await.unwrap();
+            }
+            assert!(index_present(&db, "Incr_f_halfvec_hnsw").await);
+
+            // 0.25 x (900 + w) <= w  =>  w >= 300. In 50-point batches of new
+            // rows that is the sixth batch, and not before it.
+            let guard = crate::BulkLoadGuard::begin(&adapter).await.unwrap();
+            let fresh: Vec<_> = (900..1200).map(point).collect();
+            for (n, chunk) in fresh.chunks(50).enumerate() {
+                adapter.index_points("Incr", "f", chunk).await.unwrap();
+                let written = (n + 1) * 50;
+                assert_eq!(
+                    index_present(&db, "Incr_f_halfvec_hnsw").await,
+                    written < 300,
+                    "after {written} of 900 starting rows the index must be \
+                     {} — a third of the starting rows is the documented line",
+                    if written < 300 { "kept" } else { "dropped" }
+                );
+            }
+
+            guard.finish().await.unwrap();
+            assert!(
+                index_present(&db, "Incr_f_halfvec_hnsw").await,
+                "and the end of the load rebuilds it"
+            );
+            assert_eq!(
+                adapter.collection_size("Incr", "f").await.unwrap(),
+                1200,
+                "every seeded and every incrementally loaded row is present"
+            );
+
+            drop(db);
+            adapter.close().await.unwrap();
+        },
+    )
+    .await;
+}
+
 /// A bulk load whose future is **cancelled** — the axum client disconnect, the
 /// `tokio::time::timeout`, the losing `tokio::select!` branch — never reaches
 /// `end_bulk_load`. That used to leave the scope depth above zero for the life

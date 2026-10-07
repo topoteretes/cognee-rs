@@ -175,6 +175,22 @@ const HNSW_BUILD_WORKERS: u32 = 4;
 /// more than staying live; an empty or small collection defers at once.
 const BULK_DEFER_RATIO: f64 = 0.25;
 
+/// Whether a collection that held `base_rows` rows when this bulk load started,
+/// and has been handed `written` points since, has reached
+/// [`BULK_DEFER_RATIO`] of its (current) rows and should stop maintaining its
+/// index for the rest of the load.
+///
+/// The current size is `base_rows + written` rather than a fresh `count(*)`;
+/// see [`PgVectorAdapter::bulk_should_defer`] for why that is both cheaper and
+/// equivalent. An empty collection (`base_rows == 0`) defers on its first
+/// batch, which is the intended behaviour — there is no index work worth
+/// maintaining.
+fn bulk_defer_reached(written: i64, base_rows: i64) -> bool {
+    let written = written.max(0);
+    let current = base_rows.max(0).saturating_add(written);
+    written > 0 && (written as f64) >= BULK_DEFER_RATIO * current as f64
+}
+
 /// `max_parallel_maintenance_workers` for the end-of-load build (the server
 /// caps it by `max_parallel_workers` / `max_worker_processes`, 8 by default).
 const BULK_BUILD_WORKERS: u32 = 7;
@@ -517,6 +533,47 @@ mod halfvec_gate_tests {
     }
 }
 
+/// Cases for the bulk-load deferral threshold.
+///
+/// No feature and no database: the decision became a pure function the moment
+/// the collection's size stopped being re-counted per batch, and keeping it
+/// equivalent to the per-batch `count(*)` is the whole point of the change.
+#[cfg(test)]
+mod bulk_defer_tests {
+    use super::bulk_defer_reached;
+
+    /// The threshold has to be what the per-batch `count(*)` produced. That
+    /// count was `base + new rows so far`, so `w >= 0.25 (base + w)`, i.e.
+    /// `w >= base / 3` — and an empty collection defers on its first batch.
+    #[test]
+    fn the_threshold_matches_the_per_batch_count_it_replaced() {
+        assert!(
+            bulk_defer_reached(1, 0),
+            "an empty collection has no index work worth maintaining"
+        );
+        assert!(
+            !bulk_defer_reached(0, 0),
+            "but nothing written is not a load at all"
+        );
+        assert!(!bulk_defer_reached(0, 300_000));
+
+        // 300k rows: a third of them, which is where 0.25 x (base + written)
+        // lands. The row below the line must not defer, the row on it must.
+        assert!(!bulk_defer_reached(99_999, 300_000));
+        assert!(bulk_defer_reached(100_000, 300_000));
+
+        // The incremental re-cognify this change is for: small batches into a
+        // large collection stay under the line, which is correct — the point
+        // is that they no longer pay a scan-sized count to find that out.
+        assert!(!bulk_defer_reached(500, 300_000));
+        assert!(!bulk_defer_reached(50_000, 300_000));
+
+        // Negative or absurd inputs must not panic or wrap.
+        assert!(!bulk_defer_reached(-1, 300_000));
+        assert!(bulk_defer_reached(i64::MAX, i64::MAX));
+    }
+}
+
 /// Cases for which searches may select candidates in half precision.
 ///
 /// No feature and no database: the decision is a pure function of the
@@ -692,6 +749,17 @@ struct BulkLoad {
     written: HashMap<String, i64>,
     /// Collection -> vector dimension of the index to build at scope end.
     deferred: HashMap<String, usize>,
+    /// Collection -> its row count when this bulk load first wrote to it.
+    ///
+    /// The deferral decision needs the collection's size, and reading it per
+    /// batch is a `count(*)` per batch: an incremental re-cognify into a large
+    /// collection in small batches never reaches `BULK_DEFER_RATIO x total`, so
+    /// it pays a scan-sized count for every batch and never even gets the
+    /// deferral — the exact opposite of the intent, in the scenario the scope
+    /// exists for. One count per collection per load is enough, because the
+    /// rows added since are what `written` already tracks (see
+    /// [`PgVectorAdapter::bulk_should_defer`]).
+    base_rows: HashMap<String, i64>,
 }
 
 impl PgVectorAdapter {
@@ -826,6 +894,9 @@ impl PgVectorAdapter {
 
     /// Collections written in the bulk-load scopes that just ended (all
     /// open scopes when `force`), for the end-of-load `ANALYZE`.
+    ///
+    /// Also drops the cached starting row counts: they are per load, and the
+    /// next one must count again against a collection this one has grown.
     #[allow(clippy::expect_used, reason = "lock poison is unrecoverable")]
     fn take_written(&self, force: bool) -> Vec<String> {
         // lock poison is unrecoverable
@@ -833,6 +904,7 @@ impl PgVectorAdapter {
         if !force && b.depth > 0 {
             return Vec::new();
         }
+        b.base_rows.clear();
         let mut out: Vec<String> = b.written.drain().map(|(k, _)| k).collect();
         out.sort();
         out
@@ -901,16 +973,25 @@ impl PgVectorAdapter {
         first_err.map_or(Ok(()), Err)
     }
 
-    /// Inside a bulk-load scope: whether `coll` (HNSW-indexed, `total` rows)
-    /// should stop maintaining its index now that `incoming` more points are
-    /// being written; if so it is recorded as deferred and the caller drops
-    /// the index. `None` outside a scope.
+    /// Inside a bulk-load scope: whether `coll` (HNSW-indexed, `base_rows`
+    /// rows when this load first touched it) should stop maintaining its index
+    /// now that `incoming` more points are being written; if so it is recorded
+    /// as deferred and the caller drops the index. `None` outside a scope.
+    ///
+    /// The collection's *current* size is taken as `base_rows + written`, not
+    /// re-counted: `written` is the points this load has handed it, so the sum
+    /// is exact when every point is a new row and an over-estimate when some
+    /// are overwrites — and over-estimating only defers later, which is the
+    /// safe direction (the cost is bounded by one extra index build, as the
+    /// [`BULK_DEFER_RATIO`] note explains). It reproduces what the per-batch
+    /// `count(*)` returned in the all-new case exactly: `w >= 0.25 (base + w)`,
+    /// i.e. a third of the collection's starting rows.
     #[allow(clippy::expect_used, reason = "lock poison is unrecoverable")]
     fn bulk_should_defer(
         &self,
         coll: &str,
         incoming: i64,
-        total: i64,
+        base_rows: i64,
         dimension: usize,
     ) -> Option<bool> {
         // lock poison is unrecoverable
@@ -923,11 +1004,45 @@ impl PgVectorAdapter {
         }
         let w = b.written.entry(coll.to_string()).or_insert(0);
         *w = w.saturating_add(incoming);
-        if (*w as f64) >= BULK_DEFER_RATIO * total as f64 {
+        let written = *w;
+        if bulk_defer_reached(written, base_rows) {
             b.deferred.insert(coll.to_string(), dimension);
             return Some(true);
         }
         Some(false)
+    }
+
+    /// `coll`'s row count when this bulk load first wrote to it, counted once
+    /// and cached in the scope state ([`BulkLoad::base_rows`]).
+    ///
+    /// `None` outside a scope — the caller only asks inside one.
+    #[allow(clippy::expect_used, reason = "lock poison is unrecoverable")]
+    async fn bulk_base_rows(&self, coll: &str) -> VectorDBResult<i64> {
+        {
+            // lock poison is unrecoverable
+            let b = self.bulk.lock().expect("bulk-load state lock");
+            if let Some(&cached) = b.base_rows.get(coll) {
+                return Ok(cached);
+            }
+        }
+        let rows = self
+            .db
+            .query_one(Statement::from_string(
+                DatabaseBackend::Postgres,
+                format!(r#"SELECT count(*) AS n FROM "{coll}""#),
+            ))
+            .await
+            .map_err(|e| VectorDBError::StorageError(e.to_string()))?
+            .and_then(|r| r.try_get::<i64>("", "n").ok())
+            .unwrap_or(0);
+        // lock poison is unrecoverable
+        self.bulk
+            .lock()
+            .expect("bulk-load state lock")
+            .base_rows
+            .entry(coll.to_string())
+            .or_insert(rows);
+        Ok(rows)
     }
 
     /// Remember `coll` as written inside the open bulk-load scope, if any.
@@ -1572,24 +1687,17 @@ impl PgVectorAdapter {
         {
             let index = Self::vector_index_name(coll, self.halfvec);
             if Self::vector_index_state(&self.db, &index).await? == Some(true) {
-                let total = self
-                    .db
-                    .query_one(Statement::from_string(
-                        DatabaseBackend::Postgres,
-                        format!(r#"SELECT count(*) AS n FROM "{coll}""#),
-                    ))
-                    .await
-                    .map_err(|e| VectorDBError::StorageError(e.to_string()))?
-                    .and_then(|r| r.try_get::<i64>("", "n").ok())
-                    .unwrap_or(0);
+                // Counted once per collection per load, not per batch.
+                let base_rows = self.bulk_base_rows(coll).await?;
                 let incoming = i64::try_from(points.len()).unwrap_or(i64::MAX);
-                if self.bulk_should_defer(coll, incoming, total, dimension) == Some(true) {
+                if self.bulk_should_defer(coll, incoming, base_rows, dimension) == Some(true) {
                     self.db
                         .execute_unprepared(&format!(r#"DROP INDEX IF EXISTS "{index}""#))
                         .await
                         .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
                     debug!(
-                        "bulk load: dropped HNSW index on {coll} ({total} rows) until the load ends"
+                        "bulk load: dropped HNSW index on {coll} ({base_rows} rows at the start \
+                         of the load) until the load ends"
                     );
                 }
                 return self
