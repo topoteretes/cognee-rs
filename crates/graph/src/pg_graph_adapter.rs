@@ -53,8 +53,10 @@ const ID_BATCH: usize = 20_000;
 /// it is the relational store's — so its `ConnectOptions` are not ours to
 /// change. Keep the two in step.
 ///
-/// `plan_cache_mode` is core Postgres and needs no version gate, unlike the
-/// `hnsw.*` settings the vector adapter carries the same way.
+/// `plan_cache_mode` is core Postgres (12+) and needs no version gate, unlike
+/// the `hnsw.*` settings the vector adapter carries the same way. It is not what
+/// sets this adapter's floor, though — the `GraphAutovacuum` migration does, at
+/// 13; see its own note.
 const PLAN_CACHE_LOCAL: &str = "SET LOCAL plan_cache_mode = force_custom_plan";
 
 /// Nodes of the materialized id-set CTE `ids` plus the edges induced on it:
@@ -2343,6 +2345,28 @@ mod migrator {
     /// that grows by cognify batches with stale statistics for most of a
     /// load, and a `graph_edge` of 500k rows accumulates 100k dead tuples
     /// before a vacuum. Reloptions only — no server setting is touched.
+    ///
+    /// # This migration sets the adapter's PostgreSQL floor at 13
+    /// `autovacuum_vacuum_insert_scale_factor` is the storage parameter for
+    /// insert-triggered vacuuming, which arrived in PostgreSQL 13 ("Allow
+    /// inserts, not only updates and deletes, to trigger vacuuming activity in
+    /// autovacuum … the new parameters `autovacuum_vacuum_insert_threshold` and
+    /// `autovacuum_vacuum_insert_scale_factor`, or the equivalent table storage
+    /// options" — PostgreSQL 13 release notes; the parameter is absent from the
+    /// 12 `CREATE TABLE` storage-parameter list and present in the 13 one).
+    ///
+    /// PostgreSQL rejects an unrecognized reloption rather than ignoring it, so
+    /// on 12 or older this `ALTER TABLE` is an error, the migration fails, and
+    /// both constructors refuse to initialise — a hard break, not a degraded
+    /// mode. That is accepted rather than worked around: 12 reached end of life
+    /// in November 2024, and `DO … EXCEPTION WHEN invalid_parameter_value` would
+    /// swallow a genuine misconfiguration to keep a dead release working. What
+    /// is *not* accepted is leaving it undocumented, which is why the floor is
+    /// stated here and in `docs/tools/backends.md`.
+    ///
+    /// Note that it is this migration alone, not the rest of the adapter:
+    /// `plan_cache_mode` (see [`PLAN_CACHE_LOCAL`]) is 12+, and the tables and
+    /// queries themselves go back further.
     struct GraphAutovacuum;
 
     impl MigrationName for GraphAutovacuum {

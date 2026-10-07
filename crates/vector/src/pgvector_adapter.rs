@@ -1964,7 +1964,11 @@ impl PgVectorAdapter {
     /// `iterative_scan` is [`PgVectorFeatures::iterative_scan`] and is a hard
     /// gate, not a preference: below [`ITERATIVE_SCAN_MIN_VERSION`] that `SET
     /// LOCAL` is an error rather than a no-op, and it would take the search down
-    /// with it. `plan_cache_mode` is core Postgres (12+), so it needs no gate.
+    /// with it. `plan_cache_mode` is core Postgres (12+), so it needs no gate —
+    /// that is a statement about the setting, not a claim that 12 is the floor
+    /// of a cognee Postgres deployment. The graph adapter's autovacuum
+    /// migration needs 13 (`PgGraphAdapter`'s `GraphAutovacuum`), so a store
+    /// with graph tables on it does.
     fn untuned_session_locals(
         tuned_sessions: bool,
         iterative_scan: bool,

@@ -159,6 +159,14 @@ Notes:
   expected and supported. A migration additionally sets per-table autovacuum
   scale factors (`vacuum 0.05`, `insert 0.05`, `analyze 0.02`) on both tables;
   it touches no server setting.
+  **`PgGraphAdapter` requires PostgreSQL 13 or newer.** That floor comes from
+  this migration and nothing else: `autovacuum_vacuum_insert_scale_factor` is the
+  storage parameter for insert-triggered vacuuming, added in PostgreSQL 13, and
+  Postgres rejects an unrecognized reloption rather than ignoring it — so on 12
+  the migration fails and the adapter refuses to initialise rather than running
+  without the setting. PostgreSQL 12 reached end of life in November 2024. The
+  vector adapter and the relational store have no such requirement (their
+  settings, `plan_cache_mode` among them, are 12+).
   Both constructors run with `plan_cache_mode = force_custom_plan`, by different
   means: `PgGraphAdapter::new` sets it as a connection option on the pool it
   opens, and `from_connection` — the constructor the shared-Postgres layout uses,
