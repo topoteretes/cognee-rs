@@ -35,6 +35,9 @@ sea-orm = { version = "1.1", features = [
     "sqlx-postgres",
     "with-uuid",
     "with-json",
+    # Binds `Vec<f32>` / `Vec<Uuid>` / `Vec<String>` as `real[]` / `uuid[]` /
+    # `text[]` parameters (bulk upserts, `= ANY($1)` id lists).
+    "postgres-array",
 ], optional = true }
 sea-orm-migration = { version = "1.1", features = [
     "runtime-tokio-rustls",

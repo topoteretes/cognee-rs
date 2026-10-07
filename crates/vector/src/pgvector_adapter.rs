@@ -55,8 +55,48 @@ use crate::zero_norm::{warn_zero_norm_points, warn_zero_norm_query, warn_zero_no
 )]
 mod vector_index_tests;
 
-/// Max points per INSERT batch (300 params = 100 rows × 3 columns).
+/// Max ids per `IN (...)` list on the retrieve path (one parameter each).
 const BATCH_SIZE: usize = 100;
+
+/// Rows per multi-row upsert `INSERT` (three bind parameters per row, so
+/// 6 000 parameters — well under PostgreSQL's 65 535). Full batches share one
+/// statement text, so their prepared statement is cached per connection.
+const WRITE_BATCH: usize = 2000;
+
+/// `ON CONFLICT (id)` metadata for [`VectorDB::index_points`]: the incoming
+/// metadata with `dataset_ids` replaced by the union of the stored row's and
+/// the incoming point's membership — stored `dataset_ids`, stored
+/// `dataset_id`, incoming `dataset_ids`, incoming `dataset_id`; strings only,
+/// blanks skipped, first occurrence wins — which is exactly
+/// [`VectorPoint::merge_dataset_membership`] applied with the stored row as
+/// `previous`. With no membership on either side the incoming metadata is
+/// kept as is. Computed server-side, so no read-before-write round trip.
+const MERGED_METADATA: &str = "COALESCE((
+  SELECT jsonb_set(EXCLUDED.metadata, '{dataset_ids}', jsonb_agg(to_jsonb(d.v) ORDER BY d.o))
+  FROM (
+    SELECT s.v, min(s.o) AS o FROM (
+      SELECT a.e #>> '{}' AS v, a.n AS o
+        FROM jsonb_array_elements(CASE WHEN jsonb_typeof(t.metadata->'dataset_ids') = 'array'
+                                       THEN t.metadata->'dataset_ids' ELSE '[]'::jsonb END)
+             WITH ORDINALITY a(e, n)
+       WHERE jsonb_typeof(a.e) = 'string'
+      UNION ALL
+      SELECT t.metadata->>'dataset_id', 1000000000
+       WHERE jsonb_typeof(t.metadata->'dataset_id') = 'string'
+      UNION ALL
+      SELECT b.e #>> '{}', 2000000000 + b.n
+        FROM jsonb_array_elements(CASE WHEN jsonb_typeof(EXCLUDED.metadata->'dataset_ids') = 'array'
+                                       THEN EXCLUDED.metadata->'dataset_ids' ELSE '[]'::jsonb END)
+             WITH ORDINALITY b(e, n)
+       WHERE jsonb_typeof(b.e) = 'string'
+      UNION ALL
+      SELECT EXCLUDED.metadata->>'dataset_id', 4000000000
+       WHERE jsonb_typeof(EXCLUDED.metadata->'dataset_id') = 'string'
+    ) s
+    WHERE s.v <> ''
+    GROUP BY s.v
+  ) d
+  HAVING count(*) > 0), EXCLUDED.metadata)";
 
 /// HNSW graph degree. pgvector's own default; raising it trades build time and
 /// index size for recall.
@@ -651,46 +691,90 @@ impl PgVectorAdapter {
         (where_sql, values)
     }
 
-    /// Fetch the current `metadata` JSONB for the given points (by id) from
-    /// `coll`, keyed by id. Used to union dataset membership before an upsert so
-    /// re-indexing a content-addressed point under a new dataset does not drop
-    /// the datasets it already belonged to.
-    async fn fetch_metadata(
+    /// Batched upsert shared by [`VectorDB::index_points`] (`merge_membership`)
+    /// and [`VectorDB::upsert_raw_vectors`] (verbatim replace).
+    ///
+    /// One multi-row `INSERT … ON CONFLICT` per [`WRITE_BATCH`] points, with
+    /// the vector bound as a binary `real[]` (cast to `vector`) rather than a
+    /// formatted text literal. With `merge_membership` the stored row's
+    /// dataset membership is unioned in server-side ([`MERGED_METADATA`]), so
+    /// the per-batch read-before-write of the old path is gone.
+    ///
+    /// A conflicting row is only rewritten when its vector or metadata
+    /// actually changes: a no-op update still writes a new heap tuple *and*
+    /// a new HNSW entry (an index insert is the single most expensive part of
+    /// an upsert), and cognify re-indexes every recurring point.
+    ///
+    /// Duplicate ids in one call are folded in input order first — one
+    /// statement cannot touch the same `ON CONFLICT` target twice (Postgres
+    /// aborts it with "ON CONFLICT DO UPDATE command cannot affect row a
+    /// second time") — through the same [`crate::models::dedup_points_by_id`]
+    /// / [`crate::models::dedup_points_by_id_last_wins`] helpers the LanceDB
+    /// adapter uses, so the outcome equals applying the points one by one.
+    async fn upsert_points(
         &self,
         coll: &str,
         points: &[VectorPoint],
-    ) -> VectorDBResult<HashMap<Uuid, HashMap<String, serde_json::Value>>> {
-        let mut out: HashMap<Uuid, HashMap<String, serde_json::Value>> = HashMap::new();
-        if points.is_empty() {
-            return Ok(out);
-        }
-        let placeholders: Vec<String> = (1..=points.len()).map(|i| format!("${i}::uuid")).collect();
-        let sql = format!(
-            r#"SELECT id, metadata FROM "{coll}" WHERE id IN ({})"#,
-            placeholders.join(", ")
+        merge_membership: bool,
+    ) -> VectorDBResult<()> {
+        // The shared in-batch fold (`crate::models`), which the LanceDB
+        // adapter uses too: one point per distinct id, first-appearance order,
+        // last occurrence winning, with `index_points` additionally unioning
+        // the duplicates' dataset membership. Folding here — before
+        // `chunks()`, not per chunk — also collapses ids that straddle a
+        // batch boundary, so each distinct id is written exactly once.
+        let points = if merge_membership {
+            dedup_points_by_id(points)
+        } else {
+            dedup_points_by_id_last_wins(points)
+        };
+
+        let metadata = if merge_membership {
+            MERGED_METADATA
+        } else {
+            "EXCLUDED.metadata"
+        };
+        let on_conflict = format!(
+            " ON CONFLICT (id) DO UPDATE SET vector = EXCLUDED.vector, metadata = {metadata} \
+             WHERE t.vector IS DISTINCT FROM EXCLUDED.vector \
+                OR t.metadata IS DISTINCT FROM {metadata}"
         );
-        let values: Vec<sea_orm::Value> = points.iter().map(|p| p.id.into()).collect();
-        let rows = self
-            .db
-            .query_all(Statement::from_sql_and_values(
-                DatabaseBackend::Postgres,
-                &sql,
-                values,
-            ))
-            .await
-            .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
-        for row in &rows {
-            let id: Uuid = row
-                .try_get("", "id")
-                .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
-            let metadata_val: serde_json::Value = row
-                .try_get("", "metadata")
-                .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
-            if let serde_json::Value::Object(map) = metadata_val {
-                out.insert(id, map.into_iter().collect());
+        for chunk in points.chunks(WRITE_BATCH) {
+            let mut sql = format!(r#"INSERT INTO "{coll}" AS t (id, vector, metadata) VALUES "#);
+            let mut values: Vec<sea_orm::Value> = Vec::with_capacity(chunk.len() * 3);
+            for pt in chunk {
+                let pt = pt.clone();
+                let p = values.len();
+                if p > 0 {
+                    sql.push_str(", ");
+                }
+                sql.push_str(&format!(
+                    "(${}::uuid, ${}::real[]::vector, ${}::jsonb)",
+                    p + 1,
+                    p + 2,
+                    p + 3
+                ));
+                values.push(pt.id.into());
+                values.push(pt.vector.into());
+                // Chunk and summary text is injected into point metadata, so
+                // this `jsonb` cast has the same NUL exposure as the graph
+                // tables — see `cognee_utils::sanitize`.
+                values.push(
+                    sanitize_json(serde_json::Value::Object(pt.metadata.into_iter().collect()))
+                        .into(),
+                );
             }
+            sql.push_str(&on_conflict);
+            self.db
+                .execute(Statement::from_sql_and_values(
+                    DatabaseBackend::Postgres,
+                    &sql,
+                    values,
+                ))
+                .await
+                .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
         }
-        Ok(out)
+        Ok(())
     }
 
     /// Decode one `(id, score, metadata)` query row into a [`SearchResult`].
@@ -914,84 +998,12 @@ impl VectorDB for PgVectorAdapter {
         // rows score and sort unusably once written.
         warn_zero_norm_points("pgvector", &coll, points);
 
-        // Fold repeated ids together BEFORE chunking. Point ids are
-        // content-addressed and the caller emits one point per occurrence (one
-        // per edge for `EdgeType_relationship_name`), so a corpus with many
-        // edges over a small relationship vocabulary repeats an id inside a
-        // single chunk — and Postgres aborts the whole statement with
-        // "ON CONFLICT DO UPDATE command cannot affect row a second time" when
-        // the conflict target is touched twice in one command. Folding before
-        // `chunks()` (rather than per chunk) also collapses ids that straddle a
-        // chunk boundary, so each distinct id is written exactly once.
-        // `dedup_points_by_id` unions the duplicates' dataset membership rather
-        // than letting the last one win outright; the union against what is
-        // already stored happens below, per chunk.
-        let points = dedup_points_by_id(points);
-
-        // Batch upsert in chunks to stay within parameter limits.
-        for chunk in points.chunks(BATCH_SIZE) {
-            // Point IDs are content-addressed, so the same point is re-indexed
-            // once per dataset. A plain `metadata = EXCLUDED.metadata` overwrite
-            // would drop earlier datasets' `dataset_id` (cross-dataset dedup
-            // bug). Read the existing rows' membership and union it into the
-            // incoming points before upserting, mirroring the in-memory /
-            // lancedb adapters and Python's union semantics.
-            let existing = self.fetch_metadata(&coll, chunk).await?;
-
-            let mut sql = format!(r#"INSERT INTO "{coll}" (id, vector, metadata) VALUES "#);
-            let mut values: Vec<sea_orm::Value> = Vec::with_capacity(chunk.len() * 3);
-            let mut idx = 1u32;
-
-            for (i, pt) in chunk.iter().enumerate() {
-                if i > 0 {
-                    sql.push_str(", ");
-                }
-                sql.push_str(&format!(
-                    "(${}, ${}::vector, ${}::jsonb)",
-                    idx,
-                    idx + 1,
-                    idx + 2
-                ));
-                idx += 3;
-
-                let mut merged = pt.clone();
-                if let Some(prev_meta) = existing.get(&pt.id) {
-                    let prev = VectorPoint {
-                        id: pt.id,
-                        vector: Vec::new(),
-                        metadata: prev_meta.clone(),
-                    };
-                    merged.merge_dataset_membership(&prev);
-                }
-
-                values.push(pt.id.into());
-                values.push(Self::format_vector(&pt.vector).into());
-                // Chunk and summary text is injected into point metadata, so
-                // this `jsonb` cast has the same NUL exposure as the graph
-                // tables — see `cognee_utils::sanitize`.
-                let metadata_obj: serde_json::Value = sanitize_json(serde_json::Value::Object(
-                    merged
-                        .metadata
-                        .iter()
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect(),
-                ));
-                values.push(metadata_obj.into());
-            }
-
-            sql.push_str(
-                " ON CONFLICT (id) DO UPDATE SET vector = EXCLUDED.vector, metadata = EXCLUDED.metadata",
-            );
-
-            self.db
-                .execute(Statement::from_sql_and_values(
-                    DatabaseBackend::Postgres,
-                    &sql,
-                    values,
-                ))
-                .await
-                .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
-        }
+        // Point IDs are content-addressed, so the same point is re-indexed
+        // once per dataset. A plain `metadata = EXCLUDED.metadata` overwrite
+        // would drop earlier datasets' `dataset_id` (cross-dataset dedup bug),
+        // so the stored membership is unioned in, mirroring the in-memory /
+        // lancedb adapters and Python's union semantics.
+        self.upsert_points(&coll, points, true).await?;
 
         Span::current().record(COGNEE_DB_ROW_COUNT, points.len() as i64);
         Ok(())
@@ -1045,58 +1057,9 @@ impl VectorDB for PgVectorAdapter {
                 .await?;
         }
 
-        // Same in-batch fold as `index_points`: a repeated id inside one
-        // multi-row INSERT makes Postgres abort the statement with "ON CONFLICT
-        // DO UPDATE command cannot affect row a second time". Raw upsert writes
-        // system-owned collections whose ids are far less likely to repeat, but
-        // the statement shape is identical, so the exposure is too. Last-wins
-        // rather than the unioning fold: this path stores metadata verbatim.
-        let points = dedup_points_by_id_last_wins(points);
-
-        // Batched upsert. Unlike `index_points`, we do NOT read + union prior
-        // dataset membership via `fetch_metadata`; the incoming metadata is
-        // written verbatim (full replace on conflict).
-        for chunk in points.chunks(BATCH_SIZE) {
-            let mut sql = format!(r#"INSERT INTO "{coll}" (id, vector, metadata) VALUES "#);
-            let mut values: Vec<sea_orm::Value> = Vec::with_capacity(chunk.len() * 3);
-            let mut idx = 1u32;
-
-            for (i, pt) in chunk.iter().enumerate() {
-                if i > 0 {
-                    sql.push_str(", ");
-                }
-                sql.push_str(&format!(
-                    "(${}, ${}::vector, ${}::jsonb)",
-                    idx,
-                    idx + 1,
-                    idx + 2
-                ));
-                idx += 3;
-
-                values.push(pt.id.into());
-                values.push(Self::format_vector(&pt.vector).into());
-                let metadata_obj: serde_json::Value = sanitize_json(serde_json::Value::Object(
-                    pt.metadata
-                        .iter()
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect(),
-                ));
-                values.push(metadata_obj.into());
-            }
-
-            sql.push_str(
-                " ON CONFLICT (id) DO UPDATE SET vector = EXCLUDED.vector, metadata = EXCLUDED.metadata",
-            );
-
-            self.db
-                .execute(Statement::from_sql_and_values(
-                    DatabaseBackend::Postgres,
-                    &sql,
-                    values,
-                ))
-                .await
-                .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
-        }
+        // Unlike `index_points`, prior dataset membership is NOT unioned in;
+        // the incoming metadata is written verbatim (full replace on conflict).
+        self.upsert_points(&coll, points, false).await?;
 
         Span::current().record(COGNEE_DB_ROW_COUNT, points.len() as i64);
         Ok(())
