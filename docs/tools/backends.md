@@ -71,6 +71,15 @@ Notes:
   defaults to a no-op returning `0` for the ones that have no such index. It is
   not automatic: building HNSW over a large collection is expensive, so the
   operator chooses when.
+- **Upgrading an existing pgvector store.** The halfvec index is a new index
+  under a new name (`<coll>_halfvec_hnsw`), so a store built by an older version
+  carries the old full-precision `<coll>_vector_hnsw`, which the halfvec-ordered
+  searches no longer use. Nothing breaks — those searches fall back to an exact
+  scan, which returns the true top *k* — but they are slow until
+  `cognee-cli vector-reindex` builds the new index. The **old index is not
+  dropped automatically**: it stays on disk and keeps costing an HNSW insert per
+  upsert, so drop it once the new one is in place:
+  `DROP INDEX IF EXISTS "<coll>_vector_hnsw"`. Leaving it is safe, just wasteful.
 - **Postgres graph tables.** `PgGraphAdapter` creates `graph_node` /
   `graph_edge` with their key columns `COLLATE "C"` (they are only ever
   compared for equality, and the locale collation costs a `strcoll` per btree
