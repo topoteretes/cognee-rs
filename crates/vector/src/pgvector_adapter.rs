@@ -144,6 +144,16 @@ const HNSW_EF_SEARCH_SESSION: usize = 200;
 /// back to the exact scan — see [`PgVectorAdapter::ann_search_locals`].
 const HNSW_EF_SEARCH_MAX: usize = 1000;
 
+/// `hnsw.iterative_scan`, as a `SET LOCAL`. The value, and why it is
+/// `relaxed_order` rather than `strict_order`, are in [`PgVectorAdapter::new`],
+/// which sets the same thing as a connection option on its own pool; this is
+/// the form [`PgVectorAdapter::untuned_session_locals`] uses on a connection it
+/// did not open.
+const ITERATIVE_SCAN_LOCAL: &str = "SET LOCAL hnsw.iterative_scan = relaxed_order";
+
+/// `plan_cache_mode`, as a `SET LOCAL` — the twin of [`ITERATIVE_SCAN_LOCAL`].
+const PLAN_CACHE_LOCAL: &str = "SET LOCAL plan_cache_mode = force_custom_plan";
+
 /// Batches of at least this many points into an HNSW-indexed collection are
 /// candidates for [`PgVectorAdapter::upsert_rebuilding_index`].
 const HNSW_REBUILD_MIN_ROWS: usize = 200;
@@ -399,18 +409,32 @@ const NAN_LAST: &str = "(score = 'NaN'::float8)";
 /// the migration only runs `CREATE EXTENSION IF NOT EXISTS vector`, which is a
 /// no-op against a database that already carries 0.5.x or 0.6.x. So the version
 /// is probed once per adapter and the full-precision path used below it; see
-/// [`halfvec_in_extversion`] and [`probe_halfvec_support`].
+/// [`halfvec_in_extversion`] and [`probe_pgvector_features`].
 const HALFVEC_MIN_VERSION: (u32, u32) = (0, 7);
 
-/// Whether `extversion` (the `pg_extension.extversion` string of the `vector`
-/// extension, e.g. `"0.8.2"`) is at least [`HALFVEC_MIN_VERSION`].
+/// Lowest `vector` extension version that has the `hnsw.iterative_scan` setting
+/// (pgvector 0.8.0, October 2024).
 ///
-/// Only the first two components are compared: `halfvec` arrived in 0.7.0, so
-/// no patch release is on the boundary. An unparseable version answers `false`,
-/// because the full-precision path is correct on every version while the
-/// half-precision one is correct on none below 0.7 — the safe side of a guess
-/// is the slower index, not a store whose every search errors.
-fn halfvec_in_extversion(extversion: &str) -> bool {
+/// This one has to be gated, not just preferred. pgvector marks the `hnsw.` GUC
+/// prefix reserved, so on an older extension `SET LOCAL hnsw.iterative_scan` is
+/// not quietly ignored — it is `unrecognized configuration parameter`, which
+/// aborts the transaction and so fails the search that was about to run in it.
+/// [`PgVectorAdapter::new`] is not exposed to that, because a libpq connection
+/// *option* is applied before any extension library is loaded and therefore
+/// becomes a placeholder (dropped with a warning when an older pgvector reserves
+/// the prefix); a `SET LOCAL` on a connection that has already touched a vector
+/// column is not so lucky. See [`PgVectorAdapter::untuned_session_locals`].
+const ITERATIVE_SCAN_MIN_VERSION: (u32, u32) = (0, 8);
+
+/// Whether `extversion` (the `pg_extension.extversion` string of the `vector`
+/// extension, e.g. `"0.8.2"`) is at least `min`.
+///
+/// Only the first two components are compared: both gated features arrived in a
+/// `.0`, so no patch release is on a boundary. An unparseable version answers
+/// `false`, because each fallback is correct on every version while the gated
+/// path is correct on none below its minimum — the safe side of a guess is the
+/// slower index, not a store whose every search errors.
+fn extversion_at_least(extversion: &str, min: (u32, u32)) -> bool {
     let mut parts = extversion.trim().split('.');
     let (Some(major), Some(minor)) = (parts.next(), parts.next()) else {
         return false;
@@ -425,20 +449,41 @@ fn halfvec_in_extversion(extversion: &str) -> bool {
             .ok()
     };
     match (num(major), num(minor)) {
-        (Some(major), Some(minor)) => (major, minor) >= HALFVEC_MIN_VERSION,
+        (Some(major), Some(minor)) => (major, minor) >= min,
         _ => false,
     }
 }
 
-/// Probe the installed `vector` extension once and say whether the
-/// half-precision index and ordering can be used.
+/// [`extversion_at_least`] at [`HALFVEC_MIN_VERSION`].
+fn halfvec_in_extversion(extversion: &str) -> bool {
+    extversion_at_least(extversion, HALFVEC_MIN_VERSION)
+}
+
+/// [`extversion_at_least`] at [`ITERATIVE_SCAN_MIN_VERSION`].
+fn iterative_scan_in_extversion(extversion: &str) -> bool {
+    extversion_at_least(extversion, ITERATIVE_SCAN_MIN_VERSION)
+}
+
+/// What the installed `vector` extension's version allows, probed once per
+/// adapter (see [`probe_pgvector_features`]).
+#[derive(Debug, Clone, Copy, Default)]
+struct PgVectorFeatures {
+    /// The `halfvec` type and `halfvec_cosine_ops` opclass
+    /// ([`HALFVEC_MIN_VERSION`]).
+    halfvec: bool,
+    /// The `hnsw.iterative_scan` setting ([`ITERATIVE_SCAN_MIN_VERSION`]).
+    iterative_scan: bool,
+}
+
+/// Probe the installed `vector` extension once and say which version-gated
+/// features this adapter may use.
 ///
 /// Called from both constructors, after the migration has run
 /// `CREATE EXTENSION IF NOT EXISTS vector`, so the row is expected to be there.
-/// A missing row or a failed query answers `false` and logs: the adapter stays
-/// usable on the full-precision path either way, and degrading loudly beats
-/// erroring on every search.
-async fn probe_halfvec_support(db: &DatabaseConnection) -> bool {
+/// A missing row or a failed query answers "neither" and logs: the adapter stays
+/// usable on the full-precision, non-iterative path either way, and degrading
+/// loudly beats erroring on every search.
+async fn probe_pgvector_features(db: &DatabaseConnection) -> PgVectorFeatures {
     let row = db
         .query_one(Statement::from_string(
             DatabaseBackend::Postgres,
@@ -454,32 +499,42 @@ async fn probe_halfvec_support(db: &DatabaseConnection) -> bool {
                 "could not read the installed pgvector version — using the \
                  full-precision HNSW index and ordering"
             );
-            return false;
+            return PgVectorFeatures::default();
         }
     };
-    match extversion {
-        Some(v) if halfvec_in_extversion(&v) => {
-            debug!("pgvector {v}: using the half-precision HNSW index and ordering");
-            true
-        }
-        Some(v) => {
-            warn!(
-                "pgvector {v} is older than {}.{} and has no `halfvec` type: falling back \
-                 to the full-precision index and ordering (larger index, slower scans, \
-                 identical results). `ALTER EXTENSION vector UPDATE` after installing a \
-                 newer pgvector binary, then `cognee-cli vector-reindex`, switches to the \
-                 half-precision index.",
-                HALFVEC_MIN_VERSION.0, HALFVEC_MIN_VERSION.1,
-            );
-            false
-        }
-        None => {
-            warn!(
-                "the `vector` extension reported no version — using the \
-                 full-precision HNSW index and ordering"
-            );
-            false
-        }
+    let Some(v) = extversion else {
+        warn!(
+            "the `vector` extension reported no version — using the \
+             full-precision HNSW index and ordering"
+        );
+        return PgVectorFeatures::default();
+    };
+    if halfvec_in_extversion(&v) {
+        debug!("pgvector {v}: using the half-precision HNSW index and ordering");
+    } else {
+        warn!(
+            "pgvector {v} is older than {}.{} and has no `halfvec` type: falling back \
+             to the full-precision index and ordering (larger index, slower scans, \
+             identical results). `ALTER EXTENSION vector UPDATE` after installing a \
+             newer pgvector binary, then `cognee-cli vector-reindex`, switches to the \
+             half-precision index.",
+            HALFVEC_MIN_VERSION.0, HALFVEC_MIN_VERSION.1,
+        );
+    }
+    if !iterative_scan_in_extversion(&v) {
+        // Only `from_connection` adapters can notice: `new`'s pools get this as
+        // a connection option, which an older pgvector turns into a dropped
+        // placeholder rather than an error.
+        debug!(
+            "pgvector {v} is older than {}.{} and has no `hnsw.iterative_scan`: a search \
+             on a caller-owned connection may return fewer than top_k rows once the \
+             collection has dead tuples",
+            ITERATIVE_SCAN_MIN_VERSION.0, ITERATIVE_SCAN_MIN_VERSION.1,
+        );
+    }
+    PgVectorFeatures {
+        halfvec: halfvec_in_extversion(&v),
+        iterative_scan: iterative_scan_in_extversion(&v),
     }
 }
 
@@ -726,6 +781,162 @@ mod candidate_order_tests {
     }
 }
 
+/// Cases for the per-statement session settings a search carries.
+///
+/// No feature and no database: the builders are pure functions of
+/// `tuned_sessions`, the probed pgvector version and `top_k`, which is the whole
+/// reason they take those as arguments rather than reading `self`. What they
+/// protect
+/// is that an adapter built by [`PgVectorAdapter::from_connection`] — where the
+/// pool belongs to the caller and `new`'s connection options were never
+/// applied — answers the same as one built by [`PgVectorAdapter::new`], while
+/// `new`'s own pools keep the single-round-trip fast path.
+#[cfg(test)]
+#[allow(
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
+mod session_locals_tests {
+    use super::{
+        HNSW_EF_SEARCH_MAX, HNSW_EF_SEARCH_SESSION, ITERATIVE_SCAN_LOCAL,
+        ITERATIVE_SCAN_MIN_VERSION, PLAN_CACHE_LOCAL, PgVectorAdapter,
+        iterative_scan_in_extversion,
+    };
+
+    /// The gate's own boundary, like `halfvec_gate_tests` does for 0.7.
+    #[test]
+    fn the_iterative_scan_gate_opens_at_0_8() {
+        for (raw, want) in [
+            ("0.8.2", true),
+            ("0.8.0", true),
+            ("0.8", true),
+            ("1.0.0", true),
+            ("0.10.0", true),
+            ("0.7.4", false),
+            ("0.7", false),
+            ("0.6.2", false),
+            ("", false),
+            ("unknown", false),
+        ] {
+            assert_eq!(
+                iterative_scan_in_extversion(raw),
+                want,
+                "pgvector {raw:?} must resolve to iterative_scan = {want} (gate at {}.{})",
+                ITERATIVE_SCAN_MIN_VERSION.0,
+                ITERATIVE_SCAN_MIN_VERSION.1,
+            );
+        }
+    }
+
+    /// `new()`'s pools: one plain statement for an ordinary search, and never a
+    /// repeat of what the connection options already carry.
+    #[test]
+    fn an_owned_pool_keeps_the_single_round_trip_fast_path() {
+        assert_eq!(
+            PgVectorAdapter::ann_search_locals(true, true, 100),
+            None,
+            "a top-100 search on our own pool must stay one plain statement"
+        );
+        assert_eq!(PgVectorAdapter::filtered_search_locals(true), None);
+
+        // Above the session ef_search it does need a transaction — but only for
+        // ef_search; the rest is already on the connection.
+        let locals = PgVectorAdapter::ann_search_locals(true, true, HNSW_EF_SEARCH_SESSION)
+            .expect("2 x top_k is past the session ef_search, so this must set one");
+        assert!(locals.contains("hnsw.ef_search"));
+        assert!(
+            !locals.contains("iterative_scan") && !locals.contains("plan_cache_mode"),
+            "repeating the connection options would cost every search a \
+             transaction it does not need: {locals}"
+        );
+    }
+
+    /// `from_connection()`: the caller's pool never saw `new`'s options, so each
+    /// search has to bring them. This is free — `tuned_sessions == false`
+    /// already forces a `SET LOCAL ef_search`, so the transaction and its one
+    /// round trip exist either way.
+    #[test]
+    fn a_caller_owned_pool_carries_the_ann_settings_per_statement() {
+        let locals = PgVectorAdapter::ann_search_locals(false, true, 100)
+            .expect("a connection we did not open has no session tuning at all");
+        assert!(
+            locals.contains("hnsw.ef_search"),
+            "ef_search still has to cover top_k: {locals}"
+        );
+        assert!(
+            locals.contains(ITERATIVE_SCAN_LOCAL),
+            "without iterative_scan an HNSW scan whose beam runs dry returns \
+             fewer than top_k rows and says nothing: {locals}"
+        );
+        assert!(
+            locals.contains(PLAN_CACHE_LOCAL),
+            "without force_custom_plan a cached generic plan costs the search \
+             blind: {locals}"
+        );
+
+        // Past the ef_search ceiling the exact scan is forced instead, and the
+        // rest still has to come along.
+        let huge = PgVectorAdapter::ann_search_locals(false, true, HNSW_EF_SEARCH_MAX + 1)
+            .expect("the exact-scan settings are always needed");
+        assert!(huge.contains("enable_indexscan = off"));
+        assert!(huge.contains(PLAN_CACHE_LOCAL));
+
+        // The filtered search keeps the index out of the query on purpose, so
+        // it needs none of the ANN levers — but it is the measured case for
+        // force_custom_plan, and today it is the one search path that would
+        // otherwise run with no settings at all.
+        assert_eq!(
+            PgVectorAdapter::filtered_search_locals(false).as_deref(),
+            Some(PLAN_CACHE_LOCAL),
+        );
+    }
+
+    /// The version gate. pgvector marks the `hnsw.` GUC prefix reserved, so on
+    /// an extension older than [`ITERATIVE_SCAN_MIN_VERSION`] that `SET LOCAL`
+    /// is `unrecognized configuration parameter` — an error that aborts the
+    /// transaction and takes the search with it, which is strictly worse than
+    /// the short result it was meant to prevent. `plan_cache_mode` is core
+    /// Postgres and must still come along.
+    #[test]
+    fn an_older_pgvector_gets_no_iterative_scan_and_still_gets_the_rest() {
+        let locals = PgVectorAdapter::ann_search_locals(false, false, 100)
+            .expect("ef_search and plan_cache_mode are still needed");
+        assert!(
+            !locals.contains("iterative_scan"),
+            "setting a GUC this pgvector does not define fails the search: {locals}"
+        );
+        assert!(locals.contains("hnsw.ef_search"), "{locals}");
+        assert!(locals.contains(PLAN_CACHE_LOCAL), "{locals}");
+
+        // The gate is about the older extension only; `hnsw.ef_search` has
+        // existed since 0.5, so it is never gated.
+        assert_eq!(
+            PgVectorAdapter::untuned_session_locals(false, false),
+            [PLAN_CACHE_LOCAL]
+        );
+        assert_eq!(
+            PgVectorAdapter::untuned_session_locals(false, true),
+            [ITERATIVE_SCAN_LOCAL, PLAN_CACHE_LOCAL]
+        );
+        assert!(PgVectorAdapter::untuned_session_locals(true, true).is_empty());
+    }
+
+    /// Every statement is a complete `SET LOCAL …`, joined so the whole string
+    /// is one simple-query round trip — a missing separator would make the
+    /// *first* setting a syntax error, failing every search.
+    #[test]
+    fn the_locals_are_semicolon_separated_set_local_statements() {
+        let locals = PgVectorAdapter::ann_search_locals(false, true, HNSW_EF_SEARCH_MAX + 1)
+            .expect("the exact-scan settings are always needed");
+        for stmt in locals.split("; ") {
+            assert!(
+                stmt.starts_with("SET LOCAL ") && !stmt.contains(';'),
+                "not a single SET LOCAL statement: {stmt:?} in {locals:?}"
+            );
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Table / column identifiers for sea_query (`_vector_collections`)
 // ---------------------------------------------------------------------------
@@ -816,10 +1027,17 @@ pub struct PgVectorAdapter {
     /// fix into an outage. Neither in-tree factory takes that path today, but
     /// both constructors are public API.
     owns_pool: bool,
-    /// Every pooled connection was opened with [`HNSW_EF_SEARCH_SESSION`] as
-    /// its session `hnsw.ef_search` (pools this adapter opens itself), so an
-    /// ANN search with `top_k` up to that runs as one plain statement instead
-    /// of `BEGIN; SET LOCAL …; SELECT; COMMIT`.
+    /// Every pooled connection was opened with [`Self::new`]'s session options —
+    /// [`HNSW_EF_SEARCH_SESSION`] as `hnsw.ef_search`, plus
+    /// `hnsw.iterative_scan` and `plan_cache_mode` — so an ANN search with
+    /// `top_k` up to that runs as one plain statement instead of
+    /// `BEGIN; SET LOCAL …; SELECT; COMMIT`.
+    ///
+    /// `false` for [`Self::from_connection`], where the searches carry the same
+    /// settings themselves as `SET LOCAL`s (see
+    /// [`Self::untuned_session_locals`]) — they already open a transaction for
+    /// `ef_search`, so correctness does not depend on which constructor a caller
+    /// used, only the round trip does.
     tuned_sessions: bool,
     /// Collections known to exist, so `has_collection` — called before every
     /// search and upsert by the retrievers and the indexer — is a lookup
@@ -830,7 +1048,7 @@ pub struct PgVectorAdapter {
     /// Bulk-load scope state (see [`VectorDB::begin_bulk_load`]).
     bulk: std::sync::Mutex<BulkLoad>,
     /// Whether the installed `vector` extension has the `halfvec` type, probed
-    /// once at construction (see [`probe_halfvec_support`]).
+    /// once at construction (see [`probe_pgvector_features`]).
     ///
     /// `false` puts both the index and the search ordering back on
     /// full-precision `vector`: correct on every pgvector version, just a
@@ -839,6 +1057,13 @@ pub struct PgVectorAdapter {
     /// so every similarity search would fail with `type "halfvec" does not
     /// exist`.
     halfvec: bool,
+    /// Whether the installed `vector` extension has `hnsw.iterative_scan`,
+    /// probed in the same query as [`Self::halfvec`].
+    ///
+    /// Only `!tuned_sessions` adapters consult it, and only to decide whether a
+    /// search may `SET LOCAL` that setting at all; see
+    /// [`Self::untuned_session_locals`].
+    iterative_scan: bool,
 }
 
 /// Open bulk-load scopes, and per collection the points written in them and
@@ -894,6 +1119,11 @@ impl PgVectorAdapter {
                 // wide chunk row — 40 ms p50 for a 2k-of-14k-row filter at
                 // 100k, where the custom plan's bitmap scan takes 4.4 ms.
                 ("plan_cache_mode", "force_custom_plan".to_string()),
+                // These last two are session-wide only because this pool is
+                // ours to open. `from_connection` has no such hook, so its
+                // searches re-apply the same two per statement —
+                // `ITERATIVE_SCAN_LOCAL` / `PLAN_CACHE_LOCAL`, via
+                // `untuned_session_locals`. Keep the pairs in step.
             ])
         });
         let db = Database::connect(opts)
@@ -906,7 +1136,7 @@ impl PgVectorAdapter {
             .map_err(|e| VectorDBError::StorageError(format!("PGVector migration failed: {e}")))?;
 
         debug!("PgVectorAdapter initialised (dimension={dimension})");
-        let halfvec = probe_halfvec_support(&db).await;
+        let features = probe_pgvector_features(&db).await;
         Ok(Self {
             db,
             dimension,
@@ -914,7 +1144,8 @@ impl PgVectorAdapter {
             tuned_sessions: true,
             known: RwLock::new(HashSet::new()),
             bulk: std::sync::Mutex::new(BulkLoad::default()),
-            halfvec,
+            halfvec: features.halfvec,
+            iterative_scan: features.iterative_scan,
         })
     }
 
@@ -923,13 +1154,20 @@ impl PgVectorAdapter {
     /// The caller is responsible for ensuring the database already exists
     /// (the connection proves it does). Only the pgvector extension and
     /// bookkeeping table are created if missing.
+    ///
+    /// The session tuning [`Self::new`] puts in its pool's connection options
+    /// cannot be applied here — the pool is the caller's — so the searches carry
+    /// it per statement instead (`tuned_sessions: false`; see
+    /// [`Self::untuned_session_locals`]). An adapter built this way answers
+    /// identically to one from [`Self::new`]; it just pays a transaction per
+    /// search for the privilege.
     pub async fn from_connection(db: DatabaseConnection, dimension: usize) -> VectorDBResult<Self> {
         cleanup_legacy_seaql_migrations(&db).await?;
         migrator::Migrator::up(&db, None)
             .await
             .map_err(|e| VectorDBError::StorageError(format!("PGVector migration failed: {e}")))?;
 
-        let halfvec = probe_halfvec_support(&db).await;
+        let features = probe_pgvector_features(&db).await;
         Ok(Self {
             db,
             dimension,
@@ -937,7 +1175,8 @@ impl PgVectorAdapter {
             tuned_sessions: false,
             known: RwLock::new(HashSet::new()),
             bulk: std::sync::Mutex::new(BulkLoad::default()),
-            halfvec,
+            halfvec: features.halfvec,
+            iterative_scan: features.iterative_scan,
         })
     }
 
@@ -1333,20 +1572,92 @@ impl PgVectorAdapter {
     /// trade at that size, since such a query is scanning most of the
     /// collection regardless.
     ///
-    /// `None` when no setting is needed: this adapter's own pools open every
-    /// connection with `hnsw.ef_search = HNSW_EF_SEARCH_SESSION`, which
-    /// already covers any `top_k` up to that.
-    fn ann_search_locals(&self, top_k: usize) -> Option<String> {
+    /// On top of that, everything [`Self::untuned_session_locals`] carries for a
+    /// connection this adapter did not open.
+    ///
+    /// `None` when no setting is needed at all, which is the common case:
+    /// `tuned_sessions` pools open every connection with
+    /// `hnsw.ef_search = HNSW_EF_SEARCH_SESSION` (and the rest of the tuning)
+    /// already, so an ANN search up to that `top_k` is one plain statement
+    /// rather than `BEGIN; SET LOCAL …; SELECT; COMMIT`. Pure in
+    /// `tuned_sessions` so the decision is testable without a server.
+    fn ann_search_locals(
+        tuned_sessions: bool,
+        iterative_scan: bool,
+        top_k: usize,
+    ) -> Option<String> {
+        let mut locals: Vec<String> = Vec::new();
         if top_k > HNSW_EF_SEARCH_MAX {
-            return Some(Self::exact_scan_locals().to_string());
+            locals.push(Self::exact_scan_locals().to_string());
+        } else if !tuned_sessions || top_k.saturating_mul(HNSW_EF_PER_K) > HNSW_EF_SEARCH_SESSION {
+            let ef = top_k
+                .saturating_mul(HNSW_EF_PER_K)
+                .clamp(HNSW_EF_SEARCH_DEFAULT, HNSW_EF_SEARCH_MAX);
+            locals.push(format!("SET LOCAL hnsw.ef_search = {ef}"));
         }
-        if self.tuned_sessions && top_k.saturating_mul(HNSW_EF_PER_K) <= HNSW_EF_SEARCH_SESSION {
-            return None;
+        locals.extend(
+            Self::untuned_session_locals(tuned_sessions, iterative_scan)
+                .iter()
+                .map(|s| (*s).to_string()),
+        );
+        (!locals.is_empty()).then(|| locals.join("; "))
+    }
+
+    /// The `SET LOCAL` equivalents of the connection options [`Self::new`]
+    /// applies to its own pool, for a connection it did not open.
+    ///
+    /// [`Self::from_connection`] has no hook to widen: the caller opened the
+    /// connections, and in the single-shared-Postgres layout that caller is the
+    /// relational store, so its `ConnectOptions` are not ours to change. A plain
+    /// `SET` would be worse than nothing — it outlives the statement and leaks
+    /// to whatever borrows that pooled connection next. So the settings ride
+    /// along in the transaction the searches already open for `ef_search`, which
+    /// is why this costs no extra round trip *and* no extra transaction: with
+    /// `tuned_sessions == false`, [`Self::ann_search_locals`] can never return
+    /// `None` anyway.
+    ///
+    /// Both have a named consequence when missing, which is why they are not
+    /// left to the `new()` pool (the constructor's own comments measure them):
+    ///
+    /// - `hnsw.iterative_scan = relaxed_order`: without it an HNSW scan that
+    ///   runs its beam dry before the `LIMIT` — dead tuples after deletes, or a
+    ///   degenerate graph over near-identical vectors — returns *fewer* than
+    ///   `top_k` rows and says nothing. Raising `ef_search` does not fix that
+    ///   case; `a_search_returns_top_k_rows_even_above_the_default_ef_search`
+    ///   measured 33 of 100 rows at `ef_search = 200` without it.
+    /// - `plan_cache_mode = force_custom_plan`: a generic plan cannot see the
+    ///   `NodeSet` array of [`VectorDB::search_similar_filtered`], costs the GIN
+    ///   prefilter blind and falls back to scanning every wide chunk row — 40 ms
+    ///   p50 against the custom plan's 4.4 ms, measured on a 2k-of-14k-row
+    ///   filter at 100k rows.
+    ///
+    /// Empty for `tuned_sessions`, where the pool's connection options already
+    /// carry both and repeating them would cost the searches a transaction they
+    /// do not otherwise need.
+    ///
+    /// `iterative_scan` is [`PgVectorFeatures::iterative_scan`] and is a hard
+    /// gate, not a preference: below [`ITERATIVE_SCAN_MIN_VERSION`] that `SET
+    /// LOCAL` is an error rather than a no-op, and it would take the search down
+    /// with it. `plan_cache_mode` is core Postgres (12+), so it needs no gate.
+    fn untuned_session_locals(
+        tuned_sessions: bool,
+        iterative_scan: bool,
+    ) -> &'static [&'static str] {
+        match (tuned_sessions, iterative_scan) {
+            (true, _) => &[],
+            (false, true) => &[ITERATIVE_SCAN_LOCAL, PLAN_CACHE_LOCAL],
+            (false, false) => &[PLAN_CACHE_LOCAL],
         }
-        let ef = top_k
-            .saturating_mul(HNSW_EF_PER_K)
-            .clamp(HNSW_EF_SEARCH_DEFAULT, HNSW_EF_SEARCH_MAX);
-        Some(format!("SET LOCAL hnsw.ef_search = {ef}"))
+    }
+
+    /// `SET LOCAL`s for [`VectorDB::search_similar_filtered`], which needs none
+    /// of the ANN levers — it keeps the HNSW index out of the query on purpose —
+    /// but is the very path `plan_cache_mode = force_custom_plan` exists for.
+    ///
+    /// `None` for this adapter's own pools, so the filtered search stays the
+    /// single plain statement it is today.
+    fn filtered_search_locals(tuned_sessions: bool) -> Option<String> {
+        (!tuned_sessions).then(|| PLAN_CACHE_LOCAL.to_string())
     }
 
     /// [`Self::query_all_with_locals`] when `locals` is `Some`, else one plain
@@ -2545,7 +2856,7 @@ impl VectorDB for PgVectorAdapter {
         // LIMIT is silently unmet — see `ann_search_locals`.
         let rows = self
             .query_all_maybe_locals(
-                self.ann_search_locals(top_k),
+                Self::ann_search_locals(self.tuned_sessions, self.iterative_scan, top_k),
                 Statement::from_sql_and_values(DatabaseBackend::Postgres, &sql, [vec_str.into()]),
             )
             .await
@@ -2628,15 +2939,21 @@ impl VectorDB for PgVectorAdapter {
                ORDER BY (vector <=> $1::vector) + 0, id
                LIMIT {limit}"#
         );
+        // This is the query `plan_cache_mode = force_custom_plan` exists for —
+        // the `$2::text[]` of names a generic plan has to cost blind. On this
+        // adapter's own pools that is already a connection option, so
+        // `filtered_search_locals` is `None` and the search stays one plain
+        // statement; on a caller-owned connection it rides in as a `SET LOCAL`.
         let rows = self
-            .db
-            .query_all(Statement::from_sql_and_values(
-                DatabaseBackend::Postgres,
-                &sql,
-                [vec_str.into(), requested.to_vec().into()],
-            ))
+            .query_all_maybe_locals(
+                Self::filtered_search_locals(self.tuned_sessions),
+                Statement::from_sql_and_values(
+                    DatabaseBackend::Postgres,
+                    &sql,
+                    [vec_str.into(), requested.to_vec().into()],
+                ),
+            )
             .await
-            .map_err(|e| VectorDBError::StorageError(e.to_string()))
             .inspect_err(|e| {
                 self.forget_if_missing(&coll, e);
             })?;
@@ -2777,7 +3094,7 @@ impl VectorDB for PgVectorAdapter {
         // `search_similar` or every one of them ends early.
         let rows = self
             .query_all_maybe_locals(
-                self.ann_search_locals(top_k),
+                Self::ann_search_locals(self.tuned_sessions, self.iterative_scan, top_k),
                 Statement::from_string(DatabaseBackend::Postgres, sql),
             )
             .await

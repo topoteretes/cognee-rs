@@ -449,6 +449,172 @@ async fn a_bulk_load_scope_defers_the_index_and_rebuilds_it_at_the_end() {
     .await;
 }
 
+/// [`PgVectorAdapter::from_connection`] wraps a pool whose connect options this
+/// adapter never chose, so the session tuning [`PgVectorAdapter::new`] applies
+/// there has to ride in per statement instead. Two things that only a server can
+/// answer:
+///
+/// - the statements **parse**. A `SET LOCAL` of a GUC the server does not define
+///   is an `ERROR` that aborts the transaction, and pgvector reserves the `hnsw`
+///   prefix — so a wrong name or value here does not degrade a search, it fails
+///   every one of them on this constructor. A unit test over the strings cannot
+///   see that.
+/// - every search path is covered. The three that run SQL of their own are
+///   `search_similar`, `search_similar_filtered` (which took no settings at all
+///   before, and is the measured case for `force_custom_plan`) and
+///   `batch_search_similar`; `retrieve` is an id lookup with no ANN levers to
+///   set. All of them must answer exactly what the `new()`-built adapter does.
+#[tokio::test]
+async fn a_caller_owned_connection_answers_every_search_the_same_way() {
+    with_temp_db(
+        "a_caller_owned_connection_answers_every_search_the_same_way",
+        |url| async move {
+            use serde_json::json;
+            let owned = PgVectorAdapter::new(&url, 4).await.unwrap();
+            owned.create_collection("Shared", "f", 4).await.unwrap();
+
+            // Distinct distances, and half the rows in the `alpha` NodeSet so
+            // the filtered search has something to prefilter.
+            let points: Vec<_> = (0..300u32)
+                .map(|i| {
+                    #[allow(clippy::cast_possible_truncation)]
+                    let jitter = (f64::from(i) * 1e-4) as f32;
+                    let p = crate::models::VectorPoint::new(
+                        uuid::Uuid::from_u128(0x5A_0000 + u128::from(i)),
+                        vec![1.0, jitter, 0.0, 0.0],
+                    );
+                    if i % 2 == 0 {
+                        p.with_metadata("belongs_to_set", json!(["alpha"]))
+                    } else {
+                        p.with_metadata("belongs_to_set", json!(["beta"]))
+                    }
+                })
+                .collect();
+            owned.index_points("Shared", "f", &points).await.unwrap();
+
+            // The caller's pool: no `hnsw.*`, no `plan_cache_mode`.
+            let caller_owned = Database::connect(&url).await.unwrap();
+            let shared = PgVectorAdapter::from_connection(caller_owned.clone(), 4)
+                .await
+                .expect("from_connection");
+            assert!(
+                !shared.tuned_sessions,
+                "the premise: this adapter knows it did not open the pool"
+            );
+
+            // The settings themselves, through the very wrapper the searches
+            // use: they parse (a `SET LOCAL` of a GUC under pgvector's reserved
+            // `hnsw` prefix that it does not define is an ERROR, and that is
+            // what only a server can tell us), and they are in effect for the
+            // statement that follows them in the transaction.
+            assert!(
+                shared.iterative_scan,
+                "the suite runs on pgvector 0.8+, where hnsw.iterative_scan exists"
+            );
+            let locals = PgVectorAdapter::ann_search_locals(
+                shared.tuned_sessions,
+                shared.iterative_scan,
+                100,
+            )
+            .expect("a caller-owned connection always needs its settings");
+            let applied = shared
+                .query_all_with_locals(
+                    &locals,
+                    Statement::from_string(
+                        DatabaseBackend::Postgres,
+                        "SELECT current_setting('hnsw.ef_search') AS ef, \
+                                current_setting('hnsw.iterative_scan') AS it, \
+                                current_setting('plan_cache_mode') AS pc"
+                            .to_string(),
+                    ),
+                )
+                .await
+                .expect("the SET LOCALs must parse on the server");
+            let row = applied.first().expect("one row");
+            assert_eq!(row.try_get::<String>("", "ef").unwrap(), "200");
+            assert_eq!(
+                row.try_get::<String>("", "it").unwrap(),
+                "relaxed_order",
+                "without this an HNSW scan whose beam runs dry silently returns \
+                 fewer than top_k rows"
+            );
+            assert_eq!(
+                row.try_get::<String>("", "pc").unwrap(),
+                "force_custom_plan",
+                "without this the filtered search costs its NodeSet array blind"
+            );
+
+            let query = vec![1.0, 0.0, 0.0, 0.0];
+            let ids = |hits: &[crate::models::SearchResult]| -> Vec<uuid::Uuid> {
+                hits.iter().map(|h| h.id).collect()
+            };
+
+            // An ordinary ANN search, and one past HNSW_EF_SEARCH_MAX, where the
+            // locals also force the exact scan.
+            for top_k in [100usize, super::HNSW_EF_SEARCH_MAX + 1] {
+                let mine = owned
+                    .search_similar("Shared", "f", &query, top_k)
+                    .await
+                    .unwrap();
+                let theirs = shared
+                    .search_similar("Shared", "f", &query, top_k)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    ids(&theirs),
+                    ids(&mine),
+                    "a top-{top_k} search must not depend on which constructor \
+                     opened the connection"
+                );
+            }
+
+            let names = ["alpha".to_string()];
+            let mine = owned
+                .search_similar_filtered("Shared", "f", &query, 50, Some(&names), "OR")
+                .await
+                .unwrap();
+            let theirs = shared
+                .search_similar_filtered("Shared", "f", &query, 50, Some(&names), "OR")
+                .await
+                .unwrap();
+            assert_eq!(
+                ids(&theirs),
+                ids(&mine),
+                "the filtered search is the path force_custom_plan exists for, \
+                 and the one that carried no settings at all"
+            );
+            assert_eq!(theirs.len(), 50, "150 rows are in the alpha set");
+
+            let batch = vec![query.clone(), vec![0.0, 1.0, 0.0, 0.0]];
+            let mine = owned
+                .batch_search_similar("Shared", "f", &batch, 20)
+                .await
+                .unwrap();
+            let theirs = shared
+                .batch_search_similar("Shared", "f", &batch, 20)
+                .await
+                .unwrap();
+            assert_eq!(
+                theirs.iter().map(|b| ids(b)).collect::<Vec<_>>(),
+                mine.iter().map(|b| ids(b)).collect::<Vec<_>>(),
+                "every LATERAL subquery needs the same settings as a single search"
+            );
+
+            // A no-op for a caller-owned connection, by contract — the caller's
+            // pool must still be usable afterwards.
+            shared.close().await.unwrap();
+            assert_eq!(
+                shared.collection_size("Shared", "f").await.unwrap(),
+                300,
+                "close() must not have touched the caller's pool"
+            );
+            drop(caller_owned);
+            owned.close().await.unwrap();
+        },
+    )
+    .await;
+}
+
 /// The bulk-load contract — [`VectorDB::begin_bulk_load`] calls itself "a hint,
 /// never a semantic change", with searches "served by exact scan meanwhile" —
 /// held against the fp16 candidate order of

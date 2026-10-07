@@ -36,10 +36,16 @@ Notes:
   larger `LIMIT` is otherwise silently unmet) and runs with
   `hnsw.iterative_scan = relaxed_order`, which keeps scanning until the `LIMIT`
   is met over dead tuples and tightly clustered vectors.
-  **Two pgvector version floors, and only one of them is harmless.**
-  `hnsw.iterative_scan` needs pgvector 0.8+, but it is a plain GUC name: an
-  older server ignores the unknown placeholder setting and simply does not
-  iterate. `halfvec` is not like that — the *type* arrives in pgvector 0.7.0,
+  **Two pgvector version floors, both probed.** `hnsw.iterative_scan` needs
+  pgvector 0.8+. On a pool the adapter opens itself it is a connection *option*,
+  applied before any extension library loads, so an older server turns it into a
+  placeholder that is dropped with a warning and simply does not iterate. A
+  connection handed in by the caller (`from_connection`) has no such hook: the
+  searches apply the setting themselves with `SET LOCAL`, and because pgvector
+  marks the `hnsw.` GUC prefix reserved, an older extension answers *that* with
+  `unrecognized configuration parameter` — an error that would fail the search
+  instead of merely not iterating. So the version decides whether the setting is
+  sent at all. `halfvec` is a harder floor still — the *type* arrives in 0.7.0,
   and below it `vector::halfvec(n)` does not parse, so the index build fails
   and every similarity search errors with `type "halfvec" does not exist`.
   `CREATE EXTENSION IF NOT EXISTS vector` does not help, because it is a no-op
