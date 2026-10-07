@@ -305,11 +305,16 @@ impl PgVectorAdapter {
         opts.map_sqlx_postgres_opts(|o| {
             o.options([
                 ("hnsw.ef_search", HNSW_EF_SEARCH_SESSION.to_string()),
-                // pgvector 0.8+: when dead or filtered tuples leave an index
-                // scan short of its LIMIT, keep scanning (in exact distance
-                // order) instead of silently returning fewer rows. Older
-                // pgvector ignores the unknown placeholder setting.
-                ("hnsw.iterative_scan", "strict_order".to_string()),
+                // pgvector 0.8+: when the beam runs dry before the LIMIT —
+                // dead tuples after deletes, or a degenerate graph over
+                // near-identical vectors (the `a_search_returns_top_k_rows…`
+                // test: 33 of 100 rows at ef_search = 200 with the scan off
+                // *and* with `strict_order`) — keep scanning instead of
+                // silently returning fewer rows. `relaxed_order` may emit
+                // rows slightly out of distance order, so the searches
+                // re-sort their (at most `top_k`) rows. Older pgvector
+                // ignores the unknown placeholder setting.
+                ("hnsw.iterative_scan", "relaxed_order".to_string()),
                 // Custom plans: sqlx caches each prepared statement per
                 // connection, and a generic plan cannot see the NodeSet
                 // array of `search_similar_filtered`, so it costs the GIN
@@ -1488,11 +1493,15 @@ impl VectorDB for PgVectorAdapter {
         // literal keeps the generic plan on the index. `top_k` is a `usize`,
         // so interpolating it carries no injection risk.
         let limit = i64::try_from(top_k).unwrap_or(i64::MAX);
+        // The outer ORDER BY restores exact distance order over the (at most
+        // `top_k`) rows an iterative `relaxed_order` scan returns.
         let sql = format!(
-            r#"SELECT id, 1 - (vector <=> $1::vector) AS score, metadata
-               FROM "{coll}"
-               ORDER BY vector <=> $1::vector
-               LIMIT {limit}"#
+            r#"SELECT id, score, metadata FROM (
+                 SELECT id, 1 - (vector <=> $1::vector) AS score, metadata
+                 FROM "{coll}"
+                 ORDER BY vector <=> $1::vector
+                 LIMIT {limit}) r
+               ORDER BY score DESC"#
         );
 
         // `ef_search` must cover `top_k`, or the index scan ends early and the
