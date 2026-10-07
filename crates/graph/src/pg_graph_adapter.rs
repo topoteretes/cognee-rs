@@ -41,10 +41,17 @@ const WRITE_BATCH: usize = 5000;
 /// Ids per `= ANY($1::text[])` array parameter on the read/delete paths.
 const ID_BATCH: usize = 20_000;
 
-/// Nodes of the materialized id-set CTE `ids` plus the edges induced on it,
-/// read through the source-side index and joined against the set on the
-/// target. Best for small sets (index nested loops throughout). Rows are
-/// discriminated by `kind`; see [`PgGraphAdapter::subgraph_query`].
+/// Nodes of the materialized id-set CTE `ids` plus the edges induced on it:
+/// each id's outgoing edges through the source-side index (a `LATERAL`
+/// subquery, fenced with `OFFSET 0`, so it is always a per-id index probe),
+/// kept when the target is in the set. Rows are discriminated by `kind`; see
+/// [`PgGraphAdapter::subgraph_query`].
+///
+/// The plain `ids JOIN graph_edge JOIN ids` form leaves the choice to the
+/// planner, which cannot estimate a materialized CTE's size well and picked
+/// a sequential scan of `graph_edge` plus hash joins for a 10-seed
+/// neighbourhood (88 ids): 3.3-3.9 ms vs 1.8-2.1 ms for this form on a 10k
+/// store, and the scan grows with the whole edge table.
 const INDUCED_SUBGRAPH: &str = "\
     SELECT 'node' AS kind, n.id, n.name, n.type, n.properties, \
            NULL::text AS source_id, NULL::text AS target_id, \
@@ -53,7 +60,9 @@ const INDUCED_SUBGRAPH: &str = "\
     UNION ALL \
     SELECT 'edge', NULL, NULL, NULL, NULL, \
            e.source_id, e.target_id, e.relationship_name, e.properties \
-    FROM ids a JOIN graph_edge e ON e.source_id = a.id JOIN ids b ON e.target_id = b.id";
+    FROM ids a CROSS JOIN LATERAL \
+         (SELECT * FROM graph_edge x WHERE x.source_id = a.id OFFSET 0) e \
+    WHERE e.target_id IN (SELECT id FROM ids)";
 
 /// [`INDUCED_SUBGRAPH`] with the edge half as two `IN (SELECT id FROM ids)`
 /// semi-joins. For large id sets (hundreds of seeds, thousands of ids) the
