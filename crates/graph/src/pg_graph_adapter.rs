@@ -1585,34 +1585,14 @@ impl GraphDBTrait for PgGraphAdapter {
         metrics.insert(Cow::Borrowed("mean_degree"), json!(mean_degree));
         metrics.insert(Cow::Borrowed("edge_density"), json!(edge_density));
 
-        // Connected components via recursive CTE (raw SQL — not expressible in sea_query)
-        let comp_rows = self
-            .db
-            .query_all(Statement::from_string(
-                DatabaseBackend::Postgres,
-                "WITH RECURSIVE component AS ( \
-                     SELECT id AS node_id, id AS comp_root FROM graph_node \
-                     UNION \
-                     SELECT CASE WHEN e.source_id = c.node_id THEN e.target_id ELSE e.source_id END, \
-                            c.comp_root \
-                     FROM component c \
-                     JOIN graph_edge e ON e.source_id = c.node_id OR e.target_id = c.node_id \
-                 ), \
-                 node_comp AS ( \
-                     SELECT node_id, MIN(comp_root) AS comp_id FROM component GROUP BY node_id \
-                 ) \
-                 SELECT comp_id, count(*) AS sz FROM node_comp GROUP BY comp_id ORDER BY sz DESC"
-                    .to_string(),
-            ))
-            .await
-            .map_err(|e| GraphDBError::QueryError(e.to_string()))?;
-
-        let component_sizes: Vec<Value> = comp_rows
-            .iter()
-            .filter_map(|r| {
-                let sz: i64 = r.try_get("", "sz").ok()?;
-                Some(json!(sz))
-            })
+        // Connected components by one streaming union-find pass over the
+        // node and edge keys (O(V + E)); the recursive CTE this replaces
+        // materialised every (node, reachable root) pair and did not finish
+        // within minutes on a 10k-node cognify graph.
+        let component_sizes: Vec<Value> = components::component_sizes(&self.db)
+            .await?
+            .into_iter()
+            .map(|size| json!(size))
             .collect();
         let num_components = component_sizes.len();
 
@@ -1934,6 +1914,147 @@ impl GraphDBTrait for PgGraphAdapter {
              ids AS MATERIALIZED (SELECT id FROM seeds {expand}) {induced}"
         );
         self.subgraph_query(&sql, vec![ids.into()]).await
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Connected components (streaming union-find)
+// ---------------------------------------------------------------------------
+
+/// Connected components by streaming union-find: node and edge keys are
+/// streamed once and unioned client-side, O(V + E) time and O(V) memory,
+/// always consistent with the tables.
+///
+/// Keys travel as 64-bit `hashtextextended` values (16 bytes per edge instead
+/// of two text ids); a hash collision among node ids is detected while
+/// building the index, and the pass is then redone with the ids themselves.
+mod components {
+    use std::collections::HashMap;
+    use std::collections::hash_map::Entry;
+    use std::hash::Hash;
+
+    use futures::TryStreamExt;
+    use sea_orm::{DatabaseBackend, DatabaseConnection, Statement, StreamTrait, TryGetable};
+
+    use crate::error::{GraphDBError, GraphDBResult};
+
+    struct UnionFind {
+        parent: Vec<u32>,
+        size: Vec<u32>,
+    }
+
+    impl UnionFind {
+        fn new(n: u32) -> Self {
+            Self {
+                parent: (0..n).collect(),
+                size: vec![1; n as usize],
+            }
+        }
+
+        fn find(&mut self, mut x: u32) -> u32 {
+            while self.parent[x as usize] != x {
+                let p = self.parent[x as usize];
+                self.parent[x as usize] = self.parent[p as usize];
+                x = p;
+            }
+            x
+        }
+
+        fn union(&mut self, a: u32, b: u32) {
+            let (mut ra, mut rb) = (self.find(a), self.find(b));
+            if ra == rb {
+                return;
+            }
+            if self.size[ra as usize] < self.size[rb as usize] {
+                std::mem::swap(&mut ra, &mut rb);
+            }
+            self.parent[rb as usize] = ra;
+            self.size[ra as usize] += self.size[rb as usize];
+        }
+    }
+
+    fn scan_err(e: impl std::fmt::Display) -> GraphDBError {
+        GraphDBError::QueryError(format!("connected-components scan failed: {e}"))
+    }
+
+    /// Component sizes, largest first; `None` if two node keys collided.
+    async fn sizes_by<K>(
+        db: &DatabaseConnection,
+        node_sql: &str,
+        edge_sql: &str,
+    ) -> GraphDBResult<Option<Vec<i64>>>
+    where
+        K: TryGetable + Eq + Hash,
+    {
+        let mut index: HashMap<K, u32> = HashMap::new();
+        {
+            let mut nodes = db
+                .stream(Statement::from_string(
+                    DatabaseBackend::Postgres,
+                    node_sql.to_string(),
+                ))
+                .await
+                .map_err(scan_err)?;
+            while let Some(row) = nodes.try_next().await.map_err(scan_err)? {
+                let key: K = row.try_get("", "k").map_err(scan_err)?;
+                let next = u32::try_from(index.len()).map_err(scan_err)?;
+                match index.entry(key) {
+                    Entry::Occupied(_) => return Ok(None),
+                    Entry::Vacant(v) => {
+                        v.insert(next);
+                    }
+                }
+            }
+        }
+        let n = u32::try_from(index.len()).map_err(scan_err)?;
+        let mut uf = UnionFind::new(n);
+        {
+            let mut edges = db
+                .stream(Statement::from_string(
+                    DatabaseBackend::Postgres,
+                    edge_sql.to_string(),
+                ))
+                .await
+                .map_err(scan_err)?;
+            while let Some(row) = edges.try_next().await.map_err(scan_err)? {
+                let s: K = row.try_get("", "s").map_err(scan_err)?;
+                let t: K = row.try_get("", "t").map_err(scan_err)?;
+                // Endpoints always exist (foreign keys); skip defensively.
+                if let (Some(&a), Some(&b)) = (index.get(&s), index.get(&t)) {
+                    uf.union(a, b);
+                }
+            }
+        }
+        let mut sizes: Vec<i64> = Vec::new();
+        for i in 0..n {
+            if uf.find(i) == i {
+                sizes.push(i64::from(uf.size[i as usize]));
+            }
+        }
+        sizes.sort_unstable_by(|a, b| b.cmp(a));
+        Ok(Some(sizes))
+    }
+
+    /// Sizes of the connected components of the (undirected) graph, largest
+    /// first — the recursive-CTE query's `ORDER BY sz DESC` result.
+    pub(super) async fn component_sizes(db: &DatabaseConnection) -> GraphDBResult<Vec<i64>> {
+        if let Some(sizes) = sizes_by::<i64>(
+            db,
+            "SELECT hashtextextended(id, 0) AS k FROM graph_node",
+            "SELECT hashtextextended(source_id, 0) AS s, \
+                    hashtextextended(target_id, 0) AS t FROM graph_edge",
+        )
+        .await?
+        {
+            return Ok(sizes);
+        }
+        sizes_by::<String>(
+            db,
+            "SELECT id AS k FROM graph_node",
+            "SELECT source_id AS s, target_id AS t FROM graph_edge",
+        )
+        .await?
+        .ok_or_else(|| GraphDBError::QueryError("duplicate graph_node ids".to_string()))
     }
 }
 

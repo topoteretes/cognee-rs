@@ -43,6 +43,8 @@ sea-orm = { version = "1.1", features = [
 sea-orm-migration = { version = "1.1", features = [
     "runtime-tokio-rustls",
 ], optional = true }
+# Row streams (`TryStreamExt`) for the connected-components scan.
+futures = { workspace = true, optional = true }
 
 # Internal dependencies
 cognee-models = { path = "../models", version = "0.2.0" }
@@ -50,7 +52,7 @@ cognee-utils = { path = "../utils", version = "0.2.0" }
 
 [features]
 ladybug = ["dep:lbug"]
-postgres = ["dep:sea-orm", "dep:sea-orm-migration"]
+postgres = ["dep:sea-orm", "dep:sea-orm-migration", "dep:futures"]
 testing = []
 
 # Integration tests whose whole file is behind a `#![cfg(feature = ...)]`.
