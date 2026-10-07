@@ -517,6 +517,58 @@ mod halfvec_gate_tests {
     }
 }
 
+/// Cases for which searches may select candidates in half precision.
+///
+/// No feature and no database: the decision is a pure function of the
+/// dimension, the `top_k` and whether `halfvec` exists at all. What it protects
+/// is the two paths this adapter and `docs/tools/backends.md` both declare
+/// *exact*, where an fp16 ordering would reorder rows at the `LIMIT` boundary
+/// and the outer `ORDER BY score DESC` would not notice — it only re-sorts a
+/// candidate set already chosen.
+#[cfg(test)]
+mod candidate_order_tests {
+    use super::{HNSW_EF_SEARCH_MAX, MAX_INDEXABLE_DIMENSION, PgVectorAdapter};
+
+    fn is_fp16(dim: usize, top_k: usize, halfvec: bool) -> bool {
+        PgVectorAdapter::candidate_order_expr("$1", dim, top_k, halfvec).contains("halfvec")
+    }
+
+    #[test]
+    fn half_precision_selection_is_confined_to_the_indexable_searches() {
+        // The ordinary case, and the two boundaries that still have an index.
+        assert!(is_fp16(384, 100, true), "the indexed path selects in fp16");
+        assert!(
+            is_fp16(MAX_INDEXABLE_DIMENSION, 100, true),
+            "the widest indexable collection is still indexed"
+        );
+        assert!(
+            is_fp16(384, HNSW_EF_SEARCH_MAX, true),
+            "the largest top_k an ef_search can cover still uses the index"
+        );
+
+        // Past the index ceiling pgvector cannot index the collection at all,
+        // so the search is the sequential scan the docs call exact.
+        assert!(
+            !is_fp16(MAX_INDEXABLE_DIMENSION + 1, 100, true),
+            "a collection over the index ceiling must be ordered exactly"
+        );
+        assert!(
+            !is_fp16(3072, 100, true),
+            "text-embedding-3-large is the real case of that"
+        );
+
+        // Past HNSW_EF_SEARCH_MAX, `ann_search_locals` forces the exact scan
+        // precisely to guarantee the true top-k; fp16 would spoil it.
+        assert!(
+            !is_fp16(384, HNSW_EF_SEARCH_MAX + 1, true),
+            "a top_k that forces the exact scan must be ordered exactly"
+        );
+
+        // And without the type there is no fp16 expression to emit.
+        assert!(!is_fp16(384, 100, false));
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Table / column identifiers for sea_query (`_vector_collections`)
 // ---------------------------------------------------------------------------
@@ -1066,18 +1118,35 @@ impl PgVectorAdapter {
     }
 
     /// The `ORDER BY` expression an ANN similarity search selects candidates
-    /// with, over `coll`'s `dim`-dimensional vectors, against the bound query
+    /// with, over `dim`-dimensional vectors at `top_k`, against the bound query
     /// vector `param` (`"$1"`, or a correlated column on the batch path).
     ///
-    /// Half-precision when the installed pgvector has `halfvec`: it matches the
-    /// `halfvec_cosine_ops` index and costs ~0.1% of the distance, which only
-    /// candidate *selection* sees (the score is always the full-precision
-    /// `<=>`). Below [`HALFVEC_MIN_VERSION`] there is no `halfvec` type at all,
-    /// so the expression has to be the plain `vector` one — matching the
-    /// `vector_cosine_ops` index [`Self::vector_index_ddl`] builds on that
-    /// version — or every search fails to parse.
-    fn candidate_order_expr(&self, param: &str, dim: usize) -> String {
-        if self.halfvec {
+    /// Half-precision **only where an HNSW index can actually be used**. The
+    /// fp16 cast exists to match the `halfvec_cosine_ops` index; it costs ~0.1%
+    /// of the distance, which is a fine trade against an approximate index but
+    /// not against a path this adapter *declares exact*, where it would reorder
+    /// rows at the `LIMIT` boundary for nothing. The outer `ORDER BY score DESC`
+    /// does not repair that — it only re-sorts a candidate set already chosen.
+    /// Three cases, and in all three the plain `vector <=> …` is both exact and
+    /// no slower, because there is no index to match:
+    ///
+    /// - `dim > MAX_INDEXABLE_DIMENSION`: pgvector cannot index the collection,
+    ///   so it is on the sequential scan `backends.md` promises returns the true
+    ///   top k.
+    /// - `top_k > HNSW_EF_SEARCH_MAX`: [`Self::ann_search_locals`] deliberately
+    ///   returns [`Self::exact_scan_locals`] to guarantee the true top-k, which
+    ///   an fp16 ordering would then quietly spoil at the boundary.
+    /// - No `halfvec` type at all (pgvector below [`HALFVEC_MIN_VERSION`]),
+    ///   where the index is the full-precision one and the cast would not even
+    ///   parse.
+    ///
+    /// Residual, not covered here: a collection whose index is dropped for a
+    /// bulk-load scope, or was never built, also answers by exact scan while
+    /// still being ordered in fp16. Both are per-collection, dynamic and
+    /// visible only to the writer, so a search cannot cheaply know; the
+    /// deviation is the same ~0.1% boundary effect.
+    fn candidate_order_expr(param: &str, dim: usize, top_k: usize, halfvec: bool) -> String {
+        if halfvec && dim <= MAX_INDEXABLE_DIMENSION && top_k <= HNSW_EF_SEARCH_MAX {
             format!("vector::halfvec({dim}) <=> {param}::halfvec({dim})")
         } else {
             format!("vector <=> {param}::vector")
@@ -2177,7 +2246,7 @@ impl VectorDB for PgVectorAdapter {
         let dim = query_vector.len();
         // The outer ORDER BY restores exact distance order over the (at most
         // `top_k`) rows an iterative `relaxed_order` scan returns.
-        let order = self.candidate_order_expr("$1", dim);
+        let order = Self::candidate_order_expr("$1", dim, top_k, self.halfvec);
         let sql = format!(
             r#"SELECT id, score, metadata FROM (
                  SELECT id, 1 - (vector <=> $1::vector) AS score, metadata
@@ -2397,7 +2466,7 @@ impl VectorDB for PgVectorAdapter {
             .map(|v| format!("'{}'::vector", Self::format_vector(v)))
             .collect::<Vec<_>>()
             .join(", ");
-        let order = self.candidate_order_expr("q.vec", dim);
+        let order = Self::candidate_order_expr("q.vec", dim, top_k, self.halfvec);
 
         let sql = format!(
             r#"SELECT q.idx AS idx, t.id AS id, t.score AS score, t.metadata AS metadata
