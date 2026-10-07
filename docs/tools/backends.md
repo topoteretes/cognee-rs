@@ -60,9 +60,21 @@ Notes:
   Three exceptions, and in all three the candidate ordering drops back to
   full-precision `vector` too, because there is no fp16 index to match and the
   scan is one the adapter declares exact: collections wider than 2000 dimensions
-  cannot be indexed by pgvector at all; a `top_k` above 1000 exceeds the largest
-  `ef_search` pgvector accepts; and a collection whose index is dropped for a
-  bulk-load scope (see *bulk loads* below) is indexless until the scope ends.
+  are not indexed; a `top_k` above 1000 exceeds the largest `ef_search` pgvector
+  accepts; and a collection whose index is dropped for a bulk-load scope (see
+  *bulk loads* below) is indexless until the scope ends.
+  The 2000-dimension ceiling is **this adapter's choice, not pgvector's limit**:
+  2000 is the cap for the `vector` opclasses, while the half-precision
+  expression index this adapter builds allows 4000, so
+  `text-embedding-3-large` at 3072 could be indexed. It is not, because at that
+  width the index is not the faster plan — measured on pgvector 0.8.2 over 3 000
+  rows of uniform random 3072-d vectors, a top-100 exact scan took 15.4-16.0 ms
+  against the HNSW index's 22.5 ms, for a 25.3 s build and 23 MB. Real
+  embeddings cluster better than uniform random ones, so that is a floor rather
+  than a verdict; raising the ceiling is a benchmark against a real 3072-d
+  corpus, and in the code it is one predicate
+  (`PgVectorAdapter::is_indexable_dimension`) that every gate reads, so it moves
+  in one place or not at all.
   `search_similar_filtered` stays **exact** filter-then-limit, but no longer by
   disabling index scans: each collection carries a GIN index over
   `cognee_vector_set_names(metadata)`, an `IMMUTABLE` function with

@@ -13,8 +13,9 @@
 //!
 //! Two deliberate exceptions:
 //!
-//! - Collections wider than [`MAX_INDEXABLE_DIMENSION`] cannot be indexed by
-//!   pgvector and keep the exact scan.
+//! - Collections wider than [`MAX_INDEXABLE_DIMENSION`] are not indexed and
+//!   keep the exact scan — a deliberate ceiling rather than a pgvector one; see
+//!   the constant.
 //! - [`VectorDB::search_similar_filtered`] forces the exact scan, because
 //!   pgvector post-filters an index scan and that would break the
 //!   filter-then-limit guarantee that path exists to provide. See the comment
@@ -113,10 +114,41 @@ const HNSW_M: u32 = 24;
 /// [`HNSW_M`]. `COGNEE_PGVECTOR_HNSW_EF_CONSTRUCTION` overrides it.
 const HNSW_EF_CONSTRUCTION: u32 = 128;
 
-/// pgvector cannot index a `vector` wider than 2000 dimensions — the index
-/// tuple would not fit in a page. `text-embedding-3-large` at 3072 is over the
-/// line, so a collection that wide keeps the exact scan and says so, rather
-/// than failing `create_collection` outright.
+/// Widest collection this adapter builds an HNSW index for; above it a
+/// collection keeps the exact scan and says so, rather than failing
+/// `create_collection` outright. Read only through
+/// [`PgVectorAdapter::is_indexable_dimension`], so that every gate — index
+/// creation, the candidate ordering, and the three bulk-load branches of
+/// `upsert_points` — makes the same decision. They have to agree: a collection
+/// ordered in fp16 for an index that was never built is the one combination
+/// that changes results rather than only latency.
+///
+/// 2000 is pgvector's limit for the `vector` opclasses, not for this adapter's
+/// index. The half-precision expression index allows **4000** — verified on
+/// 0.8.2, where `CREATE INDEX … USING hnsw ((v::halfvec(3072))
+/// halfvec_cosine_ops)` succeeds and the same statement over `vector
+/// vector_cosine_ops` fails with `column cannot have more than 2000
+/// dimensions` — so `text-embedding-3-large` at 3072 *could* be indexed here.
+/// It is deliberately not, because at that width the index is not the faster
+/// plan. Measured on this machine, pgvector 0.8.2, 3 000 rows of uniform
+/// random 3072-d vectors, `m = 24 / ef_construction = 128`, top-100 at
+/// `hnsw.ef_search = 200`:
+///
+/// | | exact scan | halfvec HNSW |
+/// |---|---|---|
+/// | top-100 latency | 15.4-16.0 ms | 22.5 ms |
+/// | build | — | 25.3 s (7 workers) |
+/// | size | 63 MB heap+TOAST | +23 MB |
+///
+/// An `ef_search` of 200 is 200 3072-d distance computations plus a random-access
+/// graph walk, against a tight sequential pass over 3 000 vectors — so the index
+/// loses outright at this size, and the crossover is far further out than the
+/// 384-d one. Uniform random vectors are also the worst case for HNSW, so real
+/// embeddings would do better than this; what the numbers rule out is raising
+/// the ceiling *blind*, which is all this comment used to invite. Raising it is
+/// a benchmark against a real 3072-d corpus, not a constant edit — and it must
+/// move [`PgVectorAdapter::is_indexable_dimension`] alone, never the gates
+/// individually.
 const MAX_INDEXABLE_DIMENSION: usize = 2000;
 
 /// pgvector's own default `hnsw.ef_search`.
@@ -751,6 +783,42 @@ mod candidate_order_tests {
 
         // And without the type there is no fp16 expression to emit.
         assert!(!is_fp16(384, 100, false));
+    }
+
+    /// The index ceiling is one decision, read through one predicate.
+    ///
+    /// `is_indexable_dimension` is what index creation, the bulk-load branches
+    /// of `upsert_points` and the ordering below all call, so they cannot
+    /// disagree by construction — this pins the boundary itself, and that the
+    /// ordering really does follow the predicate rather than a second copy of
+    /// the constant. The failure it rules out is the one that changes results
+    /// rather than latency: a collection ordered in fp16 for an index that was
+    /// never built.
+    #[test]
+    fn the_index_ceiling_is_a_single_shared_decision() {
+        for dim in [
+            1,
+            384,
+            1536,
+            MAX_INDEXABLE_DIMENSION - 1,
+            MAX_INDEXABLE_DIMENSION,
+        ] {
+            assert!(PgVectorAdapter::is_indexable_dimension(dim), "{dim}");
+            assert!(
+                is_fp16(dim, 100, true),
+                "{dim} is indexed, so its candidates must be selected in fp16"
+            );
+        }
+        // 3072 is `text-embedding-3-large`; 4000 is pgvector's own halfvec
+        // ceiling, above this adapter's deliberate one either way.
+        for dim in [MAX_INDEXABLE_DIMENSION + 1, 3072, 4000, 4001] {
+            assert!(!PgVectorAdapter::is_indexable_dimension(dim), "{dim}");
+            assert!(
+                !is_fp16(dim, 100, true),
+                "{dim} is not indexed, so ordering it in fp16 would move rows \
+                 across the LIMIT boundary for nothing"
+            );
+        }
     }
 
     /// The bulk-load case, which `VectorDB::begin_bulk_load` calls "a hint,
@@ -1899,9 +1967,9 @@ impl PgVectorAdapter {
     /// Four cases, and in all four the plain `vector <=> …` is no slower,
     /// because there is no *fp16* index to match:
     ///
-    /// - `dim > MAX_INDEXABLE_DIMENSION`: pgvector cannot index the collection,
-    ///   so it is on the sequential scan `backends.md` promises returns the true
-    ///   top k.
+    /// - `dim > MAX_INDEXABLE_DIMENSION`: this adapter does not index a
+    ///   collection that wide, so it is on the sequential scan `backends.md`
+    ///   promises returns the true top k.
     /// - `top_k > HNSW_EF_SEARCH_MAX`: [`Self::ann_search_locals`] deliberately
     ///   returns [`Self::exact_scan_locals`] to guarantee the true top-k, which
     ///   an fp16 ordering would then quietly spoil at the boundary.
@@ -1942,11 +2010,26 @@ impl PgVectorAdapter {
         halfvec: bool,
         indexless: bool,
     ) -> String {
-        if halfvec && !indexless && dim <= MAX_INDEXABLE_DIMENSION && top_k <= HNSW_EF_SEARCH_MAX {
+        if halfvec && !indexless && Self::is_indexable_dimension(dim) && top_k <= HNSW_EF_SEARCH_MAX
+        {
             format!("vector::halfvec({dim}) <=> {param}::halfvec({dim})")
         } else {
             format!("vector <=> {param}::vector")
         }
+    }
+
+    /// Whether a `dim`-dimensional collection gets an HNSW index at all — the
+    /// single gate every path reads, so index creation, the candidate ordering
+    /// and the bulk-load branches can never disagree about it.
+    ///
+    /// The ceiling and the measurements behind it are on
+    /// [`MAX_INDEXABLE_DIMENSION`]. Keeping this one predicate is what makes
+    /// raising it a one-line change instead of a search for the gate that was
+    /// missed: an unindexed collection ordered in fp16 would silently reorder
+    /// rows at the `LIMIT` boundary, and an indexed one ordered in fp32 would
+    /// silently stop using its index.
+    const fn is_indexable_dimension(dim: usize) -> bool {
+        dim <= MAX_INDEXABLE_DIMENSION
     }
 
     /// `SET LOCAL` statements that force an exact scan, for the paths whose
@@ -2008,9 +2091,9 @@ impl PgVectorAdapter {
         concurrently: bool,
         halfvec: bool,
     ) -> VectorDBResult<bool> {
-        if dimension > MAX_INDEXABLE_DIMENSION {
+        if !Self::is_indexable_dimension(dimension) {
             debug!(
-                "collection {coll} is {dimension}-dimensional, over pgvector's \
+                "collection {coll} is {dimension}-dimensional, over this adapter's \
                  {MAX_INDEXABLE_DIMENSION}-d index ceiling — keeping the exact scan"
             );
             return Ok(false);
@@ -2450,13 +2533,13 @@ impl PgVectorAdapter {
 
         let dimension = points.first().map_or(0, |p| p.vector.len());
         self.note_bulk_write(coll);
-        if dimension <= MAX_INDEXABLE_DIMENSION && self.is_deferred(coll) {
+        if Self::is_indexable_dimension(dimension) && self.is_deferred(coll) {
             // Index dropped for the rest of this bulk load.
             return self
                 .write_points_concurrently(coll, points, merge_membership)
                 .await;
         }
-        if dimension <= MAX_INDEXABLE_DIMENSION
+        if Self::is_indexable_dimension(dimension)
             && self.bulk.lock().map(|b| b.depth > 0).unwrap_or(false)
         {
             let index = Self::vector_index_name(coll, self.halfvec);
@@ -2479,7 +2562,7 @@ impl PgVectorAdapter {
                     .await;
             }
         }
-        if points.len() >= HNSW_REBUILD_MIN_ROWS && dimension <= MAX_INDEXABLE_DIMENSION {
+        if points.len() >= HNSW_REBUILD_MIN_ROWS && Self::is_indexable_dimension(dimension) {
             let index = Self::vector_index_name(coll, self.halfvec);
             if Self::vector_index_state(&self.db, &index).await? == Some(true) {
                 return self
@@ -2487,7 +2570,7 @@ impl PgVectorAdapter {
                     .await;
             }
         }
-        if dimension <= MAX_INDEXABLE_DIMENSION {
+        if Self::is_indexable_dimension(dimension) {
             return self
                 .write_points_concurrently(coll, points, merge_membership)
                 .await;
