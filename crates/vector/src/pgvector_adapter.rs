@@ -28,7 +28,8 @@ use sea_orm::sea_query::{
     Alias, Asterisk, Expr, Func, Iden, OnConflict, Order, PostgresQueryBuilder, Query, Table,
 };
 use sea_orm::{
-    ConnectionTrait, Database, DatabaseBackend, DatabaseConnection, Statement, TransactionTrait,
+    ConnectOptions, ConnectionTrait, Database, DatabaseBackend, DatabaseConnection, Statement,
+    TransactionTrait,
 };
 use sea_orm_migration::MigratorTrait;
 use std::collections::HashMap;
@@ -119,6 +120,12 @@ const MAX_INDEXABLE_DIMENSION: usize = 2000;
 /// `DEFAULT_WIDE_SEARCH_TOP_K = 100`, so leaving this at 40 would quietly drop
 /// 60% of every graph-completion, triplet and temporal seed set.
 const HNSW_EF_SEARCH_DEFAULT: usize = 40;
+
+/// Session `hnsw.ef_search` on pools this adapter opens itself: covers
+/// cognee's `DEFAULT_WIDE_SEARCH_TOP_K = 100` searches without a per-query
+/// `SET LOCAL` transaction, and gives smaller `top_k` searches a wider
+/// candidate list than pgvector's default of 40 (higher recall).
+const HNSW_EF_SEARCH_SESSION: usize = 100;
 
 /// Largest `hnsw.ef_search` pgvector accepts. Beyond this a search cannot be
 /// made to return `top_k` rows by raising `ef_search`, so those queries fall
@@ -232,6 +239,11 @@ pub struct PgVectorAdapter {
     /// fix into an outage. Neither in-tree factory takes that path today, but
     /// both constructors are public API.
     owns_pool: bool,
+    /// Every pooled connection was opened with [`HNSW_EF_SEARCH_SESSION`] as
+    /// its session `hnsw.ef_search` (pools this adapter opens itself), so an
+    /// ANN search with `top_k` up to that runs as one plain statement instead
+    /// of `BEGIN; SET LOCAL …; SELECT; COMMIT`.
+    tuned_sessions: bool,
 }
 
 impl PgVectorAdapter {
@@ -245,7 +257,11 @@ impl PgVectorAdapter {
     ///   `postgres://user:pass@localhost:5432/mydb`
     /// * `dimension` — default vector dimension (e.g. 384 for BGE-Small)
     pub async fn new(database_url: &str, dimension: usize) -> VectorDBResult<Self> {
-        let db = Database::connect(database_url)
+        let mut opts = ConnectOptions::new(database_url.to_string());
+        opts.map_sqlx_postgres_opts(|o| {
+            o.options([("hnsw.ef_search", HNSW_EF_SEARCH_SESSION.to_string())])
+        });
+        let db = Database::connect(opts)
             .await
             .map_err(|e| VectorDBError::StorageError(format!("PGVector connect failed: {e}")))?;
 
@@ -259,6 +275,7 @@ impl PgVectorAdapter {
             db,
             dimension,
             owns_pool: true,
+            tuned_sessions: true,
         })
     }
 
@@ -277,6 +294,7 @@ impl PgVectorAdapter {
             db,
             dimension,
             owns_pool: false,
+            tuned_sessions: false,
         })
     }
 
@@ -383,12 +401,36 @@ impl PgVectorAdapter {
     /// guarantee `top_k` rows is to not use the index — which is the right
     /// trade at that size, since such a query is scanning most of the
     /// collection regardless.
-    fn ann_search_locals(top_k: usize) -> String {
+    ///
+    /// `None` when no setting is needed: this adapter's own pools open every
+    /// connection with `hnsw.ef_search = HNSW_EF_SEARCH_SESSION`, which
+    /// already covers any `top_k` up to that.
+    fn ann_search_locals(&self, top_k: usize) -> Option<String> {
         if top_k > HNSW_EF_SEARCH_MAX {
-            return Self::exact_scan_locals().to_string();
+            return Some(Self::exact_scan_locals().to_string());
+        }
+        if self.tuned_sessions && top_k <= HNSW_EF_SEARCH_SESSION {
+            return None;
         }
         let ef = top_k.max(HNSW_EF_SEARCH_DEFAULT);
-        format!("SET LOCAL hnsw.ef_search = {ef}")
+        Some(format!("SET LOCAL hnsw.ef_search = {ef}"))
+    }
+
+    /// [`Self::query_all_with_locals`] when `locals` is `Some`, else one plain
+    /// statement.
+    async fn query_all_maybe_locals(
+        &self,
+        locals: Option<String>,
+        stmt: Statement,
+    ) -> VectorDBResult<Vec<sea_orm::QueryResult>> {
+        match locals {
+            Some(locals) => self.query_all_with_locals(&locals, stmt).await,
+            None => self
+                .db
+                .query_all(stmt)
+                .await
+                .map_err(|e| VectorDBError::StorageError(e.to_string())),
+        }
     }
 
     /// `SET LOCAL` statements that force an exact scan, for the paths whose
@@ -1218,23 +1260,28 @@ impl VectorDB for PgVectorAdapter {
 
         // cosine distance `<=>` returns 0..2 (0 = identical).
         // Convert to similarity: score = 1 - distance.
+        // `LIMIT` is a literal, not a bind parameter: sqlx prepares and caches
+        // the statement, and after five executions Postgres may switch it to a
+        // generic plan, which has to cost `LIMIT $2` without knowing the value
+        // and assumes 10% of the table. From a few thousand rows that makes a
+        // sequential scan plus sort look cheaper than the HNSW index scan —
+        // measured 15–23 ms vs 1.7 ms on a 4 320-row Entity collection. A
+        // literal keeps the generic plan on the index. `top_k` is a `usize`,
+        // so interpolating it carries no injection risk.
+        let limit = i64::try_from(top_k).unwrap_or(i64::MAX);
         let sql = format!(
             r#"SELECT id, 1 - (vector <=> $1::vector) AS score, metadata
                FROM "{coll}"
                ORDER BY vector <=> $1::vector
-               LIMIT $2"#
+               LIMIT {limit}"#
         );
 
         // `ef_search` must cover `top_k`, or the index scan ends early and the
         // LIMIT is silently unmet — see `ann_search_locals`.
         let rows = self
-            .query_all_with_locals(
-                &Self::ann_search_locals(top_k),
-                Statement::from_sql_and_values(
-                    DatabaseBackend::Postgres,
-                    &sql,
-                    [vec_str.into(), (top_k as i64).into()],
-                ),
+            .query_all_maybe_locals(
+                self.ann_search_locals(top_k),
+                Statement::from_sql_and_values(DatabaseBackend::Postgres, &sql, [vec_str.into()]),
             )
             .await?;
 
@@ -1450,8 +1497,8 @@ impl VectorDB for PgVectorAdapter {
         // {top_k}`, so this path needs the same `ef_search` floor as
         // `search_similar` or every one of them ends early.
         let rows = self
-            .query_all_with_locals(
-                &Self::ann_search_locals(top_k),
+            .query_all_maybe_locals(
+                self.ann_search_locals(top_k),
                 Statement::from_string(DatabaseBackend::Postgres, sql),
             )
             .await?;
