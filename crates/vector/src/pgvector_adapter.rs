@@ -122,11 +122,16 @@ const MAX_INDEXABLE_DIMENSION: usize = 2000;
 /// 60% of every graph-completion, triplet and temporal seed set.
 const HNSW_EF_SEARCH_DEFAULT: usize = 40;
 
+/// Candidate-list size per requested row: an ANN search runs with
+/// `hnsw.ef_search = HNSW_EF_PER_K * top_k` (at least pgvector's default,
+/// at most [`HNSW_EF_SEARCH_MAX`]). With `ef_search = top_k` a top-100 search
+/// missed ~1% of the true top 100 at 10k rows and ~10% on EdgeType at 100k.
+const HNSW_EF_PER_K: usize = 2;
+
 /// Session `hnsw.ef_search` on pools this adapter opens itself: covers
-/// cognee's `DEFAULT_WIDE_SEARCH_TOP_K = 100` searches without a per-query
-/// `SET LOCAL` transaction, and gives smaller `top_k` searches a wider
-/// candidate list than pgvector's default of 40 (higher recall).
-const HNSW_EF_SEARCH_SESSION: usize = 100;
+/// cognee's `DEFAULT_WIDE_SEARCH_TOP_K = 100` searches (at
+/// [`HNSW_EF_PER_K`]) without a per-query `SET LOCAL` transaction.
+const HNSW_EF_SEARCH_SESSION: usize = 200;
 
 /// Largest `hnsw.ef_search` pgvector accepts. Beyond this a search cannot be
 /// made to return `top_k` rows by raising `ef_search`, so those queries fall
@@ -281,7 +286,14 @@ impl PgVectorAdapter {
     pub async fn new(database_url: &str, dimension: usize) -> VectorDBResult<Self> {
         let mut opts = ConnectOptions::new(database_url.to_string());
         opts.map_sqlx_postgres_opts(|o| {
-            o.options([("hnsw.ef_search", HNSW_EF_SEARCH_SESSION.to_string())])
+            o.options([
+                ("hnsw.ef_search", HNSW_EF_SEARCH_SESSION.to_string()),
+                // pgvector 0.8+: when dead or filtered tuples leave an index
+                // scan short of its LIMIT, keep scanning (in exact distance
+                // order) instead of silently returning fewer rows. Older
+                // pgvector ignores the unknown placeholder setting.
+                ("hnsw.iterative_scan", "strict_order".to_string()),
+            ])
         });
         let db = Database::connect(opts)
             .await
@@ -471,10 +483,12 @@ impl PgVectorAdapter {
         if top_k > HNSW_EF_SEARCH_MAX {
             return Some(Self::exact_scan_locals().to_string());
         }
-        if self.tuned_sessions && top_k <= HNSW_EF_SEARCH_SESSION {
+        if self.tuned_sessions && top_k.saturating_mul(HNSW_EF_PER_K) <= HNSW_EF_SEARCH_SESSION {
             return None;
         }
-        let ef = top_k.max(HNSW_EF_SEARCH_DEFAULT);
+        let ef = top_k
+            .saturating_mul(HNSW_EF_PER_K)
+            .clamp(HNSW_EF_SEARCH_DEFAULT, HNSW_EF_SEARCH_MAX);
         Some(format!("SET LOCAL hnsw.ef_search = {ef}"))
     }
 
