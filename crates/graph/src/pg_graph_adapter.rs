@@ -2046,8 +2046,20 @@ impl GraphDBTrait for PgGraphAdapter {
 // ---------------------------------------------------------------------------
 
 /// Connected components by streaming union-find: node and edge keys are
-/// streamed once and unioned client-side, O(V + E) time and O(V) memory,
-/// always consistent with the tables.
+/// streamed once and unioned client-side, O(V + E) time and O(V) memory.
+///
+/// The two scans run in one `REPEATABLE READ` read-only transaction, so they
+/// see the same snapshot. They have to: an edge whose endpoints are not both in
+/// the node index is silently skipped (`if let (Some(&a), Some(&b))`, there for
+/// the foreign keys that make it impossible), and under the default
+/// `READ COMMITTED` each statement takes a *fresh* snapshot — so a node
+/// inserted between the passes makes its edges invisible to the index and the
+/// components it joined come apart. Wrapping the two statements in a plain
+/// `begin()` would not have been enough for the same reason.
+///
+/// Consistency stops at this pass: `node_count` and `edge_count` are separate
+/// statements outside it, so on a graph being written concurrently the
+/// component sizes can still sum to less than the reported `node_count`.
 ///
 /// Keys travel as 64-bit `hashtextextended` values (16 bytes per edge instead
 /// of two text ids); a hash collision among node ids is detected while
@@ -2058,7 +2070,10 @@ mod components {
     use std::hash::Hash;
 
     use futures::TryStreamExt;
-    use sea_orm::{DatabaseBackend, DatabaseConnection, Statement, StreamTrait, TryGetable};
+    use sea_orm::{
+        AccessMode, DatabaseBackend, DatabaseConnection, DatabaseTransaction, IsolationLevel,
+        Statement, StreamTrait, TransactionTrait, TryGetable,
+    };
 
     use crate::error::{GraphDBError, GraphDBResult};
 
@@ -2103,7 +2118,7 @@ mod components {
 
     /// Component sizes, largest first; `None` if two node keys collided.
     async fn sizes_by<K>(
-        db: &DatabaseConnection,
+        db: &DatabaseTransaction,
         node_sql: &str,
         edge_sql: &str,
     ) -> GraphDBResult<Option<Vec<i64>>>
@@ -2162,7 +2177,7 @@ mod components {
     /// Sizes of the connected components of the (undirected) graph, largest
     /// first — the recursive-CTE query's `ORDER BY sz DESC` result.
     pub(super) async fn component_sizes(db: &DatabaseConnection) -> GraphDBResult<Vec<i64>> {
-        if let Some(sizes) = sizes_by::<i64>(
+        if let Some(sizes) = sizes_in_snapshot::<i64>(
             db,
             "SELECT hashtextextended(id, 0) AS k FROM graph_node",
             "SELECT hashtextextended(source_id, 0) AS s, \
@@ -2172,13 +2187,47 @@ mod components {
         {
             return Ok(sizes);
         }
-        sizes_by::<String>(
+        // The hash pass found a collision among the node ids; redo it on the
+        // ids themselves, in a snapshot of its own — it is a fresh read either
+        // way, and the first snapshot has already been given back.
+        sizes_in_snapshot::<String>(
             db,
             "SELECT id AS k FROM graph_node",
             "SELECT source_id AS s, target_id AS t FROM graph_edge",
         )
         .await?
         .ok_or_else(|| GraphDBError::QueryError("duplicate graph_node ids".to_string()))
+    }
+
+    /// [`sizes_by`] with both of its scans inside one `REPEATABLE READ`,
+    /// read-only transaction, so they see the same snapshot.
+    ///
+    /// Read-only is not decoration: it tells Postgres this transaction can
+    /// never take a write lock or hit a serialization failure, so holding a
+    /// snapshot across two full table scans costs nothing but the vacuum
+    /// horizon for the duration.
+    async fn sizes_in_snapshot<K>(
+        db: &DatabaseConnection,
+        node_sql: &str,
+        edge_sql: &str,
+    ) -> GraphDBResult<Option<Vec<i64>>>
+    where
+        K: TryGetable + Eq + Hash,
+    {
+        let txn = db
+            .begin_with_config(
+                Some(IsolationLevel::RepeatableRead),
+                Some(AccessMode::ReadOnly),
+            )
+            .await
+            .map_err(scan_err)?;
+        let out = sizes_by::<K>(&txn, node_sql, edge_sql).await;
+        // Releasing a read-only snapshot, not undoing anything: a failure here
+        // must not turn a good answer into an error.
+        if let Err(e) = txn.rollback().await {
+            tracing::debug!("connected-components snapshot rollback failed: {e}");
+        }
+        out
     }
 }
 
