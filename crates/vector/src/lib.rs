@@ -36,7 +36,7 @@ pub use models::{
     CollectionConfig, DATASET_ID_KEY, DATASET_IDS_KEY, DistanceMetric, SearchResult, VectorPoint,
     dedup_points_by_id, dedup_points_by_id_last_wins,
 };
-pub use vector_db_trait::{VectorDB, VectorIndexBackfill};
+pub use vector_db_trait::{BulkLoadGuard, VectorDB, VectorIndexBackfill};
 
 #[cfg(feature = "pgvector")]
 pub use pgvector_adapter::PgVectorAdapter;

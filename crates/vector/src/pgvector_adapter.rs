@@ -1604,6 +1604,35 @@ impl VectorDB for PgVectorAdapter {
         built.and(analyzed)
     }
 
+    /// Close the scope without running the deferred work — the `Drop` half of
+    /// the pairing (see [`BulkLoadGuard`](crate::BulkLoadGuard)).
+    ///
+    /// Only the depth is reconciled here, and that is the point: a depth stuck
+    /// above zero is unrecoverable, because every later batch then takes the
+    /// `b.depth > 0` branch of [`Self::upsert_points`], drops the index of any
+    /// collection past [`BULK_DEFER_RATIO`] and never reaches an
+    /// `end_bulk_load` to build it again. The `deferred` / `written` maps are
+    /// deliberately left in place: a `Drop` cannot await, so the index build
+    /// and the `ANALYZE` wait for the next scope's `end_bulk_load`, for
+    /// [`Self::close`], or for `create_missing_vector_indexes`. Until then the
+    /// affected collections answer by exact scan, which is correct — that is
+    /// the same state an interrupted load leaves, and it is pinned by
+    /// `an_interrupted_bulk_load_leaves_correct_rows_that_the_backfill_reindexes`.
+    #[allow(clippy::expect_used, reason = "lock poison is unrecoverable")]
+    fn abandon_bulk_load(&self) {
+        // lock poison is unrecoverable
+        let mut b = self.bulk.lock().expect("bulk-load state lock");
+        b.depth = b.depth.saturating_sub(1);
+        if b.depth == 0 && !b.deferred.is_empty() {
+            warn!(
+                collections = b.deferred.len(),
+                "bulk load abandoned (dropped future or panic): the deferred HNSW \
+                 builds are queued for the next bulk load or close(); searches stay \
+                 correct by exact scan meanwhile"
+            );
+        }
+    }
+
     async fn create_collection(
         &self,
         data_type: &str,

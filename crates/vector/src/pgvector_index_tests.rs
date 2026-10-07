@@ -531,6 +531,106 @@ async fn an_interrupted_bulk_load_leaves_correct_rows_that_the_backfill_reindexe
     .await;
 }
 
+/// A bulk load whose future is **cancelled** — the axum client disconnect, the
+/// `tokio::time::timeout`, the losing `tokio::select!` branch — never reaches
+/// `end_bulk_load`. That used to leave the scope depth above zero for the life
+/// of the adapter, and the damage was not limited to the cancelled run: every
+/// later collection that crossed the defer ratio had its index dropped inside
+/// the still-open scope and no outermost `end_bulk_load` to build it again, so
+/// the store degraded to exact scans permanently.
+///
+/// What [`BulkLoadGuard`]'s `Drop` has to guarantee is therefore the *depth*:
+/// it cannot await, so the deferred build does not run here, but the next load
+/// must be able to reconcile it. This pins both halves — depth back to zero,
+/// and the next scope's end building both the abandoned collection's index and
+/// its own.
+#[tokio::test]
+async fn a_dropped_bulk_load_guard_closes_the_scope_and_the_next_load_reindexes() {
+    with_temp_db(
+        "a_dropped_bulk_load_guard_closes_the_scope_and_the_next_load_reindexes",
+        |url| async move {
+            let adapter = PgVectorAdapter::new(&url, 8).await.unwrap();
+            adapter
+                .create_collection("Cancelled", "f", 8)
+                .await
+                .unwrap();
+            adapter.create_collection("Next", "f", 8).await.unwrap();
+            let db = Database::connect(&url).await.unwrap();
+
+            let point = |tag: u128, i: usize| {
+                let jitter = f64::from(i as u32) * 1e-6;
+                #[allow(clippy::cast_possible_truncation)]
+                let v = vec![1.0, jitter as f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+                crate::models::VectorPoint::new(uuid::Uuid::from_u128(tag + i as u128), v)
+            };
+            let batch_of = |tag: u128| (0..2000).map(|i| point(tag, i)).collect::<Vec<_>>();
+
+            // A load that parks forever after writing, and a `select!` that
+            // drops it there. The `Notify` makes the cancellation point
+            // deterministic: the load signals once its writes are in, so the
+            // losing branch is always this future and always after the index
+            // was deferred.
+            let parked = tokio::sync::Notify::new();
+            {
+                let load = async {
+                    let guard = crate::BulkLoadGuard::begin(&adapter).await.unwrap();
+                    for chunk in batch_of(0xD0).chunks(500) {
+                        adapter.index_points("Cancelled", "f", chunk).await.unwrap();
+                    }
+                    parked.notify_one();
+                    std::future::pending::<()>().await;
+                    guard.finish().await.unwrap();
+                };
+                tokio::select! {
+                    () = load => panic!("the parked load must not run to completion"),
+                    () = parked.notified() => {}
+                }
+            }
+
+            assert!(
+                !index_present(&db, "Cancelled_f_halfvec_hnsw").await,
+                "the cancelled load must have deferred the index, or this test \
+                 is not exercising the leak"
+            );
+            assert_eq!(
+                adapter.bulk.lock().expect("bulk-load state lock").depth,
+                0,
+                "the guard's Drop must have closed the abandoned scope: a depth \
+                 stuck above zero is what makes every later load lose its index"
+            );
+
+            // The next load is the proof the adapter is not poisoned. With the
+            // scope leaked, this `end_bulk_load` would only decrement the depth
+            // back to one and build nothing at all.
+            let guard = crate::BulkLoadGuard::begin(&adapter).await.unwrap();
+            for chunk in batch_of(0xE0).chunks(500) {
+                adapter.index_points("Next", "f", chunk).await.unwrap();
+            }
+            guard.finish().await.unwrap();
+
+            assert!(
+                index_present(&db, "Next_f_halfvec_hnsw").await,
+                "a load after an abandoned one must still get its index built"
+            );
+            assert!(
+                index_present(&db, "Cancelled_f_halfvec_hnsw").await,
+                "and the abandoned load's deferred build must be reconciled by \
+                 it, not lost"
+            );
+            assert_eq!(
+                adapter.collection_size("Cancelled", "f").await.unwrap(),
+                2000,
+                "the cancelled load's rows were written before the cancellation \
+                 and stay written — only the index was deferred"
+            );
+
+            drop(db);
+            adapter.close().await.unwrap();
+        },
+    )
+    .await;
+}
+
 /// The GIN membership prefilter runs through `cognee_vector_set_names`, which
 /// replaces a `jsonb_array_elements` scan. An expression index is only as
 /// correct as that function: every row shape the corpus can produce has to map

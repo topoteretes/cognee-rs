@@ -369,14 +369,23 @@ pub trait VectorDB: Send + Sync {
     ///   serves searches by exact scan meanwhile.
     /// - **Nestable.** Scopes are counted; deferred work runs when the last
     ///   open scope ends.
-    /// - **Always paired** by the caller with `end_bulk_load`, also on error
-    ///   paths. A backend that defers work must also finish it in
-    ///   [`close`](VectorDB::close), and deferred work lost to a crash must be
-    ///   repairable by [`create_missing_vector_indexes`].
+    /// - **Closed exactly once per open scope**, by *one of* `end_bulk_load`
+    ///   (the normal path, which also runs the deferred work) or
+    ///   [`abandon_bulk_load`] (the `Drop` path, which only closes the scope).
+    ///   What is *not* guaranteed is that `end_bulk_load` is reached at all: a
+    ///   caller's future can be dropped mid-load — a client disconnect, a
+    ///   `tokio::time::timeout`, a `select!` losing branch — and a `Drop` in an
+    ///   async context cannot await. So an implementor must keep the scope
+    ///   *depth* correct from the synchronous `abandon_bulk_load` alone, and
+    ///   reconcile the deferred work later: at the next scope's end, in
+    ///   [`close`](VectorDB::close), or — for work lost to a crash — through
+    ///   [`create_missing_vector_indexes`]. [`BulkLoadGuard`] is the pairing;
+    ///   callers should use it rather than the two methods directly.
     ///
     /// The default is a no-op.
     ///
     /// [`end_bulk_load`]: VectorDB::end_bulk_load
+    /// [`abandon_bulk_load`]: VectorDB::abandon_bulk_load
     /// [`create_missing_vector_indexes`]: VectorDB::create_missing_vector_indexes
     async fn begin_bulk_load(&self) -> VectorDBResult<()> {
         Ok(())
@@ -385,9 +394,31 @@ pub trait VectorDB: Send + Sync {
     /// End a scope opened by [`begin_bulk_load`](VectorDB::begin_bulk_load);
     /// when it was the last open one, run any deferred maintenance (index
     /// builds, statistics). The default is a no-op.
+    ///
+    /// An implementor must **close the scope before its first `await`**, so
+    /// that the bookkeeping is done by the time this future can be dropped;
+    /// [`BulkLoadGuard`] disarms itself the moment it calls this, and a
+    /// deferred close would then be lost to a cancellation mid-maintenance.
     async fn end_bulk_load(&self) -> VectorDBResult<()> {
         Ok(())
     }
+
+    /// Close a scope opened by [`begin_bulk_load`](VectorDB::begin_bulk_load)
+    /// **without** running its deferred maintenance, synchronously.
+    ///
+    /// This is what [`BulkLoadGuard`]'s `Drop` calls, so it runs on the paths
+    /// that never reach [`end_bulk_load`](VectorDB::end_bulk_load) — a dropped
+    /// future or an unwinding panic. `Drop` cannot await, so an implementor
+    /// must do only the bookkeeping here: bring the scope depth back down (the
+    /// part whose loss is permanent — a depth stuck above zero makes every
+    /// later load defer an index that is then never rebuilt) and leave the
+    /// deferred work queued for the next `end_bulk_load`, for
+    /// [`close`](VectorDB::close), or for
+    /// [`create_missing_vector_indexes`](VectorDB::create_missing_vector_indexes).
+    ///
+    /// Must not block, must not panic, and must be exactly as nestable as
+    /// `end_bulk_load`. The default is a no-op.
+    fn abandon_bulk_load(&self) {}
 
     /// Perform multiple vector similarity searches in sequence.
     ///
@@ -408,6 +439,236 @@ pub trait VectorDB: Send + Sync {
             );
         }
         Ok(results)
+    }
+}
+
+/// An open bulk-load scope (see [`VectorDB::begin_bulk_load`]), closed exactly
+/// once — by [`finish`](BulkLoadGuard::finish) on the way out, or by `Drop` on
+/// every other way out.
+///
+/// # Why this is not two calls
+/// `begin_bulk_load()` … `end_bulk_load()` written as plain sequential
+/// statements around an `.await` is only paired when that await *returns*. A
+/// dropped future — an axum client disconnect, a `tokio::time::timeout`, a
+/// losing `tokio::select!` branch, Ctrl-C — and an unwinding panic both skip
+/// the second call. For a backend that counts scopes, the scope depth then
+/// stays above zero for the life of the process: the index this load dropped is
+/// never rebuilt, every later collection that crosses the defer threshold loses
+/// its index too, and the store degrades to exact scans with nothing logged.
+///
+/// `Drop` cannot await, so it does not run the deferred maintenance; it calls
+/// the synchronous [`VectorDB::abandon_bulk_load`], which closes the scope and
+/// leaves the work queued for the next scope's end, for
+/// [`VectorDB::close`], or for
+/// [`VectorDB::create_missing_vector_indexes`]. The invariant the guard
+/// actually buys is therefore the one whose loss is unrecoverable: the depth
+/// always comes back down.
+///
+/// # Example
+/// ```ignore
+/// let bulk = BulkLoadGuard::begin(vector_db.as_ref()).await?;
+/// let outcome = run_the_load().await; // dropped here? the scope still closes
+/// bulk.finish().await?;               // reached? the deferred work runs now
+/// ```
+#[must_use = "dropping the guard immediately closes the bulk-load scope again"]
+pub struct BulkLoadGuard<'a> {
+    db: &'a dyn VectorDB,
+    /// `false` once the scope has been closed, so `Drop` does not close it a
+    /// second time.
+    open: bool,
+}
+
+impl<'a> BulkLoadGuard<'a> {
+    /// Open a bulk-load scope on `db` and return the guard that closes it.
+    ///
+    /// An error means no scope was opened (and so there is nothing to close):
+    /// the hint never changes results, so a caller may log it and carry on
+    /// without one.
+    pub async fn begin(db: &'a dyn VectorDB) -> VectorDBResult<Self> {
+        db.begin_bulk_load().await?;
+        Ok(Self { db, open: true })
+    }
+
+    /// Close the scope the normal way: run [`VectorDB::end_bulk_load`], which
+    /// performs the deferred maintenance when this was the last open scope.
+    ///
+    /// Consumes the guard, so the scope cannot be closed twice, and disarms it
+    /// before the call — `end_bulk_load` closes the scope before its own first
+    /// await by contract.
+    pub async fn finish(mut self) -> VectorDBResult<()> {
+        self.open = false;
+        self.db.end_bulk_load().await
+    }
+}
+
+impl Drop for BulkLoadGuard<'_> {
+    fn drop(&mut self) {
+        if self.open {
+            self.open = false;
+            self.db.abandon_bulk_load();
+        }
+    }
+}
+
+/// Cases for [`BulkLoadGuard`]'s pairing, on `cfg(test)` alone so they run
+/// under a plain `cargo test -p cognee-vector` with no features and no
+/// Postgres: what they pin is the guard, not any backend's deferral policy.
+/// The pgvector half — that an abandoned scope really leaves `depth` at zero
+/// and that the next load still rebuilds its index — is
+/// `a_dropped_bulk_load_guard_closes_the_scope_and_the_next_load_reindexes` in
+/// `pgvector_index_tests`.
+#[cfg(test)]
+mod bulk_load_guard_tests {
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        reason = "test code — panics are acceptable"
+    )]
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// A store that records nothing but how its bulk-load scope was opened and
+    /// closed. Every data method is unreachable: no test here moves a point.
+    #[derive(Default)]
+    struct ScopeRecorder {
+        begun: AtomicUsize,
+        ended: AtomicUsize,
+        abandoned: AtomicUsize,
+    }
+
+    impl ScopeRecorder {
+        /// `(begun, ended, abandoned)`.
+        fn counts(&self) -> (usize, usize, usize) {
+            (
+                self.begun.load(Ordering::Relaxed),
+                self.ended.load(Ordering::Relaxed),
+                self.abandoned.load(Ordering::Relaxed),
+            )
+        }
+    }
+
+    #[async_trait]
+    impl VectorDB for ScopeRecorder {
+        async fn begin_bulk_load(&self) -> VectorDBResult<()> {
+            self.begun.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }
+        async fn end_bulk_load(&self) -> VectorDBResult<()> {
+            self.ended.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }
+        fn abandon_bulk_load(&self) {
+            self.abandoned.fetch_add(1, Ordering::Relaxed);
+        }
+
+        async fn create_collection(&self, _: &str, _: &str, _: usize) -> VectorDBResult<()> {
+            unimplemented!("the guard cases never touch data")
+        }
+        async fn has_collection(&self, _: &str, _: &str) -> VectorDBResult<bool> {
+            unimplemented!("the guard cases never touch data")
+        }
+        async fn index_points(&self, _: &str, _: &str, _: &[VectorPoint]) -> VectorDBResult<()> {
+            unimplemented!("the guard cases never touch data")
+        }
+        async fn search_similar(
+            &self,
+            _: &str,
+            _: &str,
+            _: &[f32],
+            _: usize,
+        ) -> VectorDBResult<Vec<SearchResult>> {
+            unimplemented!("the guard cases never touch data")
+        }
+        async fn delete_collection(&self, _: &str, _: &str) -> VectorDBResult<()> {
+            unimplemented!("the guard cases never touch data")
+        }
+        async fn retrieve(
+            &self,
+            _: &str,
+            _: &str,
+            _: &[Uuid],
+        ) -> VectorDBResult<Vec<SearchResult>> {
+            unimplemented!("the guard cases never touch data")
+        }
+        async fn collection_size(&self, _: &str, _: &str) -> VectorDBResult<usize> {
+            unimplemented!("the guard cases never touch data")
+        }
+    }
+
+    /// The happy path: `finish()` runs the deferred maintenance, and the
+    /// guard it consumed must not then also abandon the scope — that would be
+    /// one close too many and would unbalance a nested load.
+    #[tokio::test]
+    async fn finishing_the_guard_ends_the_scope_exactly_once() {
+        let db = ScopeRecorder::default();
+        let guard = BulkLoadGuard::begin(&db).await.unwrap();
+        guard.finish().await.unwrap();
+        assert_eq!(
+            db.counts(),
+            (1, 1, 0),
+            "finish() must end the scope and never also abandon it"
+        );
+    }
+
+    /// The bug this guard exists for: a load whose future never returns. The
+    /// scope must still be closed — synchronously, since `Drop` cannot await —
+    /// and `end_bulk_load` must *not* be claimed to have run.
+    #[tokio::test]
+    async fn dropping_the_guard_abandons_the_scope_instead_of_leaking_it() {
+        let db = ScopeRecorder::default();
+        {
+            let _guard = BulkLoadGuard::begin(&db).await.unwrap();
+            // The load would run here; this scope exit stands in for the
+            // dropped future / unwinding panic.
+        }
+        assert_eq!(
+            db.counts(),
+            (1, 0, 1),
+            "a dropped guard must close the scope via abandon_bulk_load, not \
+             silently leave it open"
+        );
+    }
+
+    /// The real cancellation shape: a future holding the guard across an
+    /// `.await` that never resolves, dropped by `tokio::time::timeout`. This
+    /// is the axum-disconnect / `select!` case, and the one a trailing
+    /// `end_bulk_load()` statement skips entirely.
+    #[tokio::test]
+    async fn a_cancelled_load_future_still_closes_its_scope() {
+        let db = ScopeRecorder::default();
+        let load = async {
+            let guard = BulkLoadGuard::begin(&db).await.unwrap();
+            std::future::pending::<()>().await;
+            guard.finish().await.unwrap();
+        };
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), load)
+                .await
+                .is_err(),
+            "the load must be the one that timed out, or this pins nothing"
+        );
+        assert_eq!(
+            db.counts(),
+            (1, 0, 1),
+            "the scope opened by a cancelled load must be closed by the guard's Drop"
+        );
+    }
+
+    /// Scopes are counted, so the guards must nest: two opens, two closes, and
+    /// a mixed pair (one finished, one dropped) still balances.
+    #[tokio::test]
+    async fn nested_guards_close_one_scope_each() {
+        let db = ScopeRecorder::default();
+        let outer = BulkLoadGuard::begin(&db).await.unwrap();
+        {
+            let _inner = BulkLoadGuard::begin(&db).await.unwrap();
+        }
+        outer.finish().await.unwrap();
+        assert_eq!(
+            db.counts(),
+            (2, 1, 1),
+            "each guard closes exactly its own scope, however it exits"
+        );
     }
 }
 
