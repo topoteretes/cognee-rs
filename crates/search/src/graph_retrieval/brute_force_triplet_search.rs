@@ -424,10 +424,14 @@ pub async fn brute_force_triplet_search(
     // EntityType hub yields hundreds of exactly-equal scores. Comparing the ids
     // makes the top-k context handed to the LLM identical across runs and across
     // backends.
+    //
+    // A NaN score (pgvector returns a NaN similarity for a zero-norm row or
+    // query) ranks last. `partial_cmp(..).unwrap_or(Equal)` made the comparator
+    // intransitive in that case, which the standard sort detects and panics on.
+    let rank_key = |score: f32| if score.is_nan() { f32::INFINITY } else { score };
     ranked_edges.sort_by(|left, right| {
-        left.score
-            .partial_cmp(&right.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
+        rank_key(left.score)
+            .total_cmp(&rank_key(right.score))
             .then_with(|| left.source_id.cmp(&right.source_id))
             .then_with(|| left.target_id.cmp(&right.target_id))
             .then_with(|| left.relationship_name.cmp(&right.relationship_name))
