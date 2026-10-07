@@ -16,7 +16,7 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use sea_orm::sea_query::{Alias, Cond, Expr, Iden, OnConflict, Query};
+use sea_orm::sea_query::{Alias, Cond, Expr, Iden, Query};
 use sea_orm::{ConnectionTrait, Database, DatabaseBackend, DatabaseConnection, Statement};
 use sea_orm_migration::MigratorTrait;
 use serde_json::{Value, json};
@@ -31,9 +31,13 @@ use crate::error::{GraphDBError, GraphDBResult};
 use crate::traits::GraphDBTrait;
 use crate::types::{EdgeData, GraphNode, NodeData, parse_audit_timestamp};
 
-/// Max rows per INSERT batch (6 params per node row, 6 per edge row → 600 params at 100 rows,
-/// well within PostgreSQL's limit). Matches `PgVectorAdapter::BATCH_SIZE`.
-const BATCH_SIZE: usize = 100;
+/// Rows per bulk upsert statement. Columns bind as one array parameter each,
+/// so this is bounded only by statement memory, not by PostgreSQL's 65 535
+/// bind-parameter limit.
+const WRITE_BATCH: usize = 5000;
+
+/// Ids per `= ANY($1::text[])` array parameter on the read/delete paths.
+const ID_BATCH: usize = 20_000;
 
 /// Only these column names may appear in dynamic WHERE clauses to prevent SQL injection.
 const ALLOWED_FILTER_ATTRS: &[&str] = &["id", "name", "type"];
@@ -49,8 +53,6 @@ enum GNode {
     Name,
     Type,
     Properties,
-    CreatedAt,
-    UpdatedAt,
 }
 
 impl Iden for GNode {
@@ -68,8 +70,6 @@ impl Iden for GNode {
                 Self::Name => "name",
                 Self::Type => "type",
                 Self::Properties => "properties",
-                Self::CreatedAt => "created_at",
-                Self::UpdatedAt => "updated_at",
             }
         )
         .expect("write to string cannot fail");
@@ -83,8 +83,6 @@ enum GEdge {
     TargetId,
     RelationshipName,
     Properties,
-    CreatedAt,
-    UpdatedAt,
 }
 
 impl Iden for GEdge {
@@ -102,8 +100,6 @@ impl Iden for GEdge {
                 Self::TargetId => "target_id",
                 Self::RelationshipName => "relationship_name",
                 Self::Properties => "properties",
-                Self::CreatedAt => "created_at",
-                Self::UpdatedAt => "updated_at",
             }
         )
         .expect("write to string cannot fail");
@@ -391,6 +387,35 @@ impl PgGraphAdapter {
         Ok(data)
     }
 
+    /// Run a node query (`id, name, type, properties`) and key each row by id.
+    async fn graph_nodes_where(
+        &self,
+        sql: &str,
+        values: Vec<sea_orm::Value>,
+    ) -> GraphDBResult<Vec<GraphNode>> {
+        let rows = self
+            .db
+            .query_all(Statement::from_sql_and_values(
+                DatabaseBackend::Postgres,
+                sql,
+                values,
+            ))
+            .await
+            .map_err(|e| GraphDBError::QueryError(e.to_string()))?;
+        rows.iter().map(Self::parse_graph_node).collect()
+    }
+
+    /// [`Self::parse_node_row`], keyed by the node's id.
+    fn parse_graph_node(row: &sea_orm::QueryResult) -> GraphDBResult<GraphNode> {
+        let data = Self::parse_node_row(row)?;
+        let id = data
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        Ok((id, data))
+    }
+
     /// Parse an edge row into [`EdgeData`].
     fn parse_edge_row(row: &sea_orm::QueryResult) -> GraphDBResult<EdgeData> {
         Self::parse_edge_row_cols(
@@ -519,47 +544,56 @@ impl GraphDBTrait for PgGraphAdapter {
             return Ok(());
         }
 
-        // Serialize and deduplicate by id (last wins).
-        let mut seen: HashMap<String, NodeRow> = HashMap::new();
+        // Serialize and deduplicate by id (last wins), keeping first-seen order.
+        let mut order: Vec<String> = Vec::with_capacity(nodes.len());
+        let mut seen: HashMap<String, NodeRow> = HashMap::with_capacity(nodes.len());
         for node in &nodes {
             let row = Self::serialize_node_to_row(node)?;
+            if !seen.contains_key(&row.id) {
+                order.push(row.id.clone());
+            }
             seen.insert(row.id.clone(), row);
         }
-        let rows: Vec<NodeRow> = seen.into_values().collect();
 
-        for chunk in rows.chunks(BATCH_SIZE) {
-            let mut insert = Query::insert()
-                .into_table(GNode::Table)
-                .columns([
-                    GNode::Id,
-                    GNode::Name,
-                    GNode::Type,
-                    GNode::Properties,
-                    GNode::CreatedAt,
-                    GNode::UpdatedAt,
-                ])
-                .to_owned();
-
-            for row in chunk {
-                insert.values_panic([
-                    row.id.clone().into(),
-                    row.name.clone().into(),
-                    row.node_type.clone().into(),
-                    row.properties.clone().into(),
-                    row.created_at.into(),
-                    row.updated_at.into(),
-                ]);
+        // One `INSERT … SELECT FROM unnest(…)` per `WRITE_BATCH` rows: every
+        // column travels as a single array parameter, so the statement text
+        // (and its cached prepared plan) is the same for every batch, and a
+        // batch costs one round trip instead of `rows / 100`.
+        for chunk in order.chunks(WRITE_BATCH) {
+            let mut ids = Vec::with_capacity(chunk.len());
+            let mut names = Vec::with_capacity(chunk.len());
+            let mut types = Vec::with_capacity(chunk.len());
+            let mut props = Vec::with_capacity(chunk.len());
+            let mut created = Vec::with_capacity(chunk.len());
+            let mut updated = Vec::with_capacity(chunk.len());
+            for id in chunk {
+                let Some(row) = seen.remove(id) else {
+                    continue;
+                };
+                ids.push(row.id);
+                names.push(row.name);
+                types.push(row.node_type);
+                props.push(row.properties);
+                created.push(row.created_at.to_rfc3339());
+                updated.push(row.updated_at.to_rfc3339());
             }
-
-            insert.on_conflict(
-                OnConflict::column(GNode::Id)
-                    .update_columns([GNode::Name, GNode::Type, GNode::Properties])
-                    .value(GNode::UpdatedAt, Expr::current_timestamp())
-                    .to_owned(),
-            );
-
             self.db
-                .execute(self.build(&insert))
+                .execute(Statement::from_sql_and_values(
+                    DatabaseBackend::Postgres,
+                    "INSERT INTO graph_node (id, name, type, properties, created_at, updated_at) \
+                     SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::jsonb[], \
+                                          $5::text[]::timestamptz[], $6::text[]::timestamptz[]) \
+                     ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, type = EXCLUDED.type, \
+                       properties = EXCLUDED.properties, updated_at = CURRENT_TIMESTAMP",
+                    [
+                        sea_orm::Value::from(ids),
+                        sea_orm::Value::from(names),
+                        sea_orm::Value::from(types),
+                        sea_orm::Value::from(props),
+                        sea_orm::Value::from(created),
+                        sea_orm::Value::from(updated),
+                    ],
+                ))
                 .await
                 .map_err(|e| GraphDBError::NodeError(format!("Failed to upsert nodes: {e}")))?;
         }
@@ -581,19 +615,19 @@ impl GraphDBTrait for PgGraphAdapter {
     }
 
     async fn delete_nodes(&self, node_ids: &[String]) -> GraphDBResult<()> {
-        if node_ids.is_empty() {
-            return Ok(());
+        // One `= ANY($1)` array parameter per `ID_BATCH` ids: a constant
+        // statement text, and no ceiling at PostgreSQL's 65 535 bind
+        // parameters (the per-id `IN ($1, …)` list failed past it).
+        for chunk in node_ids.chunks(ID_BATCH) {
+            self.db
+                .execute(Statement::from_sql_and_values(
+                    DatabaseBackend::Postgres,
+                    "DELETE FROM graph_node WHERE id = ANY($1::text[])",
+                    [chunk.to_vec().into()],
+                ))
+                .await
+                .map_err(|e| GraphDBError::NodeError(format!("Failed to delete nodes: {e}")))?;
         }
-
-        let query = Query::delete()
-            .from_table(GNode::Table)
-            .and_where(Expr::col(GNode::Id).is_in(node_ids.iter().map(|s| s.as_str())))
-            .to_owned();
-
-        self.db
-            .execute(self.build(&query))
-            .await
-            .map_err(|e| GraphDBError::NodeError(format!("Failed to delete nodes: {e}")))?;
         Ok(())
     }
 
@@ -617,23 +651,23 @@ impl GraphDBTrait for PgGraphAdapter {
     }
 
     async fn get_nodes(&self, node_ids: &[String]) -> GraphDBResult<Vec<NodeData>> {
-        if node_ids.is_empty() {
-            return Ok(vec![]);
+        // Array parameter per `ID_BATCH` ids, as in `delete_nodes`.
+        let mut out = Vec::with_capacity(node_ids.len());
+        for chunk in node_ids.chunks(ID_BATCH) {
+            let rows = self
+                .db
+                .query_all(Statement::from_sql_and_values(
+                    DatabaseBackend::Postgres,
+                    "SELECT id, name, type, properties FROM graph_node WHERE id = ANY($1::text[])",
+                    [chunk.to_vec().into()],
+                ))
+                .await
+                .map_err(|e| GraphDBError::QueryError(e.to_string()))?;
+            for row in &rows {
+                out.push(Self::parse_node_row(row)?);
+            }
         }
-
-        let query = Query::select()
-            .columns([GNode::Id, GNode::Name, GNode::Type, GNode::Properties])
-            .from(GNode::Table)
-            .and_where(Expr::col(GNode::Id).is_in(node_ids.iter().map(|s| s.as_str())))
-            .to_owned();
-
-        let rows = self
-            .db
-            .query_all(self.build(&query))
-            .await
-            .map_err(|e| GraphDBError::QueryError(e.to_string()))?;
-
-        rows.iter().map(Self::parse_node_row).collect()
+        Ok(out)
     }
 
     async fn get_node_truth_state(
@@ -1205,63 +1239,58 @@ impl GraphDBTrait for PgGraphAdapter {
         // survivors: `to_value` + `sanitize_json` on an entry that the next
         // duplicate immediately overwrites is pure waste.
         type EdgeProps = HashMap<Cow<'static, str>, Value>;
-        let mut seen: HashMap<(String, String, String), &EdgeProps> = HashMap::new();
+        let mut order: Vec<(String, String, String)> = Vec::with_capacity(edges.len());
+        let mut seen: HashMap<(String, String, String), &EdgeProps> =
+            HashMap::with_capacity(edges.len());
         for edge in edges {
             let key = (
                 sanitize_str(&edge.0).into_owned(),
                 sanitize_str(&edge.1).into_owned(),
                 sanitize_str(&edge.2).into_owned(),
             );
-            seen.insert(key, &edge.3);
+            if seen.insert(key.clone(), &edge.3).is_none() {
+                order.push(key);
+            }
         }
-        let mut deduped: Vec<((String, String, String), Value)> = seen
-            .into_iter()
-            .map(|(key, props)| {
-                let props_json =
-                    serde_json::to_value(props).map_err(GraphDBError::SerializationError)?;
+
+        // One `INSERT … SELECT FROM unnest(…)` per `WRITE_BATCH` edges (see
+        // `add_nodes_raw`). All rows of a call share one `created_at`, as
+        // before.
+        let now = now.to_rfc3339();
+        for chunk in order.chunks_mut(WRITE_BATCH) {
+            let mut src = Vec::with_capacity(chunk.len());
+            let mut dst = Vec::with_capacity(chunk.len());
+            let mut rel = Vec::with_capacity(chunk.len());
+            let mut props = Vec::with_capacity(chunk.len());
+            for key in chunk.iter_mut() {
+                let Some(p) = seen.get(key) else {
+                    continue;
+                };
                 // Edge properties carry LLM-authored descriptions and, through
                 // them, source text — same NUL exposure as node properties.
-                Ok((key, sanitize_json(props_json)))
-            })
-            .collect::<GraphDBResult<_>>()?;
-
-        // `chunks_mut` + `mem::take` so each row's strings and JSON blob are
-        // *moved* into the statement. Cloning here would deep-copy every edge's
-        // property object, which is a measurable cost on a graph with tens of
-        // thousands of edges and buys nothing — `deduped` is not read again.
-        for chunk in deduped.chunks_mut(BATCH_SIZE) {
-            let mut insert = Query::insert()
-                .into_table(GEdge::Table)
-                .columns([
-                    GEdge::SourceId,
-                    GEdge::TargetId,
-                    GEdge::RelationshipName,
-                    GEdge::Properties,
-                    GEdge::CreatedAt,
-                    GEdge::UpdatedAt,
-                ])
-                .to_owned();
-
-            for ((source, target, relationship_name), props_json) in chunk.iter_mut() {
-                insert.values_panic([
-                    std::mem::take(source).into(),
-                    std::mem::take(target).into(),
-                    std::mem::take(relationship_name).into(),
-                    std::mem::take(props_json).into(),
-                    now.into(),
-                    now.into(),
-                ]);
+                let json = serde_json::to_value(p).map_err(GraphDBError::SerializationError)?;
+                props.push(sanitize_json(json));
+                src.push(std::mem::take(&mut key.0));
+                dst.push(std::mem::take(&mut key.1));
+                rel.push(std::mem::take(&mut key.2));
             }
-
-            insert.on_conflict(
-                OnConflict::columns([GEdge::SourceId, GEdge::TargetId, GEdge::RelationshipName])
-                    .update_column(GEdge::Properties)
-                    .value(GEdge::UpdatedAt, Expr::current_timestamp())
-                    .to_owned(),
-            );
-
             self.db
-                .execute(self.build(&insert))
+                .execute(Statement::from_sql_and_values(
+                    DatabaseBackend::Postgres,
+                    "INSERT INTO graph_edge (source_id, target_id, relationship_name, properties, \
+                                             created_at, updated_at) \
+                     SELECT s, t, r, p, $5::timestamptz, $5::timestamptz \
+                     FROM unnest($1::text[], $2::text[], $3::text[], $4::jsonb[]) AS u(s, t, r, p) \
+                     ON CONFLICT (source_id, target_id, relationship_name) \
+                     DO UPDATE SET properties = EXCLUDED.properties, updated_at = CURRENT_TIMESTAMP",
+                    [
+                        sea_orm::Value::from(src),
+                        sea_orm::Value::from(dst),
+                        sea_orm::Value::from(rel),
+                        sea_orm::Value::from(props),
+                        sea_orm::Value::from(now.clone()),
+                    ],
+                ))
                 .await
                 .map_err(|e| GraphDBError::EdgeError(format!("Failed to upsert edges: {e}")))?;
         }
@@ -1893,6 +1922,58 @@ impl GraphDBTrait for PgGraphAdapter {
         }
 
         Ok((nodes, edges))
+    }
+
+    /// Nodes of `node_type` with exactly one incident edge (a self-loop
+    /// counts twice, as in the trait default), without loading the graph.
+    /// Each candidate probes the edge indexes and stops at the second hit, so
+    /// hubs cost no more than leaves.
+    async fn get_degree_one_nodes(&self, node_type: &str) -> GraphDBResult<Vec<GraphNode>> {
+        self.graph_nodes_where(
+            "SELECT n.id, n.name, n.type, n.properties FROM graph_node n \
+             WHERE n.type = $1 AND ( \
+               SELECT count(*) FROM ( \
+                 (SELECT 1 FROM graph_edge e WHERE e.source_id = n.id LIMIT 2) \
+                 UNION ALL \
+                 (SELECT 1 FROM graph_edge e WHERE e.target_id = n.id LIMIT 2) \
+               ) d) = 1",
+            vec![node_type.into()],
+        )
+        .await
+    }
+
+    async fn get_all_relationship_names(&self) -> GraphDBResult<HashSet<String>> {
+        let rows = self
+            .db
+            .query_all(Statement::from_string(
+                DatabaseBackend::Postgres,
+                "SELECT DISTINCT relationship_name FROM graph_edge".to_string(),
+            ))
+            .await
+            .map_err(|e| GraphDBError::QueryError(e.to_string()))?;
+        rows.iter()
+            .map(|r| {
+                r.try_get("", "relationship_name")
+                    .map_err(|e| GraphDBError::QueryError(e.to_string()))
+            })
+            .collect()
+    }
+
+    /// `EdgeType` nodes with no incident edge whose `relationship_name`
+    /// property (default "") names no edge — the trait default's predicate,
+    /// evaluated in SQL instead of over the loaded graph.
+    async fn get_zero_degree_edge_type_nodes(&self) -> GraphDBResult<Vec<GraphNode>> {
+        self.graph_nodes_where(
+            "SELECT n.id, n.name, n.type, n.properties FROM graph_node n \
+             WHERE n.type = 'EdgeType' \
+               AND NOT EXISTS (SELECT 1 FROM graph_edge e WHERE e.source_id = n.id) \
+               AND NOT EXISTS (SELECT 1 FROM graph_edge e WHERE e.target_id = n.id) \
+               AND NOT EXISTS (SELECT 1 FROM graph_edge e WHERE e.relationship_name = \
+                   CASE WHEN jsonb_typeof(n.properties->'relationship_name') = 'string' \
+                        THEN n.properties->>'relationship_name' ELSE '' END)",
+            vec![],
+        )
+        .await
     }
 
     async fn get_neighborhood(
