@@ -153,6 +153,13 @@ const HNSW_REBUILD_RATIO: f64 = 0.25;
 /// capped by the server's `max_parallel_workers` / `max_worker_processes`.
 const HNSW_BUILD_WORKERS: u32 = 4;
 
+/// Concurrent upsert statements for a batch that goes into a live HNSW
+/// index (see [`PgVectorAdapter::write_points_concurrently`]).
+const HNSW_INSERT_WRITERS: usize = 4;
+
+/// Smallest per-statement batch when a load is split across writers.
+const HNSW_INSERT_MIN_BATCH: usize = 250;
+
 /// Lower / upper bound of the `maintenance_work_mem` (kB) an index rebuild
 /// runs under: pgvector's default, and 2 GB.
 const HNSW_BUILD_BUDGET_MIN_KB: i64 = 64 * 1024;
@@ -895,6 +902,11 @@ impl PgVectorAdapter {
                     .await;
             }
         }
+        if dimension <= MAX_INDEXABLE_DIMENSION {
+            return self
+                .write_points_concurrently(coll, points, merge_membership)
+                .await;
+        }
         Self::write_points(&self.db, coll, points, merge_membership).await
     }
 
@@ -946,7 +958,9 @@ impl PgVectorAdapter {
         // over-counts re-indexed points; the ratio leaves room for that.
         let incoming = i64::try_from(points.len()).unwrap_or(i64::MAX);
         if (incoming as f64) < HNSW_REBUILD_RATIO * total as f64 {
-            return Self::write_points(&self.db, coll, points, merge_membership).await;
+            return self
+                .write_points_concurrently(coll, points, merge_membership)
+                .await;
         }
 
         let rows_after = total.saturating_add(incoming.saturating_sub(present));
@@ -994,6 +1008,66 @@ impl PgVectorAdapter {
         points: &[VectorPoint],
         merge_membership: bool,
     ) -> VectorDBResult<()> {
+        for stmt in Self::upsert_statements(coll, points, merge_membership, WRITE_BATCH) {
+            conn.execute(stmt)
+                .await
+                .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
+        }
+        Ok(())
+    }
+
+    /// [`Self::write_points`] on the pool, as up to [`HNSW_INSERT_WRITERS`]
+    /// statements in flight at once, for batches that go into a live HNSW
+    /// index.
+    ///
+    /// pgvector maintains the index inside each inserting backend, one row
+    /// at a time (~1.2 ms per 384-d row into a 209k-row EdgeType index here),
+    /// and concurrent backends insert in parallel: 3 000 rows took 3.65 s
+    /// from one statement, 1.53 s from four and no less from eight. The
+    /// statements touch disjoint ids (duplicates are folded first) and each
+    /// commits on its own — exactly as the sequential chunks already did — so
+    /// running them concurrently changes no outcome; the first error is
+    /// returned once all have finished.
+    async fn write_points_concurrently(
+        &self,
+        coll: &str,
+        points: &[VectorPoint],
+        merge_membership: bool,
+    ) -> VectorDBResult<()> {
+        use futures_util::StreamExt;
+        let per_writer = points.len().div_ceil(HNSW_INSERT_WRITERS);
+        let batch = per_writer.clamp(HNSW_INSERT_MIN_BATCH, WRITE_BATCH);
+        let stmts = Self::upsert_statements(coll, points, merge_membership, batch);
+        if stmts.len() <= 1 {
+            for stmt in stmts {
+                self.db
+                    .execute(stmt)
+                    .await
+                    .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
+            }
+            return Ok(());
+        }
+        let results: Vec<Result<sea_orm::ExecResult, sea_orm::DbErr>> =
+            futures_util::stream::iter(stmts.into_iter().map(|stmt| self.db.execute(stmt)))
+                .buffer_unordered(HNSW_INSERT_WRITERS)
+                .collect()
+                .await;
+        for r in results {
+            r.map_err(|e| VectorDBError::StorageError(e.to_string()))?;
+        }
+        Ok(())
+    }
+
+    /// The upsert statements for `points` (see [`Self::upsert_points`]): one
+    /// multi-row `INSERT … ON CONFLICT` per `batch` ids. `points` must already
+    /// be folded to one entry per distinct id — [`Self::upsert_points`] does
+    /// that for every caller — so the statements touch disjoint rows.
+    fn upsert_statements(
+        coll: &str,
+        points: &[VectorPoint],
+        merge_membership: bool,
+        batch: usize,
+    ) -> Vec<Statement> {
         let metadata = if merge_membership {
             MERGED_METADATA
         } else {
@@ -1004,7 +1078,8 @@ impl PgVectorAdapter {
              WHERE t.vector IS DISTINCT FROM EXCLUDED.vector \
                 OR t.metadata IS DISTINCT FROM {metadata}"
         );
-        for chunk in points.chunks(WRITE_BATCH) {
+        let mut stmts = Vec::with_capacity(points.len().div_ceil(batch.max(1)));
+        for chunk in points.chunks(batch.max(1)) {
             let mut sql = format!(r#"INSERT INTO "{coll}" AS t (id, vector, metadata) VALUES "#);
             let mut values: Vec<sea_orm::Value> = Vec::with_capacity(chunk.len() * 3);
             for pt in chunk {
@@ -1030,15 +1105,13 @@ impl PgVectorAdapter {
                 );
             }
             sql.push_str(&on_conflict);
-            conn.execute(Statement::from_sql_and_values(
+            stmts.push(Statement::from_sql_and_values(
                 DatabaseBackend::Postgres,
                 &sql,
                 values,
-            ))
-            .await
-            .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
+            ));
         }
-        Ok(())
+        stmts
     }
 
     /// Decode one `(id, score, metadata)` query row into a [`SearchResult`].
