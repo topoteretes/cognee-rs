@@ -157,6 +157,22 @@ const HNSW_REBUILD_RATIO: f64 = 0.4;
 /// capped by the server's `max_parallel_workers` / `max_worker_processes`.
 const HNSW_BUILD_WORKERS: u32 = 4;
 
+/// Inside a bulk-load scope (see [`VectorDB::begin_bulk_load`]), drop a
+/// collection's HNSW index once the points written to it in this scope reach
+/// this fraction of its rows, and build it once when the scope ends.
+///
+/// A ski-rental break-even: a live insert costs ~1.2-1.7 ms per 384-d row
+/// (~0.35 ms wall with four writers) and a 7-worker build ~0.09 ms per row of
+/// the whole collection (209k rows: 17.9 s), so keep inserting live until
+/// the live cost already paid in this scope equals one build — ~0.25 x the
+/// rows — then stop maintaining the index. Worst case this costs one build
+/// more than staying live; an empty or small collection defers at once.
+const BULK_DEFER_RATIO: f64 = 0.25;
+
+/// `max_parallel_maintenance_workers` for the end-of-load build (the server
+/// caps it by `max_parallel_workers` / `max_worker_processes`, 8 by default).
+const BULK_BUILD_WORKERS: u32 = 7;
+
 /// Concurrent upsert statements for a batch that goes into a live HNSW
 /// index (see [`PgVectorAdapter::write_points_concurrently`]).
 const HNSW_INSERT_WRITERS: usize = 4;
@@ -288,6 +304,18 @@ pub struct PgVectorAdapter {
     /// collection dropped behind this adapter's back (another process) is
     /// evicted on the first "relation does not exist" error.
     known: RwLock<HashSet<String>>,
+    /// Bulk-load scope state (see [`VectorDB::begin_bulk_load`]).
+    bulk: std::sync::Mutex<BulkLoad>,
+}
+
+/// Open bulk-load scopes, and per collection the points written in them and
+/// whether its HNSW index was dropped for the rest of the load.
+#[derive(Debug, Default)]
+struct BulkLoad {
+    depth: usize,
+    written: HashMap<String, i64>,
+    /// Collection -> vector dimension of the index to build at scope end.
+    deferred: HashMap<String, usize>,
 }
 
 impl PgVectorAdapter {
@@ -340,6 +368,7 @@ impl PgVectorAdapter {
             owns_pool: true,
             tuned_sessions: true,
             known: RwLock::new(HashSet::new()),
+            bulk: std::sync::Mutex::new(BulkLoad::default()),
         })
     }
 
@@ -360,6 +389,7 @@ impl PgVectorAdapter {
             owns_pool: false,
             tuned_sessions: false,
             known: RwLock::new(HashSet::new()),
+            bulk: std::sync::Mutex::new(BulkLoad::default()),
         })
     }
 
@@ -380,14 +410,122 @@ impl PgVectorAdapter {
     /// A **no-op when the connection came from [`Self::from_connection`]**, and
     /// idempotent.
     pub async fn close(&self) -> VectorDBResult<()> {
+        // A bulk load cut short by close() still leaves every collection
+        // indexed.
+        let pending = self.take_deferred(true);
+        let built = self.build_deferred(pending).await;
         if !self.owns_pool {
+            built?;
             debug!("PgVectorAdapter::close is a no-op for a caller-owned connection");
             return Ok(());
         }
-        self.db
-            .close_by_ref()
-            .await
-            .map_err(|e| VectorDBError::StorageError(format!("PGVector pool close failed: {e}")))
+        let closed =
+            self.db.close_by_ref().await.map_err(|e| {
+                VectorDBError::StorageError(format!("PGVector pool close failed: {e}"))
+            });
+        built?;
+        closed
+    }
+
+    /// Deferred index builds to run now: all of them when `force` (close) or
+    /// when the last open scope just ended.
+    #[allow(clippy::expect_used, reason = "lock poison is unrecoverable")]
+    fn take_deferred(&self, force: bool) -> Vec<(String, usize)> {
+        // lock poison is unrecoverable
+        let mut b = self.bulk.lock().expect("bulk-load state lock");
+        if !force && b.depth > 0 {
+            return Vec::new();
+        }
+        if force {
+            b.depth = 0;
+        }
+        b.written.clear();
+        let mut out: Vec<(String, usize)> = b.deferred.drain().collect();
+        out.sort();
+        out
+    }
+
+    /// Build the HNSW index of every collection whose index a bulk load
+    /// dropped: one in-memory parallel build each. All are attempted; the
+    /// first error is returned (a collection left unindexed still answers
+    /// every search by exact scan, and `create_missing_vector_indexes`
+    /// repairs it).
+    async fn build_deferred(&self, pending: Vec<(String, usize)>) -> VectorDBResult<()> {
+        let storage = |e: sea_orm::DbErr| VectorDBError::StorageError(e.to_string());
+        let mut first_err = None;
+        for (coll, dimension) in pending {
+            let res: VectorDBResult<()> = async {
+                let rows = self
+                    .db
+                    .query_one(Statement::from_string(
+                        DatabaseBackend::Postgres,
+                        format!(r#"SELECT count(*) AS n FROM "{coll}""#),
+                    ))
+                    .await
+                    .map_err(storage)?
+                    .and_then(|r| r.try_get::<i64>("", "n").ok())
+                    .unwrap_or(0);
+                let txn = self.db.begin().await.map_err(storage)?;
+                txn.execute_unprepared(&format!(
+                    "SET LOCAL maintenance_work_mem = '{}kB'; \
+                     SET LOCAL max_parallel_maintenance_workers = {BULK_BUILD_WORKERS}",
+                    Self::hnsw_build_budget_kb(rows, dimension)
+                ))
+                .await
+                .map_err(storage)?;
+                txn.execute_unprepared(&Self::vector_index_ddl(&coll, false))
+                    .await
+                    .map_err(storage)?;
+                txn.commit().await.map_err(storage)?;
+                debug!("bulk load: built HNSW index on {coll} ({rows} rows)");
+                Ok(())
+            }
+            .await;
+            if let Err(e) = res {
+                warn!("bulk load: HNSW build on {coll} failed: {e}");
+                first_err.get_or_insert(e);
+            }
+        }
+        first_err.map_or(Ok(()), Err)
+    }
+
+    /// Inside a bulk-load scope: whether `coll` (HNSW-indexed, `total` rows)
+    /// should stop maintaining its index now that `incoming` more points are
+    /// being written; if so it is recorded as deferred and the caller drops
+    /// the index. `None` outside a scope.
+    #[allow(clippy::expect_used, reason = "lock poison is unrecoverable")]
+    fn bulk_should_defer(
+        &self,
+        coll: &str,
+        incoming: i64,
+        total: i64,
+        dimension: usize,
+    ) -> Option<bool> {
+        // lock poison is unrecoverable
+        let mut b = self.bulk.lock().expect("bulk-load state lock");
+        if b.depth == 0 {
+            return None;
+        }
+        if b.deferred.contains_key(coll) {
+            return Some(false);
+        }
+        let w = b.written.entry(coll.to_string()).or_insert(0);
+        *w = w.saturating_add(incoming);
+        if (*w as f64) >= BULK_DEFER_RATIO * total as f64 {
+            b.deferred.insert(coll.to_string(), dimension);
+            return Some(true);
+        }
+        Some(false)
+    }
+
+    #[allow(clippy::expect_used, reason = "lock poison is unrecoverable")]
+    fn is_deferred(&self, coll: &str) -> bool {
+        // lock poison is unrecoverable
+        self.bulk
+            .lock()
+            .expect("bulk-load state lock")
+            .deferred
+            .contains_key(coll)
     }
 
     #[allow(clippy::expect_used, reason = "lock poison is unrecoverable")]
@@ -910,6 +1048,42 @@ impl PgVectorAdapter {
         };
 
         let dimension = points.first().map_or(0, |p| p.vector.len());
+        if dimension <= MAX_INDEXABLE_DIMENSION && self.is_deferred(coll) {
+            // Index dropped for the rest of this bulk load.
+            return self
+                .write_points_concurrently(coll, points, merge_membership)
+                .await;
+        }
+        if dimension <= MAX_INDEXABLE_DIMENSION
+            && self.bulk.lock().map(|b| b.depth > 0).unwrap_or(false)
+        {
+            let index = Self::vector_index_name(coll);
+            if Self::vector_index_state(&self.db, &index).await? == Some(true) {
+                let total = self
+                    .db
+                    .query_one(Statement::from_string(
+                        DatabaseBackend::Postgres,
+                        format!(r#"SELECT count(*) AS n FROM "{coll}""#),
+                    ))
+                    .await
+                    .map_err(|e| VectorDBError::StorageError(e.to_string()))?
+                    .and_then(|r| r.try_get::<i64>("", "n").ok())
+                    .unwrap_or(0);
+                let incoming = i64::try_from(points.len()).unwrap_or(i64::MAX);
+                if self.bulk_should_defer(coll, incoming, total, dimension) == Some(true) {
+                    self.db
+                        .execute_unprepared(&format!(r#"DROP INDEX IF EXISTS "{index}""#))
+                        .await
+                        .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
+                    debug!(
+                        "bulk load: dropped HNSW index on {coll} ({total} rows) until the load ends"
+                    );
+                }
+                return self
+                    .write_points_concurrently(coll, points, merge_membership)
+                    .await;
+            }
+        }
         if points.len() >= HNSW_REBUILD_MIN_ROWS && dimension <= MAX_INDEXABLE_DIMENSION {
             let index = Self::vector_index_name(coll);
             if Self::vector_index_state(&self.db, &index).await? == Some(true) {
@@ -1200,6 +1374,29 @@ impl VectorDB for PgVectorAdapter {
     /// directly.
     async fn create_missing_vector_indexes(&self) -> VectorDBResult<VectorIndexBackfill> {
         PgVectorAdapter::create_missing_vector_indexes(self).await
+    }
+
+    /// Opens a bulk-load scope: from here until the matching
+    /// [`end_bulk_load`](VectorDB::end_bulk_load), a collection that has
+    /// taken [`BULK_DEFER_RATIO`] x its rows in this scope has its HNSW index
+    /// dropped (searches of it run as exact scans meanwhile, so results stay
+    /// correct) and rebuilt once, in parallel, when the last scope ends.
+    #[allow(clippy::expect_used, reason = "lock poison is unrecoverable")]
+    async fn begin_bulk_load(&self) -> VectorDBResult<()> {
+        // lock poison is unrecoverable
+        self.bulk.lock().expect("bulk-load state lock").depth += 1;
+        Ok(())
+    }
+
+    #[allow(clippy::expect_used, reason = "lock poison is unrecoverable")]
+    async fn end_bulk_load(&self) -> VectorDBResult<()> {
+        {
+            // lock poison is unrecoverable
+            let mut b = self.bulk.lock().expect("bulk-load state lock");
+            b.depth = b.depth.saturating_sub(1);
+        }
+        let pending = self.take_deferred(false);
+        self.build_deferred(pending).await
     }
 
     async fn create_collection(
