@@ -531,6 +531,83 @@ async fn an_interrupted_bulk_load_leaves_correct_rows_that_the_backfill_reindexe
     .await;
 }
 
+/// A bulk load can end two ways: `end_bulk_load`, or `close()` when the scope
+/// was abandoned (a dropped future cannot await the maintenance). Both have to
+/// run *both* steps. `close()` ran only the deferred index builds, so a load
+/// finished that way left its collections planned from `reltuples = -1` or a
+/// count taken from their first batch — the very problem the `ANALYZE` step was
+/// added for, and one a collection filled faster than autovacuum's 60-second
+/// naptime cannot fix by itself.
+///
+/// The collection here deliberately does *not* cross the defer ratio, so no
+/// index is rebuilt on close: a `CREATE INDEX` updates `reltuples` as a side
+/// effect, which would mask a missing `ANALYZE`.
+#[tokio::test]
+async fn a_bulk_load_finished_by_close_analyzes_what_it_wrote() {
+    with_temp_db(
+        "a_bulk_load_finished_by_close_analyzes_what_it_wrote",
+        |url| async move {
+            let point = |i: usize| {
+                let jitter = f64::from(i as u32) * 1e-6;
+                #[allow(clippy::cast_possible_truncation)]
+                let v = vec![1.0, jitter as f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+                crate::models::VectorPoint::new(uuid::Uuid::from_u128(0x2000 + i as u128), v)
+            };
+            let reltuples = |db: DatabaseConnection| async move {
+                let row = db
+                    .query_one(Statement::from_string(
+                        DatabaseBackend::Postgres,
+                        "SELECT reltuples FROM pg_class WHERE relname = 'Closed_f'",
+                    ))
+                    .await
+                    .unwrap()
+                    .expect("the collection table must exist");
+                row.try_get::<f32>("", "reltuples").unwrap()
+            };
+
+            {
+                let adapter = PgVectorAdapter::new(&url, 8).await.unwrap();
+                adapter.create_collection("Closed", "f", 8).await.unwrap();
+                // Seeded in batches under HNSW_REBUILD_MIN_ROWS and outside any
+                // scope, so nothing rebuilds the index and nothing analyses.
+                let seed: Vec<_> = (0..100).map(point).collect();
+                for chunk in seed.chunks(50) {
+                    adapter.index_points("Closed", "f", chunk).await.unwrap();
+                }
+                let db = Database::connect(&url).await.unwrap();
+                assert_eq!(
+                    reltuples(db).await,
+                    -1.0,
+                    "nothing has analysed this collection yet, so it still \
+                     carries the `never analysed` sentinel — otherwise the \
+                     assertion below proves nothing"
+                );
+
+                // 20 points is well under 0.25 x (100 + 20), so the index stays
+                // live and only the ANALYZE is left to do.
+                adapter.begin_bulk_load().await.unwrap();
+                let more: Vec<_> = (100..120).map(point).collect();
+                adapter.index_points("Closed", "f", &more).await.unwrap();
+                // No end_bulk_load: close() is the one that has to finish it.
+                adapter.close().await.unwrap();
+            }
+
+            let db = Database::connect(&url).await.unwrap();
+            assert!(
+                index_present(&db, "Closed_f_halfvec_hnsw").await,
+                "the index was never deferred, so it must still be there"
+            );
+            assert_eq!(
+                reltuples(db).await,
+                120.0,
+                "close() must ANALYZE every collection the load wrote, or the \
+                 planner costs this collection as empty"
+            );
+        },
+    )
+    .await;
+}
+
 /// Incremental re-cognify: small batches into a collection that is already
 /// large. The deferral decision needs the collection's size, and reading it per
 /// batch used to mean a `count(*)` — a scan-sized read — for every one of them,

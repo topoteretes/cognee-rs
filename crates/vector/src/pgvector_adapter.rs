@@ -859,11 +859,20 @@ impl PgVectorAdapter {
     /// idempotent.
     pub async fn close(&self) -> VectorDBResult<()> {
         // A bulk load cut short by close() still leaves every collection
-        // indexed.
+        // indexed *and* analysed — the same two steps `end_bulk_load` runs, in
+        // the same order, because close() is the other way a load can end
+        // (`BulkLoadGuard`'s `Drop` closes the scope without being able to
+        // await either of them). Skipping the `ANALYZE` would leave a
+        // collection filled faster than autovacuum's naptime planned from
+        // `reltuples = -1` or a count from its first batch, which is the exact
+        // problem that step was added for.
         let pending = self.take_deferred(true);
+        let written = self.take_written(true);
         let built = self.build_deferred(pending).await;
+        let analyzed = self.analyze(written).await;
+        let maintained = built.and(analyzed);
         if !self.owns_pool {
-            built?;
+            maintained?;
             debug!("PgVectorAdapter::close is a no-op for a caller-owned connection");
             return Ok(());
         }
@@ -871,7 +880,7 @@ impl PgVectorAdapter {
             self.db.close_by_ref().await.map_err(|e| {
                 VectorDBError::StorageError(format!("PGVector pool close failed: {e}"))
             });
-        built?;
+        maintained?;
         closed
     }
 
