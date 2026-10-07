@@ -147,6 +147,12 @@ const HNSW_REBUILD_MIN_ROWS: usize = 200;
 /// [`PgVectorAdapter::upsert_rebuilding_index`]).
 const HNSW_REBUILD_RATIO: f64 = 0.25;
 
+/// `max_parallel_maintenance_workers` for an index rebuild (the server default
+/// is 2). pgvector's HNSW build scales with workers: 41k 384-d rows took
+/// 12.8 s / 5.0 s / 3.2 s / 2.1 s with 0 / 2 / 4 / 7 workers here. Still
+/// capped by the server's `max_parallel_workers` / `max_worker_processes`.
+const HNSW_BUILD_WORKERS: u32 = 4;
+
 /// Lower / upper bound of the `maintenance_work_mem` (kB) an index rebuild
 /// runs under: pgvector's default, and 2 GB.
 const HNSW_BUILD_BUDGET_MIN_KB: i64 = 64 * 1024;
@@ -951,7 +957,8 @@ impl PgVectorAdapter {
             .map_err(storage)?;
         Self::write_points(&txn, coll, points, merge_membership).await?;
         txn.execute_unprepared(&format!(
-            "SET LOCAL maintenance_work_mem = '{}kB'",
+            "SET LOCAL maintenance_work_mem = '{}kB'; \
+             SET LOCAL max_parallel_maintenance_workers = {HNSW_BUILD_WORKERS}",
             Self::hnsw_build_budget_kb(rows_after, dimension)
         ))
         .await
