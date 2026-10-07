@@ -39,6 +39,40 @@ const WRITE_BATCH: usize = 5000;
 /// Ids per `= ANY($1::text[])` array parameter on the read/delete paths.
 const ID_BATCH: usize = 20_000;
 
+/// Nodes of the materialized id-set CTE `ids` plus the edges induced on it,
+/// read through the source-side index and joined against the set on the
+/// target. Best for small sets (index nested loops throughout). Rows are
+/// discriminated by `kind`; see [`PgGraphAdapter::subgraph_query`].
+const INDUCED_SUBGRAPH: &str = "\
+    SELECT 'node' AS kind, n.id, n.name, n.type, n.properties, \
+           NULL::text AS source_id, NULL::text AS target_id, \
+           NULL::text AS relationship_name, NULL::jsonb AS edge_properties \
+    FROM ids JOIN graph_node n ON n.id = ids.id \
+    UNION ALL \
+    SELECT 'edge', NULL, NULL, NULL, NULL, \
+           e.source_id, e.target_id, e.relationship_name, e.properties \
+    FROM ids a JOIN graph_edge e ON e.source_id = a.id JOIN ids b ON e.target_id = b.id";
+
+/// [`INDUCED_SUBGRAPH`] with the edge half as two `IN (SELECT id FROM ids)`
+/// semi-joins. For large id sets (hundreds of seeds, thousands of ids) the
+/// explicit double join plans as a merge join that spends most of its time
+/// sorting edge rows by `target_id` under the database collation; hashed
+/// semi-joins avoid the sort. For a handful of seeds it is slower than the
+/// join form, hence both.
+const INDUCED_SUBGRAPH_SEMI: &str = "\
+    SELECT 'node' AS kind, n.id, n.name, n.type, n.properties, \
+           NULL::text AS source_id, NULL::text AS target_id, \
+           NULL::text AS relationship_name, NULL::jsonb AS edge_properties \
+    FROM ids JOIN graph_node n ON n.id = ids.id \
+    UNION ALL \
+    SELECT 'edge', NULL, NULL, NULL, NULL, \
+           e.source_id, e.target_id, e.relationship_name, e.properties \
+    FROM graph_edge e \
+    WHERE e.source_id IN (SELECT id FROM ids) AND e.target_id IN (SELECT id FROM ids)";
+
+/// Id-set size from which `get_neighborhood` uses [`INDUCED_SUBGRAPH_SEMI`].
+const SEMI_JOIN_MIN_SEEDS: usize = 64;
+
 /// Only these column names may appear in dynamic WHERE clauses to prevent SQL injection.
 const ALLOWED_FILTER_ATTRS: &[&str] = &["id", "name", "type"];
 
@@ -414,6 +448,42 @@ impl PgGraphAdapter {
             .unwrap_or("")
             .to_string();
         Ok((id, data))
+    }
+
+    /// Run a `kind`-discriminated node/edge union (`'node'` rows carry
+    /// `id, name, type, properties`; edge rows `source_id, target_id,
+    /// relationship_name, edge_properties`) and split it.
+    async fn subgraph_query(
+        &self,
+        sql: &str,
+        values: Vec<sea_orm::Value>,
+    ) -> GraphDBResult<(Vec<GraphNode>, Vec<EdgeData>)> {
+        let rows = self
+            .db
+            .query_all(Statement::from_sql_and_values(
+                DatabaseBackend::Postgres,
+                sql,
+                values,
+            ))
+            .await
+            .map_err(|e| GraphDBError::QueryError(e.to_string()))?;
+        let mut nodes = Vec::new();
+        let mut edges = Vec::new();
+        for row in &rows {
+            let kind: String = row.try_get("", "kind").unwrap_or_default();
+            if kind == "node" {
+                nodes.push(Self::parse_graph_node(row)?);
+            } else {
+                edges.push(Self::parse_edge_row_cols(
+                    row,
+                    "source_id",
+                    "target_id",
+                    "relationship_name",
+                    "edge_properties",
+                )?);
+            }
+        }
+        Ok((nodes, edges))
     }
 
     /// Parse an edge row into [`EdgeData`].
@@ -1329,17 +1399,15 @@ impl GraphDBTrait for PgGraphAdapter {
     // that sea_query's builder cannot express.
 
     async fn get_neighbors(&self, node_id: &str) -> GraphDBResult<Vec<NodeData>> {
+        // Two directed index probes unioned into the id set, instead of one
+        // `source_id = $1 OR target_id = $1` scan joined through a CASE.
         let rows = self
             .db
             .query_all(Statement::from_sql_and_values(
                 DatabaseBackend::Postgres,
-                "SELECT DISTINCT m.id, m.name, m.type, m.properties \
-                 FROM graph_edge e \
-                 JOIN graph_node m ON m.id = CASE \
-                     WHEN e.source_id = $1 THEN e.target_id \
-                     ELSE e.source_id \
-                 END \
-                 WHERE e.source_id = $1 OR e.target_id = $1",
+                "SELECT m.id, m.name, m.type, m.properties FROM graph_node m \
+                 WHERE m.id IN (SELECT target_id FROM graph_edge WHERE source_id = $1 \
+                                UNION SELECT source_id FROM graph_edge WHERE target_id = $1)",
                 [node_id.into()],
             ))
             .await
@@ -1581,17 +1649,10 @@ impl GraphDBTrait for PgGraphAdapter {
         &self,
         attribute_filters: &HashMap<Cow<'static, str>, Vec<Value>>,
     ) -> GraphDBResult<(Vec<GraphNode>, Vec<EdgeData>)> {
-        if attribute_filters.is_empty() {
-            return self.get_graph_data().await;
-        }
-
-        // Build WHERE clause — only allow whitelisted attributes to prevent SQL injection.
-        // Raw SQL is used here because the CTE + UNION ALL pattern is not expressible
-        // via sea_query.
-        let mut where_parts = Vec::new();
+        // Only whitelisted attributes may be interpolated (SQL injection);
+        // each attribute's values bind as one `text[]`.
+        let mut clauses = Vec::new();
         let mut values: Vec<sea_orm::Value> = Vec::new();
-        let mut param_idx = 1u32;
-
         for (attr, filter_values) in attribute_filters {
             if filter_values.is_empty() {
                 continue;
@@ -1601,78 +1662,27 @@ impl GraphDBTrait for PgGraphAdapter {
                     "Invalid filter attribute: {attr:?}. Allowed: {ALLOWED_FILTER_ATTRS:?}"
                 )));
             }
-            let placeholders: Vec<String> = filter_values
+            let strings: Vec<String> = filter_values
                 .iter()
                 .map(|v| {
-                    let ph = format!("${param_idx}");
-                    param_idx += 1;
-                    let s = v
-                        .as_str()
+                    v.as_str()
                         .map(String::from)
-                        .unwrap_or_else(|| v.to_string());
-                    values.push(s.into());
-                    ph
+                        .unwrap_or_else(|| v.to_string())
                 })
                 .collect();
-            where_parts.push(format!("n.{attr} IN ({})", placeholders.join(", ")));
+            values.push(strings.into());
+            clauses.push(format!("n.{attr} = ANY(${}::text[])", values.len()));
         }
 
-        if where_parts.is_empty() {
+        if clauses.is_empty() {
             return self.get_graph_data().await;
         }
 
-        let where_clause = where_parts.join(" AND ");
         let sql = format!(
-            "WITH filtered_nodes AS ( \
-                 SELECT id, name, type, properties FROM graph_node n WHERE {where_clause} \
-             ) \
-             SELECT 'node' AS kind, fn.id, fn.name, fn.type, fn.properties, \
-                    NULL::text AS source_id, NULL::text AS target_id, \
-                    NULL::text AS relationship_name, NULL::jsonb AS edge_props \
-             FROM filtered_nodes fn \
-             UNION ALL \
-             SELECT 'edge', NULL, NULL, NULL, NULL, \
-                    e.source_id, e.target_id, e.relationship_name, e.properties \
-             FROM graph_edge e \
-             WHERE e.source_id IN (SELECT id FROM filtered_nodes) \
-               AND e.target_id IN (SELECT id FROM filtered_nodes)"
+            "WITH ids AS MATERIALIZED (SELECT n.id FROM graph_node n WHERE {}) {INDUCED_SUBGRAPH}",
+            clauses.join(" AND ")
         );
-
-        let rows = self
-            .db
-            .query_all(Statement::from_sql_and_values(
-                DatabaseBackend::Postgres,
-                &sql,
-                values,
-            ))
-            .await
-            .map_err(|e| GraphDBError::QueryError(e.to_string()))?;
-
-        let mut nodes = Vec::new();
-        let mut edges = Vec::new();
-
-        for row in &rows {
-            let kind: String = row.try_get("", "kind").unwrap_or_default();
-            if kind == "node" {
-                let data = Self::parse_node_row(row)?;
-                let id = data
-                    .get("id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                nodes.push((id, data));
-            } else {
-                edges.push(Self::parse_edge_row_cols(
-                    row,
-                    "source_id",
-                    "target_id",
-                    "relationship_name",
-                    "edge_props",
-                )?);
-            }
-        }
-
-        Ok((nodes, edges))
+        self.subgraph_query(&sql, values).await
     }
 
     /// Narrow the node scan to rows that could carry `needle` as a type-ish
@@ -1745,6 +1755,12 @@ impl GraphDBTrait for PgGraphAdapter {
         Ok(nodes)
     }
 
+    /// The primary nodes (`type` = `node_type`, `name` in `node_names`), their
+    /// neighbours — any neighbour for `"OR"`, otherwise only neighbours
+    /// adjacent to as many distinct primaries as there are requested names —
+    /// and the edges induced on that set. Driven through the edge indexes
+    /// instead of `OR`-ed `IN (subquery)` predicates that scan the whole edge
+    /// table.
     async fn get_nodeset_subgraph(
         &self,
         node_type: &str,
@@ -1754,112 +1770,32 @@ impl GraphDBTrait for PgGraphAdapter {
         if node_names.is_empty() {
             return Ok((vec![], vec![]));
         }
-
-        // Raw SQL — complex CTE with dynamic neighbor logic (OR vs AND).
-        let name_placeholders: Vec<String> = (0..node_names.len())
-            .map(|i| format!("${}", i + 2))
-            .collect();
-        let names_in = name_placeholders.join(", ");
-
-        let neighbor_cte = if node_name_filter_operator == "OR" {
-            "neighbor_ids AS ( \
-                 SELECT DISTINCT CASE \
-                     WHEN e.source_id IN (SELECT id FROM primary_nodes) \
-                     THEN e.target_id ELSE e.source_id \
-                 END AS id \
-                 FROM graph_edge e \
-                 WHERE e.source_id IN (SELECT id FROM primary_nodes) \
-                    OR e.target_id IN (SELECT id FROM primary_nodes) \
-             )"
-            .to_string()
+        // (neighbour, primary) per edge touching a primary node; an edge whose
+        // source is primary contributes its target, otherwise its source.
+        let touching = "touch AS ( \
+            SELECT e.target_id AS nbr, e.source_id AS prim \
+              FROM p JOIN graph_edge e ON e.source_id = p.id \
+            UNION ALL \
+            SELECT e.source_id, e.target_id \
+              FROM p JOIN graph_edge e ON e.target_id = p.id \
+             WHERE NOT EXISTS (SELECT 1 FROM p p2 WHERE p2.id = e.source_id))";
+        let neighbours = if node_name_filter_operator == "OR" {
+            "SELECT nbr FROM touch"
         } else {
-            // AND: neighbor must be connected to every primary node.
-            let primary_count_param = format!("${}", node_names.len() + 2);
-            format!(
-                "neighbor_ids AS ( \
-                     SELECT nbr_id AS id FROM ( \
-                         SELECT CASE \
-                             WHEN e.source_id IN (SELECT id FROM primary_nodes) \
-                             THEN e.target_id ELSE e.source_id \
-                         END AS nbr_id, \
-                         CASE \
-                             WHEN e.source_id IN (SELECT id FROM primary_nodes) \
-                             THEN e.source_id ELSE e.target_id \
-                         END AS primary_id \
-                         FROM graph_edge e \
-                         WHERE e.source_id IN (SELECT id FROM primary_nodes) \
-                            OR e.target_id IN (SELECT id FROM primary_nodes) \
-                     ) sub \
-                     GROUP BY nbr_id \
-                     HAVING COUNT(DISTINCT primary_id) = {primary_count_param} \
-                 )"
-            )
+            "SELECT nbr FROM touch GROUP BY nbr HAVING count(DISTINCT prim) = $3"
         };
-
         let sql = format!(
-            "WITH primary_nodes AS ( \
-                 SELECT DISTINCT id FROM graph_node WHERE type = $1 AND name IN ({names_in}) \
-             ), \
-             {neighbor_cte}, \
-             all_ids AS ( \
-                 SELECT id FROM primary_nodes UNION SELECT id FROM neighbor_ids \
-             ) \
-             SELECT 'node' AS kind, n.id, n.name, n.type, n.properties, \
-                    NULL::text AS source_id, NULL::text AS target_id, \
-                    NULL::text AS relationship_name, NULL::jsonb AS edge_props \
-             FROM graph_node n WHERE n.id IN (SELECT id FROM all_ids) \
-             UNION ALL \
-             SELECT 'edge', NULL, NULL, NULL, NULL, \
-                    e.source_id, e.target_id, e.relationship_name, e.properties \
-             FROM graph_edge e \
-             WHERE e.source_id IN (SELECT id FROM all_ids) \
-               AND e.target_id IN (SELECT id FROM all_ids)"
+            "WITH p AS MATERIALIZED (SELECT DISTINCT id FROM graph_node \
+                                     WHERE type = $1 AND name = ANY($2::text[])), \
+             {touching}, \
+             ids AS MATERIALIZED (SELECT id FROM p UNION {neighbours}) \
+             {INDUCED_SUBGRAPH}"
         );
-
-        let mut values: Vec<sea_orm::Value> = Vec::new();
-        values.push(node_type.into());
-        for name in node_names {
-            values.push(name.clone().into());
-        }
+        let mut values: Vec<sea_orm::Value> = vec![node_type.into(), node_names.to_vec().into()];
         if node_name_filter_operator != "OR" {
-            values.push((node_names.len() as i64).into());
+            values.push(i64::try_from(node_names.len()).unwrap_or(i64::MAX).into());
         }
-
-        let rows = self
-            .db
-            .query_all(Statement::from_sql_and_values(
-                DatabaseBackend::Postgres,
-                &sql,
-                values,
-            ))
-            .await
-            .map_err(|e| GraphDBError::QueryError(e.to_string()))?;
-
-        let mut nodes = Vec::new();
-        let mut edges = Vec::new();
-
-        for row in &rows {
-            let kind: String = row.try_get("", "kind").unwrap_or_default();
-            if kind == "node" {
-                let data = Self::parse_node_row(row)?;
-                let id = data
-                    .get("id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                nodes.push((id, data));
-            } else {
-                edges.push(Self::parse_edge_row_cols(
-                    row,
-                    "source_id",
-                    "target_id",
-                    "relationship_name",
-                    "edge_props",
-                )?);
-            }
-        }
-
-        Ok((nodes, edges))
+        self.subgraph_query(&sql, values).await
     }
 
     async fn get_id_filtered_graph_data(
@@ -1869,59 +1805,13 @@ impl GraphDBTrait for PgGraphAdapter {
         if node_ids.is_empty() {
             return Ok((vec![], vec![]));
         }
-
-        // Raw SQL — the edge query reuses the same $1..$N placeholders for both
-        // source_id IN and target_id IN, a PostgreSQL optimisation that sea_query
-        // cannot express.
-        let placeholders: Vec<String> = (1..=node_ids.len()).map(|i| format!("${i}")).collect();
-        let in_clause = placeholders.join(", ");
-
-        let node_sql =
-            format!("SELECT id, name, type, properties FROM graph_node WHERE id IN ({in_clause})");
-        let edge_sql = format!(
-            "SELECT source_id, target_id, relationship_name, properties FROM graph_edge \
-             WHERE source_id IN ({in_clause}) AND target_id IN ({in_clause})"
+        // One `text[]` parameter instead of the id list bound twice (once per
+        // edge endpoint), so no 65 535-parameter ceiling at ~32k ids.
+        let sql = format!(
+            "WITH ids AS MATERIALIZED (SELECT DISTINCT unnest($1::text[]) AS id) {INDUCED_SUBGRAPH}"
         );
-
-        let values: Vec<sea_orm::Value> = node_ids.iter().map(|id| id.clone().into()).collect();
-
-        let node_rows = self
-            .db
-            .query_all(Statement::from_sql_and_values(
-                DatabaseBackend::Postgres,
-                &node_sql,
-                values.clone(),
-            ))
+        self.subgraph_query(&sql, vec![node_ids.to_vec().into()])
             .await
-            .map_err(|e| GraphDBError::QueryError(e.to_string()))?;
-
-        let mut nodes = Vec::new();
-        for row in &node_rows {
-            let data = Self::parse_node_row(row)?;
-            let id = data
-                .get("id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            nodes.push((id, data));
-        }
-
-        let edge_rows = self
-            .db
-            .query_all(Statement::from_sql_and_values(
-                DatabaseBackend::Postgres,
-                &edge_sql,
-                values,
-            ))
-            .await
-            .map_err(|e| GraphDBError::QueryError(e.to_string()))?;
-
-        let mut edges = Vec::new();
-        for row in &edge_rows {
-            edges.push(Self::parse_edge_row(row)?);
-        }
-
-        Ok((nodes, edges))
     }
 
     /// Nodes of `node_type` with exactly one incident edge (a self-loop
@@ -1976,6 +1866,16 @@ impl GraphDBTrait for PgGraphAdapter {
         .await
     }
 
+    /// The seeds' `depth`-hop neighbourhood: every node within `depth`
+    /// undirected hops and every edge whose endpoints are both in that set
+    /// (stored direction preserved).
+    ///
+    /// Depth 0 and 1 are one statement: the id set is a CTE built from two
+    /// directed index joins (no `source = x OR target = x` join, which can
+    /// only be answered by a bitmap-OR per row of the recursive CTE), and the
+    /// induced edges come from index scans on `source_id` joined against the
+    /// set. Deeper walks expand the frontier level by level (one round trip
+    /// each, never revisiting a node) and then read the induced subgraph.
     async fn get_neighborhood(
         &self,
         node_ids: &[String],
@@ -1984,69 +1884,56 @@ impl GraphDBTrait for PgGraphAdapter {
         if node_ids.is_empty() {
             return Ok((vec![], vec![]));
         }
-
-        // Single recursive-CTE round trip: expand the seed set out to `depth`
-        // hops, then return both the node rows and the edges internal to the
-        // resolved set. `ge.source_id`/`ge.target_id` are selected straight off
-        // graph_edge (no CASE swap), so the true stored direction is preserved.
-        // The two result halves are discriminated by a literal `kind` column;
-        // the edge half's properties are aliased `edge_properties` to avoid a
-        // collision with the node half's `properties` column.
-        let sql = "WITH RECURSIVE neighborhood(id, hops) AS ( \
-                       SELECT unnest($1::text[]), 0 \
-                       UNION \
-                       SELECT CASE WHEN e.source_id = n.id THEN e.target_id ELSE e.source_id END, \
-                              n.hops + 1 \
-                       FROM neighborhood n \
-                       JOIN graph_edge e ON (e.source_id = n.id OR e.target_id = n.id) \
-                       WHERE n.hops < $2 \
-                   ), \
-                   ids AS (SELECT DISTINCT id FROM neighborhood) \
-                   SELECT 'node' AS kind, gn.id, gn.name, gn.type, gn.properties, \
-                          NULL::text AS source_id, NULL::text AS target_id, \
-                          NULL::text AS relationship_name, NULL::jsonb AS edge_properties \
-                   FROM graph_node gn WHERE gn.id IN (SELECT id FROM ids) \
-                   UNION ALL \
-                   SELECT 'edge', NULL, NULL, NULL, NULL, \
-                          ge.source_id, ge.target_id, ge.relationship_name, ge.properties \
-                   FROM graph_edge ge \
-                   WHERE ge.source_id IN (SELECT id FROM ids) \
-                     AND ge.target_id IN (SELECT id FROM ids)";
-
-        let rows = self
-            .db
-            .query_all(Statement::from_sql_and_values(
-                DatabaseBackend::Postgres,
-                sql,
-                [node_ids.to_vec().into(), (depth as i64).into()],
-            ))
-            .await
-            .map_err(|e| GraphDBError::QueryError(e.to_string()))?;
-
-        let mut nodes = Vec::new();
-        let mut edges = Vec::new();
-        for row in &rows {
-            let kind: String = row.try_get("", "kind").unwrap_or_default();
-            if kind == "node" {
-                let data = Self::parse_node_row(row)?;
-                let id = data
-                    .get("id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                nodes.push((id, data));
-            } else {
-                edges.push(Self::parse_edge_row_cols(
-                    row,
-                    "source_id",
-                    "target_id",
-                    "relationship_name",
-                    "edge_properties",
-                )?);
+        let ids: Vec<String> = if depth <= 1 {
+            node_ids.to_vec()
+        } else {
+            let mut seen: HashSet<String> = node_ids.iter().cloned().collect();
+            let mut frontier: Vec<String> = seen.iter().cloned().collect();
+            for _ in 0..depth - 1 {
+                if frontier.is_empty() {
+                    break;
+                }
+                let rows = self
+                    .db
+                    .query_all(Statement::from_sql_and_values(
+                        DatabaseBackend::Postgres,
+                        "WITH f AS (SELECT DISTINCT unnest($1::text[]) AS id) \
+                         SELECT e.target_id AS id FROM graph_edge e JOIN f ON e.source_id = f.id \
+                         UNION SELECT e.source_id FROM graph_edge e JOIN f ON e.target_id = f.id",
+                        [frontier.clone().into()],
+                    ))
+                    .await
+                    .map_err(|e| GraphDBError::QueryError(e.to_string()))?;
+                let mut next = Vec::new();
+                for row in &rows {
+                    let id: String = row
+                        .try_get("", "id")
+                        .map_err(|e| GraphDBError::QueryError(e.to_string()))?;
+                    if seen.insert(id.clone()) {
+                        next.push(id);
+                    }
+                }
+                frontier = next;
             }
-        }
-
-        Ok((nodes, edges))
+            seen.into_iter().collect()
+        };
+        // For depth >= 1 the final statement adds the last hop itself.
+        let expand = if depth == 0 {
+            ""
+        } else {
+            "UNION SELECT e.target_id FROM graph_edge e JOIN seeds s ON e.source_id = s.id \
+             UNION SELECT e.source_id FROM graph_edge e JOIN seeds s ON e.target_id = s.id"
+        };
+        let induced = if ids.len() >= SEMI_JOIN_MIN_SEEDS {
+            INDUCED_SUBGRAPH_SEMI
+        } else {
+            INDUCED_SUBGRAPH
+        };
+        let sql = format!(
+            "WITH seeds AS (SELECT DISTINCT unnest($1::text[]) AS id), \
+             ids AS MATERIALIZED (SELECT id FROM seeds {expand}) {induced}"
+        );
+        self.subgraph_query(&sql, vec![ids.into()]).await
     }
 }
 
