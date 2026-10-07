@@ -21,10 +21,12 @@ pub const NODE_FILTER_RECALL_FETCH_CAP: usize = 4096;
 
 /// What a [`VectorDB::create_missing_vector_indexes`] pass actually did.
 ///
-/// Two counts rather than one, because `built == 0` alone is ambiguous: it is
-/// what a fully-indexed store reports and equally what a store reports when
-/// every single build failed. An operator running the only repair path there
-/// is needs those told apart.
+/// `built` and `failed` rather than one count, because `built == 0` alone is
+/// ambiguous: it is what a fully-indexed store reports and equally what a store
+/// reports when every single build failed. An operator running the only repair
+/// path there is needs those told apart. `dropped` is the third thing a pass
+/// can do — reclaim an index the backend has stopped reading — and it is
+/// neither a build nor a failure.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct VectorIndexBackfill {
     /// Indexes actually built by this call. Excludes collections that already
@@ -33,6 +35,19 @@ pub struct VectorIndexBackfill {
     /// Collections that needed an index and did not get one. Each was logged
     /// at `warn` with its reason and the pass continued past it.
     pub failed: usize,
+    /// Superseded indexes this call removed — a backend that changed its index
+    /// *shape* leaves the old one behind under its old name, where it is never
+    /// read again but is still maintained on every write.
+    ///
+    /// Reported separately from `built` because it is not a repair: a store
+    /// with none of these is not missing anything. It is what tells an operator
+    /// that the pass reclaimed something, so `built == 0 && dropped == 0` means
+    /// "nothing to do" and `built == 0 && dropped > 0` means "already indexed,
+    /// and the dead weight is gone now".
+    ///
+    /// Zero for every backend but pgvector, which drops `<coll>_vector_hnsw`
+    /// once `<coll>_halfvec_hnsw` is confirmed valid.
+    pub dropped: usize,
 }
 
 /// Vector database trait

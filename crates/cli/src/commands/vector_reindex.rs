@@ -70,6 +70,19 @@ pub fn run(_args: VectorReindexArgs, cm: Arc<ComponentManager>) -> Result<(), Cl
             info!("Built {} missing vector index(es).", report.built);
         }
 
+        // Not a repair, so it is reported separately and never affects the exit
+        // status: on pgvector this is the superseded full-precision
+        // `<coll>_vector_hnsw` of a store upgraded from before the
+        // half-precision index, which no search reads any more but every upsert
+        // still maintains.
+        if report.dropped > 0 {
+            info!(
+                "Dropped {} superseded vector index(es) that no search reads \
+                 any more.",
+                report.dropped
+            );
+        }
+
         // A zero build count on its own is ambiguous: it is what a healthy,
         // fully-indexed store reports and equally what a store reports when
         // every build failed. Reporting the latter as success would tell an
@@ -86,7 +99,7 @@ pub fn run(_args: VectorReindexArgs, cm: Arc<ComponentManager>) -> Result<(), Cl
             )));
         }
 
-        if report.built == 0 {
+        if report.built == 0 && report.dropped == 0 {
             info!(
                 "No vector index needed building. Either every collection on \
                  the '{provider}' backend is already indexed, or that backend \

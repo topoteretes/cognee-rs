@@ -833,7 +833,7 @@ mod session_locals_tests {
     #[test]
     fn an_owned_pool_keeps_the_single_round_trip_fast_path() {
         assert_eq!(
-            PgVectorAdapter::ann_search_locals(true, true, 100),
+            PgVectorAdapter::ann_search_locals(true, true, 100, false),
             None,
             "a top-100 search on our own pool must stay one plain statement"
         );
@@ -841,7 +841,7 @@ mod session_locals_tests {
 
         // Above the session ef_search it does need a transaction — but only for
         // ef_search; the rest is already on the connection.
-        let locals = PgVectorAdapter::ann_search_locals(true, true, HNSW_EF_SEARCH_SESSION)
+        let locals = PgVectorAdapter::ann_search_locals(true, true, HNSW_EF_SEARCH_SESSION, false)
             .expect("2 x top_k is past the session ef_search, so this must set one");
         assert!(locals.contains("hnsw.ef_search"));
         assert!(
@@ -857,7 +857,7 @@ mod session_locals_tests {
     /// round trip exist either way.
     #[test]
     fn a_caller_owned_pool_carries_the_ann_settings_per_statement() {
-        let locals = PgVectorAdapter::ann_search_locals(false, true, 100)
+        let locals = PgVectorAdapter::ann_search_locals(false, true, 100, false)
             .expect("a connection we did not open has no session tuning at all");
         assert!(
             locals.contains("hnsw.ef_search"),
@@ -876,7 +876,7 @@ mod session_locals_tests {
 
         // Past the ef_search ceiling the exact scan is forced instead, and the
         // rest still has to come along.
-        let huge = PgVectorAdapter::ann_search_locals(false, true, HNSW_EF_SEARCH_MAX + 1)
+        let huge = PgVectorAdapter::ann_search_locals(false, true, HNSW_EF_SEARCH_MAX + 1, false)
             .expect("the exact-scan settings are always needed");
         assert!(huge.contains("enable_indexscan = off"));
         assert!(huge.contains(PLAN_CACHE_LOCAL));
@@ -899,7 +899,7 @@ mod session_locals_tests {
     /// Postgres and must still come along.
     #[test]
     fn an_older_pgvector_gets_no_iterative_scan_and_still_gets_the_rest() {
-        let locals = PgVectorAdapter::ann_search_locals(false, false, 100)
+        let locals = PgVectorAdapter::ann_search_locals(false, false, 100, false)
             .expect("ef_search and plan_cache_mode are still needed");
         assert!(
             !locals.contains("iterative_scan"),
@@ -921,12 +921,60 @@ mod session_locals_tests {
         assert!(PgVectorAdapter::untuned_session_locals(true, true).is_empty());
     }
 
+    /// A collection whose index a bulk load dropped must be kept off *every*
+    /// index, not merely off the fp16 one.
+    ///
+    /// Ordering in full precision ([`PgVectorAdapter::candidate_order_expr`])
+    /// is not enough on its own, and that is the hole this pins: `vector <=>
+    /// $1::vector` is precisely what the legacy `<coll>_vector_hnsw` index
+    /// serves, so on a store upgraded from before the half-precision change the
+    /// "exact scan meanwhile" of [`VectorDB::begin_bulk_load`] would be an
+    /// approximate scan over an index this adapter never built. Turning the
+    /// index paths off is the only form no stray index can defeat.
+    #[test]
+    fn an_indexless_collection_is_kept_off_every_index() {
+        // The case that matters most: our own pool at an ordinary top_k, which
+        // is the one combination that otherwise takes the `None` fast path and
+        // so sends no settings at all.
+        let locals = PgVectorAdapter::ann_search_locals(true, true, 100, true)
+            .expect("an indexless collection can never take the no-settings fast path");
+        assert!(
+            locals.contains("enable_indexscan = off") && locals.contains("enable_bitmapscan = off"),
+            "a stray index would otherwise serve the full-precision ordering: {locals}"
+        );
+        assert!(
+            !locals.contains("hnsw.ef_search"),
+            "there is no index scan left to widen, so ef_search is dead weight: {locals}"
+        );
+
+        // The control: the very same search keeps the fast path while the index
+        // is there.
+        assert_eq!(
+            PgVectorAdapter::ann_search_locals(true, true, 100, false),
+            None
+        );
+
+        // A caller-owned pool still brings the rest along, and the branch that
+        // already forced the exact scan must not now send it twice.
+        let untuned = PgVectorAdapter::ann_search_locals(false, true, 100, true)
+            .expect("a connection we did not open has no session tuning at all");
+        assert!(untuned.contains("enable_indexscan = off"), "{untuned}");
+        assert!(untuned.contains(PLAN_CACHE_LOCAL), "{untuned}");
+        let huge = PgVectorAdapter::ann_search_locals(true, true, HNSW_EF_SEARCH_MAX + 1, true)
+            .expect("past the ef_search ceiling the exact scan is forced anyway");
+        assert_eq!(
+            huge.matches("enable_indexscan = off").count(),
+            1,
+            "the two reasons for an exact scan must not stack: {huge}"
+        );
+    }
+
     /// Every statement is a complete `SET LOCAL …`, joined so the whole string
     /// is one simple-query round trip — a missing separator would make the
     /// *first* setting a syntax error, failing every search.
     #[test]
     fn the_locals_are_semicolon_separated_set_local_statements() {
-        let locals = PgVectorAdapter::ann_search_locals(false, true, HNSW_EF_SEARCH_MAX + 1)
+        let locals = PgVectorAdapter::ann_search_locals(false, true, HNSW_EF_SEARCH_MAX + 1, false)
             .expect("the exact-scan settings are always needed");
         for stmt in locals.split("; ") {
             assert!(
@@ -1064,6 +1112,11 @@ pub struct PgVectorAdapter {
     /// search may `SET LOCAL` that setting at all; see
     /// [`Self::untuned_session_locals`].
     iterative_scan: bool,
+    /// Collections whose index shape this adapter has already checked for the
+    /// legacy-only case — see [`Self::warn_if_legacy_only_index`]. Membership
+    /// means "checked", not "warned", so the two catalog probes happen at most
+    /// once per collection per process.
+    legacy_checked: RwLock<HashSet<String>>,
 }
 
 /// Open bulk-load scopes, and per collection the points written in them and
@@ -1146,6 +1199,7 @@ impl PgVectorAdapter {
             bulk: std::sync::Mutex::new(BulkLoad::default()),
             halfvec: features.halfvec,
             iterative_scan: features.iterative_scan,
+            legacy_checked: RwLock::new(HashSet::new()),
         })
     }
 
@@ -1177,6 +1231,7 @@ impl PgVectorAdapter {
             bulk: std::sync::Mutex::new(BulkLoad::default()),
             halfvec: features.halfvec,
             iterative_scan: features.iterative_scan,
+            legacy_checked: RwLock::new(HashSet::new()),
         })
     }
 
@@ -1440,6 +1495,76 @@ impl PgVectorAdapter {
             .remove(coll);
     }
 
+    /// Warn once per collection per process if `coll` still carries only the
+    /// legacy full-precision `<coll>_vector_hnsw` index, with no valid
+    /// `<coll>_halfvec_hnsw` — the state every store upgraded from before the
+    /// half-precision change is in until `vector-reindex` runs.
+    ///
+    /// Nothing else surfaces it. Every similarity search orders by
+    /// `vector::halfvec(n) <=> …`, which the legacy index cannot serve (EXPLAIN
+    /// on pgvector 0.8.2: `Seq Scan` + `Sort`), so such a store silently does a
+    /// sequential scan and a sort on every search while *looking* indexed —
+    /// there is an index on the table, it is valid, and no warning is emitted
+    /// anywhere. The only notice of it today is a paragraph in
+    /// `docs/tools/backends.md`.
+    ///
+    /// # Why here
+    /// [`VectorDB::has_collection`] is the one method the retrievers and the
+    /// indexer both call before touching a collection, and its positive answer
+    /// is cached ([`Self::known`]), so its *cold* path runs exactly once per
+    /// collection per process — which is also already a round trip, so the two
+    /// catalog probes ride along with one rather than being added to a hot
+    /// path. A search cannot do this itself: it would be two extra round trips
+    /// per query to learn something that changes only when an operator runs the
+    /// backfill.
+    ///
+    /// Silent below [`HALFVEC_MIN_VERSION`], where the legacy name is the
+    /// *active* index and there is nothing to report, and silent on any probe
+    /// error — this is a diagnostic, and failing a `has_collection` over it
+    /// would be worse than the scan it warns about.
+    #[allow(clippy::expect_used, reason = "lock poison is unrecoverable")]
+    async fn warn_if_legacy_only_index(&self, coll: &str) {
+        if !self.halfvec {
+            return;
+        }
+        {
+            // lock poison is unrecoverable
+            let checked = self.legacy_checked.read().expect("legacy-index cache lock");
+            if checked.contains(coll) {
+                return;
+            }
+        }
+        // lock poison is unrecoverable
+        if !self
+            .legacy_checked
+            .write()
+            .expect("legacy-index cache lock")
+            .insert(coll.to_string())
+        {
+            // Another task got there first; it does the probing.
+            return;
+        }
+
+        let legacy = Self::vector_index_name(coll, false);
+        let current = Self::vector_index_name(coll, true);
+        let (Ok(Some(_)), Ok(current_state)) = (
+            Self::vector_index_state(&self.db, &legacy).await,
+            Self::vector_index_state(&self.db, &current).await,
+        ) else {
+            return;
+        };
+        if current_state == Some(true) {
+            return;
+        }
+        warn!(
+            "collection {coll} carries only the superseded full-precision index \
+             {legacy}; every similarity search orders by the half-precision \
+             expression, which that index cannot serve, so each one is a \
+             sequential scan and a sort. Run `cognee-cli vector-reindex` (online, \
+             idempotent) to build {current} and reclaim {legacy}."
+        );
+    }
+
     /// Whether `e` says `coll`'s table is gone; if so, evict it from the
     /// collection cache so the next `has_collection` asks the database.
     fn forget_if_missing(&self, coll: &str, e: &VectorDBError) -> bool {
@@ -1572,6 +1697,23 @@ impl PgVectorAdapter {
     /// trade at that size, since such a query is scanning most of the
     /// collection regardless.
     ///
+    /// `indexless` — this collection's index is dropped for the rest of a
+    /// bulk-load scope ([`Self::is_deferred`]) — takes the same exit, and that
+    /// is the *only* form of the bulk-load contract that holds unconditionally.
+    /// Phrasing the ordering in full precision ([`Self::candidate_order_expr`])
+    /// stops the fp16 index from matching, but it does not stop *another* index
+    /// from matching: a store upgraded from before the half-precision change
+    /// still carries the legacy `<coll>_vector_hnsw` over `vector
+    /// vector_cosine_ops`, and `ORDER BY vector <=> $1::vector` is exactly what
+    /// that index serves (EXPLAIN on pgvector 0.8.2: `Index Scan using
+    /// <coll>_vector_hnsw`). So a search inside a bulk load would be answered
+    /// by an *approximate* scan over an index this adapter never built and does
+    /// not maintain — the opposite of the "served by exact scan meanwhile"
+    /// [`VectorDB::begin_bulk_load`] promises. Turning the index paths off for
+    /// the statement cannot be defeated that way, whatever indexes the
+    /// collection happens to carry. It costs nothing outside a bulk-load scope,
+    /// because `indexless` is false there.
+    ///
     /// On top of that, everything [`Self::untuned_session_locals`] carries for a
     /// connection this adapter did not open.
     ///
@@ -1579,15 +1721,19 @@ impl PgVectorAdapter {
     /// `tuned_sessions` pools open every connection with
     /// `hnsw.ef_search = HNSW_EF_SEARCH_SESSION` (and the rest of the tuning)
     /// already, so an ANN search up to that `top_k` is one plain statement
-    /// rather than `BEGIN; SET LOCAL …; SELECT; COMMIT`. Pure in
+    /// rather than `BEGIN; SET LOCAL …; SELECT; COMMIT`. An `indexless` search
+    /// can never take that fast path — it always has settings to carry. Pure in
     /// `tuned_sessions` so the decision is testable without a server.
     fn ann_search_locals(
         tuned_sessions: bool,
         iterative_scan: bool,
         top_k: usize,
+        indexless: bool,
     ) -> Option<String> {
         let mut locals: Vec<String> = Vec::new();
-        if top_k > HNSW_EF_SEARCH_MAX {
+        if indexless || top_k > HNSW_EF_SEARCH_MAX {
+            // `ef_search` is pointless here — there is no index scan left to
+            // widen — so it is not also sent.
             locals.push(Self::exact_scan_locals().to_string());
         } else if !tuned_sessions || top_k.saturating_mul(HNSW_EF_PER_K) > HNSW_EF_SEARCH_SESSION {
             let ef = top_k
@@ -1687,8 +1833,8 @@ impl PgVectorAdapter {
     /// not against a path this adapter *declares exact*, where it would reorder
     /// rows at the `LIMIT` boundary for nothing. The outer `ORDER BY score DESC`
     /// does not repair that — it only re-sorts a candidate set already chosen.
-    /// Four cases, and in all four the plain `vector <=> …` is both exact and
-    /// no slower, because there is no index to match:
+    /// Four cases, and in all four the plain `vector <=> …` is no slower,
+    /// because there is no *fp16* index to match:
     ///
     /// - `dim > MAX_INDEXABLE_DIMENSION`: pgvector cannot index the collection,
     ///   so it is on the sequential scan `backends.md` promises returns the true
@@ -1709,6 +1855,15 @@ impl PgVectorAdapter {
     ///   forbids. The flag costs one uncontended in-memory mutex (the
     ///   per-collection state `upsert_points` already reads on every batch), not
     ///   a round trip.
+    ///
+    /// The expression alone is **not** enough for that last case, and this is
+    /// the half that is easy to get wrong: `vector <=> $1::vector` is the
+    /// ordering the *legacy* `<coll>_vector_hnsw` index serves, so on a store
+    /// upgraded from before the half-precision change an indexless search would
+    /// be answered by an approximate scan over an index this adapter neither
+    /// built nor maintains. The exactness therefore comes from
+    /// [`Self::ann_search_locals`] turning the index paths off for the
+    /// statement; this expression's job is only to not *add* an error on top.
     ///
     /// Residual, still not covered: a collection whose index was *never* built —
     /// a `create_collection` whose best-effort `CREATE INDEX` failed, or rows
@@ -2007,6 +2162,8 @@ impl PgVectorAdapter {
             };
 
             if state == Some(true) {
+                self.drop_legacy_vector_index(&coll, &index, &mut report)
+                    .await;
                 continue;
             }
 
@@ -2036,7 +2193,11 @@ impl PgVectorAdapter {
             )
             .await
             {
-                Ok(true) => report.built += 1,
+                Ok(true) => {
+                    report.built += 1;
+                    self.drop_legacy_vector_index(&coll, &index, &mut report)
+                        .await;
+                }
                 Ok(false) => {}
                 Err(e) => {
                     warn!("could not index collection {coll}, skipping it: {e}");
@@ -2046,6 +2207,94 @@ impl PgVectorAdapter {
         }
 
         Ok(report)
+    }
+
+    /// Drop `coll`'s legacy full-precision `<coll>_vector_hnsw` index, now that
+    /// `halfvec_index` is confirmed to be its usable one.
+    ///
+    /// # Why the backfill is where this belongs
+    /// Every store created before the half-precision change carries
+    /// `<coll>_vector_hnsw` over `vector vector_cosine_ops` — that is what
+    /// `create_collection` built — and the halfvec index arrives under a new
+    /// name, so nothing has ever removed the old one. Left in place it is not
+    /// merely wasteful: it is still maintained, so every upsert pays *two* HNSW
+    /// inserts, and a bulk-load scope that drops `<coll>_halfvec_hnsw` keeps
+    /// maintaining the legacy one row by row — which is the entire cost the
+    /// scope exists to avoid.
+    ///
+    /// The bulk-load drop path deliberately does **not** do this. It would be
+    /// permanent: the end-of-load build rebuilds only this adapter's own index
+    /// shape ([`Self::vector_index_ddl`] at `self.halfvec`), so dropping an
+    /// index it never created would remove it with nothing to put it back — a
+    /// one-way change to the store's shape, made by something the trait
+    /// documents as "a hint, never a semantic change". Here it is the
+    /// operator's explicit `vector-reindex`, and the new index is already
+    /// verified present. Correctness never depended on it either way:
+    /// [`Self::ann_search_locals`] keeps an indexless search off *every* index.
+    ///
+    /// # Why it is gated on `self.halfvec`
+    /// Below [`HALFVEC_MIN_VERSION`] `<coll>_vector_hnsw` is not a leftover —
+    /// it is the name [`Self::vector_index_name`] gives the *active* index, and
+    /// dropping it would un-index the collection the backfill was asked to
+    /// index. The name check is the same invariant from the other side, and
+    /// `index_name_tests` pins that the two suffixes can never collide.
+    ///
+    /// A failed drop is logged and not counted in
+    /// [`VectorIndexBackfill::failed`]: that count decides `vector-reindex`'s
+    /// exit status and means "a collection has no index", which is not true
+    /// here — the new index is valid and the collection is fully served. The
+    /// drop is retried by the next pass.
+    async fn drop_legacy_vector_index(
+        &self,
+        coll: &str,
+        halfvec_index: &str,
+        report: &mut VectorIndexBackfill,
+    ) {
+        if !self.halfvec {
+            return;
+        }
+        let legacy = Self::vector_index_name(coll, false);
+        if legacy == halfvec_index {
+            return;
+        }
+        match Self::vector_index_state(&self.db, &legacy).await {
+            // Nothing there (the usual case for a store created after the
+            // change), so nothing to reclaim.
+            Ok(None) => return,
+            Ok(Some(_)) => {}
+            Err(e) => {
+                warn!("could not read the state of {legacy} on {coll}, leaving it: {e}");
+                return;
+            }
+        }
+        // Re-read the new index immediately before the drop rather than trusting
+        // the caller's earlier probe: `create_vector_index` reports "ensured"
+        // through `IF NOT EXISTS`, and this is the one operation here that
+        // cannot be undone, so it pays for its own round trip.
+        match Self::vector_index_state(&self.db, halfvec_index).await {
+            Ok(Some(true)) => {}
+            other => {
+                warn!(
+                    "not dropping {legacy} on {coll}: {halfvec_index} is not a valid \
+                     index right now ({other:?})"
+                );
+                return;
+            }
+        }
+        match self
+            .db
+            .execute_unprepared(&format!(r#"DROP INDEX CONCURRENTLY IF EXISTS "{legacy}""#))
+            .await
+        {
+            Ok(_) => {
+                report.dropped += 1;
+                debug!(
+                    "dropped the superseded full-precision index {legacy} on {coll} \
+                     ({halfvec_index} is valid)"
+                );
+            }
+            Err(e) => warn!("could not drop the superseded index {legacy} on {coll}: {e}"),
+        }
     }
 
     /// Build `coll`'s NodeSet-membership GIN index if it is missing or was
@@ -2661,6 +2910,9 @@ impl VectorDB for PgVectorAdapter {
         };
         if exists {
             self.remember(&coll);
+            // Cold path only, so this is once per collection per process — see
+            // the method's own note on why it lives here.
+            self.warn_if_legacy_only_index(&coll).await;
         }
         Ok(exists)
     }
@@ -2841,8 +3093,12 @@ impl VectorDB for PgVectorAdapter {
         let dim = query_vector.len();
         // The outer ORDER BY restores exact distance order over the (at most
         // `top_k`) rows an iterative `relaxed_order` scan returns.
-        let order =
-            Self::candidate_order_expr("$1", dim, top_k, self.halfvec, self.is_deferred(&coll));
+        //
+        // Read once and used twice: the ordering expression and the session
+        // settings have to agree about whether this collection has an index
+        // right now, and two reads of the mutex could straddle a `DROP INDEX`.
+        let indexless = self.is_deferred(&coll);
+        let order = Self::candidate_order_expr("$1", dim, top_k, self.halfvec, indexless);
         let sql = format!(
             r#"SELECT id, score, metadata FROM (
                  SELECT id, 1 - (vector <=> $1::vector) AS score, metadata
@@ -2856,7 +3112,7 @@ impl VectorDB for PgVectorAdapter {
         // LIMIT is silently unmet — see `ann_search_locals`.
         let rows = self
             .query_all_maybe_locals(
-                Self::ann_search_locals(self.tuned_sessions, self.iterative_scan, top_k),
+                Self::ann_search_locals(self.tuned_sessions, self.iterative_scan, top_k, indexless),
                 Statement::from_sql_and_values(DatabaseBackend::Postgres, &sql, [vec_str.into()]),
             )
             .await
@@ -3074,8 +3330,10 @@ impl VectorDB for PgVectorAdapter {
             .map(|v| format!("'{}'::vector", Self::format_vector(v)))
             .collect::<Vec<_>>()
             .join(", ");
-        let order =
-            Self::candidate_order_expr("q.vec", dim, top_k, self.halfvec, self.is_deferred(&coll));
+        // One read, like `search_similar`: the ordering and the settings must
+        // agree about whether the index is there.
+        let indexless = self.is_deferred(&coll);
+        let order = Self::candidate_order_expr("q.vec", dim, top_k, self.halfvec, indexless);
 
         let sql = format!(
             r#"SELECT q.idx AS idx, t.id AS id, t.score AS score, t.metadata AS metadata
@@ -3094,7 +3352,7 @@ impl VectorDB for PgVectorAdapter {
         // `search_similar` or every one of them ends early.
         let rows = self
             .query_all_maybe_locals(
-                Self::ann_search_locals(self.tuned_sessions, self.iterative_scan, top_k),
+                Self::ann_search_locals(self.tuned_sessions, self.iterative_scan, top_k, indexless),
                 Statement::from_string(DatabaseBackend::Postgres, sql),
             )
             .await

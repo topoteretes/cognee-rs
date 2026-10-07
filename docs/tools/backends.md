@@ -75,11 +75,17 @@ Notes:
   collection has taken 25% of its rows inside the scope its index is dropped,
   and it is built once — in parallel, under a sized `maintenance_work_mem` —
   when the last scope ends, followed by an `ANALYZE` of every collection
-  written. **A collection without its index is still correct**: the planner
-  falls back to an exact scan, which returns the true top k — and, because the
-  adapter knows per collection that the index is gone, that scan orders by the
-  full-precision distance rather than the fp16 one the index would have matched,
-  so entering a bulk-load scope does not move rows across the `LIMIT` boundary.
+  written. **A collection without its index is still correct**: because the
+  adapter knows per collection that the index is gone, a search of it runs with
+  `enable_indexscan` / `enable_bitmapscan` off and orders by the full-precision
+  distance rather than the fp16 one the index would have matched — so it is an
+  exact scan returning the true top *k*, and entering a bulk-load scope does not
+  move rows across the `LIMIT` boundary. Both halves are needed: the
+  full-precision ordering is what the *legacy* `<coll>_vector_hnsw` index serves
+  (see *upgrading an existing pgvector store* below), so on an upgraded store
+  the expression alone would hand the search to an approximate index the adapter
+  neither built nor maintains. Turning the index paths off for the statement
+  cannot be defeated by a stray index, and costs nothing outside a scope.
   (A collection whose index was *never* built is the one case left outside that:
   it is in the catalog rather than in memory, so a search cannot tell without a
   round trip, and its scan is still ordered in fp16. `vector-reindex` is the
@@ -105,21 +111,31 @@ Notes:
 - **Upgrading an existing pgvector store.** The halfvec index is a new index
   under a new name (`<coll>_halfvec_hnsw`), so a store built by an older version
   carries the old full-precision `<coll>_vector_hnsw`, which the halfvec-ordered
-  searches no longer use. Nothing breaks — those searches fall back to an exact
-  scan, which returns the true top *k* — but they are slow until
-  `cognee-cli vector-reindex` builds the new index. The **old index is not
-  dropped automatically**: it stays on disk and keeps costing an HNSW insert per
-  upsert, so drop it once the new one is in place:
-  `DROP INDEX IF EXISTS "<coll>_vector_hnsw"`. Leaving it is safe, just wasteful.
-  The same applies, for the same reason, to a collection whose **name is longer
-  than 50 bytes**: index names now reserve room for their suffix and trim the
-  collection part, rather than appending and truncating the result, so such a
-  collection's index name changes. (Truncating the result let the HNSW and the
-  GIN membership index land on the *same* name at 62 and 63 bytes, where
-  `CREATE INDEX IF NOT EXISTS` reports a taken name as a NOTICE and the second
-  index was silently never built.) `cognee-cli vector-reindex` builds the index
-  under the new name; the old one is likewise left on disk for the operator to
-  drop.
+  searches no longer use. Results stay correct — those searches fall back to a
+  sequential scan and a sort, which returns the true top *k* — but **every
+  search on such a store is that scan**, with no error and no index missing from
+  the catalog to notice it by. The adapter therefore warns once per collection,
+  the first time it touches one, naming the collection and `vector-reindex`.
+  `cognee-cli vector-reindex` is the repair: it builds `<coll>_halfvec_hnsw`
+  with `CREATE INDEX CONCURRENTLY` and then **drops the superseded
+  `<coll>_vector_hnsw`** (`CONCURRENTLY` as well, and only once the new index is
+  confirmed valid — on a pgvector below 0.7 that name *is* the active index, so
+  there it is left alone). Dropping it matters beyond disk: it is still
+  maintained, so until then every upsert pays two HNSW inserts and a bulk-load
+  scope that drops `<coll>_halfvec_hnsw` keeps maintaining the legacy one row by
+  row, which is the whole cost the scope exists to avoid. The bulk-load path
+  does not drop it itself: it rebuilds only its own index shape at the end of
+  the load, so removing an index it never created would be permanent, and a
+  load is documented as a hint that changes nothing semantically.
+  The same name change applies, for the same reason, to a collection whose
+  **name is longer than 50 bytes**: index names now reserve room for their
+  suffix and trim the collection part, rather than appending and truncating the
+  result, so such a collection's index name changes. (Truncating the result let
+  the HNSW and the GIN membership index land on the *same* name at 62 and 63
+  bytes, where `CREATE INDEX IF NOT EXISTS` reports a taken name as a NOTICE and
+  the second index was silently never built.) `cognee-cli vector-reindex` builds
+  the index under the new name; an index under an *old trimmed* name is not
+  recognised as superseded and is left on disk for the operator to drop.
 - **Postgres graph tables.** `PgGraphAdapter` creates `graph_node` /
   `graph_edge` with their key columns `COLLATE "C"` (they are only ever
   compared for equality, and the locale collation costs a `strcoll` per btree

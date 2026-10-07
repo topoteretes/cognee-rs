@@ -515,6 +515,7 @@ async fn a_caller_owned_connection_answers_every_search_the_same_way() {
                 shared.tuned_sessions,
                 shared.iterative_scan,
                 100,
+                false,
             )
             .expect("a caller-owned connection always needs its settings");
             let applied = shared
@@ -1488,6 +1489,252 @@ async fn an_in_batch_duplicate_fold_unions_with_the_membership_already_stored() 
                 "ordinary metadata is still last-wins, not unioned"
             );
 
+            adapter.close().await.unwrap();
+        },
+    )
+    .await;
+}
+
+/// The bulk-load contract — "a hint, never a semantic change … served by exact
+/// scan meanwhile" — against the store shape it was actually broken on: one
+/// upgraded from before the half-precision index, which still carries the
+/// legacy full-precision `<coll>_vector_hnsw`.
+///
+/// Phrasing the indexless ordering in full precision keeps the *fp16* index
+/// from matching, but `vector <=> $1::vector` is exactly what the legacy index
+/// serves, so the ordering alone hands the search to an approximate scan over
+/// an index the adapter never built, is not maintaining during the load, and
+/// will not rebuild at the end of it.
+///
+/// This is the one place in this file that asserts on `EXPLAIN`, and
+/// deliberately: the file's header rules out pinning a plan the planner is free
+/// to choose, and that is the opposite of what is checked here — the premise
+/// establishes that the planner *would* choose the legacy index, and the
+/// assertion is that the adapter has taken the choice away. Only a server can
+/// answer either.
+#[tokio::test]
+async fn a_stray_full_precision_index_cannot_serve_an_indexless_search() {
+    with_temp_db(
+        "a_stray_full_precision_index_cannot_serve_an_indexless_search",
+        |url| async move {
+            let adapter = PgVectorAdapter::new(&url, 8).await.unwrap();
+            if !adapter.halfvec {
+                // Below HALFVEC_MIN_VERSION `_vector_hnsw` is the *active*
+                // index, so there is no stray one to be served by.
+                eprintln!("pgvector has no halfvec — skipping the legacy-index case");
+                adapter.close().await.unwrap();
+                return;
+            }
+            adapter.create_collection("Legacy", "f", 8).await.unwrap();
+            let db = Database::connect(&url).await.unwrap();
+
+            let point = |i: usize| {
+                let jitter = f64::from(i as u32) * 1e-5;
+                #[allow(clippy::cast_possible_truncation)]
+                let v = vec![1.0, jitter as f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+                crate::models::VectorPoint::new(uuid::Uuid::from_u128(0x1_0000 + i as u128), v)
+            };
+            let base: Vec<_> = (0..6000).map(point).collect();
+            adapter.index_points("Legacy", "f", &base).await.unwrap();
+
+            // The upgraded store, built by hand because nothing in-tree creates
+            // this shape any more: the index a pre-halfvec `create_collection`
+            // left behind, same name, same opclass, same parameters.
+            db.execute_unprepared(
+                r#"CREATE INDEX "Legacy_f_vector_hnsw" ON "Legacy_f"
+                   USING hnsw (vector vector_cosine_ops)
+                   WITH (m = 24, ef_construction = 128)"#,
+            )
+            .await
+            .unwrap();
+            db.execute_unprepared(r#"ANALYZE "Legacy_f""#)
+                .await
+                .unwrap();
+
+            // Past BULK_DEFER_RATIO x 8000, so the scope drops the halfvec index
+            // and the legacy one is the only index left on the table.
+            adapter.begin_bulk_load().await.unwrap();
+            let more: Vec<_> = (6000..8000).map(point).collect();
+            adapter.index_points("Legacy", "f", &more).await.unwrap();
+            assert!(
+                !index_present(&db, "Legacy_f_halfvec_hnsw").await,
+                "the scope must have dropped the halfvec index"
+            );
+            assert!(
+                index_present(&db, "Legacy_f_vector_hnsw").await,
+                "the bulk path must leave an index it never created alone — it \
+                 has no rebuild for it"
+            );
+            assert!(adapter.is_deferred("Legacy_f"));
+
+            let query = "'[1,0,0,0,0,0,0,0]'";
+            let order = PgVectorAdapter::candidate_order_expr(query, 8, 50, adapter.halfvec, true);
+            let explain = format!(r#"EXPLAIN SELECT id FROM "Legacy_f" ORDER BY {order} LIMIT 50"#);
+            fn plan(rows: &[sea_orm::QueryResult]) -> String {
+                rows.iter()
+                    .map(|r| r.try_get::<String>("", "QUERY PLAN").unwrap_or_default())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            }
+
+            // The premise: with no session settings, this ordering is an ANN
+            // scan over the legacy index. Without it the assertion below would
+            // pass on a server that never wanted the index anyway.
+            // Run on the adapter's *own* pool, not the bare handle above: the
+            // planner's cost for an HNSW scan depends on `hnsw.ef_search` and
+            // `hnsw.iterative_scan`, which `new()` sets as connection options,
+            // so a premise measured on a pool without them is a premise about a
+            // different server.
+            let unguarded = plan(
+                &adapter
+                    .connection()
+                    .query_all(Statement::from_string(
+                        DatabaseBackend::Postgres,
+                        explain.clone(),
+                    ))
+                    .await
+                    .unwrap(),
+            );
+            assert!(
+                unguarded.contains("Legacy_f_vector_hnsw"),
+                "the premise fails: the planner did not want the legacy index \
+                 here, so there is nothing to take away\n{unguarded}"
+            );
+
+            // And what the adapter actually sends for the same search.
+            let locals = PgVectorAdapter::ann_search_locals(
+                adapter.tuned_sessions,
+                adapter.iterative_scan,
+                50,
+                true,
+            )
+            .expect("an indexless collection can never run with no settings");
+            let guarded = plan(
+                &adapter
+                    .query_all_with_locals(
+                        &locals,
+                        Statement::from_string(DatabaseBackend::Postgres, explain),
+                    )
+                    .await
+                    .unwrap(),
+            );
+            assert!(
+                guarded.contains("Seq Scan") && !guarded.contains("Index Scan"),
+                "a search inside a bulk load must be an exact scan whatever \
+                 indexes the collection happens to carry\n{guarded}"
+            );
+
+            // And it still answers.
+            let hits = adapter
+                .search_similar("Legacy", "f", &[1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], 50)
+                .await
+                .unwrap();
+            assert_eq!(hits.len(), 50);
+
+            adapter.end_bulk_load().await.unwrap();
+            drop(db);
+            adapter.close().await.unwrap();
+        },
+    )
+    .await;
+}
+
+/// `create_missing_vector_indexes` on an upgraded store: build the
+/// half-precision index, then reclaim the full-precision one it supersedes.
+///
+/// Left in place that index is not idle — it is maintained, so every upsert
+/// pays two HNSW inserts and a bulk-load scope that drops
+/// `<coll>_halfvec_hnsw` keeps maintaining it row by row, which is the entire
+/// cost the scope exists to avoid. Nothing else would ever remove it: the two
+/// `DROP INDEX CONCURRENTLY` sites in the backfill target an *invalid* index of
+/// the same name, and the bulk path deliberately leaves an index it cannot
+/// rebuild alone.
+///
+/// Both orders are covered, because the drop has two call sites: the collection
+/// that already has a valid halfvec index (nothing to build) and the one that
+/// does not (built here, then the legacy one goes).
+#[tokio::test]
+async fn the_backfill_reclaims_the_superseded_full_precision_index() {
+    with_temp_db(
+        "the_backfill_reclaims_the_superseded_full_precision_index",
+        |url| async move {
+            let adapter = PgVectorAdapter::new(&url, 4).await.unwrap();
+            if !adapter.halfvec {
+                eprintln!("pgvector has no halfvec — skipping the legacy-index reclaim");
+                adapter.close().await.unwrap();
+                return;
+            }
+            let db = Database::connect(&url).await.unwrap();
+
+            // `Both` keeps its valid halfvec index; `OnlyOld` is the real
+            // upgraded shape — legacy index, no halfvec one.
+            for coll in ["Both", "OnlyOld"] {
+                adapter.create_collection(coll, "f", 4).await.unwrap();
+                db.execute_unprepared(&format!(
+                    r#"CREATE INDEX "{coll}_f_vector_hnsw" ON "{coll}_f"
+                       USING hnsw (vector vector_cosine_ops)"#
+                ))
+                .await
+                .unwrap();
+            }
+            db.execute_unprepared(r#"DROP INDEX "OnlyOld_f_halfvec_hnsw""#)
+                .await
+                .unwrap();
+
+            // The runtime notice is wired into `has_collection`'s cold path, so
+            // a store nobody has reindexed is visible without reading the docs.
+            // A second adapter is what makes that path reachable, and is the
+            // faithful shape anyway: an upgraded store is one this process did
+            // not create, so its collection is not in `known` and the first
+            // `has_collection` goes to the catalog. The log line itself is not
+            // observable here; that the check ran once for this collection is.
+            let observer = PgVectorAdapter::new(&url, 4).await.unwrap();
+            assert!(observer.has_collection("OnlyOld", "f").await.unwrap());
+            assert!(
+                observer
+                    .legacy_checked
+                    .read()
+                    .unwrap()
+                    .contains("OnlyOld_f"),
+                "has_collection must check a collection's index shape once, or \
+                 an un-reindexed store stays silent"
+            );
+            observer.close().await.unwrap();
+
+            let report = adapter.create_missing_vector_indexes().await.unwrap();
+            assert_eq!(
+                report.built, 1,
+                "only OnlyOld_f needed the halfvec index: {report:?}"
+            );
+            assert_eq!(
+                report.dropped, 2,
+                "both collections carried a superseded index: {report:?}"
+            );
+            assert_eq!(report.failed, 0, "{report:?}");
+
+            for coll in ["Both", "OnlyOld"] {
+                assert!(
+                    index_present(&db, &format!("{coll}_f_halfvec_hnsw")).await,
+                    "{coll} must end with a valid half-precision index"
+                );
+                assert_eq!(
+                    PgVectorAdapter::vector_index_state(&db, &format!("{coll}_f_vector_hnsw"))
+                        .await
+                        .unwrap(),
+                    None,
+                    "{coll}'s superseded full-precision index must be gone"
+                );
+            }
+
+            // Idempotent: a second pass has nothing left to build or reclaim.
+            let again = adapter.create_missing_vector_indexes().await.unwrap();
+            assert_eq!(
+                (again.built, again.dropped, again.failed),
+                (0, 0, 0),
+                "{again:?}"
+            );
+
+            drop(db);
             adapter.close().await.unwrap();
         },
     )
