@@ -1392,6 +1392,26 @@ impl PgVectorAdapter {
         out
     }
 
+    /// Forget everything an open bulk-load scope is tracking for `coll`,
+    /// because `coll` no longer exists.
+    ///
+    /// [`VectorDB::delete_collection`] used to evict only the `known` cache, so
+    /// a dataset deleted while a cognify run held a scope open left the
+    /// collection in `deferred` / `written` / `base_rows` and poisoned the end
+    /// of that scope: `build_deferred` failed on the missing relation, and the
+    /// `ANALYZE` pass failed on it too. Both are reachable from one concurrent
+    /// delete on the HTTP server. There is nothing to reconcile for a table
+    /// that is gone — not an index to build, not statistics to collect, and the
+    /// next load must count its base rows afresh if the name comes back.
+    #[allow(clippy::expect_used, reason = "lock poison is unrecoverable")]
+    fn forget_bulk(&self, coll: &str) {
+        // lock poison is unrecoverable
+        let mut b = self.bulk.lock().expect("bulk-load state lock");
+        b.deferred.remove(coll);
+        b.written.remove(coll);
+        b.base_rows.remove(coll);
+    }
+
     /// Forget `coll`'s deferred build, now that its index is back.
     #[allow(clippy::expect_used, reason = "lock poison is unrecoverable")]
     fn clear_deferred(&self, coll: &str) {
@@ -1424,14 +1444,29 @@ impl PgVectorAdapter {
     /// `ANALYZE` each of `colls`: a collection filled faster than
     /// autovacuum's naptime is otherwise planned with `reltuples = -1` or a
     /// count from its first batch.
+    ///
+    /// All are attempted and the first error is returned, like
+    /// [`Self::build_deferred`]. A `?` inside the loop looked harmless and was
+    /// not: `take_written` returns the collections sorted, so one failure left
+    /// every collection *after* it in that order unanalysed — planned from
+    /// `reltuples = -1`, which is the exact problem this step exists to
+    /// prevent, and reported as a single error that named one collection. The
+    /// failure is reachable without any corruption: a concurrent dataset delete
+    /// on the HTTP server drops a collection this load wrote to.
     async fn analyze(&self, colls: Vec<String>) -> VectorDBResult<()> {
+        let mut first_err = None;
         for coll in colls {
-            self.db
+            if let Err(e) = self
+                .db
                 .execute_unprepared(&format!(r#"ANALYZE "{coll}""#))
                 .await
-                .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
+                .map_err(|e| VectorDBError::StorageError(e.to_string()))
+            {
+                warn!("bulk load: ANALYZE of {coll} failed, continuing: {e}");
+                first_err.get_or_insert(e);
+            }
         }
-        Ok(())
+        first_err.map_or(Ok(()), Err)
     }
 
     /// Build the HNSW index of every collection whose index a bulk load
@@ -1488,10 +1523,24 @@ impl PgVectorAdapter {
             }
             .await;
             if let Err(e) = res {
-                warn!(
-                    "bulk load: HNSW build on {coll} failed, leaving it queued for \
-                     the next scope end or close(): {e}"
-                );
+                if self.forget_if_missing(&coll, &e) {
+                    // The table went away behind this adapter's back (another
+                    // process, or a `delete_collection` on another adapter over
+                    // the same database). There is no index to build for a
+                    // relation that does not exist, so unlike every other
+                    // failure this one is *not* re-tried: keeping it would make
+                    // every later scope end and every `close` fail for ever.
+                    self.forget_bulk(&coll);
+                    warn!(
+                        "bulk load: {coll} no longer exists, so its deferred HNSW \
+                         build is dropped rather than queued: {e}"
+                    );
+                } else {
+                    warn!(
+                        "bulk load: HNSW build on {coll} failed, leaving it queued for \
+                         the next scope end or close(): {e}"
+                    );
+                }
                 first_err.get_or_insert(e);
             }
         }
@@ -3540,8 +3589,10 @@ impl VectorDB for PgVectorAdapter {
         Span::current().record(COGNEE_VECTOR_COLLECTION, coll.as_str());
 
         // Evicted first: whatever happens below, the next `has_collection`
-        // asks the database.
+        // asks the database, and no open bulk-load scope still expects to
+        // index or analyse this table at its end.
         self.forget(&coll);
+        self.forget_bulk(&coll);
         let drop = Table::drop()
             .table(Alias::new(&coll))
             .if_exists()

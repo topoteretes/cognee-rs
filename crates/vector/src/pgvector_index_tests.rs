@@ -1754,9 +1754,12 @@ async fn the_backfill_reclaims_the_superseded_full_precision_index() {
 /// the caller only ever saw a `warn!`. A manual `vector-reindex` was the only
 /// repair.
 ///
-/// Renaming the table away is the cheapest deterministic stand-in for those
-/// failures — what is pinned is the bookkeeping, and that does not depend on
-/// *why* the build failed.
+/// Renaming the `vector` column away is the cheapest deterministic stand-in for
+/// those failures — what is pinned is the bookkeeping, and that does not depend
+/// on *why* the build failed. It is deliberately not the *table* that goes:
+/// a build whose relation no longer exists is the one failure that is dropped
+/// rather than queued, because nothing could ever build it (see
+/// `a_collection_that_vanishes_mid_load_does_not_poison_the_rest`).
 #[tokio::test]
 async fn a_failed_end_of_load_build_stays_queued_and_the_next_one_repairs_it() {
     with_temp_db(
@@ -1782,8 +1785,10 @@ async fn a_failed_end_of_load_build_stays_queued_and_the_next_one_repairs_it() {
                 "the scope must have dropped the index, or there is nothing to test"
             );
 
-            // Make the build fail, deterministically, without losing a row.
-            db.execute_unprepared(r#"ALTER TABLE "Requeue_f" RENAME TO "Requeue_f_hidden""#)
+            // Make the build fail, deterministically, without losing a row:
+            // the `CREATE INDEX` expression names `vector`, the `count(*)`
+            // before it does not, so only the build breaks.
+            db.execute_unprepared(r#"ALTER TABLE "Requeue_f" RENAME COLUMN vector TO stowed_away"#)
                 .await
                 .unwrap();
             assert!(
@@ -1799,7 +1804,7 @@ async fn a_failed_end_of_load_build_stays_queued_and_the_next_one_repairs_it() {
 
             // The repair is the ordinary one: the next scope end (or close())
             // picks the queued build up.
-            db.execute_unprepared(r#"ALTER TABLE "Requeue_f_hidden" RENAME TO "Requeue_f""#)
+            db.execute_unprepared(r#"ALTER TABLE "Requeue_f" RENAME COLUMN stowed_away TO vector"#)
                 .await
                 .unwrap();
             adapter.begin_bulk_load().await.unwrap();
@@ -1932,6 +1937,184 @@ async fn a_search_during_the_end_of_load_build_still_sees_an_indexless_collectio
             drop(blocker);
             drop(db);
             adapter.close().await.unwrap();
+        },
+    )
+    .await;
+}
+
+/// A collection that disappears while a bulk-load scope is open — the three
+/// ways the end of a scope met a table that was no longer there.
+///
+/// All three are reachable from one concurrent dataset delete on the HTTP
+/// server, and each broke something different:
+///
+/// - `delete_collection` evicted the `known` cache but not the scope's
+///   `deferred` / `written` / `base_rows`, so `end_bulk_load` failed on the
+///   missing relation twice over — once trying to build its index, once trying
+///   to analyse it.
+/// - `analyze` used `?` *inside* its loop over the written collections, which
+///   `take_written` returns **sorted** — so one failure left every collection
+///   after it in that order unanalysed, planned from `reltuples = -1`, which is
+///   the exact problem the `ANALYZE` step exists to prevent.
+/// - and since a failed build is now kept queued rather than forgotten, a build
+///   whose *relation* is gone had to become the one exception, or every later
+///   scope end and every `close()` would fail for ever.
+///
+/// Two things the phases below are careful about, because either would make an
+/// assertion prove nothing: the collection names are chosen so the casualty
+/// sorts *before* the survivor (that ordering is the whole of the second
+/// point), and the survivor is seeded outside any scope so its batch stays
+/// under the defer ratio — a deferred collection gets a `CREATE INDEX`, and an
+/// index build sets `reltuples` itself, which would mask a missing `ANALYZE`.
+#[tokio::test]
+async fn a_collection_that_vanishes_mid_load_does_not_poison_the_rest() {
+    with_temp_db(
+        "a_collection_that_vanishes_mid_load_does_not_poison_the_rest",
+        |url| async move {
+            let adapter = PgVectorAdapter::new(&url, 8).await.unwrap();
+            let db = Database::connect(&url).await.unwrap();
+            let point = |i: usize| {
+                let jitter = f64::from(i as u32) * 1e-6;
+                #[allow(clippy::cast_possible_truncation)]
+                let v = vec![1.0, jitter as f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+                crate::models::VectorPoint::new(uuid::Uuid::from_u128(0x4_0000 + i as u128), v)
+            };
+            let pts: Vec<_> = (0..600).map(point).collect();
+            let reltuples = |db: DatabaseConnection, table: String| async move {
+                let row = db
+                    .query_one(Statement::from_string(
+                        DatabaseBackend::Postgres,
+                        format!("SELECT reltuples FROM pg_class WHERE relname = '{table}'"),
+                    ))
+                    .await
+                    .unwrap()
+                    .expect("the collection table must exist");
+                row.try_get::<f32>("", "reltuples").unwrap()
+            };
+            // 100 rows in batches under HNSW_REBUILD_MIN_ROWS and outside any
+            // scope: nothing rebuilds the index and nothing analyses, so the
+            // collection still carries the `never analysed` sentinel.
+            async fn seed(
+                adapter: &PgVectorAdapter,
+                coll: &str,
+                batch: &[crate::models::VectorPoint],
+            ) {
+                for chunk in batch.chunks(50) {
+                    adapter.index_points(coll, "f", chunk).await.unwrap();
+                }
+            }
+
+            // --- 1. delete_collection during the scope -------------------
+            for coll in ["Agone", "Zstays"] {
+                adapter.create_collection(coll, "f", 8).await.unwrap();
+            }
+            seed(&adapter, "Zstays", &pts[..100]).await;
+            assert_eq!(
+                reltuples(db.clone(), "Zstays_f".to_string()).await,
+                -1.0,
+                "nothing has analysed the survivor yet, or the assertion below \
+                 proves nothing"
+            );
+
+            adapter.begin_bulk_load().await.unwrap();
+            // Enough into the casualty to defer its index, so the scope has
+            // both a build and an ANALYZE queued for it.
+            adapter.index_points("Agone", "f", &pts).await.unwrap();
+            assert!(
+                adapter.is_deferred("Agone_f"),
+                "the casualty must have a deferred build queued, or the scope \
+                 has nothing to be poisoned by"
+            );
+            // 20 *new* ids (the seed already holds `pts[..100]`, and an
+            // overwrite would not change the row count the ANALYZE reports);
+            // 20 is under 0.25 x (100 + 20), so the survivor keeps its live
+            // index and the ANALYZE is the only thing left to do for it.
+            adapter
+                .index_points("Zstays", "f", &pts[500..520])
+                .await
+                .unwrap();
+            adapter.delete_collection("Agone", "f").await.unwrap();
+
+            adapter.end_bulk_load().await.unwrap_or_else(|e| {
+                panic!(
+                    "a deleted collection has no index to build and no \
+                     statistics to collect, so closing the scope must succeed: {e}"
+                )
+            });
+            assert!(
+                !adapter.is_deferred("Agone_f"),
+                "and nothing may still be queued for a table that is gone"
+            );
+            assert_eq!(
+                reltuples(db.clone(), "Zstays_f".to_string()).await,
+                120.0,
+                "the surviving collection must still be analysed"
+            );
+
+            // --- 2. the ANALYZE pass continues past a failure ------------
+            // A table that disappears without going through
+            // `delete_collection` (another process) still fails its ANALYZE —
+            // that is reported, but it must not cost the collections sorted
+            // after it. Neither collection is deferred here, so `ANALYZE` is
+            // the only thing that touches `reltuples`.
+            for coll in ["Bgone", "Cstays"] {
+                adapter.create_collection(coll, "f", 8).await.unwrap();
+                seed(&adapter, coll, &pts[..100]).await;
+            }
+            assert_eq!(
+                reltuples(db.clone(), "Cstays_f".to_string()).await,
+                -1.0,
+                "the survivor must start unanalysed"
+            );
+            adapter.begin_bulk_load().await.unwrap();
+            for coll in ["Bgone", "Cstays"] {
+                adapter
+                    .index_points(coll, "f", &pts[500..520])
+                    .await
+                    .unwrap();
+                assert!(
+                    !adapter.is_deferred(&format!("{coll}_f")),
+                    "{coll} must keep its index, or its CREATE INDEX would set \
+                     reltuples and mask a missing ANALYZE"
+                );
+            }
+            db.execute_unprepared(r#"DROP TABLE "Bgone_f""#)
+                .await
+                .unwrap();
+            assert!(
+                adapter.end_bulk_load().await.is_err(),
+                "a failed ANALYZE still has to be reported"
+            );
+            assert_eq!(
+                reltuples(db.clone(), "Cstays_f".to_string()).await,
+                120.0,
+                "a collection sorted after the failure must still be analysed, \
+                 or the planner costs it as never analysed — which is what the \
+                 ANALYZE step exists to prevent"
+            );
+
+            // --- 3. a deferred build whose relation is gone --------------
+            // The one failure that is dropped rather than queued: nothing could
+            // ever build an index on a table that does not exist, and keeping
+            // it would fail every later scope end and every close().
+            adapter.create_collection("Dgone", "f", 8).await.unwrap();
+            adapter.begin_bulk_load().await.unwrap();
+            adapter.index_points("Dgone", "f", &pts).await.unwrap();
+            assert!(adapter.is_deferred("Dgone_f"));
+            db.execute_unprepared(r#"DROP TABLE "Dgone_f""#)
+                .await
+                .unwrap();
+            assert!(adapter.end_bulk_load().await.is_err());
+            assert!(
+                !adapter.is_deferred("Dgone_f"),
+                "a build with no relation to build on must not be re-queued"
+            );
+
+            drop(db);
+            adapter
+                .close()
+                .await
+                .unwrap_or_else(|e| panic!("close() must have nothing left to choke on: {e}"));
         },
     )
     .await;
