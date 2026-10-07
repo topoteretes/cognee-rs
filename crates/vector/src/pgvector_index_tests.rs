@@ -631,6 +631,108 @@ async fn a_dropped_bulk_load_guard_closes_the_scope_and_the_next_load_reindexes(
     .await;
 }
 
+/// A stored vector of norm zero scores `NaN` (`1 - (0 <=> q)`), and Postgres
+/// sorts `NaN` as **greater than** every other float. The outer
+/// `ORDER BY score DESC` that re-sorts an iterative scan's candidates therefore
+/// used to hand that row back as `results[0]` of every search over a collection
+/// at or below `top_k` — ahead of genuine matches, where the single
+/// distance-ASC ordering it replaced had put it last. Only
+/// `brute_force_triplet_search` re-ranks on its own; every other consumer of
+/// `search_similar` reads the order given.
+///
+/// Both search paths are covered: `search_similar` and the one-round-trip
+/// `batch_search_similar`, which has its own `ORDER BY` and so its own copy of
+/// the bug.
+#[tokio::test]
+async fn a_zero_norm_stored_vector_sorts_last_rather_than_first() {
+    with_temp_db(
+        "a_zero_norm_stored_vector_sorts_last_rather_than_first",
+        |url| async move {
+            let adapter = PgVectorAdapter::new(&url, 4).await.unwrap();
+            adapter.create_collection("Nan", "f", 4).await.unwrap();
+
+            // Three rows, one of them all-zero: the shape `warn_zero_norm_points`
+            // warns about and still writes. `top_k` is above the row count, so
+            // the zero row survives candidate selection and has to be ordered
+            // by the outer re-sort — which is the code under test.
+            let zero = uuid::Uuid::from_u128(0xF0);
+            let near = uuid::Uuid::from_u128(0xF1);
+            let far = uuid::Uuid::from_u128(0xF2);
+            let points = vec![
+                crate::models::VectorPoint::new(zero, vec![0.0, 0.0, 0.0, 0.0]),
+                crate::models::VectorPoint::new(near, vec![1.0, 0.0, 0.0, 0.0]),
+                crate::models::VectorPoint::new(far, vec![0.0, 1.0, 0.0, 0.0]),
+            ];
+            adapter.index_points("Nan", "f", &points).await.unwrap();
+
+            let query = vec![1.0, 0.0, 0.0, 0.0];
+
+            // The bug lives on the *exact-scan* paths, so the index has to go
+            // first. An HNSW index scan never yields the zero-norm row at all
+            // (its distance to every query is NaN, so the graph walk cannot
+            // reach it), which hides the outer sort; the exact scan returns it
+            // like any other row, and that is the plan the adapter deliberately
+            // uses for a collection over the 2000-d index ceiling, for a
+            // `top_k` above 1000, inside a bulk-load scope, and for any
+            // collection whose index was never built. Dropping the index is the
+            // cheapest way to reproduce all four.
+            let indexed = adapter
+                .search_similar("Nan", "f", &query, 10)
+                .await
+                .unwrap();
+            assert_ne!(
+                indexed.first().map(|h| h.id),
+                Some(zero),
+                "sanity: the indexed path must not lead with the zero-norm row either"
+            );
+            let db = Database::connect(&url).await.unwrap();
+            db.execute_unprepared(r#"DROP INDEX "Nan_f_halfvec_hnsw""#)
+                .await
+                .unwrap();
+            drop(db);
+
+            let hits = adapter
+                .search_similar("Nan", "f", &query, 10)
+                .await
+                .unwrap();
+            assert_eq!(
+                hits.len(),
+                3,
+                "an exact scan returns every row as a candidate at top_k = 10"
+            );
+            assert_eq!(
+                hits[0].id, near,
+                "the nearest real vector must lead the results, not the \
+                 zero-norm row whose NaN score Postgres sorts highest"
+            );
+            assert_eq!(
+                hits.last().map(|h| h.id),
+                Some(zero),
+                "the zero-norm row must come last: its score is not a similarity"
+            );
+            assert_eq!(
+                hits[1].id, far,
+                "and the real rows must keep their own descending order"
+            );
+
+            let batched = adapter
+                .batch_search_similar("Nan", "f", std::slice::from_ref(&query), 10)
+                .await
+                .unwrap();
+            assert_eq!(batched.len(), 1);
+            assert_eq!(
+                batched[0].iter().map(|h| h.id).collect::<Vec<_>>(),
+                hits.iter().map(|h| h.id).collect::<Vec<_>>(),
+                "the batch path must order NaN the same way the single-query \
+                 path does — it has its own ORDER BY"
+            );
+
+            adapter.close().await.unwrap();
+        },
+    )
+    .await;
+}
+
 /// The GIN membership prefilter runs through `cognee_vector_set_names`, which
 /// replaces a `jsonb_array_elements` scan. An expression index is only as
 /// correct as that function: every row shape the corpus can produce has to map

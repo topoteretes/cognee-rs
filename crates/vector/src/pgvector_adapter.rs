@@ -351,6 +351,22 @@ $fn$";
 /// Postgres truncates any identifier past this many bytes (`NAMEDATALEN - 1`).
 const PG_MAX_IDENTIFIER_BYTES: usize = 63;
 
+/// Leading `ORDER BY` key that keeps a `NaN` similarity score *last* rather
+/// than first, for a `score DESC` ordering over the `score` alias.
+///
+/// Postgres sorts `NaN` as greater than every other `float8` (and equal to
+/// itself, which is why `= 'NaN'` is the test), so a bare `ORDER BY score DESC`
+/// leads with it. A `NaN` score is not hypothetical: it is what
+/// `1 - (vector <=> $1)` gives for a stored vector of norm zero — the case
+/// [`warn_zero_norm_points`] exists to warn about — so without this key a
+/// single all-zero row becomes `results[0]` of every search over a collection
+/// at or below `top_k`. The distance ordering that selects candidates sorts
+/// `NaN` last on its own (it is an `ASC` ordering), so this only has to repair
+/// the outer re-sort.
+///
+/// Sorting booleans ascending puts `false` (every real score) before `true`.
+const NAN_LAST: &str = "(score = 'NaN'::float8)";
+
 /// Lowest `vector` extension version that has the `halfvec` type and the
 /// `halfvec_cosine_ops` opclass (pgvector 0.7.0, May 2024).
 ///
@@ -2168,7 +2184,7 @@ impl VectorDB for PgVectorAdapter {
                  FROM "{coll}"
                  ORDER BY {order}
                  LIMIT {limit}) r
-               ORDER BY score DESC"#
+               ORDER BY {NAN_LAST}, score DESC"#
         );
 
         // `ef_search` must cover `top_k`, or the index scan ends early and the
@@ -2392,7 +2408,7 @@ impl VectorDB for PgVectorAdapter {
                    ORDER BY {order}
                    LIMIT {top_k}
                ) t
-               ORDER BY q.idx, t.score DESC"#
+               ORDER BY q.idx, (t.score = 'NaN'::float8), t.score DESC"#
         );
 
         // Each LATERAL subquery is its own index scan with its own `LIMIT
