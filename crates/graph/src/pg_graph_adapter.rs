@@ -2514,10 +2514,18 @@ mod shared_db_migration_tests {
                 adapter.err()
             );
 
-            // 3. The graph migrator tracks its version in its OWN table and leaves
-            //    the relational bookkeeping untouched.
+            // 3. The graph migrator tracks its versions in its OWN table and
+            //    leaves the relational bookkeeping untouched. The expected count
+            //    is read off the migrator's own list rather than written out, so
+            //    adding a graph migration cannot make this assertion stale.
             assert_eq!(version_count(&db, "seaql_migrations").await, 2);
-            assert_eq!(version_count(&db, "seaql_migrations_pggraph").await, 1);
+            assert_eq!(
+                version_count(&db, "seaql_migrations_pggraph").await,
+                // Fully qualified: `sea_orm_migration::prelude::*` brings a
+                // `ValueType::try_from` for `i64` into scope too.
+                <i64 as TryFrom<usize>>::try_from(super::migrator::Migrator::migrations().len())
+                    .unwrap(),
+            );
         })
         .await;
     }
