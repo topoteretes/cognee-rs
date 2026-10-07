@@ -4323,9 +4323,19 @@ pub async fn cognify(
         // read it from — and a sweep with no run to select on would silently
         // remove nothing.
         let watcher = rollback::RunIdCapturingWatcher::new(Arc::clone(&pipeline_run_repo));
+        // One cognify run is one bulk load for the vector store: a backend
+        // may defer per-row ANN index maintenance until the scope ends. The
+        // hint never changes results, so a failure to open or close the scope
+        // is logged, not returned (the rows are written either way).
+        if let Err(e) = vector_db.begin_bulk_load().await {
+            warn!(error = %e, "cognify: vector store rejected the bulk-load scope");
+        }
         let executed = cognee_core::pipeline::execute(&pipeline, inputs, ctx, &watcher)
             .await
             .map_err(unwrap_execution_error);
+        if let Err(e) = vector_db.end_bulk_load().await {
+            warn!(error = %e, "cognify: vector store failed to finish its bulk load");
+        }
 
         // ── The policy layer ────────────────────────────────────────────────
         // Everything from here on is `rollback`'s decision: which scope to

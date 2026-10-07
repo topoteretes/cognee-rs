@@ -359,6 +359,36 @@ pub trait VectorDB: Send + Sync {
         Ok(VectorIndexBackfill::default())
     }
 
+    /// Tell the store a bulk load is starting: many `index_points` calls
+    /// follow (one cognify run), and nothing needs the ANN index to be
+    /// maintained row by row until the matching [`end_bulk_load`].
+    ///
+    /// Contract for an implementor:
+    /// - **A hint, never a semantic change.** Every read and write inside the
+    ///   scope must stay correct; a backend that defers index maintenance
+    ///   serves searches by exact scan meanwhile.
+    /// - **Nestable.** Scopes are counted; deferred work runs when the last
+    ///   open scope ends.
+    /// - **Always paired** by the caller with `end_bulk_load`, also on error
+    ///   paths. A backend that defers work must also finish it in
+    ///   [`close`](VectorDB::close), and deferred work lost to a crash must be
+    ///   repairable by [`create_missing_vector_indexes`].
+    ///
+    /// The default is a no-op.
+    ///
+    /// [`end_bulk_load`]: VectorDB::end_bulk_load
+    /// [`create_missing_vector_indexes`]: VectorDB::create_missing_vector_indexes
+    async fn begin_bulk_load(&self) -> VectorDBResult<()> {
+        Ok(())
+    }
+
+    /// End a scope opened by [`begin_bulk_load`](VectorDB::begin_bulk_load);
+    /// when it was the last open one, run any deferred maintenance (index
+    /// builds, statistics). The default is a no-op.
+    async fn end_bulk_load(&self) -> VectorDBResult<()> {
+        Ok(())
+    }
+
     /// Perform multiple vector similarity searches in sequence.
     ///
     /// Default implementation loops over [`search_similar`]. Backends may override

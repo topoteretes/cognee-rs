@@ -919,6 +919,96 @@ pub trait GraphDBTrait: Send + Sync {
 
         Ok((nodes, edges))
     }
+
+    /// [`get_neighborhood`](GraphDBTrait::get_neighborhood) narrowed by
+    /// `scope`: optionally fewer node / edge property keys per row, and
+    /// optionally at most `max_neighbors_per_seed` non-seed neighbours per
+    /// seed (depth 1 only). With [`NeighborhoodScope::default`] the result
+    /// equals `get_neighborhood` exactly.
+    ///
+    /// The default implementation runs `get_neighborhood` and narrows the
+    /// result client-side with [`apply_neighborhood_scope`], so every backend
+    /// honours the same semantics; a backend may override it to narrow in
+    /// the query instead (less IO), and must then return the same node set,
+    /// edge set and kept properties as the default.
+    async fn get_neighborhood_scoped(
+        &self,
+        node_ids: &[String],
+        depth: usize,
+        scope: &NeighborhoodScope,
+    ) -> GraphDBResult<(Vec<GraphNode>, Vec<EdgeData>)> {
+        let (nodes, edges) = self.get_neighborhood(node_ids, depth).await?;
+        Ok(apply_neighborhood_scope(
+            node_ids, depth, nodes, edges, scope,
+        ))
+    }
+}
+
+/// Narrowing options for [`GraphDBTrait::get_neighborhood_scoped`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NeighborhoodScope {
+    /// Keep only these node property keys (plus `id`, `name` and `type`,
+    /// which every backend returns). `None` keeps every property. A listed
+    /// key whose stored value is JSON `null` may be omitted by an override.
+    pub node_properties: Option<Vec<String>>,
+    /// Keep only these edge property keys. `None` keeps every property.
+    pub edge_properties: Option<Vec<String>>,
+    /// Depth 1 only: per seed, keep every neighbour that is itself a seed plus
+    /// at most this many other neighbours — the ones with the smallest ids
+    /// (byte order) — then return the subgraph induced on the seeds and the
+    /// kept neighbours. Changes results (hub fan-out is truncated), so it is
+    /// opt-in. Ignored for other depths.
+    pub max_neighbors_per_seed: Option<usize>,
+}
+
+impl NeighborhoodScope {
+    /// Whether this scope narrows nothing.
+    pub fn is_noop(&self) -> bool {
+        self.node_properties.is_none()
+            && self.edge_properties.is_none()
+            && self.max_neighbors_per_seed.is_none()
+    }
+}
+
+/// The reference semantics of [`GraphDBTrait::get_neighborhood_scoped`]:
+/// narrow a full `get_neighborhood(seeds, depth)` result by `scope`.
+pub fn apply_neighborhood_scope(
+    seeds: &[String],
+    depth: usize,
+    mut nodes: Vec<GraphNode>,
+    mut edges: Vec<EdgeData>,
+    scope: &NeighborhoodScope,
+) -> (Vec<GraphNode>, Vec<EdgeData>) {
+    if let (Some(cap), 1) = (scope.max_neighbors_per_seed, depth) {
+        let seed_set: HashSet<&str> = seeds.iter().map(String::as_str).collect();
+        let mut per_seed: HashMap<&str, std::collections::BTreeSet<&str>> = HashMap::new();
+        for (src, tgt, _, _) in &edges {
+            for (a, b) in [(src.as_str(), tgt.as_str()), (tgt.as_str(), src.as_str())] {
+                if seed_set.contains(a) && !seed_set.contains(b) {
+                    per_seed.entry(a).or_default().insert(b);
+                }
+            }
+        }
+        let mut keep: HashSet<String> = seeds.iter().cloned().collect();
+        for nbrs in per_seed.values() {
+            keep.extend(nbrs.iter().take(cap).map(|s| (*s).to_string()));
+        }
+        nodes.retain(|(id, _)| keep.contains(id));
+        edges.retain(|(src, tgt, _, _)| keep.contains(src) && keep.contains(tgt));
+    }
+    if let Some(keys) = &scope.node_properties {
+        for (_, data) in &mut nodes {
+            data.retain(|k, _| {
+                matches!(k.as_ref(), "id" | "name" | "type") || keys.iter().any(|x| x == k)
+            });
+        }
+    }
+    if let Some(keys) = &scope.edge_properties {
+        for (_, _, _, props) in &mut edges {
+            props.retain(|k, _| keys.iter().any(|x| x == k));
+        }
+    }
+    (nodes, edges)
 }
 
 /// Extension trait providing generic convenience methods on top of [`GraphDBTrait`].
@@ -957,6 +1047,66 @@ impl<T: GraphDBTrait + ?Sized> GraphDBTraitExt for T {}
 mod tests {
     use super::*;
     use crate::mock::MockGraphDB;
+
+    fn node(id: &str, extra: &[(&str, Value)]) -> GraphNode {
+        let mut d = NodeData::new();
+        d.insert(Cow::Borrowed("id"), Value::from(id));
+        d.insert(Cow::Borrowed("name"), Value::from(id));
+        d.insert(Cow::Borrowed("type"), Value::from("T"));
+        for (k, v) in extra {
+            d.insert(Cow::Owned((*k).to_string()), v.clone());
+        }
+        (id.to_string(), d)
+    }
+
+    fn edge(a: &str, b: &str) -> EdgeData {
+        let mut p = HashMap::new();
+        p.insert(Cow::Borrowed("edge_text"), Value::from(format!("{a}-{b}")));
+        p.insert(Cow::Borrowed("weight"), Value::from(1));
+        (a.to_string(), b.to_string(), "r".to_string(), p)
+    }
+
+    #[test]
+    fn neighborhood_scope_default_is_identity_and_cap_keeps_seed_edges() {
+        let seeds = vec!["s1".to_string(), "s2".to_string()];
+        let nodes: Vec<GraphNode> = ["s1", "s2", "a", "b", "c"]
+            .iter()
+            .map(|i| node(i, &[("text", Value::from("t")), ("big", Value::from(1))]))
+            .collect();
+        let edges = vec![
+            edge("s1", "s2"),
+            edge("s1", "c"),
+            edge("b", "s1"),
+            edge("s1", "a"),
+            edge("a", "b"),
+        ];
+        let (n0, e0) = apply_neighborhood_scope(
+            &seeds,
+            1,
+            nodes.clone(),
+            edges.clone(),
+            &NeighborhoodScope::default(),
+        );
+        assert_eq!((n0.len(), e0.len()), (nodes.len(), edges.len()));
+
+        // Cap 2: s1 keeps its seed neighbour s2 plus the two smallest
+        // non-seed neighbours (a, b); c is dropped, a-b stays (induced).
+        let scope = NeighborhoodScope {
+            max_neighbors_per_seed: Some(2),
+            node_properties: Some(vec!["text".to_string()]),
+            edge_properties: Some(vec!["edge_text".to_string()]),
+        };
+        let (n, e) = apply_neighborhood_scope(&seeds, 1, nodes, edges, &scope);
+        let mut ids: Vec<&str> = n.iter().map(|(i, _)| i.as_str()).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, ["a", "b", "s1", "s2"]);
+        assert_eq!(e.len(), 4);
+        assert!(
+            n.iter()
+                .all(|(_, d)| d.len() == 4 && d.contains_key("text"))
+        );
+        assert!(e.iter().all(|(_, _, _, p)| p.len() == 1));
+    }
 
     /// Delegating wrapper that forwards every *required* trait method to an
     /// inner [`MockGraphDB`] but deliberately does NOT override
