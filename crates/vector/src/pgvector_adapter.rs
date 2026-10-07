@@ -644,7 +644,8 @@ mod bulk_defer_tests {
 /// Cases for which searches may select candidates in half precision.
 ///
 /// No feature and no database: the decision is a pure function of the
-/// dimension, the `top_k` and whether `halfvec` exists at all. What it protects
+/// dimension, the `top_k`, whether `halfvec` exists at all and whether this
+/// collection's index is dropped right now. What it protects
 /// is the two paths this adapter and `docs/tools/backends.md` both declare
 /// *exact*, where an fp16 ordering would reorder rows at the `LIMIT` boundary
 /// and the outer `ORDER BY score DESC` would not notice — it only re-sorts a
@@ -654,7 +655,12 @@ mod candidate_order_tests {
     use super::{HNSW_EF_SEARCH_MAX, MAX_INDEXABLE_DIMENSION, PgVectorAdapter};
 
     fn is_fp16(dim: usize, top_k: usize, halfvec: bool) -> bool {
-        PgVectorAdapter::candidate_order_expr("$1", dim, top_k, halfvec).contains("halfvec")
+        indexed_is_fp16(dim, top_k, halfvec, false)
+    }
+
+    fn indexed_is_fp16(dim: usize, top_k: usize, halfvec: bool, indexless: bool) -> bool {
+        PgVectorAdapter::candidate_order_expr("$1", dim, top_k, halfvec, indexless)
+            .contains("halfvec")
     }
 
     #[test]
@@ -690,6 +696,33 @@ mod candidate_order_tests {
 
         // And without the type there is no fp16 expression to emit.
         assert!(!is_fp16(384, 100, false));
+    }
+
+    /// The bulk-load case, which `VectorDB::begin_bulk_load` calls "a hint,
+    /// never a semantic change … served by exact scan meanwhile". A collection
+    /// whose index is dropped for the rest of the load has nothing to match, so
+    /// entering a scope must not quietly move rows across the `LIMIT` boundary.
+    #[test]
+    fn a_collection_with_its_index_dropped_is_ordered_exactly() {
+        assert!(
+            indexed_is_fp16(384, 100, true, false),
+            "the control: the very same search is fp16 while the index is there"
+        );
+        assert!(
+            !indexed_is_fp16(384, 100, true, true),
+            "an indexless collection must be ordered exactly, or a bulk load \
+             changes what a search returns"
+        );
+        // The three already-exact cases stay exact — the flag can only remove
+        // fp16, never add it.
+        assert!(!indexed_is_fp16(
+            MAX_INDEXABLE_DIMENSION + 1,
+            100,
+            true,
+            true
+        ));
+        assert!(!indexed_is_fp16(384, HNSW_EF_SEARCH_MAX + 1, true, true));
+        assert!(!indexed_is_fp16(384, 100, false, true));
     }
 }
 
@@ -1343,7 +1376,7 @@ impl PgVectorAdapter {
     /// not against a path this adapter *declares exact*, where it would reorder
     /// rows at the `LIMIT` boundary for nothing. The outer `ORDER BY score DESC`
     /// does not repair that — it only re-sorts a candidate set already chosen.
-    /// Three cases, and in all three the plain `vector <=> …` is both exact and
+    /// Four cases, and in all four the plain `vector <=> …` is both exact and
     /// no slower, because there is no index to match:
     ///
     /// - `dim > MAX_INDEXABLE_DIMENSION`: pgvector cannot index the collection,
@@ -1355,14 +1388,32 @@ impl PgVectorAdapter {
     /// - No `halfvec` type at all (pgvector below [`HALFVEC_MIN_VERSION`]),
     ///   where the index is the full-precision one and the cast would not even
     ///   parse.
+    /// - `indexless`: this collection's index is dropped right now, for a
+    ///   bulk-load scope this adapter opened ([`Self::is_deferred`]). That is
+    ///   the case [`VectorDB::begin_bulk_load`] documents as "a hint, never a
+    ///   semantic change … a backend that defers index maintenance serves
+    ///   searches by exact scan meanwhile" — so the scan has to *be* exact, and
+    ///   an fp16 candidate order would make entering a bulk load reorder rows
+    ///   at the `LIMIT` boundary, which is precisely what that contract
+    ///   forbids. The flag costs one uncontended in-memory mutex (the
+    ///   per-collection state `upsert_points` already reads on every batch), not
+    ///   a round trip.
     ///
-    /// Residual, not covered here: a collection whose index is dropped for a
-    /// bulk-load scope, or was never built, also answers by exact scan while
-    /// still being ordered in fp16. Both are per-collection, dynamic and
-    /// visible only to the writer, so a search cannot cheaply know; the
-    /// deviation is the same ~0.1% boundary effect.
-    fn candidate_order_expr(param: &str, dim: usize, top_k: usize, halfvec: bool) -> String {
-        if halfvec && dim <= MAX_INDEXABLE_DIMENSION && top_k <= HNSW_EF_SEARCH_MAX {
+    /// Residual, still not covered: a collection whose index was *never* built —
+    /// a `create_collection` whose best-effort `CREATE INDEX` failed, or rows
+    /// written before this adapter grew an index — answers by exact scan while
+    /// still being ordered in fp16. That one is in the catalog, not in memory,
+    /// so a search cannot know it without a round trip; it is outside the
+    /// bulk-load contract, bounded by the same ~0.1% boundary effect, and
+    /// `create_missing_vector_indexes` is the documented repair.
+    fn candidate_order_expr(
+        param: &str,
+        dim: usize,
+        top_k: usize,
+        halfvec: bool,
+        indexless: bool,
+    ) -> String {
+        if halfvec && !indexless && dim <= MAX_INDEXABLE_DIMENSION && top_k <= HNSW_EF_SEARCH_MAX {
             format!("vector::halfvec({dim}) <=> {param}::halfvec({dim})")
         } else {
             format!("vector <=> {param}::vector")
@@ -2479,7 +2530,8 @@ impl VectorDB for PgVectorAdapter {
         let dim = query_vector.len();
         // The outer ORDER BY restores exact distance order over the (at most
         // `top_k`) rows an iterative `relaxed_order` scan returns.
-        let order = Self::candidate_order_expr("$1", dim, top_k, self.halfvec);
+        let order =
+            Self::candidate_order_expr("$1", dim, top_k, self.halfvec, self.is_deferred(&coll));
         let sql = format!(
             r#"SELECT id, score, metadata FROM (
                  SELECT id, 1 - (vector <=> $1::vector) AS score, metadata
@@ -2705,7 +2757,8 @@ impl VectorDB for PgVectorAdapter {
             .map(|v| format!("'{}'::vector", Self::format_vector(v)))
             .collect::<Vec<_>>()
             .join(", ");
-        let order = Self::candidate_order_expr("q.vec", dim, top_k, self.halfvec);
+        let order =
+            Self::candidate_order_expr("q.vec", dim, top_k, self.halfvec, self.is_deferred(&coll));
 
         let sql = format!(
             r#"SELECT q.idx AS idx, t.id AS id, t.score AS score, t.metadata AS metadata

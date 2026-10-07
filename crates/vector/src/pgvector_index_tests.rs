@@ -449,6 +449,148 @@ async fn a_bulk_load_scope_defers_the_index_and_rebuilds_it_at_the_end() {
     .await;
 }
 
+/// The bulk-load contract — [`VectorDB::begin_bulk_load`] calls itself "a hint,
+/// never a semantic change", with searches "served by exact scan meanwhile" —
+/// held against the fp16 candidate order of
+/// [`PgVectorAdapter::candidate_order_expr`].
+///
+/// Two rows and a `top_k` of 1, picked so the two precisions disagree outright
+/// (checked against the pgvector 0.8.2 this suite runs on):
+///
+/// | row | stored `vector(3)`      | as `halfvec(3)`             | distance to `[1,0,0]` |
+/// |-----|-------------------------|-----------------------------|-----------------------|
+/// | A   | `[1, 0.49987, 0.49987]` | `[1, 0.4997559, 0.4997559]` | fp32 0.1834327 / fp16 0.1833705 |
+/// | B   | `[1, 0.49988, 0.49980]` | `[1, 0.5,       0.4997559]` | fp32 0.1834163 / fp16 0.1834370 |
+///
+/// B is the true nearest neighbour, by 1.6e-5; A is the fp16 one, by 6.6e-5.
+/// Rounding to nearest is monotone *per component*, so a single varying
+/// component can only ever produce a tie — the inversion needs two: fp16 pulls
+/// both of A's down to the grid point below 0.5 while pushing B's first one up
+/// to 0.5, and a sum of squares does not preserve the order under that. Both
+/// gaps are strict and pgvector computes either distance in `double` over the
+/// stored `float4`/`half`, so neither comparison sits near its own resolution.
+/// At `top_k = 1` the outer `ORDER BY score DESC` cannot repair the choice:
+/// there is one row to re-sort.
+///
+/// Inside the scope there is no index, so the only plan is a scan and the
+/// ordering expression alone decides the winner — which is what makes the
+/// assertion plan-independent, in the spirit of this file's header. The
+/// *premise* (that these two rows do invert) is therefore checked as plain
+/// arithmetic rather than by searching with the index in place: over three rows
+/// the planner may or may not pick the HNSW scan, and pinning which would be
+/// pinning a plan shape.
+#[tokio::test]
+async fn a_search_inside_a_bulk_load_returns_the_exact_nearest_neighbour() {
+    with_temp_db(
+        "a_search_inside_a_bulk_load_returns_the_exact_nearest_neighbour",
+        |url| async move {
+            let adapter = PgVectorAdapter::new(&url, 3).await.unwrap();
+            if !adapter.halfvec {
+                // Below HALFVEC_MIN_VERSION there is no fp16 ordering to be
+                // wrong about, so the case this pins cannot arise.
+                eprintln!("pgvector has no halfvec — skipping the fp16 inversion");
+                adapter.close().await.unwrap();
+                return;
+            }
+            adapter.create_collection("Exact", "f", 3).await.unwrap();
+            let db = Database::connect(&url).await.unwrap();
+
+            let a = uuid::Uuid::from_u128(0xA);
+            let b = uuid::Uuid::from_u128(0xB);
+            let far = uuid::Uuid::from_u128(0xF);
+            let query = vec![1.0f32, 0.0, 0.0];
+            async fn top1(adapter: &PgVectorAdapter, query: &[f32]) -> uuid::Uuid {
+                let hits = adapter
+                    .search_similar("Exact", "f", query, 1)
+                    .await
+                    .unwrap();
+                assert_eq!(hits.len(), 1, "two rows are present, so top-1 must hit");
+                hits[0].id
+            }
+
+            adapter
+                .index_points(
+                    "Exact",
+                    "f",
+                    &[
+                        crate::models::VectorPoint::new(a, vec![1.0, 0.49987, 0.49987]),
+                        crate::models::VectorPoint::new(b, vec![1.0, 0.49988, 0.4998]),
+                    ],
+                )
+                .await
+                .unwrap();
+            assert!(index_present(&db, "Exact_f_halfvec_hnsw").await);
+
+            // The premise, as arithmetic the server does: A really is the fp16
+            // winner and B really is the fp32 one. Without this the test would
+            // go quietly green on two rows that had stopped inverting — a
+            // different pgvector rounding, a changed literal, anything.
+            let premise = db
+                .query_one(Statement::from_string(
+                    DatabaseBackend::Postgres,
+                    r#"SELECT
+                         (SELECT vector <=> '[1,0,0]'::vector FROM "Exact_f" WHERE id = '00000000-0000-0000-0000-00000000000b')
+                       < (SELECT vector <=> '[1,0,0]'::vector FROM "Exact_f" WHERE id = '00000000-0000-0000-0000-00000000000a')
+                           AS fp32_prefers_b,
+                         (SELECT vector::halfvec(3) <=> '[1,0,0]'::halfvec(3) FROM "Exact_f" WHERE id = '00000000-0000-0000-0000-00000000000a')
+                       < (SELECT vector::halfvec(3) <=> '[1,0,0]'::halfvec(3) FROM "Exact_f" WHERE id = '00000000-0000-0000-0000-00000000000b')
+                           AS fp16_prefers_a"#
+                        .to_string(),
+                ))
+                .await
+                .unwrap()
+                .expect("both rows were just written");
+            assert!(
+                premise.try_get::<bool>("", "fp32_prefers_b").unwrap(),
+                "B must be the true nearest neighbour, or there is nothing to test"
+            );
+            assert!(
+                premise.try_get::<bool>("", "fp16_prefers_a").unwrap(),
+                "A must be the fp16 nearest neighbour, or there is nothing to test"
+            );
+
+            adapter.begin_bulk_load().await.unwrap();
+            // One more point past BULK_DEFER_RATIO x the two already there, so
+            // the scope drops the index for the rest of the load. Orthogonal to
+            // the query, so it cannot become the top hit itself.
+            adapter
+                .index_points(
+                    "Exact",
+                    "f",
+                    &[crate::models::VectorPoint::new(far, vec![0.0, 1.0, 0.0])],
+                )
+                .await
+                .unwrap();
+            assert!(
+                !index_present(&db, "Exact_f_halfvec_hnsw").await,
+                "the scope must have dropped the index, or there is nothing to test"
+            );
+
+            assert_eq!(
+                top1(&adapter, &query).await,
+                b,
+                "with no index to match, the scan has to be exact: entering a \
+                 bulk load must not reorder rows at the LIMIT boundary"
+            );
+
+            // The scope is not sticky: the index comes back, and the ordering
+            // decision goes back to being the index's. Which row that picks is
+            // the planner's business (above), so only the state is asserted.
+            adapter.end_bulk_load().await.unwrap();
+            assert!(index_present(&db, "Exact_f_halfvec_hnsw").await);
+            assert!(
+                !adapter.is_deferred("Exact_f"),
+                "end_bulk_load built the index, so no search may still claim it \
+                 is indexless"
+            );
+
+            drop(db);
+            adapter.close().await.unwrap();
+        },
+    )
+    .await;
+}
+
 /// Crash safety of the bulk-load scope: a process that dies mid-load never
 /// calls `end_bulk_load` or `close`, so the index stays dropped. That must be a
 /// *correct* state — exact scans, every row present — and

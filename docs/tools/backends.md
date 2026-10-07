@@ -51,9 +51,12 @@ Notes:
   results. To move such a store onto the half-precision index, install a
   pgvector 0.7+ binary, run `ALTER EXTENSION vector UPDATE`, and then
   `cognee-cli vector-reindex`.
-  Two exceptions: collections wider than 2000 dimensions cannot be indexed by
-  pgvector and keep the exact scan, and a `top_k` above 1000 exceeds the largest
-  `ef_search` pgvector accepts and so also falls back to the exact scan.
+  Three exceptions, and in all three the candidate ordering drops back to
+  full-precision `vector` too, because there is no fp16 index to match and the
+  scan is one the adapter declares exact: collections wider than 2000 dimensions
+  cannot be indexed by pgvector at all; a `top_k` above 1000 exceeds the largest
+  `ef_search` pgvector accepts; and a collection whose index is dropped for a
+  bulk-load scope (see *bulk loads* below) is indexless until the scope ends.
   `search_similar_filtered` stays **exact** filter-then-limit, but no longer by
   disabling index scans: each collection carries a GIN index over
   `cognee_vector_set_names(metadata)`, an `IMMUTABLE` function with
@@ -67,7 +70,14 @@ Notes:
   and it is built once — in parallel, under a sized `maintenance_work_mem` —
   when the last scope ends, followed by an `ANALYZE` of every collection
   written. **A collection without its index is still correct**: the planner
-  falls back to an exact scan, which returns the true top k. So an interrupted
+  falls back to an exact scan, which returns the true top k — and, because the
+  adapter knows per collection that the index is gone, that scan orders by the
+  full-precision distance rather than the fp16 one the index would have matched,
+  so entering a bulk-load scope does not move rows across the `LIMIT` boundary.
+  (A collection whose index was *never* built is the one case left outside that:
+  it is in the catalog rather than in memory, so a search cannot tell without a
+  round trip, and its scan is still ordered in fp16. `vector-reindex` is the
+  repair, as below.) So an interrupted
   load (a crash, a process killed between `begin` and `end`) leaves every
   written row in place and searchable, and the one repair is
   `cognee-cli vector-reindex` / `create_missing_vector_indexes()`, which is
