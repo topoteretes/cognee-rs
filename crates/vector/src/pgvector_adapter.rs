@@ -147,6 +147,21 @@ const HNSW_REBUILD_RATIO: f64 = 0.25;
 const HNSW_BUILD_BUDGET_MIN_KB: i64 = 64 * 1024;
 const HNSW_BUILD_BUDGET_MAX_KB: i64 = 2 * 1024 * 1024;
 
+/// See `migrator::CreateSetNamesFunction`.
+const SET_NAMES_FUNCTION_DDL: &str = "
+CREATE OR REPLACE FUNCTION cognee_vector_set_names(m jsonb) RETURNS text[]
+LANGUAGE sql IMMUTABLE PARALLEL SAFE STRICT AS $fn$
+  SELECT COALESCE(array_agg(n), '{}'::text[]) FROM (
+    SELECT CASE jsonb_typeof(e)
+             WHEN 'string' THEN e #>> '{}'
+             WHEN 'object' THEN CASE WHEN jsonb_typeof(e->'name') = 'string' THEN e->>'name' END
+           END AS n
+    FROM jsonb_array_elements(
+      CASE WHEN jsonb_typeof(m->'belongs_to_set') = 'array'
+           THEN m->'belongs_to_set' ELSE '[]'::jsonb END) e
+  ) s WHERE n IS NOT NULL
+$fn$";
+
 /// Postgres truncates any identifier past this many bytes (`NAMEDATALEN - 1`).
 const PG_MAX_IDENTIFIER_BYTES: usize = 63;
 
@@ -557,6 +572,24 @@ impl PgVectorAdapter {
         Ok(true)
     }
 
+    /// Name of the GIN index over `cognee_vector_set_names(metadata)`,
+    /// truncated like [`Self::vector_index_name`].
+    fn set_names_index_name(coll: &str) -> String {
+        let mut name = format!("{coll}_set_names");
+        name.truncate(PG_MAX_IDENTIFIER_BYTES);
+        name
+    }
+
+    /// `CREATE INDEX` for `coll`'s NodeSet-membership GIN index.
+    fn set_names_index_ddl(coll: &str, concurrently: bool) -> String {
+        let index = Self::set_names_index_name(coll);
+        let concurrent_kw = if concurrently { " CONCURRENTLY" } else { "" };
+        format!(
+            r#"CREATE INDEX{concurrent_kw} IF NOT EXISTS "{index}"
+               ON "{coll}" USING gin (cognee_vector_set_names(metadata))"#
+        )
+    }
+
     /// `CREATE INDEX` for `coll`'s HNSW index (see [`Self::create_vector_index`]).
     fn vector_index_ddl(coll: &str, concurrently: bool) -> String {
         let index = Self::vector_index_name(coll);
@@ -692,6 +725,11 @@ impl PgVectorAdapter {
                 continue;
             }
 
+            // The NodeSet-membership GIN index (collections created before it
+            // existed have none). Independent of the HNSW index below: it
+            // applies at any dimension.
+            self.backfill_set_names_index(&coll, &mut report).await;
+
             // Check first rather than leaning on `IF NOT EXISTS`, so the count
             // reports work actually done and an already-indexed collection is
             // not handed a redundant CONCURRENTLY build.
@@ -740,6 +778,45 @@ impl PgVectorAdapter {
         Ok(report)
     }
 
+    /// Build `coll`'s NodeSet-membership GIN index if it is missing or was
+    /// left invalid, the way the HNSW backfill does (`CONCURRENTLY`, logged and
+    /// counted as failed rather than aborting the run).
+    async fn backfill_set_names_index(&self, coll: &str, report: &mut VectorIndexBackfill) {
+        let index = Self::set_names_index_name(coll);
+        let state = match Self::vector_index_state(&self.db, &index).await {
+            Ok(state) => state,
+            Err(e) => {
+                warn!("could not read the state of {index}, skipping it: {e}");
+                report.failed += 1;
+                return;
+            }
+        };
+        if state == Some(true) {
+            return;
+        }
+        if state == Some(false)
+            && let Err(e) = self
+                .db
+                .execute_unprepared(&format!(r#"DROP INDEX CONCURRENTLY "{index}""#))
+                .await
+        {
+            warn!("could not drop invalid index {index}, skipping it: {e}");
+            report.failed += 1;
+            return;
+        }
+        match self
+            .db
+            .execute_unprepared(&Self::set_names_index_ddl(coll, true))
+            .await
+        {
+            Ok(_) => report.built += 1,
+            Err(e) => {
+                warn!("could not build {index}: {e}");
+                report.failed += 1;
+            }
+        }
+    }
+
     /// Format a vector as pgvector text literal: `[1.0,2.0,3.0]`
     fn format_vector(v: &[f32]) -> String {
         let inner: String = v
@@ -748,56 +825,6 @@ impl PgVectorAdapter {
             .collect::<Vec<_>>()
             .join(",");
         format!("[{inner}]")
-    }
-
-    /// Build the `belongs_to_set` NodeSet-membership `WHERE` fragment (over the
-    /// `metadata` JSONB column) plus the ordered name parameters, numbered from
-    /// `$first_param`. `names` must be non-empty. Names are bound as parameters
-    /// — never interpolated — so caller-supplied node names cannot inject SQL.
-    ///
-    /// Semantics mirror [`crate::node_filter::metadata_matches_node_filter`]:
-    /// each element's set-name is a bare string as-is, or an object's `"name"`
-    /// field, or nothing; `"AND"` requires the requested names to be a subset of
-    /// the row's names, anything else is `"OR"` (non-empty intersection). The
-    /// `CASE ... ELSE '[]'::jsonb` fallback keeps `jsonb_array_elements` from
-    /// erroring when `belongs_to_set` is missing or not an array — such a row
-    /// then yields an empty name-set and matches nothing, exactly as the
-    /// in-memory predicate returns `false` for it.
-    fn node_filter_where(
-        names: &[String],
-        operator: &str,
-        first_param: usize,
-    ) -> (String, Vec<sea_orm::Value>) {
-        // Set-name of one `belongs_to_set` element.
-        let elem_name = "(CASE jsonb_typeof(elem.v) \
-             WHEN 'string' THEN elem.v #>> '{}' \
-             WHEN 'object' THEN elem.v ->> 'name' \
-             ELSE NULL END)";
-        // Array-guarded element expansion (never errors on non-array values).
-        let elements = "jsonb_array_elements(\
-             CASE WHEN jsonb_typeof(metadata->'belongs_to_set') = 'array' \
-                  THEN metadata->'belongs_to_set' ELSE '[]'::jsonb END) AS elem(v)";
-
-        let placeholders: Vec<String> = (0..names.len())
-            .map(|i| format!("${}::text", first_param + i))
-            .collect();
-        let values: Vec<sea_orm::Value> = names.iter().map(|n| n.clone().into()).collect();
-
-        let where_sql = if operator == "AND" {
-            // Requested ⊆ payload: no requested name is absent from the row.
-            format!(
-                "NOT EXISTS (SELECT 1 FROM unnest(ARRAY[{}]) AS req(name) \
-                 WHERE NOT EXISTS (SELECT 1 FROM {elements} WHERE {elem_name} = req.name))",
-                placeholders.join(", ")
-            )
-        } else {
-            // OR: non-empty intersection.
-            format!(
-                "EXISTS (SELECT 1 FROM {elements} WHERE {elem_name} = ANY(ARRAY[{}]))",
-                placeholders.join(", ")
-            )
-        };
-        (where_sql, values)
     }
 
     /// Batched upsert shared by [`VectorDB::index_points`] (`merge_membership`)
@@ -1113,6 +1140,20 @@ impl VectorDB for PgVectorAdapter {
             );
         }
 
+        // NodeSet-membership index for `search_similar_filtered`. Best-effort
+        // for the same reason as the HNSW index: the filtered search is exact
+        // with or without it, only slower, and the backfill adds it later.
+        if let Err(e) = self
+            .db
+            .execute_unprepared(&Self::set_names_index_ddl(&coll, false))
+            .await
+        {
+            warn!(
+                "collection {coll} was created without its NodeSet index, so filtered searches \
+                 scan it until the backfill runs: {e}"
+            );
+        }
+
         // Register in bookkeeping table.
         let insert = Query::insert()
             .into_table(VColl::Table)
@@ -1390,50 +1431,49 @@ impl VectorDB for PgVectorAdapter {
         warn_zero_norm_query("pgvector", &coll, query_vector);
 
         let vec_str = Self::format_vector(query_vector);
-        // $1 = query vector, $2 = top_k, $3.. = requested node names. Pushing the
-        // NodeSet predicate into the WHERE clause makes the ORDER BY distance
-        // LIMIT run *after* the filter (server-side filter-then-limit), so every
-        // returned row is in-set and none is crowded out — exact at any size.
-        let (where_sql, name_values) =
-            Self::node_filter_where(requested, node_name_filter_operator, 3);
-
+        // Exact filter-then-limit, as one statement. The NodeSet predicate
+        // runs *before* the ORDER BY distance LIMIT, so every returned row is
+        // in-set and none is crowded out — exact at any size. It is phrased
+        // over `cognee_vector_set_names(metadata)` (see the migrator), which
+        // the collection's GIN index answers directly: `&&` = any requested
+        // name (OR), `@>` = all of them (AND), with exactly
+        // `node_filter::metadata_matches_node_filter`'s semantics.
+        //
+        // The HNSW index must stay out of this query: pgvector post-filters an
+        // index scan (it yields roughly `hnsw.ef_search` candidates by distance
+        // alone and the WHERE clause is applied to *those*), so a selective
+        // filter would return fewer than `top_k` rows, or none —
+        // `test_search_similar_filtered_filter_then_limit` pins that with 64
+        // zero-distance out-of-set rows crowding 2 in-set ones. Ordering by
+        // `distance + 0` is not an expression the HNSW opclass can order by, so
+        // the planner cannot pick the index scan, while the GIN bitmap scan
+        // (the old `SET LOCAL enable_bitmapscan = off` ruled that out too)
+        // stays available. `id` breaks distance ties deterministically.
+        let predicate = if node_name_filter_operator == "AND" {
+            "@>"
+        } else {
+            "&&"
+        };
+        let limit = i64::try_from(top_k).unwrap_or(i64::MAX);
         let sql = format!(
             r#"SELECT id, 1 - (vector <=> $1::vector) AS score, metadata
                FROM "{coll}"
-               WHERE {where_sql}
-               ORDER BY vector <=> $1::vector
-               LIMIT $2"#
+               WHERE cognee_vector_set_names(metadata) {predicate} $2::text[]
+               ORDER BY (vector <=> $1::vector) + 0, id
+               LIMIT {limit}"#
         );
-
-        let mut values: Vec<sea_orm::Value> = Vec::with_capacity(2 + name_values.len());
-        values.push(vec_str.into());
-        values.push((top_k as i64).into());
-        values.extend(name_values);
-
-        // Deliberately keep the HNSW index out of this one query.
-        //
-        // pgvector post-filters an index scan: the index yields roughly
-        // `hnsw.ef_search` (default 40) candidates by distance alone, and the
-        // `WHERE` clause is applied to *those*. A selective NodeSet filter then
-        // returns fewer than `top_k` rows, or none at all — the exact opposite
-        // of the filter-then-limit guarantee documented above, which
-        // `test_search_similar_filtered_filter_then_limit` pins with 64
-        // zero-distance out-of-set rows crowding 2 in-set ones.
-        //
-        // Disabling index and bitmap scans for the statement forces the exact
-        // scan that guarantee needs. The unfiltered paths — `search_similar` and
-        // `batch_search_similar`, which is where the volume is — are untouched
-        // and do use the index. Trading this exactness for indexed filtered
-        // search is possible (pgvector 0.8's `hnsw.iterative_scan`, or reshaping
-        // the predicate into something GIN-indexable) but it is a behaviour
-        // change that needs its own decision, not a side effect of adding an
-        // index.
         let rows = self
-            .query_all_with_locals(
-                Self::exact_scan_locals(),
-                Statement::from_sql_and_values(DatabaseBackend::Postgres, &sql, values),
-            )
-            .await?;
+            .db
+            .query_all(Statement::from_sql_and_values(
+                DatabaseBackend::Postgres,
+                &sql,
+                [vec_str.into(), requested.to_vec().into()],
+            ))
+            .await
+            .map_err(|e| VectorDBError::StorageError(e.to_string()))
+            .inspect_err(|e| {
+                self.forget_if_missing(&coll, e);
+            })?;
 
         let mut results = Vec::with_capacity(rows.len());
         for row in &rows {
@@ -1747,7 +1787,45 @@ mod migrator {
         }
 
         fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-            vec![Box::new(CreatePgVectorExtension)]
+            vec![
+                Box::new(CreatePgVectorExtension),
+                Box::new(CreateSetNamesFunction),
+            ]
+        }
+    }
+
+    /// `cognee_vector_set_names(metadata)`: the NodeSet names of a point's
+    /// `belongs_to_set` under `crate::node_filter`'s semantics — a bare string
+    /// entry is its own name, an object contributes its `name` when that is a
+    /// string, anything else (and a missing / non-array `belongs_to_set`)
+    /// contributes nothing. IMMUTABLE, so each collection carries a GIN
+    /// expression index over it and `search_similar_filtered` becomes an
+    /// index lookup (`&&` for OR, `@>` for AND) instead of a
+    /// `jsonb_array_elements` scan of every row.
+    struct CreateSetNamesFunction;
+
+    impl MigrationName for CreateSetNamesFunction {
+        fn name(&self) -> &str {
+            "m20260929_000001_create_set_names_function"
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MigrationTrait for CreateSetNamesFunction {
+        async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            manager
+                .get_connection()
+                .execute_unprepared(super::SET_NAMES_FUNCTION_DDL)
+                .await?;
+            Ok(())
+        }
+
+        async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            manager
+                .get_connection()
+                .execute_unprepared("DROP FUNCTION IF EXISTS cognee_vector_set_names(jsonb)")
+                .await?;
+            Ok(())
         }
     }
 
@@ -1983,7 +2061,7 @@ mod shared_db_migration_tests {
             // 3. The vector migrator tracks its version in its OWN table and leaves
             //    the relational bookkeeping untouched.
             assert_eq!(version_count(&db, "seaql_migrations").await, 2);
-            assert_eq!(version_count(&db, "seaql_migrations_pgvector").await, 1);
+            assert_eq!(version_count(&db, "seaql_migrations_pgvector").await, 2);
 
             // Hand the pooled connections back before the database is dropped, so
             // cleanup does not have to lean on `WITH (FORCE)`.
