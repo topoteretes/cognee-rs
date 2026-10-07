@@ -531,6 +531,67 @@ async fn an_interrupted_bulk_load_leaves_correct_rows_that_the_backfill_reindexe
     .await;
 }
 
+/// `upsert_raw_vectors` self-creates its collection, because nothing else ever
+/// creates a system-owned one like `TruthCentroid_vector`. That guard asks
+/// `has_collection`, which now answers from a positive-only cache — so a
+/// collection dropped behind this adapter's back (a second adapter, the CLI,
+/// the Python SDK) is still remembered, the guard skips the create, and the
+/// write lands on a table that is not there. Before the cache the guard
+/// recovered transparently; without the retry it costs one hard failure and
+/// only recovers on the call after.
+#[tokio::test]
+async fn a_raw_upsert_recreates_a_collection_dropped_behind_the_adapters_back() {
+    with_temp_db(
+        "a_raw_upsert_recreates_a_collection_dropped_behind_the_adapters_back",
+        |url| async move {
+            let adapter = PgVectorAdapter::new(&url, 4).await.unwrap();
+            let centroid = vec![crate::models::VectorPoint::new(
+                uuid::Uuid::from_u128(0x7001),
+                vec![1.0, 0.0, 0.0, 0.0],
+            )];
+
+            // First write creates the collection and caches it as known.
+            adapter
+                .upsert_raw_vectors("TruthCentroid", "vector", &centroid)
+                .await
+                .unwrap();
+            assert_eq!(
+                adapter
+                    .collection_size("TruthCentroid", "vector")
+                    .await
+                    .unwrap(),
+                1
+            );
+
+            // A different process drops it. This adapter is not told.
+            let other = PgVectorAdapter::new(&url, 4).await.unwrap();
+            other
+                .delete_collection("TruthCentroid", "vector")
+                .await
+                .unwrap();
+            other.close().await.unwrap();
+
+            // The same call as before must still succeed, not fail once and
+            // work on the retry the caller has to write itself.
+            adapter
+                .upsert_raw_vectors("TruthCentroid", "vector", &centroid)
+                .await
+                .expect("a raw upsert must recreate a collection dropped under it");
+            assert_eq!(
+                adapter
+                    .collection_size("TruthCentroid", "vector")
+                    .await
+                    .unwrap(),
+                1,
+                "and the point must actually be in the recreated collection"
+            );
+
+            adapter.close().await.unwrap();
+        },
+    )
+    .await;
+}
+
 /// A bulk load can end two ways: `end_bulk_load`, or `close()` when the scope
 /// was abandoned (a dropped future cannot await the maintenance). Both have to
 /// run *both* steps. `close()` ran only the deferred index builds, so a load

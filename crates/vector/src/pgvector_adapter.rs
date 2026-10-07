@@ -2317,8 +2317,33 @@ impl VectorDB for PgVectorAdapter {
         // Unlike `index_points`, prior dataset membership is NOT unioned in;
         // the incoming metadata is written verbatim (full replace on conflict).
         if let Err(e) = self.upsert_points(&coll, points, false).await {
-            self.forget_if_missing(&coll, &e);
-            return Err(e);
+            // The self-create guard above asks `has_collection`, which answers
+            // from a positive-only cache: a collection dropped behind this
+            // adapter's back — a second adapter, the CLI, the Python SDK — is
+            // still remembered, so the guard skips the create and the write
+            // fails on a table that is not there. Before the cache that case
+            // was handled transparently, and for a system-owned collection like
+            // `TruthCentroid_vector` nothing else ever creates it, so failing
+            // once and recovering on the *next* call is a regression worth
+            // undoing. `forget_if_missing` has just evicted it, so recreate and
+            // retry exactly once; anything else propagates untouched.
+            if !self.forget_if_missing(&coll, &e) {
+                return Err(e);
+            }
+            match self
+                .create_collection(data_type, field_name, expected_dim)
+                .await
+            {
+                // Lost a race to recreate it: the collection is there either
+                // way, which is all the retry needs.
+                Ok(()) | Err(VectorDBError::CollectionExists(_)) => {}
+                Err(create_err) => return Err(create_err),
+            }
+            self.upsert_points(&coll, points, false)
+                .await
+                .inspect_err(|e| {
+                    self.forget_if_missing(&coll, e);
+                })?;
         }
 
         Span::current().record(COGNEE_DB_ROW_COUNT, points.len() as i64);
