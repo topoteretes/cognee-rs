@@ -144,8 +144,12 @@ const HNSW_REBUILD_MIN_ROWS: usize = 200;
 
 /// Rebuild the HNSW index around a batch that would insert at least this
 /// fraction of the collection's current rows into it (see
-/// [`PgVectorAdapter::upsert_rebuilding_index`]).
-const HNSW_REBUILD_RATIO: f64 = 0.25;
+/// [`PgVectorAdapter::upsert_rebuilding_index`]). Calibrated at 100k: four
+/// concurrent writers insert at ~0.5 ms per row, a 4-worker build of a 212k
+/// index costs ~0.14 ms per row of the whole collection, so a rebuild pays
+/// off from roughly 0.3 x the current rows; 0.4 leaves room for re-indexed
+/// points that turn out to be no-ops.
+const HNSW_REBUILD_RATIO: f64 = 0.4;
 
 /// `max_parallel_maintenance_workers` for an index rebuild (the server default
 /// is 2). pgvector's HNSW build scales with workers: 41k 384-d rows took
