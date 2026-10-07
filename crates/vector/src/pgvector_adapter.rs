@@ -57,8 +57,8 @@ use crate::zero_norm::{warn_zero_norm_points, warn_zero_norm_query, warn_zero_no
 )]
 mod vector_index_tests;
 
-/// Max ids per `IN (...)` list on the retrieve path (one parameter each).
-const BATCH_SIZE: usize = 100;
+/// Ids per `= ANY($1::uuid[])` array parameter (retrieve, delete).
+const ID_BATCH: usize = 20_000;
 
 /// Rows per multi-row upsert `INSERT` (three bind parameters per row, so
 /// 6 000 parameters — well under PostgreSQL's 65 535). Full batches share one
@@ -1515,17 +1515,13 @@ impl VectorDB for PgVectorAdapter {
             return Ok(vec![]);
         }
 
-        // Chunk the IN-list by BATCH_SIZE (parameter-count safety), mirroring
-        // the placeholder-building shape used by `fetch_metadata`.
-        let mut results = Vec::new();
-        for chunk in ids.chunks(BATCH_SIZE) {
-            let placeholders: Vec<String> =
-                (1..=chunk.len()).map(|i| format!("${i}::uuid")).collect();
-            let sql = format!(
-                r#"SELECT id, metadata FROM "{coll}" WHERE id IN ({})"#,
-                placeholders.join(", ")
-            );
-            let values: Vec<sea_orm::Value> = chunk.iter().map(|id| (*id).into()).collect();
+        // One `uuid[]` parameter per `ID_BATCH` ids: a constant statement
+        // text (cached prepared statement) instead of a 100-placeholder
+        // `IN (…)` list per round trip.
+        let mut results = Vec::with_capacity(ids.len());
+        for chunk in ids.chunks(ID_BATCH) {
+            let sql = format!(r#"SELECT id, metadata FROM "{coll}" WHERE id = ANY($1::uuid[])"#);
+            let values: Vec<sea_orm::Value> = vec![chunk.to_vec().into()];
             let rows = match self
                 .db
                 .query_all(Statement::from_sql_and_values(
@@ -1697,18 +1693,21 @@ impl VectorDB for PgVectorAdapter {
         let coll = Self::collection_name(data_type, field_name)?;
         Span::current().record(COGNEE_VECTOR_COLLECTION, coll.as_str());
 
-        let query = Query::delete()
-            .from_table(Alias::new(&coll))
-            .and_where(
-                Expr::col(Alias::new("id"))
-                    .is_in(point_ids.iter().copied().map(sea_orm::Value::from)),
-            )
-            .to_owned();
-
-        self.db
-            .execute(self.build(&query))
-            .await
-            .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
+        // `= ANY($1::uuid[])` per `ID_BATCH` ids rather than one bind
+        // parameter per id, which failed past PostgreSQL's 65 535.
+        for chunk in point_ids.chunks(ID_BATCH) {
+            self.db
+                .execute(Statement::from_sql_and_values(
+                    DatabaseBackend::Postgres,
+                    format!(r#"DELETE FROM "{coll}" WHERE id = ANY($1::uuid[])"#),
+                    [chunk.to_vec().into()],
+                ))
+                .await
+                .map_err(|e| VectorDBError::StorageError(e.to_string()))
+                .inspect_err(|e| {
+                    self.forget_if_missing(&coll, e);
+                })?;
+        }
 
         Span::current().record(COGNEE_DB_ROW_COUNT, point_ids.len() as i64);
         Ok(())
