@@ -1304,6 +1304,100 @@ pub async fn test_get_neighborhood_multiple_seeds(db: &dyn GraphDBTrait) {
     assert_eq!(edges.len(), 3, "all three edges, no duplicates");
 }
 
+/// The opt-in per-seed neighbour cap must mean the same thing on every
+/// backend.
+///
+/// `COGNEE_TRIPLET_NEIGHBOR_CAP` turns the triplet retriever's seed expansion
+/// into `get_neighborhood_scoped`, whose trait default narrows a full
+/// neighbourhood client-side: per seed keep every neighbour that is itself a
+/// seed, plus at most `cap` others — the smallest ids in byte order — then
+/// return the subgraph induced on what is kept. `PgGraphAdapter` overrides it
+/// with a `LATERAL`-per-seed cap in SQL so the hub fan-out never reaches the
+/// induced-subgraph join, and "ORDER BY id COLLATE \"C\" LIMIT cap" has to
+/// pick the same neighbours the Rust `BTreeSet` does. A divergence here is
+/// invisible in latency and only shows up as different search results on one
+/// backend.
+///
+/// The fixture is a hub: one seed with five non-seed neighbours whose ids sort
+/// unambiguously, a second seed to pin that seed-to-seed edges survive the cap,
+/// and an edge between two kept neighbours to pin that the result is the
+/// induced subgraph rather than a star.
+pub async fn test_get_neighborhood_scoped_cap_is_deterministic(db: &dyn GraphDBTrait) {
+    use cognee_graph::NeighborhoodScope;
+
+    db.delete_graph().await.unwrap();
+
+    let ids = ["s1", "s2", "n1", "n2", "n3", "n4", "n5"];
+    let nodes: Vec<TestNode> = ids.iter().map(|i| TestNode::new(i, i, "T", 0)).collect();
+    db.add_nodes(&nodes.iter().collect::<Vec<_>>())
+        .await
+        .unwrap();
+
+    db.add_edge("s1", "s2", "between", None).await.unwrap();
+    for n in ["n1", "n2", "n3", "n4", "n5"] {
+        db.add_edge("s1", n, "r", None).await.unwrap();
+    }
+    // An edge between two of the kept neighbours: present in the induced
+    // subgraph, and the pair that proves the result is not just the star.
+    db.add_edge("n1", "n2", "side", None).await.unwrap();
+
+    let seeds = vec!["s1".to_string(), "s2".to_string()];
+    let uncapped = db.get_neighborhood(&seeds, 1).await.unwrap();
+
+    for cap in [1usize, 2, 3, 5, 9] {
+        let scope = NeighborhoodScope {
+            max_neighbors_per_seed: Some(cap),
+            ..Default::default()
+        };
+        let (nodes, edges) = db.get_neighborhood_scoped(&seeds, 1, &scope).await.unwrap();
+
+        // The reference semantics, computed over the uncapped result.
+        let (want_nodes, want_edges) = cognee_graph::apply_neighborhood_scope(
+            &seeds,
+            1,
+            uncapped.0.clone(),
+            uncapped.1.clone(),
+            &scope,
+        );
+
+        let got: std::collections::BTreeSet<&str> =
+            nodes.iter().map(|(id, _)| id.as_str()).collect();
+        let want: std::collections::BTreeSet<&str> =
+            want_nodes.iter().map(|(id, _)| id.as_str()).collect();
+        assert_eq!(
+            got, want,
+            "cap {cap}: the backend kept a different neighbour set than              apply_neighborhood_scope, so the same cap means two things"
+        );
+        assert!(
+            got.contains("s1") && got.contains("s2"),
+            "cap {cap}: a seed is never capped away"
+        );
+
+        let got_e: std::collections::BTreeSet<(&str, &str, &str)> = edges
+            .iter()
+            .map(|(s, t, r, _)| (s.as_str(), t.as_str(), r.as_str()))
+            .collect();
+        let want_e: std::collections::BTreeSet<(&str, &str, &str)> = want_edges
+            .iter()
+            .map(|(s, t, r, _)| (s.as_str(), t.as_str(), r.as_str()))
+            .collect();
+        assert_eq!(got_e, want_e, "cap {cap}: induced edge sets differ");
+        assert!(
+            got_e.contains(&("s1", "s2", "between")),
+            "cap {cap}: the seed-to-seed edge must always survive"
+        );
+    }
+
+    // A cap at or above the real fan-out, and the default scope, are both the
+    // identity — the default is what every uncapped deployment runs.
+    let noop = db
+        .get_neighborhood_scoped(&seeds, 1, &NeighborhoodScope::default())
+        .await
+        .unwrap();
+    assert_eq!(noop.0.len(), uncapped.0.len());
+    assert_eq!(noop.1.len(), uncapped.1.len());
+}
+
 pub async fn test_get_neighborhood_empty_seeds(db: &dyn GraphDBTrait) {
     db.delete_graph().await.unwrap();
 

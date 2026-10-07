@@ -154,3 +154,4 @@ pggraph_test!(test_edge_feedback_weight_round_trip);
 pggraph_test!(test_property_writes_tolerate_nul_in_value);
 pggraph_test!(test_edge_feedback_weight_rejects_non_finite);
 pggraph_test!(test_nul_bytes_in_text_are_persistable);
+pggraph_test!(test_get_neighborhood_scoped_cap_is_deterministic);
