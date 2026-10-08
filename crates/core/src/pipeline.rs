@@ -1598,6 +1598,9 @@ async fn process_iter(
 /// Each item is **eagerly stamped** with provenance before being pushed
 /// into the batch (locked decision 8); see [`process_iter`] for the
 /// rationale.
+///
+/// An `Err` item fails the *producer* (`first_index - 1`) without retrying
+/// and stops pulling; see [`ValueStream`].
 async fn process_stream(
     mut stream: ValueStream,
     tail: &[TaskInfo],
@@ -1629,7 +1632,15 @@ async fn process_stream(
             }
             next = stream.next() => next,
         };
-        let Some(mut item) = next else { break };
+        let Some(next) = next else { break };
+        // A mid-stream failure fails the *producer* (`first_index` is the
+        // consumer's index). Not retried: the stream is partially consumed,
+        // and items already dispatched downstream cannot be recalled.
+        let mut item = next.map_err(|source| ExecutionError::TaskFailed {
+            task_index: first_index - 1,
+            attempts: 1,
+            source,
+        })?;
 
         // Drop sentinel: discard this item before stamping or accumulating.
         if crate::sentinels::is_dropped(item.as_ref()) {
@@ -2263,8 +2274,8 @@ mod tests {
         // `current_data` sourced from the streamed item would read 70/71/72.
         let fan_out = Task::async_stream(|input: Arc<dyn Value>, _ctx| {
             let x = *(*input).as_any().downcast_ref::<i32>().expect("i32 input");
-            let stream =
-                futures::stream::iter(0..3).map(move |i| Box::new(x * 10 + i) as Box<dyn Value>);
+            let stream = futures::stream::iter(0..3)
+                .map(move |i| Ok(Box::new(x * 10 + i) as Box<dyn Value>));
             Ok(Box::pin(stream) as ValueStream)
         });
 
@@ -2728,7 +2739,7 @@ mod tests {
         let stream_task = Task::AsyncStream(Arc::new(|_input, _ctx| {
             let items = vec![100_i32, 200, 300];
             Ok(
-                Box::pin(futures::stream::iter(items).map(|i| Box::new(i) as Box<dyn Value>))
+                Box::pin(futures::stream::iter(items).map(|i| Ok(Box::new(i) as Box<dyn Value>)))
                     as ValueStream,
             )
         }));
@@ -2748,12 +2759,67 @@ mod tests {
         assert_eq!(values, vec![100, 200, 300]);
     }
 
+    /// A stream that fails after it has started yielding fails the run,
+    /// attributes the error to the producer, and is not pulled any further.
+    #[tokio::test]
+    async fn test_async_stream_mid_stream_error_fails_producer() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+        let pulled_past_error = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&pulled_past_error);
+        let stream_task = Task::AsyncStream(Arc::new(move |_input, _ctx| {
+            let flag = Arc::clone(&flag);
+            let items = futures::stream::iter(0..3).map(move |i| match i {
+                0 => Ok(Box::new(1_i32) as Box<dyn Value>),
+                1 => Err::<Box<dyn Value>, TaskError>("boom".into()),
+                _ => {
+                    flag.store(true, Ordering::SeqCst);
+                    Ok(Box::new(3_i32) as Box<dyn Value>)
+                }
+            });
+            Ok(Box::pin(items) as ValueStream)
+        }));
+
+        let seen = Arc::new(AtomicUsize::new(0));
+        let seen_in_task = Arc::clone(&seen);
+        let consumer = Task::Sync(Arc::new(move |input, _ctx| {
+            seen_in_task.fetch_add(1, Ordering::SeqCst);
+            Ok(input)
+        }));
+
+        // batch_size 1: the first item is dispatched before the error arrives.
+        let pipeline = Pipeline::new("mid-stream error")
+            .with_task(stream_task)
+            .with_task(consumer)
+            .with_batch_size(1);
+
+        let inputs: Vec<Arc<dyn Value>> = vec![Arc::new(0_i32)];
+        let Err(err) = execute(&pipeline, inputs, stub_ctx().await, &NoopWatcher).await else {
+            panic!("a mid-stream error must fail the run");
+        };
+
+        match err {
+            ExecutionError::TaskFailed {
+                task_index,
+                attempts,
+                source,
+            } => {
+                assert_eq!(task_index, 0, "the producer, not the consumer, failed");
+                assert_eq!(attempts, 1, "mid-stream failures are not retried");
+                assert_eq!(source.to_string(), "boom");
+            }
+            other => panic!("expected TaskFailed, got {other:?}"),
+        }
+        assert_eq!(seen.load(Ordering::SeqCst), 1);
+        assert!(!pulled_past_error.load(Ordering::SeqCst));
+    }
+
     #[tokio::test]
     async fn test_async_stream_then_sync() {
         let stream_task = Task::AsyncStream(Arc::new(|_input, _ctx| {
             let items = vec![10_i32, 20, 30, 40];
             Ok(
-                Box::pin(futures::stream::iter(items).map(|i| Box::new(i) as Box<dyn Value>))
+                Box::pin(futures::stream::iter(items).map(|i| Ok(Box::new(i) as Box<dyn Value>)))
                     as ValueStream,
             )
         }));
@@ -2784,7 +2850,7 @@ mod tests {
         let stream_task = Task::AsyncStream(Arc::new(|_input, _ctx| {
             let items = vec![5_i32, 15];
             Ok(
-                Box::pin(futures::stream::iter(items).map(|i| Box::new(i) as Box<dyn Value>))
+                Box::pin(futures::stream::iter(items).map(|i| Ok(Box::new(i) as Box<dyn Value>)))
                     as ValueStream,
             )
         }));
@@ -2985,7 +3051,7 @@ mod tests {
         // AsyncStream yields [5, 10, 15, 20].
         let stream_task = Task::AsyncStream(Arc::new(|_input, _ctx| {
             let stream = futures::stream::iter(vec![5_i32, 10, 15, 20])
-                .map(|i| Box::new(i) as Box<dyn Value>);
+                .map(|i| Ok(Box::new(i) as Box<dyn Value>));
             Ok(Box::pin(stream) as ValueStream)
         }));
 
@@ -3018,7 +3084,7 @@ mod tests {
         // AsyncStream yields [1, 2, 3].
         let stream_task = Task::AsyncStream(Arc::new(|_input, _ctx| {
             let stream =
-                futures::stream::iter(vec![1_i32, 2, 3]).map(|i| Box::new(i) as Box<dyn Value>);
+                futures::stream::iter(vec![1_i32, 2, 3]).map(|i| Ok(Box::new(i) as Box<dyn Value>));
             Ok(Box::pin(stream) as ValueStream)
         }));
 
@@ -3105,7 +3171,7 @@ mod tests {
                     Box::new(val + 1) as Box<dyn Value>
                 })
                 .collect();
-            Ok(Box::pin(futures::stream::iter(results)) as ValueStream)
+            Ok(Box::pin(futures::stream::iter(results).map(Ok)) as ValueStream)
         }));
 
         let pipeline = Pipeline::new("sync iter then async stream batch")
@@ -3133,7 +3199,7 @@ mod tests {
         // AsyncStream yields [5, 10].
         let stream_task = Task::AsyncStream(Arc::new(|_input, _ctx| {
             let stream =
-                futures::stream::iter(vec![5_i32, 10]).map(|i| Box::new(i) as Box<dyn Value>);
+                futures::stream::iter(vec![5_i32, 10]).map(|i| Ok(Box::new(i) as Box<dyn Value>));
             Ok(Box::pin(stream) as ValueStream)
         }));
 
@@ -3172,7 +3238,7 @@ mod tests {
         // AsyncStream yields [1, 2, 3].
         let stream_task = Task::AsyncStream(Arc::new(|_input, _ctx| {
             let stream =
-                futures::stream::iter(vec![1_i32, 2, 3]).map(|i| Box::new(i) as Box<dyn Value>);
+                futures::stream::iter(vec![1_i32, 2, 3]).map(|i| Ok(Box::new(i) as Box<dyn Value>));
             Ok(Box::pin(stream) as ValueStream)
         }));
 
@@ -3185,7 +3251,7 @@ mod tests {
                     Box::new(-val) as Box<dyn Value>
                 })
                 .collect();
-            Ok(Box::pin(futures::stream::iter(results)) as ValueStream)
+            Ok(Box::pin(futures::stream::iter(results).map(Ok)) as ValueStream)
         }));
 
         let pipeline = Pipeline::new("async stream then async stream batch")
@@ -3335,7 +3401,7 @@ mod tests {
                 })
                 .collect();
             Ok(
-                Box::pin(futures::stream::iter(negated).map(|i| Box::new(i) as Box<dyn Value>))
+                Box::pin(futures::stream::iter(negated).map(|i| Ok(Box::new(i) as Box<dyn Value>)))
                     as ValueStream,
             )
         }));

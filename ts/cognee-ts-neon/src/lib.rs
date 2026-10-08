@@ -294,6 +294,7 @@ fn main(mut cx: ModuleContext) -> NeonResult<()> {
     cx.export_function("createTask", task::create_task)?;
     cx.export_function("createIterTask", task::create_iter_task)?;
     cx.export_function("createBatchTask", task::create_batch_task)?;
+    cx.export_function("createIterBatchTask", task::create_iter_batch_task)?;
 
     // TaskInfo
     cx.export_function("taskInfoNew", task_info::task_info_new)?;

@@ -151,7 +151,15 @@ pub type TaskError = Box<dyn std::error::Error + Send + Sync + 'static>;
 pub type ValueIter = Box<dyn Iterator<Item = Box<dyn Value>> + Send + 'static>;
 
 /// Boxed, type-erased async stream yielded by `AsyncStream` tasks.
-pub type ValueStream = BoxStream<'static, Box<dyn Value>>;
+///
+/// Items are `Result`s so a producer can fail *after* it has started
+/// yielding — e.g. a binding's async generator that throws on its third
+/// item. The executor fails the producing task on the first `Err` and stops
+/// pulling; items already dispatched downstream are not rolled back, and the
+/// failure is not retried (the stream has been partially consumed). Errors
+/// raised before the first item belong in the outer
+/// `Result<ValueStream, TaskError>` returned by the task closure.
+pub type ValueStream = BoxStream<'static, Result<Box<dyn Value>, TaskError>>;
 
 //
 // Single-value flavours — calling convention:
@@ -514,6 +522,10 @@ impl Task {
     /// Create a [`Task::AsyncStream`] from a typed closure returning a concrete
     /// stream.  The stream must be `'static`.
     ///
+    /// The stream is infallible: each item is wrapped in `Ok`. A producer that
+    /// can fail mid-stream should build a [`ValueStream`] and use
+    /// [`Task::async_stream`] instead.
+    ///
     /// ```rust,ignore
     /// Task::async_stream_typed(|input: &DatasetId, ctx| {
     ///     let id = *input;
@@ -529,7 +541,7 @@ impl Task {
     {
         Task::AsyncStream(Arc::new(move |input: Arc<dyn Value>, ctx| {
             let typed = Self::borrow_input::<I>(&input);
-            f(typed, ctx).map(|s| Box::pin(s.map(|v| v as Box<dyn Value>)) as ValueStream)
+            f(typed, ctx).map(|s| Box::pin(s.map(|v| Ok(v as Box<dyn Value>))) as ValueStream)
         }))
     }
 
@@ -647,7 +659,7 @@ impl Task {
     {
         Task::AsyncStreamBatch(Arc::new(move |items: &[Box<dyn Value>], ctx| {
             let typed: Vec<&I> = items.iter().map(|v| Self::borrow_item::<I>(v)).collect();
-            f(&typed, ctx).map(|s| Box::pin(s.map(|v| v as Box<dyn Value>)) as ValueStream)
+            f(&typed, ctx).map(|s| Box::pin(s.map(|v| Ok(v as Box<dyn Value>))) as ValueStream)
         }))
     }
 
@@ -1693,7 +1705,10 @@ mod tests {
             _ => panic!("async_stream_batch should produce the AsyncStream variant"),
         };
 
-        let out: Vec<i32> = stream.map(boxed_as_i32).collect().await;
+        let out: Vec<i32> = stream
+            .map(|item| boxed_as_i32(item.expect("infallible typed stream")))
+            .collect()
+            .await;
         assert_eq!(out, vec![3, 6]);
     }
 

@@ -15,7 +15,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use futures::stream;
+use futures::stream::{self, StreamExt};
 
 use cognee_core::cancellation::cancellation_pair;
 use cognee_core::{
@@ -196,7 +196,7 @@ async fn stream_yields_sentinels_directly() {
             Box::new(DroppedSentinel),
             Box::new(200_i32),
         ];
-        Ok(Box::pin(stream::iter(items)) as cognee_core::ValueStream)
+        Ok(Box::pin(stream::iter(items).map(Ok)) as cognee_core::ValueStream)
     }));
 
     // Must only receive i32 values.

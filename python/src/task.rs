@@ -160,16 +160,18 @@ fn make_sync_batch_task(callable: Arc<Py<PyAny>>) -> Task {
 fn make_async_batch_task(callable: Arc<Py<PyAny>>) -> Task {
     Task::async_batch(move |items: &[Box<dyn Value>], _ctx: Arc<TaskContext>| {
         let callable = Arc::clone(&callable);
-        // Clone items into owned PyObjects so we can move into the future.
-        let owned_items: Vec<PyObject> = Python::with_gil(|py| {
+        // Clone items into owned PyObjects so we can move into the future. A
+        // conversion failure is reported from inside the future (this closure
+        // must return one) rather than silently batching an empty list.
+        let owned_items: PyResult<Vec<PyObject>> = Python::with_gil(|py| {
             items
                 .iter()
                 .map(|v| item_to_py(py, v.as_ref()))
                 .collect::<PyResult<Vec<_>>>()
-        })
-        .unwrap_or_default();
+        });
 
         Box::pin(async move {
+            let owned_items = owned_items.map_err(|e: PyErr| -> TaskError { Box::new(e) })?;
             let future = Python::with_gil(|py| {
                 let py_list = PyList::new(py, &owned_items)?;
                 let coro = callable.call1(py, (py_list,))?;
@@ -214,7 +216,7 @@ fn make_async_stream_batch_task(callable: Arc<Py<PyAny>>) -> Task {
                 .map(|v| item_to_py(py, v.as_ref()))
                 .collect::<PyResult<Vec<_>>>()
         })
-        .unwrap_or_default();
+        .map_err(|e: PyErr| -> TaskError { Box::new(e) })?;
 
         let agen = Python::with_gil(|py| {
             let py_list = PyList::new(py, &owned_items)?;
@@ -238,11 +240,20 @@ fn make_async_stream_batch_task(callable: Arc<Py<PyAny>>) -> Task {
 ///
 /// Returns `Some(item)` on success, `None` on `StopAsyncIteration` (end of
 /// stream), and `None` on other errors (silently dropped for now).
-async fn drive_async_gen_next(agen: &Py<PyAny>) -> Option<Box<dyn Value>> {
+/// Pull the next item from a Python async generator.
+///
+/// `None` ends the stream (`StopAsyncIteration`). Any other exception —
+/// including one raised while obtaining the `__anext__` awaitable — is
+/// yielded as `Some(Err(..))`, which fails the producing task.
+async fn drive_async_gen_next(agen: &Py<PyAny>) -> Option<Result<Box<dyn Value>, TaskError>> {
     let next_future = Python::with_gil(|py| {
-        let coro = agen.call_method0(py, "__anext__").ok()?;
-        pyo3_async_runtimes::tokio::into_future(coro.bind(py).clone()).ok()
-    })?;
+        let coro = agen.call_method0(py, "__anext__")?;
+        pyo3_async_runtimes::tokio::into_future(coro.bind(py).clone())
+    });
+    let next_future = match next_future {
+        Ok(f) => f,
+        Err(e) => return Some(Err(Box::new(e))),
+    };
 
     match next_future.await {
         Ok(val) => {
@@ -251,14 +262,17 @@ async fn drive_async_gen_next(agen: &Py<PyAny>) -> Option<Box<dyn Value>> {
                     inner: val.clone_ref(py),
                 })
             });
-            Some(boxed)
+            Some(Ok(boxed))
         }
         Err(e) => {
-            // StopAsyncIteration signals end of stream; other errors stop silently.
-            let _is_stop = Python::with_gil(|py| {
+            let is_stop = Python::with_gil(|py| {
                 e.is_instance_of::<pyo3::exceptions::PyStopAsyncIteration>(py)
             });
-            None
+            if is_stop {
+                None
+            } else {
+                Some(Err(Box::new(e)))
+            }
         }
     }
 }

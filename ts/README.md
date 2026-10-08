@@ -428,16 +428,37 @@ import { pipeline, init } from '@cognee/cognee-ts';
 
 init();
 
-const task = pipeline.createTask((input: pipeline.CogneeValue, ctx: pipeline.TaskContext) => {
-  // process input …
-  return input;
-});
-
 const p = new pipeline.Pipeline("my pipeline");
-p.addTask(new pipeline.TaskInfo(task));
+p.addTask(
+  pipeline.createAsyncStreamTask(async function* (text) {
+    for (const word of (text as string).split(" ")) yield word;
+  }),
+);
+p.addTask(pipeline.createTask((word) => (word as string).toUpperCase()));
 
-const [result] = await p.execute([pipeline.CogneeValue.fromString("hello")], ctx);
+const { context } = pipeline.TaskContext.mock();
+const results = await p.execute(["hello world"], context); // ["HELLO", "WORLD"]
 ```
+
+### Task creators
+
+Every callback receives `(input, ctx)` and may return its result directly or
+through a Promise. A throw or a rejection fails the task with the error's
+message.
+
+| Creator | Async-named alias (C API parity) | Input → output |
+|---|---|---|
+| `createTask` | `createAsyncTask` | one value → one value |
+| `createIterTask` | `createAsyncStreamTask` | one value → many values, fanned out to the next task |
+| `createBatchTask` | `createAsyncBatchTask` | up to `batchSize` values → one value |
+| `createIterBatchTask` | `createAsyncStreamBatchTask` | up to `batchSize` values → many values |
+
+The aliases are the same functions under the names the C API uses
+(`cg_task_async`, `cg_task_async_stream`, …). Stream ("iter") callbacks may
+return an array, any iterable (e.g. a generator) or an async iterable (e.g. an
+`async function*`); iterables are pulled lazily, one item per downstream
+request, so a generator can stream results as it produces them. A batch task
+must directly follow a stream task, which is what accumulates its batch.
 
 All symbols previously exported from `@cognee/pipeline` are available at the top
 level of `@cognee/cognee-ts` for backward compatibility, and also under `pipeline.*`:
@@ -447,6 +468,13 @@ import {
   Pipeline,
   TaskInfo,
   createTask,
+  createIterTask,
+  createBatchTask,
+  createIterBatchTask,
+  createAsyncTask,       // async-named aliases — see "Task creators" above
+  createAsyncStreamTask,
+  createAsyncBatchTask,
+  createAsyncStreamBatchTask,
   CogneeValue,
   TaskContext,
   RunHandle,

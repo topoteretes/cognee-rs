@@ -56,3 +56,18 @@ async def test_detects_async_generator():
     p.add_task(async_gen_fn)
     results = await p.execute([5], ctx)
     assert results == [5, 10]
+
+
+@pytest.mark.asyncio
+async def test_async_generator_error_mid_stream_fails_the_run():
+    # Used to end the stream silently, so the run "succeeded" with [5].
+    ctx = cp.TaskContext.mock()
+
+    async def failing_gen(x):
+        yield x
+        raise ValueError("boom")
+
+    p = cp.Pipeline("async-gen-error")
+    p.add_task(failing_gen)
+    with pytest.raises(Exception, match="boom"):
+        await p.execute([5], ctx)

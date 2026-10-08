@@ -17,12 +17,32 @@ impl Finalize for NeonValue {}
 /// We store a `Root<JsObject>` because `Root<JsValue>` doesn't support `to_inner`
 /// in Neon (JsValue doesn't implement the Object trait). Opaque JS values must
 /// therefore be objects (not primitives).
+///
+/// The root sits behind an `Arc` so a holder can be [`share`](Self::share)d
+/// without a JS context: batch tasks copy their items off the JS thread before
+/// handing them to the callback, and `Root::clone` would need one.
 pub struct JsObjectHolder {
-    pub root: Root<JsObject>,
+    root: Arc<Root<JsObject>>,
 }
 
-// Root<JsObject> is Send. We add Sync so the blanket Value impl applies.
-unsafe impl Sync for JsObjectHolder {}
+impl JsObjectHolder {
+    pub fn new<'cx>(cx: &mut impl Context<'cx>, obj: Handle<'_, JsObject>) -> Self {
+        Self {
+            root: Arc::new(obj.root(cx)),
+        }
+    }
+
+    pub fn to_inner<'cx>(&self, cx: &mut impl Context<'cx>) -> Handle<'cx, JsObject> {
+        self.root.to_inner(cx)
+    }
+
+    /// Another holder for the same JS object (an `Arc` bump; no context needed).
+    pub fn share(&self) -> Self {
+        Self {
+            root: Arc::clone(&self.root),
+        }
+    }
+}
 
 /// Convert a JS value to `Arc<dyn Value>`.
 ///
@@ -55,8 +75,7 @@ pub fn js_to_value(
     }
     // Opaque JS object
     if let Ok(obj) = handle.downcast::<JsObject, _>(cx) {
-        let root = obj.root(cx);
-        return Ok(Arc::new(JsObjectHolder { root }));
+        return Ok(Arc::new(JsObjectHolder::new(cx, obj)));
     }
     cx.throw_type_error("unsupported JS type for Value conversion")
 }
@@ -83,7 +102,7 @@ pub fn value_to_js<'cx>(cx: &mut impl Context<'cx>, val: &dyn Value) -> JsResult
         return Ok(buf.upcast());
     }
     if let Some(holder) = any.downcast_ref::<JsObjectHolder>() {
-        return Ok(holder.root.to_inner(cx).upcast());
+        return Ok(holder.to_inner(cx).upcast());
     }
 
     // Unknown type — return undefined

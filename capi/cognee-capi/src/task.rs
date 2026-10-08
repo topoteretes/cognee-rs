@@ -385,7 +385,7 @@ pub unsafe extern "C" fn cg_task_async_stream(
             let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Box<dyn Value>>();
 
             // Stream data contains the sender and a completion channel
-            let (complete_tx, _complete_rx) =
+            let (complete_tx, complete_rx) =
                 tokio::sync::oneshot::channel::<Result<(), TaskError>>();
 
             let stream_data = Box::into_raw(Box::new(StreamCallbackData {
@@ -406,14 +406,35 @@ pub unsafe extern "C" fn cg_task_async_stream(
                 drop_ctx_ptr(ctx_ptr);
             }
 
-            let stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx)
-                .map(|v| v as Box<dyn Value>);
-
-            Ok(Box::pin(stream) as ValueStream)
+            Ok(callback_stream(rx, complete_rx))
         },
     );
 
     Box::into_raw(Box::new(CgTask { inner: task }))
+}
+
+/// Turn the item channel and completion signal of a callback-driven stream
+/// into a [`ValueStream`].
+///
+/// Items flow until the C side calls `complete`, which drops the item sender.
+/// A non-`Ok` completion status is then yielded as a trailing `Err`, failing
+/// the producing task — previously it was discarded and a failed stream was
+/// indistinguishable from a short one.
+fn callback_stream(
+    items: tokio::sync::mpsc::UnboundedReceiver<Box<dyn Value>>,
+    complete: tokio::sync::oneshot::Receiver<Result<(), TaskError>>,
+) -> ValueStream {
+    let items = tokio_stream::wrappers::UnboundedReceiverStream::new(items).map(Ok);
+    let completion = futures::stream::once(complete).filter_map(|status| async move {
+        match status {
+            Ok(Ok(())) => None,
+            Ok(Err(e)) => Some(Err(e)),
+            // `stream_complete_trampoline` always sends before dropping the
+            // sender, so this arm is unreachable; end the stream if it ever is.
+            Err(_) => None,
+        }
+    });
+    Box::pin(items.chain(completion))
 }
 
 struct StreamCallbackData {
@@ -600,7 +621,7 @@ pub unsafe extern "C" fn cg_task_async_stream_batch(
             let ud = Arc::clone(&ud);
 
             let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Box<dyn Value>>();
-            let (complete_tx, _complete_rx) =
+            let (complete_tx, complete_rx) =
                 tokio::sync::oneshot::channel::<Result<(), TaskError>>();
 
             let stream_data = Box::into_raw(Box::new(StreamCallbackData {
@@ -622,10 +643,7 @@ pub unsafe extern "C" fn cg_task_async_stream_batch(
             }
             drop(temp_values);
 
-            let stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx)
-                .map(|v| v as Box<dyn Value>);
-
-            Ok(Box::pin(stream) as ValueStream)
+            Ok(callback_stream(rx, complete_rx))
         },
     );
 
@@ -642,5 +660,44 @@ pub unsafe extern "C" fn cg_task_async_stream_batch(
 pub unsafe extern "C" fn cg_task_destroy(t: *mut CgTask) {
     if !t.is_null() {
         unsafe { drop(Box::from_raw(t)) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn int(v: i32) -> Box<dyn Value> {
+        Box::new(v)
+    }
+
+    #[test]
+    fn callback_stream_yields_items_then_ends_on_ok_completion() {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+        tx.send(int(1)).unwrap();
+        tx.send(int(2)).unwrap();
+        drop(tx);
+        done_tx.send(Ok(())).unwrap();
+
+        let items: Vec<_> = futures::executor::block_on(callback_stream(rx, done_rx).collect());
+        assert_eq!(items.len(), 2);
+        assert!(items.iter().all(Result::is_ok));
+    }
+
+    #[test]
+    fn callback_stream_surfaces_error_completion_after_items() {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+        tx.send(int(1)).unwrap();
+        drop(tx);
+        done_tx
+            .send(Err(error_code_to_task_error(CgErrorCode::TaskFailed)))
+            .unwrap();
+
+        let items: Vec<_> = futures::executor::block_on(callback_stream(rx, done_rx).collect());
+        assert_eq!(items.len(), 2, "the item, then the completion error");
+        assert!(items[0].is_ok());
+        assert!(items[1].is_err());
     }
 }

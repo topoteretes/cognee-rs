@@ -402,6 +402,7 @@ export interface NativeBindings {
   createTask(fn: Function): NativeBox;
   createIterTask(fn: Function): NativeBox;
   createBatchTask(fn: Function): NativeBox;
+  createIterBatchTask(fn: Function): NativeBox;
 
   // TaskInfo
   taskInfoNew(

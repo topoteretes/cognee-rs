@@ -124,11 +124,18 @@ export {
   TaskFn,
   IterTaskFn,
   BatchTaskFn,
+  IterBatchTaskFn,
+  StreamOutput,
   TaskOptions,
   TaskInfo,
   createTask,
   createIterTask,
   createBatchTask,
+  createIterBatchTask,
+  createAsyncTask,
+  createAsyncBatchTask,
+  createAsyncStreamTask,
+  createAsyncStreamBatchTask,
 } from "./task";
 export { TaskContext } from "./task-context";
 export {
