@@ -480,6 +480,17 @@ async fn an_overwrite_load_defers_earlier_than_an_append_load() {
                 crate::models::VectorPoint::new(uuid::Uuid::from_u128(i), v)
             };
 
+            // Same id, a different vector. `upsert_points` skips a row whose
+            // vector and metadata both match what is stored, so overwriting
+            // with `point` again would write nothing at all and the load
+            // would never touch the live index it is here to measure.
+            let moved = |i: u128| {
+                let jitter = (i as f64) * 1e-6;
+                #[allow(clippy::cast_possible_truncation)]
+                let v = vec![1.0, jitter as f32, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0];
+                crate::models::VectorPoint::new(uuid::Uuid::from_u128(i), v)
+            };
+
             // `written` after each batch, and whether the index survived it.
             // The load is fed in 50s so the crossing is pinned to ±50 points.
             async fn feed(
@@ -517,7 +528,7 @@ async fn an_overwrite_load_defers_earlier_than_an_append_load() {
                 "the collection starts indexed, or there is nothing to defer"
             );
             adapter.begin_bulk_load().await.unwrap();
-            let overwrite = feed(&adapter, &db, (0..500).map(point)).await;
+            let overwrite = feed(&adapter, &db, (0..500).map(moved)).await;
             adapter.end_bulk_load().await.unwrap();
             assert_eq!(
                 adapter.collection_size("Live", "f").await.unwrap(),
