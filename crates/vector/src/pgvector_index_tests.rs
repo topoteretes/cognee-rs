@@ -2073,7 +2073,7 @@ async fn a_search_during_the_end_of_load_build_still_sees_an_indexless_collectio
 /// server, and each broke something different:
 ///
 /// - `delete_collection` evicted the `known` cache but not the scope's
-///   `deferred` / `written` / `base_rows`, so `end_bulk_load` failed on the
+///   `deferred` / `written` / `live_rows`, so `end_bulk_load` failed on the
 ///   missing relation twice over — once trying to build its index, once trying
 ///   to analyse it.
 /// - `analyze` used `?` *inside* its loop over the written collections, which
