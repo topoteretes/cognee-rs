@@ -9,18 +9,44 @@
  * For each of blocking / background / async this example:
  *   1. Runs a one-task pipeline with a counting watcher.
  *   2. For background/async, destroys the watcher handle right after the
- *      execute call returns — the run must keep the watcher alive.
+ *      execute call returns — the run must keep the watcher alive. The task
+ *      is held until that destroy has happened, so the run is guaranteed to
+ *      hold the last reference (otherwise a fast run could finish first and
+ *      the caller's destroy, not the run, would release the watcher).
  *   3. Asserts the pipeline-level Started/Succeeded events, the run-completed
  *      event, and that the vtable's destroy fired exactly once, before the
  *      completion callback.
+ *
+ * It then repeats background/async with a failing task: the watcher must see
+ * Failed + run-errored (and no success events), the callback must get the
+ * error code, and destroy must still fire once, before the callback.
+ * All waits are bounded, so a callback that never fires fails the test
+ * instead of hanging CI.
  */
 #include "common.h"
 #include <stdatomic.h>
+#include <time.h>
+
+#define WAIT_TIMEOUT_SECS 60
+
+/* Tasks wait on this before doing anything; cleared to hold a run in flight. */
+static atomic_int g_release = 1;
+
+static void wait_released(void) {
+    time_t deadline = time(NULL) + WAIT_TIMEOUT_SECS;
+    while (!atomic_load(&g_release)) {
+        if (time(NULL) > deadline) {
+            fprintf(stderr, "FAIL: task timed out waiting to be released\n");
+            exit(1);
+        }
+    }
+}
 
 static CgErrorCode double_value(const CgValue* input, const CgTaskContext* ctx,
                                 void* user_data, CgValue** out) {
     (void)ctx;
     (void)user_data;
+    wait_released();
     int64_t val;
     CgErrorCode rc = cg_value_as_i64(input, &val);
     if (rc != CG_OK) return rc;
@@ -28,10 +54,22 @@ static CgErrorCode double_value(const CgValue* input, const CgTaskContext* ctx,
     return CG_OK;
 }
 
+static CgErrorCode always_fail(const CgValue* input, const CgTaskContext* ctx,
+                               void* user_data, CgValue** out) {
+    (void)input;
+    (void)ctx;
+    (void)user_data;
+    (void)out;
+    wait_released();
+    return CG_ERR_INVALID_ARGUMENT;
+}
+
 typedef struct {
     atomic_int pipeline_started;
     atomic_int pipeline_succeeded;
+    atomic_int pipeline_failed;
     atomic_int run_completed;
+    atomic_int run_errored;
     atomic_int task_succeeded;
     atomic_int destroyed;
 } Counters;
@@ -44,6 +82,7 @@ static void on_pipeline(void* state, const char* pipeline_id, int status_tag,
     Counters* c = (Counters*)state;
     if (status_tag == 0) atomic_fetch_add(&c->pipeline_started, 1);
     if (status_tag == 1) atomic_fetch_add(&c->pipeline_succeeded, 1);
+    if (status_tag == 2) atomic_fetch_add(&c->pipeline_failed, 1);
 }
 
 static void on_task(void* state, const char* pipeline_id, size_t task_index,
@@ -64,6 +103,12 @@ static void on_run_completed(void* state, const char* run_id, size_t output_coun
     atomic_fetch_add(&((Counters*)state)->run_completed, 1);
 }
 
+static void on_run_errored(void* state, const char* run_id, const char* error) {
+    (void)run_id;
+    (void)error;
+    atomic_fetch_add(&((Counters*)state)->run_errored, 1);
+}
+
 static void on_destroy(void* state) {
     atomic_fetch_add(&((Counters*)state)->destroyed, 1);
 }
@@ -74,6 +119,7 @@ static CgPipelineWatcher* counting_watcher(Counters* c) {
     vt.on_pipeline = on_pipeline;
     vt.on_task = on_task;
     vt.on_run_completed = on_run_completed;
+    vt.on_run_errored = on_run_errored;
     vt.destroy = on_destroy;
     return cg_pipeline_watcher_new(c, vt);
 }
@@ -128,8 +174,38 @@ static void check_callback(const char* mode, const CallbackState* s) {
 }
 
 static void wait_done(CallbackState* s) {
+    time_t deadline = time(NULL) + WAIT_TIMEOUT_SECS;
     while (!atomic_load(&s->done)) {
-        /* busy-spin — acceptable in a short example/test */
+        if (time(NULL) > deadline) {
+            fprintf(stderr, "FAIL: timed out after %ds waiting for the completion callback\n",
+                    WAIT_TIMEOUT_SECS);
+            exit(1);
+        }
+    }
+}
+
+/* A failed run: watcher sees Failed + run-errored and no success events;
+ * destroy fires once, before the callback, which gets the error code. */
+static void check_failed_run(const char* mode, Counters* c, const CallbackState* s) {
+    printf("%s: started=%d failed=%d run_errored=%d succeeded=%d run_completed=%d "
+           "destroyed=%d status=%d\n",
+           mode, atomic_load(&c->pipeline_started), atomic_load(&c->pipeline_failed),
+           atomic_load(&c->run_errored), atomic_load(&c->pipeline_succeeded),
+           atomic_load(&c->run_completed), atomic_load(&c->destroyed), (int)s->status);
+    if (s->status == CG_OK) {
+        fprintf(stderr, "FAIL (%s): failing task reported CG_OK\n", mode);
+        exit(1);
+    }
+    if (atomic_load(&c->pipeline_started) != 1 || atomic_load(&c->pipeline_failed) != 1 ||
+        atomic_load(&c->run_errored) != 1 || atomic_load(&c->pipeline_succeeded) != 0 ||
+        atomic_load(&c->run_completed) != 0 || atomic_load(&c->destroyed) != 1) {
+        fprintf(stderr, "FAIL (%s): watcher did not see the failure as expected\n", mode);
+        exit(1);
+    }
+    if (s->destroyed_at_callback != 1) {
+        fprintf(stderr, "FAIL (%s): watcher destroy had not fired by the "
+                        "completion callback\n", mode);
+        exit(1);
     }
 }
 
@@ -164,8 +240,10 @@ int main(void) {
         CallbackState s = { .counters = &c };
         atomic_init(&s.done, 0);
         CgPipelineWatcher* w = counting_watcher(&c);
+        atomic_store(&g_release, 0);
         CgPipelineRunHandle* rh = cg_pipeline_execute_in_background(pipeline, inputs, 1, ctx, w);
         cg_pipeline_watcher_destroy(w);
+        atomic_store(&g_release, 1);
         if (rh == NULL) {
             fprintf(stderr, "FAIL (background): %s\n", cg_last_error_message());
             exit(1);
@@ -182,8 +260,10 @@ int main(void) {
         CallbackState s = { .counters = &c };
         atomic_init(&s.done, 0);
         CgPipelineWatcher* w = counting_watcher(&c);
+        atomic_store(&g_release, 0);
         cg_pipeline_execute_async(pipeline, inputs, 1, ctx, w, on_done, &s);
         cg_pipeline_watcher_destroy(w);
+        atomic_store(&g_release, 1);
         wait_done(&s);
         check_callback("async", &s);
         check_counters("async", &c);
@@ -199,6 +279,44 @@ int main(void) {
         wait_done(&s);
         check_callback("async, NULL watcher", &s);
         printf("async, NULL watcher: ok\n");
+    }
+
+    cg_pipeline_destroy(pipeline);
+
+    /* Failing runs — the error path must reach the watcher too. */
+    pipeline = cg_pipeline_new("watched failure");
+    cg_pipeline_set_retry_none(pipeline);
+    cg_pipeline_add_task(pipeline, cg_task_info_new(cg_task_sync(always_fail, NULL, NULL)));
+
+    {
+        Counters c = { 0 };
+        CallbackState s = { .counters = &c };
+        atomic_init(&s.done, 0);
+        CgPipelineWatcher* w = counting_watcher(&c);
+        atomic_store(&g_release, 0);
+        CgPipelineRunHandle* rh = cg_pipeline_execute_in_background(pipeline, inputs, 1, ctx, w);
+        cg_pipeline_watcher_destroy(w);
+        atomic_store(&g_release, 1);
+        if (rh == NULL) {
+            fprintf(stderr, "FAIL (background, failing): %s\n", cg_last_error_message());
+            exit(1);
+        }
+        cg_run_handle_wait(rh, on_done, &s);
+        wait_done(&s);
+        check_failed_run("background, failing", &c, &s);
+    }
+
+    {
+        Counters c = { 0 };
+        CallbackState s = { .counters = &c };
+        atomic_init(&s.done, 0);
+        CgPipelineWatcher* w = counting_watcher(&c);
+        atomic_store(&g_release, 0);
+        cg_pipeline_execute_async(pipeline, inputs, 1, ctx, w, on_done, &s);
+        cg_pipeline_watcher_destroy(w);
+        atomic_store(&g_release, 1);
+        wait_done(&s);
+        check_failed_run("async, failing", &c, &s);
     }
 
     cg_value_destroy(input);

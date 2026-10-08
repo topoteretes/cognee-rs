@@ -158,9 +158,10 @@ void cg_pipeline_destroy(CgPipeline* p);
  * soon as the execute call returns — the Arc-shared task list keeps the
  * tasks alive for the duration of the background/async run. The same holds
  * for the watcher (NULL = no-op): a background/async run keeps its own
- * reference, so cg_pipeline_watcher_destroy() may be called right away and
- * the vtable's destroy fires once the run is done, before the completion
- * callback. In those two modes watcher callbacks — destroy included — run
+ * reference, so cg_pipeline_watcher_destroy() may be called right away.
+ * The vtable's destroy fires when the last reference goes: if the handle
+ * was destroyed while the run was in flight, that is when the run is done,
+ * before the completion callback; otherwise it is the destroy call itself. In those two modes watcher callbacks — destroy included — run
  * on runtime worker threads, not the caller's, and may run concurrently
  * (pipeline concurrency > 1, or one watcher shared by several runs), so
  * watcher state must be thread-safe and callbacks must not block or call
