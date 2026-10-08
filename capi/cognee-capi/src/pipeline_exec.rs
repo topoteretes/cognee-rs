@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use cognee_core::Value;
 use cognee_core::pipeline::{
-    NoopWatcher, PipelineRunResult, execute_blocking, execute_in_background,
+    NoopWatcher, PipelineRunResult, PipelineWatcher, execute_blocking, execute_in_background,
 };
 
 use crate::error::{CgErrorCode, execution_error_to_code, set_last_error};
@@ -85,6 +85,19 @@ unsafe fn inputs_to_vec(inputs: *const *const CgValue, count: usize) -> Vec<Arc<
         .collect()
 }
 
+/// The watcher a background/async run reports to: a shared reference to the
+/// caller's watcher, or a no-op one when `watcher` is NULL.
+///
+/// # Safety
+/// `watcher` must be a valid pointer created by this library, or null.
+unsafe fn shared_watcher(watcher: *const CgPipelineWatcher) -> Arc<dyn PipelineWatcher> {
+    if watcher.is_null() {
+        Arc::new(NoopWatcher)
+    } else {
+        Arc::clone(unsafe { &(*watcher).inner })
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Callback wrapper (Send-safe)
 // ---------------------------------------------------------------------------
@@ -144,18 +157,15 @@ pub unsafe extern "C" fn cg_pipeline_execute_blocking(
     null_check!(ctx);
     null_check!(out);
 
-    let p = unsafe { &*(*pipeline).inner };
+    // Hold a reference for the whole run, as the background/async paths do,
+    // so another thread's cg_pipeline_set_* / add_task is refused instead of
+    // mutating the task list while this run iterates it.
+    let p = Arc::clone(unsafe { &(*pipeline).inner });
     let c = Arc::clone(unsafe { &(*ctx).inner });
     let input_vec = unsafe { inputs_to_vec(inputs, input_count) };
+    let w = unsafe { shared_watcher(watcher) };
 
-    let noop = NoopWatcher;
-    let w: &dyn cognee_core::PipelineWatcher = if watcher.is_null() {
-        &noop
-    } else {
-        unsafe { (*watcher).inner.as_ref() }
-    };
-
-    match execute_blocking(p, input_vec, c, w) {
+    match execute_blocking(&p, input_vec, c, w.as_ref()) {
         Ok(result) => {
             unsafe { *out = Box::into_raw(Box::new(CgPipelineRunResult { inner: result })) };
             CgErrorCode::Ok
@@ -174,6 +184,9 @@ pub unsafe extern "C" fn cg_pipeline_execute_blocking(
 /// Execute a pipeline in the background. Returns a run handle immediately.
 ///
 /// Requires `cg_init()` to have been called first (needs the global runtime).
+/// `watcher` may be NULL (uses noop watcher). Otherwise the run keeps its own
+/// reference, so the watcher handle may be destroyed as soon as this returns;
+/// its callbacks fire on a runtime worker thread.
 ///
 /// # Safety
 /// All pointer arguments must be valid.
@@ -183,7 +196,7 @@ pub unsafe extern "C" fn cg_pipeline_execute_in_background(
     inputs: *const *const CgValue,
     input_count: usize,
     ctx: *const CgTaskContext,
-    _watcher: *const CgPipelineWatcher,
+    watcher: *const CgPipelineWatcher,
 ) -> *mut CgPipelineRunHandle {
     if pipeline.is_null() || ctx.is_null() {
         set_last_error("null pointer argument");
@@ -201,7 +214,7 @@ pub unsafe extern "C" fn cg_pipeline_execute_in_background(
     let c = Arc::clone(unsafe { &(*ctx).inner });
     let input_vec = unsafe { inputs_to_vec(inputs, input_count) };
 
-    let w: Arc<dyn cognee_core::PipelineWatcher> = Arc::new(NoopWatcher);
+    let w = unsafe { shared_watcher(watcher) };
 
     // Share the Arc so the spawned future uses the same task list.
     let p_arc = Arc::clone(unsafe { &(*pipeline).inner });
@@ -221,7 +234,9 @@ pub unsafe extern "C" fn cg_pipeline_execute_in_background(
 /// Execute a pipeline asynchronously. The callback is invoked when done.
 ///
 /// Requires `cg_init()` to have been called first.
-/// `watcher` may be NULL.
+/// `watcher` may be NULL (uses noop watcher). Otherwise the run keeps its own
+/// reference, so the watcher handle may be destroyed as soon as this returns;
+/// its callbacks fire on a runtime worker thread.
 ///
 /// # Safety
 /// All pointer arguments must be valid.
@@ -231,7 +246,7 @@ pub unsafe extern "C" fn cg_pipeline_execute_async(
     inputs: *const *const CgValue,
     input_count: usize,
     ctx: *const CgTaskContext,
-    _watcher: *const CgPipelineWatcher,
+    watcher: *const CgPipelineWatcher,
     callback: CgExecutionCallback,
     callback_data: *mut c_void,
 ) {
@@ -268,16 +283,21 @@ pub unsafe extern "C" fn cg_pipeline_execute_async(
 
     let cb = SendCallback::new(callback, callback_data);
 
-    let noop = Arc::new(NoopWatcher);
+    let w = unsafe { shared_watcher(watcher) };
 
     rt.spawn(async move {
-        let result = cognee_core::pipeline::execute(&p_arc, input_vec, c, noop.as_ref()).await;
+        let run_id = p_arc.id;
+        let result = cognee_core::pipeline::execute(&p_arc, input_vec, c, w.as_ref()).await;
+        // Release the shared pipeline and watcher before signalling
+        // completion: a caller that mutates the pipeline from (or right after)
+        // the callback would otherwise find it still in use and have the
+        // mutation refused, and a watcher whose C handle was already destroyed
+        // gets its `destroy` before the callback, as on the background path.
+        drop(p_arc);
+        drop(w);
         match result {
             Ok(outputs) => {
-                let run_result = PipelineRunResult {
-                    run_id: p_arc.id,
-                    outputs,
-                };
+                let run_result = PipelineRunResult { run_id, outputs };
                 let ptr = Box::into_raw(Box::new(CgPipelineRunResult { inner: run_result }));
                 unsafe { cb.invoke(CgErrorCode::Ok, ptr) };
             }

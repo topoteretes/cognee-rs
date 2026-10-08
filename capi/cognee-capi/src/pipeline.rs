@@ -15,10 +15,33 @@ pub struct CgPipeline {
     /// execution paths can cheaply clone a reference to the fully-built task
     /// list rather than reconstructing it.
     ///
-    /// Mutation (adding tasks, setting fields) uses `Arc::get_mut` — this is
-    /// always `Some` during construction because no second `Arc` clone exists
-    /// until the first execute call is made.
+    /// Mutation (adding tasks, setting fields) goes through [`pipeline_mut`],
+    /// which only succeeds while no run holds a clone of the `Arc`. A run
+    /// releases its clone before reporting completion, so the pipeline is
+    /// mutable again once `cg_pipeline_execute_blocking` returns or
+    /// `cg_run_handle_wait`'s / `cg_pipeline_execute_async`'s callback fires.
     pub(crate) inner: Arc<Pipeline>,
+}
+
+/// Exclusive access to the pipeline behind `p`, or `None` (with the last
+/// error set) while an in-flight run still shares it.
+///
+/// `Pipeline` holds boxed task closures and cannot be cloned, so
+/// copy-on-write is not an option; refusing the mutation is the only
+/// alternative to a panic, which `panic = "abort"` would turn into killing
+/// the host process.
+///
+/// # Safety
+/// `p` must be a valid, non-null pointer created by `cg_pipeline_new`.
+unsafe fn pipeline_mut<'a>(p: *mut CgPipeline) -> Option<&'a mut Pipeline> {
+    let inner = Arc::get_mut(unsafe { &mut (*p).inner });
+    if inner.is_none() {
+        set_last_error(
+            "pipeline is in use by an in-flight run; \
+             wait for it to complete before modifying the pipeline",
+        );
+    }
+    inner
 }
 
 /// Retry delay kind tag.
@@ -66,10 +89,10 @@ pub unsafe extern "C" fn cg_pipeline_set_name(p: *mut CgPipeline, name: *const c
     if p.is_null() || name.is_null() {
         return;
     }
-    if let Ok(s) = unsafe { crate::util::c_str_to_str(name) } {
-        Arc::get_mut(unsafe { &mut (*p).inner })
-            .expect("pipeline Arc has no second owner during construction")
-            .name = Some(s.to_owned());
+    if let Ok(s) = unsafe { crate::util::c_str_to_str(name) }
+        && let Some(pipeline) = unsafe { pipeline_mut(p) }
+    {
+        pipeline.name = Some(s.to_owned());
     }
 }
 
@@ -82,11 +105,11 @@ pub unsafe extern "C" fn cg_pipeline_add_task(p: *mut CgPipeline, info: *mut CgT
     if p.is_null() || info.is_null() {
         return;
     }
+    // Take ownership first so a refused add still frees `info`.
     let info = unsafe { Box::from_raw(info) };
-    Arc::get_mut(unsafe { &mut (*p).inner })
-        .expect("pipeline Arc has no second owner during construction")
-        .tasks
-        .push(info.inner);
+    if let Some(pipeline) = unsafe { pipeline_mut(p) } {
+        pipeline.tasks.push(info.inner);
+    }
 }
 
 /// Set the default batch size.
@@ -98,9 +121,9 @@ pub unsafe extern "C" fn cg_pipeline_set_batch_size(p: *mut CgPipeline, size: us
     if p.is_null() || size == 0 {
         return;
     }
-    Arc::get_mut(unsafe { &mut (*p).inner })
-        .expect("pipeline Arc has no second owner during construction")
-        .batch_size = size;
+    if let Some(pipeline) = unsafe { pipeline_mut(p) } {
+        pipeline.batch_size = size;
+    }
 }
 
 /// Set the item-level concurrency.
@@ -112,9 +135,9 @@ pub unsafe extern "C" fn cg_pipeline_set_concurrency(p: *mut CgPipeline, n: usiz
     if p.is_null() || n == 0 {
         return;
     }
-    Arc::get_mut(unsafe { &mut (*p).inner })
-        .expect("pipeline Arc has no second owner during construction")
-        .concurrency = n;
+    if let Some(pipeline) = unsafe { pipeline_mut(p) } {
+        pipeline.concurrency = n;
+    }
 }
 
 /// Set retry policy to no-retry.
@@ -126,9 +149,9 @@ pub unsafe extern "C" fn cg_pipeline_set_retry_none(p: *mut CgPipeline) {
     if p.is_null() {
         return;
     }
-    Arc::get_mut(unsafe { &mut (*p).inner })
-        .expect("pipeline Arc has no second owner during construction")
-        .retry_policy = RetryPolicy::NoRetry;
+    if let Some(pipeline) = unsafe { pipeline_mut(p) } {
+        pipeline.retry_policy = RetryPolicy::NoRetry;
+    }
 }
 
 /// Set retry policy to limited retries.
@@ -155,12 +178,12 @@ pub unsafe extern "C" fn cg_pipeline_set_retry_limited(
             factor: delay.factor,
         },
     };
-    Arc::get_mut(unsafe { &mut (*p).inner })
-        .expect("pipeline Arc has no second owner during construction")
-        .retry_policy = RetryPolicy::Limited {
-        max_attempts: max,
-        delay: rd,
-    };
+    if let Some(pipeline) = unsafe { pipeline_mut(p) } {
+        pipeline.retry_policy = RetryPolicy::Limited {
+            max_attempts: max,
+            delay: rd,
+        };
+    }
 }
 
 /// C function pointer type for extracting data IDs.
@@ -240,9 +263,11 @@ pub unsafe extern "C" fn cg_pipeline_set_data_id_fn(
         }
     });
 
-    Arc::get_mut(unsafe { &mut (*p).inner })
-        .expect("pipeline Arc has no second owner during construction")
-        .data_id_fn = Some(data_id_fn);
+    // A refused set drops `data_id_fn`, which runs `destroy_ud` — the
+    // function takes ownership of `user_data` either way.
+    if let Some(pipeline) = unsafe { pipeline_mut(p) } {
+        pipeline.data_id_fn = Some(data_id_fn);
+    }
 }
 
 /// # Safety

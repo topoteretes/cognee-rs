@@ -72,6 +72,8 @@ EXAMPLES=(
     example_pipeline
     example_cancellation
     example_background_task
+    example_async_exec
+    example_watcher_exec
 )
 
 for example in "${EXAMPLES[@]}"; do

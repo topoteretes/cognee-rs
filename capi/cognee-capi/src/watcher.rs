@@ -1,4 +1,5 @@
 use std::ffi::{c_char, c_void};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use cognee_core::pipeline::{
@@ -7,7 +8,10 @@ use cognee_core::pipeline::{
 use uuid::Uuid;
 
 pub struct CgPipelineWatcher {
-    pub(crate) inner: Box<dyn PipelineWatcher>,
+    /// Behind an `Arc` so background/async runs can hold their own reference:
+    /// the C handle may be destroyed as soon as the execute call returns, and
+    /// the vtable's `destroy` then fires once the last in-flight run is done.
+    pub(crate) inner: Arc<dyn PipelineWatcher>,
 }
 
 /// C-side watcher vtable. All callbacks are synchronous and must not block.
@@ -219,7 +223,7 @@ pub unsafe extern "C" fn cg_pipeline_watcher_new(
     vtable: CgPipelineWatcherVtable,
 ) -> *mut CgPipelineWatcher {
     Box::into_raw(Box::new(CgPipelineWatcher {
-        inner: Box::new(VtableWatcher { state, vtable }),
+        inner: Arc::new(VtableWatcher { state, vtable }),
     }))
 }
 
@@ -227,7 +231,7 @@ pub unsafe extern "C" fn cg_pipeline_watcher_new(
 #[unsafe(no_mangle)]
 pub extern "C" fn cg_pipeline_watcher_noop() -> *mut CgPipelineWatcher {
     Box::into_raw(Box::new(CgPipelineWatcher {
-        inner: Box::new(NoopWatcher),
+        inner: Arc::new(NoopWatcher),
     }))
 }
 
