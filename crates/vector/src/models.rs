@@ -130,11 +130,16 @@ pub fn dedup_points_by_id(points: &[VectorPoint]) -> Vec<VectorPoint> {
     fold_by_id(points, true).into_owned()
 }
 
-/// [`dedup_points_by_id`] that borrows `points` when no id repeats.
+/// [`dedup_points_by_id`] that borrows `points` when no id repeats. Only the
+/// database adapters call it, hence the gate.
 ///
 /// Adapters write every collection through this fold, and the common input —
 /// one point per distinct id — would otherwise pay a full copy of every vector
 /// just to come out unchanged (SDK-507).
+#[cfg(any(
+    feature = "pgvector",
+    all(feature = "lancedb", not(target_os = "android"))
+))]
 pub(crate) fn dedup_points_by_id_cow(points: &[VectorPoint]) -> Cow<'_, [VectorPoint]> {
     fold_by_id(points, true)
 }
@@ -155,6 +160,10 @@ pub fn dedup_points_by_id_last_wins(points: &[VectorPoint]) -> Vec<VectorPoint> 
 }
 
 /// [`dedup_points_by_id_last_wins`] that borrows `points` when no id repeats.
+#[cfg(any(
+    feature = "pgvector",
+    all(feature = "lancedb", not(target_os = "android"))
+))]
 pub(crate) fn dedup_points_by_id_last_wins_cow(points: &[VectorPoint]) -> Cow<'_, [VectorPoint]> {
     fold_by_id(points, false)
 }
@@ -358,6 +367,10 @@ mod dedup_tests {
         );
     }
 
+    #[cfg(any(
+        feature = "pgvector",
+        all(feature = "lancedb", not(target_os = "android"))
+    ))]
     #[test]
     fn distinct_ids_are_borrowed_not_copied() {
         let points = vec![point(1, "ds-a", "one"), point(2, "ds-a", "two")];
@@ -373,6 +386,10 @@ mod dedup_tests {
         }
     }
 
+    #[cfg(any(
+        feature = "pgvector",
+        all(feature = "lancedb", not(target_os = "android"))
+    ))]
     #[test]
     fn a_repeated_id_is_still_folded_through_the_borrowing_entry_points() {
         let points = vec![
