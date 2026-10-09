@@ -1,7 +1,22 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::borrow::Cow;
 use std::collections::hash_map::Entry;
+use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
+
+/// Target size, in bytes of vector data, of one write window — see
+/// [`write_window_points`].
+pub const WRITE_WINDOW_BYTES: usize = 16 * 1024 * 1024;
+
+/// How many points of `dimension` to write at a time so a window's vectors
+/// stay near [`WRITE_WINDOW_BYTES`]: ~2,700 at 1536 dimensions, never 0.
+///
+/// The one sizing rule for bounding a write's memory (SDK-507), shared by the
+/// callers that window what they hand to [`crate::VectorDB::index_points`] and
+/// by adapters that split what they are handed, so the two cannot drift.
+pub fn write_window_points(dimension: usize) -> usize {
+    (WRITE_WINDOW_BYTES / (dimension.max(1) * std::mem::size_of::<f32>())).max(1)
+}
 
 /// Vector point to be indexed
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -126,6 +141,20 @@ impl VectorPoint {
 /// later step (`fetch_metadata` + `merge_dataset_membership` in the pgvector
 /// adapter); this only folds the *incoming* list.
 pub fn dedup_points_by_id(points: &[VectorPoint]) -> Vec<VectorPoint> {
+    fold_by_id(points, true).into_owned()
+}
+
+/// [`dedup_points_by_id`] that borrows `points` when no id repeats. Only the
+/// database adapters call it, hence the gate.
+///
+/// Adapters write every collection through this fold, and the common input —
+/// one point per distinct id — would otherwise pay a full copy of every vector
+/// just to come out unchanged (SDK-507).
+#[cfg(any(
+    feature = "pgvector",
+    all(feature = "lancedb", not(target_os = "android"))
+))]
+pub(crate) fn dedup_points_by_id_cow(points: &[VectorPoint]) -> Cow<'_, [VectorPoint]> {
     fold_by_id(points, true)
 }
 
@@ -141,13 +170,30 @@ pub fn dedup_points_by_id(points: &[VectorPoint]) -> Vec<VectorPoint> {
 /// to go: the multi-row `INSERT … ON CONFLICT DO UPDATE` this feeds is the same
 /// statement shape that Postgres aborts when one id is touched twice.
 pub fn dedup_points_by_id_last_wins(points: &[VectorPoint]) -> Vec<VectorPoint> {
+    fold_by_id(points, false).into_owned()
+}
+
+/// [`dedup_points_by_id_last_wins`] that borrows `points` when no id repeats.
+#[cfg(any(
+    feature = "pgvector",
+    all(feature = "lancedb", not(target_os = "android"))
+))]
+pub(crate) fn dedup_points_by_id_last_wins_cow(points: &[VectorPoint]) -> Cow<'_, [VectorPoint]> {
     fold_by_id(points, false)
 }
 
 /// Shared implementation of the two folds above: one point per distinct id, in
 /// first-appearance order, last occurrence winning. With `union_membership`,
 /// each later occurrence first absorbs the membership accumulated so far.
-fn fold_by_id(points: &[VectorPoint], union_membership: bool) -> Vec<VectorPoint> {
+///
+/// Input with no repeated id is returned borrowed: with nothing to fold, either
+/// rule reproduces it point for point.
+fn fold_by_id(points: &[VectorPoint], union_membership: bool) -> Cow<'_, [VectorPoint]> {
+    let mut seen: HashSet<Uuid> = HashSet::with_capacity(points.len());
+    if points.iter().all(|point| seen.insert(point.id)) {
+        return Cow::Borrowed(points);
+    }
+
     // `folded` holds the output in first-appearance order; `slot_of` maps an id
     // to the index it already occupies there. The index is recorded as the
     // point is pushed and `folded` only ever grows, so every stored index stays
@@ -174,7 +220,7 @@ fn fold_by_id(points: &[VectorPoint], union_membership: bool) -> Vec<VectorPoint
         }
     }
 
-    folded
+    Cow::Owned(folded)
 }
 
 /// Metadata key holding the array of dataset-ID strings a point belongs to.
@@ -333,5 +379,48 @@ mod dedup_tests {
             !out[0].metadata.contains_key(DATASET_IDS_KEY),
             "folding must not invent an empty membership array"
         );
+    }
+
+    #[cfg(any(
+        feature = "pgvector",
+        all(feature = "lancedb", not(target_os = "android"))
+    ))]
+    #[test]
+    fn distinct_ids_are_borrowed_not_copied() {
+        let points = vec![point(1, "ds-a", "one"), point(2, "ds-a", "two")];
+        for folded in [
+            dedup_points_by_id_cow(&points),
+            dedup_points_by_id_last_wins_cow(&points),
+        ] {
+            assert!(
+                matches!(folded, Cow::Borrowed(_)),
+                "nothing to fold, so nothing should be copied"
+            );
+            assert_eq!(folded.as_ptr(), points.as_ptr());
+        }
+    }
+
+    #[cfg(any(
+        feature = "pgvector",
+        all(feature = "lancedb", not(target_os = "android"))
+    ))]
+    #[test]
+    fn a_repeated_id_is_still_folded_through_the_borrowing_entry_points() {
+        let points = vec![
+            point(1, "ds-a", "one"),
+            point(2, "ds-a", "two"),
+            point(1, "ds-b", "one"),
+        ];
+
+        let unioned = dedup_points_by_id_cow(&points);
+        assert!(matches!(unioned, Cow::Owned(_)));
+        assert_eq!(unioned.len(), 2);
+        assert_eq!(dataset_ids(&unioned[0]), vec!["ds-a", "ds-b"]);
+
+        let last_wins = dedup_points_by_id_last_wins_cow(&points);
+        assert!(matches!(last_wins, Cow::Owned(_)));
+        assert_eq!(last_wins.len(), 2);
+        assert!(!last_wins[0].metadata.contains_key(DATASET_IDS_KEY));
+        assert_eq!(last_wins[0].metadata[DATASET_ID_KEY], json!("ds-b"));
     }
 }

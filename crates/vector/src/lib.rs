@@ -34,7 +34,7 @@ pub use brute_force_vector_db::BruteForceVectorDB;
 pub use error::{VectorDBError, VectorDBResult};
 pub use models::{
     CollectionConfig, DATASET_ID_KEY, DATASET_IDS_KEY, DistanceMetric, SearchResult, VectorPoint,
-    dedup_points_by_id, dedup_points_by_id_last_wins,
+    WRITE_WINDOW_BYTES, dedup_points_by_id, dedup_points_by_id_last_wins, write_window_points,
 };
 pub use vector_db_trait::{BulkLoadGuard, VectorDB, VectorIndexBackfill};
 

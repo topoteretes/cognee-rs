@@ -65,7 +65,9 @@ async fn test_pipeline_with_embeddings() {
     let vector_db = Arc::new(MockVectorDB::new());
 
     // 2. Create config
-    let config = CognifyConfig::default();
+    // These tests read the vectors themselves, which a run keeps only on
+    // request (SDK-711).
+    let config = CognifyConfig::default().with_retained_embeddings(true);
 
     // 4. Create test data
     let text = TEST_TEXT_EMBEDDINGS_BASIC;
@@ -123,6 +125,11 @@ async fn test_pipeline_with_embeddings() {
 
     // 6. Verify embeddings were generated
     assert!(!result.embeddings.is_empty(), "No embeddings generated");
+    assert_eq!(
+        result.embedding_count,
+        result.embeddings.len(),
+        "the count reports what was generated, retained or not"
+    );
 
     // 7. Verify embeddings for chunks
     let chunk_embeddings: Vec<_> = result
@@ -195,7 +202,9 @@ async fn test_pipeline_requires_embeddings() {
     let vector_db = Arc::new(MockVectorDB::new());
 
     // 2. Create config (embeddings are REQUIRED)
-    let config = CognifyConfig::default();
+    // These tests read the vectors themselves, which a run keeps only on
+    // request (SDK-711).
+    let config = CognifyConfig::default().with_retained_embeddings(true);
 
     // 4. Create test data
     let text = "Simple test text about technology.";
@@ -283,7 +292,9 @@ async fn test_embedding_semantic_similarity() {
     let graph_db: Arc<dyn cognee_graph::GraphDBTrait> = Arc::new(MockGraphDB::new());
     let vector_db: Arc<dyn VectorDB> = Arc::new(MockVectorDB::new());
 
-    let config = CognifyConfig::default();
+    // These tests read the vectors themselves, which a run keeps only on
+    // request (SDK-711).
+    let config = CognifyConfig::default().with_retained_embeddings(true);
 
     // Create two semantically similar documents
     let texts = [
@@ -384,7 +395,9 @@ async fn test_entity_name_indexing() {
     let graph_db = Arc::new(MockGraphDB::new());
     let vector_db = Arc::new(MockVectorDB::new());
 
-    let config = CognifyConfig::default();
+    // These tests read the vectors themselves, which a run keeps only on
+    // request (SDK-711).
+    let config = CognifyConfig::default().with_retained_embeddings(true);
 
     // Create test data with entity information
     let text = TEST_TEXT_EMBEDDINGS_ENTITY;
@@ -518,7 +531,9 @@ async fn test_triplet_embeddings_disabled_by_default() {
     let vector_db = Arc::new(MockVectorDB::new());
 
     // Create config with DEFAULT settings (triplet embeddings should be disabled)
-    let config = CognifyConfig::default();
+    // These tests read the vectors themselves, which a run keeps only on
+    // request (SDK-711).
+    let config = CognifyConfig::default().with_retained_embeddings(true);
 
     // Create test data
     let text = TEST_TEXT_EMBEDDINGS_TRIPLETS_DEFAULT;

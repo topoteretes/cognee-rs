@@ -30,8 +30,16 @@ pub struct CognifyResult {
     /// Edge types aggregated from relationship names
     pub edge_types: Vec<EdgeType>,
 
-    /// Embeddings for chunks, entities, and summaries
+    /// Embeddings for chunks, entities, and summaries — **empty unless**
+    /// [`CognifyConfig::retain_embeddings`](crate::CognifyConfig::retain_embeddings)
+    /// is set. The vectors are in the vector store either way; read
+    /// [`Self::embedding_count`] for how many there were.
     pub embeddings: Vec<Embedding>,
+
+    /// How many chunk, entity and summary embeddings the run generated — what
+    /// `embeddings.len()` reported before the vectors stopped being retained by
+    /// default. Set whether or not [`Self::embeddings`] is populated.
+    pub embedding_count: usize,
 
     /// Statistics about indexed fields
     pub indexed_fields: IndexedFieldsStats,
@@ -96,6 +104,7 @@ impl CognifyResult {
             summaries: vec![],
             edge_types: vec![],
             embeddings: vec![],
+            embedding_count: 0,
             indexed_fields: IndexedFieldsStats::default(),
             documents_for_dlt: vec![],
             already_completed: false,

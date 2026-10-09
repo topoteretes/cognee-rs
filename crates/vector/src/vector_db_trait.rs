@@ -435,6 +435,34 @@ pub trait VectorDB: Send + Sync {
     /// `end_bulk_load`. The default is a no-op.
     fn abandon_bulk_load(&self) {}
 
+    /// Announce, inside an open bulk-load scope, that the next `points` points
+    /// written to the collection arrive across several
+    /// [`index_points`](VectorDB::index_points) calls rather than one.
+    ///
+    /// A caller that splits one logical write into windows — to bound how much
+    /// of it is in memory at once — calls this first, so a backend whose
+    /// per-scope decisions depend on how much is being written (pgvector's
+    /// HNSW deferral) decides on the first window exactly as it would have on
+    /// a single call of `points` points.
+    ///
+    /// The hint lapses when the innermost open scope ends: an implementor
+    /// must then drop whatever part of it no write has used, so an
+    /// announcement that overstated the write — a failure part-way, or ids
+    /// folded together — does not count towards the enclosing load. Callers
+    /// should therefore announce inside a scope of their own. Outside any
+    /// scope it is ignored.
+    ///
+    /// A hint, never a semantic change. The default is a no-op.
+    async fn announce_bulk_write(
+        &self,
+        data_type: &str,
+        field_name: &str,
+        points: usize,
+    ) -> VectorDBResult<()> {
+        let _ = (data_type, field_name, points);
+        Ok(())
+    }
+
     /// Perform multiple vector similarity searches in sequence.
     ///
     /// Default implementation loops over [`search_similar`]. Backends may override

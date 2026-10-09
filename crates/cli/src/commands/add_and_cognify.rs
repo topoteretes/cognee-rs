@@ -209,7 +209,7 @@ pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), Cli
             result.entities.len(),
             result.edges.len(),
             result.summaries.len(),
-            result.embeddings.len()
+            result.embedding_count
         );
 
         Ok(())

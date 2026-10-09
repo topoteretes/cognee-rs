@@ -441,7 +441,9 @@ def report(rows):
         "  RSS is a WHOLE-PROCESS figure - it includes allocator pages not\n"
         "  returned to the OS and the vector store's own buffers, so it does not\n"
         "  by itself attribute the growth to cognify's payload clones. Attributing\n"
-        "  it needs an allocator-level profiler, which this repo still lacks."
+        "  it needs an allocator-level profiler: see the massif procedure in\n"
+        "  docs/performance/memory-retention.md. A sweep whose sizes all stay\n"
+        "  under one 500-item graph write batch also fits a ramp, not a slope."
     )
 
     largest = rows[-1]

@@ -205,6 +205,18 @@ pub struct CognifyConfig {
     /// Python config: CognifyConfig.triplet_embedding (default: False)
     pub embed_triplets: bool,
 
+    /// Keep every chunk, entity and summary vector in
+    /// [`CognifyResult::embeddings`](crate::CognifyResult::embeddings) when
+    /// the run ends.
+    ///
+    /// Off by default: the vectors are already in the vector store, and
+    /// holding them in the result kept a full copy of them alive for the whole
+    /// of `add_data_points` and after it — memory that grew with the corpus
+    /// (SDK-507 / SDK-711). [`CognifyResult::embedding_count`](crate::CognifyResult::embedding_count)
+    /// reports how many were generated either way. Turn it on to inspect the
+    /// vectors themselves, as the embedding integration tests do.
+    pub retain_embeddings: bool,
+
     /// Batch size for embedding generation (all types: chunks, entities, summaries, triplets).
     /// Python default: varies by provider (36 for OpenAI, 100 for others)
     /// Controls how many texts are embedded in a single API call
@@ -461,6 +473,7 @@ impl Default for CognifyConfig {
             enable_summarization: true,
 
             embed_triplets: false,
+            retain_embeddings: false,
             embedding_batch_size: 100,
             vector_collection_prefix: String::new(),
 
@@ -577,6 +590,13 @@ impl CognifyConfig {
     /// Enable or disable triplet embeddings.
     pub fn with_triplet_embeddings(mut self, enable: bool) -> Self {
         self.embed_triplets = enable;
+        self
+    }
+
+    /// Keep the run's vectors in [`CognifyResult::embeddings`](crate::CognifyResult::embeddings);
+    /// see [`Self::retain_embeddings`].
+    pub fn with_retained_embeddings(mut self, retain: bool) -> Self {
+        self.retain_embeddings = retain;
         self
     }
 

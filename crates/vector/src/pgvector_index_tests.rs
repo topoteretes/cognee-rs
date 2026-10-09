@@ -584,6 +584,130 @@ async fn an_overwrite_load_defers_earlier_than_an_append_load() {
     .await;
 }
 
+/// A write split into windows and announced with `announce_bulk_write` must be
+/// decided as the single call it replaces: cognify windows each collection to
+/// bound memory (SDK-507), and without the announcement a re-index of a large
+/// collection would push its first quarter through the live index — the
+/// regression `an_overwrite_load_defers_earlier_than_an_append_load` exists for.
+///
+/// The announcement is a prepaid credit, not an extra count: once it is drawn
+/// down, unannounced batches must cross the threshold exactly where they would
+/// have with no announcement at all.
+#[tokio::test]
+async fn an_announced_split_write_is_decided_as_one_call() {
+    with_temp_db(
+        "an_announced_split_write_is_decided_as_one_call",
+        |url| async move {
+            const BASE: u128 = 1200;
+            const INDEX: &str = "Split_f_halfvec_hnsw";
+
+            // Same id as a base row, a different vector: an overwrite that really
+            // writes (see `an_overwrite_load_defers_earlier_than_an_append_load`).
+            let point = |i: u128, z: f32| {
+                let jitter = (i as f64) * 1e-6;
+                #[allow(clippy::cast_possible_truncation)]
+                let v = vec![1.0, jitter as f32, z, 0.0, 0.0, 0.0, 0.0, 0.0];
+                crate::models::VectorPoint::new(uuid::Uuid::from_u128(i), v)
+            };
+            let fresh = |url: &str| {
+                let url = url.to_string();
+                async move {
+                    let adapter = PgVectorAdapter::new(&url, 8).await.unwrap();
+                    adapter.create_collection("Split", "f", 8).await.unwrap();
+                    let base: Vec<_> = (0..BASE).map(|i| point(i, 0.0)).collect();
+                    for batch in base.chunks(400) {
+                        adapter.index_points("Split", "f", batch).await.unwrap();
+                    }
+                    adapter
+                }
+            };
+            let db = Database::connect(&url).await.unwrap();
+
+            // --- 500 announced overwrites: one call of 500 would defer at once ---
+            let adapter = fresh(&url).await;
+            assert!(index_present(&db, INDEX).await);
+            // Outside a scope the hint lapses; it must not leak into the next one.
+            adapter
+                .announce_bulk_write("Split", "f", 100_000)
+                .await
+                .unwrap();
+            adapter.begin_bulk_load().await.unwrap();
+            adapter
+                .announce_bulk_write("Split", "f", 500)
+                .await
+                .unwrap();
+            let points: Vec<_> = (0..500).map(|i| point(i, 0.5)).collect();
+            let mut windows = points.chunks(50);
+            let first = windows.next().unwrap();
+            adapter.index_points("Split", "f", first).await.unwrap();
+            assert!(
+                !index_present(&db, INDEX).await,
+                "500 announced points are past 0.25 x 1200, so the first window \
+             must already drop the index, as one 500-point call would"
+            );
+            for window in windows {
+                adapter.index_points("Split", "f", window).await.unwrap();
+            }
+            adapter.end_bulk_load().await.unwrap();
+            assert!(index_present(&db, INDEX).await);
+            assert_eq!(adapter.collection_size("Split", "f").await.unwrap(), 1200);
+            adapter.delete_collection("Split", "f").await.unwrap();
+            adapter.close().await.unwrap();
+
+            // --- a small announcement is drawn down, not counted twice ----------
+            let adapter = fresh(&url).await;
+            adapter.begin_bulk_load().await.unwrap();
+            adapter
+                .announce_bulk_write("Split", "f", 100)
+                .await
+                .unwrap();
+            let mut dropped_at = None;
+            for (n, i) in (0..500u128).step_by(50).enumerate() {
+                let window: Vec<_> = (i..i + 50).map(|j| point(j, 0.5)).collect();
+                adapter.index_points("Split", "f", &window).await.unwrap();
+                if dropped_at.is_none() && !index_present(&db, INDEX).await {
+                    dropped_at = Some((n + 1) * 50);
+                }
+            }
+            adapter.end_bulk_load().await.unwrap();
+            assert_eq!(
+                dropped_at,
+                Some(300),
+                "the 100 announced points are the first two windows, not 100 more \
+             on top of them, so an overwrite load still defers at 300"
+            );
+            adapter.delete_collection("Split", "f").await.unwrap();
+            adapter.close().await.unwrap();
+
+            // --- an announcement no write used lapses with its scope --------
+            // `index_data_points` announces inside a scope of its own. If its
+            // write fails before a window lands, the 500 points it announced
+            // were never written and must not count towards the enclosing
+            // load: the next 50 real points are far below 0.25 x 1200.
+            let adapter = fresh(&url).await;
+            adapter.begin_bulk_load().await.unwrap();
+            adapter.begin_bulk_load().await.unwrap();
+            adapter
+                .announce_bulk_write("Split", "f", 500)
+                .await
+                .unwrap();
+            adapter.end_bulk_load().await.unwrap();
+            let window: Vec<_> = (0..50u128).map(|i| point(i, 0.5)).collect();
+            adapter.index_points("Split", "f", &window).await.unwrap();
+            assert!(
+                index_present(&db, INDEX).await,
+                "an unused announcement must be withdrawn when its scope ends, \
+                 not left to make 50 written points look like 550"
+            );
+            adapter.end_bulk_load().await.unwrap();
+
+            drop(db);
+            adapter.close().await.unwrap();
+        },
+    )
+    .await;
+}
+
 /// [`PgVectorAdapter::from_connection`] wraps a pool whose connect options this
 /// adapter never chose, so the session tuning [`PgVectorAdapter::new`] applies
 /// there has to ride in per statement instead. Two things that only a server can

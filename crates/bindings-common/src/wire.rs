@@ -33,7 +33,7 @@ pub fn cognify_result_json(result: &cognee::cognify::CognifyResult) -> serde_jso
         "entities": result.entities.len(),
         "edges": result.edges.len(),
         "summaries": result.summaries.len(),
-        "embeddings": result.embeddings.len(),
+        "embeddings": result.embedding_count,
         "alreadyCompleted": result.already_completed,
         "priorPipelineRunId": result.prior_pipeline_run_id.map(|id| id.to_string()),
     })
