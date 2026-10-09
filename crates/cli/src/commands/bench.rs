@@ -808,7 +808,7 @@ async fn phase_cognify(
 
     Ok(CognifyCounts {
         chunks: result.chunks.len(),
-        embeddings: result.embeddings.len(),
+        embeddings: result.embedding_count,
     })
 }
 

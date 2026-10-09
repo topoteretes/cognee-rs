@@ -2381,13 +2381,23 @@ pub async fn add_data_points(
         info!("Upserted {} structural edges", structural_edges.len());
     }
 
-    let embeddings = generate_embeddings(
-        &input.chunks,
-        &input.entities,
-        &input.summaries,
-        embedding_engine.clone(),
-    )
-    .await?;
+    // One vector per chunk, entity and summary, whether or not they are kept.
+    let embedding_count = input.chunks.len() + input.entities.len() + input.summaries.len();
+    // Retained vectors are generated up front and reused by the index pass.
+    // Otherwise the index pass embeds those texts itself, a window at a time,
+    // and no corpus-sized set of vectors is ever held (SDK-711): it already
+    // embeds whatever has no precomputed vector, so the work done is the same.
+    let embeddings = if config.retain_embeddings {
+        generate_embeddings(
+            &input.chunks,
+            &input.entities,
+            &input.summaries,
+            embedding_engine.clone(),
+        )
+        .await?
+    } else {
+        Vec::new()
+    };
 
     let indexed_fields = index_data_points(
         &input.chunks,
@@ -2413,6 +2423,7 @@ pub async fn add_data_points(
         summaries: input.summaries.clone(),
         edge_types,
         embeddings,
+        embedding_count,
         indexed_fields,
         documents_for_dlt: input.documents.clone(),
         already_completed: false,
@@ -3263,6 +3274,7 @@ pub async fn add_temporal_data_points(
         summaries: vec![],
         edge_types: vec![],
         embeddings: vec![],
+        embedding_count: 0,
         indexed_fields,
         documents_for_dlt: vec![],
         already_completed: false,
@@ -9191,6 +9203,104 @@ mod tests {
                 .unwrap(),
             1
         );
+    }
+
+    /// SDK-711: a run keeps its chunk/entity/summary vectors only when asked
+    /// to. Not keeping them must change nothing else — same count reported,
+    /// same points indexed, same embedding work done.
+    #[tokio::test]
+    async fn add_data_points_keeps_vectors_only_on_request() {
+        use cognee_embedding::MockEmbeddingEngine;
+        use cognee_vector::MockVectorDB;
+
+        let doc_id = Uuid::new_v4();
+        let chunks = vec![
+            test_chunk(Uuid::new_v4(), doc_id, "first chunk"),
+            test_chunk(Uuid::new_v4(), doc_id, "second chunk"),
+        ];
+        let shared_type = Uuid::new_v4();
+        let entities = vec![
+            test_entity("Alice", shared_type),
+            test_entity("Bob", shared_type),
+        ];
+        let summaries = vec![TextSummary::new(
+            chunks[0].base.id,
+            "a summary".to_string(),
+            None,
+            "mock-model".to_string(),
+        )];
+        let dataset_id = Uuid::new_v4();
+        let input = SummarizedData {
+            chunks: chunks.clone(),
+            documents: vec![],
+            entities,
+            edges: vec![],
+            producers: ArtifactProducers::default(),
+            summaries,
+            dataset_id,
+            user_id: None,
+            tenant_id: None,
+            failures: FailureReport::default(),
+        };
+
+        let run = |retain: bool| {
+            let input = &input;
+            async move {
+                let engine = Arc::new(MockEmbeddingEngine::new(8));
+                let vector = Arc::new(MockVectorDB::new());
+                let db = ledger_db(dataset_id).await;
+                let result = add_data_points(
+                    input,
+                    Arc::new(cognee_graph::MockGraphDB::new()),
+                    vector.clone(),
+                    engine.clone(),
+                    &db,
+                    None,
+                    &CognifyConfig::default().with_retained_embeddings(retain),
+                )
+                .await
+                .unwrap();
+                (result, vector, engine.embedded_text_count())
+            }
+        };
+
+        let (dropped, dropped_store, dropped_work) = run(false).await;
+        let (kept, kept_store, kept_work) = run(true).await;
+
+        assert!(
+            dropped.embeddings.is_empty(),
+            "vectors are not kept by default"
+        );
+        assert_eq!(
+            dropped.embedding_count, 5,
+            "2 chunks + 2 entities + 1 summary"
+        );
+        assert_eq!(kept.embeddings.len(), 5);
+        assert_eq!(kept.embedding_count, 5);
+        assert_eq!(
+            dropped_work, kept_work,
+            "not keeping the vectors must not embed anything twice or skip anything"
+        );
+        for (data_type, field, size) in [
+            ("DocumentChunk", "text", 2),
+            ("Entity", "name", 2),
+            ("TextSummary", "text", 1),
+        ] {
+            assert_eq!(
+                dropped_store
+                    .collection_size(data_type, field)
+                    .await
+                    .unwrap(),
+                size,
+                "{data_type}_{field}"
+            );
+        }
+        for chunk in &chunks {
+            assert_eq!(
+                dropped_store.get_payload("DocumentChunk", "text", chunk.base.id),
+                kept_store.get_payload("DocumentChunk", "text", chunk.base.id),
+            );
+        }
     }
 
     #[tokio::test]

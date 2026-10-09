@@ -141,7 +141,7 @@ fn report_dataset_outcome(dataset_name: &str, result: &CognifyResult) -> Dataset
         result.entities.len(),
         result.edges.len(),
         result.summaries.len(),
-        result.embeddings.len()
+        result.embedding_count
     );
     DatasetOutcome::Ran
 }
@@ -329,7 +329,7 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
             total_entities += result.entities.len();
             total_edges += result.edges.len();
             total_summaries += result.summaries.len();
-            total_embeddings += result.embeddings.len();
+            total_embeddings += result.embedding_count;
         }
 
         info!(
