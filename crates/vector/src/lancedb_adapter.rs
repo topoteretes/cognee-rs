@@ -37,7 +37,9 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::error::{VectorDBError, VectorDBResult};
-use crate::models::{SearchResult, VectorPoint, dedup_points_by_id, dedup_points_by_id_last_wins};
+use crate::models::{
+    SearchResult, VectorPoint, dedup_points_by_id_cow, dedup_points_by_id_last_wins_cow,
+};
 use crate::vector_db_trait::VectorDB;
 use crate::zero_norm::{warn_zero_norm_points, warn_zero_norm_query};
 
@@ -74,12 +76,29 @@ fn build_schema(dimension: usize) -> SchemaRef {
     ]))
 }
 
-fn points_to_batch(
-    schema: SchemaRef,
-    dimension: usize,
+/// Rows per Arrow batch handed to one `table.add`, sized so a batch's vector
+/// column stays near [`WRITE_BATCH_BYTES`] whatever the dimension.
+///
+/// Building one `RecordBatch` for a whole collection held a full copy of every
+/// vector for the duration of the write, on top of the caller's own — and
+/// cognify indexes each collection in a single call, so that copy grew with the
+/// corpus (SDK-507). Chunking bounds it. The cost is one lance commit (and one
+/// fragment) per chunk instead of one per call.
+fn write_batch_rows(dimension: usize) -> usize {
+    (WRITE_BATCH_BYTES / (dimension.max(1) * std::mem::size_of::<f32>())).max(1)
+}
+
+/// Target size of one write batch's vector column; see [`write_batch_rows`].
+const WRITE_BATCH_BYTES: usize = 16 * 1024 * 1024;
+
+/// Check every point before anything is written: a write is split across
+/// several batches, so a bad point found mid-way would leave the earlier ones
+/// committed and the ids they replaced already deleted.
+fn validate_points(
     collection: &str,
+    dimension: usize,
     points: &[VectorPoint],
-) -> VectorDBResult<RecordBatch> {
+) -> VectorDBResult<()> {
     if let Some(p) = points.iter().find(|p| p.vector.len() != dimension) {
         return Err(VectorDBError::DimensionMismatch {
             collection: collection.to_string(),
@@ -92,7 +111,20 @@ fn points_to_batch(
     // reader: lance scores it NaN and `KNNVectorDistanceExec` filters NaN rows
     // out, so the row exists on disk and never appears in a result.
     warn_zero_norm_points("lancedb", collection, points);
+    Ok(())
+}
 
+/// Build one `RecordBatch` from points already checked by [`validate_points`].
+///
+/// `metadata_overrides` replaces the metadata of the points it names, which is
+/// how `index_points` writes merged dataset membership without cloning each
+/// point — vector included — just to change one metadata key.
+fn points_to_batch(
+    schema: SchemaRef,
+    dimension: usize,
+    points: &[VectorPoint],
+    metadata_overrides: &HashMap<Uuid, HashMap<String, serde_json::Value>>,
+) -> VectorDBResult<RecordBatch> {
     let id_array = FixedSizeBinaryArray::try_from_iter(points.iter().map(|p| *p.id.as_bytes()))
         .map_err(|e| VectorDBError::StorageError(format!("id column build: {e}")))?;
 
@@ -106,7 +138,7 @@ fn points_to_batch(
     let metadata_array = StringArray::from(
         points
             .iter()
-            .map(|p| serde_json::to_string(&p.metadata))
+            .map(|p| serde_json::to_string(metadata_overrides.get(&p.id).unwrap_or(&p.metadata)))
             .collect::<Result<Vec<_>, _>>()?,
     );
 
@@ -119,6 +151,39 @@ fn points_to_batch(
         ],
     )
     .map_err(|e| VectorDBError::StorageError(format!("record batch build: {e}")))
+}
+
+/// `id IN (X'…', …)` over the points' UUID bytes, as SQL hex literals.
+fn id_predicate(points: &[VectorPoint]) -> String {
+    let id_values: Vec<String> = points
+        .iter()
+        .map(|p| {
+            let hex: String = p.id.as_bytes().iter().map(|b| format!("{b:02X}")).collect();
+            format!("X'{hex}'")
+        })
+        .collect();
+    format!("id IN ({})", id_values.join(", "))
+}
+
+/// Append `points` to `table` in batches of `rows_per_batch`, building each
+/// batch only when it is written so at most one is alive at a time.
+async fn write_points(
+    table: &lancedb::Table,
+    schema: SchemaRef,
+    dimension: usize,
+    points: &[VectorPoint],
+    metadata_overrides: &HashMap<Uuid, HashMap<String, serde_json::Value>>,
+    rows_per_batch: usize,
+) -> VectorDBResult<()> {
+    for chunk in points.chunks(rows_per_batch.max(1)) {
+        let batch = points_to_batch(schema.clone(), dimension, chunk, metadata_overrides)?;
+        table
+            .add(vec![batch])
+            .execute()
+            .await
+            .map_err(map_lance_err)?;
+    }
+    Ok(())
 }
 
 /// Decode `id` + `metadata` columns from plain (non-vector-search) query
@@ -234,6 +299,90 @@ impl LanceDbAdapter {
         })
     }
 
+    /// [`VectorDB::index_points`], with the write batch size overridable so
+    /// tests can drive a multi-batch write without megabytes of vectors.
+    /// `None` sizes batches by [`write_batch_rows`].
+    async fn upsert_indexed_points(
+        &self,
+        data_type: &str,
+        field_name: &str,
+        points: &[VectorPoint],
+        rows_per_batch: Option<usize>,
+    ) -> VectorDBResult<()> {
+        if points.is_empty() {
+            return Ok(());
+        }
+        let name = collection_name(data_type, field_name);
+        let dimension = self.resolved_dimension(&name).await?;
+        let schema = build_schema(dimension);
+        let table = self
+            .connection
+            .open_table(&name)
+            .execute()
+            .await
+            .map_err(map_lance_err)?;
+        // Fold repeated ids first. This upsert is delete-then-add and the table
+        // has no primary key, so a repeated id would land as several physical
+        // rows sharing one id — the same input pgvector rejects outright.
+        // Folding keeps the three adapters agreeing on one row per distinct id,
+        // with the duplicates' dataset membership unioned rather than dropped.
+        let points = dedup_points_by_id_cow(points);
+        validate_points(&name, dimension, &points)?;
+
+        // Upsert by id so re-indexing existing points replaces them.
+        let predicate = id_predicate(&points);
+
+        // Read the membership of any existing rows we're about to replace, then
+        // union it into the incoming points. Point IDs are content-addressed, so
+        // the same point is re-indexed once per dataset; a plain delete+add
+        // would otherwise drop earlier datasets' `dataset_id` (cross-dataset
+        // dedup bug). Mirrors the in-memory adapters and Python's union upsert.
+        let stream = table
+            .query()
+            .only_if(predicate.clone())
+            .execute()
+            .await
+            .map_err(map_lance_err)?;
+        let batches: Vec<RecordBatch> = stream.try_collect().await.map_err(map_lance_err)?;
+        let mut existing = id_metadata_from_batches(batches)?;
+
+        // Only the points that already have a row change, and only in their
+        // metadata — so carry the merged metadata alongside instead of cloning
+        // every point, vector and all.
+        let merged_metadata: HashMap<Uuid, HashMap<String, serde_json::Value>> = points
+            .iter()
+            .filter_map(|p| {
+                let prev = VectorPoint {
+                    id: p.id,
+                    vector: Vec::new(),
+                    metadata: existing.remove(&p.id)?,
+                };
+                let mut merged = VectorPoint {
+                    id: p.id,
+                    vector: Vec::new(),
+                    metadata: p.metadata.clone(),
+                };
+                merged.merge_dataset_membership(&prev);
+                Some((p.id, merged.metadata))
+            })
+            .collect();
+
+        table
+            .delete(predicate.as_str())
+            .await
+            .map_err(map_lance_err)?;
+        let rows_per_batch = rows_per_batch.unwrap_or_else(|| write_batch_rows(dimension));
+        write_points(
+            &table,
+            schema,
+            dimension,
+            &points,
+            &merged_metadata,
+            rows_per_batch,
+        )
+        .await
+    }
+
     async fn cached_dimension(&self, table_name: &str) -> Option<usize> {
         self.dimensions.read().await.get(table_name).copied()
     }
@@ -307,84 +456,8 @@ impl VectorDB for LanceDbAdapter {
         field_name: &str,
         points: &[VectorPoint],
     ) -> VectorDBResult<()> {
-        if points.is_empty() {
-            return Ok(());
-        }
-        let name = collection_name(data_type, field_name);
-        let dimension = self.resolved_dimension(&name).await?;
-        let schema = build_schema(dimension);
-        let table = self
-            .connection
-            .open_table(&name)
-            .execute()
+        self.upsert_indexed_points(data_type, field_name, points, None)
             .await
-            .map_err(map_lance_err)?;
-        // Fold repeated ids first. This upsert is delete-then-add and the table
-        // has no primary key, so a repeated id would land as several physical
-        // rows sharing one id — the same input pgvector rejects outright.
-        // Folding keeps the three adapters agreeing on one row per distinct id,
-        // with the duplicates' dataset membership unioned rather than dropped.
-        let points = &dedup_points_by_id(points);
-
-        // Upsert by id so re-indexing existing points replaces them.
-        let id_values: Vec<String> = points
-            .iter()
-            .map(|p| {
-                let bytes = p.id.as_bytes();
-                // SQL hex literal: X'…' over the 16 UUID bytes.
-                let hex: String = bytes.iter().map(|b| format!("{b:02X}")).collect();
-                format!("X'{hex}'")
-            })
-            .collect();
-        let predicate = format!("id IN ({})", id_values.join(", "));
-
-        // Read the membership of any existing rows we're about to replace, then
-        // union it into the incoming points. Point IDs are content-addressed, so
-        // the same point is re-indexed once per dataset; a plain delete+add
-        // would otherwise drop earlier datasets' `dataset_id` (cross-dataset
-        // dedup bug). Mirrors the in-memory adapters and Python's union upsert.
-        let existing = if id_values.is_empty() {
-            HashMap::new()
-        } else {
-            let stream = table
-                .query()
-                .only_if(predicate.clone())
-                .execute()
-                .await
-                .map_err(map_lance_err)?;
-            let batches: Vec<RecordBatch> = stream.try_collect().await.map_err(map_lance_err)?;
-            id_metadata_from_batches(batches)?
-        };
-        let merged_points: Vec<VectorPoint> = points
-            .iter()
-            .map(|p| {
-                let mut np = p.clone();
-                if let Some(prev_meta) = existing.get(&p.id) {
-                    let prev = VectorPoint {
-                        id: p.id,
-                        vector: Vec::new(),
-                        metadata: prev_meta.clone(),
-                    };
-                    np.merge_dataset_membership(&prev);
-                }
-                np
-            })
-            .collect();
-        let batch = points_to_batch(schema.clone(), dimension, &name, &merged_points)?;
-
-        if !id_values.is_empty() {
-            table
-                .delete(predicate.as_str())
-                .await
-                .map_err(map_lance_err)?;
-        }
-        let _ = schema; // schema lives on the RecordBatch; nothing else needs it.
-        table
-            .add(vec![batch])
-            .execute()
-            .await
-            .map_err(map_lance_err)?;
-        Ok(())
     }
 
     async fn upsert_raw_vectors(
@@ -420,26 +493,22 @@ impl VectorDB for LanceDbAdapter {
         // read + union prior dataset membership; each raw point is written
         // verbatim (its id already scopes it) — hence the last-wins fold, which
         // still keeps a repeated id from landing as two physical rows.
-        let points = &dedup_points_by_id_last_wins(points);
-        let id_values: Vec<String> = points
-            .iter()
-            .map(|p| {
-                let hex: String = p.id.as_bytes().iter().map(|b| format!("{b:02X}")).collect();
-                format!("X'{hex}'")
-            })
-            .collect();
-        let predicate = format!("id IN ({})", id_values.join(", "));
-        let batch = points_to_batch(schema, dimension, &name, points)?;
+        let points = dedup_points_by_id_last_wins_cow(points);
+        validate_points(&name, dimension, &points)?;
+        let predicate = id_predicate(&points);
         table
             .delete(predicate.as_str())
             .await
             .map_err(map_lance_err)?;
-        table
-            .add(vec![batch])
-            .execute()
-            .await
-            .map_err(map_lance_err)?;
-        Ok(())
+        write_points(
+            &table,
+            schema,
+            dimension,
+            &points,
+            &HashMap::new(),
+            write_batch_rows(dimension),
+        )
+        .await
     }
 
     async fn search_similar(
@@ -1099,5 +1168,101 @@ mod tests {
             .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].id, id);
+    }
+
+    fn membership(row: &SearchResult) -> Vec<String> {
+        row.metadata
+            .get(crate::models::DATASET_IDS_KEY)
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn write_batches_hold_about_sixteen_mib_of_vectors() {
+        assert_eq!(write_batch_rows(1536), 2730);
+        assert_eq!(write_batch_rows(4), 1024 * 1024);
+        // A dimension too large for one row per budget still writes a row.
+        assert_eq!(write_batch_rows(usize::MAX / 8), 1);
+    }
+
+    /// The SDK-507 write path: one `index_points` call split across several
+    /// lance commits must land every row once and still union the membership
+    /// of the rows it replaces — including ones whose batch is not the first.
+    #[tokio::test]
+    async fn a_write_split_across_batches_lands_every_row_and_unions_membership() {
+        let (adapter, _dir) = fresh_adapter().await;
+        adapter.create_collection("Chunk", "text", 2).await.unwrap();
+
+        let ids: Vec<Uuid> = (0..5).map(|_| Uuid::new_v4()).collect();
+        let tagged = |id: Uuid, ds: &str| {
+            point(id, vec![1.0, 0.0], "v").with_metadata("dataset_id", json!(ds))
+        };
+        // Pre-existing rows for the first id (batch 1) and the last (batch 3).
+        adapter
+            .index_points(
+                "Chunk",
+                "text",
+                &[tagged(ids[0], "ds-a"), tagged(ids[4], "ds-a")],
+            )
+            .await
+            .unwrap();
+
+        let incoming: Vec<VectorPoint> = ids.iter().map(|id| tagged(*id, "ds-b")).collect();
+        adapter
+            .upsert_indexed_points("Chunk", "text", &incoming, Some(2))
+            .await
+            .unwrap();
+
+        assert_eq!(adapter.collection_size("Chunk", "text").await.unwrap(), 5);
+        let rows = adapter.retrieve("Chunk", "text", &ids).await.unwrap();
+        assert_eq!(rows.len(), 5);
+        for row in &rows {
+            assert_eq!(row.metadata["dataset_id"], json!("ds-b"), "row {}", row.id);
+            // A row with nothing to replace is written verbatim, so only the
+            // replaced ones carry the unioned membership array.
+            let expected: Vec<&str> = if row.id == ids[0] || row.id == ids[4] {
+                vec!["ds-a", "ds-b"]
+            } else {
+                vec![]
+            };
+            assert_eq!(membership(row), expected, "row {}", row.id);
+        }
+    }
+
+    /// Validation covers the whole input before the delete: with the write
+    /// split into batches, a bad point checked only when its batch is built
+    /// would leave the rows it was meant to replace already deleted.
+    #[tokio::test]
+    async fn a_dimension_mismatch_in_a_later_batch_leaves_existing_rows_intact() {
+        let (adapter, _dir) = fresh_adapter().await;
+        adapter.create_collection("Chunk", "text", 2).await.unwrap();
+        let id = Uuid::new_v4();
+        adapter
+            .index_points("Chunk", "text", &[point(id, vec![1.0, 0.0], "old")])
+            .await
+            .unwrap();
+
+        let incoming = vec![
+            point(id, vec![0.0, 1.0], "new"),
+            point(Uuid::new_v4(), vec![1.0, 0.0], "ok"),
+            point(Uuid::new_v4(), vec![1.0, 0.0, 0.0], "bad"),
+        ];
+        let err = adapter
+            .upsert_indexed_points("Chunk", "text", &incoming, Some(1))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, VectorDBError::DimensionMismatch { .. }),
+            "{err:?}"
+        );
+
+        assert_eq!(adapter.collection_size("Chunk", "text").await.unwrap(), 1);
+        let rows = adapter.retrieve("Chunk", "text", &[id]).await.unwrap();
+        assert_eq!(rows[0].metadata["kind"], json!("old"));
     }
 }

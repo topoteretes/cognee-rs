@@ -45,7 +45,9 @@ use cognee_utils::tracing_keys::{
 };
 
 use crate::error::{VectorDBError, VectorDBResult};
-use crate::models::{SearchResult, VectorPoint, dedup_points_by_id, dedup_points_by_id_last_wins};
+use crate::models::{
+    SearchResult, VectorPoint, dedup_points_by_id_cow, dedup_points_by_id_last_wins_cow,
+};
 use crate::vector_db_trait::{VectorDB, VectorIndexBackfill};
 use crate::zero_norm::{warn_zero_norm_points, warn_zero_norm_query, warn_zero_norm_query_batch};
 
@@ -2794,8 +2796,8 @@ impl PgVectorAdapter {
     /// Duplicate ids in one call are folded in input order first — one
     /// statement cannot touch the same `ON CONFLICT` target twice (Postgres
     /// aborts it with "ON CONFLICT DO UPDATE command cannot affect row a
-    /// second time") — through the same [`crate::models::dedup_points_by_id`]
-    /// / [`crate::models::dedup_points_by_id_last_wins`] helpers the LanceDB
+    /// second time") — through the same [`crate::models::dedup_points_by_id_cow`]
+    /// / [`crate::models::dedup_points_by_id_last_wins_cow`] helpers the LanceDB
     /// adapter uses, so the outcome equals applying the points one by one.
     async fn upsert_points(
         &self,
@@ -2810,10 +2812,11 @@ impl PgVectorAdapter {
         // rebuild decision and before `write_points` batches, so the row
         // counts the decision is made on are the rows actually written and an
         // id repeated across a batch boundary is still written exactly once.
-        let points = &if merge_membership {
-            dedup_points_by_id(points)
+        // Borrowed when no id repeats, so the common input is not copied.
+        let points: &[VectorPoint] = &if merge_membership {
+            dedup_points_by_id_cow(points)
         } else {
-            dedup_points_by_id_last_wins(points)
+            dedup_points_by_id_last_wins_cow(points)
         };
 
         let dimension = points.first().map_or(0, |p| p.vector.len());
