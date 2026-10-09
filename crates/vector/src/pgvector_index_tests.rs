@@ -676,6 +676,30 @@ async fn an_announced_split_write_is_decided_as_one_call() {
                 "the 100 announced points are the first two windows, not 100 more \
              on top of them, so an overwrite load still defers at 300"
             );
+            adapter.delete_collection("Split", "f").await.unwrap();
+            adapter.close().await.unwrap();
+
+            // --- an announcement no write used lapses with its scope --------
+            // `index_data_points` announces inside a scope of its own. If its
+            // write fails before a window lands, the 500 points it announced
+            // were never written and must not count towards the enclosing
+            // load: the next 50 real points are far below 0.25 x 1200.
+            let adapter = fresh(&url).await;
+            adapter.begin_bulk_load().await.unwrap();
+            adapter.begin_bulk_load().await.unwrap();
+            adapter
+                .announce_bulk_write("Split", "f", 500)
+                .await
+                .unwrap();
+            adapter.end_bulk_load().await.unwrap();
+            let window: Vec<_> = (0..50u128).map(|i| point(i, 0.5)).collect();
+            adapter.index_points("Split", "f", &window).await.unwrap();
+            assert!(
+                index_present(&db, INDEX).await,
+                "an unused announcement must be withdrawn when its scope ends, \
+                 not left to make 50 written points look like 550"
+            );
+            adapter.end_bulk_load().await.unwrap();
 
             drop(db);
             adapter.close().await.unwrap();

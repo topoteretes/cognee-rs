@@ -443,8 +443,14 @@ pub trait VectorDB: Send + Sync {
     /// of it is in memory at once — calls this first, so a backend whose
     /// per-scope decisions depend on how much is being written (pgvector's
     /// HNSW deferral) decides on the first window exactly as it would have on
-    /// a single call of `points` points. Outside a scope, or announcing more
-    /// than is then written, is harmless: the hint lapses with the scope.
+    /// a single call of `points` points.
+    ///
+    /// The hint lapses when the innermost open scope ends: an implementor
+    /// must then drop whatever part of it no write has used, so an
+    /// announcement that overstated the write — a failure part-way, or ids
+    /// folded together — does not count towards the enclosing load. Callers
+    /// should therefore announce inside a scope of their own. Outside any
+    /// scope it is ignored.
     ///
     /// A hint, never a semantic change. The default is a no-op.
     async fn announce_bulk_write(

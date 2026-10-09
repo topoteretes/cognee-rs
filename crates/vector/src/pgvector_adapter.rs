@@ -1393,6 +1393,26 @@ struct BulkLoad {
     prepaid: HashMap<String, i64>,
 }
 
+impl BulkLoad {
+    /// Take back the announcement credit no batch drew down, and the points it
+    /// counted into `written` ahead of them.
+    ///
+    /// Run at every scope end, nested or not, because that is where the trait
+    /// says an announcement lapses: `index_data_points` announces inside a
+    /// scope of its own, so whatever is left when that scope closes — a write
+    /// that failed part-way, or windows the id fold made smaller than the
+    /// announced total — was never written and must not count towards the
+    /// enclosing load's deferral decision. Withdrawing early is the safe
+    /// direction: a batch the credit no longer covers is counted when it lands.
+    fn withdraw_prepaid(&mut self) {
+        for (coll, credit) in std::mem::take(&mut self.prepaid) {
+            if let Some(w) = self.written.get_mut(&coll) {
+                *w = w.saturating_sub(credit).max(0);
+            }
+        }
+    }
+}
+
 /// A `count(*)` of one collection, and the point in the load it was taken at.
 #[derive(Debug, Clone, Copy)]
 struct LiveRows {
@@ -3195,6 +3215,7 @@ impl VectorDB for PgVectorAdapter {
             // lock poison is unrecoverable
             let mut b = self.bulk.lock().expect("bulk-load state lock");
             b.depth = b.depth.saturating_sub(1);
+            b.withdraw_prepaid();
         }
         let written = self.take_written(false);
         let pending = self.take_deferred(false);
@@ -3203,20 +3224,6 @@ impl VectorDB for PgVectorAdapter {
         built.and(analyzed)
     }
 
-    /// Close the scope without running the deferred work — the `Drop` half of
-    /// the pairing (see [`BulkLoadGuard`](crate::BulkLoadGuard)).
-    ///
-    /// Only the depth is reconciled here, and that is the point: a depth stuck
-    /// above zero is unrecoverable, because every later batch then takes the
-    /// `b.depth > 0` branch of [`Self::upsert_points`], drops the index of any
-    /// collection past [`BULK_DEFER_RATIO`] and never reaches an
-    /// `end_bulk_load` to build it again. The `deferred` / `written` maps are
-    /// deliberately left in place: a `Drop` cannot await, so the index build
-    /// and the `ANALYZE` wait for the next scope's `end_bulk_load`, for
-    /// [`Self::close`], or for `create_missing_vector_indexes`. Until then the
-    /// affected collections answer by exact scan, which is correct — that is
-    /// the same state an interrupted load leaves, and it is pinned by
-    /// `an_interrupted_bulk_load_leaves_correct_rows_that_the_backfill_reindexes`.
     /// Counts `points` into the collection's `written` total for this load up
     /// front, as a prepaid credit the following batches draw down, so the
     /// first window of a split write meets the [`BULK_DEFER_RATIO`] decision
@@ -3243,11 +3250,29 @@ impl VectorDB for PgVectorAdapter {
         Ok(())
     }
 
+    /// Close the scope without running the deferred work — the `Drop` half of
+    /// the pairing (see [`BulkLoadGuard`](crate::BulkLoadGuard)).
+    ///
+    /// Only the depth is reconciled here, and that is the point: a depth stuck
+    /// above zero is unrecoverable, because every later batch then takes the
+    /// `b.depth > 0` branch of [`Self::upsert_points`], drops the index of any
+    /// collection past [`BULK_DEFER_RATIO`] and never reaches an
+    /// `end_bulk_load` to build it again. The `deferred` / `written` maps are
+    /// deliberately left in place: a `Drop` cannot await, so the index build
+    /// and the `ANALYZE` wait for the next scope's `end_bulk_load`, for
+    /// [`Self::close`], or for `create_missing_vector_indexes`. Until then the
+    /// affected collections answer by exact scan, which is correct — that is
+    /// the same state an interrupted load leaves, and it is pinned by
+    /// `an_interrupted_bulk_load_leaves_correct_rows_that_the_backfill_reindexes`.
+    ///
+    /// Announcement credit no batch drew down is withdrawn, as at every scope
+    /// end: it counted points into `written` that were never written.
     #[allow(clippy::expect_used, reason = "lock poison is unrecoverable")]
     fn abandon_bulk_load(&self) {
         // lock poison is unrecoverable
         let mut b = self.bulk.lock().expect("bulk-load state lock");
         b.depth = b.depth.saturating_sub(1);
+        b.withdraw_prepaid();
         if b.depth == 0 && !b.deferred.is_empty() {
             warn!(
                 collections = b.deferred.len(),
