@@ -5238,24 +5238,10 @@ async fn reuse_or_embed(
         .collect()
 }
 
-/// Target size of the vectors in one [`index_data_points`] window; see
-/// [`index_window_points`].
-const INDEX_WINDOW_BYTES: usize = 16 * 1024 * 1024;
-
-/// Points per window when [`index_data_points`] embeds and writes a
-/// collection, sized so a window's vectors stay near [`INDEX_WINDOW_BYTES`]
-/// whatever the dimension.
-///
-/// Each collection used to be embedded, turned into points and written in one
-/// piece, so the vectors and metadata of the whole collection were live at
-/// once — a copy that grew with the corpus (SDK-507). A window bounds it.
-fn index_window_points(dimension: usize) -> usize {
-    (INDEX_WINDOW_BYTES / (dimension.max(1) * std::mem::size_of::<f32>())).max(1)
-}
-
 /// Index data points in vector database.
 ///
-/// Every collection is written in windows of [`index_window_points`] inside a
+/// Every collection is written in windows of
+/// [`cognee_vector::write_window_points`] inside a
 /// bulk-load scope of its own, each preceded by
 /// [`VectorDB::announce_bulk_write`] with the collection's total, so a backend
 /// that tunes its index maintenance to the size of a write (pgvector) decides
@@ -5278,7 +5264,10 @@ async fn index_data_points(
     config: &CognifyConfig,
     precomputed_embeddings: &[Embedding],
 ) -> Result<IndexedFieldsStats, CognifyError> {
-    let window = index_window_points(engine.dimension());
+    // Each collection used to be embedded, built and written in one piece, so
+    // all of its vectors and metadata were live at once — a copy that grew
+    // with the corpus (SDK-507). A window bounds it.
+    let window = cognee_vector::write_window_points(engine.dimension());
     // Same handling as `cognify`'s own scope: a store that rejects the hint
     // is written without it, and the scope is finished on success and failure
     // alike — a guard dropped on an error would leave the deferred work

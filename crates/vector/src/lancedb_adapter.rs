@@ -39,6 +39,7 @@ use uuid::Uuid;
 use crate::error::{VectorDBError, VectorDBResult};
 use crate::models::{
     SearchResult, VectorPoint, dedup_points_by_id_cow, dedup_points_by_id_last_wins_cow,
+    write_window_points,
 };
 use crate::vector_db_trait::VectorDB;
 use crate::zero_norm::{warn_zero_norm_points, warn_zero_norm_query};
@@ -76,20 +77,17 @@ fn build_schema(dimension: usize) -> SchemaRef {
     ]))
 }
 
-/// Rows per Arrow batch handed to one `table.add`, sized so a batch's vector
-/// column stays near [`WRITE_BATCH_BYTES`] whatever the dimension.
+/// Rows per Arrow batch handed to one `table.add`: the shared
+/// [`write_window_points`] rule.
 ///
-/// Building one `RecordBatch` for a whole collection held a full copy of every
-/// vector for the duration of the write, on top of the caller's own — and
-/// cognify indexes each collection in a single call, so that copy grew with the
-/// corpus (SDK-507). Chunking bounds it. The cost is one lance commit (and one
+/// Building one `RecordBatch` for a whole call held a full copy of every vector
+/// for the duration of the write, on top of the caller's own, and a call can be
+/// any size — cognify windows its writes to this same size, but other callers
+/// need not (SDK-507). Chunking bounds it. The cost is one lance commit (and one
 /// fragment) per chunk instead of one per call.
 fn write_batch_rows(dimension: usize) -> usize {
-    (WRITE_BATCH_BYTES / (dimension.max(1) * std::mem::size_of::<f32>())).max(1)
+    write_window_points(dimension)
 }
-
-/// Target size of one write batch's vector column; see [`write_batch_rows`].
-const WRITE_BATCH_BYTES: usize = 16 * 1024 * 1024;
 
 /// Check every point before anything is written: a write is split across
 /// several batches, so a bad point found mid-way would leave the earlier ones

@@ -4,6 +4,20 @@ use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
+/// Target size, in bytes of vector data, of one write window — see
+/// [`write_window_points`].
+pub const WRITE_WINDOW_BYTES: usize = 16 * 1024 * 1024;
+
+/// How many points of `dimension` to write at a time so a window's vectors
+/// stay near [`WRITE_WINDOW_BYTES`]: ~2,700 at 1536 dimensions, never 0.
+///
+/// The one sizing rule for bounding a write's memory (SDK-507), shared by the
+/// callers that window what they hand to [`crate::VectorDB::index_points`] and
+/// by adapters that split what they are handed, so the two cannot drift.
+pub fn write_window_points(dimension: usize) -> usize {
+    (WRITE_WINDOW_BYTES / (dimension.max(1) * std::mem::size_of::<f32>())).max(1)
+}
+
 /// Vector point to be indexed
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VectorPoint {
