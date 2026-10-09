@@ -1988,8 +1988,57 @@ mod tests {
         assert_eq!(stats.resolved_by_id, 1);
     }
 
-    /// A node carrying a distinct human-readable name, for the cross-chunk
-    /// attribution tests below.
+    /// A surface variant must drop, not bind to the only node it could mean.
+    ///
+    /// `apple` is a *unique* match against the one declared node, so a looser
+    /// endpoint normaliser guarded only by uniqueness (SDK-505 step 3) would
+    /// accept it and attach the edge to `Apple Inc.` — silently, because
+    /// `resolve_endpoint` attaches rather than merges and the tally would book it
+    /// as a legitimate resolution, not a drop. Pinned before any such normaliser
+    /// exists (SDK-633). It pins the suffix-stripping / token-subset shape only;
+    /// punctuation folding is a separate policy question this does not decide.
+    ///
+    /// Both endpoints are covered: they resolve in separate match arms, and a
+    /// source miss `continue`s before the target is ever looked up.
+    #[tokio::test]
+    async fn test_surface_variant_of_sole_node_is_dropped_not_attached() {
+        let (edges, stats) = expand_ordered_chunks(vec![KnowledgeGraph {
+            nodes: vec![node_named("apple_inc", "Apple Inc.")],
+            edges: vec![edge_between("apple", "apple_inc")],
+        }])
+        .await;
+
+        assert!(
+            edges.is_empty(),
+            "source `apple` must not resolve to `Apple Inc.`"
+        );
+        assert_eq!(stats.attempted, 1);
+        assert_eq!(stats.dropped_source_missing, 1);
+        assert_eq!(stats.dropped(), 1);
+        // Asserted by outcome, not by path: a normaliser hooked into the id
+        // lookup would show up here, not in `resolved_by_name`.
+        assert_eq!(stats.resolved_by_id + stats.resolved_by_name, 0);
+
+        let (edges, stats) = expand_ordered_chunks(vec![KnowledgeGraph {
+            nodes: vec![node_named("apple_inc", "Apple Inc.")],
+            edges: vec![edge_between("apple_inc", "apple")],
+        }])
+        .await;
+
+        assert!(
+            edges.is_empty(),
+            "target `apple` must not resolve to `Apple Inc.`"
+        );
+        assert_eq!(stats.attempted, 1);
+        assert_eq!(stats.dropped_target_missing, 1);
+        assert_eq!(stats.dropped(), 1);
+        // Exactly one resolution: the source's own declared id.
+        assert_eq!(stats.resolved_by_id, 1);
+        assert_eq!(stats.resolved_by_name, 0);
+    }
+
+    /// A node carrying a distinct human-readable name, for the surface-variant
+    /// drop test above and the cross-chunk attribution tests below.
     fn node_named(id: &str, name: &str) -> Node {
         Node {
             id: id.to_string(),
