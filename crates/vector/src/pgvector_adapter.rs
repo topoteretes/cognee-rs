@@ -1385,6 +1385,12 @@ struct BulkLoad {
     /// `written` brackets the live size tightly enough to answer most batches
     /// without reading anything; see [`bulk_defer_reached`].
     live_rows: HashMap<String, LiveRows>,
+    /// Collection -> points announced by
+    /// [`VectorDB::announce_bulk_write`] and already counted into `written`,
+    /// but not yet handed over by a batch. A batch consumes this credit before
+    /// adding to `written`, so a write split into windows is counted once and
+    /// its deferral is decided on the first window, as a single call would be.
+    prepaid: HashMap<String, i64>,
 }
 
 /// A `count(*)` of one collection, and the point in the load it was taken at.
@@ -1601,6 +1607,7 @@ impl PgVectorAdapter {
         b.deferred.remove(coll);
         b.written.remove(coll);
         b.live_rows.remove(coll);
+        b.prepaid.remove(coll);
     }
 
     /// Forget `coll`'s deferred build, now that its index is back.
@@ -1627,6 +1634,7 @@ impl PgVectorAdapter {
             return Vec::new();
         }
         b.live_rows.clear();
+        b.prepaid.clear();
         let mut out: Vec<String> = b.written.drain().map(|(k, _)| k).collect();
         out.sort();
         out
@@ -1772,8 +1780,21 @@ impl PgVectorAdapter {
         if b.deferred.contains_key(coll) {
             return Some(BulkDefer::No);
         }
+        // Points an announcement already counted are not counted again.
+        let incoming = incoming.max(0);
+        let covered = match b.prepaid.get_mut(coll) {
+            Some(credit) => {
+                let covered = incoming.min(*credit);
+                *credit -= covered;
+                covered
+            }
+            None => 0,
+        };
+        if b.prepaid.get(coll) == Some(&0) {
+            b.prepaid.remove(coll);
+        }
         let w = b.written.entry(coll.to_string()).or_insert(0);
-        *w = w.saturating_add(incoming);
+        *w = w.saturating_add(incoming - covered);
         let written = *w;
         // No count yet in this load: there is nothing to bracket from.
         let Some(&LiveRows { rows, counted_at }) = b.live_rows.get(coll) else {
@@ -1822,17 +1843,21 @@ impl PgVectorAdapter {
             return Ok(Some(BulkDefer::No));
         }
         let written = b.written.get(coll).copied().unwrap_or(0);
+        let unwritten_announced = b.prepaid.get(coll).copied().unwrap_or(0);
         // The count ran before the deciding batch was written, so it describes
-        // the collection as of `written - incoming`. Remembering it against
-        // `written` instead would make the upper bound a batch short, and a
-        // later, smaller batch could then be told to defer before the rule
-        // says so. Deciding *now* still uses `written`, because `rows` is the
-        // exact live count at this instant, not a bound.
+        // the collection as of `written - incoming` — less any announced points
+        // that `written` already includes but no batch has handed over yet.
+        // Remembering it against `written` instead would make the upper bound a
+        // batch short, and a later, smaller batch could then be told to defer
+        // before the rule says so. Deciding *now* still uses `written`, because
+        // `rows` is the exact live count at this instant, not a bound.
         b.live_rows.insert(
             coll.to_string(),
             LiveRows {
                 rows,
-                counted_at: written.saturating_sub(incoming.max(0)),
+                counted_at: written
+                    .saturating_sub(incoming.max(0))
+                    .saturating_sub(unwritten_announced),
             },
         );
         let reached = bulk_defer_reached(written, rows, written);
@@ -3192,6 +3217,32 @@ impl VectorDB for PgVectorAdapter {
     /// affected collections answer by exact scan, which is correct — that is
     /// the same state an interrupted load leaves, and it is pinned by
     /// `an_interrupted_bulk_load_leaves_correct_rows_that_the_backfill_reindexes`.
+    /// Counts `points` into the collection's `written` total for this load up
+    /// front, as a prepaid credit the following batches draw down, so the
+    /// first window of a split write meets the [`BULK_DEFER_RATIO`] decision
+    /// with the whole write counted — as one `index_points` call of `points`
+    /// points would.
+    #[allow(clippy::expect_used, reason = "lock poison is unrecoverable")]
+    async fn announce_bulk_write(
+        &self,
+        data_type: &str,
+        field_name: &str,
+        points: usize,
+    ) -> VectorDBResult<()> {
+        let coll = Self::collection_name(data_type, field_name)?;
+        let points = i64::try_from(points).unwrap_or(i64::MAX);
+        // lock poison is unrecoverable
+        let mut b = self.bulk.lock().expect("bulk-load state lock");
+        if b.depth == 0 || points == 0 || b.deferred.contains_key(&coll) {
+            return Ok(());
+        }
+        let w = b.written.entry(coll.clone()).or_insert(0);
+        *w = w.saturating_add(points);
+        let credit = b.prepaid.entry(coll).or_insert(0);
+        *credit = credit.saturating_add(points);
+        Ok(())
+    }
+
     #[allow(clippy::expect_used, reason = "lock poison is unrecoverable")]
     fn abandon_bulk_load(&self) {
         // lock poison is unrecoverable

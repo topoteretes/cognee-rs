@@ -5226,7 +5226,30 @@ async fn reuse_or_embed(
         .collect()
 }
 
+/// Target size of the vectors in one [`index_data_points`] window; see
+/// [`index_window_points`].
+const INDEX_WINDOW_BYTES: usize = 16 * 1024 * 1024;
+
+/// Points per window when [`index_data_points`] embeds and writes a
+/// collection, sized so a window's vectors stay near [`INDEX_WINDOW_BYTES`]
+/// whatever the dimension.
+///
+/// Each collection used to be embedded, turned into points and written in one
+/// piece, so the vectors and metadata of the whole collection were live at
+/// once — a copy that grew with the corpus (SDK-507). A window bounds it.
+fn index_window_points(dimension: usize) -> usize {
+    (INDEX_WINDOW_BYTES / (dimension.max(1) * std::mem::size_of::<f32>())).max(1)
+}
+
 /// Index data points in vector database.
+///
+/// Every collection is written in windows of [`index_window_points`] inside a
+/// bulk-load scope of its own, each preceded by
+/// [`VectorDB::announce_bulk_write`] with the collection's total, so a backend
+/// that tunes its index maintenance to the size of a write (pgvector) decides
+/// as it did for the single call per collection this replaces. The scope
+/// nests inside the one `cognify` holds, and stands in for it when the task
+/// runs in a pipeline of the caller's own.
 #[allow(clippy::too_many_arguments)]
 async fn index_data_points(
     chunks: &[DocumentChunk],
@@ -5243,8 +5266,79 @@ async fn index_data_points(
     config: &CognifyConfig,
     precomputed_embeddings: &[Embedding],
 ) -> Result<IndexedFieldsStats, CognifyError> {
+    let window = index_window_points(engine.dimension());
+    // Same handling as `cognify`'s own scope: a store that rejects the hint
+    // is written without it, and the scope is finished on success and failure
+    // alike — a guard dropped on an error would leave the deferred work
+    // queued instead of run.
+    let bulk = match BulkLoadGuard::begin(vector_db.as_ref()).await {
+        Ok(guard) => Some(guard),
+        Err(e) => {
+            warn!(error = %e, "index_data_points: vector store rejected the bulk-load scope");
+            None
+        }
+    };
+    let indexed = index_data_points_windowed(
+        chunks,
+        entities,
+        summaries,
+        documents,
+        edges,
+        edge_types,
+        dataset_id,
+        user_id,
+        tenant_id,
+        engine,
+        Arc::clone(&vector_db),
+        config,
+        precomputed_embeddings,
+        window,
+    )
+    .await;
+    if let Some(bulk) = bulk
+        && let Err(e) = bulk.finish().await
+    {
+        warn!(error = %e, "index_data_points: vector store failed to finish its bulk load");
+    }
+    indexed
+}
+
+/// Announce `points` points to `data_type`/`field_name`, the total the
+/// windows that follow add up to (see [`index_data_points`]).
+async fn announce_index_write(
+    vector_db: &Arc<dyn VectorDB>,
+    data_type: &str,
+    field_name: &str,
+    points: usize,
+) -> Result<(), CognifyError> {
+    vector_db
+        .announce_bulk_write(data_type, field_name, points)
+        .await
+        .map_err(|e| CognifyError::VectorDBError(e.to_string()))
+}
+
+/// [`index_data_points`] with an explicit window size, so tests can drive a
+/// multi-window write over a handful of points.
+#[allow(clippy::too_many_arguments)]
+async fn index_data_points_windowed(
+    chunks: &[DocumentChunk],
+    entities: &[GraphNodePair],
+    summaries: &[TextSummary],
+    documents: &[Document],
+    edges: &[GraphEdgePair],
+    edge_types: &[EdgeType],
+    dataset_id: Uuid,
+    user_id: Option<Uuid>,
+    tenant_id: Option<Uuid>,
+    engine: Arc<dyn EmbeddingEngine>,
+    vector_db: Arc<dyn VectorDB>,
+    config: &CognifyConfig,
+    precomputed_embeddings: &[Embedding],
+    window: usize,
+) -> Result<IndexedFieldsStats, CognifyError> {
     let mut stats = IndexedFieldsStats::default();
     let dimension = engine.dimension();
+    let window = window.max(1);
 
     // Vectors already produced by `generate_embeddings`, keyed by data point id,
     // so the chunk/entity/summary collections below reuse them rather than
@@ -5271,47 +5365,50 @@ async fn index_data_points(
                 .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
         }
 
-        let ids: Vec<Uuid> = chunks.iter().map(|c| c.base.id).collect();
-        let texts: Vec<_> = chunks.iter().map(|c| c.text.as_str()).collect();
-        let vectors = reuse_or_embed(&engine, &precomputed, &ids, &texts).await?;
+        announce_index_write(&vector_db, "DocumentChunk", "text", chunks.len()).await?;
+        for chunk_window in chunks.chunks(window) {
+            let ids: Vec<Uuid> = chunk_window.iter().map(|c| c.base.id).collect();
+            let texts: Vec<_> = chunk_window.iter().map(|c| c.text.as_str()).collect();
+            let vectors = reuse_or_embed(&engine, &precomputed, &ids, &texts).await?;
 
-        let points: Vec<VectorPoint> = chunks
-            .iter()
-            .zip(vectors)
-            .map(|(chunk, vector)| {
-                let mut point = VectorPoint::new(chunk.base.id, vector);
+            let points: Vec<VectorPoint> = chunk_window
+                .iter()
+                .zip(vectors)
+                .map(|(chunk, vector)| {
+                    let mut point = VectorPoint::new(chunk.base.id, vector);
 
-                // 1. Full DataPoint dump (Python parity — see gap-05/08).
-                //    Provides `type`, `belongs_to_set`, all source_* keys, etc.
-                for (k, v) in chunk.base.vector_metadata() {
-                    point = point.with_metadata(k, v);
-                }
+                    // 1. Full DataPoint dump (Python parity — see gap-05/08).
+                    //    Provides `type`, `belongs_to_set`, all source_* keys, etc.
+                    for (k, v) in chunk.base.vector_metadata() {
+                        point = point.with_metadata(k, v);
+                    }
 
-                // 2. Context-specific keys not present on the DataPoint.
-                point = point
-                    .with_metadata("field", json!("text"))
-                    // `json!(expr)` routes a non-literal through `to_value`,
-                    // which serialises the clone into a *second* String before
-                    // dropping the first. Constructing the node directly moves
-                    // the one copy we have to make (SDK-507).
-                    .with_metadata("text", serde_json::Value::String(chunk.text.clone()))
-                    .with_metadata("dataset_id", json!(dataset_id.to_string()))
-                    .with_metadata("document_id", json!(chunk.document_id.to_string()))
-                    .with_metadata("chunk_index", json!(chunk.chunk_index));
-                if let Some(uid) = user_id {
-                    point = point.with_metadata("user_id", json!(uid.to_string()));
-                }
-                if let Some(tid) = tenant_id {
-                    point = point.with_metadata("tenant_id", json!(tid.to_string()));
-                }
-                point
-            })
-            .collect();
+                    // 2. Context-specific keys not present on the DataPoint.
+                    point = point
+                        .with_metadata("field", json!("text"))
+                        // `json!(expr)` routes a non-literal through `to_value`,
+                        // which serialises the clone into a *second* String before
+                        // dropping the first. Constructing the node directly moves
+                        // the one copy we have to make (SDK-507).
+                        .with_metadata("text", serde_json::Value::String(chunk.text.clone()))
+                        .with_metadata("dataset_id", json!(dataset_id.to_string()))
+                        .with_metadata("document_id", json!(chunk.document_id.to_string()))
+                        .with_metadata("chunk_index", json!(chunk.chunk_index));
+                    if let Some(uid) = user_id {
+                        point = point.with_metadata("user_id", json!(uid.to_string()));
+                    }
+                    if let Some(tid) = tenant_id {
+                        point = point.with_metadata("tenant_id", json!(tid.to_string()));
+                    }
+                    point
+                })
+                .collect();
 
-        vector_db
-            .index_points("DocumentChunk", "text", &points)
-            .await
-            .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
+            vector_db
+                .index_points("DocumentChunk", "text", &points)
+                .await
+                .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
+        }
 
         stats.record("DocumentChunk", "text", chunks.len());
         info!("Indexed {} document chunks", chunks.len());
@@ -5330,61 +5427,67 @@ async fn index_data_points(
                 .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
         }
 
-        let ids: Vec<Uuid> = entities.iter().map(|e| e.entity.base.id).collect();
-        let names: Vec<_> = entities.iter().map(|e| e.entity.name.as_str()).collect();
-        let vectors = reuse_or_embed(&engine, &precomputed, &ids, &names).await?;
+        announce_index_write(&vector_db, "Entity", "name", entities.len()).await?;
+        for entity_window in entities.chunks(window) {
+            let ids: Vec<Uuid> = entity_window.iter().map(|e| e.entity.base.id).collect();
+            let names: Vec<_> = entity_window
+                .iter()
+                .map(|e| e.entity.name.as_str())
+                .collect();
+            let vectors = reuse_or_embed(&engine, &precomputed, &ids, &names).await?;
 
-        let points: Vec<VectorPoint> = entities
-            .iter()
-            .zip(vectors)
-            .map(|(entity, vector)| {
-                let mut point = VectorPoint::new(entity.entity.base.id, vector);
+            let points: Vec<VectorPoint> = entity_window
+                .iter()
+                .zip(vectors)
+                .map(|(entity, vector)| {
+                    let mut point = VectorPoint::new(entity.entity.base.id, vector);
 
-                // 1. Full DataPoint dump (Python parity — see gap-05/08).
-                for (k, v) in entity.entity.base.vector_metadata() {
-                    point = point.with_metadata(k, v);
-                }
+                    // 1. Full DataPoint dump (Python parity — see gap-05/08).
+                    for (k, v) in entity.entity.base.vector_metadata() {
+                        point = point.with_metadata(k, v);
+                    }
 
-                // 2. Context-specific keys not present on the DataPoint.
-                //    `text` is the indexed value, as Python's `IndexSchema`
-                //    writes it for every collection (`text=getattr(dp,
-                //    index_field)`). `name` lives on the outer `Entity`, not
-                //    the base, so step 1 never carries it; without `text` the
-                //    hybrid retriever has nothing to call the entity but its id.
-                point = point
-                    .with_metadata("field", json!("name"))
-                    .with_metadata(
-                        "text",
-                        serde_json::Value::String(entity.entity.name.clone()),
-                    )
-                    .with_metadata("dataset_id", json!(dataset_id.to_string()))
-                    .with_metadata("entity_type", json!(entity.entity_type.name.clone()));
-                // `description` diverges from Python, whose `IndexSchema` row
-                // carries only `text`. The hybrid retriever renders it as the
-                // line under `### {name}` — a slot the prompt template keeps
-                // but neither SDK filled, so an entity's description reached
-                // the prompt only as repeated per-chunk "Document chunk
-                // mentions …" bullets (Python) or not at all (Rust). Skipped
-                // when it merely repeats the name, as an ontology
-                // individual's does.
-                let description = entity.entity.description.trim();
-                if !description.is_empty() && description != entity.entity.name.trim() {
-                    point = point.with_metadata("description", json!(description));
-                }
-                if let Some(uid) = user_id {
-                    point = point.with_metadata("user_id", json!(uid.to_string()));
-                }
-                if let Some(tid) = tenant_id {
-                    point = point.with_metadata("tenant_id", json!(tid.to_string()));
-                }
-                point
-            })
-            .collect();
+                    // 2. Context-specific keys not present on the DataPoint.
+                    //    `text` is the indexed value, as Python's `IndexSchema`
+                    //    writes it for every collection (`text=getattr(dp,
+                    //    index_field)`). `name` lives on the outer `Entity`, not
+                    //    the base, so step 1 never carries it; without `text` the
+                    //    hybrid retriever has nothing to call the entity but its id.
+                    point = point
+                        .with_metadata("field", json!("name"))
+                        .with_metadata(
+                            "text",
+                            serde_json::Value::String(entity.entity.name.clone()),
+                        )
+                        .with_metadata("dataset_id", json!(dataset_id.to_string()))
+                        .with_metadata("entity_type", json!(entity.entity_type.name.clone()));
+                    // `description` diverges from Python, whose `IndexSchema` row
+                    // carries only `text`. The hybrid retriever renders it as the
+                    // line under `### {name}` — a slot the prompt template keeps
+                    // but neither SDK filled, so an entity's description reached
+                    // the prompt only as repeated per-chunk "Document chunk
+                    // mentions …" bullets (Python) or not at all (Rust). Skipped
+                    // when it merely repeats the name, as an ontology
+                    // individual's does.
+                    let description = entity.entity.description.trim();
+                    if !description.is_empty() && description != entity.entity.name.trim() {
+                        point = point.with_metadata("description", json!(description));
+                    }
+                    if let Some(uid) = user_id {
+                        point = point.with_metadata("user_id", json!(uid.to_string()));
+                    }
+                    if let Some(tid) = tenant_id {
+                        point = point.with_metadata("tenant_id", json!(tid.to_string()));
+                    }
+                    point
+                })
+                .collect();
 
-        vector_db
-            .index_points("Entity", "name", &points)
-            .await
-            .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
+            vector_db
+                .index_points("Entity", "name", &points)
+                .await
+                .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
+        }
 
         stats.record("Entity", "name", entities.len());
         info!("Indexed {} entity names", entities.len());
@@ -5411,46 +5514,47 @@ async fn index_data_points(
                     .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
             }
 
-            let type_names: Vec<_> = unique_entity_types
-                .iter()
-                .map(|et| et.name.as_str())
-                .collect();
-            let vectors = engine
-                .embed(&type_names)
-                .await
-                .map_err(|e| CognifyError::EmbeddingError(e.to_string()))?;
+            announce_index_write(&vector_db, "EntityType", "name", unique_entity_types.len())
+                .await?;
+            for type_window in unique_entity_types.chunks(window) {
+                let type_names: Vec<_> = type_window.iter().map(|et| et.name.as_str()).collect();
+                let vectors = engine
+                    .embed(&type_names)
+                    .await
+                    .map_err(|e| CognifyError::EmbeddingError(e.to_string()))?;
 
-            let points: Vec<VectorPoint> = unique_entity_types
-                .iter()
-                .zip(vectors)
-                .map(|(et, vector)| {
-                    let mut point = VectorPoint::new(et.base.id, vector);
+                let points: Vec<VectorPoint> = type_window
+                    .iter()
+                    .zip(vectors)
+                    .map(|(et, vector)| {
+                        let mut point = VectorPoint::new(et.base.id, vector);
 
-                    // 1. Full DataPoint dump (Python parity — see gap-05/08).
-                    for (k, v) in et.base.vector_metadata() {
-                        point = point.with_metadata(k, v);
-                    }
+                        // 1. Full DataPoint dump (Python parity — see gap-05/08).
+                        for (k, v) in et.base.vector_metadata() {
+                            point = point.with_metadata(k, v);
+                        }
 
-                    // 2. Context-specific keys not present on the DataPoint.
-                    //    `text` as for `Entity` above: Python's `IndexSchema`.
-                    point = point
-                        .with_metadata("field", json!("name"))
-                        .with_metadata("text", serde_json::Value::String(et.name.clone()))
-                        .with_metadata("dataset_id", json!(dataset_id.to_string()));
-                    if let Some(uid) = user_id {
-                        point = point.with_metadata("user_id", json!(uid.to_string()));
-                    }
-                    if let Some(tid) = tenant_id {
-                        point = point.with_metadata("tenant_id", json!(tid.to_string()));
-                    }
-                    point
-                })
-                .collect();
+                        // 2. Context-specific keys not present on the DataPoint.
+                        //    `text` as for `Entity` above: Python's `IndexSchema`.
+                        point = point
+                            .with_metadata("field", json!("name"))
+                            .with_metadata("text", serde_json::Value::String(et.name.clone()))
+                            .with_metadata("dataset_id", json!(dataset_id.to_string()));
+                        if let Some(uid) = user_id {
+                            point = point.with_metadata("user_id", json!(uid.to_string()));
+                        }
+                        if let Some(tid) = tenant_id {
+                            point = point.with_metadata("tenant_id", json!(tid.to_string()));
+                        }
+                        point
+                    })
+                    .collect();
 
-            vector_db
-                .index_points("EntityType", "name", &points)
-                .await
-                .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
+                vector_db
+                    .index_points("EntityType", "name", &points)
+                    .await
+                    .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
+            }
 
             stats.record("EntityType", "name", unique_entity_types.len());
             info!("Indexed {} entity type names", unique_entity_types.len());
@@ -5470,48 +5574,51 @@ async fn index_data_points(
                 .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
         }
 
-        let ids: Vec<Uuid> = summaries.iter().map(|s| s.base.id).collect();
-        let texts: Vec<_> = summaries.iter().map(|s| s.text.as_str()).collect();
-        let vectors = reuse_or_embed(&engine, &precomputed, &ids, &texts).await?;
+        announce_index_write(&vector_db, "TextSummary", "text", summaries.len()).await?;
+        for summary_window in summaries.chunks(window) {
+            let ids: Vec<Uuid> = summary_window.iter().map(|s| s.base.id).collect();
+            let texts: Vec<_> = summary_window.iter().map(|s| s.text.as_str()).collect();
+            let vectors = reuse_or_embed(&engine, &precomputed, &ids, &texts).await?;
 
-        let points: Vec<VectorPoint> = summaries
-            .iter()
-            .zip(vectors)
-            .map(|(summary, vector)| {
-                let mut point = VectorPoint::new(summary.base.id, vector);
+            let points: Vec<VectorPoint> = summary_window
+                .iter()
+                .zip(vectors)
+                .map(|(summary, vector)| {
+                    let mut point = VectorPoint::new(summary.base.id, vector);
 
-                // 1. Full DataPoint dump (Python parity — see gap-05/08).
-                for (k, v) in summary.base.vector_metadata() {
-                    point = point.with_metadata(k, v);
-                }
+                    // 1. Full DataPoint dump (Python parity — see gap-05/08).
+                    for (k, v) in summary.base.vector_metadata() {
+                        point = point.with_metadata(k, v);
+                    }
 
-                // 2. Context-specific keys not present on the DataPoint.
-                point = point
-                    .with_metadata("field", json!("text"))
-                    // See the chunk-text note above — one copy, not two.
-                    .with_metadata("text", serde_json::Value::String(summary.text.clone()))
-                    .with_metadata("dataset_id", json!(dataset_id.to_string()));
-                if let Some(made_from) = summary.made_from {
-                    point = point.with_metadata("chunk_id", json!(made_from.to_string()));
-                }
-                if let Some(source_chunk_id) = summary.source_chunk_id {
-                    point =
-                        point.with_metadata("source_chunk_id", json!(source_chunk_id.to_string()));
-                }
-                if let Some(uid) = user_id {
-                    point = point.with_metadata("user_id", json!(uid.to_string()));
-                }
-                if let Some(tid) = tenant_id {
-                    point = point.with_metadata("tenant_id", json!(tid.to_string()));
-                }
-                point
-            })
-            .collect();
+                    // 2. Context-specific keys not present on the DataPoint.
+                    point = point
+                        .with_metadata("field", json!("text"))
+                        // See the chunk-text note above — one copy, not two.
+                        .with_metadata("text", serde_json::Value::String(summary.text.clone()))
+                        .with_metadata("dataset_id", json!(dataset_id.to_string()));
+                    if let Some(made_from) = summary.made_from {
+                        point = point.with_metadata("chunk_id", json!(made_from.to_string()));
+                    }
+                    if let Some(source_chunk_id) = summary.source_chunk_id {
+                        point = point
+                            .with_metadata("source_chunk_id", json!(source_chunk_id.to_string()));
+                    }
+                    if let Some(uid) = user_id {
+                        point = point.with_metadata("user_id", json!(uid.to_string()));
+                    }
+                    if let Some(tid) = tenant_id {
+                        point = point.with_metadata("tenant_id", json!(tid.to_string()));
+                    }
+                    point
+                })
+                .collect();
 
-        vector_db
-            .index_points("TextSummary", "text", &points)
-            .await
-            .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
+            vector_db
+                .index_points("TextSummary", "text", &points)
+                .await
+                .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
+        }
 
         stats.record("TextSummary", "text", summaries.len());
         info!("Indexed {} summaries", summaries.len());
@@ -5534,12 +5641,6 @@ async fn index_data_points(
                     .await
                     .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
             }
-
-            let triplet_texts: Vec<_> = triplets.iter().map(|t| t.text.as_str()).collect();
-            let triplet_vectors = engine
-                .embed(&triplet_texts)
-                .await
-                .map_err(|e| CognifyError::EmbeddingError(e.to_string()))?;
 
             // Index the EdgeType DataPoints so each triplet payload can
             // inherit its originating edge's provenance (`source_*`) keys per
@@ -5581,51 +5682,66 @@ async fn index_data_points(
                 })
                 .collect();
 
-            let triplet_points: Vec<VectorPoint> = triplets
-                .iter()
-                .zip(triplet_vectors)
-                .map(|(triplet, vector)| {
-                    let mut point = VectorPoint::new(triplet.id, vector)
-                        .with_metadata("type", json!("Triplet"))
-                        .with_metadata("field", json!("text"))
-                        .with_metadata("source_id", json!(triplet.source_entity_id.to_string()))
-                        .with_metadata("target_id", json!(triplet.target_entity_id.to_string()))
-                        .with_metadata("relationship", json!(triplet.relationship_name.clone()));
+            announce_index_write(&vector_db, "Triplet", "text", triplets.len()).await?;
+            for triplet_window in triplets.chunks(window) {
+                let triplet_texts: Vec<_> =
+                    triplet_window.iter().map(|t| t.text.as_str()).collect();
+                let triplet_vectors = engine
+                    .embed(&triplet_texts)
+                    .await
+                    .map_err(|e| CognifyError::EmbeddingError(e.to_string()))?;
 
-                    // Triplet special case (gap-05/08 §4.4): copy only the
-                    // five `source_*` keys from the originating EdgeType's
-                    // DataPoint, so Triplet's own flat fields are not
-                    // overwritten.
-                    let edge_type = edge_text_by_triple
-                        .get(&(
-                            triplet.source_entity_id,
-                            triplet.target_entity_id,
-                            triplet.relationship_name.as_str(),
-                        ))
-                        .filter(|text| !text.is_empty())
-                        .and_then(|text| edge_type_by_id.get(&EdgeType::deterministic_id(text)));
-                    if let Some(edge_type) = edge_type {
-                        for (k, v) in edge_type.base.vector_metadata() {
-                            if matches!(
-                                k.as_str(),
-                                "source_pipeline"
-                                    | "source_task"
-                                    | "source_user"
-                                    | "source_node_set"
-                                    | "source_content_hash"
-                            ) {
-                                point = point.with_metadata(k, v);
+                let triplet_points: Vec<VectorPoint> = triplet_window
+                    .iter()
+                    .zip(triplet_vectors)
+                    .map(|(triplet, vector)| {
+                        let mut point = VectorPoint::new(triplet.id, vector)
+                            .with_metadata("type", json!("Triplet"))
+                            .with_metadata("field", json!("text"))
+                            .with_metadata("source_id", json!(triplet.source_entity_id.to_string()))
+                            .with_metadata("target_id", json!(triplet.target_entity_id.to_string()))
+                            .with_metadata(
+                                "relationship",
+                                json!(triplet.relationship_name.clone()),
+                            );
+
+                        // Triplet special case (gap-05/08 §4.4): copy only the
+                        // five `source_*` keys from the originating EdgeType's
+                        // DataPoint, so Triplet's own flat fields are not
+                        // overwritten.
+                        let edge_type = edge_text_by_triple
+                            .get(&(
+                                triplet.source_entity_id,
+                                triplet.target_entity_id,
+                                triplet.relationship_name.as_str(),
+                            ))
+                            .filter(|text| !text.is_empty())
+                            .and_then(|text| {
+                                edge_type_by_id.get(&EdgeType::deterministic_id(text))
+                            });
+                        if let Some(edge_type) = edge_type {
+                            for (k, v) in edge_type.base.vector_metadata() {
+                                if matches!(
+                                    k.as_str(),
+                                    "source_pipeline"
+                                        | "source_task"
+                                        | "source_user"
+                                        | "source_node_set"
+                                        | "source_content_hash"
+                                ) {
+                                    point = point.with_metadata(k, v);
+                                }
                             }
                         }
-                    }
-                    point
-                })
-                .collect();
+                        point
+                    })
+                    .collect();
 
-            vector_db
-                .index_points("Triplet", "text", &triplet_points)
-                .await
-                .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
+                vector_db
+                    .index_points("Triplet", "text", &triplet_points)
+                    .await
+                    .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
+            }
 
             stats.triplet_count = triplets.len();
             info!("Indexed {} triplets", triplets.len());
@@ -5647,46 +5763,55 @@ async fn index_data_points(
                 .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
         }
 
-        let names: Vec<&str> = edge_types
-            .iter()
-            .map(|et| et.relationship_name.as_str())
-            .collect();
-        let vectors = engine
-            .embed(&names)
-            .await
-            .map_err(|e| CognifyError::EmbeddingError(e.to_string()))?;
+        announce_index_write(
+            &vector_db,
+            "EdgeType",
+            "relationship_name",
+            edge_types.len(),
+        )
+        .await?;
+        for edge_type_window in edge_types.chunks(window) {
+            let names: Vec<&str> = edge_type_window
+                .iter()
+                .map(|et| et.relationship_name.as_str())
+                .collect();
+            let vectors = engine
+                .embed(&names)
+                .await
+                .map_err(|e| CognifyError::EmbeddingError(e.to_string()))?;
 
-        let points: Vec<VectorPoint> = edge_types
-            .iter()
-            .zip(vectors)
-            .map(|(et, vector)| {
-                let mut point = VectorPoint::new(et.base.id, vector);
+            let points: Vec<VectorPoint> = edge_type_window
+                .iter()
+                .zip(vectors)
+                .map(|(et, vector)| {
+                    let mut point = VectorPoint::new(et.base.id, vector);
 
-                // 1. Full DataPoint dump (Python parity — see gap-05/08).
-                for (k, v) in et.base.vector_metadata() {
-                    point = point.with_metadata(k, v);
-                }
+                    // 1. Full DataPoint dump (Python parity — see gap-05/08).
+                    for (k, v) in et.base.vector_metadata() {
+                        point = point.with_metadata(k, v);
+                    }
 
-                // 2. Context-specific keys not present on the DataPoint.
-                point = point
-                    .with_metadata("field", json!("relationship_name"))
-                    .with_metadata("relationship_name", json!(et.relationship_name.clone()))
-                    .with_metadata("number_of_edges", json!(et.number_of_edges))
-                    .with_metadata("dataset_id", json!(dataset_id.to_string()));
-                if let Some(uid) = user_id {
-                    point = point.with_metadata("user_id", json!(uid.to_string()));
-                }
-                if let Some(tid) = tenant_id {
-                    point = point.with_metadata("tenant_id", json!(tid.to_string()));
-                }
-                point
-            })
-            .collect();
+                    // 2. Context-specific keys not present on the DataPoint.
+                    point = point
+                        .with_metadata("field", json!("relationship_name"))
+                        .with_metadata("relationship_name", json!(et.relationship_name.clone()))
+                        .with_metadata("number_of_edges", json!(et.number_of_edges))
+                        .with_metadata("dataset_id", json!(dataset_id.to_string()));
+                    if let Some(uid) = user_id {
+                        point = point.with_metadata("user_id", json!(uid.to_string()));
+                    }
+                    if let Some(tid) = tenant_id {
+                        point = point.with_metadata("tenant_id", json!(tid.to_string()));
+                    }
+                    point
+                })
+                .collect();
 
-        vector_db
-            .index_points("EdgeType", "relationship_name", &points)
-            .await
-            .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
+            vector_db
+                .index_points("EdgeType", "relationship_name", &points)
+                .await
+                .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
+        }
 
         stats.record("EdgeType", "relationship_name", edge_types.len());
         info!("Indexed {} edge types", edge_types.len());
@@ -5721,42 +5846,45 @@ async fn index_data_points(
                     .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
             }
 
-            let names: Vec<&str> = docs.iter().map(|d| d.name.as_str()).collect();
-            let vectors = engine
-                .embed(&names)
-                .await
-                .map_err(|e| CognifyError::EmbeddingError(e.to_string()))?;
+            announce_index_write(&vector_db, type_name, "name", docs.len()).await?;
+            for doc_window in docs.chunks(window) {
+                let names: Vec<&str> = doc_window.iter().map(|d| d.name.as_str()).collect();
+                let vectors = engine
+                    .embed(&names)
+                    .await
+                    .map_err(|e| CognifyError::EmbeddingError(e.to_string()))?;
 
-            let points: Vec<VectorPoint> = docs
-                .iter()
-                .zip(vectors)
-                .map(|(doc, vector)| {
-                    let mut point = VectorPoint::new(doc.base.id, vector);
+                let points: Vec<VectorPoint> = doc_window
+                    .iter()
+                    .zip(vectors)
+                    .map(|(doc, vector)| {
+                        let mut point = VectorPoint::new(doc.base.id, vector);
 
-                    // 1. Full DataPoint dump (Python parity — see gap-05/08).
-                    for (k, v) in doc.base.vector_metadata() {
-                        point = point.with_metadata(k, v);
-                    }
+                        // 1. Full DataPoint dump (Python parity — see gap-05/08).
+                        for (k, v) in doc.base.vector_metadata() {
+                            point = point.with_metadata(k, v);
+                        }
 
-                    // 2. Context-specific keys not present on the DataPoint.
-                    point = point
-                        .with_metadata("field", json!("name"))
-                        .with_metadata("name", json!(doc.name.clone()))
-                        .with_metadata("dataset_id", json!(dataset_id.to_string()));
-                    if let Some(uid) = user_id {
-                        point = point.with_metadata("user_id", json!(uid.to_string()));
-                    }
-                    if let Some(tid) = tenant_id {
-                        point = point.with_metadata("tenant_id", json!(tid.to_string()));
-                    }
-                    point
-                })
-                .collect();
+                        // 2. Context-specific keys not present on the DataPoint.
+                        point = point
+                            .with_metadata("field", json!("name"))
+                            .with_metadata("name", json!(doc.name.clone()))
+                            .with_metadata("dataset_id", json!(dataset_id.to_string()));
+                        if let Some(uid) = user_id {
+                            point = point.with_metadata("user_id", json!(uid.to_string()));
+                        }
+                        if let Some(tid) = tenant_id {
+                            point = point.with_metadata("tenant_id", json!(tid.to_string()));
+                        }
+                        point
+                    })
+                    .collect();
 
-            vector_db
-                .index_points(type_name, "name", &points)
-                .await
-                .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
+                vector_db
+                    .index_points(type_name, "name", &points)
+                    .await
+                    .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
+            }
 
             stats.record(type_name, "name", docs.len());
             info!("Indexed {} {}", docs.len(), type_name);
@@ -8482,6 +8610,278 @@ mod tests {
 
         // 5 from generate_embeddings + 1 entity-type (not precomputed) = 6.
         assert_eq!(engine.embedded_text_count(), 6);
+    }
+
+    /// Delegates to [`cognee_vector::MockVectorDB`] and logs every bulk-scope
+    /// call, announcement and `index_points` batch, in order.
+    struct RecordingVectorDb {
+        inner: cognee_vector::MockVectorDB,
+        log: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl RecordingVectorDb {
+        fn new() -> Self {
+            Self {
+                inner: cognee_vector::MockVectorDB::new(),
+                log: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+
+        fn push(&self, entry: String) {
+            self.log.lock().unwrap().push(entry); // lock poison is unrecoverable
+        }
+
+        fn log(&self) -> Vec<String> {
+            self.log.lock().unwrap().clone() // lock poison is unrecoverable
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl VectorDB for RecordingVectorDb {
+        async fn create_collection(
+            &self,
+            data_type: &str,
+            field_name: &str,
+            dimension: usize,
+        ) -> cognee_vector::VectorDBResult<()> {
+            self.inner
+                .create_collection(data_type, field_name, dimension)
+                .await
+        }
+        async fn has_collection(
+            &self,
+            data_type: &str,
+            field_name: &str,
+        ) -> cognee_vector::VectorDBResult<bool> {
+            self.inner.has_collection(data_type, field_name).await
+        }
+        async fn index_points(
+            &self,
+            data_type: &str,
+            field_name: &str,
+            points: &[VectorPoint],
+        ) -> cognee_vector::VectorDBResult<()> {
+            self.push(format!("index {data_type}_{field_name} {}", points.len()));
+            self.inner.index_points(data_type, field_name, points).await
+        }
+        async fn search_similar(
+            &self,
+            data_type: &str,
+            field_name: &str,
+            query_vector: &[f32],
+            top_k: usize,
+        ) -> cognee_vector::VectorDBResult<Vec<cognee_vector::SearchResult>> {
+            self.inner
+                .search_similar(data_type, field_name, query_vector, top_k)
+                .await
+        }
+        async fn delete_collection(
+            &self,
+            data_type: &str,
+            field_name: &str,
+        ) -> cognee_vector::VectorDBResult<()> {
+            self.inner.delete_collection(data_type, field_name).await
+        }
+        async fn retrieve(
+            &self,
+            data_type: &str,
+            field_name: &str,
+            ids: &[Uuid],
+        ) -> cognee_vector::VectorDBResult<Vec<cognee_vector::SearchResult>> {
+            self.inner.retrieve(data_type, field_name, ids).await
+        }
+        async fn collection_size(
+            &self,
+            data_type: &str,
+            field_name: &str,
+        ) -> cognee_vector::VectorDBResult<usize> {
+            self.inner.collection_size(data_type, field_name).await
+        }
+        async fn begin_bulk_load(&self) -> cognee_vector::VectorDBResult<()> {
+            self.push("begin".to_string());
+            Ok(())
+        }
+        async fn end_bulk_load(&self) -> cognee_vector::VectorDBResult<()> {
+            self.push("end".to_string());
+            Ok(())
+        }
+        fn abandon_bulk_load(&self) {
+            self.push("abandon".to_string());
+        }
+        async fn announce_bulk_write(
+            &self,
+            data_type: &str,
+            field_name: &str,
+            points: usize,
+        ) -> cognee_vector::VectorDBResult<()> {
+            self.push(format!("announce {data_type}_{field_name} {points}"));
+            Ok(())
+        }
+    }
+
+    /// Fixture for the windowing tests: 5 chunks, 3 entities over 2 entity
+    /// types, 5 summaries and 3 documents of one type.
+    fn windowing_fixture() -> (
+        Vec<DocumentChunk>,
+        Vec<GraphNodePair>,
+        Vec<TextSummary>,
+        Vec<Document>,
+    ) {
+        let doc_id = Uuid::new_v4();
+        let chunks: Vec<_> = (0..5)
+            .map(|i| test_chunk(Uuid::new_v4(), doc_id, &format!("chunk {i}")))
+            .collect();
+        let (type_a, type_b) = (Uuid::new_v4(), Uuid::new_v4());
+        let entities = vec![
+            test_entity("Alice", type_a),
+            test_entity("Bob", type_b),
+            test_entity("Carol", type_a),
+        ];
+        let summaries = chunks
+            .iter()
+            .map(|c| {
+                TextSummary::new(
+                    c.base.id,
+                    format!("summary of {}", c.text),
+                    None,
+                    "mock-model".to_string(),
+                )
+            })
+            .collect();
+        let documents = (0..3)
+            .map(|_| test_document_with_metadata(Uuid::new_v4(), None))
+            .collect();
+        (chunks, entities, summaries, documents)
+    }
+
+    /// SDK-507: a collection is embedded and written in windows, each
+    /// collection announced once with its whole size first — and what lands
+    /// in the store is exactly what one call per collection wrote.
+    #[tokio::test]
+    async fn index_data_points_writes_each_collection_in_announced_windows() {
+        use cognee_embedding::MockEmbeddingEngine;
+
+        let (chunks, entities, summaries, documents) = windowing_fixture();
+        let dataset_id = Uuid::new_v4();
+        let config = CognifyConfig::default();
+        let run = |window: usize| {
+            let (chunks, entities, summaries, documents, config) =
+                (&chunks, &entities, &summaries, &documents, &config);
+            async move {
+                let store = Arc::new(RecordingVectorDb::new());
+                let engine: Arc<dyn EmbeddingEngine> = Arc::new(MockEmbeddingEngine::new(8));
+                index_data_points_windowed(
+                    chunks,
+                    entities,
+                    summaries,
+                    documents,
+                    &[],
+                    &[],
+                    dataset_id,
+                    None,
+                    None,
+                    engine,
+                    store.clone(),
+                    config,
+                    &[],
+                    window,
+                )
+                .await
+                .unwrap();
+                store
+            }
+        };
+
+        let windowed = run(2).await;
+        let doc_type = documents[0].base.data_type.clone();
+        let doc_coll = format!("{doc_type}_name");
+        let expected: Vec<String> = [
+            ("DocumentChunk_text", vec![2, 2, 1]),
+            ("Entity_name", vec![2, 1]),
+            ("EntityType_name", vec![2]),
+            ("TextSummary_text", vec![2, 2, 1]),
+            (doc_coll.as_str(), vec![2, 1]),
+        ]
+        .into_iter()
+        .flat_map(|(coll, batches)| {
+            let total: usize = batches.iter().sum();
+            std::iter::once(format!("announce {coll} {total}")).chain(
+                batches
+                    .into_iter()
+                    .map(move |n| format!("index {coll} {n}")),
+            )
+        })
+        .collect();
+        assert_eq!(windowed.log(), expected);
+
+        // Windowing changes how the points travel, not what is stored.
+        let whole = run(usize::MAX).await;
+        let stored = [
+            (
+                "DocumentChunk",
+                "text",
+                chunks.iter().map(|c| c.base.id).collect::<Vec<_>>(),
+            ),
+            (
+                "Entity",
+                "name",
+                entities.iter().map(|e| e.entity.base.id).collect(),
+            ),
+            (
+                "TextSummary",
+                "text",
+                summaries.iter().map(|s| s.base.id).collect(),
+            ),
+            (
+                doc_type.as_str(),
+                "name",
+                documents.iter().map(|d| d.base.id).collect(),
+            ),
+        ];
+        for (data_type, field, ids) in stored {
+            for id in ids {
+                let a = windowed.inner.get_payload(data_type, field, id);
+                assert!(a.is_some(), "{data_type}_{field} {id} was not written");
+                assert_eq!(a, whole.inner.get_payload(data_type, field, id));
+            }
+        }
+    }
+
+    /// The window loop runs inside a bulk-load scope of `index_data_points`'
+    /// own, finished rather than abandoned, so a task run outside `cognify`'s
+    /// scope still gets the size-based index decision the announcements feed.
+    #[tokio::test]
+    async fn index_data_points_holds_one_scope_around_every_write() {
+        use cognee_embedding::MockEmbeddingEngine;
+
+        let (chunks, entities, summaries, documents) = windowing_fixture();
+        let store = Arc::new(RecordingVectorDb::new());
+        index_data_points(
+            &chunks,
+            &entities,
+            &summaries,
+            &documents,
+            &[],
+            &[],
+            Uuid::new_v4(),
+            None,
+            None,
+            Arc::new(MockEmbeddingEngine::new(8)),
+            store.clone(),
+            &CognifyConfig::default(),
+            &[],
+        )
+        .await
+        .unwrap();
+
+        let log = store.log();
+        assert_eq!(log.first().map(String::as_str), Some("begin"));
+        assert_eq!(log.last().map(String::as_str), Some("end"));
+        assert_eq!(
+            log.iter().filter(|e| *e == "begin" || *e == "end").count(),
+            2
+        );
+        assert!(!log.contains(&"abandon".to_string()));
     }
 
     // The TextSummary vector payload must carry both `chunk_id` (back-compat)
