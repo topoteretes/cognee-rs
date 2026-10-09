@@ -217,20 +217,72 @@ const HNSW_BUILD_WORKERS: u32 = 4;
 /// more than staying live; an empty or small collection defers at once.
 const BULK_DEFER_RATIO: f64 = 0.25;
 
-/// Whether a collection that held `base_rows` rows when this bulk load started,
-/// and has been handed `written` points since, has reached
-/// [`BULK_DEFER_RATIO`] of its (current) rows and should stop maintaining its
-/// index for the rest of the load.
+/// The answer [`bulk_defer_reached`] gives, which is three-valued because the
+/// collection's live row count is not re-read on every batch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BulkDefer {
+    /// Keep maintaining the index: below [`BULK_DEFER_RATIO`] whatever the
+    /// collection's exact size is.
+    No,
+    /// Stop maintaining it: at or above [`BULK_DEFER_RATIO`] whatever the
+    /// collection's exact size is.
+    Yes,
+    /// Between the two: the cached count is too old to decide, so the caller
+    /// has to issue one `count(*)` and ask again.
+    Recount,
+}
+
+/// Whether a collection this bulk load has handed `written` points should stop
+/// maintaining its HNSW index, given that a `count(*)` returned `live_rows`
+/// back when the load had written `counted_at` points to it.
 ///
-/// The current size is `base_rows + written` rather than a fresh `count(*)`;
-/// see [`PgVectorAdapter::bulk_should_defer`] for why that is both cheaper and
-/// equivalent. An empty collection (`base_rows == 0`) defers on its first
+/// The rule being decided is the one the per-batch `count(*)` implemented:
+/// defer once `written >= BULK_DEFER_RATIO x (the collection's live rows
+/// *now*)`. Live rows now is not known, but it is bracketed. Nothing but this
+/// load writes to the collection, so it has gained at most the
+/// `written - counted_at` points handed over since the count, and — absent a
+/// delete, which [`PgVectorAdapter::delete_points`] invalidates the count for —
+/// it has lost none:
+///
+/// ```text
+/// live_rows  <=  live rows now  <=  live_rows + (written - counted_at)
+/// ```
+///
+/// So the threshold against the upper bound is reached => it is reached
+/// against the true count ([`BulkDefer::Yes`]); the threshold against the
+/// lower bound is not reached => it is not reached against the true count
+/// ([`BulkDefer::No`]). Only between those is a fresh count needed, and a
+/// fresh count collapses the bracket (`counted_at == written`), so asking
+/// again after one always answers `Yes` or `No`.
+///
+/// The band that needs a count is `[0.25 x base, base / 3)` wide in `written`,
+/// entered at most once per load per collection and left for good at
+/// `base / 3` — which is why this costs a handful of counts over a load rather
+/// than one per batch. An all-new (append) load walks that band and ends up
+/// deferring at `base / 3`; an all-overwrite load defers at `0.25 x base`,
+/// because its live count never grows. Estimating the size as
+/// `base + written` instead collapses both to `base / 3` and pushes an extra
+/// `base / 12` rows of an overwriting load through a live index.
+///
+/// An empty collection (`live_rows == 0`, freshly counted) defers on its first
 /// batch, which is the intended behaviour — there is no index work worth
 /// maintaining.
-fn bulk_defer_reached(written: i64, base_rows: i64) -> bool {
+fn bulk_defer_reached(written: i64, live_rows: i64, counted_at: i64) -> BulkDefer {
     let written = written.max(0);
-    let current = base_rows.max(0).saturating_add(written);
-    written > 0 && (written as f64) >= BULK_DEFER_RATIO * current as f64
+    if written == 0 {
+        // Nothing written is not a load at all.
+        return BulkDefer::No;
+    }
+    let low = live_rows.max(0);
+    let since = written.saturating_sub(counted_at.max(0)).max(0);
+    let high = low.saturating_add(since);
+    if (written as f64) >= BULK_DEFER_RATIO * high as f64 {
+        return BulkDefer::Yes;
+    }
+    if (written as f64) < BULK_DEFER_RATIO * low as f64 {
+        return BulkDefer::No;
+    }
+    BulkDefer::Recount
 }
 
 /// `max_parallel_maintenance_workers` for the end-of-load build (the server
@@ -689,42 +741,167 @@ mod index_name_tests {
 
 /// Cases for the bulk-load deferral threshold.
 ///
-/// No feature and no database: the decision became a pure function the moment
-/// the collection's size stopped being re-counted per batch, and keeping it
-/// equivalent to the per-batch `count(*)` is the whole point of the change.
+/// No feature and no database: the decision is a pure function of the points
+/// written so far and the last `count(*)` of the collection, and the whole
+/// point of the change is that it answers what a per-batch `count(*)` would
+/// have answered.
 #[cfg(test)]
 mod bulk_defer_tests {
-    use super::bulk_defer_reached;
+    use super::{BulkDefer, bulk_defer_reached};
 
-    /// The threshold has to be what the per-batch `count(*)` produced. That
-    /// count was `base + new rows so far`, so `w >= 0.25 (base + w)`, i.e.
-    /// `w >= base / 3` — and an empty collection defers on its first batch.
+    /// With a count taken *now* (`counted_at == written`) the bracket is a
+    /// point, so the answer is the per-batch `count(*)` rule verbatim:
+    /// `written >= 0.25 x live rows`. `Recount` is unreachable here.
     #[test]
-    fn the_threshold_matches_the_per_batch_count_it_replaced() {
-        assert!(
-            bulk_defer_reached(1, 0),
-            "an empty collection has no index work worth maintaining"
-        );
-        assert!(
-            !bulk_defer_reached(0, 0),
-            "but nothing written is not a load at all"
-        );
-        assert!(!bulk_defer_reached(0, 300_000));
+    fn a_fresh_count_reproduces_the_per_batch_rule() {
+        // An empty collection has no index work worth maintaining.
+        assert_eq!(bulk_defer_reached(1, 0, 1), BulkDefer::Yes);
+        // But nothing written is not a load at all.
+        assert_eq!(bulk_defer_reached(0, 0, 0), BulkDefer::No);
+        assert_eq!(bulk_defer_reached(0, 300_000, 0), BulkDefer::No);
 
-        // 300k rows: a third of them, which is where 0.25 x (base + written)
-        // lands. The row below the line must not defer, the row on it must.
-        assert!(!bulk_defer_reached(99_999, 300_000));
-        assert!(bulk_defer_reached(100_000, 300_000));
+        // 300k live rows: a quarter of them is the line. The batch below it
+        // must not defer, the one on it must.
+        assert_eq!(bulk_defer_reached(74_999, 300_000, 74_999), BulkDefer::No);
+        assert_eq!(bulk_defer_reached(75_000, 300_000, 75_000), BulkDefer::Yes);
 
-        // The incremental re-cognify this change is for: small batches into a
-        // large collection stay under the line, which is correct — the point
-        // is that they no longer pay a scan-sized count to find that out.
-        assert!(!bulk_defer_reached(500, 300_000));
-        assert!(!bulk_defer_reached(50_000, 300_000));
+        // The incremental re-cognify the cached count exists for: small
+        // batches into a large collection stay under the line.
+        assert_eq!(bulk_defer_reached(500, 300_000, 500), BulkDefer::No);
 
         // Negative or absurd inputs must not panic or wrap.
-        assert!(!bulk_defer_reached(-1, 300_000));
-        assert!(bulk_defer_reached(i64::MAX, i64::MAX));
+        assert_eq!(bulk_defer_reached(-1, 300_000, 0), BulkDefer::No);
+        assert_eq!(
+            bulk_defer_reached(i64::MAX, i64::MAX, i64::MAX),
+            BulkDefer::Yes
+        );
+        assert_eq!(bulk_defer_reached(10, 300_000, -5), BulkDefer::No);
+    }
+
+    /// A stale count brackets the live size rather than guessing it: below
+    /// `0.25 x` the lower bound is `No`, at or above `0.25 x` the upper bound
+    /// is `Yes`, and the band between them is the only place a count is
+    /// issued. The band is bounded — it starts at `0.25 x base` and ends at
+    /// `base / 3` — so a load pays a handful of counts, not one per batch.
+    #[test]
+    fn a_stale_count_only_forces_a_recount_inside_the_band() {
+        // Counted 300_000 at the start of the load (counted_at = 0).
+        assert_eq!(bulk_defer_reached(1, 300_000, 0), BulkDefer::No);
+        assert_eq!(bulk_defer_reached(74_999, 300_000, 0), BulkDefer::No);
+        // 0.25 x 300_000 <= written < 300_000 / 3: cannot be decided from a
+        // count this old, because it depends on how many of those writes were
+        // new rows.
+        assert_eq!(bulk_defer_reached(75_000, 300_000, 0), BulkDefer::Recount);
+        assert_eq!(bulk_defer_reached(99_999, 300_000, 0), BulkDefer::Recount);
+        // At base / 3 even a collection that grew by every point written is
+        // over the line, so no count can change the answer.
+        assert_eq!(bulk_defer_reached(100_000, 300_000, 0), BulkDefer::Yes);
+    }
+
+    /// The regression this threshold was changed back for: an append load and
+    /// an overwrite load over the same starting collection must not defer at
+    /// the same point, because their live row counts diverge.
+    ///
+    /// Estimating the size as `base + written` made both defer at `base / 3`.
+    /// For the overwrite load that is `base / 12` rows too late — 22k rows of
+    /// a 261k collection pushed through a live HNSW index at ~1.2 ms each.
+    #[test]
+    fn an_append_load_and_an_overwrite_load_defer_at_different_points() {
+        const BASE: i64 = 300_000;
+
+        // Append: every point written is a new row, so a count taken at
+        // `written` returns `BASE + written`...
+        let append = |written: i64| bulk_defer_reached(written, BASE + written, written);
+        assert_eq!(append(99_999), BulkDefer::No);
+        assert_eq!(append(100_000), BulkDefer::Yes); // base / 3
+
+        // ...while an overwrite load's count stays at BASE throughout.
+        let overwrite = |written: i64| bulk_defer_reached(written, BASE, written);
+        assert_eq!(overwrite(74_999), BulkDefer::No);
+        assert_eq!(overwrite(75_000), BulkDefer::Yes); // 0.25 x base
+        // Which is where the append load is still maintaining its index.
+        assert_eq!(append(75_000), BulkDefer::No);
+    }
+
+    /// The bracket has to converge: following the `Recount` answers the way
+    /// [`super::PgVectorAdapter::upsert_points`] does must reach a decision,
+    /// and must reach it after a number of counts that does not scale with the
+    /// number of batches. An append load is the worst case — it is the one
+    /// whose live count keeps moving.
+    /// The count runs *before* the deciding batch reaches the table, so it is
+    /// remembered against `written - incoming`. Recording it against `written`
+    /// instead leaves the upper bound one batch short, and a later, smaller
+    /// batch is then told to defer before the per-batch `count(*)` rule says
+    /// so — the arithmetic below is that case.
+    #[test]
+    fn a_count_remembered_a_batch_behind_does_not_defer_a_smaller_batch_early() {
+        const BASE: i64 = 300_000;
+
+        // Batch 1, 70k all-new points: counted before it lands, so the count
+        // is BASE and belongs to `written - 70_000 == 0`.
+        assert_eq!(bulk_defer_reached(70_000, BASE, 70_000), BulkDefer::No);
+
+        // Batch 2, 10k points. The collection is now BASE + 70_000, so the
+        // rule needs 0.25 x 370_000 = 92_500 and 80_000 must not defer.
+        assert_eq!(
+            bulk_defer_reached(80_000, BASE, 0),
+            BulkDefer::Recount,
+            "the bracket spans the threshold, so it must ask rather than guess"
+        );
+        assert_eq!(
+            bulk_defer_reached(80_000, BASE + 70_000, 80_000),
+            BulkDefer::No,
+            "and the fresh count agrees with the per-batch rule"
+        );
+
+        // Remembered against `written`, the upper bound would be 310_000 and
+        // 80_000 >= 77_500 would have deferred 12_500 points early.
+        assert_eq!(bulk_defer_reached(80_000, BASE, 70_000), BulkDefer::Yes);
+    }
+
+    #[test]
+    fn following_the_recounts_of_an_append_load_terminates_quickly() {
+        const BASE: i64 = 300_000;
+        // Last count: `rows` taken when the load had written `at` points.
+        let (mut rows, mut at) = (BASE, 0_i64);
+        let mut counts = 0;
+        let mut written = 0_i64;
+        // One batch per 1_000 points, as a cognify run writes them.
+        loop {
+            written += 1_000;
+            assert!(written <= BASE, "must defer long before rewriting the base");
+            match bulk_defer_reached(written, rows, at) {
+                BulkDefer::Yes => break,
+                BulkDefer::No => continue,
+                BulkDefer::Recount => {
+                    counts += 1;
+                    // The count runs before this batch is written, so it sees
+                    // BASE + the batches before it, and is remembered against
+                    // that total — one batch behind `written`.
+                    rows = BASE + written - 1_000;
+                    at = written - 1_000;
+                    // Deciding now uses the exact live count, not the bound.
+                    assert_eq!(
+                        bulk_defer_reached(written, rows, written),
+                        if written >= BASE / 3 {
+                            BulkDefer::Yes
+                        } else {
+                            BulkDefer::No
+                        },
+                        "a fresh count must always decide"
+                    );
+                    if written >= BASE / 3 {
+                        break;
+                    }
+                }
+            }
+        }
+        assert_eq!(written, 100_000, "an append load defers at base / 3");
+        assert!(
+            (1..=8).contains(&counts),
+            "the bracket must converge in a handful of counts, not one per \
+             batch (300 batches here); got {counts}"
+        );
     }
 }
 
@@ -1195,17 +1372,29 @@ struct BulkLoad {
     written: HashMap<String, i64>,
     /// Collection -> vector dimension of the index to build at scope end.
     deferred: HashMap<String, usize>,
-    /// Collection -> its row count when this bulk load first wrote to it.
+    /// Collection -> the last `count(*)` of it taken in this bulk load.
     ///
-    /// The deferral decision needs the collection's size, and reading it per
-    /// batch is a `count(*)` per batch: an incremental re-cognify into a large
-    /// collection in small batches never reaches `BULK_DEFER_RATIO x total`, so
-    /// it pays a scan-sized count for every batch and never even gets the
-    /// deferral — the exact opposite of the intent, in the scenario the scope
-    /// exists for. One count per collection per load is enough, because the
-    /// rows added since are what `written` already tracks (see
-    /// [`PgVectorAdapter::bulk_should_defer`]).
-    base_rows: HashMap<String, i64>,
+    /// The deferral decision needs the collection's live size, and reading it
+    /// per batch is a `count(*)` per batch: an incremental re-cognify into a
+    /// large collection in small batches never reaches
+    /// `BULK_DEFER_RATIO x total`, so it pays a scan-sized count for every
+    /// batch and never even gets the deferral — the exact opposite of the
+    /// intent, in the scenario the scope exists for. A remembered count plus
+    /// `written` brackets the live size tightly enough to answer most batches
+    /// without reading anything; see [`bulk_defer_reached`].
+    live_rows: HashMap<String, LiveRows>,
+}
+
+/// A `count(*)` of one collection, and the point in the load it was taken at.
+#[derive(Debug, Clone, Copy)]
+struct LiveRows {
+    /// What the count returned.
+    rows: i64,
+    /// [`BulkLoad::written`] for the batches that were already *in the
+    /// table* when the count ran — the deciding batch is counted into
+    /// `written` before it is written, so this is one batch behind it. The
+    /// rows the collection may have gained since are `written - counted_at`.
+    counted_at: i64,
 }
 
 impl PgVectorAdapter {
@@ -1397,19 +1586,19 @@ impl PgVectorAdapter {
     ///
     /// [`VectorDB::delete_collection`] used to evict only the `known` cache, so
     /// a dataset deleted while a cognify run held a scope open left the
-    /// collection in `deferred` / `written` / `base_rows` and poisoned the end
+    /// collection in `deferred` / `written` / `live_rows` and poisoned the end
     /// of that scope: `build_deferred` failed on the missing relation, and the
     /// `ANALYZE` pass failed on it too. Both are reachable from one concurrent
     /// delete on the HTTP server. There is nothing to reconcile for a table
     /// that is gone — not an index to build, not statistics to collect, and the
-    /// next load must count its base rows afresh if the name comes back.
+    /// next load must count its rows afresh if the name comes back.
     #[allow(clippy::expect_used, reason = "lock poison is unrecoverable")]
     fn forget_bulk(&self, coll: &str) {
         // lock poison is unrecoverable
         let mut b = self.bulk.lock().expect("bulk-load state lock");
         b.deferred.remove(coll);
         b.written.remove(coll);
-        b.base_rows.remove(coll);
+        b.live_rows.remove(coll);
     }
 
     /// Forget `coll`'s deferred build, now that its index is back.
@@ -1426,8 +1615,8 @@ impl PgVectorAdapter {
     /// Collections written in the bulk-load scopes that just ended (all
     /// open scopes when `force`), for the end-of-load `ANALYZE`.
     ///
-    /// Also drops the cached starting row counts: they are per load, and the
-    /// next one must count again against a collection this one has grown.
+    /// Also drops the cached row counts: they are per load, and the next one
+    /// must count again against a collection this one has grown.
     #[allow(clippy::expect_used, reason = "lock poison is unrecoverable")]
     fn take_written(&self, force: bool) -> Vec<String> {
         // lock poison is unrecoverable
@@ -1435,7 +1624,7 @@ impl PgVectorAdapter {
         if !force && b.depth > 0 {
             return Vec::new();
         }
-        b.base_rows.clear();
+        b.live_rows.clear();
         let mut out: Vec<String> = b.written.drain().map(|(k, _)| k).collect();
         out.sort();
         out
@@ -1547,19 +1736,21 @@ impl PgVectorAdapter {
         first_err.map_or(Ok(()), Err)
     }
 
-    /// Inside a bulk-load scope: whether `coll` (HNSW-indexed, `base_rows`
-    /// rows when this load first touched it) should stop maintaining its index
-    /// now that `incoming` more points are being written; if so it is recorded
-    /// as deferred and the caller drops the index. `None` outside a scope.
+    /// Inside a bulk-load scope: whether `coll` (HNSW-indexed) should stop
+    /// maintaining its index now that `incoming` more points are being
+    /// written; if so it is recorded as deferred and the caller drops the
+    /// index. `None` outside a scope.
     ///
-    /// The collection's *current* size is taken as `base_rows + written`, not
-    /// re-counted: `written` is the points this load has handed it, so the sum
-    /// is exact when every point is a new row and an over-estimate when some
-    /// are overwrites — and over-estimating only defers later, which is the
-    /// safe direction (the cost is bounded by one extra index build, as the
-    /// [`BULK_DEFER_RATIO`] note explains). It reproduces what the per-batch
-    /// `count(*)` returned in the all-new case exactly: `w >= 0.25 (base + w)`,
-    /// i.e. a third of the collection's starting rows.
+    /// `incoming` is added to the running `written` count here, so this runs
+    /// **exactly once per batch** — the [`BulkDefer::Recount`] answer is
+    /// resolved by [`Self::bulk_recount`], which does not count the batch
+    /// again.
+    ///
+    /// The threshold is `written >= BULK_DEFER_RATIO x the collection's live
+    /// rows`, which is what the `count(*)` this adapter used to issue per
+    /// batch decided. The live count is not re-read per batch; it is bracketed
+    /// from the last one taken in this load, and only a `written` that falls
+    /// inside the bracket needs a fresh count — see [`bulk_defer_reached`].
     ///
     /// The collection is recorded here, *before* the caller's `DROP INDEX`
     /// runs, so there is a window in which a search believes the index is gone
@@ -1570,44 +1761,46 @@ impl PgVectorAdapter {
     /// there while it is not — is the one that changes results, and
     /// [`Self::take_deferred`] is where it is kept shut.
     #[allow(clippy::expect_used, reason = "lock poison is unrecoverable")]
-    fn bulk_should_defer(
-        &self,
-        coll: &str,
-        incoming: i64,
-        base_rows: i64,
-        dimension: usize,
-    ) -> Option<bool> {
+    fn bulk_should_defer(&self, coll: &str, incoming: i64, dimension: usize) -> Option<BulkDefer> {
         // lock poison is unrecoverable
         let mut b = self.bulk.lock().expect("bulk-load state lock");
         if b.depth == 0 {
             return None;
         }
         if b.deferred.contains_key(coll) {
-            return Some(false);
+            return Some(BulkDefer::No);
         }
         let w = b.written.entry(coll.to_string()).or_insert(0);
         *w = w.saturating_add(incoming);
         let written = *w;
-        if bulk_defer_reached(written, base_rows) {
+        // No count yet in this load: there is nothing to bracket from.
+        let Some(&LiveRows { rows, counted_at }) = b.live_rows.get(coll) else {
+            return Some(BulkDefer::Recount);
+        };
+        let reached = bulk_defer_reached(written, rows, counted_at);
+        if reached == BulkDefer::Yes {
             b.deferred.insert(coll.to_string(), dimension);
-            return Some(true);
         }
-        Some(false)
+        Some(reached)
     }
 
-    /// `coll`'s row count when this bulk load first wrote to it, counted once
-    /// and cached in the scope state ([`BulkLoad::base_rows`]).
+    /// Resolve a [`BulkDefer::Recount`]: count `coll`'s rows, remember the
+    /// count, and decide again. A fresh count collapses the bracket, so this
+    /// never answers `Recount` itself.
     ///
-    /// `None` outside a scope — the caller only asks inside one.
+    /// The count is remembered against the `written` total as it stands now.
+    /// A batch that another task is pushing concurrently may land between the
+    /// `count(*)` and the lock, which makes the remembered pair pessimistic by
+    /// that batch — it brackets the live size slightly low and so defers
+    /// slightly early. The per-batch `count(*)` this replaces raced the same
+    /// way and in the same direction.
     #[allow(clippy::expect_used, reason = "lock poison is unrecoverable")]
-    async fn bulk_base_rows(&self, coll: &str) -> VectorDBResult<i64> {
-        {
-            // lock poison is unrecoverable
-            let b = self.bulk.lock().expect("bulk-load state lock");
-            if let Some(&cached) = b.base_rows.get(coll) {
-                return Ok(cached);
-            }
-        }
+    async fn bulk_recount(
+        &self,
+        coll: &str,
+        incoming: i64,
+        dimension: usize,
+    ) -> VectorDBResult<Option<BulkDefer>> {
         let rows = self
             .db
             .query_one(Statement::from_string(
@@ -1619,13 +1812,52 @@ impl PgVectorAdapter {
             .and_then(|r| r.try_get::<i64>("", "n").ok())
             .unwrap_or(0);
         // lock poison is unrecoverable
-        self.bulk
-            .lock()
-            .expect("bulk-load state lock")
-            .base_rows
-            .entry(coll.to_string())
-            .or_insert(rows);
-        Ok(rows)
+        let mut b = self.bulk.lock().expect("bulk-load state lock");
+        if b.depth == 0 {
+            return Ok(None);
+        }
+        if b.deferred.contains_key(coll) {
+            return Ok(Some(BulkDefer::No));
+        }
+        let written = b.written.get(coll).copied().unwrap_or(0);
+        // The count ran before the deciding batch was written, so it describes
+        // the collection as of `written - incoming`. Remembering it against
+        // `written` instead would make the upper bound a batch short, and a
+        // later, smaller batch could then be told to defer before the rule
+        // says so. Deciding *now* still uses `written`, because `rows` is the
+        // exact live count at this instant, not a bound.
+        b.live_rows.insert(
+            coll.to_string(),
+            LiveRows {
+                rows,
+                counted_at: written.saturating_sub(incoming.max(0)),
+            },
+        );
+        let reached = bulk_defer_reached(written, rows, written);
+        debug_assert_ne!(
+            reached,
+            BulkDefer::Recount,
+            "a count taken at `written` leaves no band to be undecided in"
+        );
+        if reached == BulkDefer::Yes {
+            b.deferred.insert(coll.to_string(), dimension);
+        }
+        Ok(Some(reached))
+    }
+
+    /// Drop any `count(*)` this bulk load remembers for `coll`, because rows
+    /// have been deleted from it.
+    ///
+    /// [`bulk_defer_reached`]'s bracket assumes the collection only grows
+    /// inside a load. A delete breaks the lower bound, so the remembered count
+    /// stops being one.
+    #[allow(clippy::expect_used, reason = "lock poison is unrecoverable")]
+    fn forget_bulk_live_rows(&self, coll: &str) {
+        // lock poison is unrecoverable
+        let mut b = self.bulk.lock().expect("bulk-load state lock");
+        if b.depth > 0 {
+            b.live_rows.remove(coll);
+        }
     }
 
     /// Remember `coll` as written inside the open bulk-load scope, if any.
@@ -2597,18 +2829,22 @@ impl PgVectorAdapter {
         {
             let index = Self::vector_index_name(coll, self.halfvec);
             if Self::vector_index_state(&self.db, &index).await? == Some(true) {
-                // Counted once per collection per load, not per batch.
-                let base_rows = self.bulk_base_rows(coll).await?;
                 let incoming = i64::try_from(points.len()).unwrap_or(i64::MAX);
-                if self.bulk_should_defer(coll, incoming, base_rows, dimension) == Some(true) {
+                // The live row count is read at most a handful of times per
+                // collection per load, not once per batch: most batches are
+                // decided from the last count plus what has been written
+                // since, and only the band where that is ambiguous pays for a
+                // fresh `count(*)`.
+                let mut reached = self.bulk_should_defer(coll, incoming, dimension);
+                if reached == Some(BulkDefer::Recount) {
+                    reached = self.bulk_recount(coll, incoming, dimension).await?;
+                }
+                if reached == Some(BulkDefer::Yes) {
                     self.db
                         .execute_unprepared(&format!(r#"DROP INDEX IF EXISTS "{index}""#))
                         .await
                         .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
-                    debug!(
-                        "bulk load: dropped HNSW index on {coll} ({base_rows} rows at the start \
-                         of the load) until the load ends"
-                    );
+                    debug!("bulk load: dropped HNSW index on {coll} until the load ends");
                 }
                 return self
                     .write_points_concurrently(coll, points, merge_membership)
@@ -3644,6 +3880,13 @@ impl VectorDB for PgVectorAdapter {
         let coll = Self::collection_name(data_type, field_name)?;
         Span::current().record(COGNEE_VECTOR_COLLECTION, coll.as_str());
 
+        // Before the first `DELETE`, not only after the last: a chunk that
+        // fails mid-loop leaves the earlier chunks committed and returns, and
+        // a concurrent batch reads the cache in the window between the last
+        // `DELETE` committing and the call below. Either would leave a
+        // remembered count that is no longer a lower bound.
+        self.forget_bulk_live_rows(&coll);
+
         // `= ANY($1::uuid[])` per `ID_BATCH` ids rather than one bind
         // parameter per id, which failed past PostgreSQL's 65 535.
         for chunk in point_ids.chunks(ID_BATCH) {
@@ -3659,6 +3902,11 @@ impl VectorDB for PgVectorAdapter {
                     self.forget_if_missing(&coll, e);
                 })?;
         }
+
+        // A bulk load brackets this collection's live size from the last
+        // count it took and the points written since; that bracket assumes
+        // the collection only grows. See `forget_bulk_live_rows`.
+        self.forget_bulk_live_rows(&coll);
 
         Span::current().record(COGNEE_DB_ROW_COUNT, point_ids.len() as i64);
         Ok(())

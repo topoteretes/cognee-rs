@@ -449,6 +449,141 @@ async fn a_bulk_load_scope_defers_the_index_and_rebuilds_it_at_the_end() {
     .await;
 }
 
+/// A bulk load's deferral point depends on the collection's *live* rows, so an
+/// append load and an overwrite load over the same collection must part company:
+/// the appending one grows the collection it is being measured against, the
+/// overwriting one does not.
+///
+/// The rule is `written >= 0.25 x live rows`. Over a 1200-row collection that
+/// is 400 written points when every one is new (`w >= 0.25 (1200 + w)`) and 300
+/// when every one is an overwrite (`w >= 0.25 x 1200`). Estimating the live
+/// count as `base + written` instead of reading it collapses both to 400 and
+/// pushes the extra hundred rows of the overwrite load through a live HNSW
+/// index — a 35% ingest regression at 100k, which is why this is a test and not
+/// a comment.
+///
+/// It needs a server because the distinction is only visible in what
+/// `count(*)` answers; the arithmetic either side of it is pinned by
+/// `bulk_defer_tests` in the adapter.
+#[tokio::test]
+async fn an_overwrite_load_defers_earlier_than_an_append_load() {
+    with_temp_db(
+        "an_overwrite_load_defers_earlier_than_an_append_load",
+        |url| async move {
+            const BASE: u128 = 1200;
+            const INDEX: &str = "Live_f_halfvec_hnsw";
+
+            let point = |i: u128| {
+                let jitter = (i as f64) * 1e-6;
+                #[allow(clippy::cast_possible_truncation)]
+                let v = vec![1.0, jitter as f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+                crate::models::VectorPoint::new(uuid::Uuid::from_u128(i), v)
+            };
+
+            // Same id, a different vector. `upsert_points` skips a row whose
+            // vector and metadata both match what is stored, so overwriting
+            // with `point` again would write nothing at all and the load
+            // would never touch the live index it is here to measure.
+            let moved = |i: u128| {
+                let jitter = (i as f64) * 1e-6;
+                #[allow(clippy::cast_possible_truncation)]
+                let v = vec![1.0, jitter as f32, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0];
+                crate::models::VectorPoint::new(uuid::Uuid::from_u128(i), v)
+            };
+
+            // `written` after each batch, and whether the index survived it.
+            // The load is fed in 50s so the crossing is pinned to ±50 points.
+            async fn feed(
+                adapter: &PgVectorAdapter,
+                db: &DatabaseConnection,
+                ids: impl Iterator<Item = crate::models::VectorPoint>,
+            ) -> Vec<(usize, bool)> {
+                let points: Vec<_> = ids.collect();
+                let mut seen = Vec::new();
+                for (n, batch) in points.chunks(50).enumerate() {
+                    adapter.index_points("Live", "f", batch).await.unwrap();
+                    seen.push(((n + 1) * 50, index_present(db, INDEX).await));
+                }
+                seen
+            }
+
+            let fresh = |url: &str| {
+                let url = url.to_string();
+                async move {
+                    let adapter = PgVectorAdapter::new(&url, 8).await.unwrap();
+                    adapter.create_collection("Live", "f", 8).await.unwrap();
+                    let base: Vec<_> = (0..BASE).map(point).collect();
+                    for batch in base.chunks(400) {
+                        adapter.index_points("Live", "f", batch).await.unwrap();
+                    }
+                    adapter
+                }
+            };
+
+            // --- the overwrite load: every point is an id already there ------
+            let adapter = fresh(&url).await;
+            let db = Database::connect(&url).await.unwrap();
+            assert!(
+                index_present(&db, INDEX).await,
+                "the collection starts indexed, or there is nothing to defer"
+            );
+            adapter.begin_bulk_load().await.unwrap();
+            let overwrite = feed(&adapter, &db, (0..500).map(moved)).await;
+            adapter.end_bulk_load().await.unwrap();
+            assert_eq!(
+                adapter.collection_size("Live", "f").await.unwrap(),
+                BASE as usize,
+                "an overwrite load must not add a row"
+            );
+            adapter.delete_collection("Live", "f").await.unwrap();
+            adapter.close().await.unwrap();
+
+            // --- the append load: every point is a new id --------------------
+            let adapter = fresh(&url).await;
+            assert!(index_present(&db, INDEX).await);
+            adapter.begin_bulk_load().await.unwrap();
+            let append = feed(&adapter, &db, (BASE..BASE + 500).map(point)).await;
+            adapter.end_bulk_load().await.unwrap();
+            assert_eq!(
+                adapter.collection_size("Live", "f").await.unwrap(),
+                BASE as usize + 500,
+                "an append load must add every row"
+            );
+
+            let dropped_at = |seen: &[(usize, bool)]| {
+                seen.iter()
+                    .find(|(_, present)| !present)
+                    .map(|(written, _)| *written)
+            };
+            assert_eq!(
+                dropped_at(&overwrite),
+                Some(300),
+                "an overwrite load reaches 0.25 x the collection's 1200 live \
+                 rows at 300 written points: {overwrite:?}"
+            );
+            assert_eq!(
+                dropped_at(&append),
+                Some(400),
+                "an append load grows the collection it is measured against, so \
+                 it only reaches a quarter of it at 400: {append:?}"
+            );
+
+            // The scope is still a hint and not a semantic change: both loads
+            // ended with the index back and every row readable.
+            assert!(index_present(&db, INDEX).await);
+            let hits = adapter
+                .search_similar("Live", "f", &[1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], 10)
+                .await
+                .unwrap();
+            assert_eq!(hits.len(), 10);
+
+            drop(db);
+            adapter.close().await.unwrap();
+        },
+    )
+    .await;
+}
+
 /// [`PgVectorAdapter::from_connection`] wraps a pool whose connect options this
 /// adapter never chose, so the session tuning [`PgVectorAdapter::new`] applies
 /// there has to ride in per statement instead. Two things that only a server can
@@ -1949,7 +2084,7 @@ async fn a_search_during_the_end_of_load_build_still_sees_an_indexless_collectio
 /// server, and each broke something different:
 ///
 /// - `delete_collection` evicted the `known` cache but not the scope's
-///   `deferred` / `written` / `base_rows`, so `end_bulk_load` failed on the
+///   `deferred` / `written` / `live_rows`, so `end_bulk_load` failed on the
 ///   missing relation twice over — once trying to build its index, once trying
 ///   to analyse it.
 /// - `analyze` used `?` *inside* its loop over the written collections, which
