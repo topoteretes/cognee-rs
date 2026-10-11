@@ -14,6 +14,10 @@
 //! next test still re-installs the same vars before observing them.
 
 #![cfg(feature = "telemetry")]
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests drive configuration through the process env"
+)]
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;

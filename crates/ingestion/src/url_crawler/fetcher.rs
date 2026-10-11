@@ -513,6 +513,10 @@ impl reqwest::dns::Resolve for GuardedResolver {
 /// common). An IP literal bypasses resolution, so neither compromise is
 /// needed. `https://` proxies keep their name (an IP literal would break the
 /// proxy's TLS certificate check) and are therefore subject to the guard.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "env-only by design: the standard HTTP(S)_PROXY / ALL_PROXY / NO_PROXY convention"
+)]
 fn env_proxies() -> Vec<reqwest::Proxy> {
     type Ctor = fn(Url) -> reqwest::Result<reqwest::Proxy>;
     let kinds: [(&str, Ctor); 3] = [

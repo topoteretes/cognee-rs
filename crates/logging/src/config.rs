@@ -228,6 +228,10 @@ impl LoggingConfig {
 /// Python treats `""` and unset the same way (`os.getenv(name)` is
 /// truthy-checked); we follow suit so e.g. `COGNEE_LOGS_DIR=` does
 /// not produce a `PathBuf::from("")`.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "config boundary: LoggingConfig::from_env"
+)]
 fn read_nonempty(name: &str) -> Option<String> {
     match env::var(name) {
         Ok(value) if !value.is_empty() => Some(value),
@@ -264,6 +268,10 @@ fn parse_usize(name: &'static str, default: usize) -> Result<usize, LoggingConfi
     clippy::unwrap_used,
     clippy::expect_used,
     reason = "test code — panics are acceptable failures"
+)]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "tests drive configuration through the process env"
 )]
 mod tests {
     use super::*;

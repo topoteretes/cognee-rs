@@ -29,6 +29,10 @@
 //! `crates/cognify/tests/topological_rank_parity.rs` covers them offline
 //! against Python-derived literals. The rank assertions kept below are a
 //! cross-check that the same numbers survive a real LLM run.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests drive configuration through the process env"
+)]
 
 use std::collections::HashSet;
 use std::sync::Arc;

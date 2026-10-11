@@ -48,6 +48,10 @@
 //! emits neither the blank lines nor `\n` (it uses `\r\n`). The two expected
 //! files record that measured difference rather than a claim, and the
 //! divergence is now described where it matters, in the `loaders::pdf` docs.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests drive configuration through the process env"
+)]
 
 use cognee_ingestion::loaders::{DocumentLoader, LoaderOutput, pdf::PdfLoader};
 use cognee_models::{DataPoint, Document};

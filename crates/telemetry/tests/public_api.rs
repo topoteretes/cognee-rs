@@ -3,6 +3,10 @@
 //! `tests/dispatch_with_mockito.rs` in task 02-09.
 
 #![cfg(feature = "telemetry")]
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests drive configuration through the process env"
+)]
 
 use cognee_telemetry::send_telemetry;
 use serde_json::json;

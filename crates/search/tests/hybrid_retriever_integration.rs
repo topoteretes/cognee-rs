@@ -19,6 +19,10 @@
 //! Run with:
 //!   cargo test --package cognee-search --test hybrid_retriever_integration \
 //!     -- --nocapture
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests drive configuration through the process env"
+)]
 
 use std::sync::Arc;
 

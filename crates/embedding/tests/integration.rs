@@ -4,6 +4,10 @@
     clippy::expect_used,
     reason = "integration test code — panics are acceptable failures"
 )]
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests drive configuration through the process env"
+)]
 
 use cognee_embedding::{
     config::OnnxEmbeddingConfig, engine::EmbeddingEngine, onnx::OnnxEmbeddingEngine,

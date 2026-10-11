@@ -405,6 +405,10 @@ impl AwsConfigCredentials {
         loader.load().await
     }
 
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "env-only by design: litellm/boto3-compatible AWS env fallback"
+    )]
     async fn assume_role(
         settings: &AwsSettings,
         region: &str,
@@ -415,7 +419,8 @@ impl AwsConfigCredentials {
         use aws_config::sts::AssumeRoleProvider;
         use aws_credential_types::provider::ProvideCredentials;
 
-        let sts_region = resolve_sts_region(settings.sts_endpoint.as_deref(), &ProcessEnv, region);
+        let sts_region =
+            resolve_sts_region(settings.sts_endpoint.as_deref(), &ProcessEnv::new(), region);
         let sdk_config = Self::sts_sdk_config(settings, &sts_region).await;
         let mut builder = AssumeRoleProvider::builder(role_arn)
             .configure(&sdk_config)
@@ -439,6 +444,10 @@ impl AwsConfigCredentials {
             })
     }
 
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "env-only by design: litellm/boto3-compatible AWS env fallback"
+    )]
     async fn assume_role_with_web_identity(
         settings: &AwsSettings,
         region: &str,
@@ -479,7 +488,7 @@ impl AwsConfigCredentials {
         }
 
         let provider_config = ProviderConfig::without_region().with_region(Some(Region::new(
-            resolve_sts_region(settings.sts_endpoint.as_deref(), &ProcessEnv, region),
+            resolve_sts_region(settings.sts_endpoint.as_deref(), &ProcessEnv::new(), region),
         )));
         let provider = WebIdentityTokenCredentialsProvider::builder()
             .configure(&provider_config)
@@ -721,12 +730,16 @@ impl BedrockAuthProvider {
 ///
 /// `api_key` is the request-level Bedrock API key (rung 1); the
 /// `AWS_BEARER_TOKEN_BEDROCK` fallback (rung 2) already sits on `settings`.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "env-only by design: litellm/boto3-compatible AWS env fallback"
+)]
 pub async fn resolve_auth(
     api_key: Option<&str>,
     settings: &AwsSettings,
     region: &str,
 ) -> LlmResult<BedrockAuth> {
-    let ambient = AmbientRoleIdentity::from_env(&ProcessEnv);
+    let ambient = AmbientRoleIdentity::from_env(&ProcessEnv::new());
     resolve_auth_with(api_key, settings, region, &ambient, &AwsConfigCredentials).await
 }
 
@@ -734,12 +747,16 @@ pub async fn resolve_auth(
 ///
 /// This is what adapters should call: [`resolve_auth`] alone hands back a
 /// snapshot that silently stops working once temporary credentials age out.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "env-only by design: litellm/boto3-compatible AWS env fallback"
+)]
 pub async fn resolve_auth_provider(
     api_key: Option<&str>,
     settings: &AwsSettings,
     region: &str,
 ) -> LlmResult<BedrockAuthProvider> {
-    let ambient = AmbientRoleIdentity::from_env(&ProcessEnv);
+    let ambient = AmbientRoleIdentity::from_env(&ProcessEnv::new());
     let lookup: Arc<dyn CredentialLookup> = Arc::new(AwsConfigCredentials);
     let auth = resolve_auth_with(api_key, settings, region, &ambient, lookup.as_ref()).await?;
     Ok(BedrockAuthProvider::new(

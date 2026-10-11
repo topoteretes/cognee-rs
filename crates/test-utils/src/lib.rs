@@ -12,6 +12,10 @@
     clippy::expect_used,
     reason = "test infrastructure — panics are acceptable"
 )]
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests drive configuration through the process env"
+)]
 
 pub mod mock_acl_db;
 pub mod mock_llm;

@@ -33,6 +33,10 @@
 //! `PDFIUM_AUTO_CACHE_DIR` is only honoured on the *first* resolution in a
 //! process (`pdfium-auto` memoizes into a `OnceLock`, and so does the loader),
 //! so this file deliberately contains exactly one test.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests drive configuration through the process env"
+)]
 
 use cognee_ingestion::loaders::DocumentLoader;
 use cognee_ingestion::loaders::pdf::PdfLoader;

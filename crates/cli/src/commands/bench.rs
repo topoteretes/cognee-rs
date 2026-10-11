@@ -292,6 +292,10 @@ fn corpus_text_bytes(memories: &[Memory]) -> u64 {
         .sum()
 }
 
+#[allow(
+    clippy::disallowed_methods,
+    reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
+)]
 pub fn run(args: BenchArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
     // ── Load corpus (catastrophic on failure — exit nonzero) ─────────────
     let corpus_raw = std::fs::read_to_string(&args.memories).map_err(|error| {

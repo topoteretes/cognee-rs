@@ -7,22 +7,99 @@ of truth is the [`Settings`](../crates/lib/src/config.rs) struct and the
 its type. This page groups those fields by subsystem and gives the env-var name
 and default for each.
 
-## How configuration resolves
+## Configuration model
 
-Three layers, lowest precedence first:
+**The rule.** Every behaviour knob is a field on a typed config struct. The
+environment is a source of *defaults* for those fields, never the only way to set
+them: anything an env var can set must also be settable from code (the Rust API,
+every language binding, and the CLI). Env vars are read only at a
+**configuration boundary**, the one place that turns the environment into a
+config struct. Everything below that boundary (adapters, retrievers, pipelines)
+receives resolved values through constructors and context structs, and never
+reads the process environment itself.
 
-1. **Defaults** — `Settings::default()` in [`crates/lib/src/config.rs`](../crates/lib/src/config.rs).
-2. **Persisted config file** *(CLI only)* — JSON at `~/.config/cognee-rust/config.json`
+### Precedence
+
+Lowest precedence first:
+
+1. **Defaults:** `Settings::default()` in [`crates/lib/src/config.rs`](../crates/lib/src/config.rs).
+2. **Persisted config file** *(CLI only)*: JSON at `~/.config/cognee-rust/config.json`
    (`$XDG_CONFIG_HOME/cognee-rust/config.json`), managed by `cognee-cli config`.
    See [`crates/cli/src/config_store.rs`](../crates/cli/src/config_store.rs).
-3. **Environment variables** — bound by `Settings::overlay_from_env()`. A `.env`
-   file in the working directory (or any ancestor) is loaded automatically via `dotenv`.
+3. **`.env` file:** loaded into the process environment by
+   `Settings::overlay_from_env()` (via `cognee_config_core::load_dotenv`). The file
+   is found in the working directory or any ancestor. Variables already set in the
+   process environment win over `.env`.
+4. **Process environment:** bound by `Settings::overlay_from_env()`.
+5. **Explicit code:** `ConfigManager` setters (below), a binding's constructor
+   settings object, the binding config APIs, and CLI `--flags`.
 
-So: `defaults < config.json < env`. At runtime, code can also mutate settings
-through `ConfigManager`'s `set_*` methods (below) or the binding config APIs.
+So: `defaults < config.json < .env < env < code`.
 
-Parsing notes: booleans accept `true|1|yes` / `false|0|no` (`cognee_utils::parse_env_bool`);
-empty env values are treated as unset; numeric vars that fail to parse are ignored.
+Parsing notes:
+* Booleans accept `true|1|yes|on` and `false|0|no` (`cognee_utils::parse_env_bool`).
+* Empty env values are treated as unset.
+* Numeric vars that fail to parse are ignored.
+
+### Two scopes
+
+| Scope | Config struct | Built by |
+|---|---|---|
+| **Instance** | `Settings`, behind `ConfigManager` | each SDK handle / CLI run, from `Settings::load_from_env()` or `Settings::overlay_from(&dyn EnvSource)` |
+| **Process** | `LoggingConfig`, the observability settings, product telemetry | once per process, because each configures a process-wide singleton (the `tracing` subscriber, the OTLP exporter, the analytics dispatcher) |
+
+### How the rule is enforced
+
+* The only sanctioned read of the process environment is
+  [`cognee_config_core::ProcessEnv`](../crates/config-core/src/lib.rs). Config
+  loaders take a `&dyn EnvSource`, so tests can pass a `MapEnv` instead of
+  mutating the shared process environment.
+* The root [`clippy.toml`](../clippy.toml) bans the following:
+  * `std::env::{var, var_os, vars, vars_os, set_var, remove_var}`
+  * `dotenv::*`
+  * `cognee_config_core::ProcessEnv::new`
+
+  A configuration boundary opens the process environment explicitly, under
+  `#[allow(clippy::disallowed_methods, reason = "config boundary: …")]`. That keeps
+  every boundary visible and easy to grep.
+* Three `reason` prefixes are accepted on that `allow`:
+  * `config boundary: …` turns the environment into a config struct (for example
+    `Settings::overlay_from_env`, `LoggingConfig::from_env`).
+  * `env-only by design: …` covers a conventional variable whose whole point is to
+    be ambient: proxy variables, `HOME`, the AWS default credential chain,
+    `COGNEE_CONFIG_HOME` (it locates the config file itself),
+    `COGNEE_BINDING_SUPPRESS_LOGS` (read at module load, before user code runs) and
+    `LOG_FILE_NAME` (hands the log file to child processes).
+  * `config-unification: legacy direct env read, …` marks code that predates the
+    rule. These sites are being migrated behind a config boundary, and
+    [`scripts/check_env_boundary.sh`](../scripts/check_env_boundary.sh), run by
+    `scripts/check_all.sh` and CI, fails if their count goes up. **New code must
+    never add one.**
+* Tests may drive configuration through the process environment, under a
+  file-level or module-level
+  `allow(clippy::disallowed_methods, reason = "tests drive configuration through the process env")`.
+  Prefer a `MapEnv` where the code under test accepts an `EnvSource`.
+
+### Adding a setting
+
+1. Add a field to the config struct that owns the behaviour: `Settings` for
+   instance configuration, or the process-scoped struct. Give it a default in
+   that struct's `Default`.
+2. Read its env var(s) in the struct's boundary loader through the `EnvSource`
+   you are given, for example `Settings::overlay_from(env)`. Keep the Python SDK's
+   env-var name when the setting exists there, and note any deliberate divergence
+   in this document.
+3. Make it settable from code:
+   * a `ConfigManager` setter, and the generic `ConfigManager::set` key;
+   * the CLI `config set` key;
+   * binding exposure if the setting is commonly used.
+4. Pass the resolved value down to the component that needs it, through
+   `Settings::backend_context()` (`BackendBuildContext` / `LlmInputs` /
+   `EmbeddingInputs`) or the component's constructor or builder. Never read the
+   environment inside the component.
+5. Test it by setting the value **through `ConfigManager`** (not the environment)
+   and asserting the effect. Test the env binding against a `MapEnv`.
+6. Document it here: the env var, aliases, `Settings` key and default.
 
 ## LLM
 
@@ -569,7 +646,7 @@ this setting. Assert it the way your deployment is actually started:
 The two gaps are deliberate, not oversights:
 
 - The HTTP server never loads the `cognee config` file (that file is CLI-only —
-  see [How configuration resolves](#how-configuration-resolves)) and builds no
+  see [Precedence](#precedence)) and builds no
   `Settings`, so `cognee config set single_process true` cannot reach it. Its
   environment is the only channel there is.
 - The CLI runs no sweep on any command. Every invocation is its own process,

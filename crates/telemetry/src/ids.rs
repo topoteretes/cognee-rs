@@ -70,6 +70,10 @@ mod inner {
         clippy::unwrap_used,
         reason = "Mutex lock poison is unrecoverable — no meaningful recovery possible"
     )]
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
+    )]
     pub fn get_anonymous_id() -> String {
         if let Ok(v) = std::env::var("TRACKING_ID")
             && !v.is_empty()
@@ -210,6 +214,10 @@ mod inner {
         clippy::expect_used,
         reason = "PBKDF2 with dklen=16 ≤ SHA256 output=32 is mathematically guaranteed to succeed"
     )]
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
+    )]
     pub fn get_api_key_tracking_id() -> String {
         let key = std::env::var("LLM_API_KEY").unwrap_or_default();
         if key.is_empty() {
@@ -266,6 +274,10 @@ pub use inner::__test_only_reset_caches;
     clippy::unwrap_used,
     clippy::expect_used,
     reason = "test code — panics are acceptable failures"
+)]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "tests drive configuration through the process env"
 )]
 mod ids_tests {
     use super::*;

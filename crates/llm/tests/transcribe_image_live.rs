@@ -7,6 +7,10 @@
 //!
 //! Gated behind `#[ignore]` — requires `OPENAI_TOKEN` (and optionally `OPENAI_URL`,
 //! `OPENAI_MODEL`) environment variables pointing at a vision-capable model.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests drive configuration through the process env"
+)]
 
 use cognee_llm::Llm;
 use cognee_llm::build_openai_compatible_adapter;

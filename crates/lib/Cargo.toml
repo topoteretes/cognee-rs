@@ -162,6 +162,7 @@ testing = [
 [dependencies]
 cognee-chunking = { path = "../chunking", version = "0.2.0" }
 cognee-utils = { path = "../utils", version = "0.2.0" }
+cognee-config-core = { path = "../config-core", version = "0.2.0", features = ["dotenv"] }
 cognee-cognify = { path = "../cognify", version = "0.2.0" }
 cognee-components = { path = "../components", version = "0.2.0", default-features = false }
 cognee-core = { path = "../core", version = "0.2.0", features = ["pipeline-run-registry"] }
@@ -186,7 +187,6 @@ cognee-visualization = { path = "../visualization", version = "0.2.0", optional 
 cognee-migration = { path = "../migration", version = "0.2.0", features = ["archive"] }
 async-trait.workspace = true
 chrono.workspace = true
-dotenv.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -226,3 +226,6 @@ tempfile = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 serial_test = { workspace = true }
 chrono = { workspace = true }
+# `.env` loading in the Postgres e2e test; the library itself loads `.env`
+# through `cognee_config_core::load_dotenv`.
+dotenv = { workspace = true }

@@ -19,6 +19,10 @@
 //!
 //! Row count is `COGNEE_SCALE_ROWS` (default 40 000) so the same test can be run
 //! smaller when profiling.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests drive configuration through the process env"
+)]
 
 // ── Floor guard ────────────────────────────────────────────────────────────
 // The suite is behind `sqlite` because it drives a real in-memory SQLite, and

@@ -44,6 +44,7 @@ cognee-rs/
 │   ├── bindings-common/        # Shared SDK facade for the JS (Neon) + C-API bindings
 │   ├── cli/                    # CLI binary (cognee-cli)
 │   ├── utils/                  # Shared utilities
+│   ├── config-core/            # Configuration boundary: EnvSource, ProcessEnv, MapEnv (the only env access)
 │   └── test-utils/             # Mock implementations (MockStorage, MockGraphDB, MockVectorDB)
 ├── capi/                       # C API bindings (FFI)
 ├── ts/                         # JavaScript/TypeScript/Node bindings (Neon)
@@ -113,6 +114,8 @@ cognee-rs/
 
 **cognee-utils** — Shared utilities: retry logic, deterministic ID generation (`generate_node_id`, `NAMESPACE_OID`, …), secret redaction (`redact`), and tracing attribute keys.
 
+**cognee-config-core** — The configuration boundary. `EnvSource` (a read-only view of an environment), `ProcessEnv` (the one sanctioned read of the process env; constructing it is clippy-banned outside a declared boundary), `MapEnv` (an in-memory source for tests), and `load_dotenv` (`dotenv` feature). A leaf crate with no `cognee-*` dependencies. See [configuration.md § Configuration model](configuration.md#configuration-model).
+
 **cognee-truth-subspace** — Pure alignment math (cosine projection, query-relevance-weighted truth scoring, stable id signatures) for the Phase-2 hybrid-retriever truth-subspace re-ranking feature. No I/O; consumed by cognee-search once `use_truth_weight`/`build_truth_subspace` land.
 
 **cognee-test-utils** — Test helpers and mock implementations for integration tests.
@@ -127,6 +130,7 @@ cognee-rs/
 - **Async-first** — all I/O via tokio; trait methods are `async` since components may be local or remote.
 - **Streaming-first** — `DataInput::process_by_chunks()`, `StorageTrait::store_stream()`, `ContentHasher::hash_content_stream()` avoid loading full files into memory.
 - **Deterministic IDs** — same content + owner ⇒ same UUID via `uuid5(NAMESPACE_OID, …)` (content-addressed dedup). Chunk IDs: `uuid5(NAMESPACE_OID, "{document_id}-{chunk_index}")`.
+- **Configuration at the boundary** — configuration is resolved once, at a config boundary, into a typed struct (`Settings` per SDK instance; `LoggingConfig` and the observability/telemetry settings per process); components receive resolved values through constructors and `BackendBuildContext`, and never read the process environment. Env vars are defaults; everything they set is also settable from code. Enforced by `clippy::disallowed_methods` in the root `clippy.toml` plus the `scripts/check_env_boundary.sh` ratchet. See [configuration.md § Configuration model](configuration.md#configuration-model).
 - **Error types per crate** — each crate defines its own `thiserror` enum (`StorageError`, `ChunkingError`, `IngestionError`, …).
 
 ## Key dependencies

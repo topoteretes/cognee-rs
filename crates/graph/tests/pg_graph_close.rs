@@ -44,6 +44,10 @@
 //! individual `--test` targets, so a new file runs nowhere unless it is added
 //! there.
 #![cfg(feature = "postgres")]
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests drive configuration through the process env"
+)]
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};

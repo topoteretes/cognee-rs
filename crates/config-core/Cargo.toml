@@ -1,0 +1,25 @@
+[package]
+name = "cognee-config-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "The configuration boundary for the cognee AI-memory pipeline: the only sanctioned window onto the process environment."
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# `.env` loading for the configuration boundary (`load_dotenv`). Off by default
+# so leaf crates that only need `EnvSource` (and the wasm32 build) stay
+# dependency-free; `cognee` turns it on for `Settings::overlay_from_env`.
+dotenv = ["dep:dotenv"]
+
+[dependencies]
+dotenv = { workspace = true, optional = true }

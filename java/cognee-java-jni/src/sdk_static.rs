@@ -108,6 +108,10 @@ static OTEL_RELOAD_HANDLE: OnceLock<
 /// neon's `#[neon::main]` hook. Returns silently when
 /// `COGNEE_BINDING_SUPPRESS_LOGS` is set to any non-empty value, or when another
 /// subscriber already claimed the global `tracing` slot (`try_init` semantics).
+#[allow(
+    clippy::disallowed_methods,
+    reason = "env-only by design: read at module load, before user code can configure the binding"
+)]
 pub(crate) fn install_default_subscriber() {
     INIT.call_once(|| {
         if std::env::var_os("COGNEE_BINDING_SUPPRESS_LOGS")
@@ -139,6 +143,10 @@ static OTEL_GUARD: OnceLock<Mutex<Option<TelemetryGuard>>> = OnceLock::new();
 const SERVICE_NAME_DEFAULT: &str = "cognee.java-binding";
 
 /// Apply binding-specific default `OTEL_SERVICE_NAME` when unset.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
+)]
 fn apply_default_service_name(default: &str) {
     let current = std::env::var("OTEL_SERVICE_NAME").unwrap_or_default();
     if current.is_empty() {

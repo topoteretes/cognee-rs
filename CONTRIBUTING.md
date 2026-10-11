@@ -58,6 +58,10 @@ scope:
   `.unwrap()` with a `// lock poison is unrecoverable` comment.
 - Use `thiserror` for library error enums, `anyhow` in binaries/examples.
 - Prefer `Arc<dyn Trait>` abstractions; keep public traits `Send + Sync`.
+- **Never read the process environment directly.** Add a field to a config struct, read
+  its env var at the config boundary, and pass the value down; clippy rejects
+  `std::env::var` & co. elsewhere. Checklist:
+  [docs/configuration.md § Adding a setting](docs/configuration.md#adding-a-setting).
 - **Parity is sacred:** do not change on-disk DB columns, content-hash inputs, UUID5
   namespaces/inputs, vector collection name formats, or stored-file naming unless the change
   is explicitly intended and called out — these stay byte-compatible with Python cognee.

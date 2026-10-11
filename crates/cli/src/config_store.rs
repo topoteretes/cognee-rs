@@ -51,6 +51,10 @@ impl Default for ConfigDocument {
     }
 }
 
+#[allow(
+    clippy::disallowed_methods,
+    reason = "env-only by design: COGNEE_CONFIG_HOME locates the config file itself"
+)]
 pub fn config_file_path() -> Result<PathBuf, CliError> {
     // Production always resolves the config dir via `dirs::config_dir()` —
     // unchanged on every platform. Tests set `COGNEE_CONFIG_HOME` to an isolated

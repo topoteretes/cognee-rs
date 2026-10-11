@@ -53,6 +53,10 @@ use crate::uuid_hex;
 /// Default `1800` (30 min) — Decision 12. Mirrors Python's
 /// `_abandon_after_seconds` at `metrics.py:47-52`: a non-numeric or
 /// empty value falls through to the default.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
+)]
 pub fn abandon_after_seconds() -> i64 {
     env::var("SESSION_ABANDON_AFTER_SECONDS")
         .ok()

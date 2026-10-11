@@ -432,6 +432,10 @@ impl AnthropicAdapter {
             cognee.llm.provider = "anthropic",
         ),
     )]
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
+    )]
     async fn call_api_before(
         &self,
         request_body: &Value,

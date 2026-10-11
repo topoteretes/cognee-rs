@@ -9,6 +9,10 @@
 //!    export OPENAI_URL="http://localhost:11435/v1"
 //!    export OPENAI_TOKEN="not-needed"
 //! 3. Run: cargo run --example fact_extraction_example
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests drive configuration through the process env"
+)]
 
 use cognee_cognify::{FactExtractor, KnowledgeGraph};
 use cognee_llm::OpenAIAdapter;

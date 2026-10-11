@@ -48,6 +48,10 @@ impl TokenCounterKind {
     /// 5. `EMBEDDING_PROVIDER=openai` or `openai_compatible` → TikToken
     /// 6. `EMBEDDING_PROVIDER=ollama` and `HUGGINGFACE_TOKENIZER` set → HuggingFace
     /// 7. Fallback → Word
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
+    )]
     pub fn from_env() -> Self {
         // Priority 1 & 2: explicit COGNEE_TOKEN_COUNTER override
         if let Ok(counter) = std::env::var("COGNEE_TOKEN_COUNTER") {
@@ -258,6 +262,10 @@ impl TokenCounterKind {
     clippy::unwrap_used,
     clippy::expect_used,
     reason = "test code — panics are acceptable failures"
+)]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "tests drive configuration through the process env"
 )]
 mod tests {
     use super::*;

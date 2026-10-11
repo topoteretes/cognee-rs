@@ -8,6 +8,10 @@
 //! - `ANTHROPIC_ENDPOINT`(optional; overrides the default Anthropic base URL)
 //!
 //! Run with: cargo test --package cognee-llm --test integration_anthropic
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests drive configuration through the process env"
+)]
 
 use cognee_llm::{AnthropicAdapter, GenerationOptions, Llm, LlmExt, Message};
 use schemars::JsonSchema;

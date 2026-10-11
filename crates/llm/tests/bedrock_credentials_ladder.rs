@@ -10,6 +10,10 @@
     clippy::expect_used,
     reason = "integration test code: panics are acceptable"
 )]
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests drive configuration through the process env"
+)]
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};

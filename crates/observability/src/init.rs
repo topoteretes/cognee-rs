@@ -161,6 +161,10 @@ mod telemetry_real {
         Ok(builder.build())
     }
 
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
+    )]
     fn build_resource(service_name: &str) -> opentelemetry_sdk::Resource {
         use opentelemetry::KeyValue;
         use opentelemetry_sdk::Resource;

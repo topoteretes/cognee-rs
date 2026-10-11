@@ -16,6 +16,10 @@
     clippy::expect_used,
     reason = "test code — panics are acceptable failures"
 )]
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests drive configuration through the process env"
+)]
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};

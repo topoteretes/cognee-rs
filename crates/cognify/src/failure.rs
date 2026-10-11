@@ -76,6 +76,10 @@ impl FailureStop {
     ///
     /// Returns `None` when unset or unparseable, leaving the caller's default
     /// in place rather than guessing.
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
+    )]
     pub fn from_env() -> Option<Self> {
         let raw = std::env::var("RAISE_INCREMENTAL_LOADING_ERRORS")
             .or_else(|_| std::env::var("COGNEE_RAISE_INCREMENTAL_LOADING_ERRORS"))
@@ -157,6 +161,10 @@ impl RollbackScope {
     ///
     /// Only [`Self::WholeRun`] and [`Self::FailedItems`] are reachable this
     /// way — see [`Self::Nothing`] for why the third variant is not.
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
+    )]
     pub fn from_env() -> Option<Self> {
         Self::parse_env_value(&std::env::var("COGNEE_COGNIFY_ROLLBACK_SCOPE").ok()?)
     }

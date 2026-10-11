@@ -11,6 +11,10 @@
 //! that must hold regardless of plan — filtered search staying exact — is pinned
 //! by `test_search_similar_filtered_filter_then_limit` in the shared harness,
 //! which runs against this adapter in `pgvector_integration`.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests drive configuration through the process env"
+)]
 
 use super::{PgVectorAdapter, VectorDB};
 use sea_orm::{ConnectionTrait, Database, DatabaseBackend, DatabaseConnection, Statement};

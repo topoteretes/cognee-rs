@@ -439,6 +439,10 @@ fn default_chunk_failure_ratio_threshold() -> f64 {
 
 /// Read a boolean environment variable, accepting the spellings the rest of
 /// the workspace accepts (`true`/`1`/`yes`, case-insensitive).
+#[allow(
+    clippy::disallowed_methods,
+    reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
+)]
 fn env_bool(name: &str) -> Option<bool> {
     let raw = std::env::var(name).ok()?;
     match raw.trim().to_ascii_lowercase().as_str() {
@@ -450,6 +454,10 @@ fn env_bool(name: &str) -> Option<bool> {
 
 /// Read and parse an environment variable, ignoring unparseable values so a
 /// typo falls back to the default rather than failing the process.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
+)]
 fn env_parsed<T: std::str::FromStr>(name: &str) -> Option<T> {
     std::env::var(name).ok()?.trim().parse().ok()
 }

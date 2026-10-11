@@ -35,7 +35,10 @@
 //!       --test pg_full_stack_e2e -- --nocapture
 //!
 //! Tests run serially to avoid concurrent Postgres contention.
-
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests drive configuration through the process env"
+)]
 // Gate the entire file on the postgres+pgvector+pggraph features being enabled.
 #![cfg(all(feature = "pggraph", feature = "pgvector", feature = "postgres"))]
 

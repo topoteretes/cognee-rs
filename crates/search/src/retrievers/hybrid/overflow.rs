@@ -98,6 +98,10 @@ fn cache() -> &'static Mutex<HashMap<String, String>> {
 }
 
 /// Whether query-time summarization is switched on.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
+)]
 pub(crate) fn summarization_enabled() -> bool {
     std::env::var(SUMMARIZE_ENV)
         .map(|v| v == "1")
@@ -231,6 +235,10 @@ pub(crate) async fn summarize(
 }
 
 /// How many passages one summarization call should take.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
+)]
 pub(crate) fn batch_size() -> usize {
     std::env::var(BATCH_ENV)
         .ok()
@@ -244,6 +252,10 @@ pub(crate) fn batch_size() -> usize {
 /// Fails open in every direction — unset variable, missing file, malformed
 /// JSON — because this is diagnostic scaffolding and a broken experiment
 /// should degrade to the behaviour without it, not break search.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
+)]
 pub(crate) fn load() -> HashMap<String, String> {
     let Ok(path) = std::env::var(OVERFLOW_SUMMARY_FILE_ENV) else {
         return HashMap::new();

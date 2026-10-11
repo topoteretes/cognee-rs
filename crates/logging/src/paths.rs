@@ -102,6 +102,10 @@ fn try_candidate(dir: &Path) -> Option<PathBuf> {
 /// Coordination").
 ///
 /// Reference: `cognee/shared/logging_utils.py:511-519`.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "env-only by design: LOG_FILE_NAME hands the shared log file to child processes"
+)]
 pub fn propagate_log_file_name(dir: &Path) -> PathBuf {
     // Idempotent: if LOG_FILE_NAME is already set (this process or a
     // parent), reuse it verbatim.
@@ -194,6 +198,10 @@ pub fn cleanup_old_logs(dir: &Path, max_files: usize) {
     clippy::unwrap_used,
     clippy::expect_used,
     reason = "test code — panics are acceptable failures"
+)]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "tests drive configuration through the process env"
 )]
 mod tests {
     use super::*;

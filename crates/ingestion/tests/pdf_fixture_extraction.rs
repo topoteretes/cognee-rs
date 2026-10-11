@@ -54,6 +54,10 @@
 //! library-resolution error, and it loses no coverage, because that path is
 //! itself what `pdf_pdfium_cold_cache.rs` pins. A parse failure, a bind
 //! failure, or the wrong text still fail the test.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests drive configuration through the process env"
+)]
 
 use cognee_ingestion::loaders::{DocumentLoader, LoaderOutput, pdf::PdfLoader};
 use cognee_models::{DataPoint, Document};

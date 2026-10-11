@@ -337,6 +337,10 @@ mod tuning {
     /// unset, blank or unparseable. A bad value is a typo in a deployment
     /// environment, not something to fail a connection over, so it falls back
     /// to the default rather than erroring.
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
+    )]
     fn env_u64(var: &str, default: u64, min: u64, max: u64) -> u64 {
         std::env::var(var)
             .ok()
@@ -373,6 +377,10 @@ mod tuning {
     /// measured value for that build path ([`super::HNSW_BUILD_WORKERS`] for a
     /// mid-load rebuild, [`super::BULK_BUILD_WORKERS`] for the one build at
     /// the end of a bulk-load scope); the override, when set, replaces both.
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
+    )]
     pub fn maintenance_workers(default: u32) -> u32 {
         static CACHE: OnceLock<Option<u32>> = OnceLock::new();
         CACHE
@@ -404,6 +412,10 @@ mod tuning {
         clippy::unwrap_used,
         clippy::expect_used,
         reason = "test code — panics are acceptable failures"
+    )]
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "tests drive configuration through the process env"
     )]
     mod tests {
         use super::env_u64;
@@ -4172,6 +4184,10 @@ mod migrator {
     clippy::unwrap_used,
     clippy::expect_used,
     reason = "test code — panics are acceptable failures"
+)]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "tests drive configuration through the process env"
 )]
 mod shared_db_migration_tests {
     use super::PgVectorAdapter;

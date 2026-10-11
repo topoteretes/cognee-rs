@@ -25,6 +25,10 @@
 //! `LOG_FILE_NAME` is process-global env state, so this test must be
 //! `#[serial_test::serial]` to avoid clobbering parallel tests that
 //! also touch the logging env surface.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests drive configuration through the process env"
+)]
 
 use std::ffi::OsString;
 use std::process::Command;

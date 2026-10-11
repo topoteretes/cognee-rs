@@ -20,6 +20,10 @@
 //!     read paths + effective-status).
 //!   * `cognee/api/v1/sessions/routers/get_sessions_router.py`
 //!     (aggregate_stats, cost_by_model row shapes).
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests drive configuration through the process env"
+)]
 
 use chrono::{Duration, Utc};
 use cognee_database::{

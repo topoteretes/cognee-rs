@@ -58,6 +58,10 @@ pub(crate) fn reset_binding_armed() {
 /// scope is narrowed to binding-armed callers so the pure-Rust
 /// embedder path (CLI, http-server) is unaffected even when an
 /// upstream process has set `COGNEE_HOST_SDK`.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
+)]
 pub fn is_disabled() -> bool {
     if let Ok(v) = std::env::var("TELEMETRY_DISABLED")
         && !v.is_empty()
@@ -87,6 +91,10 @@ pub fn is_disabled() -> bool {
 /// Python accepts arbitrary values, but the runtime fallback
 /// (decision 5) is synchronous, and a 60s upper bound prevents a
 /// misconfiguration from blocking shutdown indefinitely.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
+)]
 pub fn request_timeout_secs() -> u64 {
     std::env::var("TELEMETRY_REQUEST_TIMEOUT")
         .ok()
@@ -104,6 +112,10 @@ pub fn request_timeout_secs() -> u64 {
 /// `COGNEE_TELEMETRY_INTEGRATION_TEST` is non-empty. Production
 /// builds without `cfg(test)` and without that env var ignore the
 /// override entirely.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
+)]
 pub fn proxy_url() -> String {
     #[cfg(test)]
     {
@@ -125,6 +137,10 @@ pub fn proxy_url() -> String {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "tests drive configuration through the process env"
+)]
 mod tests {
     use super::*;
     use serial_test::serial;

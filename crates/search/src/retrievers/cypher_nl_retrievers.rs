@@ -81,6 +81,10 @@ Get all nodes connected to John
 MATCH (n:Entity {'name': 'John'})--(neighbor)
 RETURN n, neighbor";
 
+#[allow(
+    clippy::disallowed_methods,
+    reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
+)]
 fn cypher_queries_enabled() -> bool {
     env::var("ALLOW_CYPHER_QUERY")
         .unwrap_or_else(|_| "true".to_string())

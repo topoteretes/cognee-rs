@@ -145,7 +145,7 @@ docker compose up --build
 scripts/check_all.sh
 ```
 
-Runs in order: `cargo fmt --check` → `cargo check --all-targets` → `cargo clippy -- -D warnings` → C API check (`capi/scripts/check.sh`) → Python binding check (`python/scripts/check.sh`) → TS binding check (`ts/scripts/check.sh`) → Java binding check (`java/scripts/check.sh`).
+Runs in order: `cargo fmt --check` → `cargo check --all-targets` → `cargo clippy -- -D warnings` → config-boundary ratchet (`scripts/check_env_boundary.sh`) → C API check (`capi/scripts/check.sh`) → Python binding check (`python/scripts/check.sh`) → TS binding check (`ts/scripts/check.sh`) → Java binding check (`java/scripts/check.sh`).
 
 ### CI (GitHub Actions)
 
@@ -158,6 +158,7 @@ Runs in order: `cargo fmt --check` → `cargo check --all-targets` → `cargo cl
   - Proper error/option propagation (`?`, `map_err`, `ok_or`, `match`, etc.) — when the operation can legitimately fail and the error should surface to the caller.
   - Allowed patterns that do not need changing: `Mutex::lock().unwrap()` and `RwLock::read/write().unwrap()` are acceptable because lock poisoning only occurs if a thread already panicked, and there is no meaningful recovery in that case. Add a `// lock poison is unrecoverable` comment when doing this.
 - Use `thiserror` for custom error enums in library crates, `anyhow` in binaries/examples
+- **Never read the process environment directly** (`std::env::var`/`var_os`/`set_var`, `dotenv::*`). Every knob is a field on a config struct — `Settings` for instance config; `LoggingConfig` and the observability/telemetry settings for process config — read from env only at its config boundary (`Settings::overlay_from(&dyn EnvSource)`, `…::from_env`) and settable from code; components get resolved values via constructors and `BackendBuildContext`. Enforced by `clippy::disallowed_methods` in the root `clippy.toml` (which also bans `cognee_config_core::ProcessEnv::new` outside a declared `config boundary:`) and the `scripts/check_env_boundary.sh` ratchet: the `config-unification: legacy direct env read` allows may only go down — **never add one**, and lower its `BASELINE` when you migrate a site. Tests use `MapEnv` or a file-level `allow`. Checklist: [docs/configuration.md § Adding a setting](../docs/configuration.md#adding-a-setting).
 - Prefer streaming (`AsyncRead + Unpin + Send`) over loading full content into memory
 - Prefer `&str` borrows over `String` in intermediate data structures; use byte offset tracking for zero-copy slicing
 - All public traits must be `Send + Sync` for multi-threaded async usage

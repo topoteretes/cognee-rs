@@ -80,6 +80,12 @@ cargo clippy --all-targets -- -D warnings
 
 echo ""
 echo "================================================================"
+echo "=== Rust: Config-boundary ratchet (legacy direct env reads) ==="
+echo "================================================================"
+bash "$REPO_ROOT/scripts/check_env_boundary.sh"
+
+echo ""
+echo "================================================================"
 echo "=== Rust: Compilation check (telemetry feature) ==="
 echo "================================================================"
 cargo check --all-targets --features telemetry

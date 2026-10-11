@@ -18,6 +18,10 @@
 //! before it goes away. This test asserts the delivered count both ways round, so
 //! it fails if the flush ever moves back out.
 #![cfg(feature = "telemetry")]
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests drive configuration through the process env"
+)]
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};

@@ -1,0 +1,22 @@
+# Configuration-boundary rule (docs/configuration.md § "Configuration model"):
+# the environment is a source of *defaults*, read only at a configuration
+# boundary into a typed config struct. Components get resolved values and never
+# read the process env. The one sanctioned read is
+# `cognee_config_core::ProcessEnv`; a boundary opens it with
+# `#[allow(clippy::disallowed_methods, reason = "config boundary: …")]`.
+#
+# clippy looks for this file upward from each crate's directory, so it also
+# governs the capi/ and bindings/ workspaces.
+disallowed-methods = [
+    { path = "std::env::var", reason = "read configuration through a config struct's `from_env(&dyn EnvSource)` at a config boundary — see docs/configuration.md#adding-a-setting" },
+    { path = "std::env::var_os", reason = "read configuration through a config struct's `from_env(&dyn EnvSource)` at a config boundary — see docs/configuration.md#adding-a-setting" },
+    { path = "std::env::vars", reason = "read configuration through a config struct's `from_env(&dyn EnvSource)` at a config boundary — see docs/configuration.md#adding-a-setting" },
+    { path = "std::env::vars_os", reason = "read configuration through a config struct's `from_env(&dyn EnvSource)` at a config boundary — see docs/configuration.md#adding-a-setting" },
+    { path = "std::env::set_var", reason = "configuration must not mutate the process env; pass the value through a config struct — see docs/configuration.md#adding-a-setting" },
+    { path = "std::env::remove_var", reason = "configuration must not mutate the process env; pass the value through a config struct — see docs/configuration.md#adding-a-setting" },
+    { path = "dotenv::dotenv", reason = "use `cognee_config_core::load_dotenv` at the config boundary", allow-invalid = true },
+    { path = "dotenv::from_path", reason = "use `cognee_config_core::load_dotenv` at the config boundary", allow-invalid = true },
+    { path = "dotenv::from_filename", reason = "use `cognee_config_core::load_dotenv` at the config boundary", allow-invalid = true },
+    { path = "dotenv::var", reason = "use `cognee_config_core::load_dotenv` at the config boundary", allow-invalid = true },
+    { path = "cognee_config_core::ProcessEnv::new", reason = "only a config boundary opens the process env; mark it with `#[allow(clippy::disallowed_methods, reason = \"config boundary: …\")]`, or take resolved values / `&dyn EnvSource` instead", allow-invalid = true },
+]

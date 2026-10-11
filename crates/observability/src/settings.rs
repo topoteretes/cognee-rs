@@ -111,6 +111,10 @@ impl EnvSettingsView {
 
 // Empty string is treated as "unset" so callers can clear an env var via
 // `KEY=` without flipping the value to a literal empty string mid-process.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "config boundary: EnvSettingsView::from_env"
+)]
 fn read_env(key: &str) -> Option<String> {
     match std::env::var(key) {
         Ok(v) if !v.is_empty() => Some(v),
@@ -150,6 +154,10 @@ impl SettingsView for EnvSettingsView {
     clippy::expect_used,
     clippy::unwrap_used,
     reason = "test code — panics are acceptable failures"
+)]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "tests drive configuration through the process env"
 )]
 mod tests {
     use super::*;

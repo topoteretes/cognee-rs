@@ -37,6 +37,10 @@ pub(crate) static OTEL_RELOAD_HANDLE: OnceLock<
 /// Returns silently when `COGNEE_BINDING_SUPPRESS_LOGS` is set to any
 /// non-empty value, or when another subscriber has already claimed the
 /// global `tracing` slot (e.g. `setupLogging()` ran first).
+#[allow(
+    clippy::disallowed_methods,
+    reason = "env-only by design: read at module load, before user code can configure the binding"
+)]
 pub(crate) fn install() {
     INIT.call_once(|| {
         if std::env::var_os("COGNEE_BINDING_SUPPRESS_LOGS")

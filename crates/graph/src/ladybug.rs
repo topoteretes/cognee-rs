@@ -22,6 +22,10 @@ use tracing::{Span, instrument};
 /// CI environments. Override with `GRAPH_MAX_DB_SIZE` (bytes) for larger graphs.
 const DEFAULT_MAX_DB_SIZE: u64 = 1024 * 1024 * 1024;
 
+#[allow(
+    clippy::disallowed_methods,
+    reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
+)]
 fn read_max_db_size() -> u64 {
     std::env::var("GRAPH_MAX_DB_SIZE")
         .ok()

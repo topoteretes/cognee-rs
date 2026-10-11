@@ -42,6 +42,10 @@ impl TokenCountMode {
     /// [`TokenCountMode::Span`], so the correct count is what an unconfigured
     /// deployment gets.
     #[must_use]
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
+    )]
     pub fn from_env() -> Self {
         match std::env::var(Self::ENV_VAR) {
             Ok(v) => match v.trim().to_ascii_lowercase().as_str() {
@@ -161,6 +165,10 @@ impl TokenCounter for TikTokenCounter {
     clippy::unwrap_used,
     clippy::expect_used,
     reason = "test code — panics are acceptable failures"
+)]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "tests drive configuration through the process env"
 )]
 mod tests {
     use super::*;

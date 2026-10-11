@@ -511,6 +511,10 @@ fn embedding_error_from_llm(error: LlmError) -> EmbeddingError {
     clippy::unwrap_used,
     reason = "test code — panics are acceptable failures"
 )]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "tests drive configuration through the process env"
+)]
 mod tests {
     use super::*;
     use crate::provider::EmbeddingProvider;

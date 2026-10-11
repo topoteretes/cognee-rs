@@ -83,6 +83,10 @@ pub fn parse_single_process_override(raw: &str) -> Option<bool> {
 }
 
 /// Read [`SINGLE_PROCESS_ENV`] as an explicit override, if one was given.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
+)]
 pub fn single_process_override_from_env() -> Option<bool> {
     parse_single_process_override(&std::env::var(SINGLE_PROCESS_ENV).ok()?)
 }

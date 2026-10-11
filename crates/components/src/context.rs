@@ -423,6 +423,10 @@ fn shown(value: &Option<String>) -> &'static str {
 /// so both the SDK `Settings` and the standalone HTTP server resolve these
 /// knobs identically when lowering their config into a
 /// [`BackendBuildContext`].
+#[allow(
+    clippy::disallowed_methods,
+    reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
+)]
 pub fn aws_inputs_from_env() -> AwsInputs {
     aws_inputs_from(|key| std::env::var(key).ok())
 }
@@ -461,6 +465,10 @@ fn aws_inputs_from(lookup: impl Fn(&str) -> Option<String>) -> AwsInputs {
 /// Lives here — the env-read boundary for [`LlmInputs`] — so both the SDK
 /// `Settings` and the standalone HTTP server resolve the same knob identically
 /// when lowering their config into a [`BackendBuildContext`].
+#[allow(
+    clippy::disallowed_methods,
+    reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
+)]
 pub fn anthropic_base_url_from_env() -> Option<String> {
     std::env::var("ANTHROPIC_BASE_URL")
         .or_else(|_| std::env::var("ANTHROPIC_API_BASE"))

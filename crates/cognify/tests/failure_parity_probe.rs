@@ -25,6 +25,10 @@
 //! Emitting rather than asserting is deliberate: the comparison lives in
 //! `compare.py`, which sees both SDKs' observations at once. This file is the
 //! Rust *instrument*, and it is run by `run_rust.sh`.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests drive configuration through the process env"
+)]
 
 // Deliberately ungated: a `#![cfg(feature = "...")]` here would compile the
 // probe away under `cargo test -p cognee-cognify` and report `running 0 tests

@@ -11,6 +11,10 @@
 //!
 //! Run with:
 //!   cargo test --package cognee-search --test temporal_retriever_integration -- --nocapture
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests drive configuration through the process env"
+)]
 
 use std::sync::Arc;
 

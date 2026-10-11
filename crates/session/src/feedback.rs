@@ -25,6 +25,10 @@ Rules:\n\
 
 const DEFAULT_FEEDBACK_LLM_TIMEOUT: Duration = Duration::from_secs(8);
 
+#[allow(
+    clippy::disallowed_methods,
+    reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
+)]
 fn feedback_llm_timeout() -> Duration {
     if let Ok(raw) = std::env::var("COGNEE_FEEDBACK_LLM_TIMEOUT_MS")
         && let Ok(ms) = raw.parse::<u64>()

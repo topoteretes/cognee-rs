@@ -9,6 +9,10 @@
 //! Requires environment variables:
 //! - OPENAI_URL: Base URL for the LLM API (e.g., http://localhost:11435/v1 for Ollama)
 //! - OPENAI_TOKEN: API token (use "not-needed" for Ollama)
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests drive configuration through the process env"
+)]
 
 use cognee_chunking::CutType;
 use cognee_cognify::{SummarizedContent, SummaryExtractor};

@@ -46,36 +46,14 @@ pub const ENV_ROLE_ARN: &str = "AWS_ROLE_ARN";
 /// Ambient web-identity token file published by an IRSA/EKS pod identity.
 pub const ENV_WEB_IDENTITY_TOKEN_FILE: &str = "AWS_WEB_IDENTITY_TOKEN_FILE";
 
-/// Read-only view over an environment.
+/// Read-only view over an environment, and the real process environment.
 ///
 /// Everything in this module takes the environment as a parameter rather than
 /// calling [`std::env::var`] directly, so the resolution rules can be tested
-/// without mutating shared process state (the workspace test runner is
-/// parallel; `set_var` in one test is visible to every other test in the same
-/// binary).
-pub trait EnvSource: Send + Sync {
-    /// Return the value of `key`, or `None` when it is unset.
-    fn get(&self, key: &str) -> Option<String>;
-}
-
-/// The real process environment.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct ProcessEnv;
-
-impl EnvSource for ProcessEnv {
-    fn get(&self, key: &str) -> Option<String> {
-        std::env::var(key).ok()
-    }
-}
-
-impl<F> EnvSource for F
-where
-    F: Fn(&str) -> Option<String> + Send + Sync,
-{
-    fn get(&self, key: &str) -> Option<String> {
-        self(key)
-    }
-}
+/// without mutating shared process state. Both types now live in
+/// `cognee-config-core`, the workspace's configuration boundary; they are
+/// re-exported here so existing paths keep working.
+pub use cognee_config_core::{EnvSource, ProcessEnv};
 
 /// Trim a value and treat the empty string as absent.
 ///
@@ -217,8 +195,12 @@ impl fmt::Debug for AwsSettings {
 
 impl AwsInputs {
     /// Resolve against the real process environment.
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "env-only by design: litellm/boto3-compatible AWS env fallback"
+    )]
     pub fn resolve(&self) -> AwsSettings {
-        self.resolve_with(&ProcessEnv)
+        self.resolve_with(&ProcessEnv::new())
     }
 
     /// Resolve against an arbitrary [`EnvSource`].

@@ -850,6 +850,10 @@ impl OpenAIAdapter {
     ///
     /// # Returns
     /// A new OpenAI adapter instance
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
+    )]
     pub fn new(
         model: impl Into<String>,
         api_key: impl Into<String>,
@@ -1544,6 +1548,10 @@ impl OpenAIAdapter {
             cognee.llm.provider = "openai",
         ),
     )]
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
+    )]
     async fn send_chat_request_before(
         &self,
         request_body: Value,
@@ -2154,6 +2162,10 @@ impl Llm for OpenAIAdapter {
             .unwrap_or(Self::DEFAULT_MAX_COMPLETION_TOKENS)
     }
 
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
+    )]
     async fn transcribe_image(
         &self,
         image_bytes: &[u8],
@@ -3668,6 +3680,10 @@ struct OpenAIUsage {
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::disallowed_methods,
+        reason = "tests drive configuration through the process env"
+    )]
     #![allow(
         clippy::unwrap_used,
         clippy::expect_used,

@@ -36,6 +36,8 @@ bedrock = [
 ]
 
 [dependencies]
+# The configuration boundary (EnvSource / ProcessEnv for the Bedrock env fallback).
+cognee-config-core = { path = "../config-core", version = "0.2.0" }
 # Async runtime
 tokio.workspace = true
 async-trait.workspace = true

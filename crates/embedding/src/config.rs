@@ -424,6 +424,10 @@ impl EmbeddingConfig {
     ///
     /// Reads the same env var names as the Python SDK so that a shared `.env` file
     /// works across both implementations without modification.
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
+    )]
     pub fn from_env() -> Self {
         let mut config = Self::default();
 
@@ -674,6 +678,10 @@ impl EmbeddingConfig {
     clippy::expect_used,
     clippy::unwrap_used,
     reason = "test code — panics are acceptable failures"
+)]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "tests drive configuration through the process env"
 )]
 mod tests {
     use super::*;

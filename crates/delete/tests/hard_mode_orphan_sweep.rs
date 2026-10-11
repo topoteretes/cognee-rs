@@ -16,6 +16,10 @@
 //!   COGNEE_E2E_EMBED_MODEL_PATH, COGNEE_E2E_TOKENIZER_PATH
 //!
 //! Run with: cargo test --package cognee-delete --test hard_mode_orphan_sweep
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests drive configuration through the process env"
+)]
 
 use std::sync::Arc;
 

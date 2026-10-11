@@ -65,6 +65,10 @@ pub(crate) static OTEL_RELOAD_HANDLE: OnceLock<
 /// The `py` handle is accepted (and currently unused) to keep the
 /// signature future-proof against `pyo3-log` versions that require a
 /// `Python<'_>` for logger construction.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "env-only by design: read at module load, before user code can configure the binding"
+)]
 pub(crate) fn install(py: Python<'_>) {
     let _ = py;
     INIT.call_once(|| {

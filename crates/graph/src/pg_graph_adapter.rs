@@ -2503,6 +2503,10 @@ mod migrator {
     clippy::expect_used,
     reason = "test code — panics are acceptable failures"
 )]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "tests drive configuration through the process env"
+)]
 mod shared_db_migration_tests {
     use super::PgGraphAdapter;
     use sea_orm::{ConnectionTrait, Database, DatabaseConnection, Statement};

@@ -72,6 +72,10 @@ const SEARCH_COLLECTIONS: [(&str, &str); 6] = [
 /// CHANGES results: edges from a hub seed to its dropped neighbours never
 /// reach the ranking (they carry the non-seed penalty, so they rank below
 /// seed-to-seed edges, but they can still make the top k).
+#[allow(
+    clippy::disallowed_methods,
+    reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
+)]
 fn neighbor_cap() -> Option<usize> {
     std::env::var("COGNEE_TRIPLET_NEIGHBOR_CAP")
         .ok()

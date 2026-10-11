@@ -89,6 +89,10 @@ pub fn default_filter() -> &'static str {
 /// `tracing::info!("Logging initialized", ...)` line — the cross-SDK
 /// file-presence assertion in task 06-10 uses this string as a grep
 /// anchor.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
+)]
 pub fn init_logging<I>(cfg: LoggingConfig, extra_layers: I) -> LogGuards
 where
     I: IntoIterator<Item = BoxedLayer>,
@@ -277,6 +281,10 @@ fn build_file_layer(
     clippy::unwrap_used,
     clippy::expect_used,
     reason = "test code — panics are acceptable failures"
+)]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "tests drive configuration through the process env"
 )]
 mod tests {
     use super::*;

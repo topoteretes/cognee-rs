@@ -4,6 +4,10 @@
     reason = "test code — panics are acceptable failures"
 )]
 #![cfg(feature = "html-loader")]
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests drive configuration through the process env"
+)]
 
 use cognee_ingestion::url_crawler::{HtmlParser, extract_html};
 

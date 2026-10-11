@@ -19,6 +19,10 @@
 //! `CREATEDB`; see [`cognee_test_utils::create_temp_postgres_db`] for the full
 //! rationale.
 #![cfg(feature = "postgres")]
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests drive configuration through the process env"
+)]
 
 mod common;
 

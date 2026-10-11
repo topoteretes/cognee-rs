@@ -13,6 +13,10 @@
 //! Tests are skipped automatically when the variable is absent.
 //! All tests run serially (shared DB state).
 #![cfg(feature = "pgvector")]
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests drive configuration through the process env"
+)]
 
 mod common;
 

@@ -15,6 +15,10 @@
 //! down together with the runtime under test, and counting arrivals server-side
 //! avoids any inference from client-side state.
 #![cfg(feature = "telemetry")]
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests drive configuration through the process env"
+)]
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};

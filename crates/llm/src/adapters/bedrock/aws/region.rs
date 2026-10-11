@@ -150,8 +150,12 @@ impl AmbientRegion for DefaultChainRegion {
 
 /// The full §1.3 chain against the process environment and `aws-config`'s
 /// default region chain.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "env-only by design: litellm/boto3-compatible AWS env fallback"
+)]
 pub async fn resolve_region(settings: &AwsSettings, model: Option<&str>) -> LlmResult<String> {
-    resolve_region_with(settings, model, &ProcessEnv, &DefaultChainRegion).await
+    resolve_region_with(settings, model, &ProcessEnv::new(), &DefaultChainRegion).await
 }
 
 /// The full §1.3 chain with both ambient sources injected.

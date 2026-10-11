@@ -205,6 +205,11 @@ jobs:
       - name: clippy
         run: cargo clippy --all-targets -- -D warnings
 
+      # Config-boundary ratchet: the legacy direct-env-read allows may only
+      # decrease (docs/configuration.md § "Configuration model").
+      - name: config-boundary ratchet
+        run: bash scripts/check_env_boundary.sh
+
       # Telemetry feature is OFF by default per design decision 1, so the
       # default `cargo check --all-targets` above only covers the noop arm.
       # This step exercises the OTEL-on code path (init_telemetry, OTLP

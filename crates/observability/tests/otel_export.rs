@@ -20,6 +20,10 @@
 //! ```
 
 #![cfg(feature = "telemetry")]
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests drive configuration through the process env"
+)]
 
 use std::net::SocketAddr;
 use std::sync::Arc;

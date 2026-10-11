@@ -13,6 +13,10 @@
 //! - custom:  `CUSTOM_LLM_API_KEY`,  `CUSTOM_LLM_MODEL`,  `CUSTOM_LLM_ENDPOINT`  (endpoint is required)
 //!
 //! Run with: cargo test --package cognee-llm --test integration_providers
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests drive configuration through the process env"
+)]
 
 use cognee_llm::{GenerationOptions, Llm, Message, build_openai_compatible_adapter};
 

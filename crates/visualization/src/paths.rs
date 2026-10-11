@@ -17,6 +17,10 @@ use crate::VisualizationError;
 ///
 /// Returns `VisualizationError::NoHomeDir` if none of the above yielded a
 /// non-empty path.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "env-only by design: HOME / USERPROFILE locate the user's home directory"
+)]
 pub(crate) fn default_output_path() -> Result<PathBuf, VisualizationError> {
     if let Some(home) = dirs::home_dir() {
         return Ok(home.join("graph_visualization.html"));

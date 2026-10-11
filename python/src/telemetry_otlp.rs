@@ -97,6 +97,10 @@ pub fn setup_telemetry() -> PyResult<()> {
 /// default so dashboards can distinguish embedded use from
 /// `cognee-cli` traces, or from `cognee-http-server` traces (that server
 /// now ships outside this repository). Gap 07 decision 8.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
+)]
 fn apply_default_service_name(default: &str) {
     let current = std::env::var("OTEL_SERVICE_NAME").unwrap_or_default();
     if current.is_empty() {

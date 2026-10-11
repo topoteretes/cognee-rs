@@ -101,6 +101,10 @@ pub extern "C" fn cognee_init_otlp() -> c_int {
 }
 
 /// Apply binding-specific default `OTEL_SERVICE_NAME` when unset.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
+)]
 fn apply_default_service_name(default: &str) {
     let current = std::env::var("OTEL_SERVICE_NAME").unwrap_or_default();
     if current.is_empty() {

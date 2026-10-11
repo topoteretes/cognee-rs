@@ -13,6 +13,10 @@
 //! export OPENAI_API_KEY=sk-...
 //! cargo run --example openai_example
 //! ```
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests drive configuration through the process env"
+)]
 
 use cognee_llm::{GenerationOptions, Llm, LlmExt, Message, OpenAIAdapter};
 use schemars::JsonSchema;

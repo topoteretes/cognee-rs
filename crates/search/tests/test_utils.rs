@@ -1,3 +1,8 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests drive configuration through the process env"
+)]
+
 use cognee_embedding::{EmbeddingEngine, MockEmbeddingEngine};
 use cognee_llm::Llm;
 use cognee_llm::mock::{MissPolicy, RecordingLlm, ReplayLlm};

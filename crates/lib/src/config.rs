@@ -10,6 +10,10 @@ use std::sync::{Arc, RwLock, RwLockReadGuard};
 
 use serde::{Deserialize, Serialize};
 
+/// The configuration-boundary environment abstraction, re-exported so callers of
+/// [`Settings::overlay_from`] need no direct `cognee-config-core` dependency.
+pub use cognee_config_core::{EnvSource, MapEnv};
+
 pub const DEFAULT_SYSTEM_PROMPT_PATH: &str = "answer_simple_question.txt";
 
 /// Assemble a `postgres://user:pass@host:port/dbname` URL with percent-encoded
@@ -480,13 +484,28 @@ impl Settings {
     /// `GRAPH_DATABASE_*`, `VECTOR_DB_*`, `DB_*`, `COGNEE_*`).  A handful of
     /// Rust-specific aliases (`OPENAI_TOKEN`, `OPENAI_URL`, `OPENAI_MODEL`) are
     /// accepted as fallbacks for backward compatibility with existing test setups.
+    ///
+    /// This is a configuration boundary: it is the one place `Settings` opens
+    /// the process environment. Use [`Settings::overlay_from`] to overlay from
+    /// any other [`EnvSource`] (e.g. a `MapEnv` in tests).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "config boundary: Settings is resolved from the process env here"
+    )]
     pub fn overlay_from_env(&mut self) {
         // Load .env (no-op if absent or if the vars are already in the environment).
-        let _ = dotenv::dotenv();
+        cognee_config_core::load_dotenv();
+        self.overlay_from(&cognee_config_core::ProcessEnv::new());
+    }
 
+    /// Overlay the variables of `env` on top of `self`.
+    ///
+    /// Same rules as [`Settings::overlay_from_env`] (only set, non-empty
+    /// variables change a field), but reading from `env` instead of the
+    /// process environment, and without loading `.env`.
+    pub fn overlay_from(&mut self, env: &dyn EnvSource) {
         // Helpers ----------------------------------------------------------------
-        let str_var =
-            |name: &str| -> Option<String> { std::env::var(name).ok().filter(|v| !v.is_empty()) };
+        let str_var = |name: &str| -> Option<String> { env.get(name).filter(|v| !v.is_empty()) };
         // Try `primary` first; fall back to `alias` if primary is unset/empty.
         let str_alias = |primary: &str, alias: &str| -> Option<String> {
             str_var(primary).or_else(|| str_var(alias))
@@ -901,8 +920,8 @@ impl Settings {
         // a whitespace-only value, which a bare `parse_env_bool` reads as an
         // explicit `false` while the other path read it as "derive" — opposite
         // answers about whether a database may be swept.
-        if let Some(v) = std::env::var(cognee_database::SINGLE_PROCESS_ENV)
-            .ok()
+        if let Some(v) = env
+            .get(cognee_database::SINGLE_PROCESS_ENV)
             .and_then(|raw| cognee_database::parse_single_process_override(&raw))
         {
             self.single_process = Some(v);
@@ -954,6 +973,10 @@ impl Settings {
     /// `EMBEDDING_API_VERSION`, `HUGGINGFACE_TOKENIZER`,
     /// `EMBEDDING_MAX_COMPLETION_TOKENS`) happen here so the registry stays
     /// env-free.
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
+    )]
     pub fn backend_context(&self) -> cognee_components::BackendBuildContext {
         use std::path::PathBuf;
 
@@ -2693,6 +2716,10 @@ impl ConfigManager {
     clippy::expect_used,
     reason = "test code — panics are acceptable failures"
 )]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "tests drive configuration through the process env"
+)]
 mod tests {
     use super::*;
 
@@ -3054,6 +3081,25 @@ mod tests {
             "the transport knob must not move the structured-output one — \
              sharing a value is the defect SDK-624 fixed"
         );
+    }
+
+    /// `overlay_from` reads only the `EnvSource` it is given — no process-env
+    /// mutation, so no `#[serial]` — and keeps `overlay_from_env`'s rules:
+    /// aliases fall back, empty values count as unset.
+    #[test]
+    fn overlay_from_reads_only_the_given_env_source() {
+        let env = MapEnv::new()
+            .with("OPENAI_MODEL", "alias-model")
+            .with("LLM_NETWORK_RETRIES", "7")
+            .with("LLM_PROVIDER", "")
+            .with(cognee_database::SINGLE_PROCESS_ENV, "true");
+        let mut s = Settings::default();
+        s.overlay_from(&env);
+
+        assert_eq!(s.llm_model, "alias-model");
+        assert_eq!(s.llm_network_retries, 7);
+        assert_eq!(s.llm_provider, Settings::default().llm_provider);
+        assert_eq!(s.single_process, Some(true));
     }
 
     #[test]

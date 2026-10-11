@@ -72,6 +72,10 @@ const MAX_CONTEXT_TOKENS_ENV: &str = "COGNEE_HYBRID_MAX_CONTEXT_TOKENS";
 /// [`usize::MAX`] means "do not budget": either the model's window is bigger
 /// than anything the retriever can emit, or someone set
 /// `COGNEE_HYBRID_MAX_CONTEXT_TOKENS=0`.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
+)]
 pub(crate) fn context_budget_chars(
     max_context_tokens: u32,
     reserved_completion_tokens: u32,
