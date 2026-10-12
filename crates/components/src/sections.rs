@@ -524,3 +524,51 @@ config_section! {
         },
     }
 }
+
+config_section! {
+    /// File storage. Registered by the storage kind.
+    pub struct StorageConfig in "storage" {
+        /// Backend id selecting the storage factory (`local`; object stores
+        /// such as S3 come from an external factory).
+        pub backend: String = "local".to_string() => {
+            env: ["STORAGE_BACKEND"], alias: ["storage_backend"], secret: false,
+        },
+        /// Bucket for object-store backends. No OSS backend reads it.
+        pub bucket_name: String = String::new() => {
+            env: ["STORAGE_BUCKET_NAME"], alias: ["storage_bucket_name"], secret: false,
+        },
+    }
+}
+
+config_section! {
+    /// Ontology grounding of extracted entities. Registered by the ontology
+    /// kind.
+    pub struct OntologyConfig in "ontology" {
+        /// Ontology file(s) (`.owl`, `.ttl`, `.rdf`, …); empty disables
+        /// ontology grounding (the no-op resolver).
+        pub file_path: String = String::new() => {
+            env: ["ONTOLOGY_FILE_PATH"], alias: ["ontology_file_path"], secret: false,
+        },
+        /// Resolver id selecting the ontology factory (`rdflib`).
+        pub resolver: String = "rdflib".to_string() => {
+            env: ["ONTOLOGY_RESOLVER"], alias: ["ontology_resolver"], secret: false,
+        },
+        /// Entity-name matching strategy (`fuzzy`).
+        pub matching_strategy: String = "fuzzy".to_string() => {
+            env: ["ONTOLOGY_MATCHING_STRATEGY"], alias: ["ontology_matching_strategy"], secret: false,
+        },
+    }
+}
+
+config_section! {
+    /// Graph extraction during cognify. Registered by the graph-extraction
+    /// kind.
+    pub struct GraphExtractionConfig in "graph_extraction" {
+        /// The default extractor kind: `llm` (the built-in extractor) or a
+        /// registered backend such as `gliner`. A per-call `graphBackend`
+        /// selection overrides it.
+        pub backend: String = "llm".to_string() => {
+            env: ["GRAPH_EXTRACTOR"], alias: ["graph_extractor"], secret: false,
+        },
+    }
+}

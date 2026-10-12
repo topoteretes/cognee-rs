@@ -304,8 +304,6 @@ static KEYS: &[KeySpec] = &[
     // -- LLM ----------------------------------------------------------------
     row!(llm_max_parallel_requests: u32, env ["LLM_MAX_PARALLEL_REQUESTS"]),
     row!(graph_prompt_path: str, env []),
-    // -- Graph database -----------------------------------------------------
-    // -- Vector database ----------------------------------------------------
     // -- Chunking -----------------------------------------------------------
     row!(chunk_strategy: str, env []),
     row!(chunk_engine: str, env []),
@@ -346,11 +344,6 @@ static KEYS: &[KeySpec] = &[
         reset: |s, d| s.db_sslmode = d.db_sslmode.clone(),
     },
     row!(default_system_prompt_path: str, env []),
-    // -- Embedding ----------------------------------------------------------
-    // -- Ontology -----------------------------------------------------------
-    row!(ontology_file_path: str, env ["ONTOLOGY_FILE_PATH"]),
-    row!(ontology_resolver: str, env ["ONTOLOGY_RESOLVER"]),
-    row!(ontology_matching_strategy: str, env ["ONTOLOGY_MATCHING_STRATEGY"]),
     // -- Session / cache ----------------------------------------------------
     row!(cache_backend: str, env ["CACHE_BACKEND"]),
     row!(cache_host: str, env ["CACHE_HOST"]),
@@ -366,10 +359,6 @@ static KEYS: &[KeySpec] = &[
     row!(enable_access_control: bool, env ["ENABLE_BACKEND_ACCESS_CONTROL"]),
     // -- Logging ------------------------------------------------------------
     row!(log_level: str, env ["LOG_LEVEL"]),
-    // -- Rate limiting ------------------------------------------------------
-    // -- Storage backend ----------------------------------------------------
-    row!(storage_backend: str, env ["STORAGE_BACKEND"]),
-    row!(storage_bucket_name: str, env ["STORAGE_BUCKET_NAME"]),
     // -- Observability ------------------------------------------------------
     row!(cognee_tracing_enabled: bool, env ["COGNEE_TRACING_ENABLED"]),
     row!(otel_service_name: str, env ["OTEL_SERVICE_NAME"]),

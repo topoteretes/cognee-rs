@@ -176,7 +176,8 @@ pub use error::ComponentError;
 // beyond where they define the impls.
 pub use cognee_components::{
     BackendBuildContext, ComponentRegistry, DefaultEmbeddingFactory, EmbeddingFactory,
-    EmbeddingInputs, GraphDbFactory, LlmFactory, LlmInputs, VectorDbFactory,
+    EmbeddingInputs, GraphDbFactory, GraphExtractorFactory, LLM_GRAPH_EXTRACTOR, LlmFactory,
+    LlmInputs, OntologyResolverFactory, StorageFactory, VectorDbFactory,
 };
 
 /// Convenience re-exports for common usage.

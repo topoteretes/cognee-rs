@@ -79,12 +79,13 @@ pub fn opts_tenant(opts: &serde_json::Value) -> Result<Option<Uuid>, SdkError> {
 /// Build a per-call `CognifyConfig` by cloning the cached config and applying
 /// any `opts` overrides on top (rather than mutating the cached one).
 ///
-/// `"graphBackend"` is resolved through [`crate::graph_backend`], which is why
-/// this is `async` and fallible: building a backend can do I/O, and a kind
-/// nothing is registered under is an error rather than a silent fall back to
-/// the LLM extractor. With an empty registry — every build in this repository —
-/// the only opts that can reach either path are ones that name a backend no
-/// build here can serve, so this is inert for existing callers.
+/// `"graphBackend"` (else the configured `graph_extraction.backend`) is
+/// resolved through [`crate::graph_backend`], which is why this is `async` and
+/// fallible: building a backend can do I/O, and a kind nothing is registered
+/// under is an error rather than a silent fall back to the LLM extractor. With
+/// no backend registered — every build in this repository — and the default
+/// `llm`, the only opts that can reach either path are ones that name a backend
+/// no build here can serve, so this is inert for existing callers.
 ///
 /// # Errors
 /// [`SdkError::Validation`] for a malformed or unregistered `graphBackend`
@@ -109,7 +110,7 @@ pub async fn cognify_config_with_opts(
     if let Some(b) = opts.get("triplet").and_then(|v| v.as_bool()) {
         cfg = cfg.with_triplet_embeddings(b);
     }
-    if let Some(backend) = graph_backend_from_opts(opts).await? {
+    if let Some(backend) = graph_backend_from_opts(&svc.component_manager, opts).await? {
         cfg = cfg.with_graph_backend(backend);
     }
     Ok(cfg)
@@ -345,7 +346,7 @@ pub async fn add_and_cognify(
     // Before the add, not after: a caller who named a backend this build cannot
     // serve should not have their documents ingested by a call that was always
     // going to fail at the cognify half.
-    check_graph_backend_registered(opts)?;
+    check_graph_backend_registered(&state.cm, opts)?;
 
     let svc = state.services().await?;
     let owner_id = state.owner_id().await?;

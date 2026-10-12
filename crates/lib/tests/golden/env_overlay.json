@@ -4158,6 +4158,70 @@
   "GRAPH_DATABASE_USERNAME=\"{\\\"ssl\\\":true}\"": {
     "graph.username": "{\"ssl\":true}"
   },
+  "GRAPH_EXTRACTOR=\"  \"": {
+    "graph_extraction.backend": "  "
+  },
+  "GRAPH_EXTRACTOR=\"\"": {},
+  "GRAPH_EXTRACTOR=\"-1\"": {
+    "graph_extraction.backend": "-1"
+  },
+  "GRAPH_EXTRACTOR=\"0\"": {
+    "graph_extraction.backend": "0"
+  },
+  "GRAPH_EXTRACTOR=\"1\"": {
+    "graph_extraction.backend": "1"
+  },
+  "GRAPH_EXTRACTOR=\"1.5\"": {
+    "graph_extraction.backend": "1.5"
+  },
+  "GRAPH_EXTRACTOR=\"42\"": {
+    "graph_extraction.backend": "42"
+  },
+  "GRAPH_EXTRACTOR=\"5000000000\"": {
+    "graph_extraction.backend": "5000000000"
+  },
+  "GRAPH_EXTRACTOR=\"70000\"": {
+    "graph_extraction.backend": "70000"
+  },
+  "GRAPH_EXTRACTOR=\"TRUE\"": {
+    "graph_extraction.backend": "TRUE"
+  },
+  "GRAPH_EXTRACTOR=\"[1]\"": {
+    "graph_extraction.backend": "[1]"
+  },
+  "GRAPH_EXTRACTOR=\"abc\"": {
+    "graph_extraction.backend": "abc"
+  },
+  "GRAPH_EXTRACTOR=\"false\"": {
+    "graph_extraction.backend": "false"
+  },
+  "GRAPH_EXTRACTOR=\"no\"": {
+    "graph_extraction.backend": "no"
+  },
+  "GRAPH_EXTRACTOR=\"on\"": {
+    "graph_extraction.backend": "on"
+  },
+  "GRAPH_EXTRACTOR=\"require\"": {
+    "graph_extraction.backend": "require"
+  },
+  "GRAPH_EXTRACTOR=\"true\"": {
+    "graph_extraction.backend": "true"
+  },
+  "GRAPH_EXTRACTOR=\"v\"": {
+    "graph_extraction.backend": "v"
+  },
+  "GRAPH_EXTRACTOR=\"yes\"": {
+    "graph_extraction.backend": "yes"
+  },
+  "GRAPH_EXTRACTOR=\"{\\\"a\\\":1}\"": {
+    "graph_extraction.backend": "{\"a\":1}"
+  },
+  "GRAPH_EXTRACTOR=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
+    "graph_extraction.backend": "{\"ssl\":\"verify-full\"}"
+  },
+  "GRAPH_EXTRACTOR=\"{\\\"ssl\\\":true}\"": {
+    "graph_extraction.backend": "{\"ssl\":true}"
+  },
   "GRAPH_FILE_PATH=\"  \"": {
     "graph.file_path": "  "
   },
@@ -5576,196 +5640,196 @@
     "llm.cassette": "{\"ssl\":true}"
   },
   "ONTOLOGY_FILE_PATH=\"  \"": {
-    "ontology_file_path": "  "
+    "ontology.file_path": "  "
   },
   "ONTOLOGY_FILE_PATH=\"\"": {},
   "ONTOLOGY_FILE_PATH=\"-1\"": {
-    "ontology_file_path": "-1"
+    "ontology.file_path": "-1"
   },
   "ONTOLOGY_FILE_PATH=\"0\"": {
-    "ontology_file_path": "0"
+    "ontology.file_path": "0"
   },
   "ONTOLOGY_FILE_PATH=\"1\"": {
-    "ontology_file_path": "1"
+    "ontology.file_path": "1"
   },
   "ONTOLOGY_FILE_PATH=\"1.5\"": {
-    "ontology_file_path": "1.5"
+    "ontology.file_path": "1.5"
   },
   "ONTOLOGY_FILE_PATH=\"42\"": {
-    "ontology_file_path": "42"
+    "ontology.file_path": "42"
   },
   "ONTOLOGY_FILE_PATH=\"5000000000\"": {
-    "ontology_file_path": "5000000000"
+    "ontology.file_path": "5000000000"
   },
   "ONTOLOGY_FILE_PATH=\"70000\"": {
-    "ontology_file_path": "70000"
+    "ontology.file_path": "70000"
   },
   "ONTOLOGY_FILE_PATH=\"TRUE\"": {
-    "ontology_file_path": "TRUE"
+    "ontology.file_path": "TRUE"
   },
   "ONTOLOGY_FILE_PATH=\"[1]\"": {
-    "ontology_file_path": "[1]"
+    "ontology.file_path": "[1]"
   },
   "ONTOLOGY_FILE_PATH=\"abc\"": {
-    "ontology_file_path": "abc"
+    "ontology.file_path": "abc"
   },
   "ONTOLOGY_FILE_PATH=\"false\"": {
-    "ontology_file_path": "false"
+    "ontology.file_path": "false"
   },
   "ONTOLOGY_FILE_PATH=\"no\"": {
-    "ontology_file_path": "no"
+    "ontology.file_path": "no"
   },
   "ONTOLOGY_FILE_PATH=\"on\"": {
-    "ontology_file_path": "on"
+    "ontology.file_path": "on"
   },
   "ONTOLOGY_FILE_PATH=\"require\"": {
-    "ontology_file_path": "require"
+    "ontology.file_path": "require"
   },
   "ONTOLOGY_FILE_PATH=\"true\"": {
-    "ontology_file_path": "true"
+    "ontology.file_path": "true"
   },
   "ONTOLOGY_FILE_PATH=\"v\"": {
-    "ontology_file_path": "v"
+    "ontology.file_path": "v"
   },
   "ONTOLOGY_FILE_PATH=\"yes\"": {
-    "ontology_file_path": "yes"
+    "ontology.file_path": "yes"
   },
   "ONTOLOGY_FILE_PATH=\"{\\\"a\\\":1}\"": {
-    "ontology_file_path": "{\"a\":1}"
+    "ontology.file_path": "{\"a\":1}"
   },
   "ONTOLOGY_FILE_PATH=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "ontology_file_path": "{\"ssl\":\"verify-full\"}"
+    "ontology.file_path": "{\"ssl\":\"verify-full\"}"
   },
   "ONTOLOGY_FILE_PATH=\"{\\\"ssl\\\":true}\"": {
-    "ontology_file_path": "{\"ssl\":true}"
+    "ontology.file_path": "{\"ssl\":true}"
   },
   "ONTOLOGY_MATCHING_STRATEGY=\"  \"": {
-    "ontology_matching_strategy": "  "
+    "ontology.matching_strategy": "  "
   },
   "ONTOLOGY_MATCHING_STRATEGY=\"\"": {},
   "ONTOLOGY_MATCHING_STRATEGY=\"-1\"": {
-    "ontology_matching_strategy": "-1"
+    "ontology.matching_strategy": "-1"
   },
   "ONTOLOGY_MATCHING_STRATEGY=\"0\"": {
-    "ontology_matching_strategy": "0"
+    "ontology.matching_strategy": "0"
   },
   "ONTOLOGY_MATCHING_STRATEGY=\"1\"": {
-    "ontology_matching_strategy": "1"
+    "ontology.matching_strategy": "1"
   },
   "ONTOLOGY_MATCHING_STRATEGY=\"1.5\"": {
-    "ontology_matching_strategy": "1.5"
+    "ontology.matching_strategy": "1.5"
   },
   "ONTOLOGY_MATCHING_STRATEGY=\"42\"": {
-    "ontology_matching_strategy": "42"
+    "ontology.matching_strategy": "42"
   },
   "ONTOLOGY_MATCHING_STRATEGY=\"5000000000\"": {
-    "ontology_matching_strategy": "5000000000"
+    "ontology.matching_strategy": "5000000000"
   },
   "ONTOLOGY_MATCHING_STRATEGY=\"70000\"": {
-    "ontology_matching_strategy": "70000"
+    "ontology.matching_strategy": "70000"
   },
   "ONTOLOGY_MATCHING_STRATEGY=\"TRUE\"": {
-    "ontology_matching_strategy": "TRUE"
+    "ontology.matching_strategy": "TRUE"
   },
   "ONTOLOGY_MATCHING_STRATEGY=\"[1]\"": {
-    "ontology_matching_strategy": "[1]"
+    "ontology.matching_strategy": "[1]"
   },
   "ONTOLOGY_MATCHING_STRATEGY=\"abc\"": {
-    "ontology_matching_strategy": "abc"
+    "ontology.matching_strategy": "abc"
   },
   "ONTOLOGY_MATCHING_STRATEGY=\"false\"": {
-    "ontology_matching_strategy": "false"
+    "ontology.matching_strategy": "false"
   },
   "ONTOLOGY_MATCHING_STRATEGY=\"no\"": {
-    "ontology_matching_strategy": "no"
+    "ontology.matching_strategy": "no"
   },
   "ONTOLOGY_MATCHING_STRATEGY=\"on\"": {
-    "ontology_matching_strategy": "on"
+    "ontology.matching_strategy": "on"
   },
   "ONTOLOGY_MATCHING_STRATEGY=\"require\"": {
-    "ontology_matching_strategy": "require"
+    "ontology.matching_strategy": "require"
   },
   "ONTOLOGY_MATCHING_STRATEGY=\"true\"": {
-    "ontology_matching_strategy": "true"
+    "ontology.matching_strategy": "true"
   },
   "ONTOLOGY_MATCHING_STRATEGY=\"v\"": {
-    "ontology_matching_strategy": "v"
+    "ontology.matching_strategy": "v"
   },
   "ONTOLOGY_MATCHING_STRATEGY=\"yes\"": {
-    "ontology_matching_strategy": "yes"
+    "ontology.matching_strategy": "yes"
   },
   "ONTOLOGY_MATCHING_STRATEGY=\"{\\\"a\\\":1}\"": {
-    "ontology_matching_strategy": "{\"a\":1}"
+    "ontology.matching_strategy": "{\"a\":1}"
   },
   "ONTOLOGY_MATCHING_STRATEGY=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "ontology_matching_strategy": "{\"ssl\":\"verify-full\"}"
+    "ontology.matching_strategy": "{\"ssl\":\"verify-full\"}"
   },
   "ONTOLOGY_MATCHING_STRATEGY=\"{\\\"ssl\\\":true}\"": {
-    "ontology_matching_strategy": "{\"ssl\":true}"
+    "ontology.matching_strategy": "{\"ssl\":true}"
   },
   "ONTOLOGY_RESOLVER=\"  \"": {
-    "ontology_resolver": "  "
+    "ontology.resolver": "  "
   },
   "ONTOLOGY_RESOLVER=\"\"": {},
   "ONTOLOGY_RESOLVER=\"-1\"": {
-    "ontology_resolver": "-1"
+    "ontology.resolver": "-1"
   },
   "ONTOLOGY_RESOLVER=\"0\"": {
-    "ontology_resolver": "0"
+    "ontology.resolver": "0"
   },
   "ONTOLOGY_RESOLVER=\"1\"": {
-    "ontology_resolver": "1"
+    "ontology.resolver": "1"
   },
   "ONTOLOGY_RESOLVER=\"1.5\"": {
-    "ontology_resolver": "1.5"
+    "ontology.resolver": "1.5"
   },
   "ONTOLOGY_RESOLVER=\"42\"": {
-    "ontology_resolver": "42"
+    "ontology.resolver": "42"
   },
   "ONTOLOGY_RESOLVER=\"5000000000\"": {
-    "ontology_resolver": "5000000000"
+    "ontology.resolver": "5000000000"
   },
   "ONTOLOGY_RESOLVER=\"70000\"": {
-    "ontology_resolver": "70000"
+    "ontology.resolver": "70000"
   },
   "ONTOLOGY_RESOLVER=\"TRUE\"": {
-    "ontology_resolver": "TRUE"
+    "ontology.resolver": "TRUE"
   },
   "ONTOLOGY_RESOLVER=\"[1]\"": {
-    "ontology_resolver": "[1]"
+    "ontology.resolver": "[1]"
   },
   "ONTOLOGY_RESOLVER=\"abc\"": {
-    "ontology_resolver": "abc"
+    "ontology.resolver": "abc"
   },
   "ONTOLOGY_RESOLVER=\"false\"": {
-    "ontology_resolver": "false"
+    "ontology.resolver": "false"
   },
   "ONTOLOGY_RESOLVER=\"no\"": {
-    "ontology_resolver": "no"
+    "ontology.resolver": "no"
   },
   "ONTOLOGY_RESOLVER=\"on\"": {
-    "ontology_resolver": "on"
+    "ontology.resolver": "on"
   },
   "ONTOLOGY_RESOLVER=\"require\"": {
-    "ontology_resolver": "require"
+    "ontology.resolver": "require"
   },
   "ONTOLOGY_RESOLVER=\"true\"": {
-    "ontology_resolver": "true"
+    "ontology.resolver": "true"
   },
   "ONTOLOGY_RESOLVER=\"v\"": {
-    "ontology_resolver": "v"
+    "ontology.resolver": "v"
   },
   "ONTOLOGY_RESOLVER=\"yes\"": {
-    "ontology_resolver": "yes"
+    "ontology.resolver": "yes"
   },
   "ONTOLOGY_RESOLVER=\"{\\\"a\\\":1}\"": {
-    "ontology_resolver": "{\"a\":1}"
+    "ontology.resolver": "{\"a\":1}"
   },
   "ONTOLOGY_RESOLVER=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "ontology_resolver": "{\"ssl\":\"verify-full\"}"
+    "ontology.resolver": "{\"ssl\":\"verify-full\"}"
   },
   "ONTOLOGY_RESOLVER=\"{\\\"ssl\\\":true}\"": {
-    "ontology_resolver": "{\"ssl\":true}"
+    "ontology.resolver": "{\"ssl\":true}"
   },
   "OPENAI_MODEL=\"  \"": {
     "llm.model": "  "
@@ -6440,132 +6504,132 @@
   "SESSION_TTL_SECONDS=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
   "SESSION_TTL_SECONDS=\"{\\\"ssl\\\":true}\"": {},
   "STORAGE_BACKEND=\"  \"": {
-    "storage_backend": "  "
+    "storage.backend": "  "
   },
   "STORAGE_BACKEND=\"\"": {},
   "STORAGE_BACKEND=\"-1\"": {
-    "storage_backend": "-1"
+    "storage.backend": "-1"
   },
   "STORAGE_BACKEND=\"0\"": {
-    "storage_backend": "0"
+    "storage.backend": "0"
   },
   "STORAGE_BACKEND=\"1\"": {
-    "storage_backend": "1"
+    "storage.backend": "1"
   },
   "STORAGE_BACKEND=\"1.5\"": {
-    "storage_backend": "1.5"
+    "storage.backend": "1.5"
   },
   "STORAGE_BACKEND=\"42\"": {
-    "storage_backend": "42"
+    "storage.backend": "42"
   },
   "STORAGE_BACKEND=\"5000000000\"": {
-    "storage_backend": "5000000000"
+    "storage.backend": "5000000000"
   },
   "STORAGE_BACKEND=\"70000\"": {
-    "storage_backend": "70000"
+    "storage.backend": "70000"
   },
   "STORAGE_BACKEND=\"TRUE\"": {
-    "storage_backend": "TRUE"
+    "storage.backend": "TRUE"
   },
   "STORAGE_BACKEND=\"[1]\"": {
-    "storage_backend": "[1]"
+    "storage.backend": "[1]"
   },
   "STORAGE_BACKEND=\"abc\"": {
-    "storage_backend": "abc"
+    "storage.backend": "abc"
   },
   "STORAGE_BACKEND=\"false\"": {
-    "storage_backend": "false"
+    "storage.backend": "false"
   },
   "STORAGE_BACKEND=\"no\"": {
-    "storage_backend": "no"
+    "storage.backend": "no"
   },
   "STORAGE_BACKEND=\"on\"": {
-    "storage_backend": "on"
+    "storage.backend": "on"
   },
   "STORAGE_BACKEND=\"require\"": {
-    "storage_backend": "require"
+    "storage.backend": "require"
   },
   "STORAGE_BACKEND=\"true\"": {
-    "storage_backend": "true"
+    "storage.backend": "true"
   },
   "STORAGE_BACKEND=\"v\"": {
-    "storage_backend": "v"
+    "storage.backend": "v"
   },
   "STORAGE_BACKEND=\"yes\"": {
-    "storage_backend": "yes"
+    "storage.backend": "yes"
   },
   "STORAGE_BACKEND=\"{\\\"a\\\":1}\"": {
-    "storage_backend": "{\"a\":1}"
+    "storage.backend": "{\"a\":1}"
   },
   "STORAGE_BACKEND=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "storage_backend": "{\"ssl\":\"verify-full\"}"
+    "storage.backend": "{\"ssl\":\"verify-full\"}"
   },
   "STORAGE_BACKEND=\"{\\\"ssl\\\":true}\"": {
-    "storage_backend": "{\"ssl\":true}"
+    "storage.backend": "{\"ssl\":true}"
   },
   "STORAGE_BUCKET_NAME=\"  \"": {
-    "storage_bucket_name": "  "
+    "storage.bucket_name": "  "
   },
   "STORAGE_BUCKET_NAME=\"\"": {},
   "STORAGE_BUCKET_NAME=\"-1\"": {
-    "storage_bucket_name": "-1"
+    "storage.bucket_name": "-1"
   },
   "STORAGE_BUCKET_NAME=\"0\"": {
-    "storage_bucket_name": "0"
+    "storage.bucket_name": "0"
   },
   "STORAGE_BUCKET_NAME=\"1\"": {
-    "storage_bucket_name": "1"
+    "storage.bucket_name": "1"
   },
   "STORAGE_BUCKET_NAME=\"1.5\"": {
-    "storage_bucket_name": "1.5"
+    "storage.bucket_name": "1.5"
   },
   "STORAGE_BUCKET_NAME=\"42\"": {
-    "storage_bucket_name": "42"
+    "storage.bucket_name": "42"
   },
   "STORAGE_BUCKET_NAME=\"5000000000\"": {
-    "storage_bucket_name": "5000000000"
+    "storage.bucket_name": "5000000000"
   },
   "STORAGE_BUCKET_NAME=\"70000\"": {
-    "storage_bucket_name": "70000"
+    "storage.bucket_name": "70000"
   },
   "STORAGE_BUCKET_NAME=\"TRUE\"": {
-    "storage_bucket_name": "TRUE"
+    "storage.bucket_name": "TRUE"
   },
   "STORAGE_BUCKET_NAME=\"[1]\"": {
-    "storage_bucket_name": "[1]"
+    "storage.bucket_name": "[1]"
   },
   "STORAGE_BUCKET_NAME=\"abc\"": {
-    "storage_bucket_name": "abc"
+    "storage.bucket_name": "abc"
   },
   "STORAGE_BUCKET_NAME=\"false\"": {
-    "storage_bucket_name": "false"
+    "storage.bucket_name": "false"
   },
   "STORAGE_BUCKET_NAME=\"no\"": {
-    "storage_bucket_name": "no"
+    "storage.bucket_name": "no"
   },
   "STORAGE_BUCKET_NAME=\"on\"": {
-    "storage_bucket_name": "on"
+    "storage.bucket_name": "on"
   },
   "STORAGE_BUCKET_NAME=\"require\"": {
-    "storage_bucket_name": "require"
+    "storage.bucket_name": "require"
   },
   "STORAGE_BUCKET_NAME=\"true\"": {
-    "storage_bucket_name": "true"
+    "storage.bucket_name": "true"
   },
   "STORAGE_BUCKET_NAME=\"v\"": {
-    "storage_bucket_name": "v"
+    "storage.bucket_name": "v"
   },
   "STORAGE_BUCKET_NAME=\"yes\"": {
-    "storage_bucket_name": "yes"
+    "storage.bucket_name": "yes"
   },
   "STORAGE_BUCKET_NAME=\"{\\\"a\\\":1}\"": {
-    "storage_bucket_name": "{\"a\":1}"
+    "storage.bucket_name": "{\"a\":1}"
   },
   "STORAGE_BUCKET_NAME=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "storage_bucket_name": "{\"ssl\":\"verify-full\"}"
+    "storage.bucket_name": "{\"ssl\":\"verify-full\"}"
   },
   "STORAGE_BUCKET_NAME=\"{\\\"ssl\\\":true}\"": {
-    "storage_bucket_name": "{\"ssl\":true}"
+    "storage.bucket_name": "{\"ssl\":true}"
   },
   "TRANSCRIPTION_MODEL=\"  \"": {
     "llm.openai_compatible.transcription_model": "  "

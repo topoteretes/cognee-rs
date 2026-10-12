@@ -9,8 +9,9 @@
 //! ## Extension
 //!
 //! External adapter crates implement [`VectorDbFactory`] / [`GraphDbFactory`]
-//! / [`LlmFactory`] / [`EmbeddingFactory`] and register them via explicit
-//! dependency injection:
+//! / [`LlmFactory`] / [`EmbeddingFactory`] / [`StorageFactory`] /
+//! [`OntologyResolverFactory`] / [`GraphExtractorFactory`] and register them
+//! via explicit dependency injection:
 //!
 //! ```ignore
 //! let mut reg = ComponentRegistry::with_builtins();
@@ -40,15 +41,21 @@ pub use context::{
     parse_structured_output_mode,
 };
 pub use error::ComponentError;
-pub use registry::{ComponentRegistry, default_graph_provider};
+pub use registry::{ComponentRegistry, LLM_GRAPH_EXTRACTOR, default_graph_provider};
 pub use sections::{
-    AnthropicConfig, AwsConfig, EmbeddingConfig, GraphConfig, LlmConfig, OllamaEmbeddingConfig,
-    OnnxEmbeddingConfig, OpenAiCompatibleConfig, OpenAiCompatibleEmbeddingConfig, VectorConfig,
+    AnthropicConfig, AwsConfig, EmbeddingConfig, GraphConfig, GraphExtractionConfig, LlmConfig,
+    OllamaEmbeddingConfig, OnnxEmbeddingConfig, OntologyConfig, OpenAiCompatibleConfig,
+    OpenAiCompatibleEmbeddingConfig, StorageConfig, VectorConfig,
 };
-pub use traits::{EmbeddingFactory, GraphDbFactory, LlmFactory, VectorDbFactory};
+pub use traits::{
+    EmbeddingFactory, GraphDbFactory, GraphExtractorFactory, LlmFactory, OntologyResolverFactory,
+    StorageFactory, VectorDbFactory,
+};
 
 // Re-export the default embedding factory so external callers can compose it.
 pub use builtins::embedding::DefaultEmbeddingFactory;
+pub use builtins::ontology::RdfLibOntologyFactory;
+pub use builtins::storage::LocalStorageFactory;
 
 /// Compile-time assertion that the registry is `Send + Sync`, so a
 /// `ComponentManager` holding one stays `Send + Sync` (required by the

@@ -181,16 +181,6 @@ pub struct Settings {
 
     pub default_system_prompt_path: String,
 
-    pub ontology_file_path: String,
-    /// Ontology resolver backend. Currently always resolved to `RdfLibOntologyResolver`
-    /// when `ontology_file_path` is set — this field is reserved for future multi-resolver
-    /// support (e.g. SPARQL endpoint). Only `"rdflib"` is implemented.
-    pub ontology_resolver: String,
-    /// Fuzzy matching strategy for entity name resolution. Currently always resolved to
-    /// `FuzzyMatchingStrategy` (Ratcliff/Obershelp gestalt) — this field is reserved for
-    /// future strategy selection. Only `"fuzzy"` is implemented.
-    pub ontology_matching_strategy: String,
-
     // -- Session / cache ---------------------------------------------------------
     /// Session store backend: `"fs"`, `"redis"`, or `"seaorm"`.
     pub cache_backend: String,
@@ -212,11 +202,6 @@ pub struct Settings {
     pub log_level: String,
 
     // -- Rate limiting -----------------------------------------------------------
-
-    // -- Storage backend ---------------------------------------------------------
-    /// File storage backend: `"local"` or `"s3"`.
-    pub storage_backend: String,
-    pub storage_bucket_name: String,
 
     // -- Observability -----------------------------------------------------------
     pub cognee_tracing_enabled: bool,
@@ -368,6 +353,23 @@ impl Settings {
     /// The embedding kind section (`embedding.*`): provider, model,
     /// dimensions, credentials, batching and rate limits.
     pub fn embedding(&self) -> cognee_components::EmbeddingConfig {
+        self.section()
+    }
+
+    /// The storage kind section (`storage.*`): backend and bucket.
+    pub fn storage(&self) -> cognee_components::StorageConfig {
+        self.section()
+    }
+
+    /// The ontology kind section (`ontology.*`): file path, resolver and
+    /// matching strategy.
+    pub fn ontology(&self) -> cognee_components::OntologyConfig {
+        self.section()
+    }
+
+    /// The graph-extraction kind section (`graph_extraction.*`): the default
+    /// extractor backend.
+    pub fn graph_extraction(&self) -> cognee_components::GraphExtractionConfig {
         self.section()
     }
 
@@ -803,10 +805,6 @@ impl Default for Settings {
 
             default_system_prompt_path: DEFAULT_SYSTEM_PROMPT_PATH.to_string(),
 
-            ontology_file_path: String::new(),
-            ontology_resolver: "rdflib".to_string(),
-            ontology_matching_strategy: "fuzzy".to_string(),
-
             // Session / cache
             cache_backend: "fs".to_string(),
             cache_host: "localhost".to_string(),
@@ -826,8 +824,6 @@ impl Default for Settings {
             log_level: "info".to_string(),
 
             // Storage backend
-            storage_backend: "local".to_string(),
-            storage_bucket_name: String::new(),
 
             // Observability
             cognee_tracing_enabled: false,
@@ -1751,21 +1747,30 @@ impl ConfigManager {
 
     pub fn set_ontology_file_path(&self, path: &str) {
         let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
-        s.ontology_file_path = path.to_string();
+        s.sections.insert(
+            "ontology.file_path".to_string(),
+            serde_json::json!(path.to_string()),
+        );
         drop(s);
         self.bump_version();
     }
 
     pub fn set_ontology_resolver(&self, resolver: &str) {
         let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
-        s.ontology_resolver = resolver.to_string();
+        s.sections.insert(
+            "ontology.resolver".to_string(),
+            serde_json::json!(resolver.to_string()),
+        );
         drop(s);
         self.bump_version();
     }
 
     pub fn set_ontology_matching_strategy(&self, strategy: &str) {
         let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
-        s.ontology_matching_strategy = strategy.to_string();
+        s.sections.insert(
+            "ontology.matching_strategy".to_string(),
+            serde_json::json!(strategy.to_string()),
+        );
         drop(s);
         self.bump_version();
     }
@@ -2193,10 +2198,10 @@ mod tests {
         s.overlay_from_env();
         unsafe { std::env::remove_var("ONTOLOGY_FILE_PATH") };
 
-        assert_eq!(s.ontology_file_path, "/tmp/test.owl");
+        assert_eq!(s.ontology().file_path, "/tmp/test.owl");
         // resolver / strategy should stay at defaults when not set
-        assert_eq!(s.ontology_resolver, "rdflib");
-        assert_eq!(s.ontology_matching_strategy, "fuzzy");
+        assert_eq!(s.ontology().resolver, "rdflib");
+        assert_eq!(s.ontology().matching_strategy, "fuzzy");
     }
 
     #[test]
@@ -2229,7 +2234,7 @@ mod tests {
         s.overlay_from_env();
         unsafe { std::env::remove_var("ONTOLOGY_RESOLVER") };
 
-        assert_eq!(s.ontology_resolver, "custom");
+        assert_eq!(s.ontology().resolver, "custom");
     }
 
     #[test]
@@ -2241,7 +2246,7 @@ mod tests {
         s.overlay_from_env();
         unsafe { std::env::remove_var("ONTOLOGY_MATCHING_STRATEGY") };
 
-        assert_eq!(s.ontology_matching_strategy, "exact");
+        assert_eq!(s.ontology().matching_strategy, "exact");
     }
 
     #[test]
@@ -2255,7 +2260,7 @@ mod tests {
 
         // Empty string must not override the default (the str_var helper filters
         // out empty values, so ontology_file_path remains its default empty string).
-        assert_eq!(s.ontology_file_path, "");
+        assert_eq!(s.ontology().file_path, "");
     }
 
     #[test]
@@ -3101,15 +3106,15 @@ mod tests {
 
         cm.set_ontology_file_path("/onto.owl");
         expected_version += 1;
-        assert_eq!(cm.read().ontology_file_path, "/onto.owl");
+        assert_eq!(cm.read().ontology().file_path, "/onto.owl");
 
         cm.set_ontology_resolver("custom");
         expected_version += 1;
-        assert_eq!(cm.read().ontology_resolver, "custom");
+        assert_eq!(cm.read().ontology().resolver, "custom");
 
         cm.set_ontology_matching_strategy("exact");
         expected_version += 1;
-        assert_eq!(cm.read().ontology_matching_strategy, "exact");
+        assert_eq!(cm.read().ontology().matching_strategy, "exact");
 
         // Every granular setter must have bumped the version exactly once.
         assert_eq!(cm.version(), expected_version);
@@ -3181,7 +3186,7 @@ mod tests {
 
         cm.set("ontology_file_path", serde_json::json!("/o.owl"))
             .expect("ontology_file_path should be settable");
-        assert_eq!(cm.read().ontology_file_path, "/o.owl");
+        assert_eq!(cm.read().ontology().file_path, "/o.owl");
 
         cm.set("embedding_model_path", serde_json::json!("/m.onnx"))
             .expect("embedding_model_path should be settable");
@@ -3463,8 +3468,8 @@ mod tests {
         unsafe { std::env::remove_var("STORAGE_BACKEND") };
         unsafe { std::env::remove_var("STORAGE_BUCKET_NAME") };
 
-        assert_eq!(s.storage_backend, "s3");
-        assert_eq!(s.storage_bucket_name, "my-bucket");
+        assert_eq!(s.storage().backend, "s3");
+        assert_eq!(s.storage().bucket_name, "my-bucket");
     }
 
     #[test]
@@ -3599,7 +3604,7 @@ mod tests {
         assert!(!s.embedding().rate_limit_enabled);
         assert_eq!(s.embedding().rate_limit_requests, 60);
         assert_eq!(s.embedding().rate_limit_interval, 60);
-        assert_eq!(s.storage_backend, "local");
+        assert_eq!(s.storage().backend, "local");
         assert!(!s.cognee_tracing_enabled);
         assert_eq!(s.otel_service_name, "cognee");
         assert_eq!(s.otel_exporter_otlp_endpoint, "");

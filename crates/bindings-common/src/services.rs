@@ -25,7 +25,7 @@ use cognee::delete::DeleteService;
 use cognee::embedding::EmbeddingEngine;
 use cognee::graph::GraphDBTrait;
 use cognee::llm::Llm;
-use cognee::ontology::{NoOpOntologyResolver, OntologyResolver, RdfLibOntologyResolver};
+use cognee::ontology::OntologyResolver;
 use cognee::search::{
     SeaOrmSessionStore, SearchBuilder, SearchOrchestrator, SessionManager, SessionStore,
 };
@@ -64,6 +64,9 @@ pub struct CogneeServices {
     pub ontology_resolver: Arc<dyn OntologyResolver>,
     pub cognify_config: CognifyConfig,
     pub checkpoint_store: Arc<dyn CheckpointStore>,
+    /// The manager these services were built from; per-run components (the
+    /// graph-extraction backend) are built through its registry.
+    pub component_manager: Arc<ComponentManager>,
 }
 
 /// Startup-recovery gates, one per relational database this process has
@@ -298,7 +301,7 @@ impl CogneeServices {
     /// plan): callers that need keyless warm must set a non-empty dummy
     /// `llm_api_key` — `OpenAIAdapter::new` performs no network I/O at
     /// construction, so this never reaches the network.
-    pub async fn build(cm: &ComponentManager) -> Result<(Self, Uuid), SdkError> {
+    pub async fn build(cm: &Arc<ComponentManager>) -> Result<(Self, Uuid), SdkError> {
         // --- 1. Raw engines (errors map to ComponentError → SdkError). ---
         let storage = cm.storage().await?;
         let database = cm.database().await?;
@@ -379,18 +382,12 @@ impl CogneeServices {
             .build(),
         );
 
-        // Ontology: RdfLib when a path is configured, else NoOp.
-        let ontology_resolver: Arc<dyn OntologyResolver> = {
-            let path = cm.settings().ontology_file_path.clone();
-            if path.trim().is_empty() {
-                Arc::new(NoOpOntologyResolver::new())
-            } else {
-                Arc::new(
-                    RdfLibOntologyResolver::new(path.as_str())
-                        .map_err(|e| SdkError::ServiceBuild(format!("ontology resolver: {e}")))?,
-                )
-            }
-        };
+        // Ontology: the `ontology.resolver` factory when a path is configured,
+        // else the no-op resolver.
+        let ontology_resolver = cm
+            .ontology_resolver(None)
+            .await
+            .map_err(|e| SdkError::ServiceBuild(format!("ontology resolver: {e}")))?;
 
         // CognifyConfig from Settings. `with_temporal_cognify` is a per-call
         // flag (not a Settings field) and is left at default here.
@@ -427,6 +424,7 @@ impl CogneeServices {
             ontology_resolver,
             cognify_config,
             checkpoint_store,
+            component_manager: Arc::clone(cm),
         };
 
         Ok((services, owner_id))

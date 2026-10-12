@@ -69,6 +69,7 @@
     "graph.provider",
     "graph.url",
     "graph.username",
+    "graph_extraction.backend",
     "graph_model",
     "graph_prompt_path",
     "llm.anthropic.base_url",
@@ -108,9 +109,9 @@
     "logs_root_directory",
     "migration_db_url",
     "monitoring_tool",
-    "ontology_file_path",
-    "ontology_matching_strategy",
-    "ontology_resolver",
+    "ontology.file_path",
+    "ontology.matching_strategy",
+    "ontology.resolver",
     "otel_exporter_otlp_endpoint",
     "otel_exporter_otlp_headers",
     "otel_exporter_otlp_protocol",
@@ -121,8 +122,8 @@
     "relational_db_url",
     "session_ttl_seconds",
     "single_process",
-    "storage_backend",
-    "storage_bucket_name",
+    "storage.backend",
+    "storage.bucket_name",
     "strict_config",
     "summarization_model",
     "system_root_directory",
@@ -166,9 +167,6 @@
     "db_password",
     "db_sslmode",
     "default_system_prompt_path",
-    "ontology_file_path",
-    "ontology_resolver",
-    "ontology_matching_strategy",
     "cache_backend",
     "cache_host",
     "cache_port",
@@ -181,8 +179,6 @@
     "default_user_password",
     "enable_access_control",
     "log_level",
-    "storage_backend",
-    "storage_bucket_name",
     "cognee_tracing_enabled",
     "otel_service_name",
     "otel_exporter_otlp_endpoint",
@@ -253,6 +249,12 @@
     "graph.key",
     "graph.file_path",
     "graph.filename",
+    "storage.backend",
+    "storage.bucket_name",
+    "ontology.file_path",
+    "ontology.resolver",
+    "ontology.matching_strategy",
+    "graph_extraction.backend",
     "vector.pgvector.hnsw_m",
     "vector.pgvector.hnsw_ef_construction",
     "vector.pgvector.maintenance_workers",
@@ -5802,6 +5804,112 @@
   "set graph_database_username <- {\"a\":1}": {
     "err": true
   },
+  "set graph_extraction.backend <- \"\"": {
+    "ok": {
+      "graph_extraction.backend": ""
+    }
+  },
+  "set graph_extraction.backend <- \"1\"": {
+    "ok": {
+      "graph_extraction.backend": "1"
+    }
+  },
+  "set graph_extraction.backend <- \"s\"": {
+    "ok": {
+      "graph_extraction.backend": "s"
+    }
+  },
+  "set graph_extraction.backend <- \"true\"": {
+    "ok": {
+      "graph_extraction.backend": "true"
+    }
+  },
+  "set graph_extraction.backend <- -1": {
+    "err": true
+  },
+  "set graph_extraction.backend <- 0": {
+    "err": true
+  },
+  "set graph_extraction.backend <- 1": {
+    "err": true
+  },
+  "set graph_extraction.backend <- 1.5": {
+    "err": true
+  },
+  "set graph_extraction.backend <- 5000000000": {
+    "err": true
+  },
+  "set graph_extraction.backend <- 70000": {
+    "err": true
+  },
+  "set graph_extraction.backend <- [1]": {
+    "err": true
+  },
+  "set graph_extraction.backend <- false": {
+    "err": true
+  },
+  "set graph_extraction.backend <- null": {
+    "err": true
+  },
+  "set graph_extraction.backend <- true": {
+    "err": true
+  },
+  "set graph_extraction.backend <- {\"a\":1}": {
+    "err": true
+  },
+  "set graph_extractor <- \"\"": {
+    "ok": {
+      "graph_extraction.backend": ""
+    }
+  },
+  "set graph_extractor <- \"1\"": {
+    "ok": {
+      "graph_extraction.backend": "1"
+    }
+  },
+  "set graph_extractor <- \"s\"": {
+    "ok": {
+      "graph_extraction.backend": "s"
+    }
+  },
+  "set graph_extractor <- \"true\"": {
+    "ok": {
+      "graph_extraction.backend": "true"
+    }
+  },
+  "set graph_extractor <- -1": {
+    "err": true
+  },
+  "set graph_extractor <- 0": {
+    "err": true
+  },
+  "set graph_extractor <- 1": {
+    "err": true
+  },
+  "set graph_extractor <- 1.5": {
+    "err": true
+  },
+  "set graph_extractor <- 5000000000": {
+    "err": true
+  },
+  "set graph_extractor <- 70000": {
+    "err": true
+  },
+  "set graph_extractor <- [1]": {
+    "err": true
+  },
+  "set graph_extractor <- false": {
+    "err": true
+  },
+  "set graph_extractor <- null": {
+    "err": true
+  },
+  "set graph_extractor <- true": {
+    "err": true
+  },
+  "set graph_extractor <- {\"a\":1}": {
+    "err": true
+  },
   "set graph_file_path <- \"\"": {
     "ok": {}
   },
@@ -9533,22 +9641,179 @@
   "set no_such_key <- {\"a\":1}": {
     "ok": {}
   },
+  "set ontology.file_path <- \"\"": {
+    "ok": {}
+  },
+  "set ontology.file_path <- \"1\"": {
+    "ok": {
+      "ontology.file_path": "1"
+    }
+  },
+  "set ontology.file_path <- \"s\"": {
+    "ok": {
+      "ontology.file_path": "s"
+    }
+  },
+  "set ontology.file_path <- \"true\"": {
+    "ok": {
+      "ontology.file_path": "true"
+    }
+  },
+  "set ontology.file_path <- -1": {
+    "err": true
+  },
+  "set ontology.file_path <- 0": {
+    "err": true
+  },
+  "set ontology.file_path <- 1": {
+    "err": true
+  },
+  "set ontology.file_path <- 1.5": {
+    "err": true
+  },
+  "set ontology.file_path <- 5000000000": {
+    "err": true
+  },
+  "set ontology.file_path <- 70000": {
+    "err": true
+  },
+  "set ontology.file_path <- [1]": {
+    "err": true
+  },
+  "set ontology.file_path <- false": {
+    "err": true
+  },
+  "set ontology.file_path <- null": {
+    "err": true
+  },
+  "set ontology.file_path <- true": {
+    "err": true
+  },
+  "set ontology.file_path <- {\"a\":1}": {
+    "err": true
+  },
+  "set ontology.matching_strategy <- \"\"": {
+    "ok": {
+      "ontology.matching_strategy": ""
+    }
+  },
+  "set ontology.matching_strategy <- \"1\"": {
+    "ok": {
+      "ontology.matching_strategy": "1"
+    }
+  },
+  "set ontology.matching_strategy <- \"s\"": {
+    "ok": {
+      "ontology.matching_strategy": "s"
+    }
+  },
+  "set ontology.matching_strategy <- \"true\"": {
+    "ok": {
+      "ontology.matching_strategy": "true"
+    }
+  },
+  "set ontology.matching_strategy <- -1": {
+    "err": true
+  },
+  "set ontology.matching_strategy <- 0": {
+    "err": true
+  },
+  "set ontology.matching_strategy <- 1": {
+    "err": true
+  },
+  "set ontology.matching_strategy <- 1.5": {
+    "err": true
+  },
+  "set ontology.matching_strategy <- 5000000000": {
+    "err": true
+  },
+  "set ontology.matching_strategy <- 70000": {
+    "err": true
+  },
+  "set ontology.matching_strategy <- [1]": {
+    "err": true
+  },
+  "set ontology.matching_strategy <- false": {
+    "err": true
+  },
+  "set ontology.matching_strategy <- null": {
+    "err": true
+  },
+  "set ontology.matching_strategy <- true": {
+    "err": true
+  },
+  "set ontology.matching_strategy <- {\"a\":1}": {
+    "err": true
+  },
+  "set ontology.resolver <- \"\"": {
+    "ok": {
+      "ontology.resolver": ""
+    }
+  },
+  "set ontology.resolver <- \"1\"": {
+    "ok": {
+      "ontology.resolver": "1"
+    }
+  },
+  "set ontology.resolver <- \"s\"": {
+    "ok": {
+      "ontology.resolver": "s"
+    }
+  },
+  "set ontology.resolver <- \"true\"": {
+    "ok": {
+      "ontology.resolver": "true"
+    }
+  },
+  "set ontology.resolver <- -1": {
+    "err": true
+  },
+  "set ontology.resolver <- 0": {
+    "err": true
+  },
+  "set ontology.resolver <- 1": {
+    "err": true
+  },
+  "set ontology.resolver <- 1.5": {
+    "err": true
+  },
+  "set ontology.resolver <- 5000000000": {
+    "err": true
+  },
+  "set ontology.resolver <- 70000": {
+    "err": true
+  },
+  "set ontology.resolver <- [1]": {
+    "err": true
+  },
+  "set ontology.resolver <- false": {
+    "err": true
+  },
+  "set ontology.resolver <- null": {
+    "err": true
+  },
+  "set ontology.resolver <- true": {
+    "err": true
+  },
+  "set ontology.resolver <- {\"a\":1}": {
+    "err": true
+  },
   "set ontology_file_path <- \"\"": {
     "ok": {}
   },
   "set ontology_file_path <- \"1\"": {
     "ok": {
-      "ontology_file_path": "1"
+      "ontology.file_path": "1"
     }
   },
   "set ontology_file_path <- \"s\"": {
     "ok": {
-      "ontology_file_path": "s"
+      "ontology.file_path": "s"
     }
   },
   "set ontology_file_path <- \"true\"": {
     "ok": {
-      "ontology_file_path": "true"
+      "ontology.file_path": "true"
     }
   },
   "set ontology_file_path <- -1": {
@@ -9586,22 +9851,22 @@
   },
   "set ontology_matching_strategy <- \"\"": {
     "ok": {
-      "ontology_matching_strategy": ""
+      "ontology.matching_strategy": ""
     }
   },
   "set ontology_matching_strategy <- \"1\"": {
     "ok": {
-      "ontology_matching_strategy": "1"
+      "ontology.matching_strategy": "1"
     }
   },
   "set ontology_matching_strategy <- \"s\"": {
     "ok": {
-      "ontology_matching_strategy": "s"
+      "ontology.matching_strategy": "s"
     }
   },
   "set ontology_matching_strategy <- \"true\"": {
     "ok": {
-      "ontology_matching_strategy": "true"
+      "ontology.matching_strategy": "true"
     }
   },
   "set ontology_matching_strategy <- -1": {
@@ -9639,22 +9904,22 @@
   },
   "set ontology_resolver <- \"\"": {
     "ok": {
-      "ontology_resolver": ""
+      "ontology.resolver": ""
     }
   },
   "set ontology_resolver <- \"1\"": {
     "ok": {
-      "ontology_resolver": "1"
+      "ontology.resolver": "1"
     }
   },
   "set ontology_resolver <- \"s\"": {
     "ok": {
-      "ontology_resolver": "s"
+      "ontology.resolver": "s"
     }
   },
   "set ontology_resolver <- \"true\"": {
     "ok": {
-      "ontology_resolver": "true"
+      "ontology.resolver": "true"
     }
   },
   "set ontology_resolver <- -1": {
@@ -10438,24 +10703,128 @@
   "set single_process <- {\"a\":1}": {
     "err": true
   },
+  "set storage.backend <- \"\"": {
+    "ok": {
+      "storage.backend": ""
+    }
+  },
+  "set storage.backend <- \"1\"": {
+    "ok": {
+      "storage.backend": "1"
+    }
+  },
+  "set storage.backend <- \"s\"": {
+    "ok": {
+      "storage.backend": "s"
+    }
+  },
+  "set storage.backend <- \"true\"": {
+    "ok": {
+      "storage.backend": "true"
+    }
+  },
+  "set storage.backend <- -1": {
+    "err": true
+  },
+  "set storage.backend <- 0": {
+    "err": true
+  },
+  "set storage.backend <- 1": {
+    "err": true
+  },
+  "set storage.backend <- 1.5": {
+    "err": true
+  },
+  "set storage.backend <- 5000000000": {
+    "err": true
+  },
+  "set storage.backend <- 70000": {
+    "err": true
+  },
+  "set storage.backend <- [1]": {
+    "err": true
+  },
+  "set storage.backend <- false": {
+    "err": true
+  },
+  "set storage.backend <- null": {
+    "err": true
+  },
+  "set storage.backend <- true": {
+    "err": true
+  },
+  "set storage.backend <- {\"a\":1}": {
+    "err": true
+  },
+  "set storage.bucket_name <- \"\"": {
+    "ok": {}
+  },
+  "set storage.bucket_name <- \"1\"": {
+    "ok": {
+      "storage.bucket_name": "1"
+    }
+  },
+  "set storage.bucket_name <- \"s\"": {
+    "ok": {
+      "storage.bucket_name": "s"
+    }
+  },
+  "set storage.bucket_name <- \"true\"": {
+    "ok": {
+      "storage.bucket_name": "true"
+    }
+  },
+  "set storage.bucket_name <- -1": {
+    "err": true
+  },
+  "set storage.bucket_name <- 0": {
+    "err": true
+  },
+  "set storage.bucket_name <- 1": {
+    "err": true
+  },
+  "set storage.bucket_name <- 1.5": {
+    "err": true
+  },
+  "set storage.bucket_name <- 5000000000": {
+    "err": true
+  },
+  "set storage.bucket_name <- 70000": {
+    "err": true
+  },
+  "set storage.bucket_name <- [1]": {
+    "err": true
+  },
+  "set storage.bucket_name <- false": {
+    "err": true
+  },
+  "set storage.bucket_name <- null": {
+    "err": true
+  },
+  "set storage.bucket_name <- true": {
+    "err": true
+  },
+  "set storage.bucket_name <- {\"a\":1}": {
+    "err": true
+  },
   "set storage_backend <- \"\"": {
     "ok": {
-      "storage_backend": ""
+      "storage.backend": ""
     }
   },
   "set storage_backend <- \"1\"": {
     "ok": {
-      "storage_backend": "1"
+      "storage.backend": "1"
     }
   },
   "set storage_backend <- \"s\"": {
     "ok": {
-      "storage_backend": "s"
+      "storage.backend": "s"
     }
   },
   "set storage_backend <- \"true\"": {
     "ok": {
-      "storage_backend": "true"
+      "storage.backend": "true"
     }
   },
   "set storage_backend <- -1": {
@@ -10496,17 +10865,17 @@
   },
   "set storage_bucket_name <- \"1\"": {
     "ok": {
-      "storage_bucket_name": "1"
+      "storage.bucket_name": "1"
     }
   },
   "set storage_bucket_name <- \"s\"": {
     "ok": {
-      "storage_bucket_name": "s"
+      "storage.bucket_name": "s"
     }
   },
   "set storage_bucket_name <- \"true\"": {
     "ok": {
-      "storage_bucket_name": "true"
+      "storage.bucket_name": "true"
     }
   },
   "set storage_bucket_name <- -1": {
@@ -12566,6 +12935,20 @@
       "llm.model": "changed"
     }
   },
+  "unset graph_extraction.backend": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset graph_extractor": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
   "unset graph_file_path": {
     "ok": {
       "chunk_size": 7,
@@ -13075,6 +13458,27 @@
       "llm.model": "changed"
     }
   },
+  "unset ontology.file_path": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset ontology.matching_strategy": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset ontology.resolver": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
   "unset ontology_file_path": {
     "ok": {
       "chunk_size": 7,
@@ -13188,6 +13592,20 @@
     }
   },
   "unset single_process": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset storage.backend": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset storage.bucket_name": {
     "ok": {
       "chunk_size": 7,
       "db_port": 1,

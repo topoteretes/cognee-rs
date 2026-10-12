@@ -185,7 +185,7 @@ impl ComponentManager {
     #[instrument(name = "cognee.component.storage", level = "info", skip_all, err)]
     async fn init_storage(&self) -> Result<Arc<dyn StorageTrait>, ComponentError> {
         let ctx = self.build_context().await;
-        cognee_components::build_storage(&ctx).await
+        self.registry.build_storage(&ctx).await
     }
 
     #[instrument(name = "cognee.component.database", level = "info", skip_all, err)]
@@ -221,6 +221,55 @@ impl ComponentManager {
     async fn init_llm(&self) -> Result<Arc<dyn Llm>, ComponentError> {
         let ctx = self.build_context().await;
         self.registry.build_llm(&ctx).await
+    }
+
+    /// Build the ontology resolver selected by `ontology.resolver`, loading
+    /// `file_path` when given (a per-call override such as the CLI's
+    /// `--ontology-file`) or else `ontology.file_path`. No path means the
+    /// no-op resolver. Not cached: loading is per pipeline build.
+    #[instrument(name = "cognee.component.ontology", level = "info", skip_all, err)]
+    pub async fn ontology_resolver(
+        &self,
+        file_path: Option<&str>,
+    ) -> Result<Arc<dyn cognee_ontology::OntologyResolver>, ComponentError> {
+        let ctx = self.build_context().await;
+        self.registry.build_ontology_resolver(&ctx, file_path).await
+    }
+
+    /// Build the graph-extraction backend for one cognify run.
+    ///
+    /// `kind` is the caller's selection, or `graph_extraction.backend` when
+    /// `None`. `Ok(None)` means cognify's own LLM extractor (`llm`).
+    ///
+    /// # Errors
+    /// [`ComponentError::GraphExtractor`] when no backend is registered under
+    /// the kind (never a silent fallback to the LLM extractor), or whatever
+    /// the factory returns.
+    pub async fn graph_extractor(
+        &self,
+        kind: Option<&str>,
+        spec: &serde_json::Value,
+    ) -> Result<Option<Arc<dyn cognee_cognify::graph_backend::ChunkGraphExtractor>>, ComponentError>
+    {
+        let ctx = self.build_context().await;
+        let kind = match kind {
+            Some(k) => k.to_string(),
+            None => {
+                ctx.section::<cognee_components::GraphExtractionConfig>()
+                    .backend
+            }
+        };
+        let kind = kind.trim().to_lowercase();
+        if kind.is_empty() || kind == cognee_components::LLM_GRAPH_EXTRACTOR {
+            return Ok(None);
+        }
+        match self.registry.build_graph_extractor(&ctx, &kind, spec).await {
+            Some(built) => built.map(Some),
+            None => Err(ComponentError::GraphExtractor(format!(
+                "no graph extractor is registered for kind {kind:?}; registered: {}",
+                self.registry.graph_extractor_kinds().join(", ")
+            ))),
+        }
     }
 
     /// Return the [`Transcriber`] for the configured LLM provider, if supported.

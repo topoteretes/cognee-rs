@@ -38,9 +38,13 @@ use cognee::cognify::{
     ChunkGraphExtractor, ChunkGraphResult, ChunkRef, ExtractionContext, GraphBackendError,
 };
 use cognee::config::Settings;
+use cognee::{
+    BackendBuildContext, ComponentError, ComponentManager, ComponentRegistry, ConfigManager,
+    GraphExtractorFactory,
+};
 use cognee_bindings_common::graph_backend::{
-    GraphBackendFuture, check_graph_backend_registered, graph_backend_from_opts,
-    register_graph_backend, registered_graph_backend_kinds,
+    GraphBackendFuture, available_graph_backend_kinds, check_graph_backend_registered,
+    graph_backend_from_opts, register_graph_backend, registered_graph_backend_kinds,
 };
 use cognee_bindings_common::ops::pipeline::cognify_config_with_opts;
 use cognee_bindings_common::{CogneeServices, HandleState, SdkError};
@@ -72,12 +76,17 @@ impl ChunkGraphExtractor for StubExtractor {
 /// than an inference from the config.
 static CALLS: AtomicUsize = AtomicUsize::new(0);
 
-/// Hermetic services, built the way `handle_close.rs` builds them: every store
-/// under a temp dir, a dummy key so the strict LLM resolve succeeds without
-/// network I/O, and the mock embedding provider so warming never downloads.
-async fn services_under(dir: &TempDir) -> Arc<CogneeServices> {
+/// A manager with default settings: the resolver tests never build services.
+fn bare_cm() -> ComponentManager {
+    ComponentManager::new(ConfigManager::new(Settings::default()))
+}
+
+/// Hermetic settings: every store under a temp dir, a dummy key so the strict
+/// LLM resolve succeeds without network I/O, and the mock embedding provider
+/// so warming never downloads.
+fn settings_under(dir: &TempDir) -> Settings {
     let root = dir.path();
-    let settings = Settings {
+    Settings {
         sections: [
             (
                 "embedding.provider".to_string(),
@@ -93,8 +102,14 @@ async fn services_under(dir: &TempDir) -> Arc<CogneeServices> {
         system_root_directory: root.join("sys").to_string_lossy().into_owned(),
         relational_db_url: format!("sqlite://{}?mode=rwc", root.join("cognee.db").display()),
         ..Settings::default()
-    };
-    HandleState::from_settings(settings)
+    }
+}
+
+/// Hermetic services, built the way `handle_close.rs` builds them: every store
+/// under a temp dir, a dummy key so the strict LLM resolve succeeds without
+/// network I/O, and the mock embedding provider so warming never downloads.
+async fn services_under(dir: &TempDir) -> Arc<CogneeServices> {
+    HandleState::from_settings(settings_under(dir))
         .services()
         .await
         .expect("warm")
@@ -130,8 +145,9 @@ async fn an_unregistered_kind_fails_the_call_instead_of_using_the_llm() {
 /// The same refusal one layer down, and for the object spelling of the opt.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_unregistered_kind_is_refused_by_the_resolver_too() {
+    let cm = bare_cm();
     let opts = json!({ "graphBackend": { "kind": "absent-kind-xyz", "threshold": 0.5 } });
-    let err = graph_backend_from_opts(&opts)
+    let err = graph_backend_from_opts(&cm, &opts)
         .await
         .err()
         .expect("unregistered kind");
@@ -139,7 +155,7 @@ async fn an_unregistered_kind_is_refused_by_the_resolver_too() {
 
     // And the cheap pre-flight agrees, so `add_and_cognify` refuses before it
     // has ingested anything.
-    let err = check_graph_backend_registered(&opts).expect_err("unregistered kind");
+    let err = check_graph_backend_registered(&cm, &opts).expect_err("unregistered kind");
     assert!(err.to_string().contains("absent-kind-xyz"), "{err}");
 }
 
@@ -147,18 +163,19 @@ async fn an_unregistered_kind_is_refused_by_the_resolver_too() {
 /// dropping it is the same silent-LLM fallback by another route.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_malformed_selection_is_refused_rather_than_ignored() {
+    let cm = bare_cm();
     for opts in [
         json!({ "graphBackend": 7 }),
         json!({ "graphBackend": [] }),
         json!({ "graphBackend": { "threshold": 0.5 } }),
         json!({ "graphBackend": { "kind": 7 } }),
     ] {
-        let err = graph_backend_from_opts(&opts)
+        let err = graph_backend_from_opts(&cm, &opts)
             .await
             .err()
             .unwrap_or_else(|| panic!("{opts} must be refused, not ignored"));
         assert!(matches!(err, SdkError::Validation(_)), "{opts}: {err:?}");
-        check_graph_backend_registered(&opts)
+        check_graph_backend_registered(&cm, &opts)
             .err()
             .unwrap_or_else(|| panic!("{opts} must be refused by the pre-flight too"));
     }
@@ -235,7 +252,7 @@ async fn a_duplicate_registration_is_rejected_and_the_first_one_stands() {
     );
 
     let opts = json!({ "graphBackend": "test-duplicate" });
-    let backend = graph_backend_from_opts(&opts)
+    let backend = graph_backend_from_opts(&bare_cm(), &opts)
         .await
         .expect("resolves")
         .expect("a backend was asked for");
@@ -251,7 +268,7 @@ async fn a_factory_failure_propagates() {
     }
     register_graph_backend("test-boom", boom).expect("registration");
 
-    let err = graph_backend_from_opts(&json!({ "graphBackend": "test-boom" }))
+    let err = graph_backend_from_opts(&bare_cm(), &json!({ "graphBackend": "test-boom" }))
         .await
         .err()
         .expect("the factory failed");
@@ -284,7 +301,8 @@ async fn opts_without_a_graph_backend_are_untouched() {
             cfg.graph_backend.is_none(),
             "{opts} must attach no extractor"
         );
-        check_graph_backend_registered(&opts).unwrap_or_else(|e| panic!("{opts}: {e}"));
+        check_graph_backend_registered(&svc.component_manager, &opts)
+            .unwrap_or_else(|e| panic!("{opts}: {e}"));
     }
 
     // And the existing overrides still land.
@@ -294,4 +312,161 @@ async fn opts_without_a_graph_backend_are_untouched() {
     assert_eq!(cfg.max_chunk_size, Some(1234));
     assert_eq!(cfg.chunk_overlap, 7);
     assert!(cfg.graph_backend.is_none());
+}
+
+// ---------------------------------------------------------------------------
+// 4. Backends on the handle's component registry, and the configured default.
+// ---------------------------------------------------------------------------
+
+cognee_config_core::config_section! {
+    /// A registry-registered backend's own setting.
+    pub struct StubExtractorConfig in "graph_extraction.stub" {
+        /// Name the stub extractor reports.
+        pub label: String = "stub-default".to_string() => {
+            env: [], alias: [], secret: false,
+        },
+    }
+}
+
+/// A registry factory: names its extractor after its configured label, and
+/// after a per-call `label` when the spec carries one.
+struct StubExtractorFactory;
+
+#[async_trait::async_trait]
+impl GraphExtractorFactory for StubExtractorFactory {
+    fn provider(&self) -> &str {
+        "stub-registry"
+    }
+
+    fn config_sections(&self) -> Vec<&'static cognee_config_core::SectionSchema> {
+        vec![<StubExtractorConfig as cognee_config_core::ConfigSection>::schema()]
+    }
+
+    async fn build(
+        &self,
+        ctx: &BackendBuildContext,
+        spec: &Value,
+    ) -> Result<Arc<dyn ChunkGraphExtractor>, ComponentError> {
+        let label = spec
+            .get("label")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .unwrap_or_else(|| ctx.section::<StubExtractorConfig>().label);
+        Ok(Arc::new(StubExtractor(Box::leak(label.into_boxed_str()))))
+    }
+}
+
+fn stub_registry() -> ComponentRegistry {
+    let mut registry = ComponentRegistry::with_builtins();
+    registry
+        .register_graph_extractor(Arc::new(StubExtractorFactory))
+        .expect("not the reserved kind");
+    registry
+}
+
+/// A registry factory is reachable from the opts, its config section joins the
+/// handle's schema, and its configured setting reaches the build.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_registry_factory_serves_the_opt_and_registers_its_settings() {
+    let dir = TempDir::new().expect("tempdir");
+    let state = HandleState::from_settings_with_registry(settings_under(&dir), stub_registry());
+    state
+        .cm
+        .config()
+        .set("graph_extraction.stub.label", json!("configured"))
+        .expect("the factory's key is known");
+    let svc = state.services().await.expect("warm");
+
+    let cfg = cognify_config_with_opts(&svc, &json!({ "graphBackend": "stub-registry" }))
+        .await
+        .expect("registered backend builds");
+    let handle = cfg.graph_backend.as_ref().expect("extractor attached");
+    assert_eq!(handle.0.name(), "configured");
+
+    let opts = json!({ "graphBackend": { "kind": "stub-registry", "label": "per-call" } });
+    let cfg = cognify_config_with_opts(&svc, &opts).await.expect("config");
+    assert_eq!(
+        cfg.graph_backend.as_ref().expect("attached").0.name(),
+        "per-call"
+    );
+
+    assert!(
+        available_graph_backend_kinds(&svc.component_manager).contains(&"stub-registry".to_owned())
+    );
+}
+
+/// Without a per-call selection, `graph_extraction.backend` picks the
+/// extractor; a per-call `llm` selects the built-in one regardless.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_configured_default_applies_and_llm_overrides_it() {
+    let dir = TempDir::new().expect("tempdir");
+    let state = HandleState::from_settings_with_registry(settings_under(&dir), stub_registry());
+    state
+        .cm
+        .config()
+        .set("graph_extractor", json!("stub-registry"))
+        .expect("the Python-compatible alias is known");
+    let svc = state.services().await.expect("warm");
+
+    let cfg = cognify_config_with_opts(&svc, &json!({}))
+        .await
+        .expect("config");
+    assert_eq!(
+        cfg.graph_backend
+            .as_ref()
+            .expect("the default backend")
+            .0
+            .name(),
+        "stub-default"
+    );
+
+    let cfg = cognify_config_with_opts(&svc, &json!({ "graphBackend": "llm" }))
+        .await
+        .expect("config");
+    assert!(
+        cfg.graph_backend.is_none(),
+        "`llm` is the built-in extractor"
+    );
+}
+
+/// A misconfigured default is refused by the pre-flight, like a misspelled
+/// per-call selection.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unregistered_default_is_refused() {
+    let cm = bare_cm();
+    cm.config()
+        .set("graph_extraction.backend", json!("absent-default-xyz"))
+        .expect("known key");
+    let err = check_graph_backend_registered(&cm, &json!({})).expect_err("unregistered default");
+    assert!(err.to_string().contains("absent-default-xyz"), "{err}");
+}
+
+/// `llm` names the built-in extractor; neither registry can take it.
+#[test]
+fn the_llm_kind_is_reserved() {
+    fn any(_spec: Value) -> GraphBackendFuture {
+        Box::pin(async { Ok(Arc::new(StubExtractor("x")) as Arc<dyn ChunkGraphExtractor>) })
+    }
+    assert!(register_graph_backend("llm", any).is_err());
+
+    struct LlmNamed;
+    #[async_trait::async_trait]
+    impl GraphExtractorFactory for LlmNamed {
+        fn provider(&self) -> &str {
+            "LLM"
+        }
+        async fn build(
+            &self,
+            _ctx: &BackendBuildContext,
+            _spec: &Value,
+        ) -> Result<Arc<dyn ChunkGraphExtractor>, ComponentError> {
+            unreachable!("never registered")
+        }
+    }
+    let mut registry = ComponentRegistry::with_builtins();
+    assert!(
+        registry
+            .register_graph_extractor(Arc::new(LlmNamed))
+            .is_err()
+    );
 }

@@ -56,8 +56,8 @@ describe("Phase-2 config surface", () => {
       expect(cfg["vector.name"]).toBe("my_collection");
       expect(cfg["graph.file_path"]).toBe("/data/graph");
       expect(cfg.cache_root_directory).toBe("/tmp/cache");
-      expect(cfg.ontology_file_path).toBe("/onto.owl");
-      expect(cfg.ontology_resolver).toBe("custom");
+      expect(cfg["ontology.file_path"]).toBe("/onto.owl");
+      expect(cfg["ontology.resolver"]).toBe("custom");
     });
 
     it("blanks secret fields in getConfig", () => {
@@ -102,7 +102,7 @@ describe("Phase-2 config surface", () => {
       expect(cfg["vector.host"]).toBe("host-via-generic");
       expect(cfg["vector.port"]).toBe(7000);
       expect(cfg["llm.streaming"]).toBe(true);
-      expect(cfg.ontology_file_path).toBe("/o2.owl");
+      expect(cfg["ontology.file_path"]).toBe("/o2.owl");
     });
 
     it("ignores an unknown key by default", () => {

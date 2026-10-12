@@ -71,7 +71,8 @@ So the settings a build accepts follow the components it contains:
 * a factory compiled out by a disabled feature brings no keys: its env vars are not
   read, and setting its keys is an unknown-key condition;
 * a downstream build that registers its own factory (`register_llm`,
-  `register_vector`, …) brings that factory's keys, settable through the same
+  `register_vector`, `register_storage`, `register_ontology_resolver`,
+  `register_graph_extractor`, …) brings that factory's keys, settable through the same
   `ConfigManager::set`, binding `set` and config files as the built-in ones.
 
 `ComponentManager::with_registry` adds the registry's sections to its
@@ -1294,11 +1295,50 @@ which are not part of this repository.
 
 ## Ontology
 
-| Env var | `Settings` field | Default |
+The `ontology` section is registered by the ontology-resolver kind. Resolvers are
+factories (`OntologyResolverFactory`) on the `ComponentRegistry`, selected by
+`ontology.resolver`; an external crate adds one with `register_ontology_resolver`.
+With no file path the no-op resolver is used, whatever the resolver id.
+
+| Env var | Key (alias) | Default |
 |---|---|---|
-| `ONTOLOGY_FILE_PATH` | `ontology_file_path` | _(empty)_ |
-| `ONTOLOGY_RESOLVER` | `ontology_resolver` | `rdflib` |
-| `ONTOLOGY_MATCHING_STRATEGY` | `ontology_matching_strategy` | `fuzzy` |
+| `ONTOLOGY_FILE_PATH` | `ontology.file_path` (`ontology_file_path`) | _(empty)_ |
+| `ONTOLOGY_RESOLVER` | `ontology.resolver` (`ontology_resolver`) | `rdflib` |
+| `ONTOLOGY_MATCHING_STRATEGY` | `ontology.matching_strategy` (`ontology_matching_strategy`) | `fuzzy` |
+
+Only `rdflib` is built in; an unregistered resolver id with a file path set is an
+error. `rdflib` implements only `fuzzy` matching and warns on any other strategy.
+The CLI's `--ontology-file` overrides `ontology.file_path` for one run.
+
+## File storage
+
+The `storage` section is registered by the storage kind. Backends are factories
+(`StorageFactory`) selected by `storage.backend`; an external crate adds one (an
+object store, say) with `register_storage`.
+
+| Env var | Key (alias) | Default |
+|---|---|---|
+| `STORAGE_BACKEND` | `storage.backend` (`storage_backend`) | `local` |
+| `STORAGE_BUCKET_NAME` | `storage.bucket_name` (`storage_bucket_name`) | _(empty)_ |
+
+Only `local` (files under `data_root_directory`) is built in. An unregistered
+backend id is an error. No built-in backend reads `storage.bucket_name`.
+
+## Graph extraction
+
+The `graph_extraction` section is registered by the graph-extraction kind. It
+picks the extractor cognify uses to turn chunks into graph facts.
+
+| Env var | Key (alias) | Default |
+|---|---|---|
+| `GRAPH_EXTRACTOR` | `graph_extraction.backend` (`graph_extractor`) | `llm` |
+
+`llm` is cognify's built-in LLM extractor. Other kinds (GLiNER, …) are
+`GraphExtractorFactory`s that an external crate registers with
+`register_graph_extractor`, together with their own config sections. A binding's
+per-call `graphBackend` cognify option (a kind string, or `{"kind": …, …tuning}`)
+overrides the default. A kind nothing is registered under is an error; cognify
+never falls back to the LLM extractor silently.
 
 ## System paths, users & datasets
 

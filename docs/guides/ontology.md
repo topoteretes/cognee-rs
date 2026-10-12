@@ -29,23 +29,22 @@ The flag is `--ontology-file <path>`
 
 You can also set the ontology globally instead of per-invocation:
 
-| Env var | Config key | Default |
+| Env var | Config key (alias) | Default |
 |---|---|---|
-| `ONTOLOGY_FILE_PATH` | `ontology_file_path` | _(empty)_ |
-| `ONTOLOGY_RESOLVER` | `ontology_resolver` | `rdflib` |
-| `ONTOLOGY_MATCHING_STRATEGY` | `ontology_matching_strategy` | `fuzzy` |
+| `ONTOLOGY_FILE_PATH` | `ontology.file_path` (`ontology_file_path`) | _(empty)_ |
+| `ONTOLOGY_RESOLVER` | `ontology.resolver` (`ontology_resolver`) | `rdflib` |
+| `ONTOLOGY_MATCHING_STRATEGY` | `ontology.matching_strategy` (`ontology_matching_strategy`) | `fuzzy` |
 
 ```bash
 export ONTOLOGY_FILE_PATH=./ontologies/domain.owl
 cognee-cli cognify -d my_dataset
 ```
 
-Note: `ontology_resolver` and `ontology_matching_strategy` are stored for
-parity but the active path currently uses the RDF/JSON-LD/Turtle resolver with a
-fuzzy matching strategy whenever an ontology file is set. See
-[configuration.md](../configuration.md) for the full surface and
-[`crates/lib/src/config.rs`](../../crates/lib/src/config.rs) for the field
-definitions and `set_ontology_*` setters.
+`ontology.resolver` selects an `OntologyResolverFactory` on the component
+registry. Only `rdflib` (RDF/JSON-LD/Turtle) is built in, and it implements only
+the `fuzzy` matching strategy (it warns on any other). An external crate can add
+a resolver with `ComponentRegistry::register_ontology_resolver`. See
+[configuration.md § Ontology](../configuration.md#ontology) for the full surface.
 
 ## Supported formats
 

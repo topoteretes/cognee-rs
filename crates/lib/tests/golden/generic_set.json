@@ -6710,6 +6710,134 @@
     "err": "TypeMismatch",
     "key": "graph_database_username"
   },
+  "graph_extraction.backend <- \"\"": {
+    "ok": {
+      "graph_extraction.backend": ""
+    }
+  },
+  "graph_extraction.backend <- \"1\"": {
+    "ok": {
+      "graph_extraction.backend": "1"
+    }
+  },
+  "graph_extraction.backend <- \"s\"": {
+    "ok": {
+      "graph_extraction.backend": "s"
+    }
+  },
+  "graph_extraction.backend <- \"true\"": {
+    "ok": {
+      "graph_extraction.backend": "true"
+    }
+  },
+  "graph_extraction.backend <- -1": {
+    "err": "TypeMismatch",
+    "key": "graph_extraction.backend"
+  },
+  "graph_extraction.backend <- 0": {
+    "err": "TypeMismatch",
+    "key": "graph_extraction.backend"
+  },
+  "graph_extraction.backend <- 1": {
+    "err": "TypeMismatch",
+    "key": "graph_extraction.backend"
+  },
+  "graph_extraction.backend <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "graph_extraction.backend"
+  },
+  "graph_extraction.backend <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "graph_extraction.backend"
+  },
+  "graph_extraction.backend <- 70000": {
+    "err": "TypeMismatch",
+    "key": "graph_extraction.backend"
+  },
+  "graph_extraction.backend <- [1]": {
+    "err": "TypeMismatch",
+    "key": "graph_extraction.backend"
+  },
+  "graph_extraction.backend <- false": {
+    "err": "TypeMismatch",
+    "key": "graph_extraction.backend"
+  },
+  "graph_extraction.backend <- null": {
+    "err": "TypeMismatch",
+    "key": "graph_extraction.backend"
+  },
+  "graph_extraction.backend <- true": {
+    "err": "TypeMismatch",
+    "key": "graph_extraction.backend"
+  },
+  "graph_extraction.backend <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "graph_extraction.backend"
+  },
+  "graph_extractor <- \"\"": {
+    "ok": {
+      "graph_extraction.backend": ""
+    }
+  },
+  "graph_extractor <- \"1\"": {
+    "ok": {
+      "graph_extraction.backend": "1"
+    }
+  },
+  "graph_extractor <- \"s\"": {
+    "ok": {
+      "graph_extraction.backend": "s"
+    }
+  },
+  "graph_extractor <- \"true\"": {
+    "ok": {
+      "graph_extraction.backend": "true"
+    }
+  },
+  "graph_extractor <- -1": {
+    "err": "TypeMismatch",
+    "key": "graph_extractor"
+  },
+  "graph_extractor <- 0": {
+    "err": "TypeMismatch",
+    "key": "graph_extractor"
+  },
+  "graph_extractor <- 1": {
+    "err": "TypeMismatch",
+    "key": "graph_extractor"
+  },
+  "graph_extractor <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "graph_extractor"
+  },
+  "graph_extractor <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "graph_extractor"
+  },
+  "graph_extractor <- 70000": {
+    "err": "TypeMismatch",
+    "key": "graph_extractor"
+  },
+  "graph_extractor <- [1]": {
+    "err": "TypeMismatch",
+    "key": "graph_extractor"
+  },
+  "graph_extractor <- false": {
+    "err": "TypeMismatch",
+    "key": "graph_extractor"
+  },
+  "graph_extractor <- null": {
+    "err": "TypeMismatch",
+    "key": "graph_extractor"
+  },
+  "graph_extractor <- true": {
+    "err": "TypeMismatch",
+    "key": "graph_extractor"
+  },
+  "graph_extractor <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "graph_extractor"
+  },
   "graph_file_path <- \"\"": {
     "ok": {}
   },
@@ -11264,22 +11392,212 @@
   "no_such_key <- {\"a\":1}": {
     "ok": {}
   },
+  "ontology.file_path <- \"\"": {
+    "ok": {}
+  },
+  "ontology.file_path <- \"1\"": {
+    "ok": {
+      "ontology.file_path": "1"
+    }
+  },
+  "ontology.file_path <- \"s\"": {
+    "ok": {
+      "ontology.file_path": "s"
+    }
+  },
+  "ontology.file_path <- \"true\"": {
+    "ok": {
+      "ontology.file_path": "true"
+    }
+  },
+  "ontology.file_path <- -1": {
+    "err": "TypeMismatch",
+    "key": "ontology.file_path"
+  },
+  "ontology.file_path <- 0": {
+    "err": "TypeMismatch",
+    "key": "ontology.file_path"
+  },
+  "ontology.file_path <- 1": {
+    "err": "TypeMismatch",
+    "key": "ontology.file_path"
+  },
+  "ontology.file_path <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "ontology.file_path"
+  },
+  "ontology.file_path <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "ontology.file_path"
+  },
+  "ontology.file_path <- 70000": {
+    "err": "TypeMismatch",
+    "key": "ontology.file_path"
+  },
+  "ontology.file_path <- [1]": {
+    "err": "TypeMismatch",
+    "key": "ontology.file_path"
+  },
+  "ontology.file_path <- false": {
+    "err": "TypeMismatch",
+    "key": "ontology.file_path"
+  },
+  "ontology.file_path <- null": {
+    "err": "TypeMismatch",
+    "key": "ontology.file_path"
+  },
+  "ontology.file_path <- true": {
+    "err": "TypeMismatch",
+    "key": "ontology.file_path"
+  },
+  "ontology.file_path <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "ontology.file_path"
+  },
+  "ontology.matching_strategy <- \"\"": {
+    "ok": {
+      "ontology.matching_strategy": ""
+    }
+  },
+  "ontology.matching_strategy <- \"1\"": {
+    "ok": {
+      "ontology.matching_strategy": "1"
+    }
+  },
+  "ontology.matching_strategy <- \"s\"": {
+    "ok": {
+      "ontology.matching_strategy": "s"
+    }
+  },
+  "ontology.matching_strategy <- \"true\"": {
+    "ok": {
+      "ontology.matching_strategy": "true"
+    }
+  },
+  "ontology.matching_strategy <- -1": {
+    "err": "TypeMismatch",
+    "key": "ontology.matching_strategy"
+  },
+  "ontology.matching_strategy <- 0": {
+    "err": "TypeMismatch",
+    "key": "ontology.matching_strategy"
+  },
+  "ontology.matching_strategy <- 1": {
+    "err": "TypeMismatch",
+    "key": "ontology.matching_strategy"
+  },
+  "ontology.matching_strategy <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "ontology.matching_strategy"
+  },
+  "ontology.matching_strategy <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "ontology.matching_strategy"
+  },
+  "ontology.matching_strategy <- 70000": {
+    "err": "TypeMismatch",
+    "key": "ontology.matching_strategy"
+  },
+  "ontology.matching_strategy <- [1]": {
+    "err": "TypeMismatch",
+    "key": "ontology.matching_strategy"
+  },
+  "ontology.matching_strategy <- false": {
+    "err": "TypeMismatch",
+    "key": "ontology.matching_strategy"
+  },
+  "ontology.matching_strategy <- null": {
+    "err": "TypeMismatch",
+    "key": "ontology.matching_strategy"
+  },
+  "ontology.matching_strategy <- true": {
+    "err": "TypeMismatch",
+    "key": "ontology.matching_strategy"
+  },
+  "ontology.matching_strategy <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "ontology.matching_strategy"
+  },
+  "ontology.resolver <- \"\"": {
+    "ok": {
+      "ontology.resolver": ""
+    }
+  },
+  "ontology.resolver <- \"1\"": {
+    "ok": {
+      "ontology.resolver": "1"
+    }
+  },
+  "ontology.resolver <- \"s\"": {
+    "ok": {
+      "ontology.resolver": "s"
+    }
+  },
+  "ontology.resolver <- \"true\"": {
+    "ok": {
+      "ontology.resolver": "true"
+    }
+  },
+  "ontology.resolver <- -1": {
+    "err": "TypeMismatch",
+    "key": "ontology.resolver"
+  },
+  "ontology.resolver <- 0": {
+    "err": "TypeMismatch",
+    "key": "ontology.resolver"
+  },
+  "ontology.resolver <- 1": {
+    "err": "TypeMismatch",
+    "key": "ontology.resolver"
+  },
+  "ontology.resolver <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "ontology.resolver"
+  },
+  "ontology.resolver <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "ontology.resolver"
+  },
+  "ontology.resolver <- 70000": {
+    "err": "TypeMismatch",
+    "key": "ontology.resolver"
+  },
+  "ontology.resolver <- [1]": {
+    "err": "TypeMismatch",
+    "key": "ontology.resolver"
+  },
+  "ontology.resolver <- false": {
+    "err": "TypeMismatch",
+    "key": "ontology.resolver"
+  },
+  "ontology.resolver <- null": {
+    "err": "TypeMismatch",
+    "key": "ontology.resolver"
+  },
+  "ontology.resolver <- true": {
+    "err": "TypeMismatch",
+    "key": "ontology.resolver"
+  },
+  "ontology.resolver <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "ontology.resolver"
+  },
   "ontology_file_path <- \"\"": {
     "ok": {}
   },
   "ontology_file_path <- \"1\"": {
     "ok": {
-      "ontology_file_path": "1"
+      "ontology.file_path": "1"
     }
   },
   "ontology_file_path <- \"s\"": {
     "ok": {
-      "ontology_file_path": "s"
+      "ontology.file_path": "s"
     }
   },
   "ontology_file_path <- \"true\"": {
     "ok": {
-      "ontology_file_path": "true"
+      "ontology.file_path": "true"
     }
   },
   "ontology_file_path <- -1": {
@@ -11328,22 +11646,22 @@
   },
   "ontology_matching_strategy <- \"\"": {
     "ok": {
-      "ontology_matching_strategy": ""
+      "ontology.matching_strategy": ""
     }
   },
   "ontology_matching_strategy <- \"1\"": {
     "ok": {
-      "ontology_matching_strategy": "1"
+      "ontology.matching_strategy": "1"
     }
   },
   "ontology_matching_strategy <- \"s\"": {
     "ok": {
-      "ontology_matching_strategy": "s"
+      "ontology.matching_strategy": "s"
     }
   },
   "ontology_matching_strategy <- \"true\"": {
     "ok": {
-      "ontology_matching_strategy": "true"
+      "ontology.matching_strategy": "true"
     }
   },
   "ontology_matching_strategy <- -1": {
@@ -11392,22 +11710,22 @@
   },
   "ontology_resolver <- \"\"": {
     "ok": {
-      "ontology_resolver": ""
+      "ontology.resolver": ""
     }
   },
   "ontology_resolver <- \"1\"": {
     "ok": {
-      "ontology_resolver": "1"
+      "ontology.resolver": "1"
     }
   },
   "ontology_resolver <- \"s\"": {
     "ok": {
-      "ontology_resolver": "s"
+      "ontology.resolver": "s"
     }
   },
   "ontology_resolver <- \"true\"": {
     "ok": {
-      "ontology_resolver": "true"
+      "ontology.resolver": "true"
     }
   },
   "ontology_resolver <- -1": {
@@ -12346,24 +12664,150 @@
     "err": "TypeMismatch",
     "key": "single_process"
   },
+  "storage.backend <- \"\"": {
+    "ok": {
+      "storage.backend": ""
+    }
+  },
+  "storage.backend <- \"1\"": {
+    "ok": {
+      "storage.backend": "1"
+    }
+  },
+  "storage.backend <- \"s\"": {
+    "ok": {
+      "storage.backend": "s"
+    }
+  },
+  "storage.backend <- \"true\"": {
+    "ok": {
+      "storage.backend": "true"
+    }
+  },
+  "storage.backend <- -1": {
+    "err": "TypeMismatch",
+    "key": "storage.backend"
+  },
+  "storage.backend <- 0": {
+    "err": "TypeMismatch",
+    "key": "storage.backend"
+  },
+  "storage.backend <- 1": {
+    "err": "TypeMismatch",
+    "key": "storage.backend"
+  },
+  "storage.backend <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "storage.backend"
+  },
+  "storage.backend <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "storage.backend"
+  },
+  "storage.backend <- 70000": {
+    "err": "TypeMismatch",
+    "key": "storage.backend"
+  },
+  "storage.backend <- [1]": {
+    "err": "TypeMismatch",
+    "key": "storage.backend"
+  },
+  "storage.backend <- false": {
+    "err": "TypeMismatch",
+    "key": "storage.backend"
+  },
+  "storage.backend <- null": {
+    "err": "TypeMismatch",
+    "key": "storage.backend"
+  },
+  "storage.backend <- true": {
+    "err": "TypeMismatch",
+    "key": "storage.backend"
+  },
+  "storage.backend <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "storage.backend"
+  },
+  "storage.bucket_name <- \"\"": {
+    "ok": {}
+  },
+  "storage.bucket_name <- \"1\"": {
+    "ok": {
+      "storage.bucket_name": "1"
+    }
+  },
+  "storage.bucket_name <- \"s\"": {
+    "ok": {
+      "storage.bucket_name": "s"
+    }
+  },
+  "storage.bucket_name <- \"true\"": {
+    "ok": {
+      "storage.bucket_name": "true"
+    }
+  },
+  "storage.bucket_name <- -1": {
+    "err": "TypeMismatch",
+    "key": "storage.bucket_name"
+  },
+  "storage.bucket_name <- 0": {
+    "err": "TypeMismatch",
+    "key": "storage.bucket_name"
+  },
+  "storage.bucket_name <- 1": {
+    "err": "TypeMismatch",
+    "key": "storage.bucket_name"
+  },
+  "storage.bucket_name <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "storage.bucket_name"
+  },
+  "storage.bucket_name <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "storage.bucket_name"
+  },
+  "storage.bucket_name <- 70000": {
+    "err": "TypeMismatch",
+    "key": "storage.bucket_name"
+  },
+  "storage.bucket_name <- [1]": {
+    "err": "TypeMismatch",
+    "key": "storage.bucket_name"
+  },
+  "storage.bucket_name <- false": {
+    "err": "TypeMismatch",
+    "key": "storage.bucket_name"
+  },
+  "storage.bucket_name <- null": {
+    "err": "TypeMismatch",
+    "key": "storage.bucket_name"
+  },
+  "storage.bucket_name <- true": {
+    "err": "TypeMismatch",
+    "key": "storage.bucket_name"
+  },
+  "storage.bucket_name <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "storage.bucket_name"
+  },
   "storage_backend <- \"\"": {
     "ok": {
-      "storage_backend": ""
+      "storage.backend": ""
     }
   },
   "storage_backend <- \"1\"": {
     "ok": {
-      "storage_backend": "1"
+      "storage.backend": "1"
     }
   },
   "storage_backend <- \"s\"": {
     "ok": {
-      "storage_backend": "s"
+      "storage.backend": "s"
     }
   },
   "storage_backend <- \"true\"": {
     "ok": {
-      "storage_backend": "true"
+      "storage.backend": "true"
     }
   },
   "storage_backend <- -1": {
@@ -12415,17 +12859,17 @@
   },
   "storage_bucket_name <- \"1\"": {
     "ok": {
-      "storage_bucket_name": "1"
+      "storage.bucket_name": "1"
     }
   },
   "storage_bucket_name <- \"s\"": {
     "ok": {
-      "storage_bucket_name": "s"
+      "storage.bucket_name": "s"
     }
   },
   "storage_bucket_name <- \"true\"": {
     "ok": {
-      "storage_bucket_name": "true"
+      "storage.bucket_name": "true"
     }
   },
   "storage_bucket_name <- -1": {

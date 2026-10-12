@@ -4,7 +4,6 @@ use cognee::cognify::{ChunkStrategy, CognifyConfig, CognifyResult, FailureReport
 use cognee::database::{
     DatabaseConnection, PipelineRunRepository, SeaOrmPipelineRunRepository, ops,
 };
-use cognee::ontology::{NoOpOntologyResolver, OntologyResolver, RdfLibOntologyResolver};
 use cognee::{ComponentManager, PipelineContext};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
@@ -160,7 +159,6 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
             settings.default_user_id
         ))
     })?;
-    let settings_ontology_path = settings.ontology_file_path.clone();
 
     if args.background {
         warn!(
@@ -209,19 +207,13 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
             .await
             .map_err(|e| CliError::Runtime(format!("{e}")))?;
 
-        let ontology_path = args.ontology_file.as_deref().or({
-            if settings_ontology_path.is_empty() {
-                None
-            } else {
-                Some(settings_ontology_path.as_str())
-            }
-        });
-        let ontology_resolver: Arc<dyn OntologyResolver> = match ontology_path {
-            Some(path) => Arc::new(RdfLibOntologyResolver::new(path).map_err(|error| {
+        // `--ontology-file` overrides `ontology.file_path`; neither means none.
+        let ontology_resolver = cm
+            .ontology_resolver(args.ontology_file.as_deref())
+            .await
+            .map_err(|error| {
                 CliError::Runtime(format!("Ontology initialization failed: {error}"))
-            })?),
-            None => Arc::new(NoOpOntologyResolver::new()),
-        };
+            })?;
 
         let chunk_strategy = match cm.settings().chunk_strategy.to_uppercase().as_str() {
             "RECURSIVE" => ChunkStrategy::Recursive,

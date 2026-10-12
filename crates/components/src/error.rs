@@ -29,6 +29,12 @@ pub enum ComponentError {
     #[error("Configuration error: {0}")]
     Config(String),
 
+    #[error("Ontology resolver error: {0}")]
+    Ontology(String),
+
+    #[error("Graph extractor error: {0}")]
+    GraphExtractor(String),
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }

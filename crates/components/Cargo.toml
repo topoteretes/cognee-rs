@@ -49,7 +49,9 @@ testing      = ["cognee-vector/testing", "cognee-graph/testing"]
 # Component-owned config sections: factories declare them, the registry
 # collects them into a ConfigSchema.
 cognee-config-core = { path = "../config-core", version = "0.2.0" }
+cognee-cognify = { path = "../cognify", version = "0.2.0" }
 cognee-database = { path = "../database", version = "0.2.0" }
+cognee-ontology = { path = "../ontology", version = "0.2.0" }
 cognee-embedding = { path = "../embedding", version = "0.2.0" }
 cognee-graph = { path = "../graph", version = "0.2.0" }
 cognee-llm = { path = "../llm", version = "0.2.0" }

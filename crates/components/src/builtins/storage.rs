@@ -1,14 +1,35 @@
-//! Storage backend construction. There is no provider choice, so this is a
-//! free function rather than a registered factory.
+//! Built-in storage factory: the local filesystem.
 
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use cognee_storage::{LocalStorage, StorageTrait};
 
 use crate::context::BackendBuildContext;
 use crate::error::ComponentError;
+use crate::traits::StorageFactory;
 
-/// Build and initialize the file-storage backend (`LocalStorage`).
+/// Storage on the local filesystem, under `data_root_directory`.
+pub struct LocalStorageFactory;
+
+#[async_trait]
+impl StorageFactory for LocalStorageFactory {
+    fn provider(&self) -> &str {
+        "local"
+    }
+
+    async fn build(
+        &self,
+        ctx: &BackendBuildContext,
+    ) -> Result<Arc<dyn StorageTrait>, ComponentError> {
+        build_storage(ctx).await
+    }
+}
+
+/// Build and initialize the local-filesystem storage backend.
+///
+/// Kept for callers that build storage without a registry;
+/// [`crate::ComponentRegistry::build_storage`] selects by `storage.backend`.
 pub async fn build_storage(
     ctx: &BackendBuildContext,
 ) -> Result<Arc<dyn StorageTrait>, ComponentError> {

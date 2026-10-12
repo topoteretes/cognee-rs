@@ -6,7 +6,7 @@
 //! | Module | Contents |
 //! |---|---|
 //! | [`error`] | [`SdkError`] enum + [`SdkError::code()`] — portable, no neon/FFI imports |
-//! | [`graph_backend`] | name-keyed registry letting a linked-in crate serve the `graphBackend` cognify opt |
+//! | [`graph_backend`] | resolves the `graphBackend` cognify opt (else `graph_extraction.backend`) through the handle's component registry, plus the legacy process-wide shim |
 //! | [`handle`] | [`HandleState`] struct — shareable inner state of the SDK handle |
 //! | [`services`] | [`CogneeServices`] struct — fully-wired engine + service bundle |
 //! | [`settings_keys`] | [`canonical_settings_key`] — the key a settings-object entry is merged under |
