@@ -36,6 +36,11 @@ pgvector     = ["cognee-vector/pgvector", "dep:url"]
 # under `sqlite` / `postgres` only when the matching driver is compiled in.
 sqlite       = ["cognee-database/sqlite"]
 postgres     = ["cognee-database/postgres"]
+# Session stores beyond the relational one: `with_builtins()` registers the
+# `fs` / `redis` session-store factories (and their config sections) only when
+# these are on.
+session-fs    = ["cognee-session/fs"]
+session-redis = ["cognee-session/redis"]
 pggraph      = ["cognee-graph/postgres", "dep:url"]
 # Record/replay cassette-based mock LLM (MOCK_LLM / COGNEE_RECORD_LLM).
 mock-llm     = ["cognee-llm/mock"]
@@ -60,6 +65,7 @@ cognee-embedding = { path = "../embedding", version = "0.2.0" }
 cognee-graph = { path = "../graph", version = "0.2.0" }
 cognee-llm = { path = "../llm", version = "0.2.0" }
 cognee-storage = { path = "../storage", version = "0.2.0" }
+cognee-session = { path = "../session", version = "0.2.0", features = ["relational-store"] }
 # Dispatch pacing primitives shared with the LLM/embedding adapters.
 cognee-utils = { path = "../utils", version = "0.2.0" }
 cognee-vector = { path = "../vector", version = "0.2.0" }

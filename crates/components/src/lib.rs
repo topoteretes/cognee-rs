@@ -9,7 +9,8 @@
 //! ## Extension
 //!
 //! External adapter crates implement [`VectorDbFactory`] / [`GraphDbFactory`]
-//! / [`LlmFactory`] / [`EmbeddingFactory`] / [`RelationalDbFactory`] / [`StorageFactory`] /
+//! / [`LlmFactory`] / [`EmbeddingFactory`] / [`RelationalDbFactory`] / [`SessionStoreFactory`] /
+//! [`StorageFactory`] /
 //! [`OntologyResolverFactory`] / [`GraphExtractorFactory`] and register them
 //! via explicit dependency injection:
 //!
@@ -43,19 +44,21 @@ pub use context::{
 pub use error::ComponentError;
 pub use registry::{ComponentRegistry, LLM_GRAPH_EXTRACTOR, default_graph_provider};
 pub use sections::{
-    AnthropicConfig, AwsConfig, EmbeddingConfig, GraphConfig, GraphExtractionConfig, LlmConfig,
-    OllamaEmbeddingConfig, OnnxEmbeddingConfig, OntologyConfig, OpenAiCompatibleConfig,
-    OpenAiCompatibleEmbeddingConfig, RelationalConfig, StorageConfig, VectorConfig,
+    AnthropicConfig, AwsConfig, EmbeddingConfig, FsSessionConfig, GraphConfig,
+    GraphExtractionConfig, LlmConfig, OllamaEmbeddingConfig, OnnxEmbeddingConfig, OntologyConfig,
+    OpenAiCompatibleConfig, OpenAiCompatibleEmbeddingConfig, RedisSessionConfig, RelationalConfig,
+    SessionConfig, StorageConfig, VectorConfig,
 };
 pub use traits::{
     EmbeddingFactory, GraphDbFactory, GraphExtractorFactory, LlmFactory, OntologyResolverFactory,
-    RelationalDbFactory, StorageFactory, VectorDbFactory,
+    RelationalDbFactory, SessionStoreFactory, StorageFactory, VectorDbFactory,
 };
 
 // Re-export the default embedding factory so external callers can compose it.
 pub use builtins::database::SeaOrmRelationalFactory;
 pub use builtins::embedding::DefaultEmbeddingFactory;
 pub use builtins::ontology::RdfLibOntologyFactory;
+pub use builtins::session::RelationalSessionFactory;
 pub use builtins::storage::LocalStorageFactory;
 
 /// Compile-time assertion that the registry is `Send + Sync`, so a

@@ -223,6 +223,18 @@ impl ComponentManager {
         self.registry.build_llm(&ctx).await
     }
 
+    /// Build the session store selected by `session.store` (default
+    /// `relational`: the session tables in this manager's relational
+    /// database). Not cached: each pipeline/service build owns its store.
+    #[instrument(name = "cognee.component.session_store", level = "info", skip_all, err)]
+    pub async fn session_store(
+        &self,
+    ) -> Result<Arc<dyn cognee_session::SessionStore>, ComponentError> {
+        let database = self.database().await?;
+        let ctx = self.build_context().await;
+        self.registry.build_session_store(&ctx, database).await
+    }
+
     /// Build the ontology resolver selected by `ontology.resolver`, loading
     /// `file_path` when given (a per-call override such as the CLI's
     /// `--ontology-file`) or else `ontology.file_path`. No path means the

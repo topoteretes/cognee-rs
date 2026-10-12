@@ -11,6 +11,7 @@ use cognee_embedding::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
 use cognee_llm::{Llm, Transcriber};
 use cognee_ontology::{NoOpOntologyResolver, OntologyResolver};
+use cognee_session::SessionStore;
 use cognee_storage::StorageTrait;
 use cognee_vector::VectorDB;
 
@@ -20,10 +21,10 @@ use crate::builtins::embedding::DefaultEmbeddingFactory;
 use crate::builtins::llm::{self, OpenAiCompatibleLlmFactory};
 use crate::context::BackendBuildContext;
 use crate::error::ComponentError;
-use crate::sections::{OntologyConfig, RelationalConfig, StorageConfig};
+use crate::sections::{OntologyConfig, RelationalConfig, SessionConfig, StorageConfig};
 use crate::traits::{
     EmbeddingFactory, GraphDbFactory, GraphExtractorFactory, LlmFactory, OntologyResolverFactory,
-    RelationalDbFactory, StorageFactory, VectorDbFactory,
+    RelationalDbFactory, SessionStoreFactory, StorageFactory, VectorDbFactory,
 };
 
 /// Maps lowercase provider ids to adapter factories, per component kind.
@@ -44,6 +45,7 @@ pub struct ComponentRegistry {
     embedding: HashMap<String, Arc<dyn EmbeddingFactory>>,
     storage: HashMap<String, Arc<dyn StorageFactory>>,
     relational: HashMap<String, Arc<dyn RelationalDbFactory>>,
+    session_store: HashMap<String, Arc<dyn SessionStoreFactory>>,
     ontology: HashMap<String, Arc<dyn OntologyResolverFactory>>,
     graph_extractor: HashMap<String, Arc<dyn GraphExtractorFactory>>,
     /// Config sections registered directly (not through a factory).
@@ -65,6 +67,7 @@ impl ComponentRegistry {
             embedding: HashMap::new(),
             storage: HashMap::new(),
             relational: HashMap::new(),
+            session_store: HashMap::new(),
             ontology: HashMap::new(),
             graph_extractor: HashMap::new(),
             config_sections: Vec::new(),
@@ -159,6 +162,18 @@ impl ComponentRegistry {
             reg.register_relational(Arc::new(SeaOrmRelationalFactory::new("postgresql")));
         }
 
+        // ── session store ─────────────────────────────────────────────────
+        // `seaorm` is the HTTP server's historical id for the same store.
+        for id in ["relational", "seaorm"] {
+            reg.register_session_store(Arc::new(
+                crate::builtins::session::RelationalSessionFactory::new(id),
+            ));
+        }
+        #[cfg(feature = "session-fs")]
+        reg.register_session_store(Arc::new(crate::builtins::session::FsSessionFactory));
+        #[cfg(feature = "session-redis")]
+        reg.register_session_store(Arc::new(crate::builtins::session::RedisSessionFactory));
+
         // ── storage / ontology ────────────────────────────────────────────
         reg.register_storage(Arc::new(crate::builtins::storage::LocalStorageFactory));
         reg.register_ontology_resolver(Arc::new(crate::builtins::ontology::RdfLibOntologyFactory));
@@ -196,6 +211,11 @@ impl ComponentRegistry {
     /// `f.provider()`.
     pub fn register_relational(&mut self, f: Arc<dyn RelationalDbFactory>) {
         self.relational.insert(f.provider().to_lowercase(), f);
+    }
+
+    /// Register (or override) a session-store factory under `f.provider()`.
+    pub fn register_session_store(&mut self, f: Arc<dyn SessionStoreFactory>) {
+        self.session_store.insert(f.provider().to_lowercase(), f);
     }
 
     /// Register (or override) a storage factory under `f.provider()`.
@@ -264,6 +284,7 @@ impl ComponentRegistry {
             <crate::sections::VectorConfig as cognee_config_core::ConfigSection>::schema(),
             <crate::sections::GraphConfig as cognee_config_core::ConfigSection>::schema(),
             <crate::sections::RelationalConfig as cognee_config_core::ConfigSection>::schema(),
+            <crate::sections::SessionConfig as cognee_config_core::ConfigSection>::schema(),
             <crate::sections::StorageConfig as cognee_config_core::ConfigSection>::schema(),
             <crate::sections::OntologyConfig as cognee_config_core::ConfigSection>::schema(),
             <crate::sections::GraphExtractionConfig as cognee_config_core::ConfigSection>::schema(),
@@ -281,6 +302,9 @@ impl ComponentRegistry {
             sections.extend(f.config_sections());
         }
         for f in sorted(&self.relational) {
+            sections.extend(f.config_sections());
+        }
+        for f in sorted(&self.session_store) {
             sections.extend(f.config_sections());
         }
         for f in sorted(&self.storage) {
@@ -575,6 +599,37 @@ impl ComponentRegistry {
         ids
     }
 
+    /// Build the session store selected by `session.store` over the shared
+    /// relational `database`.
+    pub async fn build_session_store(
+        &self,
+        ctx: &BackendBuildContext,
+        database: Arc<dyn RelationalDb>,
+    ) -> Result<Arc<dyn SessionStore>, ComponentError> {
+        let store = ctx.section::<SessionConfig>().store;
+        let key = store.trim().to_lowercase();
+        let key = if key.is_empty() {
+            "relational".to_string()
+        } else {
+            key
+        };
+        let factory = self.session_store.get(&key).ok_or_else(|| {
+            ComponentError::Config(unsupported_msg(
+                "session_store",
+                &key,
+                &self.session_store_providers(),
+            ))
+        })?;
+        factory.build(ctx, database).await
+    }
+
+    /// Store ids with a registered session-store factory (sorted).
+    pub fn session_store_providers(&self) -> Vec<String> {
+        let mut ids: Vec<String> = self.session_store.keys().cloned().collect();
+        ids.sort();
+        ids
+    }
+
     /// Build the file storage selected by `storage.backend`.
     pub async fn build_storage(
         &self,
@@ -775,6 +830,11 @@ fn unsupported_msg(field: &str, provider: &str, supported: &[String]) -> String 
         "db_provider" => match p.as_str() {
             "sqlite" => " Rebuild with the `sqlite` crate feature to enable it.",
             "postgres" | "postgresql" => " Rebuild with the `postgres` crate feature to enable it.",
+            _ => "",
+        },
+        "session_store" => match p.as_str() {
+            "fs" => " Rebuild with the `session-fs` crate feature to enable it.",
+            "redis" => " Rebuild with the `session-redis` crate feature to enable it.",
             _ => "",
         },
         "llm_provider" => match p.as_str() {
@@ -1660,6 +1720,62 @@ mod tests {
         );
         let db = reg.build_database(&ctx).await.expect("custom builds");
         assert_eq!(db.system_label(), "sqlite");
+    }
+
+    #[tokio::test]
+    async fn session_store_defaults_to_the_relational_database() {
+        let reg = ComponentRegistry::with_builtins();
+        let mut ctx = test_ctx();
+        let db = reg.build_database(&ctx).await.expect("sqlite builds");
+        reg.build_session_store(&ctx, Arc::clone(&db))
+            .await
+            .expect("relational store builds");
+
+        // The HTTP server's historical id selects the same store.
+        ctx.sections
+            .insert("session.store".to_string(), serde_json::json!("seaorm"));
+        reg.build_session_store(&ctx, db)
+            .await
+            .expect("seaorm is the relational store");
+    }
+
+    #[cfg(not(feature = "session-redis"))]
+    #[tokio::test]
+    async fn a_compiled_out_session_store_points_at_its_feature() {
+        let reg = ComponentRegistry::with_builtins();
+        let mut ctx = test_ctx();
+        let db = reg.build_database(&ctx).await.expect("sqlite builds");
+        ctx.sections
+            .insert("session.store".to_string(), serde_json::json!("redis"));
+        let msg = match reg.build_session_store(&ctx, db).await {
+            Ok(_) => panic!("redis is behind the session-redis feature"),
+            Err(e) => e.to_string(),
+        };
+        assert!(msg.contains("session-redis"), "{msg}");
+        // Its settings are not registered either.
+        let schema = reg.config_schema().expect("schema");
+        assert!(schema.key_def("cache_host").is_none());
+    }
+
+    #[cfg(feature = "session-fs")]
+    #[tokio::test]
+    async fn the_fs_session_store_uses_its_configured_directory() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let reg = ComponentRegistry::with_builtins();
+        let mut ctx = test_ctx();
+        let db = reg.build_database(&ctx).await.expect("sqlite builds");
+        ctx.sections
+            .insert("session.store".to_string(), serde_json::json!("fs"));
+        ctx.sections.insert(
+            "session.fs.directory".to_string(),
+            serde_json::json!(dir.path().to_string_lossy()),
+        );
+        let store = reg.build_session_store(&ctx, db).await.expect("fs builds");
+        store
+            .create_qa_entry("s1", None, "q", "a", None)
+            .await
+            .expect("write");
+        assert!(std::fs::read_dir(dir.path()).expect("dir").next().is_some());
     }
 
     fn test_ctx() -> BackendBuildContext {

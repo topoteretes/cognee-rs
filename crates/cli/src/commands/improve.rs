@@ -5,7 +5,7 @@ use cognee::api::{ImproveParams, improve};
 use cognee::cognify::CognifyConfig;
 use cognee::core::RayonThreadPool;
 use cognee::ontology::{NoOpOntologyResolver, OntologyResolver};
-use cognee::search::{RelationalSessionStore, SessionManager};
+use cognee::search::SessionManager;
 use cognee::session::SessionStore;
 use cognee::{ComponentManager, PipelineContext};
 use tracing::info;
@@ -91,11 +91,10 @@ pub fn run(args: ImproveArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
         .with_vector_db(Arc::clone(&vector_db))
         .with_database(Arc::clone(&database));
 
-        let session_store: Arc<dyn SessionStore> = Arc::new(
-            RelationalSessionStore::new(database.clone())
-                .await
-                .map_err(|e| CliError::Runtime(format!("session store init failed: {e}")))?,
-        );
+        let session_store: Arc<dyn SessionStore> = cm
+            .session_store()
+            .await
+            .map_err(|e| CliError::Runtime(format!("session store init failed: {e}")))?;
         let session_manager = Arc::new(SessionManager::new(Arc::clone(&session_store)));
         let checkpoint_store = Arc::clone(&database).checkpoints();
 

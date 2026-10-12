@@ -72,7 +72,7 @@ So the settings a build accepts follow the components it contains:
   read, and setting its keys is an unknown-key condition;
 * a downstream build that registers its own factory (`register_llm`,
   `register_vector`, `register_storage`, `register_ontology_resolver`,
-  `register_graph_extractor`, `register_relational`, …) brings that factory's keys, settable through the same
+  `register_graph_extractor`, `register_relational`, `register_session_store`, …) brings that factory's keys, settable through the same
   `ConfigManager::set`, binding `set` and config files as the built-in ones.
 
 `ComponentManager::with_registry` adds the registry's sections to its
@@ -1381,10 +1381,27 @@ Setting `system_root_directory` cascades to the default `graph_file_path` and
 
 ## Session / cache & rate limiting
 
-| Env var | `Settings` field | Default |
+The session (Q&A history) store is chosen by the `session` section, registered by the
+session-store kind. Stores are `SessionStoreFactory`s on the `ComponentRegistry`,
+selected by `session.store`; an external crate adds one with `register_session_store`.
+A factory is handed the shared relational database. Built in:
+
+* `relational`, also registered as `seaorm`: the session tables in the relational
+  database (any `RelationalDb`). This is the default.
+* `fs` (crate feature `session-fs`): JSON files under `session.fs.directory`.
+* `redis` (crate feature `session-redis`): Python's Redis layout, at `session.redis.*`.
+
+A store compiled out by its feature brings no keys: in a default build the `CACHE_HOST`
+… variables are not read, and setting `cache_host` is an unknown key. An unregistered
+store id is an error.
+
+| Env var | Key (alias) | Default |
 |---|---|---|
-| `CACHE_BACKEND` | `cache_backend` | `fs` |
-| `CACHE_HOST` / `CACHE_PORT` | … | `localhost` / `6379` |
+| `COGNEE_SESSION_STORE` | `session.store` (`session_store`) | `relational` |
+| `COGNEE_SESSION_DIR` | `session.fs.directory` (`session_directory`; `fs` builds) | `<system_root>/sessions` |
+| `CACHE_HOST` / `CACHE_PORT` | `session.redis.host` / `.port` (`cache_host` / `cache_port`; `redis` builds) | `localhost` / `6379` |
+| `CACHE_USERNAME` / `CACHE_PASSWORD` | `session.redis.username` / `.password` (`cache_*`; `redis` builds) | _(empty)_ |
+| `CACHE_BACKEND` | `cache_backend` | `fs` (Python parity; not read — use `session.store`) |
 | `SESSION_TTL_SECONDS` | `session_ttl_seconds` | `604800` (7d) |
 | `CACHING` | `enable_caching` | `true` |
 | `LLM_RATE_LIMIT_ENABLED` / `_REQUESTS` / `_INTERVAL` | `llm.rate_limit_*` (see [LLM](#llm)) | `false` / `60` / `60` |

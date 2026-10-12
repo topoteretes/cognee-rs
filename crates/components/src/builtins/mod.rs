@@ -6,6 +6,7 @@ pub mod embedding;
 pub mod graph;
 pub mod llm;
 pub mod ontology;
+pub mod session;
 pub mod storage;
 pub mod vector;
 

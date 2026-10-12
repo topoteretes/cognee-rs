@@ -24,6 +24,7 @@ use cognee_cognify::graph_backend::ChunkGraphExtractor;
 use cognee_config_core::SectionSchema;
 use cognee_database::RelationalDb;
 use cognee_ontology::OntologyResolver;
+use cognee_session::SessionStore;
 use cognee_storage::StorageTrait;
 
 use crate::context::BackendBuildContext;
@@ -133,6 +134,24 @@ pub trait RelationalDbFactory: Send + Sync {
         &self,
         ctx: &BackendBuildContext,
     ) -> Result<Arc<dyn RelationalDb>, ComponentError>;
+}
+
+/// Builds the session (Q&A history) store for one store id (`session.store`).
+#[async_trait]
+pub trait SessionStoreFactory: Send + Sync {
+    /// Lowercase store id this factory serves (e.g. `"relational"`).
+    fn provider(&self) -> &str;
+    /// The configuration sections this factory reads.
+    fn config_sections(&self) -> Vec<&'static SectionSchema> {
+        Vec::new()
+    }
+    /// Construct the store. `database` is the relational database the other
+    /// components share, for a store that keeps sessions there.
+    async fn build(
+        &self,
+        ctx: &BackendBuildContext,
+        database: Arc<dyn RelationalDb>,
+    ) -> Result<Arc<dyn SessionStore>, ComponentError>;
 }
 
 /// Builds the file-storage backend for one provider id (`storage.backend`).

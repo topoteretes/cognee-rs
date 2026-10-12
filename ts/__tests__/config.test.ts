@@ -76,7 +76,6 @@ describe("Phase-2 config surface", () => {
         "graph.key",
         "graph.password",
         "relational.password",
-        "cache_password",
         "default_user_password",
         "otel_exporter_otlp_headers",
       ]) {

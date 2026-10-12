@@ -14,11 +14,7 @@
     "aws.sts_endpoint",
     "aws.web_identity_token",
     "cache_backend",
-    "cache_host",
-    "cache_password",
-    "cache_port",
     "cache_root_directory",
-    "cache_username",
     "chunk_engine",
     "chunk_overlap",
     "chunk_size",
@@ -120,6 +116,7 @@
     "relational.provider",
     "relational.url",
     "relational.username",
+    "session.store",
     "session_ttl_seconds",
     "single_process",
     "storage.backend",
@@ -160,10 +157,6 @@
     "db_sslmode",
     "default_system_prompt_path",
     "cache_backend",
-    "cache_host",
-    "cache_port",
-    "cache_username",
-    "cache_password",
     "session_ttl_seconds",
     "enable_caching",
     "auto_feedback",
@@ -249,6 +242,7 @@
     "relational.name",
     "relational.username",
     "relational.password",
+    "session.store",
     "storage.backend",
     "storage.bucket_name",
     "ontology.file_path",
@@ -1753,159 +1747,6 @@
   "set cache_backend <- {\"a\":1}": {
     "err": true
   },
-  "set cache_host <- \"\"": {
-    "ok": {
-      "cache_host": ""
-    }
-  },
-  "set cache_host <- \"1\"": {
-    "ok": {
-      "cache_host": "1"
-    }
-  },
-  "set cache_host <- \"s\"": {
-    "ok": {
-      "cache_host": "s"
-    }
-  },
-  "set cache_host <- \"true\"": {
-    "ok": {
-      "cache_host": "true"
-    }
-  },
-  "set cache_host <- -1": {
-    "err": true
-  },
-  "set cache_host <- 0": {
-    "err": true
-  },
-  "set cache_host <- 1": {
-    "err": true
-  },
-  "set cache_host <- 1.5": {
-    "err": true
-  },
-  "set cache_host <- 5000000000": {
-    "err": true
-  },
-  "set cache_host <- 70000": {
-    "err": true
-  },
-  "set cache_host <- [1]": {
-    "err": true
-  },
-  "set cache_host <- false": {
-    "err": true
-  },
-  "set cache_host <- null": {
-    "err": true
-  },
-  "set cache_host <- true": {
-    "err": true
-  },
-  "set cache_host <- {\"a\":1}": {
-    "err": true
-  },
-  "set cache_password <- \"\"": {
-    "ok": {}
-  },
-  "set cache_password <- \"1\"": {
-    "ok": {
-      "cache_password": "1"
-    }
-  },
-  "set cache_password <- \"s\"": {
-    "ok": {
-      "cache_password": "s"
-    }
-  },
-  "set cache_password <- \"true\"": {
-    "ok": {
-      "cache_password": "true"
-    }
-  },
-  "set cache_password <- -1": {
-    "err": true
-  },
-  "set cache_password <- 0": {
-    "err": true
-  },
-  "set cache_password <- 1": {
-    "err": true
-  },
-  "set cache_password <- 1.5": {
-    "err": true
-  },
-  "set cache_password <- 5000000000": {
-    "err": true
-  },
-  "set cache_password <- 70000": {
-    "err": true
-  },
-  "set cache_password <- [1]": {
-    "err": true
-  },
-  "set cache_password <- false": {
-    "err": true
-  },
-  "set cache_password <- null": {
-    "err": true
-  },
-  "set cache_password <- true": {
-    "err": true
-  },
-  "set cache_password <- {\"a\":1}": {
-    "err": true
-  },
-  "set cache_port <- \"\"": {
-    "err": true
-  },
-  "set cache_port <- \"1\"": {
-    "err": true
-  },
-  "set cache_port <- \"s\"": {
-    "err": true
-  },
-  "set cache_port <- \"true\"": {
-    "err": true
-  },
-  "set cache_port <- -1": {
-    "err": true
-  },
-  "set cache_port <- 0": {
-    "ok": {
-      "cache_port": 0
-    }
-  },
-  "set cache_port <- 1": {
-    "ok": {
-      "cache_port": 1
-    }
-  },
-  "set cache_port <- 1.5": {
-    "err": true
-  },
-  "set cache_port <- 5000000000": {
-    "err": true
-  },
-  "set cache_port <- 70000": {
-    "err": true
-  },
-  "set cache_port <- [1]": {
-    "err": true
-  },
-  "set cache_port <- false": {
-    "err": true
-  },
-  "set cache_port <- null": {
-    "err": true
-  },
-  "set cache_port <- true": {
-    "err": true
-  },
-  "set cache_port <- {\"a\":1}": {
-    "err": true
-  },
   "set cache_root_directory <- \"\"": {
     "ok": {
       "cache_root_directory": ""
@@ -1957,57 +1798,6 @@
     "err": true
   },
   "set cache_root_directory <- {\"a\":1}": {
-    "err": true
-  },
-  "set cache_username <- \"\"": {
-    "ok": {}
-  },
-  "set cache_username <- \"1\"": {
-    "ok": {
-      "cache_username": "1"
-    }
-  },
-  "set cache_username <- \"s\"": {
-    "ok": {
-      "cache_username": "s"
-    }
-  },
-  "set cache_username <- \"true\"": {
-    "ok": {
-      "cache_username": "true"
-    }
-  },
-  "set cache_username <- -1": {
-    "err": true
-  },
-  "set cache_username <- 0": {
-    "err": true
-  },
-  "set cache_username <- 1": {
-    "err": true
-  },
-  "set cache_username <- 1.5": {
-    "err": true
-  },
-  "set cache_username <- 5000000000": {
-    "err": true
-  },
-  "set cache_username <- 70000": {
-    "err": true
-  },
-  "set cache_username <- [1]": {
-    "err": true
-  },
-  "set cache_username <- false": {
-    "err": true
-  },
-  "set cache_username <- null": {
-    "err": true
-  },
-  "set cache_username <- true": {
-    "err": true
-  },
-  "set cache_username <- {\"a\":1}": {
     "err": true
   },
   "set chunk_engine <- \"\"": {
@@ -10997,6 +10787,112 @@
   "set relational_db_url <- {\"a\":1}": {
     "err": true
   },
+  "set session.store <- \"\"": {
+    "ok": {
+      "session.store": ""
+    }
+  },
+  "set session.store <- \"1\"": {
+    "ok": {
+      "session.store": "1"
+    }
+  },
+  "set session.store <- \"s\"": {
+    "ok": {
+      "session.store": "s"
+    }
+  },
+  "set session.store <- \"true\"": {
+    "ok": {
+      "session.store": "true"
+    }
+  },
+  "set session.store <- -1": {
+    "err": true
+  },
+  "set session.store <- 0": {
+    "err": true
+  },
+  "set session.store <- 1": {
+    "err": true
+  },
+  "set session.store <- 1.5": {
+    "err": true
+  },
+  "set session.store <- 5000000000": {
+    "err": true
+  },
+  "set session.store <- 70000": {
+    "err": true
+  },
+  "set session.store <- [1]": {
+    "err": true
+  },
+  "set session.store <- false": {
+    "err": true
+  },
+  "set session.store <- null": {
+    "err": true
+  },
+  "set session.store <- true": {
+    "err": true
+  },
+  "set session.store <- {\"a\":1}": {
+    "err": true
+  },
+  "set session_store <- \"\"": {
+    "ok": {
+      "session.store": ""
+    }
+  },
+  "set session_store <- \"1\"": {
+    "ok": {
+      "session.store": "1"
+    }
+  },
+  "set session_store <- \"s\"": {
+    "ok": {
+      "session.store": "s"
+    }
+  },
+  "set session_store <- \"true\"": {
+    "ok": {
+      "session.store": "true"
+    }
+  },
+  "set session_store <- -1": {
+    "err": true
+  },
+  "set session_store <- 0": {
+    "err": true
+  },
+  "set session_store <- 1": {
+    "err": true
+  },
+  "set session_store <- 1.5": {
+    "err": true
+  },
+  "set session_store <- 5000000000": {
+    "err": true
+  },
+  "set session_store <- 70000": {
+    "err": true
+  },
+  "set session_store <- [1]": {
+    "err": true
+  },
+  "set session_store <- false": {
+    "err": true
+  },
+  "set session_store <- null": {
+    "err": true
+  },
+  "set session_store <- true": {
+    "err": true
+  },
+  "set session_store <- {\"a\":1}": {
+    "err": true
+  },
   "set session_ttl_seconds <- \"\"": {
     "err": true
   },
@@ -12798,35 +12694,7 @@
       "relational.port": 1
     }
   },
-  "unset cache_host": {
-    "ok": {
-      "chunk_size": 7,
-      "llm.model": "changed",
-      "relational.port": 1
-    }
-  },
-  "unset cache_password": {
-    "ok": {
-      "chunk_size": 7,
-      "llm.model": "changed",
-      "relational.port": 1
-    }
-  },
-  "unset cache_port": {
-    "ok": {
-      "chunk_size": 7,
-      "llm.model": "changed",
-      "relational.port": 1
-    }
-  },
   "unset cache_root_directory": {
-    "ok": {
-      "chunk_size": 7,
-      "llm.model": "changed",
-      "relational.port": 1
-    }
-  },
-  "unset cache_username": {
     "ok": {
       "chunk_size": 7,
       "llm.model": "changed",
@@ -14047,6 +13915,20 @@
     }
   },
   "unset relational_db_url": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset session.store": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset session_store": {
     "ok": {
       "chunk_size": 7,
       "llm.model": "changed",

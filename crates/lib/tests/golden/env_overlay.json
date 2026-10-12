@@ -991,162 +991,6 @@
   "CACHE_BACKEND=\"{\\\"ssl\\\":true}\"": {
     "cache_backend": "{\"ssl\":true}"
   },
-  "CACHE_HOST=\"  \"": {
-    "cache_host": "  "
-  },
-  "CACHE_HOST=\"\"": {},
-  "CACHE_HOST=\"-1\"": {
-    "cache_host": "-1"
-  },
-  "CACHE_HOST=\"0\"": {
-    "cache_host": "0"
-  },
-  "CACHE_HOST=\"1\"": {
-    "cache_host": "1"
-  },
-  "CACHE_HOST=\"1.5\"": {
-    "cache_host": "1.5"
-  },
-  "CACHE_HOST=\"42\"": {
-    "cache_host": "42"
-  },
-  "CACHE_HOST=\"5000000000\"": {
-    "cache_host": "5000000000"
-  },
-  "CACHE_HOST=\"70000\"": {
-    "cache_host": "70000"
-  },
-  "CACHE_HOST=\"TRUE\"": {
-    "cache_host": "TRUE"
-  },
-  "CACHE_HOST=\"[1]\"": {
-    "cache_host": "[1]"
-  },
-  "CACHE_HOST=\"abc\"": {
-    "cache_host": "abc"
-  },
-  "CACHE_HOST=\"false\"": {
-    "cache_host": "false"
-  },
-  "CACHE_HOST=\"no\"": {
-    "cache_host": "no"
-  },
-  "CACHE_HOST=\"on\"": {
-    "cache_host": "on"
-  },
-  "CACHE_HOST=\"require\"": {
-    "cache_host": "require"
-  },
-  "CACHE_HOST=\"true\"": {
-    "cache_host": "true"
-  },
-  "CACHE_HOST=\"v\"": {
-    "cache_host": "v"
-  },
-  "CACHE_HOST=\"yes\"": {
-    "cache_host": "yes"
-  },
-  "CACHE_HOST=\"{\\\"a\\\":1}\"": {
-    "cache_host": "{\"a\":1}"
-  },
-  "CACHE_HOST=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "cache_host": "{\"ssl\":\"verify-full\"}"
-  },
-  "CACHE_HOST=\"{\\\"ssl\\\":true}\"": {
-    "cache_host": "{\"ssl\":true}"
-  },
-  "CACHE_PASSWORD=\"  \"": {
-    "cache_password": "  "
-  },
-  "CACHE_PASSWORD=\"\"": {},
-  "CACHE_PASSWORD=\"-1\"": {
-    "cache_password": "-1"
-  },
-  "CACHE_PASSWORD=\"0\"": {
-    "cache_password": "0"
-  },
-  "CACHE_PASSWORD=\"1\"": {
-    "cache_password": "1"
-  },
-  "CACHE_PASSWORD=\"1.5\"": {
-    "cache_password": "1.5"
-  },
-  "CACHE_PASSWORD=\"42\"": {
-    "cache_password": "42"
-  },
-  "CACHE_PASSWORD=\"5000000000\"": {
-    "cache_password": "5000000000"
-  },
-  "CACHE_PASSWORD=\"70000\"": {
-    "cache_password": "70000"
-  },
-  "CACHE_PASSWORD=\"TRUE\"": {
-    "cache_password": "TRUE"
-  },
-  "CACHE_PASSWORD=\"[1]\"": {
-    "cache_password": "[1]"
-  },
-  "CACHE_PASSWORD=\"abc\"": {
-    "cache_password": "abc"
-  },
-  "CACHE_PASSWORD=\"false\"": {
-    "cache_password": "false"
-  },
-  "CACHE_PASSWORD=\"no\"": {
-    "cache_password": "no"
-  },
-  "CACHE_PASSWORD=\"on\"": {
-    "cache_password": "on"
-  },
-  "CACHE_PASSWORD=\"require\"": {
-    "cache_password": "require"
-  },
-  "CACHE_PASSWORD=\"true\"": {
-    "cache_password": "true"
-  },
-  "CACHE_PASSWORD=\"v\"": {
-    "cache_password": "v"
-  },
-  "CACHE_PASSWORD=\"yes\"": {
-    "cache_password": "yes"
-  },
-  "CACHE_PASSWORD=\"{\\\"a\\\":1}\"": {
-    "cache_password": "{\"a\":1}"
-  },
-  "CACHE_PASSWORD=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "cache_password": "{\"ssl\":\"verify-full\"}"
-  },
-  "CACHE_PASSWORD=\"{\\\"ssl\\\":true}\"": {
-    "cache_password": "{\"ssl\":true}"
-  },
-  "CACHE_PORT=\"  \"": {},
-  "CACHE_PORT=\"\"": {},
-  "CACHE_PORT=\"-1\"": {},
-  "CACHE_PORT=\"0\"": {
-    "cache_port": 0
-  },
-  "CACHE_PORT=\"1\"": {
-    "cache_port": 1
-  },
-  "CACHE_PORT=\"1.5\"": {},
-  "CACHE_PORT=\"42\"": {
-    "cache_port": 42
-  },
-  "CACHE_PORT=\"5000000000\"": {},
-  "CACHE_PORT=\"70000\"": {},
-  "CACHE_PORT=\"TRUE\"": {},
-  "CACHE_PORT=\"[1]\"": {},
-  "CACHE_PORT=\"abc\"": {},
-  "CACHE_PORT=\"false\"": {},
-  "CACHE_PORT=\"no\"": {},
-  "CACHE_PORT=\"on\"": {},
-  "CACHE_PORT=\"require\"": {},
-  "CACHE_PORT=\"true\"": {},
-  "CACHE_PORT=\"v\"": {},
-  "CACHE_PORT=\"yes\"": {},
-  "CACHE_PORT=\"{\\\"a\\\":1}\"": {},
-  "CACHE_PORT=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
-  "CACHE_PORT=\"{\\\"ssl\\\":true}\"": {},
   "CACHE_ROOT_DIRECTORY=\"  \"": {
     "cache_root_directory": "  "
   },
@@ -1210,70 +1054,6 @@
   },
   "CACHE_ROOT_DIRECTORY=\"{\\\"ssl\\\":true}\"": {
     "cache_root_directory": "{\"ssl\":true}"
-  },
-  "CACHE_USERNAME=\"  \"": {
-    "cache_username": "  "
-  },
-  "CACHE_USERNAME=\"\"": {},
-  "CACHE_USERNAME=\"-1\"": {
-    "cache_username": "-1"
-  },
-  "CACHE_USERNAME=\"0\"": {
-    "cache_username": "0"
-  },
-  "CACHE_USERNAME=\"1\"": {
-    "cache_username": "1"
-  },
-  "CACHE_USERNAME=\"1.5\"": {
-    "cache_username": "1.5"
-  },
-  "CACHE_USERNAME=\"42\"": {
-    "cache_username": "42"
-  },
-  "CACHE_USERNAME=\"5000000000\"": {
-    "cache_username": "5000000000"
-  },
-  "CACHE_USERNAME=\"70000\"": {
-    "cache_username": "70000"
-  },
-  "CACHE_USERNAME=\"TRUE\"": {
-    "cache_username": "TRUE"
-  },
-  "CACHE_USERNAME=\"[1]\"": {
-    "cache_username": "[1]"
-  },
-  "CACHE_USERNAME=\"abc\"": {
-    "cache_username": "abc"
-  },
-  "CACHE_USERNAME=\"false\"": {
-    "cache_username": "false"
-  },
-  "CACHE_USERNAME=\"no\"": {
-    "cache_username": "no"
-  },
-  "CACHE_USERNAME=\"on\"": {
-    "cache_username": "on"
-  },
-  "CACHE_USERNAME=\"require\"": {
-    "cache_username": "require"
-  },
-  "CACHE_USERNAME=\"true\"": {
-    "cache_username": "true"
-  },
-  "CACHE_USERNAME=\"v\"": {
-    "cache_username": "v"
-  },
-  "CACHE_USERNAME=\"yes\"": {
-    "cache_username": "yes"
-  },
-  "CACHE_USERNAME=\"{\\\"a\\\":1}\"": {
-    "cache_username": "{\"a\":1}"
-  },
-  "CACHE_USERNAME=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "cache_username": "{\"ssl\":\"verify-full\"}"
-  },
-  "CACHE_USERNAME=\"{\\\"ssl\\\":true}\"": {
-    "cache_username": "{\"ssl\":true}"
   },
   "CACHING=\"  \"": {
     "enable_caching": false
@@ -2070,6 +1850,70 @@
   },
   "COGNEE_RECORD_LLM=\"{\\\"ssl\\\":true}\"": {
     "llm.record_path": "{\"ssl\":true}"
+  },
+  "COGNEE_SESSION_STORE=\"  \"": {
+    "session.store": "  "
+  },
+  "COGNEE_SESSION_STORE=\"\"": {},
+  "COGNEE_SESSION_STORE=\"-1\"": {
+    "session.store": "-1"
+  },
+  "COGNEE_SESSION_STORE=\"0\"": {
+    "session.store": "0"
+  },
+  "COGNEE_SESSION_STORE=\"1\"": {
+    "session.store": "1"
+  },
+  "COGNEE_SESSION_STORE=\"1.5\"": {
+    "session.store": "1.5"
+  },
+  "COGNEE_SESSION_STORE=\"42\"": {
+    "session.store": "42"
+  },
+  "COGNEE_SESSION_STORE=\"5000000000\"": {
+    "session.store": "5000000000"
+  },
+  "COGNEE_SESSION_STORE=\"70000\"": {
+    "session.store": "70000"
+  },
+  "COGNEE_SESSION_STORE=\"TRUE\"": {
+    "session.store": "TRUE"
+  },
+  "COGNEE_SESSION_STORE=\"[1]\"": {
+    "session.store": "[1]"
+  },
+  "COGNEE_SESSION_STORE=\"abc\"": {
+    "session.store": "abc"
+  },
+  "COGNEE_SESSION_STORE=\"false\"": {
+    "session.store": "false"
+  },
+  "COGNEE_SESSION_STORE=\"no\"": {
+    "session.store": "no"
+  },
+  "COGNEE_SESSION_STORE=\"on\"": {
+    "session.store": "on"
+  },
+  "COGNEE_SESSION_STORE=\"require\"": {
+    "session.store": "require"
+  },
+  "COGNEE_SESSION_STORE=\"true\"": {
+    "session.store": "true"
+  },
+  "COGNEE_SESSION_STORE=\"v\"": {
+    "session.store": "v"
+  },
+  "COGNEE_SESSION_STORE=\"yes\"": {
+    "session.store": "yes"
+  },
+  "COGNEE_SESSION_STORE=\"{\\\"a\\\":1}\"": {
+    "session.store": "{\"a\":1}"
+  },
+  "COGNEE_SESSION_STORE=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
+    "session.store": "{\"ssl\":\"verify-full\"}"
+  },
+  "COGNEE_SESSION_STORE=\"{\\\"ssl\\\":true}\"": {
+    "session.store": "{\"ssl\":true}"
   },
   "COGNEE_SINGLE_PROCESS=\"  \"": {},
   "COGNEE_SINGLE_PROCESS=\"\"": {},

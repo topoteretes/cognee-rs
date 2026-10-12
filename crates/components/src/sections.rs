@@ -612,3 +612,49 @@ config_section! {
         },
     }
 }
+
+config_section! {
+    /// Session (Q&A history) storage. Registered by the session-store kind.
+    pub struct SessionConfig in "session" {
+        /// Store id selecting the session-store factory: `relational` (the
+        /// relational database; `seaorm` is the same store), `fs`, `redis`.
+        pub store: String = "relational".to_string() => {
+            env: ["COGNEE_SESSION_STORE"], alias: ["session_store"], secret: false,
+        },
+    }
+}
+
+config_section! {
+    /// The filesystem session store. Registered by the `fs` session-store
+    /// factory.
+    pub struct FsSessionConfig in "session.fs" {
+        /// Directory holding the session files; empty means
+        /// `<system_root_directory>/sessions`.
+        pub directory: String = String::new() => {
+            env: ["COGNEE_SESSION_DIR"], alias: ["session_directory"], secret: false,
+        },
+    }
+}
+
+config_section! {
+    /// The Redis session store (Python's Redis cache adapter). Registered by
+    /// the `redis` session-store factory.
+    pub struct RedisSessionConfig in "session.redis" {
+        /// Redis host.
+        pub host: String = "localhost".to_string() => {
+            env: ["CACHE_HOST"], alias: ["cache_host"], secret: false,
+        },
+        /// Redis port.
+        pub port: u16 = 6379 => {
+            env: ["CACHE_PORT"], alias: ["cache_port"], secret: false,
+        },
+        /// Redis user name.
+        pub username: String = String::new() => {
+            env: ["CACHE_USERNAME"], alias: ["cache_username"], secret: false,
+        },
+        /// Redis password.
+        pub password: String = String::new() => {
+            env: ["CACHE_PASSWORD"], alias: ["cache_password"], secret: true,
+        },
+    }
+}

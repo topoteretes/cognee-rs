@@ -6,7 +6,7 @@ use cognee::cognify::CognifyConfig;
 use cognee::core::RayonThreadPool;
 use cognee::models::DataInput;
 use cognee::ontology::{NoOpOntologyResolver, OntologyResolver};
-use cognee::search::{RelationalSessionStore, SessionManager};
+use cognee::search::SessionManager;
 use cognee::session::SessionStore;
 use cognee::{ComponentManager, PipelineContext};
 use tracing::info;
@@ -95,11 +95,10 @@ pub fn run(args: RememberArgs, cm: Arc<ComponentManager>) -> Result<(), CliError
         // Session backing store/manager are only required by session-mode
         // remember (when `--session-id` is set); building them eagerly is cheap
         // and harmless in permanent mode.
-        let session_store: Arc<dyn SessionStore> = Arc::new(
-            RelationalSessionStore::new(database.clone())
-                .await
-                .map_err(|e| CliError::Runtime(format!("session store init failed: {e}")))?,
-        );
+        let session_store: Arc<dyn SessionStore> = cm
+            .session_store()
+            .await
+            .map_err(|e| CliError::Runtime(format!("session store init failed: {e}")))?;
         let session_manager = Arc::new(SessionManager::new(Arc::clone(&session_store)));
 
         let ontology_resolver: Arc<dyn OntologyResolver> = Arc::new(NoOpOntologyResolver::new());

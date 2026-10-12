@@ -25,9 +25,7 @@ use cognee::embedding::EmbeddingEngine;
 use cognee::graph::GraphDBTrait;
 use cognee::llm::Llm;
 use cognee::ontology::OntologyResolver;
-use cognee::search::{
-    RelationalSessionStore, SearchBuilder, SearchOrchestrator, SessionManager, SessionStore,
-};
+use cognee::search::{SearchBuilder, SearchOrchestrator, SessionManager, SessionStore};
 use cognee::storage::StorageTrait;
 use cognee::vector::VectorDB;
 
@@ -362,12 +360,11 @@ impl CogneeServices {
             .with_pipeline_run_repo(Arc::clone(&pipeline_run_repo)),
         );
 
-        // Session: v1 is always RelationalSessionStore (fs/redis features are not
-        // built into the default binding configurations).
-        let session_store_concrete = RelationalSessionStore::new(database.clone())
+        // Session: the `session.store` factory (default `relational`).
+        let session_store = cm
+            .session_store()
             .await
             .map_err(|e| SdkError::ServiceBuild(format!("session store: {e}")))?;
-        let session_store: Arc<dyn SessionStore> = Arc::new(session_store_concrete);
         let session_manager = Arc::new(SessionManager::new(Arc::clone(&session_store)));
 
         let search_orchestrator = Arc::new(

@@ -2,8 +2,7 @@ use std::sync::Arc;
 
 use cognee::database::IngestDb;
 use cognee::search::{
-    RelationalSessionStore, SearchBuilder, SearchOutput, SearchRequest, SearchResponse, SearchType,
-    SessionManager,
+    SearchBuilder, SearchOutput, SearchRequest, SearchResponse, SearchType, SessionManager,
 };
 use cognee::{ComponentManager, PipelineContext};
 use tracing::warn;
@@ -73,10 +72,11 @@ pub fn run(args: SearchArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
             .await
             .map_err(|e| CliError::Runtime(format!("{e}")))?;
 
-        let session_store = RelationalSessionStore::new(database.clone())
+        let session_store = cm
+            .session_store()
             .await
             .map_err(|e| CliError::Runtime(format!("session store init failed: {e}")))?;
-        let session_manager = Arc::new(SessionManager::new(Arc::new(session_store)));
+        let session_manager = Arc::new(SessionManager::new(session_store));
         let orchestrator =
             SearchBuilder::new(vector_db, embedding_engine, graph_db, llm, database.clone())
                 .with_session_manager(session_manager)

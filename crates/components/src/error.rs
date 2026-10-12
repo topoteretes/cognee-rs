@@ -35,6 +35,9 @@ pub enum ComponentError {
     #[error("Graph extractor error: {0}")]
     GraphExtractor(String),
 
+    #[error("Session store error: {0}")]
+    SessionStore(String),
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }

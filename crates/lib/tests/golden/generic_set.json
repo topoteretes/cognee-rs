@@ -1758,194 +1758,6 @@
     "err": "TypeMismatch",
     "key": "cache_backend"
   },
-  "cache_host <- \"\"": {
-    "ok": {
-      "cache_host": ""
-    }
-  },
-  "cache_host <- \"1\"": {
-    "ok": {
-      "cache_host": "1"
-    }
-  },
-  "cache_host <- \"s\"": {
-    "ok": {
-      "cache_host": "s"
-    }
-  },
-  "cache_host <- \"true\"": {
-    "ok": {
-      "cache_host": "true"
-    }
-  },
-  "cache_host <- -1": {
-    "err": "TypeMismatch",
-    "key": "cache_host"
-  },
-  "cache_host <- 0": {
-    "err": "TypeMismatch",
-    "key": "cache_host"
-  },
-  "cache_host <- 1": {
-    "err": "TypeMismatch",
-    "key": "cache_host"
-  },
-  "cache_host <- 1.5": {
-    "err": "TypeMismatch",
-    "key": "cache_host"
-  },
-  "cache_host <- 5000000000": {
-    "err": "TypeMismatch",
-    "key": "cache_host"
-  },
-  "cache_host <- 70000": {
-    "err": "TypeMismatch",
-    "key": "cache_host"
-  },
-  "cache_host <- [1]": {
-    "err": "TypeMismatch",
-    "key": "cache_host"
-  },
-  "cache_host <- false": {
-    "err": "TypeMismatch",
-    "key": "cache_host"
-  },
-  "cache_host <- null": {
-    "err": "TypeMismatch",
-    "key": "cache_host"
-  },
-  "cache_host <- true": {
-    "err": "TypeMismatch",
-    "key": "cache_host"
-  },
-  "cache_host <- {\"a\":1}": {
-    "err": "TypeMismatch",
-    "key": "cache_host"
-  },
-  "cache_password <- \"\"": {
-    "ok": {}
-  },
-  "cache_password <- \"1\"": {
-    "ok": {
-      "cache_password": "1"
-    }
-  },
-  "cache_password <- \"s\"": {
-    "ok": {
-      "cache_password": "s"
-    }
-  },
-  "cache_password <- \"true\"": {
-    "ok": {
-      "cache_password": "true"
-    }
-  },
-  "cache_password <- -1": {
-    "err": "TypeMismatch",
-    "key": "cache_password"
-  },
-  "cache_password <- 0": {
-    "err": "TypeMismatch",
-    "key": "cache_password"
-  },
-  "cache_password <- 1": {
-    "err": "TypeMismatch",
-    "key": "cache_password"
-  },
-  "cache_password <- 1.5": {
-    "err": "TypeMismatch",
-    "key": "cache_password"
-  },
-  "cache_password <- 5000000000": {
-    "err": "TypeMismatch",
-    "key": "cache_password"
-  },
-  "cache_password <- 70000": {
-    "err": "TypeMismatch",
-    "key": "cache_password"
-  },
-  "cache_password <- [1]": {
-    "err": "TypeMismatch",
-    "key": "cache_password"
-  },
-  "cache_password <- false": {
-    "err": "TypeMismatch",
-    "key": "cache_password"
-  },
-  "cache_password <- null": {
-    "err": "TypeMismatch",
-    "key": "cache_password"
-  },
-  "cache_password <- true": {
-    "err": "TypeMismatch",
-    "key": "cache_password"
-  },
-  "cache_password <- {\"a\":1}": {
-    "err": "TypeMismatch",
-    "key": "cache_password"
-  },
-  "cache_port <- \"\"": {
-    "err": "TypeMismatch",
-    "key": "cache_port"
-  },
-  "cache_port <- \"1\"": {
-    "err": "TypeMismatch",
-    "key": "cache_port"
-  },
-  "cache_port <- \"s\"": {
-    "err": "TypeMismatch",
-    "key": "cache_port"
-  },
-  "cache_port <- \"true\"": {
-    "err": "TypeMismatch",
-    "key": "cache_port"
-  },
-  "cache_port <- -1": {
-    "err": "TypeMismatch",
-    "key": "cache_port"
-  },
-  "cache_port <- 0": {
-    "ok": {
-      "cache_port": 0
-    }
-  },
-  "cache_port <- 1": {
-    "ok": {
-      "cache_port": 1
-    }
-  },
-  "cache_port <- 1.5": {
-    "err": "TypeMismatch",
-    "key": "cache_port"
-  },
-  "cache_port <- 5000000000": {
-    "err": "TypeMismatch",
-    "key": "cache_port"
-  },
-  "cache_port <- 70000": {
-    "err": "TypeMismatch",
-    "key": "cache_port"
-  },
-  "cache_port <- [1]": {
-    "err": "TypeMismatch",
-    "key": "cache_port"
-  },
-  "cache_port <- false": {
-    "err": "TypeMismatch",
-    "key": "cache_port"
-  },
-  "cache_port <- null": {
-    "err": "TypeMismatch",
-    "key": "cache_port"
-  },
-  "cache_port <- true": {
-    "err": "TypeMismatch",
-    "key": "cache_port"
-  },
-  "cache_port <- {\"a\":1}": {
-    "err": "TypeMismatch",
-    "key": "cache_port"
-  },
   "cache_root_directory <- \"\"": {
     "ok": {
       "cache_root_directory": ""
@@ -2009,68 +1821,6 @@
   "cache_root_directory <- {\"a\":1}": {
     "err": "TypeMismatch",
     "key": "cache_root_directory"
-  },
-  "cache_username <- \"\"": {
-    "ok": {}
-  },
-  "cache_username <- \"1\"": {
-    "ok": {
-      "cache_username": "1"
-    }
-  },
-  "cache_username <- \"s\"": {
-    "ok": {
-      "cache_username": "s"
-    }
-  },
-  "cache_username <- \"true\"": {
-    "ok": {
-      "cache_username": "true"
-    }
-  },
-  "cache_username <- -1": {
-    "err": "TypeMismatch",
-    "key": "cache_username"
-  },
-  "cache_username <- 0": {
-    "err": "TypeMismatch",
-    "key": "cache_username"
-  },
-  "cache_username <- 1": {
-    "err": "TypeMismatch",
-    "key": "cache_username"
-  },
-  "cache_username <- 1.5": {
-    "err": "TypeMismatch",
-    "key": "cache_username"
-  },
-  "cache_username <- 5000000000": {
-    "err": "TypeMismatch",
-    "key": "cache_username"
-  },
-  "cache_username <- 70000": {
-    "err": "TypeMismatch",
-    "key": "cache_username"
-  },
-  "cache_username <- [1]": {
-    "err": "TypeMismatch",
-    "key": "cache_username"
-  },
-  "cache_username <- false": {
-    "err": "TypeMismatch",
-    "key": "cache_username"
-  },
-  "cache_username <- null": {
-    "err": "TypeMismatch",
-    "key": "cache_username"
-  },
-  "cache_username <- true": {
-    "err": "TypeMismatch",
-    "key": "cache_username"
-  },
-  "cache_username <- {\"a\":1}": {
-    "err": "TypeMismatch",
-    "key": "cache_username"
   },
   "chunk_engine <- \"\"": {
     "ok": {
@@ -13034,6 +12784,134 @@
   "relational_db_url <- {\"a\":1}": {
     "err": "TypeMismatch",
     "key": "relational_db_url"
+  },
+  "session.store <- \"\"": {
+    "ok": {
+      "session.store": ""
+    }
+  },
+  "session.store <- \"1\"": {
+    "ok": {
+      "session.store": "1"
+    }
+  },
+  "session.store <- \"s\"": {
+    "ok": {
+      "session.store": "s"
+    }
+  },
+  "session.store <- \"true\"": {
+    "ok": {
+      "session.store": "true"
+    }
+  },
+  "session.store <- -1": {
+    "err": "TypeMismatch",
+    "key": "session.store"
+  },
+  "session.store <- 0": {
+    "err": "TypeMismatch",
+    "key": "session.store"
+  },
+  "session.store <- 1": {
+    "err": "TypeMismatch",
+    "key": "session.store"
+  },
+  "session.store <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "session.store"
+  },
+  "session.store <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "session.store"
+  },
+  "session.store <- 70000": {
+    "err": "TypeMismatch",
+    "key": "session.store"
+  },
+  "session.store <- [1]": {
+    "err": "TypeMismatch",
+    "key": "session.store"
+  },
+  "session.store <- false": {
+    "err": "TypeMismatch",
+    "key": "session.store"
+  },
+  "session.store <- null": {
+    "err": "TypeMismatch",
+    "key": "session.store"
+  },
+  "session.store <- true": {
+    "err": "TypeMismatch",
+    "key": "session.store"
+  },
+  "session.store <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "session.store"
+  },
+  "session_store <- \"\"": {
+    "ok": {
+      "session.store": ""
+    }
+  },
+  "session_store <- \"1\"": {
+    "ok": {
+      "session.store": "1"
+    }
+  },
+  "session_store <- \"s\"": {
+    "ok": {
+      "session.store": "s"
+    }
+  },
+  "session_store <- \"true\"": {
+    "ok": {
+      "session.store": "true"
+    }
+  },
+  "session_store <- -1": {
+    "err": "TypeMismatch",
+    "key": "session_store"
+  },
+  "session_store <- 0": {
+    "err": "TypeMismatch",
+    "key": "session_store"
+  },
+  "session_store <- 1": {
+    "err": "TypeMismatch",
+    "key": "session_store"
+  },
+  "session_store <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "session_store"
+  },
+  "session_store <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "session_store"
+  },
+  "session_store <- 70000": {
+    "err": "TypeMismatch",
+    "key": "session_store"
+  },
+  "session_store <- [1]": {
+    "err": "TypeMismatch",
+    "key": "session_store"
+  },
+  "session_store <- false": {
+    "err": "TypeMismatch",
+    "key": "session_store"
+  },
+  "session_store <- null": {
+    "err": "TypeMismatch",
+    "key": "session_store"
+  },
+  "session_store <- true": {
+    "err": "TypeMismatch",
+    "key": "session_store"
+  },
+  "session_store <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "session_store"
   },
   "session_ttl_seconds <- \"\"": {
     "err": "TypeMismatch",

@@ -94,6 +94,10 @@ pgvector       = ["cognee-vector/pgvector", "cognee-components/pgvector"]
 pggraph        = ["cognee-graph/postgres", "cognee-components/pggraph"]
 sqlite         = ["cognee-database/sqlite", "cognee-components/sqlite"]
 postgres       = ["cognee-database/postgres", "cognee-components/postgres"]
+# Optional session stores (`session.store = "fs"` / `"redis"`); the default
+# relational store needs neither.
+session-fs     = ["cognee-components/session-fs"]
+session-redis  = ["cognee-components/session-redis"]
 hf-tokenizer   = ["cognee-chunking/hf-tokenizer"]
 tiktoken       = ["cognee-chunking/tiktoken"]
 # AWS Bedrock LLM adapter + embedding engine (plan §2.3, §6.2). Default-on, like

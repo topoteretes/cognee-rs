@@ -171,10 +171,6 @@ pub struct Settings {
     // -- Session / cache ---------------------------------------------------------
     /// Session store backend: `"fs"`, `"redis"`, or `"seaorm"`.
     pub cache_backend: String,
-    pub cache_host: String,
-    pub cache_port: u16,
-    pub cache_username: String,
-    pub cache_password: String,
     /// Session time-to-live in seconds (default: 604 800 = 7 days).
     pub session_ttl_seconds: u64,
     pub enable_caching: bool,
@@ -804,10 +800,6 @@ impl Default for Settings {
 
             // Session / cache
             cache_backend: "fs".to_string(),
-            cache_host: "localhost".to_string(),
-            cache_port: 6379,
-            cache_username: String::new(),
-            cache_password: String::new(),
             session_ttl_seconds: 604800,
             enable_caching: true,
             auto_feedback: false,
@@ -3619,8 +3611,9 @@ mod tests {
         let s = Settings::default();
         assert!(s.llm().args.is_empty());
         assert_eq!(s.cache_backend, "fs");
-        assert_eq!(s.cache_host, "localhost");
-        assert_eq!(s.cache_port, 6379);
+        let redis = s.section::<cognee_components::RedisSessionConfig>();
+        assert_eq!(redis.host, "localhost");
+        assert_eq!(redis.port, 6379);
         assert_eq!(s.session_ttl_seconds, 604800);
         assert!(s.enable_caching);
         assert!(!s.auto_feedback);

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use cognee::api::recall;
 use cognee::database::IngestDb;
-use cognee::search::{RelationalSessionStore, SearchBuilder, SearchType, SessionManager};
+use cognee::search::{SearchBuilder, SearchType, SessionManager};
 use cognee::session::SessionStore;
 use cognee::{ComponentManager, PipelineContext};
 use uuid::Uuid;
@@ -55,11 +55,10 @@ pub fn run(args: RecallArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
             .await
             .map_err(|e| CliError::Runtime(format!("{e}")))?;
 
-        let session_store: Arc<dyn SessionStore> = Arc::new(
-            RelationalSessionStore::new(database.clone())
-                .await
-                .map_err(|e| CliError::Runtime(format!("session store init failed: {e}")))?,
-        );
+        let session_store: Arc<dyn SessionStore> = cm
+            .session_store()
+            .await
+            .map_err(|e| CliError::Runtime(format!("session store init failed: {e}")))?;
         let session_manager = Arc::new(SessionManager::new(Arc::clone(&session_store)));
 
         let orchestrator =

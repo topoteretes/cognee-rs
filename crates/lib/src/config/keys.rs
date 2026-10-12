@@ -148,13 +148,6 @@ mod kind {
             .ok_or_else(|| mismatch(key, "expected a positive integer (u32)"))
     }
 
-    pub(super) fn as_u16(key: &str, value: &Value) -> Result<u16, ConfigError> {
-        value
-            .as_u64()
-            .and_then(|n| u16::try_from(n).ok())
-            .ok_or_else(|| mismatch(key, "expected a positive integer (u16)"))
-    }
-
     #[allow(
         dead_code,
         reason = "used by the `opt_f64` row kind; no row needs it today"
@@ -174,7 +167,7 @@ mod kind {
 
 /// One row per plain setting:
 /// `row!(field: kind [secret], env ["PRIMARY", "ALIAS"…] [aliases ["key"…]])`.
-/// `kind` picks the parse rules: `str`, `u16`, `u32`, `u64`, `bool`,
+/// `kind` picks the parse rules: `str`, `u32`, `u64`, `bool`,
 /// `opt_u32` (JSON `null` clears it) and `opt_f64` (likewise).
 macro_rules! row {
     (@overlay str, $f:ident) => {
@@ -195,12 +188,6 @@ macro_rules! row {
     (@set str, $f:ident) => {
         |s, key, v| {
             s.$f = kind::as_string(key, &v)?;
-            Ok(())
-        }
-    };
-    (@set u16, $f:ident) => {
-        |s, key, v| {
-            s.$f = kind::as_u16(key, &v)?;
             Ok(())
         }
     };
@@ -338,10 +325,6 @@ static KEYS: &[KeySpec] = &[
     row!(default_system_prompt_path: str, env []),
     // -- Session / cache ----------------------------------------------------
     row!(cache_backend: str, env ["CACHE_BACKEND"]),
-    row!(cache_host: str, env ["CACHE_HOST"]),
-    row!(cache_port: u16, env ["CACHE_PORT"]),
-    row!(cache_username: str, env ["CACHE_USERNAME"]),
-    row!(cache_password: str secret, env ["CACHE_PASSWORD"]),
     row!(session_ttl_seconds: u64, env ["SESSION_TTL_SECONDS"]),
     row!(enable_caching: bool, env ["CACHING"]),
     row!(auto_feedback: bool, env ["AUTO_FEEDBACK"]),
