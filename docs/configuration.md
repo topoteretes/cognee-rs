@@ -99,20 +99,30 @@ Parsing notes:
 1. Add a field to the config struct that owns the behaviour: `Settings` for
    instance configuration, or the process-scoped struct. Give it a default in
    that struct's `Default`.
-2. Read its env var(s) in the struct's boundary loader through the `EnvSource`
-   you are given, for example `Settings::overlay_from(env)`. Keep the Python SDK's
-   env-var name when the setting exists there, and note any deliberate divergence
-   in this document.
-3. Make it settable from code:
-   * a `ConfigManager` setter, and the generic `ConfigManager::set` key;
-   * the CLI `config set` key;
-   * binding exposure if the setting is commonly used.
+2. **For a `Settings` field, add one row to the key registry,
+   [`crates/lib/src/config/keys.rs`](../crates/lib/src/config/keys.rs).** For example:
+   `row!(my_setting: u32, env ["COGNEE_MY_SETTING"])`. The row names the parse
+   rules (`str`, `u16`, `u32`, `u64`, `bool`, `opt_u32`, `opt_f64`), the env
+   var(s) in priority order, any key aliases, and `secret` for credentials.
+   That one row makes the setting:
+   * bound from the environment by `Settings::overlay_from`;
+   * settable from code by `ConfigManager::set` and so by every binding's
+     generic `set`;
+   * listed, shown, set and unset by `cognee-cli config`.
+
+   Keep the Python SDK's env-var name when the setting exists there, and note any
+   deliberate divergence in this document. A process-scoped struct reads its env
+   in its own `from_env_source(&dyn EnvSource)` instead.
+3. Add a typed `ConfigManager` setter and binding sugar only if the setting is
+   commonly used. The generic `set` already reaches it.
 4. Pass the resolved value down to the component that needs it, through
    `Settings::backend_context()` (`BackendBuildContext` / `LlmInputs` /
    `EmbeddingInputs`) or the component's constructor or builder. Never read the
    environment inside the component.
 5. Test it by setting the value **through `ConfigManager`** (not the environment)
-   and asserting the effect. Test the env binding against a `MapEnv`.
+   and asserting the effect. Add the env var to `ENV_VARS` in
+   `crates/lib/tests/config_key_golden.rs` and regenerate the golden snapshots
+   (`UPDATE_GOLDEN=1`); the env binding is then covered there.
 6. Document it here: the env var, aliases, `Settings` key and default.
 
 ## LLM
@@ -1385,23 +1395,36 @@ Cloud/Auth0 configuration (`COGNEE_CLOUD_URL`, `COGNEE_AUTH0_*`) and the
 
 ## Runtime configuration API
 
-`ConfigManager` (`Arc<RwLock<Settings>>`) exposes typed setters used by the
-bindings and CLI. Families: `set_llm_*`, `set_embedding_*`, `set_vector_db_*`,
-`set_graph_*`, `set_chunk_*`, `set_relational_db_*`, `set_*_root_directory`,
-`set_ontology_*`, `set_classification_model` / `set_summarization_model` /
-`set_summarization_schema`, plus four bulk setters (`set_llm_config`,
-`set_embedding_config`, `set_vector_db_config`, `set_graph_db_config`) and a
-generic `set(key, value)`. Introspection: `read()`, `version()`, `get_settings()`
-(secrets masked). Full signatures are in the
-[`ConfigManager` rustdoc](../crates/lib/src/config.rs). The binding ergonomics
-(granular JS setters vs generic `set` in Python/C) are documented in
-[tools/bindings.md §config](tools/bindings.md#configuration).
+`ConfigManager` (`Arc<RwLock<Settings>>`) is the runtime API that the bindings
+and the CLI use.
+
+* **Generic setter:** `set(key, value)` accepts **every key in the
+  [key registry](../crates/lib/src/config/keys.rs)**: each `Settings` field name,
+  plus aliases such as `embedding_model`. A JSON `null` clears the optional
+  settings (`chunk_size`, `llm_temperature`, `single_process`,
+  `summarization_schema`). Setting `system_root_directory` also moves the graph
+  and vector paths derived from the old root.
+* **Typed setters** for the common keys, in the families `set_llm_*`,
+  `set_embedding_*`, `set_vector_db_*`, `set_graph_*`, `set_chunk_*`,
+  `set_relational_db_*`, `set_*_root_directory`, `set_ontology_*`,
+  `set_classification_model` / `set_summarization_model` /
+  `set_summarization_schema`.
+* **Bulk setters:** `set_llm_config`, `set_embedding_config`,
+  `set_vector_db_config` and `set_graph_db_config`.
+* **Introspection:** `read()`, `version()`, `get_settings()` (secrets masked).
+  `Settings::get_key` / `set_key` / `reset_key` work on a plain `Settings`, and
+  `cognee::config::keys()` lists the registry.
+
+Full signatures are in the [`ConfigManager` rustdoc](../crates/lib/src/config.rs).
+The binding ergonomics (granular JS setters vs generic `set` in Python/C) are
+documented in [tools/bindings.md §config](tools/bindings.md#configuration).
 
 ## CLI `config` subcommand
 
 `cognee-cli config get|set|unset <key>` reads/writes the persisted JSON file.
-The settable keys are the snake_case `Settings` field names — see
-[`known_keys()`](../crates/cli/src/config_store.rs). Example:
+The settable keys are the registry keys whose value is saved in that file:
+every `Settings` field except `llm_args` and `summarization_schema`
+(`cognee-cli config list` prints them). Example:
 
 ```bash
 cognee-cli config set llm_max_retries 4

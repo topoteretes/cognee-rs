@@ -28,13 +28,14 @@ difference is purely ergonomic (design decision A3.1, intentional for 0.1.0):
 | **Python** | `set`, `set_str`, the 4 bulk setters, `get` |
 | **Java** | `config().set` / `config().setStr`, the 4 bulk setters, `config().get` |
 
-The generic `set("llm_model", value)` already reaches every key, so C and Python
+The generic `set("llm_model", value)` reaches every key in the
+[key registry](../../crates/lib/src/config/keys.rs), so C and Python
 deliberately ship only the generic + bulk setters; JS adds the granular setters
 as thin (infallible) sugar over the same underlying fields. Type errors surface
 with the stable `CONFIG_TYPE_MISMATCH` code (C: `CG_ERR_CONFIG_TYPE_MISMATCH`) at
 the call site. The full set of settable keys is the canonical `Settings` field
-names — see [configuration.md](../configuration.md) and
-[`crates/lib/src/config.rs`](../../crates/lib/src/config.rs). Field names are
+names plus their registry aliases — see [configuration.md](../configuration.md) and
+[`crates/lib/src/config/keys.rs`](../../crates/lib/src/config/keys.rs). Field names are
 camelCase in JS, snake_case in Python/C/Java (matching the struct).
 
 ### Unification path (post-0.1.0)

@@ -1,22 +1,34 @@
 {
   "<config get keys>": [
+    "auto_feedback",
+    "auto_rate_limit",
+    "cache_backend",
+    "cache_host",
+    "cache_password",
+    "cache_port",
     "cache_root_directory",
+    "cache_username",
     "chunk_engine",
     "chunk_overlap",
     "chunk_size",
     "chunk_strategy",
     "classification_model",
+    "cognee_tracing_enabled",
     "data_root_directory",
     "db_host",
     "db_name",
     "db_password",
     "db_port",
     "db_provider",
+    "db_sslmode",
     "db_username",
     "default_dataset_name",
     "default_system_prompt_path",
+    "default_user_email",
     "default_user_id",
+    "default_user_password",
     "embedding_api_key",
+    "embedding_api_version",
     "embedding_batch_size",
     "embedding_dimensions",
     "embedding_endpoint",
@@ -25,7 +37,14 @@
     "embedding_model_path",
     "embedding_onnx_batch_size",
     "embedding_provider",
+    "embedding_rate_limit_enabled",
+    "embedding_rate_limit_interval",
+    "embedding_rate_limit_requests",
     "embedding_tokenizer_path",
+    "enable_access_control",
+    "enable_caching",
+    "enable_last_accessed",
+    "graph_database_host",
     "graph_database_key",
     "graph_database_name",
     "graph_database_password",
@@ -39,27 +58,61 @@
     "graph_prompt_path",
     "llm_api_key",
     "llm_api_version",
+    "llm_cassette",
+    "llm_connect_timeout_seconds",
     "llm_endpoint",
+    "llm_fallback_api_key",
+    "llm_fallback_endpoint",
+    "llm_fallback_model",
+    "llm_fallback_provider",
     "llm_max_completion_tokens",
     "llm_max_parallel_requests",
     "llm_max_retries",
+    "llm_min_retry_seconds",
+    "llm_mock",
     "llm_model",
     "llm_network_retries",
     "llm_provider",
+    "llm_rate_limit_enabled",
+    "llm_rate_limit_interval",
+    "llm_rate_limit_requests",
+    "llm_reasoning",
+    "llm_record_path",
+    "llm_request_deadline_seconds",
+    "llm_request_timeout_seconds",
     "llm_streaming",
+    "llm_structured_output_mode",
     "llm_temperature",
+    "log_level",
     "logs_root_directory",
     "migration_db_url",
     "monitoring_tool",
+    "ontology_file_path",
+    "ontology_matching_strategy",
+    "ontology_resolver",
+    "otel_exporter_otlp_endpoint",
+    "otel_exporter_otlp_headers",
+    "otel_exporter_otlp_protocol",
+    "otel_service_name",
+    "otel_span_processor",
+    "otel_traces_sampler",
+    "otel_traces_sampler_arg",
     "relational_db_url",
+    "session_ttl_seconds",
     "single_process",
+    "storage_backend",
+    "storage_bucket_name",
     "summarization_model",
     "system_root_directory",
+    "transcription_model",
+    "vector_db_host",
     "vector_db_key",
     "vector_db_name",
+    "vector_db_password",
     "vector_db_port",
     "vector_db_provider",
-    "vector_db_url"
+    "vector_db_url",
+    "vector_db_username"
   ],
   "<config list>": [
     "default_user_id",
@@ -77,19 +130,33 @@
     "llm_api_key",
     "llm_endpoint",
     "llm_api_version",
+    "llm_reasoning",
+    "llm_structured_output_mode",
     "llm_temperature",
     "llm_streaming",
     "llm_max_completion_tokens",
     "llm_max_retries",
     "llm_network_retries",
+    "llm_min_retry_seconds",
     "llm_max_parallel_requests",
+    "llm_request_timeout_seconds",
+    "llm_connect_timeout_seconds",
+    "llm_request_deadline_seconds",
+    "llm_mock",
+    "llm_cassette",
+    "llm_record_path",
     "graph_prompt_path",
+    "llm_fallback_model",
+    "llm_fallback_provider",
+    "llm_fallback_endpoint",
+    "llm_fallback_api_key",
     "graph_database_provider",
     "graph_database_url",
     "graph_database_name",
     "graph_database_username",
     "graph_database_password",
     "graph_database_port",
+    "graph_database_host",
     "graph_database_key",
     "graph_file_path",
     "graph_filename",
@@ -98,6 +165,9 @@
     "vector_db_port",
     "vector_db_name",
     "vector_db_key",
+    "vector_db_username",
+    "vector_db_password",
+    "vector_db_host",
     "chunk_strategy",
     "chunk_engine",
     "chunk_size",
@@ -110,8 +180,9 @@
     "db_name",
     "db_username",
     "db_password",
-    "single_process",
+    "db_sslmode",
     "default_system_prompt_path",
+    "embedding_provider",
     "embedding_model_path",
     "embedding_tokenizer_path",
     "embedding_model_name",
@@ -119,9 +190,44 @@
     "embedding_max_sequence_length",
     "embedding_batch_size",
     "embedding_onnx_batch_size",
-    "embedding_provider",
     "embedding_endpoint",
-    "embedding_api_key"
+    "embedding_api_key",
+    "embedding_api_version",
+    "transcription_model",
+    "ontology_file_path",
+    "ontology_resolver",
+    "ontology_matching_strategy",
+    "cache_backend",
+    "cache_host",
+    "cache_port",
+    "cache_username",
+    "cache_password",
+    "session_ttl_seconds",
+    "enable_caching",
+    "auto_feedback",
+    "default_user_email",
+    "default_user_password",
+    "enable_access_control",
+    "log_level",
+    "auto_rate_limit",
+    "llm_rate_limit_enabled",
+    "llm_rate_limit_requests",
+    "llm_rate_limit_interval",
+    "embedding_rate_limit_enabled",
+    "embedding_rate_limit_requests",
+    "embedding_rate_limit_interval",
+    "storage_backend",
+    "storage_bucket_name",
+    "cognee_tracing_enabled",
+    "otel_service_name",
+    "otel_exporter_otlp_endpoint",
+    "otel_exporter_otlp_headers",
+    "otel_exporter_otlp_protocol",
+    "otel_span_processor",
+    "otel_traces_sampler",
+    "otel_traces_sampler_arg",
+    "enable_last_accessed",
+    "single_process"
   ],
   "set auto_feedback <- \"\"": {
     "err": true
@@ -157,13 +263,15 @@
     "err": true
   },
   "set auto_feedback <- false": {
-    "err": true
+    "ok": {}
   },
   "set auto_feedback <- null": {
     "err": true
   },
   "set auto_feedback <- true": {
-    "err": true
+    "ok": {
+      "auto_feedback": true
+    }
   },
   "set auto_feedback <- {\"a\":1}": {
     "err": true
@@ -202,28 +310,38 @@
     "err": true
   },
   "set auto_rate_limit <- false": {
-    "err": true
+    "ok": {
+      "auto_rate_limit": false
+    }
   },
   "set auto_rate_limit <- null": {
     "err": true
   },
   "set auto_rate_limit <- true": {
-    "err": true
+    "ok": {}
   },
   "set auto_rate_limit <- {\"a\":1}": {
     "err": true
   },
   "set cache_backend <- \"\"": {
-    "err": true
+    "ok": {
+      "cache_backend": ""
+    }
   },
   "set cache_backend <- \"1\"": {
-    "err": true
+    "ok": {
+      "cache_backend": "1"
+    }
   },
   "set cache_backend <- \"s\"": {
-    "err": true
+    "ok": {
+      "cache_backend": "s"
+    }
   },
   "set cache_backend <- \"true\"": {
-    "err": true
+    "ok": {
+      "cache_backend": "true"
+    }
   },
   "set cache_backend <- -1": {
     "err": true
@@ -259,16 +377,24 @@
     "err": true
   },
   "set cache_host <- \"\"": {
-    "err": true
+    "ok": {
+      "cache_host": ""
+    }
   },
   "set cache_host <- \"1\"": {
-    "err": true
+    "ok": {
+      "cache_host": "1"
+    }
   },
   "set cache_host <- \"s\"": {
-    "err": true
+    "ok": {
+      "cache_host": "s"
+    }
   },
   "set cache_host <- \"true\"": {
-    "err": true
+    "ok": {
+      "cache_host": "true"
+    }
   },
   "set cache_host <- -1": {
     "err": true
@@ -304,16 +430,22 @@
     "err": true
   },
   "set cache_password <- \"\"": {
-    "err": true
+    "ok": {}
   },
   "set cache_password <- \"1\"": {
-    "err": true
+    "ok": {
+      "cache_password": "1"
+    }
   },
   "set cache_password <- \"s\"": {
-    "err": true
+    "ok": {
+      "cache_password": "s"
+    }
   },
   "set cache_password <- \"true\"": {
-    "err": true
+    "ok": {
+      "cache_password": "true"
+    }
   },
   "set cache_password <- -1": {
     "err": true
@@ -364,10 +496,14 @@
     "err": true
   },
   "set cache_port <- 0": {
-    "err": true
+    "ok": {
+      "cache_port": 0
+    }
   },
   "set cache_port <- 1": {
-    "err": true
+    "ok": {
+      "cache_port": 1
+    }
   },
   "set cache_port <- 1.5": {
     "err": true
@@ -447,16 +583,22 @@
     "err": true
   },
   "set cache_username <- \"\"": {
-    "err": true
+    "ok": {}
   },
   "set cache_username <- \"1\"": {
-    "err": true
+    "ok": {
+      "cache_username": "1"
+    }
   },
   "set cache_username <- \"s\"": {
-    "err": true
+    "ok": {
+      "cache_username": "s"
+    }
   },
   "set cache_username <- \"true\"": {
-    "err": true
+    "ok": {
+      "cache_username": "true"
+    }
   },
   "set cache_username <- -1": {
     "err": true
@@ -784,13 +926,15 @@
     "err": true
   },
   "set cognee_tracing_enabled <- false": {
-    "err": true
+    "ok": {}
   },
   "set cognee_tracing_enabled <- null": {
     "err": true
   },
   "set cognee_tracing_enabled <- true": {
-    "err": true
+    "ok": {
+      "cognee_tracing_enabled": true
+    }
   },
   "set cognee_tracing_enabled <- {\"a\":1}": {
     "err": true
@@ -1108,16 +1252,22 @@
     "err": true
   },
   "set db_sslmode <- \"\"": {
-    "err": true
+    "ok": {}
   },
   "set db_sslmode <- \"1\"": {
-    "err": true
+    "ok": {
+      "db_sslmode": "1"
+    }
   },
   "set db_sslmode <- \"s\"": {
-    "err": true
+    "ok": {
+      "db_sslmode": "s"
+    }
   },
   "set db_sslmode <- \"true\"": {
-    "err": true
+    "ok": {
+      "db_sslmode": "true"
+    }
   },
   "set db_sslmode <- -1": {
     "err": true
@@ -1310,16 +1460,24 @@
     "err": true
   },
   "set default_user_email <- \"\"": {
-    "err": true
+    "ok": {
+      "default_user_email": ""
+    }
   },
   "set default_user_email <- \"1\"": {
-    "err": true
+    "ok": {
+      "default_user_email": "1"
+    }
   },
   "set default_user_email <- \"s\"": {
-    "err": true
+    "ok": {
+      "default_user_email": "s"
+    }
   },
   "set default_user_email <- \"true\"": {
-    "err": true
+    "ok": {
+      "default_user_email": "true"
+    }
   },
   "set default_user_email <- -1": {
     "err": true
@@ -1408,16 +1566,22 @@
     "err": true
   },
   "set default_user_password <- \"\"": {
-    "err": true
+    "ok": {}
   },
   "set default_user_password <- \"1\"": {
-    "err": true
+    "ok": {
+      "default_user_password": "1"
+    }
   },
   "set default_user_password <- \"s\"": {
-    "err": true
+    "ok": {
+      "default_user_password": "s"
+    }
   },
   "set default_user_password <- \"true\"": {
-    "err": true
+    "ok": {
+      "default_user_password": "true"
+    }
   },
   "set default_user_password <- -1": {
     "err": true
@@ -1504,16 +1668,22 @@
     "err": true
   },
   "set embedding_api_version <- \"\"": {
-    "err": true
+    "ok": {}
   },
   "set embedding_api_version <- \"1\"": {
-    "err": true
+    "ok": {
+      "embedding_api_version": "1"
+    }
   },
   "set embedding_api_version <- \"s\"": {
-    "err": true
+    "ok": {
+      "embedding_api_version": "s"
+    }
   },
   "set embedding_api_version <- \"true\"": {
-    "err": true
+    "ok": {
+      "embedding_api_version": "true"
+    }
   },
   "set embedding_api_version <- -1": {
     "err": true
@@ -1753,16 +1923,24 @@
     "err": true
   },
   "set embedding_model <- \"\"": {
-    "err": true
+    "ok": {
+      "embedding_model_name": ""
+    }
   },
   "set embedding_model <- \"1\"": {
-    "err": true
+    "ok": {
+      "embedding_model_name": "1"
+    }
   },
   "set embedding_model <- \"s\"": {
-    "err": true
+    "ok": {
+      "embedding_model_name": "s"
+    }
   },
   "set embedding_model <- \"true\"": {
-    "err": true
+    "ok": {
+      "embedding_model_name": "true"
+    }
   },
   "set embedding_model <- -1": {
     "err": true
@@ -2041,13 +2219,15 @@
     "err": true
   },
   "set embedding_rate_limit_enabled <- false": {
-    "err": true
+    "ok": {}
   },
   "set embedding_rate_limit_enabled <- null": {
     "err": true
   },
   "set embedding_rate_limit_enabled <- true": {
-    "err": true
+    "ok": {
+      "embedding_rate_limit_enabled": true
+    }
   },
   "set embedding_rate_limit_enabled <- {\"a\":1}": {
     "err": true
@@ -2068,10 +2248,14 @@
     "err": true
   },
   "set embedding_rate_limit_interval <- 0": {
-    "err": true
+    "ok": {
+      "embedding_rate_limit_interval": 0
+    }
   },
   "set embedding_rate_limit_interval <- 1": {
-    "err": true
+    "ok": {
+      "embedding_rate_limit_interval": 1
+    }
   },
   "set embedding_rate_limit_interval <- 1.5": {
     "err": true
@@ -2080,7 +2264,9 @@
     "err": true
   },
   "set embedding_rate_limit_interval <- 70000": {
-    "err": true
+    "ok": {
+      "embedding_rate_limit_interval": 70000
+    }
   },
   "set embedding_rate_limit_interval <- [1]": {
     "err": true
@@ -2113,10 +2299,14 @@
     "err": true
   },
   "set embedding_rate_limit_requests <- 0": {
-    "err": true
+    "ok": {
+      "embedding_rate_limit_requests": 0
+    }
   },
   "set embedding_rate_limit_requests <- 1": {
-    "err": true
+    "ok": {
+      "embedding_rate_limit_requests": 1
+    }
   },
   "set embedding_rate_limit_requests <- 1.5": {
     "err": true
@@ -2125,7 +2315,9 @@
     "err": true
   },
   "set embedding_rate_limit_requests <- 70000": {
-    "err": true
+    "ok": {
+      "embedding_rate_limit_requests": 70000
+    }
   },
   "set embedding_rate_limit_requests <- [1]": {
     "err": true
@@ -2229,13 +2421,15 @@
     "err": true
   },
   "set enable_access_control <- false": {
-    "err": true
+    "ok": {}
   },
   "set enable_access_control <- null": {
     "err": true
   },
   "set enable_access_control <- true": {
-    "err": true
+    "ok": {
+      "enable_access_control": true
+    }
   },
   "set enable_access_control <- {\"a\":1}": {
     "err": true
@@ -2274,13 +2468,15 @@
     "err": true
   },
   "set enable_caching <- false": {
-    "err": true
+    "ok": {
+      "enable_caching": false
+    }
   },
   "set enable_caching <- null": {
     "err": true
   },
   "set enable_caching <- true": {
-    "err": true
+    "ok": {}
   },
   "set enable_caching <- {\"a\":1}": {
     "err": true
@@ -2319,28 +2515,36 @@
     "err": true
   },
   "set enable_last_accessed <- false": {
-    "err": true
+    "ok": {}
   },
   "set enable_last_accessed <- null": {
     "err": true
   },
   "set enable_last_accessed <- true": {
-    "err": true
+    "ok": {
+      "enable_last_accessed": true
+    }
   },
   "set enable_last_accessed <- {\"a\":1}": {
     "err": true
   },
   "set graph_database_host <- \"\"": {
-    "err": true
+    "ok": {}
   },
   "set graph_database_host <- \"1\"": {
-    "err": true
+    "ok": {
+      "graph_database_host": "1"
+    }
   },
   "set graph_database_host <- \"s\"": {
-    "err": true
+    "ok": {
+      "graph_database_host": "s"
+    }
   },
   "set graph_database_host <- \"true\"": {
-    "err": true
+    "ok": {
+      "graph_database_host": "true"
+    }
   },
   "set graph_database_host <- -1": {
     "err": true
@@ -3088,16 +3292,22 @@
     "err": true
   },
   "set llm_cassette <- \"\"": {
-    "err": true
+    "ok": {}
   },
   "set llm_cassette <- \"1\"": {
-    "err": true
+    "ok": {
+      "llm_cassette": "1"
+    }
   },
   "set llm_cassette <- \"s\"": {
-    "err": true
+    "ok": {
+      "llm_cassette": "s"
+    }
   },
   "set llm_cassette <- \"true\"": {
-    "err": true
+    "ok": {
+      "llm_cassette": "true"
+    }
   },
   "set llm_cassette <- -1": {
     "err": true
@@ -3148,10 +3358,14 @@
     "err": true
   },
   "set llm_connect_timeout_seconds <- 0": {
-    "err": true
+    "ok": {
+      "llm_connect_timeout_seconds": 0
+    }
   },
   "set llm_connect_timeout_seconds <- 1": {
-    "err": true
+    "ok": {
+      "llm_connect_timeout_seconds": 1
+    }
   },
   "set llm_connect_timeout_seconds <- 1.5": {
     "err": true
@@ -3160,7 +3374,9 @@
     "err": true
   },
   "set llm_connect_timeout_seconds <- 70000": {
-    "err": true
+    "ok": {
+      "llm_connect_timeout_seconds": 70000
+    }
   },
   "set llm_connect_timeout_seconds <- [1]": {
     "err": true
@@ -3229,16 +3445,22 @@
     "err": true
   },
   "set llm_fallback_api_key <- \"\"": {
-    "err": true
+    "ok": {}
   },
   "set llm_fallback_api_key <- \"1\"": {
-    "err": true
+    "ok": {
+      "llm_fallback_api_key": "1"
+    }
   },
   "set llm_fallback_api_key <- \"s\"": {
-    "err": true
+    "ok": {
+      "llm_fallback_api_key": "s"
+    }
   },
   "set llm_fallback_api_key <- \"true\"": {
-    "err": true
+    "ok": {
+      "llm_fallback_api_key": "true"
+    }
   },
   "set llm_fallback_api_key <- -1": {
     "err": true
@@ -3274,16 +3496,22 @@
     "err": true
   },
   "set llm_fallback_endpoint <- \"\"": {
-    "err": true
+    "ok": {}
   },
   "set llm_fallback_endpoint <- \"1\"": {
-    "err": true
+    "ok": {
+      "llm_fallback_endpoint": "1"
+    }
   },
   "set llm_fallback_endpoint <- \"s\"": {
-    "err": true
+    "ok": {
+      "llm_fallback_endpoint": "s"
+    }
   },
   "set llm_fallback_endpoint <- \"true\"": {
-    "err": true
+    "ok": {
+      "llm_fallback_endpoint": "true"
+    }
   },
   "set llm_fallback_endpoint <- -1": {
     "err": true
@@ -3319,16 +3547,22 @@
     "err": true
   },
   "set llm_fallback_model <- \"\"": {
-    "err": true
+    "ok": {}
   },
   "set llm_fallback_model <- \"1\"": {
-    "err": true
+    "ok": {
+      "llm_fallback_model": "1"
+    }
   },
   "set llm_fallback_model <- \"s\"": {
-    "err": true
+    "ok": {
+      "llm_fallback_model": "s"
+    }
   },
   "set llm_fallback_model <- \"true\"": {
-    "err": true
+    "ok": {
+      "llm_fallback_model": "true"
+    }
   },
   "set llm_fallback_model <- -1": {
     "err": true
@@ -3364,16 +3598,22 @@
     "err": true
   },
   "set llm_fallback_provider <- \"\"": {
-    "err": true
+    "ok": {}
   },
   "set llm_fallback_provider <- \"1\"": {
-    "err": true
+    "ok": {
+      "llm_fallback_provider": "1"
+    }
   },
   "set llm_fallback_provider <- \"s\"": {
-    "err": true
+    "ok": {
+      "llm_fallback_provider": "s"
+    }
   },
   "set llm_fallback_provider <- \"true\"": {
-    "err": true
+    "ok": {
+      "llm_fallback_provider": "true"
+    }
   },
   "set llm_fallback_provider <- -1": {
     "err": true
@@ -3577,10 +3817,14 @@
     "err": true
   },
   "set llm_min_retry_seconds <- 0": {
-    "err": true
+    "ok": {
+      "llm_min_retry_seconds": 0
+    }
   },
   "set llm_min_retry_seconds <- 1": {
-    "err": true
+    "ok": {
+      "llm_min_retry_seconds": 1
+    }
   },
   "set llm_min_retry_seconds <- 1.5": {
     "err": true
@@ -3589,7 +3833,9 @@
     "err": true
   },
   "set llm_min_retry_seconds <- 70000": {
-    "err": true
+    "ok": {
+      "llm_min_retry_seconds": 70000
+    }
   },
   "set llm_min_retry_seconds <- [1]": {
     "err": true
@@ -3640,13 +3886,15 @@
     "err": true
   },
   "set llm_mock <- false": {
-    "err": true
+    "ok": {}
   },
   "set llm_mock <- null": {
     "err": true
   },
   "set llm_mock <- true": {
-    "err": true
+    "ok": {
+      "llm_mock": true
+    }
   },
   "set llm_mock <- {\"a\":1}": {
     "err": true
@@ -3842,13 +4090,15 @@
     "err": true
   },
   "set llm_rate_limit_enabled <- false": {
-    "err": true
+    "ok": {}
   },
   "set llm_rate_limit_enabled <- null": {
     "err": true
   },
   "set llm_rate_limit_enabled <- true": {
-    "err": true
+    "ok": {
+      "llm_rate_limit_enabled": true
+    }
   },
   "set llm_rate_limit_enabled <- {\"a\":1}": {
     "err": true
@@ -3869,10 +4119,14 @@
     "err": true
   },
   "set llm_rate_limit_interval <- 0": {
-    "err": true
+    "ok": {
+      "llm_rate_limit_interval": 0
+    }
   },
   "set llm_rate_limit_interval <- 1": {
-    "err": true
+    "ok": {
+      "llm_rate_limit_interval": 1
+    }
   },
   "set llm_rate_limit_interval <- 1.5": {
     "err": true
@@ -3881,7 +4135,9 @@
     "err": true
   },
   "set llm_rate_limit_interval <- 70000": {
-    "err": true
+    "ok": {
+      "llm_rate_limit_interval": 70000
+    }
   },
   "set llm_rate_limit_interval <- [1]": {
     "err": true
@@ -3914,10 +4170,14 @@
     "err": true
   },
   "set llm_rate_limit_requests <- 0": {
-    "err": true
+    "ok": {
+      "llm_rate_limit_requests": 0
+    }
   },
   "set llm_rate_limit_requests <- 1": {
-    "err": true
+    "ok": {
+      "llm_rate_limit_requests": 1
+    }
   },
   "set llm_rate_limit_requests <- 1.5": {
     "err": true
@@ -3926,7 +4186,9 @@
     "err": true
   },
   "set llm_rate_limit_requests <- 70000": {
-    "err": true
+    "ok": {
+      "llm_rate_limit_requests": 70000
+    }
   },
   "set llm_rate_limit_requests <- [1]": {
     "err": true
@@ -3944,16 +4206,24 @@
     "err": true
   },
   "set llm_reasoning <- \"\"": {
-    "err": true
+    "ok": {
+      "llm_reasoning": ""
+    }
   },
   "set llm_reasoning <- \"1\"": {
-    "err": true
+    "ok": {
+      "llm_reasoning": "1"
+    }
   },
   "set llm_reasoning <- \"s\"": {
-    "err": true
+    "ok": {
+      "llm_reasoning": "s"
+    }
   },
   "set llm_reasoning <- \"true\"": {
-    "err": true
+    "ok": {
+      "llm_reasoning": "true"
+    }
   },
   "set llm_reasoning <- -1": {
     "err": true
@@ -3989,16 +4259,22 @@
     "err": true
   },
   "set llm_record_path <- \"\"": {
-    "err": true
+    "ok": {}
   },
   "set llm_record_path <- \"1\"": {
-    "err": true
+    "ok": {
+      "llm_record_path": "1"
+    }
   },
   "set llm_record_path <- \"s\"": {
-    "err": true
+    "ok": {
+      "llm_record_path": "s"
+    }
   },
   "set llm_record_path <- \"true\"": {
-    "err": true
+    "ok": {
+      "llm_record_path": "true"
+    }
   },
   "set llm_record_path <- -1": {
     "err": true
@@ -4049,10 +4325,14 @@
     "err": true
   },
   "set llm_request_deadline_seconds <- 0": {
-    "err": true
+    "ok": {
+      "llm_request_deadline_seconds": 0
+    }
   },
   "set llm_request_deadline_seconds <- 1": {
-    "err": true
+    "ok": {
+      "llm_request_deadline_seconds": 1
+    }
   },
   "set llm_request_deadline_seconds <- 1.5": {
     "err": true
@@ -4061,7 +4341,9 @@
     "err": true
   },
   "set llm_request_deadline_seconds <- 70000": {
-    "err": true
+    "ok": {
+      "llm_request_deadline_seconds": 70000
+    }
   },
   "set llm_request_deadline_seconds <- [1]": {
     "err": true
@@ -4094,10 +4376,14 @@
     "err": true
   },
   "set llm_request_timeout_seconds <- 0": {
-    "err": true
+    "ok": {
+      "llm_request_timeout_seconds": 0
+    }
   },
   "set llm_request_timeout_seconds <- 1": {
-    "err": true
+    "ok": {
+      "llm_request_timeout_seconds": 1
+    }
   },
   "set llm_request_timeout_seconds <- 1.5": {
     "err": true
@@ -4106,7 +4392,9 @@
     "err": true
   },
   "set llm_request_timeout_seconds <- 70000": {
-    "err": true
+    "ok": {
+      "llm_request_timeout_seconds": 70000
+    }
   },
   "set llm_request_timeout_seconds <- [1]": {
     "err": true
@@ -4171,16 +4459,24 @@
     "err": true
   },
   "set llm_structured_output_mode <- \"\"": {
-    "err": true
+    "ok": {
+      "llm_structured_output_mode": ""
+    }
   },
   "set llm_structured_output_mode <- \"1\"": {
-    "err": true
+    "ok": {
+      "llm_structured_output_mode": "1"
+    }
   },
   "set llm_structured_output_mode <- \"s\"": {
-    "err": true
+    "ok": {
+      "llm_structured_output_mode": "s"
+    }
   },
   "set llm_structured_output_mode <- \"true\"": {
-    "err": true
+    "ok": {
+      "llm_structured_output_mode": "true"
+    }
   },
   "set llm_structured_output_mode <- -1": {
     "err": true
@@ -4273,16 +4569,24 @@
     "err": true
   },
   "set log_level <- \"\"": {
-    "err": true
+    "ok": {
+      "log_level": ""
+    }
   },
   "set log_level <- \"1\"": {
-    "err": true
+    "ok": {
+      "log_level": "1"
+    }
   },
   "set log_level <- \"s\"": {
-    "err": true
+    "ok": {
+      "log_level": "s"
+    }
   },
   "set log_level <- \"true\"": {
-    "err": true
+    "ok": {
+      "log_level": "true"
+    }
   },
   "set log_level <- -1": {
     "err": true
@@ -4520,16 +4824,22 @@
     "err": true
   },
   "set ontology_file_path <- \"\"": {
-    "err": true
+    "ok": {}
   },
   "set ontology_file_path <- \"1\"": {
-    "err": true
+    "ok": {
+      "ontology_file_path": "1"
+    }
   },
   "set ontology_file_path <- \"s\"": {
-    "err": true
+    "ok": {
+      "ontology_file_path": "s"
+    }
   },
   "set ontology_file_path <- \"true\"": {
-    "err": true
+    "ok": {
+      "ontology_file_path": "true"
+    }
   },
   "set ontology_file_path <- -1": {
     "err": true
@@ -4565,16 +4875,24 @@
     "err": true
   },
   "set ontology_matching_strategy <- \"\"": {
-    "err": true
+    "ok": {
+      "ontology_matching_strategy": ""
+    }
   },
   "set ontology_matching_strategy <- \"1\"": {
-    "err": true
+    "ok": {
+      "ontology_matching_strategy": "1"
+    }
   },
   "set ontology_matching_strategy <- \"s\"": {
-    "err": true
+    "ok": {
+      "ontology_matching_strategy": "s"
+    }
   },
   "set ontology_matching_strategy <- \"true\"": {
-    "err": true
+    "ok": {
+      "ontology_matching_strategy": "true"
+    }
   },
   "set ontology_matching_strategy <- -1": {
     "err": true
@@ -4610,16 +4928,24 @@
     "err": true
   },
   "set ontology_resolver <- \"\"": {
-    "err": true
+    "ok": {
+      "ontology_resolver": ""
+    }
   },
   "set ontology_resolver <- \"1\"": {
-    "err": true
+    "ok": {
+      "ontology_resolver": "1"
+    }
   },
   "set ontology_resolver <- \"s\"": {
-    "err": true
+    "ok": {
+      "ontology_resolver": "s"
+    }
   },
   "set ontology_resolver <- \"true\"": {
-    "err": true
+    "ok": {
+      "ontology_resolver": "true"
+    }
   },
   "set ontology_resolver <- -1": {
     "err": true
@@ -4655,16 +4981,22 @@
     "err": true
   },
   "set otel_exporter_otlp_endpoint <- \"\"": {
-    "err": true
+    "ok": {}
   },
   "set otel_exporter_otlp_endpoint <- \"1\"": {
-    "err": true
+    "ok": {
+      "otel_exporter_otlp_endpoint": "1"
+    }
   },
   "set otel_exporter_otlp_endpoint <- \"s\"": {
-    "err": true
+    "ok": {
+      "otel_exporter_otlp_endpoint": "s"
+    }
   },
   "set otel_exporter_otlp_endpoint <- \"true\"": {
-    "err": true
+    "ok": {
+      "otel_exporter_otlp_endpoint": "true"
+    }
   },
   "set otel_exporter_otlp_endpoint <- -1": {
     "err": true
@@ -4700,16 +5032,22 @@
     "err": true
   },
   "set otel_exporter_otlp_headers <- \"\"": {
-    "err": true
+    "ok": {}
   },
   "set otel_exporter_otlp_headers <- \"1\"": {
-    "err": true
+    "ok": {
+      "otel_exporter_otlp_headers": "1"
+    }
   },
   "set otel_exporter_otlp_headers <- \"s\"": {
-    "err": true
+    "ok": {
+      "otel_exporter_otlp_headers": "s"
+    }
   },
   "set otel_exporter_otlp_headers <- \"true\"": {
-    "err": true
+    "ok": {
+      "otel_exporter_otlp_headers": "true"
+    }
   },
   "set otel_exporter_otlp_headers <- -1": {
     "err": true
@@ -4745,16 +5083,24 @@
     "err": true
   },
   "set otel_exporter_otlp_protocol <- \"\"": {
-    "err": true
+    "ok": {
+      "otel_exporter_otlp_protocol": ""
+    }
   },
   "set otel_exporter_otlp_protocol <- \"1\"": {
-    "err": true
+    "ok": {
+      "otel_exporter_otlp_protocol": "1"
+    }
   },
   "set otel_exporter_otlp_protocol <- \"s\"": {
-    "err": true
+    "ok": {
+      "otel_exporter_otlp_protocol": "s"
+    }
   },
   "set otel_exporter_otlp_protocol <- \"true\"": {
-    "err": true
+    "ok": {
+      "otel_exporter_otlp_protocol": "true"
+    }
   },
   "set otel_exporter_otlp_protocol <- -1": {
     "err": true
@@ -4790,16 +5136,24 @@
     "err": true
   },
   "set otel_service_name <- \"\"": {
-    "err": true
+    "ok": {
+      "otel_service_name": ""
+    }
   },
   "set otel_service_name <- \"1\"": {
-    "err": true
+    "ok": {
+      "otel_service_name": "1"
+    }
   },
   "set otel_service_name <- \"s\"": {
-    "err": true
+    "ok": {
+      "otel_service_name": "s"
+    }
   },
   "set otel_service_name <- \"true\"": {
-    "err": true
+    "ok": {
+      "otel_service_name": "true"
+    }
   },
   "set otel_service_name <- -1": {
     "err": true
@@ -4835,16 +5189,24 @@
     "err": true
   },
   "set otel_span_processor <- \"\"": {
-    "err": true
+    "ok": {
+      "otel_span_processor": ""
+    }
   },
   "set otel_span_processor <- \"1\"": {
-    "err": true
+    "ok": {
+      "otel_span_processor": "1"
+    }
   },
   "set otel_span_processor <- \"s\"": {
-    "err": true
+    "ok": {
+      "otel_span_processor": "s"
+    }
   },
   "set otel_span_processor <- \"true\"": {
-    "err": true
+    "ok": {
+      "otel_span_processor": "true"
+    }
   },
   "set otel_span_processor <- -1": {
     "err": true
@@ -4880,16 +5242,22 @@
     "err": true
   },
   "set otel_traces_sampler <- \"\"": {
-    "err": true
+    "ok": {}
   },
   "set otel_traces_sampler <- \"1\"": {
-    "err": true
+    "ok": {
+      "otel_traces_sampler": "1"
+    }
   },
   "set otel_traces_sampler <- \"s\"": {
-    "err": true
+    "ok": {
+      "otel_traces_sampler": "s"
+    }
   },
   "set otel_traces_sampler <- \"true\"": {
-    "err": true
+    "ok": {
+      "otel_traces_sampler": "true"
+    }
   },
   "set otel_traces_sampler <- -1": {
     "err": true
@@ -4925,16 +5293,22 @@
     "err": true
   },
   "set otel_traces_sampler_arg <- \"\"": {
-    "err": true
+    "ok": {}
   },
   "set otel_traces_sampler_arg <- \"1\"": {
-    "err": true
+    "ok": {
+      "otel_traces_sampler_arg": "1"
+    }
   },
   "set otel_traces_sampler_arg <- \"s\"": {
-    "err": true
+    "ok": {
+      "otel_traces_sampler_arg": "s"
+    }
   },
   "set otel_traces_sampler_arg <- \"true\"": {
-    "err": true
+    "ok": {
+      "otel_traces_sampler_arg": "true"
+    }
   },
   "set otel_traces_sampler_arg <- -1": {
     "err": true
@@ -5038,19 +5412,27 @@
     "err": true
   },
   "set session_ttl_seconds <- 0": {
-    "err": true
+    "ok": {
+      "session_ttl_seconds": 0
+    }
   },
   "set session_ttl_seconds <- 1": {
-    "err": true
+    "ok": {
+      "session_ttl_seconds": 1
+    }
   },
   "set session_ttl_seconds <- 1.5": {
     "err": true
   },
   "set session_ttl_seconds <- 5000000000": {
-    "err": true
+    "ok": {
+      "session_ttl_seconds": 5000000000
+    }
   },
   "set session_ttl_seconds <- 70000": {
-    "err": true
+    "ok": {
+      "session_ttl_seconds": 70000
+    }
   },
   "set session_ttl_seconds <- [1]": {
     "err": true
@@ -5135,16 +5517,24 @@
     "err": true
   },
   "set storage_backend <- \"\"": {
-    "err": true
+    "ok": {
+      "storage_backend": ""
+    }
   },
   "set storage_backend <- \"1\"": {
-    "err": true
+    "ok": {
+      "storage_backend": "1"
+    }
   },
   "set storage_backend <- \"s\"": {
-    "err": true
+    "ok": {
+      "storage_backend": "s"
+    }
   },
   "set storage_backend <- \"true\"": {
-    "err": true
+    "ok": {
+      "storage_backend": "true"
+    }
   },
   "set storage_backend <- -1": {
     "err": true
@@ -5180,16 +5570,22 @@
     "err": true
   },
   "set storage_bucket_name <- \"\"": {
-    "err": true
+    "ok": {}
   },
   "set storage_bucket_name <- \"1\"": {
-    "err": true
+    "ok": {
+      "storage_bucket_name": "1"
+    }
   },
   "set storage_bucket_name <- \"s\"": {
-    "err": true
+    "ok": {
+      "storage_bucket_name": "s"
+    }
   },
   "set storage_bucket_name <- \"true\"": {
-    "err": true
+    "ok": {
+      "storage_bucket_name": "true"
+    }
   },
   "set storage_bucket_name <- -1": {
     "err": true
@@ -5374,16 +5770,22 @@
     "err": true
   },
   "set transcription_model <- \"\"": {
-    "err": true
+    "ok": {}
   },
   "set transcription_model <- \"1\"": {
-    "err": true
+    "ok": {
+      "transcription_model": "1"
+    }
   },
   "set transcription_model <- \"s\"": {
-    "err": true
+    "ok": {
+      "transcription_model": "s"
+    }
   },
   "set transcription_model <- \"true\"": {
-    "err": true
+    "ok": {
+      "transcription_model": "true"
+    }
   },
   "set transcription_model <- -1": {
     "err": true
@@ -5419,16 +5821,22 @@
     "err": true
   },
   "set vector_db_host <- \"\"": {
-    "err": true
+    "ok": {}
   },
   "set vector_db_host <- \"1\"": {
-    "err": true
+    "ok": {
+      "vector_db_host": "1"
+    }
   },
   "set vector_db_host <- \"s\"": {
-    "err": true
+    "ok": {
+      "vector_db_host": "s"
+    }
   },
   "set vector_db_host <- \"true\"": {
-    "err": true
+    "ok": {
+      "vector_db_host": "true"
+    }
   },
   "set vector_db_host <- -1": {
     "err": true
@@ -5566,16 +5974,22 @@
     "err": true
   },
   "set vector_db_password <- \"\"": {
-    "err": true
+    "ok": {}
   },
   "set vector_db_password <- \"1\"": {
-    "err": true
+    "ok": {
+      "vector_db_password": "1"
+    }
   },
   "set vector_db_password <- \"s\"": {
-    "err": true
+    "ok": {
+      "vector_db_password": "s"
+    }
   },
   "set vector_db_password <- \"true\"": {
-    "err": true
+    "ok": {
+      "vector_db_password": "true"
+    }
   },
   "set vector_db_password <- -1": {
     "err": true
@@ -5764,16 +6178,22 @@
     "err": true
   },
   "set vector_db_username <- \"\"": {
-    "err": true
+    "ok": {}
   },
   "set vector_db_username <- \"1\"": {
-    "err": true
+    "ok": {
+      "vector_db_username": "1"
+    }
   },
   "set vector_db_username <- \"s\"": {
-    "err": true
+    "ok": {
+      "vector_db_username": "s"
+    }
   },
   "set vector_db_username <- \"true\"": {
-    "err": true
+    "ok": {
+      "vector_db_username": "true"
+    }
   },
   "set vector_db_username <- -1": {
     "err": true
@@ -5809,22 +6229,46 @@
     "err": true
   },
   "unset auto_feedback": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset auto_rate_limit": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset cache_backend": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset cache_host": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset cache_password": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset cache_port": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset cache_root_directory": {
     "ok": {
@@ -5834,7 +6278,11 @@
     }
   },
   "unset cache_username": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset chunk_engine": {
     "ok": {
@@ -5871,7 +6319,11 @@
     }
   },
   "unset cognee_tracing_enabled": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset data_root_directory": {
     "ok": {
@@ -5915,7 +6367,11 @@
     }
   },
   "unset db_sslmode": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset db_username": {
     "ok": {
@@ -5939,7 +6395,11 @@
     }
   },
   "unset default_user_email": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset default_user_id": {
     "ok": {
@@ -5949,7 +6409,11 @@
     }
   },
   "unset default_user_password": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset embedding_api_key": {
     "ok": {
@@ -5959,7 +6423,11 @@
     }
   },
   "unset embedding_api_version": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset embedding_batch_size": {
     "ok": {
@@ -5990,7 +6458,11 @@
     }
   },
   "unset embedding_model": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset embedding_model_name": {
     "ok": {
@@ -6021,13 +6493,25 @@
     }
   },
   "unset embedding_rate_limit_enabled": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset embedding_rate_limit_interval": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset embedding_rate_limit_requests": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset embedding_tokenizer_path": {
     "ok": {
@@ -6037,16 +6521,32 @@
     }
   },
   "unset enable_access_control": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset enable_caching": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset enable_last_accessed": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset graph_database_host": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset graph_database_key": {
     "ok": {
@@ -6143,10 +6643,18 @@
     "err": true
   },
   "unset llm_cassette": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset llm_connect_timeout_seconds": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset llm_endpoint": {
     "ok": {
@@ -6156,16 +6664,32 @@
     }
   },
   "unset llm_fallback_api_key": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset llm_fallback_endpoint": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset llm_fallback_model": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset llm_fallback_provider": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset llm_max_completion_tokens": {
     "ok": {
@@ -6189,10 +6713,18 @@
     }
   },
   "unset llm_min_retry_seconds": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset llm_mock": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset llm_model": {
     "ok": {
@@ -6215,25 +6747,53 @@
     }
   },
   "unset llm_rate_limit_enabled": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset llm_rate_limit_interval": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset llm_rate_limit_requests": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset llm_reasoning": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset llm_record_path": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset llm_request_deadline_seconds": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset llm_request_timeout_seconds": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset llm_streaming": {
     "ok": {
@@ -6243,7 +6803,11 @@
     }
   },
   "unset llm_structured_output_mode": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset llm_temperature": {
     "ok": {
@@ -6253,7 +6817,11 @@
     }
   },
   "unset log_level": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset logs_root_directory": {
     "ok": {
@@ -6280,34 +6848,74 @@
     "err": true
   },
   "unset ontology_file_path": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset ontology_matching_strategy": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset ontology_resolver": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset otel_exporter_otlp_endpoint": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset otel_exporter_otlp_headers": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset otel_exporter_otlp_protocol": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset otel_service_name": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset otel_span_processor": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset otel_traces_sampler": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset otel_traces_sampler_arg": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset relational_db_url": {
     "ok": {
@@ -6317,7 +6925,11 @@
     }
   },
   "unset session_ttl_seconds": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset single_process": {
     "ok": {
@@ -6327,10 +6939,18 @@
     }
   },
   "unset storage_backend": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset storage_bucket_name": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset summarization_model": {
     "ok": {
@@ -6350,10 +6970,18 @@
     }
   },
   "unset transcription_model": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset vector_db_host": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset vector_db_key": {
     "ok": {
@@ -6370,7 +6998,11 @@
     }
   },
   "unset vector_db_password": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset vector_db_port": {
     "ok": {
@@ -6394,6 +7026,10 @@
     }
   },
   "unset vector_db_username": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   }
 }

@@ -135,10 +135,12 @@ fn cli_config_keys_match_golden() {
         }
 
         // `config unset` restores the default from a changed document.
-        let mut s = Settings::default();
-        s.llm_model = "changed".into();
-        s.db_port = 1;
-        s.chunk_size = Some(7);
+        let mut s = Settings {
+            llm_model: "changed".into(),
+            db_port: 1,
+            chunk_size: Some(7),
+            ..Settings::default()
+        };
         let outcome = match unset_key(&mut s, &key) {
             Ok(()) => json!({ "ok": diff_from_default(&s) }),
             Err(_) => json!({ "err": true }),

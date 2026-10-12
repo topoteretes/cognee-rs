@@ -351,3 +351,18 @@ fn generic_set_matches_golden() {
         &Value::Object(cases.into_iter().collect()),
     );
 }
+
+/// The registry binds exactly the env vars pinned above: none lost, none
+/// added without updating this list (and the docs).
+#[test]
+fn registry_binds_exactly_the_pinned_env_vars() {
+    let mut bound: Vec<&str> = cognee::config::keys()
+        .iter()
+        .flat_map(|spec| spec.env.iter().copied())
+        .collect();
+    bound.sort_unstable();
+    bound.dedup();
+    let mut pinned = ENV_VARS.to_vec();
+    pinned.sort_unstable();
+    assert_eq!(bound, pinned);
+}

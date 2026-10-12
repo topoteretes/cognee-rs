@@ -1,362 +1,374 @@
 {
   "auto_feedback <- \"\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "auto_feedback"
   },
   "auto_feedback <- \"1\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "auto_feedback"
   },
   "auto_feedback <- \"s\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "auto_feedback"
   },
   "auto_feedback <- \"true\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "auto_feedback"
   },
   "auto_feedback <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "auto_feedback"
   },
   "auto_feedback <- 0": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "auto_feedback"
   },
   "auto_feedback <- 1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "auto_feedback"
   },
   "auto_feedback <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "auto_feedback"
   },
   "auto_feedback <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "auto_feedback"
   },
   "auto_feedback <- 70000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "auto_feedback"
   },
   "auto_feedback <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "auto_feedback"
   },
   "auto_feedback <- false": {
-    "err": "UnknownKey",
-    "key": "auto_feedback"
+    "ok": {}
   },
   "auto_feedback <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "auto_feedback"
   },
   "auto_feedback <- true": {
-    "err": "UnknownKey",
-    "key": "auto_feedback"
+    "ok": {
+      "auto_feedback": true
+    }
   },
   "auto_feedback <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "auto_feedback"
   },
   "auto_rate_limit <- \"\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "auto_rate_limit"
   },
   "auto_rate_limit <- \"1\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "auto_rate_limit"
   },
   "auto_rate_limit <- \"s\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "auto_rate_limit"
   },
   "auto_rate_limit <- \"true\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "auto_rate_limit"
   },
   "auto_rate_limit <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "auto_rate_limit"
   },
   "auto_rate_limit <- 0": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "auto_rate_limit"
   },
   "auto_rate_limit <- 1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "auto_rate_limit"
   },
   "auto_rate_limit <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "auto_rate_limit"
   },
   "auto_rate_limit <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "auto_rate_limit"
   },
   "auto_rate_limit <- 70000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "auto_rate_limit"
   },
   "auto_rate_limit <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "auto_rate_limit"
   },
   "auto_rate_limit <- false": {
-    "err": "UnknownKey",
-    "key": "auto_rate_limit"
+    "ok": {
+      "auto_rate_limit": false
+    }
   },
   "auto_rate_limit <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "auto_rate_limit"
   },
   "auto_rate_limit <- true": {
-    "err": "UnknownKey",
-    "key": "auto_rate_limit"
+    "ok": {}
   },
   "auto_rate_limit <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "auto_rate_limit"
   },
   "cache_backend <- \"\"": {
-    "err": "UnknownKey",
-    "key": "cache_backend"
+    "ok": {
+      "cache_backend": ""
+    }
   },
   "cache_backend <- \"1\"": {
-    "err": "UnknownKey",
-    "key": "cache_backend"
+    "ok": {
+      "cache_backend": "1"
+    }
   },
   "cache_backend <- \"s\"": {
-    "err": "UnknownKey",
-    "key": "cache_backend"
+    "ok": {
+      "cache_backend": "s"
+    }
   },
   "cache_backend <- \"true\"": {
-    "err": "UnknownKey",
-    "key": "cache_backend"
+    "ok": {
+      "cache_backend": "true"
+    }
   },
   "cache_backend <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_backend"
   },
   "cache_backend <- 0": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_backend"
   },
   "cache_backend <- 1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_backend"
   },
   "cache_backend <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_backend"
   },
   "cache_backend <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_backend"
   },
   "cache_backend <- 70000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_backend"
   },
   "cache_backend <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_backend"
   },
   "cache_backend <- false": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_backend"
   },
   "cache_backend <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_backend"
   },
   "cache_backend <- true": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_backend"
   },
   "cache_backend <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_backend"
   },
   "cache_host <- \"\"": {
-    "err": "UnknownKey",
-    "key": "cache_host"
+    "ok": {
+      "cache_host": ""
+    }
   },
   "cache_host <- \"1\"": {
-    "err": "UnknownKey",
-    "key": "cache_host"
+    "ok": {
+      "cache_host": "1"
+    }
   },
   "cache_host <- \"s\"": {
-    "err": "UnknownKey",
-    "key": "cache_host"
+    "ok": {
+      "cache_host": "s"
+    }
   },
   "cache_host <- \"true\"": {
-    "err": "UnknownKey",
-    "key": "cache_host"
+    "ok": {
+      "cache_host": "true"
+    }
   },
   "cache_host <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_host"
   },
   "cache_host <- 0": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_host"
   },
   "cache_host <- 1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_host"
   },
   "cache_host <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_host"
   },
   "cache_host <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_host"
   },
   "cache_host <- 70000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_host"
   },
   "cache_host <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_host"
   },
   "cache_host <- false": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_host"
   },
   "cache_host <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_host"
   },
   "cache_host <- true": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_host"
   },
   "cache_host <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_host"
   },
   "cache_password <- \"\"": {
-    "err": "UnknownKey",
-    "key": "cache_password"
+    "ok": {}
   },
   "cache_password <- \"1\"": {
-    "err": "UnknownKey",
-    "key": "cache_password"
+    "ok": {
+      "cache_password": "1"
+    }
   },
   "cache_password <- \"s\"": {
-    "err": "UnknownKey",
-    "key": "cache_password"
+    "ok": {
+      "cache_password": "s"
+    }
   },
   "cache_password <- \"true\"": {
-    "err": "UnknownKey",
-    "key": "cache_password"
+    "ok": {
+      "cache_password": "true"
+    }
   },
   "cache_password <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_password"
   },
   "cache_password <- 0": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_password"
   },
   "cache_password <- 1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_password"
   },
   "cache_password <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_password"
   },
   "cache_password <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_password"
   },
   "cache_password <- 70000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_password"
   },
   "cache_password <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_password"
   },
   "cache_password <- false": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_password"
   },
   "cache_password <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_password"
   },
   "cache_password <- true": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_password"
   },
   "cache_password <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_password"
   },
   "cache_port <- \"\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_port"
   },
   "cache_port <- \"1\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_port"
   },
   "cache_port <- \"s\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_port"
   },
   "cache_port <- \"true\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_port"
   },
   "cache_port <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_port"
   },
   "cache_port <- 0": {
-    "err": "UnknownKey",
-    "key": "cache_port"
+    "ok": {
+      "cache_port": 0
+    }
   },
   "cache_port <- 1": {
-    "err": "UnknownKey",
-    "key": "cache_port"
+    "ok": {
+      "cache_port": 1
+    }
   },
   "cache_port <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_port"
   },
   "cache_port <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_port"
   },
   "cache_port <- 70000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_port"
   },
   "cache_port <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_port"
   },
   "cache_port <- false": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_port"
   },
   "cache_port <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_port"
   },
   "cache_port <- true": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_port"
   },
   "cache_port <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_port"
   },
   "cache_root_directory <- \"\"": {
@@ -424,63 +436,65 @@
     "key": "cache_root_directory"
   },
   "cache_username <- \"\"": {
-    "err": "UnknownKey",
-    "key": "cache_username"
+    "ok": {}
   },
   "cache_username <- \"1\"": {
-    "err": "UnknownKey",
-    "key": "cache_username"
+    "ok": {
+      "cache_username": "1"
+    }
   },
   "cache_username <- \"s\"": {
-    "err": "UnknownKey",
-    "key": "cache_username"
+    "ok": {
+      "cache_username": "s"
+    }
   },
   "cache_username <- \"true\"": {
-    "err": "UnknownKey",
-    "key": "cache_username"
+    "ok": {
+      "cache_username": "true"
+    }
   },
   "cache_username <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_username"
   },
   "cache_username <- 0": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_username"
   },
   "cache_username <- 1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_username"
   },
   "cache_username <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_username"
   },
   "cache_username <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_username"
   },
   "cache_username <- 70000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_username"
   },
   "cache_username <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_username"
   },
   "cache_username <- false": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_username"
   },
   "cache_username <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_username"
   },
   "cache_username <- true": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_username"
   },
   "cache_username <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cache_username"
   },
   "chunk_engine <- \"\"": {
@@ -799,63 +813,63 @@
     "key": "classification_model"
   },
   "cognee_tracing_enabled <- \"\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cognee_tracing_enabled"
   },
   "cognee_tracing_enabled <- \"1\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cognee_tracing_enabled"
   },
   "cognee_tracing_enabled <- \"s\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cognee_tracing_enabled"
   },
   "cognee_tracing_enabled <- \"true\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cognee_tracing_enabled"
   },
   "cognee_tracing_enabled <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cognee_tracing_enabled"
   },
   "cognee_tracing_enabled <- 0": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cognee_tracing_enabled"
   },
   "cognee_tracing_enabled <- 1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cognee_tracing_enabled"
   },
   "cognee_tracing_enabled <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cognee_tracing_enabled"
   },
   "cognee_tracing_enabled <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cognee_tracing_enabled"
   },
   "cognee_tracing_enabled <- 70000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cognee_tracing_enabled"
   },
   "cognee_tracing_enabled <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cognee_tracing_enabled"
   },
   "cognee_tracing_enabled <- false": {
-    "err": "UnknownKey",
-    "key": "cognee_tracing_enabled"
+    "ok": {}
   },
   "cognee_tracing_enabled <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cognee_tracing_enabled"
   },
   "cognee_tracing_enabled <- true": {
-    "err": "UnknownKey",
-    "key": "cognee_tracing_enabled"
+    "ok": {
+      "cognee_tracing_enabled": true
+    }
   },
   "cognee_tracing_enabled <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "cognee_tracing_enabled"
   },
   "data_root_directory <- \"\"": {
@@ -923,723 +937,761 @@
     "key": "data_root_directory"
   },
   "db_host <- \"\"": {
-    "err": "UnknownKey",
-    "key": "db_host"
+    "ok": {
+      "db_host": ""
+    }
   },
   "db_host <- \"1\"": {
-    "err": "UnknownKey",
-    "key": "db_host"
+    "ok": {
+      "db_host": "1"
+    }
   },
   "db_host <- \"s\"": {
-    "err": "UnknownKey",
-    "key": "db_host"
+    "ok": {
+      "db_host": "s"
+    }
   },
   "db_host <- \"true\"": {
-    "err": "UnknownKey",
-    "key": "db_host"
+    "ok": {
+      "db_host": "true"
+    }
   },
   "db_host <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_host"
   },
   "db_host <- 0": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_host"
   },
   "db_host <- 1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_host"
   },
   "db_host <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_host"
   },
   "db_host <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_host"
   },
   "db_host <- 70000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_host"
   },
   "db_host <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_host"
   },
   "db_host <- false": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_host"
   },
   "db_host <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_host"
   },
   "db_host <- true": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_host"
   },
   "db_host <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_host"
   },
   "db_name <- \"\"": {
-    "err": "UnknownKey",
-    "key": "db_name"
+    "ok": {
+      "db_name": ""
+    }
   },
   "db_name <- \"1\"": {
-    "err": "UnknownKey",
-    "key": "db_name"
+    "ok": {
+      "db_name": "1"
+    }
   },
   "db_name <- \"s\"": {
-    "err": "UnknownKey",
-    "key": "db_name"
+    "ok": {
+      "db_name": "s"
+    }
   },
   "db_name <- \"true\"": {
-    "err": "UnknownKey",
-    "key": "db_name"
+    "ok": {
+      "db_name": "true"
+    }
   },
   "db_name <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_name"
   },
   "db_name <- 0": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_name"
   },
   "db_name <- 1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_name"
   },
   "db_name <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_name"
   },
   "db_name <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_name"
   },
   "db_name <- 70000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_name"
   },
   "db_name <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_name"
   },
   "db_name <- false": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_name"
   },
   "db_name <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_name"
   },
   "db_name <- true": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_name"
   },
   "db_name <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_name"
   },
   "db_password <- \"\"": {
-    "err": "UnknownKey",
-    "key": "db_password"
+    "ok": {}
   },
   "db_password <- \"1\"": {
-    "err": "UnknownKey",
-    "key": "db_password"
+    "ok": {
+      "db_password": "1"
+    }
   },
   "db_password <- \"s\"": {
-    "err": "UnknownKey",
-    "key": "db_password"
+    "ok": {
+      "db_password": "s"
+    }
   },
   "db_password <- \"true\"": {
-    "err": "UnknownKey",
-    "key": "db_password"
+    "ok": {
+      "db_password": "true"
+    }
   },
   "db_password <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_password"
   },
   "db_password <- 0": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_password"
   },
   "db_password <- 1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_password"
   },
   "db_password <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_password"
   },
   "db_password <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_password"
   },
   "db_password <- 70000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_password"
   },
   "db_password <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_password"
   },
   "db_password <- false": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_password"
   },
   "db_password <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_password"
   },
   "db_password <- true": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_password"
   },
   "db_password <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_password"
   },
   "db_port <- \"\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_port"
   },
   "db_port <- \"1\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_port"
   },
   "db_port <- \"s\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_port"
   },
   "db_port <- \"true\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_port"
   },
   "db_port <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_port"
   },
   "db_port <- 0": {
-    "err": "UnknownKey",
-    "key": "db_port"
+    "ok": {
+      "db_port": 0
+    }
   },
   "db_port <- 1": {
-    "err": "UnknownKey",
-    "key": "db_port"
+    "ok": {
+      "db_port": 1
+    }
   },
   "db_port <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_port"
   },
   "db_port <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_port"
   },
   "db_port <- 70000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_port"
   },
   "db_port <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_port"
   },
   "db_port <- false": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_port"
   },
   "db_port <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_port"
   },
   "db_port <- true": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_port"
   },
   "db_port <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_port"
   },
   "db_provider <- \"\"": {
-    "err": "UnknownKey",
-    "key": "db_provider"
+    "ok": {
+      "db_provider": ""
+    }
   },
   "db_provider <- \"1\"": {
-    "err": "UnknownKey",
-    "key": "db_provider"
+    "ok": {
+      "db_provider": "1"
+    }
   },
   "db_provider <- \"s\"": {
-    "err": "UnknownKey",
-    "key": "db_provider"
+    "ok": {
+      "db_provider": "s"
+    }
   },
   "db_provider <- \"true\"": {
-    "err": "UnknownKey",
-    "key": "db_provider"
+    "ok": {
+      "db_provider": "true"
+    }
   },
   "db_provider <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_provider"
   },
   "db_provider <- 0": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_provider"
   },
   "db_provider <- 1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_provider"
   },
   "db_provider <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_provider"
   },
   "db_provider <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_provider"
   },
   "db_provider <- 70000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_provider"
   },
   "db_provider <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_provider"
   },
   "db_provider <- false": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_provider"
   },
   "db_provider <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_provider"
   },
   "db_provider <- true": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_provider"
   },
   "db_provider <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_provider"
   },
   "db_sslmode <- \"\"": {
-    "err": "UnknownKey",
-    "key": "db_sslmode"
+    "ok": {}
   },
   "db_sslmode <- \"1\"": {
-    "err": "UnknownKey",
-    "key": "db_sslmode"
+    "ok": {
+      "db_sslmode": "1"
+    }
   },
   "db_sslmode <- \"s\"": {
-    "err": "UnknownKey",
-    "key": "db_sslmode"
+    "ok": {
+      "db_sslmode": "s"
+    }
   },
   "db_sslmode <- \"true\"": {
-    "err": "UnknownKey",
-    "key": "db_sslmode"
+    "ok": {
+      "db_sslmode": "true"
+    }
   },
   "db_sslmode <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_sslmode"
   },
   "db_sslmode <- 0": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_sslmode"
   },
   "db_sslmode <- 1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_sslmode"
   },
   "db_sslmode <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_sslmode"
   },
   "db_sslmode <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_sslmode"
   },
   "db_sslmode <- 70000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_sslmode"
   },
   "db_sslmode <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_sslmode"
   },
   "db_sslmode <- false": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_sslmode"
   },
   "db_sslmode <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_sslmode"
   },
   "db_sslmode <- true": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_sslmode"
   },
   "db_sslmode <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_sslmode"
   },
   "db_username <- \"\"": {
-    "err": "UnknownKey",
-    "key": "db_username"
+    "ok": {}
   },
   "db_username <- \"1\"": {
-    "err": "UnknownKey",
-    "key": "db_username"
+    "ok": {
+      "db_username": "1"
+    }
   },
   "db_username <- \"s\"": {
-    "err": "UnknownKey",
-    "key": "db_username"
+    "ok": {
+      "db_username": "s"
+    }
   },
   "db_username <- \"true\"": {
-    "err": "UnknownKey",
-    "key": "db_username"
+    "ok": {
+      "db_username": "true"
+    }
   },
   "db_username <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_username"
   },
   "db_username <- 0": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_username"
   },
   "db_username <- 1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_username"
   },
   "db_username <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_username"
   },
   "db_username <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_username"
   },
   "db_username <- 70000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_username"
   },
   "db_username <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_username"
   },
   "db_username <- false": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_username"
   },
   "db_username <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_username"
   },
   "db_username <- true": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_username"
   },
   "db_username <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "db_username"
   },
   "default_dataset_name <- \"\"": {
-    "err": "UnknownKey",
-    "key": "default_dataset_name"
+    "ok": {
+      "default_dataset_name": ""
+    }
   },
   "default_dataset_name <- \"1\"": {
-    "err": "UnknownKey",
-    "key": "default_dataset_name"
+    "ok": {
+      "default_dataset_name": "1"
+    }
   },
   "default_dataset_name <- \"s\"": {
-    "err": "UnknownKey",
-    "key": "default_dataset_name"
+    "ok": {
+      "default_dataset_name": "s"
+    }
   },
   "default_dataset_name <- \"true\"": {
-    "err": "UnknownKey",
-    "key": "default_dataset_name"
+    "ok": {
+      "default_dataset_name": "true"
+    }
   },
   "default_dataset_name <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_dataset_name"
   },
   "default_dataset_name <- 0": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_dataset_name"
   },
   "default_dataset_name <- 1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_dataset_name"
   },
   "default_dataset_name <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_dataset_name"
   },
   "default_dataset_name <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_dataset_name"
   },
   "default_dataset_name <- 70000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_dataset_name"
   },
   "default_dataset_name <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_dataset_name"
   },
   "default_dataset_name <- false": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_dataset_name"
   },
   "default_dataset_name <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_dataset_name"
   },
   "default_dataset_name <- true": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_dataset_name"
   },
   "default_dataset_name <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_dataset_name"
   },
   "default_system_prompt_path <- \"\"": {
-    "err": "UnknownKey",
-    "key": "default_system_prompt_path"
+    "ok": {
+      "default_system_prompt_path": ""
+    }
   },
   "default_system_prompt_path <- \"1\"": {
-    "err": "UnknownKey",
-    "key": "default_system_prompt_path"
+    "ok": {
+      "default_system_prompt_path": "1"
+    }
   },
   "default_system_prompt_path <- \"s\"": {
-    "err": "UnknownKey",
-    "key": "default_system_prompt_path"
+    "ok": {
+      "default_system_prompt_path": "s"
+    }
   },
   "default_system_prompt_path <- \"true\"": {
-    "err": "UnknownKey",
-    "key": "default_system_prompt_path"
+    "ok": {
+      "default_system_prompt_path": "true"
+    }
   },
   "default_system_prompt_path <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_system_prompt_path"
   },
   "default_system_prompt_path <- 0": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_system_prompt_path"
   },
   "default_system_prompt_path <- 1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_system_prompt_path"
   },
   "default_system_prompt_path <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_system_prompt_path"
   },
   "default_system_prompt_path <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_system_prompt_path"
   },
   "default_system_prompt_path <- 70000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_system_prompt_path"
   },
   "default_system_prompt_path <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_system_prompt_path"
   },
   "default_system_prompt_path <- false": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_system_prompt_path"
   },
   "default_system_prompt_path <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_system_prompt_path"
   },
   "default_system_prompt_path <- true": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_system_prompt_path"
   },
   "default_system_prompt_path <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_system_prompt_path"
   },
   "default_user_email <- \"\"": {
-    "err": "UnknownKey",
-    "key": "default_user_email"
+    "ok": {
+      "default_user_email": ""
+    }
   },
   "default_user_email <- \"1\"": {
-    "err": "UnknownKey",
-    "key": "default_user_email"
+    "ok": {
+      "default_user_email": "1"
+    }
   },
   "default_user_email <- \"s\"": {
-    "err": "UnknownKey",
-    "key": "default_user_email"
+    "ok": {
+      "default_user_email": "s"
+    }
   },
   "default_user_email <- \"true\"": {
-    "err": "UnknownKey",
-    "key": "default_user_email"
+    "ok": {
+      "default_user_email": "true"
+    }
   },
   "default_user_email <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_user_email"
   },
   "default_user_email <- 0": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_user_email"
   },
   "default_user_email <- 1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_user_email"
   },
   "default_user_email <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_user_email"
   },
   "default_user_email <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_user_email"
   },
   "default_user_email <- 70000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_user_email"
   },
   "default_user_email <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_user_email"
   },
   "default_user_email <- false": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_user_email"
   },
   "default_user_email <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_user_email"
   },
   "default_user_email <- true": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_user_email"
   },
   "default_user_email <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_user_email"
   },
   "default_user_id <- \"\"": {
-    "err": "UnknownKey",
-    "key": "default_user_id"
+    "ok": {
+      "default_user_id": ""
+    }
   },
   "default_user_id <- \"1\"": {
-    "err": "UnknownKey",
-    "key": "default_user_id"
+    "ok": {
+      "default_user_id": "1"
+    }
   },
   "default_user_id <- \"s\"": {
-    "err": "UnknownKey",
-    "key": "default_user_id"
+    "ok": {
+      "default_user_id": "s"
+    }
   },
   "default_user_id <- \"true\"": {
-    "err": "UnknownKey",
-    "key": "default_user_id"
+    "ok": {
+      "default_user_id": "true"
+    }
   },
   "default_user_id <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_user_id"
   },
   "default_user_id <- 0": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_user_id"
   },
   "default_user_id <- 1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_user_id"
   },
   "default_user_id <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_user_id"
   },
   "default_user_id <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_user_id"
   },
   "default_user_id <- 70000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_user_id"
   },
   "default_user_id <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_user_id"
   },
   "default_user_id <- false": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_user_id"
   },
   "default_user_id <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_user_id"
   },
   "default_user_id <- true": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_user_id"
   },
   "default_user_id <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_user_id"
   },
   "default_user_password <- \"\"": {
-    "err": "UnknownKey",
-    "key": "default_user_password"
+    "ok": {}
   },
   "default_user_password <- \"1\"": {
-    "err": "UnknownKey",
-    "key": "default_user_password"
+    "ok": {
+      "default_user_password": "1"
+    }
   },
   "default_user_password <- \"s\"": {
-    "err": "UnknownKey",
-    "key": "default_user_password"
+    "ok": {
+      "default_user_password": "s"
+    }
   },
   "default_user_password <- \"true\"": {
-    "err": "UnknownKey",
-    "key": "default_user_password"
+    "ok": {
+      "default_user_password": "true"
+    }
   },
   "default_user_password <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_user_password"
   },
   "default_user_password <- 0": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_user_password"
   },
   "default_user_password <- 1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_user_password"
   },
   "default_user_password <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_user_password"
   },
   "default_user_password <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_user_password"
   },
   "default_user_password <- 70000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_user_password"
   },
   "default_user_password <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_user_password"
   },
   "default_user_password <- false": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_user_password"
   },
   "default_user_password <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_user_password"
   },
   "default_user_password <- true": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_user_password"
   },
   "default_user_password <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "default_user_password"
   },
   "embedding_api_key <- \"\"": {
@@ -1767,63 +1819,66 @@
     "key": "embedding_api_version"
   },
   "embedding_batch_size <- \"\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_batch_size"
   },
   "embedding_batch_size <- \"1\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_batch_size"
   },
   "embedding_batch_size <- \"s\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_batch_size"
   },
   "embedding_batch_size <- \"true\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_batch_size"
   },
   "embedding_batch_size <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_batch_size"
   },
   "embedding_batch_size <- 0": {
-    "err": "UnknownKey",
-    "key": "embedding_batch_size"
+    "ok": {
+      "embedding_batch_size": 0
+    }
   },
   "embedding_batch_size <- 1": {
-    "err": "UnknownKey",
-    "key": "embedding_batch_size"
+    "ok": {
+      "embedding_batch_size": 1
+    }
   },
   "embedding_batch_size <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_batch_size"
   },
   "embedding_batch_size <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_batch_size"
   },
   "embedding_batch_size <- 70000": {
-    "err": "UnknownKey",
-    "key": "embedding_batch_size"
+    "ok": {
+      "embedding_batch_size": 70000
+    }
   },
   "embedding_batch_size <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_batch_size"
   },
   "embedding_batch_size <- false": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_batch_size"
   },
   "embedding_batch_size <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_batch_size"
   },
   "embedding_batch_size <- true": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_batch_size"
   },
   "embedding_batch_size <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_batch_size"
   },
   "embedding_dimensions <- \"\"": {
@@ -1952,63 +2007,66 @@
     "key": "embedding_endpoint"
   },
   "embedding_max_sequence_length <- \"\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_max_sequence_length"
   },
   "embedding_max_sequence_length <- \"1\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_max_sequence_length"
   },
   "embedding_max_sequence_length <- \"s\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_max_sequence_length"
   },
   "embedding_max_sequence_length <- \"true\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_max_sequence_length"
   },
   "embedding_max_sequence_length <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_max_sequence_length"
   },
   "embedding_max_sequence_length <- 0": {
-    "err": "UnknownKey",
-    "key": "embedding_max_sequence_length"
+    "ok": {
+      "embedding_max_sequence_length": 0
+    }
   },
   "embedding_max_sequence_length <- 1": {
-    "err": "UnknownKey",
-    "key": "embedding_max_sequence_length"
+    "ok": {
+      "embedding_max_sequence_length": 1
+    }
   },
   "embedding_max_sequence_length <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_max_sequence_length"
   },
   "embedding_max_sequence_length <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_max_sequence_length"
   },
   "embedding_max_sequence_length <- 70000": {
-    "err": "UnknownKey",
-    "key": "embedding_max_sequence_length"
+    "ok": {
+      "embedding_max_sequence_length": 70000
+    }
   },
   "embedding_max_sequence_length <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_max_sequence_length"
   },
   "embedding_max_sequence_length <- false": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_max_sequence_length"
   },
   "embedding_max_sequence_length <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_max_sequence_length"
   },
   "embedding_max_sequence_length <- true": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_max_sequence_length"
   },
   "embedding_max_sequence_length <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_max_sequence_length"
   },
   "embedding_model <- \"\"": {
@@ -2204,63 +2262,66 @@
     "key": "embedding_model_path"
   },
   "embedding_onnx_batch_size <- \"\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_onnx_batch_size"
   },
   "embedding_onnx_batch_size <- \"1\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_onnx_batch_size"
   },
   "embedding_onnx_batch_size <- \"s\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_onnx_batch_size"
   },
   "embedding_onnx_batch_size <- \"true\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_onnx_batch_size"
   },
   "embedding_onnx_batch_size <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_onnx_batch_size"
   },
   "embedding_onnx_batch_size <- 0": {
-    "err": "UnknownKey",
-    "key": "embedding_onnx_batch_size"
+    "ok": {
+      "embedding_onnx_batch_size": 0
+    }
   },
   "embedding_onnx_batch_size <- 1": {
-    "err": "UnknownKey",
-    "key": "embedding_onnx_batch_size"
+    "ok": {
+      "embedding_onnx_batch_size": 1
+    }
   },
   "embedding_onnx_batch_size <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_onnx_batch_size"
   },
   "embedding_onnx_batch_size <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_onnx_batch_size"
   },
   "embedding_onnx_batch_size <- 70000": {
-    "err": "UnknownKey",
-    "key": "embedding_onnx_batch_size"
+    "ok": {
+      "embedding_onnx_batch_size": 70000
+    }
   },
   "embedding_onnx_batch_size <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_onnx_batch_size"
   },
   "embedding_onnx_batch_size <- false": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_onnx_batch_size"
   },
   "embedding_onnx_batch_size <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_onnx_batch_size"
   },
   "embedding_onnx_batch_size <- true": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_onnx_batch_size"
   },
   "embedding_onnx_batch_size <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_onnx_batch_size"
   },
   "embedding_provider <- \"\"": {
@@ -2328,183 +2389,189 @@
     "key": "embedding_provider"
   },
   "embedding_rate_limit_enabled <- \"\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_rate_limit_enabled"
   },
   "embedding_rate_limit_enabled <- \"1\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_rate_limit_enabled"
   },
   "embedding_rate_limit_enabled <- \"s\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_rate_limit_enabled"
   },
   "embedding_rate_limit_enabled <- \"true\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_rate_limit_enabled"
   },
   "embedding_rate_limit_enabled <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_rate_limit_enabled"
   },
   "embedding_rate_limit_enabled <- 0": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_rate_limit_enabled"
   },
   "embedding_rate_limit_enabled <- 1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_rate_limit_enabled"
   },
   "embedding_rate_limit_enabled <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_rate_limit_enabled"
   },
   "embedding_rate_limit_enabled <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_rate_limit_enabled"
   },
   "embedding_rate_limit_enabled <- 70000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_rate_limit_enabled"
   },
   "embedding_rate_limit_enabled <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_rate_limit_enabled"
   },
   "embedding_rate_limit_enabled <- false": {
-    "err": "UnknownKey",
-    "key": "embedding_rate_limit_enabled"
+    "ok": {}
   },
   "embedding_rate_limit_enabled <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_rate_limit_enabled"
   },
   "embedding_rate_limit_enabled <- true": {
-    "err": "UnknownKey",
-    "key": "embedding_rate_limit_enabled"
+    "ok": {
+      "embedding_rate_limit_enabled": true
+    }
   },
   "embedding_rate_limit_enabled <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_rate_limit_enabled"
   },
   "embedding_rate_limit_interval <- \"\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_rate_limit_interval"
   },
   "embedding_rate_limit_interval <- \"1\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_rate_limit_interval"
   },
   "embedding_rate_limit_interval <- \"s\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_rate_limit_interval"
   },
   "embedding_rate_limit_interval <- \"true\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_rate_limit_interval"
   },
   "embedding_rate_limit_interval <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_rate_limit_interval"
   },
   "embedding_rate_limit_interval <- 0": {
-    "err": "UnknownKey",
-    "key": "embedding_rate_limit_interval"
+    "ok": {
+      "embedding_rate_limit_interval": 0
+    }
   },
   "embedding_rate_limit_interval <- 1": {
-    "err": "UnknownKey",
-    "key": "embedding_rate_limit_interval"
+    "ok": {
+      "embedding_rate_limit_interval": 1
+    }
   },
   "embedding_rate_limit_interval <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_rate_limit_interval"
   },
   "embedding_rate_limit_interval <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_rate_limit_interval"
   },
   "embedding_rate_limit_interval <- 70000": {
-    "err": "UnknownKey",
-    "key": "embedding_rate_limit_interval"
+    "ok": {
+      "embedding_rate_limit_interval": 70000
+    }
   },
   "embedding_rate_limit_interval <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_rate_limit_interval"
   },
   "embedding_rate_limit_interval <- false": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_rate_limit_interval"
   },
   "embedding_rate_limit_interval <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_rate_limit_interval"
   },
   "embedding_rate_limit_interval <- true": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_rate_limit_interval"
   },
   "embedding_rate_limit_interval <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_rate_limit_interval"
   },
   "embedding_rate_limit_requests <- \"\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_rate_limit_requests"
   },
   "embedding_rate_limit_requests <- \"1\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_rate_limit_requests"
   },
   "embedding_rate_limit_requests <- \"s\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_rate_limit_requests"
   },
   "embedding_rate_limit_requests <- \"true\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_rate_limit_requests"
   },
   "embedding_rate_limit_requests <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_rate_limit_requests"
   },
   "embedding_rate_limit_requests <- 0": {
-    "err": "UnknownKey",
-    "key": "embedding_rate_limit_requests"
+    "ok": {
+      "embedding_rate_limit_requests": 0
+    }
   },
   "embedding_rate_limit_requests <- 1": {
-    "err": "UnknownKey",
-    "key": "embedding_rate_limit_requests"
+    "ok": {
+      "embedding_rate_limit_requests": 1
+    }
   },
   "embedding_rate_limit_requests <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_rate_limit_requests"
   },
   "embedding_rate_limit_requests <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_rate_limit_requests"
   },
   "embedding_rate_limit_requests <- 70000": {
-    "err": "UnknownKey",
-    "key": "embedding_rate_limit_requests"
+    "ok": {
+      "embedding_rate_limit_requests": 70000
+    }
   },
   "embedding_rate_limit_requests <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_rate_limit_requests"
   },
   "embedding_rate_limit_requests <- false": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_rate_limit_requests"
   },
   "embedding_rate_limit_requests <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_rate_limit_requests"
   },
   "embedding_rate_limit_requests <- true": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_rate_limit_requests"
   },
   "embedding_rate_limit_requests <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "embedding_rate_limit_requests"
   },
   "embedding_tokenizer_path <- \"\"": {
@@ -2572,483 +2639,493 @@
     "key": "embedding_tokenizer_path"
   },
   "enable_access_control <- \"\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "enable_access_control"
   },
   "enable_access_control <- \"1\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "enable_access_control"
   },
   "enable_access_control <- \"s\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "enable_access_control"
   },
   "enable_access_control <- \"true\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "enable_access_control"
   },
   "enable_access_control <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "enable_access_control"
   },
   "enable_access_control <- 0": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "enable_access_control"
   },
   "enable_access_control <- 1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "enable_access_control"
   },
   "enable_access_control <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "enable_access_control"
   },
   "enable_access_control <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "enable_access_control"
   },
   "enable_access_control <- 70000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "enable_access_control"
   },
   "enable_access_control <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "enable_access_control"
   },
   "enable_access_control <- false": {
-    "err": "UnknownKey",
-    "key": "enable_access_control"
+    "ok": {}
   },
   "enable_access_control <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "enable_access_control"
   },
   "enable_access_control <- true": {
-    "err": "UnknownKey",
-    "key": "enable_access_control"
+    "ok": {
+      "enable_access_control": true
+    }
   },
   "enable_access_control <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "enable_access_control"
   },
   "enable_caching <- \"\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "enable_caching"
   },
   "enable_caching <- \"1\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "enable_caching"
   },
   "enable_caching <- \"s\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "enable_caching"
   },
   "enable_caching <- \"true\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "enable_caching"
   },
   "enable_caching <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "enable_caching"
   },
   "enable_caching <- 0": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "enable_caching"
   },
   "enable_caching <- 1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "enable_caching"
   },
   "enable_caching <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "enable_caching"
   },
   "enable_caching <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "enable_caching"
   },
   "enable_caching <- 70000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "enable_caching"
   },
   "enable_caching <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "enable_caching"
   },
   "enable_caching <- false": {
-    "err": "UnknownKey",
-    "key": "enable_caching"
+    "ok": {
+      "enable_caching": false
+    }
   },
   "enable_caching <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "enable_caching"
   },
   "enable_caching <- true": {
-    "err": "UnknownKey",
-    "key": "enable_caching"
+    "ok": {}
   },
   "enable_caching <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "enable_caching"
   },
   "enable_last_accessed <- \"\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "enable_last_accessed"
   },
   "enable_last_accessed <- \"1\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "enable_last_accessed"
   },
   "enable_last_accessed <- \"s\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "enable_last_accessed"
   },
   "enable_last_accessed <- \"true\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "enable_last_accessed"
   },
   "enable_last_accessed <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "enable_last_accessed"
   },
   "enable_last_accessed <- 0": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "enable_last_accessed"
   },
   "enable_last_accessed <- 1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "enable_last_accessed"
   },
   "enable_last_accessed <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "enable_last_accessed"
   },
   "enable_last_accessed <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "enable_last_accessed"
   },
   "enable_last_accessed <- 70000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "enable_last_accessed"
   },
   "enable_last_accessed <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "enable_last_accessed"
   },
   "enable_last_accessed <- false": {
-    "err": "UnknownKey",
-    "key": "enable_last_accessed"
+    "ok": {}
   },
   "enable_last_accessed <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "enable_last_accessed"
   },
   "enable_last_accessed <- true": {
-    "err": "UnknownKey",
-    "key": "enable_last_accessed"
+    "ok": {
+      "enable_last_accessed": true
+    }
   },
   "enable_last_accessed <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "enable_last_accessed"
   },
   "graph_database_host <- \"\"": {
-    "err": "UnknownKey",
-    "key": "graph_database_host"
+    "ok": {}
   },
   "graph_database_host <- \"1\"": {
-    "err": "UnknownKey",
-    "key": "graph_database_host"
+    "ok": {
+      "graph_database_host": "1"
+    }
   },
   "graph_database_host <- \"s\"": {
-    "err": "UnknownKey",
-    "key": "graph_database_host"
+    "ok": {
+      "graph_database_host": "s"
+    }
   },
   "graph_database_host <- \"true\"": {
-    "err": "UnknownKey",
-    "key": "graph_database_host"
+    "ok": {
+      "graph_database_host": "true"
+    }
   },
   "graph_database_host <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_host"
   },
   "graph_database_host <- 0": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_host"
   },
   "graph_database_host <- 1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_host"
   },
   "graph_database_host <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_host"
   },
   "graph_database_host <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_host"
   },
   "graph_database_host <- 70000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_host"
   },
   "graph_database_host <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_host"
   },
   "graph_database_host <- false": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_host"
   },
   "graph_database_host <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_host"
   },
   "graph_database_host <- true": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_host"
   },
   "graph_database_host <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_host"
   },
   "graph_database_key <- \"\"": {
-    "err": "UnknownKey",
-    "key": "graph_database_key"
+    "ok": {}
   },
   "graph_database_key <- \"1\"": {
-    "err": "UnknownKey",
-    "key": "graph_database_key"
+    "ok": {
+      "graph_database_key": "1"
+    }
   },
   "graph_database_key <- \"s\"": {
-    "err": "UnknownKey",
-    "key": "graph_database_key"
+    "ok": {
+      "graph_database_key": "s"
+    }
   },
   "graph_database_key <- \"true\"": {
-    "err": "UnknownKey",
-    "key": "graph_database_key"
+    "ok": {
+      "graph_database_key": "true"
+    }
   },
   "graph_database_key <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_key"
   },
   "graph_database_key <- 0": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_key"
   },
   "graph_database_key <- 1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_key"
   },
   "graph_database_key <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_key"
   },
   "graph_database_key <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_key"
   },
   "graph_database_key <- 70000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_key"
   },
   "graph_database_key <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_key"
   },
   "graph_database_key <- false": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_key"
   },
   "graph_database_key <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_key"
   },
   "graph_database_key <- true": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_key"
   },
   "graph_database_key <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_key"
   },
   "graph_database_name <- \"\"": {
-    "err": "UnknownKey",
-    "key": "graph_database_name"
+    "ok": {}
   },
   "graph_database_name <- \"1\"": {
-    "err": "UnknownKey",
-    "key": "graph_database_name"
+    "ok": {
+      "graph_database_name": "1"
+    }
   },
   "graph_database_name <- \"s\"": {
-    "err": "UnknownKey",
-    "key": "graph_database_name"
+    "ok": {
+      "graph_database_name": "s"
+    }
   },
   "graph_database_name <- \"true\"": {
-    "err": "UnknownKey",
-    "key": "graph_database_name"
+    "ok": {
+      "graph_database_name": "true"
+    }
   },
   "graph_database_name <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_name"
   },
   "graph_database_name <- 0": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_name"
   },
   "graph_database_name <- 1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_name"
   },
   "graph_database_name <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_name"
   },
   "graph_database_name <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_name"
   },
   "graph_database_name <- 70000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_name"
   },
   "graph_database_name <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_name"
   },
   "graph_database_name <- false": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_name"
   },
   "graph_database_name <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_name"
   },
   "graph_database_name <- true": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_name"
   },
   "graph_database_name <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_name"
   },
   "graph_database_password <- \"\"": {
-    "err": "UnknownKey",
-    "key": "graph_database_password"
+    "ok": {}
   },
   "graph_database_password <- \"1\"": {
-    "err": "UnknownKey",
-    "key": "graph_database_password"
+    "ok": {
+      "graph_database_password": "1"
+    }
   },
   "graph_database_password <- \"s\"": {
-    "err": "UnknownKey",
-    "key": "graph_database_password"
+    "ok": {
+      "graph_database_password": "s"
+    }
   },
   "graph_database_password <- \"true\"": {
-    "err": "UnknownKey",
-    "key": "graph_database_password"
+    "ok": {
+      "graph_database_password": "true"
+    }
   },
   "graph_database_password <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_password"
   },
   "graph_database_password <- 0": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_password"
   },
   "graph_database_password <- 1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_password"
   },
   "graph_database_password <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_password"
   },
   "graph_database_password <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_password"
   },
   "graph_database_password <- 70000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_password"
   },
   "graph_database_password <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_password"
   },
   "graph_database_password <- false": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_password"
   },
   "graph_database_password <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_password"
   },
   "graph_database_password <- true": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_password"
   },
   "graph_database_password <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_password"
   },
   "graph_database_port <- \"\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_port"
   },
   "graph_database_port <- \"1\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_port"
   },
   "graph_database_port <- \"s\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_port"
   },
   "graph_database_port <- \"true\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_port"
   },
   "graph_database_port <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_port"
   },
   "graph_database_port <- 0": {
-    "err": "UnknownKey",
-    "key": "graph_database_port"
+    "ok": {
+      "graph_database_port": 0
+    }
   },
   "graph_database_port <- 1": {
-    "err": "UnknownKey",
-    "key": "graph_database_port"
+    "ok": {
+      "graph_database_port": 1
+    }
   },
   "graph_database_port <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_port"
   },
   "graph_database_port <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_port"
   },
   "graph_database_port <- 70000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_port"
   },
   "graph_database_port <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_port"
   },
   "graph_database_port <- false": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_port"
   },
   "graph_database_port <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_port"
   },
   "graph_database_port <- true": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_port"
   },
   "graph_database_port <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_port"
   },
   "graph_database_provider <- \"\"": {
@@ -3116,123 +3193,127 @@
     "key": "graph_database_provider"
   },
   "graph_database_url <- \"\"": {
-    "err": "UnknownKey",
-    "key": "graph_database_url"
+    "ok": {}
   },
   "graph_database_url <- \"1\"": {
-    "err": "UnknownKey",
-    "key": "graph_database_url"
+    "ok": {
+      "graph_database_url": "1"
+    }
   },
   "graph_database_url <- \"s\"": {
-    "err": "UnknownKey",
-    "key": "graph_database_url"
+    "ok": {
+      "graph_database_url": "s"
+    }
   },
   "graph_database_url <- \"true\"": {
-    "err": "UnknownKey",
-    "key": "graph_database_url"
+    "ok": {
+      "graph_database_url": "true"
+    }
   },
   "graph_database_url <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_url"
   },
   "graph_database_url <- 0": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_url"
   },
   "graph_database_url <- 1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_url"
   },
   "graph_database_url <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_url"
   },
   "graph_database_url <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_url"
   },
   "graph_database_url <- 70000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_url"
   },
   "graph_database_url <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_url"
   },
   "graph_database_url <- false": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_url"
   },
   "graph_database_url <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_url"
   },
   "graph_database_url <- true": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_url"
   },
   "graph_database_url <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_url"
   },
   "graph_database_username <- \"\"": {
-    "err": "UnknownKey",
-    "key": "graph_database_username"
+    "ok": {}
   },
   "graph_database_username <- \"1\"": {
-    "err": "UnknownKey",
-    "key": "graph_database_username"
+    "ok": {
+      "graph_database_username": "1"
+    }
   },
   "graph_database_username <- \"s\"": {
-    "err": "UnknownKey",
-    "key": "graph_database_username"
+    "ok": {
+      "graph_database_username": "s"
+    }
   },
   "graph_database_username <- \"true\"": {
-    "err": "UnknownKey",
-    "key": "graph_database_username"
+    "ok": {
+      "graph_database_username": "true"
+    }
   },
   "graph_database_username <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_username"
   },
   "graph_database_username <- 0": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_username"
   },
   "graph_database_username <- 1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_username"
   },
   "graph_database_username <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_username"
   },
   "graph_database_username <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_username"
   },
   "graph_database_username <- 70000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_username"
   },
   "graph_database_username <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_username"
   },
   "graph_database_username <- false": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_username"
   },
   "graph_database_username <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_username"
   },
   "graph_database_username <- true": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_username"
   },
   "graph_database_username <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_database_username"
   },
   "graph_file_path <- \"\"": {
@@ -3298,63 +3379,65 @@
     "key": "graph_file_path"
   },
   "graph_filename <- \"\"": {
-    "err": "UnknownKey",
-    "key": "graph_filename"
+    "ok": {}
   },
   "graph_filename <- \"1\"": {
-    "err": "UnknownKey",
-    "key": "graph_filename"
+    "ok": {
+      "graph_filename": "1"
+    }
   },
   "graph_filename <- \"s\"": {
-    "err": "UnknownKey",
-    "key": "graph_filename"
+    "ok": {
+      "graph_filename": "s"
+    }
   },
   "graph_filename <- \"true\"": {
-    "err": "UnknownKey",
-    "key": "graph_filename"
+    "ok": {
+      "graph_filename": "true"
+    }
   },
   "graph_filename <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_filename"
   },
   "graph_filename <- 0": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_filename"
   },
   "graph_filename <- 1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_filename"
   },
   "graph_filename <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_filename"
   },
   "graph_filename <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_filename"
   },
   "graph_filename <- 70000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_filename"
   },
   "graph_filename <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_filename"
   },
   "graph_filename <- false": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_filename"
   },
   "graph_filename <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_filename"
   },
   "graph_filename <- true": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_filename"
   },
   "graph_filename <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_filename"
   },
   "graph_model <- \"\"": {
@@ -3422,63 +3505,67 @@
     "key": "graph_model"
   },
   "graph_prompt_path <- \"\"": {
-    "err": "UnknownKey",
-    "key": "graph_prompt_path"
+    "ok": {
+      "graph_prompt_path": ""
+    }
   },
   "graph_prompt_path <- \"1\"": {
-    "err": "UnknownKey",
-    "key": "graph_prompt_path"
+    "ok": {
+      "graph_prompt_path": "1"
+    }
   },
   "graph_prompt_path <- \"s\"": {
-    "err": "UnknownKey",
-    "key": "graph_prompt_path"
+    "ok": {
+      "graph_prompt_path": "s"
+    }
   },
   "graph_prompt_path <- \"true\"": {
-    "err": "UnknownKey",
-    "key": "graph_prompt_path"
+    "ok": {
+      "graph_prompt_path": "true"
+    }
   },
   "graph_prompt_path <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_prompt_path"
   },
   "graph_prompt_path <- 0": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_prompt_path"
   },
   "graph_prompt_path <- 1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_prompt_path"
   },
   "graph_prompt_path <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_prompt_path"
   },
   "graph_prompt_path <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_prompt_path"
   },
   "graph_prompt_path <- 70000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_prompt_path"
   },
   "graph_prompt_path <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_prompt_path"
   },
   "graph_prompt_path <- false": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_prompt_path"
   },
   "graph_prompt_path <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_prompt_path"
   },
   "graph_prompt_path <- true": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_prompt_path"
   },
   "graph_prompt_path <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "graph_prompt_path"
   },
   "llm_api_key <- \"\"": {
@@ -3606,64 +3693,67 @@
     "key": "llm_api_version"
   },
   "llm_args <- \"\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_args"
   },
   "llm_args <- \"1\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_args"
   },
   "llm_args <- \"s\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_args"
   },
   "llm_args <- \"true\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_args"
   },
   "llm_args <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_args"
   },
   "llm_args <- 0": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_args"
   },
   "llm_args <- 1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_args"
   },
   "llm_args <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_args"
   },
   "llm_args <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_args"
   },
   "llm_args <- 70000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_args"
   },
   "llm_args <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_args"
   },
   "llm_args <- false": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_args"
   },
   "llm_args <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_args"
   },
   "llm_args <- true": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_args"
   },
   "llm_args <- {\"a\":1}": {
-    "err": "UnknownKey",
-    "key": "llm_args"
+    "ok": {
+      "llm_args": {
+        "a": 1
+      }
+    }
   },
   "llm_cassette <- \"\"": {
     "ok": {}
@@ -3728,63 +3818,66 @@
     "key": "llm_cassette"
   },
   "llm_connect_timeout_seconds <- \"\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_connect_timeout_seconds"
   },
   "llm_connect_timeout_seconds <- \"1\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_connect_timeout_seconds"
   },
   "llm_connect_timeout_seconds <- \"s\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_connect_timeout_seconds"
   },
   "llm_connect_timeout_seconds <- \"true\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_connect_timeout_seconds"
   },
   "llm_connect_timeout_seconds <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_connect_timeout_seconds"
   },
   "llm_connect_timeout_seconds <- 0": {
-    "err": "UnknownKey",
-    "key": "llm_connect_timeout_seconds"
+    "ok": {
+      "llm_connect_timeout_seconds": 0
+    }
   },
   "llm_connect_timeout_seconds <- 1": {
-    "err": "UnknownKey",
-    "key": "llm_connect_timeout_seconds"
+    "ok": {
+      "llm_connect_timeout_seconds": 1
+    }
   },
   "llm_connect_timeout_seconds <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_connect_timeout_seconds"
   },
   "llm_connect_timeout_seconds <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_connect_timeout_seconds"
   },
   "llm_connect_timeout_seconds <- 70000": {
-    "err": "UnknownKey",
-    "key": "llm_connect_timeout_seconds"
+    "ok": {
+      "llm_connect_timeout_seconds": 70000
+    }
   },
   "llm_connect_timeout_seconds <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_connect_timeout_seconds"
   },
   "llm_connect_timeout_seconds <- false": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_connect_timeout_seconds"
   },
   "llm_connect_timeout_seconds <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_connect_timeout_seconds"
   },
   "llm_connect_timeout_seconds <- true": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_connect_timeout_seconds"
   },
   "llm_connect_timeout_seconds <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_connect_timeout_seconds"
   },
   "llm_endpoint <- \"\"": {
@@ -4287,63 +4380,66 @@
     "key": "llm_max_retries"
   },
   "llm_min_retry_seconds <- \"\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_min_retry_seconds"
   },
   "llm_min_retry_seconds <- \"1\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_min_retry_seconds"
   },
   "llm_min_retry_seconds <- \"s\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_min_retry_seconds"
   },
   "llm_min_retry_seconds <- \"true\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_min_retry_seconds"
   },
   "llm_min_retry_seconds <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_min_retry_seconds"
   },
   "llm_min_retry_seconds <- 0": {
-    "err": "UnknownKey",
-    "key": "llm_min_retry_seconds"
+    "ok": {
+      "llm_min_retry_seconds": 0
+    }
   },
   "llm_min_retry_seconds <- 1": {
-    "err": "UnknownKey",
-    "key": "llm_min_retry_seconds"
+    "ok": {
+      "llm_min_retry_seconds": 1
+    }
   },
   "llm_min_retry_seconds <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_min_retry_seconds"
   },
   "llm_min_retry_seconds <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_min_retry_seconds"
   },
   "llm_min_retry_seconds <- 70000": {
-    "err": "UnknownKey",
-    "key": "llm_min_retry_seconds"
+    "ok": {
+      "llm_min_retry_seconds": 70000
+    }
   },
   "llm_min_retry_seconds <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_min_retry_seconds"
   },
   "llm_min_retry_seconds <- false": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_min_retry_seconds"
   },
   "llm_min_retry_seconds <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_min_retry_seconds"
   },
   "llm_min_retry_seconds <- true": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_min_retry_seconds"
   },
   "llm_min_retry_seconds <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_min_retry_seconds"
   },
   "llm_mock <- \"\"": {
@@ -4598,183 +4694,189 @@
     "key": "llm_provider"
   },
   "llm_rate_limit_enabled <- \"\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_rate_limit_enabled"
   },
   "llm_rate_limit_enabled <- \"1\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_rate_limit_enabled"
   },
   "llm_rate_limit_enabled <- \"s\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_rate_limit_enabled"
   },
   "llm_rate_limit_enabled <- \"true\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_rate_limit_enabled"
   },
   "llm_rate_limit_enabled <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_rate_limit_enabled"
   },
   "llm_rate_limit_enabled <- 0": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_rate_limit_enabled"
   },
   "llm_rate_limit_enabled <- 1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_rate_limit_enabled"
   },
   "llm_rate_limit_enabled <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_rate_limit_enabled"
   },
   "llm_rate_limit_enabled <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_rate_limit_enabled"
   },
   "llm_rate_limit_enabled <- 70000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_rate_limit_enabled"
   },
   "llm_rate_limit_enabled <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_rate_limit_enabled"
   },
   "llm_rate_limit_enabled <- false": {
-    "err": "UnknownKey",
-    "key": "llm_rate_limit_enabled"
+    "ok": {}
   },
   "llm_rate_limit_enabled <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_rate_limit_enabled"
   },
   "llm_rate_limit_enabled <- true": {
-    "err": "UnknownKey",
-    "key": "llm_rate_limit_enabled"
+    "ok": {
+      "llm_rate_limit_enabled": true
+    }
   },
   "llm_rate_limit_enabled <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_rate_limit_enabled"
   },
   "llm_rate_limit_interval <- \"\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_rate_limit_interval"
   },
   "llm_rate_limit_interval <- \"1\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_rate_limit_interval"
   },
   "llm_rate_limit_interval <- \"s\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_rate_limit_interval"
   },
   "llm_rate_limit_interval <- \"true\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_rate_limit_interval"
   },
   "llm_rate_limit_interval <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_rate_limit_interval"
   },
   "llm_rate_limit_interval <- 0": {
-    "err": "UnknownKey",
-    "key": "llm_rate_limit_interval"
+    "ok": {
+      "llm_rate_limit_interval": 0
+    }
   },
   "llm_rate_limit_interval <- 1": {
-    "err": "UnknownKey",
-    "key": "llm_rate_limit_interval"
+    "ok": {
+      "llm_rate_limit_interval": 1
+    }
   },
   "llm_rate_limit_interval <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_rate_limit_interval"
   },
   "llm_rate_limit_interval <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_rate_limit_interval"
   },
   "llm_rate_limit_interval <- 70000": {
-    "err": "UnknownKey",
-    "key": "llm_rate_limit_interval"
+    "ok": {
+      "llm_rate_limit_interval": 70000
+    }
   },
   "llm_rate_limit_interval <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_rate_limit_interval"
   },
   "llm_rate_limit_interval <- false": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_rate_limit_interval"
   },
   "llm_rate_limit_interval <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_rate_limit_interval"
   },
   "llm_rate_limit_interval <- true": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_rate_limit_interval"
   },
   "llm_rate_limit_interval <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_rate_limit_interval"
   },
   "llm_rate_limit_requests <- \"\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_rate_limit_requests"
   },
   "llm_rate_limit_requests <- \"1\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_rate_limit_requests"
   },
   "llm_rate_limit_requests <- \"s\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_rate_limit_requests"
   },
   "llm_rate_limit_requests <- \"true\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_rate_limit_requests"
   },
   "llm_rate_limit_requests <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_rate_limit_requests"
   },
   "llm_rate_limit_requests <- 0": {
-    "err": "UnknownKey",
-    "key": "llm_rate_limit_requests"
+    "ok": {
+      "llm_rate_limit_requests": 0
+    }
   },
   "llm_rate_limit_requests <- 1": {
-    "err": "UnknownKey",
-    "key": "llm_rate_limit_requests"
+    "ok": {
+      "llm_rate_limit_requests": 1
+    }
   },
   "llm_rate_limit_requests <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_rate_limit_requests"
   },
   "llm_rate_limit_requests <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_rate_limit_requests"
   },
   "llm_rate_limit_requests <- 70000": {
-    "err": "UnknownKey",
-    "key": "llm_rate_limit_requests"
+    "ok": {
+      "llm_rate_limit_requests": 70000
+    }
   },
   "llm_rate_limit_requests <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_rate_limit_requests"
   },
   "llm_rate_limit_requests <- false": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_rate_limit_requests"
   },
   "llm_rate_limit_requests <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_rate_limit_requests"
   },
   "llm_rate_limit_requests <- true": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_rate_limit_requests"
   },
   "llm_rate_limit_requests <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_rate_limit_requests"
   },
   "llm_reasoning <- \"\"": {
@@ -4904,123 +5006,129 @@
     "key": "llm_record_path"
   },
   "llm_request_deadline_seconds <- \"\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_request_deadline_seconds"
   },
   "llm_request_deadline_seconds <- \"1\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_request_deadline_seconds"
   },
   "llm_request_deadline_seconds <- \"s\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_request_deadline_seconds"
   },
   "llm_request_deadline_seconds <- \"true\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_request_deadline_seconds"
   },
   "llm_request_deadline_seconds <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_request_deadline_seconds"
   },
   "llm_request_deadline_seconds <- 0": {
-    "err": "UnknownKey",
-    "key": "llm_request_deadline_seconds"
+    "ok": {
+      "llm_request_deadline_seconds": 0
+    }
   },
   "llm_request_deadline_seconds <- 1": {
-    "err": "UnknownKey",
-    "key": "llm_request_deadline_seconds"
+    "ok": {
+      "llm_request_deadline_seconds": 1
+    }
   },
   "llm_request_deadline_seconds <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_request_deadline_seconds"
   },
   "llm_request_deadline_seconds <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_request_deadline_seconds"
   },
   "llm_request_deadline_seconds <- 70000": {
-    "err": "UnknownKey",
-    "key": "llm_request_deadline_seconds"
+    "ok": {
+      "llm_request_deadline_seconds": 70000
+    }
   },
   "llm_request_deadline_seconds <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_request_deadline_seconds"
   },
   "llm_request_deadline_seconds <- false": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_request_deadline_seconds"
   },
   "llm_request_deadline_seconds <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_request_deadline_seconds"
   },
   "llm_request_deadline_seconds <- true": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_request_deadline_seconds"
   },
   "llm_request_deadline_seconds <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_request_deadline_seconds"
   },
   "llm_request_timeout_seconds <- \"\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_request_timeout_seconds"
   },
   "llm_request_timeout_seconds <- \"1\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_request_timeout_seconds"
   },
   "llm_request_timeout_seconds <- \"s\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_request_timeout_seconds"
   },
   "llm_request_timeout_seconds <- \"true\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_request_timeout_seconds"
   },
   "llm_request_timeout_seconds <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_request_timeout_seconds"
   },
   "llm_request_timeout_seconds <- 0": {
-    "err": "UnknownKey",
-    "key": "llm_request_timeout_seconds"
+    "ok": {
+      "llm_request_timeout_seconds": 0
+    }
   },
   "llm_request_timeout_seconds <- 1": {
-    "err": "UnknownKey",
-    "key": "llm_request_timeout_seconds"
+    "ok": {
+      "llm_request_timeout_seconds": 1
+    }
   },
   "llm_request_timeout_seconds <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_request_timeout_seconds"
   },
   "llm_request_timeout_seconds <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_request_timeout_seconds"
   },
   "llm_request_timeout_seconds <- 70000": {
-    "err": "UnknownKey",
-    "key": "llm_request_timeout_seconds"
+    "ok": {
+      "llm_request_timeout_seconds": 70000
+    }
   },
   "llm_request_timeout_seconds <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_request_timeout_seconds"
   },
   "llm_request_timeout_seconds <- false": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_request_timeout_seconds"
   },
   "llm_request_timeout_seconds <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_request_timeout_seconds"
   },
   "llm_request_timeout_seconds <- true": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_request_timeout_seconds"
   },
   "llm_request_timeout_seconds <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "llm_request_timeout_seconds"
   },
   "llm_streaming <- \"\"": {
@@ -5213,63 +5321,67 @@
     "key": "llm_temperature"
   },
   "log_level <- \"\"": {
-    "err": "UnknownKey",
-    "key": "log_level"
+    "ok": {
+      "log_level": ""
+    }
   },
   "log_level <- \"1\"": {
-    "err": "UnknownKey",
-    "key": "log_level"
+    "ok": {
+      "log_level": "1"
+    }
   },
   "log_level <- \"s\"": {
-    "err": "UnknownKey",
-    "key": "log_level"
+    "ok": {
+      "log_level": "s"
+    }
   },
   "log_level <- \"true\"": {
-    "err": "UnknownKey",
-    "key": "log_level"
+    "ok": {
+      "log_level": "true"
+    }
   },
   "log_level <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "log_level"
   },
   "log_level <- 0": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "log_level"
   },
   "log_level <- 1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "log_level"
   },
   "log_level <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "log_level"
   },
   "log_level <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "log_level"
   },
   "log_level <- 70000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "log_level"
   },
   "log_level <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "log_level"
   },
   "log_level <- false": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "log_level"
   },
   "log_level <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "log_level"
   },
   "log_level <- true": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "log_level"
   },
   "log_level <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "log_level"
   },
   "logs_root_directory <- \"\"": {
@@ -5713,423 +5825,443 @@
     "key": "ontology_resolver"
   },
   "otel_exporter_otlp_endpoint <- \"\"": {
-    "err": "UnknownKey",
-    "key": "otel_exporter_otlp_endpoint"
+    "ok": {}
   },
   "otel_exporter_otlp_endpoint <- \"1\"": {
-    "err": "UnknownKey",
-    "key": "otel_exporter_otlp_endpoint"
+    "ok": {
+      "otel_exporter_otlp_endpoint": "1"
+    }
   },
   "otel_exporter_otlp_endpoint <- \"s\"": {
-    "err": "UnknownKey",
-    "key": "otel_exporter_otlp_endpoint"
+    "ok": {
+      "otel_exporter_otlp_endpoint": "s"
+    }
   },
   "otel_exporter_otlp_endpoint <- \"true\"": {
-    "err": "UnknownKey",
-    "key": "otel_exporter_otlp_endpoint"
+    "ok": {
+      "otel_exporter_otlp_endpoint": "true"
+    }
   },
   "otel_exporter_otlp_endpoint <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_exporter_otlp_endpoint"
   },
   "otel_exporter_otlp_endpoint <- 0": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_exporter_otlp_endpoint"
   },
   "otel_exporter_otlp_endpoint <- 1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_exporter_otlp_endpoint"
   },
   "otel_exporter_otlp_endpoint <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_exporter_otlp_endpoint"
   },
   "otel_exporter_otlp_endpoint <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_exporter_otlp_endpoint"
   },
   "otel_exporter_otlp_endpoint <- 70000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_exporter_otlp_endpoint"
   },
   "otel_exporter_otlp_endpoint <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_exporter_otlp_endpoint"
   },
   "otel_exporter_otlp_endpoint <- false": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_exporter_otlp_endpoint"
   },
   "otel_exporter_otlp_endpoint <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_exporter_otlp_endpoint"
   },
   "otel_exporter_otlp_endpoint <- true": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_exporter_otlp_endpoint"
   },
   "otel_exporter_otlp_endpoint <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_exporter_otlp_endpoint"
   },
   "otel_exporter_otlp_headers <- \"\"": {
-    "err": "UnknownKey",
-    "key": "otel_exporter_otlp_headers"
+    "ok": {}
   },
   "otel_exporter_otlp_headers <- \"1\"": {
-    "err": "UnknownKey",
-    "key": "otel_exporter_otlp_headers"
+    "ok": {
+      "otel_exporter_otlp_headers": "1"
+    }
   },
   "otel_exporter_otlp_headers <- \"s\"": {
-    "err": "UnknownKey",
-    "key": "otel_exporter_otlp_headers"
+    "ok": {
+      "otel_exporter_otlp_headers": "s"
+    }
   },
   "otel_exporter_otlp_headers <- \"true\"": {
-    "err": "UnknownKey",
-    "key": "otel_exporter_otlp_headers"
+    "ok": {
+      "otel_exporter_otlp_headers": "true"
+    }
   },
   "otel_exporter_otlp_headers <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_exporter_otlp_headers"
   },
   "otel_exporter_otlp_headers <- 0": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_exporter_otlp_headers"
   },
   "otel_exporter_otlp_headers <- 1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_exporter_otlp_headers"
   },
   "otel_exporter_otlp_headers <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_exporter_otlp_headers"
   },
   "otel_exporter_otlp_headers <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_exporter_otlp_headers"
   },
   "otel_exporter_otlp_headers <- 70000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_exporter_otlp_headers"
   },
   "otel_exporter_otlp_headers <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_exporter_otlp_headers"
   },
   "otel_exporter_otlp_headers <- false": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_exporter_otlp_headers"
   },
   "otel_exporter_otlp_headers <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_exporter_otlp_headers"
   },
   "otel_exporter_otlp_headers <- true": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_exporter_otlp_headers"
   },
   "otel_exporter_otlp_headers <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_exporter_otlp_headers"
   },
   "otel_exporter_otlp_protocol <- \"\"": {
-    "err": "UnknownKey",
-    "key": "otel_exporter_otlp_protocol"
+    "ok": {
+      "otel_exporter_otlp_protocol": ""
+    }
   },
   "otel_exporter_otlp_protocol <- \"1\"": {
-    "err": "UnknownKey",
-    "key": "otel_exporter_otlp_protocol"
+    "ok": {
+      "otel_exporter_otlp_protocol": "1"
+    }
   },
   "otel_exporter_otlp_protocol <- \"s\"": {
-    "err": "UnknownKey",
-    "key": "otel_exporter_otlp_protocol"
+    "ok": {
+      "otel_exporter_otlp_protocol": "s"
+    }
   },
   "otel_exporter_otlp_protocol <- \"true\"": {
-    "err": "UnknownKey",
-    "key": "otel_exporter_otlp_protocol"
+    "ok": {
+      "otel_exporter_otlp_protocol": "true"
+    }
   },
   "otel_exporter_otlp_protocol <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_exporter_otlp_protocol"
   },
   "otel_exporter_otlp_protocol <- 0": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_exporter_otlp_protocol"
   },
   "otel_exporter_otlp_protocol <- 1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_exporter_otlp_protocol"
   },
   "otel_exporter_otlp_protocol <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_exporter_otlp_protocol"
   },
   "otel_exporter_otlp_protocol <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_exporter_otlp_protocol"
   },
   "otel_exporter_otlp_protocol <- 70000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_exporter_otlp_protocol"
   },
   "otel_exporter_otlp_protocol <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_exporter_otlp_protocol"
   },
   "otel_exporter_otlp_protocol <- false": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_exporter_otlp_protocol"
   },
   "otel_exporter_otlp_protocol <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_exporter_otlp_protocol"
   },
   "otel_exporter_otlp_protocol <- true": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_exporter_otlp_protocol"
   },
   "otel_exporter_otlp_protocol <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_exporter_otlp_protocol"
   },
   "otel_service_name <- \"\"": {
-    "err": "UnknownKey",
-    "key": "otel_service_name"
+    "ok": {
+      "otel_service_name": ""
+    }
   },
   "otel_service_name <- \"1\"": {
-    "err": "UnknownKey",
-    "key": "otel_service_name"
+    "ok": {
+      "otel_service_name": "1"
+    }
   },
   "otel_service_name <- \"s\"": {
-    "err": "UnknownKey",
-    "key": "otel_service_name"
+    "ok": {
+      "otel_service_name": "s"
+    }
   },
   "otel_service_name <- \"true\"": {
-    "err": "UnknownKey",
-    "key": "otel_service_name"
+    "ok": {
+      "otel_service_name": "true"
+    }
   },
   "otel_service_name <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_service_name"
   },
   "otel_service_name <- 0": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_service_name"
   },
   "otel_service_name <- 1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_service_name"
   },
   "otel_service_name <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_service_name"
   },
   "otel_service_name <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_service_name"
   },
   "otel_service_name <- 70000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_service_name"
   },
   "otel_service_name <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_service_name"
   },
   "otel_service_name <- false": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_service_name"
   },
   "otel_service_name <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_service_name"
   },
   "otel_service_name <- true": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_service_name"
   },
   "otel_service_name <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_service_name"
   },
   "otel_span_processor <- \"\"": {
-    "err": "UnknownKey",
-    "key": "otel_span_processor"
+    "ok": {
+      "otel_span_processor": ""
+    }
   },
   "otel_span_processor <- \"1\"": {
-    "err": "UnknownKey",
-    "key": "otel_span_processor"
+    "ok": {
+      "otel_span_processor": "1"
+    }
   },
   "otel_span_processor <- \"s\"": {
-    "err": "UnknownKey",
-    "key": "otel_span_processor"
+    "ok": {
+      "otel_span_processor": "s"
+    }
   },
   "otel_span_processor <- \"true\"": {
-    "err": "UnknownKey",
-    "key": "otel_span_processor"
+    "ok": {
+      "otel_span_processor": "true"
+    }
   },
   "otel_span_processor <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_span_processor"
   },
   "otel_span_processor <- 0": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_span_processor"
   },
   "otel_span_processor <- 1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_span_processor"
   },
   "otel_span_processor <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_span_processor"
   },
   "otel_span_processor <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_span_processor"
   },
   "otel_span_processor <- 70000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_span_processor"
   },
   "otel_span_processor <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_span_processor"
   },
   "otel_span_processor <- false": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_span_processor"
   },
   "otel_span_processor <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_span_processor"
   },
   "otel_span_processor <- true": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_span_processor"
   },
   "otel_span_processor <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_span_processor"
   },
   "otel_traces_sampler <- \"\"": {
-    "err": "UnknownKey",
-    "key": "otel_traces_sampler"
+    "ok": {}
   },
   "otel_traces_sampler <- \"1\"": {
-    "err": "UnknownKey",
-    "key": "otel_traces_sampler"
+    "ok": {
+      "otel_traces_sampler": "1"
+    }
   },
   "otel_traces_sampler <- \"s\"": {
-    "err": "UnknownKey",
-    "key": "otel_traces_sampler"
+    "ok": {
+      "otel_traces_sampler": "s"
+    }
   },
   "otel_traces_sampler <- \"true\"": {
-    "err": "UnknownKey",
-    "key": "otel_traces_sampler"
+    "ok": {
+      "otel_traces_sampler": "true"
+    }
   },
   "otel_traces_sampler <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_traces_sampler"
   },
   "otel_traces_sampler <- 0": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_traces_sampler"
   },
   "otel_traces_sampler <- 1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_traces_sampler"
   },
   "otel_traces_sampler <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_traces_sampler"
   },
   "otel_traces_sampler <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_traces_sampler"
   },
   "otel_traces_sampler <- 70000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_traces_sampler"
   },
   "otel_traces_sampler <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_traces_sampler"
   },
   "otel_traces_sampler <- false": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_traces_sampler"
   },
   "otel_traces_sampler <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_traces_sampler"
   },
   "otel_traces_sampler <- true": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_traces_sampler"
   },
   "otel_traces_sampler <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_traces_sampler"
   },
   "otel_traces_sampler_arg <- \"\"": {
-    "err": "UnknownKey",
-    "key": "otel_traces_sampler_arg"
+    "ok": {}
   },
   "otel_traces_sampler_arg <- \"1\"": {
-    "err": "UnknownKey",
-    "key": "otel_traces_sampler_arg"
+    "ok": {
+      "otel_traces_sampler_arg": "1"
+    }
   },
   "otel_traces_sampler_arg <- \"s\"": {
-    "err": "UnknownKey",
-    "key": "otel_traces_sampler_arg"
+    "ok": {
+      "otel_traces_sampler_arg": "s"
+    }
   },
   "otel_traces_sampler_arg <- \"true\"": {
-    "err": "UnknownKey",
-    "key": "otel_traces_sampler_arg"
+    "ok": {
+      "otel_traces_sampler_arg": "true"
+    }
   },
   "otel_traces_sampler_arg <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_traces_sampler_arg"
   },
   "otel_traces_sampler_arg <- 0": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_traces_sampler_arg"
   },
   "otel_traces_sampler_arg <- 1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_traces_sampler_arg"
   },
   "otel_traces_sampler_arg <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_traces_sampler_arg"
   },
   "otel_traces_sampler_arg <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_traces_sampler_arg"
   },
   "otel_traces_sampler_arg <- 70000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_traces_sampler_arg"
   },
   "otel_traces_sampler_arg <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_traces_sampler_arg"
   },
   "otel_traces_sampler_arg <- false": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_traces_sampler_arg"
   },
   "otel_traces_sampler_arg <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_traces_sampler_arg"
   },
   "otel_traces_sampler_arg <- true": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_traces_sampler_arg"
   },
   "otel_traces_sampler_arg <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "otel_traces_sampler_arg"
   },
   "relational_db_url <- \"\"": {
@@ -6197,63 +6329,67 @@
     "key": "relational_db_url"
   },
   "session_ttl_seconds <- \"\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "session_ttl_seconds"
   },
   "session_ttl_seconds <- \"1\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "session_ttl_seconds"
   },
   "session_ttl_seconds <- \"s\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "session_ttl_seconds"
   },
   "session_ttl_seconds <- \"true\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "session_ttl_seconds"
   },
   "session_ttl_seconds <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "session_ttl_seconds"
   },
   "session_ttl_seconds <- 0": {
-    "err": "UnknownKey",
-    "key": "session_ttl_seconds"
+    "ok": {
+      "session_ttl_seconds": 0
+    }
   },
   "session_ttl_seconds <- 1": {
-    "err": "UnknownKey",
-    "key": "session_ttl_seconds"
+    "ok": {
+      "session_ttl_seconds": 1
+    }
   },
   "session_ttl_seconds <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "session_ttl_seconds"
   },
   "session_ttl_seconds <- 5000000000": {
-    "err": "UnknownKey",
-    "key": "session_ttl_seconds"
+    "ok": {
+      "session_ttl_seconds": 5000000000
+    }
   },
   "session_ttl_seconds <- 70000": {
-    "err": "UnknownKey",
-    "key": "session_ttl_seconds"
+    "ok": {
+      "session_ttl_seconds": 70000
+    }
   },
   "session_ttl_seconds <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "session_ttl_seconds"
   },
   "session_ttl_seconds <- false": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "session_ttl_seconds"
   },
   "session_ttl_seconds <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "session_ttl_seconds"
   },
   "session_ttl_seconds <- true": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "session_ttl_seconds"
   },
   "session_ttl_seconds <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "session_ttl_seconds"
   },
   "single_process <- \"\"": {
@@ -6326,123 +6462,129 @@
     "key": "single_process"
   },
   "storage_backend <- \"\"": {
-    "err": "UnknownKey",
-    "key": "storage_backend"
+    "ok": {
+      "storage_backend": ""
+    }
   },
   "storage_backend <- \"1\"": {
-    "err": "UnknownKey",
-    "key": "storage_backend"
+    "ok": {
+      "storage_backend": "1"
+    }
   },
   "storage_backend <- \"s\"": {
-    "err": "UnknownKey",
-    "key": "storage_backend"
+    "ok": {
+      "storage_backend": "s"
+    }
   },
   "storage_backend <- \"true\"": {
-    "err": "UnknownKey",
-    "key": "storage_backend"
+    "ok": {
+      "storage_backend": "true"
+    }
   },
   "storage_backend <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "storage_backend"
   },
   "storage_backend <- 0": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "storage_backend"
   },
   "storage_backend <- 1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "storage_backend"
   },
   "storage_backend <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "storage_backend"
   },
   "storage_backend <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "storage_backend"
   },
   "storage_backend <- 70000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "storage_backend"
   },
   "storage_backend <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "storage_backend"
   },
   "storage_backend <- false": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "storage_backend"
   },
   "storage_backend <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "storage_backend"
   },
   "storage_backend <- true": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "storage_backend"
   },
   "storage_backend <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "storage_backend"
   },
   "storage_bucket_name <- \"\"": {
-    "err": "UnknownKey",
-    "key": "storage_bucket_name"
+    "ok": {}
   },
   "storage_bucket_name <- \"1\"": {
-    "err": "UnknownKey",
-    "key": "storage_bucket_name"
+    "ok": {
+      "storage_bucket_name": "1"
+    }
   },
   "storage_bucket_name <- \"s\"": {
-    "err": "UnknownKey",
-    "key": "storage_bucket_name"
+    "ok": {
+      "storage_bucket_name": "s"
+    }
   },
   "storage_bucket_name <- \"true\"": {
-    "err": "UnknownKey",
-    "key": "storage_bucket_name"
+    "ok": {
+      "storage_bucket_name": "true"
+    }
   },
   "storage_bucket_name <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "storage_bucket_name"
   },
   "storage_bucket_name <- 0": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "storage_bucket_name"
   },
   "storage_bucket_name <- 1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "storage_bucket_name"
   },
   "storage_bucket_name <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "storage_bucket_name"
   },
   "storage_bucket_name <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "storage_bucket_name"
   },
   "storage_bucket_name <- 70000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "storage_bucket_name"
   },
   "storage_bucket_name <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "storage_bucket_name"
   },
   "storage_bucket_name <- false": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "storage_bucket_name"
   },
   "storage_bucket_name <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "storage_bucket_name"
   },
   "storage_bucket_name <- true": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "storage_bucket_name"
   },
   "storage_bucket_name <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "storage_bucket_name"
   },
   "summarization_model <- \"\"": {
@@ -6508,63 +6650,62 @@
     "key": "summarization_model"
   },
   "summarization_schema <- \"\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "summarization_schema"
   },
   "summarization_schema <- \"1\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "summarization_schema"
   },
   "summarization_schema <- \"s\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "summarization_schema"
   },
   "summarization_schema <- \"true\"": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "summarization_schema"
   },
   "summarization_schema <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "summarization_schema"
   },
   "summarization_schema <- 0": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "summarization_schema"
   },
   "summarization_schema <- 1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "summarization_schema"
   },
   "summarization_schema <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "summarization_schema"
   },
   "summarization_schema <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "summarization_schema"
   },
   "summarization_schema <- 70000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "summarization_schema"
   },
   "summarization_schema <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "summarization_schema"
   },
   "summarization_schema <- false": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "summarization_schema"
   },
   "summarization_schema <- null": {
-    "err": "UnknownKey",
-    "key": "summarization_schema"
+    "ok": {}
   },
   "summarization_schema <- true": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "summarization_schema"
   },
   "summarization_schema <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "summarization_schema"
   },
   "system_root_directory <- \"\"": {
@@ -6893,63 +7034,65 @@
     "key": "vector_db_name"
   },
   "vector_db_password <- \"\"": {
-    "err": "UnknownKey",
-    "key": "vector_db_password"
+    "ok": {}
   },
   "vector_db_password <- \"1\"": {
-    "err": "UnknownKey",
-    "key": "vector_db_password"
+    "ok": {
+      "vector_db_password": "1"
+    }
   },
   "vector_db_password <- \"s\"": {
-    "err": "UnknownKey",
-    "key": "vector_db_password"
+    "ok": {
+      "vector_db_password": "s"
+    }
   },
   "vector_db_password <- \"true\"": {
-    "err": "UnknownKey",
-    "key": "vector_db_password"
+    "ok": {
+      "vector_db_password": "true"
+    }
   },
   "vector_db_password <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "vector_db_password"
   },
   "vector_db_password <- 0": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "vector_db_password"
   },
   "vector_db_password <- 1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "vector_db_password"
   },
   "vector_db_password <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "vector_db_password"
   },
   "vector_db_password <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "vector_db_password"
   },
   "vector_db_password <- 70000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "vector_db_password"
   },
   "vector_db_password <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "vector_db_password"
   },
   "vector_db_password <- false": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "vector_db_password"
   },
   "vector_db_password <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "vector_db_password"
   },
   "vector_db_password <- true": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "vector_db_password"
   },
   "vector_db_password <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "vector_db_password"
   },
   "vector_db_port <- \"\"": {
@@ -7141,63 +7284,65 @@
     "key": "vector_db_url"
   },
   "vector_db_username <- \"\"": {
-    "err": "UnknownKey",
-    "key": "vector_db_username"
+    "ok": {}
   },
   "vector_db_username <- \"1\"": {
-    "err": "UnknownKey",
-    "key": "vector_db_username"
+    "ok": {
+      "vector_db_username": "1"
+    }
   },
   "vector_db_username <- \"s\"": {
-    "err": "UnknownKey",
-    "key": "vector_db_username"
+    "ok": {
+      "vector_db_username": "s"
+    }
   },
   "vector_db_username <- \"true\"": {
-    "err": "UnknownKey",
-    "key": "vector_db_username"
+    "ok": {
+      "vector_db_username": "true"
+    }
   },
   "vector_db_username <- -1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "vector_db_username"
   },
   "vector_db_username <- 0": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "vector_db_username"
   },
   "vector_db_username <- 1": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "vector_db_username"
   },
   "vector_db_username <- 1.5": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "vector_db_username"
   },
   "vector_db_username <- 5000000000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "vector_db_username"
   },
   "vector_db_username <- 70000": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "vector_db_username"
   },
   "vector_db_username <- [1]": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "vector_db_username"
   },
   "vector_db_username <- false": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "vector_db_username"
   },
   "vector_db_username <- null": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "vector_db_username"
   },
   "vector_db_username <- true": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "vector_db_username"
   },
   "vector_db_username <- {\"a\":1}": {
-    "err": "UnknownKey",
+    "err": "TypeMismatch",
     "key": "vector_db_username"
   }
 }
