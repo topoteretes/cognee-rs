@@ -26,13 +26,7 @@
     "classification_model",
     "cognee_tracing_enabled",
     "data_root_directory",
-    "db_host",
-    "db_name",
-    "db_password",
-    "db_port",
-    "db_provider",
     "db_sslmode",
-    "db_username",
     "default_dataset_name",
     "default_system_prompt_path",
     "default_user_email",
@@ -107,7 +101,6 @@
     "llm_max_parallel_requests",
     "log_level",
     "logs_root_directory",
-    "migration_db_url",
     "monitoring_tool",
     "ontology.file_path",
     "ontology.matching_strategy",
@@ -119,7 +112,14 @@
     "otel_span_processor",
     "otel_traces_sampler",
     "otel_traces_sampler_arg",
-    "relational_db_url",
+    "relational.host",
+    "relational.migration_url",
+    "relational.name",
+    "relational.password",
+    "relational.port",
+    "relational.provider",
+    "relational.url",
+    "relational.username",
     "session_ttl_seconds",
     "single_process",
     "storage.backend",
@@ -157,14 +157,6 @@
     "chunk_engine",
     "chunk_size",
     "chunk_overlap",
-    "relational_db_url",
-    "migration_db_url",
-    "db_provider",
-    "db_host",
-    "db_port",
-    "db_name",
-    "db_username",
-    "db_password",
     "db_sslmode",
     "default_system_prompt_path",
     "cache_backend",
@@ -249,6 +241,14 @@
     "graph.key",
     "graph.file_path",
     "graph.filename",
+    "relational.provider",
+    "relational.url",
+    "relational.migration_url",
+    "relational.host",
+    "relational.port",
+    "relational.name",
+    "relational.username",
+    "relational.password",
     "storage.backend",
     "storage.bucket_name",
     "ontology.file_path",
@@ -2371,22 +2371,22 @@
   },
   "set db_host <- \"\"": {
     "ok": {
-      "db_host": ""
+      "relational.host": ""
     }
   },
   "set db_host <- \"1\"": {
     "ok": {
-      "db_host": "1"
+      "relational.host": "1"
     }
   },
   "set db_host <- \"s\"": {
     "ok": {
-      "db_host": "s"
+      "relational.host": "s"
     }
   },
   "set db_host <- \"true\"": {
     "ok": {
-      "db_host": "true"
+      "relational.host": "true"
     }
   },
   "set db_host <- -1": {
@@ -2424,22 +2424,22 @@
   },
   "set db_name <- \"\"": {
     "ok": {
-      "db_name": ""
+      "relational.name": ""
     }
   },
   "set db_name <- \"1\"": {
     "ok": {
-      "db_name": "1"
+      "relational.name": "1"
     }
   },
   "set db_name <- \"s\"": {
     "ok": {
-      "db_name": "s"
+      "relational.name": "s"
     }
   },
   "set db_name <- \"true\"": {
     "ok": {
-      "db_name": "true"
+      "relational.name": "true"
     }
   },
   "set db_name <- -1": {
@@ -2480,17 +2480,17 @@
   },
   "set db_password <- \"1\"": {
     "ok": {
-      "db_password": "1"
+      "relational.password": "1"
     }
   },
   "set db_password <- \"s\"": {
     "ok": {
-      "db_password": "s"
+      "relational.password": "s"
     }
   },
   "set db_password <- \"true\"": {
     "ok": {
-      "db_password": "true"
+      "relational.password": "true"
     }
   },
   "set db_password <- -1": {
@@ -2543,12 +2543,12 @@
   },
   "set db_port <- 0": {
     "ok": {
-      "db_port": 0
+      "relational.port": 0
     }
   },
   "set db_port <- 1": {
     "ok": {
-      "db_port": 1
+      "relational.port": 1
     }
   },
   "set db_port <- 1.5": {
@@ -2577,22 +2577,22 @@
   },
   "set db_provider <- \"\"": {
     "ok": {
-      "db_provider": ""
+      "relational.provider": ""
     }
   },
   "set db_provider <- \"1\"": {
     "ok": {
-      "db_provider": "1"
+      "relational.provider": "1"
     }
   },
   "set db_provider <- \"s\"": {
     "ok": {
-      "db_provider": "s"
+      "relational.provider": "s"
     }
   },
   "set db_provider <- \"true\"": {
     "ok": {
-      "db_provider": "true"
+      "relational.provider": "true"
     }
   },
   "set db_provider <- -1": {
@@ -2684,17 +2684,17 @@
   },
   "set db_username <- \"1\"": {
     "ok": {
-      "db_username": "1"
+      "relational.username": "1"
     }
   },
   "set db_username <- \"s\"": {
     "ok": {
-      "db_username": "s"
+      "relational.username": "s"
     }
   },
   "set db_username <- \"true\"": {
     "ok": {
-      "db_username": "true"
+      "relational.username": "true"
     }
   },
   "set db_username <- -1": {
@@ -9446,17 +9446,17 @@
   },
   "set migration_db_url <- \"1\"": {
     "ok": {
-      "migration_db_url": "1"
+      "relational.migration_url": "1"
     }
   },
   "set migration_db_url <- \"s\"": {
     "ok": {
-      "migration_db_url": "s"
+      "relational.migration_url": "s"
     }
   },
   "set migration_db_url <- \"true\"": {
     "ok": {
-      "migration_db_url": "true"
+      "relational.migration_url": "true"
     }
   },
   "set migration_db_url <- -1": {
@@ -10530,24 +10530,438 @@
   "set pgvector_maintenance_workers <- {\"a\":1}": {
     "err": true
   },
+  "set relational.host <- \"\"": {
+    "ok": {
+      "relational.host": ""
+    }
+  },
+  "set relational.host <- \"1\"": {
+    "ok": {
+      "relational.host": "1"
+    }
+  },
+  "set relational.host <- \"s\"": {
+    "ok": {
+      "relational.host": "s"
+    }
+  },
+  "set relational.host <- \"true\"": {
+    "ok": {
+      "relational.host": "true"
+    }
+  },
+  "set relational.host <- -1": {
+    "err": true
+  },
+  "set relational.host <- 0": {
+    "err": true
+  },
+  "set relational.host <- 1": {
+    "err": true
+  },
+  "set relational.host <- 1.5": {
+    "err": true
+  },
+  "set relational.host <- 5000000000": {
+    "err": true
+  },
+  "set relational.host <- 70000": {
+    "err": true
+  },
+  "set relational.host <- [1]": {
+    "err": true
+  },
+  "set relational.host <- false": {
+    "err": true
+  },
+  "set relational.host <- null": {
+    "err": true
+  },
+  "set relational.host <- true": {
+    "err": true
+  },
+  "set relational.host <- {\"a\":1}": {
+    "err": true
+  },
+  "set relational.migration_url <- \"\"": {
+    "ok": {}
+  },
+  "set relational.migration_url <- \"1\"": {
+    "ok": {
+      "relational.migration_url": "1"
+    }
+  },
+  "set relational.migration_url <- \"s\"": {
+    "ok": {
+      "relational.migration_url": "s"
+    }
+  },
+  "set relational.migration_url <- \"true\"": {
+    "ok": {
+      "relational.migration_url": "true"
+    }
+  },
+  "set relational.migration_url <- -1": {
+    "err": true
+  },
+  "set relational.migration_url <- 0": {
+    "err": true
+  },
+  "set relational.migration_url <- 1": {
+    "err": true
+  },
+  "set relational.migration_url <- 1.5": {
+    "err": true
+  },
+  "set relational.migration_url <- 5000000000": {
+    "err": true
+  },
+  "set relational.migration_url <- 70000": {
+    "err": true
+  },
+  "set relational.migration_url <- [1]": {
+    "err": true
+  },
+  "set relational.migration_url <- false": {
+    "err": true
+  },
+  "set relational.migration_url <- null": {
+    "err": true
+  },
+  "set relational.migration_url <- true": {
+    "err": true
+  },
+  "set relational.migration_url <- {\"a\":1}": {
+    "err": true
+  },
+  "set relational.name <- \"\"": {
+    "ok": {
+      "relational.name": ""
+    }
+  },
+  "set relational.name <- \"1\"": {
+    "ok": {
+      "relational.name": "1"
+    }
+  },
+  "set relational.name <- \"s\"": {
+    "ok": {
+      "relational.name": "s"
+    }
+  },
+  "set relational.name <- \"true\"": {
+    "ok": {
+      "relational.name": "true"
+    }
+  },
+  "set relational.name <- -1": {
+    "err": true
+  },
+  "set relational.name <- 0": {
+    "err": true
+  },
+  "set relational.name <- 1": {
+    "err": true
+  },
+  "set relational.name <- 1.5": {
+    "err": true
+  },
+  "set relational.name <- 5000000000": {
+    "err": true
+  },
+  "set relational.name <- 70000": {
+    "err": true
+  },
+  "set relational.name <- [1]": {
+    "err": true
+  },
+  "set relational.name <- false": {
+    "err": true
+  },
+  "set relational.name <- null": {
+    "err": true
+  },
+  "set relational.name <- true": {
+    "err": true
+  },
+  "set relational.name <- {\"a\":1}": {
+    "err": true
+  },
+  "set relational.password <- \"\"": {
+    "ok": {}
+  },
+  "set relational.password <- \"1\"": {
+    "ok": {
+      "relational.password": "1"
+    }
+  },
+  "set relational.password <- \"s\"": {
+    "ok": {
+      "relational.password": "s"
+    }
+  },
+  "set relational.password <- \"true\"": {
+    "ok": {
+      "relational.password": "true"
+    }
+  },
+  "set relational.password <- -1": {
+    "err": true
+  },
+  "set relational.password <- 0": {
+    "err": true
+  },
+  "set relational.password <- 1": {
+    "err": true
+  },
+  "set relational.password <- 1.5": {
+    "err": true
+  },
+  "set relational.password <- 5000000000": {
+    "err": true
+  },
+  "set relational.password <- 70000": {
+    "err": true
+  },
+  "set relational.password <- [1]": {
+    "err": true
+  },
+  "set relational.password <- false": {
+    "err": true
+  },
+  "set relational.password <- null": {
+    "err": true
+  },
+  "set relational.password <- true": {
+    "err": true
+  },
+  "set relational.password <- {\"a\":1}": {
+    "err": true
+  },
+  "set relational.port <- \"\"": {
+    "err": true
+  },
+  "set relational.port <- \"1\"": {
+    "err": true
+  },
+  "set relational.port <- \"s\"": {
+    "err": true
+  },
+  "set relational.port <- \"true\"": {
+    "err": true
+  },
+  "set relational.port <- -1": {
+    "err": true
+  },
+  "set relational.port <- 0": {
+    "ok": {
+      "relational.port": 0
+    }
+  },
+  "set relational.port <- 1": {
+    "ok": {
+      "relational.port": 1
+    }
+  },
+  "set relational.port <- 1.5": {
+    "err": true
+  },
+  "set relational.port <- 5000000000": {
+    "err": true
+  },
+  "set relational.port <- 70000": {
+    "err": true
+  },
+  "set relational.port <- [1]": {
+    "err": true
+  },
+  "set relational.port <- false": {
+    "err": true
+  },
+  "set relational.port <- null": {
+    "err": true
+  },
+  "set relational.port <- true": {
+    "err": true
+  },
+  "set relational.port <- {\"a\":1}": {
+    "err": true
+  },
+  "set relational.provider <- \"\"": {
+    "ok": {
+      "relational.provider": ""
+    }
+  },
+  "set relational.provider <- \"1\"": {
+    "ok": {
+      "relational.provider": "1"
+    }
+  },
+  "set relational.provider <- \"s\"": {
+    "ok": {
+      "relational.provider": "s"
+    }
+  },
+  "set relational.provider <- \"true\"": {
+    "ok": {
+      "relational.provider": "true"
+    }
+  },
+  "set relational.provider <- -1": {
+    "err": true
+  },
+  "set relational.provider <- 0": {
+    "err": true
+  },
+  "set relational.provider <- 1": {
+    "err": true
+  },
+  "set relational.provider <- 1.5": {
+    "err": true
+  },
+  "set relational.provider <- 5000000000": {
+    "err": true
+  },
+  "set relational.provider <- 70000": {
+    "err": true
+  },
+  "set relational.provider <- [1]": {
+    "err": true
+  },
+  "set relational.provider <- false": {
+    "err": true
+  },
+  "set relational.provider <- null": {
+    "err": true
+  },
+  "set relational.provider <- true": {
+    "err": true
+  },
+  "set relational.provider <- {\"a\":1}": {
+    "err": true
+  },
+  "set relational.url <- \"\"": {
+    "ok": {
+      "relational.url": ""
+    }
+  },
+  "set relational.url <- \"1\"": {
+    "ok": {
+      "relational.url": "1"
+    }
+  },
+  "set relational.url <- \"s\"": {
+    "ok": {
+      "relational.url": "s"
+    }
+  },
+  "set relational.url <- \"true\"": {
+    "ok": {
+      "relational.url": "true"
+    }
+  },
+  "set relational.url <- -1": {
+    "err": true
+  },
+  "set relational.url <- 0": {
+    "err": true
+  },
+  "set relational.url <- 1": {
+    "err": true
+  },
+  "set relational.url <- 1.5": {
+    "err": true
+  },
+  "set relational.url <- 5000000000": {
+    "err": true
+  },
+  "set relational.url <- 70000": {
+    "err": true
+  },
+  "set relational.url <- [1]": {
+    "err": true
+  },
+  "set relational.url <- false": {
+    "err": true
+  },
+  "set relational.url <- null": {
+    "err": true
+  },
+  "set relational.url <- true": {
+    "err": true
+  },
+  "set relational.url <- {\"a\":1}": {
+    "err": true
+  },
+  "set relational.username <- \"\"": {
+    "ok": {}
+  },
+  "set relational.username <- \"1\"": {
+    "ok": {
+      "relational.username": "1"
+    }
+  },
+  "set relational.username <- \"s\"": {
+    "ok": {
+      "relational.username": "s"
+    }
+  },
+  "set relational.username <- \"true\"": {
+    "ok": {
+      "relational.username": "true"
+    }
+  },
+  "set relational.username <- -1": {
+    "err": true
+  },
+  "set relational.username <- 0": {
+    "err": true
+  },
+  "set relational.username <- 1": {
+    "err": true
+  },
+  "set relational.username <- 1.5": {
+    "err": true
+  },
+  "set relational.username <- 5000000000": {
+    "err": true
+  },
+  "set relational.username <- 70000": {
+    "err": true
+  },
+  "set relational.username <- [1]": {
+    "err": true
+  },
+  "set relational.username <- false": {
+    "err": true
+  },
+  "set relational.username <- null": {
+    "err": true
+  },
+  "set relational.username <- true": {
+    "err": true
+  },
+  "set relational.username <- {\"a\":1}": {
+    "err": true
+  },
   "set relational_db_url <- \"\"": {
     "ok": {
-      "relational_db_url": ""
+      "relational.url": ""
     }
   },
   "set relational_db_url <- \"1\"": {
     "ok": {
-      "relational_db_url": "1"
+      "relational.url": "1"
     }
   },
   "set relational_db_url <- \"s\"": {
     "ok": {
-      "relational_db_url": "s"
+      "relational.url": "s"
     }
   },
   "set relational_db_url <- \"true\"": {
     "ok": {
-      "relational_db_url": "true"
+      "relational.url": "true"
     }
   },
   "set relational_db_url <- -1": {
@@ -12191,301 +12605,301 @@
   "unset anthropic_base_url": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset auto_feedback": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset auto_rate_limit": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset aws.access_key_id": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset aws.bearer_token": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset aws.bedrock_runtime_endpoint": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset aws.external_id": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset aws.profile_name": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset aws.region": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset aws.role_name": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset aws.secret_access_key": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset aws.session_name": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset aws.session_token": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset aws.sts_endpoint": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset aws.web_identity_token": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset aws_access_key_id": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset aws_bearer_token_bedrock": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset aws_bedrock_runtime_endpoint": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset aws_external_id": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset aws_profile_name": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset aws_region_name": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset aws_role_name": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset aws_secret_access_key": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset aws_session_name": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset aws_session_token": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset aws_sts_endpoint": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset aws_web_identity_token": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset cache_backend": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset cache_host": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset cache_password": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset cache_port": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset cache_root_directory": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset cache_username": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset chunk_engine": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset chunk_overlap": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset chunk_size": {
     "ok": {
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset chunk_strategy": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset classification_model": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset cognee_tracing_enabled": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset data_root_directory": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset db_host": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset db_name": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset db_password": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset db_port": {
@@ -12497,1147 +12911,1202 @@
   "unset db_provider": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset db_sslmode": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset db_username": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset default_dataset_name": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset default_system_prompt_path": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset default_user_email": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset default_user_id": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset default_user_password": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset embedding.api_key": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset embedding.batch_size": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset embedding.dimensions": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset embedding.endpoint": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset embedding.max_completion_tokens": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset embedding.max_sequence_length": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset embedding.mock": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset embedding.model": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset embedding.ollama.huggingface_tokenizer": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset embedding.onnx.batch_size": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset embedding.onnx.model_path": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset embedding.onnx.tokenizer_path": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset embedding.openai_compatible.api_version": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset embedding.provider": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset embedding.rate_limit_enabled": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset embedding.rate_limit_interval": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset embedding.rate_limit_requests": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset embedding_api_key": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset embedding_api_version": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset embedding_batch_size": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset embedding_dimensions": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset embedding_endpoint": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset embedding_max_completion_tokens": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset embedding_max_sequence_length": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset embedding_model": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset embedding_model_name": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset embedding_model_path": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset embedding_onnx_batch_size": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset embedding_provider": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset embedding_rate_limit_enabled": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset embedding_rate_limit_interval": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset embedding_rate_limit_requests": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset embedding_tokenizer_path": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset enable_access_control": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset enable_caching": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset enable_last_accessed": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset graph.file_path": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset graph.filename": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset graph.host": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset graph.key": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset graph.ladybug.max_db_size": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset graph.name": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset graph.password": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset graph.port": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset graph.provider": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset graph.url": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset graph.username": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset graph_database_host": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset graph_database_key": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset graph_database_name": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset graph_database_password": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset graph_database_port": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset graph_database_provider": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset graph_database_url": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset graph_database_username": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset graph_extraction.backend": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset graph_extractor": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset graph_file_path": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset graph_filename": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset graph_max_db_size": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset graph_model": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset graph_prompt_path": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset huggingface_tokenizer": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm.anthropic.base_url": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm.api_key": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm.api_version": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm.args": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm.auto_rate_limit": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm.cassette": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm.connect_timeout_seconds": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm.debug_requests": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm.endpoint": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm.fallback_api_key": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm.fallback_endpoint": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm.fallback_model": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm.fallback_provider": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm.max_completion_tokens": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm.max_retries": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm.min_retry_seconds": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm.mock": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm.model": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1
+      "relational.port": 1
     }
   },
   "unset llm.network_retries": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm.openai_compatible.transcription_model": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm.openai_compatible.vision_model": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm.provider": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm.rate_limit_enabled": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm.rate_limit_interval": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm.rate_limit_requests": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm.reasoning": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm.record_path": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm.request_deadline_seconds": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm.request_timeout_seconds": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm.streaming": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm.structured_output_mode": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm.temperature": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm_api_key": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm_api_version": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm_args": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm_cassette": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm_connect_timeout_seconds": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm_endpoint": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm_fallback_api_key": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm_fallback_endpoint": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm_fallback_model": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm_fallback_provider": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm_max_completion_tokens": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm_max_parallel_requests": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm_max_retries": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm_min_retry_seconds": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm_mock": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm_model": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1
+      "relational.port": 1
     }
   },
   "unset llm_network_retries": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm_provider": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm_rate_limit_enabled": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm_rate_limit_interval": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm_rate_limit_requests": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm_reasoning": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm_record_path": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm_request_deadline_seconds": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm_request_timeout_seconds": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm_streaming": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm_structured_output_mode": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm_temperature": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset llm_vision_model": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset log_level": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset logs_root_directory": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset migration_db_url": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset mock_embedding": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset monitoring_tool": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset no_such_key": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset ontology.file_path": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset ontology.matching_strategy": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset ontology.resolver": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset ontology_file_path": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset ontology_matching_strategy": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset ontology_resolver": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset otel_exporter_otlp_endpoint": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset otel_exporter_otlp_headers": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset otel_exporter_otlp_protocol": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset otel_service_name": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset otel_span_processor": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset otel_traces_sampler": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset otel_traces_sampler_arg": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset pgvector_hnsw_ef_construction": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset pgvector_hnsw_m": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset pgvector_maintenance_work_mem_mb": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset pgvector_maintenance_workers": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset relational.host": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset relational.migration_url": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset relational.name": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset relational.password": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset relational.port": {
+    "ok": {
+      "chunk_size": 7,
       "llm.model": "changed"
+    }
+  },
+  "unset relational.provider": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset relational.url": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset relational.username": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset relational_db_url": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset session_ttl_seconds": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset single_process": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset storage.backend": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset storage.bucket_name": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset storage_backend": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset storage_bucket_name": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset strict_config": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset summarization_model": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset summarization_schema": {
@@ -13646,155 +14115,155 @@
   "unset system_root_directory": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset transcription_model": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset vector.host": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset vector.key": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset vector.name": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset vector.password": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset vector.pgvector.hnsw_ef_construction": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset vector.pgvector.hnsw_m": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset vector.pgvector.maintenance_work_mem_mb": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset vector.pgvector.maintenance_workers": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset vector.port": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset vector.provider": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset vector.url": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset vector.username": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset vector_db_host": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset vector_db_key": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset vector_db_name": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset vector_db_password": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset vector_db_port": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset vector_db_provider": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset vector_db_url": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   },
   "unset vector_db_username": {
     "ok": {
       "chunk_size": 7,
-      "db_port": 1,
-      "llm.model": "changed"
+      "llm.model": "changed",
+      "relational.port": 1
     }
   }
 }

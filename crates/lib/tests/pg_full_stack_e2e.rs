@@ -162,6 +162,15 @@ fn make_all_postgres_settings(pg_url: &str) -> Settings {
     Settings {
         sections: [
             (
+                "relational.provider".to_string(),
+                serde_json::json!("postgres".to_string()),
+            ),
+            ("relational.host".to_string(), serde_json::json!(host)),
+            ("relational.port".to_string(), serde_json::json!(port)),
+            ("relational.name".to_string(), serde_json::json!(name)),
+            ("relational.username".to_string(), serde_json::json!(user)),
+            ("relational.password".to_string(), serde_json::json!(pass)),
+            (
                 "graph.provider".to_string(),
                 serde_json::json!("postgres".to_string()),
             ),
@@ -203,12 +212,6 @@ fn make_all_postgres_settings(pg_url: &str) -> Settings {
         ]
         .into(),
         // Relational DB — individual fields; resolved_relational_db_url() builds the URL.
-        db_provider: "postgres".to_string(),
-        db_host: host,
-        db_port: port,
-        db_name: name,
-        db_username: user,
-        db_password: pass,
 
         // Graph DB — postgres provider, credentials intentionally empty to
         // trigger the Item-2 fallback to db_* fields.

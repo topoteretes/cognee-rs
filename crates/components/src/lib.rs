@@ -9,7 +9,7 @@
 //! ## Extension
 //!
 //! External adapter crates implement [`VectorDbFactory`] / [`GraphDbFactory`]
-//! / [`LlmFactory`] / [`EmbeddingFactory`] / [`StorageFactory`] /
+//! / [`LlmFactory`] / [`EmbeddingFactory`] / [`RelationalDbFactory`] / [`StorageFactory`] /
 //! [`OntologyResolverFactory`] / [`GraphExtractorFactory`] and register them
 //! via explicit dependency injection:
 //!
@@ -45,14 +45,15 @@ pub use registry::{ComponentRegistry, LLM_GRAPH_EXTRACTOR, default_graph_provide
 pub use sections::{
     AnthropicConfig, AwsConfig, EmbeddingConfig, GraphConfig, GraphExtractionConfig, LlmConfig,
     OllamaEmbeddingConfig, OnnxEmbeddingConfig, OntologyConfig, OpenAiCompatibleConfig,
-    OpenAiCompatibleEmbeddingConfig, StorageConfig, VectorConfig,
+    OpenAiCompatibleEmbeddingConfig, RelationalConfig, StorageConfig, VectorConfig,
 };
 pub use traits::{
     EmbeddingFactory, GraphDbFactory, GraphExtractorFactory, LlmFactory, OntologyResolverFactory,
-    StorageFactory, VectorDbFactory,
+    RelationalDbFactory, StorageFactory, VectorDbFactory,
 };
 
 // Re-export the default embedding factory so external callers can compose it.
+pub use builtins::database::SeaOrmRelationalFactory;
 pub use builtins::embedding::DefaultEmbeddingFactory;
 pub use builtins::ontology::RdfLibOntologyFactory;
 pub use builtins::storage::LocalStorageFactory;

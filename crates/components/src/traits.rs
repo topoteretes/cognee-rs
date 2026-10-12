@@ -22,6 +22,7 @@ use cognee_vector::VectorDB;
 
 use cognee_cognify::graph_backend::ChunkGraphExtractor;
 use cognee_config_core::SectionSchema;
+use cognee_database::RelationalDb;
 use cognee_ontology::OntologyResolver;
 use cognee_storage::StorageTrait;
 
@@ -115,6 +116,23 @@ pub trait EmbeddingFactory: Send + Sync {
         &self,
         ctx: &BackendBuildContext,
     ) -> Result<Arc<dyn EmbeddingEngine>, ComponentError>;
+}
+
+/// Builds the relational database for one backend id (`relational.provider`).
+#[async_trait]
+pub trait RelationalDbFactory: Send + Sync {
+    /// Lowercase backend id this factory serves (e.g. `"sqlite"`).
+    fn provider(&self) -> &str;
+    /// The configuration sections this factory reads.
+    fn config_sections(&self) -> Vec<&'static SectionSchema> {
+        Vec::new()
+    }
+    /// Connect to the database at `ctx.relational_db_url` (resolved from the
+    /// `relational` section) and bring its schema up to date.
+    async fn build(
+        &self,
+        ctx: &BackendBuildContext,
+    ) -> Result<Arc<dyn RelationalDb>, ComponentError>;
 }
 
 /// Builds the file-storage backend for one provider id (`storage.backend`).

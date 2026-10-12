@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use cognee_cognify::graph_backend::ChunkGraphExtractor;
 use cognee_config_core::{ConfigSchema, SchemaError, SectionSchema};
+use cognee_database::RelationalDb;
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
 use cognee_llm::{Llm, Transcriber};
@@ -13,14 +14,15 @@ use cognee_ontology::{NoOpOntologyResolver, OntologyResolver};
 use cognee_storage::StorageTrait;
 use cognee_vector::VectorDB;
 
+use crate::builtins::database::SeaOrmRelationalFactory;
 use crate::builtins::embedding::DefaultEmbeddingFactory;
 use crate::builtins::llm::{self, OpenAiCompatibleLlmFactory};
 use crate::context::BackendBuildContext;
 use crate::error::ComponentError;
-use crate::sections::{OntologyConfig, StorageConfig};
+use crate::sections::{OntologyConfig, RelationalConfig, StorageConfig};
 use crate::traits::{
     EmbeddingFactory, GraphDbFactory, GraphExtractorFactory, LlmFactory, OntologyResolverFactory,
-    StorageFactory, VectorDbFactory,
+    RelationalDbFactory, StorageFactory, VectorDbFactory,
 };
 
 /// Maps lowercase provider ids to adapter factories, per component kind.
@@ -40,6 +42,7 @@ pub struct ComponentRegistry {
     llm: HashMap<String, Arc<dyn LlmFactory>>,
     embedding: HashMap<String, Arc<dyn EmbeddingFactory>>,
     storage: HashMap<String, Arc<dyn StorageFactory>>,
+    relational: HashMap<String, Arc<dyn RelationalDbFactory>>,
     ontology: HashMap<String, Arc<dyn OntologyResolverFactory>>,
     graph_extractor: HashMap<String, Arc<dyn GraphExtractorFactory>>,
     /// Config sections registered directly (not through a factory).
@@ -60,6 +63,7 @@ impl ComponentRegistry {
             llm: HashMap::new(),
             embedding: HashMap::new(),
             storage: HashMap::new(),
+            relational: HashMap::new(),
             ontology: HashMap::new(),
             graph_extractor: HashMap::new(),
             config_sections: Vec::new(),
@@ -144,6 +148,16 @@ impl ComponentRegistry {
         #[cfg(feature = "bedrock")]
         reg.register_embedding(Arc::new(DefaultEmbeddingFactory::new("bedrock")));
 
+        // ── relational ────────────────────────────────────────────────────
+        // SeaORM, under each id its compiled drivers can serve.
+        #[cfg(feature = "sqlite")]
+        reg.register_relational(Arc::new(SeaOrmRelationalFactory::new("sqlite")));
+        #[cfg(feature = "postgres")]
+        {
+            reg.register_relational(Arc::new(SeaOrmRelationalFactory::new("postgres")));
+            reg.register_relational(Arc::new(SeaOrmRelationalFactory::new("postgresql")));
+        }
+
         // ── storage / ontology ────────────────────────────────────────────
         reg.register_storage(Arc::new(crate::builtins::storage::LocalStorageFactory));
         reg.register_ontology_resolver(Arc::new(crate::builtins::ontology::RdfLibOntologyFactory));
@@ -175,6 +189,12 @@ impl ComponentRegistry {
     /// Register (or override) an embedding factory under `f.provider()`.
     pub fn register_embedding(&mut self, f: Arc<dyn EmbeddingFactory>) {
         self.embedding.insert(f.provider().to_lowercase(), f);
+    }
+
+    /// Register (or override) a relational database factory under
+    /// `f.provider()`.
+    pub fn register_relational(&mut self, f: Arc<dyn RelationalDbFactory>) {
+        self.relational.insert(f.provider().to_lowercase(), f);
     }
 
     /// Register (or override) a storage factory under `f.provider()`.
@@ -242,6 +262,7 @@ impl ComponentRegistry {
             <crate::sections::EmbeddingConfig as cognee_config_core::ConfigSection>::schema(),
             <crate::sections::VectorConfig as cognee_config_core::ConfigSection>::schema(),
             <crate::sections::GraphConfig as cognee_config_core::ConfigSection>::schema(),
+            <crate::sections::RelationalConfig as cognee_config_core::ConfigSection>::schema(),
             <crate::sections::StorageConfig as cognee_config_core::ConfigSection>::schema(),
             <crate::sections::OntologyConfig as cognee_config_core::ConfigSection>::schema(),
             <crate::sections::GraphExtractionConfig as cognee_config_core::ConfigSection>::schema(),
@@ -256,6 +277,9 @@ impl ComponentRegistry {
             sections.extend(f.config_sections());
         }
         for f in sorted(&self.embedding) {
+            sections.extend(f.config_sections());
+        }
+        for f in sorted(&self.relational) {
             sections.extend(f.config_sections());
         }
         for f in sorted(&self.storage) {
@@ -517,6 +541,39 @@ impl ComponentRegistry {
         ids
     }
 
+    /// Build the relational database selected by `relational.provider`, or,
+    /// when that is empty, by the scheme of the resolved URL.
+    pub async fn build_database(
+        &self,
+        ctx: &BackendBuildContext,
+    ) -> Result<Arc<dyn RelationalDb>, ComponentError> {
+        let provider = ctx.section::<RelationalConfig>().provider;
+        let mut key = provider.trim().to_lowercase();
+        if key.is_empty() {
+            key = ctx
+                .relational_db_url
+                .split(':')
+                .next()
+                .unwrap_or_default()
+                .to_lowercase();
+        }
+        let factory = self.relational.get(&key).ok_or_else(|| {
+            ComponentError::Config(unsupported_msg(
+                "db_provider",
+                &key,
+                &self.relational_providers(),
+            ))
+        })?;
+        factory.build(ctx).await
+    }
+
+    /// Backend ids with a registered relational factory (sorted).
+    pub fn relational_providers(&self) -> Vec<String> {
+        let mut ids: Vec<String> = self.relational.keys().cloned().collect();
+        ids.sort();
+        ids
+    }
+
     /// Build the file storage selected by `storage.backend`.
     pub async fn build_storage(
         &self,
@@ -714,6 +771,11 @@ fn unsupported_msg(field: &str, provider: &str, supported: &[String]) -> String 
             "mock" => " Rebuild with the `testing` crate feature to enable it.",
             _ => "",
         },
+        "db_provider" => match p.as_str() {
+            "sqlite" => " Rebuild with the `sqlite` crate feature to enable it.",
+            "postgres" | "postgresql" => " Rebuild with the `postgres` crate feature to enable it.",
+            _ => "",
+        },
         "llm_provider" => match p.as_str() {
             // The only feature-gated built-in LLM provider: without `bedrock`
             // the factory is not registered at all, so LLM_PROVIDER=bedrock
@@ -733,6 +795,11 @@ fn unsupported_msg(field: &str, provider: &str, supported: &[String]) -> String 
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
 
@@ -1511,6 +1578,83 @@ mod tests {
             .await
             .expect("an empty per-call path is the no-op");
         assert!(!knows_person(&built));
+    }
+
+    #[tokio::test]
+    async fn build_database_selects_by_provider_and_falls_back_to_the_url_scheme() {
+        let reg = ComponentRegistry::with_builtins();
+        let mut ctx = test_ctx();
+        // Default provider `sqlite` against an in-memory URL.
+        reg.build_database(&ctx).await.expect("sqlite builds");
+
+        // Empty provider: the URL scheme picks the factory.
+        ctx.sections
+            .insert("relational.provider".to_string(), serde_json::json!(""));
+        reg.build_database(&ctx)
+            .await
+            .expect("scheme fallback builds");
+    }
+
+    #[tokio::test]
+    async fn build_database_errors_on_unregistered_provider() {
+        let reg = ComponentRegistry::with_builtins();
+        let mut ctx = test_ctx();
+        ctx.sections.insert(
+            "relational.provider".to_string(),
+            serde_json::json!("oracle"),
+        );
+        let msg = match reg.build_database(&ctx).await {
+            Ok(_) => panic!("oracle is not a built-in relational backend"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            msg.contains("oracle"),
+            "message should name the provider: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_registered_relational_factory_is_selected_and_brings_its_section() {
+        cognee_config_core::config_section! {
+            /// A custom backend's own setting.
+            pub struct CustomRelationalConfig in "relational.custom" {
+                /// Pool size.
+                pub pool: u32 = 4 => { env: [], alias: [], secret: false, },
+            }
+        }
+        struct Custom;
+        #[async_trait::async_trait]
+        impl RelationalDbFactory for Custom {
+            fn provider(&self) -> &str {
+                "custom"
+            }
+            fn config_sections(&self) -> Vec<&'static SectionSchema> {
+                vec![<CustomRelationalConfig as cognee_config_core::ConfigSection>::schema()]
+            }
+            async fn build(
+                &self,
+                _ctx: &BackendBuildContext,
+            ) -> Result<Arc<dyn RelationalDb>, ComponentError> {
+                // Delegate to SQLite in memory: what matters is the selection.
+                let db = cognee_database::connect("sqlite::memory:")
+                    .await
+                    .map_err(|e| ComponentError::Database(e.to_string()))?;
+                Ok(Arc::new(db))
+            }
+        }
+        let mut reg = ComponentRegistry::with_builtins();
+        reg.register_relational(Arc::new(Custom));
+        let schema = reg.config_schema().expect("no collisions");
+        assert!(schema.key_def("relational.custom.pool").is_some());
+        assert!(schema.key_def("db_provider").is_some());
+
+        let mut ctx = test_ctx();
+        ctx.sections.insert(
+            "relational.provider".to_string(),
+            serde_json::json!("custom"),
+        );
+        let db = reg.build_database(&ctx).await.expect("custom builds");
+        assert_eq!(db.system_label(), "sqlite");
     }
 
     fn test_ctx() -> BackendBuildContext {

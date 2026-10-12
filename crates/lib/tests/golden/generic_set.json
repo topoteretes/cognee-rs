@@ -2513,22 +2513,22 @@
   },
   "db_host <- \"\"": {
     "ok": {
-      "db_host": ""
+      "relational.host": ""
     }
   },
   "db_host <- \"1\"": {
     "ok": {
-      "db_host": "1"
+      "relational.host": "1"
     }
   },
   "db_host <- \"s\"": {
     "ok": {
-      "db_host": "s"
+      "relational.host": "s"
     }
   },
   "db_host <- \"true\"": {
     "ok": {
-      "db_host": "true"
+      "relational.host": "true"
     }
   },
   "db_host <- -1": {
@@ -2577,22 +2577,22 @@
   },
   "db_name <- \"\"": {
     "ok": {
-      "db_name": ""
+      "relational.name": ""
     }
   },
   "db_name <- \"1\"": {
     "ok": {
-      "db_name": "1"
+      "relational.name": "1"
     }
   },
   "db_name <- \"s\"": {
     "ok": {
-      "db_name": "s"
+      "relational.name": "s"
     }
   },
   "db_name <- \"true\"": {
     "ok": {
-      "db_name": "true"
+      "relational.name": "true"
     }
   },
   "db_name <- -1": {
@@ -2644,17 +2644,17 @@
   },
   "db_password <- \"1\"": {
     "ok": {
-      "db_password": "1"
+      "relational.password": "1"
     }
   },
   "db_password <- \"s\"": {
     "ok": {
-      "db_password": "s"
+      "relational.password": "s"
     }
   },
   "db_password <- \"true\"": {
     "ok": {
-      "db_password": "true"
+      "relational.password": "true"
     }
   },
   "db_password <- -1": {
@@ -2723,12 +2723,12 @@
   },
   "db_port <- 0": {
     "ok": {
-      "db_port": 0
+      "relational.port": 0
     }
   },
   "db_port <- 1": {
     "ok": {
-      "db_port": 1
+      "relational.port": 1
     }
   },
   "db_port <- 1.5": {
@@ -2765,22 +2765,22 @@
   },
   "db_provider <- \"\"": {
     "ok": {
-      "db_provider": ""
+      "relational.provider": ""
     }
   },
   "db_provider <- \"1\"": {
     "ok": {
-      "db_provider": "1"
+      "relational.provider": "1"
     }
   },
   "db_provider <- \"s\"": {
     "ok": {
-      "db_provider": "s"
+      "relational.provider": "s"
     }
   },
   "db_provider <- \"true\"": {
     "ok": {
-      "db_provider": "true"
+      "relational.provider": "true"
     }
   },
   "db_provider <- -1": {
@@ -2894,17 +2894,17 @@
   },
   "db_username <- \"1\"": {
     "ok": {
-      "db_username": "1"
+      "relational.username": "1"
     }
   },
   "db_username <- \"s\"": {
     "ok": {
-      "db_username": "s"
+      "relational.username": "s"
     }
   },
   "db_username <- \"true\"": {
     "ok": {
-      "db_username": "true"
+      "relational.username": "true"
     }
   },
   "db_username <- -1": {
@@ -11164,17 +11164,17 @@
   },
   "migration_db_url <- \"1\"": {
     "ok": {
-      "migration_db_url": "1"
+      "relational.migration_url": "1"
     }
   },
   "migration_db_url <- \"s\"": {
     "ok": {
-      "migration_db_url": "s"
+      "relational.migration_url": "s"
     }
   },
   "migration_db_url <- \"true\"": {
     "ok": {
-      "migration_db_url": "true"
+      "relational.migration_url": "true"
     }
   },
   "migration_db_url <- -1": {
@@ -12467,24 +12467,528 @@
     "err": "TypeMismatch",
     "key": "pgvector_maintenance_workers"
   },
+  "relational.host <- \"\"": {
+    "ok": {
+      "relational.host": ""
+    }
+  },
+  "relational.host <- \"1\"": {
+    "ok": {
+      "relational.host": "1"
+    }
+  },
+  "relational.host <- \"s\"": {
+    "ok": {
+      "relational.host": "s"
+    }
+  },
+  "relational.host <- \"true\"": {
+    "ok": {
+      "relational.host": "true"
+    }
+  },
+  "relational.host <- -1": {
+    "err": "TypeMismatch",
+    "key": "relational.host"
+  },
+  "relational.host <- 0": {
+    "err": "TypeMismatch",
+    "key": "relational.host"
+  },
+  "relational.host <- 1": {
+    "err": "TypeMismatch",
+    "key": "relational.host"
+  },
+  "relational.host <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "relational.host"
+  },
+  "relational.host <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "relational.host"
+  },
+  "relational.host <- 70000": {
+    "err": "TypeMismatch",
+    "key": "relational.host"
+  },
+  "relational.host <- [1]": {
+    "err": "TypeMismatch",
+    "key": "relational.host"
+  },
+  "relational.host <- false": {
+    "err": "TypeMismatch",
+    "key": "relational.host"
+  },
+  "relational.host <- null": {
+    "err": "TypeMismatch",
+    "key": "relational.host"
+  },
+  "relational.host <- true": {
+    "err": "TypeMismatch",
+    "key": "relational.host"
+  },
+  "relational.host <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "relational.host"
+  },
+  "relational.migration_url <- \"\"": {
+    "ok": {}
+  },
+  "relational.migration_url <- \"1\"": {
+    "ok": {
+      "relational.migration_url": "1"
+    }
+  },
+  "relational.migration_url <- \"s\"": {
+    "ok": {
+      "relational.migration_url": "s"
+    }
+  },
+  "relational.migration_url <- \"true\"": {
+    "ok": {
+      "relational.migration_url": "true"
+    }
+  },
+  "relational.migration_url <- -1": {
+    "err": "TypeMismatch",
+    "key": "relational.migration_url"
+  },
+  "relational.migration_url <- 0": {
+    "err": "TypeMismatch",
+    "key": "relational.migration_url"
+  },
+  "relational.migration_url <- 1": {
+    "err": "TypeMismatch",
+    "key": "relational.migration_url"
+  },
+  "relational.migration_url <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "relational.migration_url"
+  },
+  "relational.migration_url <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "relational.migration_url"
+  },
+  "relational.migration_url <- 70000": {
+    "err": "TypeMismatch",
+    "key": "relational.migration_url"
+  },
+  "relational.migration_url <- [1]": {
+    "err": "TypeMismatch",
+    "key": "relational.migration_url"
+  },
+  "relational.migration_url <- false": {
+    "err": "TypeMismatch",
+    "key": "relational.migration_url"
+  },
+  "relational.migration_url <- null": {
+    "err": "TypeMismatch",
+    "key": "relational.migration_url"
+  },
+  "relational.migration_url <- true": {
+    "err": "TypeMismatch",
+    "key": "relational.migration_url"
+  },
+  "relational.migration_url <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "relational.migration_url"
+  },
+  "relational.name <- \"\"": {
+    "ok": {
+      "relational.name": ""
+    }
+  },
+  "relational.name <- \"1\"": {
+    "ok": {
+      "relational.name": "1"
+    }
+  },
+  "relational.name <- \"s\"": {
+    "ok": {
+      "relational.name": "s"
+    }
+  },
+  "relational.name <- \"true\"": {
+    "ok": {
+      "relational.name": "true"
+    }
+  },
+  "relational.name <- -1": {
+    "err": "TypeMismatch",
+    "key": "relational.name"
+  },
+  "relational.name <- 0": {
+    "err": "TypeMismatch",
+    "key": "relational.name"
+  },
+  "relational.name <- 1": {
+    "err": "TypeMismatch",
+    "key": "relational.name"
+  },
+  "relational.name <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "relational.name"
+  },
+  "relational.name <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "relational.name"
+  },
+  "relational.name <- 70000": {
+    "err": "TypeMismatch",
+    "key": "relational.name"
+  },
+  "relational.name <- [1]": {
+    "err": "TypeMismatch",
+    "key": "relational.name"
+  },
+  "relational.name <- false": {
+    "err": "TypeMismatch",
+    "key": "relational.name"
+  },
+  "relational.name <- null": {
+    "err": "TypeMismatch",
+    "key": "relational.name"
+  },
+  "relational.name <- true": {
+    "err": "TypeMismatch",
+    "key": "relational.name"
+  },
+  "relational.name <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "relational.name"
+  },
+  "relational.password <- \"\"": {
+    "ok": {}
+  },
+  "relational.password <- \"1\"": {
+    "ok": {
+      "relational.password": "1"
+    }
+  },
+  "relational.password <- \"s\"": {
+    "ok": {
+      "relational.password": "s"
+    }
+  },
+  "relational.password <- \"true\"": {
+    "ok": {
+      "relational.password": "true"
+    }
+  },
+  "relational.password <- -1": {
+    "err": "TypeMismatch",
+    "key": "relational.password"
+  },
+  "relational.password <- 0": {
+    "err": "TypeMismatch",
+    "key": "relational.password"
+  },
+  "relational.password <- 1": {
+    "err": "TypeMismatch",
+    "key": "relational.password"
+  },
+  "relational.password <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "relational.password"
+  },
+  "relational.password <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "relational.password"
+  },
+  "relational.password <- 70000": {
+    "err": "TypeMismatch",
+    "key": "relational.password"
+  },
+  "relational.password <- [1]": {
+    "err": "TypeMismatch",
+    "key": "relational.password"
+  },
+  "relational.password <- false": {
+    "err": "TypeMismatch",
+    "key": "relational.password"
+  },
+  "relational.password <- null": {
+    "err": "TypeMismatch",
+    "key": "relational.password"
+  },
+  "relational.password <- true": {
+    "err": "TypeMismatch",
+    "key": "relational.password"
+  },
+  "relational.password <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "relational.password"
+  },
+  "relational.port <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "relational.port"
+  },
+  "relational.port <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "relational.port"
+  },
+  "relational.port <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "relational.port"
+  },
+  "relational.port <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "relational.port"
+  },
+  "relational.port <- -1": {
+    "err": "TypeMismatch",
+    "key": "relational.port"
+  },
+  "relational.port <- 0": {
+    "ok": {
+      "relational.port": 0
+    }
+  },
+  "relational.port <- 1": {
+    "ok": {
+      "relational.port": 1
+    }
+  },
+  "relational.port <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "relational.port"
+  },
+  "relational.port <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "relational.port"
+  },
+  "relational.port <- 70000": {
+    "err": "TypeMismatch",
+    "key": "relational.port"
+  },
+  "relational.port <- [1]": {
+    "err": "TypeMismatch",
+    "key": "relational.port"
+  },
+  "relational.port <- false": {
+    "err": "TypeMismatch",
+    "key": "relational.port"
+  },
+  "relational.port <- null": {
+    "err": "TypeMismatch",
+    "key": "relational.port"
+  },
+  "relational.port <- true": {
+    "err": "TypeMismatch",
+    "key": "relational.port"
+  },
+  "relational.port <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "relational.port"
+  },
+  "relational.provider <- \"\"": {
+    "ok": {
+      "relational.provider": ""
+    }
+  },
+  "relational.provider <- \"1\"": {
+    "ok": {
+      "relational.provider": "1"
+    }
+  },
+  "relational.provider <- \"s\"": {
+    "ok": {
+      "relational.provider": "s"
+    }
+  },
+  "relational.provider <- \"true\"": {
+    "ok": {
+      "relational.provider": "true"
+    }
+  },
+  "relational.provider <- -1": {
+    "err": "TypeMismatch",
+    "key": "relational.provider"
+  },
+  "relational.provider <- 0": {
+    "err": "TypeMismatch",
+    "key": "relational.provider"
+  },
+  "relational.provider <- 1": {
+    "err": "TypeMismatch",
+    "key": "relational.provider"
+  },
+  "relational.provider <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "relational.provider"
+  },
+  "relational.provider <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "relational.provider"
+  },
+  "relational.provider <- 70000": {
+    "err": "TypeMismatch",
+    "key": "relational.provider"
+  },
+  "relational.provider <- [1]": {
+    "err": "TypeMismatch",
+    "key": "relational.provider"
+  },
+  "relational.provider <- false": {
+    "err": "TypeMismatch",
+    "key": "relational.provider"
+  },
+  "relational.provider <- null": {
+    "err": "TypeMismatch",
+    "key": "relational.provider"
+  },
+  "relational.provider <- true": {
+    "err": "TypeMismatch",
+    "key": "relational.provider"
+  },
+  "relational.provider <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "relational.provider"
+  },
+  "relational.url <- \"\"": {
+    "ok": {
+      "relational.url": ""
+    }
+  },
+  "relational.url <- \"1\"": {
+    "ok": {
+      "relational.url": "1"
+    }
+  },
+  "relational.url <- \"s\"": {
+    "ok": {
+      "relational.url": "s"
+    }
+  },
+  "relational.url <- \"true\"": {
+    "ok": {
+      "relational.url": "true"
+    }
+  },
+  "relational.url <- -1": {
+    "err": "TypeMismatch",
+    "key": "relational.url"
+  },
+  "relational.url <- 0": {
+    "err": "TypeMismatch",
+    "key": "relational.url"
+  },
+  "relational.url <- 1": {
+    "err": "TypeMismatch",
+    "key": "relational.url"
+  },
+  "relational.url <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "relational.url"
+  },
+  "relational.url <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "relational.url"
+  },
+  "relational.url <- 70000": {
+    "err": "TypeMismatch",
+    "key": "relational.url"
+  },
+  "relational.url <- [1]": {
+    "err": "TypeMismatch",
+    "key": "relational.url"
+  },
+  "relational.url <- false": {
+    "err": "TypeMismatch",
+    "key": "relational.url"
+  },
+  "relational.url <- null": {
+    "err": "TypeMismatch",
+    "key": "relational.url"
+  },
+  "relational.url <- true": {
+    "err": "TypeMismatch",
+    "key": "relational.url"
+  },
+  "relational.url <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "relational.url"
+  },
+  "relational.username <- \"\"": {
+    "ok": {}
+  },
+  "relational.username <- \"1\"": {
+    "ok": {
+      "relational.username": "1"
+    }
+  },
+  "relational.username <- \"s\"": {
+    "ok": {
+      "relational.username": "s"
+    }
+  },
+  "relational.username <- \"true\"": {
+    "ok": {
+      "relational.username": "true"
+    }
+  },
+  "relational.username <- -1": {
+    "err": "TypeMismatch",
+    "key": "relational.username"
+  },
+  "relational.username <- 0": {
+    "err": "TypeMismatch",
+    "key": "relational.username"
+  },
+  "relational.username <- 1": {
+    "err": "TypeMismatch",
+    "key": "relational.username"
+  },
+  "relational.username <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "relational.username"
+  },
+  "relational.username <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "relational.username"
+  },
+  "relational.username <- 70000": {
+    "err": "TypeMismatch",
+    "key": "relational.username"
+  },
+  "relational.username <- [1]": {
+    "err": "TypeMismatch",
+    "key": "relational.username"
+  },
+  "relational.username <- false": {
+    "err": "TypeMismatch",
+    "key": "relational.username"
+  },
+  "relational.username <- null": {
+    "err": "TypeMismatch",
+    "key": "relational.username"
+  },
+  "relational.username <- true": {
+    "err": "TypeMismatch",
+    "key": "relational.username"
+  },
+  "relational.username <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "relational.username"
+  },
   "relational_db_url <- \"\"": {
     "ok": {
-      "relational_db_url": ""
+      "relational.url": ""
     }
   },
   "relational_db_url <- \"1\"": {
     "ok": {
-      "relational_db_url": "1"
+      "relational.url": "1"
     }
   },
   "relational_db_url <- \"s\"": {
     "ok": {
-      "relational_db_url": "s"
+      "relational.url": "s"
     }
   },
   "relational_db_url <- \"true\"": {
     "ok": {
-      "relational_db_url": "true"
+      "relational.url": "true"
     }
   },
   "relational_db_url <- -1": {

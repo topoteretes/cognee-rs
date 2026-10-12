@@ -72,7 +72,7 @@ So the settings a build accepts follow the components it contains:
   read, and setting its keys is an unknown-key condition;
 * a downstream build that registers its own factory (`register_llm`,
   `register_vector`, `register_storage`, `register_ontology_resolver`,
-  `register_graph_extractor`, …) brings that factory's keys, settable through the same
+  `register_graph_extractor`, `register_relational`, …) brings that factory's keys, settable through the same
   `ConfigManager::set`, binding `set` and config files as the built-in ones.
 
 `ComponentManager::with_registry` adds the registry's sections to its
@@ -790,14 +790,29 @@ config (see [roadmap/cognify-compatibility-plan.md](roadmap/cognify-compatibilit
 
 ## Relational database
 
-| Env var | `Settings` field | Default |
+The `relational` section is registered by the relational kind. Backends are
+`RelationalDbFactory`s on the `ComponentRegistry`, selected by `relational.provider`
+(when that is empty, by the scheme of the resolved URL). An external crate adds a
+backend with `register_relational`, together with its own config sections; it
+implements `cognee_database::RelationalDb`. The built-in SeaORM factory is
+registered as `sqlite` (feature `sqlite`) and `postgres` / `postgresql` (feature
+`postgres`). An unregistered provider is an error.
+
+| Env var | Key (alias) | Default |
 |---|---|---|
-| `DATABASE_URL` | `relational_db_url` | `sqlite:./cognee.db?mode=rwc` |
-| `DB_PROVIDER` | `db_provider` | `sqlite` |
-| `DB_HOST` / `DB_PORT` | `db_host` / `db_port` | `localhost` / `5432` |
-| `DB_NAME` | `db_name` | `cognee_db` |
-| `DB_USERNAME` / `DB_PASSWORD` | … | _(empty)_ |
+| `DB_PROVIDER` | `relational.provider` (`db_provider`) | `sqlite` |
+| `DATABASE_URL` | `relational.url` (`relational_db_url`) | `sqlite:./cognee.db?mode=rwc` |
+| — | `relational.migration_url` (`migration_db_url`) | _(empty)_ |
+| `DB_HOST` / `DB_PORT` | `relational.host` / `relational.port` (`db_host` / `db_port`) | `localhost` / `5432` |
+| `DB_NAME` | `relational.name` (`db_name`) | `cognee_db` |
+| `DB_USERNAME` / `DB_PASSWORD` | `relational.username` / `relational.password` (`db_username` / `db_password`) | _(empty)_ |
+| `DB_SSLMODE` (else derived from `DATABASE_CONNECT_ARGS`) | `db_sslmode` | _(empty)_ |
 | `COGNEE_SINGLE_PROCESS` | `single_process` | _(unset — see below; effectively off)_ |
+
+For `postgres` the URL is built from the connection parts; otherwise `relational.url`
+is used verbatim. `db_sslmode` and `single_process` stay cognee-wide `Settings` keys:
+the TLS mode is appended to every Postgres URL cognee builds (relational, pgvector
+and the Postgres graph), and `single_process` gates startup recovery.
 
 ### `single_process` / `COGNEE_SINGLE_PROCESS` — does one process own this database?
 

@@ -58,6 +58,13 @@ fn settings(root: &std::path::Path, endpoint: &str) -> Settings {
     Settings {
         sections: [
             (
+                "relational.url".to_string(),
+                serde_json::json!(format!(
+                    "sqlite:{}?mode=rwc",
+                    root.join("cognee.db").to_string_lossy()
+                )),
+            ),
+            (
                 "graph.provider".to_string(),
                 serde_json::json!("ladybug".to_string()),
             ),
@@ -106,10 +113,6 @@ fn settings(root: &std::path::Path, endpoint: &str) -> Settings {
         .into(),
         system_root_directory: root.join("system").to_string_lossy().into_owned(),
         data_root_directory: root.join("data").to_string_lossy().into_owned(),
-        relational_db_url: format!(
-            "sqlite:{}?mode=rwc",
-            root.join("cognee.db").to_string_lossy()
-        ),
         // In-memory, so the vector slot contributes no OS resource of its own —
         // deliberate: this test is about slot eviction, and the embedded vector
         // store was measured to hold nothing closable.

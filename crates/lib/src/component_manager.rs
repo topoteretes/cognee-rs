@@ -191,7 +191,7 @@ impl ComponentManager {
     #[instrument(name = "cognee.component.database", level = "info", skip_all, err)]
     async fn init_database(&self) -> Result<Arc<dyn RelationalDb>, ComponentError> {
         let ctx = self.build_context().await;
-        cognee_components::build_database(&ctx).await
+        self.registry.build_database(&ctx).await
     }
 
     #[instrument(name = "cognee.component.graph_db", level = "info", skip_all, err)]
@@ -747,11 +747,26 @@ mod tests {
     #[test]
     fn resolved_graph_url_falls_back_to_relational_creds() {
         let settings = Settings {
-            db_host: "relhost".to_string(),
-            db_port: 5432,
-            db_name: "reldb".to_string(),
-            db_username: "reluser".to_string(),
-            db_password: "relpass".to_string(),
+            sections: [
+                (
+                    "relational.host".to_string(),
+                    serde_json::json!("relhost".to_string()),
+                ),
+                ("relational.port".to_string(), serde_json::json!(5432)),
+                (
+                    "relational.name".to_string(),
+                    serde_json::json!("reldb".to_string()),
+                ),
+                (
+                    "relational.username".to_string(),
+                    serde_json::json!("reluser".to_string()),
+                ),
+                (
+                    "relational.password".to_string(),
+                    serde_json::json!("relpass".to_string()),
+                ),
+            ]
+            .into(),
             ..Settings::default()
         };
         let url = settings
@@ -775,9 +790,21 @@ mod tests {
     #[test]
     fn resolved_graph_url_errors_when_no_creds() {
         let settings = Settings {
-            db_host: String::new(),
-            db_name: String::new(),
-            db_username: String::new(),
+            sections: [
+                (
+                    "relational.host".to_string(),
+                    serde_json::json!(String::new()),
+                ),
+                (
+                    "relational.name".to_string(),
+                    serde_json::json!(String::new()),
+                ),
+                (
+                    "relational.username".to_string(),
+                    serde_json::json!(String::new()),
+                ),
+            ]
+            .into(),
             ..Settings::default()
         };
         let result = settings.resolved_graph_postgres_url();

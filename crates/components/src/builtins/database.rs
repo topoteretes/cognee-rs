@@ -1,13 +1,45 @@
-//! Relational database construction. No provider choice (sea-orm dispatches on
-//! the URL scheme), so this is a free function rather than a registered factory.
+//! Built-in relational factory: SeaORM (SQLite, Postgres).
+//!
+//! One factory type registered under each backend id the build supports; it
+//! connects to the resolved URL, and sea-orm dispatches on its scheme.
 
 use std::path::Path;
 use std::sync::Arc;
 
 use cognee_database::{RelationalDb, connect, initialize, sqlite_url_is_in_memory};
 
+use async_trait::async_trait;
+
 use crate::context::BackendBuildContext;
 use crate::error::ComponentError;
+use crate::traits::RelationalDbFactory;
+
+/// The SeaORM relational backend, registered under one backend id (`sqlite`,
+/// `postgres`, `postgresql`).
+pub struct SeaOrmRelationalFactory {
+    provider: &'static str,
+}
+
+impl SeaOrmRelationalFactory {
+    /// The factory for one backend id.
+    pub fn new(provider: &'static str) -> Self {
+        Self { provider }
+    }
+}
+
+#[async_trait]
+impl RelationalDbFactory for SeaOrmRelationalFactory {
+    fn provider(&self) -> &str {
+        self.provider
+    }
+
+    async fn build(
+        &self,
+        ctx: &BackendBuildContext,
+    ) -> Result<Arc<dyn RelationalDb>, ComponentError> {
+        build_database(ctx).await
+    }
+}
 
 /// Extract the on-disk filesystem path from a SQLite URL, or `None` for
 /// non-file URLs (`postgres://…`, in-memory `sqlite::memory:` or
@@ -51,6 +83,10 @@ fn sqlite_fs_path(url: &str) -> Option<String> {
 }
 
 /// Connect to and initialize the relational database from the resolved URL.
+///
+/// Kept for callers that build the database without a registry;
+/// [`crate::ComponentRegistry::build_database`] selects by
+/// `relational.provider`.
 ///
 /// For SQLite file-backed databases, the parent directory is created first
 /// (non-fatal): sea-orm's `?mode=rwc` creates the *file* but not missing

@@ -572,3 +572,43 @@ config_section! {
         },
     }
 }
+
+config_section! {
+    /// The relational database. Registered by the relational kind.
+    pub struct RelationalConfig in "relational" {
+        /// Backend id selecting the relational factory (`sqlite`, `postgres`).
+        /// For `postgres` the URL is built from the connection parts below;
+        /// otherwise `url` is used verbatim.
+        pub provider: String = "sqlite".to_string() => {
+            env: ["DB_PROVIDER"], alias: ["db_provider"], secret: false,
+        },
+        /// Connection URL (`sqlite:…`, `postgres://…`) when not built from parts.
+        pub url: String = "sqlite:./cognee.db?mode=rwc".to_string() => {
+            env: ["DATABASE_URL"], alias: ["relational_db_url"], secret: false,
+        },
+        /// Source database URL for `cognee-cli migrate`.
+        pub migration_url: String = String::new() => {
+            env: [], alias: ["migration_db_url"], secret: false,
+        },
+        /// Server host (`postgres`).
+        pub host: String = "localhost".to_string() => {
+            env: ["DB_HOST"], alias: ["db_host"], secret: false,
+        },
+        /// Server port (`postgres`).
+        pub port: u16 = 5432 => {
+            env: ["DB_PORT"], alias: ["db_port"], secret: false,
+        },
+        /// Database name (`postgres`).
+        pub name: String = "cognee_db".to_string() => {
+            env: ["DB_NAME"], alias: ["db_name"], secret: false,
+        },
+        /// User name (`postgres`).
+        pub username: String = String::new() => {
+            env: ["DB_USERNAME"], alias: ["db_username"], secret: false,
+        },
+        /// Password (`postgres`).
+        pub password: String = String::new() => {
+            env: ["DB_PASSWORD"], alias: ["db_password"], secret: true,
+        },
+    }
+}

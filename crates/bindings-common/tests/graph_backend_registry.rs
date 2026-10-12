@@ -89,6 +89,13 @@ fn settings_under(dir: &TempDir) -> Settings {
     Settings {
         sections: [
             (
+                "relational.url".to_string(),
+                serde_json::json!(format!(
+                    "sqlite://{}?mode=rwc",
+                    root.join("cognee.db").display()
+                )),
+            ),
+            (
                 "embedding.provider".to_string(),
                 serde_json::json!("mock".to_owned()),
             ),
@@ -100,7 +107,6 @@ fn settings_under(dir: &TempDir) -> Settings {
         .into(),
         data_root_directory: root.join("data").to_string_lossy().into_owned(),
         system_root_directory: root.join("sys").to_string_lossy().into_owned(),
-        relational_db_url: format!("sqlite://{}?mode=rwc", root.join("cognee.db").display()),
         ..Settings::default()
     }
 }

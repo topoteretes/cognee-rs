@@ -311,14 +311,6 @@ static KEYS: &[KeySpec] = &[
     row!(chunk_size: opt_u32, env ["COGNEE_CHUNK_SIZE", "CHUNK_SIZE"]),
     row!(chunk_overlap: u32, env ["COGNEE_CHUNK_OVERLAP", "CHUNK_OVERLAP"]),
     // -- Relational database ------------------------------------------------
-    row!(relational_db_url: str, env ["DATABASE_URL"]),
-    row!(migration_db_url: str, env []),
-    row!(db_provider: str, env ["DB_PROVIDER"]),
-    row!(db_host: str, env ["DB_HOST"]),
-    row!(db_port: u16, env ["DB_PORT"]),
-    row!(db_name: str, env ["DB_NAME"]),
-    row!(db_username: str, env ["DB_USERNAME"]),
-    row!(db_password: str secret, env ["DB_PASSWORD"]),
     KeySpec {
         key: "db_sslmode",
         key_aliases: &[],

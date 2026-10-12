@@ -203,7 +203,7 @@ mod tests {
         let cm = cognee::config::ConfigManager::new(cognee::config::Settings::default());
         let secrets = cm.secret_keys();
         assert!(secrets.contains(&"llm.fallback_api_key"));
-        assert!(secrets.contains(&"db_password"));
+        assert!(secrets.contains(&"default_user_password"));
         for key in &secrets {
             cm.set(key, json!("hunter2"))
                 .expect("secret settings take a string");

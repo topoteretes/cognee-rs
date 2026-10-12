@@ -33,6 +33,10 @@ fn handle_under(dir: &Path) -> (std::sync::Arc<HandleState>, PathBuf) {
     let settings = Settings {
         sections: [
             (
+                "relational.url".to_string(),
+                serde_json::json!(format!("sqlite://{}?mode=rwc", db_path.display())),
+            ),
+            (
                 "embedding.provider".to_string(),
                 serde_json::json!("mock".to_owned()),
             ),
@@ -44,7 +48,6 @@ fn handle_under(dir: &Path) -> (std::sync::Arc<HandleState>, PathBuf) {
         .into(),
         data_root_directory: dir.join("data").to_string_lossy().into_owned(),
         system_root_directory: dir.join("sys").to_string_lossy().into_owned(),
-        relational_db_url: format!("sqlite://{}?mode=rwc", db_path.display()),
         ..Settings::default()
     };
     (
@@ -468,6 +471,10 @@ async fn a_failed_warm_still_reports_open_resources_and_releases_them() {
     let settings = Settings {
         sections: [
             (
+                "relational.url".to_string(),
+                serde_json::json!(format!("sqlite://{}?mode=rwc", db_path.display())),
+            ),
+            (
                 "embedding.provider".to_string(),
                 serde_json::json!("mock".to_owned()),
             ),
@@ -476,7 +483,6 @@ async fn a_failed_warm_still_reports_open_resources_and_releases_them() {
         .into(),
         data_root_directory: dir.path().join("data").to_string_lossy().into_owned(),
         system_root_directory: dir.path().join("sys").to_string_lossy().into_owned(),
-        relational_db_url: format!("sqlite://{}?mode=rwc", db_path.display()),
         ..Settings::default()
     };
     let state = std::sync::Arc::new(HandleState::from_settings(settings));

@@ -143,8 +143,11 @@ fn cli_config_keys_match_golden() {
 
         // `config unset` restores the default from a changed document.
         let mut s = Settings {
-            sections: [("llm.model".to_string(), json!("changed"))].into(),
-            db_port: 1,
+            sections: [
+                ("relational.port".to_string(), serde_json::json!(1)),
+                ("llm.model".to_string(), json!("changed")),
+            ]
+            .into(),
             chunk_size: Some(7),
             ..Settings::default()
         };

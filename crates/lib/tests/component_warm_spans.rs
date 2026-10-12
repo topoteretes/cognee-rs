@@ -36,12 +36,16 @@ fn cm() -> (ComponentManager, TempDir) {
     let dir = TempDir::new().expect("tempdir");
     let root = dir.path();
     let settings = Settings {
+        sections: [(
+            "relational.url".to_string(),
+            serde_json::json!(format!(
+                "sqlite:{}?mode=rwc",
+                root.join("cognee.db").to_string_lossy()
+            )),
+        )]
+        .into(),
         system_root_directory: root.join("system").to_string_lossy().into_owned(),
         data_root_directory: root.join("data").to_string_lossy().into_owned(),
-        relational_db_url: format!(
-            "sqlite:{}?mode=rwc",
-            root.join("cognee.db").to_string_lossy()
-        ),
         ..Settings::default()
     };
     (ComponentManager::new(ConfigManager::new(settings)), dir)

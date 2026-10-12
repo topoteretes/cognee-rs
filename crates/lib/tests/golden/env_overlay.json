@@ -2288,273 +2288,273 @@
     "db_sslmode": "require"
   },
   "DATABASE_URL=\"  \"": {
-    "relational_db_url": "  "
+    "relational.url": "  "
   },
   "DATABASE_URL=\"\"": {},
   "DATABASE_URL=\"-1\"": {
-    "relational_db_url": "-1"
+    "relational.url": "-1"
   },
   "DATABASE_URL=\"0\"": {
-    "relational_db_url": "0"
+    "relational.url": "0"
   },
   "DATABASE_URL=\"1\"": {
-    "relational_db_url": "1"
+    "relational.url": "1"
   },
   "DATABASE_URL=\"1.5\"": {
-    "relational_db_url": "1.5"
+    "relational.url": "1.5"
   },
   "DATABASE_URL=\"42\"": {
-    "relational_db_url": "42"
+    "relational.url": "42"
   },
   "DATABASE_URL=\"5000000000\"": {
-    "relational_db_url": "5000000000"
+    "relational.url": "5000000000"
   },
   "DATABASE_URL=\"70000\"": {
-    "relational_db_url": "70000"
+    "relational.url": "70000"
   },
   "DATABASE_URL=\"TRUE\"": {
-    "relational_db_url": "TRUE"
+    "relational.url": "TRUE"
   },
   "DATABASE_URL=\"[1]\"": {
-    "relational_db_url": "[1]"
+    "relational.url": "[1]"
   },
   "DATABASE_URL=\"abc\"": {
-    "relational_db_url": "abc"
+    "relational.url": "abc"
   },
   "DATABASE_URL=\"false\"": {
-    "relational_db_url": "false"
+    "relational.url": "false"
   },
   "DATABASE_URL=\"no\"": {
-    "relational_db_url": "no"
+    "relational.url": "no"
   },
   "DATABASE_URL=\"on\"": {
-    "relational_db_url": "on"
+    "relational.url": "on"
   },
   "DATABASE_URL=\"require\"": {
-    "relational_db_url": "require"
+    "relational.url": "require"
   },
   "DATABASE_URL=\"true\"": {
-    "relational_db_url": "true"
+    "relational.url": "true"
   },
   "DATABASE_URL=\"v\"": {
-    "relational_db_url": "v"
+    "relational.url": "v"
   },
   "DATABASE_URL=\"yes\"": {
-    "relational_db_url": "yes"
+    "relational.url": "yes"
   },
   "DATABASE_URL=\"{\\\"a\\\":1}\"": {
-    "relational_db_url": "{\"a\":1}"
+    "relational.url": "{\"a\":1}"
   },
   "DATABASE_URL=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "relational_db_url": "{\"ssl\":\"verify-full\"}"
+    "relational.url": "{\"ssl\":\"verify-full\"}"
   },
   "DATABASE_URL=\"{\\\"ssl\\\":true}\"": {
-    "relational_db_url": "{\"ssl\":true}"
+    "relational.url": "{\"ssl\":true}"
   },
   "DB_HOST=\"  \"": {
-    "db_host": "  "
+    "relational.host": "  "
   },
   "DB_HOST=\"\"": {},
   "DB_HOST=\"-1\"": {
-    "db_host": "-1"
+    "relational.host": "-1"
   },
   "DB_HOST=\"0\"": {
-    "db_host": "0"
+    "relational.host": "0"
   },
   "DB_HOST=\"1\"": {
-    "db_host": "1"
+    "relational.host": "1"
   },
   "DB_HOST=\"1.5\"": {
-    "db_host": "1.5"
+    "relational.host": "1.5"
   },
   "DB_HOST=\"42\"": {
-    "db_host": "42"
+    "relational.host": "42"
   },
   "DB_HOST=\"5000000000\"": {
-    "db_host": "5000000000"
+    "relational.host": "5000000000"
   },
   "DB_HOST=\"70000\"": {
-    "db_host": "70000"
+    "relational.host": "70000"
   },
   "DB_HOST=\"TRUE\"": {
-    "db_host": "TRUE"
+    "relational.host": "TRUE"
   },
   "DB_HOST=\"[1]\"": {
-    "db_host": "[1]"
+    "relational.host": "[1]"
   },
   "DB_HOST=\"abc\"": {
-    "db_host": "abc"
+    "relational.host": "abc"
   },
   "DB_HOST=\"false\"": {
-    "db_host": "false"
+    "relational.host": "false"
   },
   "DB_HOST=\"no\"": {
-    "db_host": "no"
+    "relational.host": "no"
   },
   "DB_HOST=\"on\"": {
-    "db_host": "on"
+    "relational.host": "on"
   },
   "DB_HOST=\"require\"": {
-    "db_host": "require"
+    "relational.host": "require"
   },
   "DB_HOST=\"true\"": {
-    "db_host": "true"
+    "relational.host": "true"
   },
   "DB_HOST=\"v\"": {
-    "db_host": "v"
+    "relational.host": "v"
   },
   "DB_HOST=\"yes\"": {
-    "db_host": "yes"
+    "relational.host": "yes"
   },
   "DB_HOST=\"{\\\"a\\\":1}\"": {
-    "db_host": "{\"a\":1}"
+    "relational.host": "{\"a\":1}"
   },
   "DB_HOST=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "db_host": "{\"ssl\":\"verify-full\"}"
+    "relational.host": "{\"ssl\":\"verify-full\"}"
   },
   "DB_HOST=\"{\\\"ssl\\\":true}\"": {
-    "db_host": "{\"ssl\":true}"
+    "relational.host": "{\"ssl\":true}"
   },
   "DB_NAME=\"  \"": {
-    "db_name": "  "
+    "relational.name": "  "
   },
   "DB_NAME=\"\"": {},
   "DB_NAME=\"-1\"": {
-    "db_name": "-1"
+    "relational.name": "-1"
   },
   "DB_NAME=\"0\"": {
-    "db_name": "0"
+    "relational.name": "0"
   },
   "DB_NAME=\"1\"": {
-    "db_name": "1"
+    "relational.name": "1"
   },
   "DB_NAME=\"1.5\"": {
-    "db_name": "1.5"
+    "relational.name": "1.5"
   },
   "DB_NAME=\"42\"": {
-    "db_name": "42"
+    "relational.name": "42"
   },
   "DB_NAME=\"5000000000\"": {
-    "db_name": "5000000000"
+    "relational.name": "5000000000"
   },
   "DB_NAME=\"70000\"": {
-    "db_name": "70000"
+    "relational.name": "70000"
   },
   "DB_NAME=\"TRUE\"": {
-    "db_name": "TRUE"
+    "relational.name": "TRUE"
   },
   "DB_NAME=\"[1]\"": {
-    "db_name": "[1]"
+    "relational.name": "[1]"
   },
   "DB_NAME=\"abc\"": {
-    "db_name": "abc"
+    "relational.name": "abc"
   },
   "DB_NAME=\"false\"": {
-    "db_name": "false"
+    "relational.name": "false"
   },
   "DB_NAME=\"no\"": {
-    "db_name": "no"
+    "relational.name": "no"
   },
   "DB_NAME=\"on\"": {
-    "db_name": "on"
+    "relational.name": "on"
   },
   "DB_NAME=\"require\"": {
-    "db_name": "require"
+    "relational.name": "require"
   },
   "DB_NAME=\"true\"": {
-    "db_name": "true"
+    "relational.name": "true"
   },
   "DB_NAME=\"v\"": {
-    "db_name": "v"
+    "relational.name": "v"
   },
   "DB_NAME=\"yes\"": {
-    "db_name": "yes"
+    "relational.name": "yes"
   },
   "DB_NAME=\"{\\\"a\\\":1}\"": {
-    "db_name": "{\"a\":1}"
+    "relational.name": "{\"a\":1}"
   },
   "DB_NAME=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "db_name": "{\"ssl\":\"verify-full\"}"
+    "relational.name": "{\"ssl\":\"verify-full\"}"
   },
   "DB_NAME=\"{\\\"ssl\\\":true}\"": {
-    "db_name": "{\"ssl\":true}"
+    "relational.name": "{\"ssl\":true}"
   },
   "DB_PASSWORD=\"  \"": {
-    "db_password": "  "
+    "relational.password": "  "
   },
   "DB_PASSWORD=\"\"": {},
   "DB_PASSWORD=\"-1\"": {
-    "db_password": "-1"
+    "relational.password": "-1"
   },
   "DB_PASSWORD=\"0\"": {
-    "db_password": "0"
+    "relational.password": "0"
   },
   "DB_PASSWORD=\"1\"": {
-    "db_password": "1"
+    "relational.password": "1"
   },
   "DB_PASSWORD=\"1.5\"": {
-    "db_password": "1.5"
+    "relational.password": "1.5"
   },
   "DB_PASSWORD=\"42\"": {
-    "db_password": "42"
+    "relational.password": "42"
   },
   "DB_PASSWORD=\"5000000000\"": {
-    "db_password": "5000000000"
+    "relational.password": "5000000000"
   },
   "DB_PASSWORD=\"70000\"": {
-    "db_password": "70000"
+    "relational.password": "70000"
   },
   "DB_PASSWORD=\"TRUE\"": {
-    "db_password": "TRUE"
+    "relational.password": "TRUE"
   },
   "DB_PASSWORD=\"[1]\"": {
-    "db_password": "[1]"
+    "relational.password": "[1]"
   },
   "DB_PASSWORD=\"abc\"": {
-    "db_password": "abc"
+    "relational.password": "abc"
   },
   "DB_PASSWORD=\"false\"": {
-    "db_password": "false"
+    "relational.password": "false"
   },
   "DB_PASSWORD=\"no\"": {
-    "db_password": "no"
+    "relational.password": "no"
   },
   "DB_PASSWORD=\"on\"": {
-    "db_password": "on"
+    "relational.password": "on"
   },
   "DB_PASSWORD=\"require\"": {
-    "db_password": "require"
+    "relational.password": "require"
   },
   "DB_PASSWORD=\"true\"": {
-    "db_password": "true"
+    "relational.password": "true"
   },
   "DB_PASSWORD=\"v\"": {
-    "db_password": "v"
+    "relational.password": "v"
   },
   "DB_PASSWORD=\"yes\"": {
-    "db_password": "yes"
+    "relational.password": "yes"
   },
   "DB_PASSWORD=\"{\\\"a\\\":1}\"": {
-    "db_password": "{\"a\":1}"
+    "relational.password": "{\"a\":1}"
   },
   "DB_PASSWORD=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "db_password": "{\"ssl\":\"verify-full\"}"
+    "relational.password": "{\"ssl\":\"verify-full\"}"
   },
   "DB_PASSWORD=\"{\\\"ssl\\\":true}\"": {
-    "db_password": "{\"ssl\":true}"
+    "relational.password": "{\"ssl\":true}"
   },
   "DB_PORT=\"  \"": {},
   "DB_PORT=\"\"": {},
   "DB_PORT=\"-1\"": {},
   "DB_PORT=\"0\"": {
-    "db_port": 0
+    "relational.port": 0
   },
   "DB_PORT=\"1\"": {
-    "db_port": 1
+    "relational.port": 1
   },
   "DB_PORT=\"1.5\"": {},
   "DB_PORT=\"42\"": {
-    "db_port": 42
+    "relational.port": 42
   },
   "DB_PORT=\"5000000000\"": {},
   "DB_PORT=\"70000\"": {},
@@ -2572,68 +2572,68 @@
   "DB_PORT=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
   "DB_PORT=\"{\\\"ssl\\\":true}\"": {},
   "DB_PROVIDER=\"  \"": {
-    "db_provider": "  "
+    "relational.provider": "  "
   },
   "DB_PROVIDER=\"\"": {},
   "DB_PROVIDER=\"-1\"": {
-    "db_provider": "-1"
+    "relational.provider": "-1"
   },
   "DB_PROVIDER=\"0\"": {
-    "db_provider": "0"
+    "relational.provider": "0"
   },
   "DB_PROVIDER=\"1\"": {
-    "db_provider": "1"
+    "relational.provider": "1"
   },
   "DB_PROVIDER=\"1.5\"": {
-    "db_provider": "1.5"
+    "relational.provider": "1.5"
   },
   "DB_PROVIDER=\"42\"": {
-    "db_provider": "42"
+    "relational.provider": "42"
   },
   "DB_PROVIDER=\"5000000000\"": {
-    "db_provider": "5000000000"
+    "relational.provider": "5000000000"
   },
   "DB_PROVIDER=\"70000\"": {
-    "db_provider": "70000"
+    "relational.provider": "70000"
   },
   "DB_PROVIDER=\"TRUE\"": {
-    "db_provider": "TRUE"
+    "relational.provider": "TRUE"
   },
   "DB_PROVIDER=\"[1]\"": {
-    "db_provider": "[1]"
+    "relational.provider": "[1]"
   },
   "DB_PROVIDER=\"abc\"": {
-    "db_provider": "abc"
+    "relational.provider": "abc"
   },
   "DB_PROVIDER=\"false\"": {
-    "db_provider": "false"
+    "relational.provider": "false"
   },
   "DB_PROVIDER=\"no\"": {
-    "db_provider": "no"
+    "relational.provider": "no"
   },
   "DB_PROVIDER=\"on\"": {
-    "db_provider": "on"
+    "relational.provider": "on"
   },
   "DB_PROVIDER=\"require\"": {
-    "db_provider": "require"
+    "relational.provider": "require"
   },
   "DB_PROVIDER=\"true\"": {
-    "db_provider": "true"
+    "relational.provider": "true"
   },
   "DB_PROVIDER=\"v\"": {
-    "db_provider": "v"
+    "relational.provider": "v"
   },
   "DB_PROVIDER=\"yes\"": {
-    "db_provider": "yes"
+    "relational.provider": "yes"
   },
   "DB_PROVIDER=\"{\\\"a\\\":1}\"": {
-    "db_provider": "{\"a\":1}"
+    "relational.provider": "{\"a\":1}"
   },
   "DB_PROVIDER=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "db_provider": "{\"ssl\":\"verify-full\"}"
+    "relational.provider": "{\"ssl\":\"verify-full\"}"
   },
   "DB_PROVIDER=\"{\\\"ssl\\\":true}\"": {
-    "db_provider": "{\"ssl\":true}"
+    "relational.provider": "{\"ssl\":true}"
   },
   "DB_SSLMODE=\"  \"": {
     "db_sslmode": "  "
@@ -2707,68 +2707,68 @@
     "db_sslmode": "abc"
   },
   "DB_USERNAME=\"  \"": {
-    "db_username": "  "
+    "relational.username": "  "
   },
   "DB_USERNAME=\"\"": {},
   "DB_USERNAME=\"-1\"": {
-    "db_username": "-1"
+    "relational.username": "-1"
   },
   "DB_USERNAME=\"0\"": {
-    "db_username": "0"
+    "relational.username": "0"
   },
   "DB_USERNAME=\"1\"": {
-    "db_username": "1"
+    "relational.username": "1"
   },
   "DB_USERNAME=\"1.5\"": {
-    "db_username": "1.5"
+    "relational.username": "1.5"
   },
   "DB_USERNAME=\"42\"": {
-    "db_username": "42"
+    "relational.username": "42"
   },
   "DB_USERNAME=\"5000000000\"": {
-    "db_username": "5000000000"
+    "relational.username": "5000000000"
   },
   "DB_USERNAME=\"70000\"": {
-    "db_username": "70000"
+    "relational.username": "70000"
   },
   "DB_USERNAME=\"TRUE\"": {
-    "db_username": "TRUE"
+    "relational.username": "TRUE"
   },
   "DB_USERNAME=\"[1]\"": {
-    "db_username": "[1]"
+    "relational.username": "[1]"
   },
   "DB_USERNAME=\"abc\"": {
-    "db_username": "abc"
+    "relational.username": "abc"
   },
   "DB_USERNAME=\"false\"": {
-    "db_username": "false"
+    "relational.username": "false"
   },
   "DB_USERNAME=\"no\"": {
-    "db_username": "no"
+    "relational.username": "no"
   },
   "DB_USERNAME=\"on\"": {
-    "db_username": "on"
+    "relational.username": "on"
   },
   "DB_USERNAME=\"require\"": {
-    "db_username": "require"
+    "relational.username": "require"
   },
   "DB_USERNAME=\"true\"": {
-    "db_username": "true"
+    "relational.username": "true"
   },
   "DB_USERNAME=\"v\"": {
-    "db_username": "v"
+    "relational.username": "v"
   },
   "DB_USERNAME=\"yes\"": {
-    "db_username": "yes"
+    "relational.username": "yes"
   },
   "DB_USERNAME=\"{\\\"a\\\":1}\"": {
-    "db_username": "{\"a\":1}"
+    "relational.username": "{\"a\":1}"
   },
   "DB_USERNAME=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "db_username": "{\"ssl\":\"verify-full\"}"
+    "relational.username": "{\"ssl\":\"verify-full\"}"
   },
   "DB_USERNAME=\"{\\\"ssl\\\":true}\"": {
-    "db_username": "{\"ssl\":true}"
+    "relational.username": "{\"ssl\":true}"
   },
   "DEFAULT_USER_EMAIL=\"  \"": {
     "default_user_email": "  "
