@@ -118,6 +118,21 @@ impl HandleState {
         Self::from_settings(ConfigManager::from_env().read().clone())
     }
 
+    /// Construct from the environment with an explicit component registry.
+    /// The registry's config sections are known when the environment is read,
+    /// so their env vars are loaded too.
+    pub fn from_env_with_registry(registry: ComponentRegistry) -> Result<Self, SdkError> {
+        let schema = registry
+            .config_schema()
+            .map_err(|e| SdkError::Validation(e.to_string()))?;
+        let config = ConfigManager::from_env_with_schema(&schema)
+            .map_err(|e| SdkError::Validation(e.to_string()))?;
+        Ok(Self::from_settings_with_registry(
+            config.read().clone(),
+            registry,
+        ))
+    }
+
     /// Attach a DB-backed default-user bootstrap hook (builder).
     ///
     /// With a hook set, the warm path and the admin op resolve the owner via

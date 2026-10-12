@@ -548,6 +548,14 @@ pub fn builtin_schema() -> &'static ConfigSchema {
     })
 }
 
+/// The built-in schema plus the sections of `extra` (a custom registry's
+/// `config_schema()`): what a process using that registry must load env with.
+pub fn schema_with(extra: &ConfigSchema) -> Result<ConfigSchema, cognee_config_core::SchemaError> {
+    let mut schema = builtin_schema().clone();
+    schema.merge(extra)?;
+    Ok(schema)
+}
+
 /// An empty schema with every `Settings` key, key alias and env var reserved,
 /// so no section can claim them.
 pub(super) fn core_schema() -> ConfigSchema {
@@ -625,8 +633,8 @@ impl Settings {
     }
 
     /// [`Settings::overlay_from`] for a build whose component registry adds
-    /// sections of its own: `schema` is that registry's schema (it should
-    /// include the built-in sections too).
+    /// sections of its own: `schema` must include the built-in sections too
+    /// (see [`schema_with`]).
     pub fn overlay_from_with_schema(&mut self, env: &dyn EnvSource, schema: &ConfigSchema) {
         for spec in KEYS {
             (spec.overlay)(self, env);

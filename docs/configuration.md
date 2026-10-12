@@ -76,7 +76,16 @@ So the settings a build accepts follow the components it contains:
 
 `ComponentManager::with_registry` adds the registry's sections to its
 `ConfigManager`. `cognee::config::builtin_schema()` is the schema of a default
-build.
+build. A process built on a custom registry must load the environment with the
+**full** schema, so the env vars of the registry's own sections are read too:
+
+* `ConfigManager::from_env_with_schema(&registry.config_schema()?)`;
+* `HandleState::from_env_with_registry(registry)` in the bindings;
+* `Settings::load_from_env_with_schema(&cognee::config::schema_with(…)?)`, or the CLI's
+  `load_settings_with_schema`.
+
+Adding the sections afterwards makes their keys settable, but cannot read their
+env vars.
 
 Section values travel inside `Settings`, in its flattened `sections` map, so
 config files and binding settings objects carry them unchanged. A factory reads

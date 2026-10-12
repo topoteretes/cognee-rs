@@ -16,7 +16,7 @@ pub use cognee_config_core::{EnvSource, MapEnv};
 
 mod keys;
 pub use cognee_config_core::{ConfigSchema, ConfigSection, ConfigValues, KeyDef, SectionSchema};
-pub use keys::{KeySpec, builtin_schema, key_spec, keys};
+pub use keys::{KeySpec, builtin_schema, key_spec, keys, schema_with};
 
 pub const DEFAULT_SYSTEM_PROMPT_PATH: &str = "answer_simple_question.txt";
 
@@ -514,14 +514,29 @@ impl Settings {
     /// This is a configuration boundary: it is the one place `Settings` opens
     /// the process environment. Use [`Settings::overlay_from`] to overlay from
     /// any other [`EnvSource`] (e.g. a `MapEnv` in tests).
+    pub fn overlay_from_env(&mut self) {
+        self.overlay_from_env_with_schema(builtin_schema());
+    }
+
+    /// [`Settings::load_from_env`] for a build whose component registry adds
+    /// config sections of its own: `schema` must cover every section the
+    /// process will use (see [`schema_with`]), so their env vars are read too.
+    pub fn load_from_env_with_schema(schema: &ConfigSchema) -> Self {
+        let mut s = Self::default();
+        s.overlay_from_env_with_schema(schema);
+        s
+    }
+
+    /// [`Settings::overlay_from_env`] with an explicit schema; see
+    /// [`Settings::load_from_env_with_schema`].
     #[allow(
         clippy::disallowed_methods,
         reason = "config boundary: Settings is resolved from the process env here"
     )]
-    pub fn overlay_from_env(&mut self) {
+    pub fn overlay_from_env_with_schema(&mut self, schema: &ConfigSchema) {
         // Load .env (no-op if absent or if the vars are already in the environment).
         cognee_config_core::load_dotenv();
-        self.overlay_from(&cognee_config_core::ProcessEnv::new());
+        self.overlay_from_with_schema(&cognee_config_core::ProcessEnv::new(), schema);
     }
 
     /// Whether exactly one process uses the relational database.
@@ -1293,6 +1308,20 @@ impl ConfigManager {
     /// Convenience constructor: `Settings::load_from_env()` + wrap.
     pub fn from_env() -> Self {
         Self::new(Settings::load_from_env())
+    }
+
+    /// [`ConfigManager::from_env`] for a custom component registry: `extra` is
+    /// the registry's schema (`ComponentRegistry::config_schema()`). Its
+    /// sections are known *before* the environment is read, so their env vars
+    /// are loaded too, which adding them later with
+    /// [`ConfigManager::extend_schema`] cannot do.
+    pub fn from_env_with_schema(
+        extra: &ConfigSchema,
+    ) -> Result<Self, cognee_config_core::SchemaError> {
+        let schema = schema_with(extra)?;
+        let cm = Self::new(Settings::load_from_env_with_schema(&schema));
+        cm.extend_schema(extra)?;
+        Ok(cm)
     }
 
     /// Obtain a read-lock on the current settings.
@@ -2865,6 +2894,43 @@ mod tests {
             Some(&serde_json::json!(1)),
             "kept"
         );
+    }
+
+    cognee_config_core::config_section! {
+        /// A section only a custom registry knows.
+        pub struct CustomSection in "test.custom" {
+            /// A knob.
+            pub x: u32 = 1 => { env: ["COGNEE_TEST_CUSTOM_X"], alias: ["custom_x"], secret: false },
+        }
+    }
+
+    /// A custom registry's section env vars are read when env is loaded with
+    /// the full schema, and not by the built-in loader.
+    #[test]
+    fn custom_registry_sections_load_from_env_with_the_full_schema() {
+        let mut registry = cognee_components::ComponentRegistry::with_builtins();
+        registry.register_config_section(
+            <CustomSection as cognee_config_core::ConfigSection>::schema(),
+        );
+        let extra = registry.config_schema().unwrap();
+        let schema = schema_with(&extra).unwrap();
+        let env = MapEnv::new().with("COGNEE_TEST_CUSTOM_X", "5");
+
+        let mut builtin_only = Settings::default();
+        builtin_only.overlay_from(&env);
+        assert!(
+            builtin_only.sections.is_empty(),
+            "the built-in loader does not know it"
+        );
+
+        let mut settings = Settings::default();
+        settings.overlay_from_with_schema(&env, &schema);
+        let cm = crate::ComponentManager::with_registry(ConfigManager::new(settings), registry);
+        assert_eq!(cm.config().get("test.custom.x"), Some(serde_json::json!(5)));
+        assert_eq!(cm.config().get("custom_x"), Some(serde_json::json!(5)));
+        cm.config().set("custom_x", serde_json::json!(9)).unwrap();
+        let section: CustomSection = cm.config().read().backend_context().section();
+        assert_eq!(section.x, 9);
     }
 
     /// A key owned by a component config section is settable by its

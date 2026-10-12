@@ -1,6 +1,6 @@
 use crate::error::CliError;
 pub use cognee::Settings;
-use cognee::config::{ConfigError, builtin_schema, key_spec, keys};
+use cognee::config::{ConfigError, ConfigSchema, builtin_schema, key_spec, keys};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -86,6 +86,16 @@ pub fn load_settings() -> Result<Settings, CliError> {
     let config = load_config()?;
     let mut settings = config.settings;
     settings.overlay_from_env();
+    Ok(settings)
+}
+
+/// [`load_settings`] for a CLI built on a custom component registry: `schema`
+/// is `cognee::config::schema_with(&registry.config_schema()?)`, so the env
+/// vars of the registry's own config sections are read too.
+pub fn load_settings_with_schema(schema: &ConfigSchema) -> Result<Settings, CliError> {
+    let config = load_config()?;
+    let mut settings = config.settings;
+    settings.overlay_from_env_with_schema(schema);
     Ok(settings)
 }
 
