@@ -38,20 +38,23 @@
     "default_user_email",
     "default_user_id",
     "default_user_password",
-    "embedding_api_key",
-    "embedding_api_version",
-    "embedding_batch_size",
-    "embedding_dimensions",
-    "embedding_endpoint",
-    "embedding_max_sequence_length",
-    "embedding_model_name",
-    "embedding_model_path",
-    "embedding_onnx_batch_size",
-    "embedding_provider",
-    "embedding_rate_limit_enabled",
-    "embedding_rate_limit_interval",
-    "embedding_rate_limit_requests",
-    "embedding_tokenizer_path",
+    "embedding.api_key",
+    "embedding.batch_size",
+    "embedding.dimensions",
+    "embedding.endpoint",
+    "embedding.max_completion_tokens",
+    "embedding.max_sequence_length",
+    "embedding.mock",
+    "embedding.model",
+    "embedding.ollama.huggingface_tokenizer",
+    "embedding.onnx.batch_size",
+    "embedding.onnx.model_path",
+    "embedding.onnx.tokenizer_path",
+    "embedding.openai_compatible.api_version",
+    "embedding.provider",
+    "embedding.rate_limit_enabled",
+    "embedding.rate_limit_interval",
+    "embedding.rate_limit_requests",
     "enable_access_control",
     "enable_caching",
     "enable_last_accessed",
@@ -177,17 +180,6 @@
     "db_password",
     "db_sslmode",
     "default_system_prompt_path",
-    "embedding_provider",
-    "embedding_model_path",
-    "embedding_tokenizer_path",
-    "embedding_model_name",
-    "embedding_dimensions",
-    "embedding_max_sequence_length",
-    "embedding_batch_size",
-    "embedding_onnx_batch_size",
-    "embedding_endpoint",
-    "embedding_api_key",
-    "embedding_api_version",
     "ontology_file_path",
     "ontology_resolver",
     "ontology_matching_strategy",
@@ -203,9 +195,6 @@
     "default_user_password",
     "enable_access_control",
     "log_level",
-    "embedding_rate_limit_enabled",
-    "embedding_rate_limit_requests",
-    "embedding_rate_limit_interval",
     "storage_backend",
     "storage_bucket_name",
     "cognee_tracing_enabled",
@@ -248,6 +237,18 @@
     "llm.fallback_provider",
     "llm.fallback_endpoint",
     "llm.fallback_api_key",
+    "embedding.provider",
+    "embedding.model",
+    "embedding.dimensions",
+    "embedding.endpoint",
+    "embedding.api_key",
+    "embedding.batch_size",
+    "embedding.max_sequence_length",
+    "embedding.max_completion_tokens",
+    "embedding.rate_limit_enabled",
+    "embedding.rate_limit_requests",
+    "embedding.rate_limit_interval",
+    "embedding.mock",
     "graph.ladybug.max_db_size",
     "llm.anthropic.base_url",
     "llm.openai_compatible.vision_model",
@@ -263,7 +264,12 @@
     "aws.sts_endpoint",
     "aws.external_id",
     "aws.bedrock_runtime_endpoint",
-    "aws.bearer_token"
+    "aws.bearer_token",
+    "embedding.onnx.model_path",
+    "embedding.onnx.tokenizer_path",
+    "embedding.onnx.batch_size",
+    "embedding.ollama.huggingface_tokenizer",
+    "embedding.openai_compatible.api_version"
   ],
   "set anthropic_base_url <- \"\"": {
     "ok": {
@@ -2977,22 +2983,897 @@
   "set default_user_password <- {\"a\":1}": {
     "err": true
   },
+  "set embedding.api_key <- \"\"": {
+    "ok": {}
+  },
+  "set embedding.api_key <- \"1\"": {
+    "ok": {
+      "embedding.api_key": "1"
+    }
+  },
+  "set embedding.api_key <- \"s\"": {
+    "ok": {
+      "embedding.api_key": "s"
+    }
+  },
+  "set embedding.api_key <- \"true\"": {
+    "ok": {
+      "embedding.api_key": "true"
+    }
+  },
+  "set embedding.api_key <- -1": {
+    "err": true
+  },
+  "set embedding.api_key <- 0": {
+    "err": true
+  },
+  "set embedding.api_key <- 1": {
+    "err": true
+  },
+  "set embedding.api_key <- 1.5": {
+    "err": true
+  },
+  "set embedding.api_key <- 5000000000": {
+    "err": true
+  },
+  "set embedding.api_key <- 70000": {
+    "err": true
+  },
+  "set embedding.api_key <- [1]": {
+    "err": true
+  },
+  "set embedding.api_key <- false": {
+    "err": true
+  },
+  "set embedding.api_key <- null": {
+    "err": true
+  },
+  "set embedding.api_key <- true": {
+    "err": true
+  },
+  "set embedding.api_key <- {\"a\":1}": {
+    "err": true
+  },
+  "set embedding.batch_size <- \"\"": {
+    "err": true
+  },
+  "set embedding.batch_size <- \"1\"": {
+    "err": true
+  },
+  "set embedding.batch_size <- \"s\"": {
+    "err": true
+  },
+  "set embedding.batch_size <- \"true\"": {
+    "err": true
+  },
+  "set embedding.batch_size <- -1": {
+    "err": true
+  },
+  "set embedding.batch_size <- 0": {
+    "ok": {
+      "embedding.batch_size": 0
+    }
+  },
+  "set embedding.batch_size <- 1": {
+    "ok": {
+      "embedding.batch_size": 1
+    }
+  },
+  "set embedding.batch_size <- 1.5": {
+    "err": true
+  },
+  "set embedding.batch_size <- 5000000000": {
+    "err": true
+  },
+  "set embedding.batch_size <- 70000": {
+    "ok": {
+      "embedding.batch_size": 70000
+    }
+  },
+  "set embedding.batch_size <- [1]": {
+    "err": true
+  },
+  "set embedding.batch_size <- false": {
+    "err": true
+  },
+  "set embedding.batch_size <- null": {
+    "err": true
+  },
+  "set embedding.batch_size <- true": {
+    "err": true
+  },
+  "set embedding.batch_size <- {\"a\":1}": {
+    "err": true
+  },
+  "set embedding.dimensions <- \"\"": {
+    "err": true
+  },
+  "set embedding.dimensions <- \"1\"": {
+    "err": true
+  },
+  "set embedding.dimensions <- \"s\"": {
+    "err": true
+  },
+  "set embedding.dimensions <- \"true\"": {
+    "err": true
+  },
+  "set embedding.dimensions <- -1": {
+    "err": true
+  },
+  "set embedding.dimensions <- 0": {
+    "ok": {
+      "embedding.dimensions": 0
+    }
+  },
+  "set embedding.dimensions <- 1": {
+    "ok": {
+      "embedding.dimensions": 1
+    }
+  },
+  "set embedding.dimensions <- 1.5": {
+    "err": true
+  },
+  "set embedding.dimensions <- 5000000000": {
+    "err": true
+  },
+  "set embedding.dimensions <- 70000": {
+    "ok": {
+      "embedding.dimensions": 70000
+    }
+  },
+  "set embedding.dimensions <- [1]": {
+    "err": true
+  },
+  "set embedding.dimensions <- false": {
+    "err": true
+  },
+  "set embedding.dimensions <- null": {
+    "err": true
+  },
+  "set embedding.dimensions <- true": {
+    "err": true
+  },
+  "set embedding.dimensions <- {\"a\":1}": {
+    "err": true
+  },
+  "set embedding.endpoint <- \"\"": {
+    "ok": {}
+  },
+  "set embedding.endpoint <- \"1\"": {
+    "ok": {
+      "embedding.endpoint": "1"
+    }
+  },
+  "set embedding.endpoint <- \"s\"": {
+    "ok": {
+      "embedding.endpoint": "s"
+    }
+  },
+  "set embedding.endpoint <- \"true\"": {
+    "ok": {
+      "embedding.endpoint": "true"
+    }
+  },
+  "set embedding.endpoint <- -1": {
+    "err": true
+  },
+  "set embedding.endpoint <- 0": {
+    "err": true
+  },
+  "set embedding.endpoint <- 1": {
+    "err": true
+  },
+  "set embedding.endpoint <- 1.5": {
+    "err": true
+  },
+  "set embedding.endpoint <- 5000000000": {
+    "err": true
+  },
+  "set embedding.endpoint <- 70000": {
+    "err": true
+  },
+  "set embedding.endpoint <- [1]": {
+    "err": true
+  },
+  "set embedding.endpoint <- false": {
+    "err": true
+  },
+  "set embedding.endpoint <- null": {
+    "err": true
+  },
+  "set embedding.endpoint <- true": {
+    "err": true
+  },
+  "set embedding.endpoint <- {\"a\":1}": {
+    "err": true
+  },
+  "set embedding.max_completion_tokens <- \"\"": {
+    "err": true
+  },
+  "set embedding.max_completion_tokens <- \"1\"": {
+    "err": true
+  },
+  "set embedding.max_completion_tokens <- \"s\"": {
+    "err": true
+  },
+  "set embedding.max_completion_tokens <- \"true\"": {
+    "err": true
+  },
+  "set embedding.max_completion_tokens <- -1": {
+    "err": true
+  },
+  "set embedding.max_completion_tokens <- 0": {
+    "ok": {
+      "embedding.max_completion_tokens": 0
+    }
+  },
+  "set embedding.max_completion_tokens <- 1": {
+    "ok": {
+      "embedding.max_completion_tokens": 1
+    }
+  },
+  "set embedding.max_completion_tokens <- 1.5": {
+    "err": true
+  },
+  "set embedding.max_completion_tokens <- 5000000000": {
+    "err": true
+  },
+  "set embedding.max_completion_tokens <- 70000": {
+    "ok": {
+      "embedding.max_completion_tokens": 70000
+    }
+  },
+  "set embedding.max_completion_tokens <- [1]": {
+    "err": true
+  },
+  "set embedding.max_completion_tokens <- false": {
+    "err": true
+  },
+  "set embedding.max_completion_tokens <- null": {
+    "err": true
+  },
+  "set embedding.max_completion_tokens <- true": {
+    "err": true
+  },
+  "set embedding.max_completion_tokens <- {\"a\":1}": {
+    "err": true
+  },
+  "set embedding.max_sequence_length <- \"\"": {
+    "err": true
+  },
+  "set embedding.max_sequence_length <- \"1\"": {
+    "err": true
+  },
+  "set embedding.max_sequence_length <- \"s\"": {
+    "err": true
+  },
+  "set embedding.max_sequence_length <- \"true\"": {
+    "err": true
+  },
+  "set embedding.max_sequence_length <- -1": {
+    "err": true
+  },
+  "set embedding.max_sequence_length <- 0": {
+    "ok": {
+      "embedding.max_sequence_length": 0
+    }
+  },
+  "set embedding.max_sequence_length <- 1": {
+    "ok": {
+      "embedding.max_sequence_length": 1
+    }
+  },
+  "set embedding.max_sequence_length <- 1.5": {
+    "err": true
+  },
+  "set embedding.max_sequence_length <- 5000000000": {
+    "err": true
+  },
+  "set embedding.max_sequence_length <- 70000": {
+    "ok": {
+      "embedding.max_sequence_length": 70000
+    }
+  },
+  "set embedding.max_sequence_length <- [1]": {
+    "err": true
+  },
+  "set embedding.max_sequence_length <- false": {
+    "err": true
+  },
+  "set embedding.max_sequence_length <- null": {
+    "err": true
+  },
+  "set embedding.max_sequence_length <- true": {
+    "err": true
+  },
+  "set embedding.max_sequence_length <- {\"a\":1}": {
+    "err": true
+  },
+  "set embedding.mock <- \"\"": {
+    "ok": {}
+  },
+  "set embedding.mock <- \"1\"": {
+    "ok": {
+      "embedding.mock": "1"
+    }
+  },
+  "set embedding.mock <- \"s\"": {
+    "ok": {
+      "embedding.mock": "s"
+    }
+  },
+  "set embedding.mock <- \"true\"": {
+    "ok": {
+      "embedding.mock": "true"
+    }
+  },
+  "set embedding.mock <- -1": {
+    "err": true
+  },
+  "set embedding.mock <- 0": {
+    "err": true
+  },
+  "set embedding.mock <- 1": {
+    "err": true
+  },
+  "set embedding.mock <- 1.5": {
+    "err": true
+  },
+  "set embedding.mock <- 5000000000": {
+    "err": true
+  },
+  "set embedding.mock <- 70000": {
+    "err": true
+  },
+  "set embedding.mock <- [1]": {
+    "err": true
+  },
+  "set embedding.mock <- false": {
+    "err": true
+  },
+  "set embedding.mock <- null": {
+    "err": true
+  },
+  "set embedding.mock <- true": {
+    "err": true
+  },
+  "set embedding.mock <- {\"a\":1}": {
+    "err": true
+  },
+  "set embedding.model <- \"\"": {
+    "ok": {
+      "embedding.model": ""
+    }
+  },
+  "set embedding.model <- \"1\"": {
+    "ok": {
+      "embedding.model": "1"
+    }
+  },
+  "set embedding.model <- \"s\"": {
+    "ok": {
+      "embedding.model": "s"
+    }
+  },
+  "set embedding.model <- \"true\"": {
+    "ok": {
+      "embedding.model": "true"
+    }
+  },
+  "set embedding.model <- -1": {
+    "err": true
+  },
+  "set embedding.model <- 0": {
+    "err": true
+  },
+  "set embedding.model <- 1": {
+    "err": true
+  },
+  "set embedding.model <- 1.5": {
+    "err": true
+  },
+  "set embedding.model <- 5000000000": {
+    "err": true
+  },
+  "set embedding.model <- 70000": {
+    "err": true
+  },
+  "set embedding.model <- [1]": {
+    "err": true
+  },
+  "set embedding.model <- false": {
+    "err": true
+  },
+  "set embedding.model <- null": {
+    "err": true
+  },
+  "set embedding.model <- true": {
+    "err": true
+  },
+  "set embedding.model <- {\"a\":1}": {
+    "err": true
+  },
+  "set embedding.ollama.huggingface_tokenizer <- \"\"": {
+    "ok": {
+      "embedding.ollama.huggingface_tokenizer": ""
+    }
+  },
+  "set embedding.ollama.huggingface_tokenizer <- \"1\"": {
+    "ok": {
+      "embedding.ollama.huggingface_tokenizer": "1"
+    }
+  },
+  "set embedding.ollama.huggingface_tokenizer <- \"s\"": {
+    "ok": {
+      "embedding.ollama.huggingface_tokenizer": "s"
+    }
+  },
+  "set embedding.ollama.huggingface_tokenizer <- \"true\"": {
+    "ok": {
+      "embedding.ollama.huggingface_tokenizer": "true"
+    }
+  },
+  "set embedding.ollama.huggingface_tokenizer <- -1": {
+    "err": true
+  },
+  "set embedding.ollama.huggingface_tokenizer <- 0": {
+    "err": true
+  },
+  "set embedding.ollama.huggingface_tokenizer <- 1": {
+    "err": true
+  },
+  "set embedding.ollama.huggingface_tokenizer <- 1.5": {
+    "err": true
+  },
+  "set embedding.ollama.huggingface_tokenizer <- 5000000000": {
+    "err": true
+  },
+  "set embedding.ollama.huggingface_tokenizer <- 70000": {
+    "err": true
+  },
+  "set embedding.ollama.huggingface_tokenizer <- [1]": {
+    "err": true
+  },
+  "set embedding.ollama.huggingface_tokenizer <- false": {
+    "err": true
+  },
+  "set embedding.ollama.huggingface_tokenizer <- null": {
+    "ok": {}
+  },
+  "set embedding.ollama.huggingface_tokenizer <- true": {
+    "err": true
+  },
+  "set embedding.ollama.huggingface_tokenizer <- {\"a\":1}": {
+    "err": true
+  },
+  "set embedding.onnx.batch_size <- \"\"": {
+    "err": true
+  },
+  "set embedding.onnx.batch_size <- \"1\"": {
+    "err": true
+  },
+  "set embedding.onnx.batch_size <- \"s\"": {
+    "err": true
+  },
+  "set embedding.onnx.batch_size <- \"true\"": {
+    "err": true
+  },
+  "set embedding.onnx.batch_size <- -1": {
+    "err": true
+  },
+  "set embedding.onnx.batch_size <- 0": {
+    "ok": {
+      "embedding.onnx.batch_size": 0
+    }
+  },
+  "set embedding.onnx.batch_size <- 1": {
+    "ok": {
+      "embedding.onnx.batch_size": 1
+    }
+  },
+  "set embedding.onnx.batch_size <- 1.5": {
+    "err": true
+  },
+  "set embedding.onnx.batch_size <- 5000000000": {
+    "err": true
+  },
+  "set embedding.onnx.batch_size <- 70000": {
+    "ok": {
+      "embedding.onnx.batch_size": 70000
+    }
+  },
+  "set embedding.onnx.batch_size <- [1]": {
+    "err": true
+  },
+  "set embedding.onnx.batch_size <- false": {
+    "err": true
+  },
+  "set embedding.onnx.batch_size <- null": {
+    "err": true
+  },
+  "set embedding.onnx.batch_size <- true": {
+    "err": true
+  },
+  "set embedding.onnx.batch_size <- {\"a\":1}": {
+    "err": true
+  },
+  "set embedding.onnx.model_path <- \"\"": {
+    "ok": {
+      "embedding.onnx.model_path": ""
+    }
+  },
+  "set embedding.onnx.model_path <- \"1\"": {
+    "ok": {
+      "embedding.onnx.model_path": "1"
+    }
+  },
+  "set embedding.onnx.model_path <- \"s\"": {
+    "ok": {
+      "embedding.onnx.model_path": "s"
+    }
+  },
+  "set embedding.onnx.model_path <- \"true\"": {
+    "ok": {
+      "embedding.onnx.model_path": "true"
+    }
+  },
+  "set embedding.onnx.model_path <- -1": {
+    "err": true
+  },
+  "set embedding.onnx.model_path <- 0": {
+    "err": true
+  },
+  "set embedding.onnx.model_path <- 1": {
+    "err": true
+  },
+  "set embedding.onnx.model_path <- 1.5": {
+    "err": true
+  },
+  "set embedding.onnx.model_path <- 5000000000": {
+    "err": true
+  },
+  "set embedding.onnx.model_path <- 70000": {
+    "err": true
+  },
+  "set embedding.onnx.model_path <- [1]": {
+    "err": true
+  },
+  "set embedding.onnx.model_path <- false": {
+    "err": true
+  },
+  "set embedding.onnx.model_path <- null": {
+    "err": true
+  },
+  "set embedding.onnx.model_path <- true": {
+    "err": true
+  },
+  "set embedding.onnx.model_path <- {\"a\":1}": {
+    "err": true
+  },
+  "set embedding.onnx.tokenizer_path <- \"\"": {
+    "ok": {
+      "embedding.onnx.tokenizer_path": ""
+    }
+  },
+  "set embedding.onnx.tokenizer_path <- \"1\"": {
+    "ok": {
+      "embedding.onnx.tokenizer_path": "1"
+    }
+  },
+  "set embedding.onnx.tokenizer_path <- \"s\"": {
+    "ok": {
+      "embedding.onnx.tokenizer_path": "s"
+    }
+  },
+  "set embedding.onnx.tokenizer_path <- \"true\"": {
+    "ok": {
+      "embedding.onnx.tokenizer_path": "true"
+    }
+  },
+  "set embedding.onnx.tokenizer_path <- -1": {
+    "err": true
+  },
+  "set embedding.onnx.tokenizer_path <- 0": {
+    "err": true
+  },
+  "set embedding.onnx.tokenizer_path <- 1": {
+    "err": true
+  },
+  "set embedding.onnx.tokenizer_path <- 1.5": {
+    "err": true
+  },
+  "set embedding.onnx.tokenizer_path <- 5000000000": {
+    "err": true
+  },
+  "set embedding.onnx.tokenizer_path <- 70000": {
+    "err": true
+  },
+  "set embedding.onnx.tokenizer_path <- [1]": {
+    "err": true
+  },
+  "set embedding.onnx.tokenizer_path <- false": {
+    "err": true
+  },
+  "set embedding.onnx.tokenizer_path <- null": {
+    "err": true
+  },
+  "set embedding.onnx.tokenizer_path <- true": {
+    "err": true
+  },
+  "set embedding.onnx.tokenizer_path <- {\"a\":1}": {
+    "err": true
+  },
+  "set embedding.openai_compatible.api_version <- \"\"": {
+    "ok": {
+      "embedding.openai_compatible.api_version": ""
+    }
+  },
+  "set embedding.openai_compatible.api_version <- \"1\"": {
+    "ok": {
+      "embedding.openai_compatible.api_version": "1"
+    }
+  },
+  "set embedding.openai_compatible.api_version <- \"s\"": {
+    "ok": {
+      "embedding.openai_compatible.api_version": "s"
+    }
+  },
+  "set embedding.openai_compatible.api_version <- \"true\"": {
+    "ok": {
+      "embedding.openai_compatible.api_version": "true"
+    }
+  },
+  "set embedding.openai_compatible.api_version <- -1": {
+    "err": true
+  },
+  "set embedding.openai_compatible.api_version <- 0": {
+    "err": true
+  },
+  "set embedding.openai_compatible.api_version <- 1": {
+    "err": true
+  },
+  "set embedding.openai_compatible.api_version <- 1.5": {
+    "err": true
+  },
+  "set embedding.openai_compatible.api_version <- 5000000000": {
+    "err": true
+  },
+  "set embedding.openai_compatible.api_version <- 70000": {
+    "err": true
+  },
+  "set embedding.openai_compatible.api_version <- [1]": {
+    "err": true
+  },
+  "set embedding.openai_compatible.api_version <- false": {
+    "err": true
+  },
+  "set embedding.openai_compatible.api_version <- null": {
+    "ok": {}
+  },
+  "set embedding.openai_compatible.api_version <- true": {
+    "err": true
+  },
+  "set embedding.openai_compatible.api_version <- {\"a\":1}": {
+    "err": true
+  },
+  "set embedding.provider <- \"\"": {
+    "ok": {
+      "embedding.provider": ""
+    }
+  },
+  "set embedding.provider <- \"1\"": {
+    "ok": {
+      "embedding.provider": "1"
+    }
+  },
+  "set embedding.provider <- \"s\"": {
+    "ok": {
+      "embedding.provider": "s"
+    }
+  },
+  "set embedding.provider <- \"true\"": {
+    "ok": {
+      "embedding.provider": "true"
+    }
+  },
+  "set embedding.provider <- -1": {
+    "err": true
+  },
+  "set embedding.provider <- 0": {
+    "err": true
+  },
+  "set embedding.provider <- 1": {
+    "err": true
+  },
+  "set embedding.provider <- 1.5": {
+    "err": true
+  },
+  "set embedding.provider <- 5000000000": {
+    "err": true
+  },
+  "set embedding.provider <- 70000": {
+    "err": true
+  },
+  "set embedding.provider <- [1]": {
+    "err": true
+  },
+  "set embedding.provider <- false": {
+    "err": true
+  },
+  "set embedding.provider <- null": {
+    "err": true
+  },
+  "set embedding.provider <- true": {
+    "err": true
+  },
+  "set embedding.provider <- {\"a\":1}": {
+    "err": true
+  },
+  "set embedding.rate_limit_enabled <- \"\"": {
+    "err": true
+  },
+  "set embedding.rate_limit_enabled <- \"1\"": {
+    "err": true
+  },
+  "set embedding.rate_limit_enabled <- \"s\"": {
+    "err": true
+  },
+  "set embedding.rate_limit_enabled <- \"true\"": {
+    "err": true
+  },
+  "set embedding.rate_limit_enabled <- -1": {
+    "err": true
+  },
+  "set embedding.rate_limit_enabled <- 0": {
+    "err": true
+  },
+  "set embedding.rate_limit_enabled <- 1": {
+    "err": true
+  },
+  "set embedding.rate_limit_enabled <- 1.5": {
+    "err": true
+  },
+  "set embedding.rate_limit_enabled <- 5000000000": {
+    "err": true
+  },
+  "set embedding.rate_limit_enabled <- 70000": {
+    "err": true
+  },
+  "set embedding.rate_limit_enabled <- [1]": {
+    "err": true
+  },
+  "set embedding.rate_limit_enabled <- false": {
+    "ok": {}
+  },
+  "set embedding.rate_limit_enabled <- null": {
+    "err": true
+  },
+  "set embedding.rate_limit_enabled <- true": {
+    "ok": {
+      "embedding.rate_limit_enabled": true
+    }
+  },
+  "set embedding.rate_limit_enabled <- {\"a\":1}": {
+    "err": true
+  },
+  "set embedding.rate_limit_interval <- \"\"": {
+    "err": true
+  },
+  "set embedding.rate_limit_interval <- \"1\"": {
+    "err": true
+  },
+  "set embedding.rate_limit_interval <- \"s\"": {
+    "err": true
+  },
+  "set embedding.rate_limit_interval <- \"true\"": {
+    "err": true
+  },
+  "set embedding.rate_limit_interval <- -1": {
+    "err": true
+  },
+  "set embedding.rate_limit_interval <- 0": {
+    "ok": {
+      "embedding.rate_limit_interval": 0
+    }
+  },
+  "set embedding.rate_limit_interval <- 1": {
+    "ok": {
+      "embedding.rate_limit_interval": 1
+    }
+  },
+  "set embedding.rate_limit_interval <- 1.5": {
+    "err": true
+  },
+  "set embedding.rate_limit_interval <- 5000000000": {
+    "err": true
+  },
+  "set embedding.rate_limit_interval <- 70000": {
+    "ok": {
+      "embedding.rate_limit_interval": 70000
+    }
+  },
+  "set embedding.rate_limit_interval <- [1]": {
+    "err": true
+  },
+  "set embedding.rate_limit_interval <- false": {
+    "err": true
+  },
+  "set embedding.rate_limit_interval <- null": {
+    "err": true
+  },
+  "set embedding.rate_limit_interval <- true": {
+    "err": true
+  },
+  "set embedding.rate_limit_interval <- {\"a\":1}": {
+    "err": true
+  },
+  "set embedding.rate_limit_requests <- \"\"": {
+    "err": true
+  },
+  "set embedding.rate_limit_requests <- \"1\"": {
+    "err": true
+  },
+  "set embedding.rate_limit_requests <- \"s\"": {
+    "err": true
+  },
+  "set embedding.rate_limit_requests <- \"true\"": {
+    "err": true
+  },
+  "set embedding.rate_limit_requests <- -1": {
+    "err": true
+  },
+  "set embedding.rate_limit_requests <- 0": {
+    "ok": {
+      "embedding.rate_limit_requests": 0
+    }
+  },
+  "set embedding.rate_limit_requests <- 1": {
+    "ok": {
+      "embedding.rate_limit_requests": 1
+    }
+  },
+  "set embedding.rate_limit_requests <- 1.5": {
+    "err": true
+  },
+  "set embedding.rate_limit_requests <- 5000000000": {
+    "err": true
+  },
+  "set embedding.rate_limit_requests <- 70000": {
+    "ok": {
+      "embedding.rate_limit_requests": 70000
+    }
+  },
+  "set embedding.rate_limit_requests <- [1]": {
+    "err": true
+  },
+  "set embedding.rate_limit_requests <- false": {
+    "err": true
+  },
+  "set embedding.rate_limit_requests <- null": {
+    "err": true
+  },
+  "set embedding.rate_limit_requests <- true": {
+    "err": true
+  },
+  "set embedding.rate_limit_requests <- {\"a\":1}": {
+    "err": true
+  },
   "set embedding_api_key <- \"\"": {
     "ok": {}
   },
   "set embedding_api_key <- \"1\"": {
     "ok": {
-      "embedding_api_key": "1"
+      "embedding.api_key": "1"
     }
   },
   "set embedding_api_key <- \"s\"": {
     "ok": {
-      "embedding_api_key": "s"
+      "embedding.api_key": "s"
     }
   },
   "set embedding_api_key <- \"true\"": {
     "ok": {
-      "embedding_api_key": "true"
+      "embedding.api_key": "true"
     }
   },
   "set embedding_api_key <- -1": {
@@ -3029,21 +3910,23 @@
     "err": true
   },
   "set embedding_api_version <- \"\"": {
-    "ok": {}
+    "ok": {
+      "embedding.openai_compatible.api_version": ""
+    }
   },
   "set embedding_api_version <- \"1\"": {
     "ok": {
-      "embedding_api_version": "1"
+      "embedding.openai_compatible.api_version": "1"
     }
   },
   "set embedding_api_version <- \"s\"": {
     "ok": {
-      "embedding_api_version": "s"
+      "embedding.openai_compatible.api_version": "s"
     }
   },
   "set embedding_api_version <- \"true\"": {
     "ok": {
-      "embedding_api_version": "true"
+      "embedding.openai_compatible.api_version": "true"
     }
   },
   "set embedding_api_version <- -1": {
@@ -3071,7 +3954,7 @@
     "err": true
   },
   "set embedding_api_version <- null": {
-    "err": true
+    "ok": {}
   },
   "set embedding_api_version <- true": {
     "err": true
@@ -3096,12 +3979,12 @@
   },
   "set embedding_batch_size <- 0": {
     "ok": {
-      "embedding_batch_size": 0
+      "embedding.batch_size": 0
     }
   },
   "set embedding_batch_size <- 1": {
     "ok": {
-      "embedding_batch_size": 1
+      "embedding.batch_size": 1
     }
   },
   "set embedding_batch_size <- 1.5": {
@@ -3112,7 +3995,7 @@
   },
   "set embedding_batch_size <- 70000": {
     "ok": {
-      "embedding_batch_size": 70000
+      "embedding.batch_size": 70000
     }
   },
   "set embedding_batch_size <- [1]": {
@@ -3147,12 +4030,12 @@
   },
   "set embedding_dimensions <- 0": {
     "ok": {
-      "embedding_dimensions": 0
+      "embedding.dimensions": 0
     }
   },
   "set embedding_dimensions <- 1": {
     "ok": {
-      "embedding_dimensions": 1
+      "embedding.dimensions": 1
     }
   },
   "set embedding_dimensions <- 1.5": {
@@ -3163,7 +4046,7 @@
   },
   "set embedding_dimensions <- 70000": {
     "ok": {
-      "embedding_dimensions": 70000
+      "embedding.dimensions": 70000
     }
   },
   "set embedding_dimensions <- [1]": {
@@ -3186,17 +4069,17 @@
   },
   "set embedding_endpoint <- \"1\"": {
     "ok": {
-      "embedding_endpoint": "1"
+      "embedding.endpoint": "1"
     }
   },
   "set embedding_endpoint <- \"s\"": {
     "ok": {
-      "embedding_endpoint": "s"
+      "embedding.endpoint": "s"
     }
   },
   "set embedding_endpoint <- \"true\"": {
     "ok": {
-      "embedding_endpoint": "true"
+      "embedding.endpoint": "true"
     }
   },
   "set embedding_endpoint <- -1": {
@@ -3232,6 +4115,57 @@
   "set embedding_endpoint <- {\"a\":1}": {
     "err": true
   },
+  "set embedding_max_completion_tokens <- \"\"": {
+    "err": true
+  },
+  "set embedding_max_completion_tokens <- \"1\"": {
+    "err": true
+  },
+  "set embedding_max_completion_tokens <- \"s\"": {
+    "err": true
+  },
+  "set embedding_max_completion_tokens <- \"true\"": {
+    "err": true
+  },
+  "set embedding_max_completion_tokens <- -1": {
+    "err": true
+  },
+  "set embedding_max_completion_tokens <- 0": {
+    "ok": {
+      "embedding.max_completion_tokens": 0
+    }
+  },
+  "set embedding_max_completion_tokens <- 1": {
+    "ok": {
+      "embedding.max_completion_tokens": 1
+    }
+  },
+  "set embedding_max_completion_tokens <- 1.5": {
+    "err": true
+  },
+  "set embedding_max_completion_tokens <- 5000000000": {
+    "err": true
+  },
+  "set embedding_max_completion_tokens <- 70000": {
+    "ok": {
+      "embedding.max_completion_tokens": 70000
+    }
+  },
+  "set embedding_max_completion_tokens <- [1]": {
+    "err": true
+  },
+  "set embedding_max_completion_tokens <- false": {
+    "err": true
+  },
+  "set embedding_max_completion_tokens <- null": {
+    "err": true
+  },
+  "set embedding_max_completion_tokens <- true": {
+    "err": true
+  },
+  "set embedding_max_completion_tokens <- {\"a\":1}": {
+    "err": true
+  },
   "set embedding_max_sequence_length <- \"\"": {
     "err": true
   },
@@ -3249,12 +4183,12 @@
   },
   "set embedding_max_sequence_length <- 0": {
     "ok": {
-      "embedding_max_sequence_length": 0
+      "embedding.max_sequence_length": 0
     }
   },
   "set embedding_max_sequence_length <- 1": {
     "ok": {
-      "embedding_max_sequence_length": 1
+      "embedding.max_sequence_length": 1
     }
   },
   "set embedding_max_sequence_length <- 1.5": {
@@ -3265,7 +4199,7 @@
   },
   "set embedding_max_sequence_length <- 70000": {
     "ok": {
-      "embedding_max_sequence_length": 70000
+      "embedding.max_sequence_length": 70000
     }
   },
   "set embedding_max_sequence_length <- [1]": {
@@ -3285,22 +4219,22 @@
   },
   "set embedding_model <- \"\"": {
     "ok": {
-      "embedding_model_name": ""
+      "embedding.model": ""
     }
   },
   "set embedding_model <- \"1\"": {
     "ok": {
-      "embedding_model_name": "1"
+      "embedding.model": "1"
     }
   },
   "set embedding_model <- \"s\"": {
     "ok": {
-      "embedding_model_name": "s"
+      "embedding.model": "s"
     }
   },
   "set embedding_model <- \"true\"": {
     "ok": {
-      "embedding_model_name": "true"
+      "embedding.model": "true"
     }
   },
   "set embedding_model <- -1": {
@@ -3338,22 +4272,22 @@
   },
   "set embedding_model_name <- \"\"": {
     "ok": {
-      "embedding_model_name": ""
+      "embedding.model": ""
     }
   },
   "set embedding_model_name <- \"1\"": {
     "ok": {
-      "embedding_model_name": "1"
+      "embedding.model": "1"
     }
   },
   "set embedding_model_name <- \"s\"": {
     "ok": {
-      "embedding_model_name": "s"
+      "embedding.model": "s"
     }
   },
   "set embedding_model_name <- \"true\"": {
     "ok": {
-      "embedding_model_name": "true"
+      "embedding.model": "true"
     }
   },
   "set embedding_model_name <- -1": {
@@ -3391,22 +4325,22 @@
   },
   "set embedding_model_path <- \"\"": {
     "ok": {
-      "embedding_model_path": ""
+      "embedding.onnx.model_path": ""
     }
   },
   "set embedding_model_path <- \"1\"": {
     "ok": {
-      "embedding_model_path": "1"
+      "embedding.onnx.model_path": "1"
     }
   },
   "set embedding_model_path <- \"s\"": {
     "ok": {
-      "embedding_model_path": "s"
+      "embedding.onnx.model_path": "s"
     }
   },
   "set embedding_model_path <- \"true\"": {
     "ok": {
-      "embedding_model_path": "true"
+      "embedding.onnx.model_path": "true"
     }
   },
   "set embedding_model_path <- -1": {
@@ -3459,12 +4393,12 @@
   },
   "set embedding_onnx_batch_size <- 0": {
     "ok": {
-      "embedding_onnx_batch_size": 0
+      "embedding.onnx.batch_size": 0
     }
   },
   "set embedding_onnx_batch_size <- 1": {
     "ok": {
-      "embedding_onnx_batch_size": 1
+      "embedding.onnx.batch_size": 1
     }
   },
   "set embedding_onnx_batch_size <- 1.5": {
@@ -3475,7 +4409,7 @@
   },
   "set embedding_onnx_batch_size <- 70000": {
     "ok": {
-      "embedding_onnx_batch_size": 70000
+      "embedding.onnx.batch_size": 70000
     }
   },
   "set embedding_onnx_batch_size <- [1]": {
@@ -3495,22 +4429,22 @@
   },
   "set embedding_provider <- \"\"": {
     "ok": {
-      "embedding_provider": ""
+      "embedding.provider": ""
     }
   },
   "set embedding_provider <- \"1\"": {
     "ok": {
-      "embedding_provider": "1"
+      "embedding.provider": "1"
     }
   },
   "set embedding_provider <- \"s\"": {
     "ok": {
-      "embedding_provider": "s"
+      "embedding.provider": "s"
     }
   },
   "set embedding_provider <- \"true\"": {
     "ok": {
-      "embedding_provider": "true"
+      "embedding.provider": "true"
     }
   },
   "set embedding_provider <- -1": {
@@ -3587,7 +4521,7 @@
   },
   "set embedding_rate_limit_enabled <- true": {
     "ok": {
-      "embedding_rate_limit_enabled": true
+      "embedding.rate_limit_enabled": true
     }
   },
   "set embedding_rate_limit_enabled <- {\"a\":1}": {
@@ -3610,12 +4544,12 @@
   },
   "set embedding_rate_limit_interval <- 0": {
     "ok": {
-      "embedding_rate_limit_interval": 0
+      "embedding.rate_limit_interval": 0
     }
   },
   "set embedding_rate_limit_interval <- 1": {
     "ok": {
-      "embedding_rate_limit_interval": 1
+      "embedding.rate_limit_interval": 1
     }
   },
   "set embedding_rate_limit_interval <- 1.5": {
@@ -3626,7 +4560,7 @@
   },
   "set embedding_rate_limit_interval <- 70000": {
     "ok": {
-      "embedding_rate_limit_interval": 70000
+      "embedding.rate_limit_interval": 70000
     }
   },
   "set embedding_rate_limit_interval <- [1]": {
@@ -3661,12 +4595,12 @@
   },
   "set embedding_rate_limit_requests <- 0": {
     "ok": {
-      "embedding_rate_limit_requests": 0
+      "embedding.rate_limit_requests": 0
     }
   },
   "set embedding_rate_limit_requests <- 1": {
     "ok": {
-      "embedding_rate_limit_requests": 1
+      "embedding.rate_limit_requests": 1
     }
   },
   "set embedding_rate_limit_requests <- 1.5": {
@@ -3677,7 +4611,7 @@
   },
   "set embedding_rate_limit_requests <- 70000": {
     "ok": {
-      "embedding_rate_limit_requests": 70000
+      "embedding.rate_limit_requests": 70000
     }
   },
   "set embedding_rate_limit_requests <- [1]": {
@@ -3697,22 +4631,22 @@
   },
   "set embedding_tokenizer_path <- \"\"": {
     "ok": {
-      "embedding_tokenizer_path": ""
+      "embedding.onnx.tokenizer_path": ""
     }
   },
   "set embedding_tokenizer_path <- \"1\"": {
     "ok": {
-      "embedding_tokenizer_path": "1"
+      "embedding.onnx.tokenizer_path": "1"
     }
   },
   "set embedding_tokenizer_path <- \"s\"": {
     "ok": {
-      "embedding_tokenizer_path": "s"
+      "embedding.onnx.tokenizer_path": "s"
     }
   },
   "set embedding_tokenizer_path <- \"true\"": {
     "ok": {
-      "embedding_tokenizer_path": "true"
+      "embedding.onnx.tokenizer_path": "true"
     }
   },
   "set embedding_tokenizer_path <- -1": {
@@ -4609,6 +5543,59 @@
     "err": true
   },
   "set graph_prompt_path <- {\"a\":1}": {
+    "err": true
+  },
+  "set huggingface_tokenizer <- \"\"": {
+    "ok": {
+      "embedding.ollama.huggingface_tokenizer": ""
+    }
+  },
+  "set huggingface_tokenizer <- \"1\"": {
+    "ok": {
+      "embedding.ollama.huggingface_tokenizer": "1"
+    }
+  },
+  "set huggingface_tokenizer <- \"s\"": {
+    "ok": {
+      "embedding.ollama.huggingface_tokenizer": "s"
+    }
+  },
+  "set huggingface_tokenizer <- \"true\"": {
+    "ok": {
+      "embedding.ollama.huggingface_tokenizer": "true"
+    }
+  },
+  "set huggingface_tokenizer <- -1": {
+    "err": true
+  },
+  "set huggingface_tokenizer <- 0": {
+    "err": true
+  },
+  "set huggingface_tokenizer <- 1": {
+    "err": true
+  },
+  "set huggingface_tokenizer <- 1.5": {
+    "err": true
+  },
+  "set huggingface_tokenizer <- 5000000000": {
+    "err": true
+  },
+  "set huggingface_tokenizer <- 70000": {
+    "err": true
+  },
+  "set huggingface_tokenizer <- [1]": {
+    "err": true
+  },
+  "set huggingface_tokenizer <- false": {
+    "err": true
+  },
+  "set huggingface_tokenizer <- null": {
+    "ok": {}
+  },
+  "set huggingface_tokenizer <- true": {
+    "err": true
+  },
+  "set huggingface_tokenizer <- {\"a\":1}": {
     "err": true
   },
   "set llm.anthropic.base_url <- \"\"": {
@@ -7879,6 +8866,57 @@
   "set migration_db_url <- {\"a\":1}": {
     "err": true
   },
+  "set mock_embedding <- \"\"": {
+    "ok": {}
+  },
+  "set mock_embedding <- \"1\"": {
+    "ok": {
+      "embedding.mock": "1"
+    }
+  },
+  "set mock_embedding <- \"s\"": {
+    "ok": {
+      "embedding.mock": "s"
+    }
+  },
+  "set mock_embedding <- \"true\"": {
+    "ok": {
+      "embedding.mock": "true"
+    }
+  },
+  "set mock_embedding <- -1": {
+    "err": true
+  },
+  "set mock_embedding <- 0": {
+    "err": true
+  },
+  "set mock_embedding <- 1": {
+    "err": true
+  },
+  "set mock_embedding <- 1.5": {
+    "err": true
+  },
+  "set mock_embedding <- 5000000000": {
+    "err": true
+  },
+  "set mock_embedding <- 70000": {
+    "err": true
+  },
+  "set mock_embedding <- [1]": {
+    "err": true
+  },
+  "set mock_embedding <- false": {
+    "err": true
+  },
+  "set mock_embedding <- null": {
+    "err": true
+  },
+  "set mock_embedding <- true": {
+    "err": true
+  },
+  "set mock_embedding <- {\"a\":1}": {
+    "err": true
+  },
   "set monitoring_tool <- \"\"": {
     "ok": {
       "monitoring_tool": ""
@@ -9793,6 +10831,125 @@
       "llm.model": "changed"
     }
   },
+  "unset embedding.api_key": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset embedding.batch_size": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset embedding.dimensions": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset embedding.endpoint": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset embedding.max_completion_tokens": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset embedding.max_sequence_length": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset embedding.mock": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset embedding.model": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset embedding.ollama.huggingface_tokenizer": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset embedding.onnx.batch_size": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset embedding.onnx.model_path": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset embedding.onnx.tokenizer_path": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset embedding.openai_compatible.api_version": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset embedding.provider": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset embedding.rate_limit_enabled": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset embedding.rate_limit_interval": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset embedding.rate_limit_requests": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
   "unset embedding_api_key": {
     "ok": {
       "chunk_size": 7,
@@ -9822,6 +10979,13 @@
     }
   },
   "unset embedding_endpoint": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset embedding_max_completion_tokens": {
     "ok": {
       "chunk_size": 7,
       "db_port": 1,
@@ -10011,6 +11175,13 @@
     }
   },
   "unset graph_prompt_path": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset huggingface_tokenizer": {
     "ok": {
       "chunk_size": 7,
       "db_port": 1,
@@ -10457,6 +11628,13 @@
     }
   },
   "unset migration_db_url": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset mock_embedding": {
     "ok": {
       "chunk_size": 7,
       "db_port": 1,

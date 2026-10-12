@@ -41,7 +41,10 @@ pub use context::{
 };
 pub use error::ComponentError;
 pub use registry::{ComponentRegistry, default_graph_provider};
-pub use sections::{AnthropicConfig, AwsConfig, LlmConfig, OpenAiCompatibleConfig};
+pub use sections::{
+    AnthropicConfig, AwsConfig, EmbeddingConfig, LlmConfig, OllamaEmbeddingConfig,
+    OnnxEmbeddingConfig, OpenAiCompatibleConfig, OpenAiCompatibleEmbeddingConfig,
+};
 pub use traits::{EmbeddingFactory, GraphDbFactory, LlmFactory, VectorDbFactory};
 
 // Re-export the default embedding factory so external callers can compose it.

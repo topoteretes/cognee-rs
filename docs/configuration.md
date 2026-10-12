@@ -587,25 +587,41 @@ support, falling back to a synthetic `json_tool_call` tool for the rest.
 
 ## Embedding
 
-Read by `EmbeddingConfig::from_env()` ([`crates/embedding/src/config.rs`](../crates/embedding/src/config.rs)).
+The `embedding` section is registered by the embedding kind and shared by every
+provider. Each provider's factory registers the settings only it reads (see
+[Component config sections](#component-config-sections)). The Python flat name of
+each key is accepted as an alias, shown in brackets.
 
-| Env var (aliases) | `Settings` field | Default |
+| Env var (aliases) | Key (alias) | Default |
 |---|---|---|
-| `EMBEDDING_PROVIDER` | `embedding_provider` | `openai` (`onnx` on Android) |
-| `EMBEDDING_MODEL` | `embedding_model_name` | `text-embedding-3-small` (`BGE-Small-v1.5` on Android) |
-| `EMBEDDING_DIMENSIONS` | `embedding_dimensions` | `1536` (`384` on Android) |
-| `EMBEDDING_ENDPOINT` | `embedding_endpoint` | _(empty)_ |
-| `EMBEDDING_API_KEY` (falls back to `LLM_API_KEY`) | `embedding_api_key` | _(empty)_ |
-| `EMBEDDING_API_VERSION` | `embedding_api_version` | _(empty)_ |
-| `EMBEDDING_MODEL_PATH` / `COGNEE_E2E_EMBED_MODEL_PATH` | `embedding_model_path` | `./target/models/BGE-Small-v1.5-model_quantized.onnx` |
-| `EMBEDDING_TOKENIZER_PATH` / `COGNEE_E2E_TOKENIZER_PATH` | `embedding_tokenizer_path` | `./target/models/bge-small-tokenizer.json` |
-| `EMBEDDING_MAX_SEQUENCE_LENGTH` | `embedding_max_sequence_length` | `512` |
-| `EMBEDDING_BATCH_SIZE` | `embedding_batch_size` | `36` (texts per embedding request; raise for providers that allow larger batches. The OpenAI-compatible engine also dispatches up to 8 sub-batches concurrently) |
-| `EMBEDDING_ONNX_BATCH_SIZE` | `embedding_onnx_batch_size` | `32` (ONNX inference batch size; independent of `EMBEDDING_BATCH_SIZE`. Lower it under memory pressure on edge devices) |
-| `MOCK_EMBEDDING` | _(provider override)_ | `false`. `true`/`1`/`yes`/`deterministic` select the mock engine with deterministic SHA-256-derived vectors; `zero` selects all-zero vectors (cosine KNN then returns nothing) |
+| `EMBEDDING_PROVIDER` | `embedding.provider` (`embedding_provider`) | `openai` (`onnx` on Android) |
+| `EMBEDDING_MODEL` | `embedding.model` (`embedding_model_name`, `embedding_model`) | `text-embedding-3-small` (`BGE-Small-v1.5` on Android) |
+| `EMBEDDING_DIMENSIONS` | `embedding.dimensions` (`embedding_dimensions`) | `1536` (`384` on Android) |
+| `EMBEDDING_ENDPOINT` | `embedding.endpoint` (`embedding_endpoint`) | _(empty)_ |
+| `EMBEDDING_API_KEY` (falls back to `LLM_API_KEY`) | `embedding.api_key` (`embedding_api_key`) | _(empty)_ |
+| `EMBEDDING_MAX_SEQUENCE_LENGTH` | `embedding.max_sequence_length` (`embedding_max_sequence_length`) | `512` |
+| `EMBEDDING_MAX_COMPLETION_TOKENS` | `embedding.max_completion_tokens` (`embedding_max_completion_tokens`) | `8191` (input-token limit of a remote embedding API) |
+| `EMBEDDING_BATCH_SIZE` | `embedding.batch_size` (`embedding_batch_size`) | `36` (texts per embedding request; raise for providers that allow larger batches. The OpenAI-compatible engine also dispatches up to 8 sub-batches concurrently) |
+| `EMBEDDING_RATE_LIMIT_ENABLED` / `_REQUESTS` / `_INTERVAL` | `embedding.rate_limit_*` (`embedding_rate_limit_*`) | `false` / `60` / `60` |
+| `MOCK_EMBEDDING` | `embedding.mock` (`mock_embedding`) | _(empty)_. `true`/`1`/`yes`/`deterministic` select the mock engine with deterministic SHA-256-derived vectors; `zero` selects all-zero vectors (cosine KNN then returns nothing) |
+
+Provider sections, registered by the provider's factory and present only when it
+is compiled in:
+
+| Env var (aliases) | Key (alias) | Provider | Default |
+|---|---|---|---|
+| `EMBEDDING_MODEL_PATH` / `COGNEE_E2E_EMBED_MODEL_PATH` | `embedding.onnx.model_path` (`embedding_model_path`) | `onnx` / `fastembed` (`onnx` feature) | `./target/models/BGE-Small-v1.5-model_quantized.onnx` |
+| `EMBEDDING_TOKENIZER_PATH` / `COGNEE_E2E_TOKENIZER_PATH` | `embedding.onnx.tokenizer_path` (`embedding_tokenizer_path`) | `onnx` / `fastembed` | `./target/models/bge-small-tokenizer.json` |
+| `EMBEDDING_ONNX_BATCH_SIZE` | `embedding.onnx.batch_size` (`embedding_onnx_batch_size`) | `onnx` / `fastembed` | `32` (inference batch size; independent of `embedding.batch_size`. Lower it under memory pressure on edge devices) |
+| `EMBEDDING_API_VERSION` | `embedding.openai_compatible.api_version` (`embedding_api_version`) | `openai` / `openai_compatible` (Azure `api-version`) | _(unset)_ |
+| `HUGGINGFACE_TOKENIZER` | `embedding.ollama.huggingface_tokenizer` (`huggingface_tokenizer`) | `ollama` | _(unset)_ |
+| `AWS_*` | `aws.*` | `bedrock` (`bedrock` feature) | see [Bedrock](#bedrock-llm_providerbedrock) |
 
 Provider values: `onnx`, `fastembed`, `openai`, `openai_compatible`, `ollama`,
-`bedrock`, `mock`.
+`bedrock`, `mock`, plus any provider a custom registry adds with
+`ComponentRegistry::register_embedding`. A provider whose factory is not
+registered (a misspelling, or a backend compiled out) is an error, never a silent
+ONNX fallback.
 
 **`MOCK_EMBEDDING` diverges from the Python SDK, deliberately.** Python cognee's
 embedding engines all return `[0.0] * dimensions` under a truthy `MOCK_EMBEDDING`

@@ -1688,132 +1688,132 @@
     "default_user_id": "{\"ssl\":true}"
   },
   "COGNEE_E2E_EMBED_MODEL_PATH=\"  \"": {
-    "embedding_model_path": "  "
+    "embedding.onnx.model_path": "  "
   },
   "COGNEE_E2E_EMBED_MODEL_PATH=\"\"": {},
   "COGNEE_E2E_EMBED_MODEL_PATH=\"-1\"": {
-    "embedding_model_path": "-1"
+    "embedding.onnx.model_path": "-1"
   },
   "COGNEE_E2E_EMBED_MODEL_PATH=\"0\"": {
-    "embedding_model_path": "0"
+    "embedding.onnx.model_path": "0"
   },
   "COGNEE_E2E_EMBED_MODEL_PATH=\"1\"": {
-    "embedding_model_path": "1"
+    "embedding.onnx.model_path": "1"
   },
   "COGNEE_E2E_EMBED_MODEL_PATH=\"1.5\"": {
-    "embedding_model_path": "1.5"
+    "embedding.onnx.model_path": "1.5"
   },
   "COGNEE_E2E_EMBED_MODEL_PATH=\"42\"": {
-    "embedding_model_path": "42"
+    "embedding.onnx.model_path": "42"
   },
   "COGNEE_E2E_EMBED_MODEL_PATH=\"5000000000\"": {
-    "embedding_model_path": "5000000000"
+    "embedding.onnx.model_path": "5000000000"
   },
   "COGNEE_E2E_EMBED_MODEL_PATH=\"70000\"": {
-    "embedding_model_path": "70000"
+    "embedding.onnx.model_path": "70000"
   },
   "COGNEE_E2E_EMBED_MODEL_PATH=\"TRUE\"": {
-    "embedding_model_path": "TRUE"
+    "embedding.onnx.model_path": "TRUE"
   },
   "COGNEE_E2E_EMBED_MODEL_PATH=\"[1]\"": {
-    "embedding_model_path": "[1]"
+    "embedding.onnx.model_path": "[1]"
   },
   "COGNEE_E2E_EMBED_MODEL_PATH=\"abc\"": {
-    "embedding_model_path": "abc"
+    "embedding.onnx.model_path": "abc"
   },
   "COGNEE_E2E_EMBED_MODEL_PATH=\"false\"": {
-    "embedding_model_path": "false"
+    "embedding.onnx.model_path": "false"
   },
   "COGNEE_E2E_EMBED_MODEL_PATH=\"no\"": {
-    "embedding_model_path": "no"
+    "embedding.onnx.model_path": "no"
   },
   "COGNEE_E2E_EMBED_MODEL_PATH=\"on\"": {
-    "embedding_model_path": "on"
+    "embedding.onnx.model_path": "on"
   },
   "COGNEE_E2E_EMBED_MODEL_PATH=\"require\"": {
-    "embedding_model_path": "require"
+    "embedding.onnx.model_path": "require"
   },
   "COGNEE_E2E_EMBED_MODEL_PATH=\"true\"": {
-    "embedding_model_path": "true"
+    "embedding.onnx.model_path": "true"
   },
   "COGNEE_E2E_EMBED_MODEL_PATH=\"v\"": {
-    "embedding_model_path": "v"
+    "embedding.onnx.model_path": "v"
   },
   "COGNEE_E2E_EMBED_MODEL_PATH=\"yes\"": {
-    "embedding_model_path": "yes"
+    "embedding.onnx.model_path": "yes"
   },
   "COGNEE_E2E_EMBED_MODEL_PATH=\"{\\\"a\\\":1}\"": {
-    "embedding_model_path": "{\"a\":1}"
+    "embedding.onnx.model_path": "{\"a\":1}"
   },
   "COGNEE_E2E_EMBED_MODEL_PATH=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "embedding_model_path": "{\"ssl\":\"verify-full\"}"
+    "embedding.onnx.model_path": "{\"ssl\":\"verify-full\"}"
   },
   "COGNEE_E2E_EMBED_MODEL_PATH=\"{\\\"ssl\\\":true}\"": {
-    "embedding_model_path": "{\"ssl\":true}"
+    "embedding.onnx.model_path": "{\"ssl\":true}"
   },
   "COGNEE_E2E_TOKENIZER_PATH=\"  \"": {
-    "embedding_tokenizer_path": "  "
+    "embedding.onnx.tokenizer_path": "  "
   },
   "COGNEE_E2E_TOKENIZER_PATH=\"\"": {},
   "COGNEE_E2E_TOKENIZER_PATH=\"-1\"": {
-    "embedding_tokenizer_path": "-1"
+    "embedding.onnx.tokenizer_path": "-1"
   },
   "COGNEE_E2E_TOKENIZER_PATH=\"0\"": {
-    "embedding_tokenizer_path": "0"
+    "embedding.onnx.tokenizer_path": "0"
   },
   "COGNEE_E2E_TOKENIZER_PATH=\"1\"": {
-    "embedding_tokenizer_path": "1"
+    "embedding.onnx.tokenizer_path": "1"
   },
   "COGNEE_E2E_TOKENIZER_PATH=\"1.5\"": {
-    "embedding_tokenizer_path": "1.5"
+    "embedding.onnx.tokenizer_path": "1.5"
   },
   "COGNEE_E2E_TOKENIZER_PATH=\"42\"": {
-    "embedding_tokenizer_path": "42"
+    "embedding.onnx.tokenizer_path": "42"
   },
   "COGNEE_E2E_TOKENIZER_PATH=\"5000000000\"": {
-    "embedding_tokenizer_path": "5000000000"
+    "embedding.onnx.tokenizer_path": "5000000000"
   },
   "COGNEE_E2E_TOKENIZER_PATH=\"70000\"": {
-    "embedding_tokenizer_path": "70000"
+    "embedding.onnx.tokenizer_path": "70000"
   },
   "COGNEE_E2E_TOKENIZER_PATH=\"TRUE\"": {
-    "embedding_tokenizer_path": "TRUE"
+    "embedding.onnx.tokenizer_path": "TRUE"
   },
   "COGNEE_E2E_TOKENIZER_PATH=\"[1]\"": {
-    "embedding_tokenizer_path": "[1]"
+    "embedding.onnx.tokenizer_path": "[1]"
   },
   "COGNEE_E2E_TOKENIZER_PATH=\"abc\"": {
-    "embedding_tokenizer_path": "abc"
+    "embedding.onnx.tokenizer_path": "abc"
   },
   "COGNEE_E2E_TOKENIZER_PATH=\"false\"": {
-    "embedding_tokenizer_path": "false"
+    "embedding.onnx.tokenizer_path": "false"
   },
   "COGNEE_E2E_TOKENIZER_PATH=\"no\"": {
-    "embedding_tokenizer_path": "no"
+    "embedding.onnx.tokenizer_path": "no"
   },
   "COGNEE_E2E_TOKENIZER_PATH=\"on\"": {
-    "embedding_tokenizer_path": "on"
+    "embedding.onnx.tokenizer_path": "on"
   },
   "COGNEE_E2E_TOKENIZER_PATH=\"require\"": {
-    "embedding_tokenizer_path": "require"
+    "embedding.onnx.tokenizer_path": "require"
   },
   "COGNEE_E2E_TOKENIZER_PATH=\"true\"": {
-    "embedding_tokenizer_path": "true"
+    "embedding.onnx.tokenizer_path": "true"
   },
   "COGNEE_E2E_TOKENIZER_PATH=\"v\"": {
-    "embedding_tokenizer_path": "v"
+    "embedding.onnx.tokenizer_path": "v"
   },
   "COGNEE_E2E_TOKENIZER_PATH=\"yes\"": {
-    "embedding_tokenizer_path": "yes"
+    "embedding.onnx.tokenizer_path": "yes"
   },
   "COGNEE_E2E_TOKENIZER_PATH=\"{\\\"a\\\":1}\"": {
-    "embedding_tokenizer_path": "{\"a\":1}"
+    "embedding.onnx.tokenizer_path": "{\"a\":1}"
   },
   "COGNEE_E2E_TOKENIZER_PATH=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "embedding_tokenizer_path": "{\"ssl\":\"verify-full\"}"
+    "embedding.onnx.tokenizer_path": "{\"ssl\":\"verify-full\"}"
   },
   "COGNEE_E2E_TOKENIZER_PATH=\"{\\\"ssl\\\":true}\"": {
-    "embedding_tokenizer_path": "{\"ssl\":true}"
+    "embedding.onnx.tokenizer_path": "{\"ssl\":true}"
   },
   "COGNEE_LOGS_DIR=\"  \"": {
     "logs_root_directory": "  "
@@ -2771,97 +2771,161 @@
     "default_user_password": "{\"ssl\":true}"
   },
   "EMBEDDING_API_KEY=\"  \"": {
-    "embedding_api_key": "  "
+    "embedding.api_key": "  "
   },
   "EMBEDDING_API_KEY=\"\"": {},
   "EMBEDDING_API_KEY=\"\" + LLM_API_KEY=2": {
-    "embedding_api_key": "2",
+    "embedding.api_key": "2",
     "llm.api_key": "2"
   },
   "EMBEDDING_API_KEY=\"-1\"": {
-    "embedding_api_key": "-1"
+    "embedding.api_key": "-1"
   },
   "EMBEDDING_API_KEY=\"0\"": {
-    "embedding_api_key": "0"
+    "embedding.api_key": "0"
   },
   "EMBEDDING_API_KEY=\"1\"": {
-    "embedding_api_key": "1"
+    "embedding.api_key": "1"
   },
   "EMBEDDING_API_KEY=\"1.5\"": {
-    "embedding_api_key": "1.5"
+    "embedding.api_key": "1.5"
   },
   "EMBEDDING_API_KEY=\"42\"": {
-    "embedding_api_key": "42"
+    "embedding.api_key": "42"
   },
   "EMBEDDING_API_KEY=\"5000000000\"": {
-    "embedding_api_key": "5000000000"
+    "embedding.api_key": "5000000000"
   },
   "EMBEDDING_API_KEY=\"70000\"": {
-    "embedding_api_key": "70000"
+    "embedding.api_key": "70000"
   },
   "EMBEDDING_API_KEY=\"TRUE\"": {
-    "embedding_api_key": "TRUE"
+    "embedding.api_key": "TRUE"
   },
   "EMBEDDING_API_KEY=\"[1]\"": {
-    "embedding_api_key": "[1]"
+    "embedding.api_key": "[1]"
   },
   "EMBEDDING_API_KEY=\"abc\"": {
-    "embedding_api_key": "abc"
+    "embedding.api_key": "abc"
   },
   "EMBEDDING_API_KEY=\"false\"": {
-    "embedding_api_key": "false"
+    "embedding.api_key": "false"
   },
   "EMBEDDING_API_KEY=\"no\"": {
-    "embedding_api_key": "no"
+    "embedding.api_key": "no"
   },
   "EMBEDDING_API_KEY=\"on\"": {
-    "embedding_api_key": "on"
+    "embedding.api_key": "on"
   },
   "EMBEDDING_API_KEY=\"require\"": {
-    "embedding_api_key": "require"
+    "embedding.api_key": "require"
   },
   "EMBEDDING_API_KEY=\"true\"": {
-    "embedding_api_key": "true"
+    "embedding.api_key": "true"
   },
   "EMBEDDING_API_KEY=\"v\"": {
-    "embedding_api_key": "v"
+    "embedding.api_key": "v"
   },
   "EMBEDDING_API_KEY=\"yes\"": {
-    "embedding_api_key": "yes"
+    "embedding.api_key": "yes"
   },
   "EMBEDDING_API_KEY=\"{\\\"a\\\":1}\"": {
-    "embedding_api_key": "{\"a\":1}"
+    "embedding.api_key": "{\"a\":1}"
   },
   "EMBEDDING_API_KEY=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "embedding_api_key": "{\"ssl\":\"verify-full\"}"
+    "embedding.api_key": "{\"ssl\":\"verify-full\"}"
   },
   "EMBEDDING_API_KEY=\"{\\\"ssl\\\":true}\"": {
-    "embedding_api_key": "{\"ssl\":true}"
+    "embedding.api_key": "{\"ssl\":true}"
   },
   "EMBEDDING_API_KEY=1 + LLM_API_KEY=2": {
-    "embedding_api_key": "1",
+    "embedding.api_key": "1",
     "llm.api_key": "2"
   },
   "EMBEDDING_API_KEY=abc + LLM_API_KEY=2": {
-    "embedding_api_key": "abc",
+    "embedding.api_key": "abc",
     "llm.api_key": "2"
+  },
+  "EMBEDDING_API_VERSION=\"  \"": {
+    "embedding.openai_compatible.api_version": "  "
+  },
+  "EMBEDDING_API_VERSION=\"\"": {},
+  "EMBEDDING_API_VERSION=\"-1\"": {
+    "embedding.openai_compatible.api_version": "-1"
+  },
+  "EMBEDDING_API_VERSION=\"0\"": {
+    "embedding.openai_compatible.api_version": "0"
+  },
+  "EMBEDDING_API_VERSION=\"1\"": {
+    "embedding.openai_compatible.api_version": "1"
+  },
+  "EMBEDDING_API_VERSION=\"1.5\"": {
+    "embedding.openai_compatible.api_version": "1.5"
+  },
+  "EMBEDDING_API_VERSION=\"42\"": {
+    "embedding.openai_compatible.api_version": "42"
+  },
+  "EMBEDDING_API_VERSION=\"5000000000\"": {
+    "embedding.openai_compatible.api_version": "5000000000"
+  },
+  "EMBEDDING_API_VERSION=\"70000\"": {
+    "embedding.openai_compatible.api_version": "70000"
+  },
+  "EMBEDDING_API_VERSION=\"TRUE\"": {
+    "embedding.openai_compatible.api_version": "TRUE"
+  },
+  "EMBEDDING_API_VERSION=\"[1]\"": {
+    "embedding.openai_compatible.api_version": "[1]"
+  },
+  "EMBEDDING_API_VERSION=\"abc\"": {
+    "embedding.openai_compatible.api_version": "abc"
+  },
+  "EMBEDDING_API_VERSION=\"false\"": {
+    "embedding.openai_compatible.api_version": "false"
+  },
+  "EMBEDDING_API_VERSION=\"no\"": {
+    "embedding.openai_compatible.api_version": "no"
+  },
+  "EMBEDDING_API_VERSION=\"on\"": {
+    "embedding.openai_compatible.api_version": "on"
+  },
+  "EMBEDDING_API_VERSION=\"require\"": {
+    "embedding.openai_compatible.api_version": "require"
+  },
+  "EMBEDDING_API_VERSION=\"true\"": {
+    "embedding.openai_compatible.api_version": "true"
+  },
+  "EMBEDDING_API_VERSION=\"v\"": {
+    "embedding.openai_compatible.api_version": "v"
+  },
+  "EMBEDDING_API_VERSION=\"yes\"": {
+    "embedding.openai_compatible.api_version": "yes"
+  },
+  "EMBEDDING_API_VERSION=\"{\\\"a\\\":1}\"": {
+    "embedding.openai_compatible.api_version": "{\"a\":1}"
+  },
+  "EMBEDDING_API_VERSION=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
+    "embedding.openai_compatible.api_version": "{\"ssl\":\"verify-full\"}"
+  },
+  "EMBEDDING_API_VERSION=\"{\\\"ssl\\\":true}\"": {
+    "embedding.openai_compatible.api_version": "{\"ssl\":true}"
   },
   "EMBEDDING_BATCH_SIZE=\"  \"": {},
   "EMBEDDING_BATCH_SIZE=\"\"": {},
   "EMBEDDING_BATCH_SIZE=\"-1\"": {},
   "EMBEDDING_BATCH_SIZE=\"0\"": {
-    "embedding_batch_size": 0
+    "embedding.batch_size": 0
   },
   "EMBEDDING_BATCH_SIZE=\"1\"": {
-    "embedding_batch_size": 1
+    "embedding.batch_size": 1
   },
   "EMBEDDING_BATCH_SIZE=\"1.5\"": {},
   "EMBEDDING_BATCH_SIZE=\"42\"": {
-    "embedding_batch_size": 42
+    "embedding.batch_size": 42
   },
   "EMBEDDING_BATCH_SIZE=\"5000000000\"": {},
   "EMBEDDING_BATCH_SIZE=\"70000\"": {
-    "embedding_batch_size": 70000
+    "embedding.batch_size": 70000
   },
   "EMBEDDING_BATCH_SIZE=\"TRUE\"": {},
   "EMBEDDING_BATCH_SIZE=\"[1]\"": {},
@@ -2880,18 +2944,18 @@
   "EMBEDDING_DIMENSIONS=\"\"": {},
   "EMBEDDING_DIMENSIONS=\"-1\"": {},
   "EMBEDDING_DIMENSIONS=\"0\"": {
-    "embedding_dimensions": 0
+    "embedding.dimensions": 0
   },
   "EMBEDDING_DIMENSIONS=\"1\"": {
-    "embedding_dimensions": 1
+    "embedding.dimensions": 1
   },
   "EMBEDDING_DIMENSIONS=\"1.5\"": {},
   "EMBEDDING_DIMENSIONS=\"42\"": {
-    "embedding_dimensions": 42
+    "embedding.dimensions": 42
   },
   "EMBEDDING_DIMENSIONS=\"5000000000\"": {},
   "EMBEDDING_DIMENSIONS=\"70000\"": {
-    "embedding_dimensions": 70000
+    "embedding.dimensions": 70000
   },
   "EMBEDDING_DIMENSIONS=\"TRUE\"": {},
   "EMBEDDING_DIMENSIONS=\"[1]\"": {},
@@ -2907,85 +2971,115 @@
   "EMBEDDING_DIMENSIONS=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
   "EMBEDDING_DIMENSIONS=\"{\\\"ssl\\\":true}\"": {},
   "EMBEDDING_ENDPOINT=\"  \"": {
-    "embedding_endpoint": "  "
+    "embedding.endpoint": "  "
   },
   "EMBEDDING_ENDPOINT=\"\"": {},
   "EMBEDDING_ENDPOINT=\"-1\"": {
-    "embedding_endpoint": "-1"
+    "embedding.endpoint": "-1"
   },
   "EMBEDDING_ENDPOINT=\"0\"": {
-    "embedding_endpoint": "0"
+    "embedding.endpoint": "0"
   },
   "EMBEDDING_ENDPOINT=\"1\"": {
-    "embedding_endpoint": "1"
+    "embedding.endpoint": "1"
   },
   "EMBEDDING_ENDPOINT=\"1.5\"": {
-    "embedding_endpoint": "1.5"
+    "embedding.endpoint": "1.5"
   },
   "EMBEDDING_ENDPOINT=\"42\"": {
-    "embedding_endpoint": "42"
+    "embedding.endpoint": "42"
   },
   "EMBEDDING_ENDPOINT=\"5000000000\"": {
-    "embedding_endpoint": "5000000000"
+    "embedding.endpoint": "5000000000"
   },
   "EMBEDDING_ENDPOINT=\"70000\"": {
-    "embedding_endpoint": "70000"
+    "embedding.endpoint": "70000"
   },
   "EMBEDDING_ENDPOINT=\"TRUE\"": {
-    "embedding_endpoint": "TRUE"
+    "embedding.endpoint": "TRUE"
   },
   "EMBEDDING_ENDPOINT=\"[1]\"": {
-    "embedding_endpoint": "[1]"
+    "embedding.endpoint": "[1]"
   },
   "EMBEDDING_ENDPOINT=\"abc\"": {
-    "embedding_endpoint": "abc"
+    "embedding.endpoint": "abc"
   },
   "EMBEDDING_ENDPOINT=\"false\"": {
-    "embedding_endpoint": "false"
+    "embedding.endpoint": "false"
   },
   "EMBEDDING_ENDPOINT=\"no\"": {
-    "embedding_endpoint": "no"
+    "embedding.endpoint": "no"
   },
   "EMBEDDING_ENDPOINT=\"on\"": {
-    "embedding_endpoint": "on"
+    "embedding.endpoint": "on"
   },
   "EMBEDDING_ENDPOINT=\"require\"": {
-    "embedding_endpoint": "require"
+    "embedding.endpoint": "require"
   },
   "EMBEDDING_ENDPOINT=\"true\"": {
-    "embedding_endpoint": "true"
+    "embedding.endpoint": "true"
   },
   "EMBEDDING_ENDPOINT=\"v\"": {
-    "embedding_endpoint": "v"
+    "embedding.endpoint": "v"
   },
   "EMBEDDING_ENDPOINT=\"yes\"": {
-    "embedding_endpoint": "yes"
+    "embedding.endpoint": "yes"
   },
   "EMBEDDING_ENDPOINT=\"{\\\"a\\\":1}\"": {
-    "embedding_endpoint": "{\"a\":1}"
+    "embedding.endpoint": "{\"a\":1}"
   },
   "EMBEDDING_ENDPOINT=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "embedding_endpoint": "{\"ssl\":\"verify-full\"}"
+    "embedding.endpoint": "{\"ssl\":\"verify-full\"}"
   },
   "EMBEDDING_ENDPOINT=\"{\\\"ssl\\\":true}\"": {
-    "embedding_endpoint": "{\"ssl\":true}"
+    "embedding.endpoint": "{\"ssl\":true}"
   },
+  "EMBEDDING_MAX_COMPLETION_TOKENS=\"  \"": {},
+  "EMBEDDING_MAX_COMPLETION_TOKENS=\"\"": {},
+  "EMBEDDING_MAX_COMPLETION_TOKENS=\"-1\"": {},
+  "EMBEDDING_MAX_COMPLETION_TOKENS=\"0\"": {
+    "embedding.max_completion_tokens": 0
+  },
+  "EMBEDDING_MAX_COMPLETION_TOKENS=\"1\"": {
+    "embedding.max_completion_tokens": 1
+  },
+  "EMBEDDING_MAX_COMPLETION_TOKENS=\"1.5\"": {},
+  "EMBEDDING_MAX_COMPLETION_TOKENS=\"42\"": {
+    "embedding.max_completion_tokens": 42
+  },
+  "EMBEDDING_MAX_COMPLETION_TOKENS=\"5000000000\"": {},
+  "EMBEDDING_MAX_COMPLETION_TOKENS=\"70000\"": {
+    "embedding.max_completion_tokens": 70000
+  },
+  "EMBEDDING_MAX_COMPLETION_TOKENS=\"TRUE\"": {},
+  "EMBEDDING_MAX_COMPLETION_TOKENS=\"[1]\"": {},
+  "EMBEDDING_MAX_COMPLETION_TOKENS=\"abc\"": {},
+  "EMBEDDING_MAX_COMPLETION_TOKENS=\"false\"": {},
+  "EMBEDDING_MAX_COMPLETION_TOKENS=\"no\"": {},
+  "EMBEDDING_MAX_COMPLETION_TOKENS=\"on\"": {},
+  "EMBEDDING_MAX_COMPLETION_TOKENS=\"require\"": {},
+  "EMBEDDING_MAX_COMPLETION_TOKENS=\"true\"": {},
+  "EMBEDDING_MAX_COMPLETION_TOKENS=\"v\"": {},
+  "EMBEDDING_MAX_COMPLETION_TOKENS=\"yes\"": {},
+  "EMBEDDING_MAX_COMPLETION_TOKENS=\"{\\\"a\\\":1}\"": {},
+  "EMBEDDING_MAX_COMPLETION_TOKENS=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
+  "EMBEDDING_MAX_COMPLETION_TOKENS=\"{\\\"ssl\\\":true}\"": {},
   "EMBEDDING_MAX_SEQUENCE_LENGTH=\"  \"": {},
   "EMBEDDING_MAX_SEQUENCE_LENGTH=\"\"": {},
   "EMBEDDING_MAX_SEQUENCE_LENGTH=\"-1\"": {},
   "EMBEDDING_MAX_SEQUENCE_LENGTH=\"0\"": {
-    "embedding_max_sequence_length": 0
+    "embedding.max_sequence_length": 0
   },
   "EMBEDDING_MAX_SEQUENCE_LENGTH=\"1\"": {
-    "embedding_max_sequence_length": 1
+    "embedding.max_sequence_length": 1
   },
   "EMBEDDING_MAX_SEQUENCE_LENGTH=\"1.5\"": {},
   "EMBEDDING_MAX_SEQUENCE_LENGTH=\"42\"": {
-    "embedding_max_sequence_length": 42
+    "embedding.max_sequence_length": 42
   },
   "EMBEDDING_MAX_SEQUENCE_LENGTH=\"5000000000\"": {},
   "EMBEDDING_MAX_SEQUENCE_LENGTH=\"70000\"": {
-    "embedding_max_sequence_length": 70000
+    "embedding.max_sequence_length": 70000
   },
   "EMBEDDING_MAX_SEQUENCE_LENGTH=\"TRUE\"": {},
   "EMBEDDING_MAX_SEQUENCE_LENGTH=\"[1]\"": {},
@@ -3001,158 +3095,158 @@
   "EMBEDDING_MAX_SEQUENCE_LENGTH=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
   "EMBEDDING_MAX_SEQUENCE_LENGTH=\"{\\\"ssl\\\":true}\"": {},
   "EMBEDDING_MODEL=\"  \"": {
-    "embedding_model_name": "  "
+    "embedding.model": "  "
   },
   "EMBEDDING_MODEL=\"\"": {},
   "EMBEDDING_MODEL=\"-1\"": {
-    "embedding_model_name": "-1"
+    "embedding.model": "-1"
   },
   "EMBEDDING_MODEL=\"0\"": {
-    "embedding_model_name": "0"
+    "embedding.model": "0"
   },
   "EMBEDDING_MODEL=\"1\"": {
-    "embedding_model_name": "1"
+    "embedding.model": "1"
   },
   "EMBEDDING_MODEL=\"1.5\"": {
-    "embedding_model_name": "1.5"
+    "embedding.model": "1.5"
   },
   "EMBEDDING_MODEL=\"42\"": {
-    "embedding_model_name": "42"
+    "embedding.model": "42"
   },
   "EMBEDDING_MODEL=\"5000000000\"": {
-    "embedding_model_name": "5000000000"
+    "embedding.model": "5000000000"
   },
   "EMBEDDING_MODEL=\"70000\"": {
-    "embedding_model_name": "70000"
+    "embedding.model": "70000"
   },
   "EMBEDDING_MODEL=\"TRUE\"": {
-    "embedding_model_name": "TRUE"
+    "embedding.model": "TRUE"
   },
   "EMBEDDING_MODEL=\"[1]\"": {
-    "embedding_model_name": "[1]"
+    "embedding.model": "[1]"
   },
   "EMBEDDING_MODEL=\"abc\"": {
-    "embedding_model_name": "abc"
+    "embedding.model": "abc"
   },
   "EMBEDDING_MODEL=\"false\"": {
-    "embedding_model_name": "false"
+    "embedding.model": "false"
   },
   "EMBEDDING_MODEL=\"no\"": {
-    "embedding_model_name": "no"
+    "embedding.model": "no"
   },
   "EMBEDDING_MODEL=\"on\"": {
-    "embedding_model_name": "on"
+    "embedding.model": "on"
   },
   "EMBEDDING_MODEL=\"require\"": {
-    "embedding_model_name": "require"
+    "embedding.model": "require"
   },
   "EMBEDDING_MODEL=\"true\"": {
-    "embedding_model_name": "true"
+    "embedding.model": "true"
   },
   "EMBEDDING_MODEL=\"v\"": {
-    "embedding_model_name": "v"
+    "embedding.model": "v"
   },
   "EMBEDDING_MODEL=\"yes\"": {
-    "embedding_model_name": "yes"
+    "embedding.model": "yes"
   },
   "EMBEDDING_MODEL=\"{\\\"a\\\":1}\"": {
-    "embedding_model_name": "{\"a\":1}"
+    "embedding.model": "{\"a\":1}"
   },
   "EMBEDDING_MODEL=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "embedding_model_name": "{\"ssl\":\"verify-full\"}"
+    "embedding.model": "{\"ssl\":\"verify-full\"}"
   },
   "EMBEDDING_MODEL=\"{\\\"ssl\\\":true}\"": {
-    "embedding_model_name": "{\"ssl\":true}"
+    "embedding.model": "{\"ssl\":true}"
   },
   "EMBEDDING_MODEL_PATH=\"  \"": {
-    "embedding_model_path": "  "
+    "embedding.onnx.model_path": "  "
   },
   "EMBEDDING_MODEL_PATH=\"\"": {},
   "EMBEDDING_MODEL_PATH=\"\" + COGNEE_E2E_EMBED_MODEL_PATH=2": {
-    "embedding_model_path": "2"
+    "embedding.onnx.model_path": "2"
   },
   "EMBEDDING_MODEL_PATH=\"-1\"": {
-    "embedding_model_path": "-1"
+    "embedding.onnx.model_path": "-1"
   },
   "EMBEDDING_MODEL_PATH=\"0\"": {
-    "embedding_model_path": "0"
+    "embedding.onnx.model_path": "0"
   },
   "EMBEDDING_MODEL_PATH=\"1\"": {
-    "embedding_model_path": "1"
+    "embedding.onnx.model_path": "1"
   },
   "EMBEDDING_MODEL_PATH=\"1.5\"": {
-    "embedding_model_path": "1.5"
+    "embedding.onnx.model_path": "1.5"
   },
   "EMBEDDING_MODEL_PATH=\"42\"": {
-    "embedding_model_path": "42"
+    "embedding.onnx.model_path": "42"
   },
   "EMBEDDING_MODEL_PATH=\"5000000000\"": {
-    "embedding_model_path": "5000000000"
+    "embedding.onnx.model_path": "5000000000"
   },
   "EMBEDDING_MODEL_PATH=\"70000\"": {
-    "embedding_model_path": "70000"
+    "embedding.onnx.model_path": "70000"
   },
   "EMBEDDING_MODEL_PATH=\"TRUE\"": {
-    "embedding_model_path": "TRUE"
+    "embedding.onnx.model_path": "TRUE"
   },
   "EMBEDDING_MODEL_PATH=\"[1]\"": {
-    "embedding_model_path": "[1]"
+    "embedding.onnx.model_path": "[1]"
   },
   "EMBEDDING_MODEL_PATH=\"abc\"": {
-    "embedding_model_path": "abc"
+    "embedding.onnx.model_path": "abc"
   },
   "EMBEDDING_MODEL_PATH=\"false\"": {
-    "embedding_model_path": "false"
+    "embedding.onnx.model_path": "false"
   },
   "EMBEDDING_MODEL_PATH=\"no\"": {
-    "embedding_model_path": "no"
+    "embedding.onnx.model_path": "no"
   },
   "EMBEDDING_MODEL_PATH=\"on\"": {
-    "embedding_model_path": "on"
+    "embedding.onnx.model_path": "on"
   },
   "EMBEDDING_MODEL_PATH=\"require\"": {
-    "embedding_model_path": "require"
+    "embedding.onnx.model_path": "require"
   },
   "EMBEDDING_MODEL_PATH=\"true\"": {
-    "embedding_model_path": "true"
+    "embedding.onnx.model_path": "true"
   },
   "EMBEDDING_MODEL_PATH=\"v\"": {
-    "embedding_model_path": "v"
+    "embedding.onnx.model_path": "v"
   },
   "EMBEDDING_MODEL_PATH=\"yes\"": {
-    "embedding_model_path": "yes"
+    "embedding.onnx.model_path": "yes"
   },
   "EMBEDDING_MODEL_PATH=\"{\\\"a\\\":1}\"": {
-    "embedding_model_path": "{\"a\":1}"
+    "embedding.onnx.model_path": "{\"a\":1}"
   },
   "EMBEDDING_MODEL_PATH=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "embedding_model_path": "{\"ssl\":\"verify-full\"}"
+    "embedding.onnx.model_path": "{\"ssl\":\"verify-full\"}"
   },
   "EMBEDDING_MODEL_PATH=\"{\\\"ssl\\\":true}\"": {
-    "embedding_model_path": "{\"ssl\":true}"
+    "embedding.onnx.model_path": "{\"ssl\":true}"
   },
   "EMBEDDING_MODEL_PATH=1 + COGNEE_E2E_EMBED_MODEL_PATH=2": {
-    "embedding_model_path": "1"
+    "embedding.onnx.model_path": "1"
   },
   "EMBEDDING_MODEL_PATH=abc + COGNEE_E2E_EMBED_MODEL_PATH=2": {
-    "embedding_model_path": "abc"
+    "embedding.onnx.model_path": "abc"
   },
   "EMBEDDING_ONNX_BATCH_SIZE=\"  \"": {},
   "EMBEDDING_ONNX_BATCH_SIZE=\"\"": {},
   "EMBEDDING_ONNX_BATCH_SIZE=\"-1\"": {},
   "EMBEDDING_ONNX_BATCH_SIZE=\"0\"": {
-    "embedding_onnx_batch_size": 0
+    "embedding.onnx.batch_size": 0
   },
   "EMBEDDING_ONNX_BATCH_SIZE=\"1\"": {
-    "embedding_onnx_batch_size": 1
+    "embedding.onnx.batch_size": 1
   },
   "EMBEDDING_ONNX_BATCH_SIZE=\"1.5\"": {},
   "EMBEDDING_ONNX_BATCH_SIZE=\"42\"": {
-    "embedding_onnx_batch_size": 42
+    "embedding.onnx.batch_size": 42
   },
   "EMBEDDING_ONNX_BATCH_SIZE=\"5000000000\"": {},
   "EMBEDDING_ONNX_BATCH_SIZE=\"70000\"": {
-    "embedding_onnx_batch_size": 70000
+    "embedding.onnx.batch_size": 70000
   },
   "EMBEDDING_ONNX_BATCH_SIZE=\"TRUE\"": {},
   "EMBEDDING_ONNX_BATCH_SIZE=\"[1]\"": {},
@@ -3168,97 +3262,97 @@
   "EMBEDDING_ONNX_BATCH_SIZE=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
   "EMBEDDING_ONNX_BATCH_SIZE=\"{\\\"ssl\\\":true}\"": {},
   "EMBEDDING_PROVIDER=\"  \"": {
-    "embedding_provider": "  "
+    "embedding.provider": "  "
   },
   "EMBEDDING_PROVIDER=\"\"": {},
   "EMBEDDING_PROVIDER=\"-1\"": {
-    "embedding_provider": "-1"
+    "embedding.provider": "-1"
   },
   "EMBEDDING_PROVIDER=\"0\"": {
-    "embedding_provider": "0"
+    "embedding.provider": "0"
   },
   "EMBEDDING_PROVIDER=\"1\"": {
-    "embedding_provider": "1"
+    "embedding.provider": "1"
   },
   "EMBEDDING_PROVIDER=\"1.5\"": {
-    "embedding_provider": "1.5"
+    "embedding.provider": "1.5"
   },
   "EMBEDDING_PROVIDER=\"42\"": {
-    "embedding_provider": "42"
+    "embedding.provider": "42"
   },
   "EMBEDDING_PROVIDER=\"5000000000\"": {
-    "embedding_provider": "5000000000"
+    "embedding.provider": "5000000000"
   },
   "EMBEDDING_PROVIDER=\"70000\"": {
-    "embedding_provider": "70000"
+    "embedding.provider": "70000"
   },
   "EMBEDDING_PROVIDER=\"TRUE\"": {
-    "embedding_provider": "TRUE"
+    "embedding.provider": "TRUE"
   },
   "EMBEDDING_PROVIDER=\"[1]\"": {
-    "embedding_provider": "[1]"
+    "embedding.provider": "[1]"
   },
   "EMBEDDING_PROVIDER=\"abc\"": {
-    "embedding_provider": "abc"
+    "embedding.provider": "abc"
   },
   "EMBEDDING_PROVIDER=\"false\"": {
-    "embedding_provider": "false"
+    "embedding.provider": "false"
   },
   "EMBEDDING_PROVIDER=\"no\"": {
-    "embedding_provider": "no"
+    "embedding.provider": "no"
   },
   "EMBEDDING_PROVIDER=\"on\"": {
-    "embedding_provider": "on"
+    "embedding.provider": "on"
   },
   "EMBEDDING_PROVIDER=\"require\"": {
-    "embedding_provider": "require"
+    "embedding.provider": "require"
   },
   "EMBEDDING_PROVIDER=\"true\"": {
-    "embedding_provider": "true"
+    "embedding.provider": "true"
   },
   "EMBEDDING_PROVIDER=\"v\"": {
-    "embedding_provider": "v"
+    "embedding.provider": "v"
   },
   "EMBEDDING_PROVIDER=\"yes\"": {
-    "embedding_provider": "yes"
+    "embedding.provider": "yes"
   },
   "EMBEDDING_PROVIDER=\"{\\\"a\\\":1}\"": {
-    "embedding_provider": "{\"a\":1}"
+    "embedding.provider": "{\"a\":1}"
   },
   "EMBEDDING_PROVIDER=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "embedding_provider": "{\"ssl\":\"verify-full\"}"
+    "embedding.provider": "{\"ssl\":\"verify-full\"}"
   },
   "EMBEDDING_PROVIDER=\"{\\\"ssl\\\":true}\"": {
-    "embedding_provider": "{\"ssl\":true}"
+    "embedding.provider": "{\"ssl\":true}"
   },
   "EMBEDDING_RATE_LIMIT_ENABLED=\"  \"": {},
   "EMBEDDING_RATE_LIMIT_ENABLED=\"\"": {},
   "EMBEDDING_RATE_LIMIT_ENABLED=\"-1\"": {},
   "EMBEDDING_RATE_LIMIT_ENABLED=\"0\"": {},
   "EMBEDDING_RATE_LIMIT_ENABLED=\"1\"": {
-    "embedding_rate_limit_enabled": true
+    "embedding.rate_limit_enabled": true
   },
   "EMBEDDING_RATE_LIMIT_ENABLED=\"1.5\"": {},
   "EMBEDDING_RATE_LIMIT_ENABLED=\"42\"": {},
   "EMBEDDING_RATE_LIMIT_ENABLED=\"5000000000\"": {},
   "EMBEDDING_RATE_LIMIT_ENABLED=\"70000\"": {},
   "EMBEDDING_RATE_LIMIT_ENABLED=\"TRUE\"": {
-    "embedding_rate_limit_enabled": true
+    "embedding.rate_limit_enabled": true
   },
   "EMBEDDING_RATE_LIMIT_ENABLED=\"[1]\"": {},
   "EMBEDDING_RATE_LIMIT_ENABLED=\"abc\"": {},
   "EMBEDDING_RATE_LIMIT_ENABLED=\"false\"": {},
   "EMBEDDING_RATE_LIMIT_ENABLED=\"no\"": {},
   "EMBEDDING_RATE_LIMIT_ENABLED=\"on\"": {
-    "embedding_rate_limit_enabled": true
+    "embedding.rate_limit_enabled": true
   },
   "EMBEDDING_RATE_LIMIT_ENABLED=\"require\"": {},
   "EMBEDDING_RATE_LIMIT_ENABLED=\"true\"": {
-    "embedding_rate_limit_enabled": true
+    "embedding.rate_limit_enabled": true
   },
   "EMBEDDING_RATE_LIMIT_ENABLED=\"v\"": {},
   "EMBEDDING_RATE_LIMIT_ENABLED=\"yes\"": {
-    "embedding_rate_limit_enabled": true
+    "embedding.rate_limit_enabled": true
   },
   "EMBEDDING_RATE_LIMIT_ENABLED=\"{\\\"a\\\":1}\"": {},
   "EMBEDDING_RATE_LIMIT_ENABLED=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
@@ -3267,18 +3361,18 @@
   "EMBEDDING_RATE_LIMIT_INTERVAL=\"\"": {},
   "EMBEDDING_RATE_LIMIT_INTERVAL=\"-1\"": {},
   "EMBEDDING_RATE_LIMIT_INTERVAL=\"0\"": {
-    "embedding_rate_limit_interval": 0
+    "embedding.rate_limit_interval": 0
   },
   "EMBEDDING_RATE_LIMIT_INTERVAL=\"1\"": {
-    "embedding_rate_limit_interval": 1
+    "embedding.rate_limit_interval": 1
   },
   "EMBEDDING_RATE_LIMIT_INTERVAL=\"1.5\"": {},
   "EMBEDDING_RATE_LIMIT_INTERVAL=\"42\"": {
-    "embedding_rate_limit_interval": 42
+    "embedding.rate_limit_interval": 42
   },
   "EMBEDDING_RATE_LIMIT_INTERVAL=\"5000000000\"": {},
   "EMBEDDING_RATE_LIMIT_INTERVAL=\"70000\"": {
-    "embedding_rate_limit_interval": 70000
+    "embedding.rate_limit_interval": 70000
   },
   "EMBEDDING_RATE_LIMIT_INTERVAL=\"TRUE\"": {},
   "EMBEDDING_RATE_LIMIT_INTERVAL=\"[1]\"": {},
@@ -3297,18 +3391,18 @@
   "EMBEDDING_RATE_LIMIT_REQUESTS=\"\"": {},
   "EMBEDDING_RATE_LIMIT_REQUESTS=\"-1\"": {},
   "EMBEDDING_RATE_LIMIT_REQUESTS=\"0\"": {
-    "embedding_rate_limit_requests": 0
+    "embedding.rate_limit_requests": 0
   },
   "EMBEDDING_RATE_LIMIT_REQUESTS=\"1\"": {
-    "embedding_rate_limit_requests": 1
+    "embedding.rate_limit_requests": 1
   },
   "EMBEDDING_RATE_LIMIT_REQUESTS=\"1.5\"": {},
   "EMBEDDING_RATE_LIMIT_REQUESTS=\"42\"": {
-    "embedding_rate_limit_requests": 42
+    "embedding.rate_limit_requests": 42
   },
   "EMBEDDING_RATE_LIMIT_REQUESTS=\"5000000000\"": {},
   "EMBEDDING_RATE_LIMIT_REQUESTS=\"70000\"": {
-    "embedding_rate_limit_requests": 70000
+    "embedding.rate_limit_requests": 70000
   },
   "EMBEDDING_RATE_LIMIT_REQUESTS=\"TRUE\"": {},
   "EMBEDDING_RATE_LIMIT_REQUESTS=\"[1]\"": {},
@@ -3324,77 +3418,77 @@
   "EMBEDDING_RATE_LIMIT_REQUESTS=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
   "EMBEDDING_RATE_LIMIT_REQUESTS=\"{\\\"ssl\\\":true}\"": {},
   "EMBEDDING_TOKENIZER_PATH=\"  \"": {
-    "embedding_tokenizer_path": "  "
+    "embedding.onnx.tokenizer_path": "  "
   },
   "EMBEDDING_TOKENIZER_PATH=\"\"": {},
   "EMBEDDING_TOKENIZER_PATH=\"\" + COGNEE_E2E_TOKENIZER_PATH=2": {
-    "embedding_tokenizer_path": "2"
+    "embedding.onnx.tokenizer_path": "2"
   },
   "EMBEDDING_TOKENIZER_PATH=\"-1\"": {
-    "embedding_tokenizer_path": "-1"
+    "embedding.onnx.tokenizer_path": "-1"
   },
   "EMBEDDING_TOKENIZER_PATH=\"0\"": {
-    "embedding_tokenizer_path": "0"
+    "embedding.onnx.tokenizer_path": "0"
   },
   "EMBEDDING_TOKENIZER_PATH=\"1\"": {
-    "embedding_tokenizer_path": "1"
+    "embedding.onnx.tokenizer_path": "1"
   },
   "EMBEDDING_TOKENIZER_PATH=\"1.5\"": {
-    "embedding_tokenizer_path": "1.5"
+    "embedding.onnx.tokenizer_path": "1.5"
   },
   "EMBEDDING_TOKENIZER_PATH=\"42\"": {
-    "embedding_tokenizer_path": "42"
+    "embedding.onnx.tokenizer_path": "42"
   },
   "EMBEDDING_TOKENIZER_PATH=\"5000000000\"": {
-    "embedding_tokenizer_path": "5000000000"
+    "embedding.onnx.tokenizer_path": "5000000000"
   },
   "EMBEDDING_TOKENIZER_PATH=\"70000\"": {
-    "embedding_tokenizer_path": "70000"
+    "embedding.onnx.tokenizer_path": "70000"
   },
   "EMBEDDING_TOKENIZER_PATH=\"TRUE\"": {
-    "embedding_tokenizer_path": "TRUE"
+    "embedding.onnx.tokenizer_path": "TRUE"
   },
   "EMBEDDING_TOKENIZER_PATH=\"[1]\"": {
-    "embedding_tokenizer_path": "[1]"
+    "embedding.onnx.tokenizer_path": "[1]"
   },
   "EMBEDDING_TOKENIZER_PATH=\"abc\"": {
-    "embedding_tokenizer_path": "abc"
+    "embedding.onnx.tokenizer_path": "abc"
   },
   "EMBEDDING_TOKENIZER_PATH=\"false\"": {
-    "embedding_tokenizer_path": "false"
+    "embedding.onnx.tokenizer_path": "false"
   },
   "EMBEDDING_TOKENIZER_PATH=\"no\"": {
-    "embedding_tokenizer_path": "no"
+    "embedding.onnx.tokenizer_path": "no"
   },
   "EMBEDDING_TOKENIZER_PATH=\"on\"": {
-    "embedding_tokenizer_path": "on"
+    "embedding.onnx.tokenizer_path": "on"
   },
   "EMBEDDING_TOKENIZER_PATH=\"require\"": {
-    "embedding_tokenizer_path": "require"
+    "embedding.onnx.tokenizer_path": "require"
   },
   "EMBEDDING_TOKENIZER_PATH=\"true\"": {
-    "embedding_tokenizer_path": "true"
+    "embedding.onnx.tokenizer_path": "true"
   },
   "EMBEDDING_TOKENIZER_PATH=\"v\"": {
-    "embedding_tokenizer_path": "v"
+    "embedding.onnx.tokenizer_path": "v"
   },
   "EMBEDDING_TOKENIZER_PATH=\"yes\"": {
-    "embedding_tokenizer_path": "yes"
+    "embedding.onnx.tokenizer_path": "yes"
   },
   "EMBEDDING_TOKENIZER_PATH=\"{\\\"a\\\":1}\"": {
-    "embedding_tokenizer_path": "{\"a\":1}"
+    "embedding.onnx.tokenizer_path": "{\"a\":1}"
   },
   "EMBEDDING_TOKENIZER_PATH=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "embedding_tokenizer_path": "{\"ssl\":\"verify-full\"}"
+    "embedding.onnx.tokenizer_path": "{\"ssl\":\"verify-full\"}"
   },
   "EMBEDDING_TOKENIZER_PATH=\"{\\\"ssl\\\":true}\"": {
-    "embedding_tokenizer_path": "{\"ssl\":true}"
+    "embedding.onnx.tokenizer_path": "{\"ssl\":true}"
   },
   "EMBEDDING_TOKENIZER_PATH=1 + COGNEE_E2E_TOKENIZER_PATH=2": {
-    "embedding_tokenizer_path": "1"
+    "embedding.onnx.tokenizer_path": "1"
   },
   "EMBEDDING_TOKENIZER_PATH=abc + COGNEE_E2E_TOKENIZER_PATH=2": {
-    "embedding_tokenizer_path": "abc"
+    "embedding.onnx.tokenizer_path": "abc"
   },
   "ENABLE_BACKEND_ACCESS_CONTROL=\"  \"": {},
   "ENABLE_BACKEND_ACCESS_CONTROL=\"\"": {},
@@ -4032,8 +4126,72 @@
   "GRAPH_MAX_DB_SIZE=\"{\\\"a\\\":1}\"": {},
   "GRAPH_MAX_DB_SIZE=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
   "GRAPH_MAX_DB_SIZE=\"{\\\"ssl\\\":true}\"": {},
+  "HUGGINGFACE_TOKENIZER=\"  \"": {
+    "embedding.ollama.huggingface_tokenizer": "  "
+  },
+  "HUGGINGFACE_TOKENIZER=\"\"": {},
+  "HUGGINGFACE_TOKENIZER=\"-1\"": {
+    "embedding.ollama.huggingface_tokenizer": "-1"
+  },
+  "HUGGINGFACE_TOKENIZER=\"0\"": {
+    "embedding.ollama.huggingface_tokenizer": "0"
+  },
+  "HUGGINGFACE_TOKENIZER=\"1\"": {
+    "embedding.ollama.huggingface_tokenizer": "1"
+  },
+  "HUGGINGFACE_TOKENIZER=\"1.5\"": {
+    "embedding.ollama.huggingface_tokenizer": "1.5"
+  },
+  "HUGGINGFACE_TOKENIZER=\"42\"": {
+    "embedding.ollama.huggingface_tokenizer": "42"
+  },
+  "HUGGINGFACE_TOKENIZER=\"5000000000\"": {
+    "embedding.ollama.huggingface_tokenizer": "5000000000"
+  },
+  "HUGGINGFACE_TOKENIZER=\"70000\"": {
+    "embedding.ollama.huggingface_tokenizer": "70000"
+  },
+  "HUGGINGFACE_TOKENIZER=\"TRUE\"": {
+    "embedding.ollama.huggingface_tokenizer": "TRUE"
+  },
+  "HUGGINGFACE_TOKENIZER=\"[1]\"": {
+    "embedding.ollama.huggingface_tokenizer": "[1]"
+  },
+  "HUGGINGFACE_TOKENIZER=\"abc\"": {
+    "embedding.ollama.huggingface_tokenizer": "abc"
+  },
+  "HUGGINGFACE_TOKENIZER=\"false\"": {
+    "embedding.ollama.huggingface_tokenizer": "false"
+  },
+  "HUGGINGFACE_TOKENIZER=\"no\"": {
+    "embedding.ollama.huggingface_tokenizer": "no"
+  },
+  "HUGGINGFACE_TOKENIZER=\"on\"": {
+    "embedding.ollama.huggingface_tokenizer": "on"
+  },
+  "HUGGINGFACE_TOKENIZER=\"require\"": {
+    "embedding.ollama.huggingface_tokenizer": "require"
+  },
+  "HUGGINGFACE_TOKENIZER=\"true\"": {
+    "embedding.ollama.huggingface_tokenizer": "true"
+  },
+  "HUGGINGFACE_TOKENIZER=\"v\"": {
+    "embedding.ollama.huggingface_tokenizer": "v"
+  },
+  "HUGGINGFACE_TOKENIZER=\"yes\"": {
+    "embedding.ollama.huggingface_tokenizer": "yes"
+  },
+  "HUGGINGFACE_TOKENIZER=\"{\\\"a\\\":1}\"": {
+    "embedding.ollama.huggingface_tokenizer": "{\"a\":1}"
+  },
+  "HUGGINGFACE_TOKENIZER=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
+    "embedding.ollama.huggingface_tokenizer": "{\"ssl\":\"verify-full\"}"
+  },
+  "HUGGINGFACE_TOKENIZER=\"{\\\"ssl\\\":true}\"": {
+    "embedding.ollama.huggingface_tokenizer": "{\"ssl\":true}"
+  },
   "LLM_API_KEY=\"  \"": {
-    "embedding_api_key": "  ",
+    "embedding.api_key": "  ",
     "llm.api_key": "  "
   },
   "LLM_API_KEY=\"\"": {},
@@ -4041,91 +4199,91 @@
     "llm.api_key": "2"
   },
   "LLM_API_KEY=\"-1\"": {
-    "embedding_api_key": "-1",
+    "embedding.api_key": "-1",
     "llm.api_key": "-1"
   },
   "LLM_API_KEY=\"0\"": {
-    "embedding_api_key": "0",
+    "embedding.api_key": "0",
     "llm.api_key": "0"
   },
   "LLM_API_KEY=\"1\"": {
-    "embedding_api_key": "1",
+    "embedding.api_key": "1",
     "llm.api_key": "1"
   },
   "LLM_API_KEY=\"1.5\"": {
-    "embedding_api_key": "1.5",
+    "embedding.api_key": "1.5",
     "llm.api_key": "1.5"
   },
   "LLM_API_KEY=\"42\"": {
-    "embedding_api_key": "42",
+    "embedding.api_key": "42",
     "llm.api_key": "42"
   },
   "LLM_API_KEY=\"5000000000\"": {
-    "embedding_api_key": "5000000000",
+    "embedding.api_key": "5000000000",
     "llm.api_key": "5000000000"
   },
   "LLM_API_KEY=\"70000\"": {
-    "embedding_api_key": "70000",
+    "embedding.api_key": "70000",
     "llm.api_key": "70000"
   },
   "LLM_API_KEY=\"TRUE\"": {
-    "embedding_api_key": "TRUE",
+    "embedding.api_key": "TRUE",
     "llm.api_key": "TRUE"
   },
   "LLM_API_KEY=\"[1]\"": {
-    "embedding_api_key": "[1]",
+    "embedding.api_key": "[1]",
     "llm.api_key": "[1]"
   },
   "LLM_API_KEY=\"abc\"": {
-    "embedding_api_key": "abc",
+    "embedding.api_key": "abc",
     "llm.api_key": "abc"
   },
   "LLM_API_KEY=\"false\"": {
-    "embedding_api_key": "false",
+    "embedding.api_key": "false",
     "llm.api_key": "false"
   },
   "LLM_API_KEY=\"no\"": {
-    "embedding_api_key": "no",
+    "embedding.api_key": "no",
     "llm.api_key": "no"
   },
   "LLM_API_KEY=\"on\"": {
-    "embedding_api_key": "on",
+    "embedding.api_key": "on",
     "llm.api_key": "on"
   },
   "LLM_API_KEY=\"require\"": {
-    "embedding_api_key": "require",
+    "embedding.api_key": "require",
     "llm.api_key": "require"
   },
   "LLM_API_KEY=\"true\"": {
-    "embedding_api_key": "true",
+    "embedding.api_key": "true",
     "llm.api_key": "true"
   },
   "LLM_API_KEY=\"v\"": {
-    "embedding_api_key": "v",
+    "embedding.api_key": "v",
     "llm.api_key": "v"
   },
   "LLM_API_KEY=\"yes\"": {
-    "embedding_api_key": "yes",
+    "embedding.api_key": "yes",
     "llm.api_key": "yes"
   },
   "LLM_API_KEY=\"{\\\"a\\\":1}\"": {
-    "embedding_api_key": "{\"a\":1}",
+    "embedding.api_key": "{\"a\":1}",
     "llm.api_key": "{\"a\":1}"
   },
   "LLM_API_KEY=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "embedding_api_key": "{\"ssl\":\"verify-full\"}",
+    "embedding.api_key": "{\"ssl\":\"verify-full\"}",
     "llm.api_key": "{\"ssl\":\"verify-full\"}"
   },
   "LLM_API_KEY=\"{\\\"ssl\\\":true}\"": {
-    "embedding_api_key": "{\"ssl\":true}",
+    "embedding.api_key": "{\"ssl\":true}",
     "llm.api_key": "{\"ssl\":true}"
   },
   "LLM_API_KEY=1 + OPENAI_TOKEN=2": {
-    "embedding_api_key": "1",
+    "embedding.api_key": "1",
     "llm.api_key": "1"
   },
   "LLM_API_KEY=abc + OPENAI_TOKEN=2": {
-    "embedding_api_key": "abc",
+    "embedding.api_key": "abc",
     "llm.api_key": "abc"
   },
   "LLM_API_VERSION=\"  \"": {
@@ -5128,6 +5286,70 @@
   },
   "LOG_LEVEL=\"{\\\"ssl\\\":true}\"": {
     "log_level": "{\"ssl\":true}"
+  },
+  "MOCK_EMBEDDING=\"  \"": {
+    "embedding.mock": "  "
+  },
+  "MOCK_EMBEDDING=\"\"": {},
+  "MOCK_EMBEDDING=\"-1\"": {
+    "embedding.mock": "-1"
+  },
+  "MOCK_EMBEDDING=\"0\"": {
+    "embedding.mock": "0"
+  },
+  "MOCK_EMBEDDING=\"1\"": {
+    "embedding.mock": "1"
+  },
+  "MOCK_EMBEDDING=\"1.5\"": {
+    "embedding.mock": "1.5"
+  },
+  "MOCK_EMBEDDING=\"42\"": {
+    "embedding.mock": "42"
+  },
+  "MOCK_EMBEDDING=\"5000000000\"": {
+    "embedding.mock": "5000000000"
+  },
+  "MOCK_EMBEDDING=\"70000\"": {
+    "embedding.mock": "70000"
+  },
+  "MOCK_EMBEDDING=\"TRUE\"": {
+    "embedding.mock": "TRUE"
+  },
+  "MOCK_EMBEDDING=\"[1]\"": {
+    "embedding.mock": "[1]"
+  },
+  "MOCK_EMBEDDING=\"abc\"": {
+    "embedding.mock": "abc"
+  },
+  "MOCK_EMBEDDING=\"false\"": {
+    "embedding.mock": "false"
+  },
+  "MOCK_EMBEDDING=\"no\"": {
+    "embedding.mock": "no"
+  },
+  "MOCK_EMBEDDING=\"on\"": {
+    "embedding.mock": "on"
+  },
+  "MOCK_EMBEDDING=\"require\"": {
+    "embedding.mock": "require"
+  },
+  "MOCK_EMBEDDING=\"true\"": {
+    "embedding.mock": "true"
+  },
+  "MOCK_EMBEDDING=\"v\"": {
+    "embedding.mock": "v"
+  },
+  "MOCK_EMBEDDING=\"yes\"": {
+    "embedding.mock": "yes"
+  },
+  "MOCK_EMBEDDING=\"{\\\"a\\\":1}\"": {
+    "embedding.mock": "{\"a\":1}"
+  },
+  "MOCK_EMBEDDING=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
+    "embedding.mock": "{\"ssl\":\"verify-full\"}"
+  },
+  "MOCK_EMBEDDING=\"{\\\"ssl\\\":true}\"": {
+    "embedding.mock": "{\"ssl\":true}"
   },
   "MOCK_LLM=\"  \"": {},
   "MOCK_LLM=\"\"": {},

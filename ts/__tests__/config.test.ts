@@ -48,9 +48,9 @@ describe("Phase-2 config surface", () => {
       expect(cfg["llm.temperature"]).toBeCloseTo(0.42);
       expect(cfg["llm.streaming"]).toBe(true);
       expect(cfg["llm.max_retries"]).toBe(7);
-      expect(cfg.embedding_provider).toBe("openai");
-      expect(cfg.embedding_dimensions).toBe(1536);
-      expect(cfg.embedding_model_path).toBe("/models/m.onnx");
+      expect(cfg["embedding.provider"]).toBe("openai");
+      expect(cfg["embedding.dimensions"]).toBe(1536);
+      expect(cfg["embedding.onnx.model_path"]).toBe("/models/m.onnx");
       expect(cfg.vector_db_host).toBe("vector-host");
       expect(cfg.vector_db_port).toBe(6333);
       expect(cfg.vector_db_name).toBe("my_collection");
@@ -70,7 +70,7 @@ describe("Phase-2 config surface", () => {
       // Secret fields must be redacted, never echoed back verbatim.
       for (const field of [
         "llm.api_key",
-        "embedding_api_key",
+        "embedding.api_key",
         "vector_db_key",
         "vector_db_password",
         "graph_database_key",

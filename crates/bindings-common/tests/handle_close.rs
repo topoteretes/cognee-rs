@@ -31,12 +31,17 @@ use cognee_bindings_common::HandleState;
 fn handle_under(dir: &Path) -> (std::sync::Arc<HandleState>, PathBuf) {
     let db_path = dir.join("cognee.db");
     let settings = Settings {
-        sections: [(
-            "llm.api_key".to_string(),
-            serde_json::json!("sk-test".to_owned()),
-        )]
+        sections: [
+            (
+                "embedding.provider".to_string(),
+                serde_json::json!("mock".to_owned()),
+            ),
+            (
+                "llm.api_key".to_string(),
+                serde_json::json!("sk-test".to_owned()),
+            ),
+        ]
         .into(),
-        embedding_provider: "mock".to_owned(),
         data_root_directory: dir.join("data").to_string_lossy().into_owned(),
         system_root_directory: dir.join("sys").to_string_lossy().into_owned(),
         relational_db_url: format!("sqlite://{}?mode=rwc", db_path.display()),
@@ -456,8 +461,14 @@ async fn a_failed_warm_still_reports_open_resources_and_releases_them() {
 
     // Everything valid except the LLM key, which is resolved strictly and last.
     let settings = Settings {
-        sections: [("llm.api_key".to_string(), serde_json::json!(String::new()))].into(),
-        embedding_provider: "mock".to_owned(),
+        sections: [
+            (
+                "embedding.provider".to_string(),
+                serde_json::json!("mock".to_owned()),
+            ),
+            ("llm.api_key".to_string(), serde_json::json!(String::new())),
+        ]
+        .into(),
         data_root_directory: dir.path().join("data").to_string_lossy().into_owned(),
         system_root_directory: dir.path().join("sys").to_string_lossy().into_owned(),
         relational_db_url: format!("sqlite://{}?mode=rwc", db_path.display()),

@@ -208,25 +208,6 @@ pub struct Settings {
 
     pub default_system_prompt_path: String,
 
-    pub embedding_provider: String,
-    pub embedding_model_path: String,
-    pub embedding_tokenizer_path: String,
-    pub embedding_model_name: String,
-    pub embedding_dimensions: u32,
-    pub embedding_max_sequence_length: u32,
-    pub embedding_batch_size: u32,
-    /// ONNX inference batch size (the leading tensor dimension), independent of
-    /// `embedding_batch_size` which sizes HTTP requests. Maps to
-    /// `EMBEDDING_ONNX_BATCH_SIZE`; only the ONNX/Fastembed provider reads it.
-    pub embedding_onnx_batch_size: u32,
-    /// Embedding API endpoint URL (e.g. `https://api.openai.com/v1/embeddings`).
-    /// Maps to `EMBEDDING_ENDPOINT` env var.
-    pub embedding_endpoint: String,
-    /// Embedding API key. Maps to `EMBEDDING_API_KEY` env var (fallback: `LLM_API_KEY`).
-    pub embedding_api_key: String,
-    /// Embedding API version string (e.g. for Azure OpenAI `api-version`).
-    pub embedding_api_version: String,
-
     pub ontology_file_path: String,
     /// Ontology resolver backend. Currently always resolved to `RdfLibOntologyResolver`
     /// when `ontology_file_path` is set — this field is reserved for future multi-resolver
@@ -258,9 +239,6 @@ pub struct Settings {
     pub log_level: String,
 
     // -- Rate limiting -----------------------------------------------------------
-    pub embedding_rate_limit_enabled: bool,
-    pub embedding_rate_limit_requests: u32,
-    pub embedding_rate_limit_interval: u32,
 
     // -- Storage backend ---------------------------------------------------------
     /// File storage backend: `"local"` or `"s3"`.
@@ -403,6 +381,12 @@ impl Settings {
         T::from_values(&self.sections)
     }
 
+    /// The embedding kind section (`embedding.*`): provider, model,
+    /// dimensions, credentials, batching and rate limits.
+    pub fn embedding(&self) -> cognee_components::EmbeddingConfig {
+        self.section()
+    }
+
     /// The LLM kind section (`llm.*`): provider, model, credentials, retries,
     /// timeouts and the other settings every LLM adapter shares.
     pub fn llm(&self) -> cognee_components::LlmConfig {
@@ -454,10 +438,6 @@ impl Settings {
     /// `EMBEDDING_API_VERSION`, `HUGGINGFACE_TOKENIZER`,
     /// `EMBEDDING_MAX_COMPLETION_TOKENS`) happen here so the registry stays
     /// env-free.
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
-    )]
     pub fn backend_context(&self) -> cognee_components::BackendBuildContext {
         use std::path::PathBuf;
 
@@ -501,15 +481,17 @@ impl Settings {
         // Inherit only when the LLM side is Bedrock too, which is the case the
         // "shared account" rationale actually covers.
         let embedding_is_bedrock = self
-            .embedding_provider
+            .embedding()
+            .provider
             .trim()
             .eq_ignore_ascii_case("bedrock");
         let inherit_from_llm =
             !embedding_is_bedrock || self.llm().provider.trim().eq_ignore_ascii_case("bedrock");
 
         let llm = self.llm();
-        let mut endpoint_sources = vec![&self.embedding_endpoint];
-        let mut api_key_sources = vec![&self.embedding_api_key];
+        let embedding_section = self.embedding();
+        let mut endpoint_sources = vec![&embedding_section.endpoint];
+        let mut api_key_sources = vec![&embedding_section.api_key];
         if inherit_from_llm {
             endpoint_sources.push(&llm.endpoint);
             api_key_sources.push(&llm.api_key);
@@ -525,34 +507,8 @@ impl Settings {
         // `zero` is the only way to get the legacy all-zero vectors, which
         // cosine KNN backends drop (NaN distance) and therefore never retrieve.
         // Mirrors `cognee_embedding::EmbeddingConfig::from_env`.
-        let mock_raw = std::env::var("MOCK_EMBEDDING")
-            .ok()
-            .map(|v| v.trim().to_lowercase());
-        let mock_zero = matches!(mock_raw.as_deref(), Some("zero"));
-        let mock = mock_zero
-            || matches!(
-                mock_raw.as_deref(),
-                Some("true") | Some("1") | Some("yes") | Some("deterministic") | Some("hash")
-            );
-        let mock_mode = if mock_zero {
-            cognee_embedding::MockVectorMode::Zero
-        } else {
-            cognee_embedding::MockVectorMode::Deterministic
-        };
-
-        // Forward-compat env fields not yet on Settings.
-        let api_version = std::env::var("EMBEDDING_API_VERSION")
-            .ok()
-            .map(|v| v.trim().to_string())
-            .filter(|v| !v.is_empty());
-        let huggingface_tokenizer = std::env::var("HUGGINGFACE_TOKENIZER")
-            .ok()
-            .map(|v| v.trim().to_string())
-            .filter(|v| !v.is_empty());
-        let max_completion_tokens = std::env::var("EMBEDDING_MAX_COMPLETION_TOKENS")
-            .ok()
-            .and_then(|v| v.trim().parse::<usize>().ok())
-            .unwrap_or(8191);
+        let embedding = self.embedding();
+        let mock_mode = embedding.mock_mode();
 
         cognee_components::BackendBuildContext {
             sections: self.sections.clone(),
@@ -565,28 +521,21 @@ impl Settings {
             vector_provider,
             vector_db_url: self.vector_db_url.clone(),
             vector_postgres_url,
-            embedding_dimensions: self.embedding_dimensions as usize,
+            embedding_dimensions: embedding.dimensions as usize,
             embedding: cognee_components::EmbeddingInputs {
-                provider: self.embedding_provider.trim().to_lowercase(),
-                model: self.embedding_model_name.clone(),
-                dimensions: self.embedding_dimensions as usize,
+                provider: embedding.provider.trim().to_lowercase(),
+                model: embedding.model.clone(),
+                dimensions: embedding.dimensions as usize,
                 endpoint,
                 api_key,
-                batch_size: self.embedding_batch_size as usize,
-                rate_limit_enabled: self.embedding_rate_limit_enabled,
-                rate_limit_requests: self.embedding_rate_limit_requests,
-                rate_limit_interval: self.embedding_rate_limit_interval,
-                mock,
-                mock_mode,
-                api_version,
-                huggingface_tokenizer,
-                max_completion_tokens,
-                onnx_model_path: PathBuf::from(&self.embedding_model_path),
-                onnx_tokenizer_path: PathBuf::from(&self.embedding_tokenizer_path),
-                onnx_model_name: self.embedding_model_name.clone(),
-                onnx_dimensions: self.embedding_dimensions as usize,
-                onnx_max_sequence_length: self.embedding_max_sequence_length as usize,
-                onnx_batch_size: self.embedding_onnx_batch_size as usize,
+                batch_size: embedding.batch_size as usize,
+                rate_limit_enabled: embedding.rate_limit_enabled,
+                rate_limit_requests: embedding.rate_limit_requests,
+                rate_limit_interval: embedding.rate_limit_interval,
+                mock: mock_mode.is_some(),
+                mock_mode: mock_mode.unwrap_or_default(),
+                max_completion_tokens: embedding.max_completion_tokens as usize,
+                max_sequence_length: embedding.max_sequence_length as usize,
             },
             llm: cognee_components::LlmInputs {
                 provider: llm.provider.to_lowercase(),
@@ -808,15 +757,15 @@ impl Settings {
         // privacy-filtered payload — see `telemetry_snapshot_only_emits_allowlisted_keys`.
         m.insert(
             "embedding_provider".into(),
-            Value::String(self.embedding_provider.clone()),
+            Value::String(self.embedding().provider.clone()),
         );
         m.insert(
             "embedding_model".into(),
-            Value::String(self.embedding_model_name.clone()),
+            Value::String(self.embedding().model.clone()),
         );
         m.insert(
             "embedding_dimensions".into(),
-            Value::Number(self.embedding_dimensions.into()),
+            Value::Number(self.embedding().dimensions.into()),
         );
         m.insert(
             "chunk_strategy".into(),
@@ -828,18 +777,6 @@ impl Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        // Embedding default: local ONNX (BGE-Small) on Android for edge/offline
-        // deployment; OpenAI text-embedding-3-small everywhere else — matching
-        // the Python SDK and `cognee_embedding::EmbeddingConfig::default()`.
-        // (ONNX runs all texts in one inference; remote OpenAI embeddings avoid
-        // both the model download and large-batch memory blow-ups.)
-        #[cfg(target_os = "android")]
-        let (embedding_provider, embedding_model_name, embedding_dimensions) =
-            ("onnx", "BGE-Small-v1.5", 384u32);
-        #[cfg(not(target_os = "android"))]
-        let (embedding_provider, embedding_model_name, embedding_dimensions) =
-            ("openai", "text-embedding-3-small", 1536u32);
-
         Self {
             default_user_id: "00000000-0000-0000-0000-000000000000".to_string(),
             default_dataset_name: "main_dataset".to_string(),
@@ -947,24 +884,6 @@ impl Default for Settings {
 
             default_system_prompt_path: DEFAULT_SYSTEM_PROMPT_PATH.to_string(),
 
-            embedding_provider: embedding_provider.to_string(),
-            // ONNX model/tokenizer paths are only consulted when the provider is
-            // `onnx`/`fastembed` (the Android/edge default); harmless otherwise.
-            embedding_model_path: "./target/models/BGE-Small-v1.5-model_quantized.onnx".to_string(),
-            embedding_tokenizer_path: "./target/models/bge-small-tokenizer.json".to_string(),
-            embedding_model_name: embedding_model_name.to_string(),
-            // Dimensions match the default model above (text-embedding-3-small =
-            // 1536; BGE-Small = 384). If you change embedding_model_name, update
-            // this or set EMBEDDING_DIMENSIONS so from_env auto-resolves it via
-            // cognee_embedding::known_model_dimensions.
-            embedding_dimensions,
-            embedding_max_sequence_length: 512,
-            embedding_batch_size: 36,
-            embedding_onnx_batch_size: 32,
-            embedding_endpoint: String::new(),
-            embedding_api_key: String::new(),
-            embedding_api_version: String::new(),
-
             ontology_file_path: String::new(),
             ontology_resolver: "rdflib".to_string(),
             ontology_matching_strategy: "fuzzy".to_string(),
@@ -986,10 +905,6 @@ impl Default for Settings {
 
             // Logging
             log_level: "info".to_string(),
-
-            embedding_rate_limit_enabled: false,
-            embedding_rate_limit_requests: 60,
-            embedding_rate_limit_interval: 60,
 
             // Storage backend
             storage_backend: "local".to_string(),
@@ -1081,10 +996,10 @@ pub struct ConfigManager {
 /// return the values of a known key that had the wrong type.
 ///
 /// `Settings::sections` is a `#[serde(flatten)]` catch-all, so a `Settings`
-/// key serde does not know by that name lands in it too: the
-/// `#[serde(skip)]` fields (`llm_args`, `summarization_schema`) and key
-/// aliases (`embedding_model`). Those are moved out and applied through the
-/// key registry first, so only component section keys stay in `sections`.
+/// key serde does not know by that name lands in it too: a `#[serde(skip)]`
+/// field (`summarization_schema`) or a key alias. Those are moved out and
+/// applied through the key registry first; section aliases are rewritten by
+/// the schema, so only canonical section keys stay in `sections`.
 fn normalize_bulk(schema: &ConfigSchema, settings: &mut Settings) -> Vec<(String, String)> {
     let mut invalid = Vec::new();
     let core: Vec<(String, &'static KeySpec)> = settings
@@ -1382,42 +1297,58 @@ impl ConfigManager {
 
     pub fn set_embedding_provider(&self, provider: &str) {
         let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
-        s.embedding_provider = provider.to_string();
+        s.sections.insert(
+            "embedding.provider".to_string(),
+            serde_json::json!(provider.to_string()),
+        );
         drop(s);
         self.bump_version();
     }
 
     pub fn set_embedding_model(&self, model: &str) {
         let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
-        s.embedding_model_name = model.to_string();
+        s.sections.insert(
+            "embedding.model".to_string(),
+            serde_json::json!(model.to_string()),
+        );
         drop(s);
         self.bump_version();
     }
 
     pub fn set_embedding_dimensions(&self, dims: u32) {
         let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
-        s.embedding_dimensions = dims;
+        s.sections
+            .insert("embedding.dimensions".to_string(), serde_json::json!(dims));
         drop(s);
         self.bump_version();
     }
 
     pub fn set_embedding_endpoint(&self, endpoint: &str) {
         let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
-        s.embedding_endpoint = endpoint.to_string();
+        s.sections.insert(
+            "embedding.endpoint".to_string(),
+            serde_json::json!(endpoint.to_string()),
+        );
         drop(s);
         self.bump_version();
     }
 
     pub fn set_embedding_api_key(&self, key: &str) {
         let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
-        s.embedding_api_key = key.to_string();
+        s.sections.insert(
+            "embedding.api_key".to_string(),
+            serde_json::json!(key.to_string()),
+        );
         drop(s);
         self.bump_version();
     }
 
     pub fn set_embedding_api_version(&self, version: &str) {
         let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
-        s.embedding_api_version = version.to_string();
+        s.sections.insert(
+            "embedding.openai_compatible.api_version".to_string(),
+            serde_json::json!(version.to_string()),
+        );
         drop(s);
         self.bump_version();
     }
@@ -1803,14 +1734,20 @@ impl ConfigManager {
 
     pub fn set_embedding_model_path(&self, path: &str) {
         let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
-        s.embedding_model_path = path.to_string();
+        s.sections.insert(
+            "embedding.onnx.model_path".to_string(),
+            serde_json::json!(path.to_string()),
+        );
         drop(s);
         self.bump_version();
     }
 
     pub fn set_embedding_tokenizer_path(&self, path: &str) {
         let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
-        s.embedding_tokenizer_path = path.to_string();
+        s.sections.insert(
+            "embedding.onnx.tokenizer_path".to_string(),
+            serde_json::json!(path.to_string()),
+        );
         drop(s);
         self.bump_version();
     }
@@ -1974,23 +1911,23 @@ impl ConfigManager {
         // Embedding
         m.insert(
             "embedding_provider".into(),
-            Value::String(s.embedding_provider.clone()),
+            Value::String(s.embedding().provider.clone()),
         );
         m.insert(
             "embedding_model_name".into(),
-            Value::String(s.embedding_model_name.clone()),
+            Value::String(s.embedding().model.clone()),
         );
         m.insert(
             "embedding_api_key".into(),
-            Value::String(mask(&s.embedding_api_key)),
+            Value::String(mask(&s.embedding().api_key)),
         );
         m.insert(
             "embedding_endpoint".into(),
-            Value::String(s.embedding_endpoint.clone()),
+            Value::String(s.embedding().endpoint.clone()),
         );
         m.insert(
             "embedding_dimensions".into(),
-            Value::Number(s.embedding_dimensions.into()),
+            Value::Number(s.embedding().dimensions.into()),
         );
 
         // Graph DB
@@ -2091,17 +2028,6 @@ fn as_string(key: &str, value: &serde_json::Value) -> Result<String, ConfigError
         })
 }
 
-/// Extract a `u32` from a JSON value, or return a type-mismatch error.
-fn as_u32(key: &str, value: &serde_json::Value) -> Result<u32, ConfigError> {
-    value
-        .as_u64()
-        .and_then(|n| u32::try_from(n).ok())
-        .ok_or_else(|| ConfigError::TypeMismatch {
-            key: key.to_string(),
-            reason: "expected a positive integer (u32)".to_string(),
-        })
-}
-
 /// Extract a `u16` from a JSON value, or return a type-mismatch error.
 fn as_u16(key: &str, value: &serde_json::Value) -> Result<u16, ConfigError> {
     value
@@ -2159,26 +2085,28 @@ impl ConfigManager {
         &self,
         values: &HashMap<String, serde_json::Value>,
     ) -> Result<(), ConfigError> {
-        let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
-        for (key, value) in values {
-            match key.as_str() {
-                "embedding_provider" => s.embedding_provider = as_string(key, value)?,
-                "embedding_model" | "embedding_model_name" => {
-                    s.embedding_model_name = as_string(key, value)?;
-                }
-                "embedding_dimensions" => s.embedding_dimensions = as_u32(key, value)?,
-                "embedding_endpoint" => s.embedding_endpoint = as_string(key, value)?,
-                "embedding_api_key" => s.embedding_api_key = as_string(key, value)?,
-                "embedding_model_path" => s.embedding_model_path = as_string(key, value)?,
-                "embedding_tokenizer_path" => {
-                    s.embedding_tokenizer_path = as_string(key, value)?;
-                }
-                "embedding_api_version" => s.embedding_api_version = as_string(key, value)?,
-                other => return Err(ConfigError::UnknownKey(other.to_string())),
-            }
+        // The keys this bulk setter has always accepted, each dispatched
+        // through the generic setter (aliases of `embedding.*` section keys).
+        const EMBEDDING_KEYS: &[&str] = &[
+            "embedding_provider",
+            "embedding_model",
+            "embedding_model_name",
+            "embedding_dimensions",
+            "embedding_endpoint",
+            "embedding_api_key",
+            "embedding_model_path",
+            "embedding_tokenizer_path",
+            "embedding_api_version",
+        ];
+        if let Some(key) = values
+            .keys()
+            .find(|k| !EMBEDDING_KEYS.contains(&k.as_str()))
+        {
+            return Err(ConfigError::UnknownKey(key.clone()));
         }
-        drop(s);
-        self.bump_version();
+        for (key, value) in values {
+            self.set(key, value.clone())?;
+        }
         Ok(())
     }
 
@@ -2351,11 +2279,15 @@ mod tests {
         s.overlay_from_env();
         unsafe { std::env::remove_var("EMBEDDING_ONNX_BATCH_SIZE") };
 
-        assert_eq!(s.embedding_onnx_batch_size, 8);
+        assert_eq!(
+            s.section::<cognee_components::OnnxEmbeddingConfig>()
+                .batch_size,
+            8
+        );
         // The HTTP request batch is untouched by the ONNX override.
         assert_eq!(
-            s.embedding_batch_size,
-            Settings::default().embedding_batch_size
+            s.embedding().batch_size,
+            Settings::default().embedding().batch_size
         );
     }
 
@@ -2961,13 +2893,32 @@ mod tests {
             cm.get("llm_args"),
             Some(serde_json::json!({ "max_tokens": 100 }))
         );
+        assert_eq!(cm.get("embedding_model"), Some(serde_json::json!("x")));
         let s = cm.read();
-        assert_eq!(s.embedding_model_name, "x");
         assert!(
             !s.sections.contains_key("embedding_model"),
             "{:?}",
             s.sections
         );
+    }
+
+    /// The `#[serde(skip)]` `summarization_schema` arrives in the flatten map
+    /// too, and is applied as the setting.
+    #[test]
+    fn bulk_loaded_skipped_settings_field_is_applied() {
+        let settings: Settings = serde_json::from_value(serde_json::json!({
+            "strict_config": true,
+            "summarization_schema": {
+                "type": "object",
+                "properties": { "summary": { "type": "string" } },
+            },
+        }))
+        .unwrap();
+        let cm = ConfigManager::new(settings);
+        cm.check_strict().unwrap();
+        let s = cm.read();
+        assert!(s.summarization_schema.is_some());
+        assert!(s.sections.is_empty(), "{:?}", s.sections);
     }
 
     /// A wrongly typed bulk value of a `Settings` key routed through the
@@ -3118,8 +3069,8 @@ mod tests {
             .expect("bulk set should succeed");
 
         let s = cm.read();
-        assert_eq!(s.embedding_provider, "openai");
-        assert_eq!(s.embedding_dimensions, 1536);
+        assert_eq!(s.embedding().provider, "openai");
+        assert_eq!(s.embedding().dimensions, 1536);
     }
 
     // -- Option B widening: granular setters ----------------------------------
@@ -3160,11 +3111,21 @@ mod tests {
 
         cm.set_embedding_model_path("/models/m.onnx");
         expected_version += 1;
-        assert_eq!(cm.read().embedding_model_path, "/models/m.onnx");
+        assert_eq!(
+            cm.read()
+                .section::<cognee_components::OnnxEmbeddingConfig>()
+                .model_path,
+            "/models/m.onnx"
+        );
 
         cm.set_embedding_tokenizer_path("/models/t.json");
         expected_version += 1;
-        assert_eq!(cm.read().embedding_tokenizer_path, "/models/t.json");
+        assert_eq!(
+            cm.read()
+                .section::<cognee_components::OnnxEmbeddingConfig>()
+                .tokenizer_path,
+            "/models/t.json"
+        );
 
         cm.set_vector_db_host("localhost");
         expected_version += 1;
@@ -3272,7 +3233,12 @@ mod tests {
 
         cm.set("embedding_model_path", serde_json::json!("/m.onnx"))
             .expect("embedding_model_path should be settable");
-        assert_eq!(cm.read().embedding_model_path, "/m.onnx");
+        assert_eq!(
+            cm.read()
+                .section::<cognee_components::OnnxEmbeddingConfig>()
+                .model_path,
+            "/m.onnx"
+        );
     }
 
     #[test]
@@ -3331,8 +3297,16 @@ mod tests {
             .expect("bulk set should succeed");
 
         let s = cm.read();
-        assert_eq!(s.embedding_model_path, "/m.onnx");
-        assert_eq!(s.embedding_tokenizer_path, "/t.json");
+        assert_eq!(
+            s.section::<cognee_components::OnnxEmbeddingConfig>()
+                .model_path,
+            "/m.onnx"
+        );
+        assert_eq!(
+            s.section::<cognee_components::OnnxEmbeddingConfig>()
+                .tokenizer_path,
+            "/t.json"
+        );
     }
 
     #[test]
@@ -3353,19 +3327,19 @@ mod tests {
         // Default provider: OpenAI everywhere except Android (local ONNX/edge).
         #[cfg(not(target_os = "android"))]
         {
-            assert_eq!(s.embedding_provider, "openai");
-            assert_eq!(s.embedding_model_name, "text-embedding-3-small");
-            assert_eq!(s.embedding_dimensions, 1536);
+            assert_eq!(s.embedding().provider, "openai");
+            assert_eq!(s.embedding().model, "text-embedding-3-small");
+            assert_eq!(s.embedding().dimensions, 1536);
         }
         #[cfg(target_os = "android")]
         {
-            assert_eq!(s.embedding_provider, "onnx");
-            assert_eq!(s.embedding_dimensions, 384);
+            assert_eq!(s.embedding().provider, "onnx");
+            assert_eq!(s.embedding().dimensions, 384);
         }
         // No embedding-specific endpoint/key by default — they fall back to the
         // LLM provider's at engine-build time.
-        assert_eq!(s.embedding_endpoint, "");
-        assert_eq!(s.embedding_api_key, "");
+        assert_eq!(s.embedding().endpoint, "");
+        assert_eq!(s.embedding().api_key, "");
     }
 
     #[test]
@@ -3377,7 +3351,7 @@ mod tests {
         s.overlay_from_env();
         unsafe { std::env::remove_var("EMBEDDING_PROVIDER") };
 
-        assert_eq!(s.embedding_provider, "openai");
+        assert_eq!(s.embedding().provider, "openai");
     }
 
     #[test]
@@ -3523,7 +3497,7 @@ mod tests {
         unsafe { std::env::remove_var("EMBEDDING_RATE_LIMIT_REQUESTS") };
 
         assert_eq!(s.llm().rate_limit_requests, 120);
-        assert_eq!(s.embedding_rate_limit_requests, 30);
+        assert_eq!(s.embedding().rate_limit_requests, 30);
     }
 
     #[test]
@@ -3571,6 +3545,18 @@ mod tests {
         let mut s = Settings {
             sections: [
                 (
+                    "embedding.provider".to_string(),
+                    serde_json::json!("bedrock".to_string()),
+                ),
+                (
+                    "embedding.endpoint".to_string(),
+                    serde_json::json!(String::new()),
+                ),
+                (
+                    "embedding.api_key".to_string(),
+                    serde_json::json!(String::new()),
+                ),
+                (
                     "llm.provider".to_string(),
                     serde_json::json!("openai".to_string()),
                 ),
@@ -3584,9 +3570,6 @@ mod tests {
                 ),
             ]
             .into(),
-            embedding_provider: "bedrock".to_string(),
-            embedding_endpoint: String::new(),
-            embedding_api_key: String::new(),
             ..Default::default()
         };
 
@@ -3613,7 +3596,10 @@ mod tests {
         );
 
         // And a non-Bedrock embedding provider keeps the original fallback.
-        s.embedding_provider = "openai".to_string();
+        s.sections.insert(
+            "embedding.provider".to_string(),
+            serde_json::json!("openai".to_string()),
+        );
         s.sections.insert(
             "llm.provider".to_string(),
             serde_json::json!("openai".to_string()),
@@ -3658,9 +3644,9 @@ mod tests {
         assert!(!s.llm().rate_limit_enabled);
         assert_eq!(s.llm().rate_limit_requests, 60);
         assert_eq!(s.llm().rate_limit_interval, 60);
-        assert!(!s.embedding_rate_limit_enabled);
-        assert_eq!(s.embedding_rate_limit_requests, 60);
-        assert_eq!(s.embedding_rate_limit_interval, 60);
+        assert!(!s.embedding().rate_limit_enabled);
+        assert_eq!(s.embedding().rate_limit_requests, 60);
+        assert_eq!(s.embedding().rate_limit_interval, 60);
         assert_eq!(s.storage_backend, "local");
         assert!(!s.cognee_tracing_enabled);
         assert_eq!(s.otel_service_name, "cognee");
@@ -3672,9 +3658,9 @@ mod tests {
         assert_eq!(s.otel_traces_sampler_arg, "");
         assert!(!s.enable_last_accessed);
         #[cfg(not(target_os = "android"))]
-        assert_eq!(s.embedding_provider, "openai");
+        assert_eq!(s.embedding().provider, "openai");
         #[cfg(target_os = "android")]
-        assert_eq!(s.embedding_provider, "onnx");
+        assert_eq!(s.embedding().provider, "onnx");
     }
 
     #[test]
@@ -3686,7 +3672,7 @@ mod tests {
         s.overlay_from_env();
         unsafe { std::env::remove_var("EMBEDDING_ENDPOINT") };
 
-        assert_eq!(s.embedding_endpoint, "https://api.example.com/embed");
+        assert_eq!(s.embedding().endpoint, "https://api.example.com/embed");
     }
 
     #[test]
@@ -3718,12 +3704,21 @@ mod tests {
     #[test]
     fn telemetry_snapshot_redacts_credentials_and_urls() {
         let cfg = Settings {
-            sections: [("llm.api_key".to_string(), serde_json::json!("sk-secret"))].into(),
-            embedding_api_key: "sk-also-secret".into(),
+            sections: [
+                (
+                    "embedding.api_key".to_string(),
+                    serde_json::json!("sk-also-secret"),
+                ),
+                (
+                    "embedding.endpoint".to_string(),
+                    serde_json::json!("https://internal.example/v1/embed"),
+                ),
+                ("llm.api_key".to_string(), serde_json::json!("sk-secret")),
+            ]
+            .into(),
             vector_db_password: "vector-pass".into(),
             db_password: "db-pass".into(),
             relational_db_url: "postgres://user:pass@host/db".into(),
-            embedding_endpoint: "https://internal.example/v1/embed".into(),
             ..Settings::default()
         };
 
@@ -3847,7 +3842,13 @@ mod tests {
     fn test_embedding_api_version_setter() {
         let cfg = ConfigManager::new(Settings::default());
         cfg.set_embedding_api_version("2024-02-15");
-        assert_eq!(cfg.read().embedding_api_version, "2024-02-15");
+        assert_eq!(
+            cfg.read()
+                .section::<cognee_components::OpenAiCompatibleEmbeddingConfig>()
+                .api_version
+                .as_deref(),
+            Some("2024-02-15")
+        );
     }
 
     #[test]

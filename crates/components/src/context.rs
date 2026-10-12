@@ -126,19 +126,14 @@ pub struct EmbeddingInputs {
     /// SHA-256-derived content-stable vectors; `MOCK_EMBEDDING=zero` selects
     /// all-zero vectors (which cosine KNN backends never retrieve).
     pub mock_mode: MockVectorMode,
-    /// Forward-compat fields historically read from the environment.
-    pub api_version: Option<String>,
-    pub huggingface_tokenizer: Option<String>,
+    /// Input-token limit of a remote embedding API (`embedding.max_completion_tokens`).
     pub max_completion_tokens: usize,
-
-    // ONNX asset paths — carried unconditionally; only consumed under the
-    // `onnx` feature.
-    pub onnx_model_path: PathBuf,
-    pub onnx_tokenizer_path: PathBuf,
-    pub onnx_model_name: String,
-    pub onnx_dimensions: usize,
-    pub onnx_max_sequence_length: usize,
-    pub onnx_batch_size: usize,
+    /// Maximum input tokens per text (`embedding.max_sequence_length`); the
+    /// ONNX provider's sequence length.
+    pub max_sequence_length: usize,
+    // Provider-specific settings (ONNX asset paths, the Azure API version, the
+    // Ollama tokenizer, AWS) are not here: each provider's factory reads its
+    // own config section from `BackendBuildContext::sections`.
 }
 
 /// Resolved LLM / transcriber inputs.

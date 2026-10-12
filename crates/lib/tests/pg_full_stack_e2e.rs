@@ -145,16 +145,42 @@ fn make_all_postgres_settings(pg_url: &str) -> Settings {
                 tokenizer,
             ),
             None => (
-                default_settings.embedding_provider.clone(),
-                default_settings.embedding_model_name.clone(),
-                default_settings.embedding_dimensions,
-                default_settings.embedding_model_path.clone(),
-                default_settings.embedding_tokenizer_path.clone(),
+                default_settings.embedding().provider.clone(),
+                default_settings.embedding().model.clone(),
+                default_settings.embedding().dimensions,
+                default_settings
+                    .section::<cognee_components::OnnxEmbeddingConfig>()
+                    .model_path
+                    .clone(),
+                default_settings
+                    .section::<cognee_components::OnnxEmbeddingConfig>()
+                    .tokenizer_path
+                    .clone(),
             ),
         };
 
     Settings {
         sections: [
+            (
+                "embedding.provider".to_string(),
+                serde_json::json!(embedding_provider),
+            ),
+            (
+                "embedding.model".to_string(),
+                serde_json::json!(embedding_model_name),
+            ),
+            (
+                "embedding.onnx.model_path".to_string(),
+                serde_json::json!(embed_model),
+            ),
+            (
+                "embedding.onnx.tokenizer_path".to_string(),
+                serde_json::json!(embed_tok),
+            ),
+            (
+                "embedding.dimensions".to_string(),
+                serde_json::json!(embedding_dimensions),
+            ),
             (
                 "llm.provider".to_string(),
                 serde_json::json!("openai".to_string()),
@@ -183,11 +209,6 @@ fn make_all_postgres_settings(pg_url: &str) -> Settings {
 
         // Embedding — real ONNX model for non-trivial similarity when present,
         // otherwise the shared OpenAI-compatible account (see `onnx_assets`).
-        embedding_provider,
-        embedding_model_name,
-        embedding_model_path: embed_model,
-        embedding_tokenizer_path: embed_tok,
-        embedding_dimensions,
 
         // Use a unique system root so on-disk data stays isolated.
         system_root_directory: format!("./.cognee_pg_e2e_{}", Uuid::new_v4()),

@@ -28,7 +28,7 @@ pub fn run(args: ExportArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
     crate::teardown::run_command(Arc::clone(&cm), async move {
         // Scoped so the settings read guard is dropped before the awaits
         // below (clippy::await_holding_lock).
-        let embedding_model = cm.settings().embedding_model_name.clone();
+        let embedding_model = cm.settings().embedding().model.clone();
 
         let graph_db = cm
             .graph_db()

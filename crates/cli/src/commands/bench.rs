@@ -414,8 +414,8 @@ pub fn run(args: BenchArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
         let s = cm.settings();
         (
             s.llm().model.clone(),
-            s.embedding_model_name.clone(),
-            s.embedding_dimensions,
+            s.embedding().model.clone(),
+            s.embedding().dimensions,
         )
     };
 

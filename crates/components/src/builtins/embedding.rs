@@ -1,8 +1,9 @@
-//! Built-in embedding engine factory.
+//! Built-in embedding engine factories, one per provider id.
 //!
-//! Provider selection happens inside `EmbeddingConfig::create_engine`, so there
-//! is a single default embedding factory (replaceable via
-//! [`crate::ComponentRegistry::set_embedding`]) rather than a per-provider map.
+//! Each factory registers the config section its provider reads (`embedding.onnx`,
+//! `embedding.openai_compatible`, `embedding.ollama`, `aws`), so a provider that
+//! is not compiled in brings no settings. The settings every provider shares are
+//! the `embedding` kind section ([`crate::sections::EmbeddingConfig`]).
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -68,14 +69,14 @@ pub fn onnx_asset_defaults() -> OnnxAssetDefaults {
 /// for — a misconfiguration that looks like a working setup until retrieval
 /// quality is inexplicably wrong.
 ///
-/// Extracted from [`DefaultEmbeddingFactory::build`] so it is reachable from a
+/// Called by [`crate::ComponentRegistry::build_embedding`]; kept separate so it is reachable from a
 /// unit test: exercising it through the factory needs a fully-populated
 /// `BackendBuildContext`, which is why this behaviour previously had no direct
 /// coverage at all.
 ///
 /// An empty id means "use the default" and is allowed. `mock` short-circuits
 /// provider selection entirely, so the id is not consulted when mocking.
-fn validate_provider_id(provider: &str, mock: bool) -> Result<(), ComponentError> {
+pub(crate) fn validate_provider_id(provider: &str, mock: bool) -> Result<(), ComponentError> {
     let provider = provider.trim();
     if !mock && !provider.is_empty() && parse_embedding_provider(provider).is_none() {
         return Err(ComponentError::EmbeddingEngine(format!(
@@ -103,25 +104,25 @@ fn parse_embedding_provider(provider: &str) -> Option<EmbeddingProvider> {
     }
 }
 
-/// Map resolved [`EmbeddingInputs`] to a `cognee_embedding::EmbeddingConfig`.
+/// Map resolved [`EmbeddingInputs`] plus the provider sections in `sections`
+/// to a `cognee_embedding::EmbeddingConfig`.
 ///
-/// Empty and unrecognized provider strings map to `onnx`; the factory validates
-/// non-empty unrecognized values separately (see [`DefaultEmbeddingFactory`]) so
-/// a typo surfaces as an error rather than a silent ONNX fallback.
-/// `MOCK_EMBEDDING` handling is expressed through [`EmbeddingInputs::mock`] /
-/// [`EmbeddingInputs::mock_mode`], which the caller populates.
+/// Empty and unrecognized provider strings map to `onnx`; the registry rejects a
+/// non-empty unrecognized id before a factory is chosen, so a typo surfaces as an
+/// error rather than a silent ONNX fallback. `MOCK_EMBEDDING` handling is
+/// expressed through [`EmbeddingInputs::mock`] / [`EmbeddingInputs::mock_mode`].
 #[allow(
     clippy::field_reassign_with_default,
     reason = "the `onnx` field is cfg-gated on the embedding crate's own feature \
               (which can be enabled independently of this crate's), so the config \
               must be default-constructed first and the fields assigned after"
 )]
-/// `aws` carries the `aws` config section (see [`crate::sections::AwsConfig`]);
-/// only the Bedrock provider reads it.
 pub fn build_embedding_config(
     inputs: &EmbeddingInputs,
-    #[cfg_attr(not(feature = "bedrock"), allow(unused_variables))] aws: &crate::context::AwsInputs,
+    sections: &cognee_config_core::ConfigValues,
 ) -> EmbeddingConfig {
+    use cognee_config_core::ConfigSection as _;
+
     let provider = if inputs.mock {
         EmbeddingProvider::Mock
     } else {
@@ -141,13 +142,17 @@ pub fn build_embedding_config(
     config.dimensions = inputs.dimensions;
     config.endpoint = inputs.endpoint.clone();
     config.api_key = inputs.api_key.clone();
-    config.api_version = inputs.api_version.clone();
     config.max_completion_tokens = inputs.max_completion_tokens;
     config.batch_size = inputs.batch_size;
     config.mock = inputs.mock;
     config.mock_mode = inputs.mock_mode;
-    config.huggingface_tokenizer = inputs.huggingface_tokenizer.clone();
-    // Same feature-unification caveat as `onnx` above, with a benign
+    config.api_version = crate::sections::non_empty(
+        &crate::sections::OpenAiCompatibleEmbeddingConfig::from_values(sections).api_version,
+    );
+    config.huggingface_tokenizer = crate::sections::non_empty(
+        &crate::sections::OllamaEmbeddingConfig::from_values(sections).huggingface_tokenizer,
+    );
+    // Same feature-unification caveat as `onnx` below, with a benign
     // degradation: when `cognee-embedding/bedrock` is unified on while *this*
     // crate's `bedrock` feature is off, the field exists but stays `Default` —
     // which resolves region, credentials and endpoint entirely from the ambient
@@ -155,22 +160,23 @@ pub fn build_embedding_config(
     // §1.5), so the only thing lost is an explicitly caller-supplied override.
     #[cfg(feature = "bedrock")]
     {
-        config.aws = aws.into();
+        config.aws = (&crate::sections::AwsConfig::from_values(sections).to_inputs()).into();
     }
     #[cfg(feature = "onnx")]
     {
+        let onnx = crate::sections::OnnxEmbeddingConfig::from_values(sections);
         // Pooling and the query instruction are not knobs a caller picks: they
         // are what the named model was trained with, so they are derived from
-        // the name rather than taken from `EmbeddingInputs`.
+        // the name rather than configured.
         let (pooling, query_instruction) =
-            cognee_embedding::OnnxEmbeddingConfig::recipe_for(&inputs.onnx_model_name);
+            cognee_embedding::OnnxEmbeddingConfig::recipe_for(&inputs.model);
         config.onnx = cognee_embedding::OnnxEmbeddingConfig {
-            model_path: inputs.onnx_model_path.clone(),
-            tokenizer_path: inputs.onnx_tokenizer_path.clone(),
-            model_name: inputs.onnx_model_name.clone(),
-            dimensions: inputs.onnx_dimensions,
-            max_sequence_length: inputs.onnx_max_sequence_length,
-            batch_size: inputs.onnx_batch_size,
+            model_path: PathBuf::from(onnx.model_path),
+            tokenizer_path: PathBuf::from(onnx.tokenizer_path),
+            model_name: inputs.model.clone(),
+            dimensions: inputs.dimensions,
+            max_sequence_length: inputs.max_sequence_length,
+            batch_size: onnx.batch_size as usize,
             pooling,
             query_instruction,
         };
@@ -178,22 +184,61 @@ pub fn build_embedding_config(
     config
 }
 
-/// Default embedding factory — maps the context's [`EmbeddingInputs`] to a
-/// config and calls `create_engine`.
-pub struct DefaultEmbeddingFactory;
+/// Install the process-wide embedding pacer before any engine is built, so the
+/// adapters' `embedding_pacer()` lookups resolve. Without this the admission
+/// points are dead and `EMBEDDING_RATE_LIMIT_ENABLED` does nothing. Idempotent
+/// (first call wins), like the LLM pacer.
+pub(crate) fn install_embedding_pacer(ctx: &BackendBuildContext) {
+    cognee_utils::pacing::init_embedding_pacer(
+        ctx.embedding.rate_limit_requests,
+        std::time::Duration::from_secs(u64::from(ctx.embedding.rate_limit_interval)),
+        ctx.embedding.rate_limit_enabled,
+    );
+}
+
+/// Build the mock embedding engine (`MOCK_EMBEDDING` / provider `mock`).
+pub(crate) async fn build_mock_embedding(
+    ctx: &BackendBuildContext,
+) -> Result<Arc<dyn EmbeddingEngine>, ComponentError> {
+    let mut inputs = ctx.embedding.clone();
+    inputs.mock = true;
+    build_embedding_config(&inputs, &ctx.sections)
+        .create_engine()
+        .await
+        .map_err(|e| ComponentError::EmbeddingEngine(format!("embedding engine init failed: {e}")))
+}
+
+/// Built-in factory for one embedding provider id. Maps the context's
+/// [`EmbeddingInputs`] and the provider's config section to a config and calls
+/// `create_engine`.
+pub struct DefaultEmbeddingFactory {
+    provider: &'static str,
+}
+
+impl DefaultEmbeddingFactory {
+    /// A factory serving `provider` (`onnx`, `fastembed`, `openai`,
+    /// `openai_compatible`, `ollama` or `bedrock`).
+    pub fn new(provider: &'static str) -> Self {
+        Self { provider }
+    }
+}
 
 #[async_trait]
 impl EmbeddingFactory for DefaultEmbeddingFactory {
+    fn provider(&self) -> &str {
+        self.provider
+    }
+
     fn config_sections(&self) -> Vec<&'static cognee_config_core::SectionSchema> {
-        // The Bedrock provider reads the `aws` section; other providers read
-        // only the embedding inputs.
-        #[cfg(feature = "bedrock")]
-        {
-            vec![<crate::sections::AwsConfig as cognee_config_core::ConfigSection>::schema()]
-        }
-        #[cfg(not(feature = "bedrock"))]
-        {
-            Vec::new()
+        use cognee_config_core::ConfigSection as _;
+        match self.provider {
+            "onnx" | "fastembed" => vec![crate::sections::OnnxEmbeddingConfig::schema()],
+            "openai" | "openai_compatible" => {
+                vec![crate::sections::OpenAiCompatibleEmbeddingConfig::schema()]
+            }
+            "ollama" => vec![crate::sections::OllamaEmbeddingConfig::schema()],
+            "bedrock" => vec![crate::sections::AwsConfig::schema()],
+            _ => Vec::new(),
         }
     }
 
@@ -201,26 +246,15 @@ impl EmbeddingFactory for DefaultEmbeddingFactory {
         &self,
         ctx: &BackendBuildContext,
     ) -> Result<Arc<dyn EmbeddingEngine>, ComponentError> {
-        // A non-empty but unrecognized provider is a misconfiguration (typo /
-        // unsupported backend): surface it instead of silently falling back to
-        // ONNX. Empty means "use the default" and is allowed. `mock` short-
-        // circuits provider selection, so skip the check when mocking.
-        // Install the process-wide embedding pacer before any engine is built,
-        // so the adapters' `embedding_pacer()` lookups resolve. Without this the
-        // admission points are dead and EMBEDDING_RATE_LIMIT_ENABLED does
-        // nothing. Idempotent (first call wins), like the LLM pacer.
-        cognee_utils::pacing::init_embedding_pacer(
-            ctx.embedding.rate_limit_requests,
-            std::time::Duration::from_secs(u64::from(ctx.embedding.rate_limit_interval)),
-            ctx.embedding.rate_limit_enabled,
-        );
-
-        validate_provider_id(&ctx.embedding.provider, ctx.embedding.mock)?;
-        let aws = ctx.section::<crate::sections::AwsConfig>().to_inputs();
-        let config = build_embedding_config(&ctx.embedding, &aws);
-        config.create_engine().await.map_err(|e| {
-            ComponentError::EmbeddingEngine(format!("embedding engine init failed: {e}"))
-        })
+        install_embedding_pacer(ctx);
+        let mut inputs = ctx.embedding.clone();
+        inputs.provider = self.provider.to_string();
+        build_embedding_config(&inputs, &ctx.sections)
+            .create_engine()
+            .await
+            .map_err(|e| {
+                ComponentError::EmbeddingEngine(format!("embedding engine init failed: {e}"))
+            })
     }
 }
 
@@ -273,15 +307,8 @@ mod tests {
             rate_limit_interval: 60,
             mock,
             mock_mode: Default::default(),
-            api_version: None,
-            huggingface_tokenizer: None,
             max_completion_tokens: 8191,
-            onnx_model_path: std::path::PathBuf::new(),
-            onnx_tokenizer_path: std::path::PathBuf::new(),
-            onnx_model_name: String::new(),
-            onnx_dimensions: 384,
-            onnx_max_sequence_length: 512,
-            onnx_batch_size: 32,
+            max_sequence_length: 512,
         }
     }
 
@@ -360,18 +387,25 @@ mod tests {
     #[cfg(feature = "bedrock")]
     fn aws_inputs_are_carried_into_the_embedding_config() {
         let inputs = inputs("bedrock", false);
-        let aws = crate::context::AwsInputs {
-            region: Some("eu-central-1".to_string()),
-            access_key_id: Some("AKIDEXAMPLE".to_string()),
-            secret_access_key: Some("secret".to_string()),
-            profile_name: Some("cognee".to_string()),
-            bedrock_runtime_endpoint: Some("https://vpce.example".to_string()),
-            bearer_token: Some("bedrock-api-key".to_string()),
-            ..Default::default()
-        };
+        let sections: cognee_config_core::ConfigValues = [
+            ("aws.region", "eu-central-1"),
+            ("aws.access_key_id", "AKIDEXAMPLE"),
+            ("aws.secret_access_key", "secret"),
+            // An alias works too: a raw map may not be normalized yet.
+            ("aws_profile_name", "cognee"),
+            ("aws.bedrock_runtime_endpoint", "https://vpce.example"),
+            ("aws.bearer_token", "bedrock-api-key"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), serde_json::json!(v)))
+        .collect();
 
-        let config = build_embedding_config(&inputs, &aws);
+        let config = build_embedding_config(&inputs, &sections);
 
+        let aws = <crate::sections::AwsConfig as cognee_config_core::ConfigSection>::from_values(
+            &sections,
+        )
+        .to_inputs();
         let expected: cognee_llm::adapters::bedrock::aws::env::AwsInputs = (&aws).into();
         assert_eq!(config.aws, expected);
         assert_eq!(config.aws.region.as_deref(), Some("eu-central-1"));

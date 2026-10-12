@@ -78,12 +78,17 @@ static CALLS: AtomicUsize = AtomicUsize::new(0);
 async fn services_under(dir: &TempDir) -> Arc<CogneeServices> {
     let root = dir.path();
     let settings = Settings {
-        sections: [(
-            "llm.api_key".to_string(),
-            serde_json::json!("sk-test".to_owned()),
-        )]
+        sections: [
+            (
+                "embedding.provider".to_string(),
+                serde_json::json!("mock".to_owned()),
+            ),
+            (
+                "llm.api_key".to_string(),
+                serde_json::json!("sk-test".to_owned()),
+            ),
+        ]
         .into(),
-        embedding_provider: "mock".to_owned(),
         data_root_directory: root.join("data").to_string_lossy().into_owned(),
         system_root_directory: root.join("sys").to_string_lossy().into_owned(),
         relational_db_url: format!("sqlite://{}?mode=rwc", root.join("cognee.db").display()),

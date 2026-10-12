@@ -155,6 +155,10 @@ const ENV_VARS: &[&str] = &[
     "AWS_EXTERNAL_ID",
     "AWS_BEDROCK_RUNTIME_ENDPOINT",
     "AWS_BEARER_TOKEN_BEDROCK",
+    "MOCK_EMBEDDING",
+    "EMBEDDING_API_VERSION",
+    "EMBEDDING_MAX_COMPLETION_TOKENS",
+    "HUGGINGFACE_TOKENIZER",
 ];
 
 /// Raw env values probed against every variable: empty and whitespace,

@@ -150,7 +150,7 @@ def test_get_redacts_embedding_api_key():
     cognee = make_cognee()
     cognee.config.set_str("embedding_api_key", "emb-secret")
     cfg = cognee.config.get()
-    assert cfg.get("embedding_api_key") == "***REDACTED***"
+    assert cfg.get("embedding.api_key") == "***REDACTED***"
 
 
 # ---------------------------------------------------------------------------

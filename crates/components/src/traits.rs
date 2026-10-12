@@ -91,18 +91,16 @@ pub trait LlmFactory: Send + Sync {
     }
 }
 
-/// Builds the embedding engine.
+/// Builds the embedding engine for one provider id.
 ///
-/// Unlike the other kinds, embedding provider selection happens *inside*
-/// `EmbeddingConfig::create_engine`, so the registry holds a single replaceable
-/// embedding factory rather than a per-provider map. The default factory maps
-/// [`crate::EmbeddingInputs`] to a config. An empty provider defaults to `onnx`;
-/// a non-empty *unrecognized* provider is rejected with an error (rather than
-/// the pre-refactor silent `onnx` fallback), so a typo / unsupported backend
-/// fails loudly instead of embedding with the wrong model. This is an
-/// intentional behavior change — see the PR notes.
+/// The registry selects the factory by `embedding.provider`. An empty provider
+/// defaults to `onnx`; a provider with no registered factory is an error, so a
+/// typo or a compiled-out backend fails loudly instead of embedding with the
+/// wrong model. `mock` is handled by the registry itself.
 #[async_trait]
 pub trait EmbeddingFactory: Send + Sync {
+    /// Lowercase provider id this factory serves (e.g. `"openai"`, `"onnx"`).
+    fn provider(&self) -> &str;
     /// The configuration sections this factory reads, so registering the
     /// factory registers its settings (see `cognee_config_core::section`).
     /// A factory that is not registered contributes no settings.

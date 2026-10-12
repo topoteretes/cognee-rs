@@ -365,17 +365,6 @@ static KEYS: &[KeySpec] = &[
     },
     row!(default_system_prompt_path: str, env []),
     // -- Embedding ----------------------------------------------------------
-    row!(embedding_provider: str, env ["EMBEDDING_PROVIDER"]),
-    row!(embedding_model_path: str, env ["EMBEDDING_MODEL_PATH", "COGNEE_E2E_EMBED_MODEL_PATH"]),
-    row!(embedding_tokenizer_path: str, env ["EMBEDDING_TOKENIZER_PATH", "COGNEE_E2E_TOKENIZER_PATH"]),
-    row!(embedding_model_name: str, env ["EMBEDDING_MODEL"] aliases ["embedding_model"]),
-    row!(embedding_dimensions: u32, env ["EMBEDDING_DIMENSIONS"]),
-    row!(embedding_max_sequence_length: u32, env ["EMBEDDING_MAX_SEQUENCE_LENGTH"]),
-    row!(embedding_batch_size: u32, env ["EMBEDDING_BATCH_SIZE"]),
-    row!(embedding_onnx_batch_size: u32, env ["EMBEDDING_ONNX_BATCH_SIZE"]),
-    row!(embedding_endpoint: str, env ["EMBEDDING_ENDPOINT"]),
-    row!(embedding_api_key: str secret, env ["EMBEDDING_API_KEY", "LLM_API_KEY"]),
-    row!(embedding_api_version: str, env []),
     // -- Ontology -----------------------------------------------------------
     row!(ontology_file_path: str, env ["ONTOLOGY_FILE_PATH"]),
     row!(ontology_resolver: str, env ["ONTOLOGY_RESOLVER"]),
@@ -396,9 +385,6 @@ static KEYS: &[KeySpec] = &[
     // -- Logging ------------------------------------------------------------
     row!(log_level: str, env ["LOG_LEVEL"]),
     // -- Rate limiting ------------------------------------------------------
-    row!(embedding_rate_limit_enabled: bool, env ["EMBEDDING_RATE_LIMIT_ENABLED"]),
-    row!(embedding_rate_limit_requests: u32, env ["EMBEDDING_RATE_LIMIT_REQUESTS"]),
-    row!(embedding_rate_limit_interval: u32, env ["EMBEDDING_RATE_LIMIT_INTERVAL"]),
     // -- Storage backend ----------------------------------------------------
     row!(storage_backend: str, env ["STORAGE_BACKEND"]),
     row!(storage_bucket_name: str, env ["STORAGE_BUCKET_NAME"]),

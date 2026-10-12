@@ -3269,22 +3269,1091 @@
     "err": "TypeMismatch",
     "key": "default_user_password"
   },
+  "embedding.api_key <- \"\"": {
+    "ok": {}
+  },
+  "embedding.api_key <- \"1\"": {
+    "ok": {
+      "embedding.api_key": "1"
+    }
+  },
+  "embedding.api_key <- \"s\"": {
+    "ok": {
+      "embedding.api_key": "s"
+    }
+  },
+  "embedding.api_key <- \"true\"": {
+    "ok": {
+      "embedding.api_key": "true"
+    }
+  },
+  "embedding.api_key <- -1": {
+    "err": "TypeMismatch",
+    "key": "embedding.api_key"
+  },
+  "embedding.api_key <- 0": {
+    "err": "TypeMismatch",
+    "key": "embedding.api_key"
+  },
+  "embedding.api_key <- 1": {
+    "err": "TypeMismatch",
+    "key": "embedding.api_key"
+  },
+  "embedding.api_key <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "embedding.api_key"
+  },
+  "embedding.api_key <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "embedding.api_key"
+  },
+  "embedding.api_key <- 70000": {
+    "err": "TypeMismatch",
+    "key": "embedding.api_key"
+  },
+  "embedding.api_key <- [1]": {
+    "err": "TypeMismatch",
+    "key": "embedding.api_key"
+  },
+  "embedding.api_key <- false": {
+    "err": "TypeMismatch",
+    "key": "embedding.api_key"
+  },
+  "embedding.api_key <- null": {
+    "err": "TypeMismatch",
+    "key": "embedding.api_key"
+  },
+  "embedding.api_key <- true": {
+    "err": "TypeMismatch",
+    "key": "embedding.api_key"
+  },
+  "embedding.api_key <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "embedding.api_key"
+  },
+  "embedding.batch_size <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "embedding.batch_size"
+  },
+  "embedding.batch_size <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "embedding.batch_size"
+  },
+  "embedding.batch_size <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "embedding.batch_size"
+  },
+  "embedding.batch_size <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "embedding.batch_size"
+  },
+  "embedding.batch_size <- -1": {
+    "err": "TypeMismatch",
+    "key": "embedding.batch_size"
+  },
+  "embedding.batch_size <- 0": {
+    "ok": {
+      "embedding.batch_size": 0
+    }
+  },
+  "embedding.batch_size <- 1": {
+    "ok": {
+      "embedding.batch_size": 1
+    }
+  },
+  "embedding.batch_size <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "embedding.batch_size"
+  },
+  "embedding.batch_size <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "embedding.batch_size"
+  },
+  "embedding.batch_size <- 70000": {
+    "ok": {
+      "embedding.batch_size": 70000
+    }
+  },
+  "embedding.batch_size <- [1]": {
+    "err": "TypeMismatch",
+    "key": "embedding.batch_size"
+  },
+  "embedding.batch_size <- false": {
+    "err": "TypeMismatch",
+    "key": "embedding.batch_size"
+  },
+  "embedding.batch_size <- null": {
+    "err": "TypeMismatch",
+    "key": "embedding.batch_size"
+  },
+  "embedding.batch_size <- true": {
+    "err": "TypeMismatch",
+    "key": "embedding.batch_size"
+  },
+  "embedding.batch_size <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "embedding.batch_size"
+  },
+  "embedding.dimensions <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "embedding.dimensions"
+  },
+  "embedding.dimensions <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "embedding.dimensions"
+  },
+  "embedding.dimensions <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "embedding.dimensions"
+  },
+  "embedding.dimensions <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "embedding.dimensions"
+  },
+  "embedding.dimensions <- -1": {
+    "err": "TypeMismatch",
+    "key": "embedding.dimensions"
+  },
+  "embedding.dimensions <- 0": {
+    "ok": {
+      "embedding.dimensions": 0
+    }
+  },
+  "embedding.dimensions <- 1": {
+    "ok": {
+      "embedding.dimensions": 1
+    }
+  },
+  "embedding.dimensions <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "embedding.dimensions"
+  },
+  "embedding.dimensions <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "embedding.dimensions"
+  },
+  "embedding.dimensions <- 70000": {
+    "ok": {
+      "embedding.dimensions": 70000
+    }
+  },
+  "embedding.dimensions <- [1]": {
+    "err": "TypeMismatch",
+    "key": "embedding.dimensions"
+  },
+  "embedding.dimensions <- false": {
+    "err": "TypeMismatch",
+    "key": "embedding.dimensions"
+  },
+  "embedding.dimensions <- null": {
+    "err": "TypeMismatch",
+    "key": "embedding.dimensions"
+  },
+  "embedding.dimensions <- true": {
+    "err": "TypeMismatch",
+    "key": "embedding.dimensions"
+  },
+  "embedding.dimensions <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "embedding.dimensions"
+  },
+  "embedding.endpoint <- \"\"": {
+    "ok": {}
+  },
+  "embedding.endpoint <- \"1\"": {
+    "ok": {
+      "embedding.endpoint": "1"
+    }
+  },
+  "embedding.endpoint <- \"s\"": {
+    "ok": {
+      "embedding.endpoint": "s"
+    }
+  },
+  "embedding.endpoint <- \"true\"": {
+    "ok": {
+      "embedding.endpoint": "true"
+    }
+  },
+  "embedding.endpoint <- -1": {
+    "err": "TypeMismatch",
+    "key": "embedding.endpoint"
+  },
+  "embedding.endpoint <- 0": {
+    "err": "TypeMismatch",
+    "key": "embedding.endpoint"
+  },
+  "embedding.endpoint <- 1": {
+    "err": "TypeMismatch",
+    "key": "embedding.endpoint"
+  },
+  "embedding.endpoint <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "embedding.endpoint"
+  },
+  "embedding.endpoint <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "embedding.endpoint"
+  },
+  "embedding.endpoint <- 70000": {
+    "err": "TypeMismatch",
+    "key": "embedding.endpoint"
+  },
+  "embedding.endpoint <- [1]": {
+    "err": "TypeMismatch",
+    "key": "embedding.endpoint"
+  },
+  "embedding.endpoint <- false": {
+    "err": "TypeMismatch",
+    "key": "embedding.endpoint"
+  },
+  "embedding.endpoint <- null": {
+    "err": "TypeMismatch",
+    "key": "embedding.endpoint"
+  },
+  "embedding.endpoint <- true": {
+    "err": "TypeMismatch",
+    "key": "embedding.endpoint"
+  },
+  "embedding.endpoint <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "embedding.endpoint"
+  },
+  "embedding.max_completion_tokens <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "embedding.max_completion_tokens"
+  },
+  "embedding.max_completion_tokens <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "embedding.max_completion_tokens"
+  },
+  "embedding.max_completion_tokens <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "embedding.max_completion_tokens"
+  },
+  "embedding.max_completion_tokens <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "embedding.max_completion_tokens"
+  },
+  "embedding.max_completion_tokens <- -1": {
+    "err": "TypeMismatch",
+    "key": "embedding.max_completion_tokens"
+  },
+  "embedding.max_completion_tokens <- 0": {
+    "ok": {
+      "embedding.max_completion_tokens": 0
+    }
+  },
+  "embedding.max_completion_tokens <- 1": {
+    "ok": {
+      "embedding.max_completion_tokens": 1
+    }
+  },
+  "embedding.max_completion_tokens <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "embedding.max_completion_tokens"
+  },
+  "embedding.max_completion_tokens <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "embedding.max_completion_tokens"
+  },
+  "embedding.max_completion_tokens <- 70000": {
+    "ok": {
+      "embedding.max_completion_tokens": 70000
+    }
+  },
+  "embedding.max_completion_tokens <- [1]": {
+    "err": "TypeMismatch",
+    "key": "embedding.max_completion_tokens"
+  },
+  "embedding.max_completion_tokens <- false": {
+    "err": "TypeMismatch",
+    "key": "embedding.max_completion_tokens"
+  },
+  "embedding.max_completion_tokens <- null": {
+    "err": "TypeMismatch",
+    "key": "embedding.max_completion_tokens"
+  },
+  "embedding.max_completion_tokens <- true": {
+    "err": "TypeMismatch",
+    "key": "embedding.max_completion_tokens"
+  },
+  "embedding.max_completion_tokens <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "embedding.max_completion_tokens"
+  },
+  "embedding.max_sequence_length <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "embedding.max_sequence_length"
+  },
+  "embedding.max_sequence_length <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "embedding.max_sequence_length"
+  },
+  "embedding.max_sequence_length <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "embedding.max_sequence_length"
+  },
+  "embedding.max_sequence_length <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "embedding.max_sequence_length"
+  },
+  "embedding.max_sequence_length <- -1": {
+    "err": "TypeMismatch",
+    "key": "embedding.max_sequence_length"
+  },
+  "embedding.max_sequence_length <- 0": {
+    "ok": {
+      "embedding.max_sequence_length": 0
+    }
+  },
+  "embedding.max_sequence_length <- 1": {
+    "ok": {
+      "embedding.max_sequence_length": 1
+    }
+  },
+  "embedding.max_sequence_length <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "embedding.max_sequence_length"
+  },
+  "embedding.max_sequence_length <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "embedding.max_sequence_length"
+  },
+  "embedding.max_sequence_length <- 70000": {
+    "ok": {
+      "embedding.max_sequence_length": 70000
+    }
+  },
+  "embedding.max_sequence_length <- [1]": {
+    "err": "TypeMismatch",
+    "key": "embedding.max_sequence_length"
+  },
+  "embedding.max_sequence_length <- false": {
+    "err": "TypeMismatch",
+    "key": "embedding.max_sequence_length"
+  },
+  "embedding.max_sequence_length <- null": {
+    "err": "TypeMismatch",
+    "key": "embedding.max_sequence_length"
+  },
+  "embedding.max_sequence_length <- true": {
+    "err": "TypeMismatch",
+    "key": "embedding.max_sequence_length"
+  },
+  "embedding.max_sequence_length <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "embedding.max_sequence_length"
+  },
+  "embedding.mock <- \"\"": {
+    "ok": {}
+  },
+  "embedding.mock <- \"1\"": {
+    "ok": {
+      "embedding.mock": "1"
+    }
+  },
+  "embedding.mock <- \"s\"": {
+    "ok": {
+      "embedding.mock": "s"
+    }
+  },
+  "embedding.mock <- \"true\"": {
+    "ok": {
+      "embedding.mock": "true"
+    }
+  },
+  "embedding.mock <- -1": {
+    "err": "TypeMismatch",
+    "key": "embedding.mock"
+  },
+  "embedding.mock <- 0": {
+    "err": "TypeMismatch",
+    "key": "embedding.mock"
+  },
+  "embedding.mock <- 1": {
+    "err": "TypeMismatch",
+    "key": "embedding.mock"
+  },
+  "embedding.mock <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "embedding.mock"
+  },
+  "embedding.mock <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "embedding.mock"
+  },
+  "embedding.mock <- 70000": {
+    "err": "TypeMismatch",
+    "key": "embedding.mock"
+  },
+  "embedding.mock <- [1]": {
+    "err": "TypeMismatch",
+    "key": "embedding.mock"
+  },
+  "embedding.mock <- false": {
+    "err": "TypeMismatch",
+    "key": "embedding.mock"
+  },
+  "embedding.mock <- null": {
+    "err": "TypeMismatch",
+    "key": "embedding.mock"
+  },
+  "embedding.mock <- true": {
+    "err": "TypeMismatch",
+    "key": "embedding.mock"
+  },
+  "embedding.mock <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "embedding.mock"
+  },
+  "embedding.model <- \"\"": {
+    "ok": {
+      "embedding.model": ""
+    }
+  },
+  "embedding.model <- \"1\"": {
+    "ok": {
+      "embedding.model": "1"
+    }
+  },
+  "embedding.model <- \"s\"": {
+    "ok": {
+      "embedding.model": "s"
+    }
+  },
+  "embedding.model <- \"true\"": {
+    "ok": {
+      "embedding.model": "true"
+    }
+  },
+  "embedding.model <- -1": {
+    "err": "TypeMismatch",
+    "key": "embedding.model"
+  },
+  "embedding.model <- 0": {
+    "err": "TypeMismatch",
+    "key": "embedding.model"
+  },
+  "embedding.model <- 1": {
+    "err": "TypeMismatch",
+    "key": "embedding.model"
+  },
+  "embedding.model <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "embedding.model"
+  },
+  "embedding.model <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "embedding.model"
+  },
+  "embedding.model <- 70000": {
+    "err": "TypeMismatch",
+    "key": "embedding.model"
+  },
+  "embedding.model <- [1]": {
+    "err": "TypeMismatch",
+    "key": "embedding.model"
+  },
+  "embedding.model <- false": {
+    "err": "TypeMismatch",
+    "key": "embedding.model"
+  },
+  "embedding.model <- null": {
+    "err": "TypeMismatch",
+    "key": "embedding.model"
+  },
+  "embedding.model <- true": {
+    "err": "TypeMismatch",
+    "key": "embedding.model"
+  },
+  "embedding.model <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "embedding.model"
+  },
+  "embedding.ollama.huggingface_tokenizer <- \"\"": {
+    "ok": {
+      "embedding.ollama.huggingface_tokenizer": ""
+    }
+  },
+  "embedding.ollama.huggingface_tokenizer <- \"1\"": {
+    "ok": {
+      "embedding.ollama.huggingface_tokenizer": "1"
+    }
+  },
+  "embedding.ollama.huggingface_tokenizer <- \"s\"": {
+    "ok": {
+      "embedding.ollama.huggingface_tokenizer": "s"
+    }
+  },
+  "embedding.ollama.huggingface_tokenizer <- \"true\"": {
+    "ok": {
+      "embedding.ollama.huggingface_tokenizer": "true"
+    }
+  },
+  "embedding.ollama.huggingface_tokenizer <- -1": {
+    "err": "TypeMismatch",
+    "key": "embedding.ollama.huggingface_tokenizer"
+  },
+  "embedding.ollama.huggingface_tokenizer <- 0": {
+    "err": "TypeMismatch",
+    "key": "embedding.ollama.huggingface_tokenizer"
+  },
+  "embedding.ollama.huggingface_tokenizer <- 1": {
+    "err": "TypeMismatch",
+    "key": "embedding.ollama.huggingface_tokenizer"
+  },
+  "embedding.ollama.huggingface_tokenizer <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "embedding.ollama.huggingface_tokenizer"
+  },
+  "embedding.ollama.huggingface_tokenizer <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "embedding.ollama.huggingface_tokenizer"
+  },
+  "embedding.ollama.huggingface_tokenizer <- 70000": {
+    "err": "TypeMismatch",
+    "key": "embedding.ollama.huggingface_tokenizer"
+  },
+  "embedding.ollama.huggingface_tokenizer <- [1]": {
+    "err": "TypeMismatch",
+    "key": "embedding.ollama.huggingface_tokenizer"
+  },
+  "embedding.ollama.huggingface_tokenizer <- false": {
+    "err": "TypeMismatch",
+    "key": "embedding.ollama.huggingface_tokenizer"
+  },
+  "embedding.ollama.huggingface_tokenizer <- null": {
+    "ok": {}
+  },
+  "embedding.ollama.huggingface_tokenizer <- true": {
+    "err": "TypeMismatch",
+    "key": "embedding.ollama.huggingface_tokenizer"
+  },
+  "embedding.ollama.huggingface_tokenizer <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "embedding.ollama.huggingface_tokenizer"
+  },
+  "embedding.onnx.batch_size <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "embedding.onnx.batch_size"
+  },
+  "embedding.onnx.batch_size <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "embedding.onnx.batch_size"
+  },
+  "embedding.onnx.batch_size <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "embedding.onnx.batch_size"
+  },
+  "embedding.onnx.batch_size <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "embedding.onnx.batch_size"
+  },
+  "embedding.onnx.batch_size <- -1": {
+    "err": "TypeMismatch",
+    "key": "embedding.onnx.batch_size"
+  },
+  "embedding.onnx.batch_size <- 0": {
+    "ok": {
+      "embedding.onnx.batch_size": 0
+    }
+  },
+  "embedding.onnx.batch_size <- 1": {
+    "ok": {
+      "embedding.onnx.batch_size": 1
+    }
+  },
+  "embedding.onnx.batch_size <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "embedding.onnx.batch_size"
+  },
+  "embedding.onnx.batch_size <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "embedding.onnx.batch_size"
+  },
+  "embedding.onnx.batch_size <- 70000": {
+    "ok": {
+      "embedding.onnx.batch_size": 70000
+    }
+  },
+  "embedding.onnx.batch_size <- [1]": {
+    "err": "TypeMismatch",
+    "key": "embedding.onnx.batch_size"
+  },
+  "embedding.onnx.batch_size <- false": {
+    "err": "TypeMismatch",
+    "key": "embedding.onnx.batch_size"
+  },
+  "embedding.onnx.batch_size <- null": {
+    "err": "TypeMismatch",
+    "key": "embedding.onnx.batch_size"
+  },
+  "embedding.onnx.batch_size <- true": {
+    "err": "TypeMismatch",
+    "key": "embedding.onnx.batch_size"
+  },
+  "embedding.onnx.batch_size <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "embedding.onnx.batch_size"
+  },
+  "embedding.onnx.model_path <- \"\"": {
+    "ok": {
+      "embedding.onnx.model_path": ""
+    }
+  },
+  "embedding.onnx.model_path <- \"1\"": {
+    "ok": {
+      "embedding.onnx.model_path": "1"
+    }
+  },
+  "embedding.onnx.model_path <- \"s\"": {
+    "ok": {
+      "embedding.onnx.model_path": "s"
+    }
+  },
+  "embedding.onnx.model_path <- \"true\"": {
+    "ok": {
+      "embedding.onnx.model_path": "true"
+    }
+  },
+  "embedding.onnx.model_path <- -1": {
+    "err": "TypeMismatch",
+    "key": "embedding.onnx.model_path"
+  },
+  "embedding.onnx.model_path <- 0": {
+    "err": "TypeMismatch",
+    "key": "embedding.onnx.model_path"
+  },
+  "embedding.onnx.model_path <- 1": {
+    "err": "TypeMismatch",
+    "key": "embedding.onnx.model_path"
+  },
+  "embedding.onnx.model_path <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "embedding.onnx.model_path"
+  },
+  "embedding.onnx.model_path <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "embedding.onnx.model_path"
+  },
+  "embedding.onnx.model_path <- 70000": {
+    "err": "TypeMismatch",
+    "key": "embedding.onnx.model_path"
+  },
+  "embedding.onnx.model_path <- [1]": {
+    "err": "TypeMismatch",
+    "key": "embedding.onnx.model_path"
+  },
+  "embedding.onnx.model_path <- false": {
+    "err": "TypeMismatch",
+    "key": "embedding.onnx.model_path"
+  },
+  "embedding.onnx.model_path <- null": {
+    "err": "TypeMismatch",
+    "key": "embedding.onnx.model_path"
+  },
+  "embedding.onnx.model_path <- true": {
+    "err": "TypeMismatch",
+    "key": "embedding.onnx.model_path"
+  },
+  "embedding.onnx.model_path <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "embedding.onnx.model_path"
+  },
+  "embedding.onnx.tokenizer_path <- \"\"": {
+    "ok": {
+      "embedding.onnx.tokenizer_path": ""
+    }
+  },
+  "embedding.onnx.tokenizer_path <- \"1\"": {
+    "ok": {
+      "embedding.onnx.tokenizer_path": "1"
+    }
+  },
+  "embedding.onnx.tokenizer_path <- \"s\"": {
+    "ok": {
+      "embedding.onnx.tokenizer_path": "s"
+    }
+  },
+  "embedding.onnx.tokenizer_path <- \"true\"": {
+    "ok": {
+      "embedding.onnx.tokenizer_path": "true"
+    }
+  },
+  "embedding.onnx.tokenizer_path <- -1": {
+    "err": "TypeMismatch",
+    "key": "embedding.onnx.tokenizer_path"
+  },
+  "embedding.onnx.tokenizer_path <- 0": {
+    "err": "TypeMismatch",
+    "key": "embedding.onnx.tokenizer_path"
+  },
+  "embedding.onnx.tokenizer_path <- 1": {
+    "err": "TypeMismatch",
+    "key": "embedding.onnx.tokenizer_path"
+  },
+  "embedding.onnx.tokenizer_path <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "embedding.onnx.tokenizer_path"
+  },
+  "embedding.onnx.tokenizer_path <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "embedding.onnx.tokenizer_path"
+  },
+  "embedding.onnx.tokenizer_path <- 70000": {
+    "err": "TypeMismatch",
+    "key": "embedding.onnx.tokenizer_path"
+  },
+  "embedding.onnx.tokenizer_path <- [1]": {
+    "err": "TypeMismatch",
+    "key": "embedding.onnx.tokenizer_path"
+  },
+  "embedding.onnx.tokenizer_path <- false": {
+    "err": "TypeMismatch",
+    "key": "embedding.onnx.tokenizer_path"
+  },
+  "embedding.onnx.tokenizer_path <- null": {
+    "err": "TypeMismatch",
+    "key": "embedding.onnx.tokenizer_path"
+  },
+  "embedding.onnx.tokenizer_path <- true": {
+    "err": "TypeMismatch",
+    "key": "embedding.onnx.tokenizer_path"
+  },
+  "embedding.onnx.tokenizer_path <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "embedding.onnx.tokenizer_path"
+  },
+  "embedding.openai_compatible.api_version <- \"\"": {
+    "ok": {
+      "embedding.openai_compatible.api_version": ""
+    }
+  },
+  "embedding.openai_compatible.api_version <- \"1\"": {
+    "ok": {
+      "embedding.openai_compatible.api_version": "1"
+    }
+  },
+  "embedding.openai_compatible.api_version <- \"s\"": {
+    "ok": {
+      "embedding.openai_compatible.api_version": "s"
+    }
+  },
+  "embedding.openai_compatible.api_version <- \"true\"": {
+    "ok": {
+      "embedding.openai_compatible.api_version": "true"
+    }
+  },
+  "embedding.openai_compatible.api_version <- -1": {
+    "err": "TypeMismatch",
+    "key": "embedding.openai_compatible.api_version"
+  },
+  "embedding.openai_compatible.api_version <- 0": {
+    "err": "TypeMismatch",
+    "key": "embedding.openai_compatible.api_version"
+  },
+  "embedding.openai_compatible.api_version <- 1": {
+    "err": "TypeMismatch",
+    "key": "embedding.openai_compatible.api_version"
+  },
+  "embedding.openai_compatible.api_version <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "embedding.openai_compatible.api_version"
+  },
+  "embedding.openai_compatible.api_version <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "embedding.openai_compatible.api_version"
+  },
+  "embedding.openai_compatible.api_version <- 70000": {
+    "err": "TypeMismatch",
+    "key": "embedding.openai_compatible.api_version"
+  },
+  "embedding.openai_compatible.api_version <- [1]": {
+    "err": "TypeMismatch",
+    "key": "embedding.openai_compatible.api_version"
+  },
+  "embedding.openai_compatible.api_version <- false": {
+    "err": "TypeMismatch",
+    "key": "embedding.openai_compatible.api_version"
+  },
+  "embedding.openai_compatible.api_version <- null": {
+    "ok": {}
+  },
+  "embedding.openai_compatible.api_version <- true": {
+    "err": "TypeMismatch",
+    "key": "embedding.openai_compatible.api_version"
+  },
+  "embedding.openai_compatible.api_version <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "embedding.openai_compatible.api_version"
+  },
+  "embedding.provider <- \"\"": {
+    "ok": {
+      "embedding.provider": ""
+    }
+  },
+  "embedding.provider <- \"1\"": {
+    "ok": {
+      "embedding.provider": "1"
+    }
+  },
+  "embedding.provider <- \"s\"": {
+    "ok": {
+      "embedding.provider": "s"
+    }
+  },
+  "embedding.provider <- \"true\"": {
+    "ok": {
+      "embedding.provider": "true"
+    }
+  },
+  "embedding.provider <- -1": {
+    "err": "TypeMismatch",
+    "key": "embedding.provider"
+  },
+  "embedding.provider <- 0": {
+    "err": "TypeMismatch",
+    "key": "embedding.provider"
+  },
+  "embedding.provider <- 1": {
+    "err": "TypeMismatch",
+    "key": "embedding.provider"
+  },
+  "embedding.provider <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "embedding.provider"
+  },
+  "embedding.provider <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "embedding.provider"
+  },
+  "embedding.provider <- 70000": {
+    "err": "TypeMismatch",
+    "key": "embedding.provider"
+  },
+  "embedding.provider <- [1]": {
+    "err": "TypeMismatch",
+    "key": "embedding.provider"
+  },
+  "embedding.provider <- false": {
+    "err": "TypeMismatch",
+    "key": "embedding.provider"
+  },
+  "embedding.provider <- null": {
+    "err": "TypeMismatch",
+    "key": "embedding.provider"
+  },
+  "embedding.provider <- true": {
+    "err": "TypeMismatch",
+    "key": "embedding.provider"
+  },
+  "embedding.provider <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "embedding.provider"
+  },
+  "embedding.rate_limit_enabled <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "embedding.rate_limit_enabled"
+  },
+  "embedding.rate_limit_enabled <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "embedding.rate_limit_enabled"
+  },
+  "embedding.rate_limit_enabled <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "embedding.rate_limit_enabled"
+  },
+  "embedding.rate_limit_enabled <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "embedding.rate_limit_enabled"
+  },
+  "embedding.rate_limit_enabled <- -1": {
+    "err": "TypeMismatch",
+    "key": "embedding.rate_limit_enabled"
+  },
+  "embedding.rate_limit_enabled <- 0": {
+    "err": "TypeMismatch",
+    "key": "embedding.rate_limit_enabled"
+  },
+  "embedding.rate_limit_enabled <- 1": {
+    "err": "TypeMismatch",
+    "key": "embedding.rate_limit_enabled"
+  },
+  "embedding.rate_limit_enabled <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "embedding.rate_limit_enabled"
+  },
+  "embedding.rate_limit_enabled <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "embedding.rate_limit_enabled"
+  },
+  "embedding.rate_limit_enabled <- 70000": {
+    "err": "TypeMismatch",
+    "key": "embedding.rate_limit_enabled"
+  },
+  "embedding.rate_limit_enabled <- [1]": {
+    "err": "TypeMismatch",
+    "key": "embedding.rate_limit_enabled"
+  },
+  "embedding.rate_limit_enabled <- false": {
+    "ok": {}
+  },
+  "embedding.rate_limit_enabled <- null": {
+    "err": "TypeMismatch",
+    "key": "embedding.rate_limit_enabled"
+  },
+  "embedding.rate_limit_enabled <- true": {
+    "ok": {
+      "embedding.rate_limit_enabled": true
+    }
+  },
+  "embedding.rate_limit_enabled <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "embedding.rate_limit_enabled"
+  },
+  "embedding.rate_limit_interval <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "embedding.rate_limit_interval"
+  },
+  "embedding.rate_limit_interval <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "embedding.rate_limit_interval"
+  },
+  "embedding.rate_limit_interval <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "embedding.rate_limit_interval"
+  },
+  "embedding.rate_limit_interval <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "embedding.rate_limit_interval"
+  },
+  "embedding.rate_limit_interval <- -1": {
+    "err": "TypeMismatch",
+    "key": "embedding.rate_limit_interval"
+  },
+  "embedding.rate_limit_interval <- 0": {
+    "ok": {
+      "embedding.rate_limit_interval": 0
+    }
+  },
+  "embedding.rate_limit_interval <- 1": {
+    "ok": {
+      "embedding.rate_limit_interval": 1
+    }
+  },
+  "embedding.rate_limit_interval <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "embedding.rate_limit_interval"
+  },
+  "embedding.rate_limit_interval <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "embedding.rate_limit_interval"
+  },
+  "embedding.rate_limit_interval <- 70000": {
+    "ok": {
+      "embedding.rate_limit_interval": 70000
+    }
+  },
+  "embedding.rate_limit_interval <- [1]": {
+    "err": "TypeMismatch",
+    "key": "embedding.rate_limit_interval"
+  },
+  "embedding.rate_limit_interval <- false": {
+    "err": "TypeMismatch",
+    "key": "embedding.rate_limit_interval"
+  },
+  "embedding.rate_limit_interval <- null": {
+    "err": "TypeMismatch",
+    "key": "embedding.rate_limit_interval"
+  },
+  "embedding.rate_limit_interval <- true": {
+    "err": "TypeMismatch",
+    "key": "embedding.rate_limit_interval"
+  },
+  "embedding.rate_limit_interval <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "embedding.rate_limit_interval"
+  },
+  "embedding.rate_limit_requests <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "embedding.rate_limit_requests"
+  },
+  "embedding.rate_limit_requests <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "embedding.rate_limit_requests"
+  },
+  "embedding.rate_limit_requests <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "embedding.rate_limit_requests"
+  },
+  "embedding.rate_limit_requests <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "embedding.rate_limit_requests"
+  },
+  "embedding.rate_limit_requests <- -1": {
+    "err": "TypeMismatch",
+    "key": "embedding.rate_limit_requests"
+  },
+  "embedding.rate_limit_requests <- 0": {
+    "ok": {
+      "embedding.rate_limit_requests": 0
+    }
+  },
+  "embedding.rate_limit_requests <- 1": {
+    "ok": {
+      "embedding.rate_limit_requests": 1
+    }
+  },
+  "embedding.rate_limit_requests <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "embedding.rate_limit_requests"
+  },
+  "embedding.rate_limit_requests <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "embedding.rate_limit_requests"
+  },
+  "embedding.rate_limit_requests <- 70000": {
+    "ok": {
+      "embedding.rate_limit_requests": 70000
+    }
+  },
+  "embedding.rate_limit_requests <- [1]": {
+    "err": "TypeMismatch",
+    "key": "embedding.rate_limit_requests"
+  },
+  "embedding.rate_limit_requests <- false": {
+    "err": "TypeMismatch",
+    "key": "embedding.rate_limit_requests"
+  },
+  "embedding.rate_limit_requests <- null": {
+    "err": "TypeMismatch",
+    "key": "embedding.rate_limit_requests"
+  },
+  "embedding.rate_limit_requests <- true": {
+    "err": "TypeMismatch",
+    "key": "embedding.rate_limit_requests"
+  },
+  "embedding.rate_limit_requests <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "embedding.rate_limit_requests"
+  },
   "embedding_api_key <- \"\"": {
     "ok": {}
   },
   "embedding_api_key <- \"1\"": {
     "ok": {
-      "embedding_api_key": "1"
+      "embedding.api_key": "1"
     }
   },
   "embedding_api_key <- \"s\"": {
     "ok": {
-      "embedding_api_key": "s"
+      "embedding.api_key": "s"
     }
   },
   "embedding_api_key <- \"true\"": {
     "ok": {
-      "embedding_api_key": "true"
+      "embedding.api_key": "true"
     }
   },
   "embedding_api_key <- -1": {
@@ -3332,21 +4401,23 @@
     "key": "embedding_api_key"
   },
   "embedding_api_version <- \"\"": {
-    "ok": {}
+    "ok": {
+      "embedding.openai_compatible.api_version": ""
+    }
   },
   "embedding_api_version <- \"1\"": {
     "ok": {
-      "embedding_api_version": "1"
+      "embedding.openai_compatible.api_version": "1"
     }
   },
   "embedding_api_version <- \"s\"": {
     "ok": {
-      "embedding_api_version": "s"
+      "embedding.openai_compatible.api_version": "s"
     }
   },
   "embedding_api_version <- \"true\"": {
     "ok": {
-      "embedding_api_version": "true"
+      "embedding.openai_compatible.api_version": "true"
     }
   },
   "embedding_api_version <- -1": {
@@ -3382,8 +4453,7 @@
     "key": "embedding_api_version"
   },
   "embedding_api_version <- null": {
-    "err": "TypeMismatch",
-    "key": "embedding_api_version"
+    "ok": {}
   },
   "embedding_api_version <- true": {
     "err": "TypeMismatch",
@@ -3415,12 +4485,12 @@
   },
   "embedding_batch_size <- 0": {
     "ok": {
-      "embedding_batch_size": 0
+      "embedding.batch_size": 0
     }
   },
   "embedding_batch_size <- 1": {
     "ok": {
-      "embedding_batch_size": 1
+      "embedding.batch_size": 1
     }
   },
   "embedding_batch_size <- 1.5": {
@@ -3433,7 +4503,7 @@
   },
   "embedding_batch_size <- 70000": {
     "ok": {
-      "embedding_batch_size": 70000
+      "embedding.batch_size": 70000
     }
   },
   "embedding_batch_size <- [1]": {
@@ -3478,12 +4548,12 @@
   },
   "embedding_dimensions <- 0": {
     "ok": {
-      "embedding_dimensions": 0
+      "embedding.dimensions": 0
     }
   },
   "embedding_dimensions <- 1": {
     "ok": {
-      "embedding_dimensions": 1
+      "embedding.dimensions": 1
     }
   },
   "embedding_dimensions <- 1.5": {
@@ -3496,7 +4566,7 @@
   },
   "embedding_dimensions <- 70000": {
     "ok": {
-      "embedding_dimensions": 70000
+      "embedding.dimensions": 70000
     }
   },
   "embedding_dimensions <- [1]": {
@@ -3524,17 +4594,17 @@
   },
   "embedding_endpoint <- \"1\"": {
     "ok": {
-      "embedding_endpoint": "1"
+      "embedding.endpoint": "1"
     }
   },
   "embedding_endpoint <- \"s\"": {
     "ok": {
-      "embedding_endpoint": "s"
+      "embedding.endpoint": "s"
     }
   },
   "embedding_endpoint <- \"true\"": {
     "ok": {
-      "embedding_endpoint": "true"
+      "embedding.endpoint": "true"
     }
   },
   "embedding_endpoint <- -1": {
@@ -3581,6 +4651,69 @@
     "err": "TypeMismatch",
     "key": "embedding_endpoint"
   },
+  "embedding_max_completion_tokens <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "embedding_max_completion_tokens"
+  },
+  "embedding_max_completion_tokens <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "embedding_max_completion_tokens"
+  },
+  "embedding_max_completion_tokens <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "embedding_max_completion_tokens"
+  },
+  "embedding_max_completion_tokens <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "embedding_max_completion_tokens"
+  },
+  "embedding_max_completion_tokens <- -1": {
+    "err": "TypeMismatch",
+    "key": "embedding_max_completion_tokens"
+  },
+  "embedding_max_completion_tokens <- 0": {
+    "ok": {
+      "embedding.max_completion_tokens": 0
+    }
+  },
+  "embedding_max_completion_tokens <- 1": {
+    "ok": {
+      "embedding.max_completion_tokens": 1
+    }
+  },
+  "embedding_max_completion_tokens <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "embedding_max_completion_tokens"
+  },
+  "embedding_max_completion_tokens <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "embedding_max_completion_tokens"
+  },
+  "embedding_max_completion_tokens <- 70000": {
+    "ok": {
+      "embedding.max_completion_tokens": 70000
+    }
+  },
+  "embedding_max_completion_tokens <- [1]": {
+    "err": "TypeMismatch",
+    "key": "embedding_max_completion_tokens"
+  },
+  "embedding_max_completion_tokens <- false": {
+    "err": "TypeMismatch",
+    "key": "embedding_max_completion_tokens"
+  },
+  "embedding_max_completion_tokens <- null": {
+    "err": "TypeMismatch",
+    "key": "embedding_max_completion_tokens"
+  },
+  "embedding_max_completion_tokens <- true": {
+    "err": "TypeMismatch",
+    "key": "embedding_max_completion_tokens"
+  },
+  "embedding_max_completion_tokens <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "embedding_max_completion_tokens"
+  },
   "embedding_max_sequence_length <- \"\"": {
     "err": "TypeMismatch",
     "key": "embedding_max_sequence_length"
@@ -3603,12 +4736,12 @@
   },
   "embedding_max_sequence_length <- 0": {
     "ok": {
-      "embedding_max_sequence_length": 0
+      "embedding.max_sequence_length": 0
     }
   },
   "embedding_max_sequence_length <- 1": {
     "ok": {
-      "embedding_max_sequence_length": 1
+      "embedding.max_sequence_length": 1
     }
   },
   "embedding_max_sequence_length <- 1.5": {
@@ -3621,7 +4754,7 @@
   },
   "embedding_max_sequence_length <- 70000": {
     "ok": {
-      "embedding_max_sequence_length": 70000
+      "embedding.max_sequence_length": 70000
     }
   },
   "embedding_max_sequence_length <- [1]": {
@@ -3646,22 +4779,22 @@
   },
   "embedding_model <- \"\"": {
     "ok": {
-      "embedding_model_name": ""
+      "embedding.model": ""
     }
   },
   "embedding_model <- \"1\"": {
     "ok": {
-      "embedding_model_name": "1"
+      "embedding.model": "1"
     }
   },
   "embedding_model <- \"s\"": {
     "ok": {
-      "embedding_model_name": "s"
+      "embedding.model": "s"
     }
   },
   "embedding_model <- \"true\"": {
     "ok": {
-      "embedding_model_name": "true"
+      "embedding.model": "true"
     }
   },
   "embedding_model <- -1": {
@@ -3710,22 +4843,22 @@
   },
   "embedding_model_name <- \"\"": {
     "ok": {
-      "embedding_model_name": ""
+      "embedding.model": ""
     }
   },
   "embedding_model_name <- \"1\"": {
     "ok": {
-      "embedding_model_name": "1"
+      "embedding.model": "1"
     }
   },
   "embedding_model_name <- \"s\"": {
     "ok": {
-      "embedding_model_name": "s"
+      "embedding.model": "s"
     }
   },
   "embedding_model_name <- \"true\"": {
     "ok": {
-      "embedding_model_name": "true"
+      "embedding.model": "true"
     }
   },
   "embedding_model_name <- -1": {
@@ -3774,22 +4907,22 @@
   },
   "embedding_model_path <- \"\"": {
     "ok": {
-      "embedding_model_path": ""
+      "embedding.onnx.model_path": ""
     }
   },
   "embedding_model_path <- \"1\"": {
     "ok": {
-      "embedding_model_path": "1"
+      "embedding.onnx.model_path": "1"
     }
   },
   "embedding_model_path <- \"s\"": {
     "ok": {
-      "embedding_model_path": "s"
+      "embedding.onnx.model_path": "s"
     }
   },
   "embedding_model_path <- \"true\"": {
     "ok": {
-      "embedding_model_path": "true"
+      "embedding.onnx.model_path": "true"
     }
   },
   "embedding_model_path <- -1": {
@@ -3858,12 +4991,12 @@
   },
   "embedding_onnx_batch_size <- 0": {
     "ok": {
-      "embedding_onnx_batch_size": 0
+      "embedding.onnx.batch_size": 0
     }
   },
   "embedding_onnx_batch_size <- 1": {
     "ok": {
-      "embedding_onnx_batch_size": 1
+      "embedding.onnx.batch_size": 1
     }
   },
   "embedding_onnx_batch_size <- 1.5": {
@@ -3876,7 +5009,7 @@
   },
   "embedding_onnx_batch_size <- 70000": {
     "ok": {
-      "embedding_onnx_batch_size": 70000
+      "embedding.onnx.batch_size": 70000
     }
   },
   "embedding_onnx_batch_size <- [1]": {
@@ -3901,22 +5034,22 @@
   },
   "embedding_provider <- \"\"": {
     "ok": {
-      "embedding_provider": ""
+      "embedding.provider": ""
     }
   },
   "embedding_provider <- \"1\"": {
     "ok": {
-      "embedding_provider": "1"
+      "embedding.provider": "1"
     }
   },
   "embedding_provider <- \"s\"": {
     "ok": {
-      "embedding_provider": "s"
+      "embedding.provider": "s"
     }
   },
   "embedding_provider <- \"true\"": {
     "ok": {
-      "embedding_provider": "true"
+      "embedding.provider": "true"
     }
   },
   "embedding_provider <- -1": {
@@ -4016,7 +5149,7 @@
   },
   "embedding_rate_limit_enabled <- true": {
     "ok": {
-      "embedding_rate_limit_enabled": true
+      "embedding.rate_limit_enabled": true
     }
   },
   "embedding_rate_limit_enabled <- {\"a\":1}": {
@@ -4045,12 +5178,12 @@
   },
   "embedding_rate_limit_interval <- 0": {
     "ok": {
-      "embedding_rate_limit_interval": 0
+      "embedding.rate_limit_interval": 0
     }
   },
   "embedding_rate_limit_interval <- 1": {
     "ok": {
-      "embedding_rate_limit_interval": 1
+      "embedding.rate_limit_interval": 1
     }
   },
   "embedding_rate_limit_interval <- 1.5": {
@@ -4063,7 +5196,7 @@
   },
   "embedding_rate_limit_interval <- 70000": {
     "ok": {
-      "embedding_rate_limit_interval": 70000
+      "embedding.rate_limit_interval": 70000
     }
   },
   "embedding_rate_limit_interval <- [1]": {
@@ -4108,12 +5241,12 @@
   },
   "embedding_rate_limit_requests <- 0": {
     "ok": {
-      "embedding_rate_limit_requests": 0
+      "embedding.rate_limit_requests": 0
     }
   },
   "embedding_rate_limit_requests <- 1": {
     "ok": {
-      "embedding_rate_limit_requests": 1
+      "embedding.rate_limit_requests": 1
     }
   },
   "embedding_rate_limit_requests <- 1.5": {
@@ -4126,7 +5259,7 @@
   },
   "embedding_rate_limit_requests <- 70000": {
     "ok": {
-      "embedding_rate_limit_requests": 70000
+      "embedding.rate_limit_requests": 70000
     }
   },
   "embedding_rate_limit_requests <- [1]": {
@@ -4151,22 +5284,22 @@
   },
   "embedding_tokenizer_path <- \"\"": {
     "ok": {
-      "embedding_tokenizer_path": ""
+      "embedding.onnx.tokenizer_path": ""
     }
   },
   "embedding_tokenizer_path <- \"1\"": {
     "ok": {
-      "embedding_tokenizer_path": "1"
+      "embedding.onnx.tokenizer_path": "1"
     }
   },
   "embedding_tokenizer_path <- \"s\"": {
     "ok": {
-      "embedding_tokenizer_path": "s"
+      "embedding.onnx.tokenizer_path": "s"
     }
   },
   "embedding_tokenizer_path <- \"true\"": {
     "ok": {
-      "embedding_tokenizer_path": "true"
+      "embedding.onnx.tokenizer_path": "true"
     }
   },
   "embedding_tokenizer_path <- -1": {
@@ -5270,6 +6403,69 @@
   "graph_prompt_path <- {\"a\":1}": {
     "err": "TypeMismatch",
     "key": "graph_prompt_path"
+  },
+  "huggingface_tokenizer <- \"\"": {
+    "ok": {
+      "embedding.ollama.huggingface_tokenizer": ""
+    }
+  },
+  "huggingface_tokenizer <- \"1\"": {
+    "ok": {
+      "embedding.ollama.huggingface_tokenizer": "1"
+    }
+  },
+  "huggingface_tokenizer <- \"s\"": {
+    "ok": {
+      "embedding.ollama.huggingface_tokenizer": "s"
+    }
+  },
+  "huggingface_tokenizer <- \"true\"": {
+    "ok": {
+      "embedding.ollama.huggingface_tokenizer": "true"
+    }
+  },
+  "huggingface_tokenizer <- -1": {
+    "err": "TypeMismatch",
+    "key": "huggingface_tokenizer"
+  },
+  "huggingface_tokenizer <- 0": {
+    "err": "TypeMismatch",
+    "key": "huggingface_tokenizer"
+  },
+  "huggingface_tokenizer <- 1": {
+    "err": "TypeMismatch",
+    "key": "huggingface_tokenizer"
+  },
+  "huggingface_tokenizer <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "huggingface_tokenizer"
+  },
+  "huggingface_tokenizer <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "huggingface_tokenizer"
+  },
+  "huggingface_tokenizer <- 70000": {
+    "err": "TypeMismatch",
+    "key": "huggingface_tokenizer"
+  },
+  "huggingface_tokenizer <- [1]": {
+    "err": "TypeMismatch",
+    "key": "huggingface_tokenizer"
+  },
+  "huggingface_tokenizer <- false": {
+    "err": "TypeMismatch",
+    "key": "huggingface_tokenizer"
+  },
+  "huggingface_tokenizer <- null": {
+    "ok": {}
+  },
+  "huggingface_tokenizer <- true": {
+    "err": "TypeMismatch",
+    "key": "huggingface_tokenizer"
+  },
+  "huggingface_tokenizer <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "huggingface_tokenizer"
   },
   "llm.anthropic.base_url <- \"\"": {
     "ok": {
@@ -9274,6 +10470,68 @@
   "migration_db_url <- {\"a\":1}": {
     "err": "TypeMismatch",
     "key": "migration_db_url"
+  },
+  "mock_embedding <- \"\"": {
+    "ok": {}
+  },
+  "mock_embedding <- \"1\"": {
+    "ok": {
+      "embedding.mock": "1"
+    }
+  },
+  "mock_embedding <- \"s\"": {
+    "ok": {
+      "embedding.mock": "s"
+    }
+  },
+  "mock_embedding <- \"true\"": {
+    "ok": {
+      "embedding.mock": "true"
+    }
+  },
+  "mock_embedding <- -1": {
+    "err": "TypeMismatch",
+    "key": "mock_embedding"
+  },
+  "mock_embedding <- 0": {
+    "err": "TypeMismatch",
+    "key": "mock_embedding"
+  },
+  "mock_embedding <- 1": {
+    "err": "TypeMismatch",
+    "key": "mock_embedding"
+  },
+  "mock_embedding <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "mock_embedding"
+  },
+  "mock_embedding <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "mock_embedding"
+  },
+  "mock_embedding <- 70000": {
+    "err": "TypeMismatch",
+    "key": "mock_embedding"
+  },
+  "mock_embedding <- [1]": {
+    "err": "TypeMismatch",
+    "key": "mock_embedding"
+  },
+  "mock_embedding <- false": {
+    "err": "TypeMismatch",
+    "key": "mock_embedding"
+  },
+  "mock_embedding <- null": {
+    "err": "TypeMismatch",
+    "key": "mock_embedding"
+  },
+  "mock_embedding <- true": {
+    "err": "TypeMismatch",
+    "key": "mock_embedding"
+  },
+  "mock_embedding <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "mock_embedding"
   },
   "monitoring_tool <- \"\"": {
     "ok": {

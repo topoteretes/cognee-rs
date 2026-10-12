@@ -267,3 +267,134 @@ impl AwsConfig {
         }
     }
 }
+
+#[cfg(target_os = "android")]
+fn default_embedding() -> (&'static str, &'static str, u32) {
+    ("onnx", "BGE-Small-v1.5", 384)
+}
+#[cfg(not(target_os = "android"))]
+fn default_embedding() -> (&'static str, &'static str, u32) {
+    ("openai", "text-embedding-3-small", 1536)
+}
+
+config_section! {
+    /// Settings shared by every embedding provider. Registered by the
+    /// embedding kind. The default is local ONNX (BGE-Small) on Android and
+    /// OpenAI `text-embedding-3-small` elsewhere, matching the Python SDK.
+    pub struct EmbeddingConfig in "embedding" {
+        /// Provider id selecting the embedding factory (`openai`,
+        /// `openai_compatible`, `ollama`, `onnx`/`fastembed`, `bedrock`, `mock`).
+        pub provider: String = default_embedding().0.to_string() => {
+            env: ["EMBEDDING_PROVIDER"], alias: ["embedding_provider"], secret: false,
+        },
+        /// Model name.
+        pub model: String = default_embedding().1.to_string() => {
+            env: ["EMBEDDING_MODEL"], alias: ["embedding_model_name", "embedding_model"], secret: false,
+        },
+        /// Vector dimensions (must match the model).
+        pub dimensions: u32 = default_embedding().2 => {
+            env: ["EMBEDDING_DIMENSIONS"], alias: ["embedding_dimensions"], secret: false,
+        },
+        /// Endpoint; unset inherits `llm.endpoint` unless only the embedder is
+        /// Bedrock.
+        pub endpoint: String = String::new() => {
+            env: ["EMBEDDING_ENDPOINT"], alias: ["embedding_endpoint"], secret: false,
+        },
+        /// API key; unset inherits `llm.api_key` unless only the embedder is
+        /// Bedrock.
+        pub api_key: String = String::new() => {
+            env: ["EMBEDDING_API_KEY", "LLM_API_KEY"], alias: ["embedding_api_key"], secret: true,
+        },
+        /// Texts per embedding request.
+        pub batch_size: u32 = 36 => {
+            env: ["EMBEDDING_BATCH_SIZE"], alias: ["embedding_batch_size"], secret: false,
+        },
+        /// Maximum input tokens per text; also caps cognify's auto chunk size.
+        pub max_sequence_length: u32 = 512 => {
+            env: ["EMBEDDING_MAX_SEQUENCE_LENGTH"], alias: ["embedding_max_sequence_length"], secret: false,
+        },
+        /// Input-token limit of the remote embedding API.
+        pub max_completion_tokens: u32 = 8191 => {
+            env: ["EMBEDDING_MAX_COMPLETION_TOKENS"], alias: ["embedding_max_completion_tokens"], secret: false,
+        },
+        /// Pace dispatch at `rate_limit_requests` per `rate_limit_interval`.
+        pub rate_limit_enabled: bool = false => {
+            env: ["EMBEDDING_RATE_LIMIT_ENABLED"], alias: ["embedding_rate_limit_enabled"], secret: false,
+        },
+        /// Requests per pacing interval.
+        pub rate_limit_requests: u32 = 60 => {
+            env: ["EMBEDDING_RATE_LIMIT_REQUESTS"], alias: ["embedding_rate_limit_requests"], secret: false,
+        },
+        /// Pacing interval in seconds.
+        pub rate_limit_interval: u32 = 60 => {
+            env: ["EMBEDDING_RATE_LIMIT_INTERVAL"], alias: ["embedding_rate_limit_interval"], secret: false,
+        },
+        /// Mock embedder: `zero` gives all-zero vectors; `true`, `1`, `yes`,
+        /// `deterministic` or `hash` give deterministic hash vectors; anything
+        /// else (or unset) uses the real provider.
+        pub mock: String = String::new() => {
+            env: ["MOCK_EMBEDDING"], alias: ["mock_embedding"], secret: false,
+        },
+    }
+}
+
+impl EmbeddingConfig {
+    /// The mock mode, or `None` for the real provider.
+    pub fn mock_mode(&self) -> Option<cognee_embedding::MockVectorMode> {
+        match self.mock.trim().to_lowercase().as_str() {
+            "zero" => Some(cognee_embedding::MockVectorMode::Zero),
+            "true" | "1" | "yes" | "deterministic" | "hash" => {
+                Some(cognee_embedding::MockVectorMode::Deterministic)
+            }
+            _ => None,
+        }
+    }
+}
+
+config_section! {
+    /// The local ONNX (fastembed) embedding provider (`onnx` feature).
+    pub struct OnnxEmbeddingConfig in "embedding.onnx" {
+        /// Model file.
+        pub model_path: String = "./target/models/BGE-Small-v1.5-model_quantized.onnx".to_string() => {
+            env: ["EMBEDDING_MODEL_PATH", "COGNEE_E2E_EMBED_MODEL_PATH"], alias: ["embedding_model_path"], secret: false,
+        },
+        /// Tokenizer file.
+        pub tokenizer_path: String = "./target/models/bge-small-tokenizer.json".to_string() => {
+            env: ["EMBEDDING_TOKENIZER_PATH", "COGNEE_E2E_TOKENIZER_PATH"], alias: ["embedding_tokenizer_path"], secret: false,
+        },
+        /// Inference batch size (leading tensor dimension), independent of
+        /// `embedding.batch_size`.
+        pub batch_size: u32 = 32 => {
+            env: ["EMBEDDING_ONNX_BATCH_SIZE"], alias: ["embedding_onnx_batch_size"], secret: false,
+        },
+    }
+}
+
+config_section! {
+    /// The OpenAI-compatible embedding provider (OpenAI, Azure, vLLM, TEI, …).
+    pub struct OpenAiCompatibleEmbeddingConfig in "embedding.openai_compatible" {
+        /// API version (Azure `api-version`).
+        pub api_version: Option<String> = None => {
+            env: ["EMBEDDING_API_VERSION"], alias: ["embedding_api_version"], secret: false,
+        },
+    }
+}
+
+config_section! {
+    /// The Ollama embedding provider.
+    pub struct OllamaEmbeddingConfig in "embedding.ollama" {
+        /// Hugging Face tokenizer id used to count tokens for this model.
+        pub huggingface_tokenizer: Option<String> = None => {
+            env: ["HUGGINGFACE_TOKENIZER"], alias: ["huggingface_tokenizer"], secret: false,
+        },
+    }
+}
+
+/// Trim an optional string; empty means unset.
+pub(crate) fn non_empty(value: &Option<String>) -> Option<String> {
+    value
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}

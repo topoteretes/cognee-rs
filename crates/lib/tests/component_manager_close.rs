@@ -58,6 +58,23 @@ fn settings(root: &std::path::Path, endpoint: &str) -> Settings {
     Settings {
         sections: [
             (
+                "embedding.provider".to_string(),
+                serde_json::json!("openai".to_string()),
+            ),
+            (
+                "embedding.endpoint".to_string(),
+                serde_json::json!(format!("{endpoint}/v1/embeddings")),
+            ),
+            (
+                "embedding.api_key".to_string(),
+                serde_json::json!("sk-test".to_string()),
+            ),
+            (
+                "embedding.model".to_string(),
+                serde_json::json!("text-embedding-3-small".to_string()),
+            ),
+            ("embedding.dimensions".to_string(), serde_json::json!(3)),
+            (
                 "llm.provider".to_string(),
                 serde_json::json!("openai".to_string()),
             ),
@@ -91,11 +108,6 @@ fn settings(root: &std::path::Path, endpoint: &str) -> Settings {
         // deliberate: this test is about slot eviction, and the embedded vector
         // store was measured to hold nothing closable.
         vector_db_provider: "brute-force".to_string(),
-        embedding_provider: "openai".to_string(),
-        embedding_endpoint: format!("{endpoint}/v1/embeddings"),
-        embedding_api_key: "sk-test".to_string(),
-        embedding_model_name: "text-embedding-3-small".to_string(),
-        embedding_dimensions: 3,
         ..Settings::default()
     }
 }

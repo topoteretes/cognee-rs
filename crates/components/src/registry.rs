@@ -30,7 +30,7 @@ pub struct ComponentRegistry {
     vector: HashMap<String, Arc<dyn VectorDbFactory>>,
     graph: HashMap<String, Arc<dyn GraphDbFactory>>,
     llm: HashMap<String, Arc<dyn LlmFactory>>,
-    embedding: Arc<dyn EmbeddingFactory>,
+    embedding: HashMap<String, Arc<dyn EmbeddingFactory>>,
     /// Config sections registered directly (not through a factory).
     config_sections: Vec<&'static SectionSchema>,
 }
@@ -44,7 +44,7 @@ impl ComponentRegistry {
             vector: HashMap::new(),
             graph: HashMap::new(),
             llm: HashMap::new(),
-            embedding: Arc::new(DefaultEmbeddingFactory),
+            embedding: HashMap::new(),
             config_sections: Vec::new(),
         }
     }
@@ -113,6 +113,20 @@ impl ComponentRegistry {
         #[cfg(feature = "bedrock")]
         reg.register_llm(Arc::new(llm::BedrockLlmFactory));
 
+        // ── embedding ─────────────────────────────────────────────────────
+        // One factory per provider id, each registering its provider's config
+        // section. `mock` is handled by `build_embedding` itself.
+        #[cfg(feature = "onnx")]
+        {
+            reg.register_embedding(Arc::new(DefaultEmbeddingFactory::new("onnx")));
+            reg.register_embedding(Arc::new(DefaultEmbeddingFactory::new("fastembed")));
+        }
+        for id in ["openai", "openai_compatible", "ollama"] {
+            reg.register_embedding(Arc::new(DefaultEmbeddingFactory::new(id)));
+        }
+        #[cfg(feature = "bedrock")]
+        reg.register_embedding(Arc::new(DefaultEmbeddingFactory::new("bedrock")));
+
         reg
     }
 
@@ -133,10 +147,16 @@ impl ComponentRegistry {
         self.llm.insert(f.provider().to_lowercase(), f);
     }
 
-    /// Replace the embedding factory (provider selection is internal to the
-    /// engine, so there is a single slot).
+    /// Register (or override) an embedding factory under `f.provider()`.
+    pub fn register_embedding(&mut self, f: Arc<dyn EmbeddingFactory>) {
+        self.embedding.insert(f.provider().to_lowercase(), f);
+    }
+
+    /// Former single-slot setter; now the same as
+    /// [`register_embedding`](Self::register_embedding).
+    #[deprecated(note = "embedding factories are per provider now; use register_embedding")]
     pub fn set_embedding(&mut self, f: Arc<dyn EmbeddingFactory>) {
-        self.embedding = f;
+        self.register_embedding(f);
     }
 
     /// Register a configuration section that is not owned by a factory (for
@@ -162,8 +182,10 @@ impl ComponentRegistry {
         }
         // Kind sections first: the settings every adapter of a kind shares,
         // registered by the kind itself.
-        let mut sections: Vec<&'static SectionSchema> =
-            vec![<crate::sections::LlmConfig as cognee_config_core::ConfigSection>::schema()];
+        let mut sections: Vec<&'static SectionSchema> = vec![
+            <crate::sections::LlmConfig as cognee_config_core::ConfigSection>::schema(),
+            <crate::sections::EmbeddingConfig as cognee_config_core::ConfigSection>::schema(),
+        ];
         for f in sorted(&self.vector) {
             sections.extend(f.config_sections());
         }
@@ -173,7 +195,9 @@ impl ComponentRegistry {
         for f in sorted(&self.llm) {
             sections.extend(f.config_sections());
         }
-        sections.extend(self.embedding.config_sections());
+        for f in sorted(&self.embedding) {
+            sections.extend(f.config_sections());
+        }
         sections.extend(self.config_sections.iter().copied());
 
         let mut schema = ConfigSchema::new();
@@ -383,7 +407,35 @@ impl ComponentRegistry {
         &self,
         ctx: &BackendBuildContext,
     ) -> Result<Arc<dyn EmbeddingEngine>, ComponentError> {
-        self.embedding.build(ctx).await
+        // `mock` short-circuits provider selection, like the LLM mock.
+        let provider = ctx.embedding.provider.trim().to_lowercase();
+        if ctx.embedding.mock || provider == "mock" {
+            crate::builtins::embedding::install_embedding_pacer(ctx);
+            return crate::builtins::embedding::build_mock_embedding(ctx).await;
+        }
+        // Empty means the default provider.
+        let key = if provider.is_empty() {
+            "onnx".to_string()
+        } else {
+            provider
+        };
+        if let Some(factory) = self.embedding.get(&key) {
+            return factory.build(ctx).await;
+        }
+        // Not registered: an unrecognized id is a typo (never a silent ONNX
+        // fallback); a recognized one is a provider compiled out of this build.
+        crate::builtins::embedding::validate_provider_id(&key, false)?;
+        Err(ComponentError::EmbeddingEngine(format!(
+            "embedding provider '{key}' is not available in this build. Registered: {}",
+            self.embedding_providers().join(", ")
+        )))
+    }
+
+    /// Provider ids with a registered embedding factory (sorted).
+    pub fn embedding_providers(&self) -> Vec<String> {
+        let mut ids: Vec<String> = self.embedding.keys().cloned().collect();
+        ids.sort();
+        ids
     }
 }
 
@@ -1012,17 +1064,11 @@ mod tests {
                 rate_limit_interval: 60,
                 mock: false,
                 mock_mode: Default::default(),
-                api_version: None,
-                huggingface_tokenizer: None,
                 max_completion_tokens: 8191,
-                onnx_model_path: std::path::PathBuf::new(),
-                onnx_tokenizer_path: std::path::PathBuf::new(),
-                onnx_model_name: "bge-small-en-v1.5".to_string(),
-                onnx_dimensions: 384,
-                onnx_max_sequence_length: 512,
-                onnx_batch_size: 32,
+                max_sequence_length: 512,
             },
             llm: crate::context::LlmInputs {
+                api_version: String::new(),
                 debug_requests: false,
                 temperature: None,
                 provider: "openai".to_string(),
@@ -1047,7 +1093,6 @@ mod tests {
                 auto_rate_limit: true,
                 max_completion_tokens: cognee_llm::OpenAIAdapter::DEFAULT_MAX_COMPLETION_TOKENS,
                 llm_args: serde_json::Map::new(),
-                api_version: String::new(),
                 reasoning_override: None,
                 structured_output_mode: cognee_llm::StructuredOutputMode::Auto,
                 mock: false,
