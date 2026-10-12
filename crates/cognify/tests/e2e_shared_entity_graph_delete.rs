@@ -97,7 +97,7 @@ async fn test_shared_entity_graph_delete() {
         ))
         .with_graph_db(Arc::clone(&graph_db))
         .with_vector_db(Arc::clone(&vector_db))
-        .with_database(Arc::clone(&database));
+        .with_database(database.clone());
 
     let data_ai = ingest
         .add(
@@ -148,7 +148,7 @@ async fn test_shared_entity_graph_delete() {
         graph_db.clone(),
         vector_db.clone(),
         embedding_engine.clone(),
-        Arc::clone(&database),
+        database.clone(),
         Arc::new(cognee_database::NoopPipelineRunRepository::new())
             as Arc<dyn cognee_database::PipelineRunRepository>,
         Arc::new(
@@ -178,7 +178,7 @@ async fn test_shared_entity_graph_delete() {
         graph_db.clone(),
         vector_db.clone(),
         embedding_engine.clone(),
-        Arc::clone(&database),
+        database.clone(),
         Arc::new(cognee_database::NoopPipelineRunRepository::new())
             as Arc<dyn cognee_database::PipelineRunRepository>,
         Arc::new(

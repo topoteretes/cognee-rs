@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use cognee::add::AddPipeline;
 use cognee::core::RayonThreadPool;
-use cognee::database::{PipelineRunRepository, SeaOrmPipelineRunRepository};
+use cognee::database::PipelineRunRepository;
 use cognee::models::DataInput;
 use cognee::{ComponentManager, PipelineContext};
 use tracing::info;
@@ -51,7 +51,7 @@ pub fn run(args: AddArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
         // Gap 08-07: persist the four-state `pipeline_runs` trail so CLI
         // add shows up in `/api/v1/activity/pipeline-runs`.
         let pipeline_run_repo: Arc<dyn PipelineRunRepository> =
-            Arc::new(SeaOrmPipelineRunRepository::new(Arc::clone(&database)));
+            Arc::clone(&database).pipeline_runs();
 
         let pipeline = AddPipeline::new(
             storage,

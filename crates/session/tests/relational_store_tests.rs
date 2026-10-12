@@ -3,17 +3,16 @@
     clippy::expect_used,
     reason = "test code — panics are acceptable failures"
 )]
-#![cfg(feature = "sea-orm-store")]
+#![cfg(feature = "relational-store")]
 
 use std::sync::Arc;
 
-use cognee_session::{SeaOrmSessionStore, SessionManager, SessionStore, SessionTraceStep};
-use sea_orm::Database;
+use cognee_session::{RelationalSessionStore, SessionManager, SessionStore, SessionTraceStep};
 
-async fn setup_store() -> Arc<SeaOrmSessionStore> {
-    let db = Database::connect("sqlite::memory:").await.unwrap();
-    // SeaOrmSessionStore::new runs its own migration
-    Arc::new(SeaOrmSessionStore::new(Arc::new(db)).await.unwrap())
+async fn setup_store() -> Arc<RelationalSessionStore> {
+    let db = cognee_database::connect("sqlite::memory:").await.unwrap();
+    // RelationalSessionStore::new creates the session tables
+    Arc::new(RelationalSessionStore::new(Arc::new(db)).await.unwrap())
 }
 
 #[tokio::test]

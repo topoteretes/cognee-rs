@@ -8,8 +8,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use cognee_database::ops::{data, graph_storage};
-use cognee_database::{DatabaseConnection, GraphEdge, RunScope};
+use cognee_database::{GraphEdge, RelationalDb, RunScope};
 use cognee_graph::GraphDBTrait;
 use cognee_vector::VectorDB;
 use serde::{Deserialize, Serialize};
@@ -96,20 +95,20 @@ pub struct SweepOutcome {
 /// this machinery exists to remove. Refusing to construct is the honest
 /// failure; every real caller has both stores.
 ///
-/// Takes the concrete [`DatabaseConnection`] rather than the crate's
+/// Takes the concrete [`RelationalDb`] rather than the crate's
 /// [`DeleteDb`](crate::DeleteDb) abstraction: none of the run-scoped ledger
 /// queries a sweep needs exist on that trait, and the ledger code here is
 /// exercised against real in-memory SQLite rather than a mock, so there is
 /// nothing for the indirection to buy.
 pub struct RunSweeper {
-    database: Arc<DatabaseConnection>,
+    database: Arc<dyn RelationalDb>,
     graph_db: Arc<dyn GraphDBTrait>,
     vector_db: Arc<dyn VectorDB>,
 }
 
 impl RunSweeper {
     pub fn new(
-        database: Arc<DatabaseConnection>,
+        database: Arc<dyn RelationalDb>,
         graph_db: Arc<dyn GraphDBTrait>,
         vector_db: Arc<dyn VectorDB>,
     ) -> Self {
@@ -188,32 +187,35 @@ impl RunSweeper {
         //    the caller's narrowing list: an item this run wrote no row for was
         //    not rolled back here, and any marker it carries was written by an
         //    earlier run that did complete it — which the contract keeps.
-        let affected = graph_storage::get_data_ids_for_run(&self.database, &run_scope)
-            .await
-            .map_err(|e| {
-                DeleteError::Runtime(format!(
-                    "Failed to get provenance data ids for run {run_id}: {e}"
-                ))
-            })?;
+        let affected =
+            cognee_database::ProvenanceDb::get_data_ids_for_run(&*self.database, &run_scope)
+                .await
+                .map_err(|e| {
+                    DeleteError::Runtime(format!(
+                        "Failed to get provenance data ids for run {run_id}: {e}"
+                    ))
+                })?;
         Span::current().record("cognee.rollback.data_item_count", affected.len() as i64);
 
         // 2. The rows whose slug no row outside the scope claims — another
         //    run, a pre-ownership NULL-run row, another dataset, or a data
         //    item this sweep is keeping. Only those artifacts may go.
-        let nodes = graph_storage::get_unique_nodes_for_run(&self.database, &run_scope)
-            .await
-            .map_err(|e| {
-                DeleteError::Runtime(format!(
-                    "Failed to get exclusively-owned provenance nodes for run {run_id}: {e}"
-                ))
-            })?;
-        let edges = graph_storage::get_unique_edges_for_run(&self.database, &run_scope)
-            .await
-            .map_err(|e| {
-                DeleteError::Runtime(format!(
-                    "Failed to get exclusively-owned provenance edges for run {run_id}: {e}"
-                ))
-            })?;
+        let nodes =
+            cognee_database::ProvenanceDb::get_unique_nodes_for_run(&*self.database, &run_scope)
+                .await
+                .map_err(|e| {
+                    DeleteError::Runtime(format!(
+                        "Failed to get exclusively-owned provenance nodes for run {run_id}: {e}"
+                    ))
+                })?;
+        let edges =
+            cognee_database::ProvenanceDb::get_unique_edges_for_run(&*self.database, &run_scope)
+                .await
+                .map_err(|e| {
+                    DeleteError::Runtime(format!(
+                        "Failed to get exclusively-owned provenance edges for run {run_id}: {e}"
+                    ))
+                })?;
 
         // 2b. The same question for the edges' *other* identity. An
         //     `EdgeType_relationship_name` point is keyed on the edge's
@@ -240,7 +242,7 @@ impl RunSweeper {
         //    exclusive subset: the row records that this run wrote the
         //    artifact, which stays true whether or not the artifact survived.
         outcome.provenance_edges_deleted =
-            graph_storage::delete_edges_for_run(&self.database, &run_scope)
+            cognee_database::ProvenanceDb::delete_edges_for_run(&*self.database, &run_scope)
                 .await
                 .map_err(|e| {
                     DeleteError::Runtime(format!(
@@ -248,7 +250,7 @@ impl RunSweeper {
                     ))
                 })? as usize;
         outcome.provenance_nodes_deleted =
-            graph_storage::delete_nodes_for_run(&self.database, &run_scope)
+            cognee_database::ProvenanceDb::delete_nodes_for_run(&*self.database, &run_scope)
                 .await
                 .map_err(|e| {
                     DeleteError::Runtime(format!(
@@ -270,8 +272,8 @@ impl RunSweeper {
         //    raised together at the end.
         let mut failures = 0usize;
         for data_id in &affected {
-            match data::clear_cognify_pipeline_status_for_data(
-                &self.database,
+            match cognee_database::DeleteDb::clear_cognify_pipeline_status_for_data(
+                &*self.database,
                 *data_id,
                 scope.dataset_id,
             )
@@ -315,16 +317,19 @@ impl RunSweeper {
         }
 
         let claimed: HashSet<String> =
-            graph_storage::get_relationship_names_claimed_outside_run(&self.database, run_scope)
-                .await
-                .map_err(|e| {
-                    DeleteError::Runtime(format!(
-                        "Failed to get the relationship names claimed outside run {}: {e}",
-                        run_scope.pipeline_run_id
-                    ))
-                })?
-                .into_iter()
-                .collect();
+            cognee_database::ProvenanceDb::get_relationship_names_claimed_outside_run(
+                &*self.database,
+                run_scope,
+            )
+            .await
+            .map_err(|e| {
+                DeleteError::Runtime(format!(
+                    "Failed to get the relationship names claimed outside run {}: {e}",
+                    run_scope.pipeline_run_id
+                ))
+            })?
+            .into_iter()
+            .collect();
 
         Ok(edges
             .iter()

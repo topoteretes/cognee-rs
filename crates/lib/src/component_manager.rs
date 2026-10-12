@@ -13,7 +13,7 @@ use tokio::sync::RwLock as TokioRwLock;
 use tracing::instrument;
 
 use cognee_components::ComponentRegistry;
-use cognee_database::DatabaseConnection;
+use cognee_database::RelationalDb;
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
 use cognee_llm::{Llm, Transcriber};
@@ -70,7 +70,7 @@ pub struct ComponentManager {
     // When the config version advances past the cached version, the
     // component is lazily re-created on next access.
     storage: TokioRwLock<Option<(u64, Arc<dyn StorageTrait>)>>,
-    database: TokioRwLock<Option<(u64, Arc<DatabaseConnection>)>>,
+    database: TokioRwLock<Option<(u64, Arc<dyn RelationalDb>)>>,
     graph_db: TokioRwLock<Option<(u64, Arc<dyn GraphDBTrait>)>>,
     vector_db: TokioRwLock<Option<(u64, Arc<dyn VectorDB>)>>,
     embedding_engine: TokioRwLock<Option<(u64, Arc<dyn EmbeddingEngine>)>>,
@@ -189,7 +189,7 @@ impl ComponentManager {
     }
 
     #[instrument(name = "cognee.component.database", level = "info", skip_all, err)]
-    async fn init_database(&self) -> Result<Arc<DatabaseConnection>, ComponentError> {
+    async fn init_database(&self) -> Result<Arc<dyn RelationalDb>, ComponentError> {
         let ctx = self.build_context().await;
         cognee_components::build_database(&ctx).await
     }
@@ -487,7 +487,7 @@ impl ComponentManager {
         // components that have no on-disk consequence.
         if let Some((_, db)) = self.database.write().await.take() {
             if shared.may_close(&db)
-                && let Err(e) = cognee_database::close(&db).await
+                && let Err(e) = db.close().await
             {
                 tracing::warn!(error = %e, "failed to close the relational connection pool");
             }
@@ -593,7 +593,7 @@ impl PipelineContext for ComponentManager {
         versioned_accessor!(self, storage, init_storage)
     }
 
-    async fn database(&self) -> Result<Arc<DatabaseConnection>, ComponentError> {
+    async fn database(&self) -> Result<Arc<dyn RelationalDb>, ComponentError> {
         versioned_accessor!(self, database, init_database)
     }
 

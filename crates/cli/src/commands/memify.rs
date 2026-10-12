@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use cognee::cognify::{MemifyConfig, run_memify};
 use cognee::core::{CpuPool, RayonThreadPool};
-use cognee::database::{PipelineRunRepository, SeaOrmPipelineRunRepository, ops};
+use cognee::database::PipelineRunRepository;
 use cognee::{ComponentManager, PipelineContext};
 use tracing::{debug, info};
 use uuid::Uuid;
@@ -30,7 +30,7 @@ pub fn run(args: MemifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
             .await
             .map_err(|e| CliError::Runtime(format!("{e}")))?;
 
-        let dataset_names = resolve_dataset_names(&database, owner_id, requested_datasets).await?;
+        let dataset_names = resolve_dataset_names(&*database, owner_id, requested_datasets).await?;
 
         let graph_db = cm
             .graph_db()
@@ -60,19 +60,23 @@ pub fn run(args: MemifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
         let mut total_batches = 0usize;
 
         for dataset_name in &dataset_names {
-            let dataset =
-                ops::datasets::get_dataset_by_name(&database, dataset_name, owner_id, None)
-                    .await
-                    .map_err(|error| {
-                        CliError::Runtime(format!(
-                            "Failed to resolve dataset '{dataset_name}': {error}"
-                        ))
-                    })?
-                    .ok_or_else(|| {
-                        CliError::Validation(format!(
-                            "Dataset '{dataset_name}' was not found for owner {owner_id}"
-                        ))
-                    })?;
+            let dataset = cognee::database::IngestDb::get_dataset_by_name(
+                &*database,
+                dataset_name,
+                owner_id,
+                None,
+            )
+            .await
+            .map_err(|error| {
+                CliError::Runtime(format!(
+                    "Failed to resolve dataset '{dataset_name}': {error}"
+                ))
+            })?
+            .ok_or_else(|| {
+                CliError::Validation(format!(
+                    "Dataset '{dataset_name}' was not found for owner {owner_id}"
+                ))
+            })?;
 
             info!("Dataset '{dataset_name}': running memify");
 
@@ -83,7 +87,7 @@ pub fn run(args: MemifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
 
             // Gap 08-07: persist the four-state `pipeline_runs` trail.
             let pipeline_run_repo: Arc<dyn PipelineRunRepository> =
-                Arc::new(SeaOrmPipelineRunRepository::new(Arc::clone(&database)));
+                Arc::clone(&database).pipeline_runs();
 
             let result = run_memify(
                 Arc::clone(&graph_db),

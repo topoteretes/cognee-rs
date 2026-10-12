@@ -93,7 +93,7 @@ async fn test_triplet_vector_cleanup_after_data_delete() {
         ))
         .with_graph_db(Arc::clone(&graph_db))
         .with_vector_db(Arc::clone(&vector_db))
-        .with_database(Arc::clone(&database));
+        .with_database(database.clone());
 
     let data_ai = ingest
         .add(
@@ -139,7 +139,7 @@ async fn test_triplet_vector_cleanup_after_data_delete() {
         graph_db.clone(),
         vector_db.clone(),
         embedding_engine.clone(),
-        Arc::clone(&database),
+        database.clone(),
         Arc::new(cognee_database::NoopPipelineRunRepository::new())
             as Arc<dyn cognee_database::PipelineRunRepository>,
         Arc::new(
@@ -169,7 +169,7 @@ async fn test_triplet_vector_cleanup_after_data_delete() {
         graph_db.clone(),
         vector_db.clone(),
         embedding_engine.clone(),
-        Arc::clone(&database),
+        database.clone(),
         Arc::new(cognee_database::NoopPipelineRunRepository::new())
             as Arc<dyn cognee_database::PipelineRunRepository>,
         Arc::new(
@@ -200,7 +200,7 @@ async fn test_triplet_vector_cleanup_after_data_delete() {
         Arc::clone(&vector_db),
         Arc::clone(&embedding_engine),
         Arc::clone(&memify_pool),
-        Arc::clone(&database),
+        database.clone(),
         Arc::new(cognee_database::NoopPipelineRunRepository::new())
             as Arc<dyn cognee_database::PipelineRunRepository>,
         Some(ds_ai.id),
@@ -216,7 +216,7 @@ async fn test_triplet_vector_cleanup_after_data_delete() {
         Arc::clone(&vector_db),
         Arc::clone(&embedding_engine),
         memify_pool,
-        Arc::clone(&database),
+        database.clone(),
         Arc::new(cognee_database::NoopPipelineRunRepository::new())
             as Arc<dyn cognee_database::PipelineRunRepository>,
         Some(ds_q.id),

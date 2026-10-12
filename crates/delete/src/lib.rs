@@ -2074,9 +2074,10 @@ mod tests {
         assert_eq!(result.deleted_datasets, 1);
         assert_eq!(result.deleted_data, 1);
 
-        let still_exists = ops::datasets::get_dataset_by_name(&db, "test_dataset", owner, None)
-            .await
-            .unwrap();
+        let still_exists =
+            cognee_database::IngestDb::get_dataset_by_name(&*db, "test_dataset", owner, None)
+                .await
+                .unwrap();
         assert!(still_exists.is_none(), "dataset should be gone");
     }
 
@@ -2100,9 +2101,10 @@ mod tests {
         assert_eq!(preview.datasets_to_delete, 1);
         assert_eq!(preview.data_to_delete, 1);
 
-        let still_exists = ops::datasets::get_dataset_by_name(&db, "test_dataset", owner, None)
-            .await
-            .unwrap();
+        let still_exists =
+            cognee_database::IngestDb::get_dataset_by_name(&*db, "test_dataset", owner, None)
+                .await
+                .unwrap();
         assert!(
             still_exists.is_some(),
             "dataset should still exist after preview"
@@ -5211,7 +5213,7 @@ mod tests {
         );
 
         // Verify the dataset is actually gone from the DB
-        let ds = ops::datasets::get_dataset_by_name(&db, "auto_del_ds", owner, None)
+        let ds = cognee_database::IngestDb::get_dataset_by_name(&*db, "auto_del_ds", owner, None)
             .await
             .unwrap();
         assert!(ds.is_none(), "dataset should be gone from DB");
@@ -5285,7 +5287,7 @@ mod tests {
         );
 
         // Verify the dataset still exists
-        let ds = ops::datasets::get_dataset_by_name(&db, "multi_data_ds", owner, None)
+        let ds = cognee_database::IngestDb::get_dataset_by_name(&*db, "multi_data_ds", owner, None)
             .await
             .unwrap();
         assert!(ds.is_some(), "dataset should still exist in DB");
@@ -5319,7 +5321,7 @@ mod tests {
         );
 
         // Verify the dataset still exists (even though it's now empty)
-        let ds = ops::datasets::get_dataset_by_name(&db, "no_flag_ds", owner, None)
+        let ds = cognee_database::IngestDb::get_dataset_by_name(&*db, "no_flag_ds", owner, None)
             .await
             .unwrap();
         assert!(
@@ -5495,9 +5497,10 @@ mod tests {
         );
 
         // Dataset row still exists in the DB.
-        let ds_still = ops::datasets::get_dataset_by_name(&db, "memory_only_ds", owner, None)
-            .await
-            .unwrap();
+        let ds_still =
+            cognee_database::IngestDb::get_dataset_by_name(&*db, "memory_only_ds", owner, None)
+                .await
+                .unwrap();
         assert!(
             ds_still.is_some(),
             "Dataset row must survive memory-only forget"
@@ -5621,9 +5624,14 @@ mod tests {
         );
 
         // Dataset row still exists.
-        let ds_still = ops::datasets::get_dataset_by_name(&db, "memory_only_item_ds", owner, None)
-            .await
-            .unwrap();
+        let ds_still = cognee_database::IngestDb::get_dataset_by_name(
+            &*db,
+            "memory_only_item_ds",
+            owner,
+            None,
+        )
+        .await
+        .unwrap();
         assert!(
             ds_still.is_some(),
             "Dataset row must survive data-item memory-only forget"

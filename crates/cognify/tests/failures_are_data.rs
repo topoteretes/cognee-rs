@@ -155,7 +155,7 @@ async fn run_cognify_with_llm(
         graph_db,
         Arc::clone(&vector_db),
         embedding_engine,
-        Arc::clone(&db),
+        db.clone(),
         Arc::clone(&repo),
         thread_pool,
         Arc::new(NoOpOntologyResolver::new()),

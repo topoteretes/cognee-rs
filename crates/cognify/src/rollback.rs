@@ -17,8 +17,7 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use cognee_core::pipeline::{PipelineRunInfo, PipelineStatus, PipelineWatcher, TaskStatus};
 use cognee_core::pipeline_run_registry::{DbPipelineWatcher, data_info, run_info_for_errored};
-use cognee_database::ops::data;
-use cognee_database::{DatabaseConnection, PipelineRunRepository, PipelineRunStatus};
+use cognee_database::{PipelineRunRepository, PipelineRunStatus, RelationalDb};
 use cognee_delete::{RunSweeper, SweepScope};
 use cognee_graph::GraphDBTrait;
 use cognee_models::Data;
@@ -306,7 +305,7 @@ pub(crate) fn run_info_has_outstanding_failures(run_info: Option<&Value>) -> boo
 
 /// Everything the policy layer needs about the run that just ended.
 pub(crate) struct RunContext<'a> {
-    pub(crate) database: Arc<DatabaseConnection>,
+    pub(crate) database: Arc<dyn RelationalDb>,
     pub(crate) graph_db: Arc<dyn GraphDBTrait>,
     pub(crate) vector_db: Arc<dyn VectorDB>,
     pub(crate) repo: Arc<dyn PipelineRunRepository>,
@@ -383,8 +382,8 @@ impl RunContext<'_> {
             return;
         }
         for data_id in data_ids {
-            if let Err(e) = data::mark_cognify_pipeline_status_complete(
-                &self.database,
+            if let Err(e) = cognee_database::ProvenanceDb::mark_cognify_pipeline_status_complete(
+                &*self.database,
                 *data_id,
                 self.dataset_id,
             )
@@ -527,14 +526,15 @@ pub(crate) async fn on_run_completed(ctx: &RunContext<'_>, report: &FailureRepor
 /// reaches it for the dataset, before the pipeline is built, so a skipped item
 /// is never classified, never chunked and never sent to an LLM.
 pub(crate) async fn drop_already_complete(
-    db: &DatabaseConnection,
+    db: &dyn RelationalDb,
     dataset_id: Uuid,
     items: Vec<Data>,
 ) -> Result<Vec<Data>, CognifyError> {
     let ids: Vec<Uuid> = items.iter().map(|item| item.id).collect();
-    let completed = data::get_cognify_completed_data_ids(db, dataset_id, &ids)
-        .await
-        .map_err(|e| CognifyError::DatabaseError(e.to_string()))?;
+    let completed =
+        cognee_database::ProvenanceDb::get_cognify_completed_data_ids(db, dataset_id, &ids)
+            .await
+            .map_err(|e| CognifyError::DatabaseError(e.to_string()))?;
 
     if completed.is_empty() {
         return Ok(items);
@@ -564,6 +564,7 @@ mod tests {
 
     use super::*;
     use crate::failure::{FailurePolicy, FailureStage, StageFailure};
+    use cognee_database::ops::data;
 
     fn report_with(failed: &[Uuid], unreached: &[Uuid]) -> FailureReport {
         let mut report = FailureReport::default();
@@ -875,9 +876,7 @@ mod tests {
         let db = Arc::new(conn);
         let graph = Arc::new(cognee_test_utils::MockGraphDB::new());
         let vector = Arc::new(cognee_test_utils::MockVectorDB::new());
-        let repo: Arc<dyn PipelineRunRepository> = Arc::new(
-            cognee_database::SeaOrmPipelineRunRepository::new(Arc::clone(&db)),
-        );
+        let repo: Arc<dyn PipelineRunRepository> = Arc::clone(&db).pipeline_runs();
 
         let owner = Uuid::new_v4();
         let dataset_id = Uuid::new_v4();
@@ -923,9 +922,11 @@ mod tests {
         // The survivor completed, so the abort-time partition persisted it and
         // `on_run_completed` would have marked it. This is the state the
         // escalation discards.
-        data::mark_cognify_pipeline_status_complete(&db, survivor, dataset_id)
-            .await
-            .expect("mark the survivor complete");
+        cognee_database::ProvenanceDb::mark_cognify_pipeline_status_complete(
+            &*db, survivor, dataset_id,
+        )
+        .await
+        .expect("mark the survivor complete");
 
         // Two of ten chunks failed, both of them the failed file's: a 0.2 ratio
         // against the default 0.05 threshold.
@@ -967,7 +968,7 @@ mod tests {
         );
 
         let ctx = RunContext {
-            database: Arc::clone(&db),
+            database: db.clone(),
             graph_db: Arc::clone(&graph) as Arc<dyn GraphDBTrait>,
             vector_db: vector as Arc<dyn VectorDB>,
             repo,
@@ -1003,16 +1004,24 @@ mod tests {
             "the survivor's graph node is deleted alongside the failed file's"
         );
         assert!(
-            data::get_cognify_completed_data_ids(&db, dataset_id, &[survivor, failed])
-                .await
-                .expect("read the completion markers")
-                .is_empty(),
+            cognee_database::ProvenanceDb::get_cognify_completed_data_ids(
+                &*db,
+                dataset_id,
+                &[survivor, failed]
+            )
+            .await
+            .expect("read the completion markers")
+            .is_empty(),
             "the survivor is unmarked, so the next run redoes the whole dataset"
         );
     }
 
     /// A `Data` row the completion-marker ops can find.
-    async fn seed_data_item(db: &DatabaseConnection, owner: Uuid, name: &str) -> Uuid {
+    async fn seed_data_item(
+        db: &cognee_database::DatabaseConnection,
+        owner: Uuid,
+        name: &str,
+    ) -> Uuid {
         let data_id = Uuid::new_v4();
         data::create_data(
             db,
@@ -1082,7 +1091,7 @@ mod tests {
     /// stores.
     #[allow(clippy::type_complexity)]
     async fn run_context_fixture() -> (
-        Arc<DatabaseConnection>,
+        Arc<dyn RelationalDb>,
         Uuid,
         (
             Arc<dyn GraphDBTrait>,
@@ -1100,9 +1109,7 @@ mod tests {
             .expect("initialize");
         let db = Arc::new(conn);
         let dataset_id = Uuid::new_v4();
-        let repo: Arc<dyn PipelineRunRepository> = Arc::new(
-            cognee_database::SeaOrmPipelineRunRepository::new(Arc::clone(&db)),
-        );
+        let repo: Arc<dyn PipelineRunRepository> = Arc::clone(&db).pipeline_runs();
         (
             db,
             dataset_id,

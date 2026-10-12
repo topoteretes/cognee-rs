@@ -54,7 +54,7 @@ use serde_json::json;
 
 use cognee::api::{ImproveParams, remember, remember_entry};
 use cognee::cognify::{MemifyConfig, run_memify};
-use cognee::database::{PipelineRunRepository, SeaOrmPipelineRunRepository};
+use cognee::database::PipelineRunRepository;
 use cognee::models::{FeedbackEntry, MemoryEntry, QAEntry, TraceEntry};
 
 use crate::wire::marshal_inputs;
@@ -335,7 +335,7 @@ pub async fn run_memify_op(
     }
 
     let pipeline_run_repo: Arc<dyn PipelineRunRepository> =
-        Arc::new(SeaOrmPipelineRunRepository::new(Arc::clone(&svc.database)));
+        Arc::clone(&svc.database).pipeline_runs();
 
     let result = run_memify(
         svc.graph_db.clone(),

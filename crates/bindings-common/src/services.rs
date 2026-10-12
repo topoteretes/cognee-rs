@@ -18,8 +18,7 @@ use cognee::api::get_or_create_default_user;
 use cognee::cognify::{ChunkStrategy, CognifyConfig};
 use cognee::core::{CpuPool, RayonThreadPool};
 use cognee::database::{
-    CheckpointStore, DatabaseConnection, DeleteDb, IngestDb, PipelineRunRepository,
-    SeaOrmCheckpointStore, SeaOrmPipelineRunRepository, SearchHistoryDb,
+    CheckpointStore, DeleteDb, IngestDb, PipelineRunRepository, RelationalDb, SearchHistoryDb,
 };
 use cognee::delete::DeleteService;
 use cognee::embedding::EmbeddingEngine;
@@ -27,7 +26,7 @@ use cognee::graph::GraphDBTrait;
 use cognee::llm::Llm;
 use cognee::ontology::OntologyResolver;
 use cognee::search::{
-    SeaOrmSessionStore, SearchBuilder, SearchOrchestrator, SessionManager, SessionStore,
+    RelationalSessionStore, SearchBuilder, SearchOrchestrator, SessionManager, SessionStore,
 };
 use cognee::storage::StorageTrait;
 use cognee::vector::VectorDB;
@@ -47,7 +46,7 @@ pub struct CogneeServices {
     pub storage: Arc<dyn StorageTrait>,
     /// Concrete SeaORM connection. `DatabaseConnection` implements every DB
     /// trait, so derived services coerce it via `Arc::clone(&database) as Arc<dyn …>`.
-    pub database: Arc<DatabaseConnection>,
+    pub database: Arc<dyn RelationalDb>,
     pub graph_db: Arc<dyn GraphDBTrait>,
     pub vector_db: Arc<dyn VectorDB>,
     pub embedding_engine: Arc<dyn EmbeddingEngine>,
@@ -190,7 +189,7 @@ fn recovery_gate(relational_db_url: &str) -> Arc<tokio::sync::OnceCell<bool>> {
 async fn sweep_killed_run_leftovers(
     cm: &ComponentManager,
     pipeline_run_repo: &Arc<dyn PipelineRunRepository>,
-    database: &Arc<DatabaseConnection>,
+    database: &Arc<dyn RelationalDb>,
     graph_db: &Arc<dyn GraphDBTrait>,
     vector_db: &Arc<dyn VectorDB>,
 ) {
@@ -333,7 +332,7 @@ impl CogneeServices {
         );
 
         let pipeline_run_repo: Arc<dyn PipelineRunRepository> =
-            Arc::new(SeaOrmPipelineRunRepository::new(Arc::clone(&database)));
+            Arc::clone(&database).pipeline_runs();
 
         sweep_killed_run_leftovers(cm, &pipeline_run_repo, &database, &graph_db, &vector_db).await;
 
@@ -361,9 +360,9 @@ impl CogneeServices {
             .with_pipeline_run_repo(Arc::clone(&pipeline_run_repo)),
         );
 
-        // Session: v1 is always SeaOrmSessionStore (fs/redis features are not
+        // Session: v1 is always RelationalSessionStore (fs/redis features are not
         // built into the default binding configurations).
-        let session_store_concrete = SeaOrmSessionStore::new(Arc::clone(&database))
+        let session_store_concrete = RelationalSessionStore::new(database.clone())
             .await
             .map_err(|e| SdkError::ServiceBuild(format!("session store: {e}")))?;
         let session_store: Arc<dyn SessionStore> = Arc::new(session_store_concrete);
@@ -404,8 +403,7 @@ impl CogneeServices {
                 .with_max_parallel_extractions(s.llm_max_parallel_requests.max(1) as usize)
         };
 
-        let checkpoint_store: Arc<dyn CheckpointStore> =
-            Arc::new(SeaOrmCheckpointStore::new(Arc::clone(&database)));
+        let checkpoint_store: Arc<dyn CheckpointStore> = Arc::clone(&database).checkpoints();
 
         let services = CogneeServices {
             storage,

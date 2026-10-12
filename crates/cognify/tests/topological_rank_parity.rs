@@ -319,7 +319,7 @@ async fn extract_graph_rank_is_overridable_for_custom_pipelines() {
         llm,
         graph_db,
         Arc::new(NoOpOntologyResolver::new()),
-        Arc::clone(&db),
+        db.clone(),
         // Web-page node creation needs Documents, which this input omits.
         CognifyConfig::default().with_web_page_nodes(false),
         CUSTOM_RANK,

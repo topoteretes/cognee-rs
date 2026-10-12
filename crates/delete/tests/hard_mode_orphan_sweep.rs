@@ -151,7 +151,7 @@ async fn test_hard_mode_sweeps_orphan_entities() {
         ))
         .with_graph_db(Arc::clone(&graph_db))
         .with_vector_db(Arc::clone(&vector_db))
-        .with_database(Arc::clone(&database));
+        .with_database(database.clone());
 
     let data_items_1 = ingest
         .add(
@@ -202,7 +202,7 @@ async fn test_hard_mode_sweeps_orphan_entities() {
         graph_db.clone() as Arc<dyn GraphDBTrait>,
         vector_db.clone() as Arc<dyn VectorDB>,
         embedding_engine.clone() as Arc<dyn EmbeddingEngine>,
-        Arc::clone(&database),
+        database.clone(),
         Arc::new(cognee_database::NoopPipelineRunRepository::new())
             as Arc<dyn cognee_database::PipelineRunRepository>,
         Arc::new(
@@ -336,7 +336,7 @@ async fn test_soft_mode_preserves_orphan_entities() {
         ))
         .with_graph_db(Arc::clone(&graph_db))
         .with_vector_db(Arc::clone(&vector_db))
-        .with_database(Arc::clone(&database));
+        .with_database(database.clone());
 
     let data_items_1 = ingest
         .add(
@@ -384,7 +384,7 @@ async fn test_soft_mode_preserves_orphan_entities() {
         graph_db.clone() as Arc<dyn GraphDBTrait>,
         vector_db.clone() as Arc<dyn VectorDB>,
         embedding_engine.clone() as Arc<dyn EmbeddingEngine>,
-        Arc::clone(&database),
+        database.clone(),
         Arc::new(cognee_database::NoopPipelineRunRepository::new())
             as Arc<dyn cognee_database::PipelineRunRepository>,
         Arc::new(

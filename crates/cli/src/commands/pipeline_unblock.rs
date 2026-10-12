@@ -24,9 +24,7 @@
 use std::sync::Arc;
 
 use cognee::cognify::CLAIM_STALE_AFTER;
-use cognee::database::{
-    PipelineRunRepository, PipelineRunStatus, SeaOrmPipelineRunRepository, ops,
-};
+use cognee::database::PipelineRunStatus;
 use cognee::{ComponentManager, PipelineContext};
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -65,17 +63,22 @@ pub fn run(args: PipelineUnblockArgs, cm: Arc<ComponentManager>) -> Result<(), C
             .await
             .map_err(|e| CliError::Runtime(format!("{e}")))?;
 
-        let dataset = ops::datasets::get_dataset_by_name(&database, &args.dataset, owner_id, None)
-            .await
-            .map_err(|error| {
-                CliError::Runtime(format!(
-                    "Failed to resolve dataset '{}': {error}",
-                    args.dataset
-                ))
-            })?
-            .ok_or_else(|| CliError::Validation(format!("Dataset '{}' not found", args.dataset)))?;
+        let dataset = cognee::database::IngestDb::get_dataset_by_name(
+            &*database,
+            &args.dataset,
+            owner_id,
+            None,
+        )
+        .await
+        .map_err(|error| {
+            CliError::Runtime(format!(
+                "Failed to resolve dataset '{}': {error}",
+                args.dataset
+            ))
+        })?
+        .ok_or_else(|| CliError::Validation(format!("Dataset '{}' not found", args.dataset)))?;
 
-        let repo = SeaOrmPipelineRunRepository::new(Arc::clone(&database));
+        let repo = Arc::clone(&database).pipeline_runs();
         let ds = dataset.id;
         let mut found_any = false;
 

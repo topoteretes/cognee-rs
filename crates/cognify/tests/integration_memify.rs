@@ -121,7 +121,7 @@ async fn test_memify_idempotent() {
         Arc::clone(&vector_db),
         Arc::clone(&engine),
         Arc::clone(&pool),
-        Arc::clone(&database),
+        database.clone(),
         Arc::new(cognee_database::NoopPipelineRunRepository::new())
             as Arc<dyn cognee_database::PipelineRunRepository>,
         None,
@@ -137,7 +137,7 @@ async fn test_memify_idempotent() {
         Arc::clone(&vector_db),
         Arc::clone(&engine),
         Arc::clone(&pool),
-        Arc::clone(&database),
+        database.clone(),
         Arc::new(cognee_database::NoopPipelineRunRepository::new())
             as Arc<dyn cognee_database::PipelineRunRepository>,
         None,

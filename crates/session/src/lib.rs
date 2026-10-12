@@ -4,7 +4,8 @@
 //! prior context. Trait-based so the store backend is pluggable.
 //!
 //! - `SessionStore` — async trait for session persistence
-//! - `FsSessionStore` (feature `fs`), `RedisSessionStore`, `SeaOrmSessionStore`
+//! - `FsSessionStore` (feature `fs`), `RedisSessionStore`, `RelationalSessionStore`
+//!   (feature `relational-store`, over any `cognee_database::SessionQaDb`)
 //!   — the backing implementations
 
 mod error;
@@ -20,12 +21,8 @@ mod fs_store;
 #[cfg(feature = "redis")]
 mod redis_store;
 
-#[cfg(feature = "sea-orm-store")]
-mod migrator;
-#[cfg(feature = "sea-orm-store")]
-mod sea_orm_backend;
-#[cfg(feature = "sea-orm-store")]
-mod sea_orm_store;
+#[cfg(feature = "relational-store")]
+mod relational_store;
 
 pub use error::SessionError;
 pub use improve_lock::{ImproveLockGuard, release_improve_lock, try_acquire_improve_lock};
@@ -39,5 +36,6 @@ pub use fs_store::FsSessionStore;
 #[cfg(feature = "redis")]
 pub use redis_store::RedisSessionStore;
 
-#[cfg(feature = "sea-orm-store")]
-pub use sea_orm_store::SeaOrmSessionStore;
+#[cfg(feature = "relational-store")]
+#[allow(deprecated)]
+pub use relational_store::{RelationalSessionStore, SeaOrmSessionStore};

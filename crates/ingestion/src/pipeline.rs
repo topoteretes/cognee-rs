@@ -21,7 +21,7 @@ use cognee_core::pipeline::DataIdFn;
 use cognee_core::pipeline_run_registry::DbPipelineWatcher;
 use cognee_core::task::{TaskError, Value};
 use cognee_core::{Pipeline, PipelineBuilder, PipelineContext, TaskContextBuilder, TypedTask};
-use cognee_database::{AclDb, DatabaseConnection, IngestDb, PipelineRunRepository};
+use cognee_database::{AclDb, IngestDb, PipelineRunRepository, RelationalDb};
 use cognee_graph::GraphDBTrait;
 use cognee_models::{Data, DataInput, DataPoint, Dataset, Document};
 use cognee_storage::StorageTrait;
@@ -1126,7 +1126,7 @@ pub struct AddPipeline {
     thread_pool: Option<Arc<dyn CpuPool>>,
     graph_db: Option<Arc<dyn GraphDBTrait>>,
     vector_db: Option<Arc<dyn VectorDB>>,
-    db_connection: Option<Arc<DatabaseConnection>>,
+    db_connection: Option<Arc<dyn RelationalDb>>,
     // ─── Pipeline-run trail (gap 08-07) ───────────────────────────────────
     pipeline_run_repo: Option<Arc<dyn PipelineRunRepository>>,
     // ─── Concurrency (SDK-636) ────────────────────────────────────────────
@@ -1224,10 +1224,10 @@ impl AddPipeline {
         self
     }
 
-    /// Attach the relational [`DatabaseConnection`] used by
+    /// Attach the relational [`RelationalDb`] used by
     /// [`cognee_core::TaskContext`]. This is the same SeaORM handle the
     /// SQL-backed `IngestDb` is built on.
-    pub fn with_database(mut self, db: Arc<DatabaseConnection>) -> Self {
+    pub fn with_database(mut self, db: Arc<dyn RelationalDb>) -> Self {
         self.db_connection = Some(db);
         self
     }
@@ -1473,7 +1473,7 @@ mod tests {
             .with_thread_pool(Arc::new(RayonThreadPool::with_default_threads().unwrap()))
             .with_graph_db(Arc::new(MockGraphDB::new()))
             .with_vector_db(Arc::new(MockVectorDB::new()))
-            .with_database(Arc::clone(&db));
+            .with_database(db.clone());
         (pipeline, db)
     }
 
@@ -1756,11 +1756,11 @@ mod tests {
         assert_eq!(data[0].mime_type, "text/plain");
         assert_eq!(data[0].extension, "txt");
 
-        let datasets = ops::datasets::list_datasets_by_owner(&db, owner_id)
+        let datasets = cognee_database::IngestDb::list_datasets_by_owner(&*db, owner_id)
             .await
             .unwrap();
         assert_eq!(datasets.len(), 1);
-        let ds_data = ops::datasets::get_dataset_data(&db, datasets[0].id)
+        let ds_data = cognee_database::DeleteDb::get_dataset_data(&*db, datasets[0].id)
             .await
             .unwrap();
         assert_eq!(ds_data.len(), 1);
@@ -1783,7 +1783,7 @@ mod tests {
         assert_eq!(data.len(), 1);
         assert!(!data[0].name.is_empty());
 
-        let datasets = ops::datasets::list_datasets_by_owner(&db, owner_id)
+        let datasets = cognee_database::IngestDb::list_datasets_by_owner(&*db, owner_id)
             .await
             .unwrap();
         assert_eq!(datasets.len(), 1);
@@ -1804,11 +1804,11 @@ mod tests {
         let data = result.unwrap();
         assert_eq!(data.len(), 2);
 
-        let datasets = ops::datasets::list_datasets_by_owner(&db, owner_id)
+        let datasets = cognee_database::IngestDb::list_datasets_by_owner(&*db, owner_id)
             .await
             .unwrap();
         assert_eq!(datasets.len(), 1);
-        let ds_data = ops::datasets::get_dataset_data(&db, datasets[0].id)
+        let ds_data = cognee_database::DeleteDb::get_dataset_data(&*db, datasets[0].id)
             .await
             .unwrap();
         assert_eq!(ds_data.len(), 2);
@@ -1842,11 +1842,12 @@ mod tests {
         assert_eq!(result1[0].id, result2[0].id);
         assert_eq!(result1[0].content_hash, result2[0].content_hash);
 
-        let dataset = ops::datasets::get_dataset_by_name(&db, "test_dataset", owner_id, None)
-            .await
-            .unwrap()
-            .unwrap();
-        let ds_data = ops::datasets::get_dataset_data(&db, dataset.id)
+        let dataset =
+            cognee_database::IngestDb::get_dataset_by_name(&*db, "test_dataset", owner_id, None)
+                .await
+                .unwrap()
+                .unwrap();
+        let ds_data = cognee_database::DeleteDb::get_dataset_data(&*db, dataset.id)
             .await
             .unwrap();
         assert_eq!(ds_data.len(), 1);
@@ -1910,7 +1911,7 @@ mod tests {
             .await
             .unwrap();
 
-        let datasets = ops::datasets::list_datasets_by_owner(&db, owner_id)
+        let datasets = cognee_database::IngestDb::list_datasets_by_owner(&*db, owner_id)
             .await
             .unwrap();
         assert_eq!(datasets.len(), 2);
@@ -1940,11 +1941,11 @@ mod tests {
             .await
             .unwrap();
 
-        let datasets = ops::datasets::list_datasets_by_owner(&db, owner_id)
+        let datasets = cognee_database::IngestDb::list_datasets_by_owner(&*db, owner_id)
             .await
             .unwrap();
         assert_eq!(datasets.len(), 1);
-        let ds_data = ops::datasets::get_dataset_data(&db, datasets[0].id)
+        let ds_data = cognee_database::DeleteDb::get_dataset_data(&*db, datasets[0].id)
             .await
             .unwrap();
         assert_eq!(ds_data.len(), 2);
@@ -2100,7 +2101,7 @@ mod tests {
             .unwrap();
 
         // There must be exactly one dataset (deterministic ID prevents duplicates)
-        let datasets = ops::datasets::list_datasets_by_owner(&db, owner_id)
+        let datasets = cognee_database::IngestDb::list_datasets_by_owner(&*db, owner_id)
             .await
             .unwrap();
         assert_eq!(

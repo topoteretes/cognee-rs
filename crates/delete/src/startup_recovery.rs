@@ -38,7 +38,7 @@
 
 use std::sync::Arc;
 
-use cognee_database::{DatabaseConnection, PipelineRunRepository};
+use cognee_database::{PipelineRunRepository, RelationalDb};
 use cognee_graph::GraphDBTrait;
 use cognee_vector::VectorDB;
 use tracing::{info, warn};
@@ -97,7 +97,7 @@ pub struct OrphanArtifactSweep {
 /// live.
 pub async fn sweep_orphaned_run_artifacts(
     repo: &dyn PipelineRunRepository,
-    database: Arc<DatabaseConnection>,
+    database: Arc<dyn RelationalDb>,
     graph_db: Arc<dyn GraphDBTrait>,
     vector_db: Arc<dyn VectorDB>,
 ) -> OrphanArtifactSweep {

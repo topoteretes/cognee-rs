@@ -139,7 +139,7 @@ async fn test_readd_and_recognify_after_delete() {
         ))
         .with_graph_db(Arc::clone(&graph_db))
         .with_vector_db(Arc::clone(&vector_db))
-        .with_database(Arc::clone(&database));
+        .with_database(database.clone());
     let data_items_1 = ingest
         .add(
             vec![DataInput::Text(TEST_TEXT.to_string())],
@@ -299,7 +299,7 @@ async fn test_readd_and_recognify_after_delete() {
         ))
         .with_graph_db(Arc::clone(&graph_db))
         .with_vector_db(Arc::clone(&vector_db))
-        .with_database(Arc::clone(&database));
+        .with_database(database.clone());
     let data_items_2 = ingest_2
         .add(
             vec![DataInput::Text(TEST_TEXT.to_string())],

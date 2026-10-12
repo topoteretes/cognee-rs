@@ -133,7 +133,7 @@ async fn make_harness() -> Harness {
         ))
         .with_graph_db(graph_db.clone() as Arc<dyn cognee_graph::GraphDBTrait>)
         .with_vector_db(vector_db.clone() as Arc<dyn cognee_vector::VectorDB>)
-        .with_database(Arc::clone(&db));
+        .with_database(db.clone());
     let embedding_engine = Arc::new(MockEmbeddingEngine::new(16));
     let ontology: Arc<dyn OntologyResolver> = Arc::new(NoOpOntologyResolver::new());
 
@@ -178,7 +178,7 @@ async fn improve_without_sessions_runs_only_memify() {
         vector_db: h.vector_db.clone() as Arc<_>,
         embedding_engine: h.embedding_engine.clone() as Arc<_>,
         ontology_resolver: Arc::clone(&h.ontology),
-        db: Some(Arc::clone(&h.db)),
+        db: Some(h.db.clone()),
         session_store: Some(Arc::clone(&h.session_store)),
         session_manager: Some(Arc::clone(&h.session_manager)),
         add_pipeline: Some(&h.add_pipeline),
@@ -223,7 +223,7 @@ async fn improve_skips_stage1_when_session_backends_missing() {
         vector_db: h.vector_db.clone() as Arc<_>,
         embedding_engine: h.embedding_engine.clone() as Arc<_>,
         ontology_resolver: Arc::clone(&h.ontology),
-        db: Some(Arc::clone(&h.db)),
+        db: Some(h.db.clone()),
         session_store: None,
         session_manager: None,
         add_pipeline: None,
@@ -272,7 +272,7 @@ async fn improve_omits_distill_sessions_when_no_qa() {
         vector_db: h.vector_db.clone() as Arc<_>,
         embedding_engine: h.embedding_engine.clone() as Arc<_>,
         ontology_resolver: Arc::clone(&h.ontology),
-        db: Some(Arc::clone(&h.db)),
+        db: Some(h.db.clone()),
         session_store: Some(Arc::clone(&h.session_store)),
         session_manager: Some(Arc::clone(&h.session_manager)),
         add_pipeline: Some(&h.add_pipeline),
@@ -335,7 +335,7 @@ async fn improve_records_build_truth_subspace_when_opted_in() {
         vector_db: h.vector_db.clone() as Arc<_>,
         embedding_engine: h.embedding_engine.clone() as Arc<_>,
         ontology_resolver: Arc::clone(&h.ontology),
-        db: Some(Arc::clone(&h.db)),
+        db: Some(h.db.clone()),
         session_store: Some(Arc::clone(&h.session_store)),
         session_manager: Some(Arc::clone(&h.session_manager)),
         add_pipeline: Some(&h.add_pipeline),
@@ -389,7 +389,7 @@ async fn improve_omits_build_truth_subspace_when_disabled() {
         vector_db: h.vector_db.clone() as Arc<_>,
         embedding_engine: h.embedding_engine.clone() as Arc<_>,
         ontology_resolver: Arc::clone(&h.ontology),
-        db: Some(Arc::clone(&h.db)),
+        db: Some(h.db.clone()),
         session_store: Some(Arc::clone(&h.session_store)),
         session_manager: Some(Arc::clone(&h.session_manager)),
         add_pipeline: Some(&h.add_pipeline),
@@ -444,7 +444,7 @@ async fn improve_records_global_context_index_when_opted_in() {
         vector_db: h.vector_db.clone() as Arc<_>,
         embedding_engine: h.embedding_engine.clone() as Arc<_>,
         ontology_resolver: Arc::clone(&h.ontology),
-        db: Some(Arc::clone(&h.db)),
+        db: Some(h.db.clone()),
         session_store: Some(Arc::clone(&h.session_store)),
         session_manager: Some(Arc::clone(&h.session_manager)),
         add_pipeline: Some(&h.add_pipeline),
@@ -510,7 +510,7 @@ async fn improve_skips_global_context_index_in_background() {
         vector_db: h.vector_db.clone() as Arc<_>,
         embedding_engine: h.embedding_engine.clone() as Arc<_>,
         ontology_resolver: Arc::clone(&h.ontology),
-        db: Some(Arc::clone(&h.db)),
+        db: Some(h.db.clone()),
         session_store: Some(Arc::clone(&h.session_store)),
         session_manager: Some(Arc::clone(&h.session_manager)),
         add_pipeline: Some(&h.add_pipeline),
@@ -585,7 +585,7 @@ async fn improve_records_distill_sessions_when_lessons_published() {
         vector_db: h.vector_db.clone() as Arc<_>,
         embedding_engine: h.embedding_engine.clone() as Arc<_>,
         ontology_resolver: Arc::clone(&h.ontology),
-        db: Some(Arc::clone(&h.db)),
+        db: Some(h.db.clone()),
         session_store: Some(Arc::clone(&h.session_store)),
         session_manager: Some(Arc::clone(&h.session_manager)),
         add_pipeline: Some(&h.add_pipeline),

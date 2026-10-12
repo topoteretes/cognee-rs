@@ -60,4 +60,5 @@ tracing     = { workspace = true }
 
 [dev-dependencies]
 cognee-config-core = { path = "../config-core", version = "0.2.0" }
+cognee-database = { path = "../database", features = ["testing"] }
 tempfile = "3"

@@ -20,7 +20,10 @@ default = []
 # -p cognee-session --features redis
 redis = ["dep:redis"]
 fs = []
-sea-orm-store = ["dep:sea-orm", "dep:sea-orm-migration"]
+# Session entries in the relational database, through `cognee_database::SessionQaDb`.
+relational-store = ["dep:cognee-database"]
+# Former name of `relational-store`.
+sea-orm-store = ["relational-store"]
 telemetry = ["cognee-telemetry/telemetry"]
 
 [dependencies]
@@ -35,9 +38,8 @@ serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 
-# sea-orm backend (feature-gated)
-sea-orm = { version = "1.1", features = ["sqlx-sqlite", "sqlx-postgres", "runtime-tokio-rustls", "with-chrono"], optional = true }
-sea-orm-migration = { version = "1.1", features = ["runtime-tokio-rustls"], optional = true }
+# relational backend (feature-gated)
+cognee-database = { path = "../database", version = "0.2.0", optional = true }
 
 # redis backend (feature-gated)
 redis = { version = "0.29", features = ["aio", "tokio-comp", "connection-manager"], optional = true }
@@ -57,9 +59,9 @@ path = "tests/fs_store_tests.rs"
 required-features = ["fs"]
 
 [[test]]
-name = "sea_orm_store_tests"
-path = "tests/sea_orm_store_tests.rs"
-required-features = ["sea-orm-store"]
+name = "relational_store_tests"
+path = "tests/relational_store_tests.rs"
+required-features = ["relational-store"]
 
 [[test]]
 name = "test_session_manager_trace"
@@ -67,5 +69,6 @@ path = "tests/test_session_manager_trace.rs"
 required-features = ["fs"]
 
 [dev-dependencies]
+cognee-database = { path = "../database", features = ["sqlite"] }
 tokio.workspace = true
 tempfile.workspace = true

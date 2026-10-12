@@ -85,7 +85,7 @@ async fn test_delete_preview_counts_match_execution() {
         ))
         .with_graph_db(Arc::clone(&graph_db))
         .with_vector_db(Arc::clone(&vector_db))
-        .with_database(Arc::clone(&database));
+        .with_database(database.clone());
     let data_items = ingest
         .add(
             vec![
@@ -166,7 +166,7 @@ async fn test_delete_preview_counts_match_execution() {
         Arc::clone(&vector_db),
         Arc::clone(&embedding_engine),
         memify_pool,
-        Arc::clone(&database),
+        database.clone(),
         Arc::new(cognee_database::NoopPipelineRunRepository::new())
             as Arc<dyn cognee_database::PipelineRunRepository>,
         Some(dataset.id),

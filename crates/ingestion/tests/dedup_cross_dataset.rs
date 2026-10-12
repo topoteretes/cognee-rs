@@ -49,7 +49,7 @@ async fn make_pipeline(
     .with_thread_pool(Arc::new(RayonThreadPool::with_default_threads().unwrap()))
     .with_graph_db(Arc::new(MockGraphDB::new()))
     .with_vector_db(Arc::new(MockVectorDB::new()))
-    .with_database(Arc::clone(&db));
+    .with_database(db.clone());
     (pipeline, db, storage)
 }
 

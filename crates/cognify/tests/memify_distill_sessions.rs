@@ -134,7 +134,7 @@ async fn make_harness() -> Harness {
         ))
         .with_graph_db(graph_db.clone() as Arc<dyn cognee_graph::GraphDBTrait>)
         .with_vector_db(vector_db.clone() as Arc<dyn cognee_vector::VectorDB>)
-        .with_database(Arc::clone(&db));
+        .with_database(db.clone());
 
     let embedding_engine = Arc::new(MockEmbeddingEngine::new(16));
     let ontology: Arc<dyn OntologyResolver> = Arc::new(NoOpOntologyResolver::new());
@@ -183,7 +183,7 @@ async fn distill_no_qa_returns_no_qa_entries() {
         h.graph_db.clone() as Arc<_>,
         h.vector_db.clone() as Arc<_>,
         h.embedding_engine.clone() as Arc<_>,
-        Arc::clone(&h.db),
+        h.db.clone(),
         noop_repo(),
         thread_pool(),
         Arc::clone(&h.ontology),
@@ -232,7 +232,7 @@ async fn distill_curator_failopen_yields_no_proposed_lessons() {
         h.graph_db.clone() as Arc<_>,
         h.vector_db.clone() as Arc<_>,
         h.embedding_engine.clone() as Arc<_>,
-        Arc::clone(&h.db),
+        h.db.clone(),
         noop_repo(),
         thread_pool(),
         Arc::clone(&h.ontology),
@@ -284,7 +284,7 @@ async fn distill_writer_rejects_yields_no_accepted_lessons() {
         h.graph_db.clone() as Arc<_>,
         h.vector_db.clone() as Arc<_>,
         h.embedding_engine.clone() as Arc<_>,
-        Arc::clone(&h.db),
+        h.db.clone(),
         noop_repo(),
         thread_pool(),
         Arc::clone(&h.ontology),
@@ -346,7 +346,7 @@ async fn distill_writer_failopen_yields_no_accepted_lessons() {
         h.graph_db.clone() as Arc<_>,
         h.vector_db.clone() as Arc<_>,
         h.embedding_engine.clone() as Arc<_>,
-        Arc::clone(&h.db),
+        h.db.clone(),
         noop_repo(),
         thread_pool(),
         Arc::clone(&h.ontology),
@@ -413,7 +413,7 @@ async fn distill_sessions_failopen_isolates_sessions() {
         h.graph_db.clone() as Arc<_>,
         h.vector_db.clone() as Arc<_>,
         h.embedding_engine.clone() as Arc<_>,
-        Arc::clone(&h.db),
+        h.db.clone(),
         noop_repo(),
         thread_pool(),
         Arc::clone(&h.ontology),
@@ -509,7 +509,7 @@ async fn distill_happy_path_tags_both_node_sets() {
         h.graph_db.clone() as Arc<_>,
         h.vector_db.clone() as Arc<_>,
         h.embedding_engine.clone() as Arc<_>,
-        Arc::clone(&h.db),
+        h.db.clone(),
         noop_repo(),
         thread_pool(),
         Arc::clone(&h.ontology),

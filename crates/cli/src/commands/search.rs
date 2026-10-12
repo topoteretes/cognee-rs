@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use cognee::database::IngestDb;
 use cognee::search::{
-    SeaOrmSessionStore, SearchBuilder, SearchOutput, SearchRequest, SearchResponse, SearchType,
+    RelationalSessionStore, SearchBuilder, SearchOutput, SearchRequest, SearchResponse, SearchType,
     SessionManager,
 };
 use cognee::{ComponentManager, PipelineContext};
@@ -73,7 +73,7 @@ pub fn run(args: SearchArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
             .await
             .map_err(|e| CliError::Runtime(format!("{e}")))?;
 
-        let session_store = SeaOrmSessionStore::new(Arc::clone(&database))
+        let session_store = RelationalSessionStore::new(database.clone())
             .await
             .map_err(|e| CliError::Runtime(format!("session store init failed: {e}")))?;
         let session_manager = Arc::new(SessionManager::new(Arc::new(session_store)));

@@ -20,7 +20,7 @@
 use std::sync::Arc;
 
 use cognee_core::CpuPool;
-use cognee_database::{DatabaseConnection, PipelineRunRepository};
+use cognee_database::{PipelineRunRepository, RelationalDb};
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
 use cognee_ingestion::{AddParams, AddPipeline};
@@ -106,7 +106,7 @@ pub async fn persist_sessions_in_knowledge_graph(
     graph_db: Arc<dyn GraphDBTrait>,
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
-    database: Arc<DatabaseConnection>,
+    database: Arc<dyn RelationalDb>,
     pipeline_run_repo: Arc<dyn PipelineRunRepository>,
     thread_pool: Arc<dyn CpuPool>,
     ontology_resolver: Arc<dyn OntologyResolver>,
@@ -168,8 +168,8 @@ pub async fn persist_sessions_in_knowledge_graph(
         // not currently return the dataset_id directly, so we derive it from
         // the node_set-tagged Data entries through the same helper that
         // cognify_dataset_refs uses: look up by name/owner.
-        let dataset_id = match cognee_database::ops::datasets::get_dataset_by_name(
-            database.as_ref(),
+        let dataset_id = match cognee_database::IngestDb::get_dataset_by_name(
+            &*database,
             dataset_name,
             owner_id,
             tenant_id,

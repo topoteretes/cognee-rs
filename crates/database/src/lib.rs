@@ -6,6 +6,7 @@ pub mod entities;
 pub mod migrator;
 pub mod ops;
 pub mod pipelines;
+pub mod session_qa;
 pub mod single_process;
 pub mod sync;
 mod traits;
@@ -57,13 +58,15 @@ pub use pipelines::{
     PipelineRunWithAttributionRow,
 };
 pub use sea_orm::DatabaseConnection;
+pub use session_qa::{SessionQaPatch, SessionQaRow, SessionTraceRow};
 pub use sync::{
     SeaOrmSyncOperationRepository, SyncOperationRepository, SyncOperationRow, SyncOperationStatus,
 };
 pub use traits::{
     AclDb, CostByModelRow, DatasetConfigDb, DatasetConfiguration, DatasetConfigurationPatch,
-    DeleteDb, IngestDb, Notebook, NotebookDb, NotebookUpdatePatch, SearchHistoryDb,
-    SessionLifecycleDb, SessionListFilters, SessionListPage, SessionRowWithStatus, SessionStats,
+    DatasetDb, DeleteDb, IngestDb, Notebook, NotebookDb, NotebookUpdatePatch, ProvenanceDb,
+    RelationalDb, SearchHistoryDb, SessionLifecycleDb, SessionListFilters, SessionListPage,
+    SessionQaDb, SessionRowWithStatus, SessionStats,
 };
 pub use types::{
     DatabaseError, GraphEdge, GraphMetrics, GraphNode, PipelineRun, PipelineRunStatus,

@@ -64,7 +64,7 @@ async fn make_harness() -> Harness {
         ))
         .with_graph_db(graph_db.clone() as Arc<dyn cognee_graph::GraphDBTrait>)
         .with_vector_db(vector_db.clone() as Arc<dyn cognee_vector::VectorDB>)
-        .with_database(Arc::clone(&db));
+        .with_database(db.clone());
 
     let embedding_engine = Arc::new(MockEmbeddingEngine::new(16));
     let ontology: Arc<dyn OntologyResolver> = Arc::new(NoOpOntologyResolver::new());
@@ -104,7 +104,7 @@ async fn persist_empty_sessions_returns_zero() {
         h.graph_db.clone() as Arc<_>,
         h.vector_db.clone() as Arc<_>,
         h.embedding_engine.clone() as Arc<_>,
-        Arc::clone(&h.db),
+        h.db.clone(),
         Arc::new(cognee_database::NoopPipelineRunRepository::new())
             as Arc<dyn cognee_database::PipelineRunRepository>,
         Arc::new(
@@ -174,7 +174,7 @@ async fn persist_tags_nodes_with_user_sessions_node_set() {
         h.graph_db.clone() as Arc<_>,
         h.vector_db.clone() as Arc<_>,
         h.embedding_engine.clone() as Arc<_>,
-        Arc::clone(&h.db),
+        h.db.clone(),
         Arc::new(cognee_database::NoopPipelineRunRepository::new())
             as Arc<dyn cognee_database::PipelineRunRepository>,
         Arc::new(

@@ -4,7 +4,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use cognee_database::{DatabaseConnection, connect, initialize, sqlite_url_is_in_memory};
+use cognee_database::{RelationalDb, connect, initialize, sqlite_url_is_in_memory};
 
 use crate::context::BackendBuildContext;
 use crate::error::ComponentError;
@@ -62,7 +62,7 @@ fn sqlite_fs_path(url: &str) -> Option<String> {
 /// instead of silently producing an empty database at the wrong location.
 pub async fn build_database(
     ctx: &BackendBuildContext,
-) -> Result<Arc<DatabaseConnection>, ComponentError> {
+) -> Result<Arc<dyn RelationalDb>, ComponentError> {
     let url = &ctx.relational_db_url;
 
     if let Some(path) = sqlite_fs_path(url) {

@@ -42,7 +42,6 @@ use serde_json::json;
 use uuid::Uuid;
 
 use cognee::cognify::cognify as cognee_cognify;
-use cognee::database::ops;
 use cognee::models::{Data, Dataset};
 
 use crate::graph_backend::{check_graph_backend_registered, graph_backend_from_opts};
@@ -180,13 +179,14 @@ pub async fn existing_data_ids(
     owner_id: Uuid,
     tenant_id: Option<Uuid>,
 ) -> Result<HashSet<Uuid>, SdkError> {
-    let dataset = ops::datasets::get_dataset_by_name(&svc.database, name, owner_id, tenant_id)
-        .await
-        .map_err(|e| SdkError::Runtime(format!("failed to resolve dataset '{name}': {e}")))?;
+    let dataset =
+        cognee::database::IngestDb::get_dataset_by_name(&*svc.database, name, owner_id, tenant_id)
+            .await
+            .map_err(|e| SdkError::Runtime(format!("failed to resolve dataset '{name}': {e}")))?;
     let Some(dataset) = dataset else {
         return Ok(HashSet::new());
     };
-    let data = ops::datasets::get_dataset_data(&svc.database, dataset.id)
+    let data = cognee::database::DeleteDb::get_dataset_data(&*svc.database, dataset.id)
         .await
         .map_err(|e| SdkError::Runtime(format!("failed to load data for dataset '{name}': {e}")))?;
     Ok(data.into_iter().map(|d| d.id).collect())
@@ -213,7 +213,7 @@ pub async fn resolve_dataset(
     owner_id: Uuid,
     tenant_id: Option<Uuid>,
 ) -> Result<Dataset, SdkError> {
-    ops::datasets::get_dataset_by_name(&svc.database, name, owner_id, tenant_id)
+    cognee::database::IngestDb::get_dataset_by_name(&*svc.database, name, owner_id, tenant_id)
         .await
         .map_err(|e| SdkError::Runtime(format!("failed to resolve dataset '{name}': {e}")))?
         .ok_or_else(|| {
@@ -343,7 +343,7 @@ pub async fn cognify(
 
     let dataset = resolve_dataset(&svc, dataset_name, owner_id, tenant_id).await?;
 
-    let data_items = ops::datasets::get_dataset_data(&svc.database, dataset.id)
+    let data_items = cognee::database::DeleteDb::get_dataset_data(&*svc.database, dataset.id)
         .await
         .map_err(|e| {
             SdkError::Runtime(format!(

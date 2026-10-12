@@ -154,7 +154,7 @@ async fn test_search_type_matrix() {
         ))
         .with_graph_db(Arc::clone(&graph_db))
         .with_vector_db(Arc::clone(&vector_db))
-        .with_database(Arc::clone(&database));
+        .with_database(database.clone());
     ingest
         .add(
             vec![DataInput::Text(GERMANY_TEXT.to_string())],
@@ -210,7 +210,7 @@ async fn test_search_type_matrix() {
         Arc::clone(&graph_db),
         Arc::clone(&vector_db),
         Arc::clone(&embedding_engine),
-        Arc::clone(&database),
+        database.clone(),
         Arc::new(cognee_database::NoopPipelineRunRepository::new())
             as Arc<dyn cognee_database::PipelineRunRepository>,
         thread_pool,

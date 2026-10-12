@@ -12,8 +12,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::Utc;
 use cognee_core::CpuPool;
-use cognee_database::ops::pipeline_runs::{create_pipeline_run, get_latest_pipeline_run};
-use cognee_database::{DatabaseConnection, PipelineRun, PipelineRunRepository, PipelineRunStatus};
+use cognee_database::{PipelineRun, PipelineRunRepository, PipelineRunStatus, RelationalDb};
 use cognee_embedding::engine::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
 use cognee_llm::Llm;
@@ -101,10 +100,12 @@ pub trait DatasetResolver: Send + Sync {
 /// has exactly those files to redo — and reading the status and the `run_info`
 /// with two queries would let the two answers come from different rows.
 async fn dataset_is_cached(
-    database: &DatabaseConnection,
+    database: &dyn RelationalDb,
     dataset_id: Uuid,
 ) -> Result<bool, CognifyError> {
-    let latest = get_latest_pipeline_run(database, COGNIFY_PIPELINE_NAME, dataset_id).await?;
+    let latest = database
+        .get_latest_pipeline_run(COGNIFY_PIPELINE_NAME, dataset_id)
+        .await?;
     Ok(latest.is_some_and(|run| {
         matches!(run.status, PipelineRunStatus::Completed)
             && !rollback::run_info_has_outstanding_failures(run.run_info.as_ref())
@@ -131,7 +132,7 @@ async fn dataset_is_cached(
 /// dataset it is a superset of what the run actually processed; the executor's
 /// own rows, written from the filtered input, carry the exact set.
 async fn record_dataset_run(
-    database: &DatabaseConnection,
+    database: &dyn RelationalDb,
     dataset_id: Uuid,
     data_ids: &[Uuid],
     result: &CognifyResult,
@@ -157,7 +158,7 @@ async fn record_dataset_run(
         dataset_id: Some(dataset_id),
         run_info,
     };
-    create_pipeline_run(database, run).await?;
+    database.create_pipeline_run(run).await?;
     Ok(())
 }
 
@@ -185,7 +186,7 @@ pub async fn cognify_datasets(
     graph_db: Arc<dyn GraphDBTrait>,
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
-    database: Arc<DatabaseConnection>,
+    database: Arc<dyn RelationalDb>,
     pipeline_run_repo: Arc<dyn PipelineRunRepository>,
     thread_pool: Arc<dyn CpuPool>,
     ontology_resolver: Arc<dyn OntologyResolver>,
@@ -205,7 +206,7 @@ pub async fn cognify_datasets(
 
     for dataset in &datasets {
         // --- Pipeline cache check ---
-        if config.use_pipeline_cache && dataset_is_cached(&database, dataset.id).await? {
+        if config.use_pipeline_cache && dataset_is_cached(&*database, dataset.id).await? {
             info!(
                 dataset_name = %dataset.name,
                 dataset_id = %dataset.id,
@@ -256,7 +257,7 @@ pub async fn cognify_datasets(
         .await?;
 
         // --- Record successful pipeline run ---
-        record_dataset_run(&database, dataset.id, &data_ids, &result).await?;
+        record_dataset_run(&*database, dataset.id, &data_ids, &result).await?;
 
         results.push(result);
     }
@@ -284,7 +285,7 @@ pub async fn cognify_dataset_refs(
     graph_db: Arc<dyn GraphDBTrait>,
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
-    database: Arc<DatabaseConnection>,
+    database: Arc<dyn RelationalDb>,
     pipeline_run_repo: Arc<dyn PipelineRunRepository>,
     thread_pool: Arc<dyn CpuPool>,
     ontology_resolver: Arc<dyn OntologyResolver>,
@@ -328,7 +329,7 @@ pub async fn cognify_dataset_refs(
 
     let mut results = Vec::new();
     for dataset in &all_datasets {
-        if config.use_pipeline_cache && dataset_is_cached(&database, dataset.id).await? {
+        if config.use_pipeline_cache && dataset_is_cached(&*database, dataset.id).await? {
             info!(
                 dataset_name = %dataset.name,
                 dataset_id = %dataset.id,
@@ -377,7 +378,7 @@ pub async fn cognify_dataset_refs(
         )
         .await?;
 
-        record_dataset_run(&database, dataset.id, &data_ids, &result).await?;
+        record_dataset_run(&*database, dataset.id, &data_ids, &result).await?;
 
         results.push(result);
     }

@@ -141,7 +141,7 @@ async fn cognify_e2e_stamps_with_expected_task_names() {
         ))
         .with_graph_db(Arc::clone(&graph_db))
         .with_vector_db(Arc::clone(&vector_db))
-        .with_database(Arc::clone(&database));
+        .with_database(database.clone());
     let data_items = ingest
         .add(
             vec![DataInput::Text(FIXTURE_TEXT.to_string())],

@@ -53,7 +53,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_thread_pool(Arc::new(RayonThreadPool::with_default_threads()?))
         .with_graph_db(Arc::new(MockGraphDB::new()))
         .with_vector_db(Arc::new(MockVectorDB::new()))
-        .with_database(Arc::clone(&database));
+        .with_database(database.clone());
     println!("   Pipeline created\n");
 
     let owner_id = Uuid::new_v4();

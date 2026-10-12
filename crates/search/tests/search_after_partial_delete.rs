@@ -158,7 +158,7 @@ async fn test_search_returns_empty_for_deleted_doc_and_non_empty_for_remaining()
         ))
         .with_graph_db(Arc::clone(&graph_db))
         .with_vector_db(Arc::clone(&vector_db))
-        .with_database(Arc::clone(&database));
+        .with_database(database.clone());
 
     let germany_data = ingest
         .add(
@@ -209,7 +209,7 @@ async fn test_search_returns_empty_for_deleted_doc_and_non_empty_for_remaining()
         graph_db.clone(),
         vector_db.clone(),
         embedding_engine.clone(),
-        Arc::clone(&database),
+        database.clone(),
         Arc::new(cognee_database::NoopPipelineRunRepository::new())
             as Arc<dyn cognee_database::PipelineRunRepository>,
         thread_pool,

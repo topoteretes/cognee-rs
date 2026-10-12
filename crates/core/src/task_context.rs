@@ -8,7 +8,7 @@
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
-use cognee_database::DatabaseConnection;
+use cognee_database::RelationalDb;
 use cognee_graph::GraphDBTrait;
 use cognee_vector::VectorDB;
 use uuid::Uuid;
@@ -150,7 +150,7 @@ pub struct TaskContext {
     /// CPU-bound work executor (wraps a Rayon pool by default).
     pub thread_pool: Arc<dyn CpuPool>,
     /// Relational / metadata database connection.
-    pub database: Arc<DatabaseConnection>,
+    pub database: Arc<dyn RelationalDb>,
     /// Graph database.
     pub graph_db: Arc<dyn GraphDBTrait>,
     /// Vector database.
@@ -302,7 +302,7 @@ impl TaskContext {
 #[derive(Default)]
 pub struct TaskContextBuilder {
     thread_pool: Option<Arc<dyn CpuPool>>,
-    database: Option<Arc<DatabaseConnection>>,
+    database: Option<Arc<dyn RelationalDb>>,
     graph_db: Option<Arc<dyn GraphDBTrait>>,
     vector_db: Option<Arc<dyn VectorDB>>,
     progress: Option<ProgressToken>,
@@ -321,7 +321,7 @@ impl TaskContextBuilder {
         self
     }
 
-    pub fn database(mut self, db: Arc<DatabaseConnection>) -> Self {
+    pub fn database(mut self, db: Arc<dyn RelationalDb>) -> Self {
         self.database = Some(db);
         self
     }

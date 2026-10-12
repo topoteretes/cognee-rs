@@ -20,9 +20,7 @@ use cognee_cognify::{
     distill_sessions_in_knowledge_graph, persist_sessions_in_knowledge_graph, run_memify,
     sync_graph_to_session,
 };
-use cognee_database::{
-    CheckpointStore, DatabaseConnection, PipelineRunRepository, SeaOrmPipelineRunRepository,
-};
+use cognee_database::{CheckpointStore, PipelineRunRepository, RelationalDb};
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
 use cognee_ingestion::{AddParams, AddPipeline};
@@ -135,7 +133,7 @@ pub struct ImproveParams<'a> {
     pub ontology_resolver: Arc<dyn OntologyResolver>,
 
     /// Metadata DB connection. Required for Stage 4 (dataset lookup).
-    pub db: Option<Arc<DatabaseConnection>>,
+    pub db: Option<Arc<dyn RelationalDb>>,
     /// Session backing store. Required for Stages 1 and 2.
     pub session_store: Option<Arc<dyn SessionStore>>,
     /// Session manager. Required for Stages 1 and 4.
@@ -298,7 +296,7 @@ pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiErro
             .as_ref()
             .expect("has_sessions guarantees session_ids is Some with non-empty vec");
         // LIB-06-03: `persist_sessions_in_knowledge_graph` now requires
-        // `Arc<DatabaseConnection>` and `Arc<dyn CpuPool>`.
+        // `Arc<dyn RelationalDb>` and `Arc<dyn CpuPool>`.
         let stage2_db = db.clone();
         match (session_store.as_ref(), add_pipeline, stage2_db) {
             (Some(store), Some(pipeline), Some(database)) => {
@@ -313,7 +311,7 @@ pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiErro
                         }
                     };
                 let pipeline_run_repo: Arc<dyn PipelineRunRepository> =
-                    Arc::new(SeaOrmPipelineRunRepository::new(Arc::clone(&database)));
+                    Arc::clone(&database).pipeline_runs();
                 match persist_sessions_in_knowledge_graph(
                     sids,
                     &dataset_name,
@@ -351,7 +349,7 @@ pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiErro
             }
             _ => {
                 warn!(
-                    "improve stage 2: session_store, add_pipeline, and DatabaseConnection are required; skipping persist_sessions"
+                    "improve stage 2: session_store, add_pipeline, and the relational database are required; skipping persist_sessions"
                 );
             }
         }
@@ -416,7 +414,7 @@ pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiErro
                         Ok(pool) => {
                             let thread_pool: Arc<dyn cognee_core::CpuPool> = Arc::new(pool);
                             let pipeline_run_repo: Arc<dyn PipelineRunRepository> =
-                                Arc::new(SeaOrmPipelineRunRepository::new(Arc::clone(&database)));
+                                Arc::clone(&database).pipeline_runs();
                             let add_params = AddParams {
                                 node_set: Some(vec!["agent_trace_feedbacks".to_string()]),
                                 ..Default::default()
@@ -435,8 +433,8 @@ pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiErro
                                 Ok(data_rows) if !data_rows.is_empty() => {
                                     // Resolve dataset_id the same way persist_sessions does.
                                     let dataset_id_opt =
-                                        cognee_database::ops::datasets::get_dataset_by_name(
-                                            database.as_ref(),
+                                        cognee_database::IngestDb::get_dataset_by_name(
+                                            &*database,
                                             &dataset_name,
                                             owner_id,
                                             tenant_id,
@@ -502,7 +500,7 @@ pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiErro
                 }
                 _ => {
                     warn!(
-                        "improve stage 2b: add_pipeline and DatabaseConnection are required; trace steps not cognified"
+                        "improve stage 2b: add_pipeline and the relational database are required; trace steps not cognified"
                     );
                 }
             }
@@ -537,7 +535,7 @@ pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiErro
                     Ok(pool) => {
                         let thread_pool: Arc<dyn cognee_core::CpuPool> = Arc::new(pool);
                         let pipeline_run_repo: Arc<dyn PipelineRunRepository> =
-                            Arc::new(SeaOrmPipelineRunRepository::new(Arc::clone(&database)));
+                            Arc::clone(&database).pipeline_runs();
                         let r = distill_sessions_in_knowledge_graph(
                             sids,
                             &dataset_name,
@@ -578,7 +576,7 @@ pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiErro
             }
             _ => {
                 warn!(
-                    "improve stage 2c: session_store, add_pipeline, and DatabaseConnection are required; skipping distill_sessions"
+                    "improve stage 2c: session_store, add_pipeline, and the relational database are required; skipping distill_sessions"
                 );
             }
         }
@@ -598,8 +596,8 @@ pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiErro
             .expect("has_sessions guarantees session_ids is Some with non-empty vec");
         if let Some(database) = db.as_ref() {
             // Resolve the dataset the same way Stage 4 does.
-            match cognee_database::ops::datasets::get_dataset_by_name(
-                database.as_ref(),
+            match cognee_database::IngestDb::get_dataset_by_name(
+                &**database,
                 &dataset_name,
                 owner_id,
                 tenant_id,
@@ -630,7 +628,7 @@ pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiErro
                 }
             }
         } else {
-            warn!("improve stage 2d: DatabaseConnection required; skipping build_truth_subspace");
+            warn!("improve stage 2d: relational database required; skipping build_truth_subspace");
         }
     }
 
@@ -645,7 +643,7 @@ pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiErro
             Ok(pool) => {
                 let thread_pool: Arc<dyn cognee_core::CpuPool> = Arc::new(pool);
                 let pipeline_run_repo: Arc<dyn PipelineRunRepository> =
-                    Arc::new(SeaOrmPipelineRunRepository::new(Arc::clone(database)));
+                    Arc::clone(database).pipeline_runs();
                 match run_memify(
                     Arc::clone(&graph_db),
                     Arc::clone(&vector_db),
@@ -771,8 +769,8 @@ pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiErro
         ) {
             (Some(dbc), Some(mgr), Some(ckstore)) => {
                 // Stage 4 requires a dataset UUID. Resolve from the name.
-                let dataset_id_opt = cognee_database::ops::datasets::get_dataset_by_name(
-                    dbc.as_ref(),
+                let dataset_id_opt = cognee_database::IngestDb::get_dataset_by_name(
+                    &**dbc,
                     &dataset_name,
                     owner_id,
                     tenant_id,

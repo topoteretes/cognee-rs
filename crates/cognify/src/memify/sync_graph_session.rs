@@ -21,9 +21,8 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
-use cognee_database::ops::graph_storage::{get_edges_since, get_nodes_by_ids};
 use cognee_database::uuid_hex;
-use cognee_database::{CheckpointStore, DatabaseConnection, DatabaseError, GraphEdge, GraphNode};
+use cognee_database::{CheckpointStore, DatabaseError, GraphEdge, GraphNode, RelationalDb};
 use cognee_session::SessionManager;
 use thiserror::Error;
 use tracing::info;
@@ -148,7 +147,7 @@ pub async fn sync_graph_to_session(
     user_id: &str,
     session_id: &str,
     dataset_id: Uuid,
-    db: &DatabaseConnection,
+    db: &dyn RelationalDb,
     session_manager: &SessionManager,
     checkpoint_store: &dyn CheckpointStore,
     max_lines: usize,
@@ -168,7 +167,7 @@ pub async fn sync_graph_to_session(
         std::collections::HashSet::new();
 
     loop {
-        let edges = get_edges_since(db, dataset_id, latest, BATCH_SIZE).await?;
+        let edges = db.get_edges_since(dataset_id, latest, BATCH_SIZE).await?;
         if edges.is_empty() {
             break;
         }
@@ -180,7 +179,7 @@ pub async fn sync_graph_to_session(
             id_hex_set.insert(uuid_hex::to_hex(e.destination_node_id));
         }
         let id_hex_vec: Vec<String> = id_hex_set.into_iter().collect();
-        let nodes = get_nodes_by_ids(db, &id_hex_vec).await?;
+        let nodes = db.get_nodes_by_ids(&id_hex_vec).await?;
         let node_map: HashMap<Uuid, GraphNode> = nodes.into_iter().map(|n| (n.id, n)).collect();
 
         for e in &edges {

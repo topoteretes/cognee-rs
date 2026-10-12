@@ -4,9 +4,8 @@ use cognee::add::AddPipeline;
 use cognee::api::{ImproveParams, improve};
 use cognee::cognify::CognifyConfig;
 use cognee::core::RayonThreadPool;
-use cognee::database::SeaOrmCheckpointStore;
 use cognee::ontology::{NoOpOntologyResolver, OntologyResolver};
-use cognee::search::{SeaOrmSessionStore, SessionManager};
+use cognee::search::{RelationalSessionStore, SessionManager};
 use cognee::session::SessionStore;
 use cognee::{ComponentManager, PipelineContext};
 use tracing::info;
@@ -93,12 +92,12 @@ pub fn run(args: ImproveArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
         .with_database(Arc::clone(&database));
 
         let session_store: Arc<dyn SessionStore> = Arc::new(
-            SeaOrmSessionStore::new(Arc::clone(&database))
+            RelationalSessionStore::new(database.clone())
                 .await
                 .map_err(|e| CliError::Runtime(format!("session store init failed: {e}")))?,
         );
         let session_manager = Arc::new(SessionManager::new(Arc::clone(&session_store)));
-        let checkpoint_store = Arc::new(SeaOrmCheckpointStore::new(Arc::clone(&database)));
+        let checkpoint_store = Arc::clone(&database).checkpoints();
 
         let ontology_resolver: Arc<dyn OntologyResolver> = Arc::new(NoOpOntologyResolver::new());
 

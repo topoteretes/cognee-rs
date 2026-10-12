@@ -126,7 +126,7 @@ async fn test_entity_ids_are_stable_across_cognify_runs() {
         ))
         .with_graph_db(Arc::clone(&graph_db))
         .with_vector_db(Arc::clone(&vector_db))
-        .with_database(Arc::clone(&database));
+        .with_database(database.clone());
 
     let data_items = ingest
         .add(

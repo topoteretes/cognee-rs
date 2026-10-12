@@ -20,7 +20,7 @@ use uuid::Uuid;
 use cognee::ComponentManager;
 use cognee::ComponentRegistry;
 use cognee::config::{ConfigManager, Settings};
-use cognee::database::DatabaseConnection;
+use cognee::database::RelationalDb;
 use cognee::models::User;
 
 use crate::SdkError;
@@ -46,7 +46,7 @@ const TELEMETRY_FLUSH_TIMEOUT: std::time::Duration = std::time::Duration::from_m
 #[async_trait::async_trait]
 pub trait DefaultUserBootstrap: Send + Sync {
     /// Resolve (and optionally persist) the default user, returning the row.
-    async fn bootstrap(&self, db: &Arc<DatabaseConnection>, email: &str) -> Result<User, SdkError>;
+    async fn bootstrap(&self, db: &Arc<dyn RelationalDb>, email: &str) -> Result<User, SdkError>;
 }
 
 /// The shareable inner state of a binding handle.

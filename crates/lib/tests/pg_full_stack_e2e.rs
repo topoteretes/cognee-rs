@@ -50,7 +50,7 @@ use cognee::cognify::{CognifyConfig, cognify};
 use cognee::component_manager::ComponentManager;
 use cognee::config::{ConfigManager, Settings};
 use cognee::core::{CpuPool, RayonThreadPool};
-use cognee::database::{IngestDb, PipelineRunRepository, SeaOrmPipelineRunRepository, ops};
+use cognee::database::{IngestDb, PipelineRunRepository};
 use cognee::models::DataInput;
 use cognee::ontology::{NoOpOntologyResolver, OntologyResolver};
 use serial_test::serial;
@@ -332,12 +332,13 @@ async fn run_full_stack(pg_url: String) {
         .expect("add() must succeed on Postgres stack");
 
     // ---- Step 2: Cognify. ---------------------------------------------------
-    let dataset = ops::datasets::get_dataset_by_name(&db, &dataset_name, owner_id, None)
-        .await
-        .expect("get_dataset_by_name must succeed")
-        .unwrap_or_else(|| panic!("dataset '{dataset_name}' must exist after add()"));
+    let dataset =
+        cognee_database::IngestDb::get_dataset_by_name(&*db, &dataset_name, owner_id, None)
+            .await
+            .expect("get_dataset_by_name must succeed")
+            .unwrap_or_else(|| panic!("dataset '{dataset_name}' must exist after add()"));
 
-    let data_items = ops::datasets::get_dataset_data(&db, dataset.id)
+    let data_items = cognee_database::DeleteDb::get_dataset_data(&*db, dataset.id)
         .await
         .expect("get_dataset_data must succeed");
 
@@ -350,8 +351,7 @@ async fn run_full_stack(pg_url: String) {
         .with_incremental_loading(false)
         .with_summarization(false); // skip summarization to reduce LLM calls
 
-    let pipeline_run_repo: Arc<dyn PipelineRunRepository> =
-        Arc::new(SeaOrmPipelineRunRepository::new(Arc::clone(&db)));
+    let pipeline_run_repo: Arc<dyn PipelineRunRepository> = Arc::clone(&db).pipeline_runs();
 
     let ontology_resolver: Arc<dyn OntologyResolver> = Arc::new(NoOpOntologyResolver::new());
 

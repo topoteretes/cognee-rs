@@ -17,6 +17,8 @@ workspace = true
 [features]
 sqlite   = ["sea-orm/sqlx-sqlite", "dep:log", "dep:tokio"]
 postgres = ["sea-orm/sqlx-postgres"]
+# Test support: `RelationalDb::as_sea_orm` for tests that inspect the pool.
+testing  = []
 
 [dependencies]
 cognee-models     = { path = "../models", version = "0.2.0" }

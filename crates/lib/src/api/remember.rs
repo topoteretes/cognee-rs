@@ -11,10 +11,7 @@ use std::time::Instant;
 
 use cognee_cognify::cognify;
 use cognee_cognify::{CognifyConfig, CognifyResult, MemifyConfig, MemifyResult, run_memify};
-use cognee_database::{
-    CheckpointStore, DatabaseConnection, PipelineRunRepository, SeaOrmPipelineRunRepository,
-    SessionLifecycleDb,
-};
+use cognee_database::{CheckpointStore, PipelineRunRepository, RelationalDb, SessionLifecycleDb};
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
 use cognee_ingestion::AddPipeline;
@@ -211,7 +208,7 @@ pub async fn remember(
     graph_db: Arc<dyn GraphDBTrait>,
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
-    db: Option<Arc<DatabaseConnection>>,
+    db: Option<Arc<dyn RelationalDb>>,
     session_store: Option<Arc<dyn SessionStore>>,
     session_manager: Option<Arc<SessionManager>>,
     checkpoint_store: Option<Arc<dyn CheckpointStore>>,
@@ -324,7 +321,7 @@ async fn run_permanent_inner(
     graph_db: Arc<dyn GraphDBTrait>,
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
-    db: Option<Arc<DatabaseConnection>>,
+    db: Option<Arc<dyn RelationalDb>>,
     ontology_resolver: Arc<dyn OntologyResolver>,
     cognify_config: &CognifyConfig,
 ) -> Result<PermanentOutcome, ApiError> {
@@ -364,11 +361,11 @@ async fn run_permanent_inner(
     // cognify consumes its copy.
     let db_for_memify = db.clone();
 
-    // LIB-06-03: `cognify()` now requires `Arc<DatabaseConnection>` and an
+    // LIB-06-03: `cognify()` now requires `Arc<dyn RelationalDb>` and an
     // `Arc<dyn CpuPool>` (Decision 1).
     let database = db
         .clone()
-        .ok_or_else(|| ApiError::Cognify("cognify requires a DatabaseConnection".to_string()))?;
+        .ok_or_else(|| ApiError::Cognify("cognify requires a relational database".to_string()))?;
     let thread_pool: Arc<dyn cognee_core::CpuPool> = Arc::new(
         cognee_core::RayonThreadPool::with_default_threads()
             .map_err(|e| ApiError::Cognify(format!("failed to construct thread pool: {e}")))?,
@@ -378,8 +375,7 @@ async fn run_permanent_inner(
     // Gap 08-07: persist the four-state `pipeline_runs` trail through the
     // real SeaORM repo when a database is available; embedded callers fall
     // back to the no-op repo.
-    let pipeline_run_repo: Arc<dyn PipelineRunRepository> =
-        Arc::new(SeaOrmPipelineRunRepository::new(Arc::clone(&database)));
+    let pipeline_run_repo: Arc<dyn PipelineRunRepository> = Arc::clone(&database).pipeline_runs();
     let cognify_result = cognify(
         data_items,
         dataset_id,
@@ -408,7 +404,7 @@ async fn run_permanent_inner(
                 Ok(pool) => {
                     let thread_pool: Arc<dyn cognee_core::CpuPool> = Arc::new(pool);
                     let pipeline_run_repo: Arc<dyn PipelineRunRepository> =
-                        Arc::new(SeaOrmPipelineRunRepository::new(Arc::clone(&database)));
+                        Arc::clone(&database).pipeline_runs();
                     match run_memify(
                         Arc::clone(&graph_db),
                         Arc::clone(&vector_db),
@@ -471,7 +467,7 @@ async fn remember_permanent_blocking(
     graph_db: Arc<dyn GraphDBTrait>,
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
-    db: Option<Arc<DatabaseConnection>>,
+    db: Option<Arc<dyn RelationalDb>>,
     ontology_resolver: Arc<dyn OntologyResolver>,
     cognify_config: &CognifyConfig,
     start: Instant,
@@ -537,7 +533,7 @@ async fn remember_session(
     graph_db: Arc<dyn GraphDBTrait>,
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
-    db: Option<Arc<DatabaseConnection>>,
+    db: Option<Arc<dyn RelationalDb>>,
     session_store: Option<Arc<dyn SessionStore>>,
     session_manager: Option<Arc<SessionManager>>,
     checkpoint_store: Option<Arc<dyn CheckpointStore>>,
@@ -701,7 +697,7 @@ pub async fn remember_entry(
     session_id: &str,
     owner_id: Uuid,
     _tenant_id: Option<Uuid>,
-    db: Option<Arc<DatabaseConnection>>,
+    db: Option<Arc<dyn RelationalDb>>,
     _session_store: Option<Arc<dyn SessionStore>>,
     session_manager: Option<Arc<SessionManager>>,
     llm: Option<Arc<dyn Llm>>,

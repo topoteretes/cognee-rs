@@ -94,7 +94,7 @@ async fn make_harness() -> Harness {
             ))
             .with_graph_db(graph_db.clone() as Arc<dyn cognee_graph::GraphDBTrait>)
             .with_vector_db(vector_db.clone() as Arc<dyn cognee_vector::VectorDB>)
-            .with_database(Arc::clone(&db)),
+            .with_database(db.clone()),
     );
     let embedding_engine = Arc::new(MockEmbeddingEngine::new(16));
     let ontology: Arc<dyn OntologyResolver> = Arc::new(NoOpOntologyResolver::new());
@@ -174,7 +174,7 @@ async fn remember_session_returns_session_stored() {
         h.graph_db.clone() as Arc<_>,
         h.vector_db.clone() as Arc<_>,
         h.embedding_engine.clone() as Arc<_>,
-        Some(Arc::clone(&h.db)),
+        Some(h.db.clone()),
         Some(Arc::clone(&h.session_store)),
         Some(Arc::clone(&h.session_manager)),
         Some(h.checkpoint_store.clone() as Arc<_>),
@@ -211,7 +211,7 @@ async fn remember_session_self_improvement_inline() {
         h.graph_db.clone() as Arc<_>,
         h.vector_db.clone() as Arc<_>,
         h.embedding_engine.clone() as Arc<_>,
-        Some(Arc::clone(&h.db)),
+        Some(h.db.clone()),
         Some(Arc::clone(&h.session_store)),
         Some(Arc::clone(&h.session_manager)),
         Some(h.checkpoint_store.clone() as Arc<_>),

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use cognee::add::AddPipeline;
 use cognee::cognify::{ChunkStrategy, CognifyConfig, cognify};
-use cognee::database::{IngestDb, PipelineRunRepository, SeaOrmPipelineRunRepository, ops};
+use cognee::database::{IngestDb, PipelineRunRepository};
 use cognee::models::DataInput;
 use cognee::{ComponentManager, PipelineContext};
 use tracing::{info, warn};
@@ -69,7 +69,7 @@ pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), Cli
         // Gap 08-07: persist the four-state `pipeline_runs` trail through
         // both phases.
         let pipeline_run_repo: Arc<dyn PipelineRunRepository> =
-            Arc::new(SeaOrmPipelineRunRepository::new(Arc::clone(&database)));
+            Arc::clone(&database).pipeline_runs();
 
         let ingest = AddPipeline::new(Arc::clone(&storage), database.clone() as Arc<dyn IngestDb>)
             .with_thread_pool(thread_pool_for_add)
@@ -101,21 +101,25 @@ pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), Cli
         }
 
         // ── Cognify only the newly-added items ──────────────────────────────
-        let dataset =
-            ops::datasets::get_dataset_by_name(&database, &args.dataset_name, owner_id, None)
-                .await
-                .map_err(|error| {
-                    CliError::Runtime(format!(
-                        "Failed to resolve dataset '{}': {error}",
-                        args.dataset_name
-                    ))
-                })?
-                .ok_or_else(|| {
-                    CliError::Validation(format!(
-                        "Dataset '{}' was not found for owner {}",
-                        args.dataset_name, owner_id
-                    ))
-                })?;
+        let dataset = cognee::database::IngestDb::get_dataset_by_name(
+            &*database,
+            &args.dataset_name,
+            owner_id,
+            None,
+        )
+        .await
+        .map_err(|error| {
+            CliError::Runtime(format!(
+                "Failed to resolve dataset '{}': {error}",
+                args.dataset_name
+            ))
+        })?
+        .ok_or_else(|| {
+            CliError::Validation(format!(
+                "Dataset '{}' was not found for owner {}",
+                args.dataset_name, owner_id
+            ))
+        })?;
 
         let graph_db = cm
             .graph_db()

@@ -146,7 +146,7 @@ async fn test_full_pipeline_add_cognify_memify_search_delete() {
         ))
         .with_graph_db(Arc::clone(&graph_db))
         .with_vector_db(Arc::clone(&vector_db))
-        .with_database(Arc::clone(&database));
+        .with_database(database.clone());
     let data_items = ingest
         .add(
             vec![DataInput::Text(AI_TEXT.to_string())],
@@ -238,7 +238,7 @@ async fn test_full_pipeline_add_cognify_memify_search_delete() {
         Arc::clone(&vector_db),
         Arc::clone(&embedding_engine),
         memify_pool,
-        Arc::clone(&database),
+        database.clone(),
         Arc::new(cognee_database::NoopPipelineRunRepository::new())
             as Arc<dyn cognee_database::PipelineRunRepository>,
         Some(dataset.id),

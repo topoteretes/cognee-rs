@@ -11,7 +11,7 @@ use cognee_core::task::Value;
 use cognee_core::{
     CpuPool, Pipeline, PipelineBuilder, PipelineContext, TaskContextBuilder, TypedTask,
 };
-use cognee_database::{DatabaseConnection, PipelineRunRepository};
+use cognee_database::{PipelineRunRepository, RelationalDb};
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
 use cognee_models::{Entity, Triplet};
@@ -166,7 +166,7 @@ pub fn build_memify_index_only_pipeline(
 /// * `embedding_engine` — Engine to generate text embeddings.
 /// * `thread_pool` — CPU pool for [`cognee_core::TaskContext`] (LIB-06
 ///   Decision 1).
-/// * `database` — Relational [`DatabaseConnection`] for
+/// * `database` — Relational [`RelationalDb`] for
 ///   [`cognee_core::TaskContext`] (LIB-06 Decision 1).
 /// * `dataset_id` — Optional dataset ID for metadata tagging.
 /// * `user_id` — Optional user ID for metadata tagging.
@@ -181,7 +181,7 @@ pub async fn memify(
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
     thread_pool: Arc<dyn CpuPool>,
-    database: Arc<DatabaseConnection>,
+    database: Arc<dyn RelationalDb>,
     pipeline_run_repo: Arc<dyn PipelineRunRepository>,
     dataset_id: Option<Uuid>,
     user_id: Option<Uuid>,

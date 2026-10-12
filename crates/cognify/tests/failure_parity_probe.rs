@@ -231,7 +231,7 @@ impl Cell {
             Arc::clone(&self.graph_db) as Arc<dyn GraphDBTrait>,
             Arc::clone(&self.vector_db) as Arc<dyn VectorDB>,
             Arc::new(MockEmbeddingEngine::new(8)),
-            Arc::clone(&self.db),
+            self.db.clone(),
             Arc::clone(&self.repo),
             thread_pool,
             Arc::new(NoOpOntologyResolver::new()),

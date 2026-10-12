@@ -21,6 +21,7 @@
 //! - [`TypedTask`] factories: [`make_classify_documents_task`], etc.
 //! - Pipeline builders: [`build_cognify_pipeline`], [`build_temporal_cognify_pipeline`]
 
+use cognee_database::RelationalDb;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
@@ -32,7 +33,7 @@ use cognee_chunking::{
 use cognee_core::{
     CpuPool, Pipeline, PipelineBuilder, PipelineContext, TaskContextBuilder, TypedTask, Value,
 };
-use cognee_database::{DatabaseConnection, PipelineRunRepository};
+use cognee_database::PipelineRunRepository;
 use cognee_embedding::engine::EmbeddingEngine;
 use cognee_graph::{EdgeData, GraphDBTrait, GraphDBTraitExt};
 #[cfg(feature = "audio-loader")]
@@ -397,7 +398,7 @@ async fn chunk_one_document(
     max_chunk_size: usize,
     counter: &(dyn cognee_chunking::TokenCounter + Send + Sync),
     token_count_mode: TokenCountMode,
-    db: Option<&DatabaseConnection>,
+    db: Option<&dyn RelationalDb>,
     loader_registry: &LoaderRegistry,
 ) -> Result<Vec<DocumentChunk>, CognifyError> {
     let content_bytes = storage
@@ -432,7 +433,7 @@ async fn chunk_one_document(
         chunk.base.importance_weight = document.base.importance_weight;
         // Token count write-back
         if let Some(db) = db
-            && let Err(e) = cognee_database::ops::data::update_data_token_count(
+            && let Err(e) = cognee_database::ProvenanceDb::update_data_token_count(
                 db,
                 document.data_id,
                 word_count as i64,
@@ -499,7 +500,7 @@ async fn chunk_one_document(
     // Mirrors Python: update_document_token_count(document.id, document_token_count)
     if let Some(db) = db {
         let document_token_count: i64 = chunks.iter().map(|c| c.chunk_size as i64).sum();
-        if let Err(e) = cognee_database::ops::data::update_data_token_count(
+        if let Err(e) = cognee_database::ProvenanceDb::update_data_token_count(
             db,
             document.data_id,
             document_token_count,
@@ -552,7 +553,7 @@ pub async fn extract_chunks_from_documents(
     max_chunk_size: usize,
     token_counter_kind: TokenCounterKind,
     token_count_mode: TokenCountMode,
-    db: Option<&DatabaseConnection>,
+    db: Option<&dyn RelationalDb>,
     loader_registry: &LoaderRegistry,
     failure_policy: FailurePolicy,
 ) -> Result<ExtractedChunks, CognifyError> {
@@ -904,7 +905,7 @@ pub async fn extract_graph_from_data(
     llm: Arc<dyn Llm>,
     graph_db: Arc<dyn GraphDBTrait>,
     ontology_resolver: Arc<dyn OntologyResolver>,
-    db: &DatabaseConnection,
+    db: &dyn RelationalDb,
     // The run whose ownership rows these artifacts get. `None` when the stage
     // is driven outside a pipeline executor.
     pipeline_run_id: Option<Uuid>,
@@ -1506,7 +1507,7 @@ pub async fn create_web_page_nodes(
     documents: &[Document],
     chunks: &[DocumentChunk],
     graph_db: Arc<dyn GraphDBTrait>,
-    db: &DatabaseConnection,
+    db: &dyn RelationalDb,
     id: LedgerIdentity,
 ) -> Result<(), CognifyError> {
     if documents.is_empty() || chunks.is_empty() {
@@ -1610,8 +1611,7 @@ pub async fn create_web_page_nodes(
     // filter below stops the graph write from re-issuing: an edge an earlier
     // run already created is still produced by this document, and a surplus
     // claimant only ever *prevents* a deletion.
-    cognee_database::ops::graph_storage::upsert_provenance_graph(db, &prov_nodes, &prov_edges)
-        .await?;
+    cognee_database::ProvenanceDb::upsert_provenance_graph(db, &prov_nodes, &prov_edges).await?;
 
     if !nodes_by_id.is_empty() {
         graph_db
@@ -2193,7 +2193,7 @@ pub async fn add_data_points(
     graph_db: Arc<dyn GraphDBTrait>,
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
-    db: &DatabaseConnection,
+    db: &dyn RelationalDb,
     // The run whose ownership rows these artifacts get. `None` when the stage
     // is driven outside a pipeline executor.
     pipeline_run_id: Option<Uuid>,
@@ -2869,14 +2869,13 @@ fn temporal_provenance_rows(
 /// Record ownership of the temporal artifacts a run is about to write, in one
 /// transaction, before the graph or the vector store sees any of them.
 async fn record_temporal_ownership(
-    db: &DatabaseConnection,
+    db: &dyn RelationalDb,
     id: LedgerIdentity,
     node_owners: &BTreeMap<Uuid, TemporalNodeOwner>,
     edge_owners: &BTreeMap<(Uuid, String, Uuid), TemporalEdgeOwner>,
 ) -> Result<(), CognifyError> {
     let (prov_nodes, prov_edges) = temporal_provenance_rows(id, node_owners, edge_owners);
-    cognee_database::ops::graph_storage::upsert_provenance_graph(db, &prov_nodes, &prov_edges)
-        .await?;
+    cognee_database::ProvenanceDb::upsert_provenance_graph(db, &prov_nodes, &prov_edges).await?;
     if !prov_nodes.is_empty() || !prov_edges.is_empty() {
         info!(
             "Recorded ownership of {} temporal nodes and {} temporal edges before writing them",
@@ -2911,7 +2910,7 @@ pub async fn add_temporal_data_points(
     graph_db: Arc<dyn GraphDBTrait>,
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
-    db: &DatabaseConnection,
+    db: &dyn RelationalDb,
     pipeline_run_id: Option<Uuid>,
 ) -> Result<CognifyResult, CognifyError> {
     if events.events.is_empty() {
@@ -3492,7 +3491,7 @@ pub async fn extract_dlt_fk_edges(
     _chunks: &[DocumentChunk],
     documents: &[Document],
     graph_db: Arc<dyn GraphDBTrait>,
-    db: &DatabaseConnection,
+    db: &dyn RelationalDb,
     id: LedgerIdentity,
 ) -> Result<(), CognifyError> {
     // Collect DLT documents
@@ -3799,8 +3798,7 @@ pub async fn extract_dlt_fk_edges(
     // reaches the graph.
     let row_doc_ids: HashSet<Uuid> = dlt_doc_meta.keys().copied().collect();
     let (prov_nodes, prov_edges) = dlt_provenance_rows(id, &schema_nodes, &all_edges, &row_doc_ids);
-    cognee_database::ops::graph_storage::upsert_provenance_graph(db, &prov_nodes, &prov_edges)
-        .await?;
+    cognee_database::ProvenanceDb::upsert_provenance_graph(db, &prov_nodes, &prov_edges).await?;
 
     // Persist schema nodes to graph DB (SchemaTable + SchemaRelationship)
     // NOTE: Python also calls `index_data_points(schema_nodes)` to embed these
@@ -4055,7 +4053,7 @@ pub async fn cognify(
     graph_db: Arc<dyn GraphDBTrait>,
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
-    database: Arc<DatabaseConnection>,
+    database: Arc<dyn RelationalDb>,
     pipeline_run_repo: Arc<dyn PipelineRunRepository>,
     thread_pool: Arc<dyn CpuPool>,
     ontology_resolver: Arc<dyn OntologyResolver>,
@@ -4235,7 +4233,7 @@ pub async fn cognify(
         // skips for the dataset, before the pipeline is built, so a skipped
         // item is never classified, never chunked and never sent to an LLM.
         let data_items = if effective_config.incremental_loading {
-            rollback::drop_already_complete(&database, dataset_id, data_items).await?
+            rollback::drop_already_complete(&*database, dataset_id, data_items).await?
         } else {
             data_items
         };
@@ -4414,7 +4412,7 @@ pub async fn cognify(
                     &result.chunks,
                     &result.documents_for_dlt,
                     Arc::clone(&graph_db),
-                    &database,
+                    &*database,
                     LedgerIdentity::new(tenant_id, user_id, dataset_id, result.pipeline_run_id),
                 )
                 .await?;
@@ -4837,7 +4835,7 @@ fn semantic_edge_provenance_rows(
 /// their ownership rows are what keeps an earlier file's deletion from taking
 /// a still-referenced edge with it.
 async fn record_extraction_ownership(
-    db: &DatabaseConnection,
+    db: &dyn RelationalDb,
     id: LedgerIdentity,
     chunks: &[DocumentChunk],
     entities: &[GraphNodePair],
@@ -4862,8 +4860,7 @@ async fn record_extraction_ownership(
         producers,
     ));
 
-    cognee_database::ops::graph_storage::upsert_provenance_graph(db, &prov_nodes, &prov_edges)
-        .await?;
+    cognee_database::ProvenanceDb::upsert_provenance_graph(db, &prov_nodes, &prov_edges).await?;
     if !prov_nodes.is_empty() || !prov_edges.is_empty() {
         info!(
             "Recorded ownership of {} entities and {} semantic edges before writing them",
@@ -4890,7 +4887,7 @@ async fn record_extraction_ownership(
 /// and both-endpoints-agree (edges) attribution.
 #[allow(clippy::too_many_arguments)]
 async fn upsert_provenance(
-    db: &DatabaseConnection,
+    db: &dyn RelationalDb,
     id: LedgerIdentity,
     chunks: &[DocumentChunk],
     entities: &[GraphNodePair],
@@ -4900,7 +4897,6 @@ async fn upsert_provenance(
     structural_edges: &[EdgeData],
     producers: &ArtifactProducers,
 ) -> Result<(), CognifyError> {
-    use cognee_database::ops::graph_storage;
     use cognee_database::{GraphEdge, GraphNode};
 
     let LedgerIdentity {
@@ -5123,7 +5119,8 @@ async fn upsert_provenance(
     // Write the node and edge provenance batches atomically: a failure partway
     // through rolls the whole group back (see `upsert_provenance_graph`).
     if !prov_nodes.is_empty() || !prov_edges.is_empty() {
-        graph_storage::upsert_provenance_graph(db, &prov_nodes, &prov_edges).await?;
+        cognee_database::ProvenanceDb::upsert_provenance_graph(db, &prov_nodes, &prov_edges)
+            .await?;
         if !prov_nodes.is_empty() {
             info!("Upserted {} provenance node records", prov_nodes.len());
         }
@@ -6097,7 +6094,7 @@ pub fn make_extract_chunks_task(
     max_chunk_size: usize,
     token_counter_kind: TokenCounterKind,
     token_count_mode: TokenCountMode,
-    db: Option<Arc<DatabaseConnection>>,
+    db: Option<Arc<dyn RelationalDb>>,
     loader_registry: Arc<LoaderRegistry>,
     failure_policy: FailurePolicy,
 ) -> TypedTask<ClassifiedDocuments, ExtractedChunks> {
@@ -6120,7 +6117,7 @@ pub fn make_extract_chunks_task_with_rank(
     max_chunk_size: usize,
     token_counter_kind: TokenCounterKind,
     token_count_mode: TokenCountMode,
-    db: Option<Arc<DatabaseConnection>>,
+    db: Option<Arc<dyn RelationalDb>>,
     loader_registry: Arc<LoaderRegistry>,
     failure_policy: FailurePolicy,
     rank: i32,
@@ -6180,7 +6177,7 @@ pub fn make_extract_graph_task(
     llm: Arc<dyn Llm>,
     graph_db: Arc<dyn GraphDBTrait>,
     ontology_resolver: Arc<dyn OntologyResolver>,
-    db: Arc<DatabaseConnection>,
+    db: Arc<dyn RelationalDb>,
     config: CognifyConfig,
 ) -> TypedTask<ExtractedChunks, ExtractedGraphData> {
     make_extract_graph_task_with_rank(
@@ -6204,7 +6201,7 @@ pub fn make_extract_graph_task_with_rank(
     llm: Arc<dyn Llm>,
     graph_db: Arc<dyn GraphDBTrait>,
     ontology_resolver: Arc<dyn OntologyResolver>,
-    db: Arc<DatabaseConnection>,
+    db: Arc<dyn RelationalDb>,
     config: CognifyConfig,
     rank: i32,
 ) -> TypedTask<ExtractedChunks, ExtractedGraphData> {
@@ -6223,7 +6220,7 @@ pub fn make_extract_graph_task_with_rank(
                 llm,
                 Arc::clone(&graph_db),
                 ontology_resolver,
-                &db,
+                &*db,
                 pipeline_run_id,
                 &config,
                 user_label.as_deref(),
@@ -6235,7 +6232,7 @@ pub fn make_extract_graph_task_with_rank(
                     &graph_data.documents,
                     &graph_data.chunks,
                     graph_db,
-                    &db,
+                    &*db,
                     LedgerIdentity::new(
                         input.tenant_id,
                         input.user_id,
@@ -6490,7 +6487,7 @@ pub fn make_extract_graph_and_summarize_task(
     llm: Arc<dyn Llm>,
     graph_db: Arc<dyn GraphDBTrait>,
     ontology_resolver: Arc<dyn OntologyResolver>,
-    db: Arc<DatabaseConnection>,
+    db: Arc<dyn RelationalDb>,
     config: CognifyConfig,
 ) -> TypedTask<ExtractedChunks, SummarizedData> {
     // Both halves take the same rank, because they are one stage — which is
@@ -6517,7 +6514,7 @@ pub fn make_extract_graph_and_summarize_task_with_rank(
     llm: Arc<dyn Llm>,
     graph_db: Arc<dyn GraphDBTrait>,
     ontology_resolver: Arc<dyn OntologyResolver>,
-    db: Arc<DatabaseConnection>,
+    db: Arc<dyn RelationalDb>,
     config: CognifyConfig,
     rank: i32,
 ) -> TypedTask<ExtractedChunks, SummarizedData> {
@@ -6567,7 +6564,7 @@ pub fn make_add_data_points_task(
     graph_db: Arc<dyn GraphDBTrait>,
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
-    db: Arc<DatabaseConnection>,
+    db: Arc<dyn RelationalDb>,
     config: CognifyConfig,
 ) -> TypedTask<SummarizedData, CognifyResult> {
     make_add_data_points_task_with_rank(
@@ -6591,7 +6588,7 @@ pub fn make_add_data_points_task_with_rank(
     graph_db: Arc<dyn GraphDBTrait>,
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
-    db: Arc<DatabaseConnection>,
+    db: Arc<dyn RelationalDb>,
     config: CognifyConfig,
     rank: i32,
 ) -> TypedTask<SummarizedData, CognifyResult> {
@@ -6610,7 +6607,7 @@ pub fn make_add_data_points_task_with_rank(
                 graph_db,
                 vector_db,
                 embedding_engine,
-                &db,
+                &*db,
                 pipeline_run_id,
                 &config,
             )
@@ -6741,7 +6738,7 @@ pub fn build_cognify_pipeline(
     // store records its ownership first, so a databaseless persistence stage is
     // a shape the pipeline cannot be built in. `cognify()` already requires a
     // connection, and every binding routes through it.
-    db: Arc<DatabaseConnection>,
+    db: Arc<dyn RelationalDb>,
     ontology_resolver: Arc<dyn OntologyResolver>,
     config: CognifyConfig,
 ) -> Pipeline {
@@ -6811,7 +6808,7 @@ pub fn make_add_temporal_data_points_task(
     graph_db: Arc<dyn GraphDBTrait>,
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
-    db: Arc<DatabaseConnection>,
+    db: Arc<dyn RelationalDb>,
     failure_policy: FailurePolicy,
 ) -> TypedTask<ExtractedTemporalEvents, CognifyResult> {
     TypedTask::async_fn(move |input: &ExtractedTemporalEvents, ctx| {
@@ -6827,7 +6824,7 @@ pub fn make_add_temporal_data_points_task(
                 graph_db,
                 vector_db,
                 embedding_engine,
-                &db,
+                &*db,
                 pipeline_run_id,
             )
             .await?;
@@ -6860,7 +6857,7 @@ pub fn build_temporal_cognify_pipeline(
     // temporal persistence stage records ownership of every artifact before it
     // writes one, so a databaseless temporal pipeline is a shape that cannot be
     // built.
-    db: Arc<DatabaseConnection>,
+    db: Arc<dyn RelationalDb>,
     config: CognifyConfig,
 ) -> Pipeline {
     let loader_registry = Arc::new(build_loader_registry(&llm, &config));
@@ -9095,7 +9092,7 @@ mod tests {
     /// Every ownership row carries an FK to `datasets`, and the ledger is now
     /// always written, so a stage under test needs the dataset row to exist —
     /// which every real path (`add` → `cognify`) guarantees.
-    async fn ledger_db(dataset_id: Uuid) -> DatabaseConnection {
+    async fn ledger_db(dataset_id: Uuid) -> cognee_database::DatabaseConnection {
         use cognee_database::{connect, initialize};
 
         let db = connect("sqlite::memory:").await.expect("connect");
@@ -9105,7 +9102,7 @@ mod tests {
     }
 
     /// Register `dataset_id` in an existing database, for the same reason.
-    async fn seed_dataset(db: &DatabaseConnection, dataset_id: Uuid) {
+    async fn seed_dataset(db: &cognee_database::DatabaseConnection, dataset_id: Uuid) {
         use cognee_database::ops::datasets::create_dataset;
         use cognee_models::Dataset;
 
@@ -9611,7 +9608,7 @@ mod tests {
             Arc::new(MockLlm::empty()),
             graph.clone(),
             Arc::new(NoOpOntologyResolver::new()),
-            Arc::clone(&db),
+            db.clone(),
             CognifyConfig::default(),
         );
         let TypedTask::Async(run) = task else {
@@ -9626,7 +9623,7 @@ mod tests {
             Arc::new(MockLlm::empty()),
             graph.clone(),
             Arc::new(NoOpOntologyResolver::new()),
-            Arc::clone(&db),
+            db.clone(),
             CognifyConfig::default().with_web_page_nodes(false),
         );
         let TypedTask::Async(run) = task else {
@@ -9926,7 +9923,7 @@ mod tests {
             llm,
             graph,
             Arc::new(NoOpOntologyResolver::new()),
-            Arc::clone(&db),
+            db.clone(),
             CognifyConfig::default(),
         );
         let TypedTask::Async(run) = task else {
@@ -10048,7 +10045,7 @@ mod tests {
             llm,
             Arc::new(cognee_graph::MockGraphDB::new()),
             Arc::new(NoOpOntologyResolver::new()),
-            Arc::clone(&db),
+            db.clone(),
             CognifyConfig::default(),
         );
         let TypedTask::Async(run) = task else {
@@ -10724,7 +10721,7 @@ mod tests {
     async fn run_extraction(
         input: &ExtractedChunks,
         graph: Arc<dyn GraphDBTrait>,
-        db: &DatabaseConnection,
+        db: &dyn RelationalDb,
         run_id: Option<Uuid>,
     ) -> Result<ExtractedGraphData, CognifyError> {
         use cognee_ontology::NoOpOntologyResolver;
@@ -11309,7 +11306,7 @@ mod tests {
     async fn run_extraction_with_config(
         input: &ExtractedChunks,
         graph: Arc<dyn GraphDBTrait>,
-        db: &DatabaseConnection,
+        db: &dyn RelationalDb,
         config: &CognifyConfig,
     ) -> Result<ExtractedGraphData, CognifyError> {
         use cognee_ontology::NoOpOntologyResolver;
@@ -12369,7 +12366,7 @@ mod tests {
                 Arc::new(cognee_graph::MockGraphDB::new()),
                 Arc::new(MockVectorDB::new()),
                 Arc::new(MockEmbeddingEngine::new(8)),
-                Arc::clone(&db),
+                db.clone(),
                 config.clone(),
             );
             let TypedTask::Async(run) = task else {
@@ -12450,7 +12447,7 @@ mod tests {
                 Arc::new(cognee_graph::MockGraphDB::new()),
                 Arc::new(MockVectorDB::new()),
                 Arc::new(MockEmbeddingEngine::new(8)),
-                Arc::clone(&ledger),
+                ledger.clone(),
                 config.failure_policy(),
             );
             let TypedTask::Async(run) = task else {

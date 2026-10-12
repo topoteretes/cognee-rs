@@ -88,7 +88,7 @@ async fn test_search_updates_last_accessed_timestamp() {
         ))
         .with_graph_db(Arc::clone(&graph_db))
         .with_vector_db(Arc::clone(&vector_db))
-        .with_database(Arc::clone(&database));
+        .with_database(database.clone());
     ingest
         .add(
             vec![DataInput::Text(
@@ -133,7 +133,7 @@ async fn test_search_updates_last_accessed_timestamp() {
         Arc::clone(&graph_db),
         Arc::clone(&vector_db),
         Arc::clone(&embedding_engine),
-        Arc::clone(&database),
+        database.clone(),
         Arc::new(cognee_database::NoopPipelineRunRepository::new())
             as Arc<dyn cognee_database::PipelineRunRepository>,
         thread_pool,

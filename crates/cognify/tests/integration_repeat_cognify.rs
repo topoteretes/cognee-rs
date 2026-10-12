@@ -156,7 +156,7 @@ impl Harness {
             ))
             .with_graph_db(Arc::clone(&graph_db))
             .with_vector_db(Arc::clone(&vector_db))
-            .with_database(Arc::clone(&database));
+            .with_database(database.clone());
 
         Self {
             _temp_dir: temp_dir,
@@ -205,7 +205,7 @@ impl Harness {
         }
         cognee_delete::sweep_orphaned_run_artifacts(
             self.pipeline_run_repo.as_ref(),
-            Arc::clone(&self.database),
+            self.database.clone(),
             Arc::clone(&self.graph_db),
             Arc::clone(&self.vector_db),
         )
@@ -339,7 +339,7 @@ impl Harness {
             Arc::clone(&self.graph_db),
             Arc::clone(&self.vector_db),
             Arc::clone(&self.embedding_engine),
-            Arc::clone(&self.database),
+            self.database.clone(),
             Arc::clone(&self.pipeline_run_repo),
             Arc::new(cognee_core::RayonThreadPool::with_default_threads().unwrap())
                 as Arc<dyn cognee_core::CpuPool>,
@@ -368,7 +368,7 @@ impl Harness {
             Arc::clone(&self.graph_db),
             Arc::clone(&self.vector_db),
             Arc::clone(&self.embedding_engine),
-            Arc::clone(&self.database),
+            self.database.clone(),
             Arc::clone(&self.pipeline_run_repo),
             Arc::new(cognee_core::RayonThreadPool::with_default_threads().unwrap())
                 as Arc<dyn cognee_core::CpuPool>,

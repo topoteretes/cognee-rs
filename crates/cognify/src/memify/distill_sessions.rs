@@ -39,7 +39,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use cognee_core::CpuPool;
-use cognee_database::{DatabaseConnection, PipelineRunRepository};
+use cognee_database::{PipelineRunRepository, RelationalDb};
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
 use cognee_ingestion::{AddParams, AddPipeline};
@@ -596,7 +596,7 @@ async fn publish_distilled_lessons(
     graph_db: Arc<dyn GraphDBTrait>,
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
-    database: Arc<DatabaseConnection>,
+    database: Arc<dyn RelationalDb>,
     pipeline_run_repo: Arc<dyn PipelineRunRepository>,
     thread_pool: Arc<dyn CpuPool>,
     ontology_resolver: Arc<dyn OntologyResolver>,
@@ -624,8 +624,8 @@ async fn publish_distilled_lessons(
         ));
     }
 
-    let dataset_id = match cognee_database::ops::datasets::get_dataset_by_name(
-        database.as_ref(),
+    let dataset_id = match cognee_database::IngestDb::get_dataset_by_name(
+        &*database,
         dataset_name,
         owner_id,
         tenant_id,
@@ -681,7 +681,7 @@ pub async fn distill_session(
     graph_db: Arc<dyn GraphDBTrait>,
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
-    database: Arc<DatabaseConnection>,
+    database: Arc<dyn RelationalDb>,
     pipeline_run_repo: Arc<dyn PipelineRunRepository>,
     thread_pool: Arc<dyn CpuPool>,
     ontology_resolver: Arc<dyn OntologyResolver>,
@@ -775,7 +775,7 @@ pub async fn distill_sessions_in_knowledge_graph(
     graph_db: Arc<dyn GraphDBTrait>,
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
-    database: Arc<DatabaseConnection>,
+    database: Arc<dyn RelationalDb>,
     pipeline_run_repo: Arc<dyn PipelineRunRepository>,
     thread_pool: Arc<dyn CpuPool>,
     ontology_resolver: Arc<dyn OntologyResolver>,

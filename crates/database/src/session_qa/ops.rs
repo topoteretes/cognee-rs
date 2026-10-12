@@ -6,12 +6,27 @@ use sea_orm::{
 use uuid::Uuid;
 
 use super::entity;
-use crate::error::SessionError;
-use crate::session_store::SessionQAUpdate;
-use crate::types::SessionTraceStep;
+use super::{SessionQaPatch, SessionQaRow, SessionTraceRow};
+use crate::types::DatabaseError;
 
-fn map_db_err(e: sea_orm::DbErr) -> SessionError {
-    SessionError::StoreError(e.to_string())
+fn map_db_err(e: sea_orm::DbErr) -> DatabaseError {
+    DatabaseError::QueryError(e.to_string())
+}
+
+fn model_to_row(m: entity::Model) -> SessionQaRow {
+    SessionQaRow {
+        id: m.id,
+        session_id: m.session_id,
+        user_id: m.user_id,
+        question: m.question,
+        answer: m.answer,
+        context: m.context,
+        created_at: m.created_at,
+        feedback_text: m.feedback_text,
+        feedback_score: m.feedback_score,
+        used_graph_element_ids: m.used_graph_element_ids,
+        memify_metadata: m.memify_metadata,
+    }
 }
 
 pub async fn create_qa_entry(
@@ -22,7 +37,7 @@ pub async fn create_qa_entry(
     question: &str,
     answer: &str,
     context: Option<&str>,
-) -> Result<(), SessionError> {
+) -> Result<(), DatabaseError> {
     let model = entity::ActiveModel {
         id: Set(id.simple().to_string()),
         session_id: Set(session_id.to_string()),
@@ -45,7 +60,7 @@ pub async fn get_latest_entries(
     session_id: &str,
     user_id: Option<&str>,
     limit: usize,
-) -> Result<Vec<entity::Model>, SessionError> {
+) -> Result<Vec<SessionQaRow>, DatabaseError> {
     // To get the last N entries ordered oldest-first, we query DESC with limit,
     // then reverse in memory.
     let mut query = entity::Entity::find().filter(entity::Column::SessionId.eq(session_id));
@@ -62,14 +77,14 @@ pub async fn get_latest_entries(
         .map_err(map_db_err)?;
 
     entries.reverse();
-    Ok(entries)
+    Ok(entries.into_iter().map(model_to_row).collect())
 }
 
 pub async fn get_all_entries(
     db: &DatabaseConnection,
     session_id: &str,
     user_id: Option<&str>,
-) -> Result<Vec<entity::Model>, SessionError> {
+) -> Result<Vec<SessionQaRow>, DatabaseError> {
     let mut query = entity::Entity::find().filter(entity::Column::SessionId.eq(session_id));
 
     if let Some(uid) = user_id {
@@ -80,6 +95,7 @@ pub async fn get_all_entries(
         .order_by_asc(entity::Column::CreatedAt)
         .all(db)
         .await
+        .map(|rows| rows.into_iter().map(model_to_row).collect())
         .map_err(map_db_err)
 }
 
@@ -87,7 +103,7 @@ pub async fn delete_session(
     db: &DatabaseConnection,
     session_id: &str,
     user_id: Option<&str>,
-) -> Result<u64, SessionError> {
+) -> Result<u64, DatabaseError> {
     let mut delete = entity::Entity::delete_many().filter(entity::Column::SessionId.eq(session_id));
 
     if let Some(uid) = user_id {
@@ -112,7 +128,7 @@ pub async fn delete_qa_entry(
     session_id: &str,
     user_id: Option<&str>,
     qa_id: &str,
-) -> Result<bool, SessionError> {
+) -> Result<bool, DatabaseError> {
     let mut delete = entity::Entity::delete_many()
         .filter(entity::Column::Id.eq(qa_id))
         .filter(entity::Column::SessionId.eq(session_id));
@@ -126,7 +142,7 @@ pub async fn delete_qa_entry(
 }
 
 /// Delete all rows from the session_qa_entries and session_graph_context tables (prune).
-pub async fn delete_all(db: &DatabaseConnection) -> Result<(), SessionError> {
+pub async fn delete_all(db: &DatabaseConnection) -> Result<(), DatabaseError> {
     entity::Entity::delete_many()
         .exec(db)
         .await
@@ -144,8 +160,8 @@ pub async fn update_qa_entry(
     session_id: &str,
     user_id: Option<&str>,
     qa_id: &str,
-    updates: SessionQAUpdate,
-) -> Result<bool, SessionError> {
+    updates: SessionQaPatch,
+) -> Result<bool, DatabaseError> {
     // First find the existing entry
     let mut query = entity::Entity::find()
         .filter(entity::Column::Id.eq(qa_id))
@@ -179,14 +195,10 @@ pub async fn update_qa_entry(
         active.feedback_score = Set(*fs);
     }
     if let Some(ref ids) = updates.used_graph_element_ids {
-        active.used_graph_element_ids = Set(ids
-            .as_ref()
-            .map(|v| serde_json::to_string(v).unwrap_or_default()));
+        active.used_graph_element_ids = Set(ids.clone());
     }
     if let Some(ref mm) = updates.memify_metadata {
-        active.memify_metadata = Set(mm
-            .as_ref()
-            .map(|v| serde_json::to_string(v).unwrap_or_default()));
+        active.memify_metadata = Set(mm.clone());
     }
 
     // The `id` field is already `Unchanged` from the `.into()` conversion,
@@ -205,7 +217,7 @@ pub async fn get_graph_context(
     db: &DatabaseConnection,
     session_id: &str,
     user_id: Option<&str>,
-) -> Result<Option<String>, SessionError> {
+) -> Result<Option<String>, DatabaseError> {
     let id = graph_context_id(user_id, session_id);
     let model = entity::graph_context::Entity::find_by_id(&id)
         .one(db)
@@ -219,18 +231,8 @@ pub async fn save_trace_step(
     db: &DatabaseConnection,
     user_id: &str,
     session_id: &str,
-    step: SessionTraceStep,
-) -> Result<String, SessionError> {
-    let method_params_json = serde_json::to_string(&step.method_params)
-        .map_err(|e| SessionError::StoreError(format!("json error: {e}")))?;
-    let method_return_value_json = match &step.method_return_value {
-        Some(v) => Some(
-            serde_json::to_string(v)
-                .map_err(|e| SessionError::StoreError(format!("json error: {e}")))?,
-        ),
-        None => None,
-    };
-
+    step: SessionTraceRow,
+) -> Result<String, DatabaseError> {
     // Assign next `seq` for this `(user_id, session_id)` so reads return
     // entries in stable insertion order (independent of timestamp resolution).
     let max_seq: Option<i64> = entity::trace_step::Entity::find()
@@ -255,8 +257,8 @@ pub async fn save_trace_step(
         status: Set(step.status),
         memory_query: Set(step.memory_query),
         memory_context: Set(step.memory_context),
-        method_params: Set(method_params_json),
-        method_return_value: Set(method_return_value_json),
+        method_params: Set(step.method_params),
+        method_return_value: Set(step.method_return_value),
         error_message: Set(step.error_message),
         session_feedback: Set(step.session_feedback),
     };
@@ -269,7 +271,7 @@ pub async fn read_trace_steps(
     db: &DatabaseConnection,
     user_id: &str,
     session_id: &str,
-) -> Result<Vec<SessionTraceStep>, SessionError> {
+) -> Result<Vec<SessionTraceRow>, DatabaseError> {
     let models = entity::trace_step::Entity::find()
         .filter(entity::trace_step::Column::UserId.eq(user_id))
         .filter(entity::trace_step::Column::SessionId.eq(session_id))
@@ -277,31 +279,20 @@ pub async fn read_trace_steps(
         .all(db)
         .await
         .map_err(map_db_err)?;
-
-    let mut out = Vec::with_capacity(models.len());
-    for m in models {
-        let method_params: serde_json::Value = serde_json::from_str(&m.method_params)
-            .map_err(|e| SessionError::StoreError(format!("json parse error: {e}")))?;
-        let method_return_value = match m.method_return_value {
-            Some(s) => Some(
-                serde_json::from_str::<serde_json::Value>(&s)
-                    .map_err(|e| SessionError::StoreError(format!("json parse error: {e}")))?,
-            ),
-            None => None,
-        };
-        out.push(SessionTraceStep {
+    Ok(models
+        .into_iter()
+        .map(|m| SessionTraceRow {
             trace_id: m.trace_id,
             origin_function: m.origin_function,
             status: m.status,
             memory_query: m.memory_query,
             memory_context: m.memory_context,
-            method_params,
-            method_return_value,
+            method_params: m.method_params,
+            method_return_value: m.method_return_value,
             error_message: m.error_message,
             session_feedback: m.session_feedback,
-        });
-    }
-    Ok(out)
+        })
+        .collect())
 }
 
 /// Store (or overwrite) the graph context for a session.
@@ -310,7 +301,7 @@ pub async fn set_graph_context(
     session_id: &str,
     user_id: Option<&str>,
     context: &str,
-) -> Result<(), SessionError> {
+) -> Result<(), DatabaseError> {
     let id = graph_context_id(user_id, session_id);
 
     // Try to find existing, then update or insert

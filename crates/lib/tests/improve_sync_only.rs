@@ -61,7 +61,7 @@ async fn make_harness() -> Harness {
         ))
         .with_graph_db(graph_db.clone() as Arc<dyn cognee_graph::GraphDBTrait>)
         .with_vector_db(vector_db.clone() as Arc<dyn cognee_vector::VectorDB>)
-        .with_database(Arc::clone(&db));
+        .with_database(db.clone());
     let embedding_engine = Arc::new(MockEmbeddingEngine::new(16));
     let ontology: Arc<dyn OntologyResolver> = Arc::new(NoOpOntologyResolver::new());
     let session_store: Arc<dyn SessionStore> = Arc::new(FsSessionStore::new(sess_dir.path()));
@@ -126,7 +126,7 @@ async fn improve_with_sessions_runs_at_least_memify() {
         vector_db: h.vector_db.clone() as Arc<_>,
         embedding_engine: h.embedding_engine.clone() as Arc<_>,
         ontology_resolver: Arc::clone(&h.ontology),
-        db: Some(Arc::clone(&h.db)),
+        db: Some(h.db.clone()),
         session_store: Some(Arc::clone(&h.session_store)),
         session_manager: Some(Arc::clone(&h.session_manager)),
         add_pipeline: Some(&h.add_pipeline),
@@ -174,7 +174,7 @@ async fn improve_without_sessions_runs_only_memify() {
         vector_db: h.vector_db.clone() as Arc<_>,
         embedding_engine: h.embedding_engine.clone() as Arc<_>,
         ontology_resolver: Arc::clone(&h.ontology),
-        db: Some(Arc::clone(&h.db)),
+        db: Some(h.db.clone()),
         session_store: Some(Arc::clone(&h.session_store)),
         session_manager: Some(Arc::clone(&h.session_manager)),
         add_pipeline: Some(&h.add_pipeline),
@@ -230,7 +230,7 @@ async fn improve_skips_when_locked() {
         vector_db: h.vector_db.clone() as Arc<_>,
         embedding_engine: h.embedding_engine.clone() as Arc<_>,
         ontology_resolver: Arc::clone(&h.ontology),
-        db: Some(Arc::clone(&h.db)),
+        db: Some(h.db.clone()),
         session_store: Some(Arc::clone(&h.session_store)),
         session_manager: Some(Arc::clone(&h.session_manager)),
         add_pipeline: Some(&h.add_pipeline),

@@ -263,7 +263,7 @@ async fn test_recognify_after_content_update() {
         ))
         .with_graph_db(Arc::clone(&graph_db))
         .with_vector_db(Arc::clone(&vector_db))
-        .with_database(Arc::clone(&database));
+        .with_database(database.clone());
     let data_items_v1 = ingest
         .add(
             vec![DataInput::Text(TEXT_V1.to_string())],
@@ -298,7 +298,7 @@ async fn test_recognify_after_content_update() {
         graph_db.clone() as Arc<dyn GraphDBTrait>,
         vector_db.clone() as Arc<dyn VectorDB>,
         embedding_engine.clone() as Arc<dyn EmbeddingEngine>,
-        Arc::clone(&database),
+        database.clone(),
         Arc::new(cognee_database::NoopPipelineRunRepository::new())
             as Arc<dyn cognee_database::PipelineRunRepository>,
         Arc::new(
@@ -386,7 +386,7 @@ async fn test_recognify_after_content_update() {
         graph_db.clone() as Arc<dyn GraphDBTrait>,
         vector_db.clone() as Arc<dyn VectorDB>,
         embedding_engine.clone() as Arc<dyn EmbeddingEngine>,
-        Arc::clone(&database),
+        database.clone(),
         Arc::new(cognee_database::NoopPipelineRunRepository::new())
             as Arc<dyn cognee_database::PipelineRunRepository>,
         Arc::new(

@@ -257,7 +257,12 @@ fn close_blocking_waits_for_a_straggling_connection() {
     let (wal, shm) = sidecars(&db_path);
 
     let services = rt.block_on(state.services()).expect("warm");
-    let pool = services.database.get_sqlite_connection_pool().clone();
+    let pool = services
+        .database
+        .as_sea_orm()
+        .expect("the built-in relational backend")
+        .get_sqlite_connection_pool()
+        .clone();
     drop(services);
     assert!(wal.exists() && shm.exists());
 

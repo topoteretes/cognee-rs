@@ -18,11 +18,11 @@ use cognee::api::prune::{PruneTarget, prune_data, prune_system};
 use cognee::api::{DatasetDb, DatasetManager};
 use cognee::cognify::{ChunkStrategy, CognifyConfig, TokenCounterKind, cognify};
 use cognee::core::RayonThreadPool;
-use cognee::database::{IngestDb, PipelineRunRepository, SeaOrmPipelineRunRepository, ops};
+use cognee::database::{IngestDb, PipelineRunRepository};
 use cognee::models::DataInput;
 use cognee::ontology::{NoOpOntologyResolver, OntologyResolver};
 use cognee::search::{
-    SeaOrmSessionStore, SearchBuilder, SearchRequest, SearchType, SessionManager,
+    RelationalSessionStore, SearchBuilder, SearchRequest, SearchType, SessionManager,
 };
 use cognee::{ComponentManager, PipelineContext};
 use serde::{Deserialize, Serialize};
@@ -664,7 +664,7 @@ async fn phase_prune(cm: &Arc<ComponentManager>) -> Result<(), String> {
     let graph_db = cm.graph_db().await.map_err(|e| e.to_string())?;
     let vector_db = cm.vector_db().await.map_err(|e| e.to_string())?;
     let database = cm.database().await.map_err(|e| e.to_string())?;
-    let session_store = SeaOrmSessionStore::new(Arc::clone(&database))
+    let session_store = RelationalSessionStore::new(database.clone())
         .await
         .map_err(|e| e.to_string())?;
 
@@ -702,8 +702,7 @@ async fn phase_add(
     let vector_db = cm.vector_db().await.map_err(|e| e.to_string())?;
     let thread_pool =
         Arc::new(RayonThreadPool::with_default_threads().map_err(|e| format!("thread pool: {e}"))?);
-    let pipeline_run_repo: Arc<dyn PipelineRunRepository> =
-        Arc::new(SeaOrmPipelineRunRepository::new(Arc::clone(&database)));
+    let pipeline_run_repo: Arc<dyn PipelineRunRepository> = Arc::clone(&database).pipeline_runs();
 
     let pipeline = AddPipeline::new(storage, Arc::clone(&database) as Arc<dyn IngestDb>)
         .with_thread_pool(thread_pool)
@@ -748,12 +747,13 @@ async fn phase_cognify(
     let embedding_engine = cm.embedding_engine().await.map_err(|e| e.to_string())?;
     let llm = cm.llm().await.map_err(|e| e.to_string())?;
 
-    let dataset = ops::datasets::get_dataset_by_name(&database, dataset_name, owner_id, None)
-        .await
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("dataset '{dataset_name}' not found for owner {owner_id}"))?;
+    let dataset =
+        cognee::database::IngestDb::get_dataset_by_name(&*database, dataset_name, owner_id, None)
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("dataset '{dataset_name}' not found for owner {owner_id}"))?;
 
-    let data_items = ops::datasets::get_dataset_data(&database, dataset.id)
+    let data_items = cognee::database::DeleteDb::get_dataset_data(&*database, dataset.id)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -763,8 +763,7 @@ async fn phase_cognify(
 
     let thread_pool: Arc<dyn cognee::core::CpuPool> =
         Arc::new(RayonThreadPool::with_default_threads().map_err(|e| format!("thread pool: {e}"))?);
-    let pipeline_run_repo: Arc<dyn PipelineRunRepository> =
-        Arc::new(SeaOrmPipelineRunRepository::new(Arc::clone(&database)));
+    let pipeline_run_repo: Arc<dyn PipelineRunRepository> = Arc::clone(&database).pipeline_runs();
     let ontology_resolver: Arc<dyn OntologyResolver> = Arc::new(NoOpOntologyResolver::new());
 
     let chunk_strategy = match cm.settings().chunk_strategy.to_uppercase().as_str() {
@@ -866,7 +865,7 @@ async fn bench_search_orchestrator(
     let llm = cm.llm().await.map_err(|e| e.to_string())?;
     let database = cm.database().await.map_err(|e| e.to_string())?;
 
-    let session_store = SeaOrmSessionStore::new(Arc::clone(&database))
+    let session_store = RelationalSessionStore::new(database.clone())
         .await
         .map_err(|e| e.to_string())?;
     let session_manager = Arc::new(SessionManager::new(Arc::new(session_store)));
@@ -966,9 +965,10 @@ async fn phase_dataset_delete(
     // Python guards this with `if found:` — a failed add leaves nothing to
     // delete, and the phase still reports its (near-zero) elapsed rather than
     // failing a run that has already recorded the real failure in `add`.
-    let Some(dataset) = ops::datasets::get_dataset_by_name(&database, dataset_name, owner_id, None)
-        .await
-        .map_err(|e| e.to_string())?
+    let Some(dataset) =
+        cognee::database::IngestDb::get_dataset_by_name(&*database, dataset_name, owner_id, None)
+            .await
+            .map_err(|e| e.to_string())?
     else {
         warn!("dataset '{dataset_name}' not found — nothing to delete");
         return Ok(());

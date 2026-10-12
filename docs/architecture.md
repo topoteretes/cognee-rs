@@ -21,7 +21,7 @@ cognee-rs/
 ├── crates/
 │   ├── models/                 # Core data types: Data, Dataset, DataInput, Document, DocumentChunk
 │   ├── storage/                # File storage abstraction (StorageTrait, LocalStorage)
-│   ├── database/               # Metadata DB abstraction (IngestDb/SearchHistoryDb/DeleteDb)
+│   ├── database/               # Relational DB abstraction (RelationalDb and its domain traits)
 │   ├── ingestion/              # Ingest pipeline + content hashing + URL crawler
 │   ├── chunking/               # Text chunking (word→sentence→paragraph→TextChunker)
 │   ├── cognify/                # Full cognify pipeline + memify enrichment pipeline
@@ -66,7 +66,7 @@ cognee-rs/
 
 **cognee-storage** — Abstract file storage layer. Trait: `StorageTrait` (+ `StorageExt`, `StorageWriter`). Impls: `LocalStorage`, `MockStorage`.
 
-**cognee-database** — Database abstraction for metadata persistence. Traits: `IngestDb`, `SearchHistoryDb`, `DeleteDb`. Impl: `DatabaseConnection` (SQLite/Postgres via SeaORM, implements all three traits).
+**cognee-database** — Relational database abstraction. `RelationalDb` is the one object components hold (`Arc<dyn RelationalDb>`): a supertrait of the domain traits `IngestDb`, `DeleteDb`, `SearchHistoryDb`, `NotebookDb`, `DatasetConfigDb`, `SessionLifecycleDb`, `SessionQaDb` (session Q&A tables) and `ProvenanceDb` (cognify's provenance ledger and run rows), plus the pipeline-run / checkpoint / sync repositories and lifecycle (`ping`, `close`). Callers upcast to the narrow trait they need. Impl: `DatabaseConnection` (SQLite/Postgres via SeaORM); no code outside the crate depends on the concrete type.
 
 **cognee-ingestion** — Pipeline for ingesting data: streams content, computes hashes, deduplicates, and stores. Main type: `AddPipeline`. No trait abstraction — uses `StorageTrait` and `IngestDb` from sibling crates.
 
@@ -76,7 +76,7 @@ cognee-rs/
 
 **cognee-search** — Unified search orchestration across multiple retrieval strategies. Main types: `SearchBuilder`, `SearchOrchestrator`. `SearchType` enum defines 16 search modes with corresponding retriever implementations; the newest, `HybridCompletion`, blends vector search over chunks/summaries/entities/edge-facts, and 1-hop graph-neighborhood expansion, then answers via LLM completion.
 
-**cognee-session** — Session management and QA-history storage. Trait: `SessionStore`. Impls: `FsSessionStore`, `RedisSessionStore`, `SeaOrmSessionStore`.
+**cognee-session** — Session management and QA-history storage. Trait: `SessionStore`. Impls: `FsSessionStore`, `RedisSessionStore`, `RelationalSessionStore` (over any `SessionQaDb`; formerly `SeaOrmSessionStore`).
 
 **cognee-embedding** — Text vectorization engine. Trait: `EmbeddingEngine`. Impls: `OnnxEmbeddingEngine` (local ONNX Runtime, BGE-Small-v1.5), `OpenAICompatibleEmbeddingEngine` (OpenAI/Azure/vLLM/llama.cpp/TEI via HTTP), `OllamaEmbeddingEngine`, `BedrockEmbeddingEngine` (AWS Bedrock InvokeModel — Titan + Cohere families, `bedrock` feature), `MockEmbeddingEngine`. `EmbeddingConfig::from_env()` + `create_engine()` factory select the provider. See [configuration.md](configuration.md#embedding).
 

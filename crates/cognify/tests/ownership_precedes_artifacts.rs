@@ -130,7 +130,7 @@ async fn run_cognify(
         graph_db,
         vector_db,
         embedding_engine,
-        Arc::clone(&db),
+        db.clone(),
         Arc::clone(&repo),
         thread_pool,
         Arc::new(NoOpOntologyResolver::new()),

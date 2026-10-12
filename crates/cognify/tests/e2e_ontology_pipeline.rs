@@ -166,7 +166,7 @@ async fn e2e_ontology_pipeline_add_cognify_search() {
         ))
         .with_graph_db(Arc::clone(&graph_db))
         .with_vector_db(Arc::clone(&vector_db))
-        .with_database(Arc::clone(&database));
+        .with_database(database.clone());
 
     let data_items = ingest
         .add(
@@ -209,7 +209,7 @@ async fn e2e_ontology_pipeline_add_cognify_search() {
         graph_db.clone(),
         vector_db.clone(),
         embedding_engine.clone(),
-        Arc::clone(&database),
+        database.clone(),
         Arc::new(cognee_database::NoopPipelineRunRepository::new())
             as Arc<dyn cognee_database::PipelineRunRepository>,
         Arc::new(
@@ -358,7 +358,7 @@ async fn e2e_ontology_pipeline_multi_ontology_add_cognify_search() {
         ))
         .with_graph_db(Arc::clone(&graph_db))
         .with_vector_db(Arc::clone(&vector_db))
-        .with_database(Arc::clone(&database));
+        .with_database(database.clone());
 
     let data_items = ingest
         .add(
@@ -408,7 +408,7 @@ async fn e2e_ontology_pipeline_multi_ontology_add_cognify_search() {
         graph_db.clone(),
         vector_db.clone(),
         embedding_engine.clone(),
-        Arc::clone(&database),
+        database.clone(),
         Arc::new(cognee_database::NoopPipelineRunRepository::new())
             as Arc<dyn cognee_database::PipelineRunRepository>,
         Arc::new(

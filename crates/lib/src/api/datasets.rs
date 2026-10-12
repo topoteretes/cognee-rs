@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use cognee_database::ops::acl::grant_all_permissions_on_dataset_via_trait;
-use cognee_database::{AclDb, DeleteDb, IngestDb, PipelineRunStatus};
+use cognee_database::{AclDb, IngestDb, PipelineRunStatus};
 use cognee_delete::{DeleteMode, DeleteRequest, DeleteResult, DeleteScope, DeleteService};
 use cognee_ingestion::generate_dataset_id;
 use cognee_models::{Data, Dataset};
@@ -19,12 +19,9 @@ use super::error::DatasetError;
 // which `grant_all_permissions_on_dataset_via_trait` iterates. Tests below assert
 // against that same list rather than a local copy that could drift from it.
 
-/// Combined trait for dataset operations.
-///
-/// Any `DatabaseConnection` implements both `IngestDb` and `DeleteDb`,
-/// so it automatically satisfies this super-trait.
-pub trait DatasetDb: IngestDb + DeleteDb + Send + Sync {}
-impl<T: IngestDb + DeleteDb + Send + Sync> DatasetDb for T {}
+/// Combined trait for dataset operations (defined in `cognee-database`, so
+/// every [`RelationalDb`](cognee_database::RelationalDb) upcasts to it).
+pub use cognee_database::DatasetDb;
 
 /// High-level facade for dataset CRUD operations.
 ///
@@ -343,7 +340,7 @@ mod tests {
     use uuid::Uuid;
 
     /// Create a fresh in-memory SQLite database with migrations applied.
-    async fn fresh_db() -> Arc<cognee_database::DatabaseConnection> {
+    async fn fresh_db() -> Arc<dyn cognee_database::RelationalDb> {
         let db = connect("sqlite::memory:")
             .await
             .expect("in-memory SQLite always connects");

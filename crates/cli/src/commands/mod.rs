@@ -28,7 +28,7 @@ pub mod visualize;
 
 use std::sync::Arc;
 
-use cognee::database::{DeleteDb, PipelineRunRepository, SeaOrmPipelineRunRepository};
+use cognee::database::{DeleteDb, PipelineRunRepository};
 use cognee::delete::DeleteService;
 use cognee::{ComponentManager, PipelineContext};
 
@@ -67,8 +67,7 @@ pub(crate) async fn build_delete_service(
         .await
         .map_err(|e| CliError::Runtime(format!("{e}")))?;
 
-    let pipeline_run_repo: Arc<dyn PipelineRunRepository> =
-        Arc::new(SeaOrmPipelineRunRepository::new(Arc::clone(&database)));
+    let pipeline_run_repo: Arc<dyn PipelineRunRepository> = Arc::clone(&database).pipeline_runs();
 
     Ok(DeleteService::new(storage, database as Arc<dyn DeleteDb>)
         .with_graph_db(graph_db)

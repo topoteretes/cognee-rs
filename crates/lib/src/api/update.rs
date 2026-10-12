@@ -8,9 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use cognee_cognify::{CognifyConfig, CognifyResult, cognify};
-use cognee_database::{
-    AclDb, DatabaseConnection, PipelineRunRepository, SeaOrmPipelineRunRepository,
-};
+use cognee_database::{AclDb, PipelineRunRepository, RelationalDb};
 use cognee_delete::{DeleteMode, DeleteRequest, DeleteResult, DeleteScope, DeleteService};
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
@@ -81,7 +79,7 @@ pub async fn update(
     graph_db: Arc<dyn GraphDBTrait>,
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
-    db: Option<Arc<DatabaseConnection>>,
+    db: Option<Arc<dyn RelationalDb>>,
     ontology_resolver: Arc<dyn OntologyResolver>,
     cognify_config: &CognifyConfig,
 ) -> Result<UpdateResult, ApiError> {
@@ -126,7 +124,7 @@ pub async fn update(
         let user_email: Option<String> = None;
 
         let database = db.clone().ok_or_else(|| {
-            ApiError::Cognify("cognify requires a DatabaseConnection".to_string())
+            ApiError::Cognify("cognify requires a relational database".to_string())
         })?;
         let thread_pool: Arc<dyn cognee_core::CpuPool> = Arc::new(
             cognee_core::RayonThreadPool::with_default_threads()
@@ -135,7 +133,7 @@ pub async fn update(
 
         // Gap 08-07: persist the four-state `pipeline_runs` trail.
         let pipeline_run_repo: Arc<dyn PipelineRunRepository> =
-            Arc::new(SeaOrmPipelineRunRepository::new(Arc::clone(&database)));
+            Arc::clone(&database).pipeline_runs();
 
         // Apply `incremental_loading` flag on top of the caller-provided config.
         let effective_cognify_config;

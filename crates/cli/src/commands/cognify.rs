@@ -1,9 +1,7 @@
 use std::sync::Arc;
 
 use cognee::cognify::{ChunkStrategy, CognifyConfig, CognifyResult, FailureReport, cognify};
-use cognee::database::{
-    DatabaseConnection, PipelineRunRepository, SeaOrmPipelineRunRepository, ops,
-};
+use cognee::database::{PipelineRunRepository, RelationalDb};
 use cognee::{ComponentManager, PipelineContext};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
@@ -184,7 +182,7 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
             .await
             .map_err(|e| CliError::Runtime(format!("{e}")))?;
 
-        let dataset_names = resolve_dataset_names(&database, owner_id, requested_datasets).await?;
+        let dataset_names = resolve_dataset_names(&*database, owner_id, requested_datasets).await?;
 
         let storage = cm
             .storage()
@@ -250,21 +248,25 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
         let mut total_embeddings = 0usize;
 
         for dataset_name in &dataset_names {
-            let dataset =
-                ops::datasets::get_dataset_by_name(&database, dataset_name, owner_id, None)
-                    .await
-                    .map_err(|error| {
-                        CliError::Runtime(format!(
-                            "Failed to resolve dataset '{dataset_name}': {error}"
-                        ))
-                    })?
-                    .ok_or_else(|| {
-                        CliError::Validation(format!(
-                            "Dataset '{dataset_name}' was not found for owner {owner_id}"
-                        ))
-                    })?;
+            let dataset = cognee::database::IngestDb::get_dataset_by_name(
+                &*database,
+                dataset_name,
+                owner_id,
+                None,
+            )
+            .await
+            .map_err(|error| {
+                CliError::Runtime(format!(
+                    "Failed to resolve dataset '{dataset_name}': {error}"
+                ))
+            })?
+            .ok_or_else(|| {
+                CliError::Validation(format!(
+                    "Dataset '{dataset_name}' was not found for owner {owner_id}"
+                ))
+            })?;
 
-            let data_items = ops::datasets::get_dataset_data(&database, dataset.id)
+            let data_items = cognee::database::DeleteDb::get_dataset_data(&*database, dataset.id)
                 .await
                 .map_err(|error| {
                     CliError::Runtime(format!(
@@ -296,7 +298,7 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
             // Gap 08-07: persist the four-state `pipeline_runs` trail so
             // CLI cognify shows up in `/api/v1/activity/pipeline-runs`.
             let pipeline_run_repo: Arc<dyn PipelineRunRepository> =
-                Arc::new(SeaOrmPipelineRunRepository::new(Arc::clone(&database)));
+                Arc::clone(&database).pipeline_runs();
 
             let result = cognify(
                 data_items,
@@ -343,7 +345,7 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
 }
 
 pub(crate) async fn resolve_dataset_names(
-    database: &DatabaseConnection,
+    database: &dyn RelationalDb,
     owner_id: Uuid,
     requested_datasets: Vec<String>,
 ) -> Result<Vec<String>, CliError> {
@@ -351,7 +353,7 @@ pub(crate) async fn resolve_dataset_names(
         return Ok(requested_datasets);
     }
 
-    let datasets = ops::datasets::list_datasets_by_owner(database, owner_id)
+    let datasets = cognee::database::IngestDb::list_datasets_by_owner(database, owner_id)
         .await
         .map_err(|error| {
             CliError::Runtime(format!(

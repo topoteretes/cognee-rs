@@ -271,7 +271,7 @@ async fn graph_extraction_attributes_each_graph_to_its_own_chunk() {
             llm,
             graph_db,
             Arc::new(NoOpOntologyResolver::new()),
-            &db,
+            &*db,
             None,
             &config(),
             None,

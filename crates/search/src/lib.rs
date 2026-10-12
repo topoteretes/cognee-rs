@@ -21,7 +21,9 @@ pub mod types;
 /// Shared search utilities (completion helpers, etc.).
 pub mod utils;
 
-pub use cognee_session::{SeaOrmSessionStore, SessionContext, SessionManager, SessionStore};
+#[allow(deprecated)]
+pub use cognee_session::SeaOrmSessionStore;
+pub use cognee_session::{RelationalSessionStore, SessionContext, SessionManager, SessionStore};
 pub use orchestration::{SearchBuilder, SearchOrchestrator, SearchTypeRegistry};
 pub use query_router::{RouteResult, route_query};
 pub use query_router_stats::{clear_override_counts, override_counts_snapshot, record_override};
