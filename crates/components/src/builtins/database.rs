@@ -133,15 +133,14 @@ mod tests {
                 onnx_dimensions: 384,
                 onnx_max_sequence_length: 512,
                 onnx_batch_size: 32,
-                aws: crate::context::AwsInputs::default(),
             },
             llm: crate::context::LlmInputs {
+                debug_requests: false,
                 temperature: None,
                 provider: "openai".to_string(),
                 model: "gpt-4o-mini".to_string(),
                 api_key: "sk-test".to_string(),
                 endpoint: String::new(),
-                anthropic_base_url: None,
                 max_retries: 3,
                 network_retries: 2,
                 min_retry_seconds: 0,
@@ -166,7 +165,6 @@ mod tests {
                 mock: false,
                 cassette: String::new(),
                 record_path: String::new(),
-                aws: crate::context::AwsInputs::default(),
             },
         }
     }

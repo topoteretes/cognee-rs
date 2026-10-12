@@ -220,32 +220,47 @@ A setting marked `secret` (a registry row or a section key) is masked as
 
 ## LLM
 
-Read by the LLM adapter. The deep reference is [tools/cli.md](tools/cli.md#llm-retries)
-for retries and the `cognee-llm` rustdoc for the adapter.
+The `llm` section, registered by the LLM kind and shared by every LLM adapter
+(see [Component config sections](#component-config-sections)). Each key also
+answers to its Python flat name, the alias shown in brackets. The deep reference is
+[tools/cli.md](tools/cli.md#llm-retries) for retries and the `cognee-llm` rustdoc
+for the adapter.
 
-| Env var (aliases) | `Settings` field | Default |
+| Env var (aliases) | Key (alias) | Default |
 |---|---|---|
-| `LLM_PROVIDER` | `llm_provider` | `openai` |
-| `LLM_MODEL` / `OPENAI_MODEL` | `llm_model` | `openai/gpt-5-mini` |
-| `LLM_API_KEY` / `OPENAI_TOKEN` | `llm_api_key` | _(empty)_ |
-| `LLM_ENDPOINT` / `OPENAI_URL` | `llm_endpoint` | _(empty)_ |
-| `LLM_API_VERSION` | `llm_api_version` | _(empty)_ |
-| `LLM_REASONING` | `llm_reasoning` | `auto` |
-| `LLM_STRUCTURED_OUTPUT_MODE` | `llm_structured_output_mode` | `auto` |
-| `LLM_TEMPERATURE` | `llm_temperature` | *unset — no `temperature` is sent* |
-| `LLM_STREAMING` | `llm_streaming` | `false` |
-| `LLM_MAX_COMPLETION_TOKENS` / `LLM_MAX_TOKENS` | `llm_max_completion_tokens` | `16384` |
-| `LLM_ARGS` | `llm_args` | _(empty)_ |
-| `LLM_MAX_RETRIES` | `llm_max_retries` | `3` |
-| `LLM_NETWORK_RETRIES` | `llm_network_retries` | `2` |
-| `LLM_MIN_RETRY_SECONDS` | `llm_min_retry_seconds` | `240` |
-| `LLM_MAX_PARALLEL_REQUESTS` | `llm_max_parallel_requests` | `1000` (`128` on Android/iOS) |
-| `LLM_REQUEST_TIMEOUT_SECONDS` | `llm_request_timeout_seconds` | `600` |
-| `LLM_CONNECT_TIMEOUT_SECONDS` | `llm_connect_timeout_seconds` | `10` |
-| `LLM_REQUEST_DEADLINE_SECONDS` | `llm_request_deadline_seconds` | `1200` (`0` disables) |
-| `MOCK_LLM` | `llm_mock` | `false` |
-| `MOCK_LLM_CASSETTE` | `llm_cassette` | _(empty)_ |
-| `COGNEE_RECORD_LLM` | `llm_record_path` | _(empty)_ |
+| `LLM_PROVIDER` | `llm.provider` (`llm_provider`) | `openai` |
+| `LLM_MODEL` / `OPENAI_MODEL` | `llm.model` (`llm_model`) | `openai/gpt-5-mini` |
+| `LLM_API_KEY` / `OPENAI_TOKEN` | `llm.api_key` (`llm_api_key`) | _(empty)_ |
+| `LLM_ENDPOINT` / `OPENAI_URL` | `llm.endpoint` (`llm_endpoint`) | _(empty)_ |
+| `LLM_API_VERSION` | `llm.api_version` (`llm_api_version`) | _(empty)_ |
+| `LLM_REASONING` | `llm.reasoning` (`llm_reasoning`) | `auto` |
+| `LLM_STRUCTURED_OUTPUT_MODE` | `llm.structured_output_mode` (`llm_structured_output_mode`) | `auto` |
+| `LLM_TEMPERATURE` | `llm.temperature` (`llm_temperature`) | *unset — no `temperature` is sent* |
+| `LLM_STREAMING` | `llm.streaming` (`llm_streaming`) | `false` |
+| `LLM_MAX_COMPLETION_TOKENS` / `LLM_MAX_TOKENS` | `llm.max_completion_tokens` (`llm_max_completion_tokens`) | `16384` |
+| `LLM_ARGS` | `llm.args` (`llm_args`) | _(empty)_ |
+| `LLM_MAX_RETRIES` | `llm.max_retries` (`llm_max_retries`) | `3` |
+| `LLM_NETWORK_RETRIES` | `llm.network_retries` (`llm_network_retries`) | `2` |
+| `LLM_MIN_RETRY_SECONDS` | `llm.min_retry_seconds` (`llm_min_retry_seconds`) | `240` |
+| `LLM_MAX_PARALLEL_REQUESTS` | `llm_max_parallel_requests` (a `Settings` field) | `1000` (`128` on Android/iOS) |
+| `LLM_REQUEST_TIMEOUT_SECONDS` | `llm.request_timeout_seconds` (`llm_request_timeout_seconds`) | `600` |
+| `LLM_CONNECT_TIMEOUT_SECONDS` | `llm.connect_timeout_seconds` (`llm_connect_timeout_seconds`) | `10` |
+| `LLM_REQUEST_DEADLINE_SECONDS` | `llm.request_deadline_seconds` (`llm_request_deadline_seconds`) | `1200` (`0` disables) |
+| `MOCK_LLM` | `llm.mock` (`llm_mock`) | `false` |
+| `MOCK_LLM_CASSETTE` | `llm.cassette` (`llm_cassette`) | _(empty)_ |
+| `COGNEE_RECORD_LLM` | `llm.record_path` (`llm_record_path`) | _(empty)_ |
+| `LLM_RATE_LIMIT_ENABLED` / `_REQUESTS` / `_INTERVAL` | `llm.rate_limit_enabled` / `_requests` / `_interval` (`llm_rate_limit_*`) | `false` / `60` / `60` |
+| `AUTO_RATE_LIMIT` | `llm.auto_rate_limit` (`auto_rate_limit`) | `true` |
+| `COGNEE_DEBUG_LLM_REQUEST` | `llm.debug_requests` | `false` (dump every request/response body to stderr) |
+
+Adapter sections, registered by their factory and present only when it is:
+
+| Env var (aliases) | Key (alias) | Default |
+|---|---|---|
+| `LLM_VISION_MODEL` | `llm.openai_compatible.vision_model` (`llm_vision_model`) | _(unset: uses `llm.model`)_ |
+| `TRANSCRIPTION_MODEL` | `llm.openai_compatible.transcription_model` (`transcription_model`) | `whisper-1` |
+| `ANTHROPIC_BASE_URL` / `ANTHROPIC_API_BASE` | `llm.anthropic.base_url` (`anthropic_base_url`) | _(unset: public API)_ |
+| `AWS_*` (see [Bedrock](#bedrock-llm_providerbedrock)) | `aws.*` (`aws_*`), shared by the Bedrock LLM and embedding adapters (`bedrock` feature) | _(unset)_ |
 
 `LLM_MAX_COMPLETION_TOKENS` is a *completion*-token budget, and it does double
 duty: besides capping the option-less `generate` call, it is the LLM term in
@@ -286,8 +301,9 @@ all: the **HTTP server has no `LLM_ARGS` equivalent** (it defaults `llm_args` to
 an empty map, so a server deployment cannot raise a cap this way), and the
 vision/transcription path bypasses the merge.
 
-A fallback LLM (`llm_fallback_provider/_model/_endpoint/_api_key`) is configurable
-programmatically (no env binding). `MOCK_LLM` + cassettes power the offline
+A fallback LLM (`llm.fallback_provider/_model/_endpoint/_api_key`, aliases
+`llm_fallback_*`) is configurable programmatically (no env binding) but not used
+yet (SDK-1070). `MOCK_LLM` + cassettes power the offline
 benchmark — see [performance/mock-benchmark.md](performance/mock-benchmark.md).
 
 ### Supported `LLM_PROVIDER` values
@@ -1266,9 +1282,9 @@ Setting `system_root_directory` cascades to the default `graph_file_path` and
 | `CACHE_HOST` / `CACHE_PORT` | … | `localhost` / `6379` |
 | `SESSION_TTL_SECONDS` | `session_ttl_seconds` | `604800` (7d) |
 | `CACHING` | `enable_caching` | `true` |
-| `LLM_RATE_LIMIT_ENABLED` / `_REQUESTS` / `_INTERVAL` | … | `false` / `60` / `60` |
+| `LLM_RATE_LIMIT_ENABLED` / `_REQUESTS` / `_INTERVAL` | `llm.rate_limit_*` (see [LLM](#llm)) | `false` / `60` / `60` |
 | `EMBEDDING_RATE_LIMIT_ENABLED` / `_REQUESTS` / `_INTERVAL` | … | `false` / `60` / `60` |
-| `AUTO_RATE_LIMIT` | `auto_rate_limit` | `true` |
+| `AUTO_RATE_LIMIT` | `llm.auto_rate_limit` (`auto_rate_limit`) | `true` |
 
 ### How retries and pacing interact
 

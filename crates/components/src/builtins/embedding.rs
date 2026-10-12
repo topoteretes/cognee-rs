@@ -116,7 +116,12 @@ fn parse_embedding_provider(provider: &str) -> Option<EmbeddingProvider> {
               (which can be enabled independently of this crate's), so the config \
               must be default-constructed first and the fields assigned after"
 )]
-pub fn build_embedding_config(inputs: &EmbeddingInputs) -> EmbeddingConfig {
+/// `aws` carries the `aws` config section (see [`crate::sections::AwsConfig`]);
+/// only the Bedrock provider reads it.
+pub fn build_embedding_config(
+    inputs: &EmbeddingInputs,
+    #[cfg_attr(not(feature = "bedrock"), allow(unused_variables))] aws: &crate::context::AwsInputs,
+) -> EmbeddingConfig {
     let provider = if inputs.mock {
         EmbeddingProvider::Mock
     } else {
@@ -150,7 +155,7 @@ pub fn build_embedding_config(inputs: &EmbeddingInputs) -> EmbeddingConfig {
     // §1.5), so the only thing lost is an explicitly caller-supplied override.
     #[cfg(feature = "bedrock")]
     {
-        config.aws = (&inputs.aws).into();
+        config.aws = aws.into();
     }
     #[cfg(feature = "onnx")]
     {
@@ -179,6 +184,19 @@ pub struct DefaultEmbeddingFactory;
 
 #[async_trait]
 impl EmbeddingFactory for DefaultEmbeddingFactory {
+    fn config_sections(&self) -> Vec<&'static cognee_config_core::SectionSchema> {
+        // The Bedrock provider reads the `aws` section; other providers read
+        // only the embedding inputs.
+        #[cfg(feature = "bedrock")]
+        {
+            vec![<crate::sections::AwsConfig as cognee_config_core::ConfigSection>::schema()]
+        }
+        #[cfg(not(feature = "bedrock"))]
+        {
+            Vec::new()
+        }
+    }
+
     async fn build(
         &self,
         ctx: &BackendBuildContext,
@@ -198,7 +216,8 @@ impl EmbeddingFactory for DefaultEmbeddingFactory {
         );
 
         validate_provider_id(&ctx.embedding.provider, ctx.embedding.mock)?;
-        let config = build_embedding_config(&ctx.embedding);
+        let aws = ctx.section::<crate::sections::AwsConfig>().to_inputs();
+        let config = build_embedding_config(&ctx.embedding, &aws);
         config.create_engine().await.map_err(|e| {
             ComponentError::EmbeddingEngine(format!("embedding engine init failed: {e}"))
         })
@@ -263,7 +282,6 @@ mod tests {
             onnx_dimensions: 384,
             onnx_max_sequence_length: 512,
             onnx_batch_size: 32,
-            aws: crate::context::AwsInputs::default(),
         }
     }
 
@@ -318,19 +336,19 @@ mod tests {
         // build_embedding_config maps an unknown provider to onnx (the factory
         // is what rejects it); mock overrides the provider regardless.
         assert_eq!(
-            build_embedding_config(&inputs("azure", false)).provider,
+            build_embedding_config(&inputs("azure", false), &Default::default()).provider,
             EmbeddingProvider::Onnx
         );
         assert_eq!(
-            build_embedding_config(&inputs("openai", true)).provider,
+            build_embedding_config(&inputs("openai", true), &Default::default()).provider,
             EmbeddingProvider::Mock
         );
         assert_eq!(
-            build_embedding_config(&inputs("ollama", false)).provider,
+            build_embedding_config(&inputs("ollama", false), &Default::default()).provider,
             EmbeddingProvider::Ollama
         );
         assert_eq!(
-            build_embedding_config(&inputs("bedrock", false)).provider,
+            build_embedding_config(&inputs("bedrock", false), &Default::default()).provider,
             EmbeddingProvider::Bedrock
         );
     }
@@ -341,8 +359,8 @@ mod tests {
     #[test]
     #[cfg(feature = "bedrock")]
     fn aws_inputs_are_carried_into_the_embedding_config() {
-        let mut inputs = inputs("bedrock", false);
-        inputs.aws = crate::context::AwsInputs {
+        let inputs = inputs("bedrock", false);
+        let aws = crate::context::AwsInputs {
             region: Some("eu-central-1".to_string()),
             access_key_id: Some("AKIDEXAMPLE".to_string()),
             secret_access_key: Some("secret".to_string()),
@@ -352,9 +370,9 @@ mod tests {
             ..Default::default()
         };
 
-        let config = build_embedding_config(&inputs);
+        let config = build_embedding_config(&inputs, &aws);
 
-        let expected: cognee_llm::adapters::bedrock::aws::env::AwsInputs = (&inputs.aws).into();
+        let expected: cognee_llm::adapters::bedrock::aws::env::AwsInputs = (&aws).into();
         assert_eq!(config.aws, expected);
         assert_eq!(config.aws.region.as_deref(), Some("eu-central-1"));
         assert_eq!(config.aws.access_key_id.as_deref(), Some("AKIDEXAMPLE"));

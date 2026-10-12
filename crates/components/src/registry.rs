@@ -146,8 +146,10 @@ impl ComponentRegistry {
         self.config_sections.push(section);
     }
 
-    /// The config sections of every registered factory, plus those registered
-    /// with [`register_config_section`](Self::register_config_section).
+    /// The kind sections (settings shared by every adapter of a kind, such as
+    /// `llm.model`), the config sections of every registered factory, and
+    /// those registered with
+    /// [`register_config_section`](Self::register_config_section).
     ///
     /// Factories are visited in a stable order (kind, then provider id), so
     /// the schema does not depend on hash-map iteration order. Fails when two
@@ -158,7 +160,10 @@ impl ComponentRegistry {
             entries.sort_by(|a, b| a.0.cmp(b.0));
             entries.into_iter().map(|(_, v)| v).collect()
         }
-        let mut sections: Vec<&'static SectionSchema> = Vec::new();
+        // Kind sections first: the settings every adapter of a kind shares,
+        // registered by the kind itself.
+        let mut sections: Vec<&'static SectionSchema> =
+            vec![<crate::sections::LlmConfig as cognee_config_core::ConfigSection>::schema()];
         for f in sorted(&self.vector) {
             sections.extend(f.config_sections());
         }
@@ -860,8 +865,12 @@ mod tests {
         // A converse-routed id cognee ships; an invoke-routed id fails by design.
         ctx.llm.model = "eu.anthropic.claude-haiku-4-5-20251001-v1:0".to_string();
         ctx.llm.api_key = String::new();
-        ctx.llm.aws.bearer_token = Some("test-token".to_string());
-        ctx.llm.aws.region = Some("us-east-1".to_string());
+        ctx.sections.insert(
+            "aws.bearer_token".to_string(),
+            serde_json::json!("test-token"),
+        );
+        ctx.sections
+            .insert("aws.region".to_string(), serde_json::json!("us-east-1"));
 
         let built = reg.build_llm(&ctx).await;
         let adapter = match built {
@@ -908,8 +917,12 @@ mod tests {
         ctx.llm.provider = "bedrock".to_string();
         ctx.llm.model = "eu.anthropic.claude-haiku-4-5-20251001-v1:0".to_string();
         ctx.llm.api_key = String::new();
-        ctx.llm.aws.bearer_token = Some("test-token".to_string());
-        ctx.llm.aws.region = Some("Not A Region".to_string());
+        ctx.sections.insert(
+            "aws.bearer_token".to_string(),
+            serde_json::json!("test-token"),
+        );
+        ctx.sections
+            .insert("aws.region".to_string(), serde_json::json!("Not A Region"));
 
         let err = match reg.build_llm(&ctx).await {
             Ok(_) => panic!(
@@ -1008,15 +1021,14 @@ mod tests {
                 onnx_dimensions: 384,
                 onnx_max_sequence_length: 512,
                 onnx_batch_size: 32,
-                aws: crate::context::AwsInputs::default(),
             },
             llm: crate::context::LlmInputs {
+                debug_requests: false,
                 temperature: None,
                 provider: "openai".to_string(),
                 model: "gpt-4o-mini".to_string(),
                 api_key: "sk-test".to_string(),
                 endpoint: String::new(),
-                anthropic_base_url: None,
                 max_retries: 3,
                 network_retries: 2,
                 min_retry_seconds: 0,
@@ -1041,7 +1053,6 @@ mod tests {
                 mock: false,
                 cassette: String::new(),
                 record_path: String::new(),
-                aws: crate::context::AwsInputs::default(),
             },
         }
     }

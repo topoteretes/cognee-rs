@@ -56,6 +56,25 @@ use tempfile::TempDir;
 /// a real connection pool) without performing any I/O at construction time.
 fn settings(root: &std::path::Path, endpoint: &str) -> Settings {
     Settings {
+        sections: [
+            (
+                "llm.provider".to_string(),
+                serde_json::json!("openai".to_string()),
+            ),
+            (
+                "llm.model".to_string(),
+                serde_json::json!("gpt-4o-mini".to_string()),
+            ),
+            (
+                "llm.api_key".to_string(),
+                serde_json::json!("sk-test".to_string()),
+            ),
+            (
+                "llm.endpoint".to_string(),
+                serde_json::json!(endpoint.to_string()),
+            ),
+        ]
+        .into(),
         system_root_directory: root.join("system").to_string_lossy().into_owned(),
         data_root_directory: root.join("data").to_string_lossy().into_owned(),
         relational_db_url: format!(
@@ -77,10 +96,6 @@ fn settings(root: &std::path::Path, endpoint: &str) -> Settings {
         embedding_api_key: "sk-test".to_string(),
         embedding_model_name: "text-embedding-3-small".to_string(),
         embedding_dimensions: 3,
-        llm_provider: "openai".to_string(),
-        llm_model: "gpt-4o-mini".to_string(),
-        llm_api_key: "sk-test".to_string(),
-        llm_endpoint: endpoint.to_string(),
         ..Settings::default()
     }
 }

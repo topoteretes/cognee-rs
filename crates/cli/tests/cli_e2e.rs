@@ -155,17 +155,29 @@ fn config_list_contains_expected_keys() {
 fn config_unset_restores_default_llm_provider() {
     let config_home = TempDir::new().expect("temp dir should be created");
 
+    // `llm_provider` is the Python alias of the `llm.provider` section key;
+    // the file stores the canonical key.
     make_cmd(&config_home)
         .args(["config", "set", "llm_provider", "\"custom\""])
         .assert()
         .success();
+    assert_eq!(config_value(&config_home, "llm.provider"), "custom");
 
     make_cmd(&config_home)
         .args(["config", "unset", "llm_provider", "--force"])
         .assert()
         .success();
 
-    assert_eq!(config_value(&config_home, "llm_provider"), "openai");
+    // Unset removes the explicit value, so the default applies again.
+    assert_eq!(
+        config_value(&config_home, "llm.provider"),
+        serde_json::Value::Null
+    );
+    make_cmd(&config_home)
+        .args(["config", "get", "llm.provider"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("openai"));
 }
 
 /// `config set` of an unknown key fails under strict mode, including strict

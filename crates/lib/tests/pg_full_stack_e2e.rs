@@ -154,6 +154,16 @@ fn make_all_postgres_settings(pg_url: &str) -> Settings {
         };
 
     Settings {
+        sections: [
+            (
+                "llm.provider".to_string(),
+                serde_json::json!("openai".to_string()),
+            ),
+            ("llm.api_key".to_string(), serde_json::json!(llm_key)),
+            ("llm.endpoint".to_string(), serde_json::json!(llm_endpoint)),
+            ("llm.model".to_string(), serde_json::json!(llm_model)),
+        ]
+        .into(),
         // Relational DB — individual fields; resolved_relational_db_url() builds the URL.
         db_provider: "postgres".to_string(),
         db_host: host,
@@ -178,12 +188,6 @@ fn make_all_postgres_settings(pg_url: &str) -> Settings {
         embedding_model_path: embed_model,
         embedding_tokenizer_path: embed_tok,
         embedding_dimensions,
-
-        // LLM
-        llm_provider: "openai".to_string(),
-        llm_api_key: llm_key,
-        llm_endpoint,
-        llm_model,
 
         // Use a unique system root so on-disk data stays isolated.
         system_root_directory: format!("./.cognee_pg_e2e_{}", Uuid::new_v4()),

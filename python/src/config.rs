@@ -14,7 +14,6 @@
 use std::sync::Arc;
 
 use cognee_bindings_common::HandleState;
-use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 
 use crate::json::{py_to_serde, py_to_serde_map, serde_to_py};
@@ -77,8 +76,7 @@ impl PyCogneeConfig {
     /// Secret fields (``llm_api_key``, ``embedding_api_key``, etc.) are replaced
     /// with ``"***REDACTED***"`` before being returned.
     fn get(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let value = cognee_bindings_common::redacted_settings_json(self.inner.cm.config())
-            .map_err(|e| PyRuntimeError::new_err(format!("failed to serialize settings: {e}")))?;
+        let value = cognee_bindings_common::config_snapshot(self.inner.cm.config());
         serde_to_py(py, &value)
     }
 

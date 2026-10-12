@@ -24,7 +24,7 @@ pub fn run(args: SearchArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
 
     let mapped_query_type = map_query_type(args.query_type);
 
-    if requires_llm(mapped_query_type) && settings.llm_api_key.is_empty() {
+    if requires_llm(mapped_query_type) && settings.llm().api_key.is_empty() {
         warn!("Warning: llm_api_key is empty. LLM-based search types may fail at runtime.");
     }
 

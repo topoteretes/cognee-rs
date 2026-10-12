@@ -91,7 +91,9 @@ impl Commands {
     /// Call before building `ConfigManager` — see `llm_max_retries_override`.
     pub fn apply_overrides(&self, settings: &mut Settings) {
         if let Some(retries) = self.llm_max_retries_override() {
-            settings.llm_max_retries = retries;
+            settings
+                .sections
+                .insert("llm.max_retries".to_string(), serde_json::json!(retries));
         }
     }
 }
@@ -855,28 +857,30 @@ mod tests {
         let cli = parse(&["cognee-cli", "cognify", "--llm-max-retries", "10"]);
         let mut settings = Settings::default();
         assert_ne!(
-            settings.llm_max_retries, 10,
+            settings.llm().max_retries,
+            10,
             "default must differ from the test value"
         );
 
         cli.command.apply_overrides(&mut settings);
 
-        assert_eq!(settings.llm_max_retries, 10);
+        assert_eq!(settings.llm().max_retries, 10);
     }
 
     #[test]
     fn apply_overrides_leaves_settings_alone_when_the_flag_is_absent() {
         let cli = parse(&["cognee-cli", "cognify"]);
         // 7 stands in for a value that came from config.json or the env.
-        let mut settings = Settings {
-            llm_max_retries: 7,
-            ..Default::default()
-        };
+        let mut settings = Settings::default();
+        settings
+            .sections
+            .insert("llm.max_retries".to_string(), serde_json::json!(7));
 
         cli.command.apply_overrides(&mut settings);
 
         assert_eq!(
-            settings.llm_max_retries, 7,
+            settings.llm().max_retries,
+            7,
             "an absent flag must not clobber config or env",
         );
     }

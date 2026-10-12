@@ -43,11 +43,11 @@ describe("Phase-2 config surface", () => {
       native.configSetOntologyResolver(handle, "custom");
 
       const cfg = native.getConfig(handle) as Record<string, unknown>;
-      expect(cfg.llm_provider).toBe("openai");
-      expect(cfg.llm_model).toBe("gpt-4o");
-      expect(cfg.llm_temperature).toBeCloseTo(0.42);
-      expect(cfg.llm_streaming).toBe(true);
-      expect(cfg.llm_max_retries).toBe(7);
+      expect(cfg["llm.provider"]).toBe("openai");
+      expect(cfg["llm.model"]).toBe("gpt-4o");
+      expect(cfg["llm.temperature"]).toBeCloseTo(0.42);
+      expect(cfg["llm.streaming"]).toBe(true);
+      expect(cfg["llm.max_retries"]).toBe(7);
       expect(cfg.embedding_provider).toBe("openai");
       expect(cfg.embedding_dimensions).toBe(1536);
       expect(cfg.embedding_model_path).toBe("/models/m.onnx");
@@ -69,7 +69,7 @@ describe("Phase-2 config surface", () => {
       const cfg = native.getConfig(handle) as Record<string, unknown>;
       // Secret fields must be redacted, never echoed back verbatim.
       for (const field of [
-        "llm_api_key",
+        "llm.api_key",
         "embedding_api_key",
         "vector_db_key",
         "vector_db_password",
@@ -101,7 +101,7 @@ describe("Phase-2 config surface", () => {
       const cfg = native.getConfig(handle) as Record<string, unknown>;
       expect(cfg.vector_db_host).toBe("host-via-generic");
       expect(cfg.vector_db_port).toBe(7000);
-      expect(cfg.llm_streaming).toBe(true);
+      expect(cfg["llm.streaming"]).toBe(true);
       expect(cfg.ontology_file_path).toBe("/o2.owl");
     });
 
@@ -193,21 +193,21 @@ describe("Phase-2 config surface", () => {
       // Object-provided field wins.
       expect(cfg.vector_db_host).toBe("object-host");
       // Omitted field retains the env-derived baseline.
-      expect(cfg.llm_model).toBe(baseline.llm_model);
-      expect(cfg.llm_provider).toBe(baseline.llm_provider);
+      expect(cfg["llm.model"]).toBe(baseline["llm.model"]);
+      expect(cfg["llm.provider"]).toBe(baseline["llm.provider"]);
     });
 
     it("a key the object provides overrides the baseline value", () => {
       const handle = native.cogneeNew({ llm_model: "object-model" });
       const cfg = native.getConfig(handle) as Record<string, unknown>;
-      expect(cfg.llm_model).toBe("object-model");
-      expect(cfg.llm_model).not.toBe(baseline.llm_model);
+      expect(cfg["llm.model"]).toBe("object-model");
+      expect(cfg["llm.model"]).not.toBe(baseline["llm.model"]);
     });
 
     it("with no argument, getConfig matches the env-derived baseline", () => {
       const handle = native.cogneeNew();
       const cfg = native.getConfig(handle) as Record<string, unknown>;
-      expect(cfg.llm_model).toBe(baseline.llm_model);
+      expect(cfg["llm.model"]).toBe(baseline["llm.model"]);
     });
   });
 

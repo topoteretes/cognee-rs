@@ -556,9 +556,21 @@ mod tests {
 
     fn cm_with_provider(provider: &str) -> ComponentManager {
         let settings = Settings {
-            llm_provider: provider.to_string(),
-            llm_api_key: "sk-test".to_string(),
-            llm_model: "gpt-4o-mini".to_string(),
+            sections: [
+                (
+                    "llm.provider".to_string(),
+                    serde_json::json!(provider.to_string()),
+                ),
+                (
+                    "llm.api_key".to_string(),
+                    serde_json::json!("sk-test".to_string()),
+                ),
+                (
+                    "llm.model".to_string(),
+                    serde_json::json!("gpt-4o-mini".to_string()),
+                ),
+            ]
+            .into(),
             ..Settings::default()
         };
         ComponentManager::new(ConfigManager::new(settings))
@@ -581,8 +593,14 @@ mod tests {
     async fn transcriber_returns_none_for_unknown_provider() {
         // Any non-openai provider (e.g. "mock") returns None — audio gracefully unsupported.
         let settings = Settings {
-            llm_provider: "mock".to_string(),
-            llm_api_key: String::new(),
+            sections: [
+                (
+                    "llm.provider".to_string(),
+                    serde_json::json!("mock".to_string()),
+                ),
+                ("llm.api_key".to_string(), serde_json::json!(String::new())),
+            ]
+            .into(),
             ..Settings::default()
         };
         let cm = ComponentManager::new(ConfigManager::new(settings));
@@ -713,9 +731,15 @@ mod tests {
     async fn init_llm_uses_replay_mock_when_llm_mock_set_without_api_key() {
         let (_dir, cassette) = write_cassette();
         let settings = Settings {
-            llm_mock: true,
-            llm_cassette: cassette.to_string_lossy().into_owned(),
-            llm_api_key: String::new(),
+            sections: [
+                ("llm.mock".to_string(), serde_json::json!(true)),
+                (
+                    "llm.cassette".to_string(),
+                    serde_json::json!(cassette.to_string_lossy().into_owned()),
+                ),
+                ("llm.api_key".to_string(), serde_json::json!(String::new())),
+            ]
+            .into(),
             ..Settings::default()
         };
         let cm = ComponentManager::new(ConfigManager::new(settings));
@@ -743,9 +767,18 @@ mod tests {
     async fn init_llm_selects_mock_when_provider_is_mock() {
         let (_dir, cassette) = write_cassette();
         let settings = Settings {
-            llm_provider: "mock".to_string(),
-            llm_cassette: cassette.to_string_lossy().into_owned(),
-            llm_api_key: String::new(),
+            sections: [
+                (
+                    "llm.provider".to_string(),
+                    serde_json::json!("mock".to_string()),
+                ),
+                (
+                    "llm.cassette".to_string(),
+                    serde_json::json!(cassette.to_string_lossy().into_owned()),
+                ),
+                ("llm.api_key".to_string(), serde_json::json!(String::new())),
+            ]
+            .into(),
             ..Settings::default()
         };
         let cm = ComponentManager::new(ConfigManager::new(settings));
@@ -760,8 +793,11 @@ mod tests {
     #[tokio::test]
     async fn init_llm_errors_when_mock_set_but_cassette_empty() {
         let settings = Settings {
-            llm_mock: true,
-            llm_cassette: String::new(),
+            sections: [
+                ("llm.mock".to_string(), serde_json::json!(true)),
+                ("llm.cassette".to_string(), serde_json::json!(String::new())),
+            ]
+            .into(),
             ..Settings::default()
         };
         let cm = ComponentManager::new(ConfigManager::new(settings));
@@ -781,10 +817,25 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let record_path = dir.path().join("recorded.json");
         let settings = Settings {
-            llm_provider: "openai".to_string(),
-            llm_api_key: "sk-test".to_string(),
-            llm_model: "gpt-4o-mini".to_string(),
-            llm_record_path: record_path.to_string_lossy().into_owned(),
+            sections: [
+                (
+                    "llm.provider".to_string(),
+                    serde_json::json!("openai".to_string()),
+                ),
+                (
+                    "llm.api_key".to_string(),
+                    serde_json::json!("sk-test".to_string()),
+                ),
+                (
+                    "llm.model".to_string(),
+                    serde_json::json!("gpt-4o-mini".to_string()),
+                ),
+                (
+                    "llm.record_path".to_string(),
+                    serde_json::json!(record_path.to_string_lossy().into_owned()),
+                ),
+            ]
+            .into(),
             ..Settings::default()
         };
         let cm = ComponentManager::new(ConfigManager::new(settings));

@@ -537,6 +537,10 @@ pub struct OpenAIAdapter {
     pacer: Option<Arc<Pacer>>,
     /// Model name for audio transcription (e.g. `"whisper-1"`).
     transcription_model: String,
+    /// Model for image description; `None` uses `model`.
+    vision_model: Option<String>,
+    /// Dump every request/response body to stderr (`llm.debug_requests`).
+    debug_requests: bool,
     /// Extra request parameters merged into every chat-completion request body,
     /// mirroring Python cognee's `LLM_ARGS` / `llm_config.llm_args`, which the
     /// litellm adapter merges into each call as `{**self.llm_args, **kwargs}`
@@ -793,6 +797,8 @@ impl OpenAIAdapter {
     /// Default per-HTTP-request timeout. Unchanged from the value that used to be
     /// hardcoded in `new`, so an adapter built without config behaves as before.
     pub const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
+    /// Default audio transcription model.
+    pub const DEFAULT_TRANSCRIPTION_MODEL: &'static str = "whisper-1";
     /// Default TCP connect timeout.
     ///
     /// `reqwest` applies none by default, so before this a black-holed connect -
@@ -850,10 +856,6 @@ impl OpenAIAdapter {
     ///
     /// # Returns
     /// A new OpenAI adapter instance
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
-    )]
     pub fn new(
         model: impl Into<String>,
         api_key: impl Into<String>,
@@ -862,8 +864,7 @@ impl OpenAIAdapter {
         let client =
             Self::build_http_client(Self::DEFAULT_REQUEST_TIMEOUT, Self::DEFAULT_CONNECT_TIMEOUT)?;
 
-        let transcription_model =
-            std::env::var("TRANSCRIPTION_MODEL").unwrap_or_else(|_| "whisper-1".to_string());
+        let transcription_model = Self::DEFAULT_TRANSCRIPTION_MODEL.to_string();
 
         // The model is used verbatim on the wire. litellm-style provider prefix
         // stripping (`openai/`, `baseten/`, …) is owned by
@@ -896,6 +897,8 @@ impl OpenAIAdapter {
             retry_min_elapsed: Self::DEFAULT_MIN_RETRY_ELAPSED,
             pacer: None,
             transcription_model,
+            vision_model: None,
+            debug_requests: false,
             extra_args: serde_json::Map::new(),
             default_max_tokens: Some(Self::DEFAULT_MAX_COMPLETION_TOKENS),
             reasoning_model,
@@ -1168,6 +1171,21 @@ impl OpenAIAdapter {
     /// Configure the model used for audio transcription (default: `"whisper-1"`).
     pub fn with_transcription_model(mut self, model: impl Into<String>) -> Self {
         self.transcription_model = model.into();
+        self
+    }
+
+    /// Model used for image description (`llm.openai_compatible.vision_model`).
+    /// `None` or empty uses the chat model.
+    #[must_use]
+    pub fn with_vision_model(mut self, model: Option<String>) -> Self {
+        self.vision_model = model;
+        self
+    }
+
+    /// Dump every request and response body to stderr (`llm.debug_requests`).
+    #[must_use]
+    pub fn with_debug_requests(mut self, enabled: bool) -> Self {
+        self.debug_requests = enabled;
         self
     }
 
@@ -1548,10 +1566,6 @@ impl OpenAIAdapter {
             cognee.llm.provider = "openai",
         ),
     )]
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
-    )]
     async fn send_chat_request_before(
         &self,
         request_body: Value,
@@ -1559,9 +1573,7 @@ impl OpenAIAdapter {
     ) -> LlmResult<OpenAIResponse> {
         let url = self.endpoint_url("chat/completions");
         tracing::Span::current().record("url", url.as_str());
-        let debug_enabled = std::env::var("COGNEE_DEBUG_LLM_REQUEST")
-            .map(|v| cognee_utils::parse_env_bool(&v))
-            .unwrap_or(false);
+        let debug_enabled = self.debug_requests;
 
         if debug_enabled {
             let pretty_request = serde_json::to_string_pretty(&request_body)
@@ -2162,10 +2174,6 @@ impl Llm for OpenAIAdapter {
             .unwrap_or(Self::DEFAULT_MAX_COMPLETION_TOKENS)
     }
 
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
-    )]
     async fn transcribe_image(
         &self,
         image_bytes: &[u8],
@@ -2183,8 +2191,9 @@ impl Llm for OpenAIAdapter {
         let b64 = base64::engine::general_purpose::STANDARD.encode(image_bytes);
         let data_uri = format!("data:{mime_type};base64,{b64}");
 
-        let vision_model = std::env::var("LLM_VISION_MODEL")
-            .ok()
+        let vision_model = self
+            .vision_model
+            .clone()
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| self.model.clone());
 

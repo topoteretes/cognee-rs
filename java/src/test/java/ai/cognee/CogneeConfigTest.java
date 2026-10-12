@@ -19,7 +19,7 @@ class CogneeConfigTest {
             cognee.config().set("llm_model", "gpt-4o-mini");
             cognee.config().setLlmConfig(Map.of("llm_provider", "openai"));
             Map<String, Object> snapshot = cognee.config().get();
-            assertEquals("gpt-4o-mini", snapshot.get("llm_model"));
+            assertEquals("gpt-4o-mini", snapshot.get("llm.model"));
         }
     }
 

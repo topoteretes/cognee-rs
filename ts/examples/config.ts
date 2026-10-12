@@ -54,8 +54,8 @@ function main(): void {
   });
 
   const cfgA = cognee.config.get();
-  console.log(`  llm_model     = ${cfgA["llm_model"]}`);
-  console.log(`  llm_api_key   = ${cfgA["llm_api_key"]}  (redacted)`);
+  console.log(`  llm_model     = ${cfgA["llm.model"]}`);
+  console.log(`  llm_api_key   = ${cfgA["llm.api_key"]}  (redacted)`);
   console.log(`  emb_provider  = ${cfgA["embedding_provider"]}`);
 
   // ── Method B: granular setters ─────────────────────────────────────────────
@@ -66,8 +66,8 @@ function main(): void {
   cognee.config.setLlmTemperature(0.1);
 
   const cfgB = cognee.config.get();
-  console.log(`  llm_model after setLlmModel: ${cfgB["llm_model"]}`);
-  console.log(`  llm_temperature after setLlmTemperature: ${cfgB["llm_temperature"]}`);
+  console.log(`  llm_model after setLlmModel: ${cfgB["llm.model"]}`);
+  console.log(`  llm_temperature after setLlmTemperature: ${cfgB["llm.temperature"]}`);
 
   // An unknown key is a logged warning by default. With strict_config on,
   // the generic set() raises instead:

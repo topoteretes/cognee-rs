@@ -1,5 +1,142 @@
 {
   "<empty env>": {},
+  "ANTHROPIC_API_BASE=\"  \"": {
+    "llm.anthropic.base_url": "  "
+  },
+  "ANTHROPIC_API_BASE=\"\"": {},
+  "ANTHROPIC_API_BASE=\"-1\"": {
+    "llm.anthropic.base_url": "-1"
+  },
+  "ANTHROPIC_API_BASE=\"0\"": {
+    "llm.anthropic.base_url": "0"
+  },
+  "ANTHROPIC_API_BASE=\"1\"": {
+    "llm.anthropic.base_url": "1"
+  },
+  "ANTHROPIC_API_BASE=\"1.5\"": {
+    "llm.anthropic.base_url": "1.5"
+  },
+  "ANTHROPIC_API_BASE=\"42\"": {
+    "llm.anthropic.base_url": "42"
+  },
+  "ANTHROPIC_API_BASE=\"5000000000\"": {
+    "llm.anthropic.base_url": "5000000000"
+  },
+  "ANTHROPIC_API_BASE=\"70000\"": {
+    "llm.anthropic.base_url": "70000"
+  },
+  "ANTHROPIC_API_BASE=\"TRUE\"": {
+    "llm.anthropic.base_url": "TRUE"
+  },
+  "ANTHROPIC_API_BASE=\"[1]\"": {
+    "llm.anthropic.base_url": "[1]"
+  },
+  "ANTHROPIC_API_BASE=\"abc\"": {
+    "llm.anthropic.base_url": "abc"
+  },
+  "ANTHROPIC_API_BASE=\"false\"": {
+    "llm.anthropic.base_url": "false"
+  },
+  "ANTHROPIC_API_BASE=\"no\"": {
+    "llm.anthropic.base_url": "no"
+  },
+  "ANTHROPIC_API_BASE=\"on\"": {
+    "llm.anthropic.base_url": "on"
+  },
+  "ANTHROPIC_API_BASE=\"require\"": {
+    "llm.anthropic.base_url": "require"
+  },
+  "ANTHROPIC_API_BASE=\"true\"": {
+    "llm.anthropic.base_url": "true"
+  },
+  "ANTHROPIC_API_BASE=\"v\"": {
+    "llm.anthropic.base_url": "v"
+  },
+  "ANTHROPIC_API_BASE=\"yes\"": {
+    "llm.anthropic.base_url": "yes"
+  },
+  "ANTHROPIC_API_BASE=\"{\\\"a\\\":1}\"": {
+    "llm.anthropic.base_url": "{\"a\":1}"
+  },
+  "ANTHROPIC_API_BASE=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
+    "llm.anthropic.base_url": "{\"ssl\":\"verify-full\"}"
+  },
+  "ANTHROPIC_API_BASE=\"{\\\"ssl\\\":true}\"": {
+    "llm.anthropic.base_url": "{\"ssl\":true}"
+  },
+  "ANTHROPIC_BASE_URL=\"  \"": {
+    "llm.anthropic.base_url": "  "
+  },
+  "ANTHROPIC_BASE_URL=\"\"": {},
+  "ANTHROPIC_BASE_URL=\"\" + ANTHROPIC_API_BASE=2": {
+    "llm.anthropic.base_url": "2"
+  },
+  "ANTHROPIC_BASE_URL=\"-1\"": {
+    "llm.anthropic.base_url": "-1"
+  },
+  "ANTHROPIC_BASE_URL=\"0\"": {
+    "llm.anthropic.base_url": "0"
+  },
+  "ANTHROPIC_BASE_URL=\"1\"": {
+    "llm.anthropic.base_url": "1"
+  },
+  "ANTHROPIC_BASE_URL=\"1.5\"": {
+    "llm.anthropic.base_url": "1.5"
+  },
+  "ANTHROPIC_BASE_URL=\"42\"": {
+    "llm.anthropic.base_url": "42"
+  },
+  "ANTHROPIC_BASE_URL=\"5000000000\"": {
+    "llm.anthropic.base_url": "5000000000"
+  },
+  "ANTHROPIC_BASE_URL=\"70000\"": {
+    "llm.anthropic.base_url": "70000"
+  },
+  "ANTHROPIC_BASE_URL=\"TRUE\"": {
+    "llm.anthropic.base_url": "TRUE"
+  },
+  "ANTHROPIC_BASE_URL=\"[1]\"": {
+    "llm.anthropic.base_url": "[1]"
+  },
+  "ANTHROPIC_BASE_URL=\"abc\"": {
+    "llm.anthropic.base_url": "abc"
+  },
+  "ANTHROPIC_BASE_URL=\"false\"": {
+    "llm.anthropic.base_url": "false"
+  },
+  "ANTHROPIC_BASE_URL=\"no\"": {
+    "llm.anthropic.base_url": "no"
+  },
+  "ANTHROPIC_BASE_URL=\"on\"": {
+    "llm.anthropic.base_url": "on"
+  },
+  "ANTHROPIC_BASE_URL=\"require\"": {
+    "llm.anthropic.base_url": "require"
+  },
+  "ANTHROPIC_BASE_URL=\"true\"": {
+    "llm.anthropic.base_url": "true"
+  },
+  "ANTHROPIC_BASE_URL=\"v\"": {
+    "llm.anthropic.base_url": "v"
+  },
+  "ANTHROPIC_BASE_URL=\"yes\"": {
+    "llm.anthropic.base_url": "yes"
+  },
+  "ANTHROPIC_BASE_URL=\"{\\\"a\\\":1}\"": {
+    "llm.anthropic.base_url": "{\"a\":1}"
+  },
+  "ANTHROPIC_BASE_URL=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
+    "llm.anthropic.base_url": "{\"ssl\":\"verify-full\"}"
+  },
+  "ANTHROPIC_BASE_URL=\"{\\\"ssl\\\":true}\"": {
+    "llm.anthropic.base_url": "{\"ssl\":true}"
+  },
+  "ANTHROPIC_BASE_URL=1 + ANTHROPIC_API_BASE=2": {
+    "llm.anthropic.base_url": "1"
+  },
+  "ANTHROPIC_BASE_URL=abc + ANTHROPIC_API_BASE=2": {
+    "llm.anthropic.base_url": "abc"
+  },
   "AUTO_FEEDBACK=\"  \"": {},
   "AUTO_FEEDBACK=\"\"": {},
   "AUTO_FEEDBACK=\"-1\"": {},
@@ -33,58 +170,762 @@
   "AUTO_FEEDBACK=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
   "AUTO_FEEDBACK=\"{\\\"ssl\\\":true}\"": {},
   "AUTO_RATE_LIMIT=\"  \"": {
-    "auto_rate_limit": false
+    "llm.auto_rate_limit": false
   },
   "AUTO_RATE_LIMIT=\"\"": {},
   "AUTO_RATE_LIMIT=\"-1\"": {
-    "auto_rate_limit": false
+    "llm.auto_rate_limit": false
   },
   "AUTO_RATE_LIMIT=\"0\"": {
-    "auto_rate_limit": false
+    "llm.auto_rate_limit": false
   },
   "AUTO_RATE_LIMIT=\"1\"": {},
   "AUTO_RATE_LIMIT=\"1.5\"": {
-    "auto_rate_limit": false
+    "llm.auto_rate_limit": false
   },
   "AUTO_RATE_LIMIT=\"42\"": {
-    "auto_rate_limit": false
+    "llm.auto_rate_limit": false
   },
   "AUTO_RATE_LIMIT=\"5000000000\"": {
-    "auto_rate_limit": false
+    "llm.auto_rate_limit": false
   },
   "AUTO_RATE_LIMIT=\"70000\"": {
-    "auto_rate_limit": false
+    "llm.auto_rate_limit": false
   },
   "AUTO_RATE_LIMIT=\"TRUE\"": {},
   "AUTO_RATE_LIMIT=\"[1]\"": {
-    "auto_rate_limit": false
+    "llm.auto_rate_limit": false
   },
   "AUTO_RATE_LIMIT=\"abc\"": {
-    "auto_rate_limit": false
+    "llm.auto_rate_limit": false
   },
   "AUTO_RATE_LIMIT=\"false\"": {
-    "auto_rate_limit": false
+    "llm.auto_rate_limit": false
   },
   "AUTO_RATE_LIMIT=\"no\"": {
-    "auto_rate_limit": false
+    "llm.auto_rate_limit": false
   },
   "AUTO_RATE_LIMIT=\"on\"": {},
   "AUTO_RATE_LIMIT=\"require\"": {
-    "auto_rate_limit": false
+    "llm.auto_rate_limit": false
   },
   "AUTO_RATE_LIMIT=\"true\"": {},
   "AUTO_RATE_LIMIT=\"v\"": {
-    "auto_rate_limit": false
+    "llm.auto_rate_limit": false
   },
   "AUTO_RATE_LIMIT=\"yes\"": {},
   "AUTO_RATE_LIMIT=\"{\\\"a\\\":1}\"": {
-    "auto_rate_limit": false
+    "llm.auto_rate_limit": false
   },
   "AUTO_RATE_LIMIT=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "auto_rate_limit": false
+    "llm.auto_rate_limit": false
   },
   "AUTO_RATE_LIMIT=\"{\\\"ssl\\\":true}\"": {
-    "auto_rate_limit": false
+    "llm.auto_rate_limit": false
+  },
+  "AWS_ACCESS_KEY_ID=\"  \"": {
+    "aws.access_key_id": "  "
+  },
+  "AWS_ACCESS_KEY_ID=\"\"": {},
+  "AWS_ACCESS_KEY_ID=\"-1\"": {
+    "aws.access_key_id": "-1"
+  },
+  "AWS_ACCESS_KEY_ID=\"0\"": {
+    "aws.access_key_id": "0"
+  },
+  "AWS_ACCESS_KEY_ID=\"1\"": {
+    "aws.access_key_id": "1"
+  },
+  "AWS_ACCESS_KEY_ID=\"1.5\"": {
+    "aws.access_key_id": "1.5"
+  },
+  "AWS_ACCESS_KEY_ID=\"42\"": {
+    "aws.access_key_id": "42"
+  },
+  "AWS_ACCESS_KEY_ID=\"5000000000\"": {
+    "aws.access_key_id": "5000000000"
+  },
+  "AWS_ACCESS_KEY_ID=\"70000\"": {
+    "aws.access_key_id": "70000"
+  },
+  "AWS_ACCESS_KEY_ID=\"TRUE\"": {
+    "aws.access_key_id": "TRUE"
+  },
+  "AWS_ACCESS_KEY_ID=\"[1]\"": {
+    "aws.access_key_id": "[1]"
+  },
+  "AWS_ACCESS_KEY_ID=\"abc\"": {
+    "aws.access_key_id": "abc"
+  },
+  "AWS_ACCESS_KEY_ID=\"false\"": {
+    "aws.access_key_id": "false"
+  },
+  "AWS_ACCESS_KEY_ID=\"no\"": {
+    "aws.access_key_id": "no"
+  },
+  "AWS_ACCESS_KEY_ID=\"on\"": {
+    "aws.access_key_id": "on"
+  },
+  "AWS_ACCESS_KEY_ID=\"require\"": {
+    "aws.access_key_id": "require"
+  },
+  "AWS_ACCESS_KEY_ID=\"true\"": {
+    "aws.access_key_id": "true"
+  },
+  "AWS_ACCESS_KEY_ID=\"v\"": {
+    "aws.access_key_id": "v"
+  },
+  "AWS_ACCESS_KEY_ID=\"yes\"": {
+    "aws.access_key_id": "yes"
+  },
+  "AWS_ACCESS_KEY_ID=\"{\\\"a\\\":1}\"": {
+    "aws.access_key_id": "{\"a\":1}"
+  },
+  "AWS_ACCESS_KEY_ID=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
+    "aws.access_key_id": "{\"ssl\":\"verify-full\"}"
+  },
+  "AWS_ACCESS_KEY_ID=\"{\\\"ssl\\\":true}\"": {
+    "aws.access_key_id": "{\"ssl\":true}"
+  },
+  "AWS_BEARER_TOKEN_BEDROCK=\"  \"": {
+    "aws.bearer_token": "  "
+  },
+  "AWS_BEARER_TOKEN_BEDROCK=\"\"": {},
+  "AWS_BEARER_TOKEN_BEDROCK=\"-1\"": {
+    "aws.bearer_token": "-1"
+  },
+  "AWS_BEARER_TOKEN_BEDROCK=\"0\"": {
+    "aws.bearer_token": "0"
+  },
+  "AWS_BEARER_TOKEN_BEDROCK=\"1\"": {
+    "aws.bearer_token": "1"
+  },
+  "AWS_BEARER_TOKEN_BEDROCK=\"1.5\"": {
+    "aws.bearer_token": "1.5"
+  },
+  "AWS_BEARER_TOKEN_BEDROCK=\"42\"": {
+    "aws.bearer_token": "42"
+  },
+  "AWS_BEARER_TOKEN_BEDROCK=\"5000000000\"": {
+    "aws.bearer_token": "5000000000"
+  },
+  "AWS_BEARER_TOKEN_BEDROCK=\"70000\"": {
+    "aws.bearer_token": "70000"
+  },
+  "AWS_BEARER_TOKEN_BEDROCK=\"TRUE\"": {
+    "aws.bearer_token": "TRUE"
+  },
+  "AWS_BEARER_TOKEN_BEDROCK=\"[1]\"": {
+    "aws.bearer_token": "[1]"
+  },
+  "AWS_BEARER_TOKEN_BEDROCK=\"abc\"": {
+    "aws.bearer_token": "abc"
+  },
+  "AWS_BEARER_TOKEN_BEDROCK=\"false\"": {
+    "aws.bearer_token": "false"
+  },
+  "AWS_BEARER_TOKEN_BEDROCK=\"no\"": {
+    "aws.bearer_token": "no"
+  },
+  "AWS_BEARER_TOKEN_BEDROCK=\"on\"": {
+    "aws.bearer_token": "on"
+  },
+  "AWS_BEARER_TOKEN_BEDROCK=\"require\"": {
+    "aws.bearer_token": "require"
+  },
+  "AWS_BEARER_TOKEN_BEDROCK=\"true\"": {
+    "aws.bearer_token": "true"
+  },
+  "AWS_BEARER_TOKEN_BEDROCK=\"v\"": {
+    "aws.bearer_token": "v"
+  },
+  "AWS_BEARER_TOKEN_BEDROCK=\"yes\"": {
+    "aws.bearer_token": "yes"
+  },
+  "AWS_BEARER_TOKEN_BEDROCK=\"{\\\"a\\\":1}\"": {
+    "aws.bearer_token": "{\"a\":1}"
+  },
+  "AWS_BEARER_TOKEN_BEDROCK=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
+    "aws.bearer_token": "{\"ssl\":\"verify-full\"}"
+  },
+  "AWS_BEARER_TOKEN_BEDROCK=\"{\\\"ssl\\\":true}\"": {
+    "aws.bearer_token": "{\"ssl\":true}"
+  },
+  "AWS_BEDROCK_RUNTIME_ENDPOINT=\"  \"": {
+    "aws.bedrock_runtime_endpoint": "  "
+  },
+  "AWS_BEDROCK_RUNTIME_ENDPOINT=\"\"": {},
+  "AWS_BEDROCK_RUNTIME_ENDPOINT=\"-1\"": {
+    "aws.bedrock_runtime_endpoint": "-1"
+  },
+  "AWS_BEDROCK_RUNTIME_ENDPOINT=\"0\"": {
+    "aws.bedrock_runtime_endpoint": "0"
+  },
+  "AWS_BEDROCK_RUNTIME_ENDPOINT=\"1\"": {
+    "aws.bedrock_runtime_endpoint": "1"
+  },
+  "AWS_BEDROCK_RUNTIME_ENDPOINT=\"1.5\"": {
+    "aws.bedrock_runtime_endpoint": "1.5"
+  },
+  "AWS_BEDROCK_RUNTIME_ENDPOINT=\"42\"": {
+    "aws.bedrock_runtime_endpoint": "42"
+  },
+  "AWS_BEDROCK_RUNTIME_ENDPOINT=\"5000000000\"": {
+    "aws.bedrock_runtime_endpoint": "5000000000"
+  },
+  "AWS_BEDROCK_RUNTIME_ENDPOINT=\"70000\"": {
+    "aws.bedrock_runtime_endpoint": "70000"
+  },
+  "AWS_BEDROCK_RUNTIME_ENDPOINT=\"TRUE\"": {
+    "aws.bedrock_runtime_endpoint": "TRUE"
+  },
+  "AWS_BEDROCK_RUNTIME_ENDPOINT=\"[1]\"": {
+    "aws.bedrock_runtime_endpoint": "[1]"
+  },
+  "AWS_BEDROCK_RUNTIME_ENDPOINT=\"abc\"": {
+    "aws.bedrock_runtime_endpoint": "abc"
+  },
+  "AWS_BEDROCK_RUNTIME_ENDPOINT=\"false\"": {
+    "aws.bedrock_runtime_endpoint": "false"
+  },
+  "AWS_BEDROCK_RUNTIME_ENDPOINT=\"no\"": {
+    "aws.bedrock_runtime_endpoint": "no"
+  },
+  "AWS_BEDROCK_RUNTIME_ENDPOINT=\"on\"": {
+    "aws.bedrock_runtime_endpoint": "on"
+  },
+  "AWS_BEDROCK_RUNTIME_ENDPOINT=\"require\"": {
+    "aws.bedrock_runtime_endpoint": "require"
+  },
+  "AWS_BEDROCK_RUNTIME_ENDPOINT=\"true\"": {
+    "aws.bedrock_runtime_endpoint": "true"
+  },
+  "AWS_BEDROCK_RUNTIME_ENDPOINT=\"v\"": {
+    "aws.bedrock_runtime_endpoint": "v"
+  },
+  "AWS_BEDROCK_RUNTIME_ENDPOINT=\"yes\"": {
+    "aws.bedrock_runtime_endpoint": "yes"
+  },
+  "AWS_BEDROCK_RUNTIME_ENDPOINT=\"{\\\"a\\\":1}\"": {
+    "aws.bedrock_runtime_endpoint": "{\"a\":1}"
+  },
+  "AWS_BEDROCK_RUNTIME_ENDPOINT=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
+    "aws.bedrock_runtime_endpoint": "{\"ssl\":\"verify-full\"}"
+  },
+  "AWS_BEDROCK_RUNTIME_ENDPOINT=\"{\\\"ssl\\\":true}\"": {
+    "aws.bedrock_runtime_endpoint": "{\"ssl\":true}"
+  },
+  "AWS_EXTERNAL_ID=\"  \"": {
+    "aws.external_id": "  "
+  },
+  "AWS_EXTERNAL_ID=\"\"": {},
+  "AWS_EXTERNAL_ID=\"-1\"": {
+    "aws.external_id": "-1"
+  },
+  "AWS_EXTERNAL_ID=\"0\"": {
+    "aws.external_id": "0"
+  },
+  "AWS_EXTERNAL_ID=\"1\"": {
+    "aws.external_id": "1"
+  },
+  "AWS_EXTERNAL_ID=\"1.5\"": {
+    "aws.external_id": "1.5"
+  },
+  "AWS_EXTERNAL_ID=\"42\"": {
+    "aws.external_id": "42"
+  },
+  "AWS_EXTERNAL_ID=\"5000000000\"": {
+    "aws.external_id": "5000000000"
+  },
+  "AWS_EXTERNAL_ID=\"70000\"": {
+    "aws.external_id": "70000"
+  },
+  "AWS_EXTERNAL_ID=\"TRUE\"": {
+    "aws.external_id": "TRUE"
+  },
+  "AWS_EXTERNAL_ID=\"[1]\"": {
+    "aws.external_id": "[1]"
+  },
+  "AWS_EXTERNAL_ID=\"abc\"": {
+    "aws.external_id": "abc"
+  },
+  "AWS_EXTERNAL_ID=\"false\"": {
+    "aws.external_id": "false"
+  },
+  "AWS_EXTERNAL_ID=\"no\"": {
+    "aws.external_id": "no"
+  },
+  "AWS_EXTERNAL_ID=\"on\"": {
+    "aws.external_id": "on"
+  },
+  "AWS_EXTERNAL_ID=\"require\"": {
+    "aws.external_id": "require"
+  },
+  "AWS_EXTERNAL_ID=\"true\"": {
+    "aws.external_id": "true"
+  },
+  "AWS_EXTERNAL_ID=\"v\"": {
+    "aws.external_id": "v"
+  },
+  "AWS_EXTERNAL_ID=\"yes\"": {
+    "aws.external_id": "yes"
+  },
+  "AWS_EXTERNAL_ID=\"{\\\"a\\\":1}\"": {
+    "aws.external_id": "{\"a\":1}"
+  },
+  "AWS_EXTERNAL_ID=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
+    "aws.external_id": "{\"ssl\":\"verify-full\"}"
+  },
+  "AWS_EXTERNAL_ID=\"{\\\"ssl\\\":true}\"": {
+    "aws.external_id": "{\"ssl\":true}"
+  },
+  "AWS_PROFILE_NAME=\"  \"": {
+    "aws.profile_name": "  "
+  },
+  "AWS_PROFILE_NAME=\"\"": {},
+  "AWS_PROFILE_NAME=\"-1\"": {
+    "aws.profile_name": "-1"
+  },
+  "AWS_PROFILE_NAME=\"0\"": {
+    "aws.profile_name": "0"
+  },
+  "AWS_PROFILE_NAME=\"1\"": {
+    "aws.profile_name": "1"
+  },
+  "AWS_PROFILE_NAME=\"1.5\"": {
+    "aws.profile_name": "1.5"
+  },
+  "AWS_PROFILE_NAME=\"42\"": {
+    "aws.profile_name": "42"
+  },
+  "AWS_PROFILE_NAME=\"5000000000\"": {
+    "aws.profile_name": "5000000000"
+  },
+  "AWS_PROFILE_NAME=\"70000\"": {
+    "aws.profile_name": "70000"
+  },
+  "AWS_PROFILE_NAME=\"TRUE\"": {
+    "aws.profile_name": "TRUE"
+  },
+  "AWS_PROFILE_NAME=\"[1]\"": {
+    "aws.profile_name": "[1]"
+  },
+  "AWS_PROFILE_NAME=\"abc\"": {
+    "aws.profile_name": "abc"
+  },
+  "AWS_PROFILE_NAME=\"false\"": {
+    "aws.profile_name": "false"
+  },
+  "AWS_PROFILE_NAME=\"no\"": {
+    "aws.profile_name": "no"
+  },
+  "AWS_PROFILE_NAME=\"on\"": {
+    "aws.profile_name": "on"
+  },
+  "AWS_PROFILE_NAME=\"require\"": {
+    "aws.profile_name": "require"
+  },
+  "AWS_PROFILE_NAME=\"true\"": {
+    "aws.profile_name": "true"
+  },
+  "AWS_PROFILE_NAME=\"v\"": {
+    "aws.profile_name": "v"
+  },
+  "AWS_PROFILE_NAME=\"yes\"": {
+    "aws.profile_name": "yes"
+  },
+  "AWS_PROFILE_NAME=\"{\\\"a\\\":1}\"": {
+    "aws.profile_name": "{\"a\":1}"
+  },
+  "AWS_PROFILE_NAME=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
+    "aws.profile_name": "{\"ssl\":\"verify-full\"}"
+  },
+  "AWS_PROFILE_NAME=\"{\\\"ssl\\\":true}\"": {
+    "aws.profile_name": "{\"ssl\":true}"
+  },
+  "AWS_ROLE_NAME=\"  \"": {
+    "aws.role_name": "  "
+  },
+  "AWS_ROLE_NAME=\"\"": {},
+  "AWS_ROLE_NAME=\"-1\"": {
+    "aws.role_name": "-1"
+  },
+  "AWS_ROLE_NAME=\"0\"": {
+    "aws.role_name": "0"
+  },
+  "AWS_ROLE_NAME=\"1\"": {
+    "aws.role_name": "1"
+  },
+  "AWS_ROLE_NAME=\"1.5\"": {
+    "aws.role_name": "1.5"
+  },
+  "AWS_ROLE_NAME=\"42\"": {
+    "aws.role_name": "42"
+  },
+  "AWS_ROLE_NAME=\"5000000000\"": {
+    "aws.role_name": "5000000000"
+  },
+  "AWS_ROLE_NAME=\"70000\"": {
+    "aws.role_name": "70000"
+  },
+  "AWS_ROLE_NAME=\"TRUE\"": {
+    "aws.role_name": "TRUE"
+  },
+  "AWS_ROLE_NAME=\"[1]\"": {
+    "aws.role_name": "[1]"
+  },
+  "AWS_ROLE_NAME=\"abc\"": {
+    "aws.role_name": "abc"
+  },
+  "AWS_ROLE_NAME=\"false\"": {
+    "aws.role_name": "false"
+  },
+  "AWS_ROLE_NAME=\"no\"": {
+    "aws.role_name": "no"
+  },
+  "AWS_ROLE_NAME=\"on\"": {
+    "aws.role_name": "on"
+  },
+  "AWS_ROLE_NAME=\"require\"": {
+    "aws.role_name": "require"
+  },
+  "AWS_ROLE_NAME=\"true\"": {
+    "aws.role_name": "true"
+  },
+  "AWS_ROLE_NAME=\"v\"": {
+    "aws.role_name": "v"
+  },
+  "AWS_ROLE_NAME=\"yes\"": {
+    "aws.role_name": "yes"
+  },
+  "AWS_ROLE_NAME=\"{\\\"a\\\":1}\"": {
+    "aws.role_name": "{\"a\":1}"
+  },
+  "AWS_ROLE_NAME=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
+    "aws.role_name": "{\"ssl\":\"verify-full\"}"
+  },
+  "AWS_ROLE_NAME=\"{\\\"ssl\\\":true}\"": {
+    "aws.role_name": "{\"ssl\":true}"
+  },
+  "AWS_SECRET_ACCESS_KEY=\"  \"": {
+    "aws.secret_access_key": "  "
+  },
+  "AWS_SECRET_ACCESS_KEY=\"\"": {},
+  "AWS_SECRET_ACCESS_KEY=\"-1\"": {
+    "aws.secret_access_key": "-1"
+  },
+  "AWS_SECRET_ACCESS_KEY=\"0\"": {
+    "aws.secret_access_key": "0"
+  },
+  "AWS_SECRET_ACCESS_KEY=\"1\"": {
+    "aws.secret_access_key": "1"
+  },
+  "AWS_SECRET_ACCESS_KEY=\"1.5\"": {
+    "aws.secret_access_key": "1.5"
+  },
+  "AWS_SECRET_ACCESS_KEY=\"42\"": {
+    "aws.secret_access_key": "42"
+  },
+  "AWS_SECRET_ACCESS_KEY=\"5000000000\"": {
+    "aws.secret_access_key": "5000000000"
+  },
+  "AWS_SECRET_ACCESS_KEY=\"70000\"": {
+    "aws.secret_access_key": "70000"
+  },
+  "AWS_SECRET_ACCESS_KEY=\"TRUE\"": {
+    "aws.secret_access_key": "TRUE"
+  },
+  "AWS_SECRET_ACCESS_KEY=\"[1]\"": {
+    "aws.secret_access_key": "[1]"
+  },
+  "AWS_SECRET_ACCESS_KEY=\"abc\"": {
+    "aws.secret_access_key": "abc"
+  },
+  "AWS_SECRET_ACCESS_KEY=\"false\"": {
+    "aws.secret_access_key": "false"
+  },
+  "AWS_SECRET_ACCESS_KEY=\"no\"": {
+    "aws.secret_access_key": "no"
+  },
+  "AWS_SECRET_ACCESS_KEY=\"on\"": {
+    "aws.secret_access_key": "on"
+  },
+  "AWS_SECRET_ACCESS_KEY=\"require\"": {
+    "aws.secret_access_key": "require"
+  },
+  "AWS_SECRET_ACCESS_KEY=\"true\"": {
+    "aws.secret_access_key": "true"
+  },
+  "AWS_SECRET_ACCESS_KEY=\"v\"": {
+    "aws.secret_access_key": "v"
+  },
+  "AWS_SECRET_ACCESS_KEY=\"yes\"": {
+    "aws.secret_access_key": "yes"
+  },
+  "AWS_SECRET_ACCESS_KEY=\"{\\\"a\\\":1}\"": {
+    "aws.secret_access_key": "{\"a\":1}"
+  },
+  "AWS_SECRET_ACCESS_KEY=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
+    "aws.secret_access_key": "{\"ssl\":\"verify-full\"}"
+  },
+  "AWS_SECRET_ACCESS_KEY=\"{\\\"ssl\\\":true}\"": {
+    "aws.secret_access_key": "{\"ssl\":true}"
+  },
+  "AWS_SESSION_NAME=\"  \"": {
+    "aws.session_name": "  "
+  },
+  "AWS_SESSION_NAME=\"\"": {},
+  "AWS_SESSION_NAME=\"-1\"": {
+    "aws.session_name": "-1"
+  },
+  "AWS_SESSION_NAME=\"0\"": {
+    "aws.session_name": "0"
+  },
+  "AWS_SESSION_NAME=\"1\"": {
+    "aws.session_name": "1"
+  },
+  "AWS_SESSION_NAME=\"1.5\"": {
+    "aws.session_name": "1.5"
+  },
+  "AWS_SESSION_NAME=\"42\"": {
+    "aws.session_name": "42"
+  },
+  "AWS_SESSION_NAME=\"5000000000\"": {
+    "aws.session_name": "5000000000"
+  },
+  "AWS_SESSION_NAME=\"70000\"": {
+    "aws.session_name": "70000"
+  },
+  "AWS_SESSION_NAME=\"TRUE\"": {
+    "aws.session_name": "TRUE"
+  },
+  "AWS_SESSION_NAME=\"[1]\"": {
+    "aws.session_name": "[1]"
+  },
+  "AWS_SESSION_NAME=\"abc\"": {
+    "aws.session_name": "abc"
+  },
+  "AWS_SESSION_NAME=\"false\"": {
+    "aws.session_name": "false"
+  },
+  "AWS_SESSION_NAME=\"no\"": {
+    "aws.session_name": "no"
+  },
+  "AWS_SESSION_NAME=\"on\"": {
+    "aws.session_name": "on"
+  },
+  "AWS_SESSION_NAME=\"require\"": {
+    "aws.session_name": "require"
+  },
+  "AWS_SESSION_NAME=\"true\"": {
+    "aws.session_name": "true"
+  },
+  "AWS_SESSION_NAME=\"v\"": {
+    "aws.session_name": "v"
+  },
+  "AWS_SESSION_NAME=\"yes\"": {
+    "aws.session_name": "yes"
+  },
+  "AWS_SESSION_NAME=\"{\\\"a\\\":1}\"": {
+    "aws.session_name": "{\"a\":1}"
+  },
+  "AWS_SESSION_NAME=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
+    "aws.session_name": "{\"ssl\":\"verify-full\"}"
+  },
+  "AWS_SESSION_NAME=\"{\\\"ssl\\\":true}\"": {
+    "aws.session_name": "{\"ssl\":true}"
+  },
+  "AWS_SESSION_TOKEN=\"  \"": {
+    "aws.session_token": "  "
+  },
+  "AWS_SESSION_TOKEN=\"\"": {},
+  "AWS_SESSION_TOKEN=\"-1\"": {
+    "aws.session_token": "-1"
+  },
+  "AWS_SESSION_TOKEN=\"0\"": {
+    "aws.session_token": "0"
+  },
+  "AWS_SESSION_TOKEN=\"1\"": {
+    "aws.session_token": "1"
+  },
+  "AWS_SESSION_TOKEN=\"1.5\"": {
+    "aws.session_token": "1.5"
+  },
+  "AWS_SESSION_TOKEN=\"42\"": {
+    "aws.session_token": "42"
+  },
+  "AWS_SESSION_TOKEN=\"5000000000\"": {
+    "aws.session_token": "5000000000"
+  },
+  "AWS_SESSION_TOKEN=\"70000\"": {
+    "aws.session_token": "70000"
+  },
+  "AWS_SESSION_TOKEN=\"TRUE\"": {
+    "aws.session_token": "TRUE"
+  },
+  "AWS_SESSION_TOKEN=\"[1]\"": {
+    "aws.session_token": "[1]"
+  },
+  "AWS_SESSION_TOKEN=\"abc\"": {
+    "aws.session_token": "abc"
+  },
+  "AWS_SESSION_TOKEN=\"false\"": {
+    "aws.session_token": "false"
+  },
+  "AWS_SESSION_TOKEN=\"no\"": {
+    "aws.session_token": "no"
+  },
+  "AWS_SESSION_TOKEN=\"on\"": {
+    "aws.session_token": "on"
+  },
+  "AWS_SESSION_TOKEN=\"require\"": {
+    "aws.session_token": "require"
+  },
+  "AWS_SESSION_TOKEN=\"true\"": {
+    "aws.session_token": "true"
+  },
+  "AWS_SESSION_TOKEN=\"v\"": {
+    "aws.session_token": "v"
+  },
+  "AWS_SESSION_TOKEN=\"yes\"": {
+    "aws.session_token": "yes"
+  },
+  "AWS_SESSION_TOKEN=\"{\\\"a\\\":1}\"": {
+    "aws.session_token": "{\"a\":1}"
+  },
+  "AWS_SESSION_TOKEN=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
+    "aws.session_token": "{\"ssl\":\"verify-full\"}"
+  },
+  "AWS_SESSION_TOKEN=\"{\\\"ssl\\\":true}\"": {
+    "aws.session_token": "{\"ssl\":true}"
+  },
+  "AWS_STS_ENDPOINT=\"  \"": {
+    "aws.sts_endpoint": "  "
+  },
+  "AWS_STS_ENDPOINT=\"\"": {},
+  "AWS_STS_ENDPOINT=\"-1\"": {
+    "aws.sts_endpoint": "-1"
+  },
+  "AWS_STS_ENDPOINT=\"0\"": {
+    "aws.sts_endpoint": "0"
+  },
+  "AWS_STS_ENDPOINT=\"1\"": {
+    "aws.sts_endpoint": "1"
+  },
+  "AWS_STS_ENDPOINT=\"1.5\"": {
+    "aws.sts_endpoint": "1.5"
+  },
+  "AWS_STS_ENDPOINT=\"42\"": {
+    "aws.sts_endpoint": "42"
+  },
+  "AWS_STS_ENDPOINT=\"5000000000\"": {
+    "aws.sts_endpoint": "5000000000"
+  },
+  "AWS_STS_ENDPOINT=\"70000\"": {
+    "aws.sts_endpoint": "70000"
+  },
+  "AWS_STS_ENDPOINT=\"TRUE\"": {
+    "aws.sts_endpoint": "TRUE"
+  },
+  "AWS_STS_ENDPOINT=\"[1]\"": {
+    "aws.sts_endpoint": "[1]"
+  },
+  "AWS_STS_ENDPOINT=\"abc\"": {
+    "aws.sts_endpoint": "abc"
+  },
+  "AWS_STS_ENDPOINT=\"false\"": {
+    "aws.sts_endpoint": "false"
+  },
+  "AWS_STS_ENDPOINT=\"no\"": {
+    "aws.sts_endpoint": "no"
+  },
+  "AWS_STS_ENDPOINT=\"on\"": {
+    "aws.sts_endpoint": "on"
+  },
+  "AWS_STS_ENDPOINT=\"require\"": {
+    "aws.sts_endpoint": "require"
+  },
+  "AWS_STS_ENDPOINT=\"true\"": {
+    "aws.sts_endpoint": "true"
+  },
+  "AWS_STS_ENDPOINT=\"v\"": {
+    "aws.sts_endpoint": "v"
+  },
+  "AWS_STS_ENDPOINT=\"yes\"": {
+    "aws.sts_endpoint": "yes"
+  },
+  "AWS_STS_ENDPOINT=\"{\\\"a\\\":1}\"": {
+    "aws.sts_endpoint": "{\"a\":1}"
+  },
+  "AWS_STS_ENDPOINT=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
+    "aws.sts_endpoint": "{\"ssl\":\"verify-full\"}"
+  },
+  "AWS_STS_ENDPOINT=\"{\\\"ssl\\\":true}\"": {
+    "aws.sts_endpoint": "{\"ssl\":true}"
+  },
+  "AWS_WEB_IDENTITY_TOKEN=\"  \"": {
+    "aws.web_identity_token": "  "
+  },
+  "AWS_WEB_IDENTITY_TOKEN=\"\"": {},
+  "AWS_WEB_IDENTITY_TOKEN=\"-1\"": {
+    "aws.web_identity_token": "-1"
+  },
+  "AWS_WEB_IDENTITY_TOKEN=\"0\"": {
+    "aws.web_identity_token": "0"
+  },
+  "AWS_WEB_IDENTITY_TOKEN=\"1\"": {
+    "aws.web_identity_token": "1"
+  },
+  "AWS_WEB_IDENTITY_TOKEN=\"1.5\"": {
+    "aws.web_identity_token": "1.5"
+  },
+  "AWS_WEB_IDENTITY_TOKEN=\"42\"": {
+    "aws.web_identity_token": "42"
+  },
+  "AWS_WEB_IDENTITY_TOKEN=\"5000000000\"": {
+    "aws.web_identity_token": "5000000000"
+  },
+  "AWS_WEB_IDENTITY_TOKEN=\"70000\"": {
+    "aws.web_identity_token": "70000"
+  },
+  "AWS_WEB_IDENTITY_TOKEN=\"TRUE\"": {
+    "aws.web_identity_token": "TRUE"
+  },
+  "AWS_WEB_IDENTITY_TOKEN=\"[1]\"": {
+    "aws.web_identity_token": "[1]"
+  },
+  "AWS_WEB_IDENTITY_TOKEN=\"abc\"": {
+    "aws.web_identity_token": "abc"
+  },
+  "AWS_WEB_IDENTITY_TOKEN=\"false\"": {
+    "aws.web_identity_token": "false"
+  },
+  "AWS_WEB_IDENTITY_TOKEN=\"no\"": {
+    "aws.web_identity_token": "no"
+  },
+  "AWS_WEB_IDENTITY_TOKEN=\"on\"": {
+    "aws.web_identity_token": "on"
+  },
+  "AWS_WEB_IDENTITY_TOKEN=\"require\"": {
+    "aws.web_identity_token": "require"
+  },
+  "AWS_WEB_IDENTITY_TOKEN=\"true\"": {
+    "aws.web_identity_token": "true"
+  },
+  "AWS_WEB_IDENTITY_TOKEN=\"v\"": {
+    "aws.web_identity_token": "v"
+  },
+  "AWS_WEB_IDENTITY_TOKEN=\"yes\"": {
+    "aws.web_identity_token": "yes"
+  },
+  "AWS_WEB_IDENTITY_TOKEN=\"{\\\"a\\\":1}\"": {
+    "aws.web_identity_token": "{\"a\":1}"
+  },
+  "AWS_WEB_IDENTITY_TOKEN=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
+    "aws.web_identity_token": "{\"ssl\":\"verify-full\"}"
+  },
+  "AWS_WEB_IDENTITY_TOKEN=\"{\\\"ssl\\\":true}\"": {
+    "aws.web_identity_token": "{\"ssl\":true}"
   },
   "CACHE_BACKEND=\"  \"": {
     "cache_backend": "  "
@@ -686,6 +1527,38 @@
   "COGNEE_DATA_ROOT_DIRECTORY=\"{\\\"ssl\\\":true}\"": {
     "data_root_directory": "{\"ssl\":true}"
   },
+  "COGNEE_DEBUG_LLM_REQUEST=\"  \"": {},
+  "COGNEE_DEBUG_LLM_REQUEST=\"\"": {},
+  "COGNEE_DEBUG_LLM_REQUEST=\"-1\"": {},
+  "COGNEE_DEBUG_LLM_REQUEST=\"0\"": {},
+  "COGNEE_DEBUG_LLM_REQUEST=\"1\"": {
+    "llm.debug_requests": true
+  },
+  "COGNEE_DEBUG_LLM_REQUEST=\"1.5\"": {},
+  "COGNEE_DEBUG_LLM_REQUEST=\"42\"": {},
+  "COGNEE_DEBUG_LLM_REQUEST=\"5000000000\"": {},
+  "COGNEE_DEBUG_LLM_REQUEST=\"70000\"": {},
+  "COGNEE_DEBUG_LLM_REQUEST=\"TRUE\"": {
+    "llm.debug_requests": true
+  },
+  "COGNEE_DEBUG_LLM_REQUEST=\"[1]\"": {},
+  "COGNEE_DEBUG_LLM_REQUEST=\"abc\"": {},
+  "COGNEE_DEBUG_LLM_REQUEST=\"false\"": {},
+  "COGNEE_DEBUG_LLM_REQUEST=\"no\"": {},
+  "COGNEE_DEBUG_LLM_REQUEST=\"on\"": {
+    "llm.debug_requests": true
+  },
+  "COGNEE_DEBUG_LLM_REQUEST=\"require\"": {},
+  "COGNEE_DEBUG_LLM_REQUEST=\"true\"": {
+    "llm.debug_requests": true
+  },
+  "COGNEE_DEBUG_LLM_REQUEST=\"v\"": {},
+  "COGNEE_DEBUG_LLM_REQUEST=\"yes\"": {
+    "llm.debug_requests": true
+  },
+  "COGNEE_DEBUG_LLM_REQUEST=\"{\\\"a\\\":1}\"": {},
+  "COGNEE_DEBUG_LLM_REQUEST=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
+  "COGNEE_DEBUG_LLM_REQUEST=\"{\\\"ssl\\\":true}\"": {},
   "COGNEE_DEFAULT_DATASET_NAME=\"  \"": {
     "default_dataset_name": "  "
   },
@@ -1007,68 +1880,68 @@
     "logs_root_directory": "{\"ssl\":true}"
   },
   "COGNEE_RECORD_LLM=\"  \"": {
-    "llm_record_path": "  "
+    "llm.record_path": "  "
   },
   "COGNEE_RECORD_LLM=\"\"": {},
   "COGNEE_RECORD_LLM=\"-1\"": {
-    "llm_record_path": "-1"
+    "llm.record_path": "-1"
   },
   "COGNEE_RECORD_LLM=\"0\"": {
-    "llm_record_path": "0"
+    "llm.record_path": "0"
   },
   "COGNEE_RECORD_LLM=\"1\"": {
-    "llm_record_path": "1"
+    "llm.record_path": "1"
   },
   "COGNEE_RECORD_LLM=\"1.5\"": {
-    "llm_record_path": "1.5"
+    "llm.record_path": "1.5"
   },
   "COGNEE_RECORD_LLM=\"42\"": {
-    "llm_record_path": "42"
+    "llm.record_path": "42"
   },
   "COGNEE_RECORD_LLM=\"5000000000\"": {
-    "llm_record_path": "5000000000"
+    "llm.record_path": "5000000000"
   },
   "COGNEE_RECORD_LLM=\"70000\"": {
-    "llm_record_path": "70000"
+    "llm.record_path": "70000"
   },
   "COGNEE_RECORD_LLM=\"TRUE\"": {
-    "llm_record_path": "TRUE"
+    "llm.record_path": "TRUE"
   },
   "COGNEE_RECORD_LLM=\"[1]\"": {
-    "llm_record_path": "[1]"
+    "llm.record_path": "[1]"
   },
   "COGNEE_RECORD_LLM=\"abc\"": {
-    "llm_record_path": "abc"
+    "llm.record_path": "abc"
   },
   "COGNEE_RECORD_LLM=\"false\"": {
-    "llm_record_path": "false"
+    "llm.record_path": "false"
   },
   "COGNEE_RECORD_LLM=\"no\"": {
-    "llm_record_path": "no"
+    "llm.record_path": "no"
   },
   "COGNEE_RECORD_LLM=\"on\"": {
-    "llm_record_path": "on"
+    "llm.record_path": "on"
   },
   "COGNEE_RECORD_LLM=\"require\"": {
-    "llm_record_path": "require"
+    "llm.record_path": "require"
   },
   "COGNEE_RECORD_LLM=\"true\"": {
-    "llm_record_path": "true"
+    "llm.record_path": "true"
   },
   "COGNEE_RECORD_LLM=\"v\"": {
-    "llm_record_path": "v"
+    "llm.record_path": "v"
   },
   "COGNEE_RECORD_LLM=\"yes\"": {
-    "llm_record_path": "yes"
+    "llm.record_path": "yes"
   },
   "COGNEE_RECORD_LLM=\"{\\\"a\\\":1}\"": {
-    "llm_record_path": "{\"a\":1}"
+    "llm.record_path": "{\"a\":1}"
   },
   "COGNEE_RECORD_LLM=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "llm_record_path": "{\"ssl\":\"verify-full\"}"
+    "llm.record_path": "{\"ssl\":\"verify-full\"}"
   },
   "COGNEE_RECORD_LLM=\"{\\\"ssl\\\":true}\"": {
-    "llm_record_path": "{\"ssl\":true}"
+    "llm.record_path": "{\"ssl\":true}"
   },
   "COGNEE_SINGLE_PROCESS=\"  \"": {},
   "COGNEE_SINGLE_PROCESS=\"\"": {},
@@ -1902,8 +2775,8 @@
   },
   "EMBEDDING_API_KEY=\"\"": {},
   "EMBEDDING_API_KEY=\"\" + LLM_API_KEY=2": {
-    "llm_api_key": "2",
-    "embedding_api_key": "2"
+    "embedding_api_key": "2",
+    "llm.api_key": "2"
   },
   "EMBEDDING_API_KEY=\"-1\"": {
     "embedding_api_key": "-1"
@@ -1966,12 +2839,12 @@
     "embedding_api_key": "{\"ssl\":true}"
   },
   "EMBEDDING_API_KEY=1 + LLM_API_KEY=2": {
-    "llm_api_key": "2",
-    "embedding_api_key": "1"
+    "embedding_api_key": "1",
+    "llm.api_key": "2"
   },
   "EMBEDDING_API_KEY=abc + LLM_API_KEY=2": {
-    "llm_api_key": "2",
-    "embedding_api_key": "abc"
+    "embedding_api_key": "abc",
+    "llm.api_key": "2"
   },
   "EMBEDDING_BATCH_SIZE=\"  \"": {},
   "EMBEDDING_BATCH_SIZE=\"\"": {},
@@ -3160,164 +4033,164 @@
   "GRAPH_MAX_DB_SIZE=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
   "GRAPH_MAX_DB_SIZE=\"{\\\"ssl\\\":true}\"": {},
   "LLM_API_KEY=\"  \"": {
-    "llm_api_key": "  ",
-    "embedding_api_key": "  "
+    "embedding_api_key": "  ",
+    "llm.api_key": "  "
   },
   "LLM_API_KEY=\"\"": {},
   "LLM_API_KEY=\"\" + OPENAI_TOKEN=2": {
-    "llm_api_key": "2"
+    "llm.api_key": "2"
   },
   "LLM_API_KEY=\"-1\"": {
-    "llm_api_key": "-1",
-    "embedding_api_key": "-1"
+    "embedding_api_key": "-1",
+    "llm.api_key": "-1"
   },
   "LLM_API_KEY=\"0\"": {
-    "llm_api_key": "0",
-    "embedding_api_key": "0"
+    "embedding_api_key": "0",
+    "llm.api_key": "0"
   },
   "LLM_API_KEY=\"1\"": {
-    "llm_api_key": "1",
-    "embedding_api_key": "1"
+    "embedding_api_key": "1",
+    "llm.api_key": "1"
   },
   "LLM_API_KEY=\"1.5\"": {
-    "llm_api_key": "1.5",
-    "embedding_api_key": "1.5"
+    "embedding_api_key": "1.5",
+    "llm.api_key": "1.5"
   },
   "LLM_API_KEY=\"42\"": {
-    "llm_api_key": "42",
-    "embedding_api_key": "42"
+    "embedding_api_key": "42",
+    "llm.api_key": "42"
   },
   "LLM_API_KEY=\"5000000000\"": {
-    "llm_api_key": "5000000000",
-    "embedding_api_key": "5000000000"
+    "embedding_api_key": "5000000000",
+    "llm.api_key": "5000000000"
   },
   "LLM_API_KEY=\"70000\"": {
-    "llm_api_key": "70000",
-    "embedding_api_key": "70000"
+    "embedding_api_key": "70000",
+    "llm.api_key": "70000"
   },
   "LLM_API_KEY=\"TRUE\"": {
-    "llm_api_key": "TRUE",
-    "embedding_api_key": "TRUE"
+    "embedding_api_key": "TRUE",
+    "llm.api_key": "TRUE"
   },
   "LLM_API_KEY=\"[1]\"": {
-    "llm_api_key": "[1]",
-    "embedding_api_key": "[1]"
+    "embedding_api_key": "[1]",
+    "llm.api_key": "[1]"
   },
   "LLM_API_KEY=\"abc\"": {
-    "llm_api_key": "abc",
-    "embedding_api_key": "abc"
+    "embedding_api_key": "abc",
+    "llm.api_key": "abc"
   },
   "LLM_API_KEY=\"false\"": {
-    "llm_api_key": "false",
-    "embedding_api_key": "false"
+    "embedding_api_key": "false",
+    "llm.api_key": "false"
   },
   "LLM_API_KEY=\"no\"": {
-    "llm_api_key": "no",
-    "embedding_api_key": "no"
+    "embedding_api_key": "no",
+    "llm.api_key": "no"
   },
   "LLM_API_KEY=\"on\"": {
-    "llm_api_key": "on",
-    "embedding_api_key": "on"
+    "embedding_api_key": "on",
+    "llm.api_key": "on"
   },
   "LLM_API_KEY=\"require\"": {
-    "llm_api_key": "require",
-    "embedding_api_key": "require"
+    "embedding_api_key": "require",
+    "llm.api_key": "require"
   },
   "LLM_API_KEY=\"true\"": {
-    "llm_api_key": "true",
-    "embedding_api_key": "true"
+    "embedding_api_key": "true",
+    "llm.api_key": "true"
   },
   "LLM_API_KEY=\"v\"": {
-    "llm_api_key": "v",
-    "embedding_api_key": "v"
+    "embedding_api_key": "v",
+    "llm.api_key": "v"
   },
   "LLM_API_KEY=\"yes\"": {
-    "llm_api_key": "yes",
-    "embedding_api_key": "yes"
+    "embedding_api_key": "yes",
+    "llm.api_key": "yes"
   },
   "LLM_API_KEY=\"{\\\"a\\\":1}\"": {
-    "llm_api_key": "{\"a\":1}",
-    "embedding_api_key": "{\"a\":1}"
+    "embedding_api_key": "{\"a\":1}",
+    "llm.api_key": "{\"a\":1}"
   },
   "LLM_API_KEY=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "llm_api_key": "{\"ssl\":\"verify-full\"}",
-    "embedding_api_key": "{\"ssl\":\"verify-full\"}"
+    "embedding_api_key": "{\"ssl\":\"verify-full\"}",
+    "llm.api_key": "{\"ssl\":\"verify-full\"}"
   },
   "LLM_API_KEY=\"{\\\"ssl\\\":true}\"": {
-    "llm_api_key": "{\"ssl\":true}",
-    "embedding_api_key": "{\"ssl\":true}"
+    "embedding_api_key": "{\"ssl\":true}",
+    "llm.api_key": "{\"ssl\":true}"
   },
   "LLM_API_KEY=1 + OPENAI_TOKEN=2": {
-    "llm_api_key": "1",
-    "embedding_api_key": "1"
+    "embedding_api_key": "1",
+    "llm.api_key": "1"
   },
   "LLM_API_KEY=abc + OPENAI_TOKEN=2": {
-    "llm_api_key": "abc",
-    "embedding_api_key": "abc"
+    "embedding_api_key": "abc",
+    "llm.api_key": "abc"
   },
   "LLM_API_VERSION=\"  \"": {
-    "llm_api_version": "  "
+    "llm.api_version": "  "
   },
   "LLM_API_VERSION=\"\"": {},
   "LLM_API_VERSION=\"-1\"": {
-    "llm_api_version": "-1"
+    "llm.api_version": "-1"
   },
   "LLM_API_VERSION=\"0\"": {
-    "llm_api_version": "0"
+    "llm.api_version": "0"
   },
   "LLM_API_VERSION=\"1\"": {
-    "llm_api_version": "1"
+    "llm.api_version": "1"
   },
   "LLM_API_VERSION=\"1.5\"": {
-    "llm_api_version": "1.5"
+    "llm.api_version": "1.5"
   },
   "LLM_API_VERSION=\"42\"": {
-    "llm_api_version": "42"
+    "llm.api_version": "42"
   },
   "LLM_API_VERSION=\"5000000000\"": {
-    "llm_api_version": "5000000000"
+    "llm.api_version": "5000000000"
   },
   "LLM_API_VERSION=\"70000\"": {
-    "llm_api_version": "70000"
+    "llm.api_version": "70000"
   },
   "LLM_API_VERSION=\"TRUE\"": {
-    "llm_api_version": "TRUE"
+    "llm.api_version": "TRUE"
   },
   "LLM_API_VERSION=\"[1]\"": {
-    "llm_api_version": "[1]"
+    "llm.api_version": "[1]"
   },
   "LLM_API_VERSION=\"abc\"": {
-    "llm_api_version": "abc"
+    "llm.api_version": "abc"
   },
   "LLM_API_VERSION=\"false\"": {
-    "llm_api_version": "false"
+    "llm.api_version": "false"
   },
   "LLM_API_VERSION=\"no\"": {
-    "llm_api_version": "no"
+    "llm.api_version": "no"
   },
   "LLM_API_VERSION=\"on\"": {
-    "llm_api_version": "on"
+    "llm.api_version": "on"
   },
   "LLM_API_VERSION=\"require\"": {
-    "llm_api_version": "require"
+    "llm.api_version": "require"
   },
   "LLM_API_VERSION=\"true\"": {
-    "llm_api_version": "true"
+    "llm.api_version": "true"
   },
   "LLM_API_VERSION=\"v\"": {
-    "llm_api_version": "v"
+    "llm.api_version": "v"
   },
   "LLM_API_VERSION=\"yes\"": {
-    "llm_api_version": "yes"
+    "llm.api_version": "yes"
   },
   "LLM_API_VERSION=\"{\\\"a\\\":1}\"": {
-    "llm_api_version": "{\"a\":1}"
+    "llm.api_version": "{\"a\":1}"
   },
   "LLM_API_VERSION=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "llm_api_version": "{\"ssl\":\"verify-full\"}"
+    "llm.api_version": "{\"ssl\":\"verify-full\"}"
   },
   "LLM_API_VERSION=\"{\\\"ssl\\\":true}\"": {
-    "llm_api_version": "{\"ssl\":true}"
+    "llm.api_version": "{\"ssl\":true}"
   },
   "LLM_ARGS=\"  \"": {},
   "LLM_ARGS=\"\"": {},
@@ -3339,17 +4212,17 @@
   "LLM_ARGS=\"v\"": {},
   "LLM_ARGS=\"yes\"": {},
   "LLM_ARGS=\"{\\\"a\\\":1}\"": {
-    "llm_args": {
+    "llm.args": {
       "a": 1
     }
   },
   "LLM_ARGS=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "llm_args": {
+    "llm.args": {
       "ssl": "verify-full"
     }
   },
   "LLM_ARGS=\"{\\\"ssl\\\":true}\"": {
-    "llm_args": {
+    "llm.args": {
       "ssl": true
     }
   },
@@ -3357,18 +4230,18 @@
   "LLM_CONNECT_TIMEOUT_SECONDS=\"\"": {},
   "LLM_CONNECT_TIMEOUT_SECONDS=\"-1\"": {},
   "LLM_CONNECT_TIMEOUT_SECONDS=\"0\"": {
-    "llm_connect_timeout_seconds": 0
+    "llm.connect_timeout_seconds": 0
   },
   "LLM_CONNECT_TIMEOUT_SECONDS=\"1\"": {
-    "llm_connect_timeout_seconds": 1
+    "llm.connect_timeout_seconds": 1
   },
   "LLM_CONNECT_TIMEOUT_SECONDS=\"1.5\"": {},
   "LLM_CONNECT_TIMEOUT_SECONDS=\"42\"": {
-    "llm_connect_timeout_seconds": 42
+    "llm.connect_timeout_seconds": 42
   },
   "LLM_CONNECT_TIMEOUT_SECONDS=\"5000000000\"": {},
   "LLM_CONNECT_TIMEOUT_SECONDS=\"70000\"": {
-    "llm_connect_timeout_seconds": 70000
+    "llm.connect_timeout_seconds": 70000
   },
   "LLM_CONNECT_TIMEOUT_SECONDS=\"TRUE\"": {},
   "LLM_CONNECT_TIMEOUT_SECONDS=\"[1]\"": {},
@@ -3384,97 +4257,97 @@
   "LLM_CONNECT_TIMEOUT_SECONDS=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
   "LLM_CONNECT_TIMEOUT_SECONDS=\"{\\\"ssl\\\":true}\"": {},
   "LLM_ENDPOINT=\"  \"": {
-    "llm_endpoint": "  "
+    "llm.endpoint": "  "
   },
   "LLM_ENDPOINT=\"\"": {},
   "LLM_ENDPOINT=\"\" + OPENAI_URL=2": {
-    "llm_endpoint": "2"
+    "llm.endpoint": "2"
   },
   "LLM_ENDPOINT=\"-1\"": {
-    "llm_endpoint": "-1"
+    "llm.endpoint": "-1"
   },
   "LLM_ENDPOINT=\"0\"": {
-    "llm_endpoint": "0"
+    "llm.endpoint": "0"
   },
   "LLM_ENDPOINT=\"1\"": {
-    "llm_endpoint": "1"
+    "llm.endpoint": "1"
   },
   "LLM_ENDPOINT=\"1.5\"": {
-    "llm_endpoint": "1.5"
+    "llm.endpoint": "1.5"
   },
   "LLM_ENDPOINT=\"42\"": {
-    "llm_endpoint": "42"
+    "llm.endpoint": "42"
   },
   "LLM_ENDPOINT=\"5000000000\"": {
-    "llm_endpoint": "5000000000"
+    "llm.endpoint": "5000000000"
   },
   "LLM_ENDPOINT=\"70000\"": {
-    "llm_endpoint": "70000"
+    "llm.endpoint": "70000"
   },
   "LLM_ENDPOINT=\"TRUE\"": {
-    "llm_endpoint": "TRUE"
+    "llm.endpoint": "TRUE"
   },
   "LLM_ENDPOINT=\"[1]\"": {
-    "llm_endpoint": "[1]"
+    "llm.endpoint": "[1]"
   },
   "LLM_ENDPOINT=\"abc\"": {
-    "llm_endpoint": "abc"
+    "llm.endpoint": "abc"
   },
   "LLM_ENDPOINT=\"false\"": {
-    "llm_endpoint": "false"
+    "llm.endpoint": "false"
   },
   "LLM_ENDPOINT=\"no\"": {
-    "llm_endpoint": "no"
+    "llm.endpoint": "no"
   },
   "LLM_ENDPOINT=\"on\"": {
-    "llm_endpoint": "on"
+    "llm.endpoint": "on"
   },
   "LLM_ENDPOINT=\"require\"": {
-    "llm_endpoint": "require"
+    "llm.endpoint": "require"
   },
   "LLM_ENDPOINT=\"true\"": {
-    "llm_endpoint": "true"
+    "llm.endpoint": "true"
   },
   "LLM_ENDPOINT=\"v\"": {
-    "llm_endpoint": "v"
+    "llm.endpoint": "v"
   },
   "LLM_ENDPOINT=\"yes\"": {
-    "llm_endpoint": "yes"
+    "llm.endpoint": "yes"
   },
   "LLM_ENDPOINT=\"{\\\"a\\\":1}\"": {
-    "llm_endpoint": "{\"a\":1}"
+    "llm.endpoint": "{\"a\":1}"
   },
   "LLM_ENDPOINT=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "llm_endpoint": "{\"ssl\":\"verify-full\"}"
+    "llm.endpoint": "{\"ssl\":\"verify-full\"}"
   },
   "LLM_ENDPOINT=\"{\\\"ssl\\\":true}\"": {
-    "llm_endpoint": "{\"ssl\":true}"
+    "llm.endpoint": "{\"ssl\":true}"
   },
   "LLM_ENDPOINT=1 + OPENAI_URL=2": {
-    "llm_endpoint": "1"
+    "llm.endpoint": "1"
   },
   "LLM_ENDPOINT=abc + OPENAI_URL=2": {
-    "llm_endpoint": "abc"
+    "llm.endpoint": "abc"
   },
   "LLM_MAX_COMPLETION_TOKENS=\"  \"": {},
   "LLM_MAX_COMPLETION_TOKENS=\"\"": {},
   "LLM_MAX_COMPLETION_TOKENS=\"\" + LLM_MAX_TOKENS=2": {
-    "llm_max_completion_tokens": 2
+    "llm.max_completion_tokens": 2
   },
   "LLM_MAX_COMPLETION_TOKENS=\"-1\"": {},
   "LLM_MAX_COMPLETION_TOKENS=\"0\"": {
-    "llm_max_completion_tokens": 0
+    "llm.max_completion_tokens": 0
   },
   "LLM_MAX_COMPLETION_TOKENS=\"1\"": {
-    "llm_max_completion_tokens": 1
+    "llm.max_completion_tokens": 1
   },
   "LLM_MAX_COMPLETION_TOKENS=\"1.5\"": {},
   "LLM_MAX_COMPLETION_TOKENS=\"42\"": {
-    "llm_max_completion_tokens": 42
+    "llm.max_completion_tokens": 42
   },
   "LLM_MAX_COMPLETION_TOKENS=\"5000000000\"": {},
   "LLM_MAX_COMPLETION_TOKENS=\"70000\"": {
-    "llm_max_completion_tokens": 70000
+    "llm.max_completion_tokens": 70000
   },
   "LLM_MAX_COMPLETION_TOKENS=\"TRUE\"": {},
   "LLM_MAX_COMPLETION_TOKENS=\"[1]\"": {},
@@ -3490,7 +4363,7 @@
   "LLM_MAX_COMPLETION_TOKENS=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
   "LLM_MAX_COMPLETION_TOKENS=\"{\\\"ssl\\\":true}\"": {},
   "LLM_MAX_COMPLETION_TOKENS=1 + LLM_MAX_TOKENS=2": {
-    "llm_max_completion_tokens": 1
+    "llm.max_completion_tokens": 1
   },
   "LLM_MAX_COMPLETION_TOKENS=abc + LLM_MAX_TOKENS=2": {},
   "LLM_MAX_PARALLEL_REQUESTS=\"  \"": {},
@@ -3527,18 +4400,18 @@
   "LLM_MAX_RETRIES=\"\"": {},
   "LLM_MAX_RETRIES=\"-1\"": {},
   "LLM_MAX_RETRIES=\"0\"": {
-    "llm_max_retries": 0
+    "llm.max_retries": 0
   },
   "LLM_MAX_RETRIES=\"1\"": {
-    "llm_max_retries": 1
+    "llm.max_retries": 1
   },
   "LLM_MAX_RETRIES=\"1.5\"": {},
   "LLM_MAX_RETRIES=\"42\"": {
-    "llm_max_retries": 42
+    "llm.max_retries": 42
   },
   "LLM_MAX_RETRIES=\"5000000000\"": {},
   "LLM_MAX_RETRIES=\"70000\"": {
-    "llm_max_retries": 70000
+    "llm.max_retries": 70000
   },
   "LLM_MAX_RETRIES=\"TRUE\"": {},
   "LLM_MAX_RETRIES=\"[1]\"": {},
@@ -3557,18 +4430,18 @@
   "LLM_MAX_TOKENS=\"\"": {},
   "LLM_MAX_TOKENS=\"-1\"": {},
   "LLM_MAX_TOKENS=\"0\"": {
-    "llm_max_completion_tokens": 0
+    "llm.max_completion_tokens": 0
   },
   "LLM_MAX_TOKENS=\"1\"": {
-    "llm_max_completion_tokens": 1
+    "llm.max_completion_tokens": 1
   },
   "LLM_MAX_TOKENS=\"1.5\"": {},
   "LLM_MAX_TOKENS=\"42\"": {
-    "llm_max_completion_tokens": 42
+    "llm.max_completion_tokens": 42
   },
   "LLM_MAX_TOKENS=\"5000000000\"": {},
   "LLM_MAX_TOKENS=\"70000\"": {
-    "llm_max_completion_tokens": 70000
+    "llm.max_completion_tokens": 70000
   },
   "LLM_MAX_TOKENS=\"TRUE\"": {},
   "LLM_MAX_TOKENS=\"[1]\"": {},
@@ -3587,18 +4460,18 @@
   "LLM_MIN_RETRY_SECONDS=\"\"": {},
   "LLM_MIN_RETRY_SECONDS=\"-1\"": {},
   "LLM_MIN_RETRY_SECONDS=\"0\"": {
-    "llm_min_retry_seconds": 0
+    "llm.min_retry_seconds": 0
   },
   "LLM_MIN_RETRY_SECONDS=\"1\"": {
-    "llm_min_retry_seconds": 1
+    "llm.min_retry_seconds": 1
   },
   "LLM_MIN_RETRY_SECONDS=\"1.5\"": {},
   "LLM_MIN_RETRY_SECONDS=\"42\"": {
-    "llm_min_retry_seconds": 42
+    "llm.min_retry_seconds": 42
   },
   "LLM_MIN_RETRY_SECONDS=\"5000000000\"": {},
   "LLM_MIN_RETRY_SECONDS=\"70000\"": {
-    "llm_min_retry_seconds": 70000
+    "llm.min_retry_seconds": 70000
   },
   "LLM_MIN_RETRY_SECONDS=\"TRUE\"": {},
   "LLM_MIN_RETRY_SECONDS=\"[1]\"": {},
@@ -3614,94 +4487,94 @@
   "LLM_MIN_RETRY_SECONDS=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
   "LLM_MIN_RETRY_SECONDS=\"{\\\"ssl\\\":true}\"": {},
   "LLM_MODEL=\"  \"": {
-    "llm_model": "  "
+    "llm.model": "  "
   },
   "LLM_MODEL=\"\"": {},
   "LLM_MODEL=\"\" + OPENAI_MODEL=2": {
-    "llm_model": "2"
+    "llm.model": "2"
   },
   "LLM_MODEL=\"-1\"": {
-    "llm_model": "-1"
+    "llm.model": "-1"
   },
   "LLM_MODEL=\"0\"": {
-    "llm_model": "0"
+    "llm.model": "0"
   },
   "LLM_MODEL=\"1\"": {
-    "llm_model": "1"
+    "llm.model": "1"
   },
   "LLM_MODEL=\"1.5\"": {
-    "llm_model": "1.5"
+    "llm.model": "1.5"
   },
   "LLM_MODEL=\"42\"": {
-    "llm_model": "42"
+    "llm.model": "42"
   },
   "LLM_MODEL=\"5000000000\"": {
-    "llm_model": "5000000000"
+    "llm.model": "5000000000"
   },
   "LLM_MODEL=\"70000\"": {
-    "llm_model": "70000"
+    "llm.model": "70000"
   },
   "LLM_MODEL=\"TRUE\"": {
-    "llm_model": "TRUE"
+    "llm.model": "TRUE"
   },
   "LLM_MODEL=\"[1]\"": {
-    "llm_model": "[1]"
+    "llm.model": "[1]"
   },
   "LLM_MODEL=\"abc\"": {
-    "llm_model": "abc"
+    "llm.model": "abc"
   },
   "LLM_MODEL=\"false\"": {
-    "llm_model": "false"
+    "llm.model": "false"
   },
   "LLM_MODEL=\"no\"": {
-    "llm_model": "no"
+    "llm.model": "no"
   },
   "LLM_MODEL=\"on\"": {
-    "llm_model": "on"
+    "llm.model": "on"
   },
   "LLM_MODEL=\"require\"": {
-    "llm_model": "require"
+    "llm.model": "require"
   },
   "LLM_MODEL=\"true\"": {
-    "llm_model": "true"
+    "llm.model": "true"
   },
   "LLM_MODEL=\"v\"": {
-    "llm_model": "v"
+    "llm.model": "v"
   },
   "LLM_MODEL=\"yes\"": {
-    "llm_model": "yes"
+    "llm.model": "yes"
   },
   "LLM_MODEL=\"{\\\"a\\\":1}\"": {
-    "llm_model": "{\"a\":1}"
+    "llm.model": "{\"a\":1}"
   },
   "LLM_MODEL=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "llm_model": "{\"ssl\":\"verify-full\"}"
+    "llm.model": "{\"ssl\":\"verify-full\"}"
   },
   "LLM_MODEL=\"{\\\"ssl\\\":true}\"": {
-    "llm_model": "{\"ssl\":true}"
+    "llm.model": "{\"ssl\":true}"
   },
   "LLM_MODEL=1 + OPENAI_MODEL=2": {
-    "llm_model": "1"
+    "llm.model": "1"
   },
   "LLM_MODEL=abc + OPENAI_MODEL=2": {
-    "llm_model": "abc"
+    "llm.model": "abc"
   },
   "LLM_NETWORK_RETRIES=\"  \"": {},
   "LLM_NETWORK_RETRIES=\"\"": {},
   "LLM_NETWORK_RETRIES=\"-1\"": {},
   "LLM_NETWORK_RETRIES=\"0\"": {
-    "llm_network_retries": 0
+    "llm.network_retries": 0
   },
   "LLM_NETWORK_RETRIES=\"1\"": {
-    "llm_network_retries": 1
+    "llm.network_retries": 1
   },
   "LLM_NETWORK_RETRIES=\"1.5\"": {},
   "LLM_NETWORK_RETRIES=\"42\"": {
-    "llm_network_retries": 42
+    "llm.network_retries": 42
   },
   "LLM_NETWORK_RETRIES=\"5000000000\"": {},
   "LLM_NETWORK_RETRIES=\"70000\"": {
-    "llm_network_retries": 70000
+    "llm.network_retries": 70000
   },
   "LLM_NETWORK_RETRIES=\"TRUE\"": {},
   "LLM_NETWORK_RETRIES=\"[1]\"": {},
@@ -3717,97 +4590,97 @@
   "LLM_NETWORK_RETRIES=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
   "LLM_NETWORK_RETRIES=\"{\\\"ssl\\\":true}\"": {},
   "LLM_PROVIDER=\"  \"": {
-    "llm_provider": "  "
+    "llm.provider": "  "
   },
   "LLM_PROVIDER=\"\"": {},
   "LLM_PROVIDER=\"-1\"": {
-    "llm_provider": "-1"
+    "llm.provider": "-1"
   },
   "LLM_PROVIDER=\"0\"": {
-    "llm_provider": "0"
+    "llm.provider": "0"
   },
   "LLM_PROVIDER=\"1\"": {
-    "llm_provider": "1"
+    "llm.provider": "1"
   },
   "LLM_PROVIDER=\"1.5\"": {
-    "llm_provider": "1.5"
+    "llm.provider": "1.5"
   },
   "LLM_PROVIDER=\"42\"": {
-    "llm_provider": "42"
+    "llm.provider": "42"
   },
   "LLM_PROVIDER=\"5000000000\"": {
-    "llm_provider": "5000000000"
+    "llm.provider": "5000000000"
   },
   "LLM_PROVIDER=\"70000\"": {
-    "llm_provider": "70000"
+    "llm.provider": "70000"
   },
   "LLM_PROVIDER=\"TRUE\"": {
-    "llm_provider": "TRUE"
+    "llm.provider": "TRUE"
   },
   "LLM_PROVIDER=\"[1]\"": {
-    "llm_provider": "[1]"
+    "llm.provider": "[1]"
   },
   "LLM_PROVIDER=\"abc\"": {
-    "llm_provider": "abc"
+    "llm.provider": "abc"
   },
   "LLM_PROVIDER=\"false\"": {
-    "llm_provider": "false"
+    "llm.provider": "false"
   },
   "LLM_PROVIDER=\"no\"": {
-    "llm_provider": "no"
+    "llm.provider": "no"
   },
   "LLM_PROVIDER=\"on\"": {
-    "llm_provider": "on"
+    "llm.provider": "on"
   },
   "LLM_PROVIDER=\"require\"": {
-    "llm_provider": "require"
+    "llm.provider": "require"
   },
   "LLM_PROVIDER=\"true\"": {
-    "llm_provider": "true"
+    "llm.provider": "true"
   },
   "LLM_PROVIDER=\"v\"": {
-    "llm_provider": "v"
+    "llm.provider": "v"
   },
   "LLM_PROVIDER=\"yes\"": {
-    "llm_provider": "yes"
+    "llm.provider": "yes"
   },
   "LLM_PROVIDER=\"{\\\"a\\\":1}\"": {
-    "llm_provider": "{\"a\":1}"
+    "llm.provider": "{\"a\":1}"
   },
   "LLM_PROVIDER=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "llm_provider": "{\"ssl\":\"verify-full\"}"
+    "llm.provider": "{\"ssl\":\"verify-full\"}"
   },
   "LLM_PROVIDER=\"{\\\"ssl\\\":true}\"": {
-    "llm_provider": "{\"ssl\":true}"
+    "llm.provider": "{\"ssl\":true}"
   },
   "LLM_RATE_LIMIT_ENABLED=\"  \"": {},
   "LLM_RATE_LIMIT_ENABLED=\"\"": {},
   "LLM_RATE_LIMIT_ENABLED=\"-1\"": {},
   "LLM_RATE_LIMIT_ENABLED=\"0\"": {},
   "LLM_RATE_LIMIT_ENABLED=\"1\"": {
-    "llm_rate_limit_enabled": true
+    "llm.rate_limit_enabled": true
   },
   "LLM_RATE_LIMIT_ENABLED=\"1.5\"": {},
   "LLM_RATE_LIMIT_ENABLED=\"42\"": {},
   "LLM_RATE_LIMIT_ENABLED=\"5000000000\"": {},
   "LLM_RATE_LIMIT_ENABLED=\"70000\"": {},
   "LLM_RATE_LIMIT_ENABLED=\"TRUE\"": {
-    "llm_rate_limit_enabled": true
+    "llm.rate_limit_enabled": true
   },
   "LLM_RATE_LIMIT_ENABLED=\"[1]\"": {},
   "LLM_RATE_LIMIT_ENABLED=\"abc\"": {},
   "LLM_RATE_LIMIT_ENABLED=\"false\"": {},
   "LLM_RATE_LIMIT_ENABLED=\"no\"": {},
   "LLM_RATE_LIMIT_ENABLED=\"on\"": {
-    "llm_rate_limit_enabled": true
+    "llm.rate_limit_enabled": true
   },
   "LLM_RATE_LIMIT_ENABLED=\"require\"": {},
   "LLM_RATE_LIMIT_ENABLED=\"true\"": {
-    "llm_rate_limit_enabled": true
+    "llm.rate_limit_enabled": true
   },
   "LLM_RATE_LIMIT_ENABLED=\"v\"": {},
   "LLM_RATE_LIMIT_ENABLED=\"yes\"": {
-    "llm_rate_limit_enabled": true
+    "llm.rate_limit_enabled": true
   },
   "LLM_RATE_LIMIT_ENABLED=\"{\\\"a\\\":1}\"": {},
   "LLM_RATE_LIMIT_ENABLED=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
@@ -3816,18 +4689,18 @@
   "LLM_RATE_LIMIT_INTERVAL=\"\"": {},
   "LLM_RATE_LIMIT_INTERVAL=\"-1\"": {},
   "LLM_RATE_LIMIT_INTERVAL=\"0\"": {
-    "llm_rate_limit_interval": 0
+    "llm.rate_limit_interval": 0
   },
   "LLM_RATE_LIMIT_INTERVAL=\"1\"": {
-    "llm_rate_limit_interval": 1
+    "llm.rate_limit_interval": 1
   },
   "LLM_RATE_LIMIT_INTERVAL=\"1.5\"": {},
   "LLM_RATE_LIMIT_INTERVAL=\"42\"": {
-    "llm_rate_limit_interval": 42
+    "llm.rate_limit_interval": 42
   },
   "LLM_RATE_LIMIT_INTERVAL=\"5000000000\"": {},
   "LLM_RATE_LIMIT_INTERVAL=\"70000\"": {
-    "llm_rate_limit_interval": 70000
+    "llm.rate_limit_interval": 70000
   },
   "LLM_RATE_LIMIT_INTERVAL=\"TRUE\"": {},
   "LLM_RATE_LIMIT_INTERVAL=\"[1]\"": {},
@@ -3846,18 +4719,18 @@
   "LLM_RATE_LIMIT_REQUESTS=\"\"": {},
   "LLM_RATE_LIMIT_REQUESTS=\"-1\"": {},
   "LLM_RATE_LIMIT_REQUESTS=\"0\"": {
-    "llm_rate_limit_requests": 0
+    "llm.rate_limit_requests": 0
   },
   "LLM_RATE_LIMIT_REQUESTS=\"1\"": {
-    "llm_rate_limit_requests": 1
+    "llm.rate_limit_requests": 1
   },
   "LLM_RATE_LIMIT_REQUESTS=\"1.5\"": {},
   "LLM_RATE_LIMIT_REQUESTS=\"42\"": {
-    "llm_rate_limit_requests": 42
+    "llm.rate_limit_requests": 42
   },
   "LLM_RATE_LIMIT_REQUESTS=\"5000000000\"": {},
   "LLM_RATE_LIMIT_REQUESTS=\"70000\"": {
-    "llm_rate_limit_requests": 70000
+    "llm.rate_limit_requests": 70000
   },
   "LLM_RATE_LIMIT_REQUESTS=\"TRUE\"": {},
   "LLM_RATE_LIMIT_REQUESTS=\"[1]\"": {},
@@ -3873,85 +4746,85 @@
   "LLM_RATE_LIMIT_REQUESTS=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
   "LLM_RATE_LIMIT_REQUESTS=\"{\\\"ssl\\\":true}\"": {},
   "LLM_REASONING=\"  \"": {
-    "llm_reasoning": "  "
+    "llm.reasoning": "  "
   },
   "LLM_REASONING=\"\"": {},
   "LLM_REASONING=\"-1\"": {
-    "llm_reasoning": "-1"
+    "llm.reasoning": "-1"
   },
   "LLM_REASONING=\"0\"": {
-    "llm_reasoning": "0"
+    "llm.reasoning": "0"
   },
   "LLM_REASONING=\"1\"": {
-    "llm_reasoning": "1"
+    "llm.reasoning": "1"
   },
   "LLM_REASONING=\"1.5\"": {
-    "llm_reasoning": "1.5"
+    "llm.reasoning": "1.5"
   },
   "LLM_REASONING=\"42\"": {
-    "llm_reasoning": "42"
+    "llm.reasoning": "42"
   },
   "LLM_REASONING=\"5000000000\"": {
-    "llm_reasoning": "5000000000"
+    "llm.reasoning": "5000000000"
   },
   "LLM_REASONING=\"70000\"": {
-    "llm_reasoning": "70000"
+    "llm.reasoning": "70000"
   },
   "LLM_REASONING=\"TRUE\"": {
-    "llm_reasoning": "TRUE"
+    "llm.reasoning": "TRUE"
   },
   "LLM_REASONING=\"[1]\"": {
-    "llm_reasoning": "[1]"
+    "llm.reasoning": "[1]"
   },
   "LLM_REASONING=\"abc\"": {
-    "llm_reasoning": "abc"
+    "llm.reasoning": "abc"
   },
   "LLM_REASONING=\"false\"": {
-    "llm_reasoning": "false"
+    "llm.reasoning": "false"
   },
   "LLM_REASONING=\"no\"": {
-    "llm_reasoning": "no"
+    "llm.reasoning": "no"
   },
   "LLM_REASONING=\"on\"": {
-    "llm_reasoning": "on"
+    "llm.reasoning": "on"
   },
   "LLM_REASONING=\"require\"": {
-    "llm_reasoning": "require"
+    "llm.reasoning": "require"
   },
   "LLM_REASONING=\"true\"": {
-    "llm_reasoning": "true"
+    "llm.reasoning": "true"
   },
   "LLM_REASONING=\"v\"": {
-    "llm_reasoning": "v"
+    "llm.reasoning": "v"
   },
   "LLM_REASONING=\"yes\"": {
-    "llm_reasoning": "yes"
+    "llm.reasoning": "yes"
   },
   "LLM_REASONING=\"{\\\"a\\\":1}\"": {
-    "llm_reasoning": "{\"a\":1}"
+    "llm.reasoning": "{\"a\":1}"
   },
   "LLM_REASONING=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "llm_reasoning": "{\"ssl\":\"verify-full\"}"
+    "llm.reasoning": "{\"ssl\":\"verify-full\"}"
   },
   "LLM_REASONING=\"{\\\"ssl\\\":true}\"": {
-    "llm_reasoning": "{\"ssl\":true}"
+    "llm.reasoning": "{\"ssl\":true}"
   },
   "LLM_REQUEST_DEADLINE_SECONDS=\"  \"": {},
   "LLM_REQUEST_DEADLINE_SECONDS=\"\"": {},
   "LLM_REQUEST_DEADLINE_SECONDS=\"-1\"": {},
   "LLM_REQUEST_DEADLINE_SECONDS=\"0\"": {
-    "llm_request_deadline_seconds": 0
+    "llm.request_deadline_seconds": 0
   },
   "LLM_REQUEST_DEADLINE_SECONDS=\"1\"": {
-    "llm_request_deadline_seconds": 1
+    "llm.request_deadline_seconds": 1
   },
   "LLM_REQUEST_DEADLINE_SECONDS=\"1.5\"": {},
   "LLM_REQUEST_DEADLINE_SECONDS=\"42\"": {
-    "llm_request_deadline_seconds": 42
+    "llm.request_deadline_seconds": 42
   },
   "LLM_REQUEST_DEADLINE_SECONDS=\"5000000000\"": {},
   "LLM_REQUEST_DEADLINE_SECONDS=\"70000\"": {
-    "llm_request_deadline_seconds": 70000
+    "llm.request_deadline_seconds": 70000
   },
   "LLM_REQUEST_DEADLINE_SECONDS=\"TRUE\"": {},
   "LLM_REQUEST_DEADLINE_SECONDS=\"[1]\"": {},
@@ -3970,18 +4843,18 @@
   "LLM_REQUEST_TIMEOUT_SECONDS=\"\"": {},
   "LLM_REQUEST_TIMEOUT_SECONDS=\"-1\"": {},
   "LLM_REQUEST_TIMEOUT_SECONDS=\"0\"": {
-    "llm_request_timeout_seconds": 0
+    "llm.request_timeout_seconds": 0
   },
   "LLM_REQUEST_TIMEOUT_SECONDS=\"1\"": {
-    "llm_request_timeout_seconds": 1
+    "llm.request_timeout_seconds": 1
   },
   "LLM_REQUEST_TIMEOUT_SECONDS=\"1.5\"": {},
   "LLM_REQUEST_TIMEOUT_SECONDS=\"42\"": {
-    "llm_request_timeout_seconds": 42
+    "llm.request_timeout_seconds": 42
   },
   "LLM_REQUEST_TIMEOUT_SECONDS=\"5000000000\"": {},
   "LLM_REQUEST_TIMEOUT_SECONDS=\"70000\"": {
-    "llm_request_timeout_seconds": 70000
+    "llm.request_timeout_seconds": 70000
   },
   "LLM_REQUEST_TIMEOUT_SECONDS=\"TRUE\"": {},
   "LLM_REQUEST_TIMEOUT_SECONDS=\"[1]\"": {},
@@ -4001,119 +4874,119 @@
   "LLM_STREAMING=\"-1\"": {},
   "LLM_STREAMING=\"0\"": {},
   "LLM_STREAMING=\"1\"": {
-    "llm_streaming": true
+    "llm.streaming": true
   },
   "LLM_STREAMING=\"1.5\"": {},
   "LLM_STREAMING=\"42\"": {},
   "LLM_STREAMING=\"5000000000\"": {},
   "LLM_STREAMING=\"70000\"": {},
   "LLM_STREAMING=\"TRUE\"": {
-    "llm_streaming": true
+    "llm.streaming": true
   },
   "LLM_STREAMING=\"[1]\"": {},
   "LLM_STREAMING=\"abc\"": {},
   "LLM_STREAMING=\"false\"": {},
   "LLM_STREAMING=\"no\"": {},
   "LLM_STREAMING=\"on\"": {
-    "llm_streaming": true
+    "llm.streaming": true
   },
   "LLM_STREAMING=\"require\"": {},
   "LLM_STREAMING=\"true\"": {
-    "llm_streaming": true
+    "llm.streaming": true
   },
   "LLM_STREAMING=\"v\"": {},
   "LLM_STREAMING=\"yes\"": {
-    "llm_streaming": true
+    "llm.streaming": true
   },
   "LLM_STREAMING=\"{\\\"a\\\":1}\"": {},
   "LLM_STREAMING=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
   "LLM_STREAMING=\"{\\\"ssl\\\":true}\"": {},
   "LLM_STRUCTURED_OUTPUT_MODE=\"  \"": {
-    "llm_structured_output_mode": "  "
+    "llm.structured_output_mode": "  "
   },
   "LLM_STRUCTURED_OUTPUT_MODE=\"\"": {},
   "LLM_STRUCTURED_OUTPUT_MODE=\"-1\"": {
-    "llm_structured_output_mode": "-1"
+    "llm.structured_output_mode": "-1"
   },
   "LLM_STRUCTURED_OUTPUT_MODE=\"0\"": {
-    "llm_structured_output_mode": "0"
+    "llm.structured_output_mode": "0"
   },
   "LLM_STRUCTURED_OUTPUT_MODE=\"1\"": {
-    "llm_structured_output_mode": "1"
+    "llm.structured_output_mode": "1"
   },
   "LLM_STRUCTURED_OUTPUT_MODE=\"1.5\"": {
-    "llm_structured_output_mode": "1.5"
+    "llm.structured_output_mode": "1.5"
   },
   "LLM_STRUCTURED_OUTPUT_MODE=\"42\"": {
-    "llm_structured_output_mode": "42"
+    "llm.structured_output_mode": "42"
   },
   "LLM_STRUCTURED_OUTPUT_MODE=\"5000000000\"": {
-    "llm_structured_output_mode": "5000000000"
+    "llm.structured_output_mode": "5000000000"
   },
   "LLM_STRUCTURED_OUTPUT_MODE=\"70000\"": {
-    "llm_structured_output_mode": "70000"
+    "llm.structured_output_mode": "70000"
   },
   "LLM_STRUCTURED_OUTPUT_MODE=\"TRUE\"": {
-    "llm_structured_output_mode": "TRUE"
+    "llm.structured_output_mode": "TRUE"
   },
   "LLM_STRUCTURED_OUTPUT_MODE=\"[1]\"": {
-    "llm_structured_output_mode": "[1]"
+    "llm.structured_output_mode": "[1]"
   },
   "LLM_STRUCTURED_OUTPUT_MODE=\"abc\"": {
-    "llm_structured_output_mode": "abc"
+    "llm.structured_output_mode": "abc"
   },
   "LLM_STRUCTURED_OUTPUT_MODE=\"false\"": {
-    "llm_structured_output_mode": "false"
+    "llm.structured_output_mode": "false"
   },
   "LLM_STRUCTURED_OUTPUT_MODE=\"no\"": {
-    "llm_structured_output_mode": "no"
+    "llm.structured_output_mode": "no"
   },
   "LLM_STRUCTURED_OUTPUT_MODE=\"on\"": {
-    "llm_structured_output_mode": "on"
+    "llm.structured_output_mode": "on"
   },
   "LLM_STRUCTURED_OUTPUT_MODE=\"require\"": {
-    "llm_structured_output_mode": "require"
+    "llm.structured_output_mode": "require"
   },
   "LLM_STRUCTURED_OUTPUT_MODE=\"true\"": {
-    "llm_structured_output_mode": "true"
+    "llm.structured_output_mode": "true"
   },
   "LLM_STRUCTURED_OUTPUT_MODE=\"v\"": {
-    "llm_structured_output_mode": "v"
+    "llm.structured_output_mode": "v"
   },
   "LLM_STRUCTURED_OUTPUT_MODE=\"yes\"": {
-    "llm_structured_output_mode": "yes"
+    "llm.structured_output_mode": "yes"
   },
   "LLM_STRUCTURED_OUTPUT_MODE=\"{\\\"a\\\":1}\"": {
-    "llm_structured_output_mode": "{\"a\":1}"
+    "llm.structured_output_mode": "{\"a\":1}"
   },
   "LLM_STRUCTURED_OUTPUT_MODE=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "llm_structured_output_mode": "{\"ssl\":\"verify-full\"}"
+    "llm.structured_output_mode": "{\"ssl\":\"verify-full\"}"
   },
   "LLM_STRUCTURED_OUTPUT_MODE=\"{\\\"ssl\\\":true}\"": {
-    "llm_structured_output_mode": "{\"ssl\":true}"
+    "llm.structured_output_mode": "{\"ssl\":true}"
   },
   "LLM_TEMPERATURE=\"  \"": {},
   "LLM_TEMPERATURE=\"\"": {},
   "LLM_TEMPERATURE=\"-1\"": {
-    "llm_temperature": -1.0
+    "llm.temperature": -1.0
   },
   "LLM_TEMPERATURE=\"0\"": {
-    "llm_temperature": 0.0
+    "llm.temperature": 0.0
   },
   "LLM_TEMPERATURE=\"1\"": {
-    "llm_temperature": 1.0
+    "llm.temperature": 1.0
   },
   "LLM_TEMPERATURE=\"1.5\"": {
-    "llm_temperature": 1.5
+    "llm.temperature": 1.5
   },
   "LLM_TEMPERATURE=\"42\"": {
-    "llm_temperature": 42.0
+    "llm.temperature": 42.0
   },
   "LLM_TEMPERATURE=\"5000000000\"": {
-    "llm_temperature": 5000000000.0
+    "llm.temperature": 5000000000.0
   },
   "LLM_TEMPERATURE=\"70000\"": {
-    "llm_temperature": 70000.0
+    "llm.temperature": 70000.0
   },
   "LLM_TEMPERATURE=\"TRUE\"": {},
   "LLM_TEMPERATURE=\"[1]\"": {},
@@ -4128,6 +5001,70 @@
   "LLM_TEMPERATURE=\"{\\\"a\\\":1}\"": {},
   "LLM_TEMPERATURE=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
   "LLM_TEMPERATURE=\"{\\\"ssl\\\":true}\"": {},
+  "LLM_VISION_MODEL=\"  \"": {
+    "llm.openai_compatible.vision_model": "  "
+  },
+  "LLM_VISION_MODEL=\"\"": {},
+  "LLM_VISION_MODEL=\"-1\"": {
+    "llm.openai_compatible.vision_model": "-1"
+  },
+  "LLM_VISION_MODEL=\"0\"": {
+    "llm.openai_compatible.vision_model": "0"
+  },
+  "LLM_VISION_MODEL=\"1\"": {
+    "llm.openai_compatible.vision_model": "1"
+  },
+  "LLM_VISION_MODEL=\"1.5\"": {
+    "llm.openai_compatible.vision_model": "1.5"
+  },
+  "LLM_VISION_MODEL=\"42\"": {
+    "llm.openai_compatible.vision_model": "42"
+  },
+  "LLM_VISION_MODEL=\"5000000000\"": {
+    "llm.openai_compatible.vision_model": "5000000000"
+  },
+  "LLM_VISION_MODEL=\"70000\"": {
+    "llm.openai_compatible.vision_model": "70000"
+  },
+  "LLM_VISION_MODEL=\"TRUE\"": {
+    "llm.openai_compatible.vision_model": "TRUE"
+  },
+  "LLM_VISION_MODEL=\"[1]\"": {
+    "llm.openai_compatible.vision_model": "[1]"
+  },
+  "LLM_VISION_MODEL=\"abc\"": {
+    "llm.openai_compatible.vision_model": "abc"
+  },
+  "LLM_VISION_MODEL=\"false\"": {
+    "llm.openai_compatible.vision_model": "false"
+  },
+  "LLM_VISION_MODEL=\"no\"": {
+    "llm.openai_compatible.vision_model": "no"
+  },
+  "LLM_VISION_MODEL=\"on\"": {
+    "llm.openai_compatible.vision_model": "on"
+  },
+  "LLM_VISION_MODEL=\"require\"": {
+    "llm.openai_compatible.vision_model": "require"
+  },
+  "LLM_VISION_MODEL=\"true\"": {
+    "llm.openai_compatible.vision_model": "true"
+  },
+  "LLM_VISION_MODEL=\"v\"": {
+    "llm.openai_compatible.vision_model": "v"
+  },
+  "LLM_VISION_MODEL=\"yes\"": {
+    "llm.openai_compatible.vision_model": "yes"
+  },
+  "LLM_VISION_MODEL=\"{\\\"a\\\":1}\"": {
+    "llm.openai_compatible.vision_model": "{\"a\":1}"
+  },
+  "LLM_VISION_MODEL=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
+    "llm.openai_compatible.vision_model": "{\"ssl\":\"verify-full\"}"
+  },
+  "LLM_VISION_MODEL=\"{\\\"ssl\\\":true}\"": {
+    "llm.openai_compatible.vision_model": "{\"ssl\":true}"
+  },
   "LOG_LEVEL=\"  \"": {
     "log_level": "  "
   },
@@ -4197,94 +5134,96 @@
   "MOCK_LLM=\"-1\"": {},
   "MOCK_LLM=\"0\"": {},
   "MOCK_LLM=\"1\"": {
-    "llm_mock": true
+    "llm.mock": true
   },
   "MOCK_LLM=\"1.5\"": {},
   "MOCK_LLM=\"42\"": {},
   "MOCK_LLM=\"5000000000\"": {},
   "MOCK_LLM=\"70000\"": {},
   "MOCK_LLM=\"TRUE\"": {
-    "llm_mock": true
+    "llm.mock": true
   },
   "MOCK_LLM=\"[1]\"": {},
   "MOCK_LLM=\"abc\"": {},
   "MOCK_LLM=\"false\"": {},
   "MOCK_LLM=\"no\"": {},
-  "MOCK_LLM=\"on\"": {},
+  "MOCK_LLM=\"on\"": {
+    "llm.mock": true
+  },
   "MOCK_LLM=\"require\"": {},
   "MOCK_LLM=\"true\"": {
-    "llm_mock": true
+    "llm.mock": true
   },
   "MOCK_LLM=\"v\"": {},
   "MOCK_LLM=\"yes\"": {
-    "llm_mock": true
+    "llm.mock": true
   },
   "MOCK_LLM=\"{\\\"a\\\":1}\"": {},
   "MOCK_LLM=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
   "MOCK_LLM=\"{\\\"ssl\\\":true}\"": {},
   "MOCK_LLM_CASSETTE=\"  \"": {
-    "llm_cassette": "  "
+    "llm.cassette": "  "
   },
   "MOCK_LLM_CASSETTE=\"\"": {},
   "MOCK_LLM_CASSETTE=\"-1\"": {
-    "llm_cassette": "-1"
+    "llm.cassette": "-1"
   },
   "MOCK_LLM_CASSETTE=\"0\"": {
-    "llm_cassette": "0"
+    "llm.cassette": "0"
   },
   "MOCK_LLM_CASSETTE=\"1\"": {
-    "llm_cassette": "1"
+    "llm.cassette": "1"
   },
   "MOCK_LLM_CASSETTE=\"1.5\"": {
-    "llm_cassette": "1.5"
+    "llm.cassette": "1.5"
   },
   "MOCK_LLM_CASSETTE=\"42\"": {
-    "llm_cassette": "42"
+    "llm.cassette": "42"
   },
   "MOCK_LLM_CASSETTE=\"5000000000\"": {
-    "llm_cassette": "5000000000"
+    "llm.cassette": "5000000000"
   },
   "MOCK_LLM_CASSETTE=\"70000\"": {
-    "llm_cassette": "70000"
+    "llm.cassette": "70000"
   },
   "MOCK_LLM_CASSETTE=\"TRUE\"": {
-    "llm_cassette": "TRUE"
+    "llm.cassette": "TRUE"
   },
   "MOCK_LLM_CASSETTE=\"[1]\"": {
-    "llm_cassette": "[1]"
+    "llm.cassette": "[1]"
   },
   "MOCK_LLM_CASSETTE=\"abc\"": {
-    "llm_cassette": "abc"
+    "llm.cassette": "abc"
   },
   "MOCK_LLM_CASSETTE=\"false\"": {
-    "llm_cassette": "false"
+    "llm.cassette": "false"
   },
   "MOCK_LLM_CASSETTE=\"no\"": {
-    "llm_cassette": "no"
+    "llm.cassette": "no"
   },
   "MOCK_LLM_CASSETTE=\"on\"": {
-    "llm_cassette": "on"
+    "llm.cassette": "on"
   },
   "MOCK_LLM_CASSETTE=\"require\"": {
-    "llm_cassette": "require"
+    "llm.cassette": "require"
   },
   "MOCK_LLM_CASSETTE=\"true\"": {
-    "llm_cassette": "true"
+    "llm.cassette": "true"
   },
   "MOCK_LLM_CASSETTE=\"v\"": {
-    "llm_cassette": "v"
+    "llm.cassette": "v"
   },
   "MOCK_LLM_CASSETTE=\"yes\"": {
-    "llm_cassette": "yes"
+    "llm.cassette": "yes"
   },
   "MOCK_LLM_CASSETTE=\"{\\\"a\\\":1}\"": {
-    "llm_cassette": "{\"a\":1}"
+    "llm.cassette": "{\"a\":1}"
   },
   "MOCK_LLM_CASSETTE=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "llm_cassette": "{\"ssl\":\"verify-full\"}"
+    "llm.cassette": "{\"ssl\":\"verify-full\"}"
   },
   "MOCK_LLM_CASSETTE=\"{\\\"ssl\\\":true}\"": {
-    "llm_cassette": "{\"ssl\":true}"
+    "llm.cassette": "{\"ssl\":true}"
   },
   "ONTOLOGY_FILE_PATH=\"  \"": {
     "ontology_file_path": "  "
@@ -4479,196 +5418,196 @@
     "ontology_resolver": "{\"ssl\":true}"
   },
   "OPENAI_MODEL=\"  \"": {
-    "llm_model": "  "
+    "llm.model": "  "
   },
   "OPENAI_MODEL=\"\"": {},
   "OPENAI_MODEL=\"-1\"": {
-    "llm_model": "-1"
+    "llm.model": "-1"
   },
   "OPENAI_MODEL=\"0\"": {
-    "llm_model": "0"
+    "llm.model": "0"
   },
   "OPENAI_MODEL=\"1\"": {
-    "llm_model": "1"
+    "llm.model": "1"
   },
   "OPENAI_MODEL=\"1.5\"": {
-    "llm_model": "1.5"
+    "llm.model": "1.5"
   },
   "OPENAI_MODEL=\"42\"": {
-    "llm_model": "42"
+    "llm.model": "42"
   },
   "OPENAI_MODEL=\"5000000000\"": {
-    "llm_model": "5000000000"
+    "llm.model": "5000000000"
   },
   "OPENAI_MODEL=\"70000\"": {
-    "llm_model": "70000"
+    "llm.model": "70000"
   },
   "OPENAI_MODEL=\"TRUE\"": {
-    "llm_model": "TRUE"
+    "llm.model": "TRUE"
   },
   "OPENAI_MODEL=\"[1]\"": {
-    "llm_model": "[1]"
+    "llm.model": "[1]"
   },
   "OPENAI_MODEL=\"abc\"": {
-    "llm_model": "abc"
+    "llm.model": "abc"
   },
   "OPENAI_MODEL=\"false\"": {
-    "llm_model": "false"
+    "llm.model": "false"
   },
   "OPENAI_MODEL=\"no\"": {
-    "llm_model": "no"
+    "llm.model": "no"
   },
   "OPENAI_MODEL=\"on\"": {
-    "llm_model": "on"
+    "llm.model": "on"
   },
   "OPENAI_MODEL=\"require\"": {
-    "llm_model": "require"
+    "llm.model": "require"
   },
   "OPENAI_MODEL=\"true\"": {
-    "llm_model": "true"
+    "llm.model": "true"
   },
   "OPENAI_MODEL=\"v\"": {
-    "llm_model": "v"
+    "llm.model": "v"
   },
   "OPENAI_MODEL=\"yes\"": {
-    "llm_model": "yes"
+    "llm.model": "yes"
   },
   "OPENAI_MODEL=\"{\\\"a\\\":1}\"": {
-    "llm_model": "{\"a\":1}"
+    "llm.model": "{\"a\":1}"
   },
   "OPENAI_MODEL=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "llm_model": "{\"ssl\":\"verify-full\"}"
+    "llm.model": "{\"ssl\":\"verify-full\"}"
   },
   "OPENAI_MODEL=\"{\\\"ssl\\\":true}\"": {
-    "llm_model": "{\"ssl\":true}"
+    "llm.model": "{\"ssl\":true}"
   },
   "OPENAI_TOKEN=\"  \"": {
-    "llm_api_key": "  "
+    "llm.api_key": "  "
   },
   "OPENAI_TOKEN=\"\"": {},
   "OPENAI_TOKEN=\"-1\"": {
-    "llm_api_key": "-1"
+    "llm.api_key": "-1"
   },
   "OPENAI_TOKEN=\"0\"": {
-    "llm_api_key": "0"
+    "llm.api_key": "0"
   },
   "OPENAI_TOKEN=\"1\"": {
-    "llm_api_key": "1"
+    "llm.api_key": "1"
   },
   "OPENAI_TOKEN=\"1.5\"": {
-    "llm_api_key": "1.5"
+    "llm.api_key": "1.5"
   },
   "OPENAI_TOKEN=\"42\"": {
-    "llm_api_key": "42"
+    "llm.api_key": "42"
   },
   "OPENAI_TOKEN=\"5000000000\"": {
-    "llm_api_key": "5000000000"
+    "llm.api_key": "5000000000"
   },
   "OPENAI_TOKEN=\"70000\"": {
-    "llm_api_key": "70000"
+    "llm.api_key": "70000"
   },
   "OPENAI_TOKEN=\"TRUE\"": {
-    "llm_api_key": "TRUE"
+    "llm.api_key": "TRUE"
   },
   "OPENAI_TOKEN=\"[1]\"": {
-    "llm_api_key": "[1]"
+    "llm.api_key": "[1]"
   },
   "OPENAI_TOKEN=\"abc\"": {
-    "llm_api_key": "abc"
+    "llm.api_key": "abc"
   },
   "OPENAI_TOKEN=\"false\"": {
-    "llm_api_key": "false"
+    "llm.api_key": "false"
   },
   "OPENAI_TOKEN=\"no\"": {
-    "llm_api_key": "no"
+    "llm.api_key": "no"
   },
   "OPENAI_TOKEN=\"on\"": {
-    "llm_api_key": "on"
+    "llm.api_key": "on"
   },
   "OPENAI_TOKEN=\"require\"": {
-    "llm_api_key": "require"
+    "llm.api_key": "require"
   },
   "OPENAI_TOKEN=\"true\"": {
-    "llm_api_key": "true"
+    "llm.api_key": "true"
   },
   "OPENAI_TOKEN=\"v\"": {
-    "llm_api_key": "v"
+    "llm.api_key": "v"
   },
   "OPENAI_TOKEN=\"yes\"": {
-    "llm_api_key": "yes"
+    "llm.api_key": "yes"
   },
   "OPENAI_TOKEN=\"{\\\"a\\\":1}\"": {
-    "llm_api_key": "{\"a\":1}"
+    "llm.api_key": "{\"a\":1}"
   },
   "OPENAI_TOKEN=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "llm_api_key": "{\"ssl\":\"verify-full\"}"
+    "llm.api_key": "{\"ssl\":\"verify-full\"}"
   },
   "OPENAI_TOKEN=\"{\\\"ssl\\\":true}\"": {
-    "llm_api_key": "{\"ssl\":true}"
+    "llm.api_key": "{\"ssl\":true}"
   },
   "OPENAI_URL=\"  \"": {
-    "llm_endpoint": "  "
+    "llm.endpoint": "  "
   },
   "OPENAI_URL=\"\"": {},
   "OPENAI_URL=\"-1\"": {
-    "llm_endpoint": "-1"
+    "llm.endpoint": "-1"
   },
   "OPENAI_URL=\"0\"": {
-    "llm_endpoint": "0"
+    "llm.endpoint": "0"
   },
   "OPENAI_URL=\"1\"": {
-    "llm_endpoint": "1"
+    "llm.endpoint": "1"
   },
   "OPENAI_URL=\"1.5\"": {
-    "llm_endpoint": "1.5"
+    "llm.endpoint": "1.5"
   },
   "OPENAI_URL=\"42\"": {
-    "llm_endpoint": "42"
+    "llm.endpoint": "42"
   },
   "OPENAI_URL=\"5000000000\"": {
-    "llm_endpoint": "5000000000"
+    "llm.endpoint": "5000000000"
   },
   "OPENAI_URL=\"70000\"": {
-    "llm_endpoint": "70000"
+    "llm.endpoint": "70000"
   },
   "OPENAI_URL=\"TRUE\"": {
-    "llm_endpoint": "TRUE"
+    "llm.endpoint": "TRUE"
   },
   "OPENAI_URL=\"[1]\"": {
-    "llm_endpoint": "[1]"
+    "llm.endpoint": "[1]"
   },
   "OPENAI_URL=\"abc\"": {
-    "llm_endpoint": "abc"
+    "llm.endpoint": "abc"
   },
   "OPENAI_URL=\"false\"": {
-    "llm_endpoint": "false"
+    "llm.endpoint": "false"
   },
   "OPENAI_URL=\"no\"": {
-    "llm_endpoint": "no"
+    "llm.endpoint": "no"
   },
   "OPENAI_URL=\"on\"": {
-    "llm_endpoint": "on"
+    "llm.endpoint": "on"
   },
   "OPENAI_URL=\"require\"": {
-    "llm_endpoint": "require"
+    "llm.endpoint": "require"
   },
   "OPENAI_URL=\"true\"": {
-    "llm_endpoint": "true"
+    "llm.endpoint": "true"
   },
   "OPENAI_URL=\"v\"": {
-    "llm_endpoint": "v"
+    "llm.endpoint": "v"
   },
   "OPENAI_URL=\"yes\"": {
-    "llm_endpoint": "yes"
+    "llm.endpoint": "yes"
   },
   "OPENAI_URL=\"{\\\"a\\\":1}\"": {
-    "llm_endpoint": "{\"a\":1}"
+    "llm.endpoint": "{\"a\":1}"
   },
   "OPENAI_URL=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "llm_endpoint": "{\"ssl\":\"verify-full\"}"
+    "llm.endpoint": "{\"ssl\":\"verify-full\"}"
   },
   "OPENAI_URL=\"{\\\"ssl\\\":true}\"": {
-    "llm_endpoint": "{\"ssl\":true}"
+    "llm.endpoint": "{\"ssl\":true}"
   },
   "OTEL_EXPORTER_OTLP_ENDPOINT=\"  \"": {
     "otel_exporter_otlp_endpoint": "  "
@@ -5277,6 +6216,70 @@
   },
   "STORAGE_BUCKET_NAME=\"{\\\"ssl\\\":true}\"": {
     "storage_bucket_name": "{\"ssl\":true}"
+  },
+  "TRANSCRIPTION_MODEL=\"  \"": {
+    "llm.openai_compatible.transcription_model": "  "
+  },
+  "TRANSCRIPTION_MODEL=\"\"": {},
+  "TRANSCRIPTION_MODEL=\"-1\"": {
+    "llm.openai_compatible.transcription_model": "-1"
+  },
+  "TRANSCRIPTION_MODEL=\"0\"": {
+    "llm.openai_compatible.transcription_model": "0"
+  },
+  "TRANSCRIPTION_MODEL=\"1\"": {
+    "llm.openai_compatible.transcription_model": "1"
+  },
+  "TRANSCRIPTION_MODEL=\"1.5\"": {
+    "llm.openai_compatible.transcription_model": "1.5"
+  },
+  "TRANSCRIPTION_MODEL=\"42\"": {
+    "llm.openai_compatible.transcription_model": "42"
+  },
+  "TRANSCRIPTION_MODEL=\"5000000000\"": {
+    "llm.openai_compatible.transcription_model": "5000000000"
+  },
+  "TRANSCRIPTION_MODEL=\"70000\"": {
+    "llm.openai_compatible.transcription_model": "70000"
+  },
+  "TRANSCRIPTION_MODEL=\"TRUE\"": {
+    "llm.openai_compatible.transcription_model": "TRUE"
+  },
+  "TRANSCRIPTION_MODEL=\"[1]\"": {
+    "llm.openai_compatible.transcription_model": "[1]"
+  },
+  "TRANSCRIPTION_MODEL=\"abc\"": {
+    "llm.openai_compatible.transcription_model": "abc"
+  },
+  "TRANSCRIPTION_MODEL=\"false\"": {
+    "llm.openai_compatible.transcription_model": "false"
+  },
+  "TRANSCRIPTION_MODEL=\"no\"": {
+    "llm.openai_compatible.transcription_model": "no"
+  },
+  "TRANSCRIPTION_MODEL=\"on\"": {
+    "llm.openai_compatible.transcription_model": "on"
+  },
+  "TRANSCRIPTION_MODEL=\"require\"": {
+    "llm.openai_compatible.transcription_model": "require"
+  },
+  "TRANSCRIPTION_MODEL=\"true\"": {
+    "llm.openai_compatible.transcription_model": "true"
+  },
+  "TRANSCRIPTION_MODEL=\"v\"": {
+    "llm.openai_compatible.transcription_model": "v"
+  },
+  "TRANSCRIPTION_MODEL=\"yes\"": {
+    "llm.openai_compatible.transcription_model": "yes"
+  },
+  "TRANSCRIPTION_MODEL=\"{\\\"a\\\":1}\"": {
+    "llm.openai_compatible.transcription_model": "{\"a\":1}"
+  },
+  "TRANSCRIPTION_MODEL=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
+    "llm.openai_compatible.transcription_model": "{\"ssl\":\"verify-full\"}"
+  },
+  "TRANSCRIPTION_MODEL=\"{\\\"ssl\\\":true}\"": {
+    "llm.openai_compatible.transcription_model": "{\"ssl\":true}"
   },
   "VECTOR_DB_HOST=\"  \"": {
     "vector_db_host": "  "

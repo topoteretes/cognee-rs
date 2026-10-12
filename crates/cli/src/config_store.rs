@@ -144,10 +144,14 @@ fn migrate_document(document: &mut ConfigDocument) {
         // of silently changing every request, is the worse trade.
         if document
             .settings
-            .llm_temperature
+            .llm()
+            .temperature
             .is_some_and(|t| (t - LEGACY_DEFAULT_TEMPERATURE).abs() < f64::EPSILON)
         {
-            document.settings.llm_temperature = None;
+            // Pre-v3 files spell it `llm_temperature`; it lives in the `llm`
+            // section now, under `llm.temperature`.
+            document.settings.sections.remove("llm_temperature");
+            document.settings.sections.remove("llm.temperature");
         }
         document.version = 3;
     }
@@ -343,14 +347,15 @@ mod tests {
         let mut document = ConfigDocument {
             version: 2,
             settings: Settings {
-                llm_temperature: Some(0.0),
+                sections: [("llm_temperature".to_string(), serde_json::json!(0.0))].into(),
                 ..Settings::default()
             },
         };
         migrate_document(&mut document);
         assert_eq!(document.version, CURRENT_VERSION);
         assert_eq!(
-            document.settings.llm_temperature, None,
+            document.settings.llm().temperature,
+            None,
             "a persisted 0.0 must become 'unset', not an explicit zero",
         );
     }
@@ -361,12 +366,12 @@ mod tests {
         let mut document = ConfigDocument {
             version: 2,
             settings: Settings {
-                llm_temperature: Some(0.7),
+                sections: [("llm_temperature".to_string(), serde_json::json!(0.7))].into(),
                 ..Settings::default()
             },
         };
         migrate_document(&mut document);
-        assert_eq!(document.settings.llm_temperature, Some(0.7));
+        assert_eq!(document.settings.llm().temperature, Some(0.7));
     }
 
     /// `single_process` must be a first-class CLI key on every surface the

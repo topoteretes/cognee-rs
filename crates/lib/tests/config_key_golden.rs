@@ -139,6 +139,22 @@ const ENV_VARS: &[&str] = &[
     "COGNEE_STRICT_CONFIG",
     // Component config sections of a default build.
     "GRAPH_MAX_DB_SIZE",
+    "COGNEE_DEBUG_LLM_REQUEST",
+    "LLM_VISION_MODEL",
+    "TRANSCRIPTION_MODEL",
+    "ANTHROPIC_BASE_URL",
+    "ANTHROPIC_API_BASE",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "AWS_PROFILE_NAME",
+    "AWS_ROLE_NAME",
+    "AWS_SESSION_NAME",
+    "AWS_WEB_IDENTITY_TOKEN",
+    "AWS_STS_ENDPOINT",
+    "AWS_EXTERNAL_ID",
+    "AWS_BEDROCK_RUNTIME_ENDPOINT",
+    "AWS_BEARER_TOKEN_BEDROCK",
 ];
 
 /// Raw env values probed against every variable: empty and whitespace,
@@ -180,6 +196,7 @@ const ENV_ALIASES: &[(&str, &str)] = &[
     ("EMBEDDING_MODEL_PATH", "COGNEE_E2E_EMBED_MODEL_PATH"),
     ("EMBEDDING_TOKENIZER_PATH", "COGNEE_E2E_TOKENIZER_PATH"),
     ("DB_SSLMODE", "DATABASE_CONNECT_ARGS"),
+    ("ANTHROPIC_BASE_URL", "ANTHROPIC_API_BASE"),
 ];
 
 /// JSON values probed against every key.
@@ -205,18 +222,17 @@ fn set_probes() -> Vec<Value> {
 
 /// The fields of `s` that differ from `Settings::default()`. The two
 /// `#[serde(skip)]` fields are compared by hand so they are covered too.
+/// Effective values (every `Settings` field and every built-in section
+/// setting, current or default) that differ from a default configuration.
 fn diff_from_default(s: &Settings) -> Value {
     let default = Settings::default();
-    let now = serde_json::to_value(s).unwrap();
-    let base = serde_json::to_value(&default).unwrap();
+    let now = ConfigManager::new(s.clone()).snapshot(None);
+    let base = ConfigManager::new(default.clone()).snapshot(None);
     let mut out = Map::new();
     for (key, value) in now.as_object().unwrap() {
         if base.get(key) != Some(value) {
             out.insert(key.clone(), value.clone());
         }
-    }
-    if s.llm_args != default.llm_args {
-        out.insert("llm_args".into(), Value::Object(s.llm_args.clone()));
     }
     if s.summarization_schema != default.summarization_schema {
         out.insert(

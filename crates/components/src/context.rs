@@ -139,11 +139,6 @@ pub struct EmbeddingInputs {
     pub onnx_dimensions: usize,
     pub onnx_max_sequence_length: usize,
     pub onnx_batch_size: usize,
-
-    /// Resolved AWS inputs for the Bedrock embedding engine. Env-only, filled
-    /// by [`aws_inputs_from_env`] at both lowering sites; ignored by every
-    /// other provider.
-    pub aws: AwsInputs,
 }
 
 /// Resolved LLM / transcriber inputs.
@@ -155,12 +150,6 @@ pub struct LlmInputs {
     pub model: String,
     pub api_key: String,
     pub endpoint: String,
-    /// Optional Anthropic Messages API base URL override (env `ANTHROPIC_BASE_URL`,
-    /// alias `ANTHROPIC_API_BASE`). `None` uses the public Anthropic API. Kept
-    /// separate from `endpoint` on purpose: `endpoint` aliases `OPENAI_URL`, so
-    /// inheriting it would point Anthropic traffic at the OpenAI host. Only the
-    /// Anthropic factory consumes it; other providers ignore it.
-    pub anthropic_base_url: Option<String>,
     /// Total attempts at one structured-output call (`LLM_MAX_RETRIES`),
     /// Python's `_MAX_VALIDATION_RETRIES`. The loop is
     /// `0..structured_output_retries`, so this counts the first ask *plus* its
@@ -308,10 +297,8 @@ pub struct LlmInputs {
     /// When non-empty, wraps the real adapter in a recorder (`mock-llm`).
     pub record_path: String,
 
-    /// Resolved AWS inputs for the Bedrock adapter. Env-only, filled by
-    /// [`aws_inputs_from_env`] at both lowering sites; ignored by every other
-    /// provider.
-    pub aws: AwsInputs,
+    /// Dump every request/response body to stderr (`llm.debug_requests`).
+    pub debug_requests: bool,
 }
 
 /// Caller-supplied AWS parameters for the Bedrock LLM adapter and embedding
@@ -326,15 +313,12 @@ pub struct LlmInputs {
 /// must move together** — adding, renaming or reordering a field here without
 /// doing the same there breaks that conversion.
 ///
-/// Follows the [`anthropic_base_url_from_env`] precedent: env-only, carried on
-/// [`LlmInputs`] / [`EmbeddingInputs`], and **not** a `Settings` field — Python
-/// resolves these from the environment and never threads them through its LLM
-/// config.
+/// Built from the `aws` config section ([`crate::sections::AwsConfig`]),
+/// which the Bedrock LLM and embedding factories register and read.
 #[derive(Clone, Default, PartialEq, Eq)]
 pub struct AwsInputs {
-    /// An explicitly caller-supplied region **only** — deliberately never
-    /// backfilled from `AWS_REGION_NAME` / `AWS_REGION` by
-    /// [`aws_inputs_from_env`].
+    /// An explicitly caller-supplied region **only** (`aws.region`) —
+    /// deliberately never backfilled from `AWS_REGION_NAME` / `AWS_REGION`.
     ///
     /// The plan's §1.3 chain is: this parameter → the region embedded in a
     /// model ARN → `AWS_REGION_NAME` → `AWS_REGION` → the ambient profile chain
@@ -442,76 +426,6 @@ fn shown(value: &Option<String>) -> &'static str {
     if value.is_some() { "set" } else { "unset" }
 }
 
-/// Read the Bedrock/AWS knobs from the environment.
-///
-/// The names are litellm's `params_to_check` uppercase set
-/// (`base_aws_llm.py::get_credentials`) plus the endpoint and bearer-token
-/// variables — several are not the ones a reader guesses, notably
-/// `AWS_PROFILE_NAME` (**not** the boto3-standard `AWS_PROFILE`). Every value
-/// is trimmed and an empty (or all-whitespace) value is treated as unset, so an
-/// exported-but-empty variable cannot select a code path with an unusable
-/// value.
-///
-/// [`AwsInputs::region`] is deliberately left `None` — see that field's docs.
-///
-/// Lives here — the env-read boundary for [`LlmInputs`] / [`EmbeddingInputs`] —
-/// so both the SDK `Settings` and the standalone HTTP server resolve these
-/// knobs identically when lowering their config into a
-/// [`BackendBuildContext`].
-#[allow(
-    clippy::disallowed_methods,
-    reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
-)]
-pub fn aws_inputs_from_env() -> AwsInputs {
-    aws_inputs_from(|key| std::env::var(key).ok())
-}
-
-/// [`aws_inputs_from_env`] over an injectable lookup, so the name mapping is
-/// testable without mutating shared process state (the workspace test runner is
-/// parallel, and `std::env::set_var` is `unsafe` in edition 2024).
-fn aws_inputs_from(lookup: impl Fn(&str) -> Option<String>) -> AwsInputs {
-    let read = |key: &str| {
-        lookup(key)
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-    };
-
-    AwsInputs {
-        // No env leg on purpose — see the field docs (plan §1.3 / `region.rs`).
-        region: None,
-        access_key_id: read("AWS_ACCESS_KEY_ID"),
-        secret_access_key: read("AWS_SECRET_ACCESS_KEY"),
-        session_token: read("AWS_SESSION_TOKEN"),
-        profile_name: read("AWS_PROFILE_NAME"),
-        role_name: read("AWS_ROLE_NAME"),
-        session_name: read("AWS_SESSION_NAME"),
-        web_identity_token: read("AWS_WEB_IDENTITY_TOKEN"),
-        sts_endpoint: read("AWS_STS_ENDPOINT"),
-        external_id: read("AWS_EXTERNAL_ID"),
-        bedrock_runtime_endpoint: read("AWS_BEDROCK_RUNTIME_ENDPOINT"),
-        bearer_token: read("AWS_BEARER_TOKEN_BEDROCK"),
-    }
-}
-
-/// Read the optional Anthropic base-URL override from the environment
-/// (`ANTHROPIC_BASE_URL`, alias `ANTHROPIC_API_BASE`). Trims surrounding
-/// whitespace and treats an empty value as unset (`None`).
-///
-/// Lives here — the env-read boundary for [`LlmInputs`] — so both the SDK
-/// `Settings` and the standalone HTTP server resolve the same knob identically
-/// when lowering their config into a [`BackendBuildContext`].
-#[allow(
-    clippy::disallowed_methods,
-    reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
-)]
-pub fn anthropic_base_url_from_env() -> Option<String> {
-    std::env::var("ANTHROPIC_BASE_URL")
-        .or_else(|_| std::env::var("ANTHROPIC_API_BASE"))
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-}
-
 /// Parse the `LLM_REASONING` knob into a reasoning-detection override for
 /// [`LlmInputs::reasoning_override`]. `always`/`true`/`on`/`1` force reasoning
 /// mode on, `never`/`false`/`off`/`0` force it off, and everything else —
@@ -576,10 +490,28 @@ pub fn parse_structured_output_mode(value: &str) -> StructuredOutputMode {
 
 #[cfg(test)]
 mod tests {
+    use cognee_config_core::{ConfigSchema, ConfigSection, ConfigValues};
+
     use super::{
-        AwsInputs, StructuredOutputMode, aws_inputs_from, parse_reasoning_override,
-        parse_structured_output_mode,
+        AwsInputs, StructuredOutputMode, parse_reasoning_override, parse_structured_output_mode,
     };
+    use crate::sections::AwsConfig;
+
+    /// The AWS inputs the `aws` config section yields for an environment:
+    /// the env binding (`overlay_env`) plus `AwsConfig::to_inputs`.
+    #[allow(
+        clippy::expect_used,
+        reason = "test helper — panics are acceptable failures"
+    )]
+    fn aws_inputs_from(lookup: impl Fn(&str) -> Option<String> + Send + Sync) -> AwsInputs {
+        let mut schema = ConfigSchema::new();
+        schema
+            .add(AwsConfig::schema())
+            .expect("a lone section cannot collide");
+        let mut values = ConfigValues::new();
+        schema.overlay_env(&mut values, &lookup);
+        AwsConfig::from_values(&values).to_inputs()
+    }
 
     #[test]
     fn parse_reasoning_override_maps_known_tokens() {

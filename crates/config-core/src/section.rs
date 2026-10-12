@@ -104,6 +104,29 @@ impl ConfigValue for f64 {
     }
 }
 
+/// A JSON object, e.g. extra request parameters. From env it must parse as a
+/// JSON object; anything else is ignored with a warning.
+impl ConfigValue for serde_json::Map<String, Value> {
+    fn parse_env(raw: &str) -> Option<Self> {
+        match serde_json::from_str::<Value>(raw) {
+            Ok(Value::Object(map)) => Some(map),
+            _ => {
+                tracing::warn!(value = raw, "ignoring config value: not a JSON object");
+                None
+            }
+        }
+    }
+    fn from_json(value: &Value) -> Result<Self, String> {
+        value
+            .as_object()
+            .cloned()
+            .ok_or_else(|| "expected a JSON object".to_string())
+    }
+    fn to_json(&self) -> Value {
+        Value::Object(self.clone())
+    }
+}
+
 /// `Option<T>`: JSON `null` means unset.
 impl<T: ConfigValue> ConfigValue for Option<T> {
     fn parse_env(raw: &str) -> Option<Self> {
@@ -425,6 +448,24 @@ impl ConfigSchema {
         report
     }
 
+    /// Every registered setting with its current value (from `values`, else
+    /// its default), keyed canonically. With `mask = Some(marker)`, a
+    /// non-empty secret value is replaced by `marker`.
+    pub fn snapshot(&self, values: &ConfigValues, mask: Option<&str>) -> ConfigValues {
+        self.key_defs()
+            .map(|def| {
+                let value = values.get(def.key).cloned().unwrap_or_else(def.default);
+                let shown = match mask {
+                    Some(marker) if def.secret && !is_empty_value(&value) => {
+                        Value::String(marker.to_string())
+                    }
+                    _ => value,
+                };
+                (def.key.to_string(), shown)
+            })
+            .collect()
+    }
+
     /// Keys of `values` that match no registered setting.
     pub fn unknown_keys<'a>(&self, values: &'a ConfigValues) -> Vec<&'a str> {
         values
@@ -432,6 +473,14 @@ impl ConfigSchema {
             .filter(|key| self.key_def(key).is_none())
             .map(String::as_str)
             .collect()
+    }
+}
+
+fn is_empty_value(value: &Value) -> bool {
+    match value {
+        Value::Null => true,
+        Value::String(s) => s.is_empty(),
+        _ => false,
     }
 }
 
@@ -525,7 +574,12 @@ macro_rules! config_section {
                 #[allow(unused_mut, reason = "a section may have no fields")]
                 let mut section = Self::default();
                 $(
-                    if let Some(value) = values.get(concat!($section, ".", stringify!($field)))
+                    // Canonical key first, then an alias: a raw map (e.g. a
+                    // config file not yet normalized) may still use one.
+                    let value = values
+                        .get(concat!($section, ".", stringify!($field)))
+                        .or_else(|| [$($alias),*].iter().find_map(|alias: &&str| values.get(*alias)));
+                    if let Some(value) = value
                         && let Ok(v) = <$ty as $crate::ConfigValue>::from_json(value)
                     {
                         section.$field = v;

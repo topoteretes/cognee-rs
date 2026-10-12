@@ -65,6 +65,8 @@ use crate::types::{GenerationOptions, GenerationResponse, Message, TokenUsage};
 /// Built by `cognee-components`' Bedrock factory (plan §4 R5); see the module
 /// docs for the wire spec it implements.
 pub struct BedrockAdapter {
+    /// Dump every request/response body to stderr (`llm.debug_requests`).
+    debug_requests: bool,
     /// The model id **exactly as configured**. This is what goes in the request
     /// URL — cross-region prefix, ARN wrapper and suffixes included.
     model: String,
@@ -261,6 +263,7 @@ impl BedrockAdapter {
         );
 
         Ok(Self {
+            debug_requests: false,
             model,
             base_model,
             caps,
@@ -449,6 +452,13 @@ impl BedrockAdapter {
 
     /// Set `LLM_ARGS`, merged into `additionalModelRequestFields`. Explicit
     /// keys the adapter sets always win (litellm's `{**llm_args, **kwargs}`).
+    /// Dump every request and response body to stderr (`llm.debug_requests`).
+    #[must_use]
+    pub fn with_debug_requests(mut self, enabled: bool) -> Self {
+        self.debug_requests = enabled;
+        self
+    }
+
     pub fn with_extra_args(mut self, args: Map<String, Value>) -> Self {
         self.extra_args = args;
         self
@@ -613,10 +623,6 @@ impl BedrockAdapter {
             cognee.llm.provider = "bedrock",
         ),
     )]
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
-    )]
     async fn call_converse_before(
         &self,
         request_body: &Value,
@@ -625,9 +631,7 @@ impl BedrockAdapter {
         let url = converse::converse_url(&self.endpoint, &self.model);
         tracing::Span::current().record("url", url.as_str());
 
-        let debug_enabled = std::env::var("COGNEE_DEBUG_LLM_REQUEST")
-            .map(|value| cognee_utils::parse_env_bool(&value))
-            .unwrap_or(false);
+        let debug_enabled = self.debug_requests;
         if debug_enabled {
             let pretty = serde_json::to_string_pretty(request_body)
                 .unwrap_or_else(|_| request_body.to_string());

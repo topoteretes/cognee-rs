@@ -44,9 +44,11 @@ fn set_probes() -> Vec<Value> {
     ]
 }
 
+/// Effective values that differ from a default configuration (see the
+/// `cognee` golden test).
 fn diff_from_default(s: &Settings) -> Value {
-    let now = serde_json::to_value(s).unwrap();
-    let base = serde_json::to_value(Settings::default()).unwrap();
+    let now = cognee::ConfigManager::new(s.clone()).snapshot(None);
+    let base = cognee::ConfigManager::new(Settings::default()).snapshot(None);
     let mut out = Map::new();
     for (key, value) in now.as_object().unwrap() {
         if base.get(key) != Some(value) {
@@ -141,7 +143,7 @@ fn cli_config_keys_match_golden() {
 
         // `config unset` restores the default from a changed document.
         let mut s = Settings {
-            llm_model: "changed".into(),
+            sections: [("llm.model".to_string(), json!("changed"))].into(),
             db_port: 1,
             chunk_size: Some(7),
             ..Settings::default()

@@ -413,7 +413,7 @@ pub fn run(args: BenchArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
     let (llm_model, embedding_model, embedding_dimensions) = {
         let s = cm.settings();
         (
-            s.llm_model.clone(),
+            s.llm().model.clone(),
             s.embedding_model_name.clone(),
             s.embedding_dimensions,
         )

@@ -368,14 +368,8 @@ pub unsafe extern "C" fn cg_sdk_config_get(
     }
     let state = unsafe { &*sdk };
 
-    // Serialize the current settings with the secret fields blanked.
-    let value = match cognee_bindings_common::redacted_settings_json(state.state.cm.config()) {
-        Ok(v) => v,
-        Err(e) => {
-            set_last_error(format!("failed to serialize settings: {e}"));
-            return CgErrorCode::RuntimeError;
-        }
-    };
+    // Every setting, with secrets blanked before returning to the C caller.
+    let value = cognee_bindings_common::config_snapshot(state.state.cm.config());
 
     let json_str = match serde_json::to_string(&value) {
         Ok(s) => s,

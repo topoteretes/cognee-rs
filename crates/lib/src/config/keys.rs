@@ -155,6 +155,10 @@ mod kind {
             .ok_or_else(|| mismatch(key, "expected a positive integer (u16)"))
     }
 
+    #[allow(
+        dead_code,
+        reason = "used by the `opt_f64` row kind; no row needs it today"
+    )]
     pub(super) fn as_f64(key: &str, value: &Value) -> Result<f64, ConfigError> {
         value
             .as_f64()
@@ -298,80 +302,8 @@ static KEYS: &[KeySpec] = &[
         reset: |s, d| s.summarization_schema = d.summarization_schema.clone(),
     },
     // -- LLM ----------------------------------------------------------------
-    row!(llm_provider: str, env ["LLM_PROVIDER"]),
-    row!(llm_model: str, env ["LLM_MODEL", "OPENAI_MODEL"]),
-    row!(llm_api_key: str secret, env ["LLM_API_KEY", "OPENAI_TOKEN"]),
-    row!(llm_endpoint: str, env ["LLM_ENDPOINT", "OPENAI_URL"]),
-    row!(llm_api_version: str, env ["LLM_API_VERSION"]),
-    row!(llm_reasoning: str, env ["LLM_REASONING"]),
-    row!(llm_structured_output_mode: str, env ["LLM_STRUCTURED_OUTPUT_MODE"]),
-    row!(llm_temperature: opt_f64, env ["LLM_TEMPERATURE"]),
-    row!(llm_streaming: bool, env ["LLM_STREAMING"]),
-    row!(llm_max_completion_tokens: u32, env ["LLM_MAX_COMPLETION_TOKENS", "LLM_MAX_TOKENS"]),
-    row!(llm_max_retries: u32, env ["LLM_MAX_RETRIES"]),
-    row!(llm_network_retries: u32, env ["LLM_NETWORK_RETRIES"]),
-    row!(llm_min_retry_seconds: u32, env ["LLM_MIN_RETRY_SECONDS"]),
     row!(llm_max_parallel_requests: u32, env ["LLM_MAX_PARALLEL_REQUESTS"]),
-    row!(llm_request_timeout_seconds: u32, env ["LLM_REQUEST_TIMEOUT_SECONDS"]),
-    row!(llm_connect_timeout_seconds: u32, env ["LLM_CONNECT_TIMEOUT_SECONDS"]),
-    row!(llm_request_deadline_seconds: u32, env ["LLM_REQUEST_DEADLINE_SECONDS"]),
-    KeySpec {
-        key: "llm_args",
-        key_aliases: &[],
-        env: &["LLM_ARGS"],
-        secret: false,
-        persisted: false,
-        // A JSON object; anything else is ignored with a warning rather than
-        // aborting startup, like the other optional LLM knobs.
-        overlay: |s, env| {
-            if let Some(v) = first_set(env, &["LLM_ARGS"]) {
-                match serde_json::from_str::<Value>(&v) {
-                    Ok(Value::Object(map)) => s.llm_args = map,
-                    _ => tracing::warn!(
-                        "LLM_ARGS is set but is not a JSON object; ignoring it. \
-                         Expected e.g. LLM_ARGS='{{\"max_tokens\": 16384}}'"
-                    ),
-                }
-            }
-        },
-        set: |s, key, v| match v {
-            Value::Object(map) => {
-                s.llm_args = map;
-                Ok(())
-            }
-            _ => Err(mismatch(key, "expected a JSON object")),
-        },
-        get: |s| Value::Object(s.llm_args.clone()),
-        reset: |s, d| s.llm_args = d.llm_args.clone(),
-    },
-    KeySpec {
-        key: "llm_mock",
-        key_aliases: &[],
-        env: &["MOCK_LLM"],
-        secret: false,
-        persisted: true,
-        // Only `true | 1 | yes` (case-insensitive, untrimmed), like
-        // `MOCK_EMBEDDING`: stricter than the other booleans.
-        overlay: |s, env| {
-            if let Some(v) = first_set(env, &["MOCK_LLM"]) {
-                let v = v.to_lowercase();
-                s.llm_mock = v == "true" || v == "1" || v == "yes";
-            }
-        },
-        set: |s, key, v| {
-            s.llm_mock = as_bool(key, &v)?;
-            Ok(())
-        },
-        get: |s| Value::Bool(s.llm_mock),
-        reset: |s, d| s.llm_mock = d.llm_mock,
-    },
-    row!(llm_cassette: str, env ["MOCK_LLM_CASSETTE"]),
-    row!(llm_record_path: str, env ["COGNEE_RECORD_LLM"]),
     row!(graph_prompt_path: str, env []),
-    row!(llm_fallback_model: str, env []),
-    row!(llm_fallback_provider: str, env []),
-    row!(llm_fallback_endpoint: str, env []),
-    row!(llm_fallback_api_key: str secret, env []),
     // -- Graph database -----------------------------------------------------
     row!(graph_database_provider: str, env ["GRAPH_DATABASE_PROVIDER"]),
     row!(graph_database_url: str, env ["GRAPH_DATABASE_URL"]),
@@ -444,7 +376,6 @@ static KEYS: &[KeySpec] = &[
     row!(embedding_endpoint: str, env ["EMBEDDING_ENDPOINT"]),
     row!(embedding_api_key: str secret, env ["EMBEDDING_API_KEY", "LLM_API_KEY"]),
     row!(embedding_api_version: str, env []),
-    row!(transcription_model: str, env []),
     // -- Ontology -----------------------------------------------------------
     row!(ontology_file_path: str, env ["ONTOLOGY_FILE_PATH"]),
     row!(ontology_resolver: str, env ["ONTOLOGY_RESOLVER"]),
@@ -465,10 +396,6 @@ static KEYS: &[KeySpec] = &[
     // -- Logging ------------------------------------------------------------
     row!(log_level: str, env ["LOG_LEVEL"]),
     // -- Rate limiting ------------------------------------------------------
-    row!(auto_rate_limit: bool, env ["AUTO_RATE_LIMIT"]),
-    row!(llm_rate_limit_enabled: bool, env ["LLM_RATE_LIMIT_ENABLED"]),
-    row!(llm_rate_limit_requests: u32, env ["LLM_RATE_LIMIT_REQUESTS"]),
-    row!(llm_rate_limit_interval: u32, env ["LLM_RATE_LIMIT_INTERVAL"]),
     row!(embedding_rate_limit_enabled: bool, env ["EMBEDDING_RATE_LIMIT_ENABLED"]),
     row!(embedding_rate_limit_requests: u32, env ["EMBEDDING_RATE_LIMIT_REQUESTS"]),
     row!(embedding_rate_limit_interval: u32, env ["EMBEDDING_RATE_LIMIT_INTERVAL"]),
@@ -556,8 +483,8 @@ pub fn schema_with(extra: &ConfigSchema) -> Result<ConfigSchema, cognee_config_c
     Ok(schema)
 }
 
-/// An empty schema with every `Settings` key, key alias and env var reserved,
-/// so no section can claim them.
+/// An empty schema with every `Settings` key, key alias and primary env var
+/// reserved, so no section can claim them.
 pub(super) fn core_schema() -> ConfigSchema {
     let mut schema = ConfigSchema::new();
     schema
@@ -565,7 +492,10 @@ pub(super) fn core_schema() -> ConfigSchema {
             "Settings",
             KEYS.iter()
                 .flat_map(|spec| std::iter::once(spec.key).chain(spec.key_aliases.iter().copied())),
-            KEYS.iter().flat_map(|spec| spec.env.iter().copied()),
+            // Primary env vars only, the same rule sections follow: a fallback
+            // (`LLM_API_KEY` behind `embedding_api_key`) may be another
+            // owner's primary.
+            KEYS.iter().filter_map(|spec| spec.env.first().copied()),
         )
         .expect("Settings keys are unique (pinned by env_vars_and_keys_are_unique)");
     schema
@@ -652,7 +582,7 @@ impl Settings {
 mod tests {
     use super::*;
 
-    /// Every serialized `Settings` field, plus the two `#[serde(skip)]` ones,
+    /// Every serialized `Settings` field, plus the `#[serde(skip)]` one,
     /// has exactly one row, and no row names a field that does not exist.
     #[test]
     fn every_settings_field_has_exactly_one_row() {
@@ -663,7 +593,7 @@ mod tests {
             .keys()
             .cloned()
             .collect();
-        fields.extend(["llm_args".to_string(), "summarization_schema".to_string()]);
+        fields.push("summarization_schema".to_string());
         fields.sort();
 
         let mut rows: Vec<String> = KEYS.iter().map(|s| s.key.to_string()).collect();

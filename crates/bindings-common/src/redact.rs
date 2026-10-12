@@ -31,22 +31,19 @@ pub const SECRET_FIELDS: &[&str] = &[
 
 const REDACTED: &str = "***REDACTED***";
 
-/// The current settings of `config` as a JSON object, with every secret
-/// masked: the keys in [`SECRET_FIELDS`] plus every key the configuration
-/// schema marks as a secret ([`ConfigManager::secret_keys`]), which covers the
-/// component section settings flattened into the serialized `Settings` (e.g.
-/// `"llm.<adapter>.api_key"`). This is what every binding's `config.get()`
-/// returns.
+/// The configuration a binding's `get()` returns: every `Settings` field and
+/// every setting of every known component section (canonical key, current or
+/// default value), with all secrets blanked: section secrets by their
+/// `secret` flag, `Settings` secrets by their registry row's `secret` flag
+/// ([`ConfigManager::secret_keys`]) and by [`SECRET_FIELDS`].
 ///
 /// [`ConfigManager::secret_keys`]: cognee::config::ConfigManager::secret_keys
-pub fn redacted_settings_json(
-    config: &cognee::config::ConfigManager,
-) -> serde_json::Result<serde_json::Value> {
+pub fn config_snapshot(config: &cognee::config::ConfigManager) -> serde_json::Value {
     let secret = config.secret_keys();
-    let mut value = serde_json::to_value(&*config.read())?;
+    let mut value = config.snapshot(Some(REDACTED));
     redact_config_json(&mut value);
     redact_keys(&mut value, &secret);
-    Ok(value)
+    value
 }
 
 /// Mask the non-null values of `keys` in a JSON object, in place.
@@ -181,22 +178,19 @@ mod tests {
         assert_eq!(value, json!("just a string"));
     }
 
-    /// Every `Settings` row marked `secret` in the key registry is masked by
-    /// the binding path, including ones missing from `SECRET_FIELDS`.
+    /// Every setting marked `secret` (registry row or section key) is masked
+    /// by the binding path, including ones missing from `SECRET_FIELDS`.
     #[test]
     fn every_registry_secret_is_redacted() {
         let cm = cognee::config::ConfigManager::new(cognee::config::Settings::default());
-        let secrets: Vec<&str> = cognee::config::keys()
-            .iter()
-            .filter(|spec| spec.secret)
-            .map(|spec| spec.key)
-            .collect();
-        assert!(secrets.contains(&"llm_fallback_api_key"));
+        let secrets = cm.secret_keys();
+        assert!(secrets.contains(&"llm.fallback_api_key"));
+        assert!(secrets.contains(&"db_password"));
         for key in &secrets {
             cm.set(key, json!("hunter2"))
-                .expect("secret rows take a string");
+                .expect("secret settings take a string");
         }
-        let value = redacted_settings_json(&cm).expect("serializes");
+        let value = config_snapshot(&cm);
         for key in &secrets {
             assert_eq!(value[*key], json!(REDACTED), "{key} leaked");
         }
@@ -225,7 +219,7 @@ mod tests {
         cm.set("test.redact.api_key", json!("sk-section"))
             .expect("set");
         cm.set("test.redact.model", json!("m")).expect("set");
-        let value = redacted_settings_json(&cm).expect("serializes");
+        let value = config_snapshot(&cm);
         assert_eq!(value["test.redact.api_key"], json!(REDACTED));
         assert_eq!(value["test.redact.model"], json!("m"));
     }

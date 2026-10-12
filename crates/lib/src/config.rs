@@ -141,143 +141,11 @@ pub struct Settings {
     #[serde(skip)]
     pub summarization_schema: Option<serde_json::Value>,
 
-    pub llm_provider: String,
-    pub llm_model: String,
-    pub llm_api_key: String,
-    pub llm_endpoint: String,
-    pub llm_api_version: String,
-    /// Reasoning-model detection override (`LLM_REASONING`): `auto` (default,
-    /// name/host auto-detection), `always` (force the reasoning parameter shape),
-    /// or `never` (force the legacy `max_tokens`+sampling shape). Lets an operator
-    /// correct an endpoint whose model name mis-signals its reasoning nature.
-    pub llm_reasoning: String,
-    /// Structured-output request shape (`LLM_STRUCTURED_OUTPUT_MODE`): `auto`
-    /// (default, try native `tools` then legacy `functions` then JSON mode),
-    /// or `tools` / `functions` / `json` to pin one shape and never send the
-    /// others. The counterpart of Python's `llm_instructor_mode`.
-    ///
-    /// `json_schema` is also accepted and is **not** a pin: it asks for
-    /// constrained decoding (`response_format: {"type": "json_schema", …,
-    /// "strict": true}`, the shape Python's `litellm_native` path sends) ahead
-    /// of the cascade and demotes back into it — strict, then non-strict, then
-    /// out — if the endpoint refuses the request shape, remembering the
-    /// demotion per schema. See `docs/configuration.md`.
-    ///
-    /// Worth pinning on an endpoint whose shape is known — a vLLM deployment
-    /// started without `--enable-auto-tool-choice --tool-call-parser` answers no
-    /// tool call at all, and the adapter's miss probe has to rediscover that in
-    /// every fresh process. An unrecognised value leaves the cascade in place.
-    pub llm_structured_output_mode: String,
-    /// Sampling temperature, or `None` when the operator has not set one.
-    ///
-    /// `None` means "send no temperature at all" and is not the same as
-    /// `Some(0.0)`. Python draws exactly this distinction — its validator folds
-    /// the value into `llm_args` only `if "llm_temperature" in
-    /// self.model_fields_set` (`cognee/infrastructure/llm/config.py`) — because
-    /// the default gpt-5 family rejects any temperature but the provider's own,
-    /// so silently sending a defaulted 0.0 breaks those models outright.
-    pub llm_temperature: Option<f64>,
-    pub llm_streaming: bool,
-    pub llm_max_completion_tokens: u32,
-    /// Total attempts at one structured-output call, mirroring Python's
-    /// `_MAX_VALIDATION_RETRIES = 3` (`litellm_native/native_adapter.py`).
-    ///
-    /// Governs the *outer* loop only: a response that fails validation, arrives
-    /// truncated, or is rejected by the caller's validator is re-asked with the
-    /// reason in context. The loop is `0..structured_output_retries`, so this is
-    /// the first ask *plus* its re-asks — `3` is three attempts, at most two
-    /// corrective re-asks — and every adapter floors it at 1, so `0` means one
-    /// attempt and no re-ask. The transport ladder underneath it is
-    /// `llm_network_retries`, a separate knob since SDK-624 — one value feeding
-    /// both multiplied the ladders into each other
-    /// (`retries x (network_retries + 1) x llm_request_timeout_seconds`), which
-    /// is how a single chunk could occupy an hour of wall clock.
-    pub llm_max_retries: u32,
-    /// Minimum transport attempts for one HTTP request before it is allowed to
-    /// fail, mirroring Python's `stop_after_attempt(2)` (`llm/retry_config.py`).
-    ///
-    /// A floor, not a cap: paired with `llm_min_retry_seconds` this forms
-    /// Python's dual-floor stop condition, so the ladder keeps retrying until
-    /// BOTH floors are satisfied.
-    pub llm_network_retries: u32,
-    /// Minimum seconds a transient LLM failure is retried for before the call is
-    /// allowed to fail. Paired with `llm_network_retries` this forms Python's
-    /// dual-floor stop condition (`stop_after_attempt & stop_after_delay`,
-    /// `retry_config.py`): retrying continues until BOTH floors are satisfied.
-    ///
-    /// Python hard-codes 240. It is configurable here so the retry ladder keeps
-    /// a fail-fast escape hatch: set this to `0` and the stop condition reduces
-    /// to a plain attempt cap, as it behaved before.
-    pub llm_min_retry_seconds: u32,
     pub llm_max_parallel_requests: u32,
-
-    /// Per-HTTP-request timeout in seconds (`LLM_REQUEST_TIMEOUT_SECONDS`).
-    ///
-    /// Was hardcoded at 600 inside every adapter, so a deployment behind a slow
-    /// or wedged gateway had no way to fail faster. Bounds one request only; see
-    /// `llm_request_deadline_seconds` for the aggregate.
-    pub llm_request_timeout_seconds: u32,
-
-    /// TCP connect timeout in seconds (`LLM_CONNECT_TIMEOUT_SECONDS`).
-    ///
-    /// `reqwest` applies none by default, so before this a black-holed connect —
-    /// a stopped local Ollama, a wedged proxy — consumed the entire request
-    /// timeout without sending a byte.
-    pub llm_connect_timeout_seconds: u32,
-
-    /// Wall-clock ceiling on one logical structured-output call
-    /// (`LLM_REQUEST_DEADLINE_SECONDS`). `0` disables it.
-    ///
-    /// The per-request timeout above composes into no aggregate: structured
-    /// extraction makes `llm_max_retries` attempts, each running a transport
-    /// ladder that honours the `llm_min_retry_seconds` time floor.
-    /// Multiplied out, the designed worst case exceeds an hour — which is how a
-    /// single extraction can run for 45 minutes while every individual HTTP
-    /// request completes well inside its timeout.
-    ///
-    /// Enforced when *starting* new work (each cascade mode and each corrective
-    /// re-ask), not as a cancellation, so one already-dispatched request can
-    /// overrun by at most `llm_request_timeout_seconds`.
-    ///
-    /// Reaches every adapter since SDK-624. Before that the Bedrock and
-    /// Anthropic adapters had no setter for it, so it bound only the
-    /// OpenAI-compatible and Azure paths.
-    pub llm_request_deadline_seconds: u32,
-
-    /// Extra parameters merged into every LLM chat-completion request, parsed
-    /// from the `LLM_ARGS` env var (a JSON object), mirroring Python cognee's
-    /// `llm_config.llm_args`. Python's litellm adapter merges these into each
-    /// call as `{**self.llm_args, **kwargs}`; explicitly-set request parameters
-    /// always win. The canonical use is `LLM_ARGS={"max_tokens": 16384}` to
-    /// lift a provider's small default output cap that would otherwise truncate
-    /// a dense graph-extraction tool call mid-JSON. Empty by default (Python
-    /// default `llm_args = {}`). `#[serde(skip)]` (like `summarization_schema`)
-    /// keeps persisted config snapshots stable — it is env-driven only.
-    #[serde(skip)]
-    pub llm_args: serde_json::Map<String, serde_json::Value>,
-
-    /// Select the record/replay mock LLM instead of the real provider
-    /// (`MOCK_LLM`). Parallels `MOCK_EMBEDDING`. Requires the `mock-llm` feature.
-    pub llm_mock: bool,
-    /// Cassette path for the replay mock when `llm_mock` is set (`MOCK_LLM_CASSETTE`).
-    /// Empty = unset.
-    pub llm_cassette: String,
-    /// When non-empty, wrap the real adapter in a recording mock that writes a
-    /// cassette to this path (`COGNEE_RECORD_LLM`). Empty = unset.
-    pub llm_record_path: String,
 
     pub graph_prompt_path: String,
 
     // -- LLM fallback -----------------------------------------------------------
-    /// Fallback LLM model name used when the primary model fails.
-    pub llm_fallback_model: String,
-    /// Fallback LLM provider (e.g. `"openai"`, `"ollama"`).
-    pub llm_fallback_provider: String,
-    /// Base URL for the fallback LLM API endpoint.
-    pub llm_fallback_endpoint: String,
-    /// API key for the fallback LLM provider.
-    pub llm_fallback_api_key: String,
-
     /// Graph backend id. The default is derived from the graph factories the
     /// compiled features register
     /// ([`cognee_components::default_graph_provider`]): `ladybug` in every
@@ -358,8 +226,6 @@ pub struct Settings {
     pub embedding_api_key: String,
     /// Embedding API version string (e.g. for Azure OpenAI `api-version`).
     pub embedding_api_version: String,
-    /// Transcription model name (e.g. `"whisper-1"`).
-    pub transcription_model: String,
 
     pub ontology_file_path: String,
     /// Ontology resolver backend. Currently always resolved to `RdfLibOntologyResolver`
@@ -392,14 +258,6 @@ pub struct Settings {
     pub log_level: String,
 
     // -- Rate limiting -----------------------------------------------------------
-    /// Let provider overload (HTTP 429/503/529 or a timeout) switch pacing on by
-    /// itself for a cooldown window. Python's `auto_rate_limit`
-    /// (`infrastructure/llm/config.py`), default on. Set `AUTO_RATE_LIMIT=false`
-    /// to leave dispatch unpaced no matter what the provider reports.
-    pub auto_rate_limit: bool,
-    pub llm_rate_limit_enabled: bool,
-    pub llm_rate_limit_requests: u32,
-    pub llm_rate_limit_interval: u32,
     pub embedding_rate_limit_enabled: bool,
     pub embedding_rate_limit_requests: u32,
     pub embedding_rate_limit_interval: u32,
@@ -539,6 +397,18 @@ impl Settings {
         self.overlay_from_with_schema(&cognee_config_core::ProcessEnv::new(), schema);
     }
 
+    /// The typed component config section `T`: its values from
+    /// [`Settings::sections`] (canonical keys or aliases) plus defaults.
+    pub fn section<T: ConfigSection>(&self) -> T {
+        T::from_values(&self.sections)
+    }
+
+    /// The LLM kind section (`llm.*`): provider, model, credentials, retries,
+    /// timeouts and the other settings every LLM adapter shares.
+    pub fn llm(&self) -> cognee_components::LlmConfig {
+        self.section()
+    }
+
     /// Whether exactly one process uses the relational database.
     ///
     /// The explicit [`Settings::single_process`] answer when the operator gave
@@ -635,13 +505,14 @@ impl Settings {
             .trim()
             .eq_ignore_ascii_case("bedrock");
         let inherit_from_llm =
-            !embedding_is_bedrock || self.llm_provider.trim().eq_ignore_ascii_case("bedrock");
+            !embedding_is_bedrock || self.llm().provider.trim().eq_ignore_ascii_case("bedrock");
 
+        let llm = self.llm();
         let mut endpoint_sources = vec![&self.embedding_endpoint];
         let mut api_key_sources = vec![&self.embedding_api_key];
         if inherit_from_llm {
-            endpoint_sources.push(&self.llm_endpoint);
-            api_key_sources.push(&self.llm_api_key);
+            endpoint_sources.push(&llm.endpoint);
+            api_key_sources.push(&llm.api_key);
         }
         let endpoint = endpoint_sources
             .into_iter()
@@ -716,43 +587,39 @@ impl Settings {
                 onnx_dimensions: self.embedding_dimensions as usize,
                 onnx_max_sequence_length: self.embedding_max_sequence_length as usize,
                 onnx_batch_size: self.embedding_onnx_batch_size as usize,
-                aws: cognee_components::aws_inputs_from_env(),
             },
             llm: cognee_components::LlmInputs {
-                provider: self.llm_provider.to_lowercase(),
-                model: self.llm_model.clone(),
-                api_key: self.llm_api_key.clone(),
-                endpoint: self.llm_endpoint.clone(),
-                anthropic_base_url: cognee_components::anthropic_base_url_from_env(),
-                max_retries: self.llm_max_retries,
-                network_retries: self.llm_network_retries,
-                min_retry_seconds: self.llm_min_retry_seconds,
+                provider: llm.provider.to_lowercase(),
+                model: llm.model.clone(),
+                api_key: llm.api_key.clone(),
+                endpoint: llm.endpoint.clone(),
+                max_retries: llm.max_retries,
+                network_retries: llm.network_retries,
+                min_retry_seconds: llm.min_retry_seconds,
                 max_parallel_requests: self.llm_max_parallel_requests,
-                request_timeout_seconds: self.llm_request_timeout_seconds,
-                connect_timeout_seconds: self.llm_connect_timeout_seconds,
-                request_deadline_seconds: self.llm_request_deadline_seconds,
-                rate_limit_enabled: self.llm_rate_limit_enabled,
-                rate_limit_requests: self.llm_rate_limit_requests,
-                rate_limit_interval: self.llm_rate_limit_interval,
-                auto_rate_limit: self.auto_rate_limit,
-                max_completion_tokens: self.llm_max_completion_tokens,
+                request_timeout_seconds: llm.request_timeout_seconds,
+                connect_timeout_seconds: llm.connect_timeout_seconds,
+                request_deadline_seconds: llm.request_deadline_seconds,
+                rate_limit_enabled: llm.rate_limit_enabled,
+                rate_limit_requests: llm.rate_limit_requests,
+                rate_limit_interval: llm.rate_limit_interval,
+                auto_rate_limit: llm.auto_rate_limit,
+                max_completion_tokens: llm.max_completion_tokens,
                 #[allow(
                     clippy::cast_possible_truncation,
                     reason = "GenerationOptions carries f32; a sampling temperature has no precision to lose"
                 )]
-                temperature: self.llm_temperature.map(|t| t as f32),
-                llm_args: self.llm_args.clone(),
-                api_version: self.llm_api_version.clone(),
-                reasoning_override: cognee_components::parse_reasoning_override(
-                    &self.llm_reasoning,
-                ),
+                temperature: llm.temperature.map(|t| t as f32),
+                llm_args: llm.args.clone(),
+                api_version: llm.api_version.clone(),
+                reasoning_override: cognee_components::parse_reasoning_override(&llm.reasoning),
                 structured_output_mode: cognee_components::parse_structured_output_mode(
-                    &self.llm_structured_output_mode,
+                    &llm.structured_output_mode,
                 ),
-                mock: self.llm_mock,
-                cassette: self.llm_cassette.clone(),
-                record_path: self.llm_record_path.clone(),
-                aws: cognee_components::aws_inputs_from_env(),
+                mock: llm.mock,
+                cassette: llm.cassette.clone(),
+                record_path: llm.record_path.clone(),
+                debug_requests: llm.debug_requests,
             },
         }
     }
@@ -932,9 +799,9 @@ impl Settings {
         );
         m.insert(
             "llm_provider".into(),
-            Value::String(self.llm_provider.clone()),
+            Value::String(self.llm().provider.clone()),
         );
-        m.insert("llm_model".into(), Value::String(self.llm_model.clone()));
+        m.insert("llm_model".into(), Value::String(self.llm().model.clone()));
         // NOTE: `llm_mock`/`llm_cassette`/`llm_record_path` are intentionally
         // NOT emitted here. The cassette/record fields are local filesystem
         // paths (sensitive), and the telemetry snapshot is an allowlisted,
@@ -988,35 +855,6 @@ impl Default for Settings {
             graph_model: "KnowledgeGraph".to_string(),
             summarization_schema: None,
 
-            llm_provider: "openai".to_string(),
-            llm_model: "openai/gpt-5-mini".to_string(),
-            llm_api_key: String::new(),
-            llm_endpoint: String::new(),
-            llm_api_version: String::new(),
-            llm_reasoning: "auto".to_string(),
-            llm_structured_output_mode: "auto".to_string(),
-            llm_temperature: None,
-            llm_streaming: false,
-            // Single-sourced with the adapter/http-server default so lowering
-            // the global completion ceiling in one place applies everywhere.
-            llm_max_completion_tokens: cognee_llm::OpenAIAdapter::DEFAULT_MAX_COMPLETION_TOKENS,
-            // Python's `_MAX_VALIDATION_RETRIES = 3`
-            // (`litellm_native/native_adapter.py`). Was 2 while this single knob
-            // also drove the transport ladder — the two multiplied, so the value
-            // had to be kept low to bound the product. SDK-624 split them, and
-            // the structured count now matches Python's.
-            llm_max_retries: 3,
-            // Python's `stop_after_attempt(2)` (`llm/retry_config.py`).
-            llm_network_retries: 2,
-            llm_min_retry_seconds: 240,
-            // Single-sourced with the adapter constants so the setting and the
-            // adapter default cannot drift.
-            llm_request_timeout_seconds: cognee_llm::OpenAIAdapter::DEFAULT_REQUEST_TIMEOUT
-                .as_secs() as u32,
-            llm_connect_timeout_seconds: cognee_llm::OpenAIAdapter::DEFAULT_CONNECT_TIMEOUT
-                .as_secs() as u32,
-            llm_request_deadline_seconds: cognee_llm::OpenAIAdapter::DEFAULT_REQUEST_DEADLINE
-                .as_secs() as u32,
             // Single-sourced with cognify's own in-flight default so the two
             // cannot drift: this setting is what the CLI and bindings push into
             // `CognifyConfig::max_parallel_extractions`, and a mismatch would
@@ -1028,16 +866,7 @@ impl Default for Settings {
             // 1024-descriptor budget is shared with every open store.
             llm_max_parallel_requests: cognee_cognify::config::DEFAULT_MAX_PARALLEL_EXTRACTIONS
                 as u32,
-            llm_args: serde_json::Map::new(),
-            llm_mock: false,
-            llm_cassette: String::new(),
-            llm_record_path: String::new(),
             graph_prompt_path: "generate_graph_prompt.txt".to_string(),
-
-            llm_fallback_model: String::new(),
-            llm_fallback_provider: String::new(),
-            llm_fallback_endpoint: String::new(),
-            llm_fallback_api_key: String::new(),
 
             // Derived from the graph factories the compiled features register
             // rather than hardcoded, for the same reason as the HTTP server's
@@ -1135,7 +964,6 @@ impl Default for Settings {
             embedding_endpoint: String::new(),
             embedding_api_key: String::new(),
             embedding_api_version: String::new(),
-            transcription_model: String::new(),
 
             ontology_file_path: String::new(),
             ontology_resolver: "rdflib".to_string(),
@@ -1159,11 +987,6 @@ impl Default for Settings {
             // Logging
             log_level: "info".to_string(),
 
-            // Rate limiting
-            auto_rate_limit: true,
-            llm_rate_limit_enabled: false,
-            llm_rate_limit_requests: 60,
-            llm_rate_limit_interval: 60,
             embedding_rate_limit_enabled: false,
             embedding_rate_limit_requests: 60,
             embedding_rate_limit_interval: 60,
@@ -1337,6 +1160,26 @@ impl ConfigManager {
         Ok(())
     }
 
+    /// The whole configuration as one JSON object: every `Settings` field, and
+    /// every setting of every known component section under its canonical key
+    /// with its current or default value. Unknown section entries are kept.
+    /// With `mask = Some(marker)`, non-empty section secrets are replaced by
+    /// `marker` (callers mask `Settings` secrets themselves, e.g. with
+    /// `cognee_bindings_common::redact_config_json`).
+    pub fn snapshot(&self, mask: Option<&str>) -> serde_json::Value {
+        // Lock order: `schema` before `inner` (see `ConfigManager`).
+        let schema = self.schema.read().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+        let s = self.read();
+        let mut value = serde_json::to_value(&*s)
+            .expect("Settings serializes to JSON: all fields are plain data");
+        if let serde_json::Value::Object(map) = &mut value {
+            for (key, v) in schema.snapshot(&s.sections, mask) {
+                map.insert(key, v);
+            }
+        }
+        value
+    }
+
     /// A copy of the component config schema this manager knows.
     pub fn schema(&self) -> ConfigSchema {
         self.schema
@@ -1455,28 +1298,40 @@ impl ConfigManager {
 
     pub fn set_llm_provider(&self, provider: &str) {
         let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
-        s.llm_provider = provider.to_string();
+        s.sections.insert(
+            "llm.provider".to_string(),
+            serde_json::json!(provider.to_string()),
+        );
         drop(s);
         self.bump_version();
     }
 
     pub fn set_llm_model(&self, model: &str) {
         let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
-        s.llm_model = model.to_string();
+        s.sections.insert(
+            "llm.model".to_string(),
+            serde_json::json!(model.to_string()),
+        );
         drop(s);
         self.bump_version();
     }
 
     pub fn set_llm_api_key(&self, key: &str) {
         let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
-        s.llm_api_key = key.to_string();
+        s.sections.insert(
+            "llm.api_key".to_string(),
+            serde_json::json!(key.to_string()),
+        );
         drop(s);
         self.bump_version();
     }
 
     pub fn set_llm_endpoint(&self, endpoint: &str) {
         let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
-        s.llm_endpoint = endpoint.to_string();
+        s.sections.insert(
+            "llm.endpoint".to_string(),
+            serde_json::json!(endpoint.to_string()),
+        );
         drop(s);
         self.bump_version();
     }
@@ -1485,28 +1340,40 @@ impl ConfigManager {
 
     pub fn set_llm_fallback_model(&self, model: &str) {
         let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
-        s.llm_fallback_model = model.to_string();
+        s.sections.insert(
+            "llm.fallback_model".to_string(),
+            serde_json::json!(model.to_string()),
+        );
         drop(s);
         self.bump_version();
     }
 
     pub fn set_llm_fallback_provider(&self, provider: &str) {
         let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
-        s.llm_fallback_provider = provider.to_string();
+        s.sections.insert(
+            "llm.fallback_provider".to_string(),
+            serde_json::json!(provider.to_string()),
+        );
         drop(s);
         self.bump_version();
     }
 
     pub fn set_llm_fallback_endpoint(&self, endpoint: &str) {
         let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
-        s.llm_fallback_endpoint = endpoint.to_string();
+        s.sections.insert(
+            "llm.fallback_endpoint".to_string(),
+            serde_json::json!(endpoint.to_string()),
+        );
         drop(s);
         self.bump_version();
     }
 
     pub fn set_llm_fallback_api_key(&self, key: &str) {
         let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
-        s.llm_fallback_api_key = key.to_string();
+        s.sections.insert(
+            "llm.fallback_api_key".to_string(),
+            serde_json::json!(key.to_string()),
+        );
         drop(s);
         self.bump_version();
     }
@@ -1557,7 +1424,10 @@ impl ConfigManager {
 
     pub fn set_transcription_model(&self, model: &str) {
         let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
-        s.transcription_model = model.to_string();
+        s.sections.insert(
+            "llm.openai_compatible.transcription_model".to_string(),
+            serde_json::json!(model.to_string()),
+        );
         drop(s);
         self.bump_version();
     }
@@ -1808,7 +1678,10 @@ impl ConfigManager {
 
     pub fn set_llm_api_version(&self, version: &str) {
         let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
-        s.llm_api_version = version.to_string();
+        s.sections.insert(
+            "llm.api_version".to_string(),
+            serde_json::json!(version.to_string()),
+        );
         drop(s);
         self.bump_version();
     }
@@ -1817,7 +1690,10 @@ impl ConfigManager {
     /// [`Settings::llm_reasoning`].
     pub fn set_llm_reasoning(&self, mode: &str) {
         let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
-        s.llm_reasoning = mode.to_string();
+        s.sections.insert(
+            "llm.reasoning".to_string(),
+            serde_json::json!(mode.to_string()),
+        );
         drop(s);
         self.bump_version();
     }
@@ -1829,35 +1705,46 @@ impl ConfigManager {
     /// cascade rather than a pin.
     pub fn set_llm_structured_output_mode(&self, mode: &str) {
         let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
-        s.llm_structured_output_mode = mode.to_string();
+        s.sections.insert(
+            "llm.structured_output_mode".to_string(),
+            serde_json::json!(mode.to_string()),
+        );
         drop(s);
         self.bump_version();
     }
 
     pub fn set_llm_temperature(&self, temperature: f64) {
         let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
-        s.llm_temperature = Some(temperature);
+        s.sections.insert(
+            "llm.temperature".to_string(),
+            serde_json::json!(Some(temperature)),
+        );
         drop(s);
         self.bump_version();
     }
 
     pub fn set_llm_streaming(&self, streaming: bool) {
         let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
-        s.llm_streaming = streaming;
+        s.sections
+            .insert("llm.streaming".to_string(), serde_json::json!(streaming));
         drop(s);
         self.bump_version();
     }
 
     pub fn set_llm_max_completion_tokens(&self, tokens: u32) {
         let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
-        s.llm_max_completion_tokens = tokens;
+        s.sections.insert(
+            "llm.max_completion_tokens".to_string(),
+            serde_json::json!(tokens),
+        );
         drop(s);
         self.bump_version();
     }
 
     pub fn set_llm_max_retries(&self, retries: u32) {
         let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
-        s.llm_max_retries = retries;
+        s.sections
+            .insert("llm.max_retries".to_string(), serde_json::json!(retries));
         drop(s);
         self.bump_version();
     }
@@ -1866,7 +1753,10 @@ impl ConfigManager {
     /// underneath [`set_llm_max_retries`](Self::set_llm_max_retries).
     pub fn set_llm_network_retries(&self, retries: u32) {
         let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
-        s.llm_network_retries = retries;
+        s.sections.insert(
+            "llm.network_retries".to_string(),
+            serde_json::json!(retries),
+        );
         drop(s);
         self.bump_version();
     }
@@ -1881,7 +1771,8 @@ impl ConfigManager {
     /// Select the record/replay mock LLM (`MOCK_LLM` parity).
     pub fn set_llm_mock(&self, mock: bool) {
         let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
-        s.llm_mock = mock;
+        s.sections
+            .insert("llm.mock".to_string(), serde_json::json!(mock));
         drop(s);
         self.bump_version();
     }
@@ -1889,7 +1780,10 @@ impl ConfigManager {
     /// Set the cassette path used by the replay mock (`MOCK_LLM_CASSETTE`).
     pub fn set_llm_cassette(&self, cassette: &str) {
         let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
-        s.llm_cassette = cassette.to_string();
+        s.sections.insert(
+            "llm.cassette".to_string(),
+            serde_json::json!(cassette.to_string()),
+        );
         drop(s);
         self.bump_version();
     }
@@ -1897,7 +1791,10 @@ impl ConfigManager {
     /// Set the recording cassette output path (`COGNEE_RECORD_LLM`); empty = unset.
     pub fn set_llm_record_path(&self, path: &str) {
         let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
-        s.llm_record_path = path.to_string();
+        s.sections.insert(
+            "llm.record_path".to_string(),
+            serde_json::json!(path.to_string()),
+        );
         drop(s);
         self.bump_version();
     }
@@ -2040,31 +1937,38 @@ impl ConfigManager {
         };
 
         // LLM
-        m.insert("llm_provider".into(), Value::String(s.llm_provider.clone()));
-        m.insert("llm_model".into(), Value::String(s.llm_model.clone()));
-        m.insert("llm_api_key".into(), Value::String(mask(&s.llm_api_key)));
-        m.insert("llm_endpoint".into(), Value::String(s.llm_endpoint.clone()));
+        m.insert(
+            "llm_provider".into(),
+            Value::String(s.llm().provider.clone()),
+        );
+        m.insert("llm_model".into(), Value::String(s.llm().model.clone()));
+        m.insert("llm_api_key".into(), Value::String(mask(&s.llm().api_key)));
+        m.insert(
+            "llm_endpoint".into(),
+            Value::String(s.llm().endpoint.clone()),
+        );
         m.insert(
             "llm_api_version".into(),
-            Value::String(s.llm_api_version.clone()),
+            Value::String(s.llm().api_version.clone()),
         );
         m.insert(
             "llm_reasoning".into(),
-            Value::String(s.llm_reasoning.clone()),
+            Value::String(s.llm().reasoning.clone()),
         );
         m.insert(
             "llm_structured_output_mode".into(),
-            Value::String(s.llm_structured_output_mode.clone()),
+            Value::String(s.llm().structured_output_mode.clone()),
         );
         m.insert(
             "llm_temperature".into(),
-            s.llm_temperature
+            s.llm()
+                .temperature
                 .and_then(serde_json::Number::from_f64)
                 .map_or(Value::Null, Value::Number),
         );
         m.insert(
             "llm_max_completion_tokens".into(),
-            Value::Number(s.llm_max_completion_tokens.into()),
+            Value::Number(s.llm().max_completion_tokens.into()),
         );
 
         // Embedding
@@ -2198,14 +2102,6 @@ fn as_u32(key: &str, value: &serde_json::Value) -> Result<u32, ConfigError> {
         })
 }
 
-/// Extract an `f64` from a JSON value, or return a type-mismatch error.
-fn as_f64(key: &str, value: &serde_json::Value) -> Result<f64, ConfigError> {
-    value.as_f64().ok_or_else(|| ConfigError::TypeMismatch {
-        key: key.to_string(),
-        reason: "expected a number".to_string(),
-    })
-}
-
 /// Extract a `u16` from a JSON value, or return a type-mismatch error.
 fn as_u16(key: &str, value: &serde_json::Value) -> Result<u16, ConfigError> {
     value
@@ -2217,60 +2113,44 @@ fn as_u16(key: &str, value: &serde_json::Value) -> Result<u16, ConfigError> {
         })
 }
 
-/// Extract a `bool` from a JSON value, or return a type-mismatch error.
-fn as_bool(key: &str, value: &serde_json::Value) -> Result<bool, ConfigError> {
-    value.as_bool().ok_or_else(|| ConfigError::TypeMismatch {
-        key: key.to_string(),
-        reason: "expected a boolean".to_string(),
-    })
-}
-
 impl ConfigManager {
     /// Bulk-update LLM config from a map. Matches Python `config.set_llm_config()`.
     pub fn set_llm_config(
         &self,
         values: &HashMap<String, serde_json::Value>,
     ) -> Result<(), ConfigError> {
-        let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
-        for (key, value) in values {
-            match key.as_str() {
-                "llm_provider" => s.llm_provider = as_string(key, value)?,
-                "llm_model" => s.llm_model = as_string(key, value)?,
-                "llm_api_key" => s.llm_api_key = as_string(key, value)?,
-                "llm_endpoint" => s.llm_endpoint = as_string(key, value)?,
-                "llm_api_version" => s.llm_api_version = as_string(key, value)?,
-                "llm_reasoning" => s.llm_reasoning = as_string(key, value)?,
-                "llm_structured_output_mode" => {
-                    s.llm_structured_output_mode = as_string(key, value)?
-                }
-                "llm_temperature" if value.is_null() => s.llm_temperature = None,
-                "llm_temperature" => s.llm_temperature = Some(as_f64(key, value)?),
-                "llm_max_completion_tokens" => s.llm_max_completion_tokens = as_u32(key, value)?,
-                "llm_streaming" => s.llm_streaming = as_bool(key, value)?,
-                "llm_max_retries" => s.llm_max_retries = as_u32(key, value)?,
-                "llm_network_retries" => s.llm_network_retries = as_u32(key, value)?,
-                "llm_min_retry_seconds" => s.llm_min_retry_seconds = as_u32(key, value)?,
-                "llm_request_timeout_seconds" => {
-                    s.llm_request_timeout_seconds = as_u32(key, value)?;
-                }
-                "llm_connect_timeout_seconds" => {
-                    s.llm_connect_timeout_seconds = as_u32(key, value)?;
-                }
-                "llm_request_deadline_seconds" => {
-                    s.llm_request_deadline_seconds = as_u32(key, value)?;
-                }
-                "auto_rate_limit" => s.auto_rate_limit = as_bool(key, value)?,
-                "llm_max_parallel_requests" => {
-                    s.llm_max_parallel_requests = as_u32(key, value)?;
-                }
-                "llm_mock" => s.llm_mock = as_bool(key, value)?,
-                "llm_cassette" => s.llm_cassette = as_string(key, value)?,
-                "llm_record_path" => s.llm_record_path = as_string(key, value)?,
-                other => return Err(ConfigError::UnknownKey(other.to_string())),
-            }
+        // The keys this bulk setter has always accepted; each is dispatched
+        // through the generic setter (aliases of `llm.*` section keys, plus
+        // the `Settings` key `llm_max_parallel_requests`).
+        const LLM_KEYS: &[&str] = &[
+            "llm_provider",
+            "llm_model",
+            "llm_api_key",
+            "llm_endpoint",
+            "llm_api_version",
+            "llm_reasoning",
+            "llm_structured_output_mode",
+            "llm_temperature",
+            "llm_max_completion_tokens",
+            "llm_streaming",
+            "llm_max_retries",
+            "llm_network_retries",
+            "llm_min_retry_seconds",
+            "llm_request_timeout_seconds",
+            "llm_connect_timeout_seconds",
+            "llm_request_deadline_seconds",
+            "auto_rate_limit",
+            "llm_max_parallel_requests",
+            "llm_mock",
+            "llm_cassette",
+            "llm_record_path",
+        ];
+        if let Some(key) = values.keys().find(|k| !LLM_KEYS.contains(&k.as_str())) {
+            return Err(ConfigError::UnknownKey(key.clone()));
         }
-        drop(s);
-        self.bump_version();
+        for (key, value) in values {
+            self.set(key, value.clone())?;
+        }
         Ok(())
     }
 
@@ -2541,7 +2421,7 @@ mod tests {
         unsafe { std::env::remove_var("LLM_MAX_COMPLETION_TOKENS") };
         unsafe { std::env::remove_var("LLM_MAX_TOKENS") };
 
-        assert_eq!(s.llm_max_completion_tokens, 4096);
+        assert_eq!(s.llm().max_completion_tokens, 4096);
     }
 
     #[test]
@@ -2582,11 +2462,13 @@ mod tests {
     fn retry_defaults_mirror_pythons_two_independent_counts() {
         let s = Settings::default();
         assert_eq!(
-            s.llm_max_retries, 3,
+            s.llm().max_retries,
+            3,
             "structured-output re-asks mirror Python's _MAX_VALIDATION_RETRIES = 3"
         );
         assert_eq!(
-            s.llm_network_retries, 2,
+            s.llm().network_retries,
+            2,
             "the transport ladder mirrors Python's stop_after_attempt(2)"
         );
     }
@@ -2602,16 +2484,16 @@ mod tests {
     #[test]
     fn the_default_deadline_contains_the_default_retry_ladder() {
         let s = Settings::default();
-        let ladder = s.llm_max_retries.max(1) * s.llm_min_retry_seconds;
+        let ladder = s.llm().max_retries.max(1) * s.llm().min_retry_seconds;
         assert!(
-            s.llm_request_deadline_seconds >= ladder,
+            s.llm().request_deadline_seconds >= ladder,
             "LLM_REQUEST_DEADLINE_SECONDS default ({}) must contain the default \
              ladder ({} = {} x {}s), or every startup warns about the values it \
              shipped with",
-            s.llm_request_deadline_seconds,
+            s.llm().request_deadline_seconds,
             ladder,
-            s.llm_max_retries,
-            s.llm_min_retry_seconds,
+            s.llm().max_retries,
+            s.llm().min_retry_seconds,
         );
     }
 
@@ -2628,12 +2510,12 @@ mod tests {
         let s = Settings::default();
         let cooldown = cognee_utils::pacing::OVERLOAD_COOLDOWN.as_secs();
         assert!(
-            u64::from(s.llm_request_deadline_seconds) > cooldown,
+            u64::from(s.llm().request_deadline_seconds) > cooldown,
             "LLM_REQUEST_DEADLINE_SECONDS default ({}s) must outlast one \
              OVERLOAD_COOLDOWN ({cooldown}s), or a call paced behind a provider \
              overload episode spends its whole budget queueing and fails after a \
              single dispatch",
-            s.llm_request_deadline_seconds,
+            s.llm().request_deadline_seconds,
         );
     }
 
@@ -2650,7 +2532,7 @@ mod tests {
 
         cm.set("llm_network_retries", serde_json::json!(5))
             .expect("the generic dispatcher must accept the key the CLI accepts");
-        assert_eq!(cm.read().llm_network_retries, 5);
+        assert_eq!(cm.read().llm().network_retries, 5);
 
         cm.set_llm_config(
             &[("llm_network_retries".to_string(), serde_json::json!(6))]
@@ -2658,10 +2540,10 @@ mod tests {
                 .collect(),
         )
         .expect("the bulk LLM setter must accept it too");
-        assert_eq!(cm.read().llm_network_retries, 6);
+        assert_eq!(cm.read().llm().network_retries, 6);
 
         cm.set_llm_network_retries(7);
-        assert_eq!(cm.read().llm_network_retries, 7);
+        assert_eq!(cm.read().llm().network_retries, 7);
     }
 
     /// The same class of gap as the test above, for `single_process`.
@@ -2795,10 +2677,10 @@ mod tests {
         s.overlay_from_env();
         unsafe { std::env::remove_var("LLM_NETWORK_RETRIES") };
 
-        assert_eq!(s.llm_network_retries, 7);
+        assert_eq!(s.llm().network_retries, 7);
         assert_eq!(
-            s.llm_max_retries,
-            Settings::default().llm_max_retries,
+            s.llm().max_retries,
+            Settings::default().llm().max_retries,
             "the transport knob must not move the structured-output one — \
              sharing a value is the defect SDK-624 fixed"
         );
@@ -2817,9 +2699,9 @@ mod tests {
         let mut s = Settings::default();
         s.overlay_from(&env);
 
-        assert_eq!(s.llm_model, "alias-model");
-        assert_eq!(s.llm_network_retries, 7);
-        assert_eq!(s.llm_provider, Settings::default().llm_provider);
+        assert_eq!(s.llm().model, "alias-model");
+        assert_eq!(s.llm().network_retries, 7);
+        assert_eq!(s.llm().provider, Settings::default().llm().provider);
         assert_eq!(s.single_process, Some(true));
     }
 
@@ -2834,7 +2716,7 @@ mod tests {
         s.overlay_from_env();
         unsafe { std::env::remove_var("LLM_MAX_TOKENS") };
 
-        assert_eq!(s.llm_max_completion_tokens, 2048);
+        assert_eq!(s.llm().max_completion_tokens, 2048);
     }
 
     #[test]
@@ -2857,7 +2739,8 @@ mod tests {
             unsafe { std::env::remove_var("LLM_STREAMING") };
 
             assert_eq!(
-                s.llm_streaming, expected,
+                s.llm().streaming,
+                expected,
                 "LLM_STREAMING={input} should parse to {expected}"
             );
         }
@@ -2876,11 +2759,11 @@ mod tests {
         let cm = ConfigManager::new(Settings::default());
         cm.set_llm_model("gpt-4o");
         assert_eq!(cm.version(), 1);
-        assert_eq!(cm.read().llm_model, "gpt-4o");
+        assert_eq!(cm.read().llm().model, "gpt-4o");
 
         cm.set_llm_api_key("sk-test");
         assert_eq!(cm.version(), 2);
-        assert_eq!(cm.read().llm_api_key, "sk-test");
+        assert_eq!(cm.read().llm().api_key, "sk-test");
     }
 
     #[test]
@@ -2889,7 +2772,7 @@ mod tests {
         let cm2 = cm1.clone();
 
         cm1.set_llm_model("shared-model");
-        assert_eq!(cm2.read().llm_model, "shared-model");
+        assert_eq!(cm2.read().llm().model, "shared-model");
         assert_eq!(cm2.version(), 1);
     }
 
@@ -2946,7 +2829,7 @@ mod tests {
         let cm = ConfigManager::new(Settings::default());
         cm.set("llm_model", serde_json::Value::String("test-model".into()))
             .expect("set should succeed");
-        assert_eq!(cm.read().llm_model, "test-model");
+        assert_eq!(cm.read().llm().model, "test-model");
     }
 
     #[test]
@@ -3074,10 +2957,17 @@ mod tests {
         .unwrap();
         let cm = ConfigManager::new(settings);
         cm.check_strict().unwrap();
+        assert_eq!(
+            cm.get("llm_args"),
+            Some(serde_json::json!({ "max_tokens": 100 }))
+        );
         let s = cm.read();
-        assert_eq!(s.llm_args.get("max_tokens"), Some(&serde_json::json!(100)));
         assert_eq!(s.embedding_model_name, "x");
-        assert!(s.sections.is_empty(), "{:?}", s.sections);
+        assert!(
+            !s.sections.contains_key("embedding_model"),
+            "{:?}",
+            s.sections
+        );
     }
 
     /// A wrongly typed bulk value of a `Settings` key routed through the
@@ -3148,9 +3038,9 @@ mod tests {
     #[test]
     fn secret_keys_cover_registry_rows() {
         let keys = ConfigManager::new(Settings::default()).secret_keys();
-        assert!(keys.contains(&"llm_api_key"));
-        assert!(keys.contains(&"llm_fallback_api_key"));
-        assert!(!keys.contains(&"llm_model"));
+        assert!(keys.contains(&"db_password"));
+        assert!(keys.contains(&"llm.fallback_api_key"));
+        assert!(!keys.contains(&"llm.model"));
     }
 
     /// A key owned by a component config section is settable by its
@@ -3214,8 +3104,8 @@ mod tests {
         cm.set_llm_config(&map).expect("bulk set should succeed");
 
         let s = cm.read();
-        assert_eq!(s.llm_model, "gpt-4o");
-        assert_eq!(s.llm_provider, "openai");
+        assert_eq!(s.llm().model, "gpt-4o");
+        assert_eq!(s.llm().provider, "openai");
     }
 
     #[test]
@@ -3241,27 +3131,28 @@ mod tests {
 
         cm.set_llm_api_version("2024-02-15");
         expected_version += 1;
-        assert_eq!(cm.read().llm_api_version, "2024-02-15");
+        assert_eq!(cm.read().llm().api_version, "2024-02-15");
 
         cm.set_llm_temperature(0.7);
         expected_version += 1;
         assert!(
             cm.read()
-                .llm_temperature
+                .llm()
+                .temperature
                 .is_some_and(|t| (t - 0.7).abs() < f64::EPSILON)
         );
 
         cm.set_llm_streaming(true);
         expected_version += 1;
-        assert!(cm.read().llm_streaming);
+        assert!(cm.read().llm().streaming);
 
         cm.set_llm_max_completion_tokens(2048);
         expected_version += 1;
-        assert_eq!(cm.read().llm_max_completion_tokens, 2048);
+        assert_eq!(cm.read().llm().max_completion_tokens, 2048);
 
         cm.set_llm_max_retries(5);
         expected_version += 1;
-        assert_eq!(cm.read().llm_max_retries, 5);
+        assert_eq!(cm.read().llm().max_retries, 5);
 
         cm.set_llm_max_parallel_requests(8);
         expected_version += 1;
@@ -3342,17 +3233,18 @@ mod tests {
             .expect("llm_temperature should be settable");
         assert!(
             cm.read()
-                .llm_temperature
+                .llm()
+                .temperature
                 .is_some_and(|t| (t - 0.5).abs() < f64::EPSILON)
         );
 
         cm.set("llm_streaming", serde_json::json!(true))
             .expect("llm_streaming should be settable");
-        assert!(cm.read().llm_streaming);
+        assert!(cm.read().llm().streaming);
 
         cm.set("llm_max_retries", serde_json::json!(7))
             .expect("llm_max_retries should be settable");
-        assert_eq!(cm.read().llm_max_retries, 7);
+        assert_eq!(cm.read().llm().max_retries, 7);
 
         cm.set("vector_db_host", serde_json::json!("host"))
             .expect("vector_db_host should be settable");
@@ -3405,8 +3297,8 @@ mod tests {
         cm.set_llm_config(&map).expect("bulk set should succeed");
 
         let s = cm.read();
-        assert!(s.llm_streaming);
-        assert_eq!(s.llm_max_retries, 9);
+        assert!(s.llm().streaming);
+        assert_eq!(s.llm().max_retries, 9);
         assert_eq!(s.llm_max_parallel_requests, 3);
     }
 
@@ -3630,7 +3522,7 @@ mod tests {
         unsafe { std::env::remove_var("LLM_RATE_LIMIT_REQUESTS") };
         unsafe { std::env::remove_var("EMBEDDING_RATE_LIMIT_REQUESTS") };
 
-        assert_eq!(s.llm_rate_limit_requests, 120);
+        assert_eq!(s.llm().rate_limit_requests, 120);
         assert_eq!(s.embedding_rate_limit_requests, 30);
     }
 
@@ -3659,12 +3551,12 @@ mod tests {
         unsafe { std::env::remove_var("LLM_ARGS") };
 
         assert_eq!(
-            s.llm_args.get("max_tokens"),
+            s.llm().args.get("max_tokens"),
             Some(&serde_json::json!(16384))
         );
-        assert_eq!(s.llm_args.get("top_p"), Some(&serde_json::json!(0.9)));
+        assert_eq!(s.llm().args.get("top_p"), Some(&serde_json::json!(0.9)));
         // The lowered backend context carries the same map through to the factory.
-        assert_eq!(s.backend_context().llm.llm_args, s.llm_args);
+        assert_eq!(s.backend_context().llm.llm_args, s.llm().args);
     }
 
     /// A Bedrock embedding provider must not inherit an OpenAI-compatible
@@ -3677,10 +3569,22 @@ mod tests {
     #[test]
     fn bedrock_embeddings_do_not_inherit_a_foreign_llm_endpoint_or_key() {
         let mut s = Settings {
+            sections: [
+                (
+                    "llm.provider".to_string(),
+                    serde_json::json!("openai".to_string()),
+                ),
+                (
+                    "llm.endpoint".to_string(),
+                    serde_json::json!("https://llm-proxy.example.com/v1".to_string()),
+                ),
+                (
+                    "llm.api_key".to_string(),
+                    serde_json::json!("sk-openai-key".to_string()),
+                ),
+            ]
+            .into(),
             embedding_provider: "bedrock".to_string(),
-            llm_provider: "openai".to_string(),
-            llm_endpoint: "https://llm-proxy.example.com/v1".to_string(),
-            llm_api_key: "sk-openai-key".to_string(),
             embedding_endpoint: String::new(),
             embedding_api_key: String::new(),
             ..Default::default()
@@ -3697,7 +3601,10 @@ mod tests {
         );
 
         // The sharing rationale still applies when both sides are Bedrock.
-        s.llm_provider = "bedrock".to_string();
+        s.sections.insert(
+            "llm.provider".to_string(),
+            serde_json::json!("bedrock".to_string()),
+        );
         let shared = s.backend_context();
         assert_eq!(
             shared.embedding.api_key.as_deref(),
@@ -3707,7 +3614,10 @@ mod tests {
 
         // And a non-Bedrock embedding provider keeps the original fallback.
         s.embedding_provider = "openai".to_string();
-        s.llm_provider = "openai".to_string();
+        s.sections.insert(
+            "llm.provider".to_string(),
+            serde_json::json!("openai".to_string()),
+        );
         let inherited = s.backend_context();
         assert_eq!(
             inherited.embedding.endpoint.as_deref(),
@@ -3724,19 +3634,19 @@ mod tests {
         let mut s = Settings::default();
         s.overlay_from_env();
         unsafe { std::env::remove_var("LLM_ARGS") };
-        assert!(s.llm_args.is_empty());
+        assert!(s.llm().args.is_empty());
 
         unsafe { std::env::set_var("LLM_ARGS", "[1, 2, 3]") };
         let mut s = Settings::default();
         s.overlay_from_env();
         unsafe { std::env::remove_var("LLM_ARGS") };
-        assert!(s.llm_args.is_empty());
+        assert!(s.llm().args.is_empty());
     }
 
     #[test]
     fn default_values_are_correct() {
         let s = Settings::default();
-        assert!(s.llm_args.is_empty());
+        assert!(s.llm().args.is_empty());
         assert_eq!(s.cache_backend, "fs");
         assert_eq!(s.cache_host, "localhost");
         assert_eq!(s.cache_port, 6379);
@@ -3745,9 +3655,9 @@ mod tests {
         assert!(!s.auto_feedback);
         assert!(!s.enable_access_control);
         assert_eq!(s.log_level, "info");
-        assert!(!s.llm_rate_limit_enabled);
-        assert_eq!(s.llm_rate_limit_requests, 60);
-        assert_eq!(s.llm_rate_limit_interval, 60);
+        assert!(!s.llm().rate_limit_enabled);
+        assert_eq!(s.llm().rate_limit_requests, 60);
+        assert_eq!(s.llm().rate_limit_interval, 60);
         assert!(!s.embedding_rate_limit_enabled);
         assert_eq!(s.embedding_rate_limit_requests, 60);
         assert_eq!(s.embedding_rate_limit_interval, 60);
@@ -3808,7 +3718,7 @@ mod tests {
     #[test]
     fn telemetry_snapshot_redacts_credentials_and_urls() {
         let cfg = Settings {
-            llm_api_key: "sk-secret".into(),
+            sections: [("llm.api_key".to_string(), serde_json::json!("sk-secret"))].into(),
             embedding_api_key: "sk-also-secret".into(),
             vector_db_password: "vector-pass".into(),
             db_password: "db-pass".into(),
@@ -3927,10 +3837,10 @@ mod tests {
         cfg.set_llm_fallback_endpoint("https://fallback.example.com/v1");
         cfg.set_llm_fallback_api_key("fallback-key");
         let s = cfg.read();
-        assert_eq!(s.llm_fallback_model, "gpt-4o-mini");
-        assert_eq!(s.llm_fallback_provider, "openai");
-        assert_eq!(s.llm_fallback_endpoint, "https://fallback.example.com/v1");
-        assert_eq!(s.llm_fallback_api_key, "fallback-key");
+        assert_eq!(s.llm().fallback_model, "gpt-4o-mini");
+        assert_eq!(s.llm().fallback_provider, "openai");
+        assert_eq!(s.llm().fallback_endpoint, "https://fallback.example.com/v1");
+        assert_eq!(s.llm().fallback_api_key, "fallback-key");
     }
 
     #[test]
@@ -3944,7 +3854,12 @@ mod tests {
     fn test_transcription_model_setter() {
         let cfg = ConfigManager::new(Settings::default());
         cfg.set_transcription_model("whisper-1");
-        assert_eq!(cfg.read().transcription_model, "whisper-1");
+        assert_eq!(
+            cfg.read()
+                .section::<cognee_components::OpenAiCompatibleConfig>()
+                .transcription_model,
+            "whisper-1"
+        );
     }
 
     #[test]

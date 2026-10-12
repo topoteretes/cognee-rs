@@ -31,6 +31,19 @@ fn install_pacer(ctx: &BackendBuildContext) {
 }
 
 /// The configured minimum retry window, as a duration.
+/// Apply the `llm.openai_compatible` section and the kind-level debug flag to
+/// an OpenAI-compatible adapter.
+fn with_openai_compatible_section(
+    adapter: cognee_llm::OpenAIAdapter,
+    ctx: &BackendBuildContext,
+) -> cognee_llm::OpenAIAdapter {
+    let section: OpenAiCompatibleConfig = ctx.section();
+    adapter
+        .with_vision_model(section.vision_model)
+        .with_transcription_model(section.transcription_model)
+        .with_debug_requests(ctx.llm.debug_requests)
+}
+
 fn min_retry_elapsed(ctx: &BackendBuildContext) -> std::time::Duration {
     std::time::Duration::from_secs(u64::from(ctx.llm.min_retry_seconds))
 }
@@ -87,6 +100,7 @@ fn request_deadline(ctx: &BackendBuildContext) -> Option<std::time::Duration> {
 
 use crate::context::BackendBuildContext;
 use crate::error::ComponentError;
+use crate::sections::{AnthropicConfig, OpenAiCompatibleConfig};
 use crate::traits::LlmFactory;
 
 /// Provider ids served by [`OpenAiCompatibleLlmFactory`].
@@ -118,6 +132,10 @@ impl LlmFactory for OpenAiCompatibleLlmFactory {
         self.provider
     }
 
+    fn config_sections(&self) -> Vec<&'static cognee_config_core::SectionSchema> {
+        vec![<OpenAiCompatibleConfig as cognee_config_core::ConfigSection>::schema()]
+    }
+
     async fn build(&self, ctx: &BackendBuildContext) -> Result<Arc<dyn Llm>, ComponentError> {
         install_pacer(ctx);
         let adapter = build_openai_compatible_adapter(
@@ -138,6 +156,7 @@ impl LlmFactory for OpenAiCompatibleLlmFactory {
         .with_reasoning_override(ctx.llm.reasoning_override)
         .with_structured_output_mode(ctx.llm.structured_output_mode)
         .with_request_deadline(request_deadline(ctx));
+        let adapter = with_openai_compatible_section(adapter, ctx);
         let (request_timeout, connect_timeout) = http_timeouts(ctx);
         let adapter = adapter.with_http_timeouts(request_timeout, connect_timeout);
         Ok(Arc::new(adapter))
@@ -173,8 +192,9 @@ impl LlmFactory for OpenAiCompatibleLlmFactory {
             ctx.llm.max_retries,
         )
         .map_err(|e| ComponentError::Llm(e.to_string()))?
-        .with_network_retries(ctx.llm.network_retries)
-        .with_http_timeouts(request_timeout, connect_timeout);
+        .with_network_retries(ctx.llm.network_retries);
+        let adapter = with_openai_compatible_section(adapter, ctx)
+            .with_http_timeouts(request_timeout, connect_timeout);
         Ok(Some(Arc::new(adapter) as Arc<dyn Transcriber>))
     }
 }
@@ -193,13 +213,17 @@ impl LlmFactory for AnthropicLlmFactory {
         ANTHROPIC_PROVIDER
     }
 
+    fn config_sections(&self) -> Vec<&'static cognee_config_core::SectionSchema> {
+        vec![<AnthropicConfig as cognee_config_core::ConfigSection>::schema()]
+    }
+
     async fn build(&self, ctx: &BackendBuildContext) -> Result<Arc<dyn Llm>, ComponentError> {
         if ctx.llm.api_key.trim().is_empty() {
             return Err(ComponentError::Config(
                 "anthropic provider requires an API key (set LLM_API_KEY)".to_string(),
             ));
         }
-        // Use the dedicated `ctx.llm.anthropic_base_url` (env `ANTHROPIC_BASE_URL`
+        // Use the dedicated `llm.anthropic.base_url` (env `ANTHROPIC_BASE_URL`
         // / `ANTHROPIC_API_BASE`), NOT `ctx.llm.endpoint`: the latter aliases
         // OPENAI_URL (a documented-required var in this repo), so flipping
         // LLM_PROVIDER=anthropic while OPENAI_URL is still set would POST every
@@ -211,7 +235,7 @@ impl LlmFactory for AnthropicLlmFactory {
         let adapter = AnthropicAdapter::new(
             ctx.llm.model.clone(),
             ctx.llm.api_key.clone(),
-            ctx.llm.anthropic_base_url.clone(),
+            ctx.section::<AnthropicConfig>().base_url(),
         )
         .map_err(|e| ComponentError::Llm(e.to_string()))?
         .with_structured_output_retries(ctx.llm.max_retries)
@@ -222,7 +246,8 @@ impl LlmFactory for AnthropicLlmFactory {
         // Both were unreachable on this adapter before SDK-624 — no setter
         // existed — so `LLM_REQUEST_DEADLINE_SECONDS` and the two timeout knobs
         // were inert here while working on the OpenAI-compatible path.
-        .with_request_deadline(request_deadline(ctx));
+        .with_request_deadline(request_deadline(ctx))
+        .with_debug_requests(ctx.llm.debug_requests);
         let (request_timeout, connect_timeout) = http_timeouts(ctx);
         let adapter = adapter.with_http_timeouts(request_timeout, connect_timeout);
         Ok(Arc::new(adapter))
@@ -253,6 +278,10 @@ pub struct AzureLlmFactory;
 impl LlmFactory for AzureLlmFactory {
     fn provider(&self) -> &str {
         AZURE_PROVIDER
+    }
+
+    fn config_sections(&self) -> Vec<&'static cognee_config_core::SectionSchema> {
+        vec![<OpenAiCompatibleConfig as cognee_config_core::ConfigSection>::schema()]
     }
 
     async fn build(&self, ctx: &BackendBuildContext) -> Result<Arc<dyn Llm>, ComponentError> {
@@ -293,6 +322,7 @@ impl LlmFactory for AzureLlmFactory {
         .with_reasoning_override(ctx.llm.reasoning_override)
         .with_structured_output_mode(ctx.llm.structured_output_mode)
         .with_request_deadline(request_deadline(ctx));
+        let adapter = with_openai_compatible_section(adapter, ctx);
         let (request_timeout, connect_timeout) = http_timeouts(ctx);
         let adapter = adapter.with_http_timeouts(request_timeout, connect_timeout);
         Ok(Arc::new(adapter))
@@ -328,6 +358,10 @@ impl LlmFactory for BedrockLlmFactory {
         BEDROCK_PROVIDER
     }
 
+    fn config_sections(&self) -> Vec<&'static cognee_config_core::SectionSchema> {
+        vec![<crate::sections::AwsConfig as cognee_config_core::ConfigSection>::schema()]
+    }
+
     async fn build(&self, ctx: &BackendBuildContext) -> Result<Arc<dyn Llm>, ComponentError> {
         // Bedrock is a first-class provider, so it gets the same dispatch
         // pacing as the other three. `install_pacer` is first-call-wins, so in
@@ -346,14 +380,15 @@ impl LlmFactory for BedrockLlmFactory {
 
         // The single crossing point to the adapter-side struct; see
         // `crate::context::AwsInputs`.
-        let aws: cognee_llm::adapters::bedrock::aws::env::AwsInputs = (&ctx.llm.aws).into();
+        let aws: cognee_llm::adapters::bedrock::aws::env::AwsInputs =
+            (&ctx.section::<crate::sections::AwsConfig>().to_inputs()).into();
 
         // `api_base = None` on purpose: never pass `ctx.llm.endpoint`, which
         // aliases OPENAI_URL (the same trap `anthropic_base_url` exists to
         // avoid — see the Anthropic factory above). The Bedrock runtime
-        // endpoint travels via `AWS_BEDROCK_RUNTIME_ENDPOINT` on
-        // `ctx.llm.aws.bedrock_runtime_endpoint` and the plan's §1.3 chain
-        // inside the adapter.
+        // endpoint travels via `aws.bedrock_runtime_endpoint`
+        // (`AWS_BEDROCK_RUNTIME_ENDPOINT`) and the plan's §1.3 chain inside the
+        // adapter.
         let adapter =
             cognee_llm::adapters::BedrockAdapter::new(ctx.llm.model.clone(), api_key, None, &aws)
                 .await
@@ -375,7 +410,8 @@ impl LlmFactory for BedrockLlmFactory {
                 // setter existed. This is the pairing that made the runaway
                 // possible: `max_retries x (network_retries + 1) x 600s` with
                 // nothing bounding the product.
-                .with_request_deadline(request_deadline(ctx));
+                .with_request_deadline(request_deadline(ctx))
+                .with_debug_requests(ctx.llm.debug_requests);
         let (request_timeout, connect_timeout) = http_timeouts(ctx);
         let adapter = adapter.with_http_timeouts(request_timeout, connect_timeout);
         Ok(Arc::new(adapter))

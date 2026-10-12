@@ -112,7 +112,7 @@ fn run_single_file(file_path: &str, cm: &Arc<ComponentManager>) -> Result<(), Cl
 
     // Captured before the first step so a step *without* the flag falls back to
     // the configured value rather than inheriting whatever a previous step set.
-    let baseline_llm_max_retries = cm.config().read().llm_max_retries;
+    let baseline_llm_max_retries = cm.config().read().llm().max_retries;
 
     let start = Instant::now();
 
@@ -188,7 +188,7 @@ fn run_single_file(file_path: &str, cm: &Arc<ComponentManager>) -> Result<(), Cl
             .command
             .llm_max_retries_override()
             .unwrap_or(baseline_llm_max_retries);
-        if desired != cm.config().read().llm_max_retries {
+        if desired != cm.config().read().llm().max_retries {
             cm.config().set_llm_max_retries(desired);
         }
 

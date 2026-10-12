@@ -33,6 +33,8 @@ const STRUCTURED_OUTPUT_TOOL: &str = "extract_structured_data";
 
 /// Native adapter for the Anthropic Messages API.
 pub struct AnthropicAdapter {
+    /// Dump every request/response body to stderr (`llm.debug_requests`).
+    debug_requests: bool,
     model: String,
     api_key: String,
     base_url: String,
@@ -116,6 +118,7 @@ impl AnthropicAdapter {
             .unwrap_or(model);
 
         Ok(Self {
+            debug_requests: false,
             model,
             api_key: api_key.into(),
             base_url: base_url
@@ -267,6 +270,13 @@ impl AnthropicAdapter {
     /// merged into each Messages request body. Explicit keys the adapter sets
     /// (model / max_tokens / messages / tools / ...) always win; these only fill
     /// the gaps, matching Python's `{**self.llm_args, **kwargs}`.
+    /// Dump every request and response body to stderr (`llm.debug_requests`).
+    #[must_use]
+    pub fn with_debug_requests(mut self, enabled: bool) -> Self {
+        self.debug_requests = enabled;
+        self
+    }
+
     pub fn with_extra_args(mut self, args: serde_json::Map<String, Value>) -> Self {
         self.extra_args = args;
         self
@@ -432,10 +442,6 @@ impl AnthropicAdapter {
             cognee.llm.provider = "anthropic",
         ),
     )]
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
-    )]
     async fn call_api_before(
         &self,
         request_body: &Value,
@@ -443,9 +449,7 @@ impl AnthropicAdapter {
     ) -> LlmResult<AnthropicResponse> {
         let url = format!("{}/messages", self.base_url);
         tracing::Span::current().record("url", url.as_str());
-        let debug_enabled = std::env::var("COGNEE_DEBUG_LLM_REQUEST")
-            .map(|v| cognee_utils::parse_env_bool(&v))
-            .unwrap_or(false);
+        let debug_enabled = self.debug_requests;
         if debug_enabled {
             let pretty = serde_json::to_string_pretty(request_body)
                 .unwrap_or_else(|_| request_body.to_string());

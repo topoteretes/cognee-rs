@@ -1,4 +1,67 @@
 {
+  "anthropic_base_url <- \"\"": {
+    "ok": {
+      "llm.anthropic.base_url": ""
+    }
+  },
+  "anthropic_base_url <- \"1\"": {
+    "ok": {
+      "llm.anthropic.base_url": "1"
+    }
+  },
+  "anthropic_base_url <- \"s\"": {
+    "ok": {
+      "llm.anthropic.base_url": "s"
+    }
+  },
+  "anthropic_base_url <- \"true\"": {
+    "ok": {
+      "llm.anthropic.base_url": "true"
+    }
+  },
+  "anthropic_base_url <- -1": {
+    "err": "TypeMismatch",
+    "key": "anthropic_base_url"
+  },
+  "anthropic_base_url <- 0": {
+    "err": "TypeMismatch",
+    "key": "anthropic_base_url"
+  },
+  "anthropic_base_url <- 1": {
+    "err": "TypeMismatch",
+    "key": "anthropic_base_url"
+  },
+  "anthropic_base_url <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "anthropic_base_url"
+  },
+  "anthropic_base_url <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "anthropic_base_url"
+  },
+  "anthropic_base_url <- 70000": {
+    "err": "TypeMismatch",
+    "key": "anthropic_base_url"
+  },
+  "anthropic_base_url <- [1]": {
+    "err": "TypeMismatch",
+    "key": "anthropic_base_url"
+  },
+  "anthropic_base_url <- false": {
+    "err": "TypeMismatch",
+    "key": "anthropic_base_url"
+  },
+  "anthropic_base_url <- null": {
+    "ok": {}
+  },
+  "anthropic_base_url <- true": {
+    "err": "TypeMismatch",
+    "key": "anthropic_base_url"
+  },
+  "anthropic_base_url <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "anthropic_base_url"
+  },
   "auto_feedback <- \"\"": {
     "err": "TypeMismatch",
     "key": "auto_feedback"
@@ -105,7 +168,7 @@
   },
   "auto_rate_limit <- false": {
     "ok": {
-      "auto_rate_limit": false
+      "llm.auto_rate_limit": false
     }
   },
   "auto_rate_limit <- null": {
@@ -118,6 +181,1518 @@
   "auto_rate_limit <- {\"a\":1}": {
     "err": "TypeMismatch",
     "key": "auto_rate_limit"
+  },
+  "aws.access_key_id <- \"\"": {
+    "ok": {
+      "aws.access_key_id": ""
+    }
+  },
+  "aws.access_key_id <- \"1\"": {
+    "ok": {
+      "aws.access_key_id": "1"
+    }
+  },
+  "aws.access_key_id <- \"s\"": {
+    "ok": {
+      "aws.access_key_id": "s"
+    }
+  },
+  "aws.access_key_id <- \"true\"": {
+    "ok": {
+      "aws.access_key_id": "true"
+    }
+  },
+  "aws.access_key_id <- -1": {
+    "err": "TypeMismatch",
+    "key": "aws.access_key_id"
+  },
+  "aws.access_key_id <- 0": {
+    "err": "TypeMismatch",
+    "key": "aws.access_key_id"
+  },
+  "aws.access_key_id <- 1": {
+    "err": "TypeMismatch",
+    "key": "aws.access_key_id"
+  },
+  "aws.access_key_id <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "aws.access_key_id"
+  },
+  "aws.access_key_id <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "aws.access_key_id"
+  },
+  "aws.access_key_id <- 70000": {
+    "err": "TypeMismatch",
+    "key": "aws.access_key_id"
+  },
+  "aws.access_key_id <- [1]": {
+    "err": "TypeMismatch",
+    "key": "aws.access_key_id"
+  },
+  "aws.access_key_id <- false": {
+    "err": "TypeMismatch",
+    "key": "aws.access_key_id"
+  },
+  "aws.access_key_id <- null": {
+    "ok": {}
+  },
+  "aws.access_key_id <- true": {
+    "err": "TypeMismatch",
+    "key": "aws.access_key_id"
+  },
+  "aws.access_key_id <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "aws.access_key_id"
+  },
+  "aws.bearer_token <- \"\"": {
+    "ok": {
+      "aws.bearer_token": ""
+    }
+  },
+  "aws.bearer_token <- \"1\"": {
+    "ok": {
+      "aws.bearer_token": "1"
+    }
+  },
+  "aws.bearer_token <- \"s\"": {
+    "ok": {
+      "aws.bearer_token": "s"
+    }
+  },
+  "aws.bearer_token <- \"true\"": {
+    "ok": {
+      "aws.bearer_token": "true"
+    }
+  },
+  "aws.bearer_token <- -1": {
+    "err": "TypeMismatch",
+    "key": "aws.bearer_token"
+  },
+  "aws.bearer_token <- 0": {
+    "err": "TypeMismatch",
+    "key": "aws.bearer_token"
+  },
+  "aws.bearer_token <- 1": {
+    "err": "TypeMismatch",
+    "key": "aws.bearer_token"
+  },
+  "aws.bearer_token <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "aws.bearer_token"
+  },
+  "aws.bearer_token <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "aws.bearer_token"
+  },
+  "aws.bearer_token <- 70000": {
+    "err": "TypeMismatch",
+    "key": "aws.bearer_token"
+  },
+  "aws.bearer_token <- [1]": {
+    "err": "TypeMismatch",
+    "key": "aws.bearer_token"
+  },
+  "aws.bearer_token <- false": {
+    "err": "TypeMismatch",
+    "key": "aws.bearer_token"
+  },
+  "aws.bearer_token <- null": {
+    "ok": {}
+  },
+  "aws.bearer_token <- true": {
+    "err": "TypeMismatch",
+    "key": "aws.bearer_token"
+  },
+  "aws.bearer_token <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "aws.bearer_token"
+  },
+  "aws.bedrock_runtime_endpoint <- \"\"": {
+    "ok": {
+      "aws.bedrock_runtime_endpoint": ""
+    }
+  },
+  "aws.bedrock_runtime_endpoint <- \"1\"": {
+    "ok": {
+      "aws.bedrock_runtime_endpoint": "1"
+    }
+  },
+  "aws.bedrock_runtime_endpoint <- \"s\"": {
+    "ok": {
+      "aws.bedrock_runtime_endpoint": "s"
+    }
+  },
+  "aws.bedrock_runtime_endpoint <- \"true\"": {
+    "ok": {
+      "aws.bedrock_runtime_endpoint": "true"
+    }
+  },
+  "aws.bedrock_runtime_endpoint <- -1": {
+    "err": "TypeMismatch",
+    "key": "aws.bedrock_runtime_endpoint"
+  },
+  "aws.bedrock_runtime_endpoint <- 0": {
+    "err": "TypeMismatch",
+    "key": "aws.bedrock_runtime_endpoint"
+  },
+  "aws.bedrock_runtime_endpoint <- 1": {
+    "err": "TypeMismatch",
+    "key": "aws.bedrock_runtime_endpoint"
+  },
+  "aws.bedrock_runtime_endpoint <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "aws.bedrock_runtime_endpoint"
+  },
+  "aws.bedrock_runtime_endpoint <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "aws.bedrock_runtime_endpoint"
+  },
+  "aws.bedrock_runtime_endpoint <- 70000": {
+    "err": "TypeMismatch",
+    "key": "aws.bedrock_runtime_endpoint"
+  },
+  "aws.bedrock_runtime_endpoint <- [1]": {
+    "err": "TypeMismatch",
+    "key": "aws.bedrock_runtime_endpoint"
+  },
+  "aws.bedrock_runtime_endpoint <- false": {
+    "err": "TypeMismatch",
+    "key": "aws.bedrock_runtime_endpoint"
+  },
+  "aws.bedrock_runtime_endpoint <- null": {
+    "ok": {}
+  },
+  "aws.bedrock_runtime_endpoint <- true": {
+    "err": "TypeMismatch",
+    "key": "aws.bedrock_runtime_endpoint"
+  },
+  "aws.bedrock_runtime_endpoint <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "aws.bedrock_runtime_endpoint"
+  },
+  "aws.external_id <- \"\"": {
+    "ok": {
+      "aws.external_id": ""
+    }
+  },
+  "aws.external_id <- \"1\"": {
+    "ok": {
+      "aws.external_id": "1"
+    }
+  },
+  "aws.external_id <- \"s\"": {
+    "ok": {
+      "aws.external_id": "s"
+    }
+  },
+  "aws.external_id <- \"true\"": {
+    "ok": {
+      "aws.external_id": "true"
+    }
+  },
+  "aws.external_id <- -1": {
+    "err": "TypeMismatch",
+    "key": "aws.external_id"
+  },
+  "aws.external_id <- 0": {
+    "err": "TypeMismatch",
+    "key": "aws.external_id"
+  },
+  "aws.external_id <- 1": {
+    "err": "TypeMismatch",
+    "key": "aws.external_id"
+  },
+  "aws.external_id <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "aws.external_id"
+  },
+  "aws.external_id <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "aws.external_id"
+  },
+  "aws.external_id <- 70000": {
+    "err": "TypeMismatch",
+    "key": "aws.external_id"
+  },
+  "aws.external_id <- [1]": {
+    "err": "TypeMismatch",
+    "key": "aws.external_id"
+  },
+  "aws.external_id <- false": {
+    "err": "TypeMismatch",
+    "key": "aws.external_id"
+  },
+  "aws.external_id <- null": {
+    "ok": {}
+  },
+  "aws.external_id <- true": {
+    "err": "TypeMismatch",
+    "key": "aws.external_id"
+  },
+  "aws.external_id <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "aws.external_id"
+  },
+  "aws.profile_name <- \"\"": {
+    "ok": {
+      "aws.profile_name": ""
+    }
+  },
+  "aws.profile_name <- \"1\"": {
+    "ok": {
+      "aws.profile_name": "1"
+    }
+  },
+  "aws.profile_name <- \"s\"": {
+    "ok": {
+      "aws.profile_name": "s"
+    }
+  },
+  "aws.profile_name <- \"true\"": {
+    "ok": {
+      "aws.profile_name": "true"
+    }
+  },
+  "aws.profile_name <- -1": {
+    "err": "TypeMismatch",
+    "key": "aws.profile_name"
+  },
+  "aws.profile_name <- 0": {
+    "err": "TypeMismatch",
+    "key": "aws.profile_name"
+  },
+  "aws.profile_name <- 1": {
+    "err": "TypeMismatch",
+    "key": "aws.profile_name"
+  },
+  "aws.profile_name <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "aws.profile_name"
+  },
+  "aws.profile_name <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "aws.profile_name"
+  },
+  "aws.profile_name <- 70000": {
+    "err": "TypeMismatch",
+    "key": "aws.profile_name"
+  },
+  "aws.profile_name <- [1]": {
+    "err": "TypeMismatch",
+    "key": "aws.profile_name"
+  },
+  "aws.profile_name <- false": {
+    "err": "TypeMismatch",
+    "key": "aws.profile_name"
+  },
+  "aws.profile_name <- null": {
+    "ok": {}
+  },
+  "aws.profile_name <- true": {
+    "err": "TypeMismatch",
+    "key": "aws.profile_name"
+  },
+  "aws.profile_name <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "aws.profile_name"
+  },
+  "aws.region <- \"\"": {
+    "ok": {
+      "aws.region": ""
+    }
+  },
+  "aws.region <- \"1\"": {
+    "ok": {
+      "aws.region": "1"
+    }
+  },
+  "aws.region <- \"s\"": {
+    "ok": {
+      "aws.region": "s"
+    }
+  },
+  "aws.region <- \"true\"": {
+    "ok": {
+      "aws.region": "true"
+    }
+  },
+  "aws.region <- -1": {
+    "err": "TypeMismatch",
+    "key": "aws.region"
+  },
+  "aws.region <- 0": {
+    "err": "TypeMismatch",
+    "key": "aws.region"
+  },
+  "aws.region <- 1": {
+    "err": "TypeMismatch",
+    "key": "aws.region"
+  },
+  "aws.region <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "aws.region"
+  },
+  "aws.region <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "aws.region"
+  },
+  "aws.region <- 70000": {
+    "err": "TypeMismatch",
+    "key": "aws.region"
+  },
+  "aws.region <- [1]": {
+    "err": "TypeMismatch",
+    "key": "aws.region"
+  },
+  "aws.region <- false": {
+    "err": "TypeMismatch",
+    "key": "aws.region"
+  },
+  "aws.region <- null": {
+    "ok": {}
+  },
+  "aws.region <- true": {
+    "err": "TypeMismatch",
+    "key": "aws.region"
+  },
+  "aws.region <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "aws.region"
+  },
+  "aws.role_name <- \"\"": {
+    "ok": {
+      "aws.role_name": ""
+    }
+  },
+  "aws.role_name <- \"1\"": {
+    "ok": {
+      "aws.role_name": "1"
+    }
+  },
+  "aws.role_name <- \"s\"": {
+    "ok": {
+      "aws.role_name": "s"
+    }
+  },
+  "aws.role_name <- \"true\"": {
+    "ok": {
+      "aws.role_name": "true"
+    }
+  },
+  "aws.role_name <- -1": {
+    "err": "TypeMismatch",
+    "key": "aws.role_name"
+  },
+  "aws.role_name <- 0": {
+    "err": "TypeMismatch",
+    "key": "aws.role_name"
+  },
+  "aws.role_name <- 1": {
+    "err": "TypeMismatch",
+    "key": "aws.role_name"
+  },
+  "aws.role_name <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "aws.role_name"
+  },
+  "aws.role_name <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "aws.role_name"
+  },
+  "aws.role_name <- 70000": {
+    "err": "TypeMismatch",
+    "key": "aws.role_name"
+  },
+  "aws.role_name <- [1]": {
+    "err": "TypeMismatch",
+    "key": "aws.role_name"
+  },
+  "aws.role_name <- false": {
+    "err": "TypeMismatch",
+    "key": "aws.role_name"
+  },
+  "aws.role_name <- null": {
+    "ok": {}
+  },
+  "aws.role_name <- true": {
+    "err": "TypeMismatch",
+    "key": "aws.role_name"
+  },
+  "aws.role_name <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "aws.role_name"
+  },
+  "aws.secret_access_key <- \"\"": {
+    "ok": {
+      "aws.secret_access_key": ""
+    }
+  },
+  "aws.secret_access_key <- \"1\"": {
+    "ok": {
+      "aws.secret_access_key": "1"
+    }
+  },
+  "aws.secret_access_key <- \"s\"": {
+    "ok": {
+      "aws.secret_access_key": "s"
+    }
+  },
+  "aws.secret_access_key <- \"true\"": {
+    "ok": {
+      "aws.secret_access_key": "true"
+    }
+  },
+  "aws.secret_access_key <- -1": {
+    "err": "TypeMismatch",
+    "key": "aws.secret_access_key"
+  },
+  "aws.secret_access_key <- 0": {
+    "err": "TypeMismatch",
+    "key": "aws.secret_access_key"
+  },
+  "aws.secret_access_key <- 1": {
+    "err": "TypeMismatch",
+    "key": "aws.secret_access_key"
+  },
+  "aws.secret_access_key <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "aws.secret_access_key"
+  },
+  "aws.secret_access_key <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "aws.secret_access_key"
+  },
+  "aws.secret_access_key <- 70000": {
+    "err": "TypeMismatch",
+    "key": "aws.secret_access_key"
+  },
+  "aws.secret_access_key <- [1]": {
+    "err": "TypeMismatch",
+    "key": "aws.secret_access_key"
+  },
+  "aws.secret_access_key <- false": {
+    "err": "TypeMismatch",
+    "key": "aws.secret_access_key"
+  },
+  "aws.secret_access_key <- null": {
+    "ok": {}
+  },
+  "aws.secret_access_key <- true": {
+    "err": "TypeMismatch",
+    "key": "aws.secret_access_key"
+  },
+  "aws.secret_access_key <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "aws.secret_access_key"
+  },
+  "aws.session_name <- \"\"": {
+    "ok": {
+      "aws.session_name": ""
+    }
+  },
+  "aws.session_name <- \"1\"": {
+    "ok": {
+      "aws.session_name": "1"
+    }
+  },
+  "aws.session_name <- \"s\"": {
+    "ok": {
+      "aws.session_name": "s"
+    }
+  },
+  "aws.session_name <- \"true\"": {
+    "ok": {
+      "aws.session_name": "true"
+    }
+  },
+  "aws.session_name <- -1": {
+    "err": "TypeMismatch",
+    "key": "aws.session_name"
+  },
+  "aws.session_name <- 0": {
+    "err": "TypeMismatch",
+    "key": "aws.session_name"
+  },
+  "aws.session_name <- 1": {
+    "err": "TypeMismatch",
+    "key": "aws.session_name"
+  },
+  "aws.session_name <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "aws.session_name"
+  },
+  "aws.session_name <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "aws.session_name"
+  },
+  "aws.session_name <- 70000": {
+    "err": "TypeMismatch",
+    "key": "aws.session_name"
+  },
+  "aws.session_name <- [1]": {
+    "err": "TypeMismatch",
+    "key": "aws.session_name"
+  },
+  "aws.session_name <- false": {
+    "err": "TypeMismatch",
+    "key": "aws.session_name"
+  },
+  "aws.session_name <- null": {
+    "ok": {}
+  },
+  "aws.session_name <- true": {
+    "err": "TypeMismatch",
+    "key": "aws.session_name"
+  },
+  "aws.session_name <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "aws.session_name"
+  },
+  "aws.session_token <- \"\"": {
+    "ok": {
+      "aws.session_token": ""
+    }
+  },
+  "aws.session_token <- \"1\"": {
+    "ok": {
+      "aws.session_token": "1"
+    }
+  },
+  "aws.session_token <- \"s\"": {
+    "ok": {
+      "aws.session_token": "s"
+    }
+  },
+  "aws.session_token <- \"true\"": {
+    "ok": {
+      "aws.session_token": "true"
+    }
+  },
+  "aws.session_token <- -1": {
+    "err": "TypeMismatch",
+    "key": "aws.session_token"
+  },
+  "aws.session_token <- 0": {
+    "err": "TypeMismatch",
+    "key": "aws.session_token"
+  },
+  "aws.session_token <- 1": {
+    "err": "TypeMismatch",
+    "key": "aws.session_token"
+  },
+  "aws.session_token <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "aws.session_token"
+  },
+  "aws.session_token <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "aws.session_token"
+  },
+  "aws.session_token <- 70000": {
+    "err": "TypeMismatch",
+    "key": "aws.session_token"
+  },
+  "aws.session_token <- [1]": {
+    "err": "TypeMismatch",
+    "key": "aws.session_token"
+  },
+  "aws.session_token <- false": {
+    "err": "TypeMismatch",
+    "key": "aws.session_token"
+  },
+  "aws.session_token <- null": {
+    "ok": {}
+  },
+  "aws.session_token <- true": {
+    "err": "TypeMismatch",
+    "key": "aws.session_token"
+  },
+  "aws.session_token <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "aws.session_token"
+  },
+  "aws.sts_endpoint <- \"\"": {
+    "ok": {
+      "aws.sts_endpoint": ""
+    }
+  },
+  "aws.sts_endpoint <- \"1\"": {
+    "ok": {
+      "aws.sts_endpoint": "1"
+    }
+  },
+  "aws.sts_endpoint <- \"s\"": {
+    "ok": {
+      "aws.sts_endpoint": "s"
+    }
+  },
+  "aws.sts_endpoint <- \"true\"": {
+    "ok": {
+      "aws.sts_endpoint": "true"
+    }
+  },
+  "aws.sts_endpoint <- -1": {
+    "err": "TypeMismatch",
+    "key": "aws.sts_endpoint"
+  },
+  "aws.sts_endpoint <- 0": {
+    "err": "TypeMismatch",
+    "key": "aws.sts_endpoint"
+  },
+  "aws.sts_endpoint <- 1": {
+    "err": "TypeMismatch",
+    "key": "aws.sts_endpoint"
+  },
+  "aws.sts_endpoint <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "aws.sts_endpoint"
+  },
+  "aws.sts_endpoint <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "aws.sts_endpoint"
+  },
+  "aws.sts_endpoint <- 70000": {
+    "err": "TypeMismatch",
+    "key": "aws.sts_endpoint"
+  },
+  "aws.sts_endpoint <- [1]": {
+    "err": "TypeMismatch",
+    "key": "aws.sts_endpoint"
+  },
+  "aws.sts_endpoint <- false": {
+    "err": "TypeMismatch",
+    "key": "aws.sts_endpoint"
+  },
+  "aws.sts_endpoint <- null": {
+    "ok": {}
+  },
+  "aws.sts_endpoint <- true": {
+    "err": "TypeMismatch",
+    "key": "aws.sts_endpoint"
+  },
+  "aws.sts_endpoint <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "aws.sts_endpoint"
+  },
+  "aws.web_identity_token <- \"\"": {
+    "ok": {
+      "aws.web_identity_token": ""
+    }
+  },
+  "aws.web_identity_token <- \"1\"": {
+    "ok": {
+      "aws.web_identity_token": "1"
+    }
+  },
+  "aws.web_identity_token <- \"s\"": {
+    "ok": {
+      "aws.web_identity_token": "s"
+    }
+  },
+  "aws.web_identity_token <- \"true\"": {
+    "ok": {
+      "aws.web_identity_token": "true"
+    }
+  },
+  "aws.web_identity_token <- -1": {
+    "err": "TypeMismatch",
+    "key": "aws.web_identity_token"
+  },
+  "aws.web_identity_token <- 0": {
+    "err": "TypeMismatch",
+    "key": "aws.web_identity_token"
+  },
+  "aws.web_identity_token <- 1": {
+    "err": "TypeMismatch",
+    "key": "aws.web_identity_token"
+  },
+  "aws.web_identity_token <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "aws.web_identity_token"
+  },
+  "aws.web_identity_token <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "aws.web_identity_token"
+  },
+  "aws.web_identity_token <- 70000": {
+    "err": "TypeMismatch",
+    "key": "aws.web_identity_token"
+  },
+  "aws.web_identity_token <- [1]": {
+    "err": "TypeMismatch",
+    "key": "aws.web_identity_token"
+  },
+  "aws.web_identity_token <- false": {
+    "err": "TypeMismatch",
+    "key": "aws.web_identity_token"
+  },
+  "aws.web_identity_token <- null": {
+    "ok": {}
+  },
+  "aws.web_identity_token <- true": {
+    "err": "TypeMismatch",
+    "key": "aws.web_identity_token"
+  },
+  "aws.web_identity_token <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "aws.web_identity_token"
+  },
+  "aws_access_key_id <- \"\"": {
+    "ok": {
+      "aws.access_key_id": ""
+    }
+  },
+  "aws_access_key_id <- \"1\"": {
+    "ok": {
+      "aws.access_key_id": "1"
+    }
+  },
+  "aws_access_key_id <- \"s\"": {
+    "ok": {
+      "aws.access_key_id": "s"
+    }
+  },
+  "aws_access_key_id <- \"true\"": {
+    "ok": {
+      "aws.access_key_id": "true"
+    }
+  },
+  "aws_access_key_id <- -1": {
+    "err": "TypeMismatch",
+    "key": "aws_access_key_id"
+  },
+  "aws_access_key_id <- 0": {
+    "err": "TypeMismatch",
+    "key": "aws_access_key_id"
+  },
+  "aws_access_key_id <- 1": {
+    "err": "TypeMismatch",
+    "key": "aws_access_key_id"
+  },
+  "aws_access_key_id <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "aws_access_key_id"
+  },
+  "aws_access_key_id <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "aws_access_key_id"
+  },
+  "aws_access_key_id <- 70000": {
+    "err": "TypeMismatch",
+    "key": "aws_access_key_id"
+  },
+  "aws_access_key_id <- [1]": {
+    "err": "TypeMismatch",
+    "key": "aws_access_key_id"
+  },
+  "aws_access_key_id <- false": {
+    "err": "TypeMismatch",
+    "key": "aws_access_key_id"
+  },
+  "aws_access_key_id <- null": {
+    "ok": {}
+  },
+  "aws_access_key_id <- true": {
+    "err": "TypeMismatch",
+    "key": "aws_access_key_id"
+  },
+  "aws_access_key_id <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "aws_access_key_id"
+  },
+  "aws_bearer_token_bedrock <- \"\"": {
+    "ok": {
+      "aws.bearer_token": ""
+    }
+  },
+  "aws_bearer_token_bedrock <- \"1\"": {
+    "ok": {
+      "aws.bearer_token": "1"
+    }
+  },
+  "aws_bearer_token_bedrock <- \"s\"": {
+    "ok": {
+      "aws.bearer_token": "s"
+    }
+  },
+  "aws_bearer_token_bedrock <- \"true\"": {
+    "ok": {
+      "aws.bearer_token": "true"
+    }
+  },
+  "aws_bearer_token_bedrock <- -1": {
+    "err": "TypeMismatch",
+    "key": "aws_bearer_token_bedrock"
+  },
+  "aws_bearer_token_bedrock <- 0": {
+    "err": "TypeMismatch",
+    "key": "aws_bearer_token_bedrock"
+  },
+  "aws_bearer_token_bedrock <- 1": {
+    "err": "TypeMismatch",
+    "key": "aws_bearer_token_bedrock"
+  },
+  "aws_bearer_token_bedrock <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "aws_bearer_token_bedrock"
+  },
+  "aws_bearer_token_bedrock <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "aws_bearer_token_bedrock"
+  },
+  "aws_bearer_token_bedrock <- 70000": {
+    "err": "TypeMismatch",
+    "key": "aws_bearer_token_bedrock"
+  },
+  "aws_bearer_token_bedrock <- [1]": {
+    "err": "TypeMismatch",
+    "key": "aws_bearer_token_bedrock"
+  },
+  "aws_bearer_token_bedrock <- false": {
+    "err": "TypeMismatch",
+    "key": "aws_bearer_token_bedrock"
+  },
+  "aws_bearer_token_bedrock <- null": {
+    "ok": {}
+  },
+  "aws_bearer_token_bedrock <- true": {
+    "err": "TypeMismatch",
+    "key": "aws_bearer_token_bedrock"
+  },
+  "aws_bearer_token_bedrock <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "aws_bearer_token_bedrock"
+  },
+  "aws_bedrock_runtime_endpoint <- \"\"": {
+    "ok": {
+      "aws.bedrock_runtime_endpoint": ""
+    }
+  },
+  "aws_bedrock_runtime_endpoint <- \"1\"": {
+    "ok": {
+      "aws.bedrock_runtime_endpoint": "1"
+    }
+  },
+  "aws_bedrock_runtime_endpoint <- \"s\"": {
+    "ok": {
+      "aws.bedrock_runtime_endpoint": "s"
+    }
+  },
+  "aws_bedrock_runtime_endpoint <- \"true\"": {
+    "ok": {
+      "aws.bedrock_runtime_endpoint": "true"
+    }
+  },
+  "aws_bedrock_runtime_endpoint <- -1": {
+    "err": "TypeMismatch",
+    "key": "aws_bedrock_runtime_endpoint"
+  },
+  "aws_bedrock_runtime_endpoint <- 0": {
+    "err": "TypeMismatch",
+    "key": "aws_bedrock_runtime_endpoint"
+  },
+  "aws_bedrock_runtime_endpoint <- 1": {
+    "err": "TypeMismatch",
+    "key": "aws_bedrock_runtime_endpoint"
+  },
+  "aws_bedrock_runtime_endpoint <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "aws_bedrock_runtime_endpoint"
+  },
+  "aws_bedrock_runtime_endpoint <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "aws_bedrock_runtime_endpoint"
+  },
+  "aws_bedrock_runtime_endpoint <- 70000": {
+    "err": "TypeMismatch",
+    "key": "aws_bedrock_runtime_endpoint"
+  },
+  "aws_bedrock_runtime_endpoint <- [1]": {
+    "err": "TypeMismatch",
+    "key": "aws_bedrock_runtime_endpoint"
+  },
+  "aws_bedrock_runtime_endpoint <- false": {
+    "err": "TypeMismatch",
+    "key": "aws_bedrock_runtime_endpoint"
+  },
+  "aws_bedrock_runtime_endpoint <- null": {
+    "ok": {}
+  },
+  "aws_bedrock_runtime_endpoint <- true": {
+    "err": "TypeMismatch",
+    "key": "aws_bedrock_runtime_endpoint"
+  },
+  "aws_bedrock_runtime_endpoint <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "aws_bedrock_runtime_endpoint"
+  },
+  "aws_external_id <- \"\"": {
+    "ok": {
+      "aws.external_id": ""
+    }
+  },
+  "aws_external_id <- \"1\"": {
+    "ok": {
+      "aws.external_id": "1"
+    }
+  },
+  "aws_external_id <- \"s\"": {
+    "ok": {
+      "aws.external_id": "s"
+    }
+  },
+  "aws_external_id <- \"true\"": {
+    "ok": {
+      "aws.external_id": "true"
+    }
+  },
+  "aws_external_id <- -1": {
+    "err": "TypeMismatch",
+    "key": "aws_external_id"
+  },
+  "aws_external_id <- 0": {
+    "err": "TypeMismatch",
+    "key": "aws_external_id"
+  },
+  "aws_external_id <- 1": {
+    "err": "TypeMismatch",
+    "key": "aws_external_id"
+  },
+  "aws_external_id <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "aws_external_id"
+  },
+  "aws_external_id <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "aws_external_id"
+  },
+  "aws_external_id <- 70000": {
+    "err": "TypeMismatch",
+    "key": "aws_external_id"
+  },
+  "aws_external_id <- [1]": {
+    "err": "TypeMismatch",
+    "key": "aws_external_id"
+  },
+  "aws_external_id <- false": {
+    "err": "TypeMismatch",
+    "key": "aws_external_id"
+  },
+  "aws_external_id <- null": {
+    "ok": {}
+  },
+  "aws_external_id <- true": {
+    "err": "TypeMismatch",
+    "key": "aws_external_id"
+  },
+  "aws_external_id <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "aws_external_id"
+  },
+  "aws_profile_name <- \"\"": {
+    "ok": {
+      "aws.profile_name": ""
+    }
+  },
+  "aws_profile_name <- \"1\"": {
+    "ok": {
+      "aws.profile_name": "1"
+    }
+  },
+  "aws_profile_name <- \"s\"": {
+    "ok": {
+      "aws.profile_name": "s"
+    }
+  },
+  "aws_profile_name <- \"true\"": {
+    "ok": {
+      "aws.profile_name": "true"
+    }
+  },
+  "aws_profile_name <- -1": {
+    "err": "TypeMismatch",
+    "key": "aws_profile_name"
+  },
+  "aws_profile_name <- 0": {
+    "err": "TypeMismatch",
+    "key": "aws_profile_name"
+  },
+  "aws_profile_name <- 1": {
+    "err": "TypeMismatch",
+    "key": "aws_profile_name"
+  },
+  "aws_profile_name <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "aws_profile_name"
+  },
+  "aws_profile_name <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "aws_profile_name"
+  },
+  "aws_profile_name <- 70000": {
+    "err": "TypeMismatch",
+    "key": "aws_profile_name"
+  },
+  "aws_profile_name <- [1]": {
+    "err": "TypeMismatch",
+    "key": "aws_profile_name"
+  },
+  "aws_profile_name <- false": {
+    "err": "TypeMismatch",
+    "key": "aws_profile_name"
+  },
+  "aws_profile_name <- null": {
+    "ok": {}
+  },
+  "aws_profile_name <- true": {
+    "err": "TypeMismatch",
+    "key": "aws_profile_name"
+  },
+  "aws_profile_name <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "aws_profile_name"
+  },
+  "aws_region_name <- \"\"": {
+    "ok": {
+      "aws.region": ""
+    }
+  },
+  "aws_region_name <- \"1\"": {
+    "ok": {
+      "aws.region": "1"
+    }
+  },
+  "aws_region_name <- \"s\"": {
+    "ok": {
+      "aws.region": "s"
+    }
+  },
+  "aws_region_name <- \"true\"": {
+    "ok": {
+      "aws.region": "true"
+    }
+  },
+  "aws_region_name <- -1": {
+    "err": "TypeMismatch",
+    "key": "aws_region_name"
+  },
+  "aws_region_name <- 0": {
+    "err": "TypeMismatch",
+    "key": "aws_region_name"
+  },
+  "aws_region_name <- 1": {
+    "err": "TypeMismatch",
+    "key": "aws_region_name"
+  },
+  "aws_region_name <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "aws_region_name"
+  },
+  "aws_region_name <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "aws_region_name"
+  },
+  "aws_region_name <- 70000": {
+    "err": "TypeMismatch",
+    "key": "aws_region_name"
+  },
+  "aws_region_name <- [1]": {
+    "err": "TypeMismatch",
+    "key": "aws_region_name"
+  },
+  "aws_region_name <- false": {
+    "err": "TypeMismatch",
+    "key": "aws_region_name"
+  },
+  "aws_region_name <- null": {
+    "ok": {}
+  },
+  "aws_region_name <- true": {
+    "err": "TypeMismatch",
+    "key": "aws_region_name"
+  },
+  "aws_region_name <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "aws_region_name"
+  },
+  "aws_role_name <- \"\"": {
+    "ok": {
+      "aws.role_name": ""
+    }
+  },
+  "aws_role_name <- \"1\"": {
+    "ok": {
+      "aws.role_name": "1"
+    }
+  },
+  "aws_role_name <- \"s\"": {
+    "ok": {
+      "aws.role_name": "s"
+    }
+  },
+  "aws_role_name <- \"true\"": {
+    "ok": {
+      "aws.role_name": "true"
+    }
+  },
+  "aws_role_name <- -1": {
+    "err": "TypeMismatch",
+    "key": "aws_role_name"
+  },
+  "aws_role_name <- 0": {
+    "err": "TypeMismatch",
+    "key": "aws_role_name"
+  },
+  "aws_role_name <- 1": {
+    "err": "TypeMismatch",
+    "key": "aws_role_name"
+  },
+  "aws_role_name <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "aws_role_name"
+  },
+  "aws_role_name <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "aws_role_name"
+  },
+  "aws_role_name <- 70000": {
+    "err": "TypeMismatch",
+    "key": "aws_role_name"
+  },
+  "aws_role_name <- [1]": {
+    "err": "TypeMismatch",
+    "key": "aws_role_name"
+  },
+  "aws_role_name <- false": {
+    "err": "TypeMismatch",
+    "key": "aws_role_name"
+  },
+  "aws_role_name <- null": {
+    "ok": {}
+  },
+  "aws_role_name <- true": {
+    "err": "TypeMismatch",
+    "key": "aws_role_name"
+  },
+  "aws_role_name <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "aws_role_name"
+  },
+  "aws_secret_access_key <- \"\"": {
+    "ok": {
+      "aws.secret_access_key": ""
+    }
+  },
+  "aws_secret_access_key <- \"1\"": {
+    "ok": {
+      "aws.secret_access_key": "1"
+    }
+  },
+  "aws_secret_access_key <- \"s\"": {
+    "ok": {
+      "aws.secret_access_key": "s"
+    }
+  },
+  "aws_secret_access_key <- \"true\"": {
+    "ok": {
+      "aws.secret_access_key": "true"
+    }
+  },
+  "aws_secret_access_key <- -1": {
+    "err": "TypeMismatch",
+    "key": "aws_secret_access_key"
+  },
+  "aws_secret_access_key <- 0": {
+    "err": "TypeMismatch",
+    "key": "aws_secret_access_key"
+  },
+  "aws_secret_access_key <- 1": {
+    "err": "TypeMismatch",
+    "key": "aws_secret_access_key"
+  },
+  "aws_secret_access_key <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "aws_secret_access_key"
+  },
+  "aws_secret_access_key <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "aws_secret_access_key"
+  },
+  "aws_secret_access_key <- 70000": {
+    "err": "TypeMismatch",
+    "key": "aws_secret_access_key"
+  },
+  "aws_secret_access_key <- [1]": {
+    "err": "TypeMismatch",
+    "key": "aws_secret_access_key"
+  },
+  "aws_secret_access_key <- false": {
+    "err": "TypeMismatch",
+    "key": "aws_secret_access_key"
+  },
+  "aws_secret_access_key <- null": {
+    "ok": {}
+  },
+  "aws_secret_access_key <- true": {
+    "err": "TypeMismatch",
+    "key": "aws_secret_access_key"
+  },
+  "aws_secret_access_key <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "aws_secret_access_key"
+  },
+  "aws_session_name <- \"\"": {
+    "ok": {
+      "aws.session_name": ""
+    }
+  },
+  "aws_session_name <- \"1\"": {
+    "ok": {
+      "aws.session_name": "1"
+    }
+  },
+  "aws_session_name <- \"s\"": {
+    "ok": {
+      "aws.session_name": "s"
+    }
+  },
+  "aws_session_name <- \"true\"": {
+    "ok": {
+      "aws.session_name": "true"
+    }
+  },
+  "aws_session_name <- -1": {
+    "err": "TypeMismatch",
+    "key": "aws_session_name"
+  },
+  "aws_session_name <- 0": {
+    "err": "TypeMismatch",
+    "key": "aws_session_name"
+  },
+  "aws_session_name <- 1": {
+    "err": "TypeMismatch",
+    "key": "aws_session_name"
+  },
+  "aws_session_name <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "aws_session_name"
+  },
+  "aws_session_name <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "aws_session_name"
+  },
+  "aws_session_name <- 70000": {
+    "err": "TypeMismatch",
+    "key": "aws_session_name"
+  },
+  "aws_session_name <- [1]": {
+    "err": "TypeMismatch",
+    "key": "aws_session_name"
+  },
+  "aws_session_name <- false": {
+    "err": "TypeMismatch",
+    "key": "aws_session_name"
+  },
+  "aws_session_name <- null": {
+    "ok": {}
+  },
+  "aws_session_name <- true": {
+    "err": "TypeMismatch",
+    "key": "aws_session_name"
+  },
+  "aws_session_name <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "aws_session_name"
+  },
+  "aws_session_token <- \"\"": {
+    "ok": {
+      "aws.session_token": ""
+    }
+  },
+  "aws_session_token <- \"1\"": {
+    "ok": {
+      "aws.session_token": "1"
+    }
+  },
+  "aws_session_token <- \"s\"": {
+    "ok": {
+      "aws.session_token": "s"
+    }
+  },
+  "aws_session_token <- \"true\"": {
+    "ok": {
+      "aws.session_token": "true"
+    }
+  },
+  "aws_session_token <- -1": {
+    "err": "TypeMismatch",
+    "key": "aws_session_token"
+  },
+  "aws_session_token <- 0": {
+    "err": "TypeMismatch",
+    "key": "aws_session_token"
+  },
+  "aws_session_token <- 1": {
+    "err": "TypeMismatch",
+    "key": "aws_session_token"
+  },
+  "aws_session_token <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "aws_session_token"
+  },
+  "aws_session_token <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "aws_session_token"
+  },
+  "aws_session_token <- 70000": {
+    "err": "TypeMismatch",
+    "key": "aws_session_token"
+  },
+  "aws_session_token <- [1]": {
+    "err": "TypeMismatch",
+    "key": "aws_session_token"
+  },
+  "aws_session_token <- false": {
+    "err": "TypeMismatch",
+    "key": "aws_session_token"
+  },
+  "aws_session_token <- null": {
+    "ok": {}
+  },
+  "aws_session_token <- true": {
+    "err": "TypeMismatch",
+    "key": "aws_session_token"
+  },
+  "aws_session_token <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "aws_session_token"
+  },
+  "aws_sts_endpoint <- \"\"": {
+    "ok": {
+      "aws.sts_endpoint": ""
+    }
+  },
+  "aws_sts_endpoint <- \"1\"": {
+    "ok": {
+      "aws.sts_endpoint": "1"
+    }
+  },
+  "aws_sts_endpoint <- \"s\"": {
+    "ok": {
+      "aws.sts_endpoint": "s"
+    }
+  },
+  "aws_sts_endpoint <- \"true\"": {
+    "ok": {
+      "aws.sts_endpoint": "true"
+    }
+  },
+  "aws_sts_endpoint <- -1": {
+    "err": "TypeMismatch",
+    "key": "aws_sts_endpoint"
+  },
+  "aws_sts_endpoint <- 0": {
+    "err": "TypeMismatch",
+    "key": "aws_sts_endpoint"
+  },
+  "aws_sts_endpoint <- 1": {
+    "err": "TypeMismatch",
+    "key": "aws_sts_endpoint"
+  },
+  "aws_sts_endpoint <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "aws_sts_endpoint"
+  },
+  "aws_sts_endpoint <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "aws_sts_endpoint"
+  },
+  "aws_sts_endpoint <- 70000": {
+    "err": "TypeMismatch",
+    "key": "aws_sts_endpoint"
+  },
+  "aws_sts_endpoint <- [1]": {
+    "err": "TypeMismatch",
+    "key": "aws_sts_endpoint"
+  },
+  "aws_sts_endpoint <- false": {
+    "err": "TypeMismatch",
+    "key": "aws_sts_endpoint"
+  },
+  "aws_sts_endpoint <- null": {
+    "ok": {}
+  },
+  "aws_sts_endpoint <- true": {
+    "err": "TypeMismatch",
+    "key": "aws_sts_endpoint"
+  },
+  "aws_sts_endpoint <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "aws_sts_endpoint"
+  },
+  "aws_web_identity_token <- \"\"": {
+    "ok": {
+      "aws.web_identity_token": ""
+    }
+  },
+  "aws_web_identity_token <- \"1\"": {
+    "ok": {
+      "aws.web_identity_token": "1"
+    }
+  },
+  "aws_web_identity_token <- \"s\"": {
+    "ok": {
+      "aws.web_identity_token": "s"
+    }
+  },
+  "aws_web_identity_token <- \"true\"": {
+    "ok": {
+      "aws.web_identity_token": "true"
+    }
+  },
+  "aws_web_identity_token <- -1": {
+    "err": "TypeMismatch",
+    "key": "aws_web_identity_token"
+  },
+  "aws_web_identity_token <- 0": {
+    "err": "TypeMismatch",
+    "key": "aws_web_identity_token"
+  },
+  "aws_web_identity_token <- 1": {
+    "err": "TypeMismatch",
+    "key": "aws_web_identity_token"
+  },
+  "aws_web_identity_token <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "aws_web_identity_token"
+  },
+  "aws_web_identity_token <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "aws_web_identity_token"
+  },
+  "aws_web_identity_token <- 70000": {
+    "err": "TypeMismatch",
+    "key": "aws_web_identity_token"
+  },
+  "aws_web_identity_token <- [1]": {
+    "err": "TypeMismatch",
+    "key": "aws_web_identity_token"
+  },
+  "aws_web_identity_token <- false": {
+    "err": "TypeMismatch",
+    "key": "aws_web_identity_token"
+  },
+  "aws_web_identity_token <- null": {
+    "ok": {}
+  },
+  "aws_web_identity_token <- true": {
+    "err": "TypeMismatch",
+    "key": "aws_web_identity_token"
+  },
+  "aws_web_identity_token <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "aws_web_identity_token"
   },
   "cache_backend <- \"\"": {
     "ok": {
@@ -3696,22 +5271,2021 @@
     "err": "TypeMismatch",
     "key": "graph_prompt_path"
   },
+  "llm.anthropic.base_url <- \"\"": {
+    "ok": {
+      "llm.anthropic.base_url": ""
+    }
+  },
+  "llm.anthropic.base_url <- \"1\"": {
+    "ok": {
+      "llm.anthropic.base_url": "1"
+    }
+  },
+  "llm.anthropic.base_url <- \"s\"": {
+    "ok": {
+      "llm.anthropic.base_url": "s"
+    }
+  },
+  "llm.anthropic.base_url <- \"true\"": {
+    "ok": {
+      "llm.anthropic.base_url": "true"
+    }
+  },
+  "llm.anthropic.base_url <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm.anthropic.base_url"
+  },
+  "llm.anthropic.base_url <- 0": {
+    "err": "TypeMismatch",
+    "key": "llm.anthropic.base_url"
+  },
+  "llm.anthropic.base_url <- 1": {
+    "err": "TypeMismatch",
+    "key": "llm.anthropic.base_url"
+  },
+  "llm.anthropic.base_url <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm.anthropic.base_url"
+  },
+  "llm.anthropic.base_url <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm.anthropic.base_url"
+  },
+  "llm.anthropic.base_url <- 70000": {
+    "err": "TypeMismatch",
+    "key": "llm.anthropic.base_url"
+  },
+  "llm.anthropic.base_url <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm.anthropic.base_url"
+  },
+  "llm.anthropic.base_url <- false": {
+    "err": "TypeMismatch",
+    "key": "llm.anthropic.base_url"
+  },
+  "llm.anthropic.base_url <- null": {
+    "ok": {}
+  },
+  "llm.anthropic.base_url <- true": {
+    "err": "TypeMismatch",
+    "key": "llm.anthropic.base_url"
+  },
+  "llm.anthropic.base_url <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm.anthropic.base_url"
+  },
+  "llm.api_key <- \"\"": {
+    "ok": {}
+  },
+  "llm.api_key <- \"1\"": {
+    "ok": {
+      "llm.api_key": "1"
+    }
+  },
+  "llm.api_key <- \"s\"": {
+    "ok": {
+      "llm.api_key": "s"
+    }
+  },
+  "llm.api_key <- \"true\"": {
+    "ok": {
+      "llm.api_key": "true"
+    }
+  },
+  "llm.api_key <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm.api_key"
+  },
+  "llm.api_key <- 0": {
+    "err": "TypeMismatch",
+    "key": "llm.api_key"
+  },
+  "llm.api_key <- 1": {
+    "err": "TypeMismatch",
+    "key": "llm.api_key"
+  },
+  "llm.api_key <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm.api_key"
+  },
+  "llm.api_key <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm.api_key"
+  },
+  "llm.api_key <- 70000": {
+    "err": "TypeMismatch",
+    "key": "llm.api_key"
+  },
+  "llm.api_key <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm.api_key"
+  },
+  "llm.api_key <- false": {
+    "err": "TypeMismatch",
+    "key": "llm.api_key"
+  },
+  "llm.api_key <- null": {
+    "err": "TypeMismatch",
+    "key": "llm.api_key"
+  },
+  "llm.api_key <- true": {
+    "err": "TypeMismatch",
+    "key": "llm.api_key"
+  },
+  "llm.api_key <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm.api_key"
+  },
+  "llm.api_version <- \"\"": {
+    "ok": {}
+  },
+  "llm.api_version <- \"1\"": {
+    "ok": {
+      "llm.api_version": "1"
+    }
+  },
+  "llm.api_version <- \"s\"": {
+    "ok": {
+      "llm.api_version": "s"
+    }
+  },
+  "llm.api_version <- \"true\"": {
+    "ok": {
+      "llm.api_version": "true"
+    }
+  },
+  "llm.api_version <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm.api_version"
+  },
+  "llm.api_version <- 0": {
+    "err": "TypeMismatch",
+    "key": "llm.api_version"
+  },
+  "llm.api_version <- 1": {
+    "err": "TypeMismatch",
+    "key": "llm.api_version"
+  },
+  "llm.api_version <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm.api_version"
+  },
+  "llm.api_version <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm.api_version"
+  },
+  "llm.api_version <- 70000": {
+    "err": "TypeMismatch",
+    "key": "llm.api_version"
+  },
+  "llm.api_version <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm.api_version"
+  },
+  "llm.api_version <- false": {
+    "err": "TypeMismatch",
+    "key": "llm.api_version"
+  },
+  "llm.api_version <- null": {
+    "err": "TypeMismatch",
+    "key": "llm.api_version"
+  },
+  "llm.api_version <- true": {
+    "err": "TypeMismatch",
+    "key": "llm.api_version"
+  },
+  "llm.api_version <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm.api_version"
+  },
+  "llm.args <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "llm.args"
+  },
+  "llm.args <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "llm.args"
+  },
+  "llm.args <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "llm.args"
+  },
+  "llm.args <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "llm.args"
+  },
+  "llm.args <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm.args"
+  },
+  "llm.args <- 0": {
+    "err": "TypeMismatch",
+    "key": "llm.args"
+  },
+  "llm.args <- 1": {
+    "err": "TypeMismatch",
+    "key": "llm.args"
+  },
+  "llm.args <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm.args"
+  },
+  "llm.args <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm.args"
+  },
+  "llm.args <- 70000": {
+    "err": "TypeMismatch",
+    "key": "llm.args"
+  },
+  "llm.args <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm.args"
+  },
+  "llm.args <- false": {
+    "err": "TypeMismatch",
+    "key": "llm.args"
+  },
+  "llm.args <- null": {
+    "err": "TypeMismatch",
+    "key": "llm.args"
+  },
+  "llm.args <- true": {
+    "err": "TypeMismatch",
+    "key": "llm.args"
+  },
+  "llm.args <- {\"a\":1}": {
+    "ok": {
+      "llm.args": {
+        "a": 1
+      }
+    }
+  },
+  "llm.auto_rate_limit <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "llm.auto_rate_limit"
+  },
+  "llm.auto_rate_limit <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "llm.auto_rate_limit"
+  },
+  "llm.auto_rate_limit <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "llm.auto_rate_limit"
+  },
+  "llm.auto_rate_limit <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "llm.auto_rate_limit"
+  },
+  "llm.auto_rate_limit <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm.auto_rate_limit"
+  },
+  "llm.auto_rate_limit <- 0": {
+    "err": "TypeMismatch",
+    "key": "llm.auto_rate_limit"
+  },
+  "llm.auto_rate_limit <- 1": {
+    "err": "TypeMismatch",
+    "key": "llm.auto_rate_limit"
+  },
+  "llm.auto_rate_limit <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm.auto_rate_limit"
+  },
+  "llm.auto_rate_limit <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm.auto_rate_limit"
+  },
+  "llm.auto_rate_limit <- 70000": {
+    "err": "TypeMismatch",
+    "key": "llm.auto_rate_limit"
+  },
+  "llm.auto_rate_limit <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm.auto_rate_limit"
+  },
+  "llm.auto_rate_limit <- false": {
+    "ok": {
+      "llm.auto_rate_limit": false
+    }
+  },
+  "llm.auto_rate_limit <- null": {
+    "err": "TypeMismatch",
+    "key": "llm.auto_rate_limit"
+  },
+  "llm.auto_rate_limit <- true": {
+    "ok": {}
+  },
+  "llm.auto_rate_limit <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm.auto_rate_limit"
+  },
+  "llm.cassette <- \"\"": {
+    "ok": {}
+  },
+  "llm.cassette <- \"1\"": {
+    "ok": {
+      "llm.cassette": "1"
+    }
+  },
+  "llm.cassette <- \"s\"": {
+    "ok": {
+      "llm.cassette": "s"
+    }
+  },
+  "llm.cassette <- \"true\"": {
+    "ok": {
+      "llm.cassette": "true"
+    }
+  },
+  "llm.cassette <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm.cassette"
+  },
+  "llm.cassette <- 0": {
+    "err": "TypeMismatch",
+    "key": "llm.cassette"
+  },
+  "llm.cassette <- 1": {
+    "err": "TypeMismatch",
+    "key": "llm.cassette"
+  },
+  "llm.cassette <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm.cassette"
+  },
+  "llm.cassette <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm.cassette"
+  },
+  "llm.cassette <- 70000": {
+    "err": "TypeMismatch",
+    "key": "llm.cassette"
+  },
+  "llm.cassette <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm.cassette"
+  },
+  "llm.cassette <- false": {
+    "err": "TypeMismatch",
+    "key": "llm.cassette"
+  },
+  "llm.cassette <- null": {
+    "err": "TypeMismatch",
+    "key": "llm.cassette"
+  },
+  "llm.cassette <- true": {
+    "err": "TypeMismatch",
+    "key": "llm.cassette"
+  },
+  "llm.cassette <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm.cassette"
+  },
+  "llm.connect_timeout_seconds <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "llm.connect_timeout_seconds"
+  },
+  "llm.connect_timeout_seconds <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "llm.connect_timeout_seconds"
+  },
+  "llm.connect_timeout_seconds <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "llm.connect_timeout_seconds"
+  },
+  "llm.connect_timeout_seconds <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "llm.connect_timeout_seconds"
+  },
+  "llm.connect_timeout_seconds <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm.connect_timeout_seconds"
+  },
+  "llm.connect_timeout_seconds <- 0": {
+    "ok": {
+      "llm.connect_timeout_seconds": 0
+    }
+  },
+  "llm.connect_timeout_seconds <- 1": {
+    "ok": {
+      "llm.connect_timeout_seconds": 1
+    }
+  },
+  "llm.connect_timeout_seconds <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm.connect_timeout_seconds"
+  },
+  "llm.connect_timeout_seconds <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm.connect_timeout_seconds"
+  },
+  "llm.connect_timeout_seconds <- 70000": {
+    "ok": {
+      "llm.connect_timeout_seconds": 70000
+    }
+  },
+  "llm.connect_timeout_seconds <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm.connect_timeout_seconds"
+  },
+  "llm.connect_timeout_seconds <- false": {
+    "err": "TypeMismatch",
+    "key": "llm.connect_timeout_seconds"
+  },
+  "llm.connect_timeout_seconds <- null": {
+    "err": "TypeMismatch",
+    "key": "llm.connect_timeout_seconds"
+  },
+  "llm.connect_timeout_seconds <- true": {
+    "err": "TypeMismatch",
+    "key": "llm.connect_timeout_seconds"
+  },
+  "llm.connect_timeout_seconds <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm.connect_timeout_seconds"
+  },
+  "llm.debug_requests <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "llm.debug_requests"
+  },
+  "llm.debug_requests <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "llm.debug_requests"
+  },
+  "llm.debug_requests <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "llm.debug_requests"
+  },
+  "llm.debug_requests <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "llm.debug_requests"
+  },
+  "llm.debug_requests <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm.debug_requests"
+  },
+  "llm.debug_requests <- 0": {
+    "err": "TypeMismatch",
+    "key": "llm.debug_requests"
+  },
+  "llm.debug_requests <- 1": {
+    "err": "TypeMismatch",
+    "key": "llm.debug_requests"
+  },
+  "llm.debug_requests <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm.debug_requests"
+  },
+  "llm.debug_requests <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm.debug_requests"
+  },
+  "llm.debug_requests <- 70000": {
+    "err": "TypeMismatch",
+    "key": "llm.debug_requests"
+  },
+  "llm.debug_requests <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm.debug_requests"
+  },
+  "llm.debug_requests <- false": {
+    "ok": {}
+  },
+  "llm.debug_requests <- null": {
+    "err": "TypeMismatch",
+    "key": "llm.debug_requests"
+  },
+  "llm.debug_requests <- true": {
+    "ok": {
+      "llm.debug_requests": true
+    }
+  },
+  "llm.debug_requests <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm.debug_requests"
+  },
+  "llm.endpoint <- \"\"": {
+    "ok": {}
+  },
+  "llm.endpoint <- \"1\"": {
+    "ok": {
+      "llm.endpoint": "1"
+    }
+  },
+  "llm.endpoint <- \"s\"": {
+    "ok": {
+      "llm.endpoint": "s"
+    }
+  },
+  "llm.endpoint <- \"true\"": {
+    "ok": {
+      "llm.endpoint": "true"
+    }
+  },
+  "llm.endpoint <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm.endpoint"
+  },
+  "llm.endpoint <- 0": {
+    "err": "TypeMismatch",
+    "key": "llm.endpoint"
+  },
+  "llm.endpoint <- 1": {
+    "err": "TypeMismatch",
+    "key": "llm.endpoint"
+  },
+  "llm.endpoint <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm.endpoint"
+  },
+  "llm.endpoint <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm.endpoint"
+  },
+  "llm.endpoint <- 70000": {
+    "err": "TypeMismatch",
+    "key": "llm.endpoint"
+  },
+  "llm.endpoint <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm.endpoint"
+  },
+  "llm.endpoint <- false": {
+    "err": "TypeMismatch",
+    "key": "llm.endpoint"
+  },
+  "llm.endpoint <- null": {
+    "err": "TypeMismatch",
+    "key": "llm.endpoint"
+  },
+  "llm.endpoint <- true": {
+    "err": "TypeMismatch",
+    "key": "llm.endpoint"
+  },
+  "llm.endpoint <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm.endpoint"
+  },
+  "llm.fallback_api_key <- \"\"": {
+    "ok": {}
+  },
+  "llm.fallback_api_key <- \"1\"": {
+    "ok": {
+      "llm.fallback_api_key": "1"
+    }
+  },
+  "llm.fallback_api_key <- \"s\"": {
+    "ok": {
+      "llm.fallback_api_key": "s"
+    }
+  },
+  "llm.fallback_api_key <- \"true\"": {
+    "ok": {
+      "llm.fallback_api_key": "true"
+    }
+  },
+  "llm.fallback_api_key <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm.fallback_api_key"
+  },
+  "llm.fallback_api_key <- 0": {
+    "err": "TypeMismatch",
+    "key": "llm.fallback_api_key"
+  },
+  "llm.fallback_api_key <- 1": {
+    "err": "TypeMismatch",
+    "key": "llm.fallback_api_key"
+  },
+  "llm.fallback_api_key <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm.fallback_api_key"
+  },
+  "llm.fallback_api_key <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm.fallback_api_key"
+  },
+  "llm.fallback_api_key <- 70000": {
+    "err": "TypeMismatch",
+    "key": "llm.fallback_api_key"
+  },
+  "llm.fallback_api_key <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm.fallback_api_key"
+  },
+  "llm.fallback_api_key <- false": {
+    "err": "TypeMismatch",
+    "key": "llm.fallback_api_key"
+  },
+  "llm.fallback_api_key <- null": {
+    "err": "TypeMismatch",
+    "key": "llm.fallback_api_key"
+  },
+  "llm.fallback_api_key <- true": {
+    "err": "TypeMismatch",
+    "key": "llm.fallback_api_key"
+  },
+  "llm.fallback_api_key <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm.fallback_api_key"
+  },
+  "llm.fallback_endpoint <- \"\"": {
+    "ok": {}
+  },
+  "llm.fallback_endpoint <- \"1\"": {
+    "ok": {
+      "llm.fallback_endpoint": "1"
+    }
+  },
+  "llm.fallback_endpoint <- \"s\"": {
+    "ok": {
+      "llm.fallback_endpoint": "s"
+    }
+  },
+  "llm.fallback_endpoint <- \"true\"": {
+    "ok": {
+      "llm.fallback_endpoint": "true"
+    }
+  },
+  "llm.fallback_endpoint <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm.fallback_endpoint"
+  },
+  "llm.fallback_endpoint <- 0": {
+    "err": "TypeMismatch",
+    "key": "llm.fallback_endpoint"
+  },
+  "llm.fallback_endpoint <- 1": {
+    "err": "TypeMismatch",
+    "key": "llm.fallback_endpoint"
+  },
+  "llm.fallback_endpoint <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm.fallback_endpoint"
+  },
+  "llm.fallback_endpoint <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm.fallback_endpoint"
+  },
+  "llm.fallback_endpoint <- 70000": {
+    "err": "TypeMismatch",
+    "key": "llm.fallback_endpoint"
+  },
+  "llm.fallback_endpoint <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm.fallback_endpoint"
+  },
+  "llm.fallback_endpoint <- false": {
+    "err": "TypeMismatch",
+    "key": "llm.fallback_endpoint"
+  },
+  "llm.fallback_endpoint <- null": {
+    "err": "TypeMismatch",
+    "key": "llm.fallback_endpoint"
+  },
+  "llm.fallback_endpoint <- true": {
+    "err": "TypeMismatch",
+    "key": "llm.fallback_endpoint"
+  },
+  "llm.fallback_endpoint <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm.fallback_endpoint"
+  },
+  "llm.fallback_model <- \"\"": {
+    "ok": {}
+  },
+  "llm.fallback_model <- \"1\"": {
+    "ok": {
+      "llm.fallback_model": "1"
+    }
+  },
+  "llm.fallback_model <- \"s\"": {
+    "ok": {
+      "llm.fallback_model": "s"
+    }
+  },
+  "llm.fallback_model <- \"true\"": {
+    "ok": {
+      "llm.fallback_model": "true"
+    }
+  },
+  "llm.fallback_model <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm.fallback_model"
+  },
+  "llm.fallback_model <- 0": {
+    "err": "TypeMismatch",
+    "key": "llm.fallback_model"
+  },
+  "llm.fallback_model <- 1": {
+    "err": "TypeMismatch",
+    "key": "llm.fallback_model"
+  },
+  "llm.fallback_model <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm.fallback_model"
+  },
+  "llm.fallback_model <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm.fallback_model"
+  },
+  "llm.fallback_model <- 70000": {
+    "err": "TypeMismatch",
+    "key": "llm.fallback_model"
+  },
+  "llm.fallback_model <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm.fallback_model"
+  },
+  "llm.fallback_model <- false": {
+    "err": "TypeMismatch",
+    "key": "llm.fallback_model"
+  },
+  "llm.fallback_model <- null": {
+    "err": "TypeMismatch",
+    "key": "llm.fallback_model"
+  },
+  "llm.fallback_model <- true": {
+    "err": "TypeMismatch",
+    "key": "llm.fallback_model"
+  },
+  "llm.fallback_model <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm.fallback_model"
+  },
+  "llm.fallback_provider <- \"\"": {
+    "ok": {}
+  },
+  "llm.fallback_provider <- \"1\"": {
+    "ok": {
+      "llm.fallback_provider": "1"
+    }
+  },
+  "llm.fallback_provider <- \"s\"": {
+    "ok": {
+      "llm.fallback_provider": "s"
+    }
+  },
+  "llm.fallback_provider <- \"true\"": {
+    "ok": {
+      "llm.fallback_provider": "true"
+    }
+  },
+  "llm.fallback_provider <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm.fallback_provider"
+  },
+  "llm.fallback_provider <- 0": {
+    "err": "TypeMismatch",
+    "key": "llm.fallback_provider"
+  },
+  "llm.fallback_provider <- 1": {
+    "err": "TypeMismatch",
+    "key": "llm.fallback_provider"
+  },
+  "llm.fallback_provider <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm.fallback_provider"
+  },
+  "llm.fallback_provider <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm.fallback_provider"
+  },
+  "llm.fallback_provider <- 70000": {
+    "err": "TypeMismatch",
+    "key": "llm.fallback_provider"
+  },
+  "llm.fallback_provider <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm.fallback_provider"
+  },
+  "llm.fallback_provider <- false": {
+    "err": "TypeMismatch",
+    "key": "llm.fallback_provider"
+  },
+  "llm.fallback_provider <- null": {
+    "err": "TypeMismatch",
+    "key": "llm.fallback_provider"
+  },
+  "llm.fallback_provider <- true": {
+    "err": "TypeMismatch",
+    "key": "llm.fallback_provider"
+  },
+  "llm.fallback_provider <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm.fallback_provider"
+  },
+  "llm.max_completion_tokens <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "llm.max_completion_tokens"
+  },
+  "llm.max_completion_tokens <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "llm.max_completion_tokens"
+  },
+  "llm.max_completion_tokens <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "llm.max_completion_tokens"
+  },
+  "llm.max_completion_tokens <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "llm.max_completion_tokens"
+  },
+  "llm.max_completion_tokens <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm.max_completion_tokens"
+  },
+  "llm.max_completion_tokens <- 0": {
+    "ok": {
+      "llm.max_completion_tokens": 0
+    }
+  },
+  "llm.max_completion_tokens <- 1": {
+    "ok": {
+      "llm.max_completion_tokens": 1
+    }
+  },
+  "llm.max_completion_tokens <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm.max_completion_tokens"
+  },
+  "llm.max_completion_tokens <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm.max_completion_tokens"
+  },
+  "llm.max_completion_tokens <- 70000": {
+    "ok": {
+      "llm.max_completion_tokens": 70000
+    }
+  },
+  "llm.max_completion_tokens <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm.max_completion_tokens"
+  },
+  "llm.max_completion_tokens <- false": {
+    "err": "TypeMismatch",
+    "key": "llm.max_completion_tokens"
+  },
+  "llm.max_completion_tokens <- null": {
+    "err": "TypeMismatch",
+    "key": "llm.max_completion_tokens"
+  },
+  "llm.max_completion_tokens <- true": {
+    "err": "TypeMismatch",
+    "key": "llm.max_completion_tokens"
+  },
+  "llm.max_completion_tokens <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm.max_completion_tokens"
+  },
+  "llm.max_retries <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "llm.max_retries"
+  },
+  "llm.max_retries <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "llm.max_retries"
+  },
+  "llm.max_retries <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "llm.max_retries"
+  },
+  "llm.max_retries <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "llm.max_retries"
+  },
+  "llm.max_retries <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm.max_retries"
+  },
+  "llm.max_retries <- 0": {
+    "ok": {
+      "llm.max_retries": 0
+    }
+  },
+  "llm.max_retries <- 1": {
+    "ok": {
+      "llm.max_retries": 1
+    }
+  },
+  "llm.max_retries <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm.max_retries"
+  },
+  "llm.max_retries <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm.max_retries"
+  },
+  "llm.max_retries <- 70000": {
+    "ok": {
+      "llm.max_retries": 70000
+    }
+  },
+  "llm.max_retries <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm.max_retries"
+  },
+  "llm.max_retries <- false": {
+    "err": "TypeMismatch",
+    "key": "llm.max_retries"
+  },
+  "llm.max_retries <- null": {
+    "err": "TypeMismatch",
+    "key": "llm.max_retries"
+  },
+  "llm.max_retries <- true": {
+    "err": "TypeMismatch",
+    "key": "llm.max_retries"
+  },
+  "llm.max_retries <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm.max_retries"
+  },
+  "llm.min_retry_seconds <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "llm.min_retry_seconds"
+  },
+  "llm.min_retry_seconds <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "llm.min_retry_seconds"
+  },
+  "llm.min_retry_seconds <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "llm.min_retry_seconds"
+  },
+  "llm.min_retry_seconds <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "llm.min_retry_seconds"
+  },
+  "llm.min_retry_seconds <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm.min_retry_seconds"
+  },
+  "llm.min_retry_seconds <- 0": {
+    "ok": {
+      "llm.min_retry_seconds": 0
+    }
+  },
+  "llm.min_retry_seconds <- 1": {
+    "ok": {
+      "llm.min_retry_seconds": 1
+    }
+  },
+  "llm.min_retry_seconds <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm.min_retry_seconds"
+  },
+  "llm.min_retry_seconds <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm.min_retry_seconds"
+  },
+  "llm.min_retry_seconds <- 70000": {
+    "ok": {
+      "llm.min_retry_seconds": 70000
+    }
+  },
+  "llm.min_retry_seconds <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm.min_retry_seconds"
+  },
+  "llm.min_retry_seconds <- false": {
+    "err": "TypeMismatch",
+    "key": "llm.min_retry_seconds"
+  },
+  "llm.min_retry_seconds <- null": {
+    "err": "TypeMismatch",
+    "key": "llm.min_retry_seconds"
+  },
+  "llm.min_retry_seconds <- true": {
+    "err": "TypeMismatch",
+    "key": "llm.min_retry_seconds"
+  },
+  "llm.min_retry_seconds <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm.min_retry_seconds"
+  },
+  "llm.mock <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "llm.mock"
+  },
+  "llm.mock <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "llm.mock"
+  },
+  "llm.mock <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "llm.mock"
+  },
+  "llm.mock <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "llm.mock"
+  },
+  "llm.mock <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm.mock"
+  },
+  "llm.mock <- 0": {
+    "err": "TypeMismatch",
+    "key": "llm.mock"
+  },
+  "llm.mock <- 1": {
+    "err": "TypeMismatch",
+    "key": "llm.mock"
+  },
+  "llm.mock <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm.mock"
+  },
+  "llm.mock <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm.mock"
+  },
+  "llm.mock <- 70000": {
+    "err": "TypeMismatch",
+    "key": "llm.mock"
+  },
+  "llm.mock <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm.mock"
+  },
+  "llm.mock <- false": {
+    "ok": {}
+  },
+  "llm.mock <- null": {
+    "err": "TypeMismatch",
+    "key": "llm.mock"
+  },
+  "llm.mock <- true": {
+    "ok": {
+      "llm.mock": true
+    }
+  },
+  "llm.mock <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm.mock"
+  },
+  "llm.model <- \"\"": {
+    "ok": {
+      "llm.model": ""
+    }
+  },
+  "llm.model <- \"1\"": {
+    "ok": {
+      "llm.model": "1"
+    }
+  },
+  "llm.model <- \"s\"": {
+    "ok": {
+      "llm.model": "s"
+    }
+  },
+  "llm.model <- \"true\"": {
+    "ok": {
+      "llm.model": "true"
+    }
+  },
+  "llm.model <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm.model"
+  },
+  "llm.model <- 0": {
+    "err": "TypeMismatch",
+    "key": "llm.model"
+  },
+  "llm.model <- 1": {
+    "err": "TypeMismatch",
+    "key": "llm.model"
+  },
+  "llm.model <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm.model"
+  },
+  "llm.model <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm.model"
+  },
+  "llm.model <- 70000": {
+    "err": "TypeMismatch",
+    "key": "llm.model"
+  },
+  "llm.model <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm.model"
+  },
+  "llm.model <- false": {
+    "err": "TypeMismatch",
+    "key": "llm.model"
+  },
+  "llm.model <- null": {
+    "err": "TypeMismatch",
+    "key": "llm.model"
+  },
+  "llm.model <- true": {
+    "err": "TypeMismatch",
+    "key": "llm.model"
+  },
+  "llm.model <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm.model"
+  },
+  "llm.network_retries <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "llm.network_retries"
+  },
+  "llm.network_retries <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "llm.network_retries"
+  },
+  "llm.network_retries <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "llm.network_retries"
+  },
+  "llm.network_retries <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "llm.network_retries"
+  },
+  "llm.network_retries <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm.network_retries"
+  },
+  "llm.network_retries <- 0": {
+    "ok": {
+      "llm.network_retries": 0
+    }
+  },
+  "llm.network_retries <- 1": {
+    "ok": {
+      "llm.network_retries": 1
+    }
+  },
+  "llm.network_retries <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm.network_retries"
+  },
+  "llm.network_retries <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm.network_retries"
+  },
+  "llm.network_retries <- 70000": {
+    "ok": {
+      "llm.network_retries": 70000
+    }
+  },
+  "llm.network_retries <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm.network_retries"
+  },
+  "llm.network_retries <- false": {
+    "err": "TypeMismatch",
+    "key": "llm.network_retries"
+  },
+  "llm.network_retries <- null": {
+    "err": "TypeMismatch",
+    "key": "llm.network_retries"
+  },
+  "llm.network_retries <- true": {
+    "err": "TypeMismatch",
+    "key": "llm.network_retries"
+  },
+  "llm.network_retries <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm.network_retries"
+  },
+  "llm.openai_compatible.transcription_model <- \"\"": {
+    "ok": {
+      "llm.openai_compatible.transcription_model": ""
+    }
+  },
+  "llm.openai_compatible.transcription_model <- \"1\"": {
+    "ok": {
+      "llm.openai_compatible.transcription_model": "1"
+    }
+  },
+  "llm.openai_compatible.transcription_model <- \"s\"": {
+    "ok": {
+      "llm.openai_compatible.transcription_model": "s"
+    }
+  },
+  "llm.openai_compatible.transcription_model <- \"true\"": {
+    "ok": {
+      "llm.openai_compatible.transcription_model": "true"
+    }
+  },
+  "llm.openai_compatible.transcription_model <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm.openai_compatible.transcription_model"
+  },
+  "llm.openai_compatible.transcription_model <- 0": {
+    "err": "TypeMismatch",
+    "key": "llm.openai_compatible.transcription_model"
+  },
+  "llm.openai_compatible.transcription_model <- 1": {
+    "err": "TypeMismatch",
+    "key": "llm.openai_compatible.transcription_model"
+  },
+  "llm.openai_compatible.transcription_model <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm.openai_compatible.transcription_model"
+  },
+  "llm.openai_compatible.transcription_model <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm.openai_compatible.transcription_model"
+  },
+  "llm.openai_compatible.transcription_model <- 70000": {
+    "err": "TypeMismatch",
+    "key": "llm.openai_compatible.transcription_model"
+  },
+  "llm.openai_compatible.transcription_model <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm.openai_compatible.transcription_model"
+  },
+  "llm.openai_compatible.transcription_model <- false": {
+    "err": "TypeMismatch",
+    "key": "llm.openai_compatible.transcription_model"
+  },
+  "llm.openai_compatible.transcription_model <- null": {
+    "err": "TypeMismatch",
+    "key": "llm.openai_compatible.transcription_model"
+  },
+  "llm.openai_compatible.transcription_model <- true": {
+    "err": "TypeMismatch",
+    "key": "llm.openai_compatible.transcription_model"
+  },
+  "llm.openai_compatible.transcription_model <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm.openai_compatible.transcription_model"
+  },
+  "llm.openai_compatible.vision_model <- \"\"": {
+    "ok": {
+      "llm.openai_compatible.vision_model": ""
+    }
+  },
+  "llm.openai_compatible.vision_model <- \"1\"": {
+    "ok": {
+      "llm.openai_compatible.vision_model": "1"
+    }
+  },
+  "llm.openai_compatible.vision_model <- \"s\"": {
+    "ok": {
+      "llm.openai_compatible.vision_model": "s"
+    }
+  },
+  "llm.openai_compatible.vision_model <- \"true\"": {
+    "ok": {
+      "llm.openai_compatible.vision_model": "true"
+    }
+  },
+  "llm.openai_compatible.vision_model <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm.openai_compatible.vision_model"
+  },
+  "llm.openai_compatible.vision_model <- 0": {
+    "err": "TypeMismatch",
+    "key": "llm.openai_compatible.vision_model"
+  },
+  "llm.openai_compatible.vision_model <- 1": {
+    "err": "TypeMismatch",
+    "key": "llm.openai_compatible.vision_model"
+  },
+  "llm.openai_compatible.vision_model <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm.openai_compatible.vision_model"
+  },
+  "llm.openai_compatible.vision_model <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm.openai_compatible.vision_model"
+  },
+  "llm.openai_compatible.vision_model <- 70000": {
+    "err": "TypeMismatch",
+    "key": "llm.openai_compatible.vision_model"
+  },
+  "llm.openai_compatible.vision_model <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm.openai_compatible.vision_model"
+  },
+  "llm.openai_compatible.vision_model <- false": {
+    "err": "TypeMismatch",
+    "key": "llm.openai_compatible.vision_model"
+  },
+  "llm.openai_compatible.vision_model <- null": {
+    "ok": {}
+  },
+  "llm.openai_compatible.vision_model <- true": {
+    "err": "TypeMismatch",
+    "key": "llm.openai_compatible.vision_model"
+  },
+  "llm.openai_compatible.vision_model <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm.openai_compatible.vision_model"
+  },
+  "llm.provider <- \"\"": {
+    "ok": {
+      "llm.provider": ""
+    }
+  },
+  "llm.provider <- \"1\"": {
+    "ok": {
+      "llm.provider": "1"
+    }
+  },
+  "llm.provider <- \"s\"": {
+    "ok": {
+      "llm.provider": "s"
+    }
+  },
+  "llm.provider <- \"true\"": {
+    "ok": {
+      "llm.provider": "true"
+    }
+  },
+  "llm.provider <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm.provider"
+  },
+  "llm.provider <- 0": {
+    "err": "TypeMismatch",
+    "key": "llm.provider"
+  },
+  "llm.provider <- 1": {
+    "err": "TypeMismatch",
+    "key": "llm.provider"
+  },
+  "llm.provider <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm.provider"
+  },
+  "llm.provider <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm.provider"
+  },
+  "llm.provider <- 70000": {
+    "err": "TypeMismatch",
+    "key": "llm.provider"
+  },
+  "llm.provider <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm.provider"
+  },
+  "llm.provider <- false": {
+    "err": "TypeMismatch",
+    "key": "llm.provider"
+  },
+  "llm.provider <- null": {
+    "err": "TypeMismatch",
+    "key": "llm.provider"
+  },
+  "llm.provider <- true": {
+    "err": "TypeMismatch",
+    "key": "llm.provider"
+  },
+  "llm.provider <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm.provider"
+  },
+  "llm.rate_limit_enabled <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "llm.rate_limit_enabled"
+  },
+  "llm.rate_limit_enabled <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "llm.rate_limit_enabled"
+  },
+  "llm.rate_limit_enabled <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "llm.rate_limit_enabled"
+  },
+  "llm.rate_limit_enabled <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "llm.rate_limit_enabled"
+  },
+  "llm.rate_limit_enabled <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm.rate_limit_enabled"
+  },
+  "llm.rate_limit_enabled <- 0": {
+    "err": "TypeMismatch",
+    "key": "llm.rate_limit_enabled"
+  },
+  "llm.rate_limit_enabled <- 1": {
+    "err": "TypeMismatch",
+    "key": "llm.rate_limit_enabled"
+  },
+  "llm.rate_limit_enabled <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm.rate_limit_enabled"
+  },
+  "llm.rate_limit_enabled <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm.rate_limit_enabled"
+  },
+  "llm.rate_limit_enabled <- 70000": {
+    "err": "TypeMismatch",
+    "key": "llm.rate_limit_enabled"
+  },
+  "llm.rate_limit_enabled <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm.rate_limit_enabled"
+  },
+  "llm.rate_limit_enabled <- false": {
+    "ok": {}
+  },
+  "llm.rate_limit_enabled <- null": {
+    "err": "TypeMismatch",
+    "key": "llm.rate_limit_enabled"
+  },
+  "llm.rate_limit_enabled <- true": {
+    "ok": {
+      "llm.rate_limit_enabled": true
+    }
+  },
+  "llm.rate_limit_enabled <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm.rate_limit_enabled"
+  },
+  "llm.rate_limit_interval <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "llm.rate_limit_interval"
+  },
+  "llm.rate_limit_interval <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "llm.rate_limit_interval"
+  },
+  "llm.rate_limit_interval <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "llm.rate_limit_interval"
+  },
+  "llm.rate_limit_interval <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "llm.rate_limit_interval"
+  },
+  "llm.rate_limit_interval <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm.rate_limit_interval"
+  },
+  "llm.rate_limit_interval <- 0": {
+    "ok": {
+      "llm.rate_limit_interval": 0
+    }
+  },
+  "llm.rate_limit_interval <- 1": {
+    "ok": {
+      "llm.rate_limit_interval": 1
+    }
+  },
+  "llm.rate_limit_interval <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm.rate_limit_interval"
+  },
+  "llm.rate_limit_interval <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm.rate_limit_interval"
+  },
+  "llm.rate_limit_interval <- 70000": {
+    "ok": {
+      "llm.rate_limit_interval": 70000
+    }
+  },
+  "llm.rate_limit_interval <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm.rate_limit_interval"
+  },
+  "llm.rate_limit_interval <- false": {
+    "err": "TypeMismatch",
+    "key": "llm.rate_limit_interval"
+  },
+  "llm.rate_limit_interval <- null": {
+    "err": "TypeMismatch",
+    "key": "llm.rate_limit_interval"
+  },
+  "llm.rate_limit_interval <- true": {
+    "err": "TypeMismatch",
+    "key": "llm.rate_limit_interval"
+  },
+  "llm.rate_limit_interval <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm.rate_limit_interval"
+  },
+  "llm.rate_limit_requests <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "llm.rate_limit_requests"
+  },
+  "llm.rate_limit_requests <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "llm.rate_limit_requests"
+  },
+  "llm.rate_limit_requests <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "llm.rate_limit_requests"
+  },
+  "llm.rate_limit_requests <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "llm.rate_limit_requests"
+  },
+  "llm.rate_limit_requests <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm.rate_limit_requests"
+  },
+  "llm.rate_limit_requests <- 0": {
+    "ok": {
+      "llm.rate_limit_requests": 0
+    }
+  },
+  "llm.rate_limit_requests <- 1": {
+    "ok": {
+      "llm.rate_limit_requests": 1
+    }
+  },
+  "llm.rate_limit_requests <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm.rate_limit_requests"
+  },
+  "llm.rate_limit_requests <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm.rate_limit_requests"
+  },
+  "llm.rate_limit_requests <- 70000": {
+    "ok": {
+      "llm.rate_limit_requests": 70000
+    }
+  },
+  "llm.rate_limit_requests <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm.rate_limit_requests"
+  },
+  "llm.rate_limit_requests <- false": {
+    "err": "TypeMismatch",
+    "key": "llm.rate_limit_requests"
+  },
+  "llm.rate_limit_requests <- null": {
+    "err": "TypeMismatch",
+    "key": "llm.rate_limit_requests"
+  },
+  "llm.rate_limit_requests <- true": {
+    "err": "TypeMismatch",
+    "key": "llm.rate_limit_requests"
+  },
+  "llm.rate_limit_requests <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm.rate_limit_requests"
+  },
+  "llm.reasoning <- \"\"": {
+    "ok": {
+      "llm.reasoning": ""
+    }
+  },
+  "llm.reasoning <- \"1\"": {
+    "ok": {
+      "llm.reasoning": "1"
+    }
+  },
+  "llm.reasoning <- \"s\"": {
+    "ok": {
+      "llm.reasoning": "s"
+    }
+  },
+  "llm.reasoning <- \"true\"": {
+    "ok": {
+      "llm.reasoning": "true"
+    }
+  },
+  "llm.reasoning <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm.reasoning"
+  },
+  "llm.reasoning <- 0": {
+    "err": "TypeMismatch",
+    "key": "llm.reasoning"
+  },
+  "llm.reasoning <- 1": {
+    "err": "TypeMismatch",
+    "key": "llm.reasoning"
+  },
+  "llm.reasoning <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm.reasoning"
+  },
+  "llm.reasoning <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm.reasoning"
+  },
+  "llm.reasoning <- 70000": {
+    "err": "TypeMismatch",
+    "key": "llm.reasoning"
+  },
+  "llm.reasoning <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm.reasoning"
+  },
+  "llm.reasoning <- false": {
+    "err": "TypeMismatch",
+    "key": "llm.reasoning"
+  },
+  "llm.reasoning <- null": {
+    "err": "TypeMismatch",
+    "key": "llm.reasoning"
+  },
+  "llm.reasoning <- true": {
+    "err": "TypeMismatch",
+    "key": "llm.reasoning"
+  },
+  "llm.reasoning <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm.reasoning"
+  },
+  "llm.record_path <- \"\"": {
+    "ok": {}
+  },
+  "llm.record_path <- \"1\"": {
+    "ok": {
+      "llm.record_path": "1"
+    }
+  },
+  "llm.record_path <- \"s\"": {
+    "ok": {
+      "llm.record_path": "s"
+    }
+  },
+  "llm.record_path <- \"true\"": {
+    "ok": {
+      "llm.record_path": "true"
+    }
+  },
+  "llm.record_path <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm.record_path"
+  },
+  "llm.record_path <- 0": {
+    "err": "TypeMismatch",
+    "key": "llm.record_path"
+  },
+  "llm.record_path <- 1": {
+    "err": "TypeMismatch",
+    "key": "llm.record_path"
+  },
+  "llm.record_path <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm.record_path"
+  },
+  "llm.record_path <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm.record_path"
+  },
+  "llm.record_path <- 70000": {
+    "err": "TypeMismatch",
+    "key": "llm.record_path"
+  },
+  "llm.record_path <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm.record_path"
+  },
+  "llm.record_path <- false": {
+    "err": "TypeMismatch",
+    "key": "llm.record_path"
+  },
+  "llm.record_path <- null": {
+    "err": "TypeMismatch",
+    "key": "llm.record_path"
+  },
+  "llm.record_path <- true": {
+    "err": "TypeMismatch",
+    "key": "llm.record_path"
+  },
+  "llm.record_path <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm.record_path"
+  },
+  "llm.request_deadline_seconds <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "llm.request_deadline_seconds"
+  },
+  "llm.request_deadline_seconds <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "llm.request_deadline_seconds"
+  },
+  "llm.request_deadline_seconds <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "llm.request_deadline_seconds"
+  },
+  "llm.request_deadline_seconds <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "llm.request_deadline_seconds"
+  },
+  "llm.request_deadline_seconds <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm.request_deadline_seconds"
+  },
+  "llm.request_deadline_seconds <- 0": {
+    "ok": {
+      "llm.request_deadline_seconds": 0
+    }
+  },
+  "llm.request_deadline_seconds <- 1": {
+    "ok": {
+      "llm.request_deadline_seconds": 1
+    }
+  },
+  "llm.request_deadline_seconds <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm.request_deadline_seconds"
+  },
+  "llm.request_deadline_seconds <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm.request_deadline_seconds"
+  },
+  "llm.request_deadline_seconds <- 70000": {
+    "ok": {
+      "llm.request_deadline_seconds": 70000
+    }
+  },
+  "llm.request_deadline_seconds <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm.request_deadline_seconds"
+  },
+  "llm.request_deadline_seconds <- false": {
+    "err": "TypeMismatch",
+    "key": "llm.request_deadline_seconds"
+  },
+  "llm.request_deadline_seconds <- null": {
+    "err": "TypeMismatch",
+    "key": "llm.request_deadline_seconds"
+  },
+  "llm.request_deadline_seconds <- true": {
+    "err": "TypeMismatch",
+    "key": "llm.request_deadline_seconds"
+  },
+  "llm.request_deadline_seconds <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm.request_deadline_seconds"
+  },
+  "llm.request_timeout_seconds <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "llm.request_timeout_seconds"
+  },
+  "llm.request_timeout_seconds <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "llm.request_timeout_seconds"
+  },
+  "llm.request_timeout_seconds <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "llm.request_timeout_seconds"
+  },
+  "llm.request_timeout_seconds <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "llm.request_timeout_seconds"
+  },
+  "llm.request_timeout_seconds <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm.request_timeout_seconds"
+  },
+  "llm.request_timeout_seconds <- 0": {
+    "ok": {
+      "llm.request_timeout_seconds": 0
+    }
+  },
+  "llm.request_timeout_seconds <- 1": {
+    "ok": {
+      "llm.request_timeout_seconds": 1
+    }
+  },
+  "llm.request_timeout_seconds <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm.request_timeout_seconds"
+  },
+  "llm.request_timeout_seconds <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm.request_timeout_seconds"
+  },
+  "llm.request_timeout_seconds <- 70000": {
+    "ok": {
+      "llm.request_timeout_seconds": 70000
+    }
+  },
+  "llm.request_timeout_seconds <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm.request_timeout_seconds"
+  },
+  "llm.request_timeout_seconds <- false": {
+    "err": "TypeMismatch",
+    "key": "llm.request_timeout_seconds"
+  },
+  "llm.request_timeout_seconds <- null": {
+    "err": "TypeMismatch",
+    "key": "llm.request_timeout_seconds"
+  },
+  "llm.request_timeout_seconds <- true": {
+    "err": "TypeMismatch",
+    "key": "llm.request_timeout_seconds"
+  },
+  "llm.request_timeout_seconds <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm.request_timeout_seconds"
+  },
+  "llm.streaming <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "llm.streaming"
+  },
+  "llm.streaming <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "llm.streaming"
+  },
+  "llm.streaming <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "llm.streaming"
+  },
+  "llm.streaming <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "llm.streaming"
+  },
+  "llm.streaming <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm.streaming"
+  },
+  "llm.streaming <- 0": {
+    "err": "TypeMismatch",
+    "key": "llm.streaming"
+  },
+  "llm.streaming <- 1": {
+    "err": "TypeMismatch",
+    "key": "llm.streaming"
+  },
+  "llm.streaming <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm.streaming"
+  },
+  "llm.streaming <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm.streaming"
+  },
+  "llm.streaming <- 70000": {
+    "err": "TypeMismatch",
+    "key": "llm.streaming"
+  },
+  "llm.streaming <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm.streaming"
+  },
+  "llm.streaming <- false": {
+    "ok": {}
+  },
+  "llm.streaming <- null": {
+    "err": "TypeMismatch",
+    "key": "llm.streaming"
+  },
+  "llm.streaming <- true": {
+    "ok": {
+      "llm.streaming": true
+    }
+  },
+  "llm.streaming <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm.streaming"
+  },
+  "llm.structured_output_mode <- \"\"": {
+    "ok": {
+      "llm.structured_output_mode": ""
+    }
+  },
+  "llm.structured_output_mode <- \"1\"": {
+    "ok": {
+      "llm.structured_output_mode": "1"
+    }
+  },
+  "llm.structured_output_mode <- \"s\"": {
+    "ok": {
+      "llm.structured_output_mode": "s"
+    }
+  },
+  "llm.structured_output_mode <- \"true\"": {
+    "ok": {
+      "llm.structured_output_mode": "true"
+    }
+  },
+  "llm.structured_output_mode <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm.structured_output_mode"
+  },
+  "llm.structured_output_mode <- 0": {
+    "err": "TypeMismatch",
+    "key": "llm.structured_output_mode"
+  },
+  "llm.structured_output_mode <- 1": {
+    "err": "TypeMismatch",
+    "key": "llm.structured_output_mode"
+  },
+  "llm.structured_output_mode <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm.structured_output_mode"
+  },
+  "llm.structured_output_mode <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm.structured_output_mode"
+  },
+  "llm.structured_output_mode <- 70000": {
+    "err": "TypeMismatch",
+    "key": "llm.structured_output_mode"
+  },
+  "llm.structured_output_mode <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm.structured_output_mode"
+  },
+  "llm.structured_output_mode <- false": {
+    "err": "TypeMismatch",
+    "key": "llm.structured_output_mode"
+  },
+  "llm.structured_output_mode <- null": {
+    "err": "TypeMismatch",
+    "key": "llm.structured_output_mode"
+  },
+  "llm.structured_output_mode <- true": {
+    "err": "TypeMismatch",
+    "key": "llm.structured_output_mode"
+  },
+  "llm.structured_output_mode <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm.structured_output_mode"
+  },
+  "llm.temperature <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "llm.temperature"
+  },
+  "llm.temperature <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "llm.temperature"
+  },
+  "llm.temperature <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "llm.temperature"
+  },
+  "llm.temperature <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "llm.temperature"
+  },
+  "llm.temperature <- -1": {
+    "ok": {
+      "llm.temperature": -1.0
+    }
+  },
+  "llm.temperature <- 0": {
+    "ok": {
+      "llm.temperature": 0.0
+    }
+  },
+  "llm.temperature <- 1": {
+    "ok": {
+      "llm.temperature": 1.0
+    }
+  },
+  "llm.temperature <- 1.5": {
+    "ok": {
+      "llm.temperature": 1.5
+    }
+  },
+  "llm.temperature <- 5000000000": {
+    "ok": {
+      "llm.temperature": 5000000000.0
+    }
+  },
+  "llm.temperature <- 70000": {
+    "ok": {
+      "llm.temperature": 70000.0
+    }
+  },
+  "llm.temperature <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm.temperature"
+  },
+  "llm.temperature <- false": {
+    "err": "TypeMismatch",
+    "key": "llm.temperature"
+  },
+  "llm.temperature <- null": {
+    "ok": {}
+  },
+  "llm.temperature <- true": {
+    "err": "TypeMismatch",
+    "key": "llm.temperature"
+  },
+  "llm.temperature <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm.temperature"
+  },
   "llm_api_key <- \"\"": {
     "ok": {}
   },
   "llm_api_key <- \"1\"": {
     "ok": {
-      "llm_api_key": "1"
+      "llm.api_key": "1"
     }
   },
   "llm_api_key <- \"s\"": {
     "ok": {
-      "llm_api_key": "s"
+      "llm.api_key": "s"
     }
   },
   "llm_api_key <- \"true\"": {
     "ok": {
-      "llm_api_key": "true"
+      "llm.api_key": "true"
     }
   },
   "llm_api_key <- -1": {
@@ -3763,17 +7337,17 @@
   },
   "llm_api_version <- \"1\"": {
     "ok": {
-      "llm_api_version": "1"
+      "llm.api_version": "1"
     }
   },
   "llm_api_version <- \"s\"": {
     "ok": {
-      "llm_api_version": "s"
+      "llm.api_version": "s"
     }
   },
   "llm_api_version <- \"true\"": {
     "ok": {
-      "llm_api_version": "true"
+      "llm.api_version": "true"
     }
   },
   "llm_api_version <- -1": {
@@ -3878,7 +7452,7 @@
   },
   "llm_args <- {\"a\":1}": {
     "ok": {
-      "llm_args": {
+      "llm.args": {
         "a": 1
       }
     }
@@ -3888,17 +7462,17 @@
   },
   "llm_cassette <- \"1\"": {
     "ok": {
-      "llm_cassette": "1"
+      "llm.cassette": "1"
     }
   },
   "llm_cassette <- \"s\"": {
     "ok": {
-      "llm_cassette": "s"
+      "llm.cassette": "s"
     }
   },
   "llm_cassette <- \"true\"": {
     "ok": {
-      "llm_cassette": "true"
+      "llm.cassette": "true"
     }
   },
   "llm_cassette <- -1": {
@@ -3967,12 +7541,12 @@
   },
   "llm_connect_timeout_seconds <- 0": {
     "ok": {
-      "llm_connect_timeout_seconds": 0
+      "llm.connect_timeout_seconds": 0
     }
   },
   "llm_connect_timeout_seconds <- 1": {
     "ok": {
-      "llm_connect_timeout_seconds": 1
+      "llm.connect_timeout_seconds": 1
     }
   },
   "llm_connect_timeout_seconds <- 1.5": {
@@ -3985,7 +7559,7 @@
   },
   "llm_connect_timeout_seconds <- 70000": {
     "ok": {
-      "llm_connect_timeout_seconds": 70000
+      "llm.connect_timeout_seconds": 70000
     }
   },
   "llm_connect_timeout_seconds <- [1]": {
@@ -4013,17 +7587,17 @@
   },
   "llm_endpoint <- \"1\"": {
     "ok": {
-      "llm_endpoint": "1"
+      "llm.endpoint": "1"
     }
   },
   "llm_endpoint <- \"s\"": {
     "ok": {
-      "llm_endpoint": "s"
+      "llm.endpoint": "s"
     }
   },
   "llm_endpoint <- \"true\"": {
     "ok": {
-      "llm_endpoint": "true"
+      "llm.endpoint": "true"
     }
   },
   "llm_endpoint <- -1": {
@@ -4075,17 +7649,17 @@
   },
   "llm_fallback_api_key <- \"1\"": {
     "ok": {
-      "llm_fallback_api_key": "1"
+      "llm.fallback_api_key": "1"
     }
   },
   "llm_fallback_api_key <- \"s\"": {
     "ok": {
-      "llm_fallback_api_key": "s"
+      "llm.fallback_api_key": "s"
     }
   },
   "llm_fallback_api_key <- \"true\"": {
     "ok": {
-      "llm_fallback_api_key": "true"
+      "llm.fallback_api_key": "true"
     }
   },
   "llm_fallback_api_key <- -1": {
@@ -4137,17 +7711,17 @@
   },
   "llm_fallback_endpoint <- \"1\"": {
     "ok": {
-      "llm_fallback_endpoint": "1"
+      "llm.fallback_endpoint": "1"
     }
   },
   "llm_fallback_endpoint <- \"s\"": {
     "ok": {
-      "llm_fallback_endpoint": "s"
+      "llm.fallback_endpoint": "s"
     }
   },
   "llm_fallback_endpoint <- \"true\"": {
     "ok": {
-      "llm_fallback_endpoint": "true"
+      "llm.fallback_endpoint": "true"
     }
   },
   "llm_fallback_endpoint <- -1": {
@@ -4199,17 +7773,17 @@
   },
   "llm_fallback_model <- \"1\"": {
     "ok": {
-      "llm_fallback_model": "1"
+      "llm.fallback_model": "1"
     }
   },
   "llm_fallback_model <- \"s\"": {
     "ok": {
-      "llm_fallback_model": "s"
+      "llm.fallback_model": "s"
     }
   },
   "llm_fallback_model <- \"true\"": {
     "ok": {
-      "llm_fallback_model": "true"
+      "llm.fallback_model": "true"
     }
   },
   "llm_fallback_model <- -1": {
@@ -4261,17 +7835,17 @@
   },
   "llm_fallback_provider <- \"1\"": {
     "ok": {
-      "llm_fallback_provider": "1"
+      "llm.fallback_provider": "1"
     }
   },
   "llm_fallback_provider <- \"s\"": {
     "ok": {
-      "llm_fallback_provider": "s"
+      "llm.fallback_provider": "s"
     }
   },
   "llm_fallback_provider <- \"true\"": {
     "ok": {
-      "llm_fallback_provider": "true"
+      "llm.fallback_provider": "true"
     }
   },
   "llm_fallback_provider <- -1": {
@@ -4340,12 +7914,12 @@
   },
   "llm_max_completion_tokens <- 0": {
     "ok": {
-      "llm_max_completion_tokens": 0
+      "llm.max_completion_tokens": 0
     }
   },
   "llm_max_completion_tokens <- 1": {
     "ok": {
-      "llm_max_completion_tokens": 1
+      "llm.max_completion_tokens": 1
     }
   },
   "llm_max_completion_tokens <- 1.5": {
@@ -4358,7 +7932,7 @@
   },
   "llm_max_completion_tokens <- 70000": {
     "ok": {
-      "llm_max_completion_tokens": 70000
+      "llm.max_completion_tokens": 70000
     }
   },
   "llm_max_completion_tokens <- [1]": {
@@ -4466,12 +8040,12 @@
   },
   "llm_max_retries <- 0": {
     "ok": {
-      "llm_max_retries": 0
+      "llm.max_retries": 0
     }
   },
   "llm_max_retries <- 1": {
     "ok": {
-      "llm_max_retries": 1
+      "llm.max_retries": 1
     }
   },
   "llm_max_retries <- 1.5": {
@@ -4484,7 +8058,7 @@
   },
   "llm_max_retries <- 70000": {
     "ok": {
-      "llm_max_retries": 70000
+      "llm.max_retries": 70000
     }
   },
   "llm_max_retries <- [1]": {
@@ -4529,12 +8103,12 @@
   },
   "llm_min_retry_seconds <- 0": {
     "ok": {
-      "llm_min_retry_seconds": 0
+      "llm.min_retry_seconds": 0
     }
   },
   "llm_min_retry_seconds <- 1": {
     "ok": {
-      "llm_min_retry_seconds": 1
+      "llm.min_retry_seconds": 1
     }
   },
   "llm_min_retry_seconds <- 1.5": {
@@ -4547,7 +8121,7 @@
   },
   "llm_min_retry_seconds <- 70000": {
     "ok": {
-      "llm_min_retry_seconds": 70000
+      "llm.min_retry_seconds": 70000
     }
   },
   "llm_min_retry_seconds <- [1]": {
@@ -4623,7 +8197,7 @@
   },
   "llm_mock <- true": {
     "ok": {
-      "llm_mock": true
+      "llm.mock": true
     }
   },
   "llm_mock <- {\"a\":1}": {
@@ -4632,22 +8206,22 @@
   },
   "llm_model <- \"\"": {
     "ok": {
-      "llm_model": ""
+      "llm.model": ""
     }
   },
   "llm_model <- \"1\"": {
     "ok": {
-      "llm_model": "1"
+      "llm.model": "1"
     }
   },
   "llm_model <- \"s\"": {
     "ok": {
-      "llm_model": "s"
+      "llm.model": "s"
     }
   },
   "llm_model <- \"true\"": {
     "ok": {
-      "llm_model": "true"
+      "llm.model": "true"
     }
   },
   "llm_model <- -1": {
@@ -4716,12 +8290,12 @@
   },
   "llm_network_retries <- 0": {
     "ok": {
-      "llm_network_retries": 0
+      "llm.network_retries": 0
     }
   },
   "llm_network_retries <- 1": {
     "ok": {
-      "llm_network_retries": 1
+      "llm.network_retries": 1
     }
   },
   "llm_network_retries <- 1.5": {
@@ -4734,7 +8308,7 @@
   },
   "llm_network_retries <- 70000": {
     "ok": {
-      "llm_network_retries": 70000
+      "llm.network_retries": 70000
     }
   },
   "llm_network_retries <- [1]": {
@@ -4759,22 +8333,22 @@
   },
   "llm_provider <- \"\"": {
     "ok": {
-      "llm_provider": ""
+      "llm.provider": ""
     }
   },
   "llm_provider <- \"1\"": {
     "ok": {
-      "llm_provider": "1"
+      "llm.provider": "1"
     }
   },
   "llm_provider <- \"s\"": {
     "ok": {
-      "llm_provider": "s"
+      "llm.provider": "s"
     }
   },
   "llm_provider <- \"true\"": {
     "ok": {
-      "llm_provider": "true"
+      "llm.provider": "true"
     }
   },
   "llm_provider <- -1": {
@@ -4874,7 +8448,7 @@
   },
   "llm_rate_limit_enabled <- true": {
     "ok": {
-      "llm_rate_limit_enabled": true
+      "llm.rate_limit_enabled": true
     }
   },
   "llm_rate_limit_enabled <- {\"a\":1}": {
@@ -4903,12 +8477,12 @@
   },
   "llm_rate_limit_interval <- 0": {
     "ok": {
-      "llm_rate_limit_interval": 0
+      "llm.rate_limit_interval": 0
     }
   },
   "llm_rate_limit_interval <- 1": {
     "ok": {
-      "llm_rate_limit_interval": 1
+      "llm.rate_limit_interval": 1
     }
   },
   "llm_rate_limit_interval <- 1.5": {
@@ -4921,7 +8495,7 @@
   },
   "llm_rate_limit_interval <- 70000": {
     "ok": {
-      "llm_rate_limit_interval": 70000
+      "llm.rate_limit_interval": 70000
     }
   },
   "llm_rate_limit_interval <- [1]": {
@@ -4966,12 +8540,12 @@
   },
   "llm_rate_limit_requests <- 0": {
     "ok": {
-      "llm_rate_limit_requests": 0
+      "llm.rate_limit_requests": 0
     }
   },
   "llm_rate_limit_requests <- 1": {
     "ok": {
-      "llm_rate_limit_requests": 1
+      "llm.rate_limit_requests": 1
     }
   },
   "llm_rate_limit_requests <- 1.5": {
@@ -4984,7 +8558,7 @@
   },
   "llm_rate_limit_requests <- 70000": {
     "ok": {
-      "llm_rate_limit_requests": 70000
+      "llm.rate_limit_requests": 70000
     }
   },
   "llm_rate_limit_requests <- [1]": {
@@ -5009,22 +8583,22 @@
   },
   "llm_reasoning <- \"\"": {
     "ok": {
-      "llm_reasoning": ""
+      "llm.reasoning": ""
     }
   },
   "llm_reasoning <- \"1\"": {
     "ok": {
-      "llm_reasoning": "1"
+      "llm.reasoning": "1"
     }
   },
   "llm_reasoning <- \"s\"": {
     "ok": {
-      "llm_reasoning": "s"
+      "llm.reasoning": "s"
     }
   },
   "llm_reasoning <- \"true\"": {
     "ok": {
-      "llm_reasoning": "true"
+      "llm.reasoning": "true"
     }
   },
   "llm_reasoning <- -1": {
@@ -5076,17 +8650,17 @@
   },
   "llm_record_path <- \"1\"": {
     "ok": {
-      "llm_record_path": "1"
+      "llm.record_path": "1"
     }
   },
   "llm_record_path <- \"s\"": {
     "ok": {
-      "llm_record_path": "s"
+      "llm.record_path": "s"
     }
   },
   "llm_record_path <- \"true\"": {
     "ok": {
-      "llm_record_path": "true"
+      "llm.record_path": "true"
     }
   },
   "llm_record_path <- -1": {
@@ -5155,12 +8729,12 @@
   },
   "llm_request_deadline_seconds <- 0": {
     "ok": {
-      "llm_request_deadline_seconds": 0
+      "llm.request_deadline_seconds": 0
     }
   },
   "llm_request_deadline_seconds <- 1": {
     "ok": {
-      "llm_request_deadline_seconds": 1
+      "llm.request_deadline_seconds": 1
     }
   },
   "llm_request_deadline_seconds <- 1.5": {
@@ -5173,7 +8747,7 @@
   },
   "llm_request_deadline_seconds <- 70000": {
     "ok": {
-      "llm_request_deadline_seconds": 70000
+      "llm.request_deadline_seconds": 70000
     }
   },
   "llm_request_deadline_seconds <- [1]": {
@@ -5218,12 +8792,12 @@
   },
   "llm_request_timeout_seconds <- 0": {
     "ok": {
-      "llm_request_timeout_seconds": 0
+      "llm.request_timeout_seconds": 0
     }
   },
   "llm_request_timeout_seconds <- 1": {
     "ok": {
-      "llm_request_timeout_seconds": 1
+      "llm.request_timeout_seconds": 1
     }
   },
   "llm_request_timeout_seconds <- 1.5": {
@@ -5236,7 +8810,7 @@
   },
   "llm_request_timeout_seconds <- 70000": {
     "ok": {
-      "llm_request_timeout_seconds": 70000
+      "llm.request_timeout_seconds": 70000
     }
   },
   "llm_request_timeout_seconds <- [1]": {
@@ -5312,7 +8886,7 @@
   },
   "llm_streaming <- true": {
     "ok": {
-      "llm_streaming": true
+      "llm.streaming": true
     }
   },
   "llm_streaming <- {\"a\":1}": {
@@ -5321,22 +8895,22 @@
   },
   "llm_structured_output_mode <- \"\"": {
     "ok": {
-      "llm_structured_output_mode": ""
+      "llm.structured_output_mode": ""
     }
   },
   "llm_structured_output_mode <- \"1\"": {
     "ok": {
-      "llm_structured_output_mode": "1"
+      "llm.structured_output_mode": "1"
     }
   },
   "llm_structured_output_mode <- \"s\"": {
     "ok": {
-      "llm_structured_output_mode": "s"
+      "llm.structured_output_mode": "s"
     }
   },
   "llm_structured_output_mode <- \"true\"": {
     "ok": {
-      "llm_structured_output_mode": "true"
+      "llm.structured_output_mode": "true"
     }
   },
   "llm_structured_output_mode <- -1": {
@@ -5401,32 +8975,32 @@
   },
   "llm_temperature <- -1": {
     "ok": {
-      "llm_temperature": -1.0
+      "llm.temperature": -1.0
     }
   },
   "llm_temperature <- 0": {
     "ok": {
-      "llm_temperature": 0.0
+      "llm.temperature": 0.0
     }
   },
   "llm_temperature <- 1": {
     "ok": {
-      "llm_temperature": 1.0
+      "llm.temperature": 1.0
     }
   },
   "llm_temperature <- 1.5": {
     "ok": {
-      "llm_temperature": 1.5
+      "llm.temperature": 1.5
     }
   },
   "llm_temperature <- 5000000000": {
     "ok": {
-      "llm_temperature": 5000000000.0
+      "llm.temperature": 5000000000.0
     }
   },
   "llm_temperature <- 70000": {
     "ok": {
-      "llm_temperature": 70000.0
+      "llm.temperature": 70000.0
     }
   },
   "llm_temperature <- [1]": {
@@ -5447,6 +9021,69 @@
   "llm_temperature <- {\"a\":1}": {
     "err": "TypeMismatch",
     "key": "llm_temperature"
+  },
+  "llm_vision_model <- \"\"": {
+    "ok": {
+      "llm.openai_compatible.vision_model": ""
+    }
+  },
+  "llm_vision_model <- \"1\"": {
+    "ok": {
+      "llm.openai_compatible.vision_model": "1"
+    }
+  },
+  "llm_vision_model <- \"s\"": {
+    "ok": {
+      "llm.openai_compatible.vision_model": "s"
+    }
+  },
+  "llm_vision_model <- \"true\"": {
+    "ok": {
+      "llm.openai_compatible.vision_model": "true"
+    }
+  },
+  "llm_vision_model <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm_vision_model"
+  },
+  "llm_vision_model <- 0": {
+    "err": "TypeMismatch",
+    "key": "llm_vision_model"
+  },
+  "llm_vision_model <- 1": {
+    "err": "TypeMismatch",
+    "key": "llm_vision_model"
+  },
+  "llm_vision_model <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm_vision_model"
+  },
+  "llm_vision_model <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm_vision_model"
+  },
+  "llm_vision_model <- 70000": {
+    "err": "TypeMismatch",
+    "key": "llm_vision_model"
+  },
+  "llm_vision_model <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm_vision_model"
+  },
+  "llm_vision_model <- false": {
+    "err": "TypeMismatch",
+    "key": "llm_vision_model"
+  },
+  "llm_vision_model <- null": {
+    "ok": {}
+  },
+  "llm_vision_model <- true": {
+    "err": "TypeMismatch",
+    "key": "llm_vision_model"
+  },
+  "llm_vision_model <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm_vision_model"
   },
   "log_level <- \"\"": {
     "ok": {
@@ -6962,21 +10599,23 @@
     "vector_db_url": "/srv/cognee/vectors"
   },
   "transcription_model <- \"\"": {
-    "ok": {}
+    "ok": {
+      "llm.openai_compatible.transcription_model": ""
+    }
   },
   "transcription_model <- \"1\"": {
     "ok": {
-      "transcription_model": "1"
+      "llm.openai_compatible.transcription_model": "1"
     }
   },
   "transcription_model <- \"s\"": {
     "ok": {
-      "transcription_model": "s"
+      "llm.openai_compatible.transcription_model": "s"
     }
   },
   "transcription_model <- \"true\"": {
     "ok": {
-      "transcription_model": "true"
+      "llm.openai_compatible.transcription_model": "true"
     }
   },
   "transcription_model <- -1": {

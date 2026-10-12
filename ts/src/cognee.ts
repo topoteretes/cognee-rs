@@ -49,15 +49,21 @@ import { wrapNativeError } from "./errors";
 // Cloud module-level functions (`serve` / `disconnect`) are not part of the
 // OSS `cognee` package, which does not expose them.
 
-/** Convert a single `snake_case` key to `camelCase`. */
+/**
+ * Convert a single `snake_case` key to `camelCase`. The dots of a namespaced
+ * section key count as word breaks too, so the canonical `llm.max_retries`
+ * reads back as `llmMaxRetries`: the same name its Python alias
+ * (`llm_max_retries`) always produced.
+ */
 function snakeToCamel(key: string): string {
-  return key.replace(/_([a-z0-9])/g, (_m, c: string) => c.toUpperCase());
+  return key.replace(/[_.]([a-z0-9])/g, (_m, c: string) => c.toUpperCase());
 }
 
 /**
- * Rewrite the top-level keys of a config snapshot from `snake_case` (the wire
- * shape returned by the native `getConfig`) to the documented `camelCase` API
- * keys (`llm_model` -> `llmModel`, `chunk_size` -> `chunkSize`, ...), so the
+ * Rewrite the top-level keys of a config snapshot from `snake_case` / canonical
+ * section keys (the wire shape returned by the native `getConfig`) to the
+ * documented `camelCase` API keys (`llm.model` -> `llmModel`, `chunk_size` ->
+ * `chunkSize`, ...), so the
  * object returned by `config.get()` matches `CogneeConfigObject` / the setters.
  */
 function configToCamel(obj: Record<string, unknown>): Record<string, unknown> {

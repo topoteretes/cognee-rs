@@ -239,13 +239,12 @@ bulk_setter!(config_set_graph_db_config, set_graph_db_config);
 // ---------------------------------------------------------------------------
 
 /// `getConfig(handle) -> object` — a JSON snapshot of the current `Settings`
-/// with secret fields blanked (see `cognee_bindings_common::redacted_settings_json`).
+/// with secret fields blanked (see `cognee_bindings_common::config_snapshot`).
 pub fn get_config(mut cx: FunctionContext) -> JsResult<JsValue> {
     let handle = cx.argument::<JsBox<CogneeHandle>>(0)?;
 
-    // The settings with the secret fields blanked, before crossing into JS.
-    let value = cognee_bindings_common::redacted_settings_json(handle.state.cm.config())
-        .or_else(|e| cx.throw_error(format!("failed to serialize settings: {e}")))?;
+    // Every setting, with secrets blanked before crossing back into JS.
+    let value = cognee_bindings_common::config_snapshot(handle.state.cm.config());
 
     let json = serde_json::to_string(&value)
         .or_else(|e| cx.throw_error(format!("failed to serialize settings: {e}")))?;

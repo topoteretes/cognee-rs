@@ -71,8 +71,8 @@ def main() -> None:
     cognee = Cognee(initial_settings)
 
     cfg = cognee.config.get()
-    print(f"  llm_model     = {cfg.get('llm_model')}")
-    print(f"  llm_api_key   = {cfg.get('llm_api_key')}  (redacted)")
+    print(f"  llm_model     = {cfg.get('llm.model')}")
+    print(f"  llm_api_key   = {cfg.get('llm.api_key')}  (redacted)")
     print(f"  emb_provider  = {cfg.get('embedding_provider')}")
 
     # ── Method B: single key-value setters ────────────────────────────────────
@@ -84,8 +84,8 @@ def main() -> None:
     cognee.config.set("llm_temperature", 0.1)
 
     cfg = cognee.config.get()
-    print(f"  llm_model after set_str: {cfg.get('llm_model')}")
-    print(f"  llm_temperature after set: {cfg.get('llm_temperature')}")
+    print(f"  llm_model after set_str: {cfg.get('llm.model')}")
+    print(f"  llm_temperature after set: {cfg.get('llm.temperature')}")
 
     # An unknown key is a logged warning by default. With strict_config on,
     # set() raises CogneeUnknownConfigKeyError instead.

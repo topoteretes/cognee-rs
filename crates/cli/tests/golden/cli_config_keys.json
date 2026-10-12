@@ -1,7 +1,18 @@
 {
   "<config get keys>": [
     "auto_feedback",
-    "auto_rate_limit",
+    "aws.access_key_id",
+    "aws.bearer_token",
+    "aws.bedrock_runtime_endpoint",
+    "aws.external_id",
+    "aws.profile_name",
+    "aws.region",
+    "aws.role_name",
+    "aws.secret_access_key",
+    "aws.session_name",
+    "aws.session_token",
+    "aws.sts_endpoint",
+    "aws.web_identity_token",
     "cache_backend",
     "cache_host",
     "cache_password",
@@ -57,33 +68,39 @@
     "graph_filename",
     "graph_model",
     "graph_prompt_path",
-    "llm_api_key",
-    "llm_api_version",
-    "llm_cassette",
-    "llm_connect_timeout_seconds",
-    "llm_endpoint",
-    "llm_fallback_api_key",
-    "llm_fallback_endpoint",
-    "llm_fallback_model",
-    "llm_fallback_provider",
-    "llm_max_completion_tokens",
+    "llm.anthropic.base_url",
+    "llm.api_key",
+    "llm.api_version",
+    "llm.args",
+    "llm.auto_rate_limit",
+    "llm.cassette",
+    "llm.connect_timeout_seconds",
+    "llm.debug_requests",
+    "llm.endpoint",
+    "llm.fallback_api_key",
+    "llm.fallback_endpoint",
+    "llm.fallback_model",
+    "llm.fallback_provider",
+    "llm.max_completion_tokens",
+    "llm.max_retries",
+    "llm.min_retry_seconds",
+    "llm.mock",
+    "llm.model",
+    "llm.network_retries",
+    "llm.openai_compatible.transcription_model",
+    "llm.openai_compatible.vision_model",
+    "llm.provider",
+    "llm.rate_limit_enabled",
+    "llm.rate_limit_interval",
+    "llm.rate_limit_requests",
+    "llm.reasoning",
+    "llm.record_path",
+    "llm.request_deadline_seconds",
+    "llm.request_timeout_seconds",
+    "llm.streaming",
+    "llm.structured_output_mode",
+    "llm.temperature",
     "llm_max_parallel_requests",
-    "llm_max_retries",
-    "llm_min_retry_seconds",
-    "llm_mock",
-    "llm_model",
-    "llm_network_retries",
-    "llm_provider",
-    "llm_rate_limit_enabled",
-    "llm_rate_limit_interval",
-    "llm_rate_limit_requests",
-    "llm_reasoning",
-    "llm_record_path",
-    "llm_request_deadline_seconds",
-    "llm_request_timeout_seconds",
-    "llm_streaming",
-    "llm_structured_output_mode",
-    "llm_temperature",
     "log_level",
     "logs_root_directory",
     "migration_db_url",
@@ -106,7 +123,6 @@
     "strict_config",
     "summarization_model",
     "system_root_directory",
-    "transcription_model",
     "vector_db_host",
     "vector_db_key",
     "vector_db_name",
@@ -127,31 +143,8 @@
     "classification_model",
     "summarization_model",
     "graph_model",
-    "llm_provider",
-    "llm_model",
-    "llm_api_key",
-    "llm_endpoint",
-    "llm_api_version",
-    "llm_reasoning",
-    "llm_structured_output_mode",
-    "llm_temperature",
-    "llm_streaming",
-    "llm_max_completion_tokens",
-    "llm_max_retries",
-    "llm_network_retries",
-    "llm_min_retry_seconds",
     "llm_max_parallel_requests",
-    "llm_request_timeout_seconds",
-    "llm_connect_timeout_seconds",
-    "llm_request_deadline_seconds",
-    "llm_mock",
-    "llm_cassette",
-    "llm_record_path",
     "graph_prompt_path",
-    "llm_fallback_model",
-    "llm_fallback_provider",
-    "llm_fallback_endpoint",
-    "llm_fallback_api_key",
     "graph_database_provider",
     "graph_database_url",
     "graph_database_name",
@@ -195,7 +188,6 @@
     "embedding_endpoint",
     "embedding_api_key",
     "embedding_api_version",
-    "transcription_model",
     "ontology_file_path",
     "ontology_resolver",
     "ontology_matching_strategy",
@@ -211,10 +203,6 @@
     "default_user_password",
     "enable_access_control",
     "log_level",
-    "auto_rate_limit",
-    "llm_rate_limit_enabled",
-    "llm_rate_limit_requests",
-    "llm_rate_limit_interval",
     "embedding_rate_limit_enabled",
     "embedding_rate_limit_requests",
     "embedding_rate_limit_interval",
@@ -231,8 +219,105 @@
     "enable_last_accessed",
     "strict_config",
     "single_process",
-    "graph.ladybug.max_db_size"
+    "llm.provider",
+    "llm.model",
+    "llm.api_key",
+    "llm.endpoint",
+    "llm.api_version",
+    "llm.reasoning",
+    "llm.structured_output_mode",
+    "llm.temperature",
+    "llm.streaming",
+    "llm.max_completion_tokens",
+    "llm.max_retries",
+    "llm.network_retries",
+    "llm.min_retry_seconds",
+    "llm.request_timeout_seconds",
+    "llm.connect_timeout_seconds",
+    "llm.request_deadline_seconds",
+    "llm.args",
+    "llm.rate_limit_enabled",
+    "llm.rate_limit_requests",
+    "llm.rate_limit_interval",
+    "llm.auto_rate_limit",
+    "llm.mock",
+    "llm.cassette",
+    "llm.record_path",
+    "llm.debug_requests",
+    "llm.fallback_model",
+    "llm.fallback_provider",
+    "llm.fallback_endpoint",
+    "llm.fallback_api_key",
+    "graph.ladybug.max_db_size",
+    "llm.anthropic.base_url",
+    "llm.openai_compatible.vision_model",
+    "llm.openai_compatible.transcription_model",
+    "aws.region",
+    "aws.access_key_id",
+    "aws.secret_access_key",
+    "aws.session_token",
+    "aws.profile_name",
+    "aws.role_name",
+    "aws.session_name",
+    "aws.web_identity_token",
+    "aws.sts_endpoint",
+    "aws.external_id",
+    "aws.bedrock_runtime_endpoint",
+    "aws.bearer_token"
   ],
+  "set anthropic_base_url <- \"\"": {
+    "ok": {
+      "llm.anthropic.base_url": ""
+    }
+  },
+  "set anthropic_base_url <- \"1\"": {
+    "ok": {
+      "llm.anthropic.base_url": "1"
+    }
+  },
+  "set anthropic_base_url <- \"s\"": {
+    "ok": {
+      "llm.anthropic.base_url": "s"
+    }
+  },
+  "set anthropic_base_url <- \"true\"": {
+    "ok": {
+      "llm.anthropic.base_url": "true"
+    }
+  },
+  "set anthropic_base_url <- -1": {
+    "err": true
+  },
+  "set anthropic_base_url <- 0": {
+    "err": true
+  },
+  "set anthropic_base_url <- 1": {
+    "err": true
+  },
+  "set anthropic_base_url <- 1.5": {
+    "err": true
+  },
+  "set anthropic_base_url <- 5000000000": {
+    "err": true
+  },
+  "set anthropic_base_url <- 70000": {
+    "err": true
+  },
+  "set anthropic_base_url <- [1]": {
+    "err": true
+  },
+  "set anthropic_base_url <- false": {
+    "err": true
+  },
+  "set anthropic_base_url <- null": {
+    "ok": {}
+  },
+  "set anthropic_base_url <- true": {
+    "err": true
+  },
+  "set anthropic_base_url <- {\"a\":1}": {
+    "err": true
+  },
   "set auto_feedback <- \"\"": {
     "err": true
   },
@@ -315,7 +400,7 @@
   },
   "set auto_rate_limit <- false": {
     "ok": {
-      "auto_rate_limit": false
+      "llm.auto_rate_limit": false
     }
   },
   "set auto_rate_limit <- null": {
@@ -325,6 +410,1278 @@
     "ok": {}
   },
   "set auto_rate_limit <- {\"a\":1}": {
+    "err": true
+  },
+  "set aws.access_key_id <- \"\"": {
+    "ok": {
+      "aws.access_key_id": ""
+    }
+  },
+  "set aws.access_key_id <- \"1\"": {
+    "ok": {
+      "aws.access_key_id": "1"
+    }
+  },
+  "set aws.access_key_id <- \"s\"": {
+    "ok": {
+      "aws.access_key_id": "s"
+    }
+  },
+  "set aws.access_key_id <- \"true\"": {
+    "ok": {
+      "aws.access_key_id": "true"
+    }
+  },
+  "set aws.access_key_id <- -1": {
+    "err": true
+  },
+  "set aws.access_key_id <- 0": {
+    "err": true
+  },
+  "set aws.access_key_id <- 1": {
+    "err": true
+  },
+  "set aws.access_key_id <- 1.5": {
+    "err": true
+  },
+  "set aws.access_key_id <- 5000000000": {
+    "err": true
+  },
+  "set aws.access_key_id <- 70000": {
+    "err": true
+  },
+  "set aws.access_key_id <- [1]": {
+    "err": true
+  },
+  "set aws.access_key_id <- false": {
+    "err": true
+  },
+  "set aws.access_key_id <- null": {
+    "ok": {}
+  },
+  "set aws.access_key_id <- true": {
+    "err": true
+  },
+  "set aws.access_key_id <- {\"a\":1}": {
+    "err": true
+  },
+  "set aws.bearer_token <- \"\"": {
+    "ok": {
+      "aws.bearer_token": ""
+    }
+  },
+  "set aws.bearer_token <- \"1\"": {
+    "ok": {
+      "aws.bearer_token": "1"
+    }
+  },
+  "set aws.bearer_token <- \"s\"": {
+    "ok": {
+      "aws.bearer_token": "s"
+    }
+  },
+  "set aws.bearer_token <- \"true\"": {
+    "ok": {
+      "aws.bearer_token": "true"
+    }
+  },
+  "set aws.bearer_token <- -1": {
+    "err": true
+  },
+  "set aws.bearer_token <- 0": {
+    "err": true
+  },
+  "set aws.bearer_token <- 1": {
+    "err": true
+  },
+  "set aws.bearer_token <- 1.5": {
+    "err": true
+  },
+  "set aws.bearer_token <- 5000000000": {
+    "err": true
+  },
+  "set aws.bearer_token <- 70000": {
+    "err": true
+  },
+  "set aws.bearer_token <- [1]": {
+    "err": true
+  },
+  "set aws.bearer_token <- false": {
+    "err": true
+  },
+  "set aws.bearer_token <- null": {
+    "ok": {}
+  },
+  "set aws.bearer_token <- true": {
+    "err": true
+  },
+  "set aws.bearer_token <- {\"a\":1}": {
+    "err": true
+  },
+  "set aws.bedrock_runtime_endpoint <- \"\"": {
+    "ok": {
+      "aws.bedrock_runtime_endpoint": ""
+    }
+  },
+  "set aws.bedrock_runtime_endpoint <- \"1\"": {
+    "ok": {
+      "aws.bedrock_runtime_endpoint": "1"
+    }
+  },
+  "set aws.bedrock_runtime_endpoint <- \"s\"": {
+    "ok": {
+      "aws.bedrock_runtime_endpoint": "s"
+    }
+  },
+  "set aws.bedrock_runtime_endpoint <- \"true\"": {
+    "ok": {
+      "aws.bedrock_runtime_endpoint": "true"
+    }
+  },
+  "set aws.bedrock_runtime_endpoint <- -1": {
+    "err": true
+  },
+  "set aws.bedrock_runtime_endpoint <- 0": {
+    "err": true
+  },
+  "set aws.bedrock_runtime_endpoint <- 1": {
+    "err": true
+  },
+  "set aws.bedrock_runtime_endpoint <- 1.5": {
+    "err": true
+  },
+  "set aws.bedrock_runtime_endpoint <- 5000000000": {
+    "err": true
+  },
+  "set aws.bedrock_runtime_endpoint <- 70000": {
+    "err": true
+  },
+  "set aws.bedrock_runtime_endpoint <- [1]": {
+    "err": true
+  },
+  "set aws.bedrock_runtime_endpoint <- false": {
+    "err": true
+  },
+  "set aws.bedrock_runtime_endpoint <- null": {
+    "ok": {}
+  },
+  "set aws.bedrock_runtime_endpoint <- true": {
+    "err": true
+  },
+  "set aws.bedrock_runtime_endpoint <- {\"a\":1}": {
+    "err": true
+  },
+  "set aws.external_id <- \"\"": {
+    "ok": {
+      "aws.external_id": ""
+    }
+  },
+  "set aws.external_id <- \"1\"": {
+    "ok": {
+      "aws.external_id": "1"
+    }
+  },
+  "set aws.external_id <- \"s\"": {
+    "ok": {
+      "aws.external_id": "s"
+    }
+  },
+  "set aws.external_id <- \"true\"": {
+    "ok": {
+      "aws.external_id": "true"
+    }
+  },
+  "set aws.external_id <- -1": {
+    "err": true
+  },
+  "set aws.external_id <- 0": {
+    "err": true
+  },
+  "set aws.external_id <- 1": {
+    "err": true
+  },
+  "set aws.external_id <- 1.5": {
+    "err": true
+  },
+  "set aws.external_id <- 5000000000": {
+    "err": true
+  },
+  "set aws.external_id <- 70000": {
+    "err": true
+  },
+  "set aws.external_id <- [1]": {
+    "err": true
+  },
+  "set aws.external_id <- false": {
+    "err": true
+  },
+  "set aws.external_id <- null": {
+    "ok": {}
+  },
+  "set aws.external_id <- true": {
+    "err": true
+  },
+  "set aws.external_id <- {\"a\":1}": {
+    "err": true
+  },
+  "set aws.profile_name <- \"\"": {
+    "ok": {
+      "aws.profile_name": ""
+    }
+  },
+  "set aws.profile_name <- \"1\"": {
+    "ok": {
+      "aws.profile_name": "1"
+    }
+  },
+  "set aws.profile_name <- \"s\"": {
+    "ok": {
+      "aws.profile_name": "s"
+    }
+  },
+  "set aws.profile_name <- \"true\"": {
+    "ok": {
+      "aws.profile_name": "true"
+    }
+  },
+  "set aws.profile_name <- -1": {
+    "err": true
+  },
+  "set aws.profile_name <- 0": {
+    "err": true
+  },
+  "set aws.profile_name <- 1": {
+    "err": true
+  },
+  "set aws.profile_name <- 1.5": {
+    "err": true
+  },
+  "set aws.profile_name <- 5000000000": {
+    "err": true
+  },
+  "set aws.profile_name <- 70000": {
+    "err": true
+  },
+  "set aws.profile_name <- [1]": {
+    "err": true
+  },
+  "set aws.profile_name <- false": {
+    "err": true
+  },
+  "set aws.profile_name <- null": {
+    "ok": {}
+  },
+  "set aws.profile_name <- true": {
+    "err": true
+  },
+  "set aws.profile_name <- {\"a\":1}": {
+    "err": true
+  },
+  "set aws.region <- \"\"": {
+    "ok": {
+      "aws.region": ""
+    }
+  },
+  "set aws.region <- \"1\"": {
+    "ok": {
+      "aws.region": "1"
+    }
+  },
+  "set aws.region <- \"s\"": {
+    "ok": {
+      "aws.region": "s"
+    }
+  },
+  "set aws.region <- \"true\"": {
+    "ok": {
+      "aws.region": "true"
+    }
+  },
+  "set aws.region <- -1": {
+    "err": true
+  },
+  "set aws.region <- 0": {
+    "err": true
+  },
+  "set aws.region <- 1": {
+    "err": true
+  },
+  "set aws.region <- 1.5": {
+    "err": true
+  },
+  "set aws.region <- 5000000000": {
+    "err": true
+  },
+  "set aws.region <- 70000": {
+    "err": true
+  },
+  "set aws.region <- [1]": {
+    "err": true
+  },
+  "set aws.region <- false": {
+    "err": true
+  },
+  "set aws.region <- null": {
+    "ok": {}
+  },
+  "set aws.region <- true": {
+    "err": true
+  },
+  "set aws.region <- {\"a\":1}": {
+    "err": true
+  },
+  "set aws.role_name <- \"\"": {
+    "ok": {
+      "aws.role_name": ""
+    }
+  },
+  "set aws.role_name <- \"1\"": {
+    "ok": {
+      "aws.role_name": "1"
+    }
+  },
+  "set aws.role_name <- \"s\"": {
+    "ok": {
+      "aws.role_name": "s"
+    }
+  },
+  "set aws.role_name <- \"true\"": {
+    "ok": {
+      "aws.role_name": "true"
+    }
+  },
+  "set aws.role_name <- -1": {
+    "err": true
+  },
+  "set aws.role_name <- 0": {
+    "err": true
+  },
+  "set aws.role_name <- 1": {
+    "err": true
+  },
+  "set aws.role_name <- 1.5": {
+    "err": true
+  },
+  "set aws.role_name <- 5000000000": {
+    "err": true
+  },
+  "set aws.role_name <- 70000": {
+    "err": true
+  },
+  "set aws.role_name <- [1]": {
+    "err": true
+  },
+  "set aws.role_name <- false": {
+    "err": true
+  },
+  "set aws.role_name <- null": {
+    "ok": {}
+  },
+  "set aws.role_name <- true": {
+    "err": true
+  },
+  "set aws.role_name <- {\"a\":1}": {
+    "err": true
+  },
+  "set aws.secret_access_key <- \"\"": {
+    "ok": {
+      "aws.secret_access_key": ""
+    }
+  },
+  "set aws.secret_access_key <- \"1\"": {
+    "ok": {
+      "aws.secret_access_key": "1"
+    }
+  },
+  "set aws.secret_access_key <- \"s\"": {
+    "ok": {
+      "aws.secret_access_key": "s"
+    }
+  },
+  "set aws.secret_access_key <- \"true\"": {
+    "ok": {
+      "aws.secret_access_key": "true"
+    }
+  },
+  "set aws.secret_access_key <- -1": {
+    "err": true
+  },
+  "set aws.secret_access_key <- 0": {
+    "err": true
+  },
+  "set aws.secret_access_key <- 1": {
+    "err": true
+  },
+  "set aws.secret_access_key <- 1.5": {
+    "err": true
+  },
+  "set aws.secret_access_key <- 5000000000": {
+    "err": true
+  },
+  "set aws.secret_access_key <- 70000": {
+    "err": true
+  },
+  "set aws.secret_access_key <- [1]": {
+    "err": true
+  },
+  "set aws.secret_access_key <- false": {
+    "err": true
+  },
+  "set aws.secret_access_key <- null": {
+    "ok": {}
+  },
+  "set aws.secret_access_key <- true": {
+    "err": true
+  },
+  "set aws.secret_access_key <- {\"a\":1}": {
+    "err": true
+  },
+  "set aws.session_name <- \"\"": {
+    "ok": {
+      "aws.session_name": ""
+    }
+  },
+  "set aws.session_name <- \"1\"": {
+    "ok": {
+      "aws.session_name": "1"
+    }
+  },
+  "set aws.session_name <- \"s\"": {
+    "ok": {
+      "aws.session_name": "s"
+    }
+  },
+  "set aws.session_name <- \"true\"": {
+    "ok": {
+      "aws.session_name": "true"
+    }
+  },
+  "set aws.session_name <- -1": {
+    "err": true
+  },
+  "set aws.session_name <- 0": {
+    "err": true
+  },
+  "set aws.session_name <- 1": {
+    "err": true
+  },
+  "set aws.session_name <- 1.5": {
+    "err": true
+  },
+  "set aws.session_name <- 5000000000": {
+    "err": true
+  },
+  "set aws.session_name <- 70000": {
+    "err": true
+  },
+  "set aws.session_name <- [1]": {
+    "err": true
+  },
+  "set aws.session_name <- false": {
+    "err": true
+  },
+  "set aws.session_name <- null": {
+    "ok": {}
+  },
+  "set aws.session_name <- true": {
+    "err": true
+  },
+  "set aws.session_name <- {\"a\":1}": {
+    "err": true
+  },
+  "set aws.session_token <- \"\"": {
+    "ok": {
+      "aws.session_token": ""
+    }
+  },
+  "set aws.session_token <- \"1\"": {
+    "ok": {
+      "aws.session_token": "1"
+    }
+  },
+  "set aws.session_token <- \"s\"": {
+    "ok": {
+      "aws.session_token": "s"
+    }
+  },
+  "set aws.session_token <- \"true\"": {
+    "ok": {
+      "aws.session_token": "true"
+    }
+  },
+  "set aws.session_token <- -1": {
+    "err": true
+  },
+  "set aws.session_token <- 0": {
+    "err": true
+  },
+  "set aws.session_token <- 1": {
+    "err": true
+  },
+  "set aws.session_token <- 1.5": {
+    "err": true
+  },
+  "set aws.session_token <- 5000000000": {
+    "err": true
+  },
+  "set aws.session_token <- 70000": {
+    "err": true
+  },
+  "set aws.session_token <- [1]": {
+    "err": true
+  },
+  "set aws.session_token <- false": {
+    "err": true
+  },
+  "set aws.session_token <- null": {
+    "ok": {}
+  },
+  "set aws.session_token <- true": {
+    "err": true
+  },
+  "set aws.session_token <- {\"a\":1}": {
+    "err": true
+  },
+  "set aws.sts_endpoint <- \"\"": {
+    "ok": {
+      "aws.sts_endpoint": ""
+    }
+  },
+  "set aws.sts_endpoint <- \"1\"": {
+    "ok": {
+      "aws.sts_endpoint": "1"
+    }
+  },
+  "set aws.sts_endpoint <- \"s\"": {
+    "ok": {
+      "aws.sts_endpoint": "s"
+    }
+  },
+  "set aws.sts_endpoint <- \"true\"": {
+    "ok": {
+      "aws.sts_endpoint": "true"
+    }
+  },
+  "set aws.sts_endpoint <- -1": {
+    "err": true
+  },
+  "set aws.sts_endpoint <- 0": {
+    "err": true
+  },
+  "set aws.sts_endpoint <- 1": {
+    "err": true
+  },
+  "set aws.sts_endpoint <- 1.5": {
+    "err": true
+  },
+  "set aws.sts_endpoint <- 5000000000": {
+    "err": true
+  },
+  "set aws.sts_endpoint <- 70000": {
+    "err": true
+  },
+  "set aws.sts_endpoint <- [1]": {
+    "err": true
+  },
+  "set aws.sts_endpoint <- false": {
+    "err": true
+  },
+  "set aws.sts_endpoint <- null": {
+    "ok": {}
+  },
+  "set aws.sts_endpoint <- true": {
+    "err": true
+  },
+  "set aws.sts_endpoint <- {\"a\":1}": {
+    "err": true
+  },
+  "set aws.web_identity_token <- \"\"": {
+    "ok": {
+      "aws.web_identity_token": ""
+    }
+  },
+  "set aws.web_identity_token <- \"1\"": {
+    "ok": {
+      "aws.web_identity_token": "1"
+    }
+  },
+  "set aws.web_identity_token <- \"s\"": {
+    "ok": {
+      "aws.web_identity_token": "s"
+    }
+  },
+  "set aws.web_identity_token <- \"true\"": {
+    "ok": {
+      "aws.web_identity_token": "true"
+    }
+  },
+  "set aws.web_identity_token <- -1": {
+    "err": true
+  },
+  "set aws.web_identity_token <- 0": {
+    "err": true
+  },
+  "set aws.web_identity_token <- 1": {
+    "err": true
+  },
+  "set aws.web_identity_token <- 1.5": {
+    "err": true
+  },
+  "set aws.web_identity_token <- 5000000000": {
+    "err": true
+  },
+  "set aws.web_identity_token <- 70000": {
+    "err": true
+  },
+  "set aws.web_identity_token <- [1]": {
+    "err": true
+  },
+  "set aws.web_identity_token <- false": {
+    "err": true
+  },
+  "set aws.web_identity_token <- null": {
+    "ok": {}
+  },
+  "set aws.web_identity_token <- true": {
+    "err": true
+  },
+  "set aws.web_identity_token <- {\"a\":1}": {
+    "err": true
+  },
+  "set aws_access_key_id <- \"\"": {
+    "ok": {
+      "aws.access_key_id": ""
+    }
+  },
+  "set aws_access_key_id <- \"1\"": {
+    "ok": {
+      "aws.access_key_id": "1"
+    }
+  },
+  "set aws_access_key_id <- \"s\"": {
+    "ok": {
+      "aws.access_key_id": "s"
+    }
+  },
+  "set aws_access_key_id <- \"true\"": {
+    "ok": {
+      "aws.access_key_id": "true"
+    }
+  },
+  "set aws_access_key_id <- -1": {
+    "err": true
+  },
+  "set aws_access_key_id <- 0": {
+    "err": true
+  },
+  "set aws_access_key_id <- 1": {
+    "err": true
+  },
+  "set aws_access_key_id <- 1.5": {
+    "err": true
+  },
+  "set aws_access_key_id <- 5000000000": {
+    "err": true
+  },
+  "set aws_access_key_id <- 70000": {
+    "err": true
+  },
+  "set aws_access_key_id <- [1]": {
+    "err": true
+  },
+  "set aws_access_key_id <- false": {
+    "err": true
+  },
+  "set aws_access_key_id <- null": {
+    "ok": {}
+  },
+  "set aws_access_key_id <- true": {
+    "err": true
+  },
+  "set aws_access_key_id <- {\"a\":1}": {
+    "err": true
+  },
+  "set aws_bearer_token_bedrock <- \"\"": {
+    "ok": {
+      "aws.bearer_token": ""
+    }
+  },
+  "set aws_bearer_token_bedrock <- \"1\"": {
+    "ok": {
+      "aws.bearer_token": "1"
+    }
+  },
+  "set aws_bearer_token_bedrock <- \"s\"": {
+    "ok": {
+      "aws.bearer_token": "s"
+    }
+  },
+  "set aws_bearer_token_bedrock <- \"true\"": {
+    "ok": {
+      "aws.bearer_token": "true"
+    }
+  },
+  "set aws_bearer_token_bedrock <- -1": {
+    "err": true
+  },
+  "set aws_bearer_token_bedrock <- 0": {
+    "err": true
+  },
+  "set aws_bearer_token_bedrock <- 1": {
+    "err": true
+  },
+  "set aws_bearer_token_bedrock <- 1.5": {
+    "err": true
+  },
+  "set aws_bearer_token_bedrock <- 5000000000": {
+    "err": true
+  },
+  "set aws_bearer_token_bedrock <- 70000": {
+    "err": true
+  },
+  "set aws_bearer_token_bedrock <- [1]": {
+    "err": true
+  },
+  "set aws_bearer_token_bedrock <- false": {
+    "err": true
+  },
+  "set aws_bearer_token_bedrock <- null": {
+    "ok": {}
+  },
+  "set aws_bearer_token_bedrock <- true": {
+    "err": true
+  },
+  "set aws_bearer_token_bedrock <- {\"a\":1}": {
+    "err": true
+  },
+  "set aws_bedrock_runtime_endpoint <- \"\"": {
+    "ok": {
+      "aws.bedrock_runtime_endpoint": ""
+    }
+  },
+  "set aws_bedrock_runtime_endpoint <- \"1\"": {
+    "ok": {
+      "aws.bedrock_runtime_endpoint": "1"
+    }
+  },
+  "set aws_bedrock_runtime_endpoint <- \"s\"": {
+    "ok": {
+      "aws.bedrock_runtime_endpoint": "s"
+    }
+  },
+  "set aws_bedrock_runtime_endpoint <- \"true\"": {
+    "ok": {
+      "aws.bedrock_runtime_endpoint": "true"
+    }
+  },
+  "set aws_bedrock_runtime_endpoint <- -1": {
+    "err": true
+  },
+  "set aws_bedrock_runtime_endpoint <- 0": {
+    "err": true
+  },
+  "set aws_bedrock_runtime_endpoint <- 1": {
+    "err": true
+  },
+  "set aws_bedrock_runtime_endpoint <- 1.5": {
+    "err": true
+  },
+  "set aws_bedrock_runtime_endpoint <- 5000000000": {
+    "err": true
+  },
+  "set aws_bedrock_runtime_endpoint <- 70000": {
+    "err": true
+  },
+  "set aws_bedrock_runtime_endpoint <- [1]": {
+    "err": true
+  },
+  "set aws_bedrock_runtime_endpoint <- false": {
+    "err": true
+  },
+  "set aws_bedrock_runtime_endpoint <- null": {
+    "ok": {}
+  },
+  "set aws_bedrock_runtime_endpoint <- true": {
+    "err": true
+  },
+  "set aws_bedrock_runtime_endpoint <- {\"a\":1}": {
+    "err": true
+  },
+  "set aws_external_id <- \"\"": {
+    "ok": {
+      "aws.external_id": ""
+    }
+  },
+  "set aws_external_id <- \"1\"": {
+    "ok": {
+      "aws.external_id": "1"
+    }
+  },
+  "set aws_external_id <- \"s\"": {
+    "ok": {
+      "aws.external_id": "s"
+    }
+  },
+  "set aws_external_id <- \"true\"": {
+    "ok": {
+      "aws.external_id": "true"
+    }
+  },
+  "set aws_external_id <- -1": {
+    "err": true
+  },
+  "set aws_external_id <- 0": {
+    "err": true
+  },
+  "set aws_external_id <- 1": {
+    "err": true
+  },
+  "set aws_external_id <- 1.5": {
+    "err": true
+  },
+  "set aws_external_id <- 5000000000": {
+    "err": true
+  },
+  "set aws_external_id <- 70000": {
+    "err": true
+  },
+  "set aws_external_id <- [1]": {
+    "err": true
+  },
+  "set aws_external_id <- false": {
+    "err": true
+  },
+  "set aws_external_id <- null": {
+    "ok": {}
+  },
+  "set aws_external_id <- true": {
+    "err": true
+  },
+  "set aws_external_id <- {\"a\":1}": {
+    "err": true
+  },
+  "set aws_profile_name <- \"\"": {
+    "ok": {
+      "aws.profile_name": ""
+    }
+  },
+  "set aws_profile_name <- \"1\"": {
+    "ok": {
+      "aws.profile_name": "1"
+    }
+  },
+  "set aws_profile_name <- \"s\"": {
+    "ok": {
+      "aws.profile_name": "s"
+    }
+  },
+  "set aws_profile_name <- \"true\"": {
+    "ok": {
+      "aws.profile_name": "true"
+    }
+  },
+  "set aws_profile_name <- -1": {
+    "err": true
+  },
+  "set aws_profile_name <- 0": {
+    "err": true
+  },
+  "set aws_profile_name <- 1": {
+    "err": true
+  },
+  "set aws_profile_name <- 1.5": {
+    "err": true
+  },
+  "set aws_profile_name <- 5000000000": {
+    "err": true
+  },
+  "set aws_profile_name <- 70000": {
+    "err": true
+  },
+  "set aws_profile_name <- [1]": {
+    "err": true
+  },
+  "set aws_profile_name <- false": {
+    "err": true
+  },
+  "set aws_profile_name <- null": {
+    "ok": {}
+  },
+  "set aws_profile_name <- true": {
+    "err": true
+  },
+  "set aws_profile_name <- {\"a\":1}": {
+    "err": true
+  },
+  "set aws_region_name <- \"\"": {
+    "ok": {
+      "aws.region": ""
+    }
+  },
+  "set aws_region_name <- \"1\"": {
+    "ok": {
+      "aws.region": "1"
+    }
+  },
+  "set aws_region_name <- \"s\"": {
+    "ok": {
+      "aws.region": "s"
+    }
+  },
+  "set aws_region_name <- \"true\"": {
+    "ok": {
+      "aws.region": "true"
+    }
+  },
+  "set aws_region_name <- -1": {
+    "err": true
+  },
+  "set aws_region_name <- 0": {
+    "err": true
+  },
+  "set aws_region_name <- 1": {
+    "err": true
+  },
+  "set aws_region_name <- 1.5": {
+    "err": true
+  },
+  "set aws_region_name <- 5000000000": {
+    "err": true
+  },
+  "set aws_region_name <- 70000": {
+    "err": true
+  },
+  "set aws_region_name <- [1]": {
+    "err": true
+  },
+  "set aws_region_name <- false": {
+    "err": true
+  },
+  "set aws_region_name <- null": {
+    "ok": {}
+  },
+  "set aws_region_name <- true": {
+    "err": true
+  },
+  "set aws_region_name <- {\"a\":1}": {
+    "err": true
+  },
+  "set aws_role_name <- \"\"": {
+    "ok": {
+      "aws.role_name": ""
+    }
+  },
+  "set aws_role_name <- \"1\"": {
+    "ok": {
+      "aws.role_name": "1"
+    }
+  },
+  "set aws_role_name <- \"s\"": {
+    "ok": {
+      "aws.role_name": "s"
+    }
+  },
+  "set aws_role_name <- \"true\"": {
+    "ok": {
+      "aws.role_name": "true"
+    }
+  },
+  "set aws_role_name <- -1": {
+    "err": true
+  },
+  "set aws_role_name <- 0": {
+    "err": true
+  },
+  "set aws_role_name <- 1": {
+    "err": true
+  },
+  "set aws_role_name <- 1.5": {
+    "err": true
+  },
+  "set aws_role_name <- 5000000000": {
+    "err": true
+  },
+  "set aws_role_name <- 70000": {
+    "err": true
+  },
+  "set aws_role_name <- [1]": {
+    "err": true
+  },
+  "set aws_role_name <- false": {
+    "err": true
+  },
+  "set aws_role_name <- null": {
+    "ok": {}
+  },
+  "set aws_role_name <- true": {
+    "err": true
+  },
+  "set aws_role_name <- {\"a\":1}": {
+    "err": true
+  },
+  "set aws_secret_access_key <- \"\"": {
+    "ok": {
+      "aws.secret_access_key": ""
+    }
+  },
+  "set aws_secret_access_key <- \"1\"": {
+    "ok": {
+      "aws.secret_access_key": "1"
+    }
+  },
+  "set aws_secret_access_key <- \"s\"": {
+    "ok": {
+      "aws.secret_access_key": "s"
+    }
+  },
+  "set aws_secret_access_key <- \"true\"": {
+    "ok": {
+      "aws.secret_access_key": "true"
+    }
+  },
+  "set aws_secret_access_key <- -1": {
+    "err": true
+  },
+  "set aws_secret_access_key <- 0": {
+    "err": true
+  },
+  "set aws_secret_access_key <- 1": {
+    "err": true
+  },
+  "set aws_secret_access_key <- 1.5": {
+    "err": true
+  },
+  "set aws_secret_access_key <- 5000000000": {
+    "err": true
+  },
+  "set aws_secret_access_key <- 70000": {
+    "err": true
+  },
+  "set aws_secret_access_key <- [1]": {
+    "err": true
+  },
+  "set aws_secret_access_key <- false": {
+    "err": true
+  },
+  "set aws_secret_access_key <- null": {
+    "ok": {}
+  },
+  "set aws_secret_access_key <- true": {
+    "err": true
+  },
+  "set aws_secret_access_key <- {\"a\":1}": {
+    "err": true
+  },
+  "set aws_session_name <- \"\"": {
+    "ok": {
+      "aws.session_name": ""
+    }
+  },
+  "set aws_session_name <- \"1\"": {
+    "ok": {
+      "aws.session_name": "1"
+    }
+  },
+  "set aws_session_name <- \"s\"": {
+    "ok": {
+      "aws.session_name": "s"
+    }
+  },
+  "set aws_session_name <- \"true\"": {
+    "ok": {
+      "aws.session_name": "true"
+    }
+  },
+  "set aws_session_name <- -1": {
+    "err": true
+  },
+  "set aws_session_name <- 0": {
+    "err": true
+  },
+  "set aws_session_name <- 1": {
+    "err": true
+  },
+  "set aws_session_name <- 1.5": {
+    "err": true
+  },
+  "set aws_session_name <- 5000000000": {
+    "err": true
+  },
+  "set aws_session_name <- 70000": {
+    "err": true
+  },
+  "set aws_session_name <- [1]": {
+    "err": true
+  },
+  "set aws_session_name <- false": {
+    "err": true
+  },
+  "set aws_session_name <- null": {
+    "ok": {}
+  },
+  "set aws_session_name <- true": {
+    "err": true
+  },
+  "set aws_session_name <- {\"a\":1}": {
+    "err": true
+  },
+  "set aws_session_token <- \"\"": {
+    "ok": {
+      "aws.session_token": ""
+    }
+  },
+  "set aws_session_token <- \"1\"": {
+    "ok": {
+      "aws.session_token": "1"
+    }
+  },
+  "set aws_session_token <- \"s\"": {
+    "ok": {
+      "aws.session_token": "s"
+    }
+  },
+  "set aws_session_token <- \"true\"": {
+    "ok": {
+      "aws.session_token": "true"
+    }
+  },
+  "set aws_session_token <- -1": {
+    "err": true
+  },
+  "set aws_session_token <- 0": {
+    "err": true
+  },
+  "set aws_session_token <- 1": {
+    "err": true
+  },
+  "set aws_session_token <- 1.5": {
+    "err": true
+  },
+  "set aws_session_token <- 5000000000": {
+    "err": true
+  },
+  "set aws_session_token <- 70000": {
+    "err": true
+  },
+  "set aws_session_token <- [1]": {
+    "err": true
+  },
+  "set aws_session_token <- false": {
+    "err": true
+  },
+  "set aws_session_token <- null": {
+    "ok": {}
+  },
+  "set aws_session_token <- true": {
+    "err": true
+  },
+  "set aws_session_token <- {\"a\":1}": {
+    "err": true
+  },
+  "set aws_sts_endpoint <- \"\"": {
+    "ok": {
+      "aws.sts_endpoint": ""
+    }
+  },
+  "set aws_sts_endpoint <- \"1\"": {
+    "ok": {
+      "aws.sts_endpoint": "1"
+    }
+  },
+  "set aws_sts_endpoint <- \"s\"": {
+    "ok": {
+      "aws.sts_endpoint": "s"
+    }
+  },
+  "set aws_sts_endpoint <- \"true\"": {
+    "ok": {
+      "aws.sts_endpoint": "true"
+    }
+  },
+  "set aws_sts_endpoint <- -1": {
+    "err": true
+  },
+  "set aws_sts_endpoint <- 0": {
+    "err": true
+  },
+  "set aws_sts_endpoint <- 1": {
+    "err": true
+  },
+  "set aws_sts_endpoint <- 1.5": {
+    "err": true
+  },
+  "set aws_sts_endpoint <- 5000000000": {
+    "err": true
+  },
+  "set aws_sts_endpoint <- 70000": {
+    "err": true
+  },
+  "set aws_sts_endpoint <- [1]": {
+    "err": true
+  },
+  "set aws_sts_endpoint <- false": {
+    "err": true
+  },
+  "set aws_sts_endpoint <- null": {
+    "ok": {}
+  },
+  "set aws_sts_endpoint <- true": {
+    "err": true
+  },
+  "set aws_sts_endpoint <- {\"a\":1}": {
+    "err": true
+  },
+  "set aws_web_identity_token <- \"\"": {
+    "ok": {
+      "aws.web_identity_token": ""
+    }
+  },
+  "set aws_web_identity_token <- \"1\"": {
+    "ok": {
+      "aws.web_identity_token": "1"
+    }
+  },
+  "set aws_web_identity_token <- \"s\"": {
+    "ok": {
+      "aws.web_identity_token": "s"
+    }
+  },
+  "set aws_web_identity_token <- \"true\"": {
+    "ok": {
+      "aws.web_identity_token": "true"
+    }
+  },
+  "set aws_web_identity_token <- -1": {
+    "err": true
+  },
+  "set aws_web_identity_token <- 0": {
+    "err": true
+  },
+  "set aws_web_identity_token <- 1": {
+    "err": true
+  },
+  "set aws_web_identity_token <- 1.5": {
+    "err": true
+  },
+  "set aws_web_identity_token <- 5000000000": {
+    "err": true
+  },
+  "set aws_web_identity_token <- 70000": {
+    "err": true
+  },
+  "set aws_web_identity_token <- [1]": {
+    "err": true
+  },
+  "set aws_web_identity_token <- false": {
+    "err": true
+  },
+  "set aws_web_identity_token <- null": {
+    "ok": {}
+  },
+  "set aws_web_identity_token <- true": {
+    "err": true
+  },
+  "set aws_web_identity_token <- {\"a\":1}": {
     "err": true
   },
   "set cache_backend <- \"\"": {
@@ -3254,22 +4611,1652 @@
   "set graph_prompt_path <- {\"a\":1}": {
     "err": true
   },
+  "set llm.anthropic.base_url <- \"\"": {
+    "ok": {
+      "llm.anthropic.base_url": ""
+    }
+  },
+  "set llm.anthropic.base_url <- \"1\"": {
+    "ok": {
+      "llm.anthropic.base_url": "1"
+    }
+  },
+  "set llm.anthropic.base_url <- \"s\"": {
+    "ok": {
+      "llm.anthropic.base_url": "s"
+    }
+  },
+  "set llm.anthropic.base_url <- \"true\"": {
+    "ok": {
+      "llm.anthropic.base_url": "true"
+    }
+  },
+  "set llm.anthropic.base_url <- -1": {
+    "err": true
+  },
+  "set llm.anthropic.base_url <- 0": {
+    "err": true
+  },
+  "set llm.anthropic.base_url <- 1": {
+    "err": true
+  },
+  "set llm.anthropic.base_url <- 1.5": {
+    "err": true
+  },
+  "set llm.anthropic.base_url <- 5000000000": {
+    "err": true
+  },
+  "set llm.anthropic.base_url <- 70000": {
+    "err": true
+  },
+  "set llm.anthropic.base_url <- [1]": {
+    "err": true
+  },
+  "set llm.anthropic.base_url <- false": {
+    "err": true
+  },
+  "set llm.anthropic.base_url <- null": {
+    "ok": {}
+  },
+  "set llm.anthropic.base_url <- true": {
+    "err": true
+  },
+  "set llm.anthropic.base_url <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm.api_key <- \"\"": {
+    "ok": {}
+  },
+  "set llm.api_key <- \"1\"": {
+    "ok": {
+      "llm.api_key": "1"
+    }
+  },
+  "set llm.api_key <- \"s\"": {
+    "ok": {
+      "llm.api_key": "s"
+    }
+  },
+  "set llm.api_key <- \"true\"": {
+    "ok": {
+      "llm.api_key": "true"
+    }
+  },
+  "set llm.api_key <- -1": {
+    "err": true
+  },
+  "set llm.api_key <- 0": {
+    "err": true
+  },
+  "set llm.api_key <- 1": {
+    "err": true
+  },
+  "set llm.api_key <- 1.5": {
+    "err": true
+  },
+  "set llm.api_key <- 5000000000": {
+    "err": true
+  },
+  "set llm.api_key <- 70000": {
+    "err": true
+  },
+  "set llm.api_key <- [1]": {
+    "err": true
+  },
+  "set llm.api_key <- false": {
+    "err": true
+  },
+  "set llm.api_key <- null": {
+    "err": true
+  },
+  "set llm.api_key <- true": {
+    "err": true
+  },
+  "set llm.api_key <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm.api_version <- \"\"": {
+    "ok": {}
+  },
+  "set llm.api_version <- \"1\"": {
+    "ok": {
+      "llm.api_version": "1"
+    }
+  },
+  "set llm.api_version <- \"s\"": {
+    "ok": {
+      "llm.api_version": "s"
+    }
+  },
+  "set llm.api_version <- \"true\"": {
+    "ok": {
+      "llm.api_version": "true"
+    }
+  },
+  "set llm.api_version <- -1": {
+    "err": true
+  },
+  "set llm.api_version <- 0": {
+    "err": true
+  },
+  "set llm.api_version <- 1": {
+    "err": true
+  },
+  "set llm.api_version <- 1.5": {
+    "err": true
+  },
+  "set llm.api_version <- 5000000000": {
+    "err": true
+  },
+  "set llm.api_version <- 70000": {
+    "err": true
+  },
+  "set llm.api_version <- [1]": {
+    "err": true
+  },
+  "set llm.api_version <- false": {
+    "err": true
+  },
+  "set llm.api_version <- null": {
+    "err": true
+  },
+  "set llm.api_version <- true": {
+    "err": true
+  },
+  "set llm.api_version <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm.args <- \"\"": {
+    "err": true
+  },
+  "set llm.args <- \"1\"": {
+    "err": true
+  },
+  "set llm.args <- \"s\"": {
+    "err": true
+  },
+  "set llm.args <- \"true\"": {
+    "err": true
+  },
+  "set llm.args <- -1": {
+    "err": true
+  },
+  "set llm.args <- 0": {
+    "err": true
+  },
+  "set llm.args <- 1": {
+    "err": true
+  },
+  "set llm.args <- 1.5": {
+    "err": true
+  },
+  "set llm.args <- 5000000000": {
+    "err": true
+  },
+  "set llm.args <- 70000": {
+    "err": true
+  },
+  "set llm.args <- [1]": {
+    "err": true
+  },
+  "set llm.args <- false": {
+    "err": true
+  },
+  "set llm.args <- null": {
+    "err": true
+  },
+  "set llm.args <- true": {
+    "err": true
+  },
+  "set llm.args <- {\"a\":1}": {
+    "ok": {
+      "llm.args": {
+        "a": 1
+      }
+    }
+  },
+  "set llm.auto_rate_limit <- \"\"": {
+    "err": true
+  },
+  "set llm.auto_rate_limit <- \"1\"": {
+    "err": true
+  },
+  "set llm.auto_rate_limit <- \"s\"": {
+    "err": true
+  },
+  "set llm.auto_rate_limit <- \"true\"": {
+    "err": true
+  },
+  "set llm.auto_rate_limit <- -1": {
+    "err": true
+  },
+  "set llm.auto_rate_limit <- 0": {
+    "err": true
+  },
+  "set llm.auto_rate_limit <- 1": {
+    "err": true
+  },
+  "set llm.auto_rate_limit <- 1.5": {
+    "err": true
+  },
+  "set llm.auto_rate_limit <- 5000000000": {
+    "err": true
+  },
+  "set llm.auto_rate_limit <- 70000": {
+    "err": true
+  },
+  "set llm.auto_rate_limit <- [1]": {
+    "err": true
+  },
+  "set llm.auto_rate_limit <- false": {
+    "ok": {
+      "llm.auto_rate_limit": false
+    }
+  },
+  "set llm.auto_rate_limit <- null": {
+    "err": true
+  },
+  "set llm.auto_rate_limit <- true": {
+    "ok": {}
+  },
+  "set llm.auto_rate_limit <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm.cassette <- \"\"": {
+    "ok": {}
+  },
+  "set llm.cassette <- \"1\"": {
+    "ok": {
+      "llm.cassette": "1"
+    }
+  },
+  "set llm.cassette <- \"s\"": {
+    "ok": {
+      "llm.cassette": "s"
+    }
+  },
+  "set llm.cassette <- \"true\"": {
+    "ok": {
+      "llm.cassette": "true"
+    }
+  },
+  "set llm.cassette <- -1": {
+    "err": true
+  },
+  "set llm.cassette <- 0": {
+    "err": true
+  },
+  "set llm.cassette <- 1": {
+    "err": true
+  },
+  "set llm.cassette <- 1.5": {
+    "err": true
+  },
+  "set llm.cassette <- 5000000000": {
+    "err": true
+  },
+  "set llm.cassette <- 70000": {
+    "err": true
+  },
+  "set llm.cassette <- [1]": {
+    "err": true
+  },
+  "set llm.cassette <- false": {
+    "err": true
+  },
+  "set llm.cassette <- null": {
+    "err": true
+  },
+  "set llm.cassette <- true": {
+    "err": true
+  },
+  "set llm.cassette <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm.connect_timeout_seconds <- \"\"": {
+    "err": true
+  },
+  "set llm.connect_timeout_seconds <- \"1\"": {
+    "err": true
+  },
+  "set llm.connect_timeout_seconds <- \"s\"": {
+    "err": true
+  },
+  "set llm.connect_timeout_seconds <- \"true\"": {
+    "err": true
+  },
+  "set llm.connect_timeout_seconds <- -1": {
+    "err": true
+  },
+  "set llm.connect_timeout_seconds <- 0": {
+    "ok": {
+      "llm.connect_timeout_seconds": 0
+    }
+  },
+  "set llm.connect_timeout_seconds <- 1": {
+    "ok": {
+      "llm.connect_timeout_seconds": 1
+    }
+  },
+  "set llm.connect_timeout_seconds <- 1.5": {
+    "err": true
+  },
+  "set llm.connect_timeout_seconds <- 5000000000": {
+    "err": true
+  },
+  "set llm.connect_timeout_seconds <- 70000": {
+    "ok": {
+      "llm.connect_timeout_seconds": 70000
+    }
+  },
+  "set llm.connect_timeout_seconds <- [1]": {
+    "err": true
+  },
+  "set llm.connect_timeout_seconds <- false": {
+    "err": true
+  },
+  "set llm.connect_timeout_seconds <- null": {
+    "err": true
+  },
+  "set llm.connect_timeout_seconds <- true": {
+    "err": true
+  },
+  "set llm.connect_timeout_seconds <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm.debug_requests <- \"\"": {
+    "err": true
+  },
+  "set llm.debug_requests <- \"1\"": {
+    "err": true
+  },
+  "set llm.debug_requests <- \"s\"": {
+    "err": true
+  },
+  "set llm.debug_requests <- \"true\"": {
+    "err": true
+  },
+  "set llm.debug_requests <- -1": {
+    "err": true
+  },
+  "set llm.debug_requests <- 0": {
+    "err": true
+  },
+  "set llm.debug_requests <- 1": {
+    "err": true
+  },
+  "set llm.debug_requests <- 1.5": {
+    "err": true
+  },
+  "set llm.debug_requests <- 5000000000": {
+    "err": true
+  },
+  "set llm.debug_requests <- 70000": {
+    "err": true
+  },
+  "set llm.debug_requests <- [1]": {
+    "err": true
+  },
+  "set llm.debug_requests <- false": {
+    "ok": {}
+  },
+  "set llm.debug_requests <- null": {
+    "err": true
+  },
+  "set llm.debug_requests <- true": {
+    "ok": {
+      "llm.debug_requests": true
+    }
+  },
+  "set llm.debug_requests <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm.endpoint <- \"\"": {
+    "ok": {}
+  },
+  "set llm.endpoint <- \"1\"": {
+    "ok": {
+      "llm.endpoint": "1"
+    }
+  },
+  "set llm.endpoint <- \"s\"": {
+    "ok": {
+      "llm.endpoint": "s"
+    }
+  },
+  "set llm.endpoint <- \"true\"": {
+    "ok": {
+      "llm.endpoint": "true"
+    }
+  },
+  "set llm.endpoint <- -1": {
+    "err": true
+  },
+  "set llm.endpoint <- 0": {
+    "err": true
+  },
+  "set llm.endpoint <- 1": {
+    "err": true
+  },
+  "set llm.endpoint <- 1.5": {
+    "err": true
+  },
+  "set llm.endpoint <- 5000000000": {
+    "err": true
+  },
+  "set llm.endpoint <- 70000": {
+    "err": true
+  },
+  "set llm.endpoint <- [1]": {
+    "err": true
+  },
+  "set llm.endpoint <- false": {
+    "err": true
+  },
+  "set llm.endpoint <- null": {
+    "err": true
+  },
+  "set llm.endpoint <- true": {
+    "err": true
+  },
+  "set llm.endpoint <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm.fallback_api_key <- \"\"": {
+    "ok": {}
+  },
+  "set llm.fallback_api_key <- \"1\"": {
+    "ok": {
+      "llm.fallback_api_key": "1"
+    }
+  },
+  "set llm.fallback_api_key <- \"s\"": {
+    "ok": {
+      "llm.fallback_api_key": "s"
+    }
+  },
+  "set llm.fallback_api_key <- \"true\"": {
+    "ok": {
+      "llm.fallback_api_key": "true"
+    }
+  },
+  "set llm.fallback_api_key <- -1": {
+    "err": true
+  },
+  "set llm.fallback_api_key <- 0": {
+    "err": true
+  },
+  "set llm.fallback_api_key <- 1": {
+    "err": true
+  },
+  "set llm.fallback_api_key <- 1.5": {
+    "err": true
+  },
+  "set llm.fallback_api_key <- 5000000000": {
+    "err": true
+  },
+  "set llm.fallback_api_key <- 70000": {
+    "err": true
+  },
+  "set llm.fallback_api_key <- [1]": {
+    "err": true
+  },
+  "set llm.fallback_api_key <- false": {
+    "err": true
+  },
+  "set llm.fallback_api_key <- null": {
+    "err": true
+  },
+  "set llm.fallback_api_key <- true": {
+    "err": true
+  },
+  "set llm.fallback_api_key <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm.fallback_endpoint <- \"\"": {
+    "ok": {}
+  },
+  "set llm.fallback_endpoint <- \"1\"": {
+    "ok": {
+      "llm.fallback_endpoint": "1"
+    }
+  },
+  "set llm.fallback_endpoint <- \"s\"": {
+    "ok": {
+      "llm.fallback_endpoint": "s"
+    }
+  },
+  "set llm.fallback_endpoint <- \"true\"": {
+    "ok": {
+      "llm.fallback_endpoint": "true"
+    }
+  },
+  "set llm.fallback_endpoint <- -1": {
+    "err": true
+  },
+  "set llm.fallback_endpoint <- 0": {
+    "err": true
+  },
+  "set llm.fallback_endpoint <- 1": {
+    "err": true
+  },
+  "set llm.fallback_endpoint <- 1.5": {
+    "err": true
+  },
+  "set llm.fallback_endpoint <- 5000000000": {
+    "err": true
+  },
+  "set llm.fallback_endpoint <- 70000": {
+    "err": true
+  },
+  "set llm.fallback_endpoint <- [1]": {
+    "err": true
+  },
+  "set llm.fallback_endpoint <- false": {
+    "err": true
+  },
+  "set llm.fallback_endpoint <- null": {
+    "err": true
+  },
+  "set llm.fallback_endpoint <- true": {
+    "err": true
+  },
+  "set llm.fallback_endpoint <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm.fallback_model <- \"\"": {
+    "ok": {}
+  },
+  "set llm.fallback_model <- \"1\"": {
+    "ok": {
+      "llm.fallback_model": "1"
+    }
+  },
+  "set llm.fallback_model <- \"s\"": {
+    "ok": {
+      "llm.fallback_model": "s"
+    }
+  },
+  "set llm.fallback_model <- \"true\"": {
+    "ok": {
+      "llm.fallback_model": "true"
+    }
+  },
+  "set llm.fallback_model <- -1": {
+    "err": true
+  },
+  "set llm.fallback_model <- 0": {
+    "err": true
+  },
+  "set llm.fallback_model <- 1": {
+    "err": true
+  },
+  "set llm.fallback_model <- 1.5": {
+    "err": true
+  },
+  "set llm.fallback_model <- 5000000000": {
+    "err": true
+  },
+  "set llm.fallback_model <- 70000": {
+    "err": true
+  },
+  "set llm.fallback_model <- [1]": {
+    "err": true
+  },
+  "set llm.fallback_model <- false": {
+    "err": true
+  },
+  "set llm.fallback_model <- null": {
+    "err": true
+  },
+  "set llm.fallback_model <- true": {
+    "err": true
+  },
+  "set llm.fallback_model <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm.fallback_provider <- \"\"": {
+    "ok": {}
+  },
+  "set llm.fallback_provider <- \"1\"": {
+    "ok": {
+      "llm.fallback_provider": "1"
+    }
+  },
+  "set llm.fallback_provider <- \"s\"": {
+    "ok": {
+      "llm.fallback_provider": "s"
+    }
+  },
+  "set llm.fallback_provider <- \"true\"": {
+    "ok": {
+      "llm.fallback_provider": "true"
+    }
+  },
+  "set llm.fallback_provider <- -1": {
+    "err": true
+  },
+  "set llm.fallback_provider <- 0": {
+    "err": true
+  },
+  "set llm.fallback_provider <- 1": {
+    "err": true
+  },
+  "set llm.fallback_provider <- 1.5": {
+    "err": true
+  },
+  "set llm.fallback_provider <- 5000000000": {
+    "err": true
+  },
+  "set llm.fallback_provider <- 70000": {
+    "err": true
+  },
+  "set llm.fallback_provider <- [1]": {
+    "err": true
+  },
+  "set llm.fallback_provider <- false": {
+    "err": true
+  },
+  "set llm.fallback_provider <- null": {
+    "err": true
+  },
+  "set llm.fallback_provider <- true": {
+    "err": true
+  },
+  "set llm.fallback_provider <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm.max_completion_tokens <- \"\"": {
+    "err": true
+  },
+  "set llm.max_completion_tokens <- \"1\"": {
+    "err": true
+  },
+  "set llm.max_completion_tokens <- \"s\"": {
+    "err": true
+  },
+  "set llm.max_completion_tokens <- \"true\"": {
+    "err": true
+  },
+  "set llm.max_completion_tokens <- -1": {
+    "err": true
+  },
+  "set llm.max_completion_tokens <- 0": {
+    "ok": {
+      "llm.max_completion_tokens": 0
+    }
+  },
+  "set llm.max_completion_tokens <- 1": {
+    "ok": {
+      "llm.max_completion_tokens": 1
+    }
+  },
+  "set llm.max_completion_tokens <- 1.5": {
+    "err": true
+  },
+  "set llm.max_completion_tokens <- 5000000000": {
+    "err": true
+  },
+  "set llm.max_completion_tokens <- 70000": {
+    "ok": {
+      "llm.max_completion_tokens": 70000
+    }
+  },
+  "set llm.max_completion_tokens <- [1]": {
+    "err": true
+  },
+  "set llm.max_completion_tokens <- false": {
+    "err": true
+  },
+  "set llm.max_completion_tokens <- null": {
+    "err": true
+  },
+  "set llm.max_completion_tokens <- true": {
+    "err": true
+  },
+  "set llm.max_completion_tokens <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm.max_retries <- \"\"": {
+    "err": true
+  },
+  "set llm.max_retries <- \"1\"": {
+    "err": true
+  },
+  "set llm.max_retries <- \"s\"": {
+    "err": true
+  },
+  "set llm.max_retries <- \"true\"": {
+    "err": true
+  },
+  "set llm.max_retries <- -1": {
+    "err": true
+  },
+  "set llm.max_retries <- 0": {
+    "ok": {
+      "llm.max_retries": 0
+    }
+  },
+  "set llm.max_retries <- 1": {
+    "ok": {
+      "llm.max_retries": 1
+    }
+  },
+  "set llm.max_retries <- 1.5": {
+    "err": true
+  },
+  "set llm.max_retries <- 5000000000": {
+    "err": true
+  },
+  "set llm.max_retries <- 70000": {
+    "ok": {
+      "llm.max_retries": 70000
+    }
+  },
+  "set llm.max_retries <- [1]": {
+    "err": true
+  },
+  "set llm.max_retries <- false": {
+    "err": true
+  },
+  "set llm.max_retries <- null": {
+    "err": true
+  },
+  "set llm.max_retries <- true": {
+    "err": true
+  },
+  "set llm.max_retries <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm.min_retry_seconds <- \"\"": {
+    "err": true
+  },
+  "set llm.min_retry_seconds <- \"1\"": {
+    "err": true
+  },
+  "set llm.min_retry_seconds <- \"s\"": {
+    "err": true
+  },
+  "set llm.min_retry_seconds <- \"true\"": {
+    "err": true
+  },
+  "set llm.min_retry_seconds <- -1": {
+    "err": true
+  },
+  "set llm.min_retry_seconds <- 0": {
+    "ok": {
+      "llm.min_retry_seconds": 0
+    }
+  },
+  "set llm.min_retry_seconds <- 1": {
+    "ok": {
+      "llm.min_retry_seconds": 1
+    }
+  },
+  "set llm.min_retry_seconds <- 1.5": {
+    "err": true
+  },
+  "set llm.min_retry_seconds <- 5000000000": {
+    "err": true
+  },
+  "set llm.min_retry_seconds <- 70000": {
+    "ok": {
+      "llm.min_retry_seconds": 70000
+    }
+  },
+  "set llm.min_retry_seconds <- [1]": {
+    "err": true
+  },
+  "set llm.min_retry_seconds <- false": {
+    "err": true
+  },
+  "set llm.min_retry_seconds <- null": {
+    "err": true
+  },
+  "set llm.min_retry_seconds <- true": {
+    "err": true
+  },
+  "set llm.min_retry_seconds <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm.mock <- \"\"": {
+    "err": true
+  },
+  "set llm.mock <- \"1\"": {
+    "err": true
+  },
+  "set llm.mock <- \"s\"": {
+    "err": true
+  },
+  "set llm.mock <- \"true\"": {
+    "err": true
+  },
+  "set llm.mock <- -1": {
+    "err": true
+  },
+  "set llm.mock <- 0": {
+    "err": true
+  },
+  "set llm.mock <- 1": {
+    "err": true
+  },
+  "set llm.mock <- 1.5": {
+    "err": true
+  },
+  "set llm.mock <- 5000000000": {
+    "err": true
+  },
+  "set llm.mock <- 70000": {
+    "err": true
+  },
+  "set llm.mock <- [1]": {
+    "err": true
+  },
+  "set llm.mock <- false": {
+    "ok": {}
+  },
+  "set llm.mock <- null": {
+    "err": true
+  },
+  "set llm.mock <- true": {
+    "ok": {
+      "llm.mock": true
+    }
+  },
+  "set llm.mock <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm.model <- \"\"": {
+    "ok": {
+      "llm.model": ""
+    }
+  },
+  "set llm.model <- \"1\"": {
+    "ok": {
+      "llm.model": "1"
+    }
+  },
+  "set llm.model <- \"s\"": {
+    "ok": {
+      "llm.model": "s"
+    }
+  },
+  "set llm.model <- \"true\"": {
+    "ok": {
+      "llm.model": "true"
+    }
+  },
+  "set llm.model <- -1": {
+    "err": true
+  },
+  "set llm.model <- 0": {
+    "err": true
+  },
+  "set llm.model <- 1": {
+    "err": true
+  },
+  "set llm.model <- 1.5": {
+    "err": true
+  },
+  "set llm.model <- 5000000000": {
+    "err": true
+  },
+  "set llm.model <- 70000": {
+    "err": true
+  },
+  "set llm.model <- [1]": {
+    "err": true
+  },
+  "set llm.model <- false": {
+    "err": true
+  },
+  "set llm.model <- null": {
+    "err": true
+  },
+  "set llm.model <- true": {
+    "err": true
+  },
+  "set llm.model <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm.network_retries <- \"\"": {
+    "err": true
+  },
+  "set llm.network_retries <- \"1\"": {
+    "err": true
+  },
+  "set llm.network_retries <- \"s\"": {
+    "err": true
+  },
+  "set llm.network_retries <- \"true\"": {
+    "err": true
+  },
+  "set llm.network_retries <- -1": {
+    "err": true
+  },
+  "set llm.network_retries <- 0": {
+    "ok": {
+      "llm.network_retries": 0
+    }
+  },
+  "set llm.network_retries <- 1": {
+    "ok": {
+      "llm.network_retries": 1
+    }
+  },
+  "set llm.network_retries <- 1.5": {
+    "err": true
+  },
+  "set llm.network_retries <- 5000000000": {
+    "err": true
+  },
+  "set llm.network_retries <- 70000": {
+    "ok": {
+      "llm.network_retries": 70000
+    }
+  },
+  "set llm.network_retries <- [1]": {
+    "err": true
+  },
+  "set llm.network_retries <- false": {
+    "err": true
+  },
+  "set llm.network_retries <- null": {
+    "err": true
+  },
+  "set llm.network_retries <- true": {
+    "err": true
+  },
+  "set llm.network_retries <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm.openai_compatible.transcription_model <- \"\"": {
+    "ok": {
+      "llm.openai_compatible.transcription_model": ""
+    }
+  },
+  "set llm.openai_compatible.transcription_model <- \"1\"": {
+    "ok": {
+      "llm.openai_compatible.transcription_model": "1"
+    }
+  },
+  "set llm.openai_compatible.transcription_model <- \"s\"": {
+    "ok": {
+      "llm.openai_compatible.transcription_model": "s"
+    }
+  },
+  "set llm.openai_compatible.transcription_model <- \"true\"": {
+    "ok": {
+      "llm.openai_compatible.transcription_model": "true"
+    }
+  },
+  "set llm.openai_compatible.transcription_model <- -1": {
+    "err": true
+  },
+  "set llm.openai_compatible.transcription_model <- 0": {
+    "err": true
+  },
+  "set llm.openai_compatible.transcription_model <- 1": {
+    "err": true
+  },
+  "set llm.openai_compatible.transcription_model <- 1.5": {
+    "err": true
+  },
+  "set llm.openai_compatible.transcription_model <- 5000000000": {
+    "err": true
+  },
+  "set llm.openai_compatible.transcription_model <- 70000": {
+    "err": true
+  },
+  "set llm.openai_compatible.transcription_model <- [1]": {
+    "err": true
+  },
+  "set llm.openai_compatible.transcription_model <- false": {
+    "err": true
+  },
+  "set llm.openai_compatible.transcription_model <- null": {
+    "err": true
+  },
+  "set llm.openai_compatible.transcription_model <- true": {
+    "err": true
+  },
+  "set llm.openai_compatible.transcription_model <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm.openai_compatible.vision_model <- \"\"": {
+    "ok": {
+      "llm.openai_compatible.vision_model": ""
+    }
+  },
+  "set llm.openai_compatible.vision_model <- \"1\"": {
+    "ok": {
+      "llm.openai_compatible.vision_model": "1"
+    }
+  },
+  "set llm.openai_compatible.vision_model <- \"s\"": {
+    "ok": {
+      "llm.openai_compatible.vision_model": "s"
+    }
+  },
+  "set llm.openai_compatible.vision_model <- \"true\"": {
+    "ok": {
+      "llm.openai_compatible.vision_model": "true"
+    }
+  },
+  "set llm.openai_compatible.vision_model <- -1": {
+    "err": true
+  },
+  "set llm.openai_compatible.vision_model <- 0": {
+    "err": true
+  },
+  "set llm.openai_compatible.vision_model <- 1": {
+    "err": true
+  },
+  "set llm.openai_compatible.vision_model <- 1.5": {
+    "err": true
+  },
+  "set llm.openai_compatible.vision_model <- 5000000000": {
+    "err": true
+  },
+  "set llm.openai_compatible.vision_model <- 70000": {
+    "err": true
+  },
+  "set llm.openai_compatible.vision_model <- [1]": {
+    "err": true
+  },
+  "set llm.openai_compatible.vision_model <- false": {
+    "err": true
+  },
+  "set llm.openai_compatible.vision_model <- null": {
+    "ok": {}
+  },
+  "set llm.openai_compatible.vision_model <- true": {
+    "err": true
+  },
+  "set llm.openai_compatible.vision_model <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm.provider <- \"\"": {
+    "ok": {
+      "llm.provider": ""
+    }
+  },
+  "set llm.provider <- \"1\"": {
+    "ok": {
+      "llm.provider": "1"
+    }
+  },
+  "set llm.provider <- \"s\"": {
+    "ok": {
+      "llm.provider": "s"
+    }
+  },
+  "set llm.provider <- \"true\"": {
+    "ok": {
+      "llm.provider": "true"
+    }
+  },
+  "set llm.provider <- -1": {
+    "err": true
+  },
+  "set llm.provider <- 0": {
+    "err": true
+  },
+  "set llm.provider <- 1": {
+    "err": true
+  },
+  "set llm.provider <- 1.5": {
+    "err": true
+  },
+  "set llm.provider <- 5000000000": {
+    "err": true
+  },
+  "set llm.provider <- 70000": {
+    "err": true
+  },
+  "set llm.provider <- [1]": {
+    "err": true
+  },
+  "set llm.provider <- false": {
+    "err": true
+  },
+  "set llm.provider <- null": {
+    "err": true
+  },
+  "set llm.provider <- true": {
+    "err": true
+  },
+  "set llm.provider <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm.rate_limit_enabled <- \"\"": {
+    "err": true
+  },
+  "set llm.rate_limit_enabled <- \"1\"": {
+    "err": true
+  },
+  "set llm.rate_limit_enabled <- \"s\"": {
+    "err": true
+  },
+  "set llm.rate_limit_enabled <- \"true\"": {
+    "err": true
+  },
+  "set llm.rate_limit_enabled <- -1": {
+    "err": true
+  },
+  "set llm.rate_limit_enabled <- 0": {
+    "err": true
+  },
+  "set llm.rate_limit_enabled <- 1": {
+    "err": true
+  },
+  "set llm.rate_limit_enabled <- 1.5": {
+    "err": true
+  },
+  "set llm.rate_limit_enabled <- 5000000000": {
+    "err": true
+  },
+  "set llm.rate_limit_enabled <- 70000": {
+    "err": true
+  },
+  "set llm.rate_limit_enabled <- [1]": {
+    "err": true
+  },
+  "set llm.rate_limit_enabled <- false": {
+    "ok": {}
+  },
+  "set llm.rate_limit_enabled <- null": {
+    "err": true
+  },
+  "set llm.rate_limit_enabled <- true": {
+    "ok": {
+      "llm.rate_limit_enabled": true
+    }
+  },
+  "set llm.rate_limit_enabled <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm.rate_limit_interval <- \"\"": {
+    "err": true
+  },
+  "set llm.rate_limit_interval <- \"1\"": {
+    "err": true
+  },
+  "set llm.rate_limit_interval <- \"s\"": {
+    "err": true
+  },
+  "set llm.rate_limit_interval <- \"true\"": {
+    "err": true
+  },
+  "set llm.rate_limit_interval <- -1": {
+    "err": true
+  },
+  "set llm.rate_limit_interval <- 0": {
+    "ok": {
+      "llm.rate_limit_interval": 0
+    }
+  },
+  "set llm.rate_limit_interval <- 1": {
+    "ok": {
+      "llm.rate_limit_interval": 1
+    }
+  },
+  "set llm.rate_limit_interval <- 1.5": {
+    "err": true
+  },
+  "set llm.rate_limit_interval <- 5000000000": {
+    "err": true
+  },
+  "set llm.rate_limit_interval <- 70000": {
+    "ok": {
+      "llm.rate_limit_interval": 70000
+    }
+  },
+  "set llm.rate_limit_interval <- [1]": {
+    "err": true
+  },
+  "set llm.rate_limit_interval <- false": {
+    "err": true
+  },
+  "set llm.rate_limit_interval <- null": {
+    "err": true
+  },
+  "set llm.rate_limit_interval <- true": {
+    "err": true
+  },
+  "set llm.rate_limit_interval <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm.rate_limit_requests <- \"\"": {
+    "err": true
+  },
+  "set llm.rate_limit_requests <- \"1\"": {
+    "err": true
+  },
+  "set llm.rate_limit_requests <- \"s\"": {
+    "err": true
+  },
+  "set llm.rate_limit_requests <- \"true\"": {
+    "err": true
+  },
+  "set llm.rate_limit_requests <- -1": {
+    "err": true
+  },
+  "set llm.rate_limit_requests <- 0": {
+    "ok": {
+      "llm.rate_limit_requests": 0
+    }
+  },
+  "set llm.rate_limit_requests <- 1": {
+    "ok": {
+      "llm.rate_limit_requests": 1
+    }
+  },
+  "set llm.rate_limit_requests <- 1.5": {
+    "err": true
+  },
+  "set llm.rate_limit_requests <- 5000000000": {
+    "err": true
+  },
+  "set llm.rate_limit_requests <- 70000": {
+    "ok": {
+      "llm.rate_limit_requests": 70000
+    }
+  },
+  "set llm.rate_limit_requests <- [1]": {
+    "err": true
+  },
+  "set llm.rate_limit_requests <- false": {
+    "err": true
+  },
+  "set llm.rate_limit_requests <- null": {
+    "err": true
+  },
+  "set llm.rate_limit_requests <- true": {
+    "err": true
+  },
+  "set llm.rate_limit_requests <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm.reasoning <- \"\"": {
+    "ok": {
+      "llm.reasoning": ""
+    }
+  },
+  "set llm.reasoning <- \"1\"": {
+    "ok": {
+      "llm.reasoning": "1"
+    }
+  },
+  "set llm.reasoning <- \"s\"": {
+    "ok": {
+      "llm.reasoning": "s"
+    }
+  },
+  "set llm.reasoning <- \"true\"": {
+    "ok": {
+      "llm.reasoning": "true"
+    }
+  },
+  "set llm.reasoning <- -1": {
+    "err": true
+  },
+  "set llm.reasoning <- 0": {
+    "err": true
+  },
+  "set llm.reasoning <- 1": {
+    "err": true
+  },
+  "set llm.reasoning <- 1.5": {
+    "err": true
+  },
+  "set llm.reasoning <- 5000000000": {
+    "err": true
+  },
+  "set llm.reasoning <- 70000": {
+    "err": true
+  },
+  "set llm.reasoning <- [1]": {
+    "err": true
+  },
+  "set llm.reasoning <- false": {
+    "err": true
+  },
+  "set llm.reasoning <- null": {
+    "err": true
+  },
+  "set llm.reasoning <- true": {
+    "err": true
+  },
+  "set llm.reasoning <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm.record_path <- \"\"": {
+    "ok": {}
+  },
+  "set llm.record_path <- \"1\"": {
+    "ok": {
+      "llm.record_path": "1"
+    }
+  },
+  "set llm.record_path <- \"s\"": {
+    "ok": {
+      "llm.record_path": "s"
+    }
+  },
+  "set llm.record_path <- \"true\"": {
+    "ok": {
+      "llm.record_path": "true"
+    }
+  },
+  "set llm.record_path <- -1": {
+    "err": true
+  },
+  "set llm.record_path <- 0": {
+    "err": true
+  },
+  "set llm.record_path <- 1": {
+    "err": true
+  },
+  "set llm.record_path <- 1.5": {
+    "err": true
+  },
+  "set llm.record_path <- 5000000000": {
+    "err": true
+  },
+  "set llm.record_path <- 70000": {
+    "err": true
+  },
+  "set llm.record_path <- [1]": {
+    "err": true
+  },
+  "set llm.record_path <- false": {
+    "err": true
+  },
+  "set llm.record_path <- null": {
+    "err": true
+  },
+  "set llm.record_path <- true": {
+    "err": true
+  },
+  "set llm.record_path <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm.request_deadline_seconds <- \"\"": {
+    "err": true
+  },
+  "set llm.request_deadline_seconds <- \"1\"": {
+    "err": true
+  },
+  "set llm.request_deadline_seconds <- \"s\"": {
+    "err": true
+  },
+  "set llm.request_deadline_seconds <- \"true\"": {
+    "err": true
+  },
+  "set llm.request_deadline_seconds <- -1": {
+    "err": true
+  },
+  "set llm.request_deadline_seconds <- 0": {
+    "ok": {
+      "llm.request_deadline_seconds": 0
+    }
+  },
+  "set llm.request_deadline_seconds <- 1": {
+    "ok": {
+      "llm.request_deadline_seconds": 1
+    }
+  },
+  "set llm.request_deadline_seconds <- 1.5": {
+    "err": true
+  },
+  "set llm.request_deadline_seconds <- 5000000000": {
+    "err": true
+  },
+  "set llm.request_deadline_seconds <- 70000": {
+    "ok": {
+      "llm.request_deadline_seconds": 70000
+    }
+  },
+  "set llm.request_deadline_seconds <- [1]": {
+    "err": true
+  },
+  "set llm.request_deadline_seconds <- false": {
+    "err": true
+  },
+  "set llm.request_deadline_seconds <- null": {
+    "err": true
+  },
+  "set llm.request_deadline_seconds <- true": {
+    "err": true
+  },
+  "set llm.request_deadline_seconds <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm.request_timeout_seconds <- \"\"": {
+    "err": true
+  },
+  "set llm.request_timeout_seconds <- \"1\"": {
+    "err": true
+  },
+  "set llm.request_timeout_seconds <- \"s\"": {
+    "err": true
+  },
+  "set llm.request_timeout_seconds <- \"true\"": {
+    "err": true
+  },
+  "set llm.request_timeout_seconds <- -1": {
+    "err": true
+  },
+  "set llm.request_timeout_seconds <- 0": {
+    "ok": {
+      "llm.request_timeout_seconds": 0
+    }
+  },
+  "set llm.request_timeout_seconds <- 1": {
+    "ok": {
+      "llm.request_timeout_seconds": 1
+    }
+  },
+  "set llm.request_timeout_seconds <- 1.5": {
+    "err": true
+  },
+  "set llm.request_timeout_seconds <- 5000000000": {
+    "err": true
+  },
+  "set llm.request_timeout_seconds <- 70000": {
+    "ok": {
+      "llm.request_timeout_seconds": 70000
+    }
+  },
+  "set llm.request_timeout_seconds <- [1]": {
+    "err": true
+  },
+  "set llm.request_timeout_seconds <- false": {
+    "err": true
+  },
+  "set llm.request_timeout_seconds <- null": {
+    "err": true
+  },
+  "set llm.request_timeout_seconds <- true": {
+    "err": true
+  },
+  "set llm.request_timeout_seconds <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm.streaming <- \"\"": {
+    "err": true
+  },
+  "set llm.streaming <- \"1\"": {
+    "err": true
+  },
+  "set llm.streaming <- \"s\"": {
+    "err": true
+  },
+  "set llm.streaming <- \"true\"": {
+    "err": true
+  },
+  "set llm.streaming <- -1": {
+    "err": true
+  },
+  "set llm.streaming <- 0": {
+    "err": true
+  },
+  "set llm.streaming <- 1": {
+    "err": true
+  },
+  "set llm.streaming <- 1.5": {
+    "err": true
+  },
+  "set llm.streaming <- 5000000000": {
+    "err": true
+  },
+  "set llm.streaming <- 70000": {
+    "err": true
+  },
+  "set llm.streaming <- [1]": {
+    "err": true
+  },
+  "set llm.streaming <- false": {
+    "ok": {}
+  },
+  "set llm.streaming <- null": {
+    "err": true
+  },
+  "set llm.streaming <- true": {
+    "ok": {
+      "llm.streaming": true
+    }
+  },
+  "set llm.streaming <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm.structured_output_mode <- \"\"": {
+    "ok": {
+      "llm.structured_output_mode": ""
+    }
+  },
+  "set llm.structured_output_mode <- \"1\"": {
+    "ok": {
+      "llm.structured_output_mode": "1"
+    }
+  },
+  "set llm.structured_output_mode <- \"s\"": {
+    "ok": {
+      "llm.structured_output_mode": "s"
+    }
+  },
+  "set llm.structured_output_mode <- \"true\"": {
+    "ok": {
+      "llm.structured_output_mode": "true"
+    }
+  },
+  "set llm.structured_output_mode <- -1": {
+    "err": true
+  },
+  "set llm.structured_output_mode <- 0": {
+    "err": true
+  },
+  "set llm.structured_output_mode <- 1": {
+    "err": true
+  },
+  "set llm.structured_output_mode <- 1.5": {
+    "err": true
+  },
+  "set llm.structured_output_mode <- 5000000000": {
+    "err": true
+  },
+  "set llm.structured_output_mode <- 70000": {
+    "err": true
+  },
+  "set llm.structured_output_mode <- [1]": {
+    "err": true
+  },
+  "set llm.structured_output_mode <- false": {
+    "err": true
+  },
+  "set llm.structured_output_mode <- null": {
+    "err": true
+  },
+  "set llm.structured_output_mode <- true": {
+    "err": true
+  },
+  "set llm.structured_output_mode <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm.temperature <- \"\"": {
+    "err": true
+  },
+  "set llm.temperature <- \"1\"": {
+    "err": true
+  },
+  "set llm.temperature <- \"s\"": {
+    "err": true
+  },
+  "set llm.temperature <- \"true\"": {
+    "err": true
+  },
+  "set llm.temperature <- -1": {
+    "ok": {
+      "llm.temperature": -1.0
+    }
+  },
+  "set llm.temperature <- 0": {
+    "ok": {
+      "llm.temperature": 0.0
+    }
+  },
+  "set llm.temperature <- 1": {
+    "ok": {
+      "llm.temperature": 1.0
+    }
+  },
+  "set llm.temperature <- 1.5": {
+    "ok": {
+      "llm.temperature": 1.5
+    }
+  },
+  "set llm.temperature <- 5000000000": {
+    "ok": {
+      "llm.temperature": 5000000000.0
+    }
+  },
+  "set llm.temperature <- 70000": {
+    "ok": {
+      "llm.temperature": 70000.0
+    }
+  },
+  "set llm.temperature <- [1]": {
+    "err": true
+  },
+  "set llm.temperature <- false": {
+    "err": true
+  },
+  "set llm.temperature <- null": {
+    "ok": {}
+  },
+  "set llm.temperature <- true": {
+    "err": true
+  },
+  "set llm.temperature <- {\"a\":1}": {
+    "err": true
+  },
   "set llm_api_key <- \"\"": {
     "ok": {}
   },
   "set llm_api_key <- \"1\"": {
     "ok": {
-      "llm_api_key": "1"
+      "llm.api_key": "1"
     }
   },
   "set llm_api_key <- \"s\"": {
     "ok": {
-      "llm_api_key": "s"
+      "llm.api_key": "s"
     }
   },
   "set llm_api_key <- \"true\"": {
     "ok": {
-      "llm_api_key": "true"
+      "llm.api_key": "true"
     }
   },
   "set llm_api_key <- -1": {
@@ -3310,17 +6297,17 @@
   },
   "set llm_api_version <- \"1\"": {
     "ok": {
-      "llm_api_version": "1"
+      "llm.api_version": "1"
     }
   },
   "set llm_api_version <- \"s\"": {
     "ok": {
-      "llm_api_version": "s"
+      "llm.api_version": "s"
     }
   },
   "set llm_api_version <- \"true\"": {
     "ok": {
-      "llm_api_version": "true"
+      "llm.api_version": "true"
     }
   },
   "set llm_api_version <- -1": {
@@ -3399,24 +6386,28 @@
     "err": true
   },
   "set llm_args <- {\"a\":1}": {
-    "err": true
+    "ok": {
+      "llm.args": {
+        "a": 1
+      }
+    }
   },
   "set llm_cassette <- \"\"": {
     "ok": {}
   },
   "set llm_cassette <- \"1\"": {
     "ok": {
-      "llm_cassette": "1"
+      "llm.cassette": "1"
     }
   },
   "set llm_cassette <- \"s\"": {
     "ok": {
-      "llm_cassette": "s"
+      "llm.cassette": "s"
     }
   },
   "set llm_cassette <- \"true\"": {
     "ok": {
-      "llm_cassette": "true"
+      "llm.cassette": "true"
     }
   },
   "set llm_cassette <- -1": {
@@ -3469,12 +6460,12 @@
   },
   "set llm_connect_timeout_seconds <- 0": {
     "ok": {
-      "llm_connect_timeout_seconds": 0
+      "llm.connect_timeout_seconds": 0
     }
   },
   "set llm_connect_timeout_seconds <- 1": {
     "ok": {
-      "llm_connect_timeout_seconds": 1
+      "llm.connect_timeout_seconds": 1
     }
   },
   "set llm_connect_timeout_seconds <- 1.5": {
@@ -3485,7 +6476,7 @@
   },
   "set llm_connect_timeout_seconds <- 70000": {
     "ok": {
-      "llm_connect_timeout_seconds": 70000
+      "llm.connect_timeout_seconds": 70000
     }
   },
   "set llm_connect_timeout_seconds <- [1]": {
@@ -3508,17 +6499,17 @@
   },
   "set llm_endpoint <- \"1\"": {
     "ok": {
-      "llm_endpoint": "1"
+      "llm.endpoint": "1"
     }
   },
   "set llm_endpoint <- \"s\"": {
     "ok": {
-      "llm_endpoint": "s"
+      "llm.endpoint": "s"
     }
   },
   "set llm_endpoint <- \"true\"": {
     "ok": {
-      "llm_endpoint": "true"
+      "llm.endpoint": "true"
     }
   },
   "set llm_endpoint <- -1": {
@@ -3559,17 +6550,17 @@
   },
   "set llm_fallback_api_key <- \"1\"": {
     "ok": {
-      "llm_fallback_api_key": "1"
+      "llm.fallback_api_key": "1"
     }
   },
   "set llm_fallback_api_key <- \"s\"": {
     "ok": {
-      "llm_fallback_api_key": "s"
+      "llm.fallback_api_key": "s"
     }
   },
   "set llm_fallback_api_key <- \"true\"": {
     "ok": {
-      "llm_fallback_api_key": "true"
+      "llm.fallback_api_key": "true"
     }
   },
   "set llm_fallback_api_key <- -1": {
@@ -3610,17 +6601,17 @@
   },
   "set llm_fallback_endpoint <- \"1\"": {
     "ok": {
-      "llm_fallback_endpoint": "1"
+      "llm.fallback_endpoint": "1"
     }
   },
   "set llm_fallback_endpoint <- \"s\"": {
     "ok": {
-      "llm_fallback_endpoint": "s"
+      "llm.fallback_endpoint": "s"
     }
   },
   "set llm_fallback_endpoint <- \"true\"": {
     "ok": {
-      "llm_fallback_endpoint": "true"
+      "llm.fallback_endpoint": "true"
     }
   },
   "set llm_fallback_endpoint <- -1": {
@@ -3661,17 +6652,17 @@
   },
   "set llm_fallback_model <- \"1\"": {
     "ok": {
-      "llm_fallback_model": "1"
+      "llm.fallback_model": "1"
     }
   },
   "set llm_fallback_model <- \"s\"": {
     "ok": {
-      "llm_fallback_model": "s"
+      "llm.fallback_model": "s"
     }
   },
   "set llm_fallback_model <- \"true\"": {
     "ok": {
-      "llm_fallback_model": "true"
+      "llm.fallback_model": "true"
     }
   },
   "set llm_fallback_model <- -1": {
@@ -3712,17 +6703,17 @@
   },
   "set llm_fallback_provider <- \"1\"": {
     "ok": {
-      "llm_fallback_provider": "1"
+      "llm.fallback_provider": "1"
     }
   },
   "set llm_fallback_provider <- \"s\"": {
     "ok": {
-      "llm_fallback_provider": "s"
+      "llm.fallback_provider": "s"
     }
   },
   "set llm_fallback_provider <- \"true\"": {
     "ok": {
-      "llm_fallback_provider": "true"
+      "llm.fallback_provider": "true"
     }
   },
   "set llm_fallback_provider <- -1": {
@@ -3775,12 +6766,12 @@
   },
   "set llm_max_completion_tokens <- 0": {
     "ok": {
-      "llm_max_completion_tokens": 0
+      "llm.max_completion_tokens": 0
     }
   },
   "set llm_max_completion_tokens <- 1": {
     "ok": {
-      "llm_max_completion_tokens": 1
+      "llm.max_completion_tokens": 1
     }
   },
   "set llm_max_completion_tokens <- 1.5": {
@@ -3791,7 +6782,7 @@
   },
   "set llm_max_completion_tokens <- 70000": {
     "ok": {
-      "llm_max_completion_tokens": 70000
+      "llm.max_completion_tokens": 70000
     }
   },
   "set llm_max_completion_tokens <- [1]": {
@@ -3877,12 +6868,12 @@
   },
   "set llm_max_retries <- 0": {
     "ok": {
-      "llm_max_retries": 0
+      "llm.max_retries": 0
     }
   },
   "set llm_max_retries <- 1": {
     "ok": {
-      "llm_max_retries": 1
+      "llm.max_retries": 1
     }
   },
   "set llm_max_retries <- 1.5": {
@@ -3893,7 +6884,7 @@
   },
   "set llm_max_retries <- 70000": {
     "ok": {
-      "llm_max_retries": 70000
+      "llm.max_retries": 70000
     }
   },
   "set llm_max_retries <- [1]": {
@@ -3928,12 +6919,12 @@
   },
   "set llm_min_retry_seconds <- 0": {
     "ok": {
-      "llm_min_retry_seconds": 0
+      "llm.min_retry_seconds": 0
     }
   },
   "set llm_min_retry_seconds <- 1": {
     "ok": {
-      "llm_min_retry_seconds": 1
+      "llm.min_retry_seconds": 1
     }
   },
   "set llm_min_retry_seconds <- 1.5": {
@@ -3944,7 +6935,7 @@
   },
   "set llm_min_retry_seconds <- 70000": {
     "ok": {
-      "llm_min_retry_seconds": 70000
+      "llm.min_retry_seconds": 70000
     }
   },
   "set llm_min_retry_seconds <- [1]": {
@@ -4003,7 +6994,7 @@
   },
   "set llm_mock <- true": {
     "ok": {
-      "llm_mock": true
+      "llm.mock": true
     }
   },
   "set llm_mock <- {\"a\":1}": {
@@ -4011,22 +7002,22 @@
   },
   "set llm_model <- \"\"": {
     "ok": {
-      "llm_model": ""
+      "llm.model": ""
     }
   },
   "set llm_model <- \"1\"": {
     "ok": {
-      "llm_model": "1"
+      "llm.model": "1"
     }
   },
   "set llm_model <- \"s\"": {
     "ok": {
-      "llm_model": "s"
+      "llm.model": "s"
     }
   },
   "set llm_model <- \"true\"": {
     "ok": {
-      "llm_model": "true"
+      "llm.model": "true"
     }
   },
   "set llm_model <- -1": {
@@ -4079,12 +7070,12 @@
   },
   "set llm_network_retries <- 0": {
     "ok": {
-      "llm_network_retries": 0
+      "llm.network_retries": 0
     }
   },
   "set llm_network_retries <- 1": {
     "ok": {
-      "llm_network_retries": 1
+      "llm.network_retries": 1
     }
   },
   "set llm_network_retries <- 1.5": {
@@ -4095,7 +7086,7 @@
   },
   "set llm_network_retries <- 70000": {
     "ok": {
-      "llm_network_retries": 70000
+      "llm.network_retries": 70000
     }
   },
   "set llm_network_retries <- [1]": {
@@ -4115,22 +7106,22 @@
   },
   "set llm_provider <- \"\"": {
     "ok": {
-      "llm_provider": ""
+      "llm.provider": ""
     }
   },
   "set llm_provider <- \"1\"": {
     "ok": {
-      "llm_provider": "1"
+      "llm.provider": "1"
     }
   },
   "set llm_provider <- \"s\"": {
     "ok": {
-      "llm_provider": "s"
+      "llm.provider": "s"
     }
   },
   "set llm_provider <- \"true\"": {
     "ok": {
-      "llm_provider": "true"
+      "llm.provider": "true"
     }
   },
   "set llm_provider <- -1": {
@@ -4207,7 +7198,7 @@
   },
   "set llm_rate_limit_enabled <- true": {
     "ok": {
-      "llm_rate_limit_enabled": true
+      "llm.rate_limit_enabled": true
     }
   },
   "set llm_rate_limit_enabled <- {\"a\":1}": {
@@ -4230,12 +7221,12 @@
   },
   "set llm_rate_limit_interval <- 0": {
     "ok": {
-      "llm_rate_limit_interval": 0
+      "llm.rate_limit_interval": 0
     }
   },
   "set llm_rate_limit_interval <- 1": {
     "ok": {
-      "llm_rate_limit_interval": 1
+      "llm.rate_limit_interval": 1
     }
   },
   "set llm_rate_limit_interval <- 1.5": {
@@ -4246,7 +7237,7 @@
   },
   "set llm_rate_limit_interval <- 70000": {
     "ok": {
-      "llm_rate_limit_interval": 70000
+      "llm.rate_limit_interval": 70000
     }
   },
   "set llm_rate_limit_interval <- [1]": {
@@ -4281,12 +7272,12 @@
   },
   "set llm_rate_limit_requests <- 0": {
     "ok": {
-      "llm_rate_limit_requests": 0
+      "llm.rate_limit_requests": 0
     }
   },
   "set llm_rate_limit_requests <- 1": {
     "ok": {
-      "llm_rate_limit_requests": 1
+      "llm.rate_limit_requests": 1
     }
   },
   "set llm_rate_limit_requests <- 1.5": {
@@ -4297,7 +7288,7 @@
   },
   "set llm_rate_limit_requests <- 70000": {
     "ok": {
-      "llm_rate_limit_requests": 70000
+      "llm.rate_limit_requests": 70000
     }
   },
   "set llm_rate_limit_requests <- [1]": {
@@ -4317,22 +7308,22 @@
   },
   "set llm_reasoning <- \"\"": {
     "ok": {
-      "llm_reasoning": ""
+      "llm.reasoning": ""
     }
   },
   "set llm_reasoning <- \"1\"": {
     "ok": {
-      "llm_reasoning": "1"
+      "llm.reasoning": "1"
     }
   },
   "set llm_reasoning <- \"s\"": {
     "ok": {
-      "llm_reasoning": "s"
+      "llm.reasoning": "s"
     }
   },
   "set llm_reasoning <- \"true\"": {
     "ok": {
-      "llm_reasoning": "true"
+      "llm.reasoning": "true"
     }
   },
   "set llm_reasoning <- -1": {
@@ -4373,17 +7364,17 @@
   },
   "set llm_record_path <- \"1\"": {
     "ok": {
-      "llm_record_path": "1"
+      "llm.record_path": "1"
     }
   },
   "set llm_record_path <- \"s\"": {
     "ok": {
-      "llm_record_path": "s"
+      "llm.record_path": "s"
     }
   },
   "set llm_record_path <- \"true\"": {
     "ok": {
-      "llm_record_path": "true"
+      "llm.record_path": "true"
     }
   },
   "set llm_record_path <- -1": {
@@ -4436,12 +7427,12 @@
   },
   "set llm_request_deadline_seconds <- 0": {
     "ok": {
-      "llm_request_deadline_seconds": 0
+      "llm.request_deadline_seconds": 0
     }
   },
   "set llm_request_deadline_seconds <- 1": {
     "ok": {
-      "llm_request_deadline_seconds": 1
+      "llm.request_deadline_seconds": 1
     }
   },
   "set llm_request_deadline_seconds <- 1.5": {
@@ -4452,7 +7443,7 @@
   },
   "set llm_request_deadline_seconds <- 70000": {
     "ok": {
-      "llm_request_deadline_seconds": 70000
+      "llm.request_deadline_seconds": 70000
     }
   },
   "set llm_request_deadline_seconds <- [1]": {
@@ -4487,12 +7478,12 @@
   },
   "set llm_request_timeout_seconds <- 0": {
     "ok": {
-      "llm_request_timeout_seconds": 0
+      "llm.request_timeout_seconds": 0
     }
   },
   "set llm_request_timeout_seconds <- 1": {
     "ok": {
-      "llm_request_timeout_seconds": 1
+      "llm.request_timeout_seconds": 1
     }
   },
   "set llm_request_timeout_seconds <- 1.5": {
@@ -4503,7 +7494,7 @@
   },
   "set llm_request_timeout_seconds <- 70000": {
     "ok": {
-      "llm_request_timeout_seconds": 70000
+      "llm.request_timeout_seconds": 70000
     }
   },
   "set llm_request_timeout_seconds <- [1]": {
@@ -4562,7 +7553,7 @@
   },
   "set llm_streaming <- true": {
     "ok": {
-      "llm_streaming": true
+      "llm.streaming": true
     }
   },
   "set llm_streaming <- {\"a\":1}": {
@@ -4570,22 +7561,22 @@
   },
   "set llm_structured_output_mode <- \"\"": {
     "ok": {
-      "llm_structured_output_mode": ""
+      "llm.structured_output_mode": ""
     }
   },
   "set llm_structured_output_mode <- \"1\"": {
     "ok": {
-      "llm_structured_output_mode": "1"
+      "llm.structured_output_mode": "1"
     }
   },
   "set llm_structured_output_mode <- \"s\"": {
     "ok": {
-      "llm_structured_output_mode": "s"
+      "llm.structured_output_mode": "s"
     }
   },
   "set llm_structured_output_mode <- \"true\"": {
     "ok": {
-      "llm_structured_output_mode": "true"
+      "llm.structured_output_mode": "true"
     }
   },
   "set llm_structured_output_mode <- -1": {
@@ -4635,32 +7626,32 @@
   },
   "set llm_temperature <- -1": {
     "ok": {
-      "llm_temperature": -1.0
+      "llm.temperature": -1.0
     }
   },
   "set llm_temperature <- 0": {
     "ok": {
-      "llm_temperature": 0.0
+      "llm.temperature": 0.0
     }
   },
   "set llm_temperature <- 1": {
     "ok": {
-      "llm_temperature": 1.0
+      "llm.temperature": 1.0
     }
   },
   "set llm_temperature <- 1.5": {
     "ok": {
-      "llm_temperature": 1.5
+      "llm.temperature": 1.5
     }
   },
   "set llm_temperature <- 5000000000": {
     "ok": {
-      "llm_temperature": 5000000000.0
+      "llm.temperature": 5000000000.0
     }
   },
   "set llm_temperature <- 70000": {
     "ok": {
-      "llm_temperature": 70000.0
+      "llm.temperature": 70000.0
     }
   },
   "set llm_temperature <- [1]": {
@@ -4676,6 +7667,59 @@
     "err": true
   },
   "set llm_temperature <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm_vision_model <- \"\"": {
+    "ok": {
+      "llm.openai_compatible.vision_model": ""
+    }
+  },
+  "set llm_vision_model <- \"1\"": {
+    "ok": {
+      "llm.openai_compatible.vision_model": "1"
+    }
+  },
+  "set llm_vision_model <- \"s\"": {
+    "ok": {
+      "llm.openai_compatible.vision_model": "s"
+    }
+  },
+  "set llm_vision_model <- \"true\"": {
+    "ok": {
+      "llm.openai_compatible.vision_model": "true"
+    }
+  },
+  "set llm_vision_model <- -1": {
+    "err": true
+  },
+  "set llm_vision_model <- 0": {
+    "err": true
+  },
+  "set llm_vision_model <- 1": {
+    "err": true
+  },
+  "set llm_vision_model <- 1.5": {
+    "err": true
+  },
+  "set llm_vision_model <- 5000000000": {
+    "err": true
+  },
+  "set llm_vision_model <- 70000": {
+    "err": true
+  },
+  "set llm_vision_model <- [1]": {
+    "err": true
+  },
+  "set llm_vision_model <- false": {
+    "err": true
+  },
+  "set llm_vision_model <- null": {
+    "ok": {}
+  },
+  "set llm_vision_model <- true": {
+    "err": true
+  },
+  "set llm_vision_model <- {\"a\":1}": {
     "err": true
   },
   "set log_level <- \"\"": {
@@ -5927,21 +8971,23 @@
     "err": true
   },
   "set transcription_model <- \"\"": {
-    "ok": {}
+    "ok": {
+      "llm.openai_compatible.transcription_model": ""
+    }
   },
   "set transcription_model <- \"1\"": {
     "ok": {
-      "transcription_model": "1"
+      "llm.openai_compatible.transcription_model": "1"
     }
   },
   "set transcription_model <- \"s\"": {
     "ok": {
-      "transcription_model": "s"
+      "llm.openai_compatible.transcription_model": "s"
     }
   },
   "set transcription_model <- \"true\"": {
     "ok": {
-      "transcription_model": "true"
+      "llm.openai_compatible.transcription_model": "true"
     }
   },
   "set transcription_model <- -1": {
@@ -6385,516 +9431,918 @@
   "set vector_db_username <- {\"a\":1}": {
     "err": true
   },
+  "unset anthropic_base_url": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
   "unset auto_feedback": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset auto_rate_limit": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset aws.access_key_id": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset aws.bearer_token": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset aws.bedrock_runtime_endpoint": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset aws.external_id": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset aws.profile_name": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset aws.region": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset aws.role_name": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset aws.secret_access_key": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset aws.session_name": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset aws.session_token": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset aws.sts_endpoint": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset aws.web_identity_token": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset aws_access_key_id": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset aws_bearer_token_bedrock": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset aws_bedrock_runtime_endpoint": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset aws_external_id": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset aws_profile_name": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset aws_region_name": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset aws_role_name": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset aws_secret_access_key": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset aws_session_name": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset aws_session_token": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset aws_sts_endpoint": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset aws_web_identity_token": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset cache_backend": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset cache_host": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset cache_password": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset cache_port": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset cache_root_directory": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset cache_username": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset chunk_engine": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset chunk_overlap": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset chunk_size": {
     "ok": {
-      "llm_model": "changed",
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset chunk_strategy": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset classification_model": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset cognee_tracing_enabled": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset data_root_directory": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset db_host": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset db_name": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset db_password": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset db_port": {
     "ok": {
-      "llm_model": "changed",
-      "chunk_size": 7
+      "chunk_size": 7,
+      "llm.model": "changed"
     }
   },
   "unset db_provider": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset db_sslmode": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset db_username": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset default_dataset_name": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset default_system_prompt_path": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset default_user_email": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset default_user_id": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset default_user_password": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset embedding_api_key": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset embedding_api_version": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset embedding_batch_size": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset embedding_dimensions": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset embedding_endpoint": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset embedding_max_sequence_length": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset embedding_model": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset embedding_model_name": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset embedding_model_path": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset embedding_onnx_batch_size": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset embedding_provider": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset embedding_rate_limit_enabled": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset embedding_rate_limit_interval": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset embedding_rate_limit_requests": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset embedding_tokenizer_path": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset enable_access_control": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset enable_caching": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset enable_last_accessed": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset graph.ladybug.max_db_size": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset graph_database_host": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset graph_database_key": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset graph_database_name": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset graph_database_password": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset graph_database_port": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset graph_database_provider": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset graph_database_url": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset graph_database_username": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset graph_file_path": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset graph_filename": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset graph_max_db_size": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset graph_model": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset graph_prompt_path": {
     "ok": {
-      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset llm.anthropic.base_url": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset llm.api_key": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset llm.api_version": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset llm.args": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset llm.auto_rate_limit": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset llm.cassette": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset llm.connect_timeout_seconds": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset llm.debug_requests": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset llm.endpoint": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset llm.fallback_api_key": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset llm.fallback_endpoint": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset llm.fallback_model": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset llm.fallback_provider": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset llm.max_completion_tokens": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset llm.max_retries": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset llm.min_retry_seconds": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset llm.mock": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset llm.model": {
+    "ok": {
       "chunk_size": 7,
       "db_port": 1
+    }
+  },
+  "unset llm.network_retries": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset llm.openai_compatible.transcription_model": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset llm.openai_compatible.vision_model": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset llm.provider": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset llm.rate_limit_enabled": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset llm.rate_limit_interval": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset llm.rate_limit_requests": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset llm.reasoning": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset llm.record_path": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset llm.request_deadline_seconds": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset llm.request_timeout_seconds": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset llm.streaming": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset llm.structured_output_mode": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset llm.temperature": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset llm_api_key": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset llm_api_version": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset llm_args": {
-    "err": true
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
   },
   "unset llm_cassette": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset llm_connect_timeout_seconds": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset llm_endpoint": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset llm_fallback_api_key": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset llm_fallback_endpoint": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset llm_fallback_model": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset llm_fallback_provider": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset llm_max_completion_tokens": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset llm_max_parallel_requests": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset llm_max_retries": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset llm_min_retry_seconds": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset llm_mock": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset llm_model": {
@@ -6905,240 +10353,247 @@
   },
   "unset llm_network_retries": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset llm_provider": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset llm_rate_limit_enabled": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset llm_rate_limit_interval": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset llm_rate_limit_requests": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset llm_reasoning": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset llm_record_path": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset llm_request_deadline_seconds": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset llm_request_timeout_seconds": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset llm_streaming": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset llm_structured_output_mode": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset llm_temperature": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset llm_vision_model": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset log_level": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset logs_root_directory": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset migration_db_url": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset monitoring_tool": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset no_such_key": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset ontology_file_path": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset ontology_matching_strategy": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset ontology_resolver": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset otel_exporter_otlp_endpoint": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset otel_exporter_otlp_headers": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset otel_exporter_otlp_protocol": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset otel_service_name": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset otel_span_processor": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset otel_traces_sampler": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset otel_traces_sampler_arg": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset relational_db_url": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset session_ttl_seconds": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset single_process": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset storage_backend": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset storage_bucket_name": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset strict_config": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset summarization_model": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset summarization_schema": {
@@ -7146,72 +10601,72 @@
   },
   "unset system_root_directory": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset transcription_model": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset vector_db_host": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset vector_db_key": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset vector_db_name": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset vector_db_password": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset vector_db_port": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset vector_db_provider": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset vector_db_url": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   },
   "unset vector_db_username": {
     "ok": {
-      "llm_model": "changed",
       "chunk_size": 7,
-      "db_port": 1
+      "db_port": 1,
+      "llm.model": "changed"
     }
   }
 }

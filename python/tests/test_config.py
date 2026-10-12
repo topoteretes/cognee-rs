@@ -120,10 +120,11 @@ def test_get_returns_dict():
 
 
 def test_get_contains_llm_provider():
-    """The dict returned by ``get()`` must contain ``llm_provider``."""
+    """``get()`` lists every setting under its canonical key, ``llm.provider``
+    included (``llm_provider`` is its Python alias, accepted by the setters)."""
     cognee = make_cognee()
     cfg = cognee.config.get()
-    assert "llm_provider" in cfg
+    assert cfg["llm.provider"] == "openai"
 
 
 def test_get_reflects_set_str():
@@ -131,7 +132,7 @@ def test_get_reflects_set_str():
     cognee = make_cognee()
     cognee.config.set_str("llm_provider", "ollama")
     cfg = cognee.config.get()
-    assert cfg["llm_provider"] == "ollama"
+    assert cfg["llm.provider"] == "ollama"
 
 
 def test_get_redacts_llm_api_key():
@@ -141,7 +142,7 @@ def test_get_redacts_llm_api_key():
     # not just when the field was already empty.
     cognee.config.set_str("llm_api_key", "sk-super-secret")
     cfg = cognee.config.get()
-    assert cfg.get("llm_api_key") == "***REDACTED***"
+    assert cfg.get("llm.api_key") == "***REDACTED***"
 
 
 def test_get_redacts_embedding_api_key():
@@ -176,7 +177,7 @@ def test_set_llm_config_reflected_in_get():
     cognee = make_cognee()
     cognee.config.set_llm_config({"llm_model": "gpt-4o-mini"})
     cfg = cognee.config.get()
-    assert cfg["llm_model"] == "gpt-4o-mini"
+    assert cfg["llm.model"] == "gpt-4o-mini"
 
 
 def test_set_llm_config_non_dict_raises():
