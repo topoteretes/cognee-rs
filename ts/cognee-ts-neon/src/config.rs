@@ -250,3 +250,13 @@ pub fn get_config(mut cx: FunctionContext) -> JsResult<JsValue> {
         .or_else(|e| cx.throw_error(format!("failed to serialize settings: {e}")))?;
     parse_js(&mut cx, &json)
 }
+
+/// `configKeyAliases(handle) -> object` — canonical section key → its plain
+/// (Python-compatible) alias, for the camelCase `config.get()` layer.
+pub fn get_config_key_aliases(mut cx: FunctionContext) -> JsResult<JsValue> {
+    let handle = cx.argument::<JsBox<CogneeHandle>>(0)?;
+    let aliases = cognee_bindings_common::config_key_aliases(handle.state.cm.config());
+    let json = serde_json::to_string(&aliases)
+        .or_else(|e| cx.throw_error(format!("failed to serialize config key aliases: {e}")))?;
+    parse_js(&mut cx, &json)
+}

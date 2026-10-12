@@ -51,10 +51,10 @@ describe("Phase-2 config surface", () => {
       expect(cfg["embedding.provider"]).toBe("openai");
       expect(cfg["embedding.dimensions"]).toBe(1536);
       expect(cfg["embedding.onnx.model_path"]).toBe("/models/m.onnx");
-      expect(cfg.vector_db_host).toBe("vector-host");
-      expect(cfg.vector_db_port).toBe(6333);
-      expect(cfg.vector_db_name).toBe("my_collection");
-      expect(cfg.graph_file_path).toBe("/data/graph");
+      expect(cfg["vector.host"]).toBe("vector-host");
+      expect(cfg["vector.port"]).toBe(6333);
+      expect(cfg["vector.name"]).toBe("my_collection");
+      expect(cfg["graph.file_path"]).toBe("/data/graph");
       expect(cfg.cache_root_directory).toBe("/tmp/cache");
       expect(cfg.ontology_file_path).toBe("/onto.owl");
       expect(cfg.ontology_resolver).toBe("custom");
@@ -71,10 +71,10 @@ describe("Phase-2 config surface", () => {
       for (const field of [
         "llm.api_key",
         "embedding.api_key",
-        "vector_db_key",
-        "vector_db_password",
-        "graph_database_key",
-        "graph_database_password",
+        "vector.key",
+        "vector.password",
+        "graph.key",
+        "graph.password",
         "db_password",
         "cache_password",
         "default_user_password",
@@ -99,8 +99,8 @@ describe("Phase-2 config surface", () => {
       native.configSet(handle, "ontology_file_path", "/o2.owl");
 
       const cfg = native.getConfig(handle) as Record<string, unknown>;
-      expect(cfg.vector_db_host).toBe("host-via-generic");
-      expect(cfg.vector_db_port).toBe(7000);
+      expect(cfg["vector.host"]).toBe("host-via-generic");
+      expect(cfg["vector.port"]).toBe(7000);
       expect(cfg["llm.streaming"]).toBe(true);
       expect(cfg.ontology_file_path).toBe("/o2.owl");
     });
@@ -150,10 +150,10 @@ describe("Phase-2 config surface", () => {
         vector_db_name: "bulk_coll",
       });
       const cfg = native.getConfig(handle) as Record<string, unknown>;
-      expect(cfg.vector_db_provider).toBe("brute-force");
-      expect(cfg.vector_db_host).toBe("bulk-host");
-      expect(cfg.vector_db_port).toBe(6334);
-      expect(cfg.vector_db_name).toBe("bulk_coll");
+      expect(cfg["vector.provider"]).toBe("brute-force");
+      expect(cfg["vector.host"]).toBe("bulk-host");
+      expect(cfg["vector.port"]).toBe(6334);
+      expect(cfg["vector.name"]).toBe("bulk_coll");
     });
 
     it("rejects an out-of-subset key with a typed UnknownKey error", () => {
@@ -191,7 +191,7 @@ describe("Phase-2 config surface", () => {
       const handle = native.cogneeNew({ vector_db_host: "object-host" });
       const cfg = native.getConfig(handle) as Record<string, unknown>;
       // Object-provided field wins.
-      expect(cfg.vector_db_host).toBe("object-host");
+      expect(cfg["vector.host"]).toBe("object-host");
       // Omitted field retains the env-derived baseline.
       expect(cfg["llm.model"]).toBe(baseline["llm.model"]);
       expect(cfg["llm.provider"]).toBe(baseline["llm.provider"]);
@@ -245,7 +245,7 @@ describe("Phase-2 config surface", () => {
       });
 
       const before = native.getConfig(handle) as Record<string, unknown>;
-      expect(before.vector_db_url).toBe(vecA);
+      expect(before["vector.url"]).toBe(vecA);
 
       // Mutate config: this bumps the version, invalidating any cached services
       // so the next op rebuilds the engines from this new value.
@@ -253,8 +253,8 @@ describe("Phase-2 config surface", () => {
       native.configSet(handle, "vector_db_url", vecB);
 
       const after = native.getConfig(handle) as Record<string, unknown>;
-      expect(after.vector_db_url).toBe(vecB);
-      expect(after.vector_db_url).not.toBe(before.vector_db_url);
+      expect(after["vector.url"]).toBe(vecB);
+      expect(after["vector.url"]).not.toBe(before["vector.url"]);
     });
   });
 });

@@ -304,156 +304,130 @@ const HNSW_INSERT_MIN_BATCH: usize = 250;
 const HNSW_BUILD_BUDGET_MIN_KB: i64 = 64 * 1024;
 const HNSW_BUILD_BUDGET_MAX_KB: i64 = 2 * 1024 * 1024;
 
-/// Operator overrides for the index-build knobs above.
-///
-/// Four environment variables, each read once per process and clamped to a
-/// range the adapter can still work in. They exist because the defaults are
-/// calibrated on one machine against one corpus shape, and the two that cost
-/// resources — parallel maintenance workers and `maintenance_work_mem` — have
-/// to be turnable *down* on a small or shared server without patching the
-/// crate. Unset, every one of them is the measured default.
-///
-/// | Variable | Default | Range | Effect |
-/// |---|---|---|---|
-/// | `COGNEE_PGVECTOR_HNSW_M` | 24 | 2–100 | `m` of every HNSW index built from now on |
-/// | `COGNEE_PGVECTOR_HNSW_EF_CONSTRUCTION` | 128 | `2 * m`–1000 | `ef_construction` of those builds |
-/// | `COGNEE_PGVECTOR_MAINTENANCE_WORKERS` | 4 rebuild / 7 bulk-load | 0–64 | `max_parallel_maintenance_workers` for a build, when set overriding both defaults |
-/// | `COGNEE_PGVECTOR_MAINTENANCE_WORK_MEM_MB` | 2048 | 64–65536 | ceiling of the per-build `maintenance_work_mem` |
-///
-/// `m` / `ef_construction` apply to indexes **built after** the change; an
-/// index already on disk keeps the parameters it was built with until it is
-/// rebuilt (`create_missing_vector_indexes` does not rebuild a valid index).
-///
-/// Asking for more parallel maintenance workers than the server can start is
-/// not an error: `max_parallel_maintenance_workers` is a plain per-session
-/// GUC, and Postgres silently launches as many as
-/// `max_parallel_workers` / `max_worker_processes` still allow — down to zero,
-/// where the build runs serially. So a 7-worker request on a server
-/// configured for two gets two, and the only cost is a slower build.
-mod tuning {
-    use std::sync::OnceLock;
-
-    /// `var` parsed as a `u64` and clamped to `[min, max]`, or `default` when
-    /// unset, blank or unparseable. A bad value is a typo in a deployment
-    /// environment, not something to fail a connection over, so it falls back
-    /// to the default rather than erroring.
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
-    )]
-    fn env_u64(var: &str, default: u64, min: u64, max: u64) -> u64 {
-        std::env::var(var)
-            .ok()
-            .and_then(|v| v.trim().parse::<u64>().ok())
-            .map_or(default, |v| v.clamp(min, max))
+cognee_config_core::config_section! {
+    /// Operator overrides for the pgvector index-build knobs above. Registered
+    /// by the pgvector factory, so these settings exist only in builds with the
+    /// `pgvector` feature.
+    ///
+    /// They exist because the defaults are calibrated on one machine against
+    /// one corpus shape, and the two that cost resources — parallel
+    /// maintenance workers and `maintenance_work_mem` — have to be turnable
+    /// *down* on a small or shared server. Each value is clamped to a range the
+    /// adapter can still work in (see [`PgVectorTuning`]).
+    ///
+    /// `hnsw_m` / `hnsw_ef_construction` apply to indexes **built after** the
+    /// change; an index already on disk keeps the parameters it was built with
+    /// until it is rebuilt (`create_missing_vector_indexes` does not rebuild a
+    /// valid index).
+    ///
+    /// Asking for more parallel maintenance workers than the server can start
+    /// is not an error: `max_parallel_maintenance_workers` is a plain
+    /// per-session GUC, and Postgres silently launches as many as
+    /// `max_parallel_workers` / `max_worker_processes` still allow — down to
+    /// zero, where the build runs serially.
+    pub struct PgVectorConfig in "vector.pgvector" {
+        /// `m` of every HNSW index built from now on (2–100).
+        pub hnsw_m: u32 = HNSW_M => {
+            env: ["COGNEE_PGVECTOR_HNSW_M"], alias: ["pgvector_hnsw_m"], secret: false,
+        },
+        /// `ef_construction` of those builds (`2 * m`–1000).
+        pub hnsw_ef_construction: u32 = HNSW_EF_CONSTRUCTION => {
+            env: ["COGNEE_PGVECTOR_HNSW_EF_CONSTRUCTION"], alias: ["pgvector_hnsw_ef_construction"], secret: false,
+        },
+        /// `max_parallel_maintenance_workers` for every build (0–64); unset uses
+        /// 4 for a rebuild and 7 for a bulk load.
+        pub maintenance_workers: Option<u32> = None => {
+            env: ["COGNEE_PGVECTOR_MAINTENANCE_WORKERS"], alias: ["pgvector_maintenance_workers"], secret: false,
+        },
+        /// Ceiling of the per-build `maintenance_work_mem`, in MB (64–65536).
+        pub maintenance_work_mem_mb: u32 = (HNSW_BUILD_BUDGET_MAX_KB / 1024) as u32 => {
+            env: ["COGNEE_PGVECTOR_MAINTENANCE_WORK_MEM_MB"], alias: ["pgvector_maintenance_work_mem_mb"], secret: false,
+        },
     }
+}
 
-    /// `m` for new HNSW indexes — see the module docs.
-    pub fn hnsw_m() -> u32 {
-        static CACHE: OnceLock<u32> = OnceLock::new();
-        *CACHE.get_or_init(|| {
-            env_u64("COGNEE_PGVECTOR_HNSW_M", u64::from(super::HNSW_M), 2, 100) as u32
-        })
-    }
+/// The index-build tuning an adapter applies: [`PgVectorConfig`] clamped to
+/// ranges the adapter can still work in. A value out of range is a typo in a
+/// deployment, not something to fail a connection over, so it clamps rather
+/// than errors.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PgVectorTuning {
+    hnsw_m: u32,
+    hnsw_ef_construction: u32,
+    maintenance_workers: Option<u32>,
+    build_budget_max_kb: i64,
+}
 
-    /// `ef_construction` for new HNSW indexes. pgvector requires
-    /// `ef_construction >= 2 * m`, so the floor follows [`hnsw_m`] rather than
-    /// being a constant — a configuration that violated it would make every
-    /// `CREATE INDEX` fail.
-    pub fn hnsw_ef_construction() -> u32 {
-        static CACHE: OnceLock<u32> = OnceLock::new();
-        *CACHE.get_or_init(|| {
-            let floor = u64::from(hnsw_m()) * 2;
-            env_u64(
-                "COGNEE_PGVECTOR_HNSW_EF_CONSTRUCTION",
-                u64::from(super::HNSW_EF_CONSTRUCTION).max(floor),
-                floor,
-                1000,
-            ) as u32
-        })
-    }
-
-    /// `max_parallel_maintenance_workers` for an index build. `default` is the
-    /// measured value for that build path ([`super::HNSW_BUILD_WORKERS`] for a
-    /// mid-load rebuild, [`super::BULK_BUILD_WORKERS`] for the one build at
-    /// the end of a bulk-load scope); the override, when set, replaces both.
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
-    )]
-    pub fn maintenance_workers(default: u32) -> u32 {
-        static CACHE: OnceLock<Option<u32>> = OnceLock::new();
-        CACHE
-            .get_or_init(|| {
-                std::env::var("COGNEE_PGVECTOR_MAINTENANCE_WORKERS")
-                    .ok()
-                    .and_then(|v| v.trim().parse::<u64>().ok())
-                    .map(|v| v.min(64) as u32)
-            })
-            .unwrap_or(default)
-    }
-
-    /// Ceiling of the per-build `maintenance_work_mem`, in kB.
-    pub fn build_budget_max_kb() -> i64 {
-        static CACHE: OnceLock<i64> = OnceLock::new();
-        *CACHE.get_or_init(|| {
-            let default_mb = (super::HNSW_BUILD_BUDGET_MAX_KB / 1024) as u64;
-            (env_u64(
-                "COGNEE_PGVECTOR_MAINTENANCE_WORK_MEM_MB",
-                default_mb,
-                (super::HNSW_BUILD_BUDGET_MIN_KB / 1024) as u64,
-                64 * 1024,
-            ) * 1024) as i64
-        })
-    }
-
-    #[cfg(test)]
-    #[allow(
-        clippy::unwrap_used,
-        clippy::expect_used,
-        reason = "test code — panics are acceptable failures"
-    )]
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "tests drive configuration through the process env"
-    )]
-    mod tests {
-        use super::env_u64;
-
-        /// The accessors above cache in a `OnceLock`, so the parsing and
-        /// clamping rule is what there is to pin: a blank, negative or
-        /// non-numeric value must fall back to the default rather than
-        /// propagate into DDL, and an out-of-range one must clamp.
-        #[test]
-        fn a_bad_or_out_of_range_value_falls_back_or_clamps() {
-            const VAR: &str = "COGNEE_PGVECTOR_TUNING_PARSE_TEST";
-            // SAFETY: single-threaded test over a variable no other test or
-            // accessor reads; nothing else in this process can observe it.
-            for (raw, want) in [
-                (None, 24),
-                (Some(""), 24),
-                (Some("   "), 24),
-                (Some("not-a-number"), 24),
-                (Some("-8"), 24),
-                (Some("48"), 48),
-                (Some(" 48 "), 48),
-                (Some("1"), 2),
-                (Some("100000"), 100),
-            ] {
-                unsafe {
-                    match raw {
-                        Some(v) => std::env::set_var(VAR, v),
-                        None => std::env::remove_var(VAR),
-                    }
-                }
-                assert_eq!(
-                    env_u64(VAR, 24, 2, 100),
-                    want,
-                    "{raw:?} must resolve to {want}"
-                );
-            }
-            unsafe { std::env::remove_var(VAR) };
+impl PgVectorTuning {
+    /// Clamp `config`: `m` to 2–100; `ef_construction` to `2 * m`–1000
+    /// (pgvector requires `ef_construction >= 2 * m`, so the floor follows `m`
+    /// and every `CREATE INDEX` stays valid); workers to at most 64; the
+    /// memory ceiling to 64–65536 MB.
+    pub fn from_config(config: &PgVectorConfig) -> Self {
+        let hnsw_m = config.hnsw_m.clamp(2, 100);
+        let floor = hnsw_m * 2;
+        Self {
+            hnsw_m,
+            hnsw_ef_construction: config.hnsw_ef_construction.clamp(floor, 1000.max(floor)),
+            maintenance_workers: config.maintenance_workers.map(|w| w.min(64)),
+            build_budget_max_kb: i64::from(config.maintenance_work_mem_mb.clamp(64, 64 * 1024))
+                * 1024,
         }
+    }
+
+    /// `max_parallel_maintenance_workers` for a build whose measured default is
+    /// `default` ([`HNSW_BUILD_WORKERS`] for a mid-load rebuild,
+    /// [`BULK_BUILD_WORKERS`] for the one build at the end of a bulk-load
+    /// scope); the configured value, when set, replaces both.
+    fn maintenance_workers(&self, default: u32) -> u32 {
+        self.maintenance_workers.unwrap_or(default)
+    }
+}
+
+impl Default for PgVectorTuning {
+    fn default() -> Self {
+        Self::from_config(&PgVectorConfig::default())
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
+mod tuning_tests {
+    use super::{PgVectorConfig, PgVectorTuning};
+
+    /// Out-of-range values clamp rather than propagate into DDL.
+    #[test]
+    fn out_of_range_values_clamp() {
+        let tuning = |m: u32, ef: u32, workers: Option<u32>, mem: u32| {
+            PgVectorTuning::from_config(&PgVectorConfig {
+                hnsw_m: m,
+                hnsw_ef_construction: ef,
+                maintenance_workers: workers,
+                maintenance_work_mem_mb: mem,
+            })
+        };
+        assert_eq!(tuning(1, 128, None, 2048).hnsw_m, 2);
+        assert_eq!(tuning(100_000, 128, None, 2048).hnsw_m, 100);
+        // ef_construction's floor follows m.
+        assert_eq!(tuning(48, 10, None, 2048).hnsw_ef_construction, 96);
+        assert_eq!(tuning(24, 5000, None, 2048).hnsw_ef_construction, 1000);
+        assert_eq!(tuning(24, 128, Some(500), 2048).maintenance_workers(4), 64);
+        assert_eq!(tuning(24, 128, None, 2048).maintenance_workers(4), 4);
+        assert_eq!(tuning(24, 128, None, 1).build_budget_max_kb, 64 * 1024);
+    }
+
+    /// The defaults are the measured constants.
+    #[test]
+    fn defaults_are_the_measured_constants() {
+        let t = PgVectorTuning::default();
+        assert_eq!(t.hnsw_m, super::HNSW_M);
+        assert_eq!(t.hnsw_ef_construction, super::HNSW_EF_CONSTRUCTION);
+        assert_eq!(t.maintenance_workers, None);
+        assert_eq!(t.build_budget_max_kb, super::HNSW_BUILD_BUDGET_MAX_KB);
     }
 }
 
@@ -1325,6 +1299,8 @@ async fn cleanup_legacy_seaql_migrations(db: &DatabaseConnection) -> VectorDBRes
 /// adapter will attempt `CREATE EXTENSION IF NOT EXISTS vector` on startup).
 pub struct PgVectorAdapter {
     db: DatabaseConnection,
+    /// Index-build tuning (`vector.pgvector`); see [`PgVectorTuning`].
+    tuning: PgVectorTuning,
     dimension: usize,
     /// Whether this adapter opened `db` itself and may therefore close it.
     ///
@@ -1438,6 +1414,13 @@ struct LiveRows {
 }
 
 impl PgVectorAdapter {
+    /// Apply index-build tuning (`vector.pgvector`, see [`PgVectorConfig`]).
+    #[must_use]
+    pub fn with_tuning(mut self, tuning: PgVectorTuning) -> Self {
+        self.tuning = tuning;
+        self
+    }
+
     /// Connect to an existing PostgreSQL database and run pgvector migrations.
     ///
     /// The database must already exist. Use [`Self::from_connection`] to share
@@ -1491,6 +1474,7 @@ impl PgVectorAdapter {
             db,
             dimension,
             owns_pool: true,
+            tuning: PgVectorTuning::default(),
             tuned_sessions: true,
             known: RwLock::new(HashSet::new()),
             bulk: std::sync::Mutex::new(BulkLoad::default()),
@@ -1523,6 +1507,7 @@ impl PgVectorAdapter {
             db,
             dimension,
             owns_pool: false,
+            tuning: PgVectorTuning::default(),
             tuned_sessions: false,
             known: RwLock::new(HashSet::new()),
             bulk: std::sync::Mutex::new(BulkLoad::default()),
@@ -1731,12 +1716,13 @@ impl PgVectorAdapter {
                 txn.execute_unprepared(&format!(
                     "SET LOCAL maintenance_work_mem = '{}kB'; \
                      SET LOCAL max_parallel_maintenance_workers = {}",
-                    Self::hnsw_build_budget_kb(rows, dimension),
-                    tuning::maintenance_workers(BULK_BUILD_WORKERS)
+                    Self::hnsw_build_budget_kb(&self.tuning, rows, dimension),
+                    self.tuning.maintenance_workers(BULK_BUILD_WORKERS)
                 ))
                 .await
                 .map_err(storage)?;
                 txn.execute_unprepared(&Self::vector_index_ddl(
+                    &self.tuning,
                     &coll,
                     dimension,
                     false,
@@ -2430,6 +2416,7 @@ impl PgVectorAdapter {
     /// backfills tables that already hold rows and may be serving traffic.
     async fn create_vector_index(
         db: &DatabaseConnection,
+        tuning: &PgVectorTuning,
         coll: &str,
         dimension: usize,
         concurrently: bool,
@@ -2444,7 +2431,7 @@ impl PgVectorAdapter {
         }
 
         let index = Self::vector_index_name(coll, halfvec);
-        let ddl = Self::vector_index_ddl(coll, dimension, concurrently, halfvec);
+        let ddl = Self::vector_index_ddl(tuning, coll, dimension, concurrently, halfvec);
 
         db.execute_unprepared(&ddl)
             .await
@@ -2488,7 +2475,13 @@ impl PgVectorAdapter {
     /// [`HALFVEC_MIN_VERSION`], where the type does not exist — builds the
     /// full-precision index under the legacy `_vector_hnsw` name instead, which
     /// is what [`Self::candidate_order_expr`] orders by on that version.
-    fn vector_index_ddl(coll: &str, dimension: usize, concurrently: bool, halfvec: bool) -> String {
+    fn vector_index_ddl(
+        tuning: &PgVectorTuning,
+        coll: &str,
+        dimension: usize,
+        concurrently: bool,
+        halfvec: bool,
+    ) -> String {
         let index = Self::vector_index_name(coll, halfvec);
         let concurrent_kw = if concurrently { " CONCURRENTLY" } else { "" };
         // Without `halfvec` (pgvector < 0.7) the half-precision cast does not
@@ -2504,8 +2497,8 @@ impl PgVectorAdapter {
             r#"CREATE INDEX{concurrent_kw} IF NOT EXISTS "{index}"
                ON "{coll}" USING hnsw ({column})
                WITH (m = {m}, ef_construction = {ef})"#,
-            m = tuning::hnsw_m(),
-            ef = tuning::hnsw_ef_construction(),
+            m = tuning.hnsw_m,
+            ef = tuning.hnsw_ef_construction,
         )
     }
 
@@ -2676,6 +2669,7 @@ impl PgVectorAdapter {
 
             match Self::create_vector_index(
                 &self.db,
+                &self.tuning,
                 &coll,
                 dimension.max(0) as usize,
                 true,
@@ -2990,12 +2984,13 @@ impl PgVectorAdapter {
         txn.execute_unprepared(&format!(
             "SET LOCAL maintenance_work_mem = '{}kB'; \
              SET LOCAL max_parallel_maintenance_workers = {}",
-            Self::hnsw_build_budget_kb(rows_after, dimension),
-            tuning::maintenance_workers(HNSW_BUILD_WORKERS)
+            Self::hnsw_build_budget_kb(&self.tuning, rows_after, dimension),
+            self.tuning.maintenance_workers(HNSW_BUILD_WORKERS)
         ))
         .await
         .map_err(storage)?;
         txn.execute_unprepared(&Self::vector_index_ddl(
+            &self.tuning,
             coll,
             dimension,
             false,
@@ -3016,10 +3011,10 @@ impl PgVectorAdapter {
     /// [`HNSW_BUILD_BUDGET_MIN_KB`, `HNSW_BUILD_BUDGET_MAX_KB`]. A build that
     /// outgrows the budget does not fail — pgvector finishes it on disk, much
     /// more slowly — so this only has to be roughly right.
-    fn hnsw_build_budget_kb(rows: i64, dimension: usize) -> i64 {
-        let per_row = (dimension as i64) * 4 + i64::from(tuning::hnsw_m()) * 2 * 10 + 200;
+    fn hnsw_build_budget_kb(tuning: &PgVectorTuning, rows: i64, dimension: usize) -> i64 {
+        let per_row = (dimension as i64) * 4 + i64::from(tuning.hnsw_m) * 2 * 10 + 200;
         let bytes = rows.max(0).saturating_mul(per_row).saturating_mul(3) / 2;
-        (bytes / 1024).clamp(HNSW_BUILD_BUDGET_MIN_KB, tuning::build_budget_max_kb())
+        (bytes / 1024).clamp(HNSW_BUILD_BUDGET_MIN_KB, tuning.build_budget_max_kb)
     }
 
     /// Write `points` into `coll` (see [`Self::upsert_points`]) on `conn`.
@@ -3350,8 +3345,15 @@ impl VectorDB for PgVectorAdapter {
         // `maintenance_work_mem`) must degrade to the sequential scan, which is
         // exactly the behaviour before this index existed. The backfill picks it
         // up later.
-        if let Err(e) =
-            Self::create_vector_index(&self.db, &coll, dimension, false, self.halfvec).await
+        if let Err(e) = Self::create_vector_index(
+            &self.db,
+            &self.tuning,
+            &coll,
+            dimension,
+            false,
+            self.halfvec,
+        )
+        .await
         {
             warn!(
                 "collection {coll} was created without an ANN index, so its searches will \

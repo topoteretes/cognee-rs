@@ -375,6 +375,8 @@ export interface NativeBindings {
   // `getConfig` returns a snapshot of the current Settings with secret fields
   // (api keys, passwords, OTLP headers) blanked to "***REDACTED***".
   getConfig(handle: NativeBox): Record<string, unknown>;
+  // Canonical section key -> its plain (Python-compatible) alias.
+  configKeyAliases(handle: NativeBox): Record<string, string>;
 
   // Logging (gap-06): argument-less, idempotent.
   setupLogging(): void;

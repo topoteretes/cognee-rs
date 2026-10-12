@@ -58,17 +58,17 @@
     "enable_access_control",
     "enable_caching",
     "enable_last_accessed",
+    "graph.file_path",
+    "graph.filename",
+    "graph.host",
+    "graph.key",
     "graph.ladybug.max_db_size",
-    "graph_database_host",
-    "graph_database_key",
-    "graph_database_name",
-    "graph_database_password",
-    "graph_database_port",
-    "graph_database_provider",
-    "graph_database_url",
-    "graph_database_username",
-    "graph_file_path",
-    "graph_filename",
+    "graph.name",
+    "graph.password",
+    "graph.port",
+    "graph.provider",
+    "graph.url",
+    "graph.username",
     "graph_model",
     "graph_prompt_path",
     "llm.anthropic.base_url",
@@ -126,14 +126,18 @@
     "strict_config",
     "summarization_model",
     "system_root_directory",
-    "vector_db_host",
-    "vector_db_key",
-    "vector_db_name",
-    "vector_db_password",
-    "vector_db_port",
-    "vector_db_provider",
-    "vector_db_url",
-    "vector_db_username"
+    "vector.host",
+    "vector.key",
+    "vector.name",
+    "vector.password",
+    "vector.pgvector.hnsw_ef_construction",
+    "vector.pgvector.hnsw_m",
+    "vector.pgvector.maintenance_work_mem_mb",
+    "vector.pgvector.maintenance_workers",
+    "vector.port",
+    "vector.provider",
+    "vector.url",
+    "vector.username"
   ],
   "<config list>": [
     "default_user_id",
@@ -148,24 +152,6 @@
     "graph_model",
     "llm_max_parallel_requests",
     "graph_prompt_path",
-    "graph_database_provider",
-    "graph_database_url",
-    "graph_database_name",
-    "graph_database_username",
-    "graph_database_password",
-    "graph_database_port",
-    "graph_database_host",
-    "graph_database_key",
-    "graph_file_path",
-    "graph_filename",
-    "vector_db_provider",
-    "vector_db_url",
-    "vector_db_port",
-    "vector_db_name",
-    "vector_db_key",
-    "vector_db_username",
-    "vector_db_password",
-    "vector_db_host",
     "chunk_strategy",
     "chunk_engine",
     "chunk_size",
@@ -249,6 +235,28 @@
     "embedding.rate_limit_requests",
     "embedding.rate_limit_interval",
     "embedding.mock",
+    "vector.provider",
+    "vector.url",
+    "vector.port",
+    "vector.name",
+    "vector.key",
+    "vector.username",
+    "vector.password",
+    "vector.host",
+    "graph.provider",
+    "graph.url",
+    "graph.name",
+    "graph.username",
+    "graph.password",
+    "graph.port",
+    "graph.host",
+    "graph.key",
+    "graph.file_path",
+    "graph.filename",
+    "vector.pgvector.hnsw_m",
+    "vector.pgvector.hnsw_ef_construction",
+    "vector.pgvector.maintenance_workers",
+    "vector.pgvector.maintenance_work_mem_mb",
     "graph.ladybug.max_db_size",
     "llm.anthropic.base_url",
     "llm.openai_compatible.vision_model",
@@ -4823,6 +4831,210 @@
   "set enable_last_accessed <- {\"a\":1}": {
     "err": true
   },
+  "set graph.file_path <- \"\"": {
+    "ok": {}
+  },
+  "set graph.file_path <- \"1\"": {
+    "ok": {
+      "graph.file_path": "1"
+    }
+  },
+  "set graph.file_path <- \"s\"": {
+    "ok": {
+      "graph.file_path": "s"
+    }
+  },
+  "set graph.file_path <- \"true\"": {
+    "ok": {
+      "graph.file_path": "true"
+    }
+  },
+  "set graph.file_path <- -1": {
+    "err": true
+  },
+  "set graph.file_path <- 0": {
+    "err": true
+  },
+  "set graph.file_path <- 1": {
+    "err": true
+  },
+  "set graph.file_path <- 1.5": {
+    "err": true
+  },
+  "set graph.file_path <- 5000000000": {
+    "err": true
+  },
+  "set graph.file_path <- 70000": {
+    "err": true
+  },
+  "set graph.file_path <- [1]": {
+    "err": true
+  },
+  "set graph.file_path <- false": {
+    "err": true
+  },
+  "set graph.file_path <- null": {
+    "err": true
+  },
+  "set graph.file_path <- true": {
+    "err": true
+  },
+  "set graph.file_path <- {\"a\":1}": {
+    "err": true
+  },
+  "set graph.filename <- \"\"": {
+    "ok": {}
+  },
+  "set graph.filename <- \"1\"": {
+    "ok": {
+      "graph.filename": "1"
+    }
+  },
+  "set graph.filename <- \"s\"": {
+    "ok": {
+      "graph.filename": "s"
+    }
+  },
+  "set graph.filename <- \"true\"": {
+    "ok": {
+      "graph.filename": "true"
+    }
+  },
+  "set graph.filename <- -1": {
+    "err": true
+  },
+  "set graph.filename <- 0": {
+    "err": true
+  },
+  "set graph.filename <- 1": {
+    "err": true
+  },
+  "set graph.filename <- 1.5": {
+    "err": true
+  },
+  "set graph.filename <- 5000000000": {
+    "err": true
+  },
+  "set graph.filename <- 70000": {
+    "err": true
+  },
+  "set graph.filename <- [1]": {
+    "err": true
+  },
+  "set graph.filename <- false": {
+    "err": true
+  },
+  "set graph.filename <- null": {
+    "err": true
+  },
+  "set graph.filename <- true": {
+    "err": true
+  },
+  "set graph.filename <- {\"a\":1}": {
+    "err": true
+  },
+  "set graph.host <- \"\"": {
+    "ok": {}
+  },
+  "set graph.host <- \"1\"": {
+    "ok": {
+      "graph.host": "1"
+    }
+  },
+  "set graph.host <- \"s\"": {
+    "ok": {
+      "graph.host": "s"
+    }
+  },
+  "set graph.host <- \"true\"": {
+    "ok": {
+      "graph.host": "true"
+    }
+  },
+  "set graph.host <- -1": {
+    "err": true
+  },
+  "set graph.host <- 0": {
+    "err": true
+  },
+  "set graph.host <- 1": {
+    "err": true
+  },
+  "set graph.host <- 1.5": {
+    "err": true
+  },
+  "set graph.host <- 5000000000": {
+    "err": true
+  },
+  "set graph.host <- 70000": {
+    "err": true
+  },
+  "set graph.host <- [1]": {
+    "err": true
+  },
+  "set graph.host <- false": {
+    "err": true
+  },
+  "set graph.host <- null": {
+    "err": true
+  },
+  "set graph.host <- true": {
+    "err": true
+  },
+  "set graph.host <- {\"a\":1}": {
+    "err": true
+  },
+  "set graph.key <- \"\"": {
+    "ok": {}
+  },
+  "set graph.key <- \"1\"": {
+    "ok": {
+      "graph.key": "1"
+    }
+  },
+  "set graph.key <- \"s\"": {
+    "ok": {
+      "graph.key": "s"
+    }
+  },
+  "set graph.key <- \"true\"": {
+    "ok": {
+      "graph.key": "true"
+    }
+  },
+  "set graph.key <- -1": {
+    "err": true
+  },
+  "set graph.key <- 0": {
+    "err": true
+  },
+  "set graph.key <- 1": {
+    "err": true
+  },
+  "set graph.key <- 1.5": {
+    "err": true
+  },
+  "set graph.key <- 5000000000": {
+    "err": true
+  },
+  "set graph.key <- 70000": {
+    "err": true
+  },
+  "set graph.key <- [1]": {
+    "err": true
+  },
+  "set graph.key <- false": {
+    "err": true
+  },
+  "set graph.key <- null": {
+    "err": true
+  },
+  "set graph.key <- true": {
+    "err": true
+  },
+  "set graph.key <- {\"a\":1}": {
+    "err": true
+  },
   "set graph.ladybug.max_db_size <- \"\"": {
     "err": true
   },
@@ -4876,22 +5088,328 @@
   "set graph.ladybug.max_db_size <- {\"a\":1}": {
     "err": true
   },
+  "set graph.name <- \"\"": {
+    "ok": {}
+  },
+  "set graph.name <- \"1\"": {
+    "ok": {
+      "graph.name": "1"
+    }
+  },
+  "set graph.name <- \"s\"": {
+    "ok": {
+      "graph.name": "s"
+    }
+  },
+  "set graph.name <- \"true\"": {
+    "ok": {
+      "graph.name": "true"
+    }
+  },
+  "set graph.name <- -1": {
+    "err": true
+  },
+  "set graph.name <- 0": {
+    "err": true
+  },
+  "set graph.name <- 1": {
+    "err": true
+  },
+  "set graph.name <- 1.5": {
+    "err": true
+  },
+  "set graph.name <- 5000000000": {
+    "err": true
+  },
+  "set graph.name <- 70000": {
+    "err": true
+  },
+  "set graph.name <- [1]": {
+    "err": true
+  },
+  "set graph.name <- false": {
+    "err": true
+  },
+  "set graph.name <- null": {
+    "err": true
+  },
+  "set graph.name <- true": {
+    "err": true
+  },
+  "set graph.name <- {\"a\":1}": {
+    "err": true
+  },
+  "set graph.password <- \"\"": {
+    "ok": {}
+  },
+  "set graph.password <- \"1\"": {
+    "ok": {
+      "graph.password": "1"
+    }
+  },
+  "set graph.password <- \"s\"": {
+    "ok": {
+      "graph.password": "s"
+    }
+  },
+  "set graph.password <- \"true\"": {
+    "ok": {
+      "graph.password": "true"
+    }
+  },
+  "set graph.password <- -1": {
+    "err": true
+  },
+  "set graph.password <- 0": {
+    "err": true
+  },
+  "set graph.password <- 1": {
+    "err": true
+  },
+  "set graph.password <- 1.5": {
+    "err": true
+  },
+  "set graph.password <- 5000000000": {
+    "err": true
+  },
+  "set graph.password <- 70000": {
+    "err": true
+  },
+  "set graph.password <- [1]": {
+    "err": true
+  },
+  "set graph.password <- false": {
+    "err": true
+  },
+  "set graph.password <- null": {
+    "err": true
+  },
+  "set graph.password <- true": {
+    "err": true
+  },
+  "set graph.password <- {\"a\":1}": {
+    "err": true
+  },
+  "set graph.port <- \"\"": {
+    "err": true
+  },
+  "set graph.port <- \"1\"": {
+    "err": true
+  },
+  "set graph.port <- \"s\"": {
+    "err": true
+  },
+  "set graph.port <- \"true\"": {
+    "err": true
+  },
+  "set graph.port <- -1": {
+    "err": true
+  },
+  "set graph.port <- 0": {
+    "ok": {
+      "graph.port": 0
+    }
+  },
+  "set graph.port <- 1": {
+    "ok": {
+      "graph.port": 1
+    }
+  },
+  "set graph.port <- 1.5": {
+    "err": true
+  },
+  "set graph.port <- 5000000000": {
+    "err": true
+  },
+  "set graph.port <- 70000": {
+    "err": true
+  },
+  "set graph.port <- [1]": {
+    "err": true
+  },
+  "set graph.port <- false": {
+    "err": true
+  },
+  "set graph.port <- null": {
+    "err": true
+  },
+  "set graph.port <- true": {
+    "err": true
+  },
+  "set graph.port <- {\"a\":1}": {
+    "err": true
+  },
+  "set graph.provider <- \"\"": {
+    "ok": {
+      "graph.provider": ""
+    }
+  },
+  "set graph.provider <- \"1\"": {
+    "ok": {
+      "graph.provider": "1"
+    }
+  },
+  "set graph.provider <- \"s\"": {
+    "ok": {
+      "graph.provider": "s"
+    }
+  },
+  "set graph.provider <- \"true\"": {
+    "ok": {
+      "graph.provider": "true"
+    }
+  },
+  "set graph.provider <- -1": {
+    "err": true
+  },
+  "set graph.provider <- 0": {
+    "err": true
+  },
+  "set graph.provider <- 1": {
+    "err": true
+  },
+  "set graph.provider <- 1.5": {
+    "err": true
+  },
+  "set graph.provider <- 5000000000": {
+    "err": true
+  },
+  "set graph.provider <- 70000": {
+    "err": true
+  },
+  "set graph.provider <- [1]": {
+    "err": true
+  },
+  "set graph.provider <- false": {
+    "err": true
+  },
+  "set graph.provider <- null": {
+    "err": true
+  },
+  "set graph.provider <- true": {
+    "err": true
+  },
+  "set graph.provider <- {\"a\":1}": {
+    "err": true
+  },
+  "set graph.url <- \"\"": {
+    "ok": {}
+  },
+  "set graph.url <- \"1\"": {
+    "ok": {
+      "graph.url": "1"
+    }
+  },
+  "set graph.url <- \"s\"": {
+    "ok": {
+      "graph.url": "s"
+    }
+  },
+  "set graph.url <- \"true\"": {
+    "ok": {
+      "graph.url": "true"
+    }
+  },
+  "set graph.url <- -1": {
+    "err": true
+  },
+  "set graph.url <- 0": {
+    "err": true
+  },
+  "set graph.url <- 1": {
+    "err": true
+  },
+  "set graph.url <- 1.5": {
+    "err": true
+  },
+  "set graph.url <- 5000000000": {
+    "err": true
+  },
+  "set graph.url <- 70000": {
+    "err": true
+  },
+  "set graph.url <- [1]": {
+    "err": true
+  },
+  "set graph.url <- false": {
+    "err": true
+  },
+  "set graph.url <- null": {
+    "err": true
+  },
+  "set graph.url <- true": {
+    "err": true
+  },
+  "set graph.url <- {\"a\":1}": {
+    "err": true
+  },
+  "set graph.username <- \"\"": {
+    "ok": {}
+  },
+  "set graph.username <- \"1\"": {
+    "ok": {
+      "graph.username": "1"
+    }
+  },
+  "set graph.username <- \"s\"": {
+    "ok": {
+      "graph.username": "s"
+    }
+  },
+  "set graph.username <- \"true\"": {
+    "ok": {
+      "graph.username": "true"
+    }
+  },
+  "set graph.username <- -1": {
+    "err": true
+  },
+  "set graph.username <- 0": {
+    "err": true
+  },
+  "set graph.username <- 1": {
+    "err": true
+  },
+  "set graph.username <- 1.5": {
+    "err": true
+  },
+  "set graph.username <- 5000000000": {
+    "err": true
+  },
+  "set graph.username <- 70000": {
+    "err": true
+  },
+  "set graph.username <- [1]": {
+    "err": true
+  },
+  "set graph.username <- false": {
+    "err": true
+  },
+  "set graph.username <- null": {
+    "err": true
+  },
+  "set graph.username <- true": {
+    "err": true
+  },
+  "set graph.username <- {\"a\":1}": {
+    "err": true
+  },
   "set graph_database_host <- \"\"": {
     "ok": {}
   },
   "set graph_database_host <- \"1\"": {
     "ok": {
-      "graph_database_host": "1"
+      "graph.host": "1"
     }
   },
   "set graph_database_host <- \"s\"": {
     "ok": {
-      "graph_database_host": "s"
+      "graph.host": "s"
     }
   },
   "set graph_database_host <- \"true\"": {
     "ok": {
-      "graph_database_host": "true"
+      "graph.host": "true"
     }
   },
   "set graph_database_host <- -1": {
@@ -4932,17 +5450,17 @@
   },
   "set graph_database_key <- \"1\"": {
     "ok": {
-      "graph_database_key": "1"
+      "graph.key": "1"
     }
   },
   "set graph_database_key <- \"s\"": {
     "ok": {
-      "graph_database_key": "s"
+      "graph.key": "s"
     }
   },
   "set graph_database_key <- \"true\"": {
     "ok": {
-      "graph_database_key": "true"
+      "graph.key": "true"
     }
   },
   "set graph_database_key <- -1": {
@@ -4983,17 +5501,17 @@
   },
   "set graph_database_name <- \"1\"": {
     "ok": {
-      "graph_database_name": "1"
+      "graph.name": "1"
     }
   },
   "set graph_database_name <- \"s\"": {
     "ok": {
-      "graph_database_name": "s"
+      "graph.name": "s"
     }
   },
   "set graph_database_name <- \"true\"": {
     "ok": {
-      "graph_database_name": "true"
+      "graph.name": "true"
     }
   },
   "set graph_database_name <- -1": {
@@ -5034,17 +5552,17 @@
   },
   "set graph_database_password <- \"1\"": {
     "ok": {
-      "graph_database_password": "1"
+      "graph.password": "1"
     }
   },
   "set graph_database_password <- \"s\"": {
     "ok": {
-      "graph_database_password": "s"
+      "graph.password": "s"
     }
   },
   "set graph_database_password <- \"true\"": {
     "ok": {
-      "graph_database_password": "true"
+      "graph.password": "true"
     }
   },
   "set graph_database_password <- -1": {
@@ -5097,12 +5615,12 @@
   },
   "set graph_database_port <- 0": {
     "ok": {
-      "graph_database_port": 0
+      "graph.port": 0
     }
   },
   "set graph_database_port <- 1": {
     "ok": {
-      "graph_database_port": 1
+      "graph.port": 1
     }
   },
   "set graph_database_port <- 1.5": {
@@ -5131,22 +5649,22 @@
   },
   "set graph_database_provider <- \"\"": {
     "ok": {
-      "graph_database_provider": ""
+      "graph.provider": ""
     }
   },
   "set graph_database_provider <- \"1\"": {
     "ok": {
-      "graph_database_provider": "1"
+      "graph.provider": "1"
     }
   },
   "set graph_database_provider <- \"s\"": {
     "ok": {
-      "graph_database_provider": "s"
+      "graph.provider": "s"
     }
   },
   "set graph_database_provider <- \"true\"": {
     "ok": {
-      "graph_database_provider": "true"
+      "graph.provider": "true"
     }
   },
   "set graph_database_provider <- -1": {
@@ -5187,17 +5705,17 @@
   },
   "set graph_database_url <- \"1\"": {
     "ok": {
-      "graph_database_url": "1"
+      "graph.url": "1"
     }
   },
   "set graph_database_url <- \"s\"": {
     "ok": {
-      "graph_database_url": "s"
+      "graph.url": "s"
     }
   },
   "set graph_database_url <- \"true\"": {
     "ok": {
-      "graph_database_url": "true"
+      "graph.url": "true"
     }
   },
   "set graph_database_url <- -1": {
@@ -5238,17 +5756,17 @@
   },
   "set graph_database_username <- \"1\"": {
     "ok": {
-      "graph_database_username": "1"
+      "graph.username": "1"
     }
   },
   "set graph_database_username <- \"s\"": {
     "ok": {
-      "graph_database_username": "s"
+      "graph.username": "s"
     }
   },
   "set graph_database_username <- \"true\"": {
     "ok": {
-      "graph_database_username": "true"
+      "graph.username": "true"
     }
   },
   "set graph_database_username <- -1": {
@@ -5289,17 +5807,17 @@
   },
   "set graph_file_path <- \"1\"": {
     "ok": {
-      "graph_file_path": "1"
+      "graph.file_path": "1"
     }
   },
   "set graph_file_path <- \"s\"": {
     "ok": {
-      "graph_file_path": "s"
+      "graph.file_path": "s"
     }
   },
   "set graph_file_path <- \"true\"": {
     "ok": {
-      "graph_file_path": "true"
+      "graph.file_path": "true"
     }
   },
   "set graph_file_path <- -1": {
@@ -5340,17 +5858,17 @@
   },
   "set graph_filename <- \"1\"": {
     "ok": {
-      "graph_filename": "1"
+      "graph.filename": "1"
     }
   },
   "set graph_filename <- \"s\"": {
     "ok": {
-      "graph_filename": "s"
+      "graph.filename": "s"
     }
   },
   "set graph_filename <- \"true\"": {
     "ok": {
-      "graph_filename": "true"
+      "graph.filename": "true"
     }
   },
   "set graph_filename <- -1": {
@@ -9535,6 +10053,210 @@
   "set otel_traces_sampler_arg <- {\"a\":1}": {
     "err": true
   },
+  "set pgvector_hnsw_ef_construction <- \"\"": {
+    "err": true
+  },
+  "set pgvector_hnsw_ef_construction <- \"1\"": {
+    "err": true
+  },
+  "set pgvector_hnsw_ef_construction <- \"s\"": {
+    "err": true
+  },
+  "set pgvector_hnsw_ef_construction <- \"true\"": {
+    "err": true
+  },
+  "set pgvector_hnsw_ef_construction <- -1": {
+    "err": true
+  },
+  "set pgvector_hnsw_ef_construction <- 0": {
+    "ok": {
+      "vector.pgvector.hnsw_ef_construction": 0
+    }
+  },
+  "set pgvector_hnsw_ef_construction <- 1": {
+    "ok": {
+      "vector.pgvector.hnsw_ef_construction": 1
+    }
+  },
+  "set pgvector_hnsw_ef_construction <- 1.5": {
+    "err": true
+  },
+  "set pgvector_hnsw_ef_construction <- 5000000000": {
+    "err": true
+  },
+  "set pgvector_hnsw_ef_construction <- 70000": {
+    "ok": {
+      "vector.pgvector.hnsw_ef_construction": 70000
+    }
+  },
+  "set pgvector_hnsw_ef_construction <- [1]": {
+    "err": true
+  },
+  "set pgvector_hnsw_ef_construction <- false": {
+    "err": true
+  },
+  "set pgvector_hnsw_ef_construction <- null": {
+    "err": true
+  },
+  "set pgvector_hnsw_ef_construction <- true": {
+    "err": true
+  },
+  "set pgvector_hnsw_ef_construction <- {\"a\":1}": {
+    "err": true
+  },
+  "set pgvector_hnsw_m <- \"\"": {
+    "err": true
+  },
+  "set pgvector_hnsw_m <- \"1\"": {
+    "err": true
+  },
+  "set pgvector_hnsw_m <- \"s\"": {
+    "err": true
+  },
+  "set pgvector_hnsw_m <- \"true\"": {
+    "err": true
+  },
+  "set pgvector_hnsw_m <- -1": {
+    "err": true
+  },
+  "set pgvector_hnsw_m <- 0": {
+    "ok": {
+      "vector.pgvector.hnsw_m": 0
+    }
+  },
+  "set pgvector_hnsw_m <- 1": {
+    "ok": {
+      "vector.pgvector.hnsw_m": 1
+    }
+  },
+  "set pgvector_hnsw_m <- 1.5": {
+    "err": true
+  },
+  "set pgvector_hnsw_m <- 5000000000": {
+    "err": true
+  },
+  "set pgvector_hnsw_m <- 70000": {
+    "ok": {
+      "vector.pgvector.hnsw_m": 70000
+    }
+  },
+  "set pgvector_hnsw_m <- [1]": {
+    "err": true
+  },
+  "set pgvector_hnsw_m <- false": {
+    "err": true
+  },
+  "set pgvector_hnsw_m <- null": {
+    "err": true
+  },
+  "set pgvector_hnsw_m <- true": {
+    "err": true
+  },
+  "set pgvector_hnsw_m <- {\"a\":1}": {
+    "err": true
+  },
+  "set pgvector_maintenance_work_mem_mb <- \"\"": {
+    "err": true
+  },
+  "set pgvector_maintenance_work_mem_mb <- \"1\"": {
+    "err": true
+  },
+  "set pgvector_maintenance_work_mem_mb <- \"s\"": {
+    "err": true
+  },
+  "set pgvector_maintenance_work_mem_mb <- \"true\"": {
+    "err": true
+  },
+  "set pgvector_maintenance_work_mem_mb <- -1": {
+    "err": true
+  },
+  "set pgvector_maintenance_work_mem_mb <- 0": {
+    "ok": {
+      "vector.pgvector.maintenance_work_mem_mb": 0
+    }
+  },
+  "set pgvector_maintenance_work_mem_mb <- 1": {
+    "ok": {
+      "vector.pgvector.maintenance_work_mem_mb": 1
+    }
+  },
+  "set pgvector_maintenance_work_mem_mb <- 1.5": {
+    "err": true
+  },
+  "set pgvector_maintenance_work_mem_mb <- 5000000000": {
+    "err": true
+  },
+  "set pgvector_maintenance_work_mem_mb <- 70000": {
+    "ok": {
+      "vector.pgvector.maintenance_work_mem_mb": 70000
+    }
+  },
+  "set pgvector_maintenance_work_mem_mb <- [1]": {
+    "err": true
+  },
+  "set pgvector_maintenance_work_mem_mb <- false": {
+    "err": true
+  },
+  "set pgvector_maintenance_work_mem_mb <- null": {
+    "err": true
+  },
+  "set pgvector_maintenance_work_mem_mb <- true": {
+    "err": true
+  },
+  "set pgvector_maintenance_work_mem_mb <- {\"a\":1}": {
+    "err": true
+  },
+  "set pgvector_maintenance_workers <- \"\"": {
+    "err": true
+  },
+  "set pgvector_maintenance_workers <- \"1\"": {
+    "err": true
+  },
+  "set pgvector_maintenance_workers <- \"s\"": {
+    "err": true
+  },
+  "set pgvector_maintenance_workers <- \"true\"": {
+    "err": true
+  },
+  "set pgvector_maintenance_workers <- -1": {
+    "err": true
+  },
+  "set pgvector_maintenance_workers <- 0": {
+    "ok": {
+      "vector.pgvector.maintenance_workers": 0
+    }
+  },
+  "set pgvector_maintenance_workers <- 1": {
+    "ok": {
+      "vector.pgvector.maintenance_workers": 1
+    }
+  },
+  "set pgvector_maintenance_workers <- 1.5": {
+    "err": true
+  },
+  "set pgvector_maintenance_workers <- 5000000000": {
+    "err": true
+  },
+  "set pgvector_maintenance_workers <- 70000": {
+    "ok": {
+      "vector.pgvector.maintenance_workers": 70000
+    }
+  },
+  "set pgvector_maintenance_workers <- [1]": {
+    "err": true
+  },
+  "set pgvector_maintenance_workers <- false": {
+    "err": true
+  },
+  "set pgvector_maintenance_workers <- null": {
+    "ok": {}
+  },
+  "set pgvector_maintenance_workers <- true": {
+    "err": true
+  },
+  "set pgvector_maintenance_workers <- {\"a\":1}": {
+    "err": true
+  },
   "set relational_db_url <- \"\"": {
     "ok": {
       "relational_db_url": ""
@@ -10061,22 +10783,634 @@
   "set transcription_model <- {\"a\":1}": {
     "err": true
   },
+  "set vector.host <- \"\"": {
+    "ok": {}
+  },
+  "set vector.host <- \"1\"": {
+    "ok": {
+      "vector.host": "1"
+    }
+  },
+  "set vector.host <- \"s\"": {
+    "ok": {
+      "vector.host": "s"
+    }
+  },
+  "set vector.host <- \"true\"": {
+    "ok": {
+      "vector.host": "true"
+    }
+  },
+  "set vector.host <- -1": {
+    "err": true
+  },
+  "set vector.host <- 0": {
+    "err": true
+  },
+  "set vector.host <- 1": {
+    "err": true
+  },
+  "set vector.host <- 1.5": {
+    "err": true
+  },
+  "set vector.host <- 5000000000": {
+    "err": true
+  },
+  "set vector.host <- 70000": {
+    "err": true
+  },
+  "set vector.host <- [1]": {
+    "err": true
+  },
+  "set vector.host <- false": {
+    "err": true
+  },
+  "set vector.host <- null": {
+    "err": true
+  },
+  "set vector.host <- true": {
+    "err": true
+  },
+  "set vector.host <- {\"a\":1}": {
+    "err": true
+  },
+  "set vector.key <- \"\"": {
+    "ok": {}
+  },
+  "set vector.key <- \"1\"": {
+    "ok": {
+      "vector.key": "1"
+    }
+  },
+  "set vector.key <- \"s\"": {
+    "ok": {
+      "vector.key": "s"
+    }
+  },
+  "set vector.key <- \"true\"": {
+    "ok": {
+      "vector.key": "true"
+    }
+  },
+  "set vector.key <- -1": {
+    "err": true
+  },
+  "set vector.key <- 0": {
+    "err": true
+  },
+  "set vector.key <- 1": {
+    "err": true
+  },
+  "set vector.key <- 1.5": {
+    "err": true
+  },
+  "set vector.key <- 5000000000": {
+    "err": true
+  },
+  "set vector.key <- 70000": {
+    "err": true
+  },
+  "set vector.key <- [1]": {
+    "err": true
+  },
+  "set vector.key <- false": {
+    "err": true
+  },
+  "set vector.key <- null": {
+    "err": true
+  },
+  "set vector.key <- true": {
+    "err": true
+  },
+  "set vector.key <- {\"a\":1}": {
+    "err": true
+  },
+  "set vector.name <- \"\"": {
+    "ok": {}
+  },
+  "set vector.name <- \"1\"": {
+    "ok": {
+      "vector.name": "1"
+    }
+  },
+  "set vector.name <- \"s\"": {
+    "ok": {
+      "vector.name": "s"
+    }
+  },
+  "set vector.name <- \"true\"": {
+    "ok": {
+      "vector.name": "true"
+    }
+  },
+  "set vector.name <- -1": {
+    "err": true
+  },
+  "set vector.name <- 0": {
+    "err": true
+  },
+  "set vector.name <- 1": {
+    "err": true
+  },
+  "set vector.name <- 1.5": {
+    "err": true
+  },
+  "set vector.name <- 5000000000": {
+    "err": true
+  },
+  "set vector.name <- 70000": {
+    "err": true
+  },
+  "set vector.name <- [1]": {
+    "err": true
+  },
+  "set vector.name <- false": {
+    "err": true
+  },
+  "set vector.name <- null": {
+    "err": true
+  },
+  "set vector.name <- true": {
+    "err": true
+  },
+  "set vector.name <- {\"a\":1}": {
+    "err": true
+  },
+  "set vector.password <- \"\"": {
+    "ok": {}
+  },
+  "set vector.password <- \"1\"": {
+    "ok": {
+      "vector.password": "1"
+    }
+  },
+  "set vector.password <- \"s\"": {
+    "ok": {
+      "vector.password": "s"
+    }
+  },
+  "set vector.password <- \"true\"": {
+    "ok": {
+      "vector.password": "true"
+    }
+  },
+  "set vector.password <- -1": {
+    "err": true
+  },
+  "set vector.password <- 0": {
+    "err": true
+  },
+  "set vector.password <- 1": {
+    "err": true
+  },
+  "set vector.password <- 1.5": {
+    "err": true
+  },
+  "set vector.password <- 5000000000": {
+    "err": true
+  },
+  "set vector.password <- 70000": {
+    "err": true
+  },
+  "set vector.password <- [1]": {
+    "err": true
+  },
+  "set vector.password <- false": {
+    "err": true
+  },
+  "set vector.password <- null": {
+    "err": true
+  },
+  "set vector.password <- true": {
+    "err": true
+  },
+  "set vector.password <- {\"a\":1}": {
+    "err": true
+  },
+  "set vector.pgvector.hnsw_ef_construction <- \"\"": {
+    "err": true
+  },
+  "set vector.pgvector.hnsw_ef_construction <- \"1\"": {
+    "err": true
+  },
+  "set vector.pgvector.hnsw_ef_construction <- \"s\"": {
+    "err": true
+  },
+  "set vector.pgvector.hnsw_ef_construction <- \"true\"": {
+    "err": true
+  },
+  "set vector.pgvector.hnsw_ef_construction <- -1": {
+    "err": true
+  },
+  "set vector.pgvector.hnsw_ef_construction <- 0": {
+    "ok": {
+      "vector.pgvector.hnsw_ef_construction": 0
+    }
+  },
+  "set vector.pgvector.hnsw_ef_construction <- 1": {
+    "ok": {
+      "vector.pgvector.hnsw_ef_construction": 1
+    }
+  },
+  "set vector.pgvector.hnsw_ef_construction <- 1.5": {
+    "err": true
+  },
+  "set vector.pgvector.hnsw_ef_construction <- 5000000000": {
+    "err": true
+  },
+  "set vector.pgvector.hnsw_ef_construction <- 70000": {
+    "ok": {
+      "vector.pgvector.hnsw_ef_construction": 70000
+    }
+  },
+  "set vector.pgvector.hnsw_ef_construction <- [1]": {
+    "err": true
+  },
+  "set vector.pgvector.hnsw_ef_construction <- false": {
+    "err": true
+  },
+  "set vector.pgvector.hnsw_ef_construction <- null": {
+    "err": true
+  },
+  "set vector.pgvector.hnsw_ef_construction <- true": {
+    "err": true
+  },
+  "set vector.pgvector.hnsw_ef_construction <- {\"a\":1}": {
+    "err": true
+  },
+  "set vector.pgvector.hnsw_m <- \"\"": {
+    "err": true
+  },
+  "set vector.pgvector.hnsw_m <- \"1\"": {
+    "err": true
+  },
+  "set vector.pgvector.hnsw_m <- \"s\"": {
+    "err": true
+  },
+  "set vector.pgvector.hnsw_m <- \"true\"": {
+    "err": true
+  },
+  "set vector.pgvector.hnsw_m <- -1": {
+    "err": true
+  },
+  "set vector.pgvector.hnsw_m <- 0": {
+    "ok": {
+      "vector.pgvector.hnsw_m": 0
+    }
+  },
+  "set vector.pgvector.hnsw_m <- 1": {
+    "ok": {
+      "vector.pgvector.hnsw_m": 1
+    }
+  },
+  "set vector.pgvector.hnsw_m <- 1.5": {
+    "err": true
+  },
+  "set vector.pgvector.hnsw_m <- 5000000000": {
+    "err": true
+  },
+  "set vector.pgvector.hnsw_m <- 70000": {
+    "ok": {
+      "vector.pgvector.hnsw_m": 70000
+    }
+  },
+  "set vector.pgvector.hnsw_m <- [1]": {
+    "err": true
+  },
+  "set vector.pgvector.hnsw_m <- false": {
+    "err": true
+  },
+  "set vector.pgvector.hnsw_m <- null": {
+    "err": true
+  },
+  "set vector.pgvector.hnsw_m <- true": {
+    "err": true
+  },
+  "set vector.pgvector.hnsw_m <- {\"a\":1}": {
+    "err": true
+  },
+  "set vector.pgvector.maintenance_work_mem_mb <- \"\"": {
+    "err": true
+  },
+  "set vector.pgvector.maintenance_work_mem_mb <- \"1\"": {
+    "err": true
+  },
+  "set vector.pgvector.maintenance_work_mem_mb <- \"s\"": {
+    "err": true
+  },
+  "set vector.pgvector.maintenance_work_mem_mb <- \"true\"": {
+    "err": true
+  },
+  "set vector.pgvector.maintenance_work_mem_mb <- -1": {
+    "err": true
+  },
+  "set vector.pgvector.maintenance_work_mem_mb <- 0": {
+    "ok": {
+      "vector.pgvector.maintenance_work_mem_mb": 0
+    }
+  },
+  "set vector.pgvector.maintenance_work_mem_mb <- 1": {
+    "ok": {
+      "vector.pgvector.maintenance_work_mem_mb": 1
+    }
+  },
+  "set vector.pgvector.maintenance_work_mem_mb <- 1.5": {
+    "err": true
+  },
+  "set vector.pgvector.maintenance_work_mem_mb <- 5000000000": {
+    "err": true
+  },
+  "set vector.pgvector.maintenance_work_mem_mb <- 70000": {
+    "ok": {
+      "vector.pgvector.maintenance_work_mem_mb": 70000
+    }
+  },
+  "set vector.pgvector.maintenance_work_mem_mb <- [1]": {
+    "err": true
+  },
+  "set vector.pgvector.maintenance_work_mem_mb <- false": {
+    "err": true
+  },
+  "set vector.pgvector.maintenance_work_mem_mb <- null": {
+    "err": true
+  },
+  "set vector.pgvector.maintenance_work_mem_mb <- true": {
+    "err": true
+  },
+  "set vector.pgvector.maintenance_work_mem_mb <- {\"a\":1}": {
+    "err": true
+  },
+  "set vector.pgvector.maintenance_workers <- \"\"": {
+    "err": true
+  },
+  "set vector.pgvector.maintenance_workers <- \"1\"": {
+    "err": true
+  },
+  "set vector.pgvector.maintenance_workers <- \"s\"": {
+    "err": true
+  },
+  "set vector.pgvector.maintenance_workers <- \"true\"": {
+    "err": true
+  },
+  "set vector.pgvector.maintenance_workers <- -1": {
+    "err": true
+  },
+  "set vector.pgvector.maintenance_workers <- 0": {
+    "ok": {
+      "vector.pgvector.maintenance_workers": 0
+    }
+  },
+  "set vector.pgvector.maintenance_workers <- 1": {
+    "ok": {
+      "vector.pgvector.maintenance_workers": 1
+    }
+  },
+  "set vector.pgvector.maintenance_workers <- 1.5": {
+    "err": true
+  },
+  "set vector.pgvector.maintenance_workers <- 5000000000": {
+    "err": true
+  },
+  "set vector.pgvector.maintenance_workers <- 70000": {
+    "ok": {
+      "vector.pgvector.maintenance_workers": 70000
+    }
+  },
+  "set vector.pgvector.maintenance_workers <- [1]": {
+    "err": true
+  },
+  "set vector.pgvector.maintenance_workers <- false": {
+    "err": true
+  },
+  "set vector.pgvector.maintenance_workers <- null": {
+    "ok": {}
+  },
+  "set vector.pgvector.maintenance_workers <- true": {
+    "err": true
+  },
+  "set vector.pgvector.maintenance_workers <- {\"a\":1}": {
+    "err": true
+  },
+  "set vector.port <- \"\"": {
+    "err": true
+  },
+  "set vector.port <- \"1\"": {
+    "err": true
+  },
+  "set vector.port <- \"s\"": {
+    "err": true
+  },
+  "set vector.port <- \"true\"": {
+    "err": true
+  },
+  "set vector.port <- -1": {
+    "err": true
+  },
+  "set vector.port <- 0": {
+    "ok": {
+      "vector.port": 0
+    }
+  },
+  "set vector.port <- 1": {
+    "ok": {
+      "vector.port": 1
+    }
+  },
+  "set vector.port <- 1.5": {
+    "err": true
+  },
+  "set vector.port <- 5000000000": {
+    "err": true
+  },
+  "set vector.port <- 70000": {
+    "err": true
+  },
+  "set vector.port <- [1]": {
+    "err": true
+  },
+  "set vector.port <- false": {
+    "err": true
+  },
+  "set vector.port <- null": {
+    "err": true
+  },
+  "set vector.port <- true": {
+    "err": true
+  },
+  "set vector.port <- {\"a\":1}": {
+    "err": true
+  },
+  "set vector.provider <- \"\"": {
+    "ok": {
+      "vector.provider": ""
+    }
+  },
+  "set vector.provider <- \"1\"": {
+    "ok": {
+      "vector.provider": "1"
+    }
+  },
+  "set vector.provider <- \"s\"": {
+    "ok": {
+      "vector.provider": "s"
+    }
+  },
+  "set vector.provider <- \"true\"": {
+    "ok": {
+      "vector.provider": "true"
+    }
+  },
+  "set vector.provider <- -1": {
+    "err": true
+  },
+  "set vector.provider <- 0": {
+    "err": true
+  },
+  "set vector.provider <- 1": {
+    "err": true
+  },
+  "set vector.provider <- 1.5": {
+    "err": true
+  },
+  "set vector.provider <- 5000000000": {
+    "err": true
+  },
+  "set vector.provider <- 70000": {
+    "err": true
+  },
+  "set vector.provider <- [1]": {
+    "err": true
+  },
+  "set vector.provider <- false": {
+    "err": true
+  },
+  "set vector.provider <- null": {
+    "err": true
+  },
+  "set vector.provider <- true": {
+    "err": true
+  },
+  "set vector.provider <- {\"a\":1}": {
+    "err": true
+  },
+  "set vector.url <- \"\"": {
+    "ok": {}
+  },
+  "set vector.url <- \"1\"": {
+    "ok": {
+      "vector.url": "1"
+    }
+  },
+  "set vector.url <- \"s\"": {
+    "ok": {
+      "vector.url": "s"
+    }
+  },
+  "set vector.url <- \"true\"": {
+    "ok": {
+      "vector.url": "true"
+    }
+  },
+  "set vector.url <- -1": {
+    "err": true
+  },
+  "set vector.url <- 0": {
+    "err": true
+  },
+  "set vector.url <- 1": {
+    "err": true
+  },
+  "set vector.url <- 1.5": {
+    "err": true
+  },
+  "set vector.url <- 5000000000": {
+    "err": true
+  },
+  "set vector.url <- 70000": {
+    "err": true
+  },
+  "set vector.url <- [1]": {
+    "err": true
+  },
+  "set vector.url <- false": {
+    "err": true
+  },
+  "set vector.url <- null": {
+    "err": true
+  },
+  "set vector.url <- true": {
+    "err": true
+  },
+  "set vector.url <- {\"a\":1}": {
+    "err": true
+  },
+  "set vector.username <- \"\"": {
+    "ok": {}
+  },
+  "set vector.username <- \"1\"": {
+    "ok": {
+      "vector.username": "1"
+    }
+  },
+  "set vector.username <- \"s\"": {
+    "ok": {
+      "vector.username": "s"
+    }
+  },
+  "set vector.username <- \"true\"": {
+    "ok": {
+      "vector.username": "true"
+    }
+  },
+  "set vector.username <- -1": {
+    "err": true
+  },
+  "set vector.username <- 0": {
+    "err": true
+  },
+  "set vector.username <- 1": {
+    "err": true
+  },
+  "set vector.username <- 1.5": {
+    "err": true
+  },
+  "set vector.username <- 5000000000": {
+    "err": true
+  },
+  "set vector.username <- 70000": {
+    "err": true
+  },
+  "set vector.username <- [1]": {
+    "err": true
+  },
+  "set vector.username <- false": {
+    "err": true
+  },
+  "set vector.username <- null": {
+    "err": true
+  },
+  "set vector.username <- true": {
+    "err": true
+  },
+  "set vector.username <- {\"a\":1}": {
+    "err": true
+  },
   "set vector_db_host <- \"\"": {
     "ok": {}
   },
   "set vector_db_host <- \"1\"": {
     "ok": {
-      "vector_db_host": "1"
+      "vector.host": "1"
     }
   },
   "set vector_db_host <- \"s\"": {
     "ok": {
-      "vector_db_host": "s"
+      "vector.host": "s"
     }
   },
   "set vector_db_host <- \"true\"": {
     "ok": {
-      "vector_db_host": "true"
+      "vector.host": "true"
     }
   },
   "set vector_db_host <- -1": {
@@ -10117,17 +11451,17 @@
   },
   "set vector_db_key <- \"1\"": {
     "ok": {
-      "vector_db_key": "1"
+      "vector.key": "1"
     }
   },
   "set vector_db_key <- \"s\"": {
     "ok": {
-      "vector_db_key": "s"
+      "vector.key": "s"
     }
   },
   "set vector_db_key <- \"true\"": {
     "ok": {
-      "vector_db_key": "true"
+      "vector.key": "true"
     }
   },
   "set vector_db_key <- -1": {
@@ -10168,17 +11502,17 @@
   },
   "set vector_db_name <- \"1\"": {
     "ok": {
-      "vector_db_name": "1"
+      "vector.name": "1"
     }
   },
   "set vector_db_name <- \"s\"": {
     "ok": {
-      "vector_db_name": "s"
+      "vector.name": "s"
     }
   },
   "set vector_db_name <- \"true\"": {
     "ok": {
-      "vector_db_name": "true"
+      "vector.name": "true"
     }
   },
   "set vector_db_name <- -1": {
@@ -10219,17 +11553,17 @@
   },
   "set vector_db_password <- \"1\"": {
     "ok": {
-      "vector_db_password": "1"
+      "vector.password": "1"
     }
   },
   "set vector_db_password <- \"s\"": {
     "ok": {
-      "vector_db_password": "s"
+      "vector.password": "s"
     }
   },
   "set vector_db_password <- \"true\"": {
     "ok": {
-      "vector_db_password": "true"
+      "vector.password": "true"
     }
   },
   "set vector_db_password <- -1": {
@@ -10282,12 +11616,12 @@
   },
   "set vector_db_port <- 0": {
     "ok": {
-      "vector_db_port": 0
+      "vector.port": 0
     }
   },
   "set vector_db_port <- 1": {
     "ok": {
-      "vector_db_port": 1
+      "vector.port": 1
     }
   },
   "set vector_db_port <- 1.5": {
@@ -10316,22 +11650,22 @@
   },
   "set vector_db_provider <- \"\"": {
     "ok": {
-      "vector_db_provider": ""
+      "vector.provider": ""
     }
   },
   "set vector_db_provider <- \"1\"": {
     "ok": {
-      "vector_db_provider": "1"
+      "vector.provider": "1"
     }
   },
   "set vector_db_provider <- \"s\"": {
     "ok": {
-      "vector_db_provider": "s"
+      "vector.provider": "s"
     }
   },
   "set vector_db_provider <- \"true\"": {
     "ok": {
-      "vector_db_provider": "true"
+      "vector.provider": "true"
     }
   },
   "set vector_db_provider <- -1": {
@@ -10372,17 +11706,17 @@
   },
   "set vector_db_url <- \"1\"": {
     "ok": {
-      "vector_db_url": "1"
+      "vector.url": "1"
     }
   },
   "set vector_db_url <- \"s\"": {
     "ok": {
-      "vector_db_url": "s"
+      "vector.url": "s"
     }
   },
   "set vector_db_url <- \"true\"": {
     "ok": {
-      "vector_db_url": "true"
+      "vector.url": "true"
     }
   },
   "set vector_db_url <- -1": {
@@ -10423,17 +11757,17 @@
   },
   "set vector_db_username <- \"1\"": {
     "ok": {
-      "vector_db_username": "1"
+      "vector.username": "1"
     }
   },
   "set vector_db_username <- \"s\"": {
     "ok": {
-      "vector_db_username": "s"
+      "vector.username": "s"
     }
   },
   "set vector_db_username <- \"true\"": {
     "ok": {
-      "vector_db_username": "true"
+      "vector.username": "true"
     }
   },
   "set vector_db_username <- -1": {
@@ -11083,7 +12417,77 @@
       "llm.model": "changed"
     }
   },
+  "unset graph.file_path": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset graph.filename": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset graph.host": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset graph.key": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
   "unset graph.ladybug.max_db_size": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset graph.name": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset graph.password": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset graph.port": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset graph.provider": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset graph.url": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset graph.username": {
     "ok": {
       "chunk_size": 7,
       "db_port": 1,
@@ -11725,6 +13129,34 @@
       "llm.model": "changed"
     }
   },
+  "unset pgvector_hnsw_ef_construction": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset pgvector_hnsw_m": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset pgvector_maintenance_work_mem_mb": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset pgvector_maintenance_workers": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
   "unset relational_db_url": {
     "ok": {
       "chunk_size": 7,
@@ -11785,6 +13217,90 @@
     }
   },
   "unset transcription_model": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset vector.host": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset vector.key": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset vector.name": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset vector.password": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset vector.pgvector.hnsw_ef_construction": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset vector.pgvector.hnsw_m": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset vector.pgvector.maintenance_work_mem_mb": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset vector.pgvector.maintenance_workers": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset vector.port": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset vector.provider": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset vector.url": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1,
+      "llm.model": "changed"
+    }
+  },
+  "unset vector.username": {
     "ok": {
       "chunk_size": 7,
       "db_port": 1,

@@ -28,7 +28,6 @@
 1 crates/session/src/feedback.rs
 7 crates/telemetry/src/env.rs
 3 crates/telemetry/src/ids.rs
-2 crates/vector/src/pgvector_adapter.rs
 1 crates/visualization/src/paths.rs
 3 java/cognee-java-jni/src/sdk_static.rs
 1 python/src/default_subscriber.rs

@@ -626,7 +626,11 @@ mod tests {
     #[test]
     fn resolved_graph_url_returns_explicit_url_as_is() {
         let settings = Settings {
-            graph_database_url: "postgres://user:pw@myhost:5432/graphs".to_string(),
+            sections: [(
+                "graph.url".to_string(),
+                serde_json::json!("postgres://user:pw@myhost:5432/graphs".to_string()),
+            )]
+            .into(),
             ..Settings::default()
         };
         let url = settings
@@ -639,11 +643,26 @@ mod tests {
     #[test]
     fn resolved_graph_url_builds_from_graph_creds() {
         let settings = Settings {
-            graph_database_host: "graphhost".to_string(),
-            graph_database_port: 5432,
-            graph_database_name: "mygraph".to_string(),
-            graph_database_username: "guser".to_string(),
-            graph_database_password: "gpass".to_string(),
+            sections: [
+                (
+                    "graph.host".to_string(),
+                    serde_json::json!("graphhost".to_string()),
+                ),
+                ("graph.port".to_string(), serde_json::json!(5432)),
+                (
+                    "graph.name".to_string(),
+                    serde_json::json!("mygraph".to_string()),
+                ),
+                (
+                    "graph.username".to_string(),
+                    serde_json::json!("guser".to_string()),
+                ),
+                (
+                    "graph.password".to_string(),
+                    serde_json::json!("gpass".to_string()),
+                ),
+            ]
+            .into(),
             ..Settings::default()
         };
         let url = settings
@@ -698,7 +717,11 @@ mod tests {
     #[tokio::test]
     async fn init_graph_db_rejects_unsupported_provider() {
         let settings = Settings {
-            graph_database_provider: "neo4j".to_string(),
+            sections: [(
+                "graph.provider".to_string(),
+                serde_json::json!("neo4j".to_string()),
+            )]
+            .into(),
             ..Settings::default()
         };
         let cm = ComponentManager::new(ConfigManager::new(settings));

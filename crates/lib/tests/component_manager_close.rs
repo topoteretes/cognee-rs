@@ -58,6 +58,14 @@ fn settings(root: &std::path::Path, endpoint: &str) -> Settings {
     Settings {
         sections: [
             (
+                "graph.provider".to_string(),
+                serde_json::json!("ladybug".to_string()),
+            ),
+            (
+                "vector.provider".to_string(),
+                serde_json::json!("brute-force".to_string()),
+            ),
+            (
                 "embedding.provider".to_string(),
                 serde_json::json!("openai".to_string()),
             ),
@@ -90,6 +98,10 @@ fn settings(root: &std::path::Path, endpoint: &str) -> Settings {
                 "llm.endpoint".to_string(),
                 serde_json::json!(endpoint.to_string()),
             ),
+            (
+                "graph.file_path".to_string(),
+                serde_json::json!(root.join("system").join("graph").to_string_lossy()),
+            ),
         ]
         .into(),
         system_root_directory: root.join("system").to_string_lossy().into_owned(),
@@ -98,16 +110,9 @@ fn settings(root: &std::path::Path, endpoint: &str) -> Settings {
             "sqlite:{}?mode=rwc",
             root.join("cognee.db").to_string_lossy()
         ),
-        graph_database_provider: "ladybug".to_string(),
-        graph_file_path: root
-            .join("system")
-            .join("graph")
-            .to_string_lossy()
-            .into_owned(),
         // In-memory, so the vector slot contributes no OS resource of its own —
         // deliberate: this test is about slot eviction, and the embedded vector
         // store was measured to hold nothing closable.
-        vector_db_provider: "brute-force".to_string(),
         ..Settings::default()
     }
 }
@@ -465,7 +470,10 @@ async fn warm_manager_with_stuck_graph(root: &std::path::Path) -> ComponentManag
     let mut registry = cognee::ComponentRegistry::with_builtins();
     registry.register_graph(Arc::new(StuckGraphFactory));
     let mut s = settings(root, "http://127.0.0.1:1/v1");
-    s.graph_database_provider = "stuck".to_string();
+    s.sections.insert(
+        "graph.provider".to_string(),
+        serde_json::json!("stuck".to_string()),
+    );
     let cm = ComponentManager::with_registry(ConfigManager::new(s), registry);
     cm.database().await.expect("database");
     cm.graph_db().await.expect("graph");

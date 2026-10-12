@@ -502,14 +502,15 @@ impl ConfigSchema {
     }
 
     /// Every registered setting with its current value (from `values`, else
-    /// its default), keyed canonically. With `mask = Some(marker)`, a
-    /// non-empty secret value is replaced by `marker`.
+    /// its default), keyed canonically. With `mask = Some(marker)`, every
+    /// non-null secret value (an empty one too, so its presence leaks
+    /// nothing) is replaced by `marker`.
     pub fn snapshot(&self, values: &ConfigValues, mask: Option<&str>) -> ConfigValues {
         self.key_defs()
             .map(|def| {
                 let value = values.get(def.key).cloned().unwrap_or_else(def.default);
                 let shown = match mask {
-                    Some(marker) if def.secret && !is_empty_value(&value) => {
+                    Some(marker) if def.secret && !value.is_null() => {
                         Value::String(marker.to_string())
                     }
                     _ => value,
@@ -526,14 +527,6 @@ impl ConfigSchema {
             .filter(|key| self.key_def(key).is_none())
             .map(String::as_str)
             .collect()
-    }
-}
-
-fn is_empty_value(value: &Value) -> bool {
-    match value {
-        Value::Null => true,
-        Value::String(s) => s.is_empty(),
-        _ => false,
     }
 }
 

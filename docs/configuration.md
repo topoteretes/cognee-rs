@@ -659,13 +659,18 @@ are normalised client-side.
 
 ## Vector database
 
-| Env var | `Settings` field | Default |
+The `vector` section is registered by the vector kind. Backend-specific settings
+are registered by the backend's factory, for example
+[`vector.pgvector`](#pgvector-index-tuning). Python flat names are accepted as
+aliases, shown in brackets.
+
+| Env var | Key (alias) | Default |
 |---|---|---|
-| `VECTOR_DB_PROVIDER` | `vector_db_provider` | `lancedb` (embedded, persistent) on non-Android; falls back to `brute-force` (in-memory) on Android |
-| `VECTOR_DB_URL` | `vector_db_url` | _(empty — defaults to `{system_root_directory}/databases/cognee.lancedb`; set to `:memory:` to force the in-memory brute-force store)_ |
-| `VECTOR_DB_HOST` / `VECTOR_DB_PORT` | `vector_db_host` / `vector_db_port` | _(empty)_ / `1234` |
-| `VECTOR_DB_NAME` / `VECTOR_DB_KEY` | `vector_db_name` / `vector_db_key` | _(empty)_ |
-| `VECTOR_DB_USERNAME` / `VECTOR_DB_PASSWORD` | … | _(empty)_ |
+| `VECTOR_DB_PROVIDER` | `vector.provider` (`vector_db_provider`) | `lancedb` (embedded, persistent) on non-Android; falls back to `brute-force` (in-memory) on Android |
+| `VECTOR_DB_URL` | `vector.url` (`vector_db_url`) | _(empty — defaults to `{system_root_directory}/databases/cognee.lancedb`; set to `:memory:` to force the in-memory brute-force store)_ |
+| `VECTOR_DB_HOST` / `VECTOR_DB_PORT` | `vector.host` / `vector.port` (`vector_db_host` / `vector_db_port`) | _(empty)_ / `1234` |
+| `VECTOR_DB_NAME` / `VECTOR_DB_KEY` | `vector.name` / `vector.key` (`vector_db_name` / `vector_db_key`) | _(empty)_ |
+| `VECTOR_DB_USERNAME` / `VECTOR_DB_PASSWORD` | `vector.username` / `vector.password` (`vector_db_*`) | _(empty)_ |
 
 Supported providers:
 
@@ -696,8 +701,11 @@ initialization in OSS (it returns a config error rather than falling back).
 
 ### pgvector index tuning
 
-Four optional overrides for the `pgvector` adapter's HNSW build, read once per
-process and clamped to the range shown. **Leave them unset** unless a
+The `vector.pgvector` section, registered by the pgvector factory (`pgvector`
+builds only): four optional overrides for the adapter's HNSW build, applied per
+adapter and clamped to the range shown. Keys are
+`vector.pgvector.hnsw_m`, `.hnsw_ef_construction`, `.maintenance_workers` and
+`.maintenance_work_mem_mb`, with aliases `pgvector_hnsw_m` and so on. **Leave them unset** unless a
 measurement says otherwise: the defaults are calibrated against a 100k-point
 corpus of 384-d embeddings, and the two that cost server resources exist so
 they can be turned *down* on a small or shared Postgres without patching the
@@ -726,20 +734,24 @@ Notes:
   `max_worker_processes` still allow, down to zero (a serial build). The only
   cost of over-asking is a slower build, so no server-side configuration is
   required to adopt the defaults.
-- A blank, negative or non-numeric value falls back to the default rather than
-  failing the connection — a typo in a deployment environment should not take
-  the store down.
+- A blank, negative or non-numeric env value is ignored and the default applies;
+  an out-of-range value clamps. A typo in a deployment environment should not
+  take the store down.
 
 ## Graph database
 
-| Env var | `Settings` field | Default |
+The `graph` section is registered by the graph kind; backend sections such as
+`graph.ladybug` are registered by their factory. Python flat names are accepted as
+aliases.
+
+| Env var | Key (alias) | Default |
 |---|---|---|
-| `GRAPH_DATABASE_PROVIDER` | `graph_database_provider` | `ladybug` (derived — see below) |
-| `GRAPH_FILE_PATH` | `graph_file_path` | _(empty; defaults under the system root)_ |
-| `GRAPH_DATABASE_URL` | `graph_database_url` | _(empty)_ |
-| `GRAPH_DATABASE_HOST` / `GRAPH_DATABASE_PORT` | `graph_database_host` / `graph_database_port` | _(empty)_ / `123` |
-| `GRAPH_DATABASE_NAME` / `GRAPH_DATABASE_KEY` | … | _(empty)_ |
-| `GRAPH_DATABASE_USERNAME` / `GRAPH_DATABASE_PASSWORD` | … | _(empty)_ |
+| `GRAPH_DATABASE_PROVIDER` | `graph.provider` (`graph_database_provider`) | `ladybug` (derived — see below) |
+| `GRAPH_FILE_PATH` | `graph.file_path` (`graph_file_path`) | _(empty; defaults under the system root)_ |
+| `GRAPH_DATABASE_URL` | `graph.url` (`graph_database_url`) | _(empty)_ |
+| `GRAPH_DATABASE_HOST` / `GRAPH_DATABASE_PORT` | `graph.host` / `graph.port` (`graph_database_host` / `graph_database_port`) | _(empty)_ / `123` |
+| `GRAPH_DATABASE_NAME` / `GRAPH_DATABASE_KEY` | `graph.name` / `graph.key` (`graph_database_*`) | _(empty)_ |
+| `GRAPH_DATABASE_USERNAME` / `GRAPH_DATABASE_PASSWORD` | `graph.username` / `graph.password` (`graph_database_*`) | _(empty)_ |
 | `GRAPH_MAX_DB_SIZE` | section key `graph.ladybug.max_db_size` (alias `graph_max_db_size`; `ladybug` builds only) | `1073741824` (1 GiB) |
 
 Supported providers: `ladybug`/`kuzu` (embedded), `postgres` (feature `pggraph`).

@@ -39,7 +39,7 @@ pub use models::{
 pub use vector_db_trait::{BulkLoadGuard, VectorDB, VectorIndexBackfill};
 
 #[cfg(feature = "pgvector")]
-pub use pgvector_adapter::PgVectorAdapter;
+pub use pgvector_adapter::{PgVectorAdapter, PgVectorConfig, PgVectorTuning};
 
 #[cfg(all(feature = "lancedb", not(target_os = "android")))]
 pub use lancedb_adapter::LanceDbAdapter;

@@ -33,6 +33,6 @@ pub mod wire;
 pub use error::SdkError;
 pub use graph_backend::{GraphBackendFactory, register_graph_backend};
 pub use handle::{DefaultUserBootstrap, HandleState};
-pub use redact::{config_snapshot, redact_config_json};
+pub use redact::{config_key_aliases, config_snapshot, redact_config_json};
 pub use services::CogneeServices;
 pub use settings_keys::canonical_settings_key;

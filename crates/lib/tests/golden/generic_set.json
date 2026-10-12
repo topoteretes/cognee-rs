@@ -5526,6 +5526,254 @@
     "err": "TypeMismatch",
     "key": "enable_last_accessed"
   },
+  "graph.file_path <- \"\"": {
+    "ok": {}
+  },
+  "graph.file_path <- \"1\"": {
+    "ok": {
+      "graph.file_path": "1"
+    }
+  },
+  "graph.file_path <- \"s\"": {
+    "ok": {
+      "graph.file_path": "s"
+    }
+  },
+  "graph.file_path <- \"true\"": {
+    "ok": {
+      "graph.file_path": "true"
+    }
+  },
+  "graph.file_path <- -1": {
+    "err": "TypeMismatch",
+    "key": "graph.file_path"
+  },
+  "graph.file_path <- 0": {
+    "err": "TypeMismatch",
+    "key": "graph.file_path"
+  },
+  "graph.file_path <- 1": {
+    "err": "TypeMismatch",
+    "key": "graph.file_path"
+  },
+  "graph.file_path <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "graph.file_path"
+  },
+  "graph.file_path <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "graph.file_path"
+  },
+  "graph.file_path <- 70000": {
+    "err": "TypeMismatch",
+    "key": "graph.file_path"
+  },
+  "graph.file_path <- [1]": {
+    "err": "TypeMismatch",
+    "key": "graph.file_path"
+  },
+  "graph.file_path <- false": {
+    "err": "TypeMismatch",
+    "key": "graph.file_path"
+  },
+  "graph.file_path <- null": {
+    "err": "TypeMismatch",
+    "key": "graph.file_path"
+  },
+  "graph.file_path <- true": {
+    "err": "TypeMismatch",
+    "key": "graph.file_path"
+  },
+  "graph.file_path <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "graph.file_path"
+  },
+  "graph.filename <- \"\"": {
+    "ok": {}
+  },
+  "graph.filename <- \"1\"": {
+    "ok": {
+      "graph.filename": "1"
+    }
+  },
+  "graph.filename <- \"s\"": {
+    "ok": {
+      "graph.filename": "s"
+    }
+  },
+  "graph.filename <- \"true\"": {
+    "ok": {
+      "graph.filename": "true"
+    }
+  },
+  "graph.filename <- -1": {
+    "err": "TypeMismatch",
+    "key": "graph.filename"
+  },
+  "graph.filename <- 0": {
+    "err": "TypeMismatch",
+    "key": "graph.filename"
+  },
+  "graph.filename <- 1": {
+    "err": "TypeMismatch",
+    "key": "graph.filename"
+  },
+  "graph.filename <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "graph.filename"
+  },
+  "graph.filename <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "graph.filename"
+  },
+  "graph.filename <- 70000": {
+    "err": "TypeMismatch",
+    "key": "graph.filename"
+  },
+  "graph.filename <- [1]": {
+    "err": "TypeMismatch",
+    "key": "graph.filename"
+  },
+  "graph.filename <- false": {
+    "err": "TypeMismatch",
+    "key": "graph.filename"
+  },
+  "graph.filename <- null": {
+    "err": "TypeMismatch",
+    "key": "graph.filename"
+  },
+  "graph.filename <- true": {
+    "err": "TypeMismatch",
+    "key": "graph.filename"
+  },
+  "graph.filename <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "graph.filename"
+  },
+  "graph.host <- \"\"": {
+    "ok": {}
+  },
+  "graph.host <- \"1\"": {
+    "ok": {
+      "graph.host": "1"
+    }
+  },
+  "graph.host <- \"s\"": {
+    "ok": {
+      "graph.host": "s"
+    }
+  },
+  "graph.host <- \"true\"": {
+    "ok": {
+      "graph.host": "true"
+    }
+  },
+  "graph.host <- -1": {
+    "err": "TypeMismatch",
+    "key": "graph.host"
+  },
+  "graph.host <- 0": {
+    "err": "TypeMismatch",
+    "key": "graph.host"
+  },
+  "graph.host <- 1": {
+    "err": "TypeMismatch",
+    "key": "graph.host"
+  },
+  "graph.host <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "graph.host"
+  },
+  "graph.host <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "graph.host"
+  },
+  "graph.host <- 70000": {
+    "err": "TypeMismatch",
+    "key": "graph.host"
+  },
+  "graph.host <- [1]": {
+    "err": "TypeMismatch",
+    "key": "graph.host"
+  },
+  "graph.host <- false": {
+    "err": "TypeMismatch",
+    "key": "graph.host"
+  },
+  "graph.host <- null": {
+    "err": "TypeMismatch",
+    "key": "graph.host"
+  },
+  "graph.host <- true": {
+    "err": "TypeMismatch",
+    "key": "graph.host"
+  },
+  "graph.host <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "graph.host"
+  },
+  "graph.key <- \"\"": {
+    "ok": {}
+  },
+  "graph.key <- \"1\"": {
+    "ok": {
+      "graph.key": "1"
+    }
+  },
+  "graph.key <- \"s\"": {
+    "ok": {
+      "graph.key": "s"
+    }
+  },
+  "graph.key <- \"true\"": {
+    "ok": {
+      "graph.key": "true"
+    }
+  },
+  "graph.key <- -1": {
+    "err": "TypeMismatch",
+    "key": "graph.key"
+  },
+  "graph.key <- 0": {
+    "err": "TypeMismatch",
+    "key": "graph.key"
+  },
+  "graph.key <- 1": {
+    "err": "TypeMismatch",
+    "key": "graph.key"
+  },
+  "graph.key <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "graph.key"
+  },
+  "graph.key <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "graph.key"
+  },
+  "graph.key <- 70000": {
+    "err": "TypeMismatch",
+    "key": "graph.key"
+  },
+  "graph.key <- [1]": {
+    "err": "TypeMismatch",
+    "key": "graph.key"
+  },
+  "graph.key <- false": {
+    "err": "TypeMismatch",
+    "key": "graph.key"
+  },
+  "graph.key <- null": {
+    "err": "TypeMismatch",
+    "key": "graph.key"
+  },
+  "graph.key <- true": {
+    "err": "TypeMismatch",
+    "key": "graph.key"
+  },
+  "graph.key <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "graph.key"
+  },
   "graph.ladybug.max_db_size <- \"\"": {
     "err": "TypeMismatch",
     "key": "graph.ladybug.max_db_size"
@@ -5590,22 +5838,396 @@
     "err": "TypeMismatch",
     "key": "graph.ladybug.max_db_size"
   },
+  "graph.name <- \"\"": {
+    "ok": {}
+  },
+  "graph.name <- \"1\"": {
+    "ok": {
+      "graph.name": "1"
+    }
+  },
+  "graph.name <- \"s\"": {
+    "ok": {
+      "graph.name": "s"
+    }
+  },
+  "graph.name <- \"true\"": {
+    "ok": {
+      "graph.name": "true"
+    }
+  },
+  "graph.name <- -1": {
+    "err": "TypeMismatch",
+    "key": "graph.name"
+  },
+  "graph.name <- 0": {
+    "err": "TypeMismatch",
+    "key": "graph.name"
+  },
+  "graph.name <- 1": {
+    "err": "TypeMismatch",
+    "key": "graph.name"
+  },
+  "graph.name <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "graph.name"
+  },
+  "graph.name <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "graph.name"
+  },
+  "graph.name <- 70000": {
+    "err": "TypeMismatch",
+    "key": "graph.name"
+  },
+  "graph.name <- [1]": {
+    "err": "TypeMismatch",
+    "key": "graph.name"
+  },
+  "graph.name <- false": {
+    "err": "TypeMismatch",
+    "key": "graph.name"
+  },
+  "graph.name <- null": {
+    "err": "TypeMismatch",
+    "key": "graph.name"
+  },
+  "graph.name <- true": {
+    "err": "TypeMismatch",
+    "key": "graph.name"
+  },
+  "graph.name <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "graph.name"
+  },
+  "graph.password <- \"\"": {
+    "ok": {}
+  },
+  "graph.password <- \"1\"": {
+    "ok": {
+      "graph.password": "1"
+    }
+  },
+  "graph.password <- \"s\"": {
+    "ok": {
+      "graph.password": "s"
+    }
+  },
+  "graph.password <- \"true\"": {
+    "ok": {
+      "graph.password": "true"
+    }
+  },
+  "graph.password <- -1": {
+    "err": "TypeMismatch",
+    "key": "graph.password"
+  },
+  "graph.password <- 0": {
+    "err": "TypeMismatch",
+    "key": "graph.password"
+  },
+  "graph.password <- 1": {
+    "err": "TypeMismatch",
+    "key": "graph.password"
+  },
+  "graph.password <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "graph.password"
+  },
+  "graph.password <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "graph.password"
+  },
+  "graph.password <- 70000": {
+    "err": "TypeMismatch",
+    "key": "graph.password"
+  },
+  "graph.password <- [1]": {
+    "err": "TypeMismatch",
+    "key": "graph.password"
+  },
+  "graph.password <- false": {
+    "err": "TypeMismatch",
+    "key": "graph.password"
+  },
+  "graph.password <- null": {
+    "err": "TypeMismatch",
+    "key": "graph.password"
+  },
+  "graph.password <- true": {
+    "err": "TypeMismatch",
+    "key": "graph.password"
+  },
+  "graph.password <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "graph.password"
+  },
+  "graph.port <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "graph.port"
+  },
+  "graph.port <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "graph.port"
+  },
+  "graph.port <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "graph.port"
+  },
+  "graph.port <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "graph.port"
+  },
+  "graph.port <- -1": {
+    "err": "TypeMismatch",
+    "key": "graph.port"
+  },
+  "graph.port <- 0": {
+    "ok": {
+      "graph.port": 0
+    }
+  },
+  "graph.port <- 1": {
+    "ok": {
+      "graph.port": 1
+    }
+  },
+  "graph.port <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "graph.port"
+  },
+  "graph.port <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "graph.port"
+  },
+  "graph.port <- 70000": {
+    "err": "TypeMismatch",
+    "key": "graph.port"
+  },
+  "graph.port <- [1]": {
+    "err": "TypeMismatch",
+    "key": "graph.port"
+  },
+  "graph.port <- false": {
+    "err": "TypeMismatch",
+    "key": "graph.port"
+  },
+  "graph.port <- null": {
+    "err": "TypeMismatch",
+    "key": "graph.port"
+  },
+  "graph.port <- true": {
+    "err": "TypeMismatch",
+    "key": "graph.port"
+  },
+  "graph.port <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "graph.port"
+  },
+  "graph.provider <- \"\"": {
+    "ok": {
+      "graph.provider": ""
+    }
+  },
+  "graph.provider <- \"1\"": {
+    "ok": {
+      "graph.provider": "1"
+    }
+  },
+  "graph.provider <- \"s\"": {
+    "ok": {
+      "graph.provider": "s"
+    }
+  },
+  "graph.provider <- \"true\"": {
+    "ok": {
+      "graph.provider": "true"
+    }
+  },
+  "graph.provider <- -1": {
+    "err": "TypeMismatch",
+    "key": "graph.provider"
+  },
+  "graph.provider <- 0": {
+    "err": "TypeMismatch",
+    "key": "graph.provider"
+  },
+  "graph.provider <- 1": {
+    "err": "TypeMismatch",
+    "key": "graph.provider"
+  },
+  "graph.provider <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "graph.provider"
+  },
+  "graph.provider <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "graph.provider"
+  },
+  "graph.provider <- 70000": {
+    "err": "TypeMismatch",
+    "key": "graph.provider"
+  },
+  "graph.provider <- [1]": {
+    "err": "TypeMismatch",
+    "key": "graph.provider"
+  },
+  "graph.provider <- false": {
+    "err": "TypeMismatch",
+    "key": "graph.provider"
+  },
+  "graph.provider <- null": {
+    "err": "TypeMismatch",
+    "key": "graph.provider"
+  },
+  "graph.provider <- true": {
+    "err": "TypeMismatch",
+    "key": "graph.provider"
+  },
+  "graph.provider <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "graph.provider"
+  },
+  "graph.url <- \"\"": {
+    "ok": {}
+  },
+  "graph.url <- \"1\"": {
+    "ok": {
+      "graph.url": "1"
+    }
+  },
+  "graph.url <- \"s\"": {
+    "ok": {
+      "graph.url": "s"
+    }
+  },
+  "graph.url <- \"true\"": {
+    "ok": {
+      "graph.url": "true"
+    }
+  },
+  "graph.url <- -1": {
+    "err": "TypeMismatch",
+    "key": "graph.url"
+  },
+  "graph.url <- 0": {
+    "err": "TypeMismatch",
+    "key": "graph.url"
+  },
+  "graph.url <- 1": {
+    "err": "TypeMismatch",
+    "key": "graph.url"
+  },
+  "graph.url <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "graph.url"
+  },
+  "graph.url <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "graph.url"
+  },
+  "graph.url <- 70000": {
+    "err": "TypeMismatch",
+    "key": "graph.url"
+  },
+  "graph.url <- [1]": {
+    "err": "TypeMismatch",
+    "key": "graph.url"
+  },
+  "graph.url <- false": {
+    "err": "TypeMismatch",
+    "key": "graph.url"
+  },
+  "graph.url <- null": {
+    "err": "TypeMismatch",
+    "key": "graph.url"
+  },
+  "graph.url <- true": {
+    "err": "TypeMismatch",
+    "key": "graph.url"
+  },
+  "graph.url <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "graph.url"
+  },
+  "graph.username <- \"\"": {
+    "ok": {}
+  },
+  "graph.username <- \"1\"": {
+    "ok": {
+      "graph.username": "1"
+    }
+  },
+  "graph.username <- \"s\"": {
+    "ok": {
+      "graph.username": "s"
+    }
+  },
+  "graph.username <- \"true\"": {
+    "ok": {
+      "graph.username": "true"
+    }
+  },
+  "graph.username <- -1": {
+    "err": "TypeMismatch",
+    "key": "graph.username"
+  },
+  "graph.username <- 0": {
+    "err": "TypeMismatch",
+    "key": "graph.username"
+  },
+  "graph.username <- 1": {
+    "err": "TypeMismatch",
+    "key": "graph.username"
+  },
+  "graph.username <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "graph.username"
+  },
+  "graph.username <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "graph.username"
+  },
+  "graph.username <- 70000": {
+    "err": "TypeMismatch",
+    "key": "graph.username"
+  },
+  "graph.username <- [1]": {
+    "err": "TypeMismatch",
+    "key": "graph.username"
+  },
+  "graph.username <- false": {
+    "err": "TypeMismatch",
+    "key": "graph.username"
+  },
+  "graph.username <- null": {
+    "err": "TypeMismatch",
+    "key": "graph.username"
+  },
+  "graph.username <- true": {
+    "err": "TypeMismatch",
+    "key": "graph.username"
+  },
+  "graph.username <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "graph.username"
+  },
   "graph_database_host <- \"\"": {
     "ok": {}
   },
   "graph_database_host <- \"1\"": {
     "ok": {
-      "graph_database_host": "1"
+      "graph.host": "1"
     }
   },
   "graph_database_host <- \"s\"": {
     "ok": {
-      "graph_database_host": "s"
+      "graph.host": "s"
     }
   },
   "graph_database_host <- \"true\"": {
     "ok": {
-      "graph_database_host": "true"
+      "graph.host": "true"
     }
   },
   "graph_database_host <- -1": {
@@ -5657,17 +6279,17 @@
   },
   "graph_database_key <- \"1\"": {
     "ok": {
-      "graph_database_key": "1"
+      "graph.key": "1"
     }
   },
   "graph_database_key <- \"s\"": {
     "ok": {
-      "graph_database_key": "s"
+      "graph.key": "s"
     }
   },
   "graph_database_key <- \"true\"": {
     "ok": {
-      "graph_database_key": "true"
+      "graph.key": "true"
     }
   },
   "graph_database_key <- -1": {
@@ -5719,17 +6341,17 @@
   },
   "graph_database_name <- \"1\"": {
     "ok": {
-      "graph_database_name": "1"
+      "graph.name": "1"
     }
   },
   "graph_database_name <- \"s\"": {
     "ok": {
-      "graph_database_name": "s"
+      "graph.name": "s"
     }
   },
   "graph_database_name <- \"true\"": {
     "ok": {
-      "graph_database_name": "true"
+      "graph.name": "true"
     }
   },
   "graph_database_name <- -1": {
@@ -5781,17 +6403,17 @@
   },
   "graph_database_password <- \"1\"": {
     "ok": {
-      "graph_database_password": "1"
+      "graph.password": "1"
     }
   },
   "graph_database_password <- \"s\"": {
     "ok": {
-      "graph_database_password": "s"
+      "graph.password": "s"
     }
   },
   "graph_database_password <- \"true\"": {
     "ok": {
-      "graph_database_password": "true"
+      "graph.password": "true"
     }
   },
   "graph_database_password <- -1": {
@@ -5860,12 +6482,12 @@
   },
   "graph_database_port <- 0": {
     "ok": {
-      "graph_database_port": 0
+      "graph.port": 0
     }
   },
   "graph_database_port <- 1": {
     "ok": {
-      "graph_database_port": 1
+      "graph.port": 1
     }
   },
   "graph_database_port <- 1.5": {
@@ -5902,22 +6524,22 @@
   },
   "graph_database_provider <- \"\"": {
     "ok": {
-      "graph_database_provider": ""
+      "graph.provider": ""
     }
   },
   "graph_database_provider <- \"1\"": {
     "ok": {
-      "graph_database_provider": "1"
+      "graph.provider": "1"
     }
   },
   "graph_database_provider <- \"s\"": {
     "ok": {
-      "graph_database_provider": "s"
+      "graph.provider": "s"
     }
   },
   "graph_database_provider <- \"true\"": {
     "ok": {
-      "graph_database_provider": "true"
+      "graph.provider": "true"
     }
   },
   "graph_database_provider <- -1": {
@@ -5969,17 +6591,17 @@
   },
   "graph_database_url <- \"1\"": {
     "ok": {
-      "graph_database_url": "1"
+      "graph.url": "1"
     }
   },
   "graph_database_url <- \"s\"": {
     "ok": {
-      "graph_database_url": "s"
+      "graph.url": "s"
     }
   },
   "graph_database_url <- \"true\"": {
     "ok": {
-      "graph_database_url": "true"
+      "graph.url": "true"
     }
   },
   "graph_database_url <- -1": {
@@ -6031,17 +6653,17 @@
   },
   "graph_database_username <- \"1\"": {
     "ok": {
-      "graph_database_username": "1"
+      "graph.username": "1"
     }
   },
   "graph_database_username <- \"s\"": {
     "ok": {
-      "graph_database_username": "s"
+      "graph.username": "s"
     }
   },
   "graph_database_username <- \"true\"": {
     "ok": {
-      "graph_database_username": "true"
+      "graph.username": "true"
     }
   },
   "graph_database_username <- -1": {
@@ -6093,17 +6715,17 @@
   },
   "graph_file_path <- \"1\"": {
     "ok": {
-      "graph_file_path": "1"
+      "graph.file_path": "1"
     }
   },
   "graph_file_path <- \"s\"": {
     "ok": {
-      "graph_file_path": "s"
+      "graph.file_path": "s"
     }
   },
   "graph_file_path <- \"true\"": {
     "ok": {
-      "graph_file_path": "true"
+      "graph.file_path": "true"
     }
   },
   "graph_file_path <- -1": {
@@ -6155,17 +6777,17 @@
   },
   "graph_filename <- \"1\"": {
     "ok": {
-      "graph_filename": "1"
+      "graph.filename": "1"
     }
   },
   "graph_filename <- \"s\"": {
     "ok": {
-      "graph_filename": "s"
+      "graph.filename": "s"
     }
   },
   "graph_filename <- \"true\"": {
     "ok": {
-      "graph_filename": "true"
+      "graph.filename": "true"
     }
   },
   "graph_filename <- -1": {
@@ -11272,6 +11894,257 @@
     "err": "TypeMismatch",
     "key": "otel_traces_sampler_arg"
   },
+  "pgvector_hnsw_ef_construction <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "pgvector_hnsw_ef_construction"
+  },
+  "pgvector_hnsw_ef_construction <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "pgvector_hnsw_ef_construction"
+  },
+  "pgvector_hnsw_ef_construction <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "pgvector_hnsw_ef_construction"
+  },
+  "pgvector_hnsw_ef_construction <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "pgvector_hnsw_ef_construction"
+  },
+  "pgvector_hnsw_ef_construction <- -1": {
+    "err": "TypeMismatch",
+    "key": "pgvector_hnsw_ef_construction"
+  },
+  "pgvector_hnsw_ef_construction <- 0": {
+    "ok": {
+      "vector.pgvector.hnsw_ef_construction": 0
+    }
+  },
+  "pgvector_hnsw_ef_construction <- 1": {
+    "ok": {
+      "vector.pgvector.hnsw_ef_construction": 1
+    }
+  },
+  "pgvector_hnsw_ef_construction <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "pgvector_hnsw_ef_construction"
+  },
+  "pgvector_hnsw_ef_construction <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "pgvector_hnsw_ef_construction"
+  },
+  "pgvector_hnsw_ef_construction <- 70000": {
+    "ok": {
+      "vector.pgvector.hnsw_ef_construction": 70000
+    }
+  },
+  "pgvector_hnsw_ef_construction <- [1]": {
+    "err": "TypeMismatch",
+    "key": "pgvector_hnsw_ef_construction"
+  },
+  "pgvector_hnsw_ef_construction <- false": {
+    "err": "TypeMismatch",
+    "key": "pgvector_hnsw_ef_construction"
+  },
+  "pgvector_hnsw_ef_construction <- null": {
+    "err": "TypeMismatch",
+    "key": "pgvector_hnsw_ef_construction"
+  },
+  "pgvector_hnsw_ef_construction <- true": {
+    "err": "TypeMismatch",
+    "key": "pgvector_hnsw_ef_construction"
+  },
+  "pgvector_hnsw_ef_construction <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "pgvector_hnsw_ef_construction"
+  },
+  "pgvector_hnsw_m <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "pgvector_hnsw_m"
+  },
+  "pgvector_hnsw_m <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "pgvector_hnsw_m"
+  },
+  "pgvector_hnsw_m <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "pgvector_hnsw_m"
+  },
+  "pgvector_hnsw_m <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "pgvector_hnsw_m"
+  },
+  "pgvector_hnsw_m <- -1": {
+    "err": "TypeMismatch",
+    "key": "pgvector_hnsw_m"
+  },
+  "pgvector_hnsw_m <- 0": {
+    "ok": {
+      "vector.pgvector.hnsw_m": 0
+    }
+  },
+  "pgvector_hnsw_m <- 1": {
+    "ok": {
+      "vector.pgvector.hnsw_m": 1
+    }
+  },
+  "pgvector_hnsw_m <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "pgvector_hnsw_m"
+  },
+  "pgvector_hnsw_m <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "pgvector_hnsw_m"
+  },
+  "pgvector_hnsw_m <- 70000": {
+    "ok": {
+      "vector.pgvector.hnsw_m": 70000
+    }
+  },
+  "pgvector_hnsw_m <- [1]": {
+    "err": "TypeMismatch",
+    "key": "pgvector_hnsw_m"
+  },
+  "pgvector_hnsw_m <- false": {
+    "err": "TypeMismatch",
+    "key": "pgvector_hnsw_m"
+  },
+  "pgvector_hnsw_m <- null": {
+    "err": "TypeMismatch",
+    "key": "pgvector_hnsw_m"
+  },
+  "pgvector_hnsw_m <- true": {
+    "err": "TypeMismatch",
+    "key": "pgvector_hnsw_m"
+  },
+  "pgvector_hnsw_m <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "pgvector_hnsw_m"
+  },
+  "pgvector_maintenance_work_mem_mb <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "pgvector_maintenance_work_mem_mb"
+  },
+  "pgvector_maintenance_work_mem_mb <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "pgvector_maintenance_work_mem_mb"
+  },
+  "pgvector_maintenance_work_mem_mb <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "pgvector_maintenance_work_mem_mb"
+  },
+  "pgvector_maintenance_work_mem_mb <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "pgvector_maintenance_work_mem_mb"
+  },
+  "pgvector_maintenance_work_mem_mb <- -1": {
+    "err": "TypeMismatch",
+    "key": "pgvector_maintenance_work_mem_mb"
+  },
+  "pgvector_maintenance_work_mem_mb <- 0": {
+    "ok": {
+      "vector.pgvector.maintenance_work_mem_mb": 0
+    }
+  },
+  "pgvector_maintenance_work_mem_mb <- 1": {
+    "ok": {
+      "vector.pgvector.maintenance_work_mem_mb": 1
+    }
+  },
+  "pgvector_maintenance_work_mem_mb <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "pgvector_maintenance_work_mem_mb"
+  },
+  "pgvector_maintenance_work_mem_mb <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "pgvector_maintenance_work_mem_mb"
+  },
+  "pgvector_maintenance_work_mem_mb <- 70000": {
+    "ok": {
+      "vector.pgvector.maintenance_work_mem_mb": 70000
+    }
+  },
+  "pgvector_maintenance_work_mem_mb <- [1]": {
+    "err": "TypeMismatch",
+    "key": "pgvector_maintenance_work_mem_mb"
+  },
+  "pgvector_maintenance_work_mem_mb <- false": {
+    "err": "TypeMismatch",
+    "key": "pgvector_maintenance_work_mem_mb"
+  },
+  "pgvector_maintenance_work_mem_mb <- null": {
+    "err": "TypeMismatch",
+    "key": "pgvector_maintenance_work_mem_mb"
+  },
+  "pgvector_maintenance_work_mem_mb <- true": {
+    "err": "TypeMismatch",
+    "key": "pgvector_maintenance_work_mem_mb"
+  },
+  "pgvector_maintenance_work_mem_mb <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "pgvector_maintenance_work_mem_mb"
+  },
+  "pgvector_maintenance_workers <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "pgvector_maintenance_workers"
+  },
+  "pgvector_maintenance_workers <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "pgvector_maintenance_workers"
+  },
+  "pgvector_maintenance_workers <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "pgvector_maintenance_workers"
+  },
+  "pgvector_maintenance_workers <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "pgvector_maintenance_workers"
+  },
+  "pgvector_maintenance_workers <- -1": {
+    "err": "TypeMismatch",
+    "key": "pgvector_maintenance_workers"
+  },
+  "pgvector_maintenance_workers <- 0": {
+    "ok": {
+      "vector.pgvector.maintenance_workers": 0
+    }
+  },
+  "pgvector_maintenance_workers <- 1": {
+    "ok": {
+      "vector.pgvector.maintenance_workers": 1
+    }
+  },
+  "pgvector_maintenance_workers <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "pgvector_maintenance_workers"
+  },
+  "pgvector_maintenance_workers <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "pgvector_maintenance_workers"
+  },
+  "pgvector_maintenance_workers <- 70000": {
+    "ok": {
+      "vector.pgvector.maintenance_workers": 70000
+    }
+  },
+  "pgvector_maintenance_workers <- [1]": {
+    "err": "TypeMismatch",
+    "key": "pgvector_maintenance_workers"
+  },
+  "pgvector_maintenance_workers <- false": {
+    "err": "TypeMismatch",
+    "key": "pgvector_maintenance_workers"
+  },
+  "pgvector_maintenance_workers <- null": {
+    "ok": {}
+  },
+  "pgvector_maintenance_workers <- true": {
+    "err": "TypeMismatch",
+    "key": "pgvector_maintenance_workers"
+  },
+  "pgvector_maintenance_workers <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "pgvector_maintenance_workers"
+  },
   "relational_db_url <- \"\"": {
     "ok": {
       "relational_db_url": ""
@@ -11782,29 +12655,29 @@
   "system_root_directory <- \"\"": {
     "ok": {
       "system_root_directory": "",
-      "graph_file_path": "/graph",
-      "vector_db_url": "/vectors"
+      "graph.file_path": "/graph",
+      "vector.url": "/vectors"
     }
   },
   "system_root_directory <- \"1\"": {
     "ok": {
       "system_root_directory": "1",
-      "graph_file_path": "1/graph",
-      "vector_db_url": "1/vectors"
+      "graph.file_path": "1/graph",
+      "vector.url": "1/vectors"
     }
   },
   "system_root_directory <- \"s\"": {
     "ok": {
       "system_root_directory": "s",
-      "graph_file_path": "s/graph",
-      "vector_db_url": "s/vectors"
+      "graph.file_path": "s/graph",
+      "vector.url": "s/vectors"
     }
   },
   "system_root_directory <- \"true\"": {
     "ok": {
       "system_root_directory": "true",
-      "graph_file_path": "true/graph",
-      "vector_db_url": "true/vectors"
+      "graph.file_path": "true/graph",
+      "vector.url": "true/vectors"
     }
   },
   "system_root_directory <- -1": {
@@ -11853,8 +12726,8 @@
   },
   "system_root_directory cascade": {
     "system_root_directory": "/srv/cognee",
-    "graph_file_path": "/srv/cognee/custom_graph",
-    "vector_db_url": "/srv/cognee/vectors"
+    "graph.file_path": "/srv/cognee/custom_graph",
+    "vector.url": "/srv/cognee/vectors"
   },
   "transcription_model <- \"\"": {
     "ok": {
@@ -11920,22 +12793,771 @@
     "err": "TypeMismatch",
     "key": "transcription_model"
   },
+  "vector.host <- \"\"": {
+    "ok": {}
+  },
+  "vector.host <- \"1\"": {
+    "ok": {
+      "vector.host": "1"
+    }
+  },
+  "vector.host <- \"s\"": {
+    "ok": {
+      "vector.host": "s"
+    }
+  },
+  "vector.host <- \"true\"": {
+    "ok": {
+      "vector.host": "true"
+    }
+  },
+  "vector.host <- -1": {
+    "err": "TypeMismatch",
+    "key": "vector.host"
+  },
+  "vector.host <- 0": {
+    "err": "TypeMismatch",
+    "key": "vector.host"
+  },
+  "vector.host <- 1": {
+    "err": "TypeMismatch",
+    "key": "vector.host"
+  },
+  "vector.host <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "vector.host"
+  },
+  "vector.host <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "vector.host"
+  },
+  "vector.host <- 70000": {
+    "err": "TypeMismatch",
+    "key": "vector.host"
+  },
+  "vector.host <- [1]": {
+    "err": "TypeMismatch",
+    "key": "vector.host"
+  },
+  "vector.host <- false": {
+    "err": "TypeMismatch",
+    "key": "vector.host"
+  },
+  "vector.host <- null": {
+    "err": "TypeMismatch",
+    "key": "vector.host"
+  },
+  "vector.host <- true": {
+    "err": "TypeMismatch",
+    "key": "vector.host"
+  },
+  "vector.host <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "vector.host"
+  },
+  "vector.key <- \"\"": {
+    "ok": {}
+  },
+  "vector.key <- \"1\"": {
+    "ok": {
+      "vector.key": "1"
+    }
+  },
+  "vector.key <- \"s\"": {
+    "ok": {
+      "vector.key": "s"
+    }
+  },
+  "vector.key <- \"true\"": {
+    "ok": {
+      "vector.key": "true"
+    }
+  },
+  "vector.key <- -1": {
+    "err": "TypeMismatch",
+    "key": "vector.key"
+  },
+  "vector.key <- 0": {
+    "err": "TypeMismatch",
+    "key": "vector.key"
+  },
+  "vector.key <- 1": {
+    "err": "TypeMismatch",
+    "key": "vector.key"
+  },
+  "vector.key <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "vector.key"
+  },
+  "vector.key <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "vector.key"
+  },
+  "vector.key <- 70000": {
+    "err": "TypeMismatch",
+    "key": "vector.key"
+  },
+  "vector.key <- [1]": {
+    "err": "TypeMismatch",
+    "key": "vector.key"
+  },
+  "vector.key <- false": {
+    "err": "TypeMismatch",
+    "key": "vector.key"
+  },
+  "vector.key <- null": {
+    "err": "TypeMismatch",
+    "key": "vector.key"
+  },
+  "vector.key <- true": {
+    "err": "TypeMismatch",
+    "key": "vector.key"
+  },
+  "vector.key <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "vector.key"
+  },
+  "vector.name <- \"\"": {
+    "ok": {}
+  },
+  "vector.name <- \"1\"": {
+    "ok": {
+      "vector.name": "1"
+    }
+  },
+  "vector.name <- \"s\"": {
+    "ok": {
+      "vector.name": "s"
+    }
+  },
+  "vector.name <- \"true\"": {
+    "ok": {
+      "vector.name": "true"
+    }
+  },
+  "vector.name <- -1": {
+    "err": "TypeMismatch",
+    "key": "vector.name"
+  },
+  "vector.name <- 0": {
+    "err": "TypeMismatch",
+    "key": "vector.name"
+  },
+  "vector.name <- 1": {
+    "err": "TypeMismatch",
+    "key": "vector.name"
+  },
+  "vector.name <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "vector.name"
+  },
+  "vector.name <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "vector.name"
+  },
+  "vector.name <- 70000": {
+    "err": "TypeMismatch",
+    "key": "vector.name"
+  },
+  "vector.name <- [1]": {
+    "err": "TypeMismatch",
+    "key": "vector.name"
+  },
+  "vector.name <- false": {
+    "err": "TypeMismatch",
+    "key": "vector.name"
+  },
+  "vector.name <- null": {
+    "err": "TypeMismatch",
+    "key": "vector.name"
+  },
+  "vector.name <- true": {
+    "err": "TypeMismatch",
+    "key": "vector.name"
+  },
+  "vector.name <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "vector.name"
+  },
+  "vector.password <- \"\"": {
+    "ok": {}
+  },
+  "vector.password <- \"1\"": {
+    "ok": {
+      "vector.password": "1"
+    }
+  },
+  "vector.password <- \"s\"": {
+    "ok": {
+      "vector.password": "s"
+    }
+  },
+  "vector.password <- \"true\"": {
+    "ok": {
+      "vector.password": "true"
+    }
+  },
+  "vector.password <- -1": {
+    "err": "TypeMismatch",
+    "key": "vector.password"
+  },
+  "vector.password <- 0": {
+    "err": "TypeMismatch",
+    "key": "vector.password"
+  },
+  "vector.password <- 1": {
+    "err": "TypeMismatch",
+    "key": "vector.password"
+  },
+  "vector.password <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "vector.password"
+  },
+  "vector.password <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "vector.password"
+  },
+  "vector.password <- 70000": {
+    "err": "TypeMismatch",
+    "key": "vector.password"
+  },
+  "vector.password <- [1]": {
+    "err": "TypeMismatch",
+    "key": "vector.password"
+  },
+  "vector.password <- false": {
+    "err": "TypeMismatch",
+    "key": "vector.password"
+  },
+  "vector.password <- null": {
+    "err": "TypeMismatch",
+    "key": "vector.password"
+  },
+  "vector.password <- true": {
+    "err": "TypeMismatch",
+    "key": "vector.password"
+  },
+  "vector.password <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "vector.password"
+  },
+  "vector.pgvector.hnsw_ef_construction <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "vector.pgvector.hnsw_ef_construction"
+  },
+  "vector.pgvector.hnsw_ef_construction <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "vector.pgvector.hnsw_ef_construction"
+  },
+  "vector.pgvector.hnsw_ef_construction <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "vector.pgvector.hnsw_ef_construction"
+  },
+  "vector.pgvector.hnsw_ef_construction <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "vector.pgvector.hnsw_ef_construction"
+  },
+  "vector.pgvector.hnsw_ef_construction <- -1": {
+    "err": "TypeMismatch",
+    "key": "vector.pgvector.hnsw_ef_construction"
+  },
+  "vector.pgvector.hnsw_ef_construction <- 0": {
+    "ok": {
+      "vector.pgvector.hnsw_ef_construction": 0
+    }
+  },
+  "vector.pgvector.hnsw_ef_construction <- 1": {
+    "ok": {
+      "vector.pgvector.hnsw_ef_construction": 1
+    }
+  },
+  "vector.pgvector.hnsw_ef_construction <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "vector.pgvector.hnsw_ef_construction"
+  },
+  "vector.pgvector.hnsw_ef_construction <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "vector.pgvector.hnsw_ef_construction"
+  },
+  "vector.pgvector.hnsw_ef_construction <- 70000": {
+    "ok": {
+      "vector.pgvector.hnsw_ef_construction": 70000
+    }
+  },
+  "vector.pgvector.hnsw_ef_construction <- [1]": {
+    "err": "TypeMismatch",
+    "key": "vector.pgvector.hnsw_ef_construction"
+  },
+  "vector.pgvector.hnsw_ef_construction <- false": {
+    "err": "TypeMismatch",
+    "key": "vector.pgvector.hnsw_ef_construction"
+  },
+  "vector.pgvector.hnsw_ef_construction <- null": {
+    "err": "TypeMismatch",
+    "key": "vector.pgvector.hnsw_ef_construction"
+  },
+  "vector.pgvector.hnsw_ef_construction <- true": {
+    "err": "TypeMismatch",
+    "key": "vector.pgvector.hnsw_ef_construction"
+  },
+  "vector.pgvector.hnsw_ef_construction <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "vector.pgvector.hnsw_ef_construction"
+  },
+  "vector.pgvector.hnsw_m <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "vector.pgvector.hnsw_m"
+  },
+  "vector.pgvector.hnsw_m <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "vector.pgvector.hnsw_m"
+  },
+  "vector.pgvector.hnsw_m <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "vector.pgvector.hnsw_m"
+  },
+  "vector.pgvector.hnsw_m <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "vector.pgvector.hnsw_m"
+  },
+  "vector.pgvector.hnsw_m <- -1": {
+    "err": "TypeMismatch",
+    "key": "vector.pgvector.hnsw_m"
+  },
+  "vector.pgvector.hnsw_m <- 0": {
+    "ok": {
+      "vector.pgvector.hnsw_m": 0
+    }
+  },
+  "vector.pgvector.hnsw_m <- 1": {
+    "ok": {
+      "vector.pgvector.hnsw_m": 1
+    }
+  },
+  "vector.pgvector.hnsw_m <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "vector.pgvector.hnsw_m"
+  },
+  "vector.pgvector.hnsw_m <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "vector.pgvector.hnsw_m"
+  },
+  "vector.pgvector.hnsw_m <- 70000": {
+    "ok": {
+      "vector.pgvector.hnsw_m": 70000
+    }
+  },
+  "vector.pgvector.hnsw_m <- [1]": {
+    "err": "TypeMismatch",
+    "key": "vector.pgvector.hnsw_m"
+  },
+  "vector.pgvector.hnsw_m <- false": {
+    "err": "TypeMismatch",
+    "key": "vector.pgvector.hnsw_m"
+  },
+  "vector.pgvector.hnsw_m <- null": {
+    "err": "TypeMismatch",
+    "key": "vector.pgvector.hnsw_m"
+  },
+  "vector.pgvector.hnsw_m <- true": {
+    "err": "TypeMismatch",
+    "key": "vector.pgvector.hnsw_m"
+  },
+  "vector.pgvector.hnsw_m <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "vector.pgvector.hnsw_m"
+  },
+  "vector.pgvector.maintenance_work_mem_mb <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "vector.pgvector.maintenance_work_mem_mb"
+  },
+  "vector.pgvector.maintenance_work_mem_mb <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "vector.pgvector.maintenance_work_mem_mb"
+  },
+  "vector.pgvector.maintenance_work_mem_mb <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "vector.pgvector.maintenance_work_mem_mb"
+  },
+  "vector.pgvector.maintenance_work_mem_mb <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "vector.pgvector.maintenance_work_mem_mb"
+  },
+  "vector.pgvector.maintenance_work_mem_mb <- -1": {
+    "err": "TypeMismatch",
+    "key": "vector.pgvector.maintenance_work_mem_mb"
+  },
+  "vector.pgvector.maintenance_work_mem_mb <- 0": {
+    "ok": {
+      "vector.pgvector.maintenance_work_mem_mb": 0
+    }
+  },
+  "vector.pgvector.maintenance_work_mem_mb <- 1": {
+    "ok": {
+      "vector.pgvector.maintenance_work_mem_mb": 1
+    }
+  },
+  "vector.pgvector.maintenance_work_mem_mb <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "vector.pgvector.maintenance_work_mem_mb"
+  },
+  "vector.pgvector.maintenance_work_mem_mb <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "vector.pgvector.maintenance_work_mem_mb"
+  },
+  "vector.pgvector.maintenance_work_mem_mb <- 70000": {
+    "ok": {
+      "vector.pgvector.maintenance_work_mem_mb": 70000
+    }
+  },
+  "vector.pgvector.maintenance_work_mem_mb <- [1]": {
+    "err": "TypeMismatch",
+    "key": "vector.pgvector.maintenance_work_mem_mb"
+  },
+  "vector.pgvector.maintenance_work_mem_mb <- false": {
+    "err": "TypeMismatch",
+    "key": "vector.pgvector.maintenance_work_mem_mb"
+  },
+  "vector.pgvector.maintenance_work_mem_mb <- null": {
+    "err": "TypeMismatch",
+    "key": "vector.pgvector.maintenance_work_mem_mb"
+  },
+  "vector.pgvector.maintenance_work_mem_mb <- true": {
+    "err": "TypeMismatch",
+    "key": "vector.pgvector.maintenance_work_mem_mb"
+  },
+  "vector.pgvector.maintenance_work_mem_mb <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "vector.pgvector.maintenance_work_mem_mb"
+  },
+  "vector.pgvector.maintenance_workers <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "vector.pgvector.maintenance_workers"
+  },
+  "vector.pgvector.maintenance_workers <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "vector.pgvector.maintenance_workers"
+  },
+  "vector.pgvector.maintenance_workers <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "vector.pgvector.maintenance_workers"
+  },
+  "vector.pgvector.maintenance_workers <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "vector.pgvector.maintenance_workers"
+  },
+  "vector.pgvector.maintenance_workers <- -1": {
+    "err": "TypeMismatch",
+    "key": "vector.pgvector.maintenance_workers"
+  },
+  "vector.pgvector.maintenance_workers <- 0": {
+    "ok": {
+      "vector.pgvector.maintenance_workers": 0
+    }
+  },
+  "vector.pgvector.maintenance_workers <- 1": {
+    "ok": {
+      "vector.pgvector.maintenance_workers": 1
+    }
+  },
+  "vector.pgvector.maintenance_workers <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "vector.pgvector.maintenance_workers"
+  },
+  "vector.pgvector.maintenance_workers <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "vector.pgvector.maintenance_workers"
+  },
+  "vector.pgvector.maintenance_workers <- 70000": {
+    "ok": {
+      "vector.pgvector.maintenance_workers": 70000
+    }
+  },
+  "vector.pgvector.maintenance_workers <- [1]": {
+    "err": "TypeMismatch",
+    "key": "vector.pgvector.maintenance_workers"
+  },
+  "vector.pgvector.maintenance_workers <- false": {
+    "err": "TypeMismatch",
+    "key": "vector.pgvector.maintenance_workers"
+  },
+  "vector.pgvector.maintenance_workers <- null": {
+    "ok": {}
+  },
+  "vector.pgvector.maintenance_workers <- true": {
+    "err": "TypeMismatch",
+    "key": "vector.pgvector.maintenance_workers"
+  },
+  "vector.pgvector.maintenance_workers <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "vector.pgvector.maintenance_workers"
+  },
+  "vector.port <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "vector.port"
+  },
+  "vector.port <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "vector.port"
+  },
+  "vector.port <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "vector.port"
+  },
+  "vector.port <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "vector.port"
+  },
+  "vector.port <- -1": {
+    "err": "TypeMismatch",
+    "key": "vector.port"
+  },
+  "vector.port <- 0": {
+    "ok": {
+      "vector.port": 0
+    }
+  },
+  "vector.port <- 1": {
+    "ok": {
+      "vector.port": 1
+    }
+  },
+  "vector.port <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "vector.port"
+  },
+  "vector.port <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "vector.port"
+  },
+  "vector.port <- 70000": {
+    "err": "TypeMismatch",
+    "key": "vector.port"
+  },
+  "vector.port <- [1]": {
+    "err": "TypeMismatch",
+    "key": "vector.port"
+  },
+  "vector.port <- false": {
+    "err": "TypeMismatch",
+    "key": "vector.port"
+  },
+  "vector.port <- null": {
+    "err": "TypeMismatch",
+    "key": "vector.port"
+  },
+  "vector.port <- true": {
+    "err": "TypeMismatch",
+    "key": "vector.port"
+  },
+  "vector.port <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "vector.port"
+  },
+  "vector.provider <- \"\"": {
+    "ok": {
+      "vector.provider": ""
+    }
+  },
+  "vector.provider <- \"1\"": {
+    "ok": {
+      "vector.provider": "1"
+    }
+  },
+  "vector.provider <- \"s\"": {
+    "ok": {
+      "vector.provider": "s"
+    }
+  },
+  "vector.provider <- \"true\"": {
+    "ok": {
+      "vector.provider": "true"
+    }
+  },
+  "vector.provider <- -1": {
+    "err": "TypeMismatch",
+    "key": "vector.provider"
+  },
+  "vector.provider <- 0": {
+    "err": "TypeMismatch",
+    "key": "vector.provider"
+  },
+  "vector.provider <- 1": {
+    "err": "TypeMismatch",
+    "key": "vector.provider"
+  },
+  "vector.provider <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "vector.provider"
+  },
+  "vector.provider <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "vector.provider"
+  },
+  "vector.provider <- 70000": {
+    "err": "TypeMismatch",
+    "key": "vector.provider"
+  },
+  "vector.provider <- [1]": {
+    "err": "TypeMismatch",
+    "key": "vector.provider"
+  },
+  "vector.provider <- false": {
+    "err": "TypeMismatch",
+    "key": "vector.provider"
+  },
+  "vector.provider <- null": {
+    "err": "TypeMismatch",
+    "key": "vector.provider"
+  },
+  "vector.provider <- true": {
+    "err": "TypeMismatch",
+    "key": "vector.provider"
+  },
+  "vector.provider <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "vector.provider"
+  },
+  "vector.url <- \"\"": {
+    "ok": {}
+  },
+  "vector.url <- \"1\"": {
+    "ok": {
+      "vector.url": "1"
+    }
+  },
+  "vector.url <- \"s\"": {
+    "ok": {
+      "vector.url": "s"
+    }
+  },
+  "vector.url <- \"true\"": {
+    "ok": {
+      "vector.url": "true"
+    }
+  },
+  "vector.url <- -1": {
+    "err": "TypeMismatch",
+    "key": "vector.url"
+  },
+  "vector.url <- 0": {
+    "err": "TypeMismatch",
+    "key": "vector.url"
+  },
+  "vector.url <- 1": {
+    "err": "TypeMismatch",
+    "key": "vector.url"
+  },
+  "vector.url <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "vector.url"
+  },
+  "vector.url <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "vector.url"
+  },
+  "vector.url <- 70000": {
+    "err": "TypeMismatch",
+    "key": "vector.url"
+  },
+  "vector.url <- [1]": {
+    "err": "TypeMismatch",
+    "key": "vector.url"
+  },
+  "vector.url <- false": {
+    "err": "TypeMismatch",
+    "key": "vector.url"
+  },
+  "vector.url <- null": {
+    "err": "TypeMismatch",
+    "key": "vector.url"
+  },
+  "vector.url <- true": {
+    "err": "TypeMismatch",
+    "key": "vector.url"
+  },
+  "vector.url <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "vector.url"
+  },
+  "vector.username <- \"\"": {
+    "ok": {}
+  },
+  "vector.username <- \"1\"": {
+    "ok": {
+      "vector.username": "1"
+    }
+  },
+  "vector.username <- \"s\"": {
+    "ok": {
+      "vector.username": "s"
+    }
+  },
+  "vector.username <- \"true\"": {
+    "ok": {
+      "vector.username": "true"
+    }
+  },
+  "vector.username <- -1": {
+    "err": "TypeMismatch",
+    "key": "vector.username"
+  },
+  "vector.username <- 0": {
+    "err": "TypeMismatch",
+    "key": "vector.username"
+  },
+  "vector.username <- 1": {
+    "err": "TypeMismatch",
+    "key": "vector.username"
+  },
+  "vector.username <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "vector.username"
+  },
+  "vector.username <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "vector.username"
+  },
+  "vector.username <- 70000": {
+    "err": "TypeMismatch",
+    "key": "vector.username"
+  },
+  "vector.username <- [1]": {
+    "err": "TypeMismatch",
+    "key": "vector.username"
+  },
+  "vector.username <- false": {
+    "err": "TypeMismatch",
+    "key": "vector.username"
+  },
+  "vector.username <- null": {
+    "err": "TypeMismatch",
+    "key": "vector.username"
+  },
+  "vector.username <- true": {
+    "err": "TypeMismatch",
+    "key": "vector.username"
+  },
+  "vector.username <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "vector.username"
+  },
   "vector_db_host <- \"\"": {
     "ok": {}
   },
   "vector_db_host <- \"1\"": {
     "ok": {
-      "vector_db_host": "1"
+      "vector.host": "1"
     }
   },
   "vector_db_host <- \"s\"": {
     "ok": {
-      "vector_db_host": "s"
+      "vector.host": "s"
     }
   },
   "vector_db_host <- \"true\"": {
     "ok": {
-      "vector_db_host": "true"
+      "vector.host": "true"
     }
   },
   "vector_db_host <- -1": {
@@ -11987,17 +13609,17 @@
   },
   "vector_db_key <- \"1\"": {
     "ok": {
-      "vector_db_key": "1"
+      "vector.key": "1"
     }
   },
   "vector_db_key <- \"s\"": {
     "ok": {
-      "vector_db_key": "s"
+      "vector.key": "s"
     }
   },
   "vector_db_key <- \"true\"": {
     "ok": {
-      "vector_db_key": "true"
+      "vector.key": "true"
     }
   },
   "vector_db_key <- -1": {
@@ -12049,17 +13671,17 @@
   },
   "vector_db_name <- \"1\"": {
     "ok": {
-      "vector_db_name": "1"
+      "vector.name": "1"
     }
   },
   "vector_db_name <- \"s\"": {
     "ok": {
-      "vector_db_name": "s"
+      "vector.name": "s"
     }
   },
   "vector_db_name <- \"true\"": {
     "ok": {
-      "vector_db_name": "true"
+      "vector.name": "true"
     }
   },
   "vector_db_name <- -1": {
@@ -12111,17 +13733,17 @@
   },
   "vector_db_password <- \"1\"": {
     "ok": {
-      "vector_db_password": "1"
+      "vector.password": "1"
     }
   },
   "vector_db_password <- \"s\"": {
     "ok": {
-      "vector_db_password": "s"
+      "vector.password": "s"
     }
   },
   "vector_db_password <- \"true\"": {
     "ok": {
-      "vector_db_password": "true"
+      "vector.password": "true"
     }
   },
   "vector_db_password <- -1": {
@@ -12190,12 +13812,12 @@
   },
   "vector_db_port <- 0": {
     "ok": {
-      "vector_db_port": 0
+      "vector.port": 0
     }
   },
   "vector_db_port <- 1": {
     "ok": {
-      "vector_db_port": 1
+      "vector.port": 1
     }
   },
   "vector_db_port <- 1.5": {
@@ -12232,22 +13854,22 @@
   },
   "vector_db_provider <- \"\"": {
     "ok": {
-      "vector_db_provider": ""
+      "vector.provider": ""
     }
   },
   "vector_db_provider <- \"1\"": {
     "ok": {
-      "vector_db_provider": "1"
+      "vector.provider": "1"
     }
   },
   "vector_db_provider <- \"s\"": {
     "ok": {
-      "vector_db_provider": "s"
+      "vector.provider": "s"
     }
   },
   "vector_db_provider <- \"true\"": {
     "ok": {
-      "vector_db_provider": "true"
+      "vector.provider": "true"
     }
   },
   "vector_db_provider <- -1": {
@@ -12299,17 +13921,17 @@
   },
   "vector_db_url <- \"1\"": {
     "ok": {
-      "vector_db_url": "1"
+      "vector.url": "1"
     }
   },
   "vector_db_url <- \"s\"": {
     "ok": {
-      "vector_db_url": "s"
+      "vector.url": "s"
     }
   },
   "vector_db_url <- \"true\"": {
     "ok": {
-      "vector_db_url": "true"
+      "vector.url": "true"
     }
   },
   "vector_db_url <- -1": {
@@ -12361,17 +13983,17 @@
   },
   "vector_db_username <- \"1\"": {
     "ok": {
-      "vector_db_username": "1"
+      "vector.username": "1"
     }
   },
   "vector_db_username <- \"s\"": {
     "ok": {
-      "vector_db_username": "s"
+      "vector.username": "s"
     }
   },
   "vector_db_username <- \"true\"": {
     "ok": {
-      "vector_db_username": "true"
+      "vector.username": "true"
     }
   },
   "vector_db_username <- -1": {

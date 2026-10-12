@@ -59,6 +59,24 @@ fn redact_keys(value: &mut serde_json::Value, keys: &[&str]) {
     }
 }
 
+/// For every component-section key that has a plain (Python-compatible)
+/// alias, the canonical key mapped to its first alias: `llm.model` →
+/// `llm_model`. Bindings whose idiomatic API spells keys differently (the TS
+/// camelCase layer) use it to keep their documented names stable.
+pub fn config_key_aliases(
+    config: &cognee::config::ConfigManager,
+) -> serde_json::Map<String, serde_json::Value> {
+    config
+        .schema()
+        .key_defs()
+        .filter_map(|def| {
+            def.aliases
+                .first()
+                .map(|alias| (def.key.to_string(), serde_json::Value::from(*alias)))
+        })
+        .collect()
+}
+
 /// Redact secret values in a config JSON object in place.
 ///
 /// Every key in [`SECRET_FIELDS`] whose value is non-null is replaced with

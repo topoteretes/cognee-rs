@@ -162,6 +162,18 @@ fn make_all_postgres_settings(pg_url: &str) -> Settings {
     Settings {
         sections: [
             (
+                "graph.provider".to_string(),
+                serde_json::json!("postgres".to_string()),
+            ),
+            (
+                "vector.provider".to_string(),
+                serde_json::json!("pgvector".to_string()),
+            ),
+            (
+                "vector.url".to_string(),
+                serde_json::json!(pg_url.to_string()),
+            ),
+            (
                 "embedding.provider".to_string(),
                 serde_json::json!(embedding_provider),
             ),
@@ -200,12 +212,9 @@ fn make_all_postgres_settings(pg_url: &str) -> Settings {
 
         // Graph DB — postgres provider, credentials intentionally empty to
         // trigger the Item-2 fallback to db_* fields.
-        graph_database_provider: "postgres".to_string(),
         // graph_database_url, graph_database_host, etc. left at defaults (empty)
 
         // Vector DB — use pgvector with the same Postgres instance.
-        vector_db_provider: "pgvector".to_string(),
-        vector_db_url: pg_url.to_string(),
 
         // Embedding — real ONNX model for non-trivial similarity when present,
         // otherwise the shared OpenAI-compatible account (see `onnx_assets`).

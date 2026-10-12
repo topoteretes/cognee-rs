@@ -256,6 +256,7 @@ fn main(mut cx: ModuleContext) -> NeonResult<()> {
     )?;
     cx.export_function("configSetGraphDbConfig", config::config_set_graph_db_config)?;
     cx.export_function("getConfig", config::get_config)?;
+    cx.export_function("configKeyAliases", config::get_config_key_aliases)?;
 
     // Logging entrypoint (gap-06): argument-less, idempotent.
     cx.export_function("setupLogging", logging::setup_logging)?;

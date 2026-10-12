@@ -146,33 +146,6 @@ pub struct Settings {
     pub graph_prompt_path: String,
 
     // -- LLM fallback -----------------------------------------------------------
-    /// Graph backend id. The default is derived from the graph factories the
-    /// compiled features register
-    /// ([`cognee_components::default_graph_provider`]): `ladybug` in every
-    /// default build, else `postgres` wherever `pggraph` is compiled in, else
-    /// the single registered backend if there is exactly one. A build that
-    /// drops `ladybug` therefore still resolves on its own unless it registers
-    /// two or more backends and neither preferred id.
-    pub graph_database_provider: String,
-    pub graph_database_url: String,
-    pub graph_database_name: String,
-    pub graph_database_username: String,
-    pub graph_database_password: String,
-    pub graph_database_port: u16,
-    pub graph_database_host: String,
-    pub graph_database_key: String,
-    pub graph_file_path: String,
-    pub graph_filename: String,
-
-    pub vector_db_provider: String,
-    pub vector_db_url: String,
-    pub vector_db_port: u16,
-    pub vector_db_name: String,
-    pub vector_db_key: String,
-    pub vector_db_username: String,
-    pub vector_db_password: String,
-    pub vector_db_host: String,
-
     pub chunk_strategy: String,
     pub chunk_engine: String,
     /// Maximum chunk size in tokens. `None` (the default) means "auto-calculate
@@ -381,6 +354,17 @@ impl Settings {
         T::from_values(&self.sections)
     }
 
+    /// The vector kind section (`vector.*`): backend, URL and connection parts.
+    pub fn vector(&self) -> cognee_components::VectorConfig {
+        self.section()
+    }
+
+    /// The graph kind section (`graph.*`): backend, URL, connection parts and
+    /// the embedded graph file path.
+    pub fn graph(&self) -> cognee_components::GraphConfig {
+        self.section()
+    }
+
     /// The embedding kind section (`embedding.*`): provider, model,
     /// dimensions, credentials, batching and rate limits.
     pub fn embedding(&self) -> cognee_components::EmbeddingConfig {
@@ -441,7 +425,7 @@ impl Settings {
     pub fn backend_context(&self) -> cognee_components::BackendBuildContext {
         use std::path::PathBuf;
 
-        let graph_provider = self.graph_database_provider.to_lowercase();
+        let graph_provider = self.graph().provider.to_lowercase();
         // Resolved for EVERY provider, not only the built-in Postgres ones.
         //
         // `ComponentRegistry` is an open extension point: an external crate may
@@ -463,7 +447,7 @@ impl Settings {
         // user may never see.
         let graph_postgres_url = Some(self.resolved_graph_postgres_url());
 
-        let vector_provider = self.vector_db_provider.to_lowercase();
+        let vector_provider = self.vector().provider.to_lowercase();
         let vector_postgres_url = Some(self.resolved_vector_postgres_url());
 
         // Embedding endpoint/key fall back to the LLM provider's when no
@@ -516,10 +500,10 @@ impl Settings {
             system_root_directory: PathBuf::from(&self.system_root_directory),
             relational_db_url: self.resolved_relational_db_url(),
             graph_provider,
-            graph_file_path: self.graph_file_path.clone(),
+            graph_file_path: self.graph().file_path.clone(),
             graph_postgres_url,
             vector_provider,
-            vector_db_url: self.vector_db_url.clone(),
+            vector_db_url: self.vector().url.clone(),
             vector_postgres_url,
             embedding_dimensions: embedding.dimensions as usize,
             embedding: cognee_components::EmbeddingInputs {
@@ -581,28 +565,26 @@ impl Settings {
     /// offered to whichever graph provider is selected, including externally
     /// registered ones, so it cannot depend on the built-in `pggraph` feature.
     pub(crate) fn resolved_graph_postgres_url(&self) -> Result<String, String> {
-        if self.graph_database_url.starts_with("postgres://")
-            || self.graph_database_url.starts_with("postgresql://")
-        {
-            return Ok(self.graph_database_url.clone());
+        let graph = self.graph();
+        if graph.url.starts_with("postgres://") || graph.url.starts_with("postgresql://") {
+            return Ok(graph.url.clone());
         }
 
-        let graph_host = if self.graph_database_host.is_empty() {
+        let graph_host = if graph.host.is_empty() {
             None
         } else {
-            Some(self.graph_database_host.as_str())
+            Some(graph.host.as_str())
         };
-        let graph_creds_complete = graph_host.is_some()
-            && !self.graph_database_username.is_empty()
-            && !self.graph_database_name.is_empty();
+        let graph_creds_complete =
+            graph_host.is_some() && !graph.username.is_empty() && !graph.name.is_empty();
 
         let (host, port, name, user, pass) = if graph_creds_complete {
             (
                 graph_host.unwrap_or_default(),
-                self.graph_database_port,
-                self.graph_database_name.as_str(),
-                self.graph_database_username.as_str(),
-                self.graph_database_password.as_str(),
+                graph.port,
+                graph.name.as_str(),
+                graph.username.as_str(),
+                graph.password.as_str(),
             )
         } else {
             // `debug`, not `warn`: `Settings::backend_context` resolves this for
@@ -635,10 +617,9 @@ impl Settings {
     /// Always compiled, for the reason given on
     /// [`Self::resolved_graph_postgres_url`].
     pub(crate) fn resolved_vector_postgres_url(&self) -> Result<String, String> {
-        if self.vector_db_url.starts_with("postgres://")
-            || self.vector_db_url.starts_with("postgresql://")
-        {
-            return Ok(self.vector_db_url.clone());
+        let vector = self.vector();
+        if vector.url.starts_with("postgres://") || vector.url.starts_with("postgresql://") {
+            return Ok(vector.url.clone());
         }
 
         // Python parity (`create_vector_engine.py` pgvector branch): use the
@@ -655,17 +636,16 @@ impl Settings {
         // host, silently defeating the single-DB goal. Gate on host+name+username
         // (not password, which may be empty for trust auth), matching the graph
         // path.
-        let vector_creds_complete = !self.vector_db_host.is_empty()
-            && !self.vector_db_name.is_empty()
-            && !self.vector_db_username.is_empty();
+        let vector_creds_complete =
+            !vector.host.is_empty() && !vector.name.is_empty() && !vector.username.is_empty();
 
         let (host, port, name, user, pass) = if vector_creds_complete {
             (
-                self.vector_db_host.as_str(),
-                self.vector_db_port,
-                self.vector_db_name.as_str(),
-                self.vector_db_username.as_str(),
-                self.vector_db_password.as_str(),
+                vector.host.as_str(),
+                vector.port,
+                vector.name.as_str(),
+                vector.username.as_str(),
+                vector.password.as_str(),
             )
         } else {
             // `debug`, not `warn`: `Settings::backend_context` resolves this for
@@ -736,11 +716,11 @@ impl Settings {
         m.insert("sdk_runtime".into(), Value::String("rust".into()));
         m.insert(
             "vector_db_provider".into(),
-            Value::String(self.vector_db_provider.clone()),
+            Value::String(self.vector().provider.clone()),
         );
         m.insert(
             "graph_db_provider".into(),
-            Value::String(self.graph_database_provider.clone()),
+            Value::String(self.graph().provider.clone()),
         );
         m.insert(
             "relational_db_provider".into(),
@@ -805,24 +785,6 @@ impl Default for Settings {
                 as u32,
             graph_prompt_path: "generate_graph_prompt.txt".to_string(),
 
-            // Derived from the graph factories the compiled features register
-            // rather than hardcoded, for the same reason as the HTTP server's
-            // `graph_provider`: a build without `ladybug` (an SDK or CLI
-            // compiled `--no-default-features` with `pggraph`) would otherwise
-            // default to a backend the registry cannot build, and fail on the
-            // first graph access. `ladybug` still wins wherever it is compiled
-            // in, which is every default build.
-            graph_database_provider: cognee_components::default_graph_provider().to_string(),
-            graph_database_url: String::new(),
-            graph_database_name: String::new(),
-            graph_database_username: String::new(),
-            graph_database_password: String::new(),
-            graph_database_port: 123,
-            graph_database_host: String::new(),
-            graph_database_key: String::new(),
-            graph_file_path: String::new(),
-            graph_filename: String::new(),
-
             // OSS default: legacy `"lancedb"` is kept as the literal value so
             // existing configs continue to boot without edits. It is not a
             // fallback — `ComponentManager::init_vector_db` hands the provider id
@@ -854,18 +816,6 @@ impl Default for Settings {
             // the provider back) or from `VECTOR_DB_PROVIDER`; those are
             // absorbed by `ANDROID_LANCEDB_FALLBACK` in
             // `ComponentRegistry::resolve_vector_key`. Keep the two in step.
-            #[cfg(all(target_os = "android", not(feature = "lancedb")))]
-            vector_db_provider: "brute-force".to_string(),
-            #[cfg(not(all(target_os = "android", not(feature = "lancedb"))))]
-            vector_db_provider: "lancedb".to_string(),
-            vector_db_url: String::new(),
-            vector_db_port: 1234,
-            vector_db_name: String::new(),
-            vector_db_key: String::new(),
-            vector_db_username: String::new(),
-            vector_db_password: String::new(),
-            vector_db_host: String::new(),
-
             chunk_strategy: "PARAGRAPH".to_string(),
             chunk_engine: "DEFAULT_ENGINE".to_string(),
             chunk_size: None,
@@ -1367,14 +1317,18 @@ impl ConfigManager {
 
     pub fn set_vector_db_provider(&self, provider: &str) {
         let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
-        s.vector_db_provider = provider.to_string();
+        s.sections.insert(
+            "vector.provider".to_string(),
+            serde_json::json!(provider.to_string()),
+        );
         drop(s);
         self.bump_version();
     }
 
     pub fn set_vector_db_url(&self, url: &str) {
         let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
-        s.vector_db_url = url.to_string();
+        s.sections
+            .insert("vector.url".to_string(), serde_json::json!(url.to_string()));
         drop(s);
         self.bump_version();
     }
@@ -1461,7 +1415,8 @@ impl ConfigManager {
 
     pub fn set_vector_db_key(&self, key: &str) {
         let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
-        s.vector_db_key = key.to_string();
+        s.sections
+            .insert("vector.key".to_string(), serde_json::json!(key.to_string()));
         drop(s);
         self.bump_version();
     }
@@ -1470,7 +1425,10 @@ impl ConfigManager {
 
     pub fn set_graph_database_provider(&self, provider: &str) {
         let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
-        s.graph_database_provider = provider.to_string();
+        s.sections.insert(
+            "graph.provider".to_string(),
+            serde_json::json!(provider.to_string()),
+        );
         drop(s);
         self.bump_version();
     }
@@ -1540,23 +1498,29 @@ impl ConfigManager {
         s.system_root_directory = path.to_string();
 
         // Cascade graph_file_path
-        if s.graph_file_path.is_empty() || s.graph_file_path.starts_with(&old_root) {
-            let suffix = if s.graph_file_path.is_empty() {
+        if s.graph().file_path.is_empty() || s.graph().file_path.starts_with(&old_root) {
+            let suffix = if s.graph().file_path.is_empty() {
                 "/graph".to_string()
             } else {
-                s.graph_file_path[old_root.len()..].to_string()
+                s.graph().file_path[old_root.len()..].to_string()
             };
-            s.graph_file_path = format!("{path}{suffix}");
+            s.sections.insert(
+                "graph.file_path".to_string(),
+                serde_json::json!(format!("{path}{suffix}")),
+            );
         }
 
         // Cascade vector_db_url (only if it was using the default system root path)
-        if s.vector_db_url.is_empty() || s.vector_db_url.starts_with(&old_root) {
-            let suffix = if s.vector_db_url.is_empty() {
+        if s.vector().url.is_empty() || s.vector().url.starts_with(&old_root) {
+            let suffix = if s.vector().url.is_empty() {
                 "/vectors".to_string()
             } else {
-                s.vector_db_url[old_root.len()..].to_string()
+                s.vector().url[old_root.len()..].to_string()
             };
-            s.vector_db_url = format!("{path}{suffix}");
+            s.sections.insert(
+                "vector.url".to_string(),
+                serde_json::json!(format!("{path}{suffix}")),
+            );
         }
 
         drop(s);
@@ -1756,21 +1720,28 @@ impl ConfigManager {
 
     pub fn set_vector_db_host(&self, host: &str) {
         let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
-        s.vector_db_host = host.to_string();
+        s.sections.insert(
+            "vector.host".to_string(),
+            serde_json::json!(host.to_string()),
+        );
         drop(s);
         self.bump_version();
     }
 
     pub fn set_vector_db_port(&self, port: u16) {
         let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
-        s.vector_db_port = port;
+        s.sections
+            .insert("vector.port".to_string(), serde_json::json!(port));
         drop(s);
         self.bump_version();
     }
 
     pub fn set_vector_db_name(&self, name: &str) {
         let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
-        s.vector_db_name = name.to_string();
+        s.sections.insert(
+            "vector.name".to_string(),
+            serde_json::json!(name.to_string()),
+        );
         drop(s);
         self.bump_version();
     }
@@ -1783,7 +1754,10 @@ impl ConfigManager {
     /// this is a plain field write and does **not** cascade to other paths.
     pub fn set_graph_file_path(&self, path: &str) {
         let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
-        s.graph_file_path = path.to_string();
+        s.sections.insert(
+            "graph.file_path".to_string(),
+            serde_json::json!(path.to_string()),
+        );
         drop(s);
         self.bump_version();
     }
@@ -1933,37 +1907,34 @@ impl ConfigManager {
         // Graph DB
         m.insert(
             "graph_database_provider".into(),
-            Value::String(s.graph_database_provider.clone()),
+            Value::String(s.graph().provider.clone()),
         );
         m.insert(
             "graph_database_url".into(),
-            Value::String(mask_url(&s.graph_database_url)),
+            Value::String(mask_url(&s.graph().url)),
         );
         m.insert(
             "graph_database_password".into(),
-            Value::String(mask(&s.graph_database_password)),
+            Value::String(mask(&s.graph().password)),
         );
         m.insert(
             "graph_database_key".into(),
-            Value::String(mask(&s.graph_database_key)),
+            Value::String(mask(&s.graph().key)),
         );
 
         // Vector DB
         m.insert(
             "vector_db_provider".into(),
-            Value::String(s.vector_db_provider.clone()),
+            Value::String(s.vector().provider.clone()),
         );
         m.insert(
             "vector_db_url".into(),
-            Value::String(mask_url(&s.vector_db_url)),
+            Value::String(mask_url(&s.vector().url)),
         );
-        m.insert(
-            "vector_db_key".into(),
-            Value::String(mask(&s.vector_db_key)),
-        );
+        m.insert("vector_db_key".into(), Value::String(mask(&s.vector().key)));
         m.insert(
             "vector_db_password".into(),
-            Value::String(mask(&s.vector_db_password)),
+            Value::String(mask(&s.vector().password)),
         );
 
         // Relational DB
@@ -2025,17 +1996,6 @@ fn as_string(key: &str, value: &serde_json::Value) -> Result<String, ConfigError
         .ok_or_else(|| ConfigError::TypeMismatch {
             key: key.to_string(),
             reason: "expected a string".to_string(),
-        })
-}
-
-/// Extract a `u16` from a JSON value, or return a type-mismatch error.
-fn as_u16(key: &str, value: &serde_json::Value) -> Result<u16, ConfigError> {
-    value
-        .as_u64()
-        .and_then(|n| u16::try_from(n).ok())
-        .ok_or_else(|| ConfigError::TypeMismatch {
-            key: key.to_string(),
-            reason: "expected a positive integer (u16)".to_string(),
         })
 }
 
@@ -2115,20 +2075,22 @@ impl ConfigManager {
         &self,
         values: &HashMap<String, serde_json::Value>,
     ) -> Result<(), ConfigError> {
-        let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
-        for (key, value) in values {
-            match key.as_str() {
-                "vector_db_provider" => s.vector_db_provider = as_string(key, value)?,
-                "vector_db_url" => s.vector_db_url = as_string(key, value)?,
-                "vector_db_key" => s.vector_db_key = as_string(key, value)?,
-                "vector_db_host" => s.vector_db_host = as_string(key, value)?,
-                "vector_db_port" => s.vector_db_port = as_u16(key, value)?,
-                "vector_db_name" => s.vector_db_name = as_string(key, value)?,
-                other => return Err(ConfigError::UnknownKey(other.to_string())),
-            }
+        // The keys this bulk setter has always accepted, each dispatched
+        // through the generic setter.
+        const VECTOR_KEYS: &[&str] = &[
+            "vector_db_provider",
+            "vector_db_url",
+            "vector_db_key",
+            "vector_db_host",
+            "vector_db_port",
+            "vector_db_name",
+        ];
+        if let Some(key) = values.keys().find(|k| !VECTOR_KEYS.contains(&k.as_str())) {
+            return Err(ConfigError::UnknownKey(key.clone()));
         }
-        drop(s);
-        self.bump_version();
+        for (key, value) in values {
+            self.set(key, value.clone())?;
+        }
         Ok(())
     }
 
@@ -2137,17 +2099,15 @@ impl ConfigManager {
         &self,
         values: &HashMap<String, serde_json::Value>,
     ) -> Result<(), ConfigError> {
-        let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
-        for (key, value) in values {
-            match key.as_str() {
-                "graph_database_provider" => s.graph_database_provider = as_string(key, value)?,
-                "graph_model" => s.graph_model = as_string(key, value)?,
-                "graph_file_path" => s.graph_file_path = as_string(key, value)?,
-                other => return Err(ConfigError::UnknownKey(other.to_string())),
-            }
+        // The keys this bulk setter has always accepted, each dispatched
+        // through the generic setter.
+        const GRAPH_KEYS: &[&str] = &["graph_database_provider", "graph_model", "graph_file_path"];
+        if let Some(key) = values.keys().find(|k| !GRAPH_KEYS.contains(&k.as_str())) {
+            return Err(ConfigError::UnknownKey(key.clone()));
         }
-        drop(s);
-        self.bump_version();
+        for (key, value) in values {
+            self.set(key, value.clone())?;
+        }
         Ok(())
     }
 
@@ -2711,9 +2671,18 @@ mod tests {
     #[test]
     fn config_manager_cascading_system_root() {
         let settings = Settings {
+            sections: [
+                (
+                    "graph.file_path".to_string(),
+                    serde_json::json!("/old/root/graph".to_string()),
+                ),
+                (
+                    "vector.url".to_string(),
+                    serde_json::json!("/old/root/vectors".to_string()),
+                ),
+            ]
+            .into(),
             system_root_directory: "/old/root".to_string(),
-            graph_file_path: "/old/root/graph".to_string(),
-            vector_db_url: "/old/root/vectors".to_string(),
             ..Default::default()
         };
 
@@ -2722,8 +2691,8 @@ mod tests {
 
         let s = cm.read();
         assert_eq!(s.system_root_directory, "/new/root");
-        assert_eq!(s.graph_file_path, "/new/root/graph");
-        assert_eq!(s.vector_db_url, "/new/root/vectors");
+        assert_eq!(s.graph().file_path, "/new/root/graph");
+        assert_eq!(s.vector().url, "/new/root/vectors");
     }
 
     #[test]
@@ -2734,16 +2703,26 @@ mod tests {
         cm.set_system_root_directory("/data/cognee");
 
         let s = cm.read();
-        assert_eq!(s.graph_file_path, "/data/cognee/graph");
-        assert_eq!(s.vector_db_url, "/data/cognee/vectors");
+        assert_eq!(s.graph().file_path, "/data/cognee/graph");
+        assert_eq!(s.vector().url, "/data/cognee/vectors");
     }
 
     #[test]
     fn config_manager_no_cascade_when_custom_paths() {
         let settings = Settings {
             system_root_directory: "/old".to_string(),
-            graph_file_path: "/custom/graph".to_string(), // not under /old
-            vector_db_url: "/custom/vectors".to_string(), // not under /old
+            // Neither is under /old.
+            sections: [
+                (
+                    "graph.file_path".to_string(),
+                    serde_json::json!("/custom/graph"),
+                ),
+                (
+                    "vector.url".to_string(),
+                    serde_json::json!("/custom/vectors"),
+                ),
+            ]
+            .into(),
             ..Default::default()
         };
 
@@ -2752,8 +2731,8 @@ mod tests {
 
         let s = cm.read();
         // Custom paths should NOT be cascaded
-        assert_eq!(s.graph_file_path, "/custom/graph");
-        assert_eq!(s.vector_db_url, "/custom/vectors");
+        assert_eq!(s.graph().file_path, "/custom/graph");
+        assert_eq!(s.vector().url, "/custom/vectors");
     }
 
     #[test]
@@ -3129,19 +3108,19 @@ mod tests {
 
         cm.set_vector_db_host("localhost");
         expected_version += 1;
-        assert_eq!(cm.read().vector_db_host, "localhost");
+        assert_eq!(cm.read().vector().host, "localhost");
 
         cm.set_vector_db_port(6333);
         expected_version += 1;
-        assert_eq!(cm.read().vector_db_port, 6333);
+        assert_eq!(cm.read().vector().port, 6333);
 
         cm.set_vector_db_name("my_collection");
         expected_version += 1;
-        assert_eq!(cm.read().vector_db_name, "my_collection");
+        assert_eq!(cm.read().vector().name, "my_collection");
 
         cm.set_graph_file_path("/data/graph");
         expected_version += 1;
-        assert_eq!(cm.read().graph_file_path, "/data/graph");
+        assert_eq!(cm.read().graph().file_path, "/data/graph");
 
         cm.set_cache_root_directory("/tmp/cache");
         expected_version += 1;
@@ -3170,17 +3149,21 @@ mod tests {
     #[test]
     fn config_manager_set_graph_file_path_does_not_cascade() {
         let settings = Settings {
+            sections: [(
+                "vector.url".to_string(),
+                serde_json::json!("/root/vectors".to_string()),
+            )]
+            .into(),
             system_root_directory: "/root".to_string(),
-            vector_db_url: "/root/vectors".to_string(),
             ..Default::default()
         };
         let cm = ConfigManager::new(settings);
         cm.set_graph_file_path("/elsewhere/graph");
 
         let s = cm.read();
-        assert_eq!(s.graph_file_path, "/elsewhere/graph");
+        assert_eq!(s.graph().file_path, "/elsewhere/graph");
         // Unlike set_system_root_directory, vector_db_url is untouched.
-        assert_eq!(s.vector_db_url, "/root/vectors");
+        assert_eq!(s.vector().url, "/root/vectors");
         assert_eq!(s.system_root_directory, "/root");
     }
 
@@ -3209,15 +3192,15 @@ mod tests {
 
         cm.set("vector_db_host", serde_json::json!("host"))
             .expect("vector_db_host should be settable");
-        assert_eq!(cm.read().vector_db_host, "host");
+        assert_eq!(cm.read().vector().host, "host");
 
         cm.set("vector_db_port", serde_json::json!(6333))
             .expect("vector_db_port should be settable");
-        assert_eq!(cm.read().vector_db_port, 6333);
+        assert_eq!(cm.read().vector().port, 6333);
 
         cm.set("graph_file_path", serde_json::json!("/g"))
             .expect("graph_file_path should be settable");
-        assert_eq!(cm.read().graph_file_path, "/g");
+        assert_eq!(cm.read().graph().file_path, "/g");
 
         cm.set("cache_root_directory", serde_json::json!("/c"))
             .expect("cache_root_directory should be settable");
@@ -3279,9 +3262,9 @@ mod tests {
             .expect("bulk set should succeed");
 
         let s = cm.read();
-        assert_eq!(s.vector_db_host, "vhost");
-        assert_eq!(s.vector_db_port, 6333);
-        assert_eq!(s.vector_db_name, "coll");
+        assert_eq!(s.vector().host, "vhost");
+        assert_eq!(s.vector().port, 6333);
+        assert_eq!(s.vector().name, "coll");
     }
 
     #[test]
@@ -3706,6 +3689,10 @@ mod tests {
         let cfg = Settings {
             sections: [
                 (
+                    "vector.password".to_string(),
+                    serde_json::json!("vector-pass"),
+                ),
+                (
                     "embedding.api_key".to_string(),
                     serde_json::json!("sk-also-secret"),
                 ),
@@ -3716,7 +3703,6 @@ mod tests {
                 ("llm.api_key".to_string(), serde_json::json!("sk-secret")),
             ]
             .into(),
-            vector_db_password: "vector-pass".into(),
             db_password: "db-pass".into(),
             relational_db_url: "postgres://user:pass@host/db".into(),
             ..Settings::default()
@@ -3758,9 +3744,9 @@ mod tests {
         // this crate's default features, which is the configuration every
         // consumer of the documented default builds.
         #[cfg(feature = "ladybug")]
-        assert_eq!(settings.graph_database_provider, "ladybug");
+        assert_eq!(settings.graph().provider, "ladybug");
         #[cfg(all(not(feature = "ladybug"), feature = "pggraph"))]
-        assert_eq!(settings.graph_database_provider, "postgres");
+        assert_eq!(settings.graph().provider, "postgres");
         assert_eq!(settings.logs_root_directory, "./logs");
     }
 
@@ -3993,8 +3979,17 @@ mod tests {
     #[test]
     fn backend_context_resolves_postgres_urls_for_an_external_provider() {
         let s = Settings {
-            graph_database_provider: "some-external-provider".to_string(),
-            vector_db_provider: "some-external-provider".to_string(),
+            sections: [
+                (
+                    "graph.provider".to_string(),
+                    serde_json::json!("some-external-provider"),
+                ),
+                (
+                    "vector.provider".to_string(),
+                    serde_json::json!("some-external-provider"),
+                ),
+            ]
+            .into(),
             db_provider: "postgres".to_string(),
             db_host: "shared-pg".to_string(),
             db_port: 5432,
@@ -4033,8 +4028,17 @@ mod tests {
         // left to fall back to (`vector_postgres_url_errs_when_relational_host_
         // or_name_missing` pins that this is an error rather than a bogus URL).
         let s = Settings {
-            graph_database_provider: "some-external-provider".to_string(),
-            vector_db_provider: "some-external-provider".to_string(),
+            sections: [
+                (
+                    "graph.provider".to_string(),
+                    serde_json::json!("some-external-provider"),
+                ),
+                (
+                    "vector.provider".to_string(),
+                    serde_json::json!("some-external-provider"),
+                ),
+            ]
+            .into(),
             db_host: String::new(),
             ..Settings::default()
         };
@@ -4052,12 +4056,30 @@ mod tests {
     fn vector_postgres_url_uses_full_vector_creds() {
         // When the full VECTOR_DB_* set is present, use it verbatim.
         let s = Settings {
-            vector_db_provider: "pgvector".to_string(),
-            vector_db_host: "vec.internal".to_string(),
-            vector_db_port: 6543,
-            vector_db_name: "vectors".to_string(),
-            vector_db_username: "vuser".to_string(),
-            vector_db_password: "vpw".to_string(),
+            sections: [
+                (
+                    "vector.provider".to_string(),
+                    serde_json::json!("pgvector".to_string()),
+                ),
+                (
+                    "vector.host".to_string(),
+                    serde_json::json!("vec.internal".to_string()),
+                ),
+                ("vector.port".to_string(), serde_json::json!(6543)),
+                (
+                    "vector.name".to_string(),
+                    serde_json::json!("vectors".to_string()),
+                ),
+                (
+                    "vector.username".to_string(),
+                    serde_json::json!("vuser".to_string()),
+                ),
+                (
+                    "vector.password".to_string(),
+                    serde_json::json!("vpw".to_string()),
+                ),
+            ]
+            .into(),
             ..Settings::default()
         };
         assert_eq!(
@@ -4074,7 +4096,11 @@ mod tests {
         // DATABASE — NOT port 1234 or a `cognee_vectors` database (Fixes 1 & 2).
         // This is the path the pg_shared_db_single_stack test could not exercise.
         let s = Settings {
-            vector_db_provider: "pgvector".to_string(),
+            sections: [(
+                "vector.provider".to_string(),
+                serde_json::json!("pgvector".to_string()),
+            )]
+            .into(),
             db_provider: "postgres".to_string(),
             db_host: "shared-pg".to_string(),
             db_port: 5432,
@@ -4096,8 +4122,17 @@ mod tests {
         // VECTOR_DB_HOST alone is incomplete → fall back wholesale to relational
         // (Python's all-or-nothing rule), not a per-field mix landing on 1234.
         let s = Settings {
-            vector_db_provider: "pgvector".to_string(),
-            vector_db_host: "ignored-partial".to_string(),
+            sections: [
+                (
+                    "vector.provider".to_string(),
+                    serde_json::json!("pgvector".to_string()),
+                ),
+                (
+                    "vector.host".to_string(),
+                    serde_json::json!("ignored-partial".to_string()),
+                ),
+            ]
+            .into(),
             db_host: "shared-pg".to_string(),
             db_port: 5432,
             db_name: "cognee_db".to_string(),
@@ -4120,7 +4155,11 @@ mod tests {
         // (localhost/5432/cognee_db) — NOT the old per-field defaults
         // (port 1234 / `cognee_vectors`) that split the stores.
         let s = Settings {
-            vector_db_provider: "pgvector".to_string(),
+            sections: [(
+                "vector.provider".to_string(),
+                serde_json::json!("pgvector".to_string()),
+            )]
+            .into(),
             db_username: String::new(),
             ..Settings::default()
         };
@@ -4136,7 +4175,11 @@ mod tests {
         // A password with a blank username is a misconfiguration, not the
         // default: fail fast rather than silently authenticating as `postgres`.
         let s = Settings {
-            vector_db_provider: "pgvector".to_string(),
+            sections: [(
+                "vector.provider".to_string(),
+                serde_json::json!("pgvector".to_string()),
+            )]
+            .into(),
             db_username: String::new(),
             db_password: "secret".to_string(),
             ..Settings::default()
@@ -4150,7 +4193,11 @@ mod tests {
         // If even the relational host/name are blank there is nothing to fall
         // back to, so surface an explicit error rather than a bogus URL.
         let s = Settings {
-            vector_db_provider: "pgvector".to_string(),
+            sections: [(
+                "vector.provider".to_string(),
+                serde_json::json!("pgvector".to_string()),
+            )]
+            .into(),
             db_host: String::new(),
             ..Settings::default()
         };
@@ -4162,8 +4209,19 @@ mod tests {
     fn vector_postgres_url_full_url_shortcut_is_verbatim() {
         // A full postgres:// URL in vector_db_url is passed through untouched.
         let s = Settings {
-            vector_db_provider: "pgvector".to_string(),
-            vector_db_url: "postgres://u:p@explicit:6543/vecs?sslmode=require".to_string(),
+            sections: [
+                (
+                    "vector.provider".to_string(),
+                    serde_json::json!("pgvector".to_string()),
+                ),
+                (
+                    "vector.url".to_string(),
+                    serde_json::json!(
+                        "postgres://u:p@explicit:6543/vecs?sslmode=require".to_string()
+                    ),
+                ),
+            ]
+            .into(),
             db_sslmode: "disable".to_string(),
             ..Settings::default()
         };
@@ -4178,7 +4236,11 @@ mod tests {
     fn vector_postgres_url_appends_sslmode() {
         // sslmode is appended on the relational-fallback (single-DB) path too.
         let s = Settings {
-            vector_db_provider: "pgvector".to_string(),
+            sections: [(
+                "vector.provider".to_string(),
+                serde_json::json!("pgvector".to_string()),
+            )]
+            .into(),
             db_host: "shared-pg".to_string(),
             db_port: 5432,
             db_name: "cognee_db".to_string(),
@@ -4197,12 +4259,30 @@ mod tests {
     #[test]
     fn graph_postgres_url_appends_sslmode() {
         let s = Settings {
-            graph_database_provider: "postgres".to_string(),
-            graph_database_host: "graph.internal".to_string(),
-            graph_database_port: 5432,
-            graph_database_name: "cognee".to_string(),
-            graph_database_username: "postgres".to_string(),
-            graph_database_password: "pw".to_string(),
+            sections: [
+                (
+                    "graph.provider".to_string(),
+                    serde_json::json!("postgres".to_string()),
+                ),
+                (
+                    "graph.host".to_string(),
+                    serde_json::json!("graph.internal".to_string()),
+                ),
+                ("graph.port".to_string(), serde_json::json!(5432)),
+                (
+                    "graph.name".to_string(),
+                    serde_json::json!("cognee".to_string()),
+                ),
+                (
+                    "graph.username".to_string(),
+                    serde_json::json!("postgres".to_string()),
+                ),
+                (
+                    "graph.password".to_string(),
+                    serde_json::json!("pw".to_string()),
+                ),
+            ]
+            .into(),
             db_sslmode: "require".to_string(),
             ..Settings::default()
         };

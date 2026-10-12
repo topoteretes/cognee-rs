@@ -38,7 +38,7 @@ pub fn run(_args: VectorReindexArgs, cm: Arc<ComponentManager>) -> Result<(), Cl
     // dropped before the awaits below (clippy::await_holding_lock). It is only
     // used to make the "nothing to do" message concrete — the decision itself
     // belongs to the backend, not to this string.
-    let provider = cm.settings().vector_db_provider.to_lowercase();
+    let provider = cm.settings().vector().provider.to_lowercase();
 
     crate::teardown::run_command(Arc::clone(&cm), async move {
         let vector_db = cm

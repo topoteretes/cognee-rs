@@ -1879,6 +1879,126 @@
   "COGNEE_LOGS_DIR=\"{\\\"ssl\\\":true}\"": {
     "logs_root_directory": "{\"ssl\":true}"
   },
+  "COGNEE_PGVECTOR_HNSW_EF_CONSTRUCTION=\"  \"": {},
+  "COGNEE_PGVECTOR_HNSW_EF_CONSTRUCTION=\"\"": {},
+  "COGNEE_PGVECTOR_HNSW_EF_CONSTRUCTION=\"-1\"": {},
+  "COGNEE_PGVECTOR_HNSW_EF_CONSTRUCTION=\"0\"": {
+    "vector.pgvector.hnsw_ef_construction": 0
+  },
+  "COGNEE_PGVECTOR_HNSW_EF_CONSTRUCTION=\"1\"": {
+    "vector.pgvector.hnsw_ef_construction": 1
+  },
+  "COGNEE_PGVECTOR_HNSW_EF_CONSTRUCTION=\"1.5\"": {},
+  "COGNEE_PGVECTOR_HNSW_EF_CONSTRUCTION=\"42\"": {
+    "vector.pgvector.hnsw_ef_construction": 42
+  },
+  "COGNEE_PGVECTOR_HNSW_EF_CONSTRUCTION=\"5000000000\"": {},
+  "COGNEE_PGVECTOR_HNSW_EF_CONSTRUCTION=\"70000\"": {
+    "vector.pgvector.hnsw_ef_construction": 70000
+  },
+  "COGNEE_PGVECTOR_HNSW_EF_CONSTRUCTION=\"TRUE\"": {},
+  "COGNEE_PGVECTOR_HNSW_EF_CONSTRUCTION=\"[1]\"": {},
+  "COGNEE_PGVECTOR_HNSW_EF_CONSTRUCTION=\"abc\"": {},
+  "COGNEE_PGVECTOR_HNSW_EF_CONSTRUCTION=\"false\"": {},
+  "COGNEE_PGVECTOR_HNSW_EF_CONSTRUCTION=\"no\"": {},
+  "COGNEE_PGVECTOR_HNSW_EF_CONSTRUCTION=\"on\"": {},
+  "COGNEE_PGVECTOR_HNSW_EF_CONSTRUCTION=\"require\"": {},
+  "COGNEE_PGVECTOR_HNSW_EF_CONSTRUCTION=\"true\"": {},
+  "COGNEE_PGVECTOR_HNSW_EF_CONSTRUCTION=\"v\"": {},
+  "COGNEE_PGVECTOR_HNSW_EF_CONSTRUCTION=\"yes\"": {},
+  "COGNEE_PGVECTOR_HNSW_EF_CONSTRUCTION=\"{\\\"a\\\":1}\"": {},
+  "COGNEE_PGVECTOR_HNSW_EF_CONSTRUCTION=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
+  "COGNEE_PGVECTOR_HNSW_EF_CONSTRUCTION=\"{\\\"ssl\\\":true}\"": {},
+  "COGNEE_PGVECTOR_HNSW_M=\"  \"": {},
+  "COGNEE_PGVECTOR_HNSW_M=\"\"": {},
+  "COGNEE_PGVECTOR_HNSW_M=\"-1\"": {},
+  "COGNEE_PGVECTOR_HNSW_M=\"0\"": {
+    "vector.pgvector.hnsw_m": 0
+  },
+  "COGNEE_PGVECTOR_HNSW_M=\"1\"": {
+    "vector.pgvector.hnsw_m": 1
+  },
+  "COGNEE_PGVECTOR_HNSW_M=\"1.5\"": {},
+  "COGNEE_PGVECTOR_HNSW_M=\"42\"": {
+    "vector.pgvector.hnsw_m": 42
+  },
+  "COGNEE_PGVECTOR_HNSW_M=\"5000000000\"": {},
+  "COGNEE_PGVECTOR_HNSW_M=\"70000\"": {
+    "vector.pgvector.hnsw_m": 70000
+  },
+  "COGNEE_PGVECTOR_HNSW_M=\"TRUE\"": {},
+  "COGNEE_PGVECTOR_HNSW_M=\"[1]\"": {},
+  "COGNEE_PGVECTOR_HNSW_M=\"abc\"": {},
+  "COGNEE_PGVECTOR_HNSW_M=\"false\"": {},
+  "COGNEE_PGVECTOR_HNSW_M=\"no\"": {},
+  "COGNEE_PGVECTOR_HNSW_M=\"on\"": {},
+  "COGNEE_PGVECTOR_HNSW_M=\"require\"": {},
+  "COGNEE_PGVECTOR_HNSW_M=\"true\"": {},
+  "COGNEE_PGVECTOR_HNSW_M=\"v\"": {},
+  "COGNEE_PGVECTOR_HNSW_M=\"yes\"": {},
+  "COGNEE_PGVECTOR_HNSW_M=\"{\\\"a\\\":1}\"": {},
+  "COGNEE_PGVECTOR_HNSW_M=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
+  "COGNEE_PGVECTOR_HNSW_M=\"{\\\"ssl\\\":true}\"": {},
+  "COGNEE_PGVECTOR_MAINTENANCE_WORKERS=\"  \"": {},
+  "COGNEE_PGVECTOR_MAINTENANCE_WORKERS=\"\"": {},
+  "COGNEE_PGVECTOR_MAINTENANCE_WORKERS=\"-1\"": {},
+  "COGNEE_PGVECTOR_MAINTENANCE_WORKERS=\"0\"": {
+    "vector.pgvector.maintenance_workers": 0
+  },
+  "COGNEE_PGVECTOR_MAINTENANCE_WORKERS=\"1\"": {
+    "vector.pgvector.maintenance_workers": 1
+  },
+  "COGNEE_PGVECTOR_MAINTENANCE_WORKERS=\"1.5\"": {},
+  "COGNEE_PGVECTOR_MAINTENANCE_WORKERS=\"42\"": {
+    "vector.pgvector.maintenance_workers": 42
+  },
+  "COGNEE_PGVECTOR_MAINTENANCE_WORKERS=\"5000000000\"": {},
+  "COGNEE_PGVECTOR_MAINTENANCE_WORKERS=\"70000\"": {
+    "vector.pgvector.maintenance_workers": 70000
+  },
+  "COGNEE_PGVECTOR_MAINTENANCE_WORKERS=\"TRUE\"": {},
+  "COGNEE_PGVECTOR_MAINTENANCE_WORKERS=\"[1]\"": {},
+  "COGNEE_PGVECTOR_MAINTENANCE_WORKERS=\"abc\"": {},
+  "COGNEE_PGVECTOR_MAINTENANCE_WORKERS=\"false\"": {},
+  "COGNEE_PGVECTOR_MAINTENANCE_WORKERS=\"no\"": {},
+  "COGNEE_PGVECTOR_MAINTENANCE_WORKERS=\"on\"": {},
+  "COGNEE_PGVECTOR_MAINTENANCE_WORKERS=\"require\"": {},
+  "COGNEE_PGVECTOR_MAINTENANCE_WORKERS=\"true\"": {},
+  "COGNEE_PGVECTOR_MAINTENANCE_WORKERS=\"v\"": {},
+  "COGNEE_PGVECTOR_MAINTENANCE_WORKERS=\"yes\"": {},
+  "COGNEE_PGVECTOR_MAINTENANCE_WORKERS=\"{\\\"a\\\":1}\"": {},
+  "COGNEE_PGVECTOR_MAINTENANCE_WORKERS=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
+  "COGNEE_PGVECTOR_MAINTENANCE_WORKERS=\"{\\\"ssl\\\":true}\"": {},
+  "COGNEE_PGVECTOR_MAINTENANCE_WORK_MEM_MB=\"  \"": {},
+  "COGNEE_PGVECTOR_MAINTENANCE_WORK_MEM_MB=\"\"": {},
+  "COGNEE_PGVECTOR_MAINTENANCE_WORK_MEM_MB=\"-1\"": {},
+  "COGNEE_PGVECTOR_MAINTENANCE_WORK_MEM_MB=\"0\"": {
+    "vector.pgvector.maintenance_work_mem_mb": 0
+  },
+  "COGNEE_PGVECTOR_MAINTENANCE_WORK_MEM_MB=\"1\"": {
+    "vector.pgvector.maintenance_work_mem_mb": 1
+  },
+  "COGNEE_PGVECTOR_MAINTENANCE_WORK_MEM_MB=\"1.5\"": {},
+  "COGNEE_PGVECTOR_MAINTENANCE_WORK_MEM_MB=\"42\"": {
+    "vector.pgvector.maintenance_work_mem_mb": 42
+  },
+  "COGNEE_PGVECTOR_MAINTENANCE_WORK_MEM_MB=\"5000000000\"": {},
+  "COGNEE_PGVECTOR_MAINTENANCE_WORK_MEM_MB=\"70000\"": {
+    "vector.pgvector.maintenance_work_mem_mb": 70000
+  },
+  "COGNEE_PGVECTOR_MAINTENANCE_WORK_MEM_MB=\"TRUE\"": {},
+  "COGNEE_PGVECTOR_MAINTENANCE_WORK_MEM_MB=\"[1]\"": {},
+  "COGNEE_PGVECTOR_MAINTENANCE_WORK_MEM_MB=\"abc\"": {},
+  "COGNEE_PGVECTOR_MAINTENANCE_WORK_MEM_MB=\"false\"": {},
+  "COGNEE_PGVECTOR_MAINTENANCE_WORK_MEM_MB=\"no\"": {},
+  "COGNEE_PGVECTOR_MAINTENANCE_WORK_MEM_MB=\"on\"": {},
+  "COGNEE_PGVECTOR_MAINTENANCE_WORK_MEM_MB=\"require\"": {},
+  "COGNEE_PGVECTOR_MAINTENANCE_WORK_MEM_MB=\"true\"": {},
+  "COGNEE_PGVECTOR_MAINTENANCE_WORK_MEM_MB=\"v\"": {},
+  "COGNEE_PGVECTOR_MAINTENANCE_WORK_MEM_MB=\"yes\"": {},
+  "COGNEE_PGVECTOR_MAINTENANCE_WORK_MEM_MB=\"{\\\"a\\\":1}\"": {},
+  "COGNEE_PGVECTOR_MAINTENANCE_WORK_MEM_MB=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
+  "COGNEE_PGVECTOR_MAINTENANCE_WORK_MEM_MB=\"{\\\"ssl\\\":true}\"": {},
   "COGNEE_RECORD_LLM=\"  \"": {
     "llm.record_path": "  "
   },
@@ -3555,273 +3675,273 @@
   "ENABLE_LAST_ACCESSED=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
   "ENABLE_LAST_ACCESSED=\"{\\\"ssl\\\":true}\"": {},
   "GRAPH_DATABASE_HOST=\"  \"": {
-    "graph_database_host": "  "
+    "graph.host": "  "
   },
   "GRAPH_DATABASE_HOST=\"\"": {},
   "GRAPH_DATABASE_HOST=\"-1\"": {
-    "graph_database_host": "-1"
+    "graph.host": "-1"
   },
   "GRAPH_DATABASE_HOST=\"0\"": {
-    "graph_database_host": "0"
+    "graph.host": "0"
   },
   "GRAPH_DATABASE_HOST=\"1\"": {
-    "graph_database_host": "1"
+    "graph.host": "1"
   },
   "GRAPH_DATABASE_HOST=\"1.5\"": {
-    "graph_database_host": "1.5"
+    "graph.host": "1.5"
   },
   "GRAPH_DATABASE_HOST=\"42\"": {
-    "graph_database_host": "42"
+    "graph.host": "42"
   },
   "GRAPH_DATABASE_HOST=\"5000000000\"": {
-    "graph_database_host": "5000000000"
+    "graph.host": "5000000000"
   },
   "GRAPH_DATABASE_HOST=\"70000\"": {
-    "graph_database_host": "70000"
+    "graph.host": "70000"
   },
   "GRAPH_DATABASE_HOST=\"TRUE\"": {
-    "graph_database_host": "TRUE"
+    "graph.host": "TRUE"
   },
   "GRAPH_DATABASE_HOST=\"[1]\"": {
-    "graph_database_host": "[1]"
+    "graph.host": "[1]"
   },
   "GRAPH_DATABASE_HOST=\"abc\"": {
-    "graph_database_host": "abc"
+    "graph.host": "abc"
   },
   "GRAPH_DATABASE_HOST=\"false\"": {
-    "graph_database_host": "false"
+    "graph.host": "false"
   },
   "GRAPH_DATABASE_HOST=\"no\"": {
-    "graph_database_host": "no"
+    "graph.host": "no"
   },
   "GRAPH_DATABASE_HOST=\"on\"": {
-    "graph_database_host": "on"
+    "graph.host": "on"
   },
   "GRAPH_DATABASE_HOST=\"require\"": {
-    "graph_database_host": "require"
+    "graph.host": "require"
   },
   "GRAPH_DATABASE_HOST=\"true\"": {
-    "graph_database_host": "true"
+    "graph.host": "true"
   },
   "GRAPH_DATABASE_HOST=\"v\"": {
-    "graph_database_host": "v"
+    "graph.host": "v"
   },
   "GRAPH_DATABASE_HOST=\"yes\"": {
-    "graph_database_host": "yes"
+    "graph.host": "yes"
   },
   "GRAPH_DATABASE_HOST=\"{\\\"a\\\":1}\"": {
-    "graph_database_host": "{\"a\":1}"
+    "graph.host": "{\"a\":1}"
   },
   "GRAPH_DATABASE_HOST=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "graph_database_host": "{\"ssl\":\"verify-full\"}"
+    "graph.host": "{\"ssl\":\"verify-full\"}"
   },
   "GRAPH_DATABASE_HOST=\"{\\\"ssl\\\":true}\"": {
-    "graph_database_host": "{\"ssl\":true}"
+    "graph.host": "{\"ssl\":true}"
   },
   "GRAPH_DATABASE_KEY=\"  \"": {
-    "graph_database_key": "  "
+    "graph.key": "  "
   },
   "GRAPH_DATABASE_KEY=\"\"": {},
   "GRAPH_DATABASE_KEY=\"-1\"": {
-    "graph_database_key": "-1"
+    "graph.key": "-1"
   },
   "GRAPH_DATABASE_KEY=\"0\"": {
-    "graph_database_key": "0"
+    "graph.key": "0"
   },
   "GRAPH_DATABASE_KEY=\"1\"": {
-    "graph_database_key": "1"
+    "graph.key": "1"
   },
   "GRAPH_DATABASE_KEY=\"1.5\"": {
-    "graph_database_key": "1.5"
+    "graph.key": "1.5"
   },
   "GRAPH_DATABASE_KEY=\"42\"": {
-    "graph_database_key": "42"
+    "graph.key": "42"
   },
   "GRAPH_DATABASE_KEY=\"5000000000\"": {
-    "graph_database_key": "5000000000"
+    "graph.key": "5000000000"
   },
   "GRAPH_DATABASE_KEY=\"70000\"": {
-    "graph_database_key": "70000"
+    "graph.key": "70000"
   },
   "GRAPH_DATABASE_KEY=\"TRUE\"": {
-    "graph_database_key": "TRUE"
+    "graph.key": "TRUE"
   },
   "GRAPH_DATABASE_KEY=\"[1]\"": {
-    "graph_database_key": "[1]"
+    "graph.key": "[1]"
   },
   "GRAPH_DATABASE_KEY=\"abc\"": {
-    "graph_database_key": "abc"
+    "graph.key": "abc"
   },
   "GRAPH_DATABASE_KEY=\"false\"": {
-    "graph_database_key": "false"
+    "graph.key": "false"
   },
   "GRAPH_DATABASE_KEY=\"no\"": {
-    "graph_database_key": "no"
+    "graph.key": "no"
   },
   "GRAPH_DATABASE_KEY=\"on\"": {
-    "graph_database_key": "on"
+    "graph.key": "on"
   },
   "GRAPH_DATABASE_KEY=\"require\"": {
-    "graph_database_key": "require"
+    "graph.key": "require"
   },
   "GRAPH_DATABASE_KEY=\"true\"": {
-    "graph_database_key": "true"
+    "graph.key": "true"
   },
   "GRAPH_DATABASE_KEY=\"v\"": {
-    "graph_database_key": "v"
+    "graph.key": "v"
   },
   "GRAPH_DATABASE_KEY=\"yes\"": {
-    "graph_database_key": "yes"
+    "graph.key": "yes"
   },
   "GRAPH_DATABASE_KEY=\"{\\\"a\\\":1}\"": {
-    "graph_database_key": "{\"a\":1}"
+    "graph.key": "{\"a\":1}"
   },
   "GRAPH_DATABASE_KEY=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "graph_database_key": "{\"ssl\":\"verify-full\"}"
+    "graph.key": "{\"ssl\":\"verify-full\"}"
   },
   "GRAPH_DATABASE_KEY=\"{\\\"ssl\\\":true}\"": {
-    "graph_database_key": "{\"ssl\":true}"
+    "graph.key": "{\"ssl\":true}"
   },
   "GRAPH_DATABASE_NAME=\"  \"": {
-    "graph_database_name": "  "
+    "graph.name": "  "
   },
   "GRAPH_DATABASE_NAME=\"\"": {},
   "GRAPH_DATABASE_NAME=\"-1\"": {
-    "graph_database_name": "-1"
+    "graph.name": "-1"
   },
   "GRAPH_DATABASE_NAME=\"0\"": {
-    "graph_database_name": "0"
+    "graph.name": "0"
   },
   "GRAPH_DATABASE_NAME=\"1\"": {
-    "graph_database_name": "1"
+    "graph.name": "1"
   },
   "GRAPH_DATABASE_NAME=\"1.5\"": {
-    "graph_database_name": "1.5"
+    "graph.name": "1.5"
   },
   "GRAPH_DATABASE_NAME=\"42\"": {
-    "graph_database_name": "42"
+    "graph.name": "42"
   },
   "GRAPH_DATABASE_NAME=\"5000000000\"": {
-    "graph_database_name": "5000000000"
+    "graph.name": "5000000000"
   },
   "GRAPH_DATABASE_NAME=\"70000\"": {
-    "graph_database_name": "70000"
+    "graph.name": "70000"
   },
   "GRAPH_DATABASE_NAME=\"TRUE\"": {
-    "graph_database_name": "TRUE"
+    "graph.name": "TRUE"
   },
   "GRAPH_DATABASE_NAME=\"[1]\"": {
-    "graph_database_name": "[1]"
+    "graph.name": "[1]"
   },
   "GRAPH_DATABASE_NAME=\"abc\"": {
-    "graph_database_name": "abc"
+    "graph.name": "abc"
   },
   "GRAPH_DATABASE_NAME=\"false\"": {
-    "graph_database_name": "false"
+    "graph.name": "false"
   },
   "GRAPH_DATABASE_NAME=\"no\"": {
-    "graph_database_name": "no"
+    "graph.name": "no"
   },
   "GRAPH_DATABASE_NAME=\"on\"": {
-    "graph_database_name": "on"
+    "graph.name": "on"
   },
   "GRAPH_DATABASE_NAME=\"require\"": {
-    "graph_database_name": "require"
+    "graph.name": "require"
   },
   "GRAPH_DATABASE_NAME=\"true\"": {
-    "graph_database_name": "true"
+    "graph.name": "true"
   },
   "GRAPH_DATABASE_NAME=\"v\"": {
-    "graph_database_name": "v"
+    "graph.name": "v"
   },
   "GRAPH_DATABASE_NAME=\"yes\"": {
-    "graph_database_name": "yes"
+    "graph.name": "yes"
   },
   "GRAPH_DATABASE_NAME=\"{\\\"a\\\":1}\"": {
-    "graph_database_name": "{\"a\":1}"
+    "graph.name": "{\"a\":1}"
   },
   "GRAPH_DATABASE_NAME=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "graph_database_name": "{\"ssl\":\"verify-full\"}"
+    "graph.name": "{\"ssl\":\"verify-full\"}"
   },
   "GRAPH_DATABASE_NAME=\"{\\\"ssl\\\":true}\"": {
-    "graph_database_name": "{\"ssl\":true}"
+    "graph.name": "{\"ssl\":true}"
   },
   "GRAPH_DATABASE_PASSWORD=\"  \"": {
-    "graph_database_password": "  "
+    "graph.password": "  "
   },
   "GRAPH_DATABASE_PASSWORD=\"\"": {},
   "GRAPH_DATABASE_PASSWORD=\"-1\"": {
-    "graph_database_password": "-1"
+    "graph.password": "-1"
   },
   "GRAPH_DATABASE_PASSWORD=\"0\"": {
-    "graph_database_password": "0"
+    "graph.password": "0"
   },
   "GRAPH_DATABASE_PASSWORD=\"1\"": {
-    "graph_database_password": "1"
+    "graph.password": "1"
   },
   "GRAPH_DATABASE_PASSWORD=\"1.5\"": {
-    "graph_database_password": "1.5"
+    "graph.password": "1.5"
   },
   "GRAPH_DATABASE_PASSWORD=\"42\"": {
-    "graph_database_password": "42"
+    "graph.password": "42"
   },
   "GRAPH_DATABASE_PASSWORD=\"5000000000\"": {
-    "graph_database_password": "5000000000"
+    "graph.password": "5000000000"
   },
   "GRAPH_DATABASE_PASSWORD=\"70000\"": {
-    "graph_database_password": "70000"
+    "graph.password": "70000"
   },
   "GRAPH_DATABASE_PASSWORD=\"TRUE\"": {
-    "graph_database_password": "TRUE"
+    "graph.password": "TRUE"
   },
   "GRAPH_DATABASE_PASSWORD=\"[1]\"": {
-    "graph_database_password": "[1]"
+    "graph.password": "[1]"
   },
   "GRAPH_DATABASE_PASSWORD=\"abc\"": {
-    "graph_database_password": "abc"
+    "graph.password": "abc"
   },
   "GRAPH_DATABASE_PASSWORD=\"false\"": {
-    "graph_database_password": "false"
+    "graph.password": "false"
   },
   "GRAPH_DATABASE_PASSWORD=\"no\"": {
-    "graph_database_password": "no"
+    "graph.password": "no"
   },
   "GRAPH_DATABASE_PASSWORD=\"on\"": {
-    "graph_database_password": "on"
+    "graph.password": "on"
   },
   "GRAPH_DATABASE_PASSWORD=\"require\"": {
-    "graph_database_password": "require"
+    "graph.password": "require"
   },
   "GRAPH_DATABASE_PASSWORD=\"true\"": {
-    "graph_database_password": "true"
+    "graph.password": "true"
   },
   "GRAPH_DATABASE_PASSWORD=\"v\"": {
-    "graph_database_password": "v"
+    "graph.password": "v"
   },
   "GRAPH_DATABASE_PASSWORD=\"yes\"": {
-    "graph_database_password": "yes"
+    "graph.password": "yes"
   },
   "GRAPH_DATABASE_PASSWORD=\"{\\\"a\\\":1}\"": {
-    "graph_database_password": "{\"a\":1}"
+    "graph.password": "{\"a\":1}"
   },
   "GRAPH_DATABASE_PASSWORD=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "graph_database_password": "{\"ssl\":\"verify-full\"}"
+    "graph.password": "{\"ssl\":\"verify-full\"}"
   },
   "GRAPH_DATABASE_PASSWORD=\"{\\\"ssl\\\":true}\"": {
-    "graph_database_password": "{\"ssl\":true}"
+    "graph.password": "{\"ssl\":true}"
   },
   "GRAPH_DATABASE_PORT=\"  \"": {},
   "GRAPH_DATABASE_PORT=\"\"": {},
   "GRAPH_DATABASE_PORT=\"-1\"": {},
   "GRAPH_DATABASE_PORT=\"0\"": {
-    "graph_database_port": 0
+    "graph.port": 0
   },
   "GRAPH_DATABASE_PORT=\"1\"": {
-    "graph_database_port": 1
+    "graph.port": 1
   },
   "GRAPH_DATABASE_PORT=\"1.5\"": {},
   "GRAPH_DATABASE_PORT=\"42\"": {
-    "graph_database_port": 42
+    "graph.port": 42
   },
   "GRAPH_DATABASE_PORT=\"5000000000\"": {},
   "GRAPH_DATABASE_PORT=\"70000\"": {},
@@ -3839,260 +3959,260 @@
   "GRAPH_DATABASE_PORT=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
   "GRAPH_DATABASE_PORT=\"{\\\"ssl\\\":true}\"": {},
   "GRAPH_DATABASE_PROVIDER=\"  \"": {
-    "graph_database_provider": "  "
+    "graph.provider": "  "
   },
   "GRAPH_DATABASE_PROVIDER=\"\"": {},
   "GRAPH_DATABASE_PROVIDER=\"-1\"": {
-    "graph_database_provider": "-1"
+    "graph.provider": "-1"
   },
   "GRAPH_DATABASE_PROVIDER=\"0\"": {
-    "graph_database_provider": "0"
+    "graph.provider": "0"
   },
   "GRAPH_DATABASE_PROVIDER=\"1\"": {
-    "graph_database_provider": "1"
+    "graph.provider": "1"
   },
   "GRAPH_DATABASE_PROVIDER=\"1.5\"": {
-    "graph_database_provider": "1.5"
+    "graph.provider": "1.5"
   },
   "GRAPH_DATABASE_PROVIDER=\"42\"": {
-    "graph_database_provider": "42"
+    "graph.provider": "42"
   },
   "GRAPH_DATABASE_PROVIDER=\"5000000000\"": {
-    "graph_database_provider": "5000000000"
+    "graph.provider": "5000000000"
   },
   "GRAPH_DATABASE_PROVIDER=\"70000\"": {
-    "graph_database_provider": "70000"
+    "graph.provider": "70000"
   },
   "GRAPH_DATABASE_PROVIDER=\"TRUE\"": {
-    "graph_database_provider": "TRUE"
+    "graph.provider": "TRUE"
   },
   "GRAPH_DATABASE_PROVIDER=\"[1]\"": {
-    "graph_database_provider": "[1]"
+    "graph.provider": "[1]"
   },
   "GRAPH_DATABASE_PROVIDER=\"abc\"": {
-    "graph_database_provider": "abc"
+    "graph.provider": "abc"
   },
   "GRAPH_DATABASE_PROVIDER=\"false\"": {
-    "graph_database_provider": "false"
+    "graph.provider": "false"
   },
   "GRAPH_DATABASE_PROVIDER=\"no\"": {
-    "graph_database_provider": "no"
+    "graph.provider": "no"
   },
   "GRAPH_DATABASE_PROVIDER=\"on\"": {
-    "graph_database_provider": "on"
+    "graph.provider": "on"
   },
   "GRAPH_DATABASE_PROVIDER=\"require\"": {
-    "graph_database_provider": "require"
+    "graph.provider": "require"
   },
   "GRAPH_DATABASE_PROVIDER=\"true\"": {
-    "graph_database_provider": "true"
+    "graph.provider": "true"
   },
   "GRAPH_DATABASE_PROVIDER=\"v\"": {
-    "graph_database_provider": "v"
+    "graph.provider": "v"
   },
   "GRAPH_DATABASE_PROVIDER=\"yes\"": {
-    "graph_database_provider": "yes"
+    "graph.provider": "yes"
   },
   "GRAPH_DATABASE_PROVIDER=\"{\\\"a\\\":1}\"": {
-    "graph_database_provider": "{\"a\":1}"
+    "graph.provider": "{\"a\":1}"
   },
   "GRAPH_DATABASE_PROVIDER=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "graph_database_provider": "{\"ssl\":\"verify-full\"}"
+    "graph.provider": "{\"ssl\":\"verify-full\"}"
   },
   "GRAPH_DATABASE_PROVIDER=\"{\\\"ssl\\\":true}\"": {
-    "graph_database_provider": "{\"ssl\":true}"
+    "graph.provider": "{\"ssl\":true}"
   },
   "GRAPH_DATABASE_URL=\"  \"": {
-    "graph_database_url": "  "
+    "graph.url": "  "
   },
   "GRAPH_DATABASE_URL=\"\"": {},
   "GRAPH_DATABASE_URL=\"-1\"": {
-    "graph_database_url": "-1"
+    "graph.url": "-1"
   },
   "GRAPH_DATABASE_URL=\"0\"": {
-    "graph_database_url": "0"
+    "graph.url": "0"
   },
   "GRAPH_DATABASE_URL=\"1\"": {
-    "graph_database_url": "1"
+    "graph.url": "1"
   },
   "GRAPH_DATABASE_URL=\"1.5\"": {
-    "graph_database_url": "1.5"
+    "graph.url": "1.5"
   },
   "GRAPH_DATABASE_URL=\"42\"": {
-    "graph_database_url": "42"
+    "graph.url": "42"
   },
   "GRAPH_DATABASE_URL=\"5000000000\"": {
-    "graph_database_url": "5000000000"
+    "graph.url": "5000000000"
   },
   "GRAPH_DATABASE_URL=\"70000\"": {
-    "graph_database_url": "70000"
+    "graph.url": "70000"
   },
   "GRAPH_DATABASE_URL=\"TRUE\"": {
-    "graph_database_url": "TRUE"
+    "graph.url": "TRUE"
   },
   "GRAPH_DATABASE_URL=\"[1]\"": {
-    "graph_database_url": "[1]"
+    "graph.url": "[1]"
   },
   "GRAPH_DATABASE_URL=\"abc\"": {
-    "graph_database_url": "abc"
+    "graph.url": "abc"
   },
   "GRAPH_DATABASE_URL=\"false\"": {
-    "graph_database_url": "false"
+    "graph.url": "false"
   },
   "GRAPH_DATABASE_URL=\"no\"": {
-    "graph_database_url": "no"
+    "graph.url": "no"
   },
   "GRAPH_DATABASE_URL=\"on\"": {
-    "graph_database_url": "on"
+    "graph.url": "on"
   },
   "GRAPH_DATABASE_URL=\"require\"": {
-    "graph_database_url": "require"
+    "graph.url": "require"
   },
   "GRAPH_DATABASE_URL=\"true\"": {
-    "graph_database_url": "true"
+    "graph.url": "true"
   },
   "GRAPH_DATABASE_URL=\"v\"": {
-    "graph_database_url": "v"
+    "graph.url": "v"
   },
   "GRAPH_DATABASE_URL=\"yes\"": {
-    "graph_database_url": "yes"
+    "graph.url": "yes"
   },
   "GRAPH_DATABASE_URL=\"{\\\"a\\\":1}\"": {
-    "graph_database_url": "{\"a\":1}"
+    "graph.url": "{\"a\":1}"
   },
   "GRAPH_DATABASE_URL=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "graph_database_url": "{\"ssl\":\"verify-full\"}"
+    "graph.url": "{\"ssl\":\"verify-full\"}"
   },
   "GRAPH_DATABASE_URL=\"{\\\"ssl\\\":true}\"": {
-    "graph_database_url": "{\"ssl\":true}"
+    "graph.url": "{\"ssl\":true}"
   },
   "GRAPH_DATABASE_USERNAME=\"  \"": {
-    "graph_database_username": "  "
+    "graph.username": "  "
   },
   "GRAPH_DATABASE_USERNAME=\"\"": {},
   "GRAPH_DATABASE_USERNAME=\"-1\"": {
-    "graph_database_username": "-1"
+    "graph.username": "-1"
   },
   "GRAPH_DATABASE_USERNAME=\"0\"": {
-    "graph_database_username": "0"
+    "graph.username": "0"
   },
   "GRAPH_DATABASE_USERNAME=\"1\"": {
-    "graph_database_username": "1"
+    "graph.username": "1"
   },
   "GRAPH_DATABASE_USERNAME=\"1.5\"": {
-    "graph_database_username": "1.5"
+    "graph.username": "1.5"
   },
   "GRAPH_DATABASE_USERNAME=\"42\"": {
-    "graph_database_username": "42"
+    "graph.username": "42"
   },
   "GRAPH_DATABASE_USERNAME=\"5000000000\"": {
-    "graph_database_username": "5000000000"
+    "graph.username": "5000000000"
   },
   "GRAPH_DATABASE_USERNAME=\"70000\"": {
-    "graph_database_username": "70000"
+    "graph.username": "70000"
   },
   "GRAPH_DATABASE_USERNAME=\"TRUE\"": {
-    "graph_database_username": "TRUE"
+    "graph.username": "TRUE"
   },
   "GRAPH_DATABASE_USERNAME=\"[1]\"": {
-    "graph_database_username": "[1]"
+    "graph.username": "[1]"
   },
   "GRAPH_DATABASE_USERNAME=\"abc\"": {
-    "graph_database_username": "abc"
+    "graph.username": "abc"
   },
   "GRAPH_DATABASE_USERNAME=\"false\"": {
-    "graph_database_username": "false"
+    "graph.username": "false"
   },
   "GRAPH_DATABASE_USERNAME=\"no\"": {
-    "graph_database_username": "no"
+    "graph.username": "no"
   },
   "GRAPH_DATABASE_USERNAME=\"on\"": {
-    "graph_database_username": "on"
+    "graph.username": "on"
   },
   "GRAPH_DATABASE_USERNAME=\"require\"": {
-    "graph_database_username": "require"
+    "graph.username": "require"
   },
   "GRAPH_DATABASE_USERNAME=\"true\"": {
-    "graph_database_username": "true"
+    "graph.username": "true"
   },
   "GRAPH_DATABASE_USERNAME=\"v\"": {
-    "graph_database_username": "v"
+    "graph.username": "v"
   },
   "GRAPH_DATABASE_USERNAME=\"yes\"": {
-    "graph_database_username": "yes"
+    "graph.username": "yes"
   },
   "GRAPH_DATABASE_USERNAME=\"{\\\"a\\\":1}\"": {
-    "graph_database_username": "{\"a\":1}"
+    "graph.username": "{\"a\":1}"
   },
   "GRAPH_DATABASE_USERNAME=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "graph_database_username": "{\"ssl\":\"verify-full\"}"
+    "graph.username": "{\"ssl\":\"verify-full\"}"
   },
   "GRAPH_DATABASE_USERNAME=\"{\\\"ssl\\\":true}\"": {
-    "graph_database_username": "{\"ssl\":true}"
+    "graph.username": "{\"ssl\":true}"
   },
   "GRAPH_FILE_PATH=\"  \"": {
-    "graph_file_path": "  "
+    "graph.file_path": "  "
   },
   "GRAPH_FILE_PATH=\"\"": {},
   "GRAPH_FILE_PATH=\"-1\"": {
-    "graph_file_path": "-1"
+    "graph.file_path": "-1"
   },
   "GRAPH_FILE_PATH=\"0\"": {
-    "graph_file_path": "0"
+    "graph.file_path": "0"
   },
   "GRAPH_FILE_PATH=\"1\"": {
-    "graph_file_path": "1"
+    "graph.file_path": "1"
   },
   "GRAPH_FILE_PATH=\"1.5\"": {
-    "graph_file_path": "1.5"
+    "graph.file_path": "1.5"
   },
   "GRAPH_FILE_PATH=\"42\"": {
-    "graph_file_path": "42"
+    "graph.file_path": "42"
   },
   "GRAPH_FILE_PATH=\"5000000000\"": {
-    "graph_file_path": "5000000000"
+    "graph.file_path": "5000000000"
   },
   "GRAPH_FILE_PATH=\"70000\"": {
-    "graph_file_path": "70000"
+    "graph.file_path": "70000"
   },
   "GRAPH_FILE_PATH=\"TRUE\"": {
-    "graph_file_path": "TRUE"
+    "graph.file_path": "TRUE"
   },
   "GRAPH_FILE_PATH=\"[1]\"": {
-    "graph_file_path": "[1]"
+    "graph.file_path": "[1]"
   },
   "GRAPH_FILE_PATH=\"abc\"": {
-    "graph_file_path": "abc"
+    "graph.file_path": "abc"
   },
   "GRAPH_FILE_PATH=\"false\"": {
-    "graph_file_path": "false"
+    "graph.file_path": "false"
   },
   "GRAPH_FILE_PATH=\"no\"": {
-    "graph_file_path": "no"
+    "graph.file_path": "no"
   },
   "GRAPH_FILE_PATH=\"on\"": {
-    "graph_file_path": "on"
+    "graph.file_path": "on"
   },
   "GRAPH_FILE_PATH=\"require\"": {
-    "graph_file_path": "require"
+    "graph.file_path": "require"
   },
   "GRAPH_FILE_PATH=\"true\"": {
-    "graph_file_path": "true"
+    "graph.file_path": "true"
   },
   "GRAPH_FILE_PATH=\"v\"": {
-    "graph_file_path": "v"
+    "graph.file_path": "v"
   },
   "GRAPH_FILE_PATH=\"yes\"": {
-    "graph_file_path": "yes"
+    "graph.file_path": "yes"
   },
   "GRAPH_FILE_PATH=\"{\\\"a\\\":1}\"": {
-    "graph_file_path": "{\"a\":1}"
+    "graph.file_path": "{\"a\":1}"
   },
   "GRAPH_FILE_PATH=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "graph_file_path": "{\"ssl\":\"verify-full\"}"
+    "graph.file_path": "{\"ssl\":\"verify-full\"}"
   },
   "GRAPH_FILE_PATH=\"{\\\"ssl\\\":true}\"": {
-    "graph_file_path": "{\"ssl\":true}"
+    "graph.file_path": "{\"ssl\":true}"
   },
   "GRAPH_MAX_DB_SIZE=\"  \"": {},
   "GRAPH_MAX_DB_SIZE=\"\"": {},
@@ -6504,273 +6624,273 @@
     "llm.openai_compatible.transcription_model": "{\"ssl\":true}"
   },
   "VECTOR_DB_HOST=\"  \"": {
-    "vector_db_host": "  "
+    "vector.host": "  "
   },
   "VECTOR_DB_HOST=\"\"": {},
   "VECTOR_DB_HOST=\"-1\"": {
-    "vector_db_host": "-1"
+    "vector.host": "-1"
   },
   "VECTOR_DB_HOST=\"0\"": {
-    "vector_db_host": "0"
+    "vector.host": "0"
   },
   "VECTOR_DB_HOST=\"1\"": {
-    "vector_db_host": "1"
+    "vector.host": "1"
   },
   "VECTOR_DB_HOST=\"1.5\"": {
-    "vector_db_host": "1.5"
+    "vector.host": "1.5"
   },
   "VECTOR_DB_HOST=\"42\"": {
-    "vector_db_host": "42"
+    "vector.host": "42"
   },
   "VECTOR_DB_HOST=\"5000000000\"": {
-    "vector_db_host": "5000000000"
+    "vector.host": "5000000000"
   },
   "VECTOR_DB_HOST=\"70000\"": {
-    "vector_db_host": "70000"
+    "vector.host": "70000"
   },
   "VECTOR_DB_HOST=\"TRUE\"": {
-    "vector_db_host": "TRUE"
+    "vector.host": "TRUE"
   },
   "VECTOR_DB_HOST=\"[1]\"": {
-    "vector_db_host": "[1]"
+    "vector.host": "[1]"
   },
   "VECTOR_DB_HOST=\"abc\"": {
-    "vector_db_host": "abc"
+    "vector.host": "abc"
   },
   "VECTOR_DB_HOST=\"false\"": {
-    "vector_db_host": "false"
+    "vector.host": "false"
   },
   "VECTOR_DB_HOST=\"no\"": {
-    "vector_db_host": "no"
+    "vector.host": "no"
   },
   "VECTOR_DB_HOST=\"on\"": {
-    "vector_db_host": "on"
+    "vector.host": "on"
   },
   "VECTOR_DB_HOST=\"require\"": {
-    "vector_db_host": "require"
+    "vector.host": "require"
   },
   "VECTOR_DB_HOST=\"true\"": {
-    "vector_db_host": "true"
+    "vector.host": "true"
   },
   "VECTOR_DB_HOST=\"v\"": {
-    "vector_db_host": "v"
+    "vector.host": "v"
   },
   "VECTOR_DB_HOST=\"yes\"": {
-    "vector_db_host": "yes"
+    "vector.host": "yes"
   },
   "VECTOR_DB_HOST=\"{\\\"a\\\":1}\"": {
-    "vector_db_host": "{\"a\":1}"
+    "vector.host": "{\"a\":1}"
   },
   "VECTOR_DB_HOST=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "vector_db_host": "{\"ssl\":\"verify-full\"}"
+    "vector.host": "{\"ssl\":\"verify-full\"}"
   },
   "VECTOR_DB_HOST=\"{\\\"ssl\\\":true}\"": {
-    "vector_db_host": "{\"ssl\":true}"
+    "vector.host": "{\"ssl\":true}"
   },
   "VECTOR_DB_KEY=\"  \"": {
-    "vector_db_key": "  "
+    "vector.key": "  "
   },
   "VECTOR_DB_KEY=\"\"": {},
   "VECTOR_DB_KEY=\"-1\"": {
-    "vector_db_key": "-1"
+    "vector.key": "-1"
   },
   "VECTOR_DB_KEY=\"0\"": {
-    "vector_db_key": "0"
+    "vector.key": "0"
   },
   "VECTOR_DB_KEY=\"1\"": {
-    "vector_db_key": "1"
+    "vector.key": "1"
   },
   "VECTOR_DB_KEY=\"1.5\"": {
-    "vector_db_key": "1.5"
+    "vector.key": "1.5"
   },
   "VECTOR_DB_KEY=\"42\"": {
-    "vector_db_key": "42"
+    "vector.key": "42"
   },
   "VECTOR_DB_KEY=\"5000000000\"": {
-    "vector_db_key": "5000000000"
+    "vector.key": "5000000000"
   },
   "VECTOR_DB_KEY=\"70000\"": {
-    "vector_db_key": "70000"
+    "vector.key": "70000"
   },
   "VECTOR_DB_KEY=\"TRUE\"": {
-    "vector_db_key": "TRUE"
+    "vector.key": "TRUE"
   },
   "VECTOR_DB_KEY=\"[1]\"": {
-    "vector_db_key": "[1]"
+    "vector.key": "[1]"
   },
   "VECTOR_DB_KEY=\"abc\"": {
-    "vector_db_key": "abc"
+    "vector.key": "abc"
   },
   "VECTOR_DB_KEY=\"false\"": {
-    "vector_db_key": "false"
+    "vector.key": "false"
   },
   "VECTOR_DB_KEY=\"no\"": {
-    "vector_db_key": "no"
+    "vector.key": "no"
   },
   "VECTOR_DB_KEY=\"on\"": {
-    "vector_db_key": "on"
+    "vector.key": "on"
   },
   "VECTOR_DB_KEY=\"require\"": {
-    "vector_db_key": "require"
+    "vector.key": "require"
   },
   "VECTOR_DB_KEY=\"true\"": {
-    "vector_db_key": "true"
+    "vector.key": "true"
   },
   "VECTOR_DB_KEY=\"v\"": {
-    "vector_db_key": "v"
+    "vector.key": "v"
   },
   "VECTOR_DB_KEY=\"yes\"": {
-    "vector_db_key": "yes"
+    "vector.key": "yes"
   },
   "VECTOR_DB_KEY=\"{\\\"a\\\":1}\"": {
-    "vector_db_key": "{\"a\":1}"
+    "vector.key": "{\"a\":1}"
   },
   "VECTOR_DB_KEY=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "vector_db_key": "{\"ssl\":\"verify-full\"}"
+    "vector.key": "{\"ssl\":\"verify-full\"}"
   },
   "VECTOR_DB_KEY=\"{\\\"ssl\\\":true}\"": {
-    "vector_db_key": "{\"ssl\":true}"
+    "vector.key": "{\"ssl\":true}"
   },
   "VECTOR_DB_NAME=\"  \"": {
-    "vector_db_name": "  "
+    "vector.name": "  "
   },
   "VECTOR_DB_NAME=\"\"": {},
   "VECTOR_DB_NAME=\"-1\"": {
-    "vector_db_name": "-1"
+    "vector.name": "-1"
   },
   "VECTOR_DB_NAME=\"0\"": {
-    "vector_db_name": "0"
+    "vector.name": "0"
   },
   "VECTOR_DB_NAME=\"1\"": {
-    "vector_db_name": "1"
+    "vector.name": "1"
   },
   "VECTOR_DB_NAME=\"1.5\"": {
-    "vector_db_name": "1.5"
+    "vector.name": "1.5"
   },
   "VECTOR_DB_NAME=\"42\"": {
-    "vector_db_name": "42"
+    "vector.name": "42"
   },
   "VECTOR_DB_NAME=\"5000000000\"": {
-    "vector_db_name": "5000000000"
+    "vector.name": "5000000000"
   },
   "VECTOR_DB_NAME=\"70000\"": {
-    "vector_db_name": "70000"
+    "vector.name": "70000"
   },
   "VECTOR_DB_NAME=\"TRUE\"": {
-    "vector_db_name": "TRUE"
+    "vector.name": "TRUE"
   },
   "VECTOR_DB_NAME=\"[1]\"": {
-    "vector_db_name": "[1]"
+    "vector.name": "[1]"
   },
   "VECTOR_DB_NAME=\"abc\"": {
-    "vector_db_name": "abc"
+    "vector.name": "abc"
   },
   "VECTOR_DB_NAME=\"false\"": {
-    "vector_db_name": "false"
+    "vector.name": "false"
   },
   "VECTOR_DB_NAME=\"no\"": {
-    "vector_db_name": "no"
+    "vector.name": "no"
   },
   "VECTOR_DB_NAME=\"on\"": {
-    "vector_db_name": "on"
+    "vector.name": "on"
   },
   "VECTOR_DB_NAME=\"require\"": {
-    "vector_db_name": "require"
+    "vector.name": "require"
   },
   "VECTOR_DB_NAME=\"true\"": {
-    "vector_db_name": "true"
+    "vector.name": "true"
   },
   "VECTOR_DB_NAME=\"v\"": {
-    "vector_db_name": "v"
+    "vector.name": "v"
   },
   "VECTOR_DB_NAME=\"yes\"": {
-    "vector_db_name": "yes"
+    "vector.name": "yes"
   },
   "VECTOR_DB_NAME=\"{\\\"a\\\":1}\"": {
-    "vector_db_name": "{\"a\":1}"
+    "vector.name": "{\"a\":1}"
   },
   "VECTOR_DB_NAME=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "vector_db_name": "{\"ssl\":\"verify-full\"}"
+    "vector.name": "{\"ssl\":\"verify-full\"}"
   },
   "VECTOR_DB_NAME=\"{\\\"ssl\\\":true}\"": {
-    "vector_db_name": "{\"ssl\":true}"
+    "vector.name": "{\"ssl\":true}"
   },
   "VECTOR_DB_PASSWORD=\"  \"": {
-    "vector_db_password": "  "
+    "vector.password": "  "
   },
   "VECTOR_DB_PASSWORD=\"\"": {},
   "VECTOR_DB_PASSWORD=\"-1\"": {
-    "vector_db_password": "-1"
+    "vector.password": "-1"
   },
   "VECTOR_DB_PASSWORD=\"0\"": {
-    "vector_db_password": "0"
+    "vector.password": "0"
   },
   "VECTOR_DB_PASSWORD=\"1\"": {
-    "vector_db_password": "1"
+    "vector.password": "1"
   },
   "VECTOR_DB_PASSWORD=\"1.5\"": {
-    "vector_db_password": "1.5"
+    "vector.password": "1.5"
   },
   "VECTOR_DB_PASSWORD=\"42\"": {
-    "vector_db_password": "42"
+    "vector.password": "42"
   },
   "VECTOR_DB_PASSWORD=\"5000000000\"": {
-    "vector_db_password": "5000000000"
+    "vector.password": "5000000000"
   },
   "VECTOR_DB_PASSWORD=\"70000\"": {
-    "vector_db_password": "70000"
+    "vector.password": "70000"
   },
   "VECTOR_DB_PASSWORD=\"TRUE\"": {
-    "vector_db_password": "TRUE"
+    "vector.password": "TRUE"
   },
   "VECTOR_DB_PASSWORD=\"[1]\"": {
-    "vector_db_password": "[1]"
+    "vector.password": "[1]"
   },
   "VECTOR_DB_PASSWORD=\"abc\"": {
-    "vector_db_password": "abc"
+    "vector.password": "abc"
   },
   "VECTOR_DB_PASSWORD=\"false\"": {
-    "vector_db_password": "false"
+    "vector.password": "false"
   },
   "VECTOR_DB_PASSWORD=\"no\"": {
-    "vector_db_password": "no"
+    "vector.password": "no"
   },
   "VECTOR_DB_PASSWORD=\"on\"": {
-    "vector_db_password": "on"
+    "vector.password": "on"
   },
   "VECTOR_DB_PASSWORD=\"require\"": {
-    "vector_db_password": "require"
+    "vector.password": "require"
   },
   "VECTOR_DB_PASSWORD=\"true\"": {
-    "vector_db_password": "true"
+    "vector.password": "true"
   },
   "VECTOR_DB_PASSWORD=\"v\"": {
-    "vector_db_password": "v"
+    "vector.password": "v"
   },
   "VECTOR_DB_PASSWORD=\"yes\"": {
-    "vector_db_password": "yes"
+    "vector.password": "yes"
   },
   "VECTOR_DB_PASSWORD=\"{\\\"a\\\":1}\"": {
-    "vector_db_password": "{\"a\":1}"
+    "vector.password": "{\"a\":1}"
   },
   "VECTOR_DB_PASSWORD=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "vector_db_password": "{\"ssl\":\"verify-full\"}"
+    "vector.password": "{\"ssl\":\"verify-full\"}"
   },
   "VECTOR_DB_PASSWORD=\"{\\\"ssl\\\":true}\"": {
-    "vector_db_password": "{\"ssl\":true}"
+    "vector.password": "{\"ssl\":true}"
   },
   "VECTOR_DB_PORT=\"  \"": {},
   "VECTOR_DB_PORT=\"\"": {},
   "VECTOR_DB_PORT=\"-1\"": {},
   "VECTOR_DB_PORT=\"0\"": {
-    "vector_db_port": 0
+    "vector.port": 0
   },
   "VECTOR_DB_PORT=\"1\"": {
-    "vector_db_port": 1
+    "vector.port": 1
   },
   "VECTOR_DB_PORT=\"1.5\"": {},
   "VECTOR_DB_PORT=\"42\"": {
-    "vector_db_port": 42
+    "vector.port": 42
   },
   "VECTOR_DB_PORT=\"5000000000\"": {},
   "VECTOR_DB_PORT=\"70000\"": {},
@@ -6788,195 +6908,195 @@
   "VECTOR_DB_PORT=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
   "VECTOR_DB_PORT=\"{\\\"ssl\\\":true}\"": {},
   "VECTOR_DB_PROVIDER=\"  \"": {
-    "vector_db_provider": "  "
+    "vector.provider": "  "
   },
   "VECTOR_DB_PROVIDER=\"\"": {},
   "VECTOR_DB_PROVIDER=\"-1\"": {
-    "vector_db_provider": "-1"
+    "vector.provider": "-1"
   },
   "VECTOR_DB_PROVIDER=\"0\"": {
-    "vector_db_provider": "0"
+    "vector.provider": "0"
   },
   "VECTOR_DB_PROVIDER=\"1\"": {
-    "vector_db_provider": "1"
+    "vector.provider": "1"
   },
   "VECTOR_DB_PROVIDER=\"1.5\"": {
-    "vector_db_provider": "1.5"
+    "vector.provider": "1.5"
   },
   "VECTOR_DB_PROVIDER=\"42\"": {
-    "vector_db_provider": "42"
+    "vector.provider": "42"
   },
   "VECTOR_DB_PROVIDER=\"5000000000\"": {
-    "vector_db_provider": "5000000000"
+    "vector.provider": "5000000000"
   },
   "VECTOR_DB_PROVIDER=\"70000\"": {
-    "vector_db_provider": "70000"
+    "vector.provider": "70000"
   },
   "VECTOR_DB_PROVIDER=\"TRUE\"": {
-    "vector_db_provider": "TRUE"
+    "vector.provider": "TRUE"
   },
   "VECTOR_DB_PROVIDER=\"[1]\"": {
-    "vector_db_provider": "[1]"
+    "vector.provider": "[1]"
   },
   "VECTOR_DB_PROVIDER=\"abc\"": {
-    "vector_db_provider": "abc"
+    "vector.provider": "abc"
   },
   "VECTOR_DB_PROVIDER=\"false\"": {
-    "vector_db_provider": "false"
+    "vector.provider": "false"
   },
   "VECTOR_DB_PROVIDER=\"no\"": {
-    "vector_db_provider": "no"
+    "vector.provider": "no"
   },
   "VECTOR_DB_PROVIDER=\"on\"": {
-    "vector_db_provider": "on"
+    "vector.provider": "on"
   },
   "VECTOR_DB_PROVIDER=\"require\"": {
-    "vector_db_provider": "require"
+    "vector.provider": "require"
   },
   "VECTOR_DB_PROVIDER=\"true\"": {
-    "vector_db_provider": "true"
+    "vector.provider": "true"
   },
   "VECTOR_DB_PROVIDER=\"v\"": {
-    "vector_db_provider": "v"
+    "vector.provider": "v"
   },
   "VECTOR_DB_PROVIDER=\"yes\"": {
-    "vector_db_provider": "yes"
+    "vector.provider": "yes"
   },
   "VECTOR_DB_PROVIDER=\"{\\\"a\\\":1}\"": {
-    "vector_db_provider": "{\"a\":1}"
+    "vector.provider": "{\"a\":1}"
   },
   "VECTOR_DB_PROVIDER=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "vector_db_provider": "{\"ssl\":\"verify-full\"}"
+    "vector.provider": "{\"ssl\":\"verify-full\"}"
   },
   "VECTOR_DB_PROVIDER=\"{\\\"ssl\\\":true}\"": {
-    "vector_db_provider": "{\"ssl\":true}"
+    "vector.provider": "{\"ssl\":true}"
   },
   "VECTOR_DB_URL=\"  \"": {
-    "vector_db_url": "  "
+    "vector.url": "  "
   },
   "VECTOR_DB_URL=\"\"": {},
   "VECTOR_DB_URL=\"-1\"": {
-    "vector_db_url": "-1"
+    "vector.url": "-1"
   },
   "VECTOR_DB_URL=\"0\"": {
-    "vector_db_url": "0"
+    "vector.url": "0"
   },
   "VECTOR_DB_URL=\"1\"": {
-    "vector_db_url": "1"
+    "vector.url": "1"
   },
   "VECTOR_DB_URL=\"1.5\"": {
-    "vector_db_url": "1.5"
+    "vector.url": "1.5"
   },
   "VECTOR_DB_URL=\"42\"": {
-    "vector_db_url": "42"
+    "vector.url": "42"
   },
   "VECTOR_DB_URL=\"5000000000\"": {
-    "vector_db_url": "5000000000"
+    "vector.url": "5000000000"
   },
   "VECTOR_DB_URL=\"70000\"": {
-    "vector_db_url": "70000"
+    "vector.url": "70000"
   },
   "VECTOR_DB_URL=\"TRUE\"": {
-    "vector_db_url": "TRUE"
+    "vector.url": "TRUE"
   },
   "VECTOR_DB_URL=\"[1]\"": {
-    "vector_db_url": "[1]"
+    "vector.url": "[1]"
   },
   "VECTOR_DB_URL=\"abc\"": {
-    "vector_db_url": "abc"
+    "vector.url": "abc"
   },
   "VECTOR_DB_URL=\"false\"": {
-    "vector_db_url": "false"
+    "vector.url": "false"
   },
   "VECTOR_DB_URL=\"no\"": {
-    "vector_db_url": "no"
+    "vector.url": "no"
   },
   "VECTOR_DB_URL=\"on\"": {
-    "vector_db_url": "on"
+    "vector.url": "on"
   },
   "VECTOR_DB_URL=\"require\"": {
-    "vector_db_url": "require"
+    "vector.url": "require"
   },
   "VECTOR_DB_URL=\"true\"": {
-    "vector_db_url": "true"
+    "vector.url": "true"
   },
   "VECTOR_DB_URL=\"v\"": {
-    "vector_db_url": "v"
+    "vector.url": "v"
   },
   "VECTOR_DB_URL=\"yes\"": {
-    "vector_db_url": "yes"
+    "vector.url": "yes"
   },
   "VECTOR_DB_URL=\"{\\\"a\\\":1}\"": {
-    "vector_db_url": "{\"a\":1}"
+    "vector.url": "{\"a\":1}"
   },
   "VECTOR_DB_URL=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "vector_db_url": "{\"ssl\":\"verify-full\"}"
+    "vector.url": "{\"ssl\":\"verify-full\"}"
   },
   "VECTOR_DB_URL=\"{\\\"ssl\\\":true}\"": {
-    "vector_db_url": "{\"ssl\":true}"
+    "vector.url": "{\"ssl\":true}"
   },
   "VECTOR_DB_USERNAME=\"  \"": {
-    "vector_db_username": "  "
+    "vector.username": "  "
   },
   "VECTOR_DB_USERNAME=\"\"": {},
   "VECTOR_DB_USERNAME=\"-1\"": {
-    "vector_db_username": "-1"
+    "vector.username": "-1"
   },
   "VECTOR_DB_USERNAME=\"0\"": {
-    "vector_db_username": "0"
+    "vector.username": "0"
   },
   "VECTOR_DB_USERNAME=\"1\"": {
-    "vector_db_username": "1"
+    "vector.username": "1"
   },
   "VECTOR_DB_USERNAME=\"1.5\"": {
-    "vector_db_username": "1.5"
+    "vector.username": "1.5"
   },
   "VECTOR_DB_USERNAME=\"42\"": {
-    "vector_db_username": "42"
+    "vector.username": "42"
   },
   "VECTOR_DB_USERNAME=\"5000000000\"": {
-    "vector_db_username": "5000000000"
+    "vector.username": "5000000000"
   },
   "VECTOR_DB_USERNAME=\"70000\"": {
-    "vector_db_username": "70000"
+    "vector.username": "70000"
   },
   "VECTOR_DB_USERNAME=\"TRUE\"": {
-    "vector_db_username": "TRUE"
+    "vector.username": "TRUE"
   },
   "VECTOR_DB_USERNAME=\"[1]\"": {
-    "vector_db_username": "[1]"
+    "vector.username": "[1]"
   },
   "VECTOR_DB_USERNAME=\"abc\"": {
-    "vector_db_username": "abc"
+    "vector.username": "abc"
   },
   "VECTOR_DB_USERNAME=\"false\"": {
-    "vector_db_username": "false"
+    "vector.username": "false"
   },
   "VECTOR_DB_USERNAME=\"no\"": {
-    "vector_db_username": "no"
+    "vector.username": "no"
   },
   "VECTOR_DB_USERNAME=\"on\"": {
-    "vector_db_username": "on"
+    "vector.username": "on"
   },
   "VECTOR_DB_USERNAME=\"require\"": {
-    "vector_db_username": "require"
+    "vector.username": "require"
   },
   "VECTOR_DB_USERNAME=\"true\"": {
-    "vector_db_username": "true"
+    "vector.username": "true"
   },
   "VECTOR_DB_USERNAME=\"v\"": {
-    "vector_db_username": "v"
+    "vector.username": "v"
   },
   "VECTOR_DB_USERNAME=\"yes\"": {
-    "vector_db_username": "yes"
+    "vector.username": "yes"
   },
   "VECTOR_DB_USERNAME=\"{\\\"a\\\":1}\"": {
-    "vector_db_username": "{\"a\":1}"
+    "vector.username": "{\"a\":1}"
   },
   "VECTOR_DB_USERNAME=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "vector_db_username": "{\"ssl\":\"verify-full\"}"
+    "vector.username": "{\"ssl\":\"verify-full\"}"
   },
   "VECTOR_DB_USERNAME=\"{\\\"ssl\\\":true}\"": {
-    "vector_db_username": "{\"ssl\":true}"
+    "vector.username": "{\"ssl\":true}"
   }
 }

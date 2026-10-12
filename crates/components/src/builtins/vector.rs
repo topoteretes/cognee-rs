@@ -21,6 +21,10 @@ impl VectorDbFactory for PgVectorFactory {
         "pgvector"
     }
 
+    fn config_sections(&self) -> Vec<&'static cognee_config_core::SectionSchema> {
+        vec![<cognee_vector::PgVectorConfig as cognee_config_core::ConfigSection>::schema()]
+    }
+
     async fn build(&self, ctx: &BackendBuildContext) -> Result<Arc<dyn VectorDB>, ComponentError> {
         let url = match ctx.vector_postgres_url.as_ref() {
             Some(Ok(url)) => url,
@@ -31,9 +35,11 @@ impl VectorDbFactory for PgVectorFactory {
                 ));
             }
         };
+        let tuning = cognee_vector::PgVectorTuning::from_config(&ctx.section());
         let adapter = cognee_vector::PgVectorAdapter::new(url, ctx.embedding_dimensions)
             .await
-            .map_err(|e| ComponentError::VectorDb(format!("pgvector init failed: {e}")))?;
+            .map_err(|e| ComponentError::VectorDb(format!("pgvector init failed: {e}")))?
+            .with_tuning(tuning);
         Ok(Arc::new(adapter))
     }
 }

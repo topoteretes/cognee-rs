@@ -189,6 +189,8 @@ impl ComponentRegistry {
         let mut sections: Vec<&'static SectionSchema> = vec![
             <crate::sections::LlmConfig as cognee_config_core::ConfigSection>::schema(),
             <crate::sections::EmbeddingConfig as cognee_config_core::ConfigSection>::schema(),
+            <crate::sections::VectorConfig as cognee_config_core::ConfigSection>::schema(),
+            <crate::sections::GraphConfig as cognee_config_core::ConfigSection>::schema(),
         ];
         for f in sorted(&self.vector) {
             sections.extend(f.config_sections());

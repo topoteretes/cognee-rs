@@ -25,6 +25,8 @@ pgvector = ["dep:sea-orm", "dep:sea-orm-migration", "dep:futures-util"]
 testing  = []
 
 [dependencies]
+# Component-owned config sections (PgVectorConfig).
+cognee-config-core = { path = "../config-core", version = "0.2.0" }
 # Async
 tokio       = { workspace = true }
 async-trait = { workspace = true }

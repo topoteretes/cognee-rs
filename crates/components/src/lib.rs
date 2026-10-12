@@ -42,8 +42,8 @@ pub use context::{
 pub use error::ComponentError;
 pub use registry::{ComponentRegistry, default_graph_provider};
 pub use sections::{
-    AnthropicConfig, AwsConfig, EmbeddingConfig, LlmConfig, OllamaEmbeddingConfig,
-    OnnxEmbeddingConfig, OpenAiCompatibleConfig, OpenAiCompatibleEmbeddingConfig,
+    AnthropicConfig, AwsConfig, EmbeddingConfig, GraphConfig, LlmConfig, OllamaEmbeddingConfig,
+    OnnxEmbeddingConfig, OpenAiCompatibleConfig, OpenAiCompatibleEmbeddingConfig, VectorConfig,
 };
 pub use traits::{EmbeddingFactory, GraphDbFactory, LlmFactory, VectorDbFactory};
 
