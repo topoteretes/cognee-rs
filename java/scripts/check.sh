@@ -35,6 +35,16 @@ echo "================================================================"
 cargo fmt --manifest-path "$JAVA_DIR/cognee-java-jni/Cargo.toml" -- --check
 cargo clippy --manifest-path "$JAVA_DIR/cognee-java-jni/Cargo.toml" --all-targets -- -D warnings
 
+# Config-boundary lint for the Neon crate (see docs/configuration.md
+# § "Configuration model"). cognee-ts-neon shares this bindings/ workspace, so
+# this check run reuses the engine artifacts the clippy run above just built,
+# where a clippy step in ts/scripts/check.sh would pay for a whole extra check
+# build next to the addon's release build. Only the env ban is denied: the
+# crate has never been held to the full `-D warnings` clippy gate, and widening
+# that is a separate change.
+cargo clippy --manifest-path "$JAVA_DIR/../ts/cognee-ts-neon/Cargo.toml" --all-targets -- \
+  -A warnings -D clippy::disallowed_methods
+
 echo ""
 echo "================================================================"
 echo "=== Java: Building native cdylib (debug) ==="

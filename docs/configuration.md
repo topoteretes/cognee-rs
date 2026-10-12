@@ -51,9 +51,14 @@ Parsing notes:
 ### How the rule is enforced
 
 * The only sanctioned read of the process environment is
-  [`cognee_config_core::ProcessEnv`](../crates/config-core/src/lib.rs). Config
-  loaders take a `&dyn EnvSource`, so tests can pass a `MapEnv` instead of
-  mutating the shared process environment.
+  [`cognee_config_core::ProcessEnv`](../crates/config-core/src/lib.rs). The
+  boundary loaders read through an `EnvSource`, so tests can pass a `MapEnv`
+  instead of mutating the shared process environment:
+  * `Settings::overlay_from(&dyn EnvSource)`
+  * `LoggingConfig::from_env_source(&dyn EnvSource)`
+  * `EnvSettingsView::from_env_source(&dyn EnvSource)`
+
+  The `from_env()` / `overlay_from_env()` entry points are thin boundaries over them.
 * The root [`clippy.toml`](../clippy.toml) bans the following:
   * `std::env::{var, var_os, vars, vars_os, set_var, remove_var}`
   * `dotenv::*`
@@ -62,23 +67,32 @@ Parsing notes:
   A configuration boundary opens the process environment explicitly, under
   `#[allow(clippy::disallowed_methods, reason = "config boundary: …")]`. That keeps
   every boundary visible and easy to grep.
-* Three `reason` prefixes are accepted on that `allow`:
-  * `config boundary: …` turns the environment into a config struct (for example
-    `Settings::overlay_from_env`, `LoggingConfig::from_env`).
+* Three `reason` prefixes are accepted on that `allow` in production code:
+  * `config boundary: …` turns the environment into a config struct.
   * `env-only by design: …` covers a conventional variable whose whole point is to
     be ambient: proxy variables, `HOME`, the AWS default credential chain,
     `COGNEE_CONFIG_HOME` (it locates the config file itself),
     `COGNEE_BINDING_SUPPRESS_LOGS` (read at module load, before user code runs) and
     `LOG_FILE_NAME` (hands the log file to child processes).
   * `config-unification: legacy direct env read, …` marks code that predates the
-    rule. These sites are being migrated behind a config boundary, and
-    [`scripts/check_env_boundary.sh`](../scripts/check_env_boundary.sh), run by
-    `scripts/check_all.sh` and CI, fails if their count goes up. **New code must
-    never add one.**
+    rule and is being migrated behind a config boundary. **New code must never add
+    one.**
+* An `allow` can hide more than one read, so the reads themselves are counted.
+  [`scripts/check_env_boundary.sh`](../scripts/check_env_boundary.sh) counts every
+  direct-access call site in production code, per file. Test modules, `tests/`,
+  `examples/` and `crates/test-utils` are excluded. It compares the counts with
+  [`scripts/env_boundary_baseline.txt`](../scripts/env_boundary_baseline.txt) and
+  fails if any file's count goes **up**, with any `allow` reason. It also fails if
+  a count goes **down**, so the lower number gets locked in. Run
+  `scripts/check_env_boundary.sh --update` to rewrite the baseline. A genuinely new
+  config boundary is therefore always an explicit, reviewed baseline change. The
+  check runs in `scripts/check_all.sh` and CI, and covers the `capi/`, Python,
+  TypeScript and Java binding crates too.
 * Tests may drive configuration through the process environment, under a
   file-level or module-level
   `allow(clippy::disallowed_methods, reason = "tests drive configuration through the process env")`.
-  Prefer a `MapEnv` where the code under test accepts an `EnvSource`.
+  Prefer a `MapEnv` where the code under test accepts an `EnvSource`. Example
+  binaries carry their own `example binary: …` reason.
 
 ### Adding a setting
 

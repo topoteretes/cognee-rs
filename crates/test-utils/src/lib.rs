@@ -14,7 +14,7 @@
 )]
 #![allow(
     clippy::disallowed_methods,
-    reason = "tests drive configuration through the process env"
+    reason = "test infrastructure: drives configuration through the process env for the tests that use it"
 )]
 
 pub mod mock_acl_db;

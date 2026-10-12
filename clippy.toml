@@ -8,10 +8,10 @@
 # clippy looks for this file upward from each crate's directory, so it also
 # governs the capi/ and bindings/ workspaces.
 disallowed-methods = [
-    { path = "std::env::var", reason = "read configuration through a config struct's `from_env(&dyn EnvSource)` at a config boundary — see docs/configuration.md#adding-a-setting" },
-    { path = "std::env::var_os", reason = "read configuration through a config struct's `from_env(&dyn EnvSource)` at a config boundary — see docs/configuration.md#adding-a-setting" },
-    { path = "std::env::vars", reason = "read configuration through a config struct's `from_env(&dyn EnvSource)` at a config boundary — see docs/configuration.md#adding-a-setting" },
-    { path = "std::env::vars_os", reason = "read configuration through a config struct's `from_env(&dyn EnvSource)` at a config boundary — see docs/configuration.md#adding-a-setting" },
+    { path = "std::env::var", reason = "add a config-struct field and read it at the config boundary through an `EnvSource` (e.g. `Settings::overlay_from`) — see docs/configuration.md#adding-a-setting" },
+    { path = "std::env::var_os", reason = "add a config-struct field and read it at the config boundary through an `EnvSource` (e.g. `Settings::overlay_from`) — see docs/configuration.md#adding-a-setting" },
+    { path = "std::env::vars", reason = "add a config-struct field and read it at the config boundary through an `EnvSource` (e.g. `Settings::overlay_from`) — see docs/configuration.md#adding-a-setting" },
+    { path = "std::env::vars_os", reason = "add a config-struct field and read it at the config boundary through an `EnvSource` (e.g. `Settings::overlay_from`) — see docs/configuration.md#adding-a-setting" },
     { path = "std::env::set_var", reason = "configuration must not mutate the process env; pass the value through a config struct — see docs/configuration.md#adding-a-setting" },
     { path = "std::env::remove_var", reason = "configuration must not mutate the process env; pass the value through a config struct — see docs/configuration.md#adding-a-setting" },
     { path = "dotenv::dotenv", reason = "use `cognee_config_core::load_dotenv` at the config boundary", allow-invalid = true },

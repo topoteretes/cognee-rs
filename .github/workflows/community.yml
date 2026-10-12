@@ -103,7 +103,7 @@ jobs:
       - name: clippy
         run: cargo clippy --all-targets -- -D warnings
 
-      # Config-boundary ratchet: the legacy direct-env-read allows may only
+      # Config-boundary ratchet: direct process-env reads in production code may only
       # decrease (docs/configuration.md § "Configuration model").
       - name: config-boundary ratchet
         run: bash scripts/check_env_boundary.sh

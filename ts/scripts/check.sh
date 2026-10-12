@@ -36,21 +36,6 @@ echo "node ${NODE_VERSION_RAW} (ok)"
 
 echo ""
 echo "================================================================"
-echo "=== TS: config-boundary lint (no direct env access) ==="
-echo "================================================================"
-
-# Enforces the root clippy.toml ban on std::env::var & co. (see
-# docs/configuration.md § "Configuration model") for the Neon crate, which is
-# not a root-workspace member and so is not reached by the root clippy run.
-# Only that one lint is denied: the crate has never been held to the full
-# `-D warnings` clippy gate, and widening it is a separate change. The check
-# build lands in the bindings workspace's shared target/, which
-# java/scripts/check.sh's clippy run reuses.
-cargo clippy --manifest-path "$TS_DIR/cognee-ts-neon/Cargo.toml" --all-targets -- \
-  -A warnings -D clippy::disallowed_methods
-
-echo ""
-echo "================================================================"
 echo "=== TS: Installing npm dependencies ==="
 echo "================================================================"
 

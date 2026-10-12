@@ -28,6 +28,7 @@ telemetry = [
 ]
 
 [dependencies]
+cognee-config-core = { path = "../config-core", version = "0.2.0" }
 cognee-utils = { path = "../utils", version = "0.2.0" }
 thiserror.workspace = true
 tracing.workspace = true

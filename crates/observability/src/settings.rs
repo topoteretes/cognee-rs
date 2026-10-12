@@ -5,6 +5,8 @@
 //! sibling task so HTTP middleware and other upstream callers can drive
 //! [`crate::init_telemetry`] without going through `cognee`.
 
+use cognee_config_core::EnvSource;
+
 /// Borrow-only adapter over the OTEL fields of cognee `Settings`.
 ///
 /// All accessors return `&str` / `bool` so implementations can avoid
@@ -77,31 +79,45 @@ impl Default for EnvSettingsView {
 impl EnvSettingsView {
     /// Read all eight OTEL env vars. Missing or empty vars fall back to
     /// the same defaults as `cognee::Settings::default()`.
+    ///
+    /// This is a configuration boundary: it is where tracing setup opens the
+    /// process environment. [`EnvSettingsView::from_env_source`] reads the same
+    /// variables from any [`EnvSource`].
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "config boundary: the OTel settings are resolved from the process env here"
+    )]
     pub fn from_env() -> Self {
+        Self::from_env_source(&cognee_config_core::ProcessEnv::new())
+    }
+
+    /// [`EnvSettingsView::from_env`], reading from `env` instead of the
+    /// process environment.
+    pub fn from_env_source(env: &dyn EnvSource) -> Self {
         let mut view = Self::default();
 
-        if let Some(v) = read_env("COGNEE_TRACING_ENABLED") {
+        if let Some(v) = read_env(env, "COGNEE_TRACING_ENABLED") {
             view.tracing_enabled = cognee_utils::parse_env_bool(&v);
         }
-        if let Some(v) = read_env("OTEL_SERVICE_NAME") {
+        if let Some(v) = read_env(env, "OTEL_SERVICE_NAME") {
             view.service_name = v;
         }
-        if let Some(v) = read_env("OTEL_EXPORTER_OTLP_ENDPOINT") {
+        if let Some(v) = read_env(env, "OTEL_EXPORTER_OTLP_ENDPOINT") {
             view.otlp_endpoint = v;
         }
-        if let Some(v) = read_env("OTEL_EXPORTER_OTLP_HEADERS") {
+        if let Some(v) = read_env(env, "OTEL_EXPORTER_OTLP_HEADERS") {
             view.otlp_headers = v;
         }
-        if let Some(v) = read_env("OTEL_EXPORTER_OTLP_PROTOCOL") {
+        if let Some(v) = read_env(env, "OTEL_EXPORTER_OTLP_PROTOCOL") {
             view.otlp_protocol = v;
         }
-        if let Some(v) = read_env("OTEL_SPAN_PROCESSOR") {
+        if let Some(v) = read_env(env, "OTEL_SPAN_PROCESSOR") {
             view.span_processor = v;
         }
-        if let Some(v) = read_env("OTEL_TRACES_SAMPLER") {
+        if let Some(v) = read_env(env, "OTEL_TRACES_SAMPLER") {
             view.traces_sampler = v;
         }
-        if let Some(v) = read_env("OTEL_TRACES_SAMPLER_ARG") {
+        if let Some(v) = read_env(env, "OTEL_TRACES_SAMPLER_ARG") {
             view.traces_sampler_arg = v;
         }
 
@@ -111,15 +127,8 @@ impl EnvSettingsView {
 
 // Empty string is treated as "unset" so callers can clear an env var via
 // `KEY=` without flipping the value to a literal empty string mid-process.
-#[allow(
-    clippy::disallowed_methods,
-    reason = "config boundary: EnvSettingsView::from_env"
-)]
-fn read_env(key: &str) -> Option<String> {
-    match std::env::var(key) {
-        Ok(v) if !v.is_empty() => Some(v),
-        _ => None,
-    }
+fn read_env(env: &dyn EnvSource, key: &str) -> Option<String> {
+    env.get(key).filter(|v| !v.is_empty())
 }
 
 impl SettingsView for EnvSettingsView {
@@ -248,5 +257,23 @@ mod tests {
         assert_eq!(view.traces_sampler_arg(), "0.5");
 
         clear_otel_env();
+    }
+
+    /// `from_env_source` reads only the source it is given, so it needs no
+    /// process-env mutation and no `#[serial]`.
+    #[test]
+    fn from_env_source_reads_only_the_given_source() {
+        let env = cognee_config_core::MapEnv::new()
+            .with("COGNEE_TRACING_ENABLED", "yes")
+            .with("OTEL_SERVICE_NAME", "svc")
+            .with("OTEL_EXPORTER_OTLP_ENDPOINT", "");
+        let view = EnvSettingsView::from_env_source(&env);
+        assert!(view.tracing_enabled());
+        assert_eq!(view.service_name(), "svc");
+        assert_eq!(
+            view.otlp_endpoint(),
+            EnvSettingsView::default().otlp_endpoint(),
+            "empty means unset"
+        );
     }
 }

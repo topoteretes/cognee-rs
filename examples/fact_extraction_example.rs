@@ -11,7 +11,7 @@
 //! 3. Run: cargo run --example fact_extraction_example
 #![allow(
     clippy::disallowed_methods,
-    reason = "tests drive configuration through the process env"
+    reason = "example binary: reads its demo credentials from the process env"
 )]
 
 use cognee_cognify::{FactExtractor, KnowledgeGraph};

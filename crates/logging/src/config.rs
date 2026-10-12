@@ -13,7 +13,7 @@
 //! behavior; keeping `from_env` free of `tracing::*` calls lets unit
 //! tests run without a subscriber.
 
-use std::env;
+use cognee_config_core::EnvSource;
 use std::path::PathBuf;
 use thiserror::Error;
 
@@ -161,13 +161,27 @@ impl LoggingConfig {
     /// value (e.g. `COGNEE_LOG_ROTATION=weekly`,
     /// `COGNEE_LOG_BACKUP_COUNT=abc`). Unset env vars fall back to
     /// the documented defaults.
+    ///
+    /// This is a configuration boundary: it is where logging opens the
+    /// process environment. [`LoggingConfig::from_env_source`] reads the
+    /// same variables from any [`EnvSource`].
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "config boundary: LoggingConfig is resolved from the process env here"
+    )]
     pub fn from_env() -> Result<Self, LoggingConfigError> {
-        let file_enabled = parse_bool("COGNEE_LOG_FILE", true);
+        Self::from_env_source(&cognee_config_core::ProcessEnv::new())
+    }
 
-        let logs_dir_override = read_nonempty("COGNEE_LOGS_DIR").map(PathBuf::from);
-        let log_file_name = read_nonempty("LOG_FILE_NAME").map(PathBuf::from);
+    /// [`LoggingConfig::from_env`], reading from `env` instead of the
+    /// process environment.
+    pub fn from_env_source(env: &dyn EnvSource) -> Result<Self, LoggingConfigError> {
+        let file_enabled = parse_bool(env, "COGNEE_LOG_FILE", true);
 
-        let rotation = match read_nonempty("COGNEE_LOG_ROTATION") {
+        let logs_dir_override = read_nonempty(env, "COGNEE_LOGS_DIR").map(PathBuf::from);
+        let log_file_name = read_nonempty(env, "LOG_FILE_NAME").map(PathBuf::from);
+
+        let rotation = match read_nonempty(env, "COGNEE_LOG_ROTATION") {
             None => LogRotation::Daily,
             Some(raw) => match raw.to_ascii_lowercase().as_str() {
                 "daily" => LogRotation::Daily,
@@ -184,7 +198,7 @@ impl LoggingConfig {
             },
         };
 
-        let format = match read_nonempty("COGNEE_LOG_FORMAT") {
+        let format = match read_nonempty(env, "COGNEE_LOG_FORMAT") {
             None => LogFormat::Plain,
             Some(raw) => match raw.to_ascii_lowercase().as_str() {
                 "plain" => LogFormat::Plain,
@@ -199,15 +213,16 @@ impl LoggingConfig {
             },
         };
 
-        let backup_count = parse_usize("COGNEE_LOG_BACKUP_COUNT", 5)?;
-        let max_files = parse_usize("COGNEE_LOG_MAX_FILES", 10)?;
+        let backup_count = parse_usize(env, "COGNEE_LOG_BACKUP_COUNT", 5)?;
+        let max_files = parse_usize(env, "COGNEE_LOG_MAX_FILES", 10)?;
 
         // Decision 7: RUST_LOG wins over LOG_LEVEL. When only
         // LOG_LEVEL is set, surface it verbatim so the init layer
         // (task 06-05) can feed it into `EnvFilter::new` as a bare
         // level. When both are unset, leave `None` so init substitutes
         // `default_filter()` (decision 6).
-        let level_filter = read_nonempty("RUST_LOG").or_else(|| read_nonempty("LOG_LEVEL"));
+        let level_filter =
+            read_nonempty(env, "RUST_LOG").or_else(|| read_nonempty(env, "LOG_LEVEL"));
 
         Ok(Self {
             file_enabled,
@@ -228,22 +243,15 @@ impl LoggingConfig {
 /// Python treats `""` and unset the same way (`os.getenv(name)` is
 /// truthy-checked); we follow suit so e.g. `COGNEE_LOGS_DIR=` does
 /// not produce a `PathBuf::from("")`.
-#[allow(
-    clippy::disallowed_methods,
-    reason = "config boundary: LoggingConfig::from_env"
-)]
-fn read_nonempty(name: &str) -> Option<String> {
-    match env::var(name) {
-        Ok(value) if !value.is_empty() => Some(value),
-        _ => None,
-    }
+fn read_nonempty(env: &dyn EnvSource, name: &str) -> Option<String> {
+    env.get(name).filter(|value| !value.is_empty())
 }
 
 /// Parse a boolean env var with the Python-compatible semantics in
 /// `logging_utils.py:501`: anything other than `false`/`0`/`no`
 /// (case-insensitive) is treated as truthy. Unset → `default`.
-fn parse_bool(name: &str, default: bool) -> bool {
-    match read_nonempty(name) {
+fn parse_bool(env: &dyn EnvSource, name: &str, default: bool) -> bool {
+    match read_nonempty(env, name) {
         None => default,
         Some(value) => {
             let lower = value.to_ascii_lowercase();
@@ -254,8 +262,12 @@ fn parse_bool(name: &str, default: bool) -> bool {
 
 /// Parse a `usize` env var, surfacing parse failures as
 /// [`LoggingConfigError::InvalidInt`].
-fn parse_usize(name: &'static str, default: usize) -> Result<usize, LoggingConfigError> {
-    match read_nonempty(name) {
+fn parse_usize(
+    env: &dyn EnvSource,
+    name: &'static str,
+    default: usize,
+) -> Result<usize, LoggingConfigError> {
+    match read_nonempty(env, name) {
         None => Ok(default),
         Some(value) => value
             .parse::<usize>()
@@ -575,5 +587,23 @@ mod tests {
         let cfg = LoggingConfig::from_env().expect("parses");
         let cloned = cfg.clone();
         let _ = format!("{cloned:?}");
+    }
+
+    /// `from_env_source` reads only the source it is given, so it needs no
+    /// process-env mutation and no `#[serial]`.
+    #[test]
+    fn from_env_source_reads_only_the_given_source() {
+        let env = cognee_config_core::MapEnv::new()
+            .with("COGNEE_LOG_FILE", "false")
+            .with("COGNEE_LOG_ROTATION", "Hourly")
+            .with("COGNEE_LOG_BACKUP_COUNT", "3")
+            .with("COGNEE_LOGS_DIR", "")
+            .with("LOG_LEVEL", "debug");
+        let cfg = LoggingConfig::from_env_source(&env).expect("parses");
+        assert!(!cfg.file_enabled);
+        assert_eq!(cfg.rotation, LogRotation::Hourly);
+        assert_eq!(cfg.backup_count, 3);
+        assert_eq!(cfg.logs_dir_override, None, "empty means unset");
+        assert_eq!(cfg.level_filter.as_deref(), Some("debug"));
     }
 }
