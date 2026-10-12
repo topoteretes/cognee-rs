@@ -87,7 +87,9 @@ def main() -> None:
     print(f"  llm_model after set_str: {cfg.get('llm_model')}")
     print(f"  llm_temperature after set: {cfg.get('llm_temperature')}")
 
-    # set() raises CogneeUnknownConfigKeyError for unknown keys.
+    # An unknown key is a logged warning by default. With strict_config on,
+    # set() raises CogneeUnknownConfigKeyError instead.
+    cognee.config.set("strict_config", True)
     try:
         cognee.config.set("definitely_not_a_real_key", 42)
     except CogneeUnknownConfigKeyError as exc:

@@ -136,6 +136,9 @@ const ENV_VARS: &[&str] = &[
     "OTEL_TRACES_SAMPLER_ARG",
     "ENABLE_LAST_ACCESSED",
     "COGNEE_SINGLE_PROCESS",
+    "COGNEE_STRICT_CONFIG",
+    // Component config sections of a default build.
+    "GRAPH_MAX_DB_SIZE",
 ];
 
 /// Raw env values probed against every variable: empty and whitespace,
@@ -262,7 +265,12 @@ fn set_keys() -> Vec<String> {
         .into_iter()
         .map(String::from),
     );
+    for def in cognee::config::builtin_schema().key_defs() {
+        keys.push(def.key.to_string());
+        keys.extend(def.aliases.iter().map(|a| a.to_string()));
+    }
     keys.sort();
+    keys.dedup();
     keys
 }
 
@@ -346,6 +354,18 @@ fn generic_set_matches_golden() {
         "system_root_directory cascade".to_string(),
         diff_from_default(&cm.read()),
     );
+    // Strict mode turns an unknown key into an error.
+    let cm = ConfigManager::new(Settings {
+        strict_config: true,
+        ..Settings::default()
+    });
+    cases.insert(
+        "strict: no_such_key <- 1".to_string(),
+        match cm.set("no_such_key", json!(1)) {
+            Ok(()) => json!({ "ok": diff_from_default(&cm.read()) }),
+            Err(e) => json!({ "err": format!("{e}") }),
+        },
+    );
     check_golden(
         "generic_set.json",
         &Value::Object(cases.into_iter().collect()),
@@ -359,6 +379,11 @@ fn registry_binds_exactly_the_pinned_env_vars() {
     let mut bound: Vec<&str> = cognee::config::keys()
         .iter()
         .flat_map(|spec| spec.env.iter().copied())
+        .chain(
+            cognee::config::builtin_schema()
+                .key_defs()
+                .flat_map(|def| def.env.iter().copied()),
+        )
         .collect();
     bound.sort_unstable();
     bound.dedup();

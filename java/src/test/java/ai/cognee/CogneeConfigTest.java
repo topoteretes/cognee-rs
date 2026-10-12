@@ -36,6 +36,10 @@ class CogneeConfigTest {
     @Test
     void unknownKeySurfacesCode(@TempDir Path dir) {
         try (Cognee cognee = handle(dir)) {
+            // Lenient by default: ignored with a logged warning.
+            cognee.config().set("no_such_key", "x");
+            // strict_config makes it an error.
+            cognee.config().set("strict_config", true);
             CogneeException ex = assertThrows(
                     CogneeException.class,
                     () -> cognee.config().set("no_such_key", "x"));

@@ -46,10 +46,15 @@ impl GraphDbFactory for LadybugGraphFactory {
         self.provider
     }
 
+    fn config_sections(&self) -> Vec<&'static cognee_config_core::SectionSchema> {
+        vec![<cognee_graph::LadybugConfig as cognee_config_core::ConfigSection>::schema()]
+    }
+
     async fn build(
         &self,
         ctx: &BackendBuildContext,
     ) -> Result<Arc<dyn GraphDBTrait>, ComponentError> {
+        let config: cognee_graph::LadybugConfig = ctx.section();
         let graph_path = if ctx.graph_file_path.is_empty() {
             format!("{}/graph", ctx.system_root_directory.display())
         } else {
@@ -62,9 +67,10 @@ impl GraphDbFactory for LadybugGraphFactory {
             })?;
         }
 
-        let graph_db = cognee_graph::LadybugAdapter::new(&graph_path)
-            .await
-            .map_err(|e| ComponentError::GraphDb(format!("initialization failed: {e}")))?;
+        let graph_db =
+            cognee_graph::LadybugAdapter::with_max_db_size(&graph_path, config.max_db_size)
+                .await
+                .map_err(|e| ComponentError::GraphDb(format!("initialization failed: {e}")))?;
         graph_db
             .initialize()
             .await

@@ -105,8 +105,16 @@ describe("Phase-2 config surface", () => {
       expect(cfg.ontology_file_path).toBe("/o2.owl");
     });
 
-    it("throws a typed UnknownKey error for an unknown key", () => {
+    it("ignores an unknown key by default", () => {
       const handle = native.cogneeNew({});
+      native.configSet(handle, "nonexistent_key", "value");
+      const cfg = native.getConfig(handle) as Record<string, unknown>;
+      expect(cfg.nonexistent_key).toBeUndefined();
+    });
+
+    it("throws a typed UnknownKey error for an unknown key when strict_config is on", () => {
+      const handle = native.cogneeNew({});
+      native.configSet(handle, "strict_config", true);
       let caught: unknown;
       try {
         native.configSet(handle, "nonexistent_key", "value");

@@ -13,7 +13,6 @@
 1 crates/database/src/ops/session_lifecycle.rs
 1 crates/database/src/single_process.rs
 12 crates/embedding/src/config.rs
-1 crates/graph/src/ladybug.rs
 2 crates/ingestion/src/url_crawler/fetcher.rs
 5 crates/lib/src/config.rs
 1 crates/llm/src/adapters/anthropic.rs

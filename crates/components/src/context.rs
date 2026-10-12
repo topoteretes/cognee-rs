@@ -12,6 +12,7 @@
 use std::fmt;
 use std::path::PathBuf;
 
+use cognee_config_core::{ConfigSection, ConfigValues};
 use cognee_embedding::MockVectorMode;
 use cognee_llm::StructuredOutputMode;
 
@@ -79,6 +80,21 @@ pub struct BackendBuildContext {
     pub embedding: EmbeddingInputs,
     /// Resolved LLM / transcriber inputs.
     pub llm: LlmInputs,
+
+    // ── component-owned config sections ───────────────────────────────────
+    /// Values of the registered component config sections, keyed by canonical
+    /// key (`"graph.ladybug.max_db_size"`). A factory reads its own section
+    /// with [`BackendBuildContext::section`]; keys it does not find take their
+    /// defaults.
+    pub sections: ConfigValues,
+}
+
+impl BackendBuildContext {
+    /// The typed config section `T`, from [`BackendBuildContext::sections`]
+    /// plus defaults.
+    pub fn section<T: ConfigSection>(&self) -> T {
+        T::from_values(&self.sections)
+    }
 }
 
 /// Resolved embedding-engine inputs. Mapped to a `cognee_embedding::EmbeddingConfig`

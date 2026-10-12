@@ -1132,6 +1132,38 @@
   "COGNEE_SINGLE_PROCESS=\"{\\\"ssl\\\":true}\"": {
     "single_process": false
   },
+  "COGNEE_STRICT_CONFIG=\"  \"": {},
+  "COGNEE_STRICT_CONFIG=\"\"": {},
+  "COGNEE_STRICT_CONFIG=\"-1\"": {},
+  "COGNEE_STRICT_CONFIG=\"0\"": {},
+  "COGNEE_STRICT_CONFIG=\"1\"": {
+    "strict_config": true
+  },
+  "COGNEE_STRICT_CONFIG=\"1.5\"": {},
+  "COGNEE_STRICT_CONFIG=\"42\"": {},
+  "COGNEE_STRICT_CONFIG=\"5000000000\"": {},
+  "COGNEE_STRICT_CONFIG=\"70000\"": {},
+  "COGNEE_STRICT_CONFIG=\"TRUE\"": {
+    "strict_config": true
+  },
+  "COGNEE_STRICT_CONFIG=\"[1]\"": {},
+  "COGNEE_STRICT_CONFIG=\"abc\"": {},
+  "COGNEE_STRICT_CONFIG=\"false\"": {},
+  "COGNEE_STRICT_CONFIG=\"no\"": {},
+  "COGNEE_STRICT_CONFIG=\"on\"": {
+    "strict_config": true
+  },
+  "COGNEE_STRICT_CONFIG=\"require\"": {},
+  "COGNEE_STRICT_CONFIG=\"true\"": {
+    "strict_config": true
+  },
+  "COGNEE_STRICT_CONFIG=\"v\"": {},
+  "COGNEE_STRICT_CONFIG=\"yes\"": {
+    "strict_config": true
+  },
+  "COGNEE_STRICT_CONFIG=\"{\\\"a\\\":1}\"": {},
+  "COGNEE_STRICT_CONFIG=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
+  "COGNEE_STRICT_CONFIG=\"{\\\"ssl\\\":true}\"": {},
   "COGNEE_SYSTEM_ROOT_DIRECTORY=\"  \"": {
     "system_root_directory": "  "
   },
@@ -3095,6 +3127,38 @@
   "GRAPH_FILE_PATH=\"{\\\"ssl\\\":true}\"": {
     "graph_file_path": "{\"ssl\":true}"
   },
+  "GRAPH_MAX_DB_SIZE=\"  \"": {},
+  "GRAPH_MAX_DB_SIZE=\"\"": {},
+  "GRAPH_MAX_DB_SIZE=\"-1\"": {},
+  "GRAPH_MAX_DB_SIZE=\"0\"": {
+    "graph.ladybug.max_db_size": 0
+  },
+  "GRAPH_MAX_DB_SIZE=\"1\"": {
+    "graph.ladybug.max_db_size": 1
+  },
+  "GRAPH_MAX_DB_SIZE=\"1.5\"": {},
+  "GRAPH_MAX_DB_SIZE=\"42\"": {
+    "graph.ladybug.max_db_size": 42
+  },
+  "GRAPH_MAX_DB_SIZE=\"5000000000\"": {
+    "graph.ladybug.max_db_size": 5000000000
+  },
+  "GRAPH_MAX_DB_SIZE=\"70000\"": {
+    "graph.ladybug.max_db_size": 70000
+  },
+  "GRAPH_MAX_DB_SIZE=\"TRUE\"": {},
+  "GRAPH_MAX_DB_SIZE=\"[1]\"": {},
+  "GRAPH_MAX_DB_SIZE=\"abc\"": {},
+  "GRAPH_MAX_DB_SIZE=\"false\"": {},
+  "GRAPH_MAX_DB_SIZE=\"no\"": {},
+  "GRAPH_MAX_DB_SIZE=\"on\"": {},
+  "GRAPH_MAX_DB_SIZE=\"require\"": {},
+  "GRAPH_MAX_DB_SIZE=\"true\"": {},
+  "GRAPH_MAX_DB_SIZE=\"v\"": {},
+  "GRAPH_MAX_DB_SIZE=\"yes\"": {},
+  "GRAPH_MAX_DB_SIZE=\"{\\\"a\\\":1}\"": {},
+  "GRAPH_MAX_DB_SIZE=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
+  "GRAPH_MAX_DB_SIZE=\"{\\\"ssl\\\":true}\"": {},
   "LLM_API_KEY=\"  \"": {
     "llm_api_key": "  ",
     "embedding_api_key": "  "

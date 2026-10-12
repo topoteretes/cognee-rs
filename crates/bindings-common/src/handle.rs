@@ -146,6 +146,13 @@ impl HandleState {
                 "cognee handle is closed (close() was called); create a new handle".to_string(),
             ));
         }
+        // Strict mode: a key in the loaded configuration that no registered
+        // component owns fails here, the first fallible step after the handle
+        // learned its full schema.
+        self.cm
+            .config()
+            .check_strict()
+            .map_err(|e| SdkError::Validation(e.to_string()))?;
         let current_ver = self.cm.config().version();
 
         // Fast path: cache hit at the current version.

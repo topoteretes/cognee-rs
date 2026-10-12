@@ -19,6 +19,10 @@
 
 use serde_json::Value;
 
+use std::sync::OnceLock;
+
+use cognee_config_core::ConfigSchema;
+
 use super::{ConfigError, EnvSource, Settings, sslmode_from_connect_args};
 
 /// One setting: its key, how it is read from env and JSON, and how it is
@@ -482,6 +486,7 @@ static KEYS: &[KeySpec] = &[
     row!(otel_traces_sampler_arg: str, env ["OTEL_TRACES_SAMPLER_ARG"]),
     // -- Feature flags ------------------------------------------------------
     row!(enable_last_accessed: bool, env ["ENABLE_LAST_ACCESSED"]),
+    row!(strict_config: bool, env ["COGNEE_STRICT_CONFIG"]),
     KeySpec {
         key: "single_process",
         key_aliases: &[],
@@ -522,39 +527,111 @@ static KEYS: &[KeySpec] = &[
     },
 ];
 
+/// The configuration schema of a default build: the `Settings` keys and env
+/// vars reserved, plus the sections of every factory
+/// `ComponentRegistry::with_builtins()` registers for the enabled features.
+///
+/// A custom registry adds its sections to a [`ConfigManager`](super::ConfigManager)
+/// with [`ConfigManager::extend_schema`](super::ConfigManager::extend_schema)
+/// (which `ComponentManager::with_registry` does).
+pub fn builtin_schema() -> &'static ConfigSchema {
+    static SCHEMA: OnceLock<ConfigSchema> = OnceLock::new();
+    SCHEMA.get_or_init(|| {
+        let mut schema = core_schema();
+        let builtins = cognee_components::ComponentRegistry::with_builtins()
+            .config_schema()
+            .expect("built-in config sections do not collide (pinned by builtin_schema_has_no_collisions)");
+        schema
+            .merge(&builtins)
+            .expect("built-in config sections do not claim Settings keys (pinned by builtin_schema_has_no_collisions)");
+        schema
+    })
+}
+
+/// An empty schema with every `Settings` key, key alias and env var reserved,
+/// so no section can claim them.
+pub(super) fn core_schema() -> ConfigSchema {
+    let mut schema = ConfigSchema::new();
+    schema
+        .reserve(
+            "Settings",
+            KEYS.iter()
+                .flat_map(|spec| std::iter::once(spec.key).chain(spec.key_aliases.iter().copied())),
+            KEYS.iter().flat_map(|spec| spec.env.iter().copied()),
+        )
+        .expect("Settings keys are unique (pinned by env_vars_and_keys_are_unique)");
+    schema
+}
+
 impl Settings {
-    /// Set the setting `key` (or one of its aliases) from a JSON value, with
-    /// the same parse rules as [`ConfigManager::set`](super::ConfigManager::set).
+    /// Set the setting `key` (a `Settings` key, a built-in section key, or an
+    /// alias of either) from a JSON value, with the same parse rules as
+    /// [`ConfigManager::set`](super::ConfigManager::set).
     ///
     /// This is the plain assignment: unlike
     /// [`ConfigManager::set_system_root_directory`](super::ConfigManager::set_system_root_directory)
-    /// it does not move the paths derived from the system root.
+    /// it does not move the paths derived from the system root. An unknown key
+    /// is a warning, or [`ConfigError::UnknownKey`] when `strict_config` is on.
     pub fn set_key(&mut self, key: &str, value: Value) -> Result<(), ConfigError> {
-        let spec = key_spec(key).ok_or_else(|| ConfigError::UnknownKey(key.to_string()))?;
-        (spec.set)(self, key, value)
+        if let Some(spec) = key_spec(key) {
+            return (spec.set)(self, key, value);
+        }
+        let schema = builtin_schema();
+        if schema.key_def(key).is_some() {
+            schema.set(&mut self.sections, key, &value)?;
+            return Ok(());
+        }
+        cognee_config_core::unknown_key(key, self.strict_config).map_err(ConfigError::from)
     }
 
     /// The current value of setting `key` (or an alias) as JSON, unmasked.
+    /// `None` for an unknown key.
     pub fn get_key(&self, key: &str) -> Option<Value> {
-        key_spec(key).map(|spec| (spec.get)(self))
+        match key_spec(key) {
+            Some(spec) => Some((spec.get)(self)),
+            None => builtin_schema().get(&self.sections, key),
+        }
     }
 
-    /// Restore setting `key` (or an alias) to its `Settings::default()` value.
+    /// Restore setting `key` (or an alias) to its default, or remove a stale
+    /// section entry that no component owns. Any other unknown key is a
+    /// warning, or [`ConfigError::UnknownKey`] when `strict_config` is on.
     pub fn reset_key(&mut self, key: &str) -> Result<(), ConfigError> {
-        let spec = key_spec(key).ok_or_else(|| ConfigError::UnknownKey(key.to_string()))?;
-        (spec.reset)(self, &Settings::default());
-        Ok(())
+        if let Some(spec) = key_spec(key) {
+            (spec.reset)(self, &Settings::default());
+            return Ok(());
+        }
+        if let Some(def) = builtin_schema().key_def(key) {
+            self.sections.remove(def.key);
+            return Ok(());
+        }
+        // A stale entry no component owns (e.g. written by a build with more
+        // features): removing it is how a config is repaired, so it is allowed
+        // even in strict mode.
+        if self.sections.remove(key).is_some() {
+            return Ok(());
+        }
+        cognee_config_core::unknown_key(key, self.strict_config).map_err(ConfigError::from)
     }
 
-    /// Overlay the variables of `env` on top of `self`.
+    /// Overlay the variables of `env` on top of `self`: the `Settings` keys
+    /// and every built-in section.
     ///
     /// Same rules as [`Settings::overlay_from_env`] (only set, non-empty
-    /// variables change a field), but reading from `env` instead of the
+    /// variables change a value), but reading from `env` instead of the
     /// process environment, and without loading `.env`.
     pub fn overlay_from(&mut self, env: &dyn EnvSource) {
+        self.overlay_from_with_schema(env, builtin_schema());
+    }
+
+    /// [`Settings::overlay_from`] for a build whose component registry adds
+    /// sections of its own: `schema` is that registry's schema (it should
+    /// include the built-in sections too).
+    pub fn overlay_from_with_schema(&mut self, env: &dyn EnvSource, schema: &ConfigSchema) {
         for spec in KEYS {
             (spec.overlay)(self, env);
         }
+        schema.overlay_env(&mut self.sections, env);
     }
 }
 
@@ -613,6 +690,17 @@ mod tests {
             total,
             "an env var is the primary of two rows"
         );
+    }
+
+    /// The built-in sections neither collide with each other nor claim a
+    /// `Settings` key or env var.
+    #[test]
+    fn builtin_schema_has_no_collisions() {
+        let mut schema = core_schema();
+        let builtins = cognee_components::ComponentRegistry::with_builtins()
+            .config_schema()
+            .unwrap();
+        schema.merge(&builtins).unwrap();
     }
 
     /// Every row's get/set round-trips its default value.

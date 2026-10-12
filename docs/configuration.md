@@ -48,6 +48,58 @@ Parsing notes:
 | **Instance** | `Settings`, behind `ConfigManager` | each SDK handle / CLI run, from `Settings::load_from_env()` or `Settings::overlay_from(&dyn EnvSource)` |
 | **Process** | `LoggingConfig`, the observability settings, product telemetry | once per process, because each configures a process-wide singleton (the `tracing` subscriber, the OTLP exporter, the analytics dispatcher) |
 
+### Component config sections
+
+Settings that belong to one component are declared **by that component**, not in
+`Settings`. A section is a typed struct declared with
+[`cognee_config_core::config_section!`](../crates/config-core/src/section.rs). Each
+field becomes a setting with:
+
+* a canonical, namespaced key: `"<section>.<field>"`, e.g. `graph.ladybug.max_db_size`;
+* its env vars, in priority order;
+* optional plain aliases, typically the Python SDK's flat name, e.g. `graph_max_db_size`;
+* a secret flag.
+
+The component's factory returns the section from `config_sections()`. **Registering
+the factory registers its settings.** `ComponentRegistry::config_schema()` collects
+the sections of every registered factory, plus any added with
+`register_config_section` (for settings that no factory owns, e.g. a server
+module's).
+
+So the settings a build accepts follow the components it contains:
+
+* a factory compiled out by a disabled feature brings no keys: its env vars are not
+  read, and setting its keys is an unknown-key condition;
+* a downstream build that registers its own factory (`register_llm`,
+  `register_vector`, …) brings that factory's keys, settable through the same
+  `ConfigManager::set`, binding `set` and config files as the built-in ones.
+
+`ComponentManager::with_registry` adds the registry's sections to its
+`ConfigManager`. `cognee::config::builtin_schema()` is the schema of a default
+build.
+
+Section values travel inside `Settings`, in its flattened `sections` map, so
+config files and binding settings objects carry them unchanged. A factory reads
+its typed section from the build context with `ctx.section::<T>()`. A section key,
+its canonical key and its aliases are all accepted by `ConfigManager::set` /
+`get`. Two sections claiming the same key, alias or primary env var is a
+registration error. So is a section claiming a `Settings` key.
+
+### Unknown keys and strict mode
+
+A key can be unknown because it is misspelled, or because the component that owns
+it is not compiled into, or registered with, this build. The two look the same, so
+the policy is a setting:
+
+| `strict_config` / `COGNEE_STRICT_CONFIG` | Unknown key in `set` / `cognee-cli config set` | Unknown key in a loaded config (config file, binding settings object) |
+|---|---|---|
+| `false` (default) | warning; nothing changes | warning; the entry is **kept**, so a config written by a build with more components survives |
+| `true` | `UnknownKey` error | error at first use: the CLI command, or the handle's first operation |
+
+`cognee-cli config unset <key>` removes a stale entry even in strict mode, so a
+config can always be repaired. A value of the wrong type for a known key is always
+an error.
+
 ### How the rule is enforced
 
 * The only sanctioned read of the process environment is
@@ -96,23 +148,43 @@ Parsing notes:
 
 ### Adding a setting
 
-1. Add a field to the config struct that owns the behaviour: `Settings` for
-   instance configuration, or the process-scoped struct. Give it a default in
-   that struct's `Default`.
-2. **For a `Settings` field, add one row to the key registry,
-   [`crates/lib/src/config/keys.rs`](../crates/lib/src/config/keys.rs).** For example:
-   `row!(my_setting: u32, env ["COGNEE_MY_SETTING"])`. The row names the parse
-   rules (`str`, `u16`, `u32`, `u64`, `bool`, `opt_u32`, `opt_f64`), the env
-   var(s) in priority order, any key aliases, and `secret` for credentials.
-   That one row makes the setting:
-   * bound from the environment by `Settings::overlay_from`;
-   * settable from code by `ConfigManager::set` and so by every binding's
+1. **Pick the owner.**
+   * A setting **one component reads** (an adapter or backend option) goes in that
+     component's **config section**:
+     ```rust
+     cognee_config_core::config_section! {
+         /// What the section configures.
+         pub struct MyAdapterConfig in "llm.my_adapter" {
+             /// What the setting does.
+             pub timeout_seconds: u32 = 30 => {
+                 env: ["MY_ADAPTER_TIMEOUT_SECONDS"],
+                 alias: ["my_adapter_timeout_seconds"],
+                 secret: false,
+             },
+         }
+     }
+     ```
+     Return `MyAdapterConfig::schema()` from the factory's `config_sections()`,
+     and read it in `build` with `ctx.section::<MyAdapterConfig>()`. The setting
+     then exists exactly when the factory is registered.
+   * A setting **shared across components or cognee-wide** (paths, the LLM
+     provider and model, cognify behaviour) is a field on `Settings` with its
+     default, plus **one row in the key registry,
+     [`crates/lib/src/config/keys.rs`](../crates/lib/src/config/keys.rs)**. For
+     example: `row!(my_setting: u32, env ["COGNEE_MY_SETTING"])`. The row names
+     the parse rules (`str`, `u16`, `u32`, `u64`, `bool`, `opt_u32`,
+     `opt_f64`), the env vars in priority order, any key aliases, and `secret`
+     for credentials.
+2. Either way the setting is now:
+   * bound from the environment;
+   * settable from code by `ConfigManager::set`, and so by every binding's
      generic `set`;
    * listed, shown, set and unset by `cognee-cli config`.
 
-   Keep the Python SDK's env-var name when the setting exists there, and note any
-   deliberate divergence in this document. A process-scoped struct reads its env
-   in its own `from_env_source(&dyn EnvSource)` instead.
+   Keep the Python SDK's env-var name when the setting exists there, and give a
+   namespaced section key the Python flat name as an alias. Note any deliberate
+   divergence in this document. A process-scoped struct reads its env in its own
+   `from_env_source(&dyn EnvSource)` instead.
 3. Add a typed `ConfigManager` setter and binding sugar only if the setting is
    commonly used. The generic `set` already reaches it.
 4. Pass the resolved value down to the component that needs it, through
@@ -606,6 +678,7 @@ Notes:
 | `GRAPH_DATABASE_HOST` / `GRAPH_DATABASE_PORT` | `graph_database_host` / `graph_database_port` | _(empty)_ / `123` |
 | `GRAPH_DATABASE_NAME` / `GRAPH_DATABASE_KEY` | … | _(empty)_ |
 | `GRAPH_DATABASE_USERNAME` / `GRAPH_DATABASE_PASSWORD` | … | _(empty)_ |
+| `GRAPH_MAX_DB_SIZE` | section key `graph.ladybug.max_db_size` (alias `graph_max_db_size`; `ladybug` builds only) | `1073741824` (1 GiB) |
 
 Supported providers: `ladybug`/`kuzu` (embedded), `postgres` (feature `pggraph`).
 
@@ -1399,8 +1472,11 @@ Cloud/Auth0 configuration (`COGNEE_CLOUD_URL`, `COGNEE_AUTH0_*`) and the
 and the CLI use.
 
 * **Generic setter:** `set(key, value)` accepts **every key in the
-  [key registry](../crates/lib/src/config/keys.rs)**: each `Settings` field name,
-  plus aliases such as `embedding_model`. A JSON `null` clears the optional
+  [key registry](../crates/lib/src/config/keys.rs)** (each `Settings` field name,
+  plus aliases such as `embedding_model`) and **every key of a registered component
+  section**, canonical or alias (see [Component config sections](#component-config-sections)).
+  An unknown key follows [strict mode](#unknown-keys-and-strict-mode). `get(key)`
+  reads any of them. A JSON `null` clears the optional
   settings (`chunk_size`, `llm_temperature`, `single_process`,
   `summarization_schema`). Setting `system_root_directory` also moves the graph
   and vector paths derived from the old root.
@@ -1412,8 +1488,10 @@ and the CLI use.
 * **Bulk setters:** `set_llm_config`, `set_embedding_config`,
   `set_vector_db_config` and `set_graph_db_config`.
 * **Introspection:** `read()`, `version()`, `get_settings()` (secrets masked).
-  `Settings::get_key` / `set_key` / `reset_key` work on a plain `Settings`, and
-  `cognee::config::keys()` lists the registry.
+  `Settings::get_key` / `set_key` / `reset_key` work on a plain `Settings`,
+  `cognee::config::keys()` lists the registry, and `ConfigManager::schema()` the
+  component sections it knows. `ConfigManager::apply_patch` applies a settings
+  object in bulk, which is how the C and Python constructors take theirs.
 
 Full signatures are in the [`ConfigManager` rustdoc](../crates/lib/src/config.rs).
 The binding ergonomics (granular JS setters vs generic `set` in Python/C) are
@@ -1422,9 +1500,10 @@ documented in [tools/bindings.md §config](tools/bindings.md#configuration).
 ## CLI `config` subcommand
 
 `cognee-cli config get|set|unset <key>` reads/writes the persisted JSON file.
-The settable keys are the registry keys whose value is saved in that file:
-every `Settings` field except `llm_args` and `summarization_schema`
-(`cognee-cli config list` prints them). Example:
+The settable keys are the registry keys whose value is saved in that file
+(every `Settings` field except `llm_args` and `summarization_schema`), plus the
+keys of the component sections compiled into this build. `cognee-cli config list`
+prints them. Example:
 
 ```bash
 cognee-cli config set llm_max_retries 4

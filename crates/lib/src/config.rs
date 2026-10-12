@@ -15,7 +15,8 @@ use serde::{Deserialize, Serialize};
 pub use cognee_config_core::{EnvSource, MapEnv};
 
 mod keys;
-pub use keys::{KeySpec, key_spec, keys};
+pub use cognee_config_core::{ConfigSchema, ConfigSection, ConfigValues, KeyDef, SectionSchema};
+pub use keys::{KeySpec, builtin_schema, key_spec, keys};
 
 pub const DEFAULT_SYSTEM_PROMPT_PATH: &str = "answer_simple_question.txt";
 
@@ -466,6 +467,23 @@ pub struct Settings {
     /// `set_config`, [`ConfigManager::set_single_process`], or
     /// `COGNEE_SINGLE_PROCESS=1`.
     pub single_process: Option<bool>,
+
+    /// Make an unknown config key an error instead of a warning
+    /// (`COGNEE_STRICT_CONFIG`). Off by default: a key can be unknown because
+    /// it is misspelled, or because the component that owns it is not
+    /// compiled into or registered with this build.
+    pub strict_config: bool,
+
+    /// Values of the component-owned config sections (see
+    /// [`cognee_config_core::section`]), keyed by canonical key such as
+    /// `graph.ladybug.max_db_size`.
+    ///
+    /// Flattened: in a config file or a binding's settings object these keys
+    /// sit next to the `Settings` fields, and any key that is not a `Settings`
+    /// field lands here. [`ConfigManager`] checks them against its schema;
+    /// one that matches no registered section is an unknown key.
+    #[serde(flatten)]
+    pub sections: cognee_config_core::ConfigValues,
 }
 
 impl Settings {
@@ -651,6 +669,7 @@ impl Settings {
             .unwrap_or(8191);
 
         cognee_components::BackendBuildContext {
+            sections: self.sections.clone(),
             data_root_directory: PathBuf::from(&self.data_root_directory),
             system_root_directory: PathBuf::from(&self.system_root_directory),
             relational_db_url: self.resolved_relational_db_url(),
@@ -1151,6 +1170,8 @@ impl Default for Settings {
             // Feature flags
             enable_last_accessed: false,
             single_process: None,
+            strict_config: false,
+            sections: cognee_config_core::ConfigValues::new(),
         }
     }
 }
@@ -1166,6 +1187,17 @@ pub enum ConfigError {
     UnknownKey(String),
     #[error("Type mismatch for key '{key}': {reason}")]
     TypeMismatch { key: String, reason: String },
+}
+
+impl From<cognee_config_core::KeyError> for ConfigError {
+    fn from(error: cognee_config_core::KeyError) -> Self {
+        match error {
+            cognee_config_core::KeyError::Unknown(key) => ConfigError::UnknownKey(key),
+            cognee_config_core::KeyError::Invalid { key, reason } => {
+                ConfigError::TypeMismatch { key, reason }
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1193,14 +1225,68 @@ pub enum ConfigError {
 pub struct ConfigManager {
     inner: Arc<RwLock<Settings>>,
     version: Arc<AtomicU64>,
+    /// The component config sections this manager knows: the built-in ones,
+    /// plus those of a custom registry added by
+    /// [`ConfigManager::extend_schema`].
+    schema: Arc<RwLock<ConfigSchema>>,
 }
 
 impl ConfigManager {
     /// Create a new `ConfigManager` wrapping the given settings.
+    ///
+    /// Section values in `settings.sections` are checked against the built-in
+    /// schema: aliases become canonical keys, a value of the wrong type is
+    /// dropped with a warning, and an unknown key is kept with a warning (see
+    /// [`ConfigManager::check_strict`]).
     pub fn new(settings: Settings) -> Self {
+        let schema = builtin_schema().clone();
+        let mut settings = settings;
+        schema.normalize_lenient(&mut settings.sections);
         Self {
             inner: Arc::new(RwLock::new(settings)),
             version: Arc::new(AtomicU64::new(0)),
+            schema: Arc::new(RwLock::new(schema)),
+        }
+    }
+
+    /// Add the config sections of a custom component registry (see
+    /// `ComponentRegistry::config_schema`), so their keys become settable
+    /// here and section values that were unknown so far are checked.
+    pub fn extend_schema(
+        &self,
+        other: &ConfigSchema,
+    ) -> Result<(), cognee_config_core::SchemaError> {
+        let mut schema = self.schema.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+        schema.merge(other)?;
+        let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+        schema.normalize_lenient(&mut s.sections);
+        Ok(())
+    }
+
+    /// A copy of the component config schema this manager knows.
+    pub fn schema(&self) -> ConfigSchema {
+        self.schema
+            .read()
+            .expect("lock poison is unrecoverable") // lock poison is unrecoverable
+            .clone()
+    }
+
+    /// With `strict_config` on, fail if the loaded configuration holds a key
+    /// that no registered setting owns. Lenient (the default), always `Ok`:
+    /// unknown keys were already reported as warnings.
+    ///
+    /// Explicit [`ConfigManager::set`] calls apply the policy themselves; this
+    /// covers keys that arrived in bulk (a config file, a binding's settings
+    /// object), which are checked when the configuration is first used.
+    pub fn check_strict(&self) -> Result<(), ConfigError> {
+        let s = self.read();
+        if !s.strict_config {
+            return Ok(());
+        }
+        let schema = self.schema.read().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+        match schema.unknown_keys(&s.sections).first() {
+            Some(key) => Err(ConfigError::UnknownKey((*key).to_string())),
+            None => Ok(()),
         }
     }
 
@@ -1230,6 +1316,7 @@ impl Clone for ConfigManager {
         Self {
             inner: Arc::clone(&self.inner),
             version: Arc::clone(&self.version),
+            schema: Arc::clone(&self.schema),
         }
     }
 }
@@ -2139,16 +2226,80 @@ impl ConfigManager {
     /// [`ConfigManager::set_system_root_directory`], so the graph and vector
     /// paths derived from the old root move with it.
     pub fn set(&self, key: &str, value: serde_json::Value) -> Result<(), ConfigError> {
-        let spec = key_spec(key).ok_or_else(|| ConfigError::UnknownKey(key.to_string()))?;
-        if spec.key == "system_root_directory" {
-            self.set_system_root_directory(as_string(key, &value)?.as_str());
+        if let Some(spec) = key_spec(key) {
+            if spec.key == "system_root_directory" {
+                self.set_system_root_directory(as_string(key, &value)?.as_str());
+                return Ok(());
+            }
+            let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+            (spec.set)(&mut s, key, value)?;
+            drop(s);
+            self.bump_version();
             return Ok(());
         }
+        let schema = self.schema.read().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
         let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
-        (spec.set)(&mut s, key, value)?;
+        if schema.key_def(key).is_some() {
+            schema
+                .set(&mut s.sections, key, &value)
+                .map_err(ConfigError::from)?;
+            drop(s);
+            drop(schema);
+            self.bump_version();
+            return Ok(());
+        }
+        let strict = s.strict_config;
         drop(s);
-        self.bump_version();
+        cognee_config_core::unknown_key(key, strict).map_err(ConfigError::from)
+    }
+
+    /// Apply a JSON object of settings in bulk, e.g. a binding's constructor
+    /// settings object.
+    ///
+    /// `Settings` keys and known section keys are set as by
+    /// [`ConfigManager::set`]; a value of the wrong type is an error. A key
+    /// this manager does not know (yet) is *kept* in `Settings::sections`
+    /// with a warning rather than dropped: it may belong to a component
+    /// registry added later with [`ConfigManager::extend_schema`], which
+    /// checks it then. Strict mode is enforced by
+    /// [`ConfigManager::check_strict`] once the full schema is known.
+    pub fn apply_patch(
+        &self,
+        patch: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<(), ConfigError> {
+        for (key, value) in patch {
+            let known = key_spec(key).is_some()
+                || self
+                    .schema
+                    .read()
+                    .expect("lock poison is unrecoverable") // lock poison is unrecoverable
+                    .key_def(key)
+                    .is_some();
+            if known {
+                self.set(key, value.clone())?;
+            } else {
+                // Lenient here even in strict mode: see the doc comment.
+                let _ = cognee_config_core::unknown_key(key, false);
+                let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+                s.sections.insert(key.clone(), value.clone());
+                drop(s);
+                self.bump_version();
+            }
+        }
         Ok(())
+    }
+
+    /// The current value of `key` (a `Settings` key, a section key, or an
+    /// alias of either) as JSON, unmasked. `None` for an unknown key.
+    pub fn get(&self, key: &str) -> Option<serde_json::Value> {
+        let s = self.read();
+        if let Some(spec) = key_spec(key) {
+            return Some((spec.get)(&s));
+        }
+        self.schema
+            .read()
+            .expect("lock poison is unrecoverable") // lock poison is unrecoverable
+            .get(&s.sections, key)
     }
 }
 
@@ -2678,15 +2829,63 @@ mod tests {
         assert_eq!(cm.read().chunk_size, Some(2048));
     }
 
+    /// Lenient by default: an unknown key is a warning, changes nothing and
+    /// does not bump the version.
     #[test]
-    fn config_manager_generic_set_unknown_key() {
+    fn config_manager_generic_set_unknown_key_is_lenient_by_default() {
         let cm = ConfigManager::new(Settings::default());
-        let result = cm.set("nonexistent_key", serde_json::json!("value"));
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            ConfigError::UnknownKey(k) => assert_eq!(k, "nonexistent_key"),
-            other => panic!("expected UnknownKey, got: {other}"),
+        cm.set("nonexistent_key", serde_json::json!("value"))
+            .expect("lenient by default");
+        assert_eq!(cm.version(), 0);
+        assert!(cm.read().sections.is_empty());
+    }
+
+    /// With `strict_config` on, an unknown key is an error, from `set` and
+    /// for keys that arrived in bulk (`check_strict`).
+    #[test]
+    fn config_manager_generic_set_unknown_key_errors_when_strict() {
+        let cm = ConfigManager::new(Settings::default());
+        cm.set("strict_config", serde_json::json!(true)).unwrap();
+        match cm.set("nonexistent_key", serde_json::json!("value")) {
+            Err(ConfigError::UnknownKey(k)) => assert_eq!(k, "nonexistent_key"),
+            other => panic!("expected UnknownKey, got: {other:?}"),
         }
+
+        let mut settings = Settings {
+            strict_config: true,
+            ..Settings::default()
+        };
+        settings
+            .sections
+            .insert("stale.key".into(), serde_json::json!(1));
+        let cm = ConfigManager::new(settings);
+        assert!(matches!(cm.check_strict(), Err(ConfigError::UnknownKey(k)) if k == "stale.key"));
+        assert_eq!(
+            cm.read().sections.get("stale.key"),
+            Some(&serde_json::json!(1)),
+            "kept"
+        );
+    }
+
+    /// A key owned by a component config section is settable by its
+    /// canonical key and its plain alias, and reaches the build context.
+    #[cfg(feature = "ladybug")]
+    #[test]
+    fn section_keys_are_settable_and_reach_the_build_context() {
+        let cm = ConfigManager::new(Settings::default());
+        cm.set("graph_max_db_size", serde_json::json!(2048))
+            .unwrap();
+        assert_eq!(
+            cm.get("graph.ladybug.max_db_size"),
+            Some(serde_json::json!(2048))
+        );
+        assert!(matches!(
+            cm.set("graph.ladybug.max_db_size", serde_json::json!("big")),
+            Err(ConfigError::TypeMismatch { .. })
+        ));
+        let ctx = cm.read().backend_context();
+        let section: cognee_graph::LadybugConfig = ctx.section();
+        assert_eq!(section.max_db_size, 2048);
     }
 
     #[test]

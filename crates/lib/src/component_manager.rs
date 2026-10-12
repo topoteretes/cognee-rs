@@ -95,7 +95,21 @@ impl ComponentManager {
 
     /// Construct with an explicit registry. Use this to inject external adapter
     /// factories (register them on the registry before passing it in).
+    ///
+    /// The registry's config sections (see `ComponentRegistry::config_schema`)
+    /// are added to `config`, so the settings of every registered factory,
+    /// built-in or not, are settable through it. A collision between two
+    /// sections is a programming error in the registering crates; it is logged
+    /// and the colliding registry's sections are not added.
     pub fn with_registry(config: ConfigManager, registry: ComponentRegistry) -> Self {
+        match registry.config_schema() {
+            Ok(schema) => {
+                if let Err(error) = config.extend_schema(&schema) {
+                    tracing::error!(%error, "component config sections not registered");
+                }
+            }
+            Err(error) => tracing::error!(%error, "component config sections not registered"),
+        }
         Self {
             config,
             registry,

@@ -19,18 +19,23 @@ use tracing::{Span, instrument};
 /// startup. Many container runtimes (including GitHub Actions runners) cap the
 /// process address space well below 8 TiB, causing initialization to fail.
 /// 1 GiB is sufficient for typical knowledge-graph workloads and works in all
-/// CI environments. Override with `GRAPH_MAX_DB_SIZE` (bytes) for larger graphs.
-const DEFAULT_MAX_DB_SIZE: u64 = 1024 * 1024 * 1024;
+/// CI environments. Raise it with [`LadybugConfig::max_db_size`] for larger
+/// graphs.
+pub const DEFAULT_MAX_DB_SIZE: u64 = 1024 * 1024 * 1024;
 
-#[allow(
-    clippy::disallowed_methods,
-    reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
-)]
-fn read_max_db_size() -> u64 {
-    std::env::var("GRAPH_MAX_DB_SIZE")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(DEFAULT_MAX_DB_SIZE)
+cognee_config_core::config_section! {
+    /// The embedded Ladybug (Kuzu) graph database. Registered by the Ladybug
+    /// graph factory, so these settings exist only in builds with the
+    /// `ladybug` feature.
+    pub struct LadybugConfig in "graph.ladybug" {
+        /// Maximum database size in bytes. Kuzu reserves this much address
+        /// space up front, so keep it within the process's address-space limit.
+        pub max_db_size: u64 = DEFAULT_MAX_DB_SIZE => {
+            env: ["GRAPH_MAX_DB_SIZE"],
+            alias: ["graph_max_db_size"],
+            secret: false,
+        },
+    }
 }
 
 use crate::types::parse_audit_timestamp;
@@ -233,7 +238,16 @@ impl LadybugAdapter {
     /// Returns GraphDBError::InitializationError if database creation fails
     ///
     pub async fn new(db_path: &str) -> GraphDBResult<Self> {
-        let config = SystemConfig::default().max_db_size(read_max_db_size());
+        Self::with_max_db_size(db_path, DEFAULT_MAX_DB_SIZE).await
+    }
+
+    /// [`LadybugAdapter::new`] with an explicit maximum database size in bytes
+    /// (see [`LadybugConfig::max_db_size`]).
+    ///
+    /// # Errors
+    /// Returns GraphDBError::InitializationError if database creation fails
+    pub async fn with_max_db_size(db_path: &str, max_db_size: u64) -> GraphDBResult<Self> {
+        let config = SystemConfig::default().max_db_size(max_db_size);
         let db = Database::new(db_path, config).map_err(|e| {
             GraphDBError::InitializationError(format!("Failed to create database: {e}"))
         })?;
@@ -2473,7 +2487,7 @@ mod tests {
     async fn ladybug_supports_idempotent_unwind_merge_batch() {
         let temp_dir = TempDir::new().unwrap();
         let db_path = temp_dir.path().join("merge.db");
-        let config = SystemConfig::default().max_db_size(read_max_db_size());
+        let config = SystemConfig::default().max_db_size(DEFAULT_MAX_DB_SIZE);
         let db = Database::new(db_path.to_str().unwrap(), config).unwrap();
         let conn = Connection::new(&db).unwrap();
         conn.query(

@@ -17,7 +17,7 @@
  *
  *   7. cg_sdk_config_set_graph_db_config bulk setter.
  *
- *   8. Unknown key → CG_ERR_UNKNOWN_CONFIG_KEY (17).
+ *   8. Unknown key → ignored by default; CG_ERR_UNKNOWN_CONFIG_KEY (17) with strict_config.
  *
  *   9. Type mismatch → CG_ERR_CONFIG_TYPE_MISMATCH (18).
  *
@@ -261,6 +261,14 @@ int main(void)
     /* ── Test 8: unknown key → CG_ERR_UNKNOWN_CONFIG_KEY (17) ───────────── */
     printf("=== Test 8: unknown key → CG_ERR_UNKNOWN_CONFIG_KEY ===\n");
 
+    /* Lenient by default: an unknown key is a logged warning, not an error. */
+    rc = cg_sdk_config_set_str(sdk, "nonexistent_key_xyz", "value");
+    ASSERT_EQ(rc, (CgErrorCode)CG_OK,
+              "unknown key must be accepted (ignored) when strict_config is off");
+
+    /* strict_config turns it into CG_ERR_UNKNOWN_CONFIG_KEY. */
+    rc = cg_sdk_config_set(sdk, "strict_config", "true");
+    ASSERT_EQ(rc, (CgErrorCode)CG_OK, "strict_config must be settable");
     rc = cg_sdk_config_set_str(sdk, "nonexistent_key_xyz", "value");
     ASSERT_EQ(rc, (CgErrorCode)CG_ERR_UNKNOWN_CONFIG_KEY,
               "unknown key must return CG_ERR_UNKNOWN_CONFIG_KEY (17)");

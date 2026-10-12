@@ -53,9 +53,17 @@ def test_set_str_known_key_succeeds():
     cognee.config.set_str("llm_provider", "openai")
 
 
-def test_set_str_unknown_key_raises():
-    """``config.set_str`` with an unknown key must raise ``CogneeUnknownConfigKeyError``."""
+def test_set_str_unknown_key_is_a_warning_by_default():
+    """Lenient by default: an unknown key is logged and ignored, not raised."""
     cognee = make_cognee()
+    cognee.config.set_str("totally_unknown_key_xyz", "value")
+    assert "totally_unknown_key_xyz" not in cognee.config.get()
+
+
+def test_set_str_unknown_key_raises_when_strict():
+    """With ``strict_config`` on, an unknown key raises ``CogneeUnknownConfigKeyError``."""
+    cognee = make_cognee()
+    cognee.config.set("strict_config", True)
     with pytest.raises(cp.CogneeUnknownConfigKeyError):
         cognee.config.set_str("totally_unknown_key_xyz", "value")
 
@@ -63,6 +71,7 @@ def test_set_str_unknown_key_raises():
 def test_set_str_error_is_cognee_error_subclass():
     """``CogneeUnknownConfigKeyError`` must be catchable as ``CogneeError``."""
     cognee = make_cognee()
+    cognee.config.set("strict_config", True)
     with pytest.raises(cp.CogneeError):
         cognee.config.set_str("totally_unknown_key_xyz", "value")
 
@@ -90,9 +99,10 @@ def test_set_int_known_key_succeeds():
     cognee.config.set("llm_max_retries", 5)
 
 
-def test_set_unknown_key_raises():
-    """``config.set`` with an unknown key must raise ``CogneeUnknownConfigKeyError``."""
+def test_set_unknown_key_raises_when_strict():
+    """With ``strict_config`` on, ``config.set`` of an unknown key raises."""
     cognee = make_cognee()
+    cognee.config.set("strict_config", True)
     with pytest.raises(cp.CogneeUnknownConfigKeyError):
         cognee.config.set("unknown_key_abc", "value")
 

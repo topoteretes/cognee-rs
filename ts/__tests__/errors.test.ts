@@ -51,6 +51,8 @@ describe("Phase-8 error marshalling (Tier-A)", () => {
 
   it("configSet with unknown key throws code=UNKNOWN_CONFIG_KEY and kind=UNKNOWN_CONFIG_KEY", () => {
     const handle = makeTempHandle(tmpDir);
+    // Unknown keys are only an error with strict_config on.
+    native.configSet(handle, "strict_config", true);
     let caught: unknown;
     try {
       native.configSet(handle, "nonexistent_key", "some_value");

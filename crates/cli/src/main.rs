@@ -35,6 +35,14 @@ fn run(mut settings: Settings) -> Result<(), CliError> {
     let config = ConfigManager::new(settings);
     let cm = Arc::new(ComponentManager::new(config));
 
+    // Strict mode: an unknown key in the loaded configuration is an error.
+    // `config` itself is exempt, so `config unset <stale key>` can repair it.
+    if !matches!(cli.command, Commands::Config(_)) {
+        cm.config()
+            .check_strict()
+            .map_err(|e| CliError::Validation(e.to_string()))?;
+    }
+
     let result = dispatch(cli.command, &cm);
 
     // Fallback release. A command that ran through `teardown::run_command` has

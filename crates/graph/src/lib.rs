@@ -45,7 +45,7 @@ pub use traits::{
 pub use types::{EdgeData, GraphEdge, GraphNode, NodeData};
 
 #[cfg(feature = "ladybug")]
-pub use ladybug::LadybugAdapter;
+pub use ladybug::{DEFAULT_MAX_DB_SIZE, LadybugAdapter, LadybugConfig};
 
 #[cfg(feature = "postgres")]
 pub use pg_graph_adapter::PgGraphAdapter;

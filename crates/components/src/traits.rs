@@ -20,6 +20,8 @@ use cognee_graph::GraphDBTrait;
 use cognee_llm::{Llm, Transcriber};
 use cognee_vector::VectorDB;
 
+use cognee_config_core::SectionSchema;
+
 use crate::context::BackendBuildContext;
 use crate::error::ComponentError;
 
@@ -28,6 +30,12 @@ use crate::error::ComponentError;
 pub trait VectorDbFactory: Send + Sync {
     /// Lowercase provider id this factory serves (e.g. `"lancedb"`, `"qdrant"`).
     fn provider(&self) -> &str;
+    /// The configuration sections this factory reads, so registering the
+    /// factory registers its settings (see `cognee_config_core::section`).
+    /// A factory that is not registered contributes no settings.
+    fn config_sections(&self) -> Vec<&'static SectionSchema> {
+        Vec::new()
+    }
     /// Construct the backend from the resolved context.
     async fn build(&self, ctx: &BackendBuildContext) -> Result<Arc<dyn VectorDB>, ComponentError>;
 }
@@ -37,6 +45,12 @@ pub trait VectorDbFactory: Send + Sync {
 pub trait GraphDbFactory: Send + Sync {
     /// Lowercase provider id this factory serves (e.g. `"ladybug"`).
     fn provider(&self) -> &str;
+    /// The configuration sections this factory reads, so registering the
+    /// factory registers its settings (see `cognee_config_core::section`).
+    /// A factory that is not registered contributes no settings.
+    fn config_sections(&self) -> Vec<&'static SectionSchema> {
+        Vec::new()
+    }
     /// Construct the backend from the resolved context.
     async fn build(
         &self,
@@ -57,6 +71,12 @@ pub trait GraphDbFactory: Send + Sync {
 pub trait LlmFactory: Send + Sync {
     /// Lowercase provider id this factory serves.
     fn provider(&self) -> &str;
+    /// The configuration sections this factory reads, so registering the
+    /// factory registers its settings (see `cognee_config_core::section`).
+    /// A factory that is not registered contributes no settings.
+    fn config_sections(&self) -> Vec<&'static SectionSchema> {
+        Vec::new()
+    }
     /// Construct the raw LLM adapter from the resolved context.
     async fn build(&self, ctx: &BackendBuildContext) -> Result<Arc<dyn Llm>, ComponentError>;
     /// Construct a transcriber for this provider, or `Ok(None)` when the
@@ -83,6 +103,12 @@ pub trait LlmFactory: Send + Sync {
 /// intentional behavior change — see the PR notes.
 #[async_trait]
 pub trait EmbeddingFactory: Send + Sync {
+    /// The configuration sections this factory reads, so registering the
+    /// factory registers its settings (see `cognee_config_core::section`).
+    /// A factory that is not registered contributes no settings.
+    fn config_sections(&self) -> Vec<&'static SectionSchema> {
+        Vec::new()
+    }
     /// Construct the embedding engine from the resolved context.
     async fn build(
         &self,

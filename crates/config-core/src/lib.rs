@@ -18,8 +18,19 @@
 //!   the boundary takes `&dyn EnvSource` (for tests) or, better, the already
 //!   resolved value.
 //! * Tests build a [`MapEnv`] instead of mutating the shared process env.
+//!
+//! It also holds the machinery for **component-owned configuration**: a
+//! component declares the settings it reads as a typed section with
+//! [`config_section!`], and registering the component registers the section
+//! in a [`ConfigSchema`]. See [`section`].
 
 use std::collections::BTreeMap;
+
+pub mod section;
+pub use section::{
+    ConfigSchema, ConfigSection, ConfigValue, ConfigValues, KeyDef, KeyError, SchemaError,
+    SectionSchema, unknown_key,
+};
 
 /// Read-only view over an environment.
 ///

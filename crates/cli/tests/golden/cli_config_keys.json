@@ -44,6 +44,7 @@
     "enable_access_control",
     "enable_caching",
     "enable_last_accessed",
+    "graph.ladybug.max_db_size",
     "graph_database_host",
     "graph_database_key",
     "graph_database_name",
@@ -102,6 +103,7 @@
     "single_process",
     "storage_backend",
     "storage_bucket_name",
+    "strict_config",
     "summarization_model",
     "system_root_directory",
     "transcription_model",
@@ -227,7 +229,9 @@
     "otel_traces_sampler",
     "otel_traces_sampler_arg",
     "enable_last_accessed",
-    "single_process"
+    "strict_config",
+    "single_process",
+    "graph.ladybug.max_db_size"
   ],
   "set auto_feedback <- \"\"": {
     "err": true
@@ -2528,6 +2532,59 @@
   "set enable_last_accessed <- {\"a\":1}": {
     "err": true
   },
+  "set graph.ladybug.max_db_size <- \"\"": {
+    "err": true
+  },
+  "set graph.ladybug.max_db_size <- \"1\"": {
+    "err": true
+  },
+  "set graph.ladybug.max_db_size <- \"s\"": {
+    "err": true
+  },
+  "set graph.ladybug.max_db_size <- \"true\"": {
+    "err": true
+  },
+  "set graph.ladybug.max_db_size <- -1": {
+    "err": true
+  },
+  "set graph.ladybug.max_db_size <- 0": {
+    "ok": {
+      "graph.ladybug.max_db_size": 0
+    }
+  },
+  "set graph.ladybug.max_db_size <- 1": {
+    "ok": {
+      "graph.ladybug.max_db_size": 1
+    }
+  },
+  "set graph.ladybug.max_db_size <- 1.5": {
+    "err": true
+  },
+  "set graph.ladybug.max_db_size <- 5000000000": {
+    "ok": {
+      "graph.ladybug.max_db_size": 5000000000
+    }
+  },
+  "set graph.ladybug.max_db_size <- 70000": {
+    "ok": {
+      "graph.ladybug.max_db_size": 70000
+    }
+  },
+  "set graph.ladybug.max_db_size <- [1]": {
+    "err": true
+  },
+  "set graph.ladybug.max_db_size <- false": {
+    "err": true
+  },
+  "set graph.ladybug.max_db_size <- null": {
+    "err": true
+  },
+  "set graph.ladybug.max_db_size <- true": {
+    "err": true
+  },
+  "set graph.ladybug.max_db_size <- {\"a\":1}": {
+    "err": true
+  },
   "set graph_database_host <- \"\"": {
     "ok": {}
   },
@@ -3036,6 +3093,59 @@
     "err": true
   },
   "set graph_filename <- {\"a\":1}": {
+    "err": true
+  },
+  "set graph_max_db_size <- \"\"": {
+    "err": true
+  },
+  "set graph_max_db_size <- \"1\"": {
+    "err": true
+  },
+  "set graph_max_db_size <- \"s\"": {
+    "err": true
+  },
+  "set graph_max_db_size <- \"true\"": {
+    "err": true
+  },
+  "set graph_max_db_size <- -1": {
+    "err": true
+  },
+  "set graph_max_db_size <- 0": {
+    "ok": {
+      "graph.ladybug.max_db_size": 0
+    }
+  },
+  "set graph_max_db_size <- 1": {
+    "ok": {
+      "graph.ladybug.max_db_size": 1
+    }
+  },
+  "set graph_max_db_size <- 1.5": {
+    "err": true
+  },
+  "set graph_max_db_size <- 5000000000": {
+    "ok": {
+      "graph.ladybug.max_db_size": 5000000000
+    }
+  },
+  "set graph_max_db_size <- 70000": {
+    "ok": {
+      "graph.ladybug.max_db_size": 70000
+    }
+  },
+  "set graph_max_db_size <- [1]": {
+    "err": true
+  },
+  "set graph_max_db_size <- false": {
+    "err": true
+  },
+  "set graph_max_db_size <- null": {
+    "err": true
+  },
+  "set graph_max_db_size <- true": {
+    "err": true
+  },
+  "set graph_max_db_size <- {\"a\":1}": {
     "err": true
   },
   "set graph_model <- \"\"": {
@@ -4779,49 +4889,49 @@
     "err": true
   },
   "set no_such_key <- \"\"": {
-    "err": true
+    "ok": {}
   },
   "set no_such_key <- \"1\"": {
-    "err": true
+    "ok": {}
   },
   "set no_such_key <- \"s\"": {
-    "err": true
+    "ok": {}
   },
   "set no_such_key <- \"true\"": {
-    "err": true
+    "ok": {}
   },
   "set no_such_key <- -1": {
-    "err": true
+    "ok": {}
   },
   "set no_such_key <- 0": {
-    "err": true
+    "ok": {}
   },
   "set no_such_key <- 1": {
-    "err": true
+    "ok": {}
   },
   "set no_such_key <- 1.5": {
-    "err": true
+    "ok": {}
   },
   "set no_such_key <- 5000000000": {
-    "err": true
+    "ok": {}
   },
   "set no_such_key <- 70000": {
-    "err": true
+    "ok": {}
   },
   "set no_such_key <- [1]": {
-    "err": true
+    "ok": {}
   },
   "set no_such_key <- false": {
-    "err": true
+    "ok": {}
   },
   "set no_such_key <- null": {
-    "err": true
+    "ok": {}
   },
   "set no_such_key <- true": {
-    "err": true
+    "ok": {}
   },
   "set no_such_key <- {\"a\":1}": {
-    "err": true
+    "ok": {}
   },
   "set ontology_file_path <- \"\"": {
     "ok": {}
@@ -5618,6 +5728,53 @@
     "err": true
   },
   "set storage_bucket_name <- {\"a\":1}": {
+    "err": true
+  },
+  "set strict_config <- \"\"": {
+    "err": true
+  },
+  "set strict_config <- \"1\"": {
+    "err": true
+  },
+  "set strict_config <- \"s\"": {
+    "err": true
+  },
+  "set strict_config <- \"true\"": {
+    "err": true
+  },
+  "set strict_config <- -1": {
+    "err": true
+  },
+  "set strict_config <- 0": {
+    "err": true
+  },
+  "set strict_config <- 1": {
+    "err": true
+  },
+  "set strict_config <- 1.5": {
+    "err": true
+  },
+  "set strict_config <- 5000000000": {
+    "err": true
+  },
+  "set strict_config <- 70000": {
+    "err": true
+  },
+  "set strict_config <- [1]": {
+    "err": true
+  },
+  "set strict_config <- false": {
+    "ok": {}
+  },
+  "set strict_config <- null": {
+    "err": true
+  },
+  "set strict_config <- true": {
+    "ok": {
+      "strict_config": true
+    }
+  },
+  "set strict_config <- {\"a\":1}": {
     "err": true
   },
   "set summarization_model <- \"\"": {
@@ -6541,6 +6698,13 @@
       "db_port": 1
     }
   },
+  "unset graph.ladybug.max_db_size": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
   "unset graph_database_host": {
     "ok": {
       "llm_model": "changed",
@@ -6605,6 +6769,13 @@
     }
   },
   "unset graph_filename": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset graph_max_db_size": {
     "ok": {
       "llm_model": "changed",
       "chunk_size": 7,
@@ -6845,7 +7016,11 @@
     }
   },
   "unset no_such_key": {
-    "err": true
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
   },
   "unset ontology_file_path": {
     "ok": {
@@ -6946,6 +7121,13 @@
     }
   },
   "unset storage_bucket_name": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset strict_config": {
     "ok": {
       "llm_model": "changed",
       "chunk_size": 7,

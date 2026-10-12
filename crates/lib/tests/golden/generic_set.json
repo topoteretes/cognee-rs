@@ -2818,6 +2818,70 @@
     "err": "TypeMismatch",
     "key": "enable_last_accessed"
   },
+  "graph.ladybug.max_db_size <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "graph.ladybug.max_db_size"
+  },
+  "graph.ladybug.max_db_size <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "graph.ladybug.max_db_size"
+  },
+  "graph.ladybug.max_db_size <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "graph.ladybug.max_db_size"
+  },
+  "graph.ladybug.max_db_size <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "graph.ladybug.max_db_size"
+  },
+  "graph.ladybug.max_db_size <- -1": {
+    "err": "TypeMismatch",
+    "key": "graph.ladybug.max_db_size"
+  },
+  "graph.ladybug.max_db_size <- 0": {
+    "ok": {
+      "graph.ladybug.max_db_size": 0
+    }
+  },
+  "graph.ladybug.max_db_size <- 1": {
+    "ok": {
+      "graph.ladybug.max_db_size": 1
+    }
+  },
+  "graph.ladybug.max_db_size <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "graph.ladybug.max_db_size"
+  },
+  "graph.ladybug.max_db_size <- 5000000000": {
+    "ok": {
+      "graph.ladybug.max_db_size": 5000000000
+    }
+  },
+  "graph.ladybug.max_db_size <- 70000": {
+    "ok": {
+      "graph.ladybug.max_db_size": 70000
+    }
+  },
+  "graph.ladybug.max_db_size <- [1]": {
+    "err": "TypeMismatch",
+    "key": "graph.ladybug.max_db_size"
+  },
+  "graph.ladybug.max_db_size <- false": {
+    "err": "TypeMismatch",
+    "key": "graph.ladybug.max_db_size"
+  },
+  "graph.ladybug.max_db_size <- null": {
+    "err": "TypeMismatch",
+    "key": "graph.ladybug.max_db_size"
+  },
+  "graph.ladybug.max_db_size <- true": {
+    "err": "TypeMismatch",
+    "key": "graph.ladybug.max_db_size"
+  },
+  "graph.ladybug.max_db_size <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "graph.ladybug.max_db_size"
+  },
   "graph_database_host <- \"\"": {
     "ok": {}
   },
@@ -3439,6 +3503,70 @@
   "graph_filename <- {\"a\":1}": {
     "err": "TypeMismatch",
     "key": "graph_filename"
+  },
+  "graph_max_db_size <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "graph_max_db_size"
+  },
+  "graph_max_db_size <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "graph_max_db_size"
+  },
+  "graph_max_db_size <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "graph_max_db_size"
+  },
+  "graph_max_db_size <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "graph_max_db_size"
+  },
+  "graph_max_db_size <- -1": {
+    "err": "TypeMismatch",
+    "key": "graph_max_db_size"
+  },
+  "graph_max_db_size <- 0": {
+    "ok": {
+      "graph.ladybug.max_db_size": 0
+    }
+  },
+  "graph_max_db_size <- 1": {
+    "ok": {
+      "graph.ladybug.max_db_size": 1
+    }
+  },
+  "graph_max_db_size <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "graph_max_db_size"
+  },
+  "graph_max_db_size <- 5000000000": {
+    "ok": {
+      "graph.ladybug.max_db_size": 5000000000
+    }
+  },
+  "graph_max_db_size <- 70000": {
+    "ok": {
+      "graph.ladybug.max_db_size": 70000
+    }
+  },
+  "graph_max_db_size <- [1]": {
+    "err": "TypeMismatch",
+    "key": "graph_max_db_size"
+  },
+  "graph_max_db_size <- false": {
+    "err": "TypeMismatch",
+    "key": "graph_max_db_size"
+  },
+  "graph_max_db_size <- null": {
+    "err": "TypeMismatch",
+    "key": "graph_max_db_size"
+  },
+  "graph_max_db_size <- true": {
+    "err": "TypeMismatch",
+    "key": "graph_max_db_size"
+  },
+  "graph_max_db_size <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "graph_max_db_size"
   },
   "graph_model <- \"\"": {
     "ok": {
@@ -5575,64 +5703,49 @@
     "key": "monitoring_tool"
   },
   "no_such_key <- \"\"": {
-    "err": "UnknownKey",
-    "key": "no_such_key"
+    "ok": {}
   },
   "no_such_key <- \"1\"": {
-    "err": "UnknownKey",
-    "key": "no_such_key"
+    "ok": {}
   },
   "no_such_key <- \"s\"": {
-    "err": "UnknownKey",
-    "key": "no_such_key"
+    "ok": {}
   },
   "no_such_key <- \"true\"": {
-    "err": "UnknownKey",
-    "key": "no_such_key"
+    "ok": {}
   },
   "no_such_key <- -1": {
-    "err": "UnknownKey",
-    "key": "no_such_key"
+    "ok": {}
   },
   "no_such_key <- 0": {
-    "err": "UnknownKey",
-    "key": "no_such_key"
+    "ok": {}
   },
   "no_such_key <- 1": {
-    "err": "UnknownKey",
-    "key": "no_such_key"
+    "ok": {}
   },
   "no_such_key <- 1.5": {
-    "err": "UnknownKey",
-    "key": "no_such_key"
+    "ok": {}
   },
   "no_such_key <- 5000000000": {
-    "err": "UnknownKey",
-    "key": "no_such_key"
+    "ok": {}
   },
   "no_such_key <- 70000": {
-    "err": "UnknownKey",
-    "key": "no_such_key"
+    "ok": {}
   },
   "no_such_key <- [1]": {
-    "err": "UnknownKey",
-    "key": "no_such_key"
+    "ok": {}
   },
   "no_such_key <- false": {
-    "err": "UnknownKey",
-    "key": "no_such_key"
+    "ok": {}
   },
   "no_such_key <- null": {
-    "err": "UnknownKey",
-    "key": "no_such_key"
+    "ok": {}
   },
   "no_such_key <- true": {
-    "err": "UnknownKey",
-    "key": "no_such_key"
+    "ok": {}
   },
   "no_such_key <- {\"a\":1}": {
-    "err": "UnknownKey",
-    "key": "no_such_key"
+    "ok": {}
   },
   "ontology_file_path <- \"\"": {
     "ok": {}
@@ -6586,6 +6699,69 @@
   "storage_bucket_name <- {\"a\":1}": {
     "err": "TypeMismatch",
     "key": "storage_bucket_name"
+  },
+  "strict: no_such_key <- 1": {
+    "err": "Unknown config key: no_such_key"
+  },
+  "strict_config <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "strict_config"
+  },
+  "strict_config <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "strict_config"
+  },
+  "strict_config <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "strict_config"
+  },
+  "strict_config <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "strict_config"
+  },
+  "strict_config <- -1": {
+    "err": "TypeMismatch",
+    "key": "strict_config"
+  },
+  "strict_config <- 0": {
+    "err": "TypeMismatch",
+    "key": "strict_config"
+  },
+  "strict_config <- 1": {
+    "err": "TypeMismatch",
+    "key": "strict_config"
+  },
+  "strict_config <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "strict_config"
+  },
+  "strict_config <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "strict_config"
+  },
+  "strict_config <- 70000": {
+    "err": "TypeMismatch",
+    "key": "strict_config"
+  },
+  "strict_config <- [1]": {
+    "err": "TypeMismatch",
+    "key": "strict_config"
+  },
+  "strict_config <- false": {
+    "ok": {}
+  },
+  "strict_config <- null": {
+    "err": "TypeMismatch",
+    "key": "strict_config"
+  },
+  "strict_config <- true": {
+    "ok": {
+      "strict_config": true
+    }
+  },
+  "strict_config <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "strict_config"
   },
   "summarization_model <- \"\"": {
     "ok": {}

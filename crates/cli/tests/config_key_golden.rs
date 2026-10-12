@@ -74,7 +74,12 @@ fn all_keys() -> Vec<String> {
         .into_iter()
         .map(String::from),
     );
+    for def in cognee::config::builtin_schema().key_defs() {
+        keys.push(def.key.to_string());
+        keys.extend(def.aliases.iter().map(|a| a.to_string()));
+    }
     keys.sort();
+    keys.dedup();
     keys
 }
 

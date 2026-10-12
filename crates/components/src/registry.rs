@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use cognee_config_core::{ConfigSchema, SchemaError, SectionSchema};
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
 use cognee_llm::{Llm, Transcriber};
@@ -30,6 +31,8 @@ pub struct ComponentRegistry {
     graph: HashMap<String, Arc<dyn GraphDbFactory>>,
     llm: HashMap<String, Arc<dyn LlmFactory>>,
     embedding: Arc<dyn EmbeddingFactory>,
+    /// Config sections registered directly (not through a factory).
+    config_sections: Vec<&'static SectionSchema>,
 }
 
 impl ComponentRegistry {
@@ -42,6 +45,7 @@ impl ComponentRegistry {
             graph: HashMap::new(),
             llm: HashMap::new(),
             embedding: Arc::new(DefaultEmbeddingFactory),
+            config_sections: Vec::new(),
         }
     }
 
@@ -133,6 +137,45 @@ impl ComponentRegistry {
     /// engine, so there is a single slot).
     pub fn set_embedding(&mut self, f: Arc<dyn EmbeddingFactory>) {
         self.embedding = f;
+    }
+
+    /// Register a configuration section that is not owned by a factory (for
+    /// example a server module's settings), so its keys join this registry's
+    /// [`config_schema`](Self::config_schema).
+    pub fn register_config_section(&mut self, section: &'static SectionSchema) {
+        self.config_sections.push(section);
+    }
+
+    /// The config sections of every registered factory, plus those registered
+    /// with [`register_config_section`](Self::register_config_section).
+    ///
+    /// Factories are visited in a stable order (kind, then provider id), so
+    /// the schema does not depend on hash-map iteration order. Fails when two
+    /// sections claim the same key, alias or primary env var.
+    pub fn config_schema(&self) -> Result<ConfigSchema, SchemaError> {
+        fn sorted<V>(map: &HashMap<String, V>) -> Vec<&V> {
+            let mut entries: Vec<_> = map.iter().collect();
+            entries.sort_by(|a, b| a.0.cmp(b.0));
+            entries.into_iter().map(|(_, v)| v).collect()
+        }
+        let mut sections: Vec<&'static SectionSchema> = Vec::new();
+        for f in sorted(&self.vector) {
+            sections.extend(f.config_sections());
+        }
+        for f in sorted(&self.graph) {
+            sections.extend(f.config_sections());
+        }
+        for f in sorted(&self.llm) {
+            sections.extend(f.config_sections());
+        }
+        sections.extend(self.embedding.config_sections());
+        sections.extend(self.config_sections.iter().copied());
+
+        let mut schema = ConfigSchema::new();
+        for section in sections {
+            schema.add(section)?;
+        }
+        Ok(schema)
     }
 
     /// Provider ids with a registered vector factory (sorted). Used by the
@@ -933,6 +976,7 @@ mod tests {
 
     fn test_ctx() -> BackendBuildContext {
         BackendBuildContext {
+            sections: Default::default(),
             data_root_directory: std::path::PathBuf::from("/tmp/cognee-test-data"),
             system_root_directory: std::path::PathBuf::from("/tmp/cognee-test-system"),
             relational_db_url: "sqlite::memory:".to_string(),

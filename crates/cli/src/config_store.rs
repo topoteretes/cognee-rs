@@ -1,6 +1,6 @@
 use crate::error::CliError;
 pub use cognee::Settings;
-use cognee::config::{ConfigError, KeySpec, key_spec, keys};
+use cognee::config::{ConfigError, builtin_schema, key_spec, keys};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -168,49 +168,61 @@ pub fn save_config(config: &ConfigDocument) -> Result<(), CliError> {
         .map_err(|error| CliError::Runtime(format!("Failed to replace config file: {error}")))
 }
 
-/// The settings `cognee-cli config` can address: every registry key whose
+/// The settings `cognee-cli config` can address: every `Settings` key whose
 /// value is saved in `config.json` (`llm_args` and `summarization_schema` are
-/// not serialized, so a `config set` of them would be silently lost).
-fn cli_keys() -> impl Iterator<Item = &'static KeySpec> {
-    keys().iter().filter(|spec| spec.persisted)
-}
-
-fn cli_key_spec(key: &str) -> Result<&'static KeySpec, CliError> {
-    key_spec(key).filter(|spec| spec.persisted).ok_or_else(|| {
-        CliError::Validation(format!(
-            "Unknown config key '{key}'. Use 'cognee-cli config list' to see supported keys."
-        ))
-    })
-}
-
+/// not serialized, so a `config set` of them would be silently lost), then the
+/// keys of the component config sections compiled into this build.
 pub fn known_keys() -> Vec<&'static str> {
-    cli_keys().map(|spec| spec.key).collect()
-}
-
-pub fn as_flat_map(settings: &Settings) -> BTreeMap<&'static str, Value> {
-    cli_keys()
-        .map(|spec| {
-            let value = settings.get_key(spec.key).unwrap_or(Value::Null);
-            (spec.key, value)
-        })
+    keys()
+        .iter()
+        .filter(|spec| spec.persisted)
+        .map(|spec| spec.key)
+        .chain(builtin_schema().key_defs().map(|def| def.key))
         .collect()
 }
 
-pub fn set_value(settings: &mut Settings, key: &str, value: Value) -> Result<(), CliError> {
-    cli_key_spec(key)?;
-    settings.set_key(key, value).map_err(|error| match error {
+/// A key `config set` / `config unset` must refuse even though it exists: a
+/// `Settings` field that is not saved in `config.json`.
+fn reject_unpersisted(key: &str) -> Result<(), CliError> {
+    match key_spec(key) {
+        Some(spec) if !spec.persisted => Err(CliError::Validation(format!(
+            "Config key '{key}' is not saved in the config file; set it through the \
+             environment or the SDK instead."
+        ))),
+        _ => Ok(()),
+    }
+}
+
+fn cli_error(error: ConfigError) -> CliError {
+    match error {
         ConfigError::TypeMismatch { key, reason } => {
             CliError::Validation(format!("Config key '{key}': {reason}"))
         }
-        other => CliError::Validation(other.to_string()),
-    })
+        ConfigError::UnknownKey(key) => CliError::Validation(format!(
+            "Unknown config key '{key}'. Use 'cognee-cli config list' to see supported keys."
+        )),
+    }
 }
 
+pub fn as_flat_map(settings: &Settings) -> BTreeMap<&'static str, Value> {
+    known_keys()
+        .into_iter()
+        .map(|key| (key, settings.get_key(key).unwrap_or(Value::Null)))
+        .collect()
+}
+
+/// `config set`. An unknown key is a warning and changes nothing, or an error
+/// when `strict_config` is on.
+pub fn set_value(settings: &mut Settings, key: &str, value: Value) -> Result<(), CliError> {
+    reject_unpersisted(key)?;
+    settings.set_key(key, value).map_err(cli_error)
+}
+
+/// `config unset`: restore the default. An unknown key is handled as in
+/// [`set_value`].
 pub fn unset_key(settings: &mut Settings, key: &str) -> Result<(), CliError> {
-    cli_key_spec(key)?;
-    settings
-        .reset_key(key)
-        .map_err(|error| CliError::Validation(error.to_string()))
+    reject_unpersisted(key)?;
+    settings.reset_key(key).map_err(cli_error)
 }
 
 #[cfg(test)]

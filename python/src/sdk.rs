@@ -25,8 +25,8 @@ use crate::sdk_sessions::PyCogneeSessions;
 /// Apply a JSON object patch on top of `base` settings.
 ///
 /// Delegates every key to `ConfigManager::set(key, value)`, which handles all
-/// known `Settings` fields with type checking. Unknown keys are silently
-/// ignored for forward-compatibility.
+/// known `Settings` and component-section keys with type checking. An unknown
+/// key is kept with a warning (an error at first use under `strict_config`).
 ///
 /// Mirrors `apply_settings_json_patch` in `capi/cognee-capi/src/sdk.rs`.
 fn apply_settings_json_patch(
@@ -40,23 +40,13 @@ fn apply_settings_json_patch(
         .as_object()
         .ok_or_else(|| "settings_json must be a JSON object".to_string())?;
 
-    // Wrap the base settings in a temporary ConfigManager so we can use the
-    // generic `set(key, value)` dispatcher for all known keys.
+    // `apply_patch` sets every known key with type checking and keeps an
+    // unknown one (with a warning) for the handle's full schema to check, so a
+    // key owned by a component section survives into the handle. With
+    // `strict_config` on, an unknown key fails the first operation.
     let cm = ConfigManager::new(base);
-    for (key, value) in obj {
-        // Unknown keys are silently ignored (forward-compatibility). Type
-        // mismatches are reported as errors since they indicate caller bugs.
-        match cm.set(key, value.clone()) {
-            Ok(()) => {}
-            Err(cognee::config::ConfigError::UnknownKey(_)) => {
-                // Silently skip unrecognised keys — new fields added to Settings
-                // in future versions will not break older JSON overlays.
-            }
-            Err(e) => {
-                return Err(format!("settings_json key '{key}': {e}"));
-            }
-        }
-    }
+    cm.apply_patch(obj)
+        .map_err(|e| format!("settings_json: {e}"))?;
 
     Ok(cm.read().clone())
 }

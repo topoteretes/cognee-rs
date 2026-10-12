@@ -69,7 +69,9 @@ function main(): void {
   console.log(`  llm_model after setLlmModel: ${cfgB["llm_model"]}`);
   console.log(`  llm_temperature after setLlmTemperature: ${cfgB["llm_temperature"]}`);
 
-  // The generic set() raises for unknown keys:
+  // An unknown key is a logged warning by default. With strict_config on,
+  // the generic set() raises instead:
+  cognee.config.set("strict_config", true);
   try {
     cognee.config.set("definitely_not_a_real_key", 42);
   } catch (err: unknown) {

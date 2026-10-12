@@ -101,6 +101,7 @@ mod tests {
 
     fn ctx_with_db_url(url: String) -> BackendBuildContext {
         BackendBuildContext {
+            sections: Default::default(),
             data_root_directory: std::path::PathBuf::from("/tmp"),
             system_root_directory: std::path::PathBuf::from("/tmp"),
             relational_db_url: url,
