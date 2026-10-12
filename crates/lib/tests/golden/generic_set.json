@@ -1,0 +1,7203 @@
+{
+  "auto_feedback <- \"\"": {
+    "err": "UnknownKey",
+    "key": "auto_feedback"
+  },
+  "auto_feedback <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "auto_feedback"
+  },
+  "auto_feedback <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "auto_feedback"
+  },
+  "auto_feedback <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "auto_feedback"
+  },
+  "auto_feedback <- -1": {
+    "err": "UnknownKey",
+    "key": "auto_feedback"
+  },
+  "auto_feedback <- 0": {
+    "err": "UnknownKey",
+    "key": "auto_feedback"
+  },
+  "auto_feedback <- 1": {
+    "err": "UnknownKey",
+    "key": "auto_feedback"
+  },
+  "auto_feedback <- 1.5": {
+    "err": "UnknownKey",
+    "key": "auto_feedback"
+  },
+  "auto_feedback <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "auto_feedback"
+  },
+  "auto_feedback <- 70000": {
+    "err": "UnknownKey",
+    "key": "auto_feedback"
+  },
+  "auto_feedback <- [1]": {
+    "err": "UnknownKey",
+    "key": "auto_feedback"
+  },
+  "auto_feedback <- false": {
+    "err": "UnknownKey",
+    "key": "auto_feedback"
+  },
+  "auto_feedback <- null": {
+    "err": "UnknownKey",
+    "key": "auto_feedback"
+  },
+  "auto_feedback <- true": {
+    "err": "UnknownKey",
+    "key": "auto_feedback"
+  },
+  "auto_feedback <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "auto_feedback"
+  },
+  "auto_rate_limit <- \"\"": {
+    "err": "UnknownKey",
+    "key": "auto_rate_limit"
+  },
+  "auto_rate_limit <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "auto_rate_limit"
+  },
+  "auto_rate_limit <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "auto_rate_limit"
+  },
+  "auto_rate_limit <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "auto_rate_limit"
+  },
+  "auto_rate_limit <- -1": {
+    "err": "UnknownKey",
+    "key": "auto_rate_limit"
+  },
+  "auto_rate_limit <- 0": {
+    "err": "UnknownKey",
+    "key": "auto_rate_limit"
+  },
+  "auto_rate_limit <- 1": {
+    "err": "UnknownKey",
+    "key": "auto_rate_limit"
+  },
+  "auto_rate_limit <- 1.5": {
+    "err": "UnknownKey",
+    "key": "auto_rate_limit"
+  },
+  "auto_rate_limit <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "auto_rate_limit"
+  },
+  "auto_rate_limit <- 70000": {
+    "err": "UnknownKey",
+    "key": "auto_rate_limit"
+  },
+  "auto_rate_limit <- [1]": {
+    "err": "UnknownKey",
+    "key": "auto_rate_limit"
+  },
+  "auto_rate_limit <- false": {
+    "err": "UnknownKey",
+    "key": "auto_rate_limit"
+  },
+  "auto_rate_limit <- null": {
+    "err": "UnknownKey",
+    "key": "auto_rate_limit"
+  },
+  "auto_rate_limit <- true": {
+    "err": "UnknownKey",
+    "key": "auto_rate_limit"
+  },
+  "auto_rate_limit <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "auto_rate_limit"
+  },
+  "cache_backend <- \"\"": {
+    "err": "UnknownKey",
+    "key": "cache_backend"
+  },
+  "cache_backend <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "cache_backend"
+  },
+  "cache_backend <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "cache_backend"
+  },
+  "cache_backend <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "cache_backend"
+  },
+  "cache_backend <- -1": {
+    "err": "UnknownKey",
+    "key": "cache_backend"
+  },
+  "cache_backend <- 0": {
+    "err": "UnknownKey",
+    "key": "cache_backend"
+  },
+  "cache_backend <- 1": {
+    "err": "UnknownKey",
+    "key": "cache_backend"
+  },
+  "cache_backend <- 1.5": {
+    "err": "UnknownKey",
+    "key": "cache_backend"
+  },
+  "cache_backend <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "cache_backend"
+  },
+  "cache_backend <- 70000": {
+    "err": "UnknownKey",
+    "key": "cache_backend"
+  },
+  "cache_backend <- [1]": {
+    "err": "UnknownKey",
+    "key": "cache_backend"
+  },
+  "cache_backend <- false": {
+    "err": "UnknownKey",
+    "key": "cache_backend"
+  },
+  "cache_backend <- null": {
+    "err": "UnknownKey",
+    "key": "cache_backend"
+  },
+  "cache_backend <- true": {
+    "err": "UnknownKey",
+    "key": "cache_backend"
+  },
+  "cache_backend <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "cache_backend"
+  },
+  "cache_host <- \"\"": {
+    "err": "UnknownKey",
+    "key": "cache_host"
+  },
+  "cache_host <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "cache_host"
+  },
+  "cache_host <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "cache_host"
+  },
+  "cache_host <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "cache_host"
+  },
+  "cache_host <- -1": {
+    "err": "UnknownKey",
+    "key": "cache_host"
+  },
+  "cache_host <- 0": {
+    "err": "UnknownKey",
+    "key": "cache_host"
+  },
+  "cache_host <- 1": {
+    "err": "UnknownKey",
+    "key": "cache_host"
+  },
+  "cache_host <- 1.5": {
+    "err": "UnknownKey",
+    "key": "cache_host"
+  },
+  "cache_host <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "cache_host"
+  },
+  "cache_host <- 70000": {
+    "err": "UnknownKey",
+    "key": "cache_host"
+  },
+  "cache_host <- [1]": {
+    "err": "UnknownKey",
+    "key": "cache_host"
+  },
+  "cache_host <- false": {
+    "err": "UnknownKey",
+    "key": "cache_host"
+  },
+  "cache_host <- null": {
+    "err": "UnknownKey",
+    "key": "cache_host"
+  },
+  "cache_host <- true": {
+    "err": "UnknownKey",
+    "key": "cache_host"
+  },
+  "cache_host <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "cache_host"
+  },
+  "cache_password <- \"\"": {
+    "err": "UnknownKey",
+    "key": "cache_password"
+  },
+  "cache_password <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "cache_password"
+  },
+  "cache_password <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "cache_password"
+  },
+  "cache_password <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "cache_password"
+  },
+  "cache_password <- -1": {
+    "err": "UnknownKey",
+    "key": "cache_password"
+  },
+  "cache_password <- 0": {
+    "err": "UnknownKey",
+    "key": "cache_password"
+  },
+  "cache_password <- 1": {
+    "err": "UnknownKey",
+    "key": "cache_password"
+  },
+  "cache_password <- 1.5": {
+    "err": "UnknownKey",
+    "key": "cache_password"
+  },
+  "cache_password <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "cache_password"
+  },
+  "cache_password <- 70000": {
+    "err": "UnknownKey",
+    "key": "cache_password"
+  },
+  "cache_password <- [1]": {
+    "err": "UnknownKey",
+    "key": "cache_password"
+  },
+  "cache_password <- false": {
+    "err": "UnknownKey",
+    "key": "cache_password"
+  },
+  "cache_password <- null": {
+    "err": "UnknownKey",
+    "key": "cache_password"
+  },
+  "cache_password <- true": {
+    "err": "UnknownKey",
+    "key": "cache_password"
+  },
+  "cache_password <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "cache_password"
+  },
+  "cache_port <- \"\"": {
+    "err": "UnknownKey",
+    "key": "cache_port"
+  },
+  "cache_port <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "cache_port"
+  },
+  "cache_port <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "cache_port"
+  },
+  "cache_port <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "cache_port"
+  },
+  "cache_port <- -1": {
+    "err": "UnknownKey",
+    "key": "cache_port"
+  },
+  "cache_port <- 0": {
+    "err": "UnknownKey",
+    "key": "cache_port"
+  },
+  "cache_port <- 1": {
+    "err": "UnknownKey",
+    "key": "cache_port"
+  },
+  "cache_port <- 1.5": {
+    "err": "UnknownKey",
+    "key": "cache_port"
+  },
+  "cache_port <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "cache_port"
+  },
+  "cache_port <- 70000": {
+    "err": "UnknownKey",
+    "key": "cache_port"
+  },
+  "cache_port <- [1]": {
+    "err": "UnknownKey",
+    "key": "cache_port"
+  },
+  "cache_port <- false": {
+    "err": "UnknownKey",
+    "key": "cache_port"
+  },
+  "cache_port <- null": {
+    "err": "UnknownKey",
+    "key": "cache_port"
+  },
+  "cache_port <- true": {
+    "err": "UnknownKey",
+    "key": "cache_port"
+  },
+  "cache_port <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "cache_port"
+  },
+  "cache_root_directory <- \"\"": {
+    "ok": {
+      "cache_root_directory": ""
+    }
+  },
+  "cache_root_directory <- \"1\"": {
+    "ok": {
+      "cache_root_directory": "1"
+    }
+  },
+  "cache_root_directory <- \"s\"": {
+    "ok": {
+      "cache_root_directory": "s"
+    }
+  },
+  "cache_root_directory <- \"true\"": {
+    "ok": {
+      "cache_root_directory": "true"
+    }
+  },
+  "cache_root_directory <- -1": {
+    "err": "TypeMismatch",
+    "key": "cache_root_directory"
+  },
+  "cache_root_directory <- 0": {
+    "err": "TypeMismatch",
+    "key": "cache_root_directory"
+  },
+  "cache_root_directory <- 1": {
+    "err": "TypeMismatch",
+    "key": "cache_root_directory"
+  },
+  "cache_root_directory <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "cache_root_directory"
+  },
+  "cache_root_directory <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "cache_root_directory"
+  },
+  "cache_root_directory <- 70000": {
+    "err": "TypeMismatch",
+    "key": "cache_root_directory"
+  },
+  "cache_root_directory <- [1]": {
+    "err": "TypeMismatch",
+    "key": "cache_root_directory"
+  },
+  "cache_root_directory <- false": {
+    "err": "TypeMismatch",
+    "key": "cache_root_directory"
+  },
+  "cache_root_directory <- null": {
+    "err": "TypeMismatch",
+    "key": "cache_root_directory"
+  },
+  "cache_root_directory <- true": {
+    "err": "TypeMismatch",
+    "key": "cache_root_directory"
+  },
+  "cache_root_directory <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "cache_root_directory"
+  },
+  "cache_username <- \"\"": {
+    "err": "UnknownKey",
+    "key": "cache_username"
+  },
+  "cache_username <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "cache_username"
+  },
+  "cache_username <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "cache_username"
+  },
+  "cache_username <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "cache_username"
+  },
+  "cache_username <- -1": {
+    "err": "UnknownKey",
+    "key": "cache_username"
+  },
+  "cache_username <- 0": {
+    "err": "UnknownKey",
+    "key": "cache_username"
+  },
+  "cache_username <- 1": {
+    "err": "UnknownKey",
+    "key": "cache_username"
+  },
+  "cache_username <- 1.5": {
+    "err": "UnknownKey",
+    "key": "cache_username"
+  },
+  "cache_username <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "cache_username"
+  },
+  "cache_username <- 70000": {
+    "err": "UnknownKey",
+    "key": "cache_username"
+  },
+  "cache_username <- [1]": {
+    "err": "UnknownKey",
+    "key": "cache_username"
+  },
+  "cache_username <- false": {
+    "err": "UnknownKey",
+    "key": "cache_username"
+  },
+  "cache_username <- null": {
+    "err": "UnknownKey",
+    "key": "cache_username"
+  },
+  "cache_username <- true": {
+    "err": "UnknownKey",
+    "key": "cache_username"
+  },
+  "cache_username <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "cache_username"
+  },
+  "chunk_engine <- \"\"": {
+    "ok": {
+      "chunk_engine": ""
+    }
+  },
+  "chunk_engine <- \"1\"": {
+    "ok": {
+      "chunk_engine": "1"
+    }
+  },
+  "chunk_engine <- \"s\"": {
+    "ok": {
+      "chunk_engine": "s"
+    }
+  },
+  "chunk_engine <- \"true\"": {
+    "ok": {
+      "chunk_engine": "true"
+    }
+  },
+  "chunk_engine <- -1": {
+    "err": "TypeMismatch",
+    "key": "chunk_engine"
+  },
+  "chunk_engine <- 0": {
+    "err": "TypeMismatch",
+    "key": "chunk_engine"
+  },
+  "chunk_engine <- 1": {
+    "err": "TypeMismatch",
+    "key": "chunk_engine"
+  },
+  "chunk_engine <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "chunk_engine"
+  },
+  "chunk_engine <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "chunk_engine"
+  },
+  "chunk_engine <- 70000": {
+    "err": "TypeMismatch",
+    "key": "chunk_engine"
+  },
+  "chunk_engine <- [1]": {
+    "err": "TypeMismatch",
+    "key": "chunk_engine"
+  },
+  "chunk_engine <- false": {
+    "err": "TypeMismatch",
+    "key": "chunk_engine"
+  },
+  "chunk_engine <- null": {
+    "err": "TypeMismatch",
+    "key": "chunk_engine"
+  },
+  "chunk_engine <- true": {
+    "err": "TypeMismatch",
+    "key": "chunk_engine"
+  },
+  "chunk_engine <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "chunk_engine"
+  },
+  "chunk_overlap <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "chunk_overlap"
+  },
+  "chunk_overlap <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "chunk_overlap"
+  },
+  "chunk_overlap <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "chunk_overlap"
+  },
+  "chunk_overlap <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "chunk_overlap"
+  },
+  "chunk_overlap <- -1": {
+    "err": "TypeMismatch",
+    "key": "chunk_overlap"
+  },
+  "chunk_overlap <- 0": {
+    "ok": {
+      "chunk_overlap": 0
+    }
+  },
+  "chunk_overlap <- 1": {
+    "ok": {
+      "chunk_overlap": 1
+    }
+  },
+  "chunk_overlap <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "chunk_overlap"
+  },
+  "chunk_overlap <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "chunk_overlap"
+  },
+  "chunk_overlap <- 70000": {
+    "ok": {
+      "chunk_overlap": 70000
+    }
+  },
+  "chunk_overlap <- [1]": {
+    "err": "TypeMismatch",
+    "key": "chunk_overlap"
+  },
+  "chunk_overlap <- false": {
+    "err": "TypeMismatch",
+    "key": "chunk_overlap"
+  },
+  "chunk_overlap <- null": {
+    "err": "TypeMismatch",
+    "key": "chunk_overlap"
+  },
+  "chunk_overlap <- true": {
+    "err": "TypeMismatch",
+    "key": "chunk_overlap"
+  },
+  "chunk_overlap <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "chunk_overlap"
+  },
+  "chunk_size <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "chunk_size"
+  },
+  "chunk_size <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "chunk_size"
+  },
+  "chunk_size <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "chunk_size"
+  },
+  "chunk_size <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "chunk_size"
+  },
+  "chunk_size <- -1": {
+    "err": "TypeMismatch",
+    "key": "chunk_size"
+  },
+  "chunk_size <- 0": {
+    "ok": {
+      "chunk_size": 0
+    }
+  },
+  "chunk_size <- 1": {
+    "ok": {
+      "chunk_size": 1
+    }
+  },
+  "chunk_size <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "chunk_size"
+  },
+  "chunk_size <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "chunk_size"
+  },
+  "chunk_size <- 70000": {
+    "ok": {
+      "chunk_size": 70000
+    }
+  },
+  "chunk_size <- [1]": {
+    "err": "TypeMismatch",
+    "key": "chunk_size"
+  },
+  "chunk_size <- false": {
+    "err": "TypeMismatch",
+    "key": "chunk_size"
+  },
+  "chunk_size <- null": {
+    "ok": {}
+  },
+  "chunk_size <- true": {
+    "err": "TypeMismatch",
+    "key": "chunk_size"
+  },
+  "chunk_size <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "chunk_size"
+  },
+  "chunk_strategy <- \"\"": {
+    "ok": {
+      "chunk_strategy": ""
+    }
+  },
+  "chunk_strategy <- \"1\"": {
+    "ok": {
+      "chunk_strategy": "1"
+    }
+  },
+  "chunk_strategy <- \"s\"": {
+    "ok": {
+      "chunk_strategy": "s"
+    }
+  },
+  "chunk_strategy <- \"true\"": {
+    "ok": {
+      "chunk_strategy": "true"
+    }
+  },
+  "chunk_strategy <- -1": {
+    "err": "TypeMismatch",
+    "key": "chunk_strategy"
+  },
+  "chunk_strategy <- 0": {
+    "err": "TypeMismatch",
+    "key": "chunk_strategy"
+  },
+  "chunk_strategy <- 1": {
+    "err": "TypeMismatch",
+    "key": "chunk_strategy"
+  },
+  "chunk_strategy <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "chunk_strategy"
+  },
+  "chunk_strategy <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "chunk_strategy"
+  },
+  "chunk_strategy <- 70000": {
+    "err": "TypeMismatch",
+    "key": "chunk_strategy"
+  },
+  "chunk_strategy <- [1]": {
+    "err": "TypeMismatch",
+    "key": "chunk_strategy"
+  },
+  "chunk_strategy <- false": {
+    "err": "TypeMismatch",
+    "key": "chunk_strategy"
+  },
+  "chunk_strategy <- null": {
+    "err": "TypeMismatch",
+    "key": "chunk_strategy"
+  },
+  "chunk_strategy <- true": {
+    "err": "TypeMismatch",
+    "key": "chunk_strategy"
+  },
+  "chunk_strategy <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "chunk_strategy"
+  },
+  "classification_model <- \"\"": {
+    "ok": {}
+  },
+  "classification_model <- \"1\"": {
+    "ok": {
+      "classification_model": "1"
+    }
+  },
+  "classification_model <- \"s\"": {
+    "ok": {
+      "classification_model": "s"
+    }
+  },
+  "classification_model <- \"true\"": {
+    "ok": {
+      "classification_model": "true"
+    }
+  },
+  "classification_model <- -1": {
+    "err": "TypeMismatch",
+    "key": "classification_model"
+  },
+  "classification_model <- 0": {
+    "err": "TypeMismatch",
+    "key": "classification_model"
+  },
+  "classification_model <- 1": {
+    "err": "TypeMismatch",
+    "key": "classification_model"
+  },
+  "classification_model <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "classification_model"
+  },
+  "classification_model <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "classification_model"
+  },
+  "classification_model <- 70000": {
+    "err": "TypeMismatch",
+    "key": "classification_model"
+  },
+  "classification_model <- [1]": {
+    "err": "TypeMismatch",
+    "key": "classification_model"
+  },
+  "classification_model <- false": {
+    "err": "TypeMismatch",
+    "key": "classification_model"
+  },
+  "classification_model <- null": {
+    "err": "TypeMismatch",
+    "key": "classification_model"
+  },
+  "classification_model <- true": {
+    "err": "TypeMismatch",
+    "key": "classification_model"
+  },
+  "classification_model <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "classification_model"
+  },
+  "cognee_tracing_enabled <- \"\"": {
+    "err": "UnknownKey",
+    "key": "cognee_tracing_enabled"
+  },
+  "cognee_tracing_enabled <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "cognee_tracing_enabled"
+  },
+  "cognee_tracing_enabled <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "cognee_tracing_enabled"
+  },
+  "cognee_tracing_enabled <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "cognee_tracing_enabled"
+  },
+  "cognee_tracing_enabled <- -1": {
+    "err": "UnknownKey",
+    "key": "cognee_tracing_enabled"
+  },
+  "cognee_tracing_enabled <- 0": {
+    "err": "UnknownKey",
+    "key": "cognee_tracing_enabled"
+  },
+  "cognee_tracing_enabled <- 1": {
+    "err": "UnknownKey",
+    "key": "cognee_tracing_enabled"
+  },
+  "cognee_tracing_enabled <- 1.5": {
+    "err": "UnknownKey",
+    "key": "cognee_tracing_enabled"
+  },
+  "cognee_tracing_enabled <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "cognee_tracing_enabled"
+  },
+  "cognee_tracing_enabled <- 70000": {
+    "err": "UnknownKey",
+    "key": "cognee_tracing_enabled"
+  },
+  "cognee_tracing_enabled <- [1]": {
+    "err": "UnknownKey",
+    "key": "cognee_tracing_enabled"
+  },
+  "cognee_tracing_enabled <- false": {
+    "err": "UnknownKey",
+    "key": "cognee_tracing_enabled"
+  },
+  "cognee_tracing_enabled <- null": {
+    "err": "UnknownKey",
+    "key": "cognee_tracing_enabled"
+  },
+  "cognee_tracing_enabled <- true": {
+    "err": "UnknownKey",
+    "key": "cognee_tracing_enabled"
+  },
+  "cognee_tracing_enabled <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "cognee_tracing_enabled"
+  },
+  "data_root_directory <- \"\"": {
+    "ok": {
+      "data_root_directory": ""
+    }
+  },
+  "data_root_directory <- \"1\"": {
+    "ok": {
+      "data_root_directory": "1"
+    }
+  },
+  "data_root_directory <- \"s\"": {
+    "ok": {
+      "data_root_directory": "s"
+    }
+  },
+  "data_root_directory <- \"true\"": {
+    "ok": {
+      "data_root_directory": "true"
+    }
+  },
+  "data_root_directory <- -1": {
+    "err": "TypeMismatch",
+    "key": "data_root_directory"
+  },
+  "data_root_directory <- 0": {
+    "err": "TypeMismatch",
+    "key": "data_root_directory"
+  },
+  "data_root_directory <- 1": {
+    "err": "TypeMismatch",
+    "key": "data_root_directory"
+  },
+  "data_root_directory <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "data_root_directory"
+  },
+  "data_root_directory <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "data_root_directory"
+  },
+  "data_root_directory <- 70000": {
+    "err": "TypeMismatch",
+    "key": "data_root_directory"
+  },
+  "data_root_directory <- [1]": {
+    "err": "TypeMismatch",
+    "key": "data_root_directory"
+  },
+  "data_root_directory <- false": {
+    "err": "TypeMismatch",
+    "key": "data_root_directory"
+  },
+  "data_root_directory <- null": {
+    "err": "TypeMismatch",
+    "key": "data_root_directory"
+  },
+  "data_root_directory <- true": {
+    "err": "TypeMismatch",
+    "key": "data_root_directory"
+  },
+  "data_root_directory <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "data_root_directory"
+  },
+  "db_host <- \"\"": {
+    "err": "UnknownKey",
+    "key": "db_host"
+  },
+  "db_host <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "db_host"
+  },
+  "db_host <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "db_host"
+  },
+  "db_host <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "db_host"
+  },
+  "db_host <- -1": {
+    "err": "UnknownKey",
+    "key": "db_host"
+  },
+  "db_host <- 0": {
+    "err": "UnknownKey",
+    "key": "db_host"
+  },
+  "db_host <- 1": {
+    "err": "UnknownKey",
+    "key": "db_host"
+  },
+  "db_host <- 1.5": {
+    "err": "UnknownKey",
+    "key": "db_host"
+  },
+  "db_host <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "db_host"
+  },
+  "db_host <- 70000": {
+    "err": "UnknownKey",
+    "key": "db_host"
+  },
+  "db_host <- [1]": {
+    "err": "UnknownKey",
+    "key": "db_host"
+  },
+  "db_host <- false": {
+    "err": "UnknownKey",
+    "key": "db_host"
+  },
+  "db_host <- null": {
+    "err": "UnknownKey",
+    "key": "db_host"
+  },
+  "db_host <- true": {
+    "err": "UnknownKey",
+    "key": "db_host"
+  },
+  "db_host <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "db_host"
+  },
+  "db_name <- \"\"": {
+    "err": "UnknownKey",
+    "key": "db_name"
+  },
+  "db_name <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "db_name"
+  },
+  "db_name <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "db_name"
+  },
+  "db_name <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "db_name"
+  },
+  "db_name <- -1": {
+    "err": "UnknownKey",
+    "key": "db_name"
+  },
+  "db_name <- 0": {
+    "err": "UnknownKey",
+    "key": "db_name"
+  },
+  "db_name <- 1": {
+    "err": "UnknownKey",
+    "key": "db_name"
+  },
+  "db_name <- 1.5": {
+    "err": "UnknownKey",
+    "key": "db_name"
+  },
+  "db_name <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "db_name"
+  },
+  "db_name <- 70000": {
+    "err": "UnknownKey",
+    "key": "db_name"
+  },
+  "db_name <- [1]": {
+    "err": "UnknownKey",
+    "key": "db_name"
+  },
+  "db_name <- false": {
+    "err": "UnknownKey",
+    "key": "db_name"
+  },
+  "db_name <- null": {
+    "err": "UnknownKey",
+    "key": "db_name"
+  },
+  "db_name <- true": {
+    "err": "UnknownKey",
+    "key": "db_name"
+  },
+  "db_name <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "db_name"
+  },
+  "db_password <- \"\"": {
+    "err": "UnknownKey",
+    "key": "db_password"
+  },
+  "db_password <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "db_password"
+  },
+  "db_password <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "db_password"
+  },
+  "db_password <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "db_password"
+  },
+  "db_password <- -1": {
+    "err": "UnknownKey",
+    "key": "db_password"
+  },
+  "db_password <- 0": {
+    "err": "UnknownKey",
+    "key": "db_password"
+  },
+  "db_password <- 1": {
+    "err": "UnknownKey",
+    "key": "db_password"
+  },
+  "db_password <- 1.5": {
+    "err": "UnknownKey",
+    "key": "db_password"
+  },
+  "db_password <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "db_password"
+  },
+  "db_password <- 70000": {
+    "err": "UnknownKey",
+    "key": "db_password"
+  },
+  "db_password <- [1]": {
+    "err": "UnknownKey",
+    "key": "db_password"
+  },
+  "db_password <- false": {
+    "err": "UnknownKey",
+    "key": "db_password"
+  },
+  "db_password <- null": {
+    "err": "UnknownKey",
+    "key": "db_password"
+  },
+  "db_password <- true": {
+    "err": "UnknownKey",
+    "key": "db_password"
+  },
+  "db_password <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "db_password"
+  },
+  "db_port <- \"\"": {
+    "err": "UnknownKey",
+    "key": "db_port"
+  },
+  "db_port <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "db_port"
+  },
+  "db_port <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "db_port"
+  },
+  "db_port <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "db_port"
+  },
+  "db_port <- -1": {
+    "err": "UnknownKey",
+    "key": "db_port"
+  },
+  "db_port <- 0": {
+    "err": "UnknownKey",
+    "key": "db_port"
+  },
+  "db_port <- 1": {
+    "err": "UnknownKey",
+    "key": "db_port"
+  },
+  "db_port <- 1.5": {
+    "err": "UnknownKey",
+    "key": "db_port"
+  },
+  "db_port <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "db_port"
+  },
+  "db_port <- 70000": {
+    "err": "UnknownKey",
+    "key": "db_port"
+  },
+  "db_port <- [1]": {
+    "err": "UnknownKey",
+    "key": "db_port"
+  },
+  "db_port <- false": {
+    "err": "UnknownKey",
+    "key": "db_port"
+  },
+  "db_port <- null": {
+    "err": "UnknownKey",
+    "key": "db_port"
+  },
+  "db_port <- true": {
+    "err": "UnknownKey",
+    "key": "db_port"
+  },
+  "db_port <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "db_port"
+  },
+  "db_provider <- \"\"": {
+    "err": "UnknownKey",
+    "key": "db_provider"
+  },
+  "db_provider <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "db_provider"
+  },
+  "db_provider <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "db_provider"
+  },
+  "db_provider <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "db_provider"
+  },
+  "db_provider <- -1": {
+    "err": "UnknownKey",
+    "key": "db_provider"
+  },
+  "db_provider <- 0": {
+    "err": "UnknownKey",
+    "key": "db_provider"
+  },
+  "db_provider <- 1": {
+    "err": "UnknownKey",
+    "key": "db_provider"
+  },
+  "db_provider <- 1.5": {
+    "err": "UnknownKey",
+    "key": "db_provider"
+  },
+  "db_provider <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "db_provider"
+  },
+  "db_provider <- 70000": {
+    "err": "UnknownKey",
+    "key": "db_provider"
+  },
+  "db_provider <- [1]": {
+    "err": "UnknownKey",
+    "key": "db_provider"
+  },
+  "db_provider <- false": {
+    "err": "UnknownKey",
+    "key": "db_provider"
+  },
+  "db_provider <- null": {
+    "err": "UnknownKey",
+    "key": "db_provider"
+  },
+  "db_provider <- true": {
+    "err": "UnknownKey",
+    "key": "db_provider"
+  },
+  "db_provider <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "db_provider"
+  },
+  "db_sslmode <- \"\"": {
+    "err": "UnknownKey",
+    "key": "db_sslmode"
+  },
+  "db_sslmode <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "db_sslmode"
+  },
+  "db_sslmode <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "db_sslmode"
+  },
+  "db_sslmode <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "db_sslmode"
+  },
+  "db_sslmode <- -1": {
+    "err": "UnknownKey",
+    "key": "db_sslmode"
+  },
+  "db_sslmode <- 0": {
+    "err": "UnknownKey",
+    "key": "db_sslmode"
+  },
+  "db_sslmode <- 1": {
+    "err": "UnknownKey",
+    "key": "db_sslmode"
+  },
+  "db_sslmode <- 1.5": {
+    "err": "UnknownKey",
+    "key": "db_sslmode"
+  },
+  "db_sslmode <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "db_sslmode"
+  },
+  "db_sslmode <- 70000": {
+    "err": "UnknownKey",
+    "key": "db_sslmode"
+  },
+  "db_sslmode <- [1]": {
+    "err": "UnknownKey",
+    "key": "db_sslmode"
+  },
+  "db_sslmode <- false": {
+    "err": "UnknownKey",
+    "key": "db_sslmode"
+  },
+  "db_sslmode <- null": {
+    "err": "UnknownKey",
+    "key": "db_sslmode"
+  },
+  "db_sslmode <- true": {
+    "err": "UnknownKey",
+    "key": "db_sslmode"
+  },
+  "db_sslmode <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "db_sslmode"
+  },
+  "db_username <- \"\"": {
+    "err": "UnknownKey",
+    "key": "db_username"
+  },
+  "db_username <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "db_username"
+  },
+  "db_username <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "db_username"
+  },
+  "db_username <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "db_username"
+  },
+  "db_username <- -1": {
+    "err": "UnknownKey",
+    "key": "db_username"
+  },
+  "db_username <- 0": {
+    "err": "UnknownKey",
+    "key": "db_username"
+  },
+  "db_username <- 1": {
+    "err": "UnknownKey",
+    "key": "db_username"
+  },
+  "db_username <- 1.5": {
+    "err": "UnknownKey",
+    "key": "db_username"
+  },
+  "db_username <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "db_username"
+  },
+  "db_username <- 70000": {
+    "err": "UnknownKey",
+    "key": "db_username"
+  },
+  "db_username <- [1]": {
+    "err": "UnknownKey",
+    "key": "db_username"
+  },
+  "db_username <- false": {
+    "err": "UnknownKey",
+    "key": "db_username"
+  },
+  "db_username <- null": {
+    "err": "UnknownKey",
+    "key": "db_username"
+  },
+  "db_username <- true": {
+    "err": "UnknownKey",
+    "key": "db_username"
+  },
+  "db_username <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "db_username"
+  },
+  "default_dataset_name <- \"\"": {
+    "err": "UnknownKey",
+    "key": "default_dataset_name"
+  },
+  "default_dataset_name <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "default_dataset_name"
+  },
+  "default_dataset_name <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "default_dataset_name"
+  },
+  "default_dataset_name <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "default_dataset_name"
+  },
+  "default_dataset_name <- -1": {
+    "err": "UnknownKey",
+    "key": "default_dataset_name"
+  },
+  "default_dataset_name <- 0": {
+    "err": "UnknownKey",
+    "key": "default_dataset_name"
+  },
+  "default_dataset_name <- 1": {
+    "err": "UnknownKey",
+    "key": "default_dataset_name"
+  },
+  "default_dataset_name <- 1.5": {
+    "err": "UnknownKey",
+    "key": "default_dataset_name"
+  },
+  "default_dataset_name <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "default_dataset_name"
+  },
+  "default_dataset_name <- 70000": {
+    "err": "UnknownKey",
+    "key": "default_dataset_name"
+  },
+  "default_dataset_name <- [1]": {
+    "err": "UnknownKey",
+    "key": "default_dataset_name"
+  },
+  "default_dataset_name <- false": {
+    "err": "UnknownKey",
+    "key": "default_dataset_name"
+  },
+  "default_dataset_name <- null": {
+    "err": "UnknownKey",
+    "key": "default_dataset_name"
+  },
+  "default_dataset_name <- true": {
+    "err": "UnknownKey",
+    "key": "default_dataset_name"
+  },
+  "default_dataset_name <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "default_dataset_name"
+  },
+  "default_system_prompt_path <- \"\"": {
+    "err": "UnknownKey",
+    "key": "default_system_prompt_path"
+  },
+  "default_system_prompt_path <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "default_system_prompt_path"
+  },
+  "default_system_prompt_path <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "default_system_prompt_path"
+  },
+  "default_system_prompt_path <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "default_system_prompt_path"
+  },
+  "default_system_prompt_path <- -1": {
+    "err": "UnknownKey",
+    "key": "default_system_prompt_path"
+  },
+  "default_system_prompt_path <- 0": {
+    "err": "UnknownKey",
+    "key": "default_system_prompt_path"
+  },
+  "default_system_prompt_path <- 1": {
+    "err": "UnknownKey",
+    "key": "default_system_prompt_path"
+  },
+  "default_system_prompt_path <- 1.5": {
+    "err": "UnknownKey",
+    "key": "default_system_prompt_path"
+  },
+  "default_system_prompt_path <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "default_system_prompt_path"
+  },
+  "default_system_prompt_path <- 70000": {
+    "err": "UnknownKey",
+    "key": "default_system_prompt_path"
+  },
+  "default_system_prompt_path <- [1]": {
+    "err": "UnknownKey",
+    "key": "default_system_prompt_path"
+  },
+  "default_system_prompt_path <- false": {
+    "err": "UnknownKey",
+    "key": "default_system_prompt_path"
+  },
+  "default_system_prompt_path <- null": {
+    "err": "UnknownKey",
+    "key": "default_system_prompt_path"
+  },
+  "default_system_prompt_path <- true": {
+    "err": "UnknownKey",
+    "key": "default_system_prompt_path"
+  },
+  "default_system_prompt_path <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "default_system_prompt_path"
+  },
+  "default_user_email <- \"\"": {
+    "err": "UnknownKey",
+    "key": "default_user_email"
+  },
+  "default_user_email <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "default_user_email"
+  },
+  "default_user_email <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "default_user_email"
+  },
+  "default_user_email <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "default_user_email"
+  },
+  "default_user_email <- -1": {
+    "err": "UnknownKey",
+    "key": "default_user_email"
+  },
+  "default_user_email <- 0": {
+    "err": "UnknownKey",
+    "key": "default_user_email"
+  },
+  "default_user_email <- 1": {
+    "err": "UnknownKey",
+    "key": "default_user_email"
+  },
+  "default_user_email <- 1.5": {
+    "err": "UnknownKey",
+    "key": "default_user_email"
+  },
+  "default_user_email <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "default_user_email"
+  },
+  "default_user_email <- 70000": {
+    "err": "UnknownKey",
+    "key": "default_user_email"
+  },
+  "default_user_email <- [1]": {
+    "err": "UnknownKey",
+    "key": "default_user_email"
+  },
+  "default_user_email <- false": {
+    "err": "UnknownKey",
+    "key": "default_user_email"
+  },
+  "default_user_email <- null": {
+    "err": "UnknownKey",
+    "key": "default_user_email"
+  },
+  "default_user_email <- true": {
+    "err": "UnknownKey",
+    "key": "default_user_email"
+  },
+  "default_user_email <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "default_user_email"
+  },
+  "default_user_id <- \"\"": {
+    "err": "UnknownKey",
+    "key": "default_user_id"
+  },
+  "default_user_id <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "default_user_id"
+  },
+  "default_user_id <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "default_user_id"
+  },
+  "default_user_id <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "default_user_id"
+  },
+  "default_user_id <- -1": {
+    "err": "UnknownKey",
+    "key": "default_user_id"
+  },
+  "default_user_id <- 0": {
+    "err": "UnknownKey",
+    "key": "default_user_id"
+  },
+  "default_user_id <- 1": {
+    "err": "UnknownKey",
+    "key": "default_user_id"
+  },
+  "default_user_id <- 1.5": {
+    "err": "UnknownKey",
+    "key": "default_user_id"
+  },
+  "default_user_id <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "default_user_id"
+  },
+  "default_user_id <- 70000": {
+    "err": "UnknownKey",
+    "key": "default_user_id"
+  },
+  "default_user_id <- [1]": {
+    "err": "UnknownKey",
+    "key": "default_user_id"
+  },
+  "default_user_id <- false": {
+    "err": "UnknownKey",
+    "key": "default_user_id"
+  },
+  "default_user_id <- null": {
+    "err": "UnknownKey",
+    "key": "default_user_id"
+  },
+  "default_user_id <- true": {
+    "err": "UnknownKey",
+    "key": "default_user_id"
+  },
+  "default_user_id <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "default_user_id"
+  },
+  "default_user_password <- \"\"": {
+    "err": "UnknownKey",
+    "key": "default_user_password"
+  },
+  "default_user_password <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "default_user_password"
+  },
+  "default_user_password <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "default_user_password"
+  },
+  "default_user_password <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "default_user_password"
+  },
+  "default_user_password <- -1": {
+    "err": "UnknownKey",
+    "key": "default_user_password"
+  },
+  "default_user_password <- 0": {
+    "err": "UnknownKey",
+    "key": "default_user_password"
+  },
+  "default_user_password <- 1": {
+    "err": "UnknownKey",
+    "key": "default_user_password"
+  },
+  "default_user_password <- 1.5": {
+    "err": "UnknownKey",
+    "key": "default_user_password"
+  },
+  "default_user_password <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "default_user_password"
+  },
+  "default_user_password <- 70000": {
+    "err": "UnknownKey",
+    "key": "default_user_password"
+  },
+  "default_user_password <- [1]": {
+    "err": "UnknownKey",
+    "key": "default_user_password"
+  },
+  "default_user_password <- false": {
+    "err": "UnknownKey",
+    "key": "default_user_password"
+  },
+  "default_user_password <- null": {
+    "err": "UnknownKey",
+    "key": "default_user_password"
+  },
+  "default_user_password <- true": {
+    "err": "UnknownKey",
+    "key": "default_user_password"
+  },
+  "default_user_password <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "default_user_password"
+  },
+  "embedding_api_key <- \"\"": {
+    "ok": {}
+  },
+  "embedding_api_key <- \"1\"": {
+    "ok": {
+      "embedding_api_key": "1"
+    }
+  },
+  "embedding_api_key <- \"s\"": {
+    "ok": {
+      "embedding_api_key": "s"
+    }
+  },
+  "embedding_api_key <- \"true\"": {
+    "ok": {
+      "embedding_api_key": "true"
+    }
+  },
+  "embedding_api_key <- -1": {
+    "err": "TypeMismatch",
+    "key": "embedding_api_key"
+  },
+  "embedding_api_key <- 0": {
+    "err": "TypeMismatch",
+    "key": "embedding_api_key"
+  },
+  "embedding_api_key <- 1": {
+    "err": "TypeMismatch",
+    "key": "embedding_api_key"
+  },
+  "embedding_api_key <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "embedding_api_key"
+  },
+  "embedding_api_key <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "embedding_api_key"
+  },
+  "embedding_api_key <- 70000": {
+    "err": "TypeMismatch",
+    "key": "embedding_api_key"
+  },
+  "embedding_api_key <- [1]": {
+    "err": "TypeMismatch",
+    "key": "embedding_api_key"
+  },
+  "embedding_api_key <- false": {
+    "err": "TypeMismatch",
+    "key": "embedding_api_key"
+  },
+  "embedding_api_key <- null": {
+    "err": "TypeMismatch",
+    "key": "embedding_api_key"
+  },
+  "embedding_api_key <- true": {
+    "err": "TypeMismatch",
+    "key": "embedding_api_key"
+  },
+  "embedding_api_key <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "embedding_api_key"
+  },
+  "embedding_api_version <- \"\"": {
+    "ok": {}
+  },
+  "embedding_api_version <- \"1\"": {
+    "ok": {
+      "embedding_api_version": "1"
+    }
+  },
+  "embedding_api_version <- \"s\"": {
+    "ok": {
+      "embedding_api_version": "s"
+    }
+  },
+  "embedding_api_version <- \"true\"": {
+    "ok": {
+      "embedding_api_version": "true"
+    }
+  },
+  "embedding_api_version <- -1": {
+    "err": "TypeMismatch",
+    "key": "embedding_api_version"
+  },
+  "embedding_api_version <- 0": {
+    "err": "TypeMismatch",
+    "key": "embedding_api_version"
+  },
+  "embedding_api_version <- 1": {
+    "err": "TypeMismatch",
+    "key": "embedding_api_version"
+  },
+  "embedding_api_version <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "embedding_api_version"
+  },
+  "embedding_api_version <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "embedding_api_version"
+  },
+  "embedding_api_version <- 70000": {
+    "err": "TypeMismatch",
+    "key": "embedding_api_version"
+  },
+  "embedding_api_version <- [1]": {
+    "err": "TypeMismatch",
+    "key": "embedding_api_version"
+  },
+  "embedding_api_version <- false": {
+    "err": "TypeMismatch",
+    "key": "embedding_api_version"
+  },
+  "embedding_api_version <- null": {
+    "err": "TypeMismatch",
+    "key": "embedding_api_version"
+  },
+  "embedding_api_version <- true": {
+    "err": "TypeMismatch",
+    "key": "embedding_api_version"
+  },
+  "embedding_api_version <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "embedding_api_version"
+  },
+  "embedding_batch_size <- \"\"": {
+    "err": "UnknownKey",
+    "key": "embedding_batch_size"
+  },
+  "embedding_batch_size <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "embedding_batch_size"
+  },
+  "embedding_batch_size <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "embedding_batch_size"
+  },
+  "embedding_batch_size <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "embedding_batch_size"
+  },
+  "embedding_batch_size <- -1": {
+    "err": "UnknownKey",
+    "key": "embedding_batch_size"
+  },
+  "embedding_batch_size <- 0": {
+    "err": "UnknownKey",
+    "key": "embedding_batch_size"
+  },
+  "embedding_batch_size <- 1": {
+    "err": "UnknownKey",
+    "key": "embedding_batch_size"
+  },
+  "embedding_batch_size <- 1.5": {
+    "err": "UnknownKey",
+    "key": "embedding_batch_size"
+  },
+  "embedding_batch_size <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "embedding_batch_size"
+  },
+  "embedding_batch_size <- 70000": {
+    "err": "UnknownKey",
+    "key": "embedding_batch_size"
+  },
+  "embedding_batch_size <- [1]": {
+    "err": "UnknownKey",
+    "key": "embedding_batch_size"
+  },
+  "embedding_batch_size <- false": {
+    "err": "UnknownKey",
+    "key": "embedding_batch_size"
+  },
+  "embedding_batch_size <- null": {
+    "err": "UnknownKey",
+    "key": "embedding_batch_size"
+  },
+  "embedding_batch_size <- true": {
+    "err": "UnknownKey",
+    "key": "embedding_batch_size"
+  },
+  "embedding_batch_size <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "embedding_batch_size"
+  },
+  "embedding_dimensions <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "embedding_dimensions"
+  },
+  "embedding_dimensions <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "embedding_dimensions"
+  },
+  "embedding_dimensions <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "embedding_dimensions"
+  },
+  "embedding_dimensions <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "embedding_dimensions"
+  },
+  "embedding_dimensions <- -1": {
+    "err": "TypeMismatch",
+    "key": "embedding_dimensions"
+  },
+  "embedding_dimensions <- 0": {
+    "ok": {
+      "embedding_dimensions": 0
+    }
+  },
+  "embedding_dimensions <- 1": {
+    "ok": {
+      "embedding_dimensions": 1
+    }
+  },
+  "embedding_dimensions <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "embedding_dimensions"
+  },
+  "embedding_dimensions <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "embedding_dimensions"
+  },
+  "embedding_dimensions <- 70000": {
+    "ok": {
+      "embedding_dimensions": 70000
+    }
+  },
+  "embedding_dimensions <- [1]": {
+    "err": "TypeMismatch",
+    "key": "embedding_dimensions"
+  },
+  "embedding_dimensions <- false": {
+    "err": "TypeMismatch",
+    "key": "embedding_dimensions"
+  },
+  "embedding_dimensions <- null": {
+    "err": "TypeMismatch",
+    "key": "embedding_dimensions"
+  },
+  "embedding_dimensions <- true": {
+    "err": "TypeMismatch",
+    "key": "embedding_dimensions"
+  },
+  "embedding_dimensions <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "embedding_dimensions"
+  },
+  "embedding_endpoint <- \"\"": {
+    "ok": {}
+  },
+  "embedding_endpoint <- \"1\"": {
+    "ok": {
+      "embedding_endpoint": "1"
+    }
+  },
+  "embedding_endpoint <- \"s\"": {
+    "ok": {
+      "embedding_endpoint": "s"
+    }
+  },
+  "embedding_endpoint <- \"true\"": {
+    "ok": {
+      "embedding_endpoint": "true"
+    }
+  },
+  "embedding_endpoint <- -1": {
+    "err": "TypeMismatch",
+    "key": "embedding_endpoint"
+  },
+  "embedding_endpoint <- 0": {
+    "err": "TypeMismatch",
+    "key": "embedding_endpoint"
+  },
+  "embedding_endpoint <- 1": {
+    "err": "TypeMismatch",
+    "key": "embedding_endpoint"
+  },
+  "embedding_endpoint <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "embedding_endpoint"
+  },
+  "embedding_endpoint <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "embedding_endpoint"
+  },
+  "embedding_endpoint <- 70000": {
+    "err": "TypeMismatch",
+    "key": "embedding_endpoint"
+  },
+  "embedding_endpoint <- [1]": {
+    "err": "TypeMismatch",
+    "key": "embedding_endpoint"
+  },
+  "embedding_endpoint <- false": {
+    "err": "TypeMismatch",
+    "key": "embedding_endpoint"
+  },
+  "embedding_endpoint <- null": {
+    "err": "TypeMismatch",
+    "key": "embedding_endpoint"
+  },
+  "embedding_endpoint <- true": {
+    "err": "TypeMismatch",
+    "key": "embedding_endpoint"
+  },
+  "embedding_endpoint <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "embedding_endpoint"
+  },
+  "embedding_max_sequence_length <- \"\"": {
+    "err": "UnknownKey",
+    "key": "embedding_max_sequence_length"
+  },
+  "embedding_max_sequence_length <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "embedding_max_sequence_length"
+  },
+  "embedding_max_sequence_length <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "embedding_max_sequence_length"
+  },
+  "embedding_max_sequence_length <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "embedding_max_sequence_length"
+  },
+  "embedding_max_sequence_length <- -1": {
+    "err": "UnknownKey",
+    "key": "embedding_max_sequence_length"
+  },
+  "embedding_max_sequence_length <- 0": {
+    "err": "UnknownKey",
+    "key": "embedding_max_sequence_length"
+  },
+  "embedding_max_sequence_length <- 1": {
+    "err": "UnknownKey",
+    "key": "embedding_max_sequence_length"
+  },
+  "embedding_max_sequence_length <- 1.5": {
+    "err": "UnknownKey",
+    "key": "embedding_max_sequence_length"
+  },
+  "embedding_max_sequence_length <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "embedding_max_sequence_length"
+  },
+  "embedding_max_sequence_length <- 70000": {
+    "err": "UnknownKey",
+    "key": "embedding_max_sequence_length"
+  },
+  "embedding_max_sequence_length <- [1]": {
+    "err": "UnknownKey",
+    "key": "embedding_max_sequence_length"
+  },
+  "embedding_max_sequence_length <- false": {
+    "err": "UnknownKey",
+    "key": "embedding_max_sequence_length"
+  },
+  "embedding_max_sequence_length <- null": {
+    "err": "UnknownKey",
+    "key": "embedding_max_sequence_length"
+  },
+  "embedding_max_sequence_length <- true": {
+    "err": "UnknownKey",
+    "key": "embedding_max_sequence_length"
+  },
+  "embedding_max_sequence_length <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "embedding_max_sequence_length"
+  },
+  "embedding_model <- \"\"": {
+    "ok": {
+      "embedding_model_name": ""
+    }
+  },
+  "embedding_model <- \"1\"": {
+    "ok": {
+      "embedding_model_name": "1"
+    }
+  },
+  "embedding_model <- \"s\"": {
+    "ok": {
+      "embedding_model_name": "s"
+    }
+  },
+  "embedding_model <- \"true\"": {
+    "ok": {
+      "embedding_model_name": "true"
+    }
+  },
+  "embedding_model <- -1": {
+    "err": "TypeMismatch",
+    "key": "embedding_model"
+  },
+  "embedding_model <- 0": {
+    "err": "TypeMismatch",
+    "key": "embedding_model"
+  },
+  "embedding_model <- 1": {
+    "err": "TypeMismatch",
+    "key": "embedding_model"
+  },
+  "embedding_model <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "embedding_model"
+  },
+  "embedding_model <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "embedding_model"
+  },
+  "embedding_model <- 70000": {
+    "err": "TypeMismatch",
+    "key": "embedding_model"
+  },
+  "embedding_model <- [1]": {
+    "err": "TypeMismatch",
+    "key": "embedding_model"
+  },
+  "embedding_model <- false": {
+    "err": "TypeMismatch",
+    "key": "embedding_model"
+  },
+  "embedding_model <- null": {
+    "err": "TypeMismatch",
+    "key": "embedding_model"
+  },
+  "embedding_model <- true": {
+    "err": "TypeMismatch",
+    "key": "embedding_model"
+  },
+  "embedding_model <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "embedding_model"
+  },
+  "embedding_model_name <- \"\"": {
+    "ok": {
+      "embedding_model_name": ""
+    }
+  },
+  "embedding_model_name <- \"1\"": {
+    "ok": {
+      "embedding_model_name": "1"
+    }
+  },
+  "embedding_model_name <- \"s\"": {
+    "ok": {
+      "embedding_model_name": "s"
+    }
+  },
+  "embedding_model_name <- \"true\"": {
+    "ok": {
+      "embedding_model_name": "true"
+    }
+  },
+  "embedding_model_name <- -1": {
+    "err": "TypeMismatch",
+    "key": "embedding_model_name"
+  },
+  "embedding_model_name <- 0": {
+    "err": "TypeMismatch",
+    "key": "embedding_model_name"
+  },
+  "embedding_model_name <- 1": {
+    "err": "TypeMismatch",
+    "key": "embedding_model_name"
+  },
+  "embedding_model_name <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "embedding_model_name"
+  },
+  "embedding_model_name <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "embedding_model_name"
+  },
+  "embedding_model_name <- 70000": {
+    "err": "TypeMismatch",
+    "key": "embedding_model_name"
+  },
+  "embedding_model_name <- [1]": {
+    "err": "TypeMismatch",
+    "key": "embedding_model_name"
+  },
+  "embedding_model_name <- false": {
+    "err": "TypeMismatch",
+    "key": "embedding_model_name"
+  },
+  "embedding_model_name <- null": {
+    "err": "TypeMismatch",
+    "key": "embedding_model_name"
+  },
+  "embedding_model_name <- true": {
+    "err": "TypeMismatch",
+    "key": "embedding_model_name"
+  },
+  "embedding_model_name <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "embedding_model_name"
+  },
+  "embedding_model_path <- \"\"": {
+    "ok": {
+      "embedding_model_path": ""
+    }
+  },
+  "embedding_model_path <- \"1\"": {
+    "ok": {
+      "embedding_model_path": "1"
+    }
+  },
+  "embedding_model_path <- \"s\"": {
+    "ok": {
+      "embedding_model_path": "s"
+    }
+  },
+  "embedding_model_path <- \"true\"": {
+    "ok": {
+      "embedding_model_path": "true"
+    }
+  },
+  "embedding_model_path <- -1": {
+    "err": "TypeMismatch",
+    "key": "embedding_model_path"
+  },
+  "embedding_model_path <- 0": {
+    "err": "TypeMismatch",
+    "key": "embedding_model_path"
+  },
+  "embedding_model_path <- 1": {
+    "err": "TypeMismatch",
+    "key": "embedding_model_path"
+  },
+  "embedding_model_path <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "embedding_model_path"
+  },
+  "embedding_model_path <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "embedding_model_path"
+  },
+  "embedding_model_path <- 70000": {
+    "err": "TypeMismatch",
+    "key": "embedding_model_path"
+  },
+  "embedding_model_path <- [1]": {
+    "err": "TypeMismatch",
+    "key": "embedding_model_path"
+  },
+  "embedding_model_path <- false": {
+    "err": "TypeMismatch",
+    "key": "embedding_model_path"
+  },
+  "embedding_model_path <- null": {
+    "err": "TypeMismatch",
+    "key": "embedding_model_path"
+  },
+  "embedding_model_path <- true": {
+    "err": "TypeMismatch",
+    "key": "embedding_model_path"
+  },
+  "embedding_model_path <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "embedding_model_path"
+  },
+  "embedding_onnx_batch_size <- \"\"": {
+    "err": "UnknownKey",
+    "key": "embedding_onnx_batch_size"
+  },
+  "embedding_onnx_batch_size <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "embedding_onnx_batch_size"
+  },
+  "embedding_onnx_batch_size <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "embedding_onnx_batch_size"
+  },
+  "embedding_onnx_batch_size <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "embedding_onnx_batch_size"
+  },
+  "embedding_onnx_batch_size <- -1": {
+    "err": "UnknownKey",
+    "key": "embedding_onnx_batch_size"
+  },
+  "embedding_onnx_batch_size <- 0": {
+    "err": "UnknownKey",
+    "key": "embedding_onnx_batch_size"
+  },
+  "embedding_onnx_batch_size <- 1": {
+    "err": "UnknownKey",
+    "key": "embedding_onnx_batch_size"
+  },
+  "embedding_onnx_batch_size <- 1.5": {
+    "err": "UnknownKey",
+    "key": "embedding_onnx_batch_size"
+  },
+  "embedding_onnx_batch_size <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "embedding_onnx_batch_size"
+  },
+  "embedding_onnx_batch_size <- 70000": {
+    "err": "UnknownKey",
+    "key": "embedding_onnx_batch_size"
+  },
+  "embedding_onnx_batch_size <- [1]": {
+    "err": "UnknownKey",
+    "key": "embedding_onnx_batch_size"
+  },
+  "embedding_onnx_batch_size <- false": {
+    "err": "UnknownKey",
+    "key": "embedding_onnx_batch_size"
+  },
+  "embedding_onnx_batch_size <- null": {
+    "err": "UnknownKey",
+    "key": "embedding_onnx_batch_size"
+  },
+  "embedding_onnx_batch_size <- true": {
+    "err": "UnknownKey",
+    "key": "embedding_onnx_batch_size"
+  },
+  "embedding_onnx_batch_size <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "embedding_onnx_batch_size"
+  },
+  "embedding_provider <- \"\"": {
+    "ok": {
+      "embedding_provider": ""
+    }
+  },
+  "embedding_provider <- \"1\"": {
+    "ok": {
+      "embedding_provider": "1"
+    }
+  },
+  "embedding_provider <- \"s\"": {
+    "ok": {
+      "embedding_provider": "s"
+    }
+  },
+  "embedding_provider <- \"true\"": {
+    "ok": {
+      "embedding_provider": "true"
+    }
+  },
+  "embedding_provider <- -1": {
+    "err": "TypeMismatch",
+    "key": "embedding_provider"
+  },
+  "embedding_provider <- 0": {
+    "err": "TypeMismatch",
+    "key": "embedding_provider"
+  },
+  "embedding_provider <- 1": {
+    "err": "TypeMismatch",
+    "key": "embedding_provider"
+  },
+  "embedding_provider <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "embedding_provider"
+  },
+  "embedding_provider <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "embedding_provider"
+  },
+  "embedding_provider <- 70000": {
+    "err": "TypeMismatch",
+    "key": "embedding_provider"
+  },
+  "embedding_provider <- [1]": {
+    "err": "TypeMismatch",
+    "key": "embedding_provider"
+  },
+  "embedding_provider <- false": {
+    "err": "TypeMismatch",
+    "key": "embedding_provider"
+  },
+  "embedding_provider <- null": {
+    "err": "TypeMismatch",
+    "key": "embedding_provider"
+  },
+  "embedding_provider <- true": {
+    "err": "TypeMismatch",
+    "key": "embedding_provider"
+  },
+  "embedding_provider <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "embedding_provider"
+  },
+  "embedding_rate_limit_enabled <- \"\"": {
+    "err": "UnknownKey",
+    "key": "embedding_rate_limit_enabled"
+  },
+  "embedding_rate_limit_enabled <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "embedding_rate_limit_enabled"
+  },
+  "embedding_rate_limit_enabled <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "embedding_rate_limit_enabled"
+  },
+  "embedding_rate_limit_enabled <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "embedding_rate_limit_enabled"
+  },
+  "embedding_rate_limit_enabled <- -1": {
+    "err": "UnknownKey",
+    "key": "embedding_rate_limit_enabled"
+  },
+  "embedding_rate_limit_enabled <- 0": {
+    "err": "UnknownKey",
+    "key": "embedding_rate_limit_enabled"
+  },
+  "embedding_rate_limit_enabled <- 1": {
+    "err": "UnknownKey",
+    "key": "embedding_rate_limit_enabled"
+  },
+  "embedding_rate_limit_enabled <- 1.5": {
+    "err": "UnknownKey",
+    "key": "embedding_rate_limit_enabled"
+  },
+  "embedding_rate_limit_enabled <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "embedding_rate_limit_enabled"
+  },
+  "embedding_rate_limit_enabled <- 70000": {
+    "err": "UnknownKey",
+    "key": "embedding_rate_limit_enabled"
+  },
+  "embedding_rate_limit_enabled <- [1]": {
+    "err": "UnknownKey",
+    "key": "embedding_rate_limit_enabled"
+  },
+  "embedding_rate_limit_enabled <- false": {
+    "err": "UnknownKey",
+    "key": "embedding_rate_limit_enabled"
+  },
+  "embedding_rate_limit_enabled <- null": {
+    "err": "UnknownKey",
+    "key": "embedding_rate_limit_enabled"
+  },
+  "embedding_rate_limit_enabled <- true": {
+    "err": "UnknownKey",
+    "key": "embedding_rate_limit_enabled"
+  },
+  "embedding_rate_limit_enabled <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "embedding_rate_limit_enabled"
+  },
+  "embedding_rate_limit_interval <- \"\"": {
+    "err": "UnknownKey",
+    "key": "embedding_rate_limit_interval"
+  },
+  "embedding_rate_limit_interval <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "embedding_rate_limit_interval"
+  },
+  "embedding_rate_limit_interval <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "embedding_rate_limit_interval"
+  },
+  "embedding_rate_limit_interval <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "embedding_rate_limit_interval"
+  },
+  "embedding_rate_limit_interval <- -1": {
+    "err": "UnknownKey",
+    "key": "embedding_rate_limit_interval"
+  },
+  "embedding_rate_limit_interval <- 0": {
+    "err": "UnknownKey",
+    "key": "embedding_rate_limit_interval"
+  },
+  "embedding_rate_limit_interval <- 1": {
+    "err": "UnknownKey",
+    "key": "embedding_rate_limit_interval"
+  },
+  "embedding_rate_limit_interval <- 1.5": {
+    "err": "UnknownKey",
+    "key": "embedding_rate_limit_interval"
+  },
+  "embedding_rate_limit_interval <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "embedding_rate_limit_interval"
+  },
+  "embedding_rate_limit_interval <- 70000": {
+    "err": "UnknownKey",
+    "key": "embedding_rate_limit_interval"
+  },
+  "embedding_rate_limit_interval <- [1]": {
+    "err": "UnknownKey",
+    "key": "embedding_rate_limit_interval"
+  },
+  "embedding_rate_limit_interval <- false": {
+    "err": "UnknownKey",
+    "key": "embedding_rate_limit_interval"
+  },
+  "embedding_rate_limit_interval <- null": {
+    "err": "UnknownKey",
+    "key": "embedding_rate_limit_interval"
+  },
+  "embedding_rate_limit_interval <- true": {
+    "err": "UnknownKey",
+    "key": "embedding_rate_limit_interval"
+  },
+  "embedding_rate_limit_interval <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "embedding_rate_limit_interval"
+  },
+  "embedding_rate_limit_requests <- \"\"": {
+    "err": "UnknownKey",
+    "key": "embedding_rate_limit_requests"
+  },
+  "embedding_rate_limit_requests <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "embedding_rate_limit_requests"
+  },
+  "embedding_rate_limit_requests <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "embedding_rate_limit_requests"
+  },
+  "embedding_rate_limit_requests <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "embedding_rate_limit_requests"
+  },
+  "embedding_rate_limit_requests <- -1": {
+    "err": "UnknownKey",
+    "key": "embedding_rate_limit_requests"
+  },
+  "embedding_rate_limit_requests <- 0": {
+    "err": "UnknownKey",
+    "key": "embedding_rate_limit_requests"
+  },
+  "embedding_rate_limit_requests <- 1": {
+    "err": "UnknownKey",
+    "key": "embedding_rate_limit_requests"
+  },
+  "embedding_rate_limit_requests <- 1.5": {
+    "err": "UnknownKey",
+    "key": "embedding_rate_limit_requests"
+  },
+  "embedding_rate_limit_requests <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "embedding_rate_limit_requests"
+  },
+  "embedding_rate_limit_requests <- 70000": {
+    "err": "UnknownKey",
+    "key": "embedding_rate_limit_requests"
+  },
+  "embedding_rate_limit_requests <- [1]": {
+    "err": "UnknownKey",
+    "key": "embedding_rate_limit_requests"
+  },
+  "embedding_rate_limit_requests <- false": {
+    "err": "UnknownKey",
+    "key": "embedding_rate_limit_requests"
+  },
+  "embedding_rate_limit_requests <- null": {
+    "err": "UnknownKey",
+    "key": "embedding_rate_limit_requests"
+  },
+  "embedding_rate_limit_requests <- true": {
+    "err": "UnknownKey",
+    "key": "embedding_rate_limit_requests"
+  },
+  "embedding_rate_limit_requests <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "embedding_rate_limit_requests"
+  },
+  "embedding_tokenizer_path <- \"\"": {
+    "ok": {
+      "embedding_tokenizer_path": ""
+    }
+  },
+  "embedding_tokenizer_path <- \"1\"": {
+    "ok": {
+      "embedding_tokenizer_path": "1"
+    }
+  },
+  "embedding_tokenizer_path <- \"s\"": {
+    "ok": {
+      "embedding_tokenizer_path": "s"
+    }
+  },
+  "embedding_tokenizer_path <- \"true\"": {
+    "ok": {
+      "embedding_tokenizer_path": "true"
+    }
+  },
+  "embedding_tokenizer_path <- -1": {
+    "err": "TypeMismatch",
+    "key": "embedding_tokenizer_path"
+  },
+  "embedding_tokenizer_path <- 0": {
+    "err": "TypeMismatch",
+    "key": "embedding_tokenizer_path"
+  },
+  "embedding_tokenizer_path <- 1": {
+    "err": "TypeMismatch",
+    "key": "embedding_tokenizer_path"
+  },
+  "embedding_tokenizer_path <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "embedding_tokenizer_path"
+  },
+  "embedding_tokenizer_path <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "embedding_tokenizer_path"
+  },
+  "embedding_tokenizer_path <- 70000": {
+    "err": "TypeMismatch",
+    "key": "embedding_tokenizer_path"
+  },
+  "embedding_tokenizer_path <- [1]": {
+    "err": "TypeMismatch",
+    "key": "embedding_tokenizer_path"
+  },
+  "embedding_tokenizer_path <- false": {
+    "err": "TypeMismatch",
+    "key": "embedding_tokenizer_path"
+  },
+  "embedding_tokenizer_path <- null": {
+    "err": "TypeMismatch",
+    "key": "embedding_tokenizer_path"
+  },
+  "embedding_tokenizer_path <- true": {
+    "err": "TypeMismatch",
+    "key": "embedding_tokenizer_path"
+  },
+  "embedding_tokenizer_path <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "embedding_tokenizer_path"
+  },
+  "enable_access_control <- \"\"": {
+    "err": "UnknownKey",
+    "key": "enable_access_control"
+  },
+  "enable_access_control <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "enable_access_control"
+  },
+  "enable_access_control <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "enable_access_control"
+  },
+  "enable_access_control <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "enable_access_control"
+  },
+  "enable_access_control <- -1": {
+    "err": "UnknownKey",
+    "key": "enable_access_control"
+  },
+  "enable_access_control <- 0": {
+    "err": "UnknownKey",
+    "key": "enable_access_control"
+  },
+  "enable_access_control <- 1": {
+    "err": "UnknownKey",
+    "key": "enable_access_control"
+  },
+  "enable_access_control <- 1.5": {
+    "err": "UnknownKey",
+    "key": "enable_access_control"
+  },
+  "enable_access_control <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "enable_access_control"
+  },
+  "enable_access_control <- 70000": {
+    "err": "UnknownKey",
+    "key": "enable_access_control"
+  },
+  "enable_access_control <- [1]": {
+    "err": "UnknownKey",
+    "key": "enable_access_control"
+  },
+  "enable_access_control <- false": {
+    "err": "UnknownKey",
+    "key": "enable_access_control"
+  },
+  "enable_access_control <- null": {
+    "err": "UnknownKey",
+    "key": "enable_access_control"
+  },
+  "enable_access_control <- true": {
+    "err": "UnknownKey",
+    "key": "enable_access_control"
+  },
+  "enable_access_control <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "enable_access_control"
+  },
+  "enable_caching <- \"\"": {
+    "err": "UnknownKey",
+    "key": "enable_caching"
+  },
+  "enable_caching <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "enable_caching"
+  },
+  "enable_caching <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "enable_caching"
+  },
+  "enable_caching <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "enable_caching"
+  },
+  "enable_caching <- -1": {
+    "err": "UnknownKey",
+    "key": "enable_caching"
+  },
+  "enable_caching <- 0": {
+    "err": "UnknownKey",
+    "key": "enable_caching"
+  },
+  "enable_caching <- 1": {
+    "err": "UnknownKey",
+    "key": "enable_caching"
+  },
+  "enable_caching <- 1.5": {
+    "err": "UnknownKey",
+    "key": "enable_caching"
+  },
+  "enable_caching <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "enable_caching"
+  },
+  "enable_caching <- 70000": {
+    "err": "UnknownKey",
+    "key": "enable_caching"
+  },
+  "enable_caching <- [1]": {
+    "err": "UnknownKey",
+    "key": "enable_caching"
+  },
+  "enable_caching <- false": {
+    "err": "UnknownKey",
+    "key": "enable_caching"
+  },
+  "enable_caching <- null": {
+    "err": "UnknownKey",
+    "key": "enable_caching"
+  },
+  "enable_caching <- true": {
+    "err": "UnknownKey",
+    "key": "enable_caching"
+  },
+  "enable_caching <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "enable_caching"
+  },
+  "enable_last_accessed <- \"\"": {
+    "err": "UnknownKey",
+    "key": "enable_last_accessed"
+  },
+  "enable_last_accessed <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "enable_last_accessed"
+  },
+  "enable_last_accessed <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "enable_last_accessed"
+  },
+  "enable_last_accessed <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "enable_last_accessed"
+  },
+  "enable_last_accessed <- -1": {
+    "err": "UnknownKey",
+    "key": "enable_last_accessed"
+  },
+  "enable_last_accessed <- 0": {
+    "err": "UnknownKey",
+    "key": "enable_last_accessed"
+  },
+  "enable_last_accessed <- 1": {
+    "err": "UnknownKey",
+    "key": "enable_last_accessed"
+  },
+  "enable_last_accessed <- 1.5": {
+    "err": "UnknownKey",
+    "key": "enable_last_accessed"
+  },
+  "enable_last_accessed <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "enable_last_accessed"
+  },
+  "enable_last_accessed <- 70000": {
+    "err": "UnknownKey",
+    "key": "enable_last_accessed"
+  },
+  "enable_last_accessed <- [1]": {
+    "err": "UnknownKey",
+    "key": "enable_last_accessed"
+  },
+  "enable_last_accessed <- false": {
+    "err": "UnknownKey",
+    "key": "enable_last_accessed"
+  },
+  "enable_last_accessed <- null": {
+    "err": "UnknownKey",
+    "key": "enable_last_accessed"
+  },
+  "enable_last_accessed <- true": {
+    "err": "UnknownKey",
+    "key": "enable_last_accessed"
+  },
+  "enable_last_accessed <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "enable_last_accessed"
+  },
+  "graph_database_host <- \"\"": {
+    "err": "UnknownKey",
+    "key": "graph_database_host"
+  },
+  "graph_database_host <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "graph_database_host"
+  },
+  "graph_database_host <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "graph_database_host"
+  },
+  "graph_database_host <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "graph_database_host"
+  },
+  "graph_database_host <- -1": {
+    "err": "UnknownKey",
+    "key": "graph_database_host"
+  },
+  "graph_database_host <- 0": {
+    "err": "UnknownKey",
+    "key": "graph_database_host"
+  },
+  "graph_database_host <- 1": {
+    "err": "UnknownKey",
+    "key": "graph_database_host"
+  },
+  "graph_database_host <- 1.5": {
+    "err": "UnknownKey",
+    "key": "graph_database_host"
+  },
+  "graph_database_host <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "graph_database_host"
+  },
+  "graph_database_host <- 70000": {
+    "err": "UnknownKey",
+    "key": "graph_database_host"
+  },
+  "graph_database_host <- [1]": {
+    "err": "UnknownKey",
+    "key": "graph_database_host"
+  },
+  "graph_database_host <- false": {
+    "err": "UnknownKey",
+    "key": "graph_database_host"
+  },
+  "graph_database_host <- null": {
+    "err": "UnknownKey",
+    "key": "graph_database_host"
+  },
+  "graph_database_host <- true": {
+    "err": "UnknownKey",
+    "key": "graph_database_host"
+  },
+  "graph_database_host <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "graph_database_host"
+  },
+  "graph_database_key <- \"\"": {
+    "err": "UnknownKey",
+    "key": "graph_database_key"
+  },
+  "graph_database_key <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "graph_database_key"
+  },
+  "graph_database_key <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "graph_database_key"
+  },
+  "graph_database_key <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "graph_database_key"
+  },
+  "graph_database_key <- -1": {
+    "err": "UnknownKey",
+    "key": "graph_database_key"
+  },
+  "graph_database_key <- 0": {
+    "err": "UnknownKey",
+    "key": "graph_database_key"
+  },
+  "graph_database_key <- 1": {
+    "err": "UnknownKey",
+    "key": "graph_database_key"
+  },
+  "graph_database_key <- 1.5": {
+    "err": "UnknownKey",
+    "key": "graph_database_key"
+  },
+  "graph_database_key <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "graph_database_key"
+  },
+  "graph_database_key <- 70000": {
+    "err": "UnknownKey",
+    "key": "graph_database_key"
+  },
+  "graph_database_key <- [1]": {
+    "err": "UnknownKey",
+    "key": "graph_database_key"
+  },
+  "graph_database_key <- false": {
+    "err": "UnknownKey",
+    "key": "graph_database_key"
+  },
+  "graph_database_key <- null": {
+    "err": "UnknownKey",
+    "key": "graph_database_key"
+  },
+  "graph_database_key <- true": {
+    "err": "UnknownKey",
+    "key": "graph_database_key"
+  },
+  "graph_database_key <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "graph_database_key"
+  },
+  "graph_database_name <- \"\"": {
+    "err": "UnknownKey",
+    "key": "graph_database_name"
+  },
+  "graph_database_name <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "graph_database_name"
+  },
+  "graph_database_name <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "graph_database_name"
+  },
+  "graph_database_name <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "graph_database_name"
+  },
+  "graph_database_name <- -1": {
+    "err": "UnknownKey",
+    "key": "graph_database_name"
+  },
+  "graph_database_name <- 0": {
+    "err": "UnknownKey",
+    "key": "graph_database_name"
+  },
+  "graph_database_name <- 1": {
+    "err": "UnknownKey",
+    "key": "graph_database_name"
+  },
+  "graph_database_name <- 1.5": {
+    "err": "UnknownKey",
+    "key": "graph_database_name"
+  },
+  "graph_database_name <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "graph_database_name"
+  },
+  "graph_database_name <- 70000": {
+    "err": "UnknownKey",
+    "key": "graph_database_name"
+  },
+  "graph_database_name <- [1]": {
+    "err": "UnknownKey",
+    "key": "graph_database_name"
+  },
+  "graph_database_name <- false": {
+    "err": "UnknownKey",
+    "key": "graph_database_name"
+  },
+  "graph_database_name <- null": {
+    "err": "UnknownKey",
+    "key": "graph_database_name"
+  },
+  "graph_database_name <- true": {
+    "err": "UnknownKey",
+    "key": "graph_database_name"
+  },
+  "graph_database_name <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "graph_database_name"
+  },
+  "graph_database_password <- \"\"": {
+    "err": "UnknownKey",
+    "key": "graph_database_password"
+  },
+  "graph_database_password <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "graph_database_password"
+  },
+  "graph_database_password <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "graph_database_password"
+  },
+  "graph_database_password <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "graph_database_password"
+  },
+  "graph_database_password <- -1": {
+    "err": "UnknownKey",
+    "key": "graph_database_password"
+  },
+  "graph_database_password <- 0": {
+    "err": "UnknownKey",
+    "key": "graph_database_password"
+  },
+  "graph_database_password <- 1": {
+    "err": "UnknownKey",
+    "key": "graph_database_password"
+  },
+  "graph_database_password <- 1.5": {
+    "err": "UnknownKey",
+    "key": "graph_database_password"
+  },
+  "graph_database_password <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "graph_database_password"
+  },
+  "graph_database_password <- 70000": {
+    "err": "UnknownKey",
+    "key": "graph_database_password"
+  },
+  "graph_database_password <- [1]": {
+    "err": "UnknownKey",
+    "key": "graph_database_password"
+  },
+  "graph_database_password <- false": {
+    "err": "UnknownKey",
+    "key": "graph_database_password"
+  },
+  "graph_database_password <- null": {
+    "err": "UnknownKey",
+    "key": "graph_database_password"
+  },
+  "graph_database_password <- true": {
+    "err": "UnknownKey",
+    "key": "graph_database_password"
+  },
+  "graph_database_password <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "graph_database_password"
+  },
+  "graph_database_port <- \"\"": {
+    "err": "UnknownKey",
+    "key": "graph_database_port"
+  },
+  "graph_database_port <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "graph_database_port"
+  },
+  "graph_database_port <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "graph_database_port"
+  },
+  "graph_database_port <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "graph_database_port"
+  },
+  "graph_database_port <- -1": {
+    "err": "UnknownKey",
+    "key": "graph_database_port"
+  },
+  "graph_database_port <- 0": {
+    "err": "UnknownKey",
+    "key": "graph_database_port"
+  },
+  "graph_database_port <- 1": {
+    "err": "UnknownKey",
+    "key": "graph_database_port"
+  },
+  "graph_database_port <- 1.5": {
+    "err": "UnknownKey",
+    "key": "graph_database_port"
+  },
+  "graph_database_port <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "graph_database_port"
+  },
+  "graph_database_port <- 70000": {
+    "err": "UnknownKey",
+    "key": "graph_database_port"
+  },
+  "graph_database_port <- [1]": {
+    "err": "UnknownKey",
+    "key": "graph_database_port"
+  },
+  "graph_database_port <- false": {
+    "err": "UnknownKey",
+    "key": "graph_database_port"
+  },
+  "graph_database_port <- null": {
+    "err": "UnknownKey",
+    "key": "graph_database_port"
+  },
+  "graph_database_port <- true": {
+    "err": "UnknownKey",
+    "key": "graph_database_port"
+  },
+  "graph_database_port <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "graph_database_port"
+  },
+  "graph_database_provider <- \"\"": {
+    "ok": {
+      "graph_database_provider": ""
+    }
+  },
+  "graph_database_provider <- \"1\"": {
+    "ok": {
+      "graph_database_provider": "1"
+    }
+  },
+  "graph_database_provider <- \"s\"": {
+    "ok": {
+      "graph_database_provider": "s"
+    }
+  },
+  "graph_database_provider <- \"true\"": {
+    "ok": {
+      "graph_database_provider": "true"
+    }
+  },
+  "graph_database_provider <- -1": {
+    "err": "TypeMismatch",
+    "key": "graph_database_provider"
+  },
+  "graph_database_provider <- 0": {
+    "err": "TypeMismatch",
+    "key": "graph_database_provider"
+  },
+  "graph_database_provider <- 1": {
+    "err": "TypeMismatch",
+    "key": "graph_database_provider"
+  },
+  "graph_database_provider <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "graph_database_provider"
+  },
+  "graph_database_provider <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "graph_database_provider"
+  },
+  "graph_database_provider <- 70000": {
+    "err": "TypeMismatch",
+    "key": "graph_database_provider"
+  },
+  "graph_database_provider <- [1]": {
+    "err": "TypeMismatch",
+    "key": "graph_database_provider"
+  },
+  "graph_database_provider <- false": {
+    "err": "TypeMismatch",
+    "key": "graph_database_provider"
+  },
+  "graph_database_provider <- null": {
+    "err": "TypeMismatch",
+    "key": "graph_database_provider"
+  },
+  "graph_database_provider <- true": {
+    "err": "TypeMismatch",
+    "key": "graph_database_provider"
+  },
+  "graph_database_provider <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "graph_database_provider"
+  },
+  "graph_database_url <- \"\"": {
+    "err": "UnknownKey",
+    "key": "graph_database_url"
+  },
+  "graph_database_url <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "graph_database_url"
+  },
+  "graph_database_url <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "graph_database_url"
+  },
+  "graph_database_url <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "graph_database_url"
+  },
+  "graph_database_url <- -1": {
+    "err": "UnknownKey",
+    "key": "graph_database_url"
+  },
+  "graph_database_url <- 0": {
+    "err": "UnknownKey",
+    "key": "graph_database_url"
+  },
+  "graph_database_url <- 1": {
+    "err": "UnknownKey",
+    "key": "graph_database_url"
+  },
+  "graph_database_url <- 1.5": {
+    "err": "UnknownKey",
+    "key": "graph_database_url"
+  },
+  "graph_database_url <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "graph_database_url"
+  },
+  "graph_database_url <- 70000": {
+    "err": "UnknownKey",
+    "key": "graph_database_url"
+  },
+  "graph_database_url <- [1]": {
+    "err": "UnknownKey",
+    "key": "graph_database_url"
+  },
+  "graph_database_url <- false": {
+    "err": "UnknownKey",
+    "key": "graph_database_url"
+  },
+  "graph_database_url <- null": {
+    "err": "UnknownKey",
+    "key": "graph_database_url"
+  },
+  "graph_database_url <- true": {
+    "err": "UnknownKey",
+    "key": "graph_database_url"
+  },
+  "graph_database_url <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "graph_database_url"
+  },
+  "graph_database_username <- \"\"": {
+    "err": "UnknownKey",
+    "key": "graph_database_username"
+  },
+  "graph_database_username <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "graph_database_username"
+  },
+  "graph_database_username <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "graph_database_username"
+  },
+  "graph_database_username <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "graph_database_username"
+  },
+  "graph_database_username <- -1": {
+    "err": "UnknownKey",
+    "key": "graph_database_username"
+  },
+  "graph_database_username <- 0": {
+    "err": "UnknownKey",
+    "key": "graph_database_username"
+  },
+  "graph_database_username <- 1": {
+    "err": "UnknownKey",
+    "key": "graph_database_username"
+  },
+  "graph_database_username <- 1.5": {
+    "err": "UnknownKey",
+    "key": "graph_database_username"
+  },
+  "graph_database_username <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "graph_database_username"
+  },
+  "graph_database_username <- 70000": {
+    "err": "UnknownKey",
+    "key": "graph_database_username"
+  },
+  "graph_database_username <- [1]": {
+    "err": "UnknownKey",
+    "key": "graph_database_username"
+  },
+  "graph_database_username <- false": {
+    "err": "UnknownKey",
+    "key": "graph_database_username"
+  },
+  "graph_database_username <- null": {
+    "err": "UnknownKey",
+    "key": "graph_database_username"
+  },
+  "graph_database_username <- true": {
+    "err": "UnknownKey",
+    "key": "graph_database_username"
+  },
+  "graph_database_username <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "graph_database_username"
+  },
+  "graph_file_path <- \"\"": {
+    "ok": {}
+  },
+  "graph_file_path <- \"1\"": {
+    "ok": {
+      "graph_file_path": "1"
+    }
+  },
+  "graph_file_path <- \"s\"": {
+    "ok": {
+      "graph_file_path": "s"
+    }
+  },
+  "graph_file_path <- \"true\"": {
+    "ok": {
+      "graph_file_path": "true"
+    }
+  },
+  "graph_file_path <- -1": {
+    "err": "TypeMismatch",
+    "key": "graph_file_path"
+  },
+  "graph_file_path <- 0": {
+    "err": "TypeMismatch",
+    "key": "graph_file_path"
+  },
+  "graph_file_path <- 1": {
+    "err": "TypeMismatch",
+    "key": "graph_file_path"
+  },
+  "graph_file_path <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "graph_file_path"
+  },
+  "graph_file_path <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "graph_file_path"
+  },
+  "graph_file_path <- 70000": {
+    "err": "TypeMismatch",
+    "key": "graph_file_path"
+  },
+  "graph_file_path <- [1]": {
+    "err": "TypeMismatch",
+    "key": "graph_file_path"
+  },
+  "graph_file_path <- false": {
+    "err": "TypeMismatch",
+    "key": "graph_file_path"
+  },
+  "graph_file_path <- null": {
+    "err": "TypeMismatch",
+    "key": "graph_file_path"
+  },
+  "graph_file_path <- true": {
+    "err": "TypeMismatch",
+    "key": "graph_file_path"
+  },
+  "graph_file_path <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "graph_file_path"
+  },
+  "graph_filename <- \"\"": {
+    "err": "UnknownKey",
+    "key": "graph_filename"
+  },
+  "graph_filename <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "graph_filename"
+  },
+  "graph_filename <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "graph_filename"
+  },
+  "graph_filename <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "graph_filename"
+  },
+  "graph_filename <- -1": {
+    "err": "UnknownKey",
+    "key": "graph_filename"
+  },
+  "graph_filename <- 0": {
+    "err": "UnknownKey",
+    "key": "graph_filename"
+  },
+  "graph_filename <- 1": {
+    "err": "UnknownKey",
+    "key": "graph_filename"
+  },
+  "graph_filename <- 1.5": {
+    "err": "UnknownKey",
+    "key": "graph_filename"
+  },
+  "graph_filename <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "graph_filename"
+  },
+  "graph_filename <- 70000": {
+    "err": "UnknownKey",
+    "key": "graph_filename"
+  },
+  "graph_filename <- [1]": {
+    "err": "UnknownKey",
+    "key": "graph_filename"
+  },
+  "graph_filename <- false": {
+    "err": "UnknownKey",
+    "key": "graph_filename"
+  },
+  "graph_filename <- null": {
+    "err": "UnknownKey",
+    "key": "graph_filename"
+  },
+  "graph_filename <- true": {
+    "err": "UnknownKey",
+    "key": "graph_filename"
+  },
+  "graph_filename <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "graph_filename"
+  },
+  "graph_model <- \"\"": {
+    "ok": {
+      "graph_model": ""
+    }
+  },
+  "graph_model <- \"1\"": {
+    "ok": {
+      "graph_model": "1"
+    }
+  },
+  "graph_model <- \"s\"": {
+    "ok": {
+      "graph_model": "s"
+    }
+  },
+  "graph_model <- \"true\"": {
+    "ok": {
+      "graph_model": "true"
+    }
+  },
+  "graph_model <- -1": {
+    "err": "TypeMismatch",
+    "key": "graph_model"
+  },
+  "graph_model <- 0": {
+    "err": "TypeMismatch",
+    "key": "graph_model"
+  },
+  "graph_model <- 1": {
+    "err": "TypeMismatch",
+    "key": "graph_model"
+  },
+  "graph_model <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "graph_model"
+  },
+  "graph_model <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "graph_model"
+  },
+  "graph_model <- 70000": {
+    "err": "TypeMismatch",
+    "key": "graph_model"
+  },
+  "graph_model <- [1]": {
+    "err": "TypeMismatch",
+    "key": "graph_model"
+  },
+  "graph_model <- false": {
+    "err": "TypeMismatch",
+    "key": "graph_model"
+  },
+  "graph_model <- null": {
+    "err": "TypeMismatch",
+    "key": "graph_model"
+  },
+  "graph_model <- true": {
+    "err": "TypeMismatch",
+    "key": "graph_model"
+  },
+  "graph_model <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "graph_model"
+  },
+  "graph_prompt_path <- \"\"": {
+    "err": "UnknownKey",
+    "key": "graph_prompt_path"
+  },
+  "graph_prompt_path <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "graph_prompt_path"
+  },
+  "graph_prompt_path <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "graph_prompt_path"
+  },
+  "graph_prompt_path <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "graph_prompt_path"
+  },
+  "graph_prompt_path <- -1": {
+    "err": "UnknownKey",
+    "key": "graph_prompt_path"
+  },
+  "graph_prompt_path <- 0": {
+    "err": "UnknownKey",
+    "key": "graph_prompt_path"
+  },
+  "graph_prompt_path <- 1": {
+    "err": "UnknownKey",
+    "key": "graph_prompt_path"
+  },
+  "graph_prompt_path <- 1.5": {
+    "err": "UnknownKey",
+    "key": "graph_prompt_path"
+  },
+  "graph_prompt_path <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "graph_prompt_path"
+  },
+  "graph_prompt_path <- 70000": {
+    "err": "UnknownKey",
+    "key": "graph_prompt_path"
+  },
+  "graph_prompt_path <- [1]": {
+    "err": "UnknownKey",
+    "key": "graph_prompt_path"
+  },
+  "graph_prompt_path <- false": {
+    "err": "UnknownKey",
+    "key": "graph_prompt_path"
+  },
+  "graph_prompt_path <- null": {
+    "err": "UnknownKey",
+    "key": "graph_prompt_path"
+  },
+  "graph_prompt_path <- true": {
+    "err": "UnknownKey",
+    "key": "graph_prompt_path"
+  },
+  "graph_prompt_path <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "graph_prompt_path"
+  },
+  "llm_api_key <- \"\"": {
+    "ok": {}
+  },
+  "llm_api_key <- \"1\"": {
+    "ok": {
+      "llm_api_key": "1"
+    }
+  },
+  "llm_api_key <- \"s\"": {
+    "ok": {
+      "llm_api_key": "s"
+    }
+  },
+  "llm_api_key <- \"true\"": {
+    "ok": {
+      "llm_api_key": "true"
+    }
+  },
+  "llm_api_key <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm_api_key"
+  },
+  "llm_api_key <- 0": {
+    "err": "TypeMismatch",
+    "key": "llm_api_key"
+  },
+  "llm_api_key <- 1": {
+    "err": "TypeMismatch",
+    "key": "llm_api_key"
+  },
+  "llm_api_key <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm_api_key"
+  },
+  "llm_api_key <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm_api_key"
+  },
+  "llm_api_key <- 70000": {
+    "err": "TypeMismatch",
+    "key": "llm_api_key"
+  },
+  "llm_api_key <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm_api_key"
+  },
+  "llm_api_key <- false": {
+    "err": "TypeMismatch",
+    "key": "llm_api_key"
+  },
+  "llm_api_key <- null": {
+    "err": "TypeMismatch",
+    "key": "llm_api_key"
+  },
+  "llm_api_key <- true": {
+    "err": "TypeMismatch",
+    "key": "llm_api_key"
+  },
+  "llm_api_key <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm_api_key"
+  },
+  "llm_api_version <- \"\"": {
+    "ok": {}
+  },
+  "llm_api_version <- \"1\"": {
+    "ok": {
+      "llm_api_version": "1"
+    }
+  },
+  "llm_api_version <- \"s\"": {
+    "ok": {
+      "llm_api_version": "s"
+    }
+  },
+  "llm_api_version <- \"true\"": {
+    "ok": {
+      "llm_api_version": "true"
+    }
+  },
+  "llm_api_version <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm_api_version"
+  },
+  "llm_api_version <- 0": {
+    "err": "TypeMismatch",
+    "key": "llm_api_version"
+  },
+  "llm_api_version <- 1": {
+    "err": "TypeMismatch",
+    "key": "llm_api_version"
+  },
+  "llm_api_version <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm_api_version"
+  },
+  "llm_api_version <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm_api_version"
+  },
+  "llm_api_version <- 70000": {
+    "err": "TypeMismatch",
+    "key": "llm_api_version"
+  },
+  "llm_api_version <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm_api_version"
+  },
+  "llm_api_version <- false": {
+    "err": "TypeMismatch",
+    "key": "llm_api_version"
+  },
+  "llm_api_version <- null": {
+    "err": "TypeMismatch",
+    "key": "llm_api_version"
+  },
+  "llm_api_version <- true": {
+    "err": "TypeMismatch",
+    "key": "llm_api_version"
+  },
+  "llm_api_version <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm_api_version"
+  },
+  "llm_args <- \"\"": {
+    "err": "UnknownKey",
+    "key": "llm_args"
+  },
+  "llm_args <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "llm_args"
+  },
+  "llm_args <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "llm_args"
+  },
+  "llm_args <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "llm_args"
+  },
+  "llm_args <- -1": {
+    "err": "UnknownKey",
+    "key": "llm_args"
+  },
+  "llm_args <- 0": {
+    "err": "UnknownKey",
+    "key": "llm_args"
+  },
+  "llm_args <- 1": {
+    "err": "UnknownKey",
+    "key": "llm_args"
+  },
+  "llm_args <- 1.5": {
+    "err": "UnknownKey",
+    "key": "llm_args"
+  },
+  "llm_args <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "llm_args"
+  },
+  "llm_args <- 70000": {
+    "err": "UnknownKey",
+    "key": "llm_args"
+  },
+  "llm_args <- [1]": {
+    "err": "UnknownKey",
+    "key": "llm_args"
+  },
+  "llm_args <- false": {
+    "err": "UnknownKey",
+    "key": "llm_args"
+  },
+  "llm_args <- null": {
+    "err": "UnknownKey",
+    "key": "llm_args"
+  },
+  "llm_args <- true": {
+    "err": "UnknownKey",
+    "key": "llm_args"
+  },
+  "llm_args <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "llm_args"
+  },
+  "llm_cassette <- \"\"": {
+    "ok": {}
+  },
+  "llm_cassette <- \"1\"": {
+    "ok": {
+      "llm_cassette": "1"
+    }
+  },
+  "llm_cassette <- \"s\"": {
+    "ok": {
+      "llm_cassette": "s"
+    }
+  },
+  "llm_cassette <- \"true\"": {
+    "ok": {
+      "llm_cassette": "true"
+    }
+  },
+  "llm_cassette <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm_cassette"
+  },
+  "llm_cassette <- 0": {
+    "err": "TypeMismatch",
+    "key": "llm_cassette"
+  },
+  "llm_cassette <- 1": {
+    "err": "TypeMismatch",
+    "key": "llm_cassette"
+  },
+  "llm_cassette <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm_cassette"
+  },
+  "llm_cassette <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm_cassette"
+  },
+  "llm_cassette <- 70000": {
+    "err": "TypeMismatch",
+    "key": "llm_cassette"
+  },
+  "llm_cassette <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm_cassette"
+  },
+  "llm_cassette <- false": {
+    "err": "TypeMismatch",
+    "key": "llm_cassette"
+  },
+  "llm_cassette <- null": {
+    "err": "TypeMismatch",
+    "key": "llm_cassette"
+  },
+  "llm_cassette <- true": {
+    "err": "TypeMismatch",
+    "key": "llm_cassette"
+  },
+  "llm_cassette <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm_cassette"
+  },
+  "llm_connect_timeout_seconds <- \"\"": {
+    "err": "UnknownKey",
+    "key": "llm_connect_timeout_seconds"
+  },
+  "llm_connect_timeout_seconds <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "llm_connect_timeout_seconds"
+  },
+  "llm_connect_timeout_seconds <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "llm_connect_timeout_seconds"
+  },
+  "llm_connect_timeout_seconds <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "llm_connect_timeout_seconds"
+  },
+  "llm_connect_timeout_seconds <- -1": {
+    "err": "UnknownKey",
+    "key": "llm_connect_timeout_seconds"
+  },
+  "llm_connect_timeout_seconds <- 0": {
+    "err": "UnknownKey",
+    "key": "llm_connect_timeout_seconds"
+  },
+  "llm_connect_timeout_seconds <- 1": {
+    "err": "UnknownKey",
+    "key": "llm_connect_timeout_seconds"
+  },
+  "llm_connect_timeout_seconds <- 1.5": {
+    "err": "UnknownKey",
+    "key": "llm_connect_timeout_seconds"
+  },
+  "llm_connect_timeout_seconds <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "llm_connect_timeout_seconds"
+  },
+  "llm_connect_timeout_seconds <- 70000": {
+    "err": "UnknownKey",
+    "key": "llm_connect_timeout_seconds"
+  },
+  "llm_connect_timeout_seconds <- [1]": {
+    "err": "UnknownKey",
+    "key": "llm_connect_timeout_seconds"
+  },
+  "llm_connect_timeout_seconds <- false": {
+    "err": "UnknownKey",
+    "key": "llm_connect_timeout_seconds"
+  },
+  "llm_connect_timeout_seconds <- null": {
+    "err": "UnknownKey",
+    "key": "llm_connect_timeout_seconds"
+  },
+  "llm_connect_timeout_seconds <- true": {
+    "err": "UnknownKey",
+    "key": "llm_connect_timeout_seconds"
+  },
+  "llm_connect_timeout_seconds <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "llm_connect_timeout_seconds"
+  },
+  "llm_endpoint <- \"\"": {
+    "ok": {}
+  },
+  "llm_endpoint <- \"1\"": {
+    "ok": {
+      "llm_endpoint": "1"
+    }
+  },
+  "llm_endpoint <- \"s\"": {
+    "ok": {
+      "llm_endpoint": "s"
+    }
+  },
+  "llm_endpoint <- \"true\"": {
+    "ok": {
+      "llm_endpoint": "true"
+    }
+  },
+  "llm_endpoint <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm_endpoint"
+  },
+  "llm_endpoint <- 0": {
+    "err": "TypeMismatch",
+    "key": "llm_endpoint"
+  },
+  "llm_endpoint <- 1": {
+    "err": "TypeMismatch",
+    "key": "llm_endpoint"
+  },
+  "llm_endpoint <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm_endpoint"
+  },
+  "llm_endpoint <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm_endpoint"
+  },
+  "llm_endpoint <- 70000": {
+    "err": "TypeMismatch",
+    "key": "llm_endpoint"
+  },
+  "llm_endpoint <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm_endpoint"
+  },
+  "llm_endpoint <- false": {
+    "err": "TypeMismatch",
+    "key": "llm_endpoint"
+  },
+  "llm_endpoint <- null": {
+    "err": "TypeMismatch",
+    "key": "llm_endpoint"
+  },
+  "llm_endpoint <- true": {
+    "err": "TypeMismatch",
+    "key": "llm_endpoint"
+  },
+  "llm_endpoint <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm_endpoint"
+  },
+  "llm_fallback_api_key <- \"\"": {
+    "ok": {}
+  },
+  "llm_fallback_api_key <- \"1\"": {
+    "ok": {
+      "llm_fallback_api_key": "1"
+    }
+  },
+  "llm_fallback_api_key <- \"s\"": {
+    "ok": {
+      "llm_fallback_api_key": "s"
+    }
+  },
+  "llm_fallback_api_key <- \"true\"": {
+    "ok": {
+      "llm_fallback_api_key": "true"
+    }
+  },
+  "llm_fallback_api_key <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm_fallback_api_key"
+  },
+  "llm_fallback_api_key <- 0": {
+    "err": "TypeMismatch",
+    "key": "llm_fallback_api_key"
+  },
+  "llm_fallback_api_key <- 1": {
+    "err": "TypeMismatch",
+    "key": "llm_fallback_api_key"
+  },
+  "llm_fallback_api_key <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm_fallback_api_key"
+  },
+  "llm_fallback_api_key <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm_fallback_api_key"
+  },
+  "llm_fallback_api_key <- 70000": {
+    "err": "TypeMismatch",
+    "key": "llm_fallback_api_key"
+  },
+  "llm_fallback_api_key <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm_fallback_api_key"
+  },
+  "llm_fallback_api_key <- false": {
+    "err": "TypeMismatch",
+    "key": "llm_fallback_api_key"
+  },
+  "llm_fallback_api_key <- null": {
+    "err": "TypeMismatch",
+    "key": "llm_fallback_api_key"
+  },
+  "llm_fallback_api_key <- true": {
+    "err": "TypeMismatch",
+    "key": "llm_fallback_api_key"
+  },
+  "llm_fallback_api_key <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm_fallback_api_key"
+  },
+  "llm_fallback_endpoint <- \"\"": {
+    "ok": {}
+  },
+  "llm_fallback_endpoint <- \"1\"": {
+    "ok": {
+      "llm_fallback_endpoint": "1"
+    }
+  },
+  "llm_fallback_endpoint <- \"s\"": {
+    "ok": {
+      "llm_fallback_endpoint": "s"
+    }
+  },
+  "llm_fallback_endpoint <- \"true\"": {
+    "ok": {
+      "llm_fallback_endpoint": "true"
+    }
+  },
+  "llm_fallback_endpoint <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm_fallback_endpoint"
+  },
+  "llm_fallback_endpoint <- 0": {
+    "err": "TypeMismatch",
+    "key": "llm_fallback_endpoint"
+  },
+  "llm_fallback_endpoint <- 1": {
+    "err": "TypeMismatch",
+    "key": "llm_fallback_endpoint"
+  },
+  "llm_fallback_endpoint <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm_fallback_endpoint"
+  },
+  "llm_fallback_endpoint <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm_fallback_endpoint"
+  },
+  "llm_fallback_endpoint <- 70000": {
+    "err": "TypeMismatch",
+    "key": "llm_fallback_endpoint"
+  },
+  "llm_fallback_endpoint <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm_fallback_endpoint"
+  },
+  "llm_fallback_endpoint <- false": {
+    "err": "TypeMismatch",
+    "key": "llm_fallback_endpoint"
+  },
+  "llm_fallback_endpoint <- null": {
+    "err": "TypeMismatch",
+    "key": "llm_fallback_endpoint"
+  },
+  "llm_fallback_endpoint <- true": {
+    "err": "TypeMismatch",
+    "key": "llm_fallback_endpoint"
+  },
+  "llm_fallback_endpoint <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm_fallback_endpoint"
+  },
+  "llm_fallback_model <- \"\"": {
+    "ok": {}
+  },
+  "llm_fallback_model <- \"1\"": {
+    "ok": {
+      "llm_fallback_model": "1"
+    }
+  },
+  "llm_fallback_model <- \"s\"": {
+    "ok": {
+      "llm_fallback_model": "s"
+    }
+  },
+  "llm_fallback_model <- \"true\"": {
+    "ok": {
+      "llm_fallback_model": "true"
+    }
+  },
+  "llm_fallback_model <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm_fallback_model"
+  },
+  "llm_fallback_model <- 0": {
+    "err": "TypeMismatch",
+    "key": "llm_fallback_model"
+  },
+  "llm_fallback_model <- 1": {
+    "err": "TypeMismatch",
+    "key": "llm_fallback_model"
+  },
+  "llm_fallback_model <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm_fallback_model"
+  },
+  "llm_fallback_model <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm_fallback_model"
+  },
+  "llm_fallback_model <- 70000": {
+    "err": "TypeMismatch",
+    "key": "llm_fallback_model"
+  },
+  "llm_fallback_model <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm_fallback_model"
+  },
+  "llm_fallback_model <- false": {
+    "err": "TypeMismatch",
+    "key": "llm_fallback_model"
+  },
+  "llm_fallback_model <- null": {
+    "err": "TypeMismatch",
+    "key": "llm_fallback_model"
+  },
+  "llm_fallback_model <- true": {
+    "err": "TypeMismatch",
+    "key": "llm_fallback_model"
+  },
+  "llm_fallback_model <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm_fallback_model"
+  },
+  "llm_fallback_provider <- \"\"": {
+    "ok": {}
+  },
+  "llm_fallback_provider <- \"1\"": {
+    "ok": {
+      "llm_fallback_provider": "1"
+    }
+  },
+  "llm_fallback_provider <- \"s\"": {
+    "ok": {
+      "llm_fallback_provider": "s"
+    }
+  },
+  "llm_fallback_provider <- \"true\"": {
+    "ok": {
+      "llm_fallback_provider": "true"
+    }
+  },
+  "llm_fallback_provider <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm_fallback_provider"
+  },
+  "llm_fallback_provider <- 0": {
+    "err": "TypeMismatch",
+    "key": "llm_fallback_provider"
+  },
+  "llm_fallback_provider <- 1": {
+    "err": "TypeMismatch",
+    "key": "llm_fallback_provider"
+  },
+  "llm_fallback_provider <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm_fallback_provider"
+  },
+  "llm_fallback_provider <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm_fallback_provider"
+  },
+  "llm_fallback_provider <- 70000": {
+    "err": "TypeMismatch",
+    "key": "llm_fallback_provider"
+  },
+  "llm_fallback_provider <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm_fallback_provider"
+  },
+  "llm_fallback_provider <- false": {
+    "err": "TypeMismatch",
+    "key": "llm_fallback_provider"
+  },
+  "llm_fallback_provider <- null": {
+    "err": "TypeMismatch",
+    "key": "llm_fallback_provider"
+  },
+  "llm_fallback_provider <- true": {
+    "err": "TypeMismatch",
+    "key": "llm_fallback_provider"
+  },
+  "llm_fallback_provider <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm_fallback_provider"
+  },
+  "llm_max_completion_tokens <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "llm_max_completion_tokens"
+  },
+  "llm_max_completion_tokens <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "llm_max_completion_tokens"
+  },
+  "llm_max_completion_tokens <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "llm_max_completion_tokens"
+  },
+  "llm_max_completion_tokens <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "llm_max_completion_tokens"
+  },
+  "llm_max_completion_tokens <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm_max_completion_tokens"
+  },
+  "llm_max_completion_tokens <- 0": {
+    "ok": {
+      "llm_max_completion_tokens": 0
+    }
+  },
+  "llm_max_completion_tokens <- 1": {
+    "ok": {
+      "llm_max_completion_tokens": 1
+    }
+  },
+  "llm_max_completion_tokens <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm_max_completion_tokens"
+  },
+  "llm_max_completion_tokens <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm_max_completion_tokens"
+  },
+  "llm_max_completion_tokens <- 70000": {
+    "ok": {
+      "llm_max_completion_tokens": 70000
+    }
+  },
+  "llm_max_completion_tokens <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm_max_completion_tokens"
+  },
+  "llm_max_completion_tokens <- false": {
+    "err": "TypeMismatch",
+    "key": "llm_max_completion_tokens"
+  },
+  "llm_max_completion_tokens <- null": {
+    "err": "TypeMismatch",
+    "key": "llm_max_completion_tokens"
+  },
+  "llm_max_completion_tokens <- true": {
+    "err": "TypeMismatch",
+    "key": "llm_max_completion_tokens"
+  },
+  "llm_max_completion_tokens <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm_max_completion_tokens"
+  },
+  "llm_max_parallel_requests <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "llm_max_parallel_requests"
+  },
+  "llm_max_parallel_requests <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "llm_max_parallel_requests"
+  },
+  "llm_max_parallel_requests <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "llm_max_parallel_requests"
+  },
+  "llm_max_parallel_requests <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "llm_max_parallel_requests"
+  },
+  "llm_max_parallel_requests <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm_max_parallel_requests"
+  },
+  "llm_max_parallel_requests <- 0": {
+    "ok": {
+      "llm_max_parallel_requests": 0
+    }
+  },
+  "llm_max_parallel_requests <- 1": {
+    "ok": {
+      "llm_max_parallel_requests": 1
+    }
+  },
+  "llm_max_parallel_requests <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm_max_parallel_requests"
+  },
+  "llm_max_parallel_requests <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm_max_parallel_requests"
+  },
+  "llm_max_parallel_requests <- 70000": {
+    "ok": {
+      "llm_max_parallel_requests": 70000
+    }
+  },
+  "llm_max_parallel_requests <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm_max_parallel_requests"
+  },
+  "llm_max_parallel_requests <- false": {
+    "err": "TypeMismatch",
+    "key": "llm_max_parallel_requests"
+  },
+  "llm_max_parallel_requests <- null": {
+    "err": "TypeMismatch",
+    "key": "llm_max_parallel_requests"
+  },
+  "llm_max_parallel_requests <- true": {
+    "err": "TypeMismatch",
+    "key": "llm_max_parallel_requests"
+  },
+  "llm_max_parallel_requests <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm_max_parallel_requests"
+  },
+  "llm_max_retries <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "llm_max_retries"
+  },
+  "llm_max_retries <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "llm_max_retries"
+  },
+  "llm_max_retries <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "llm_max_retries"
+  },
+  "llm_max_retries <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "llm_max_retries"
+  },
+  "llm_max_retries <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm_max_retries"
+  },
+  "llm_max_retries <- 0": {
+    "ok": {
+      "llm_max_retries": 0
+    }
+  },
+  "llm_max_retries <- 1": {
+    "ok": {
+      "llm_max_retries": 1
+    }
+  },
+  "llm_max_retries <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm_max_retries"
+  },
+  "llm_max_retries <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm_max_retries"
+  },
+  "llm_max_retries <- 70000": {
+    "ok": {
+      "llm_max_retries": 70000
+    }
+  },
+  "llm_max_retries <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm_max_retries"
+  },
+  "llm_max_retries <- false": {
+    "err": "TypeMismatch",
+    "key": "llm_max_retries"
+  },
+  "llm_max_retries <- null": {
+    "err": "TypeMismatch",
+    "key": "llm_max_retries"
+  },
+  "llm_max_retries <- true": {
+    "err": "TypeMismatch",
+    "key": "llm_max_retries"
+  },
+  "llm_max_retries <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm_max_retries"
+  },
+  "llm_min_retry_seconds <- \"\"": {
+    "err": "UnknownKey",
+    "key": "llm_min_retry_seconds"
+  },
+  "llm_min_retry_seconds <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "llm_min_retry_seconds"
+  },
+  "llm_min_retry_seconds <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "llm_min_retry_seconds"
+  },
+  "llm_min_retry_seconds <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "llm_min_retry_seconds"
+  },
+  "llm_min_retry_seconds <- -1": {
+    "err": "UnknownKey",
+    "key": "llm_min_retry_seconds"
+  },
+  "llm_min_retry_seconds <- 0": {
+    "err": "UnknownKey",
+    "key": "llm_min_retry_seconds"
+  },
+  "llm_min_retry_seconds <- 1": {
+    "err": "UnknownKey",
+    "key": "llm_min_retry_seconds"
+  },
+  "llm_min_retry_seconds <- 1.5": {
+    "err": "UnknownKey",
+    "key": "llm_min_retry_seconds"
+  },
+  "llm_min_retry_seconds <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "llm_min_retry_seconds"
+  },
+  "llm_min_retry_seconds <- 70000": {
+    "err": "UnknownKey",
+    "key": "llm_min_retry_seconds"
+  },
+  "llm_min_retry_seconds <- [1]": {
+    "err": "UnknownKey",
+    "key": "llm_min_retry_seconds"
+  },
+  "llm_min_retry_seconds <- false": {
+    "err": "UnknownKey",
+    "key": "llm_min_retry_seconds"
+  },
+  "llm_min_retry_seconds <- null": {
+    "err": "UnknownKey",
+    "key": "llm_min_retry_seconds"
+  },
+  "llm_min_retry_seconds <- true": {
+    "err": "UnknownKey",
+    "key": "llm_min_retry_seconds"
+  },
+  "llm_min_retry_seconds <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "llm_min_retry_seconds"
+  },
+  "llm_mock <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "llm_mock"
+  },
+  "llm_mock <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "llm_mock"
+  },
+  "llm_mock <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "llm_mock"
+  },
+  "llm_mock <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "llm_mock"
+  },
+  "llm_mock <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm_mock"
+  },
+  "llm_mock <- 0": {
+    "err": "TypeMismatch",
+    "key": "llm_mock"
+  },
+  "llm_mock <- 1": {
+    "err": "TypeMismatch",
+    "key": "llm_mock"
+  },
+  "llm_mock <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm_mock"
+  },
+  "llm_mock <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm_mock"
+  },
+  "llm_mock <- 70000": {
+    "err": "TypeMismatch",
+    "key": "llm_mock"
+  },
+  "llm_mock <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm_mock"
+  },
+  "llm_mock <- false": {
+    "ok": {}
+  },
+  "llm_mock <- null": {
+    "err": "TypeMismatch",
+    "key": "llm_mock"
+  },
+  "llm_mock <- true": {
+    "ok": {
+      "llm_mock": true
+    }
+  },
+  "llm_mock <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm_mock"
+  },
+  "llm_model <- \"\"": {
+    "ok": {
+      "llm_model": ""
+    }
+  },
+  "llm_model <- \"1\"": {
+    "ok": {
+      "llm_model": "1"
+    }
+  },
+  "llm_model <- \"s\"": {
+    "ok": {
+      "llm_model": "s"
+    }
+  },
+  "llm_model <- \"true\"": {
+    "ok": {
+      "llm_model": "true"
+    }
+  },
+  "llm_model <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm_model"
+  },
+  "llm_model <- 0": {
+    "err": "TypeMismatch",
+    "key": "llm_model"
+  },
+  "llm_model <- 1": {
+    "err": "TypeMismatch",
+    "key": "llm_model"
+  },
+  "llm_model <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm_model"
+  },
+  "llm_model <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm_model"
+  },
+  "llm_model <- 70000": {
+    "err": "TypeMismatch",
+    "key": "llm_model"
+  },
+  "llm_model <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm_model"
+  },
+  "llm_model <- false": {
+    "err": "TypeMismatch",
+    "key": "llm_model"
+  },
+  "llm_model <- null": {
+    "err": "TypeMismatch",
+    "key": "llm_model"
+  },
+  "llm_model <- true": {
+    "err": "TypeMismatch",
+    "key": "llm_model"
+  },
+  "llm_model <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm_model"
+  },
+  "llm_network_retries <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "llm_network_retries"
+  },
+  "llm_network_retries <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "llm_network_retries"
+  },
+  "llm_network_retries <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "llm_network_retries"
+  },
+  "llm_network_retries <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "llm_network_retries"
+  },
+  "llm_network_retries <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm_network_retries"
+  },
+  "llm_network_retries <- 0": {
+    "ok": {
+      "llm_network_retries": 0
+    }
+  },
+  "llm_network_retries <- 1": {
+    "ok": {
+      "llm_network_retries": 1
+    }
+  },
+  "llm_network_retries <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm_network_retries"
+  },
+  "llm_network_retries <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm_network_retries"
+  },
+  "llm_network_retries <- 70000": {
+    "ok": {
+      "llm_network_retries": 70000
+    }
+  },
+  "llm_network_retries <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm_network_retries"
+  },
+  "llm_network_retries <- false": {
+    "err": "TypeMismatch",
+    "key": "llm_network_retries"
+  },
+  "llm_network_retries <- null": {
+    "err": "TypeMismatch",
+    "key": "llm_network_retries"
+  },
+  "llm_network_retries <- true": {
+    "err": "TypeMismatch",
+    "key": "llm_network_retries"
+  },
+  "llm_network_retries <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm_network_retries"
+  },
+  "llm_provider <- \"\"": {
+    "ok": {
+      "llm_provider": ""
+    }
+  },
+  "llm_provider <- \"1\"": {
+    "ok": {
+      "llm_provider": "1"
+    }
+  },
+  "llm_provider <- \"s\"": {
+    "ok": {
+      "llm_provider": "s"
+    }
+  },
+  "llm_provider <- \"true\"": {
+    "ok": {
+      "llm_provider": "true"
+    }
+  },
+  "llm_provider <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm_provider"
+  },
+  "llm_provider <- 0": {
+    "err": "TypeMismatch",
+    "key": "llm_provider"
+  },
+  "llm_provider <- 1": {
+    "err": "TypeMismatch",
+    "key": "llm_provider"
+  },
+  "llm_provider <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm_provider"
+  },
+  "llm_provider <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm_provider"
+  },
+  "llm_provider <- 70000": {
+    "err": "TypeMismatch",
+    "key": "llm_provider"
+  },
+  "llm_provider <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm_provider"
+  },
+  "llm_provider <- false": {
+    "err": "TypeMismatch",
+    "key": "llm_provider"
+  },
+  "llm_provider <- null": {
+    "err": "TypeMismatch",
+    "key": "llm_provider"
+  },
+  "llm_provider <- true": {
+    "err": "TypeMismatch",
+    "key": "llm_provider"
+  },
+  "llm_provider <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm_provider"
+  },
+  "llm_rate_limit_enabled <- \"\"": {
+    "err": "UnknownKey",
+    "key": "llm_rate_limit_enabled"
+  },
+  "llm_rate_limit_enabled <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "llm_rate_limit_enabled"
+  },
+  "llm_rate_limit_enabled <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "llm_rate_limit_enabled"
+  },
+  "llm_rate_limit_enabled <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "llm_rate_limit_enabled"
+  },
+  "llm_rate_limit_enabled <- -1": {
+    "err": "UnknownKey",
+    "key": "llm_rate_limit_enabled"
+  },
+  "llm_rate_limit_enabled <- 0": {
+    "err": "UnknownKey",
+    "key": "llm_rate_limit_enabled"
+  },
+  "llm_rate_limit_enabled <- 1": {
+    "err": "UnknownKey",
+    "key": "llm_rate_limit_enabled"
+  },
+  "llm_rate_limit_enabled <- 1.5": {
+    "err": "UnknownKey",
+    "key": "llm_rate_limit_enabled"
+  },
+  "llm_rate_limit_enabled <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "llm_rate_limit_enabled"
+  },
+  "llm_rate_limit_enabled <- 70000": {
+    "err": "UnknownKey",
+    "key": "llm_rate_limit_enabled"
+  },
+  "llm_rate_limit_enabled <- [1]": {
+    "err": "UnknownKey",
+    "key": "llm_rate_limit_enabled"
+  },
+  "llm_rate_limit_enabled <- false": {
+    "err": "UnknownKey",
+    "key": "llm_rate_limit_enabled"
+  },
+  "llm_rate_limit_enabled <- null": {
+    "err": "UnknownKey",
+    "key": "llm_rate_limit_enabled"
+  },
+  "llm_rate_limit_enabled <- true": {
+    "err": "UnknownKey",
+    "key": "llm_rate_limit_enabled"
+  },
+  "llm_rate_limit_enabled <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "llm_rate_limit_enabled"
+  },
+  "llm_rate_limit_interval <- \"\"": {
+    "err": "UnknownKey",
+    "key": "llm_rate_limit_interval"
+  },
+  "llm_rate_limit_interval <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "llm_rate_limit_interval"
+  },
+  "llm_rate_limit_interval <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "llm_rate_limit_interval"
+  },
+  "llm_rate_limit_interval <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "llm_rate_limit_interval"
+  },
+  "llm_rate_limit_interval <- -1": {
+    "err": "UnknownKey",
+    "key": "llm_rate_limit_interval"
+  },
+  "llm_rate_limit_interval <- 0": {
+    "err": "UnknownKey",
+    "key": "llm_rate_limit_interval"
+  },
+  "llm_rate_limit_interval <- 1": {
+    "err": "UnknownKey",
+    "key": "llm_rate_limit_interval"
+  },
+  "llm_rate_limit_interval <- 1.5": {
+    "err": "UnknownKey",
+    "key": "llm_rate_limit_interval"
+  },
+  "llm_rate_limit_interval <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "llm_rate_limit_interval"
+  },
+  "llm_rate_limit_interval <- 70000": {
+    "err": "UnknownKey",
+    "key": "llm_rate_limit_interval"
+  },
+  "llm_rate_limit_interval <- [1]": {
+    "err": "UnknownKey",
+    "key": "llm_rate_limit_interval"
+  },
+  "llm_rate_limit_interval <- false": {
+    "err": "UnknownKey",
+    "key": "llm_rate_limit_interval"
+  },
+  "llm_rate_limit_interval <- null": {
+    "err": "UnknownKey",
+    "key": "llm_rate_limit_interval"
+  },
+  "llm_rate_limit_interval <- true": {
+    "err": "UnknownKey",
+    "key": "llm_rate_limit_interval"
+  },
+  "llm_rate_limit_interval <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "llm_rate_limit_interval"
+  },
+  "llm_rate_limit_requests <- \"\"": {
+    "err": "UnknownKey",
+    "key": "llm_rate_limit_requests"
+  },
+  "llm_rate_limit_requests <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "llm_rate_limit_requests"
+  },
+  "llm_rate_limit_requests <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "llm_rate_limit_requests"
+  },
+  "llm_rate_limit_requests <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "llm_rate_limit_requests"
+  },
+  "llm_rate_limit_requests <- -1": {
+    "err": "UnknownKey",
+    "key": "llm_rate_limit_requests"
+  },
+  "llm_rate_limit_requests <- 0": {
+    "err": "UnknownKey",
+    "key": "llm_rate_limit_requests"
+  },
+  "llm_rate_limit_requests <- 1": {
+    "err": "UnknownKey",
+    "key": "llm_rate_limit_requests"
+  },
+  "llm_rate_limit_requests <- 1.5": {
+    "err": "UnknownKey",
+    "key": "llm_rate_limit_requests"
+  },
+  "llm_rate_limit_requests <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "llm_rate_limit_requests"
+  },
+  "llm_rate_limit_requests <- 70000": {
+    "err": "UnknownKey",
+    "key": "llm_rate_limit_requests"
+  },
+  "llm_rate_limit_requests <- [1]": {
+    "err": "UnknownKey",
+    "key": "llm_rate_limit_requests"
+  },
+  "llm_rate_limit_requests <- false": {
+    "err": "UnknownKey",
+    "key": "llm_rate_limit_requests"
+  },
+  "llm_rate_limit_requests <- null": {
+    "err": "UnknownKey",
+    "key": "llm_rate_limit_requests"
+  },
+  "llm_rate_limit_requests <- true": {
+    "err": "UnknownKey",
+    "key": "llm_rate_limit_requests"
+  },
+  "llm_rate_limit_requests <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "llm_rate_limit_requests"
+  },
+  "llm_reasoning <- \"\"": {
+    "ok": {
+      "llm_reasoning": ""
+    }
+  },
+  "llm_reasoning <- \"1\"": {
+    "ok": {
+      "llm_reasoning": "1"
+    }
+  },
+  "llm_reasoning <- \"s\"": {
+    "ok": {
+      "llm_reasoning": "s"
+    }
+  },
+  "llm_reasoning <- \"true\"": {
+    "ok": {
+      "llm_reasoning": "true"
+    }
+  },
+  "llm_reasoning <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm_reasoning"
+  },
+  "llm_reasoning <- 0": {
+    "err": "TypeMismatch",
+    "key": "llm_reasoning"
+  },
+  "llm_reasoning <- 1": {
+    "err": "TypeMismatch",
+    "key": "llm_reasoning"
+  },
+  "llm_reasoning <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm_reasoning"
+  },
+  "llm_reasoning <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm_reasoning"
+  },
+  "llm_reasoning <- 70000": {
+    "err": "TypeMismatch",
+    "key": "llm_reasoning"
+  },
+  "llm_reasoning <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm_reasoning"
+  },
+  "llm_reasoning <- false": {
+    "err": "TypeMismatch",
+    "key": "llm_reasoning"
+  },
+  "llm_reasoning <- null": {
+    "err": "TypeMismatch",
+    "key": "llm_reasoning"
+  },
+  "llm_reasoning <- true": {
+    "err": "TypeMismatch",
+    "key": "llm_reasoning"
+  },
+  "llm_reasoning <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm_reasoning"
+  },
+  "llm_record_path <- \"\"": {
+    "ok": {}
+  },
+  "llm_record_path <- \"1\"": {
+    "ok": {
+      "llm_record_path": "1"
+    }
+  },
+  "llm_record_path <- \"s\"": {
+    "ok": {
+      "llm_record_path": "s"
+    }
+  },
+  "llm_record_path <- \"true\"": {
+    "ok": {
+      "llm_record_path": "true"
+    }
+  },
+  "llm_record_path <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm_record_path"
+  },
+  "llm_record_path <- 0": {
+    "err": "TypeMismatch",
+    "key": "llm_record_path"
+  },
+  "llm_record_path <- 1": {
+    "err": "TypeMismatch",
+    "key": "llm_record_path"
+  },
+  "llm_record_path <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm_record_path"
+  },
+  "llm_record_path <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm_record_path"
+  },
+  "llm_record_path <- 70000": {
+    "err": "TypeMismatch",
+    "key": "llm_record_path"
+  },
+  "llm_record_path <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm_record_path"
+  },
+  "llm_record_path <- false": {
+    "err": "TypeMismatch",
+    "key": "llm_record_path"
+  },
+  "llm_record_path <- null": {
+    "err": "TypeMismatch",
+    "key": "llm_record_path"
+  },
+  "llm_record_path <- true": {
+    "err": "TypeMismatch",
+    "key": "llm_record_path"
+  },
+  "llm_record_path <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm_record_path"
+  },
+  "llm_request_deadline_seconds <- \"\"": {
+    "err": "UnknownKey",
+    "key": "llm_request_deadline_seconds"
+  },
+  "llm_request_deadline_seconds <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "llm_request_deadline_seconds"
+  },
+  "llm_request_deadline_seconds <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "llm_request_deadline_seconds"
+  },
+  "llm_request_deadline_seconds <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "llm_request_deadline_seconds"
+  },
+  "llm_request_deadline_seconds <- -1": {
+    "err": "UnknownKey",
+    "key": "llm_request_deadline_seconds"
+  },
+  "llm_request_deadline_seconds <- 0": {
+    "err": "UnknownKey",
+    "key": "llm_request_deadline_seconds"
+  },
+  "llm_request_deadline_seconds <- 1": {
+    "err": "UnknownKey",
+    "key": "llm_request_deadline_seconds"
+  },
+  "llm_request_deadline_seconds <- 1.5": {
+    "err": "UnknownKey",
+    "key": "llm_request_deadline_seconds"
+  },
+  "llm_request_deadline_seconds <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "llm_request_deadline_seconds"
+  },
+  "llm_request_deadline_seconds <- 70000": {
+    "err": "UnknownKey",
+    "key": "llm_request_deadline_seconds"
+  },
+  "llm_request_deadline_seconds <- [1]": {
+    "err": "UnknownKey",
+    "key": "llm_request_deadline_seconds"
+  },
+  "llm_request_deadline_seconds <- false": {
+    "err": "UnknownKey",
+    "key": "llm_request_deadline_seconds"
+  },
+  "llm_request_deadline_seconds <- null": {
+    "err": "UnknownKey",
+    "key": "llm_request_deadline_seconds"
+  },
+  "llm_request_deadline_seconds <- true": {
+    "err": "UnknownKey",
+    "key": "llm_request_deadline_seconds"
+  },
+  "llm_request_deadline_seconds <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "llm_request_deadline_seconds"
+  },
+  "llm_request_timeout_seconds <- \"\"": {
+    "err": "UnknownKey",
+    "key": "llm_request_timeout_seconds"
+  },
+  "llm_request_timeout_seconds <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "llm_request_timeout_seconds"
+  },
+  "llm_request_timeout_seconds <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "llm_request_timeout_seconds"
+  },
+  "llm_request_timeout_seconds <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "llm_request_timeout_seconds"
+  },
+  "llm_request_timeout_seconds <- -1": {
+    "err": "UnknownKey",
+    "key": "llm_request_timeout_seconds"
+  },
+  "llm_request_timeout_seconds <- 0": {
+    "err": "UnknownKey",
+    "key": "llm_request_timeout_seconds"
+  },
+  "llm_request_timeout_seconds <- 1": {
+    "err": "UnknownKey",
+    "key": "llm_request_timeout_seconds"
+  },
+  "llm_request_timeout_seconds <- 1.5": {
+    "err": "UnknownKey",
+    "key": "llm_request_timeout_seconds"
+  },
+  "llm_request_timeout_seconds <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "llm_request_timeout_seconds"
+  },
+  "llm_request_timeout_seconds <- 70000": {
+    "err": "UnknownKey",
+    "key": "llm_request_timeout_seconds"
+  },
+  "llm_request_timeout_seconds <- [1]": {
+    "err": "UnknownKey",
+    "key": "llm_request_timeout_seconds"
+  },
+  "llm_request_timeout_seconds <- false": {
+    "err": "UnknownKey",
+    "key": "llm_request_timeout_seconds"
+  },
+  "llm_request_timeout_seconds <- null": {
+    "err": "UnknownKey",
+    "key": "llm_request_timeout_seconds"
+  },
+  "llm_request_timeout_seconds <- true": {
+    "err": "UnknownKey",
+    "key": "llm_request_timeout_seconds"
+  },
+  "llm_request_timeout_seconds <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "llm_request_timeout_seconds"
+  },
+  "llm_streaming <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "llm_streaming"
+  },
+  "llm_streaming <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "llm_streaming"
+  },
+  "llm_streaming <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "llm_streaming"
+  },
+  "llm_streaming <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "llm_streaming"
+  },
+  "llm_streaming <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm_streaming"
+  },
+  "llm_streaming <- 0": {
+    "err": "TypeMismatch",
+    "key": "llm_streaming"
+  },
+  "llm_streaming <- 1": {
+    "err": "TypeMismatch",
+    "key": "llm_streaming"
+  },
+  "llm_streaming <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm_streaming"
+  },
+  "llm_streaming <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm_streaming"
+  },
+  "llm_streaming <- 70000": {
+    "err": "TypeMismatch",
+    "key": "llm_streaming"
+  },
+  "llm_streaming <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm_streaming"
+  },
+  "llm_streaming <- false": {
+    "ok": {}
+  },
+  "llm_streaming <- null": {
+    "err": "TypeMismatch",
+    "key": "llm_streaming"
+  },
+  "llm_streaming <- true": {
+    "ok": {
+      "llm_streaming": true
+    }
+  },
+  "llm_streaming <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm_streaming"
+  },
+  "llm_structured_output_mode <- \"\"": {
+    "ok": {
+      "llm_structured_output_mode": ""
+    }
+  },
+  "llm_structured_output_mode <- \"1\"": {
+    "ok": {
+      "llm_structured_output_mode": "1"
+    }
+  },
+  "llm_structured_output_mode <- \"s\"": {
+    "ok": {
+      "llm_structured_output_mode": "s"
+    }
+  },
+  "llm_structured_output_mode <- \"true\"": {
+    "ok": {
+      "llm_structured_output_mode": "true"
+    }
+  },
+  "llm_structured_output_mode <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm_structured_output_mode"
+  },
+  "llm_structured_output_mode <- 0": {
+    "err": "TypeMismatch",
+    "key": "llm_structured_output_mode"
+  },
+  "llm_structured_output_mode <- 1": {
+    "err": "TypeMismatch",
+    "key": "llm_structured_output_mode"
+  },
+  "llm_structured_output_mode <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm_structured_output_mode"
+  },
+  "llm_structured_output_mode <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm_structured_output_mode"
+  },
+  "llm_structured_output_mode <- 70000": {
+    "err": "TypeMismatch",
+    "key": "llm_structured_output_mode"
+  },
+  "llm_structured_output_mode <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm_structured_output_mode"
+  },
+  "llm_structured_output_mode <- false": {
+    "err": "TypeMismatch",
+    "key": "llm_structured_output_mode"
+  },
+  "llm_structured_output_mode <- null": {
+    "err": "TypeMismatch",
+    "key": "llm_structured_output_mode"
+  },
+  "llm_structured_output_mode <- true": {
+    "err": "TypeMismatch",
+    "key": "llm_structured_output_mode"
+  },
+  "llm_structured_output_mode <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm_structured_output_mode"
+  },
+  "llm_temperature <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "llm_temperature"
+  },
+  "llm_temperature <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "llm_temperature"
+  },
+  "llm_temperature <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "llm_temperature"
+  },
+  "llm_temperature <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "llm_temperature"
+  },
+  "llm_temperature <- -1": {
+    "ok": {
+      "llm_temperature": -1.0
+    }
+  },
+  "llm_temperature <- 0": {
+    "ok": {
+      "llm_temperature": 0.0
+    }
+  },
+  "llm_temperature <- 1": {
+    "ok": {
+      "llm_temperature": 1.0
+    }
+  },
+  "llm_temperature <- 1.5": {
+    "ok": {
+      "llm_temperature": 1.5
+    }
+  },
+  "llm_temperature <- 5000000000": {
+    "ok": {
+      "llm_temperature": 5000000000.0
+    }
+  },
+  "llm_temperature <- 70000": {
+    "ok": {
+      "llm_temperature": 70000.0
+    }
+  },
+  "llm_temperature <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm_temperature"
+  },
+  "llm_temperature <- false": {
+    "err": "TypeMismatch",
+    "key": "llm_temperature"
+  },
+  "llm_temperature <- null": {
+    "ok": {}
+  },
+  "llm_temperature <- true": {
+    "err": "TypeMismatch",
+    "key": "llm_temperature"
+  },
+  "llm_temperature <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm_temperature"
+  },
+  "log_level <- \"\"": {
+    "err": "UnknownKey",
+    "key": "log_level"
+  },
+  "log_level <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "log_level"
+  },
+  "log_level <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "log_level"
+  },
+  "log_level <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "log_level"
+  },
+  "log_level <- -1": {
+    "err": "UnknownKey",
+    "key": "log_level"
+  },
+  "log_level <- 0": {
+    "err": "UnknownKey",
+    "key": "log_level"
+  },
+  "log_level <- 1": {
+    "err": "UnknownKey",
+    "key": "log_level"
+  },
+  "log_level <- 1.5": {
+    "err": "UnknownKey",
+    "key": "log_level"
+  },
+  "log_level <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "log_level"
+  },
+  "log_level <- 70000": {
+    "err": "UnknownKey",
+    "key": "log_level"
+  },
+  "log_level <- [1]": {
+    "err": "UnknownKey",
+    "key": "log_level"
+  },
+  "log_level <- false": {
+    "err": "UnknownKey",
+    "key": "log_level"
+  },
+  "log_level <- null": {
+    "err": "UnknownKey",
+    "key": "log_level"
+  },
+  "log_level <- true": {
+    "err": "UnknownKey",
+    "key": "log_level"
+  },
+  "log_level <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "log_level"
+  },
+  "logs_root_directory <- \"\"": {
+    "ok": {
+      "logs_root_directory": ""
+    }
+  },
+  "logs_root_directory <- \"1\"": {
+    "ok": {
+      "logs_root_directory": "1"
+    }
+  },
+  "logs_root_directory <- \"s\"": {
+    "ok": {
+      "logs_root_directory": "s"
+    }
+  },
+  "logs_root_directory <- \"true\"": {
+    "ok": {
+      "logs_root_directory": "true"
+    }
+  },
+  "logs_root_directory <- -1": {
+    "err": "TypeMismatch",
+    "key": "logs_root_directory"
+  },
+  "logs_root_directory <- 0": {
+    "err": "TypeMismatch",
+    "key": "logs_root_directory"
+  },
+  "logs_root_directory <- 1": {
+    "err": "TypeMismatch",
+    "key": "logs_root_directory"
+  },
+  "logs_root_directory <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "logs_root_directory"
+  },
+  "logs_root_directory <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "logs_root_directory"
+  },
+  "logs_root_directory <- 70000": {
+    "err": "TypeMismatch",
+    "key": "logs_root_directory"
+  },
+  "logs_root_directory <- [1]": {
+    "err": "TypeMismatch",
+    "key": "logs_root_directory"
+  },
+  "logs_root_directory <- false": {
+    "err": "TypeMismatch",
+    "key": "logs_root_directory"
+  },
+  "logs_root_directory <- null": {
+    "err": "TypeMismatch",
+    "key": "logs_root_directory"
+  },
+  "logs_root_directory <- true": {
+    "err": "TypeMismatch",
+    "key": "logs_root_directory"
+  },
+  "logs_root_directory <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "logs_root_directory"
+  },
+  "migration_db_url <- \"\"": {
+    "ok": {}
+  },
+  "migration_db_url <- \"1\"": {
+    "ok": {
+      "migration_db_url": "1"
+    }
+  },
+  "migration_db_url <- \"s\"": {
+    "ok": {
+      "migration_db_url": "s"
+    }
+  },
+  "migration_db_url <- \"true\"": {
+    "ok": {
+      "migration_db_url": "true"
+    }
+  },
+  "migration_db_url <- -1": {
+    "err": "TypeMismatch",
+    "key": "migration_db_url"
+  },
+  "migration_db_url <- 0": {
+    "err": "TypeMismatch",
+    "key": "migration_db_url"
+  },
+  "migration_db_url <- 1": {
+    "err": "TypeMismatch",
+    "key": "migration_db_url"
+  },
+  "migration_db_url <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "migration_db_url"
+  },
+  "migration_db_url <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "migration_db_url"
+  },
+  "migration_db_url <- 70000": {
+    "err": "TypeMismatch",
+    "key": "migration_db_url"
+  },
+  "migration_db_url <- [1]": {
+    "err": "TypeMismatch",
+    "key": "migration_db_url"
+  },
+  "migration_db_url <- false": {
+    "err": "TypeMismatch",
+    "key": "migration_db_url"
+  },
+  "migration_db_url <- null": {
+    "err": "TypeMismatch",
+    "key": "migration_db_url"
+  },
+  "migration_db_url <- true": {
+    "err": "TypeMismatch",
+    "key": "migration_db_url"
+  },
+  "migration_db_url <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "migration_db_url"
+  },
+  "monitoring_tool <- \"\"": {
+    "ok": {
+      "monitoring_tool": ""
+    }
+  },
+  "monitoring_tool <- \"1\"": {
+    "ok": {
+      "monitoring_tool": "1"
+    }
+  },
+  "monitoring_tool <- \"s\"": {
+    "ok": {
+      "monitoring_tool": "s"
+    }
+  },
+  "monitoring_tool <- \"true\"": {
+    "ok": {
+      "monitoring_tool": "true"
+    }
+  },
+  "monitoring_tool <- -1": {
+    "err": "TypeMismatch",
+    "key": "monitoring_tool"
+  },
+  "monitoring_tool <- 0": {
+    "err": "TypeMismatch",
+    "key": "monitoring_tool"
+  },
+  "monitoring_tool <- 1": {
+    "err": "TypeMismatch",
+    "key": "monitoring_tool"
+  },
+  "monitoring_tool <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "monitoring_tool"
+  },
+  "monitoring_tool <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "monitoring_tool"
+  },
+  "monitoring_tool <- 70000": {
+    "err": "TypeMismatch",
+    "key": "monitoring_tool"
+  },
+  "monitoring_tool <- [1]": {
+    "err": "TypeMismatch",
+    "key": "monitoring_tool"
+  },
+  "monitoring_tool <- false": {
+    "err": "TypeMismatch",
+    "key": "monitoring_tool"
+  },
+  "monitoring_tool <- null": {
+    "err": "TypeMismatch",
+    "key": "monitoring_tool"
+  },
+  "monitoring_tool <- true": {
+    "err": "TypeMismatch",
+    "key": "monitoring_tool"
+  },
+  "monitoring_tool <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "monitoring_tool"
+  },
+  "no_such_key <- \"\"": {
+    "err": "UnknownKey",
+    "key": "no_such_key"
+  },
+  "no_such_key <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "no_such_key"
+  },
+  "no_such_key <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "no_such_key"
+  },
+  "no_such_key <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "no_such_key"
+  },
+  "no_such_key <- -1": {
+    "err": "UnknownKey",
+    "key": "no_such_key"
+  },
+  "no_such_key <- 0": {
+    "err": "UnknownKey",
+    "key": "no_such_key"
+  },
+  "no_such_key <- 1": {
+    "err": "UnknownKey",
+    "key": "no_such_key"
+  },
+  "no_such_key <- 1.5": {
+    "err": "UnknownKey",
+    "key": "no_such_key"
+  },
+  "no_such_key <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "no_such_key"
+  },
+  "no_such_key <- 70000": {
+    "err": "UnknownKey",
+    "key": "no_such_key"
+  },
+  "no_such_key <- [1]": {
+    "err": "UnknownKey",
+    "key": "no_such_key"
+  },
+  "no_such_key <- false": {
+    "err": "UnknownKey",
+    "key": "no_such_key"
+  },
+  "no_such_key <- null": {
+    "err": "UnknownKey",
+    "key": "no_such_key"
+  },
+  "no_such_key <- true": {
+    "err": "UnknownKey",
+    "key": "no_such_key"
+  },
+  "no_such_key <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "no_such_key"
+  },
+  "ontology_file_path <- \"\"": {
+    "ok": {}
+  },
+  "ontology_file_path <- \"1\"": {
+    "ok": {
+      "ontology_file_path": "1"
+    }
+  },
+  "ontology_file_path <- \"s\"": {
+    "ok": {
+      "ontology_file_path": "s"
+    }
+  },
+  "ontology_file_path <- \"true\"": {
+    "ok": {
+      "ontology_file_path": "true"
+    }
+  },
+  "ontology_file_path <- -1": {
+    "err": "TypeMismatch",
+    "key": "ontology_file_path"
+  },
+  "ontology_file_path <- 0": {
+    "err": "TypeMismatch",
+    "key": "ontology_file_path"
+  },
+  "ontology_file_path <- 1": {
+    "err": "TypeMismatch",
+    "key": "ontology_file_path"
+  },
+  "ontology_file_path <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "ontology_file_path"
+  },
+  "ontology_file_path <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "ontology_file_path"
+  },
+  "ontology_file_path <- 70000": {
+    "err": "TypeMismatch",
+    "key": "ontology_file_path"
+  },
+  "ontology_file_path <- [1]": {
+    "err": "TypeMismatch",
+    "key": "ontology_file_path"
+  },
+  "ontology_file_path <- false": {
+    "err": "TypeMismatch",
+    "key": "ontology_file_path"
+  },
+  "ontology_file_path <- null": {
+    "err": "TypeMismatch",
+    "key": "ontology_file_path"
+  },
+  "ontology_file_path <- true": {
+    "err": "TypeMismatch",
+    "key": "ontology_file_path"
+  },
+  "ontology_file_path <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "ontology_file_path"
+  },
+  "ontology_matching_strategy <- \"\"": {
+    "ok": {
+      "ontology_matching_strategy": ""
+    }
+  },
+  "ontology_matching_strategy <- \"1\"": {
+    "ok": {
+      "ontology_matching_strategy": "1"
+    }
+  },
+  "ontology_matching_strategy <- \"s\"": {
+    "ok": {
+      "ontology_matching_strategy": "s"
+    }
+  },
+  "ontology_matching_strategy <- \"true\"": {
+    "ok": {
+      "ontology_matching_strategy": "true"
+    }
+  },
+  "ontology_matching_strategy <- -1": {
+    "err": "TypeMismatch",
+    "key": "ontology_matching_strategy"
+  },
+  "ontology_matching_strategy <- 0": {
+    "err": "TypeMismatch",
+    "key": "ontology_matching_strategy"
+  },
+  "ontology_matching_strategy <- 1": {
+    "err": "TypeMismatch",
+    "key": "ontology_matching_strategy"
+  },
+  "ontology_matching_strategy <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "ontology_matching_strategy"
+  },
+  "ontology_matching_strategy <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "ontology_matching_strategy"
+  },
+  "ontology_matching_strategy <- 70000": {
+    "err": "TypeMismatch",
+    "key": "ontology_matching_strategy"
+  },
+  "ontology_matching_strategy <- [1]": {
+    "err": "TypeMismatch",
+    "key": "ontology_matching_strategy"
+  },
+  "ontology_matching_strategy <- false": {
+    "err": "TypeMismatch",
+    "key": "ontology_matching_strategy"
+  },
+  "ontology_matching_strategy <- null": {
+    "err": "TypeMismatch",
+    "key": "ontology_matching_strategy"
+  },
+  "ontology_matching_strategy <- true": {
+    "err": "TypeMismatch",
+    "key": "ontology_matching_strategy"
+  },
+  "ontology_matching_strategy <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "ontology_matching_strategy"
+  },
+  "ontology_resolver <- \"\"": {
+    "ok": {
+      "ontology_resolver": ""
+    }
+  },
+  "ontology_resolver <- \"1\"": {
+    "ok": {
+      "ontology_resolver": "1"
+    }
+  },
+  "ontology_resolver <- \"s\"": {
+    "ok": {
+      "ontology_resolver": "s"
+    }
+  },
+  "ontology_resolver <- \"true\"": {
+    "ok": {
+      "ontology_resolver": "true"
+    }
+  },
+  "ontology_resolver <- -1": {
+    "err": "TypeMismatch",
+    "key": "ontology_resolver"
+  },
+  "ontology_resolver <- 0": {
+    "err": "TypeMismatch",
+    "key": "ontology_resolver"
+  },
+  "ontology_resolver <- 1": {
+    "err": "TypeMismatch",
+    "key": "ontology_resolver"
+  },
+  "ontology_resolver <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "ontology_resolver"
+  },
+  "ontology_resolver <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "ontology_resolver"
+  },
+  "ontology_resolver <- 70000": {
+    "err": "TypeMismatch",
+    "key": "ontology_resolver"
+  },
+  "ontology_resolver <- [1]": {
+    "err": "TypeMismatch",
+    "key": "ontology_resolver"
+  },
+  "ontology_resolver <- false": {
+    "err": "TypeMismatch",
+    "key": "ontology_resolver"
+  },
+  "ontology_resolver <- null": {
+    "err": "TypeMismatch",
+    "key": "ontology_resolver"
+  },
+  "ontology_resolver <- true": {
+    "err": "TypeMismatch",
+    "key": "ontology_resolver"
+  },
+  "ontology_resolver <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "ontology_resolver"
+  },
+  "otel_exporter_otlp_endpoint <- \"\"": {
+    "err": "UnknownKey",
+    "key": "otel_exporter_otlp_endpoint"
+  },
+  "otel_exporter_otlp_endpoint <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "otel_exporter_otlp_endpoint"
+  },
+  "otel_exporter_otlp_endpoint <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "otel_exporter_otlp_endpoint"
+  },
+  "otel_exporter_otlp_endpoint <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "otel_exporter_otlp_endpoint"
+  },
+  "otel_exporter_otlp_endpoint <- -1": {
+    "err": "UnknownKey",
+    "key": "otel_exporter_otlp_endpoint"
+  },
+  "otel_exporter_otlp_endpoint <- 0": {
+    "err": "UnknownKey",
+    "key": "otel_exporter_otlp_endpoint"
+  },
+  "otel_exporter_otlp_endpoint <- 1": {
+    "err": "UnknownKey",
+    "key": "otel_exporter_otlp_endpoint"
+  },
+  "otel_exporter_otlp_endpoint <- 1.5": {
+    "err": "UnknownKey",
+    "key": "otel_exporter_otlp_endpoint"
+  },
+  "otel_exporter_otlp_endpoint <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "otel_exporter_otlp_endpoint"
+  },
+  "otel_exporter_otlp_endpoint <- 70000": {
+    "err": "UnknownKey",
+    "key": "otel_exporter_otlp_endpoint"
+  },
+  "otel_exporter_otlp_endpoint <- [1]": {
+    "err": "UnknownKey",
+    "key": "otel_exporter_otlp_endpoint"
+  },
+  "otel_exporter_otlp_endpoint <- false": {
+    "err": "UnknownKey",
+    "key": "otel_exporter_otlp_endpoint"
+  },
+  "otel_exporter_otlp_endpoint <- null": {
+    "err": "UnknownKey",
+    "key": "otel_exporter_otlp_endpoint"
+  },
+  "otel_exporter_otlp_endpoint <- true": {
+    "err": "UnknownKey",
+    "key": "otel_exporter_otlp_endpoint"
+  },
+  "otel_exporter_otlp_endpoint <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "otel_exporter_otlp_endpoint"
+  },
+  "otel_exporter_otlp_headers <- \"\"": {
+    "err": "UnknownKey",
+    "key": "otel_exporter_otlp_headers"
+  },
+  "otel_exporter_otlp_headers <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "otel_exporter_otlp_headers"
+  },
+  "otel_exporter_otlp_headers <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "otel_exporter_otlp_headers"
+  },
+  "otel_exporter_otlp_headers <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "otel_exporter_otlp_headers"
+  },
+  "otel_exporter_otlp_headers <- -1": {
+    "err": "UnknownKey",
+    "key": "otel_exporter_otlp_headers"
+  },
+  "otel_exporter_otlp_headers <- 0": {
+    "err": "UnknownKey",
+    "key": "otel_exporter_otlp_headers"
+  },
+  "otel_exporter_otlp_headers <- 1": {
+    "err": "UnknownKey",
+    "key": "otel_exporter_otlp_headers"
+  },
+  "otel_exporter_otlp_headers <- 1.5": {
+    "err": "UnknownKey",
+    "key": "otel_exporter_otlp_headers"
+  },
+  "otel_exporter_otlp_headers <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "otel_exporter_otlp_headers"
+  },
+  "otel_exporter_otlp_headers <- 70000": {
+    "err": "UnknownKey",
+    "key": "otel_exporter_otlp_headers"
+  },
+  "otel_exporter_otlp_headers <- [1]": {
+    "err": "UnknownKey",
+    "key": "otel_exporter_otlp_headers"
+  },
+  "otel_exporter_otlp_headers <- false": {
+    "err": "UnknownKey",
+    "key": "otel_exporter_otlp_headers"
+  },
+  "otel_exporter_otlp_headers <- null": {
+    "err": "UnknownKey",
+    "key": "otel_exporter_otlp_headers"
+  },
+  "otel_exporter_otlp_headers <- true": {
+    "err": "UnknownKey",
+    "key": "otel_exporter_otlp_headers"
+  },
+  "otel_exporter_otlp_headers <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "otel_exporter_otlp_headers"
+  },
+  "otel_exporter_otlp_protocol <- \"\"": {
+    "err": "UnknownKey",
+    "key": "otel_exporter_otlp_protocol"
+  },
+  "otel_exporter_otlp_protocol <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "otel_exporter_otlp_protocol"
+  },
+  "otel_exporter_otlp_protocol <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "otel_exporter_otlp_protocol"
+  },
+  "otel_exporter_otlp_protocol <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "otel_exporter_otlp_protocol"
+  },
+  "otel_exporter_otlp_protocol <- -1": {
+    "err": "UnknownKey",
+    "key": "otel_exporter_otlp_protocol"
+  },
+  "otel_exporter_otlp_protocol <- 0": {
+    "err": "UnknownKey",
+    "key": "otel_exporter_otlp_protocol"
+  },
+  "otel_exporter_otlp_protocol <- 1": {
+    "err": "UnknownKey",
+    "key": "otel_exporter_otlp_protocol"
+  },
+  "otel_exporter_otlp_protocol <- 1.5": {
+    "err": "UnknownKey",
+    "key": "otel_exporter_otlp_protocol"
+  },
+  "otel_exporter_otlp_protocol <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "otel_exporter_otlp_protocol"
+  },
+  "otel_exporter_otlp_protocol <- 70000": {
+    "err": "UnknownKey",
+    "key": "otel_exporter_otlp_protocol"
+  },
+  "otel_exporter_otlp_protocol <- [1]": {
+    "err": "UnknownKey",
+    "key": "otel_exporter_otlp_protocol"
+  },
+  "otel_exporter_otlp_protocol <- false": {
+    "err": "UnknownKey",
+    "key": "otel_exporter_otlp_protocol"
+  },
+  "otel_exporter_otlp_protocol <- null": {
+    "err": "UnknownKey",
+    "key": "otel_exporter_otlp_protocol"
+  },
+  "otel_exporter_otlp_protocol <- true": {
+    "err": "UnknownKey",
+    "key": "otel_exporter_otlp_protocol"
+  },
+  "otel_exporter_otlp_protocol <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "otel_exporter_otlp_protocol"
+  },
+  "otel_service_name <- \"\"": {
+    "err": "UnknownKey",
+    "key": "otel_service_name"
+  },
+  "otel_service_name <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "otel_service_name"
+  },
+  "otel_service_name <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "otel_service_name"
+  },
+  "otel_service_name <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "otel_service_name"
+  },
+  "otel_service_name <- -1": {
+    "err": "UnknownKey",
+    "key": "otel_service_name"
+  },
+  "otel_service_name <- 0": {
+    "err": "UnknownKey",
+    "key": "otel_service_name"
+  },
+  "otel_service_name <- 1": {
+    "err": "UnknownKey",
+    "key": "otel_service_name"
+  },
+  "otel_service_name <- 1.5": {
+    "err": "UnknownKey",
+    "key": "otel_service_name"
+  },
+  "otel_service_name <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "otel_service_name"
+  },
+  "otel_service_name <- 70000": {
+    "err": "UnknownKey",
+    "key": "otel_service_name"
+  },
+  "otel_service_name <- [1]": {
+    "err": "UnknownKey",
+    "key": "otel_service_name"
+  },
+  "otel_service_name <- false": {
+    "err": "UnknownKey",
+    "key": "otel_service_name"
+  },
+  "otel_service_name <- null": {
+    "err": "UnknownKey",
+    "key": "otel_service_name"
+  },
+  "otel_service_name <- true": {
+    "err": "UnknownKey",
+    "key": "otel_service_name"
+  },
+  "otel_service_name <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "otel_service_name"
+  },
+  "otel_span_processor <- \"\"": {
+    "err": "UnknownKey",
+    "key": "otel_span_processor"
+  },
+  "otel_span_processor <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "otel_span_processor"
+  },
+  "otel_span_processor <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "otel_span_processor"
+  },
+  "otel_span_processor <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "otel_span_processor"
+  },
+  "otel_span_processor <- -1": {
+    "err": "UnknownKey",
+    "key": "otel_span_processor"
+  },
+  "otel_span_processor <- 0": {
+    "err": "UnknownKey",
+    "key": "otel_span_processor"
+  },
+  "otel_span_processor <- 1": {
+    "err": "UnknownKey",
+    "key": "otel_span_processor"
+  },
+  "otel_span_processor <- 1.5": {
+    "err": "UnknownKey",
+    "key": "otel_span_processor"
+  },
+  "otel_span_processor <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "otel_span_processor"
+  },
+  "otel_span_processor <- 70000": {
+    "err": "UnknownKey",
+    "key": "otel_span_processor"
+  },
+  "otel_span_processor <- [1]": {
+    "err": "UnknownKey",
+    "key": "otel_span_processor"
+  },
+  "otel_span_processor <- false": {
+    "err": "UnknownKey",
+    "key": "otel_span_processor"
+  },
+  "otel_span_processor <- null": {
+    "err": "UnknownKey",
+    "key": "otel_span_processor"
+  },
+  "otel_span_processor <- true": {
+    "err": "UnknownKey",
+    "key": "otel_span_processor"
+  },
+  "otel_span_processor <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "otel_span_processor"
+  },
+  "otel_traces_sampler <- \"\"": {
+    "err": "UnknownKey",
+    "key": "otel_traces_sampler"
+  },
+  "otel_traces_sampler <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "otel_traces_sampler"
+  },
+  "otel_traces_sampler <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "otel_traces_sampler"
+  },
+  "otel_traces_sampler <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "otel_traces_sampler"
+  },
+  "otel_traces_sampler <- -1": {
+    "err": "UnknownKey",
+    "key": "otel_traces_sampler"
+  },
+  "otel_traces_sampler <- 0": {
+    "err": "UnknownKey",
+    "key": "otel_traces_sampler"
+  },
+  "otel_traces_sampler <- 1": {
+    "err": "UnknownKey",
+    "key": "otel_traces_sampler"
+  },
+  "otel_traces_sampler <- 1.5": {
+    "err": "UnknownKey",
+    "key": "otel_traces_sampler"
+  },
+  "otel_traces_sampler <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "otel_traces_sampler"
+  },
+  "otel_traces_sampler <- 70000": {
+    "err": "UnknownKey",
+    "key": "otel_traces_sampler"
+  },
+  "otel_traces_sampler <- [1]": {
+    "err": "UnknownKey",
+    "key": "otel_traces_sampler"
+  },
+  "otel_traces_sampler <- false": {
+    "err": "UnknownKey",
+    "key": "otel_traces_sampler"
+  },
+  "otel_traces_sampler <- null": {
+    "err": "UnknownKey",
+    "key": "otel_traces_sampler"
+  },
+  "otel_traces_sampler <- true": {
+    "err": "UnknownKey",
+    "key": "otel_traces_sampler"
+  },
+  "otel_traces_sampler <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "otel_traces_sampler"
+  },
+  "otel_traces_sampler_arg <- \"\"": {
+    "err": "UnknownKey",
+    "key": "otel_traces_sampler_arg"
+  },
+  "otel_traces_sampler_arg <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "otel_traces_sampler_arg"
+  },
+  "otel_traces_sampler_arg <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "otel_traces_sampler_arg"
+  },
+  "otel_traces_sampler_arg <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "otel_traces_sampler_arg"
+  },
+  "otel_traces_sampler_arg <- -1": {
+    "err": "UnknownKey",
+    "key": "otel_traces_sampler_arg"
+  },
+  "otel_traces_sampler_arg <- 0": {
+    "err": "UnknownKey",
+    "key": "otel_traces_sampler_arg"
+  },
+  "otel_traces_sampler_arg <- 1": {
+    "err": "UnknownKey",
+    "key": "otel_traces_sampler_arg"
+  },
+  "otel_traces_sampler_arg <- 1.5": {
+    "err": "UnknownKey",
+    "key": "otel_traces_sampler_arg"
+  },
+  "otel_traces_sampler_arg <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "otel_traces_sampler_arg"
+  },
+  "otel_traces_sampler_arg <- 70000": {
+    "err": "UnknownKey",
+    "key": "otel_traces_sampler_arg"
+  },
+  "otel_traces_sampler_arg <- [1]": {
+    "err": "UnknownKey",
+    "key": "otel_traces_sampler_arg"
+  },
+  "otel_traces_sampler_arg <- false": {
+    "err": "UnknownKey",
+    "key": "otel_traces_sampler_arg"
+  },
+  "otel_traces_sampler_arg <- null": {
+    "err": "UnknownKey",
+    "key": "otel_traces_sampler_arg"
+  },
+  "otel_traces_sampler_arg <- true": {
+    "err": "UnknownKey",
+    "key": "otel_traces_sampler_arg"
+  },
+  "otel_traces_sampler_arg <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "otel_traces_sampler_arg"
+  },
+  "relational_db_url <- \"\"": {
+    "ok": {
+      "relational_db_url": ""
+    }
+  },
+  "relational_db_url <- \"1\"": {
+    "ok": {
+      "relational_db_url": "1"
+    }
+  },
+  "relational_db_url <- \"s\"": {
+    "ok": {
+      "relational_db_url": "s"
+    }
+  },
+  "relational_db_url <- \"true\"": {
+    "ok": {
+      "relational_db_url": "true"
+    }
+  },
+  "relational_db_url <- -1": {
+    "err": "TypeMismatch",
+    "key": "relational_db_url"
+  },
+  "relational_db_url <- 0": {
+    "err": "TypeMismatch",
+    "key": "relational_db_url"
+  },
+  "relational_db_url <- 1": {
+    "err": "TypeMismatch",
+    "key": "relational_db_url"
+  },
+  "relational_db_url <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "relational_db_url"
+  },
+  "relational_db_url <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "relational_db_url"
+  },
+  "relational_db_url <- 70000": {
+    "err": "TypeMismatch",
+    "key": "relational_db_url"
+  },
+  "relational_db_url <- [1]": {
+    "err": "TypeMismatch",
+    "key": "relational_db_url"
+  },
+  "relational_db_url <- false": {
+    "err": "TypeMismatch",
+    "key": "relational_db_url"
+  },
+  "relational_db_url <- null": {
+    "err": "TypeMismatch",
+    "key": "relational_db_url"
+  },
+  "relational_db_url <- true": {
+    "err": "TypeMismatch",
+    "key": "relational_db_url"
+  },
+  "relational_db_url <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "relational_db_url"
+  },
+  "session_ttl_seconds <- \"\"": {
+    "err": "UnknownKey",
+    "key": "session_ttl_seconds"
+  },
+  "session_ttl_seconds <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "session_ttl_seconds"
+  },
+  "session_ttl_seconds <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "session_ttl_seconds"
+  },
+  "session_ttl_seconds <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "session_ttl_seconds"
+  },
+  "session_ttl_seconds <- -1": {
+    "err": "UnknownKey",
+    "key": "session_ttl_seconds"
+  },
+  "session_ttl_seconds <- 0": {
+    "err": "UnknownKey",
+    "key": "session_ttl_seconds"
+  },
+  "session_ttl_seconds <- 1": {
+    "err": "UnknownKey",
+    "key": "session_ttl_seconds"
+  },
+  "session_ttl_seconds <- 1.5": {
+    "err": "UnknownKey",
+    "key": "session_ttl_seconds"
+  },
+  "session_ttl_seconds <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "session_ttl_seconds"
+  },
+  "session_ttl_seconds <- 70000": {
+    "err": "UnknownKey",
+    "key": "session_ttl_seconds"
+  },
+  "session_ttl_seconds <- [1]": {
+    "err": "UnknownKey",
+    "key": "session_ttl_seconds"
+  },
+  "session_ttl_seconds <- false": {
+    "err": "UnknownKey",
+    "key": "session_ttl_seconds"
+  },
+  "session_ttl_seconds <- null": {
+    "err": "UnknownKey",
+    "key": "session_ttl_seconds"
+  },
+  "session_ttl_seconds <- true": {
+    "err": "UnknownKey",
+    "key": "session_ttl_seconds"
+  },
+  "session_ttl_seconds <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "session_ttl_seconds"
+  },
+  "single_process <- \"\"": {
+    "ok": {}
+  },
+  "single_process <- \"1\"": {
+    "ok": {
+      "single_process": true
+    }
+  },
+  "single_process <- \"s\"": {
+    "ok": {
+      "single_process": false
+    }
+  },
+  "single_process <- \"true\"": {
+    "ok": {
+      "single_process": true
+    }
+  },
+  "single_process <- -1": {
+    "ok": {
+      "single_process": false
+    }
+  },
+  "single_process <- 0": {
+    "ok": {
+      "single_process": false
+    }
+  },
+  "single_process <- 1": {
+    "ok": {
+      "single_process": true
+    }
+  },
+  "single_process <- 1.5": {
+    "ok": {
+      "single_process": false
+    }
+  },
+  "single_process <- 5000000000": {
+    "ok": {
+      "single_process": false
+    }
+  },
+  "single_process <- 70000": {
+    "ok": {
+      "single_process": false
+    }
+  },
+  "single_process <- [1]": {
+    "err": "TypeMismatch",
+    "key": "single_process"
+  },
+  "single_process <- false": {
+    "ok": {
+      "single_process": false
+    }
+  },
+  "single_process <- null": {
+    "ok": {}
+  },
+  "single_process <- true": {
+    "ok": {
+      "single_process": true
+    }
+  },
+  "single_process <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "single_process"
+  },
+  "storage_backend <- \"\"": {
+    "err": "UnknownKey",
+    "key": "storage_backend"
+  },
+  "storage_backend <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "storage_backend"
+  },
+  "storage_backend <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "storage_backend"
+  },
+  "storage_backend <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "storage_backend"
+  },
+  "storage_backend <- -1": {
+    "err": "UnknownKey",
+    "key": "storage_backend"
+  },
+  "storage_backend <- 0": {
+    "err": "UnknownKey",
+    "key": "storage_backend"
+  },
+  "storage_backend <- 1": {
+    "err": "UnknownKey",
+    "key": "storage_backend"
+  },
+  "storage_backend <- 1.5": {
+    "err": "UnknownKey",
+    "key": "storage_backend"
+  },
+  "storage_backend <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "storage_backend"
+  },
+  "storage_backend <- 70000": {
+    "err": "UnknownKey",
+    "key": "storage_backend"
+  },
+  "storage_backend <- [1]": {
+    "err": "UnknownKey",
+    "key": "storage_backend"
+  },
+  "storage_backend <- false": {
+    "err": "UnknownKey",
+    "key": "storage_backend"
+  },
+  "storage_backend <- null": {
+    "err": "UnknownKey",
+    "key": "storage_backend"
+  },
+  "storage_backend <- true": {
+    "err": "UnknownKey",
+    "key": "storage_backend"
+  },
+  "storage_backend <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "storage_backend"
+  },
+  "storage_bucket_name <- \"\"": {
+    "err": "UnknownKey",
+    "key": "storage_bucket_name"
+  },
+  "storage_bucket_name <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "storage_bucket_name"
+  },
+  "storage_bucket_name <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "storage_bucket_name"
+  },
+  "storage_bucket_name <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "storage_bucket_name"
+  },
+  "storage_bucket_name <- -1": {
+    "err": "UnknownKey",
+    "key": "storage_bucket_name"
+  },
+  "storage_bucket_name <- 0": {
+    "err": "UnknownKey",
+    "key": "storage_bucket_name"
+  },
+  "storage_bucket_name <- 1": {
+    "err": "UnknownKey",
+    "key": "storage_bucket_name"
+  },
+  "storage_bucket_name <- 1.5": {
+    "err": "UnknownKey",
+    "key": "storage_bucket_name"
+  },
+  "storage_bucket_name <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "storage_bucket_name"
+  },
+  "storage_bucket_name <- 70000": {
+    "err": "UnknownKey",
+    "key": "storage_bucket_name"
+  },
+  "storage_bucket_name <- [1]": {
+    "err": "UnknownKey",
+    "key": "storage_bucket_name"
+  },
+  "storage_bucket_name <- false": {
+    "err": "UnknownKey",
+    "key": "storage_bucket_name"
+  },
+  "storage_bucket_name <- null": {
+    "err": "UnknownKey",
+    "key": "storage_bucket_name"
+  },
+  "storage_bucket_name <- true": {
+    "err": "UnknownKey",
+    "key": "storage_bucket_name"
+  },
+  "storage_bucket_name <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "storage_bucket_name"
+  },
+  "summarization_model <- \"\"": {
+    "ok": {}
+  },
+  "summarization_model <- \"1\"": {
+    "ok": {
+      "summarization_model": "1"
+    }
+  },
+  "summarization_model <- \"s\"": {
+    "ok": {
+      "summarization_model": "s"
+    }
+  },
+  "summarization_model <- \"true\"": {
+    "ok": {
+      "summarization_model": "true"
+    }
+  },
+  "summarization_model <- -1": {
+    "err": "TypeMismatch",
+    "key": "summarization_model"
+  },
+  "summarization_model <- 0": {
+    "err": "TypeMismatch",
+    "key": "summarization_model"
+  },
+  "summarization_model <- 1": {
+    "err": "TypeMismatch",
+    "key": "summarization_model"
+  },
+  "summarization_model <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "summarization_model"
+  },
+  "summarization_model <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "summarization_model"
+  },
+  "summarization_model <- 70000": {
+    "err": "TypeMismatch",
+    "key": "summarization_model"
+  },
+  "summarization_model <- [1]": {
+    "err": "TypeMismatch",
+    "key": "summarization_model"
+  },
+  "summarization_model <- false": {
+    "err": "TypeMismatch",
+    "key": "summarization_model"
+  },
+  "summarization_model <- null": {
+    "err": "TypeMismatch",
+    "key": "summarization_model"
+  },
+  "summarization_model <- true": {
+    "err": "TypeMismatch",
+    "key": "summarization_model"
+  },
+  "summarization_model <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "summarization_model"
+  },
+  "summarization_schema <- \"\"": {
+    "err": "UnknownKey",
+    "key": "summarization_schema"
+  },
+  "summarization_schema <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "summarization_schema"
+  },
+  "summarization_schema <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "summarization_schema"
+  },
+  "summarization_schema <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "summarization_schema"
+  },
+  "summarization_schema <- -1": {
+    "err": "UnknownKey",
+    "key": "summarization_schema"
+  },
+  "summarization_schema <- 0": {
+    "err": "UnknownKey",
+    "key": "summarization_schema"
+  },
+  "summarization_schema <- 1": {
+    "err": "UnknownKey",
+    "key": "summarization_schema"
+  },
+  "summarization_schema <- 1.5": {
+    "err": "UnknownKey",
+    "key": "summarization_schema"
+  },
+  "summarization_schema <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "summarization_schema"
+  },
+  "summarization_schema <- 70000": {
+    "err": "UnknownKey",
+    "key": "summarization_schema"
+  },
+  "summarization_schema <- [1]": {
+    "err": "UnknownKey",
+    "key": "summarization_schema"
+  },
+  "summarization_schema <- false": {
+    "err": "UnknownKey",
+    "key": "summarization_schema"
+  },
+  "summarization_schema <- null": {
+    "err": "UnknownKey",
+    "key": "summarization_schema"
+  },
+  "summarization_schema <- true": {
+    "err": "UnknownKey",
+    "key": "summarization_schema"
+  },
+  "summarization_schema <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "summarization_schema"
+  },
+  "system_root_directory <- \"\"": {
+    "ok": {
+      "system_root_directory": "",
+      "graph_file_path": "/graph",
+      "vector_db_url": "/vectors"
+    }
+  },
+  "system_root_directory <- \"1\"": {
+    "ok": {
+      "system_root_directory": "1",
+      "graph_file_path": "1/graph",
+      "vector_db_url": "1/vectors"
+    }
+  },
+  "system_root_directory <- \"s\"": {
+    "ok": {
+      "system_root_directory": "s",
+      "graph_file_path": "s/graph",
+      "vector_db_url": "s/vectors"
+    }
+  },
+  "system_root_directory <- \"true\"": {
+    "ok": {
+      "system_root_directory": "true",
+      "graph_file_path": "true/graph",
+      "vector_db_url": "true/vectors"
+    }
+  },
+  "system_root_directory <- -1": {
+    "err": "TypeMismatch",
+    "key": "system_root_directory"
+  },
+  "system_root_directory <- 0": {
+    "err": "TypeMismatch",
+    "key": "system_root_directory"
+  },
+  "system_root_directory <- 1": {
+    "err": "TypeMismatch",
+    "key": "system_root_directory"
+  },
+  "system_root_directory <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "system_root_directory"
+  },
+  "system_root_directory <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "system_root_directory"
+  },
+  "system_root_directory <- 70000": {
+    "err": "TypeMismatch",
+    "key": "system_root_directory"
+  },
+  "system_root_directory <- [1]": {
+    "err": "TypeMismatch",
+    "key": "system_root_directory"
+  },
+  "system_root_directory <- false": {
+    "err": "TypeMismatch",
+    "key": "system_root_directory"
+  },
+  "system_root_directory <- null": {
+    "err": "TypeMismatch",
+    "key": "system_root_directory"
+  },
+  "system_root_directory <- true": {
+    "err": "TypeMismatch",
+    "key": "system_root_directory"
+  },
+  "system_root_directory <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "system_root_directory"
+  },
+  "system_root_directory cascade": {
+    "system_root_directory": "/srv/cognee",
+    "graph_file_path": "/srv/cognee/custom_graph",
+    "vector_db_url": "/srv/cognee/vectors"
+  },
+  "transcription_model <- \"\"": {
+    "ok": {}
+  },
+  "transcription_model <- \"1\"": {
+    "ok": {
+      "transcription_model": "1"
+    }
+  },
+  "transcription_model <- \"s\"": {
+    "ok": {
+      "transcription_model": "s"
+    }
+  },
+  "transcription_model <- \"true\"": {
+    "ok": {
+      "transcription_model": "true"
+    }
+  },
+  "transcription_model <- -1": {
+    "err": "TypeMismatch",
+    "key": "transcription_model"
+  },
+  "transcription_model <- 0": {
+    "err": "TypeMismatch",
+    "key": "transcription_model"
+  },
+  "transcription_model <- 1": {
+    "err": "TypeMismatch",
+    "key": "transcription_model"
+  },
+  "transcription_model <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "transcription_model"
+  },
+  "transcription_model <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "transcription_model"
+  },
+  "transcription_model <- 70000": {
+    "err": "TypeMismatch",
+    "key": "transcription_model"
+  },
+  "transcription_model <- [1]": {
+    "err": "TypeMismatch",
+    "key": "transcription_model"
+  },
+  "transcription_model <- false": {
+    "err": "TypeMismatch",
+    "key": "transcription_model"
+  },
+  "transcription_model <- null": {
+    "err": "TypeMismatch",
+    "key": "transcription_model"
+  },
+  "transcription_model <- true": {
+    "err": "TypeMismatch",
+    "key": "transcription_model"
+  },
+  "transcription_model <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "transcription_model"
+  },
+  "vector_db_host <- \"\"": {
+    "ok": {}
+  },
+  "vector_db_host <- \"1\"": {
+    "ok": {
+      "vector_db_host": "1"
+    }
+  },
+  "vector_db_host <- \"s\"": {
+    "ok": {
+      "vector_db_host": "s"
+    }
+  },
+  "vector_db_host <- \"true\"": {
+    "ok": {
+      "vector_db_host": "true"
+    }
+  },
+  "vector_db_host <- -1": {
+    "err": "TypeMismatch",
+    "key": "vector_db_host"
+  },
+  "vector_db_host <- 0": {
+    "err": "TypeMismatch",
+    "key": "vector_db_host"
+  },
+  "vector_db_host <- 1": {
+    "err": "TypeMismatch",
+    "key": "vector_db_host"
+  },
+  "vector_db_host <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "vector_db_host"
+  },
+  "vector_db_host <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "vector_db_host"
+  },
+  "vector_db_host <- 70000": {
+    "err": "TypeMismatch",
+    "key": "vector_db_host"
+  },
+  "vector_db_host <- [1]": {
+    "err": "TypeMismatch",
+    "key": "vector_db_host"
+  },
+  "vector_db_host <- false": {
+    "err": "TypeMismatch",
+    "key": "vector_db_host"
+  },
+  "vector_db_host <- null": {
+    "err": "TypeMismatch",
+    "key": "vector_db_host"
+  },
+  "vector_db_host <- true": {
+    "err": "TypeMismatch",
+    "key": "vector_db_host"
+  },
+  "vector_db_host <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "vector_db_host"
+  },
+  "vector_db_key <- \"\"": {
+    "ok": {}
+  },
+  "vector_db_key <- \"1\"": {
+    "ok": {
+      "vector_db_key": "1"
+    }
+  },
+  "vector_db_key <- \"s\"": {
+    "ok": {
+      "vector_db_key": "s"
+    }
+  },
+  "vector_db_key <- \"true\"": {
+    "ok": {
+      "vector_db_key": "true"
+    }
+  },
+  "vector_db_key <- -1": {
+    "err": "TypeMismatch",
+    "key": "vector_db_key"
+  },
+  "vector_db_key <- 0": {
+    "err": "TypeMismatch",
+    "key": "vector_db_key"
+  },
+  "vector_db_key <- 1": {
+    "err": "TypeMismatch",
+    "key": "vector_db_key"
+  },
+  "vector_db_key <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "vector_db_key"
+  },
+  "vector_db_key <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "vector_db_key"
+  },
+  "vector_db_key <- 70000": {
+    "err": "TypeMismatch",
+    "key": "vector_db_key"
+  },
+  "vector_db_key <- [1]": {
+    "err": "TypeMismatch",
+    "key": "vector_db_key"
+  },
+  "vector_db_key <- false": {
+    "err": "TypeMismatch",
+    "key": "vector_db_key"
+  },
+  "vector_db_key <- null": {
+    "err": "TypeMismatch",
+    "key": "vector_db_key"
+  },
+  "vector_db_key <- true": {
+    "err": "TypeMismatch",
+    "key": "vector_db_key"
+  },
+  "vector_db_key <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "vector_db_key"
+  },
+  "vector_db_name <- \"\"": {
+    "ok": {}
+  },
+  "vector_db_name <- \"1\"": {
+    "ok": {
+      "vector_db_name": "1"
+    }
+  },
+  "vector_db_name <- \"s\"": {
+    "ok": {
+      "vector_db_name": "s"
+    }
+  },
+  "vector_db_name <- \"true\"": {
+    "ok": {
+      "vector_db_name": "true"
+    }
+  },
+  "vector_db_name <- -1": {
+    "err": "TypeMismatch",
+    "key": "vector_db_name"
+  },
+  "vector_db_name <- 0": {
+    "err": "TypeMismatch",
+    "key": "vector_db_name"
+  },
+  "vector_db_name <- 1": {
+    "err": "TypeMismatch",
+    "key": "vector_db_name"
+  },
+  "vector_db_name <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "vector_db_name"
+  },
+  "vector_db_name <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "vector_db_name"
+  },
+  "vector_db_name <- 70000": {
+    "err": "TypeMismatch",
+    "key": "vector_db_name"
+  },
+  "vector_db_name <- [1]": {
+    "err": "TypeMismatch",
+    "key": "vector_db_name"
+  },
+  "vector_db_name <- false": {
+    "err": "TypeMismatch",
+    "key": "vector_db_name"
+  },
+  "vector_db_name <- null": {
+    "err": "TypeMismatch",
+    "key": "vector_db_name"
+  },
+  "vector_db_name <- true": {
+    "err": "TypeMismatch",
+    "key": "vector_db_name"
+  },
+  "vector_db_name <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "vector_db_name"
+  },
+  "vector_db_password <- \"\"": {
+    "err": "UnknownKey",
+    "key": "vector_db_password"
+  },
+  "vector_db_password <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "vector_db_password"
+  },
+  "vector_db_password <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "vector_db_password"
+  },
+  "vector_db_password <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "vector_db_password"
+  },
+  "vector_db_password <- -1": {
+    "err": "UnknownKey",
+    "key": "vector_db_password"
+  },
+  "vector_db_password <- 0": {
+    "err": "UnknownKey",
+    "key": "vector_db_password"
+  },
+  "vector_db_password <- 1": {
+    "err": "UnknownKey",
+    "key": "vector_db_password"
+  },
+  "vector_db_password <- 1.5": {
+    "err": "UnknownKey",
+    "key": "vector_db_password"
+  },
+  "vector_db_password <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "vector_db_password"
+  },
+  "vector_db_password <- 70000": {
+    "err": "UnknownKey",
+    "key": "vector_db_password"
+  },
+  "vector_db_password <- [1]": {
+    "err": "UnknownKey",
+    "key": "vector_db_password"
+  },
+  "vector_db_password <- false": {
+    "err": "UnknownKey",
+    "key": "vector_db_password"
+  },
+  "vector_db_password <- null": {
+    "err": "UnknownKey",
+    "key": "vector_db_password"
+  },
+  "vector_db_password <- true": {
+    "err": "UnknownKey",
+    "key": "vector_db_password"
+  },
+  "vector_db_password <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "vector_db_password"
+  },
+  "vector_db_port <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "vector_db_port"
+  },
+  "vector_db_port <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "vector_db_port"
+  },
+  "vector_db_port <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "vector_db_port"
+  },
+  "vector_db_port <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "vector_db_port"
+  },
+  "vector_db_port <- -1": {
+    "err": "TypeMismatch",
+    "key": "vector_db_port"
+  },
+  "vector_db_port <- 0": {
+    "ok": {
+      "vector_db_port": 0
+    }
+  },
+  "vector_db_port <- 1": {
+    "ok": {
+      "vector_db_port": 1
+    }
+  },
+  "vector_db_port <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "vector_db_port"
+  },
+  "vector_db_port <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "vector_db_port"
+  },
+  "vector_db_port <- 70000": {
+    "err": "TypeMismatch",
+    "key": "vector_db_port"
+  },
+  "vector_db_port <- [1]": {
+    "err": "TypeMismatch",
+    "key": "vector_db_port"
+  },
+  "vector_db_port <- false": {
+    "err": "TypeMismatch",
+    "key": "vector_db_port"
+  },
+  "vector_db_port <- null": {
+    "err": "TypeMismatch",
+    "key": "vector_db_port"
+  },
+  "vector_db_port <- true": {
+    "err": "TypeMismatch",
+    "key": "vector_db_port"
+  },
+  "vector_db_port <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "vector_db_port"
+  },
+  "vector_db_provider <- \"\"": {
+    "ok": {
+      "vector_db_provider": ""
+    }
+  },
+  "vector_db_provider <- \"1\"": {
+    "ok": {
+      "vector_db_provider": "1"
+    }
+  },
+  "vector_db_provider <- \"s\"": {
+    "ok": {
+      "vector_db_provider": "s"
+    }
+  },
+  "vector_db_provider <- \"true\"": {
+    "ok": {
+      "vector_db_provider": "true"
+    }
+  },
+  "vector_db_provider <- -1": {
+    "err": "TypeMismatch",
+    "key": "vector_db_provider"
+  },
+  "vector_db_provider <- 0": {
+    "err": "TypeMismatch",
+    "key": "vector_db_provider"
+  },
+  "vector_db_provider <- 1": {
+    "err": "TypeMismatch",
+    "key": "vector_db_provider"
+  },
+  "vector_db_provider <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "vector_db_provider"
+  },
+  "vector_db_provider <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "vector_db_provider"
+  },
+  "vector_db_provider <- 70000": {
+    "err": "TypeMismatch",
+    "key": "vector_db_provider"
+  },
+  "vector_db_provider <- [1]": {
+    "err": "TypeMismatch",
+    "key": "vector_db_provider"
+  },
+  "vector_db_provider <- false": {
+    "err": "TypeMismatch",
+    "key": "vector_db_provider"
+  },
+  "vector_db_provider <- null": {
+    "err": "TypeMismatch",
+    "key": "vector_db_provider"
+  },
+  "vector_db_provider <- true": {
+    "err": "TypeMismatch",
+    "key": "vector_db_provider"
+  },
+  "vector_db_provider <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "vector_db_provider"
+  },
+  "vector_db_url <- \"\"": {
+    "ok": {}
+  },
+  "vector_db_url <- \"1\"": {
+    "ok": {
+      "vector_db_url": "1"
+    }
+  },
+  "vector_db_url <- \"s\"": {
+    "ok": {
+      "vector_db_url": "s"
+    }
+  },
+  "vector_db_url <- \"true\"": {
+    "ok": {
+      "vector_db_url": "true"
+    }
+  },
+  "vector_db_url <- -1": {
+    "err": "TypeMismatch",
+    "key": "vector_db_url"
+  },
+  "vector_db_url <- 0": {
+    "err": "TypeMismatch",
+    "key": "vector_db_url"
+  },
+  "vector_db_url <- 1": {
+    "err": "TypeMismatch",
+    "key": "vector_db_url"
+  },
+  "vector_db_url <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "vector_db_url"
+  },
+  "vector_db_url <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "vector_db_url"
+  },
+  "vector_db_url <- 70000": {
+    "err": "TypeMismatch",
+    "key": "vector_db_url"
+  },
+  "vector_db_url <- [1]": {
+    "err": "TypeMismatch",
+    "key": "vector_db_url"
+  },
+  "vector_db_url <- false": {
+    "err": "TypeMismatch",
+    "key": "vector_db_url"
+  },
+  "vector_db_url <- null": {
+    "err": "TypeMismatch",
+    "key": "vector_db_url"
+  },
+  "vector_db_url <- true": {
+    "err": "TypeMismatch",
+    "key": "vector_db_url"
+  },
+  "vector_db_url <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "vector_db_url"
+  },
+  "vector_db_username <- \"\"": {
+    "err": "UnknownKey",
+    "key": "vector_db_username"
+  },
+  "vector_db_username <- \"1\"": {
+    "err": "UnknownKey",
+    "key": "vector_db_username"
+  },
+  "vector_db_username <- \"s\"": {
+    "err": "UnknownKey",
+    "key": "vector_db_username"
+  },
+  "vector_db_username <- \"true\"": {
+    "err": "UnknownKey",
+    "key": "vector_db_username"
+  },
+  "vector_db_username <- -1": {
+    "err": "UnknownKey",
+    "key": "vector_db_username"
+  },
+  "vector_db_username <- 0": {
+    "err": "UnknownKey",
+    "key": "vector_db_username"
+  },
+  "vector_db_username <- 1": {
+    "err": "UnknownKey",
+    "key": "vector_db_username"
+  },
+  "vector_db_username <- 1.5": {
+    "err": "UnknownKey",
+    "key": "vector_db_username"
+  },
+  "vector_db_username <- 5000000000": {
+    "err": "UnknownKey",
+    "key": "vector_db_username"
+  },
+  "vector_db_username <- 70000": {
+    "err": "UnknownKey",
+    "key": "vector_db_username"
+  },
+  "vector_db_username <- [1]": {
+    "err": "UnknownKey",
+    "key": "vector_db_username"
+  },
+  "vector_db_username <- false": {
+    "err": "UnknownKey",
+    "key": "vector_db_username"
+  },
+  "vector_db_username <- null": {
+    "err": "UnknownKey",
+    "key": "vector_db_username"
+  },
+  "vector_db_username <- true": {
+    "err": "UnknownKey",
+    "key": "vector_db_username"
+  },
+  "vector_db_username <- {\"a\":1}": {
+    "err": "UnknownKey",
+    "key": "vector_db_username"
+  }
+}

@@ -1,0 +1,6399 @@
+{
+  "<config get keys>": [
+    "cache_root_directory",
+    "chunk_engine",
+    "chunk_overlap",
+    "chunk_size",
+    "chunk_strategy",
+    "classification_model",
+    "data_root_directory",
+    "db_host",
+    "db_name",
+    "db_password",
+    "db_port",
+    "db_provider",
+    "db_username",
+    "default_dataset_name",
+    "default_system_prompt_path",
+    "default_user_id",
+    "embedding_api_key",
+    "embedding_batch_size",
+    "embedding_dimensions",
+    "embedding_endpoint",
+    "embedding_max_sequence_length",
+    "embedding_model_name",
+    "embedding_model_path",
+    "embedding_onnx_batch_size",
+    "embedding_provider",
+    "embedding_tokenizer_path",
+    "graph_database_key",
+    "graph_database_name",
+    "graph_database_password",
+    "graph_database_port",
+    "graph_database_provider",
+    "graph_database_url",
+    "graph_database_username",
+    "graph_file_path",
+    "graph_filename",
+    "graph_model",
+    "graph_prompt_path",
+    "llm_api_key",
+    "llm_api_version",
+    "llm_endpoint",
+    "llm_max_completion_tokens",
+    "llm_max_parallel_requests",
+    "llm_max_retries",
+    "llm_model",
+    "llm_network_retries",
+    "llm_provider",
+    "llm_streaming",
+    "llm_temperature",
+    "logs_root_directory",
+    "migration_db_url",
+    "monitoring_tool",
+    "relational_db_url",
+    "single_process",
+    "summarization_model",
+    "system_root_directory",
+    "vector_db_key",
+    "vector_db_name",
+    "vector_db_port",
+    "vector_db_provider",
+    "vector_db_url"
+  ],
+  "<config list>": [
+    "default_user_id",
+    "default_dataset_name",
+    "system_root_directory",
+    "data_root_directory",
+    "cache_root_directory",
+    "logs_root_directory",
+    "monitoring_tool",
+    "classification_model",
+    "summarization_model",
+    "graph_model",
+    "llm_provider",
+    "llm_model",
+    "llm_api_key",
+    "llm_endpoint",
+    "llm_api_version",
+    "llm_temperature",
+    "llm_streaming",
+    "llm_max_completion_tokens",
+    "llm_max_retries",
+    "llm_network_retries",
+    "llm_max_parallel_requests",
+    "graph_prompt_path",
+    "graph_database_provider",
+    "graph_database_url",
+    "graph_database_name",
+    "graph_database_username",
+    "graph_database_password",
+    "graph_database_port",
+    "graph_database_key",
+    "graph_file_path",
+    "graph_filename",
+    "vector_db_provider",
+    "vector_db_url",
+    "vector_db_port",
+    "vector_db_name",
+    "vector_db_key",
+    "chunk_strategy",
+    "chunk_engine",
+    "chunk_size",
+    "chunk_overlap",
+    "relational_db_url",
+    "migration_db_url",
+    "db_provider",
+    "db_host",
+    "db_port",
+    "db_name",
+    "db_username",
+    "db_password",
+    "single_process",
+    "default_system_prompt_path",
+    "embedding_model_path",
+    "embedding_tokenizer_path",
+    "embedding_model_name",
+    "embedding_dimensions",
+    "embedding_max_sequence_length",
+    "embedding_batch_size",
+    "embedding_onnx_batch_size",
+    "embedding_provider",
+    "embedding_endpoint",
+    "embedding_api_key"
+  ],
+  "set auto_feedback <- \"\"": {
+    "err": true
+  },
+  "set auto_feedback <- \"1\"": {
+    "err": true
+  },
+  "set auto_feedback <- \"s\"": {
+    "err": true
+  },
+  "set auto_feedback <- \"true\"": {
+    "err": true
+  },
+  "set auto_feedback <- -1": {
+    "err": true
+  },
+  "set auto_feedback <- 0": {
+    "err": true
+  },
+  "set auto_feedback <- 1": {
+    "err": true
+  },
+  "set auto_feedback <- 1.5": {
+    "err": true
+  },
+  "set auto_feedback <- 5000000000": {
+    "err": true
+  },
+  "set auto_feedback <- 70000": {
+    "err": true
+  },
+  "set auto_feedback <- [1]": {
+    "err": true
+  },
+  "set auto_feedback <- false": {
+    "err": true
+  },
+  "set auto_feedback <- null": {
+    "err": true
+  },
+  "set auto_feedback <- true": {
+    "err": true
+  },
+  "set auto_feedback <- {\"a\":1}": {
+    "err": true
+  },
+  "set auto_rate_limit <- \"\"": {
+    "err": true
+  },
+  "set auto_rate_limit <- \"1\"": {
+    "err": true
+  },
+  "set auto_rate_limit <- \"s\"": {
+    "err": true
+  },
+  "set auto_rate_limit <- \"true\"": {
+    "err": true
+  },
+  "set auto_rate_limit <- -1": {
+    "err": true
+  },
+  "set auto_rate_limit <- 0": {
+    "err": true
+  },
+  "set auto_rate_limit <- 1": {
+    "err": true
+  },
+  "set auto_rate_limit <- 1.5": {
+    "err": true
+  },
+  "set auto_rate_limit <- 5000000000": {
+    "err": true
+  },
+  "set auto_rate_limit <- 70000": {
+    "err": true
+  },
+  "set auto_rate_limit <- [1]": {
+    "err": true
+  },
+  "set auto_rate_limit <- false": {
+    "err": true
+  },
+  "set auto_rate_limit <- null": {
+    "err": true
+  },
+  "set auto_rate_limit <- true": {
+    "err": true
+  },
+  "set auto_rate_limit <- {\"a\":1}": {
+    "err": true
+  },
+  "set cache_backend <- \"\"": {
+    "err": true
+  },
+  "set cache_backend <- \"1\"": {
+    "err": true
+  },
+  "set cache_backend <- \"s\"": {
+    "err": true
+  },
+  "set cache_backend <- \"true\"": {
+    "err": true
+  },
+  "set cache_backend <- -1": {
+    "err": true
+  },
+  "set cache_backend <- 0": {
+    "err": true
+  },
+  "set cache_backend <- 1": {
+    "err": true
+  },
+  "set cache_backend <- 1.5": {
+    "err": true
+  },
+  "set cache_backend <- 5000000000": {
+    "err": true
+  },
+  "set cache_backend <- 70000": {
+    "err": true
+  },
+  "set cache_backend <- [1]": {
+    "err": true
+  },
+  "set cache_backend <- false": {
+    "err": true
+  },
+  "set cache_backend <- null": {
+    "err": true
+  },
+  "set cache_backend <- true": {
+    "err": true
+  },
+  "set cache_backend <- {\"a\":1}": {
+    "err": true
+  },
+  "set cache_host <- \"\"": {
+    "err": true
+  },
+  "set cache_host <- \"1\"": {
+    "err": true
+  },
+  "set cache_host <- \"s\"": {
+    "err": true
+  },
+  "set cache_host <- \"true\"": {
+    "err": true
+  },
+  "set cache_host <- -1": {
+    "err": true
+  },
+  "set cache_host <- 0": {
+    "err": true
+  },
+  "set cache_host <- 1": {
+    "err": true
+  },
+  "set cache_host <- 1.5": {
+    "err": true
+  },
+  "set cache_host <- 5000000000": {
+    "err": true
+  },
+  "set cache_host <- 70000": {
+    "err": true
+  },
+  "set cache_host <- [1]": {
+    "err": true
+  },
+  "set cache_host <- false": {
+    "err": true
+  },
+  "set cache_host <- null": {
+    "err": true
+  },
+  "set cache_host <- true": {
+    "err": true
+  },
+  "set cache_host <- {\"a\":1}": {
+    "err": true
+  },
+  "set cache_password <- \"\"": {
+    "err": true
+  },
+  "set cache_password <- \"1\"": {
+    "err": true
+  },
+  "set cache_password <- \"s\"": {
+    "err": true
+  },
+  "set cache_password <- \"true\"": {
+    "err": true
+  },
+  "set cache_password <- -1": {
+    "err": true
+  },
+  "set cache_password <- 0": {
+    "err": true
+  },
+  "set cache_password <- 1": {
+    "err": true
+  },
+  "set cache_password <- 1.5": {
+    "err": true
+  },
+  "set cache_password <- 5000000000": {
+    "err": true
+  },
+  "set cache_password <- 70000": {
+    "err": true
+  },
+  "set cache_password <- [1]": {
+    "err": true
+  },
+  "set cache_password <- false": {
+    "err": true
+  },
+  "set cache_password <- null": {
+    "err": true
+  },
+  "set cache_password <- true": {
+    "err": true
+  },
+  "set cache_password <- {\"a\":1}": {
+    "err": true
+  },
+  "set cache_port <- \"\"": {
+    "err": true
+  },
+  "set cache_port <- \"1\"": {
+    "err": true
+  },
+  "set cache_port <- \"s\"": {
+    "err": true
+  },
+  "set cache_port <- \"true\"": {
+    "err": true
+  },
+  "set cache_port <- -1": {
+    "err": true
+  },
+  "set cache_port <- 0": {
+    "err": true
+  },
+  "set cache_port <- 1": {
+    "err": true
+  },
+  "set cache_port <- 1.5": {
+    "err": true
+  },
+  "set cache_port <- 5000000000": {
+    "err": true
+  },
+  "set cache_port <- 70000": {
+    "err": true
+  },
+  "set cache_port <- [1]": {
+    "err": true
+  },
+  "set cache_port <- false": {
+    "err": true
+  },
+  "set cache_port <- null": {
+    "err": true
+  },
+  "set cache_port <- true": {
+    "err": true
+  },
+  "set cache_port <- {\"a\":1}": {
+    "err": true
+  },
+  "set cache_root_directory <- \"\"": {
+    "ok": {
+      "cache_root_directory": ""
+    }
+  },
+  "set cache_root_directory <- \"1\"": {
+    "ok": {
+      "cache_root_directory": "1"
+    }
+  },
+  "set cache_root_directory <- \"s\"": {
+    "ok": {
+      "cache_root_directory": "s"
+    }
+  },
+  "set cache_root_directory <- \"true\"": {
+    "ok": {
+      "cache_root_directory": "true"
+    }
+  },
+  "set cache_root_directory <- -1": {
+    "err": true
+  },
+  "set cache_root_directory <- 0": {
+    "err": true
+  },
+  "set cache_root_directory <- 1": {
+    "err": true
+  },
+  "set cache_root_directory <- 1.5": {
+    "err": true
+  },
+  "set cache_root_directory <- 5000000000": {
+    "err": true
+  },
+  "set cache_root_directory <- 70000": {
+    "err": true
+  },
+  "set cache_root_directory <- [1]": {
+    "err": true
+  },
+  "set cache_root_directory <- false": {
+    "err": true
+  },
+  "set cache_root_directory <- null": {
+    "err": true
+  },
+  "set cache_root_directory <- true": {
+    "err": true
+  },
+  "set cache_root_directory <- {\"a\":1}": {
+    "err": true
+  },
+  "set cache_username <- \"\"": {
+    "err": true
+  },
+  "set cache_username <- \"1\"": {
+    "err": true
+  },
+  "set cache_username <- \"s\"": {
+    "err": true
+  },
+  "set cache_username <- \"true\"": {
+    "err": true
+  },
+  "set cache_username <- -1": {
+    "err": true
+  },
+  "set cache_username <- 0": {
+    "err": true
+  },
+  "set cache_username <- 1": {
+    "err": true
+  },
+  "set cache_username <- 1.5": {
+    "err": true
+  },
+  "set cache_username <- 5000000000": {
+    "err": true
+  },
+  "set cache_username <- 70000": {
+    "err": true
+  },
+  "set cache_username <- [1]": {
+    "err": true
+  },
+  "set cache_username <- false": {
+    "err": true
+  },
+  "set cache_username <- null": {
+    "err": true
+  },
+  "set cache_username <- true": {
+    "err": true
+  },
+  "set cache_username <- {\"a\":1}": {
+    "err": true
+  },
+  "set chunk_engine <- \"\"": {
+    "ok": {
+      "chunk_engine": ""
+    }
+  },
+  "set chunk_engine <- \"1\"": {
+    "ok": {
+      "chunk_engine": "1"
+    }
+  },
+  "set chunk_engine <- \"s\"": {
+    "ok": {
+      "chunk_engine": "s"
+    }
+  },
+  "set chunk_engine <- \"true\"": {
+    "ok": {
+      "chunk_engine": "true"
+    }
+  },
+  "set chunk_engine <- -1": {
+    "err": true
+  },
+  "set chunk_engine <- 0": {
+    "err": true
+  },
+  "set chunk_engine <- 1": {
+    "err": true
+  },
+  "set chunk_engine <- 1.5": {
+    "err": true
+  },
+  "set chunk_engine <- 5000000000": {
+    "err": true
+  },
+  "set chunk_engine <- 70000": {
+    "err": true
+  },
+  "set chunk_engine <- [1]": {
+    "err": true
+  },
+  "set chunk_engine <- false": {
+    "err": true
+  },
+  "set chunk_engine <- null": {
+    "err": true
+  },
+  "set chunk_engine <- true": {
+    "err": true
+  },
+  "set chunk_engine <- {\"a\":1}": {
+    "err": true
+  },
+  "set chunk_overlap <- \"\"": {
+    "err": true
+  },
+  "set chunk_overlap <- \"1\"": {
+    "err": true
+  },
+  "set chunk_overlap <- \"s\"": {
+    "err": true
+  },
+  "set chunk_overlap <- \"true\"": {
+    "err": true
+  },
+  "set chunk_overlap <- -1": {
+    "err": true
+  },
+  "set chunk_overlap <- 0": {
+    "ok": {
+      "chunk_overlap": 0
+    }
+  },
+  "set chunk_overlap <- 1": {
+    "ok": {
+      "chunk_overlap": 1
+    }
+  },
+  "set chunk_overlap <- 1.5": {
+    "err": true
+  },
+  "set chunk_overlap <- 5000000000": {
+    "err": true
+  },
+  "set chunk_overlap <- 70000": {
+    "ok": {
+      "chunk_overlap": 70000
+    }
+  },
+  "set chunk_overlap <- [1]": {
+    "err": true
+  },
+  "set chunk_overlap <- false": {
+    "err": true
+  },
+  "set chunk_overlap <- null": {
+    "err": true
+  },
+  "set chunk_overlap <- true": {
+    "err": true
+  },
+  "set chunk_overlap <- {\"a\":1}": {
+    "err": true
+  },
+  "set chunk_size <- \"\"": {
+    "err": true
+  },
+  "set chunk_size <- \"1\"": {
+    "err": true
+  },
+  "set chunk_size <- \"s\"": {
+    "err": true
+  },
+  "set chunk_size <- \"true\"": {
+    "err": true
+  },
+  "set chunk_size <- -1": {
+    "err": true
+  },
+  "set chunk_size <- 0": {
+    "ok": {
+      "chunk_size": 0
+    }
+  },
+  "set chunk_size <- 1": {
+    "ok": {
+      "chunk_size": 1
+    }
+  },
+  "set chunk_size <- 1.5": {
+    "err": true
+  },
+  "set chunk_size <- 5000000000": {
+    "err": true
+  },
+  "set chunk_size <- 70000": {
+    "ok": {
+      "chunk_size": 70000
+    }
+  },
+  "set chunk_size <- [1]": {
+    "err": true
+  },
+  "set chunk_size <- false": {
+    "err": true
+  },
+  "set chunk_size <- null": {
+    "ok": {}
+  },
+  "set chunk_size <- true": {
+    "err": true
+  },
+  "set chunk_size <- {\"a\":1}": {
+    "err": true
+  },
+  "set chunk_strategy <- \"\"": {
+    "ok": {
+      "chunk_strategy": ""
+    }
+  },
+  "set chunk_strategy <- \"1\"": {
+    "ok": {
+      "chunk_strategy": "1"
+    }
+  },
+  "set chunk_strategy <- \"s\"": {
+    "ok": {
+      "chunk_strategy": "s"
+    }
+  },
+  "set chunk_strategy <- \"true\"": {
+    "ok": {
+      "chunk_strategy": "true"
+    }
+  },
+  "set chunk_strategy <- -1": {
+    "err": true
+  },
+  "set chunk_strategy <- 0": {
+    "err": true
+  },
+  "set chunk_strategy <- 1": {
+    "err": true
+  },
+  "set chunk_strategy <- 1.5": {
+    "err": true
+  },
+  "set chunk_strategy <- 5000000000": {
+    "err": true
+  },
+  "set chunk_strategy <- 70000": {
+    "err": true
+  },
+  "set chunk_strategy <- [1]": {
+    "err": true
+  },
+  "set chunk_strategy <- false": {
+    "err": true
+  },
+  "set chunk_strategy <- null": {
+    "err": true
+  },
+  "set chunk_strategy <- true": {
+    "err": true
+  },
+  "set chunk_strategy <- {\"a\":1}": {
+    "err": true
+  },
+  "set classification_model <- \"\"": {
+    "ok": {}
+  },
+  "set classification_model <- \"1\"": {
+    "ok": {
+      "classification_model": "1"
+    }
+  },
+  "set classification_model <- \"s\"": {
+    "ok": {
+      "classification_model": "s"
+    }
+  },
+  "set classification_model <- \"true\"": {
+    "ok": {
+      "classification_model": "true"
+    }
+  },
+  "set classification_model <- -1": {
+    "err": true
+  },
+  "set classification_model <- 0": {
+    "err": true
+  },
+  "set classification_model <- 1": {
+    "err": true
+  },
+  "set classification_model <- 1.5": {
+    "err": true
+  },
+  "set classification_model <- 5000000000": {
+    "err": true
+  },
+  "set classification_model <- 70000": {
+    "err": true
+  },
+  "set classification_model <- [1]": {
+    "err": true
+  },
+  "set classification_model <- false": {
+    "err": true
+  },
+  "set classification_model <- null": {
+    "err": true
+  },
+  "set classification_model <- true": {
+    "err": true
+  },
+  "set classification_model <- {\"a\":1}": {
+    "err": true
+  },
+  "set cognee_tracing_enabled <- \"\"": {
+    "err": true
+  },
+  "set cognee_tracing_enabled <- \"1\"": {
+    "err": true
+  },
+  "set cognee_tracing_enabled <- \"s\"": {
+    "err": true
+  },
+  "set cognee_tracing_enabled <- \"true\"": {
+    "err": true
+  },
+  "set cognee_tracing_enabled <- -1": {
+    "err": true
+  },
+  "set cognee_tracing_enabled <- 0": {
+    "err": true
+  },
+  "set cognee_tracing_enabled <- 1": {
+    "err": true
+  },
+  "set cognee_tracing_enabled <- 1.5": {
+    "err": true
+  },
+  "set cognee_tracing_enabled <- 5000000000": {
+    "err": true
+  },
+  "set cognee_tracing_enabled <- 70000": {
+    "err": true
+  },
+  "set cognee_tracing_enabled <- [1]": {
+    "err": true
+  },
+  "set cognee_tracing_enabled <- false": {
+    "err": true
+  },
+  "set cognee_tracing_enabled <- null": {
+    "err": true
+  },
+  "set cognee_tracing_enabled <- true": {
+    "err": true
+  },
+  "set cognee_tracing_enabled <- {\"a\":1}": {
+    "err": true
+  },
+  "set data_root_directory <- \"\"": {
+    "ok": {
+      "data_root_directory": ""
+    }
+  },
+  "set data_root_directory <- \"1\"": {
+    "ok": {
+      "data_root_directory": "1"
+    }
+  },
+  "set data_root_directory <- \"s\"": {
+    "ok": {
+      "data_root_directory": "s"
+    }
+  },
+  "set data_root_directory <- \"true\"": {
+    "ok": {
+      "data_root_directory": "true"
+    }
+  },
+  "set data_root_directory <- -1": {
+    "err": true
+  },
+  "set data_root_directory <- 0": {
+    "err": true
+  },
+  "set data_root_directory <- 1": {
+    "err": true
+  },
+  "set data_root_directory <- 1.5": {
+    "err": true
+  },
+  "set data_root_directory <- 5000000000": {
+    "err": true
+  },
+  "set data_root_directory <- 70000": {
+    "err": true
+  },
+  "set data_root_directory <- [1]": {
+    "err": true
+  },
+  "set data_root_directory <- false": {
+    "err": true
+  },
+  "set data_root_directory <- null": {
+    "err": true
+  },
+  "set data_root_directory <- true": {
+    "err": true
+  },
+  "set data_root_directory <- {\"a\":1}": {
+    "err": true
+  },
+  "set db_host <- \"\"": {
+    "ok": {
+      "db_host": ""
+    }
+  },
+  "set db_host <- \"1\"": {
+    "ok": {
+      "db_host": "1"
+    }
+  },
+  "set db_host <- \"s\"": {
+    "ok": {
+      "db_host": "s"
+    }
+  },
+  "set db_host <- \"true\"": {
+    "ok": {
+      "db_host": "true"
+    }
+  },
+  "set db_host <- -1": {
+    "err": true
+  },
+  "set db_host <- 0": {
+    "err": true
+  },
+  "set db_host <- 1": {
+    "err": true
+  },
+  "set db_host <- 1.5": {
+    "err": true
+  },
+  "set db_host <- 5000000000": {
+    "err": true
+  },
+  "set db_host <- 70000": {
+    "err": true
+  },
+  "set db_host <- [1]": {
+    "err": true
+  },
+  "set db_host <- false": {
+    "err": true
+  },
+  "set db_host <- null": {
+    "err": true
+  },
+  "set db_host <- true": {
+    "err": true
+  },
+  "set db_host <- {\"a\":1}": {
+    "err": true
+  },
+  "set db_name <- \"\"": {
+    "ok": {
+      "db_name": ""
+    }
+  },
+  "set db_name <- \"1\"": {
+    "ok": {
+      "db_name": "1"
+    }
+  },
+  "set db_name <- \"s\"": {
+    "ok": {
+      "db_name": "s"
+    }
+  },
+  "set db_name <- \"true\"": {
+    "ok": {
+      "db_name": "true"
+    }
+  },
+  "set db_name <- -1": {
+    "err": true
+  },
+  "set db_name <- 0": {
+    "err": true
+  },
+  "set db_name <- 1": {
+    "err": true
+  },
+  "set db_name <- 1.5": {
+    "err": true
+  },
+  "set db_name <- 5000000000": {
+    "err": true
+  },
+  "set db_name <- 70000": {
+    "err": true
+  },
+  "set db_name <- [1]": {
+    "err": true
+  },
+  "set db_name <- false": {
+    "err": true
+  },
+  "set db_name <- null": {
+    "err": true
+  },
+  "set db_name <- true": {
+    "err": true
+  },
+  "set db_name <- {\"a\":1}": {
+    "err": true
+  },
+  "set db_password <- \"\"": {
+    "ok": {}
+  },
+  "set db_password <- \"1\"": {
+    "ok": {
+      "db_password": "1"
+    }
+  },
+  "set db_password <- \"s\"": {
+    "ok": {
+      "db_password": "s"
+    }
+  },
+  "set db_password <- \"true\"": {
+    "ok": {
+      "db_password": "true"
+    }
+  },
+  "set db_password <- -1": {
+    "err": true
+  },
+  "set db_password <- 0": {
+    "err": true
+  },
+  "set db_password <- 1": {
+    "err": true
+  },
+  "set db_password <- 1.5": {
+    "err": true
+  },
+  "set db_password <- 5000000000": {
+    "err": true
+  },
+  "set db_password <- 70000": {
+    "err": true
+  },
+  "set db_password <- [1]": {
+    "err": true
+  },
+  "set db_password <- false": {
+    "err": true
+  },
+  "set db_password <- null": {
+    "err": true
+  },
+  "set db_password <- true": {
+    "err": true
+  },
+  "set db_password <- {\"a\":1}": {
+    "err": true
+  },
+  "set db_port <- \"\"": {
+    "err": true
+  },
+  "set db_port <- \"1\"": {
+    "err": true
+  },
+  "set db_port <- \"s\"": {
+    "err": true
+  },
+  "set db_port <- \"true\"": {
+    "err": true
+  },
+  "set db_port <- -1": {
+    "err": true
+  },
+  "set db_port <- 0": {
+    "ok": {
+      "db_port": 0
+    }
+  },
+  "set db_port <- 1": {
+    "ok": {
+      "db_port": 1
+    }
+  },
+  "set db_port <- 1.5": {
+    "err": true
+  },
+  "set db_port <- 5000000000": {
+    "err": true
+  },
+  "set db_port <- 70000": {
+    "err": true
+  },
+  "set db_port <- [1]": {
+    "err": true
+  },
+  "set db_port <- false": {
+    "err": true
+  },
+  "set db_port <- null": {
+    "err": true
+  },
+  "set db_port <- true": {
+    "err": true
+  },
+  "set db_port <- {\"a\":1}": {
+    "err": true
+  },
+  "set db_provider <- \"\"": {
+    "ok": {
+      "db_provider": ""
+    }
+  },
+  "set db_provider <- \"1\"": {
+    "ok": {
+      "db_provider": "1"
+    }
+  },
+  "set db_provider <- \"s\"": {
+    "ok": {
+      "db_provider": "s"
+    }
+  },
+  "set db_provider <- \"true\"": {
+    "ok": {
+      "db_provider": "true"
+    }
+  },
+  "set db_provider <- -1": {
+    "err": true
+  },
+  "set db_provider <- 0": {
+    "err": true
+  },
+  "set db_provider <- 1": {
+    "err": true
+  },
+  "set db_provider <- 1.5": {
+    "err": true
+  },
+  "set db_provider <- 5000000000": {
+    "err": true
+  },
+  "set db_provider <- 70000": {
+    "err": true
+  },
+  "set db_provider <- [1]": {
+    "err": true
+  },
+  "set db_provider <- false": {
+    "err": true
+  },
+  "set db_provider <- null": {
+    "err": true
+  },
+  "set db_provider <- true": {
+    "err": true
+  },
+  "set db_provider <- {\"a\":1}": {
+    "err": true
+  },
+  "set db_sslmode <- \"\"": {
+    "err": true
+  },
+  "set db_sslmode <- \"1\"": {
+    "err": true
+  },
+  "set db_sslmode <- \"s\"": {
+    "err": true
+  },
+  "set db_sslmode <- \"true\"": {
+    "err": true
+  },
+  "set db_sslmode <- -1": {
+    "err": true
+  },
+  "set db_sslmode <- 0": {
+    "err": true
+  },
+  "set db_sslmode <- 1": {
+    "err": true
+  },
+  "set db_sslmode <- 1.5": {
+    "err": true
+  },
+  "set db_sslmode <- 5000000000": {
+    "err": true
+  },
+  "set db_sslmode <- 70000": {
+    "err": true
+  },
+  "set db_sslmode <- [1]": {
+    "err": true
+  },
+  "set db_sslmode <- false": {
+    "err": true
+  },
+  "set db_sslmode <- null": {
+    "err": true
+  },
+  "set db_sslmode <- true": {
+    "err": true
+  },
+  "set db_sslmode <- {\"a\":1}": {
+    "err": true
+  },
+  "set db_username <- \"\"": {
+    "ok": {}
+  },
+  "set db_username <- \"1\"": {
+    "ok": {
+      "db_username": "1"
+    }
+  },
+  "set db_username <- \"s\"": {
+    "ok": {
+      "db_username": "s"
+    }
+  },
+  "set db_username <- \"true\"": {
+    "ok": {
+      "db_username": "true"
+    }
+  },
+  "set db_username <- -1": {
+    "err": true
+  },
+  "set db_username <- 0": {
+    "err": true
+  },
+  "set db_username <- 1": {
+    "err": true
+  },
+  "set db_username <- 1.5": {
+    "err": true
+  },
+  "set db_username <- 5000000000": {
+    "err": true
+  },
+  "set db_username <- 70000": {
+    "err": true
+  },
+  "set db_username <- [1]": {
+    "err": true
+  },
+  "set db_username <- false": {
+    "err": true
+  },
+  "set db_username <- null": {
+    "err": true
+  },
+  "set db_username <- true": {
+    "err": true
+  },
+  "set db_username <- {\"a\":1}": {
+    "err": true
+  },
+  "set default_dataset_name <- \"\"": {
+    "ok": {
+      "default_dataset_name": ""
+    }
+  },
+  "set default_dataset_name <- \"1\"": {
+    "ok": {
+      "default_dataset_name": "1"
+    }
+  },
+  "set default_dataset_name <- \"s\"": {
+    "ok": {
+      "default_dataset_name": "s"
+    }
+  },
+  "set default_dataset_name <- \"true\"": {
+    "ok": {
+      "default_dataset_name": "true"
+    }
+  },
+  "set default_dataset_name <- -1": {
+    "err": true
+  },
+  "set default_dataset_name <- 0": {
+    "err": true
+  },
+  "set default_dataset_name <- 1": {
+    "err": true
+  },
+  "set default_dataset_name <- 1.5": {
+    "err": true
+  },
+  "set default_dataset_name <- 5000000000": {
+    "err": true
+  },
+  "set default_dataset_name <- 70000": {
+    "err": true
+  },
+  "set default_dataset_name <- [1]": {
+    "err": true
+  },
+  "set default_dataset_name <- false": {
+    "err": true
+  },
+  "set default_dataset_name <- null": {
+    "err": true
+  },
+  "set default_dataset_name <- true": {
+    "err": true
+  },
+  "set default_dataset_name <- {\"a\":1}": {
+    "err": true
+  },
+  "set default_system_prompt_path <- \"\"": {
+    "ok": {
+      "default_system_prompt_path": ""
+    }
+  },
+  "set default_system_prompt_path <- \"1\"": {
+    "ok": {
+      "default_system_prompt_path": "1"
+    }
+  },
+  "set default_system_prompt_path <- \"s\"": {
+    "ok": {
+      "default_system_prompt_path": "s"
+    }
+  },
+  "set default_system_prompt_path <- \"true\"": {
+    "ok": {
+      "default_system_prompt_path": "true"
+    }
+  },
+  "set default_system_prompt_path <- -1": {
+    "err": true
+  },
+  "set default_system_prompt_path <- 0": {
+    "err": true
+  },
+  "set default_system_prompt_path <- 1": {
+    "err": true
+  },
+  "set default_system_prompt_path <- 1.5": {
+    "err": true
+  },
+  "set default_system_prompt_path <- 5000000000": {
+    "err": true
+  },
+  "set default_system_prompt_path <- 70000": {
+    "err": true
+  },
+  "set default_system_prompt_path <- [1]": {
+    "err": true
+  },
+  "set default_system_prompt_path <- false": {
+    "err": true
+  },
+  "set default_system_prompt_path <- null": {
+    "err": true
+  },
+  "set default_system_prompt_path <- true": {
+    "err": true
+  },
+  "set default_system_prompt_path <- {\"a\":1}": {
+    "err": true
+  },
+  "set default_user_email <- \"\"": {
+    "err": true
+  },
+  "set default_user_email <- \"1\"": {
+    "err": true
+  },
+  "set default_user_email <- \"s\"": {
+    "err": true
+  },
+  "set default_user_email <- \"true\"": {
+    "err": true
+  },
+  "set default_user_email <- -1": {
+    "err": true
+  },
+  "set default_user_email <- 0": {
+    "err": true
+  },
+  "set default_user_email <- 1": {
+    "err": true
+  },
+  "set default_user_email <- 1.5": {
+    "err": true
+  },
+  "set default_user_email <- 5000000000": {
+    "err": true
+  },
+  "set default_user_email <- 70000": {
+    "err": true
+  },
+  "set default_user_email <- [1]": {
+    "err": true
+  },
+  "set default_user_email <- false": {
+    "err": true
+  },
+  "set default_user_email <- null": {
+    "err": true
+  },
+  "set default_user_email <- true": {
+    "err": true
+  },
+  "set default_user_email <- {\"a\":1}": {
+    "err": true
+  },
+  "set default_user_id <- \"\"": {
+    "ok": {
+      "default_user_id": ""
+    }
+  },
+  "set default_user_id <- \"1\"": {
+    "ok": {
+      "default_user_id": "1"
+    }
+  },
+  "set default_user_id <- \"s\"": {
+    "ok": {
+      "default_user_id": "s"
+    }
+  },
+  "set default_user_id <- \"true\"": {
+    "ok": {
+      "default_user_id": "true"
+    }
+  },
+  "set default_user_id <- -1": {
+    "err": true
+  },
+  "set default_user_id <- 0": {
+    "err": true
+  },
+  "set default_user_id <- 1": {
+    "err": true
+  },
+  "set default_user_id <- 1.5": {
+    "err": true
+  },
+  "set default_user_id <- 5000000000": {
+    "err": true
+  },
+  "set default_user_id <- 70000": {
+    "err": true
+  },
+  "set default_user_id <- [1]": {
+    "err": true
+  },
+  "set default_user_id <- false": {
+    "err": true
+  },
+  "set default_user_id <- null": {
+    "err": true
+  },
+  "set default_user_id <- true": {
+    "err": true
+  },
+  "set default_user_id <- {\"a\":1}": {
+    "err": true
+  },
+  "set default_user_password <- \"\"": {
+    "err": true
+  },
+  "set default_user_password <- \"1\"": {
+    "err": true
+  },
+  "set default_user_password <- \"s\"": {
+    "err": true
+  },
+  "set default_user_password <- \"true\"": {
+    "err": true
+  },
+  "set default_user_password <- -1": {
+    "err": true
+  },
+  "set default_user_password <- 0": {
+    "err": true
+  },
+  "set default_user_password <- 1": {
+    "err": true
+  },
+  "set default_user_password <- 1.5": {
+    "err": true
+  },
+  "set default_user_password <- 5000000000": {
+    "err": true
+  },
+  "set default_user_password <- 70000": {
+    "err": true
+  },
+  "set default_user_password <- [1]": {
+    "err": true
+  },
+  "set default_user_password <- false": {
+    "err": true
+  },
+  "set default_user_password <- null": {
+    "err": true
+  },
+  "set default_user_password <- true": {
+    "err": true
+  },
+  "set default_user_password <- {\"a\":1}": {
+    "err": true
+  },
+  "set embedding_api_key <- \"\"": {
+    "ok": {}
+  },
+  "set embedding_api_key <- \"1\"": {
+    "ok": {
+      "embedding_api_key": "1"
+    }
+  },
+  "set embedding_api_key <- \"s\"": {
+    "ok": {
+      "embedding_api_key": "s"
+    }
+  },
+  "set embedding_api_key <- \"true\"": {
+    "ok": {
+      "embedding_api_key": "true"
+    }
+  },
+  "set embedding_api_key <- -1": {
+    "err": true
+  },
+  "set embedding_api_key <- 0": {
+    "err": true
+  },
+  "set embedding_api_key <- 1": {
+    "err": true
+  },
+  "set embedding_api_key <- 1.5": {
+    "err": true
+  },
+  "set embedding_api_key <- 5000000000": {
+    "err": true
+  },
+  "set embedding_api_key <- 70000": {
+    "err": true
+  },
+  "set embedding_api_key <- [1]": {
+    "err": true
+  },
+  "set embedding_api_key <- false": {
+    "err": true
+  },
+  "set embedding_api_key <- null": {
+    "err": true
+  },
+  "set embedding_api_key <- true": {
+    "err": true
+  },
+  "set embedding_api_key <- {\"a\":1}": {
+    "err": true
+  },
+  "set embedding_api_version <- \"\"": {
+    "err": true
+  },
+  "set embedding_api_version <- \"1\"": {
+    "err": true
+  },
+  "set embedding_api_version <- \"s\"": {
+    "err": true
+  },
+  "set embedding_api_version <- \"true\"": {
+    "err": true
+  },
+  "set embedding_api_version <- -1": {
+    "err": true
+  },
+  "set embedding_api_version <- 0": {
+    "err": true
+  },
+  "set embedding_api_version <- 1": {
+    "err": true
+  },
+  "set embedding_api_version <- 1.5": {
+    "err": true
+  },
+  "set embedding_api_version <- 5000000000": {
+    "err": true
+  },
+  "set embedding_api_version <- 70000": {
+    "err": true
+  },
+  "set embedding_api_version <- [1]": {
+    "err": true
+  },
+  "set embedding_api_version <- false": {
+    "err": true
+  },
+  "set embedding_api_version <- null": {
+    "err": true
+  },
+  "set embedding_api_version <- true": {
+    "err": true
+  },
+  "set embedding_api_version <- {\"a\":1}": {
+    "err": true
+  },
+  "set embedding_batch_size <- \"\"": {
+    "err": true
+  },
+  "set embedding_batch_size <- \"1\"": {
+    "err": true
+  },
+  "set embedding_batch_size <- \"s\"": {
+    "err": true
+  },
+  "set embedding_batch_size <- \"true\"": {
+    "err": true
+  },
+  "set embedding_batch_size <- -1": {
+    "err": true
+  },
+  "set embedding_batch_size <- 0": {
+    "ok": {
+      "embedding_batch_size": 0
+    }
+  },
+  "set embedding_batch_size <- 1": {
+    "ok": {
+      "embedding_batch_size": 1
+    }
+  },
+  "set embedding_batch_size <- 1.5": {
+    "err": true
+  },
+  "set embedding_batch_size <- 5000000000": {
+    "err": true
+  },
+  "set embedding_batch_size <- 70000": {
+    "ok": {
+      "embedding_batch_size": 70000
+    }
+  },
+  "set embedding_batch_size <- [1]": {
+    "err": true
+  },
+  "set embedding_batch_size <- false": {
+    "err": true
+  },
+  "set embedding_batch_size <- null": {
+    "err": true
+  },
+  "set embedding_batch_size <- true": {
+    "err": true
+  },
+  "set embedding_batch_size <- {\"a\":1}": {
+    "err": true
+  },
+  "set embedding_dimensions <- \"\"": {
+    "err": true
+  },
+  "set embedding_dimensions <- \"1\"": {
+    "err": true
+  },
+  "set embedding_dimensions <- \"s\"": {
+    "err": true
+  },
+  "set embedding_dimensions <- \"true\"": {
+    "err": true
+  },
+  "set embedding_dimensions <- -1": {
+    "err": true
+  },
+  "set embedding_dimensions <- 0": {
+    "ok": {
+      "embedding_dimensions": 0
+    }
+  },
+  "set embedding_dimensions <- 1": {
+    "ok": {
+      "embedding_dimensions": 1
+    }
+  },
+  "set embedding_dimensions <- 1.5": {
+    "err": true
+  },
+  "set embedding_dimensions <- 5000000000": {
+    "err": true
+  },
+  "set embedding_dimensions <- 70000": {
+    "ok": {
+      "embedding_dimensions": 70000
+    }
+  },
+  "set embedding_dimensions <- [1]": {
+    "err": true
+  },
+  "set embedding_dimensions <- false": {
+    "err": true
+  },
+  "set embedding_dimensions <- null": {
+    "err": true
+  },
+  "set embedding_dimensions <- true": {
+    "err": true
+  },
+  "set embedding_dimensions <- {\"a\":1}": {
+    "err": true
+  },
+  "set embedding_endpoint <- \"\"": {
+    "ok": {}
+  },
+  "set embedding_endpoint <- \"1\"": {
+    "ok": {
+      "embedding_endpoint": "1"
+    }
+  },
+  "set embedding_endpoint <- \"s\"": {
+    "ok": {
+      "embedding_endpoint": "s"
+    }
+  },
+  "set embedding_endpoint <- \"true\"": {
+    "ok": {
+      "embedding_endpoint": "true"
+    }
+  },
+  "set embedding_endpoint <- -1": {
+    "err": true
+  },
+  "set embedding_endpoint <- 0": {
+    "err": true
+  },
+  "set embedding_endpoint <- 1": {
+    "err": true
+  },
+  "set embedding_endpoint <- 1.5": {
+    "err": true
+  },
+  "set embedding_endpoint <- 5000000000": {
+    "err": true
+  },
+  "set embedding_endpoint <- 70000": {
+    "err": true
+  },
+  "set embedding_endpoint <- [1]": {
+    "err": true
+  },
+  "set embedding_endpoint <- false": {
+    "err": true
+  },
+  "set embedding_endpoint <- null": {
+    "err": true
+  },
+  "set embedding_endpoint <- true": {
+    "err": true
+  },
+  "set embedding_endpoint <- {\"a\":1}": {
+    "err": true
+  },
+  "set embedding_max_sequence_length <- \"\"": {
+    "err": true
+  },
+  "set embedding_max_sequence_length <- \"1\"": {
+    "err": true
+  },
+  "set embedding_max_sequence_length <- \"s\"": {
+    "err": true
+  },
+  "set embedding_max_sequence_length <- \"true\"": {
+    "err": true
+  },
+  "set embedding_max_sequence_length <- -1": {
+    "err": true
+  },
+  "set embedding_max_sequence_length <- 0": {
+    "ok": {
+      "embedding_max_sequence_length": 0
+    }
+  },
+  "set embedding_max_sequence_length <- 1": {
+    "ok": {
+      "embedding_max_sequence_length": 1
+    }
+  },
+  "set embedding_max_sequence_length <- 1.5": {
+    "err": true
+  },
+  "set embedding_max_sequence_length <- 5000000000": {
+    "err": true
+  },
+  "set embedding_max_sequence_length <- 70000": {
+    "ok": {
+      "embedding_max_sequence_length": 70000
+    }
+  },
+  "set embedding_max_sequence_length <- [1]": {
+    "err": true
+  },
+  "set embedding_max_sequence_length <- false": {
+    "err": true
+  },
+  "set embedding_max_sequence_length <- null": {
+    "err": true
+  },
+  "set embedding_max_sequence_length <- true": {
+    "err": true
+  },
+  "set embedding_max_sequence_length <- {\"a\":1}": {
+    "err": true
+  },
+  "set embedding_model <- \"\"": {
+    "err": true
+  },
+  "set embedding_model <- \"1\"": {
+    "err": true
+  },
+  "set embedding_model <- \"s\"": {
+    "err": true
+  },
+  "set embedding_model <- \"true\"": {
+    "err": true
+  },
+  "set embedding_model <- -1": {
+    "err": true
+  },
+  "set embedding_model <- 0": {
+    "err": true
+  },
+  "set embedding_model <- 1": {
+    "err": true
+  },
+  "set embedding_model <- 1.5": {
+    "err": true
+  },
+  "set embedding_model <- 5000000000": {
+    "err": true
+  },
+  "set embedding_model <- 70000": {
+    "err": true
+  },
+  "set embedding_model <- [1]": {
+    "err": true
+  },
+  "set embedding_model <- false": {
+    "err": true
+  },
+  "set embedding_model <- null": {
+    "err": true
+  },
+  "set embedding_model <- true": {
+    "err": true
+  },
+  "set embedding_model <- {\"a\":1}": {
+    "err": true
+  },
+  "set embedding_model_name <- \"\"": {
+    "ok": {
+      "embedding_model_name": ""
+    }
+  },
+  "set embedding_model_name <- \"1\"": {
+    "ok": {
+      "embedding_model_name": "1"
+    }
+  },
+  "set embedding_model_name <- \"s\"": {
+    "ok": {
+      "embedding_model_name": "s"
+    }
+  },
+  "set embedding_model_name <- \"true\"": {
+    "ok": {
+      "embedding_model_name": "true"
+    }
+  },
+  "set embedding_model_name <- -1": {
+    "err": true
+  },
+  "set embedding_model_name <- 0": {
+    "err": true
+  },
+  "set embedding_model_name <- 1": {
+    "err": true
+  },
+  "set embedding_model_name <- 1.5": {
+    "err": true
+  },
+  "set embedding_model_name <- 5000000000": {
+    "err": true
+  },
+  "set embedding_model_name <- 70000": {
+    "err": true
+  },
+  "set embedding_model_name <- [1]": {
+    "err": true
+  },
+  "set embedding_model_name <- false": {
+    "err": true
+  },
+  "set embedding_model_name <- null": {
+    "err": true
+  },
+  "set embedding_model_name <- true": {
+    "err": true
+  },
+  "set embedding_model_name <- {\"a\":1}": {
+    "err": true
+  },
+  "set embedding_model_path <- \"\"": {
+    "ok": {
+      "embedding_model_path": ""
+    }
+  },
+  "set embedding_model_path <- \"1\"": {
+    "ok": {
+      "embedding_model_path": "1"
+    }
+  },
+  "set embedding_model_path <- \"s\"": {
+    "ok": {
+      "embedding_model_path": "s"
+    }
+  },
+  "set embedding_model_path <- \"true\"": {
+    "ok": {
+      "embedding_model_path": "true"
+    }
+  },
+  "set embedding_model_path <- -1": {
+    "err": true
+  },
+  "set embedding_model_path <- 0": {
+    "err": true
+  },
+  "set embedding_model_path <- 1": {
+    "err": true
+  },
+  "set embedding_model_path <- 1.5": {
+    "err": true
+  },
+  "set embedding_model_path <- 5000000000": {
+    "err": true
+  },
+  "set embedding_model_path <- 70000": {
+    "err": true
+  },
+  "set embedding_model_path <- [1]": {
+    "err": true
+  },
+  "set embedding_model_path <- false": {
+    "err": true
+  },
+  "set embedding_model_path <- null": {
+    "err": true
+  },
+  "set embedding_model_path <- true": {
+    "err": true
+  },
+  "set embedding_model_path <- {\"a\":1}": {
+    "err": true
+  },
+  "set embedding_onnx_batch_size <- \"\"": {
+    "err": true
+  },
+  "set embedding_onnx_batch_size <- \"1\"": {
+    "err": true
+  },
+  "set embedding_onnx_batch_size <- \"s\"": {
+    "err": true
+  },
+  "set embedding_onnx_batch_size <- \"true\"": {
+    "err": true
+  },
+  "set embedding_onnx_batch_size <- -1": {
+    "err": true
+  },
+  "set embedding_onnx_batch_size <- 0": {
+    "ok": {
+      "embedding_onnx_batch_size": 0
+    }
+  },
+  "set embedding_onnx_batch_size <- 1": {
+    "ok": {
+      "embedding_onnx_batch_size": 1
+    }
+  },
+  "set embedding_onnx_batch_size <- 1.5": {
+    "err": true
+  },
+  "set embedding_onnx_batch_size <- 5000000000": {
+    "err": true
+  },
+  "set embedding_onnx_batch_size <- 70000": {
+    "ok": {
+      "embedding_onnx_batch_size": 70000
+    }
+  },
+  "set embedding_onnx_batch_size <- [1]": {
+    "err": true
+  },
+  "set embedding_onnx_batch_size <- false": {
+    "err": true
+  },
+  "set embedding_onnx_batch_size <- null": {
+    "err": true
+  },
+  "set embedding_onnx_batch_size <- true": {
+    "err": true
+  },
+  "set embedding_onnx_batch_size <- {\"a\":1}": {
+    "err": true
+  },
+  "set embedding_provider <- \"\"": {
+    "ok": {
+      "embedding_provider": ""
+    }
+  },
+  "set embedding_provider <- \"1\"": {
+    "ok": {
+      "embedding_provider": "1"
+    }
+  },
+  "set embedding_provider <- \"s\"": {
+    "ok": {
+      "embedding_provider": "s"
+    }
+  },
+  "set embedding_provider <- \"true\"": {
+    "ok": {
+      "embedding_provider": "true"
+    }
+  },
+  "set embedding_provider <- -1": {
+    "err": true
+  },
+  "set embedding_provider <- 0": {
+    "err": true
+  },
+  "set embedding_provider <- 1": {
+    "err": true
+  },
+  "set embedding_provider <- 1.5": {
+    "err": true
+  },
+  "set embedding_provider <- 5000000000": {
+    "err": true
+  },
+  "set embedding_provider <- 70000": {
+    "err": true
+  },
+  "set embedding_provider <- [1]": {
+    "err": true
+  },
+  "set embedding_provider <- false": {
+    "err": true
+  },
+  "set embedding_provider <- null": {
+    "err": true
+  },
+  "set embedding_provider <- true": {
+    "err": true
+  },
+  "set embedding_provider <- {\"a\":1}": {
+    "err": true
+  },
+  "set embedding_rate_limit_enabled <- \"\"": {
+    "err": true
+  },
+  "set embedding_rate_limit_enabled <- \"1\"": {
+    "err": true
+  },
+  "set embedding_rate_limit_enabled <- \"s\"": {
+    "err": true
+  },
+  "set embedding_rate_limit_enabled <- \"true\"": {
+    "err": true
+  },
+  "set embedding_rate_limit_enabled <- -1": {
+    "err": true
+  },
+  "set embedding_rate_limit_enabled <- 0": {
+    "err": true
+  },
+  "set embedding_rate_limit_enabled <- 1": {
+    "err": true
+  },
+  "set embedding_rate_limit_enabled <- 1.5": {
+    "err": true
+  },
+  "set embedding_rate_limit_enabled <- 5000000000": {
+    "err": true
+  },
+  "set embedding_rate_limit_enabled <- 70000": {
+    "err": true
+  },
+  "set embedding_rate_limit_enabled <- [1]": {
+    "err": true
+  },
+  "set embedding_rate_limit_enabled <- false": {
+    "err": true
+  },
+  "set embedding_rate_limit_enabled <- null": {
+    "err": true
+  },
+  "set embedding_rate_limit_enabled <- true": {
+    "err": true
+  },
+  "set embedding_rate_limit_enabled <- {\"a\":1}": {
+    "err": true
+  },
+  "set embedding_rate_limit_interval <- \"\"": {
+    "err": true
+  },
+  "set embedding_rate_limit_interval <- \"1\"": {
+    "err": true
+  },
+  "set embedding_rate_limit_interval <- \"s\"": {
+    "err": true
+  },
+  "set embedding_rate_limit_interval <- \"true\"": {
+    "err": true
+  },
+  "set embedding_rate_limit_interval <- -1": {
+    "err": true
+  },
+  "set embedding_rate_limit_interval <- 0": {
+    "err": true
+  },
+  "set embedding_rate_limit_interval <- 1": {
+    "err": true
+  },
+  "set embedding_rate_limit_interval <- 1.5": {
+    "err": true
+  },
+  "set embedding_rate_limit_interval <- 5000000000": {
+    "err": true
+  },
+  "set embedding_rate_limit_interval <- 70000": {
+    "err": true
+  },
+  "set embedding_rate_limit_interval <- [1]": {
+    "err": true
+  },
+  "set embedding_rate_limit_interval <- false": {
+    "err": true
+  },
+  "set embedding_rate_limit_interval <- null": {
+    "err": true
+  },
+  "set embedding_rate_limit_interval <- true": {
+    "err": true
+  },
+  "set embedding_rate_limit_interval <- {\"a\":1}": {
+    "err": true
+  },
+  "set embedding_rate_limit_requests <- \"\"": {
+    "err": true
+  },
+  "set embedding_rate_limit_requests <- \"1\"": {
+    "err": true
+  },
+  "set embedding_rate_limit_requests <- \"s\"": {
+    "err": true
+  },
+  "set embedding_rate_limit_requests <- \"true\"": {
+    "err": true
+  },
+  "set embedding_rate_limit_requests <- -1": {
+    "err": true
+  },
+  "set embedding_rate_limit_requests <- 0": {
+    "err": true
+  },
+  "set embedding_rate_limit_requests <- 1": {
+    "err": true
+  },
+  "set embedding_rate_limit_requests <- 1.5": {
+    "err": true
+  },
+  "set embedding_rate_limit_requests <- 5000000000": {
+    "err": true
+  },
+  "set embedding_rate_limit_requests <- 70000": {
+    "err": true
+  },
+  "set embedding_rate_limit_requests <- [1]": {
+    "err": true
+  },
+  "set embedding_rate_limit_requests <- false": {
+    "err": true
+  },
+  "set embedding_rate_limit_requests <- null": {
+    "err": true
+  },
+  "set embedding_rate_limit_requests <- true": {
+    "err": true
+  },
+  "set embedding_rate_limit_requests <- {\"a\":1}": {
+    "err": true
+  },
+  "set embedding_tokenizer_path <- \"\"": {
+    "ok": {
+      "embedding_tokenizer_path": ""
+    }
+  },
+  "set embedding_tokenizer_path <- \"1\"": {
+    "ok": {
+      "embedding_tokenizer_path": "1"
+    }
+  },
+  "set embedding_tokenizer_path <- \"s\"": {
+    "ok": {
+      "embedding_tokenizer_path": "s"
+    }
+  },
+  "set embedding_tokenizer_path <- \"true\"": {
+    "ok": {
+      "embedding_tokenizer_path": "true"
+    }
+  },
+  "set embedding_tokenizer_path <- -1": {
+    "err": true
+  },
+  "set embedding_tokenizer_path <- 0": {
+    "err": true
+  },
+  "set embedding_tokenizer_path <- 1": {
+    "err": true
+  },
+  "set embedding_tokenizer_path <- 1.5": {
+    "err": true
+  },
+  "set embedding_tokenizer_path <- 5000000000": {
+    "err": true
+  },
+  "set embedding_tokenizer_path <- 70000": {
+    "err": true
+  },
+  "set embedding_tokenizer_path <- [1]": {
+    "err": true
+  },
+  "set embedding_tokenizer_path <- false": {
+    "err": true
+  },
+  "set embedding_tokenizer_path <- null": {
+    "err": true
+  },
+  "set embedding_tokenizer_path <- true": {
+    "err": true
+  },
+  "set embedding_tokenizer_path <- {\"a\":1}": {
+    "err": true
+  },
+  "set enable_access_control <- \"\"": {
+    "err": true
+  },
+  "set enable_access_control <- \"1\"": {
+    "err": true
+  },
+  "set enable_access_control <- \"s\"": {
+    "err": true
+  },
+  "set enable_access_control <- \"true\"": {
+    "err": true
+  },
+  "set enable_access_control <- -1": {
+    "err": true
+  },
+  "set enable_access_control <- 0": {
+    "err": true
+  },
+  "set enable_access_control <- 1": {
+    "err": true
+  },
+  "set enable_access_control <- 1.5": {
+    "err": true
+  },
+  "set enable_access_control <- 5000000000": {
+    "err": true
+  },
+  "set enable_access_control <- 70000": {
+    "err": true
+  },
+  "set enable_access_control <- [1]": {
+    "err": true
+  },
+  "set enable_access_control <- false": {
+    "err": true
+  },
+  "set enable_access_control <- null": {
+    "err": true
+  },
+  "set enable_access_control <- true": {
+    "err": true
+  },
+  "set enable_access_control <- {\"a\":1}": {
+    "err": true
+  },
+  "set enable_caching <- \"\"": {
+    "err": true
+  },
+  "set enable_caching <- \"1\"": {
+    "err": true
+  },
+  "set enable_caching <- \"s\"": {
+    "err": true
+  },
+  "set enable_caching <- \"true\"": {
+    "err": true
+  },
+  "set enable_caching <- -1": {
+    "err": true
+  },
+  "set enable_caching <- 0": {
+    "err": true
+  },
+  "set enable_caching <- 1": {
+    "err": true
+  },
+  "set enable_caching <- 1.5": {
+    "err": true
+  },
+  "set enable_caching <- 5000000000": {
+    "err": true
+  },
+  "set enable_caching <- 70000": {
+    "err": true
+  },
+  "set enable_caching <- [1]": {
+    "err": true
+  },
+  "set enable_caching <- false": {
+    "err": true
+  },
+  "set enable_caching <- null": {
+    "err": true
+  },
+  "set enable_caching <- true": {
+    "err": true
+  },
+  "set enable_caching <- {\"a\":1}": {
+    "err": true
+  },
+  "set enable_last_accessed <- \"\"": {
+    "err": true
+  },
+  "set enable_last_accessed <- \"1\"": {
+    "err": true
+  },
+  "set enable_last_accessed <- \"s\"": {
+    "err": true
+  },
+  "set enable_last_accessed <- \"true\"": {
+    "err": true
+  },
+  "set enable_last_accessed <- -1": {
+    "err": true
+  },
+  "set enable_last_accessed <- 0": {
+    "err": true
+  },
+  "set enable_last_accessed <- 1": {
+    "err": true
+  },
+  "set enable_last_accessed <- 1.5": {
+    "err": true
+  },
+  "set enable_last_accessed <- 5000000000": {
+    "err": true
+  },
+  "set enable_last_accessed <- 70000": {
+    "err": true
+  },
+  "set enable_last_accessed <- [1]": {
+    "err": true
+  },
+  "set enable_last_accessed <- false": {
+    "err": true
+  },
+  "set enable_last_accessed <- null": {
+    "err": true
+  },
+  "set enable_last_accessed <- true": {
+    "err": true
+  },
+  "set enable_last_accessed <- {\"a\":1}": {
+    "err": true
+  },
+  "set graph_database_host <- \"\"": {
+    "err": true
+  },
+  "set graph_database_host <- \"1\"": {
+    "err": true
+  },
+  "set graph_database_host <- \"s\"": {
+    "err": true
+  },
+  "set graph_database_host <- \"true\"": {
+    "err": true
+  },
+  "set graph_database_host <- -1": {
+    "err": true
+  },
+  "set graph_database_host <- 0": {
+    "err": true
+  },
+  "set graph_database_host <- 1": {
+    "err": true
+  },
+  "set graph_database_host <- 1.5": {
+    "err": true
+  },
+  "set graph_database_host <- 5000000000": {
+    "err": true
+  },
+  "set graph_database_host <- 70000": {
+    "err": true
+  },
+  "set graph_database_host <- [1]": {
+    "err": true
+  },
+  "set graph_database_host <- false": {
+    "err": true
+  },
+  "set graph_database_host <- null": {
+    "err": true
+  },
+  "set graph_database_host <- true": {
+    "err": true
+  },
+  "set graph_database_host <- {\"a\":1}": {
+    "err": true
+  },
+  "set graph_database_key <- \"\"": {
+    "ok": {}
+  },
+  "set graph_database_key <- \"1\"": {
+    "ok": {
+      "graph_database_key": "1"
+    }
+  },
+  "set graph_database_key <- \"s\"": {
+    "ok": {
+      "graph_database_key": "s"
+    }
+  },
+  "set graph_database_key <- \"true\"": {
+    "ok": {
+      "graph_database_key": "true"
+    }
+  },
+  "set graph_database_key <- -1": {
+    "err": true
+  },
+  "set graph_database_key <- 0": {
+    "err": true
+  },
+  "set graph_database_key <- 1": {
+    "err": true
+  },
+  "set graph_database_key <- 1.5": {
+    "err": true
+  },
+  "set graph_database_key <- 5000000000": {
+    "err": true
+  },
+  "set graph_database_key <- 70000": {
+    "err": true
+  },
+  "set graph_database_key <- [1]": {
+    "err": true
+  },
+  "set graph_database_key <- false": {
+    "err": true
+  },
+  "set graph_database_key <- null": {
+    "err": true
+  },
+  "set graph_database_key <- true": {
+    "err": true
+  },
+  "set graph_database_key <- {\"a\":1}": {
+    "err": true
+  },
+  "set graph_database_name <- \"\"": {
+    "ok": {}
+  },
+  "set graph_database_name <- \"1\"": {
+    "ok": {
+      "graph_database_name": "1"
+    }
+  },
+  "set graph_database_name <- \"s\"": {
+    "ok": {
+      "graph_database_name": "s"
+    }
+  },
+  "set graph_database_name <- \"true\"": {
+    "ok": {
+      "graph_database_name": "true"
+    }
+  },
+  "set graph_database_name <- -1": {
+    "err": true
+  },
+  "set graph_database_name <- 0": {
+    "err": true
+  },
+  "set graph_database_name <- 1": {
+    "err": true
+  },
+  "set graph_database_name <- 1.5": {
+    "err": true
+  },
+  "set graph_database_name <- 5000000000": {
+    "err": true
+  },
+  "set graph_database_name <- 70000": {
+    "err": true
+  },
+  "set graph_database_name <- [1]": {
+    "err": true
+  },
+  "set graph_database_name <- false": {
+    "err": true
+  },
+  "set graph_database_name <- null": {
+    "err": true
+  },
+  "set graph_database_name <- true": {
+    "err": true
+  },
+  "set graph_database_name <- {\"a\":1}": {
+    "err": true
+  },
+  "set graph_database_password <- \"\"": {
+    "ok": {}
+  },
+  "set graph_database_password <- \"1\"": {
+    "ok": {
+      "graph_database_password": "1"
+    }
+  },
+  "set graph_database_password <- \"s\"": {
+    "ok": {
+      "graph_database_password": "s"
+    }
+  },
+  "set graph_database_password <- \"true\"": {
+    "ok": {
+      "graph_database_password": "true"
+    }
+  },
+  "set graph_database_password <- -1": {
+    "err": true
+  },
+  "set graph_database_password <- 0": {
+    "err": true
+  },
+  "set graph_database_password <- 1": {
+    "err": true
+  },
+  "set graph_database_password <- 1.5": {
+    "err": true
+  },
+  "set graph_database_password <- 5000000000": {
+    "err": true
+  },
+  "set graph_database_password <- 70000": {
+    "err": true
+  },
+  "set graph_database_password <- [1]": {
+    "err": true
+  },
+  "set graph_database_password <- false": {
+    "err": true
+  },
+  "set graph_database_password <- null": {
+    "err": true
+  },
+  "set graph_database_password <- true": {
+    "err": true
+  },
+  "set graph_database_password <- {\"a\":1}": {
+    "err": true
+  },
+  "set graph_database_port <- \"\"": {
+    "err": true
+  },
+  "set graph_database_port <- \"1\"": {
+    "err": true
+  },
+  "set graph_database_port <- \"s\"": {
+    "err": true
+  },
+  "set graph_database_port <- \"true\"": {
+    "err": true
+  },
+  "set graph_database_port <- -1": {
+    "err": true
+  },
+  "set graph_database_port <- 0": {
+    "ok": {
+      "graph_database_port": 0
+    }
+  },
+  "set graph_database_port <- 1": {
+    "ok": {
+      "graph_database_port": 1
+    }
+  },
+  "set graph_database_port <- 1.5": {
+    "err": true
+  },
+  "set graph_database_port <- 5000000000": {
+    "err": true
+  },
+  "set graph_database_port <- 70000": {
+    "err": true
+  },
+  "set graph_database_port <- [1]": {
+    "err": true
+  },
+  "set graph_database_port <- false": {
+    "err": true
+  },
+  "set graph_database_port <- null": {
+    "err": true
+  },
+  "set graph_database_port <- true": {
+    "err": true
+  },
+  "set graph_database_port <- {\"a\":1}": {
+    "err": true
+  },
+  "set graph_database_provider <- \"\"": {
+    "ok": {
+      "graph_database_provider": ""
+    }
+  },
+  "set graph_database_provider <- \"1\"": {
+    "ok": {
+      "graph_database_provider": "1"
+    }
+  },
+  "set graph_database_provider <- \"s\"": {
+    "ok": {
+      "graph_database_provider": "s"
+    }
+  },
+  "set graph_database_provider <- \"true\"": {
+    "ok": {
+      "graph_database_provider": "true"
+    }
+  },
+  "set graph_database_provider <- -1": {
+    "err": true
+  },
+  "set graph_database_provider <- 0": {
+    "err": true
+  },
+  "set graph_database_provider <- 1": {
+    "err": true
+  },
+  "set graph_database_provider <- 1.5": {
+    "err": true
+  },
+  "set graph_database_provider <- 5000000000": {
+    "err": true
+  },
+  "set graph_database_provider <- 70000": {
+    "err": true
+  },
+  "set graph_database_provider <- [1]": {
+    "err": true
+  },
+  "set graph_database_provider <- false": {
+    "err": true
+  },
+  "set graph_database_provider <- null": {
+    "err": true
+  },
+  "set graph_database_provider <- true": {
+    "err": true
+  },
+  "set graph_database_provider <- {\"a\":1}": {
+    "err": true
+  },
+  "set graph_database_url <- \"\"": {
+    "ok": {}
+  },
+  "set graph_database_url <- \"1\"": {
+    "ok": {
+      "graph_database_url": "1"
+    }
+  },
+  "set graph_database_url <- \"s\"": {
+    "ok": {
+      "graph_database_url": "s"
+    }
+  },
+  "set graph_database_url <- \"true\"": {
+    "ok": {
+      "graph_database_url": "true"
+    }
+  },
+  "set graph_database_url <- -1": {
+    "err": true
+  },
+  "set graph_database_url <- 0": {
+    "err": true
+  },
+  "set graph_database_url <- 1": {
+    "err": true
+  },
+  "set graph_database_url <- 1.5": {
+    "err": true
+  },
+  "set graph_database_url <- 5000000000": {
+    "err": true
+  },
+  "set graph_database_url <- 70000": {
+    "err": true
+  },
+  "set graph_database_url <- [1]": {
+    "err": true
+  },
+  "set graph_database_url <- false": {
+    "err": true
+  },
+  "set graph_database_url <- null": {
+    "err": true
+  },
+  "set graph_database_url <- true": {
+    "err": true
+  },
+  "set graph_database_url <- {\"a\":1}": {
+    "err": true
+  },
+  "set graph_database_username <- \"\"": {
+    "ok": {}
+  },
+  "set graph_database_username <- \"1\"": {
+    "ok": {
+      "graph_database_username": "1"
+    }
+  },
+  "set graph_database_username <- \"s\"": {
+    "ok": {
+      "graph_database_username": "s"
+    }
+  },
+  "set graph_database_username <- \"true\"": {
+    "ok": {
+      "graph_database_username": "true"
+    }
+  },
+  "set graph_database_username <- -1": {
+    "err": true
+  },
+  "set graph_database_username <- 0": {
+    "err": true
+  },
+  "set graph_database_username <- 1": {
+    "err": true
+  },
+  "set graph_database_username <- 1.5": {
+    "err": true
+  },
+  "set graph_database_username <- 5000000000": {
+    "err": true
+  },
+  "set graph_database_username <- 70000": {
+    "err": true
+  },
+  "set graph_database_username <- [1]": {
+    "err": true
+  },
+  "set graph_database_username <- false": {
+    "err": true
+  },
+  "set graph_database_username <- null": {
+    "err": true
+  },
+  "set graph_database_username <- true": {
+    "err": true
+  },
+  "set graph_database_username <- {\"a\":1}": {
+    "err": true
+  },
+  "set graph_file_path <- \"\"": {
+    "ok": {}
+  },
+  "set graph_file_path <- \"1\"": {
+    "ok": {
+      "graph_file_path": "1"
+    }
+  },
+  "set graph_file_path <- \"s\"": {
+    "ok": {
+      "graph_file_path": "s"
+    }
+  },
+  "set graph_file_path <- \"true\"": {
+    "ok": {
+      "graph_file_path": "true"
+    }
+  },
+  "set graph_file_path <- -1": {
+    "err": true
+  },
+  "set graph_file_path <- 0": {
+    "err": true
+  },
+  "set graph_file_path <- 1": {
+    "err": true
+  },
+  "set graph_file_path <- 1.5": {
+    "err": true
+  },
+  "set graph_file_path <- 5000000000": {
+    "err": true
+  },
+  "set graph_file_path <- 70000": {
+    "err": true
+  },
+  "set graph_file_path <- [1]": {
+    "err": true
+  },
+  "set graph_file_path <- false": {
+    "err": true
+  },
+  "set graph_file_path <- null": {
+    "err": true
+  },
+  "set graph_file_path <- true": {
+    "err": true
+  },
+  "set graph_file_path <- {\"a\":1}": {
+    "err": true
+  },
+  "set graph_filename <- \"\"": {
+    "ok": {}
+  },
+  "set graph_filename <- \"1\"": {
+    "ok": {
+      "graph_filename": "1"
+    }
+  },
+  "set graph_filename <- \"s\"": {
+    "ok": {
+      "graph_filename": "s"
+    }
+  },
+  "set graph_filename <- \"true\"": {
+    "ok": {
+      "graph_filename": "true"
+    }
+  },
+  "set graph_filename <- -1": {
+    "err": true
+  },
+  "set graph_filename <- 0": {
+    "err": true
+  },
+  "set graph_filename <- 1": {
+    "err": true
+  },
+  "set graph_filename <- 1.5": {
+    "err": true
+  },
+  "set graph_filename <- 5000000000": {
+    "err": true
+  },
+  "set graph_filename <- 70000": {
+    "err": true
+  },
+  "set graph_filename <- [1]": {
+    "err": true
+  },
+  "set graph_filename <- false": {
+    "err": true
+  },
+  "set graph_filename <- null": {
+    "err": true
+  },
+  "set graph_filename <- true": {
+    "err": true
+  },
+  "set graph_filename <- {\"a\":1}": {
+    "err": true
+  },
+  "set graph_model <- \"\"": {
+    "ok": {
+      "graph_model": ""
+    }
+  },
+  "set graph_model <- \"1\"": {
+    "ok": {
+      "graph_model": "1"
+    }
+  },
+  "set graph_model <- \"s\"": {
+    "ok": {
+      "graph_model": "s"
+    }
+  },
+  "set graph_model <- \"true\"": {
+    "ok": {
+      "graph_model": "true"
+    }
+  },
+  "set graph_model <- -1": {
+    "err": true
+  },
+  "set graph_model <- 0": {
+    "err": true
+  },
+  "set graph_model <- 1": {
+    "err": true
+  },
+  "set graph_model <- 1.5": {
+    "err": true
+  },
+  "set graph_model <- 5000000000": {
+    "err": true
+  },
+  "set graph_model <- 70000": {
+    "err": true
+  },
+  "set graph_model <- [1]": {
+    "err": true
+  },
+  "set graph_model <- false": {
+    "err": true
+  },
+  "set graph_model <- null": {
+    "err": true
+  },
+  "set graph_model <- true": {
+    "err": true
+  },
+  "set graph_model <- {\"a\":1}": {
+    "err": true
+  },
+  "set graph_prompt_path <- \"\"": {
+    "ok": {
+      "graph_prompt_path": ""
+    }
+  },
+  "set graph_prompt_path <- \"1\"": {
+    "ok": {
+      "graph_prompt_path": "1"
+    }
+  },
+  "set graph_prompt_path <- \"s\"": {
+    "ok": {
+      "graph_prompt_path": "s"
+    }
+  },
+  "set graph_prompt_path <- \"true\"": {
+    "ok": {
+      "graph_prompt_path": "true"
+    }
+  },
+  "set graph_prompt_path <- -1": {
+    "err": true
+  },
+  "set graph_prompt_path <- 0": {
+    "err": true
+  },
+  "set graph_prompt_path <- 1": {
+    "err": true
+  },
+  "set graph_prompt_path <- 1.5": {
+    "err": true
+  },
+  "set graph_prompt_path <- 5000000000": {
+    "err": true
+  },
+  "set graph_prompt_path <- 70000": {
+    "err": true
+  },
+  "set graph_prompt_path <- [1]": {
+    "err": true
+  },
+  "set graph_prompt_path <- false": {
+    "err": true
+  },
+  "set graph_prompt_path <- null": {
+    "err": true
+  },
+  "set graph_prompt_path <- true": {
+    "err": true
+  },
+  "set graph_prompt_path <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm_api_key <- \"\"": {
+    "ok": {}
+  },
+  "set llm_api_key <- \"1\"": {
+    "ok": {
+      "llm_api_key": "1"
+    }
+  },
+  "set llm_api_key <- \"s\"": {
+    "ok": {
+      "llm_api_key": "s"
+    }
+  },
+  "set llm_api_key <- \"true\"": {
+    "ok": {
+      "llm_api_key": "true"
+    }
+  },
+  "set llm_api_key <- -1": {
+    "err": true
+  },
+  "set llm_api_key <- 0": {
+    "err": true
+  },
+  "set llm_api_key <- 1": {
+    "err": true
+  },
+  "set llm_api_key <- 1.5": {
+    "err": true
+  },
+  "set llm_api_key <- 5000000000": {
+    "err": true
+  },
+  "set llm_api_key <- 70000": {
+    "err": true
+  },
+  "set llm_api_key <- [1]": {
+    "err": true
+  },
+  "set llm_api_key <- false": {
+    "err": true
+  },
+  "set llm_api_key <- null": {
+    "err": true
+  },
+  "set llm_api_key <- true": {
+    "err": true
+  },
+  "set llm_api_key <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm_api_version <- \"\"": {
+    "ok": {}
+  },
+  "set llm_api_version <- \"1\"": {
+    "ok": {
+      "llm_api_version": "1"
+    }
+  },
+  "set llm_api_version <- \"s\"": {
+    "ok": {
+      "llm_api_version": "s"
+    }
+  },
+  "set llm_api_version <- \"true\"": {
+    "ok": {
+      "llm_api_version": "true"
+    }
+  },
+  "set llm_api_version <- -1": {
+    "err": true
+  },
+  "set llm_api_version <- 0": {
+    "err": true
+  },
+  "set llm_api_version <- 1": {
+    "err": true
+  },
+  "set llm_api_version <- 1.5": {
+    "err": true
+  },
+  "set llm_api_version <- 5000000000": {
+    "err": true
+  },
+  "set llm_api_version <- 70000": {
+    "err": true
+  },
+  "set llm_api_version <- [1]": {
+    "err": true
+  },
+  "set llm_api_version <- false": {
+    "err": true
+  },
+  "set llm_api_version <- null": {
+    "err": true
+  },
+  "set llm_api_version <- true": {
+    "err": true
+  },
+  "set llm_api_version <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm_args <- \"\"": {
+    "err": true
+  },
+  "set llm_args <- \"1\"": {
+    "err": true
+  },
+  "set llm_args <- \"s\"": {
+    "err": true
+  },
+  "set llm_args <- \"true\"": {
+    "err": true
+  },
+  "set llm_args <- -1": {
+    "err": true
+  },
+  "set llm_args <- 0": {
+    "err": true
+  },
+  "set llm_args <- 1": {
+    "err": true
+  },
+  "set llm_args <- 1.5": {
+    "err": true
+  },
+  "set llm_args <- 5000000000": {
+    "err": true
+  },
+  "set llm_args <- 70000": {
+    "err": true
+  },
+  "set llm_args <- [1]": {
+    "err": true
+  },
+  "set llm_args <- false": {
+    "err": true
+  },
+  "set llm_args <- null": {
+    "err": true
+  },
+  "set llm_args <- true": {
+    "err": true
+  },
+  "set llm_args <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm_cassette <- \"\"": {
+    "err": true
+  },
+  "set llm_cassette <- \"1\"": {
+    "err": true
+  },
+  "set llm_cassette <- \"s\"": {
+    "err": true
+  },
+  "set llm_cassette <- \"true\"": {
+    "err": true
+  },
+  "set llm_cassette <- -1": {
+    "err": true
+  },
+  "set llm_cassette <- 0": {
+    "err": true
+  },
+  "set llm_cassette <- 1": {
+    "err": true
+  },
+  "set llm_cassette <- 1.5": {
+    "err": true
+  },
+  "set llm_cassette <- 5000000000": {
+    "err": true
+  },
+  "set llm_cassette <- 70000": {
+    "err": true
+  },
+  "set llm_cassette <- [1]": {
+    "err": true
+  },
+  "set llm_cassette <- false": {
+    "err": true
+  },
+  "set llm_cassette <- null": {
+    "err": true
+  },
+  "set llm_cassette <- true": {
+    "err": true
+  },
+  "set llm_cassette <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm_connect_timeout_seconds <- \"\"": {
+    "err": true
+  },
+  "set llm_connect_timeout_seconds <- \"1\"": {
+    "err": true
+  },
+  "set llm_connect_timeout_seconds <- \"s\"": {
+    "err": true
+  },
+  "set llm_connect_timeout_seconds <- \"true\"": {
+    "err": true
+  },
+  "set llm_connect_timeout_seconds <- -1": {
+    "err": true
+  },
+  "set llm_connect_timeout_seconds <- 0": {
+    "err": true
+  },
+  "set llm_connect_timeout_seconds <- 1": {
+    "err": true
+  },
+  "set llm_connect_timeout_seconds <- 1.5": {
+    "err": true
+  },
+  "set llm_connect_timeout_seconds <- 5000000000": {
+    "err": true
+  },
+  "set llm_connect_timeout_seconds <- 70000": {
+    "err": true
+  },
+  "set llm_connect_timeout_seconds <- [1]": {
+    "err": true
+  },
+  "set llm_connect_timeout_seconds <- false": {
+    "err": true
+  },
+  "set llm_connect_timeout_seconds <- null": {
+    "err": true
+  },
+  "set llm_connect_timeout_seconds <- true": {
+    "err": true
+  },
+  "set llm_connect_timeout_seconds <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm_endpoint <- \"\"": {
+    "ok": {}
+  },
+  "set llm_endpoint <- \"1\"": {
+    "ok": {
+      "llm_endpoint": "1"
+    }
+  },
+  "set llm_endpoint <- \"s\"": {
+    "ok": {
+      "llm_endpoint": "s"
+    }
+  },
+  "set llm_endpoint <- \"true\"": {
+    "ok": {
+      "llm_endpoint": "true"
+    }
+  },
+  "set llm_endpoint <- -1": {
+    "err": true
+  },
+  "set llm_endpoint <- 0": {
+    "err": true
+  },
+  "set llm_endpoint <- 1": {
+    "err": true
+  },
+  "set llm_endpoint <- 1.5": {
+    "err": true
+  },
+  "set llm_endpoint <- 5000000000": {
+    "err": true
+  },
+  "set llm_endpoint <- 70000": {
+    "err": true
+  },
+  "set llm_endpoint <- [1]": {
+    "err": true
+  },
+  "set llm_endpoint <- false": {
+    "err": true
+  },
+  "set llm_endpoint <- null": {
+    "err": true
+  },
+  "set llm_endpoint <- true": {
+    "err": true
+  },
+  "set llm_endpoint <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm_fallback_api_key <- \"\"": {
+    "err": true
+  },
+  "set llm_fallback_api_key <- \"1\"": {
+    "err": true
+  },
+  "set llm_fallback_api_key <- \"s\"": {
+    "err": true
+  },
+  "set llm_fallback_api_key <- \"true\"": {
+    "err": true
+  },
+  "set llm_fallback_api_key <- -1": {
+    "err": true
+  },
+  "set llm_fallback_api_key <- 0": {
+    "err": true
+  },
+  "set llm_fallback_api_key <- 1": {
+    "err": true
+  },
+  "set llm_fallback_api_key <- 1.5": {
+    "err": true
+  },
+  "set llm_fallback_api_key <- 5000000000": {
+    "err": true
+  },
+  "set llm_fallback_api_key <- 70000": {
+    "err": true
+  },
+  "set llm_fallback_api_key <- [1]": {
+    "err": true
+  },
+  "set llm_fallback_api_key <- false": {
+    "err": true
+  },
+  "set llm_fallback_api_key <- null": {
+    "err": true
+  },
+  "set llm_fallback_api_key <- true": {
+    "err": true
+  },
+  "set llm_fallback_api_key <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm_fallback_endpoint <- \"\"": {
+    "err": true
+  },
+  "set llm_fallback_endpoint <- \"1\"": {
+    "err": true
+  },
+  "set llm_fallback_endpoint <- \"s\"": {
+    "err": true
+  },
+  "set llm_fallback_endpoint <- \"true\"": {
+    "err": true
+  },
+  "set llm_fallback_endpoint <- -1": {
+    "err": true
+  },
+  "set llm_fallback_endpoint <- 0": {
+    "err": true
+  },
+  "set llm_fallback_endpoint <- 1": {
+    "err": true
+  },
+  "set llm_fallback_endpoint <- 1.5": {
+    "err": true
+  },
+  "set llm_fallback_endpoint <- 5000000000": {
+    "err": true
+  },
+  "set llm_fallback_endpoint <- 70000": {
+    "err": true
+  },
+  "set llm_fallback_endpoint <- [1]": {
+    "err": true
+  },
+  "set llm_fallback_endpoint <- false": {
+    "err": true
+  },
+  "set llm_fallback_endpoint <- null": {
+    "err": true
+  },
+  "set llm_fallback_endpoint <- true": {
+    "err": true
+  },
+  "set llm_fallback_endpoint <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm_fallback_model <- \"\"": {
+    "err": true
+  },
+  "set llm_fallback_model <- \"1\"": {
+    "err": true
+  },
+  "set llm_fallback_model <- \"s\"": {
+    "err": true
+  },
+  "set llm_fallback_model <- \"true\"": {
+    "err": true
+  },
+  "set llm_fallback_model <- -1": {
+    "err": true
+  },
+  "set llm_fallback_model <- 0": {
+    "err": true
+  },
+  "set llm_fallback_model <- 1": {
+    "err": true
+  },
+  "set llm_fallback_model <- 1.5": {
+    "err": true
+  },
+  "set llm_fallback_model <- 5000000000": {
+    "err": true
+  },
+  "set llm_fallback_model <- 70000": {
+    "err": true
+  },
+  "set llm_fallback_model <- [1]": {
+    "err": true
+  },
+  "set llm_fallback_model <- false": {
+    "err": true
+  },
+  "set llm_fallback_model <- null": {
+    "err": true
+  },
+  "set llm_fallback_model <- true": {
+    "err": true
+  },
+  "set llm_fallback_model <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm_fallback_provider <- \"\"": {
+    "err": true
+  },
+  "set llm_fallback_provider <- \"1\"": {
+    "err": true
+  },
+  "set llm_fallback_provider <- \"s\"": {
+    "err": true
+  },
+  "set llm_fallback_provider <- \"true\"": {
+    "err": true
+  },
+  "set llm_fallback_provider <- -1": {
+    "err": true
+  },
+  "set llm_fallback_provider <- 0": {
+    "err": true
+  },
+  "set llm_fallback_provider <- 1": {
+    "err": true
+  },
+  "set llm_fallback_provider <- 1.5": {
+    "err": true
+  },
+  "set llm_fallback_provider <- 5000000000": {
+    "err": true
+  },
+  "set llm_fallback_provider <- 70000": {
+    "err": true
+  },
+  "set llm_fallback_provider <- [1]": {
+    "err": true
+  },
+  "set llm_fallback_provider <- false": {
+    "err": true
+  },
+  "set llm_fallback_provider <- null": {
+    "err": true
+  },
+  "set llm_fallback_provider <- true": {
+    "err": true
+  },
+  "set llm_fallback_provider <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm_max_completion_tokens <- \"\"": {
+    "err": true
+  },
+  "set llm_max_completion_tokens <- \"1\"": {
+    "err": true
+  },
+  "set llm_max_completion_tokens <- \"s\"": {
+    "err": true
+  },
+  "set llm_max_completion_tokens <- \"true\"": {
+    "err": true
+  },
+  "set llm_max_completion_tokens <- -1": {
+    "err": true
+  },
+  "set llm_max_completion_tokens <- 0": {
+    "ok": {
+      "llm_max_completion_tokens": 0
+    }
+  },
+  "set llm_max_completion_tokens <- 1": {
+    "ok": {
+      "llm_max_completion_tokens": 1
+    }
+  },
+  "set llm_max_completion_tokens <- 1.5": {
+    "err": true
+  },
+  "set llm_max_completion_tokens <- 5000000000": {
+    "err": true
+  },
+  "set llm_max_completion_tokens <- 70000": {
+    "ok": {
+      "llm_max_completion_tokens": 70000
+    }
+  },
+  "set llm_max_completion_tokens <- [1]": {
+    "err": true
+  },
+  "set llm_max_completion_tokens <- false": {
+    "err": true
+  },
+  "set llm_max_completion_tokens <- null": {
+    "err": true
+  },
+  "set llm_max_completion_tokens <- true": {
+    "err": true
+  },
+  "set llm_max_completion_tokens <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm_max_parallel_requests <- \"\"": {
+    "err": true
+  },
+  "set llm_max_parallel_requests <- \"1\"": {
+    "err": true
+  },
+  "set llm_max_parallel_requests <- \"s\"": {
+    "err": true
+  },
+  "set llm_max_parallel_requests <- \"true\"": {
+    "err": true
+  },
+  "set llm_max_parallel_requests <- -1": {
+    "err": true
+  },
+  "set llm_max_parallel_requests <- 0": {
+    "ok": {
+      "llm_max_parallel_requests": 0
+    }
+  },
+  "set llm_max_parallel_requests <- 1": {
+    "ok": {
+      "llm_max_parallel_requests": 1
+    }
+  },
+  "set llm_max_parallel_requests <- 1.5": {
+    "err": true
+  },
+  "set llm_max_parallel_requests <- 5000000000": {
+    "err": true
+  },
+  "set llm_max_parallel_requests <- 70000": {
+    "ok": {
+      "llm_max_parallel_requests": 70000
+    }
+  },
+  "set llm_max_parallel_requests <- [1]": {
+    "err": true
+  },
+  "set llm_max_parallel_requests <- false": {
+    "err": true
+  },
+  "set llm_max_parallel_requests <- null": {
+    "err": true
+  },
+  "set llm_max_parallel_requests <- true": {
+    "err": true
+  },
+  "set llm_max_parallel_requests <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm_max_retries <- \"\"": {
+    "err": true
+  },
+  "set llm_max_retries <- \"1\"": {
+    "err": true
+  },
+  "set llm_max_retries <- \"s\"": {
+    "err": true
+  },
+  "set llm_max_retries <- \"true\"": {
+    "err": true
+  },
+  "set llm_max_retries <- -1": {
+    "err": true
+  },
+  "set llm_max_retries <- 0": {
+    "ok": {
+      "llm_max_retries": 0
+    }
+  },
+  "set llm_max_retries <- 1": {
+    "ok": {
+      "llm_max_retries": 1
+    }
+  },
+  "set llm_max_retries <- 1.5": {
+    "err": true
+  },
+  "set llm_max_retries <- 5000000000": {
+    "err": true
+  },
+  "set llm_max_retries <- 70000": {
+    "ok": {
+      "llm_max_retries": 70000
+    }
+  },
+  "set llm_max_retries <- [1]": {
+    "err": true
+  },
+  "set llm_max_retries <- false": {
+    "err": true
+  },
+  "set llm_max_retries <- null": {
+    "err": true
+  },
+  "set llm_max_retries <- true": {
+    "err": true
+  },
+  "set llm_max_retries <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm_min_retry_seconds <- \"\"": {
+    "err": true
+  },
+  "set llm_min_retry_seconds <- \"1\"": {
+    "err": true
+  },
+  "set llm_min_retry_seconds <- \"s\"": {
+    "err": true
+  },
+  "set llm_min_retry_seconds <- \"true\"": {
+    "err": true
+  },
+  "set llm_min_retry_seconds <- -1": {
+    "err": true
+  },
+  "set llm_min_retry_seconds <- 0": {
+    "err": true
+  },
+  "set llm_min_retry_seconds <- 1": {
+    "err": true
+  },
+  "set llm_min_retry_seconds <- 1.5": {
+    "err": true
+  },
+  "set llm_min_retry_seconds <- 5000000000": {
+    "err": true
+  },
+  "set llm_min_retry_seconds <- 70000": {
+    "err": true
+  },
+  "set llm_min_retry_seconds <- [1]": {
+    "err": true
+  },
+  "set llm_min_retry_seconds <- false": {
+    "err": true
+  },
+  "set llm_min_retry_seconds <- null": {
+    "err": true
+  },
+  "set llm_min_retry_seconds <- true": {
+    "err": true
+  },
+  "set llm_min_retry_seconds <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm_mock <- \"\"": {
+    "err": true
+  },
+  "set llm_mock <- \"1\"": {
+    "err": true
+  },
+  "set llm_mock <- \"s\"": {
+    "err": true
+  },
+  "set llm_mock <- \"true\"": {
+    "err": true
+  },
+  "set llm_mock <- -1": {
+    "err": true
+  },
+  "set llm_mock <- 0": {
+    "err": true
+  },
+  "set llm_mock <- 1": {
+    "err": true
+  },
+  "set llm_mock <- 1.5": {
+    "err": true
+  },
+  "set llm_mock <- 5000000000": {
+    "err": true
+  },
+  "set llm_mock <- 70000": {
+    "err": true
+  },
+  "set llm_mock <- [1]": {
+    "err": true
+  },
+  "set llm_mock <- false": {
+    "err": true
+  },
+  "set llm_mock <- null": {
+    "err": true
+  },
+  "set llm_mock <- true": {
+    "err": true
+  },
+  "set llm_mock <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm_model <- \"\"": {
+    "ok": {
+      "llm_model": ""
+    }
+  },
+  "set llm_model <- \"1\"": {
+    "ok": {
+      "llm_model": "1"
+    }
+  },
+  "set llm_model <- \"s\"": {
+    "ok": {
+      "llm_model": "s"
+    }
+  },
+  "set llm_model <- \"true\"": {
+    "ok": {
+      "llm_model": "true"
+    }
+  },
+  "set llm_model <- -1": {
+    "err": true
+  },
+  "set llm_model <- 0": {
+    "err": true
+  },
+  "set llm_model <- 1": {
+    "err": true
+  },
+  "set llm_model <- 1.5": {
+    "err": true
+  },
+  "set llm_model <- 5000000000": {
+    "err": true
+  },
+  "set llm_model <- 70000": {
+    "err": true
+  },
+  "set llm_model <- [1]": {
+    "err": true
+  },
+  "set llm_model <- false": {
+    "err": true
+  },
+  "set llm_model <- null": {
+    "err": true
+  },
+  "set llm_model <- true": {
+    "err": true
+  },
+  "set llm_model <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm_network_retries <- \"\"": {
+    "err": true
+  },
+  "set llm_network_retries <- \"1\"": {
+    "err": true
+  },
+  "set llm_network_retries <- \"s\"": {
+    "err": true
+  },
+  "set llm_network_retries <- \"true\"": {
+    "err": true
+  },
+  "set llm_network_retries <- -1": {
+    "err": true
+  },
+  "set llm_network_retries <- 0": {
+    "ok": {
+      "llm_network_retries": 0
+    }
+  },
+  "set llm_network_retries <- 1": {
+    "ok": {
+      "llm_network_retries": 1
+    }
+  },
+  "set llm_network_retries <- 1.5": {
+    "err": true
+  },
+  "set llm_network_retries <- 5000000000": {
+    "err": true
+  },
+  "set llm_network_retries <- 70000": {
+    "ok": {
+      "llm_network_retries": 70000
+    }
+  },
+  "set llm_network_retries <- [1]": {
+    "err": true
+  },
+  "set llm_network_retries <- false": {
+    "err": true
+  },
+  "set llm_network_retries <- null": {
+    "err": true
+  },
+  "set llm_network_retries <- true": {
+    "err": true
+  },
+  "set llm_network_retries <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm_provider <- \"\"": {
+    "ok": {
+      "llm_provider": ""
+    }
+  },
+  "set llm_provider <- \"1\"": {
+    "ok": {
+      "llm_provider": "1"
+    }
+  },
+  "set llm_provider <- \"s\"": {
+    "ok": {
+      "llm_provider": "s"
+    }
+  },
+  "set llm_provider <- \"true\"": {
+    "ok": {
+      "llm_provider": "true"
+    }
+  },
+  "set llm_provider <- -1": {
+    "err": true
+  },
+  "set llm_provider <- 0": {
+    "err": true
+  },
+  "set llm_provider <- 1": {
+    "err": true
+  },
+  "set llm_provider <- 1.5": {
+    "err": true
+  },
+  "set llm_provider <- 5000000000": {
+    "err": true
+  },
+  "set llm_provider <- 70000": {
+    "err": true
+  },
+  "set llm_provider <- [1]": {
+    "err": true
+  },
+  "set llm_provider <- false": {
+    "err": true
+  },
+  "set llm_provider <- null": {
+    "err": true
+  },
+  "set llm_provider <- true": {
+    "err": true
+  },
+  "set llm_provider <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm_rate_limit_enabled <- \"\"": {
+    "err": true
+  },
+  "set llm_rate_limit_enabled <- \"1\"": {
+    "err": true
+  },
+  "set llm_rate_limit_enabled <- \"s\"": {
+    "err": true
+  },
+  "set llm_rate_limit_enabled <- \"true\"": {
+    "err": true
+  },
+  "set llm_rate_limit_enabled <- -1": {
+    "err": true
+  },
+  "set llm_rate_limit_enabled <- 0": {
+    "err": true
+  },
+  "set llm_rate_limit_enabled <- 1": {
+    "err": true
+  },
+  "set llm_rate_limit_enabled <- 1.5": {
+    "err": true
+  },
+  "set llm_rate_limit_enabled <- 5000000000": {
+    "err": true
+  },
+  "set llm_rate_limit_enabled <- 70000": {
+    "err": true
+  },
+  "set llm_rate_limit_enabled <- [1]": {
+    "err": true
+  },
+  "set llm_rate_limit_enabled <- false": {
+    "err": true
+  },
+  "set llm_rate_limit_enabled <- null": {
+    "err": true
+  },
+  "set llm_rate_limit_enabled <- true": {
+    "err": true
+  },
+  "set llm_rate_limit_enabled <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm_rate_limit_interval <- \"\"": {
+    "err": true
+  },
+  "set llm_rate_limit_interval <- \"1\"": {
+    "err": true
+  },
+  "set llm_rate_limit_interval <- \"s\"": {
+    "err": true
+  },
+  "set llm_rate_limit_interval <- \"true\"": {
+    "err": true
+  },
+  "set llm_rate_limit_interval <- -1": {
+    "err": true
+  },
+  "set llm_rate_limit_interval <- 0": {
+    "err": true
+  },
+  "set llm_rate_limit_interval <- 1": {
+    "err": true
+  },
+  "set llm_rate_limit_interval <- 1.5": {
+    "err": true
+  },
+  "set llm_rate_limit_interval <- 5000000000": {
+    "err": true
+  },
+  "set llm_rate_limit_interval <- 70000": {
+    "err": true
+  },
+  "set llm_rate_limit_interval <- [1]": {
+    "err": true
+  },
+  "set llm_rate_limit_interval <- false": {
+    "err": true
+  },
+  "set llm_rate_limit_interval <- null": {
+    "err": true
+  },
+  "set llm_rate_limit_interval <- true": {
+    "err": true
+  },
+  "set llm_rate_limit_interval <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm_rate_limit_requests <- \"\"": {
+    "err": true
+  },
+  "set llm_rate_limit_requests <- \"1\"": {
+    "err": true
+  },
+  "set llm_rate_limit_requests <- \"s\"": {
+    "err": true
+  },
+  "set llm_rate_limit_requests <- \"true\"": {
+    "err": true
+  },
+  "set llm_rate_limit_requests <- -1": {
+    "err": true
+  },
+  "set llm_rate_limit_requests <- 0": {
+    "err": true
+  },
+  "set llm_rate_limit_requests <- 1": {
+    "err": true
+  },
+  "set llm_rate_limit_requests <- 1.5": {
+    "err": true
+  },
+  "set llm_rate_limit_requests <- 5000000000": {
+    "err": true
+  },
+  "set llm_rate_limit_requests <- 70000": {
+    "err": true
+  },
+  "set llm_rate_limit_requests <- [1]": {
+    "err": true
+  },
+  "set llm_rate_limit_requests <- false": {
+    "err": true
+  },
+  "set llm_rate_limit_requests <- null": {
+    "err": true
+  },
+  "set llm_rate_limit_requests <- true": {
+    "err": true
+  },
+  "set llm_rate_limit_requests <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm_reasoning <- \"\"": {
+    "err": true
+  },
+  "set llm_reasoning <- \"1\"": {
+    "err": true
+  },
+  "set llm_reasoning <- \"s\"": {
+    "err": true
+  },
+  "set llm_reasoning <- \"true\"": {
+    "err": true
+  },
+  "set llm_reasoning <- -1": {
+    "err": true
+  },
+  "set llm_reasoning <- 0": {
+    "err": true
+  },
+  "set llm_reasoning <- 1": {
+    "err": true
+  },
+  "set llm_reasoning <- 1.5": {
+    "err": true
+  },
+  "set llm_reasoning <- 5000000000": {
+    "err": true
+  },
+  "set llm_reasoning <- 70000": {
+    "err": true
+  },
+  "set llm_reasoning <- [1]": {
+    "err": true
+  },
+  "set llm_reasoning <- false": {
+    "err": true
+  },
+  "set llm_reasoning <- null": {
+    "err": true
+  },
+  "set llm_reasoning <- true": {
+    "err": true
+  },
+  "set llm_reasoning <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm_record_path <- \"\"": {
+    "err": true
+  },
+  "set llm_record_path <- \"1\"": {
+    "err": true
+  },
+  "set llm_record_path <- \"s\"": {
+    "err": true
+  },
+  "set llm_record_path <- \"true\"": {
+    "err": true
+  },
+  "set llm_record_path <- -1": {
+    "err": true
+  },
+  "set llm_record_path <- 0": {
+    "err": true
+  },
+  "set llm_record_path <- 1": {
+    "err": true
+  },
+  "set llm_record_path <- 1.5": {
+    "err": true
+  },
+  "set llm_record_path <- 5000000000": {
+    "err": true
+  },
+  "set llm_record_path <- 70000": {
+    "err": true
+  },
+  "set llm_record_path <- [1]": {
+    "err": true
+  },
+  "set llm_record_path <- false": {
+    "err": true
+  },
+  "set llm_record_path <- null": {
+    "err": true
+  },
+  "set llm_record_path <- true": {
+    "err": true
+  },
+  "set llm_record_path <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm_request_deadline_seconds <- \"\"": {
+    "err": true
+  },
+  "set llm_request_deadline_seconds <- \"1\"": {
+    "err": true
+  },
+  "set llm_request_deadline_seconds <- \"s\"": {
+    "err": true
+  },
+  "set llm_request_deadline_seconds <- \"true\"": {
+    "err": true
+  },
+  "set llm_request_deadline_seconds <- -1": {
+    "err": true
+  },
+  "set llm_request_deadline_seconds <- 0": {
+    "err": true
+  },
+  "set llm_request_deadline_seconds <- 1": {
+    "err": true
+  },
+  "set llm_request_deadline_seconds <- 1.5": {
+    "err": true
+  },
+  "set llm_request_deadline_seconds <- 5000000000": {
+    "err": true
+  },
+  "set llm_request_deadline_seconds <- 70000": {
+    "err": true
+  },
+  "set llm_request_deadline_seconds <- [1]": {
+    "err": true
+  },
+  "set llm_request_deadline_seconds <- false": {
+    "err": true
+  },
+  "set llm_request_deadline_seconds <- null": {
+    "err": true
+  },
+  "set llm_request_deadline_seconds <- true": {
+    "err": true
+  },
+  "set llm_request_deadline_seconds <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm_request_timeout_seconds <- \"\"": {
+    "err": true
+  },
+  "set llm_request_timeout_seconds <- \"1\"": {
+    "err": true
+  },
+  "set llm_request_timeout_seconds <- \"s\"": {
+    "err": true
+  },
+  "set llm_request_timeout_seconds <- \"true\"": {
+    "err": true
+  },
+  "set llm_request_timeout_seconds <- -1": {
+    "err": true
+  },
+  "set llm_request_timeout_seconds <- 0": {
+    "err": true
+  },
+  "set llm_request_timeout_seconds <- 1": {
+    "err": true
+  },
+  "set llm_request_timeout_seconds <- 1.5": {
+    "err": true
+  },
+  "set llm_request_timeout_seconds <- 5000000000": {
+    "err": true
+  },
+  "set llm_request_timeout_seconds <- 70000": {
+    "err": true
+  },
+  "set llm_request_timeout_seconds <- [1]": {
+    "err": true
+  },
+  "set llm_request_timeout_seconds <- false": {
+    "err": true
+  },
+  "set llm_request_timeout_seconds <- null": {
+    "err": true
+  },
+  "set llm_request_timeout_seconds <- true": {
+    "err": true
+  },
+  "set llm_request_timeout_seconds <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm_streaming <- \"\"": {
+    "err": true
+  },
+  "set llm_streaming <- \"1\"": {
+    "err": true
+  },
+  "set llm_streaming <- \"s\"": {
+    "err": true
+  },
+  "set llm_streaming <- \"true\"": {
+    "err": true
+  },
+  "set llm_streaming <- -1": {
+    "err": true
+  },
+  "set llm_streaming <- 0": {
+    "err": true
+  },
+  "set llm_streaming <- 1": {
+    "err": true
+  },
+  "set llm_streaming <- 1.5": {
+    "err": true
+  },
+  "set llm_streaming <- 5000000000": {
+    "err": true
+  },
+  "set llm_streaming <- 70000": {
+    "err": true
+  },
+  "set llm_streaming <- [1]": {
+    "err": true
+  },
+  "set llm_streaming <- false": {
+    "ok": {}
+  },
+  "set llm_streaming <- null": {
+    "err": true
+  },
+  "set llm_streaming <- true": {
+    "ok": {
+      "llm_streaming": true
+    }
+  },
+  "set llm_streaming <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm_structured_output_mode <- \"\"": {
+    "err": true
+  },
+  "set llm_structured_output_mode <- \"1\"": {
+    "err": true
+  },
+  "set llm_structured_output_mode <- \"s\"": {
+    "err": true
+  },
+  "set llm_structured_output_mode <- \"true\"": {
+    "err": true
+  },
+  "set llm_structured_output_mode <- -1": {
+    "err": true
+  },
+  "set llm_structured_output_mode <- 0": {
+    "err": true
+  },
+  "set llm_structured_output_mode <- 1": {
+    "err": true
+  },
+  "set llm_structured_output_mode <- 1.5": {
+    "err": true
+  },
+  "set llm_structured_output_mode <- 5000000000": {
+    "err": true
+  },
+  "set llm_structured_output_mode <- 70000": {
+    "err": true
+  },
+  "set llm_structured_output_mode <- [1]": {
+    "err": true
+  },
+  "set llm_structured_output_mode <- false": {
+    "err": true
+  },
+  "set llm_structured_output_mode <- null": {
+    "err": true
+  },
+  "set llm_structured_output_mode <- true": {
+    "err": true
+  },
+  "set llm_structured_output_mode <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm_temperature <- \"\"": {
+    "err": true
+  },
+  "set llm_temperature <- \"1\"": {
+    "err": true
+  },
+  "set llm_temperature <- \"s\"": {
+    "err": true
+  },
+  "set llm_temperature <- \"true\"": {
+    "err": true
+  },
+  "set llm_temperature <- -1": {
+    "ok": {
+      "llm_temperature": -1.0
+    }
+  },
+  "set llm_temperature <- 0": {
+    "ok": {
+      "llm_temperature": 0.0
+    }
+  },
+  "set llm_temperature <- 1": {
+    "ok": {
+      "llm_temperature": 1.0
+    }
+  },
+  "set llm_temperature <- 1.5": {
+    "ok": {
+      "llm_temperature": 1.5
+    }
+  },
+  "set llm_temperature <- 5000000000": {
+    "ok": {
+      "llm_temperature": 5000000000.0
+    }
+  },
+  "set llm_temperature <- 70000": {
+    "ok": {
+      "llm_temperature": 70000.0
+    }
+  },
+  "set llm_temperature <- [1]": {
+    "err": true
+  },
+  "set llm_temperature <- false": {
+    "err": true
+  },
+  "set llm_temperature <- null": {
+    "ok": {}
+  },
+  "set llm_temperature <- true": {
+    "err": true
+  },
+  "set llm_temperature <- {\"a\":1}": {
+    "err": true
+  },
+  "set log_level <- \"\"": {
+    "err": true
+  },
+  "set log_level <- \"1\"": {
+    "err": true
+  },
+  "set log_level <- \"s\"": {
+    "err": true
+  },
+  "set log_level <- \"true\"": {
+    "err": true
+  },
+  "set log_level <- -1": {
+    "err": true
+  },
+  "set log_level <- 0": {
+    "err": true
+  },
+  "set log_level <- 1": {
+    "err": true
+  },
+  "set log_level <- 1.5": {
+    "err": true
+  },
+  "set log_level <- 5000000000": {
+    "err": true
+  },
+  "set log_level <- 70000": {
+    "err": true
+  },
+  "set log_level <- [1]": {
+    "err": true
+  },
+  "set log_level <- false": {
+    "err": true
+  },
+  "set log_level <- null": {
+    "err": true
+  },
+  "set log_level <- true": {
+    "err": true
+  },
+  "set log_level <- {\"a\":1}": {
+    "err": true
+  },
+  "set logs_root_directory <- \"\"": {
+    "ok": {
+      "logs_root_directory": ""
+    }
+  },
+  "set logs_root_directory <- \"1\"": {
+    "ok": {
+      "logs_root_directory": "1"
+    }
+  },
+  "set logs_root_directory <- \"s\"": {
+    "ok": {
+      "logs_root_directory": "s"
+    }
+  },
+  "set logs_root_directory <- \"true\"": {
+    "ok": {
+      "logs_root_directory": "true"
+    }
+  },
+  "set logs_root_directory <- -1": {
+    "err": true
+  },
+  "set logs_root_directory <- 0": {
+    "err": true
+  },
+  "set logs_root_directory <- 1": {
+    "err": true
+  },
+  "set logs_root_directory <- 1.5": {
+    "err": true
+  },
+  "set logs_root_directory <- 5000000000": {
+    "err": true
+  },
+  "set logs_root_directory <- 70000": {
+    "err": true
+  },
+  "set logs_root_directory <- [1]": {
+    "err": true
+  },
+  "set logs_root_directory <- false": {
+    "err": true
+  },
+  "set logs_root_directory <- null": {
+    "err": true
+  },
+  "set logs_root_directory <- true": {
+    "err": true
+  },
+  "set logs_root_directory <- {\"a\":1}": {
+    "err": true
+  },
+  "set migration_db_url <- \"\"": {
+    "ok": {}
+  },
+  "set migration_db_url <- \"1\"": {
+    "ok": {
+      "migration_db_url": "1"
+    }
+  },
+  "set migration_db_url <- \"s\"": {
+    "ok": {
+      "migration_db_url": "s"
+    }
+  },
+  "set migration_db_url <- \"true\"": {
+    "ok": {
+      "migration_db_url": "true"
+    }
+  },
+  "set migration_db_url <- -1": {
+    "err": true
+  },
+  "set migration_db_url <- 0": {
+    "err": true
+  },
+  "set migration_db_url <- 1": {
+    "err": true
+  },
+  "set migration_db_url <- 1.5": {
+    "err": true
+  },
+  "set migration_db_url <- 5000000000": {
+    "err": true
+  },
+  "set migration_db_url <- 70000": {
+    "err": true
+  },
+  "set migration_db_url <- [1]": {
+    "err": true
+  },
+  "set migration_db_url <- false": {
+    "err": true
+  },
+  "set migration_db_url <- null": {
+    "err": true
+  },
+  "set migration_db_url <- true": {
+    "err": true
+  },
+  "set migration_db_url <- {\"a\":1}": {
+    "err": true
+  },
+  "set monitoring_tool <- \"\"": {
+    "ok": {
+      "monitoring_tool": ""
+    }
+  },
+  "set monitoring_tool <- \"1\"": {
+    "ok": {
+      "monitoring_tool": "1"
+    }
+  },
+  "set monitoring_tool <- \"s\"": {
+    "ok": {
+      "monitoring_tool": "s"
+    }
+  },
+  "set monitoring_tool <- \"true\"": {
+    "ok": {
+      "monitoring_tool": "true"
+    }
+  },
+  "set monitoring_tool <- -1": {
+    "err": true
+  },
+  "set monitoring_tool <- 0": {
+    "err": true
+  },
+  "set monitoring_tool <- 1": {
+    "err": true
+  },
+  "set monitoring_tool <- 1.5": {
+    "err": true
+  },
+  "set monitoring_tool <- 5000000000": {
+    "err": true
+  },
+  "set monitoring_tool <- 70000": {
+    "err": true
+  },
+  "set monitoring_tool <- [1]": {
+    "err": true
+  },
+  "set monitoring_tool <- false": {
+    "err": true
+  },
+  "set monitoring_tool <- null": {
+    "err": true
+  },
+  "set monitoring_tool <- true": {
+    "err": true
+  },
+  "set monitoring_tool <- {\"a\":1}": {
+    "err": true
+  },
+  "set no_such_key <- \"\"": {
+    "err": true
+  },
+  "set no_such_key <- \"1\"": {
+    "err": true
+  },
+  "set no_such_key <- \"s\"": {
+    "err": true
+  },
+  "set no_such_key <- \"true\"": {
+    "err": true
+  },
+  "set no_such_key <- -1": {
+    "err": true
+  },
+  "set no_such_key <- 0": {
+    "err": true
+  },
+  "set no_such_key <- 1": {
+    "err": true
+  },
+  "set no_such_key <- 1.5": {
+    "err": true
+  },
+  "set no_such_key <- 5000000000": {
+    "err": true
+  },
+  "set no_such_key <- 70000": {
+    "err": true
+  },
+  "set no_such_key <- [1]": {
+    "err": true
+  },
+  "set no_such_key <- false": {
+    "err": true
+  },
+  "set no_such_key <- null": {
+    "err": true
+  },
+  "set no_such_key <- true": {
+    "err": true
+  },
+  "set no_such_key <- {\"a\":1}": {
+    "err": true
+  },
+  "set ontology_file_path <- \"\"": {
+    "err": true
+  },
+  "set ontology_file_path <- \"1\"": {
+    "err": true
+  },
+  "set ontology_file_path <- \"s\"": {
+    "err": true
+  },
+  "set ontology_file_path <- \"true\"": {
+    "err": true
+  },
+  "set ontology_file_path <- -1": {
+    "err": true
+  },
+  "set ontology_file_path <- 0": {
+    "err": true
+  },
+  "set ontology_file_path <- 1": {
+    "err": true
+  },
+  "set ontology_file_path <- 1.5": {
+    "err": true
+  },
+  "set ontology_file_path <- 5000000000": {
+    "err": true
+  },
+  "set ontology_file_path <- 70000": {
+    "err": true
+  },
+  "set ontology_file_path <- [1]": {
+    "err": true
+  },
+  "set ontology_file_path <- false": {
+    "err": true
+  },
+  "set ontology_file_path <- null": {
+    "err": true
+  },
+  "set ontology_file_path <- true": {
+    "err": true
+  },
+  "set ontology_file_path <- {\"a\":1}": {
+    "err": true
+  },
+  "set ontology_matching_strategy <- \"\"": {
+    "err": true
+  },
+  "set ontology_matching_strategy <- \"1\"": {
+    "err": true
+  },
+  "set ontology_matching_strategy <- \"s\"": {
+    "err": true
+  },
+  "set ontology_matching_strategy <- \"true\"": {
+    "err": true
+  },
+  "set ontology_matching_strategy <- -1": {
+    "err": true
+  },
+  "set ontology_matching_strategy <- 0": {
+    "err": true
+  },
+  "set ontology_matching_strategy <- 1": {
+    "err": true
+  },
+  "set ontology_matching_strategy <- 1.5": {
+    "err": true
+  },
+  "set ontology_matching_strategy <- 5000000000": {
+    "err": true
+  },
+  "set ontology_matching_strategy <- 70000": {
+    "err": true
+  },
+  "set ontology_matching_strategy <- [1]": {
+    "err": true
+  },
+  "set ontology_matching_strategy <- false": {
+    "err": true
+  },
+  "set ontology_matching_strategy <- null": {
+    "err": true
+  },
+  "set ontology_matching_strategy <- true": {
+    "err": true
+  },
+  "set ontology_matching_strategy <- {\"a\":1}": {
+    "err": true
+  },
+  "set ontology_resolver <- \"\"": {
+    "err": true
+  },
+  "set ontology_resolver <- \"1\"": {
+    "err": true
+  },
+  "set ontology_resolver <- \"s\"": {
+    "err": true
+  },
+  "set ontology_resolver <- \"true\"": {
+    "err": true
+  },
+  "set ontology_resolver <- -1": {
+    "err": true
+  },
+  "set ontology_resolver <- 0": {
+    "err": true
+  },
+  "set ontology_resolver <- 1": {
+    "err": true
+  },
+  "set ontology_resolver <- 1.5": {
+    "err": true
+  },
+  "set ontology_resolver <- 5000000000": {
+    "err": true
+  },
+  "set ontology_resolver <- 70000": {
+    "err": true
+  },
+  "set ontology_resolver <- [1]": {
+    "err": true
+  },
+  "set ontology_resolver <- false": {
+    "err": true
+  },
+  "set ontology_resolver <- null": {
+    "err": true
+  },
+  "set ontology_resolver <- true": {
+    "err": true
+  },
+  "set ontology_resolver <- {\"a\":1}": {
+    "err": true
+  },
+  "set otel_exporter_otlp_endpoint <- \"\"": {
+    "err": true
+  },
+  "set otel_exporter_otlp_endpoint <- \"1\"": {
+    "err": true
+  },
+  "set otel_exporter_otlp_endpoint <- \"s\"": {
+    "err": true
+  },
+  "set otel_exporter_otlp_endpoint <- \"true\"": {
+    "err": true
+  },
+  "set otel_exporter_otlp_endpoint <- -1": {
+    "err": true
+  },
+  "set otel_exporter_otlp_endpoint <- 0": {
+    "err": true
+  },
+  "set otel_exporter_otlp_endpoint <- 1": {
+    "err": true
+  },
+  "set otel_exporter_otlp_endpoint <- 1.5": {
+    "err": true
+  },
+  "set otel_exporter_otlp_endpoint <- 5000000000": {
+    "err": true
+  },
+  "set otel_exporter_otlp_endpoint <- 70000": {
+    "err": true
+  },
+  "set otel_exporter_otlp_endpoint <- [1]": {
+    "err": true
+  },
+  "set otel_exporter_otlp_endpoint <- false": {
+    "err": true
+  },
+  "set otel_exporter_otlp_endpoint <- null": {
+    "err": true
+  },
+  "set otel_exporter_otlp_endpoint <- true": {
+    "err": true
+  },
+  "set otel_exporter_otlp_endpoint <- {\"a\":1}": {
+    "err": true
+  },
+  "set otel_exporter_otlp_headers <- \"\"": {
+    "err": true
+  },
+  "set otel_exporter_otlp_headers <- \"1\"": {
+    "err": true
+  },
+  "set otel_exporter_otlp_headers <- \"s\"": {
+    "err": true
+  },
+  "set otel_exporter_otlp_headers <- \"true\"": {
+    "err": true
+  },
+  "set otel_exporter_otlp_headers <- -1": {
+    "err": true
+  },
+  "set otel_exporter_otlp_headers <- 0": {
+    "err": true
+  },
+  "set otel_exporter_otlp_headers <- 1": {
+    "err": true
+  },
+  "set otel_exporter_otlp_headers <- 1.5": {
+    "err": true
+  },
+  "set otel_exporter_otlp_headers <- 5000000000": {
+    "err": true
+  },
+  "set otel_exporter_otlp_headers <- 70000": {
+    "err": true
+  },
+  "set otel_exporter_otlp_headers <- [1]": {
+    "err": true
+  },
+  "set otel_exporter_otlp_headers <- false": {
+    "err": true
+  },
+  "set otel_exporter_otlp_headers <- null": {
+    "err": true
+  },
+  "set otel_exporter_otlp_headers <- true": {
+    "err": true
+  },
+  "set otel_exporter_otlp_headers <- {\"a\":1}": {
+    "err": true
+  },
+  "set otel_exporter_otlp_protocol <- \"\"": {
+    "err": true
+  },
+  "set otel_exporter_otlp_protocol <- \"1\"": {
+    "err": true
+  },
+  "set otel_exporter_otlp_protocol <- \"s\"": {
+    "err": true
+  },
+  "set otel_exporter_otlp_protocol <- \"true\"": {
+    "err": true
+  },
+  "set otel_exporter_otlp_protocol <- -1": {
+    "err": true
+  },
+  "set otel_exporter_otlp_protocol <- 0": {
+    "err": true
+  },
+  "set otel_exporter_otlp_protocol <- 1": {
+    "err": true
+  },
+  "set otel_exporter_otlp_protocol <- 1.5": {
+    "err": true
+  },
+  "set otel_exporter_otlp_protocol <- 5000000000": {
+    "err": true
+  },
+  "set otel_exporter_otlp_protocol <- 70000": {
+    "err": true
+  },
+  "set otel_exporter_otlp_protocol <- [1]": {
+    "err": true
+  },
+  "set otel_exporter_otlp_protocol <- false": {
+    "err": true
+  },
+  "set otel_exporter_otlp_protocol <- null": {
+    "err": true
+  },
+  "set otel_exporter_otlp_protocol <- true": {
+    "err": true
+  },
+  "set otel_exporter_otlp_protocol <- {\"a\":1}": {
+    "err": true
+  },
+  "set otel_service_name <- \"\"": {
+    "err": true
+  },
+  "set otel_service_name <- \"1\"": {
+    "err": true
+  },
+  "set otel_service_name <- \"s\"": {
+    "err": true
+  },
+  "set otel_service_name <- \"true\"": {
+    "err": true
+  },
+  "set otel_service_name <- -1": {
+    "err": true
+  },
+  "set otel_service_name <- 0": {
+    "err": true
+  },
+  "set otel_service_name <- 1": {
+    "err": true
+  },
+  "set otel_service_name <- 1.5": {
+    "err": true
+  },
+  "set otel_service_name <- 5000000000": {
+    "err": true
+  },
+  "set otel_service_name <- 70000": {
+    "err": true
+  },
+  "set otel_service_name <- [1]": {
+    "err": true
+  },
+  "set otel_service_name <- false": {
+    "err": true
+  },
+  "set otel_service_name <- null": {
+    "err": true
+  },
+  "set otel_service_name <- true": {
+    "err": true
+  },
+  "set otel_service_name <- {\"a\":1}": {
+    "err": true
+  },
+  "set otel_span_processor <- \"\"": {
+    "err": true
+  },
+  "set otel_span_processor <- \"1\"": {
+    "err": true
+  },
+  "set otel_span_processor <- \"s\"": {
+    "err": true
+  },
+  "set otel_span_processor <- \"true\"": {
+    "err": true
+  },
+  "set otel_span_processor <- -1": {
+    "err": true
+  },
+  "set otel_span_processor <- 0": {
+    "err": true
+  },
+  "set otel_span_processor <- 1": {
+    "err": true
+  },
+  "set otel_span_processor <- 1.5": {
+    "err": true
+  },
+  "set otel_span_processor <- 5000000000": {
+    "err": true
+  },
+  "set otel_span_processor <- 70000": {
+    "err": true
+  },
+  "set otel_span_processor <- [1]": {
+    "err": true
+  },
+  "set otel_span_processor <- false": {
+    "err": true
+  },
+  "set otel_span_processor <- null": {
+    "err": true
+  },
+  "set otel_span_processor <- true": {
+    "err": true
+  },
+  "set otel_span_processor <- {\"a\":1}": {
+    "err": true
+  },
+  "set otel_traces_sampler <- \"\"": {
+    "err": true
+  },
+  "set otel_traces_sampler <- \"1\"": {
+    "err": true
+  },
+  "set otel_traces_sampler <- \"s\"": {
+    "err": true
+  },
+  "set otel_traces_sampler <- \"true\"": {
+    "err": true
+  },
+  "set otel_traces_sampler <- -1": {
+    "err": true
+  },
+  "set otel_traces_sampler <- 0": {
+    "err": true
+  },
+  "set otel_traces_sampler <- 1": {
+    "err": true
+  },
+  "set otel_traces_sampler <- 1.5": {
+    "err": true
+  },
+  "set otel_traces_sampler <- 5000000000": {
+    "err": true
+  },
+  "set otel_traces_sampler <- 70000": {
+    "err": true
+  },
+  "set otel_traces_sampler <- [1]": {
+    "err": true
+  },
+  "set otel_traces_sampler <- false": {
+    "err": true
+  },
+  "set otel_traces_sampler <- null": {
+    "err": true
+  },
+  "set otel_traces_sampler <- true": {
+    "err": true
+  },
+  "set otel_traces_sampler <- {\"a\":1}": {
+    "err": true
+  },
+  "set otel_traces_sampler_arg <- \"\"": {
+    "err": true
+  },
+  "set otel_traces_sampler_arg <- \"1\"": {
+    "err": true
+  },
+  "set otel_traces_sampler_arg <- \"s\"": {
+    "err": true
+  },
+  "set otel_traces_sampler_arg <- \"true\"": {
+    "err": true
+  },
+  "set otel_traces_sampler_arg <- -1": {
+    "err": true
+  },
+  "set otel_traces_sampler_arg <- 0": {
+    "err": true
+  },
+  "set otel_traces_sampler_arg <- 1": {
+    "err": true
+  },
+  "set otel_traces_sampler_arg <- 1.5": {
+    "err": true
+  },
+  "set otel_traces_sampler_arg <- 5000000000": {
+    "err": true
+  },
+  "set otel_traces_sampler_arg <- 70000": {
+    "err": true
+  },
+  "set otel_traces_sampler_arg <- [1]": {
+    "err": true
+  },
+  "set otel_traces_sampler_arg <- false": {
+    "err": true
+  },
+  "set otel_traces_sampler_arg <- null": {
+    "err": true
+  },
+  "set otel_traces_sampler_arg <- true": {
+    "err": true
+  },
+  "set otel_traces_sampler_arg <- {\"a\":1}": {
+    "err": true
+  },
+  "set relational_db_url <- \"\"": {
+    "ok": {
+      "relational_db_url": ""
+    }
+  },
+  "set relational_db_url <- \"1\"": {
+    "ok": {
+      "relational_db_url": "1"
+    }
+  },
+  "set relational_db_url <- \"s\"": {
+    "ok": {
+      "relational_db_url": "s"
+    }
+  },
+  "set relational_db_url <- \"true\"": {
+    "ok": {
+      "relational_db_url": "true"
+    }
+  },
+  "set relational_db_url <- -1": {
+    "err": true
+  },
+  "set relational_db_url <- 0": {
+    "err": true
+  },
+  "set relational_db_url <- 1": {
+    "err": true
+  },
+  "set relational_db_url <- 1.5": {
+    "err": true
+  },
+  "set relational_db_url <- 5000000000": {
+    "err": true
+  },
+  "set relational_db_url <- 70000": {
+    "err": true
+  },
+  "set relational_db_url <- [1]": {
+    "err": true
+  },
+  "set relational_db_url <- false": {
+    "err": true
+  },
+  "set relational_db_url <- null": {
+    "err": true
+  },
+  "set relational_db_url <- true": {
+    "err": true
+  },
+  "set relational_db_url <- {\"a\":1}": {
+    "err": true
+  },
+  "set session_ttl_seconds <- \"\"": {
+    "err": true
+  },
+  "set session_ttl_seconds <- \"1\"": {
+    "err": true
+  },
+  "set session_ttl_seconds <- \"s\"": {
+    "err": true
+  },
+  "set session_ttl_seconds <- \"true\"": {
+    "err": true
+  },
+  "set session_ttl_seconds <- -1": {
+    "err": true
+  },
+  "set session_ttl_seconds <- 0": {
+    "err": true
+  },
+  "set session_ttl_seconds <- 1": {
+    "err": true
+  },
+  "set session_ttl_seconds <- 1.5": {
+    "err": true
+  },
+  "set session_ttl_seconds <- 5000000000": {
+    "err": true
+  },
+  "set session_ttl_seconds <- 70000": {
+    "err": true
+  },
+  "set session_ttl_seconds <- [1]": {
+    "err": true
+  },
+  "set session_ttl_seconds <- false": {
+    "err": true
+  },
+  "set session_ttl_seconds <- null": {
+    "err": true
+  },
+  "set session_ttl_seconds <- true": {
+    "err": true
+  },
+  "set session_ttl_seconds <- {\"a\":1}": {
+    "err": true
+  },
+  "set single_process <- \"\"": {
+    "ok": {}
+  },
+  "set single_process <- \"1\"": {
+    "ok": {
+      "single_process": true
+    }
+  },
+  "set single_process <- \"s\"": {
+    "ok": {
+      "single_process": false
+    }
+  },
+  "set single_process <- \"true\"": {
+    "ok": {
+      "single_process": true
+    }
+  },
+  "set single_process <- -1": {
+    "ok": {
+      "single_process": false
+    }
+  },
+  "set single_process <- 0": {
+    "ok": {
+      "single_process": false
+    }
+  },
+  "set single_process <- 1": {
+    "ok": {
+      "single_process": true
+    }
+  },
+  "set single_process <- 1.5": {
+    "ok": {
+      "single_process": false
+    }
+  },
+  "set single_process <- 5000000000": {
+    "ok": {
+      "single_process": false
+    }
+  },
+  "set single_process <- 70000": {
+    "ok": {
+      "single_process": false
+    }
+  },
+  "set single_process <- [1]": {
+    "err": true
+  },
+  "set single_process <- false": {
+    "ok": {
+      "single_process": false
+    }
+  },
+  "set single_process <- null": {
+    "ok": {}
+  },
+  "set single_process <- true": {
+    "ok": {
+      "single_process": true
+    }
+  },
+  "set single_process <- {\"a\":1}": {
+    "err": true
+  },
+  "set storage_backend <- \"\"": {
+    "err": true
+  },
+  "set storage_backend <- \"1\"": {
+    "err": true
+  },
+  "set storage_backend <- \"s\"": {
+    "err": true
+  },
+  "set storage_backend <- \"true\"": {
+    "err": true
+  },
+  "set storage_backend <- -1": {
+    "err": true
+  },
+  "set storage_backend <- 0": {
+    "err": true
+  },
+  "set storage_backend <- 1": {
+    "err": true
+  },
+  "set storage_backend <- 1.5": {
+    "err": true
+  },
+  "set storage_backend <- 5000000000": {
+    "err": true
+  },
+  "set storage_backend <- 70000": {
+    "err": true
+  },
+  "set storage_backend <- [1]": {
+    "err": true
+  },
+  "set storage_backend <- false": {
+    "err": true
+  },
+  "set storage_backend <- null": {
+    "err": true
+  },
+  "set storage_backend <- true": {
+    "err": true
+  },
+  "set storage_backend <- {\"a\":1}": {
+    "err": true
+  },
+  "set storage_bucket_name <- \"\"": {
+    "err": true
+  },
+  "set storage_bucket_name <- \"1\"": {
+    "err": true
+  },
+  "set storage_bucket_name <- \"s\"": {
+    "err": true
+  },
+  "set storage_bucket_name <- \"true\"": {
+    "err": true
+  },
+  "set storage_bucket_name <- -1": {
+    "err": true
+  },
+  "set storage_bucket_name <- 0": {
+    "err": true
+  },
+  "set storage_bucket_name <- 1": {
+    "err": true
+  },
+  "set storage_bucket_name <- 1.5": {
+    "err": true
+  },
+  "set storage_bucket_name <- 5000000000": {
+    "err": true
+  },
+  "set storage_bucket_name <- 70000": {
+    "err": true
+  },
+  "set storage_bucket_name <- [1]": {
+    "err": true
+  },
+  "set storage_bucket_name <- false": {
+    "err": true
+  },
+  "set storage_bucket_name <- null": {
+    "err": true
+  },
+  "set storage_bucket_name <- true": {
+    "err": true
+  },
+  "set storage_bucket_name <- {\"a\":1}": {
+    "err": true
+  },
+  "set summarization_model <- \"\"": {
+    "ok": {}
+  },
+  "set summarization_model <- \"1\"": {
+    "ok": {
+      "summarization_model": "1"
+    }
+  },
+  "set summarization_model <- \"s\"": {
+    "ok": {
+      "summarization_model": "s"
+    }
+  },
+  "set summarization_model <- \"true\"": {
+    "ok": {
+      "summarization_model": "true"
+    }
+  },
+  "set summarization_model <- -1": {
+    "err": true
+  },
+  "set summarization_model <- 0": {
+    "err": true
+  },
+  "set summarization_model <- 1": {
+    "err": true
+  },
+  "set summarization_model <- 1.5": {
+    "err": true
+  },
+  "set summarization_model <- 5000000000": {
+    "err": true
+  },
+  "set summarization_model <- 70000": {
+    "err": true
+  },
+  "set summarization_model <- [1]": {
+    "err": true
+  },
+  "set summarization_model <- false": {
+    "err": true
+  },
+  "set summarization_model <- null": {
+    "err": true
+  },
+  "set summarization_model <- true": {
+    "err": true
+  },
+  "set summarization_model <- {\"a\":1}": {
+    "err": true
+  },
+  "set summarization_schema <- \"\"": {
+    "err": true
+  },
+  "set summarization_schema <- \"1\"": {
+    "err": true
+  },
+  "set summarization_schema <- \"s\"": {
+    "err": true
+  },
+  "set summarization_schema <- \"true\"": {
+    "err": true
+  },
+  "set summarization_schema <- -1": {
+    "err": true
+  },
+  "set summarization_schema <- 0": {
+    "err": true
+  },
+  "set summarization_schema <- 1": {
+    "err": true
+  },
+  "set summarization_schema <- 1.5": {
+    "err": true
+  },
+  "set summarization_schema <- 5000000000": {
+    "err": true
+  },
+  "set summarization_schema <- 70000": {
+    "err": true
+  },
+  "set summarization_schema <- [1]": {
+    "err": true
+  },
+  "set summarization_schema <- false": {
+    "err": true
+  },
+  "set summarization_schema <- null": {
+    "err": true
+  },
+  "set summarization_schema <- true": {
+    "err": true
+  },
+  "set summarization_schema <- {\"a\":1}": {
+    "err": true
+  },
+  "set system_root_directory <- \"\"": {
+    "ok": {
+      "system_root_directory": ""
+    }
+  },
+  "set system_root_directory <- \"1\"": {
+    "ok": {
+      "system_root_directory": "1"
+    }
+  },
+  "set system_root_directory <- \"s\"": {
+    "ok": {
+      "system_root_directory": "s"
+    }
+  },
+  "set system_root_directory <- \"true\"": {
+    "ok": {
+      "system_root_directory": "true"
+    }
+  },
+  "set system_root_directory <- -1": {
+    "err": true
+  },
+  "set system_root_directory <- 0": {
+    "err": true
+  },
+  "set system_root_directory <- 1": {
+    "err": true
+  },
+  "set system_root_directory <- 1.5": {
+    "err": true
+  },
+  "set system_root_directory <- 5000000000": {
+    "err": true
+  },
+  "set system_root_directory <- 70000": {
+    "err": true
+  },
+  "set system_root_directory <- [1]": {
+    "err": true
+  },
+  "set system_root_directory <- false": {
+    "err": true
+  },
+  "set system_root_directory <- null": {
+    "err": true
+  },
+  "set system_root_directory <- true": {
+    "err": true
+  },
+  "set system_root_directory <- {\"a\":1}": {
+    "err": true
+  },
+  "set transcription_model <- \"\"": {
+    "err": true
+  },
+  "set transcription_model <- \"1\"": {
+    "err": true
+  },
+  "set transcription_model <- \"s\"": {
+    "err": true
+  },
+  "set transcription_model <- \"true\"": {
+    "err": true
+  },
+  "set transcription_model <- -1": {
+    "err": true
+  },
+  "set transcription_model <- 0": {
+    "err": true
+  },
+  "set transcription_model <- 1": {
+    "err": true
+  },
+  "set transcription_model <- 1.5": {
+    "err": true
+  },
+  "set transcription_model <- 5000000000": {
+    "err": true
+  },
+  "set transcription_model <- 70000": {
+    "err": true
+  },
+  "set transcription_model <- [1]": {
+    "err": true
+  },
+  "set transcription_model <- false": {
+    "err": true
+  },
+  "set transcription_model <- null": {
+    "err": true
+  },
+  "set transcription_model <- true": {
+    "err": true
+  },
+  "set transcription_model <- {\"a\":1}": {
+    "err": true
+  },
+  "set vector_db_host <- \"\"": {
+    "err": true
+  },
+  "set vector_db_host <- \"1\"": {
+    "err": true
+  },
+  "set vector_db_host <- \"s\"": {
+    "err": true
+  },
+  "set vector_db_host <- \"true\"": {
+    "err": true
+  },
+  "set vector_db_host <- -1": {
+    "err": true
+  },
+  "set vector_db_host <- 0": {
+    "err": true
+  },
+  "set vector_db_host <- 1": {
+    "err": true
+  },
+  "set vector_db_host <- 1.5": {
+    "err": true
+  },
+  "set vector_db_host <- 5000000000": {
+    "err": true
+  },
+  "set vector_db_host <- 70000": {
+    "err": true
+  },
+  "set vector_db_host <- [1]": {
+    "err": true
+  },
+  "set vector_db_host <- false": {
+    "err": true
+  },
+  "set vector_db_host <- null": {
+    "err": true
+  },
+  "set vector_db_host <- true": {
+    "err": true
+  },
+  "set vector_db_host <- {\"a\":1}": {
+    "err": true
+  },
+  "set vector_db_key <- \"\"": {
+    "ok": {}
+  },
+  "set vector_db_key <- \"1\"": {
+    "ok": {
+      "vector_db_key": "1"
+    }
+  },
+  "set vector_db_key <- \"s\"": {
+    "ok": {
+      "vector_db_key": "s"
+    }
+  },
+  "set vector_db_key <- \"true\"": {
+    "ok": {
+      "vector_db_key": "true"
+    }
+  },
+  "set vector_db_key <- -1": {
+    "err": true
+  },
+  "set vector_db_key <- 0": {
+    "err": true
+  },
+  "set vector_db_key <- 1": {
+    "err": true
+  },
+  "set vector_db_key <- 1.5": {
+    "err": true
+  },
+  "set vector_db_key <- 5000000000": {
+    "err": true
+  },
+  "set vector_db_key <- 70000": {
+    "err": true
+  },
+  "set vector_db_key <- [1]": {
+    "err": true
+  },
+  "set vector_db_key <- false": {
+    "err": true
+  },
+  "set vector_db_key <- null": {
+    "err": true
+  },
+  "set vector_db_key <- true": {
+    "err": true
+  },
+  "set vector_db_key <- {\"a\":1}": {
+    "err": true
+  },
+  "set vector_db_name <- \"\"": {
+    "ok": {}
+  },
+  "set vector_db_name <- \"1\"": {
+    "ok": {
+      "vector_db_name": "1"
+    }
+  },
+  "set vector_db_name <- \"s\"": {
+    "ok": {
+      "vector_db_name": "s"
+    }
+  },
+  "set vector_db_name <- \"true\"": {
+    "ok": {
+      "vector_db_name": "true"
+    }
+  },
+  "set vector_db_name <- -1": {
+    "err": true
+  },
+  "set vector_db_name <- 0": {
+    "err": true
+  },
+  "set vector_db_name <- 1": {
+    "err": true
+  },
+  "set vector_db_name <- 1.5": {
+    "err": true
+  },
+  "set vector_db_name <- 5000000000": {
+    "err": true
+  },
+  "set vector_db_name <- 70000": {
+    "err": true
+  },
+  "set vector_db_name <- [1]": {
+    "err": true
+  },
+  "set vector_db_name <- false": {
+    "err": true
+  },
+  "set vector_db_name <- null": {
+    "err": true
+  },
+  "set vector_db_name <- true": {
+    "err": true
+  },
+  "set vector_db_name <- {\"a\":1}": {
+    "err": true
+  },
+  "set vector_db_password <- \"\"": {
+    "err": true
+  },
+  "set vector_db_password <- \"1\"": {
+    "err": true
+  },
+  "set vector_db_password <- \"s\"": {
+    "err": true
+  },
+  "set vector_db_password <- \"true\"": {
+    "err": true
+  },
+  "set vector_db_password <- -1": {
+    "err": true
+  },
+  "set vector_db_password <- 0": {
+    "err": true
+  },
+  "set vector_db_password <- 1": {
+    "err": true
+  },
+  "set vector_db_password <- 1.5": {
+    "err": true
+  },
+  "set vector_db_password <- 5000000000": {
+    "err": true
+  },
+  "set vector_db_password <- 70000": {
+    "err": true
+  },
+  "set vector_db_password <- [1]": {
+    "err": true
+  },
+  "set vector_db_password <- false": {
+    "err": true
+  },
+  "set vector_db_password <- null": {
+    "err": true
+  },
+  "set vector_db_password <- true": {
+    "err": true
+  },
+  "set vector_db_password <- {\"a\":1}": {
+    "err": true
+  },
+  "set vector_db_port <- \"\"": {
+    "err": true
+  },
+  "set vector_db_port <- \"1\"": {
+    "err": true
+  },
+  "set vector_db_port <- \"s\"": {
+    "err": true
+  },
+  "set vector_db_port <- \"true\"": {
+    "err": true
+  },
+  "set vector_db_port <- -1": {
+    "err": true
+  },
+  "set vector_db_port <- 0": {
+    "ok": {
+      "vector_db_port": 0
+    }
+  },
+  "set vector_db_port <- 1": {
+    "ok": {
+      "vector_db_port": 1
+    }
+  },
+  "set vector_db_port <- 1.5": {
+    "err": true
+  },
+  "set vector_db_port <- 5000000000": {
+    "err": true
+  },
+  "set vector_db_port <- 70000": {
+    "err": true
+  },
+  "set vector_db_port <- [1]": {
+    "err": true
+  },
+  "set vector_db_port <- false": {
+    "err": true
+  },
+  "set vector_db_port <- null": {
+    "err": true
+  },
+  "set vector_db_port <- true": {
+    "err": true
+  },
+  "set vector_db_port <- {\"a\":1}": {
+    "err": true
+  },
+  "set vector_db_provider <- \"\"": {
+    "ok": {
+      "vector_db_provider": ""
+    }
+  },
+  "set vector_db_provider <- \"1\"": {
+    "ok": {
+      "vector_db_provider": "1"
+    }
+  },
+  "set vector_db_provider <- \"s\"": {
+    "ok": {
+      "vector_db_provider": "s"
+    }
+  },
+  "set vector_db_provider <- \"true\"": {
+    "ok": {
+      "vector_db_provider": "true"
+    }
+  },
+  "set vector_db_provider <- -1": {
+    "err": true
+  },
+  "set vector_db_provider <- 0": {
+    "err": true
+  },
+  "set vector_db_provider <- 1": {
+    "err": true
+  },
+  "set vector_db_provider <- 1.5": {
+    "err": true
+  },
+  "set vector_db_provider <- 5000000000": {
+    "err": true
+  },
+  "set vector_db_provider <- 70000": {
+    "err": true
+  },
+  "set vector_db_provider <- [1]": {
+    "err": true
+  },
+  "set vector_db_provider <- false": {
+    "err": true
+  },
+  "set vector_db_provider <- null": {
+    "err": true
+  },
+  "set vector_db_provider <- true": {
+    "err": true
+  },
+  "set vector_db_provider <- {\"a\":1}": {
+    "err": true
+  },
+  "set vector_db_url <- \"\"": {
+    "ok": {}
+  },
+  "set vector_db_url <- \"1\"": {
+    "ok": {
+      "vector_db_url": "1"
+    }
+  },
+  "set vector_db_url <- \"s\"": {
+    "ok": {
+      "vector_db_url": "s"
+    }
+  },
+  "set vector_db_url <- \"true\"": {
+    "ok": {
+      "vector_db_url": "true"
+    }
+  },
+  "set vector_db_url <- -1": {
+    "err": true
+  },
+  "set vector_db_url <- 0": {
+    "err": true
+  },
+  "set vector_db_url <- 1": {
+    "err": true
+  },
+  "set vector_db_url <- 1.5": {
+    "err": true
+  },
+  "set vector_db_url <- 5000000000": {
+    "err": true
+  },
+  "set vector_db_url <- 70000": {
+    "err": true
+  },
+  "set vector_db_url <- [1]": {
+    "err": true
+  },
+  "set vector_db_url <- false": {
+    "err": true
+  },
+  "set vector_db_url <- null": {
+    "err": true
+  },
+  "set vector_db_url <- true": {
+    "err": true
+  },
+  "set vector_db_url <- {\"a\":1}": {
+    "err": true
+  },
+  "set vector_db_username <- \"\"": {
+    "err": true
+  },
+  "set vector_db_username <- \"1\"": {
+    "err": true
+  },
+  "set vector_db_username <- \"s\"": {
+    "err": true
+  },
+  "set vector_db_username <- \"true\"": {
+    "err": true
+  },
+  "set vector_db_username <- -1": {
+    "err": true
+  },
+  "set vector_db_username <- 0": {
+    "err": true
+  },
+  "set vector_db_username <- 1": {
+    "err": true
+  },
+  "set vector_db_username <- 1.5": {
+    "err": true
+  },
+  "set vector_db_username <- 5000000000": {
+    "err": true
+  },
+  "set vector_db_username <- 70000": {
+    "err": true
+  },
+  "set vector_db_username <- [1]": {
+    "err": true
+  },
+  "set vector_db_username <- false": {
+    "err": true
+  },
+  "set vector_db_username <- null": {
+    "err": true
+  },
+  "set vector_db_username <- true": {
+    "err": true
+  },
+  "set vector_db_username <- {\"a\":1}": {
+    "err": true
+  },
+  "unset auto_feedback": {
+    "err": true
+  },
+  "unset auto_rate_limit": {
+    "err": true
+  },
+  "unset cache_backend": {
+    "err": true
+  },
+  "unset cache_host": {
+    "err": true
+  },
+  "unset cache_password": {
+    "err": true
+  },
+  "unset cache_port": {
+    "err": true
+  },
+  "unset cache_root_directory": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset cache_username": {
+    "err": true
+  },
+  "unset chunk_engine": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset chunk_overlap": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset chunk_size": {
+    "ok": {
+      "llm_model": "changed",
+      "db_port": 1
+    }
+  },
+  "unset chunk_strategy": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset classification_model": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset cognee_tracing_enabled": {
+    "err": true
+  },
+  "unset data_root_directory": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset db_host": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset db_name": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset db_password": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset db_port": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7
+    }
+  },
+  "unset db_provider": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset db_sslmode": {
+    "err": true
+  },
+  "unset db_username": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset default_dataset_name": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset default_system_prompt_path": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset default_user_email": {
+    "err": true
+  },
+  "unset default_user_id": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset default_user_password": {
+    "err": true
+  },
+  "unset embedding_api_key": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset embedding_api_version": {
+    "err": true
+  },
+  "unset embedding_batch_size": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset embedding_dimensions": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset embedding_endpoint": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset embedding_max_sequence_length": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset embedding_model": {
+    "err": true
+  },
+  "unset embedding_model_name": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset embedding_model_path": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset embedding_onnx_batch_size": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset embedding_provider": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset embedding_rate_limit_enabled": {
+    "err": true
+  },
+  "unset embedding_rate_limit_interval": {
+    "err": true
+  },
+  "unset embedding_rate_limit_requests": {
+    "err": true
+  },
+  "unset embedding_tokenizer_path": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset enable_access_control": {
+    "err": true
+  },
+  "unset enable_caching": {
+    "err": true
+  },
+  "unset enable_last_accessed": {
+    "err": true
+  },
+  "unset graph_database_host": {
+    "err": true
+  },
+  "unset graph_database_key": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset graph_database_name": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset graph_database_password": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset graph_database_port": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset graph_database_provider": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset graph_database_url": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset graph_database_username": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset graph_file_path": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset graph_filename": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset graph_model": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset graph_prompt_path": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset llm_api_key": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset llm_api_version": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset llm_args": {
+    "err": true
+  },
+  "unset llm_cassette": {
+    "err": true
+  },
+  "unset llm_connect_timeout_seconds": {
+    "err": true
+  },
+  "unset llm_endpoint": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset llm_fallback_api_key": {
+    "err": true
+  },
+  "unset llm_fallback_endpoint": {
+    "err": true
+  },
+  "unset llm_fallback_model": {
+    "err": true
+  },
+  "unset llm_fallback_provider": {
+    "err": true
+  },
+  "unset llm_max_completion_tokens": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset llm_max_parallel_requests": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset llm_max_retries": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset llm_min_retry_seconds": {
+    "err": true
+  },
+  "unset llm_mock": {
+    "err": true
+  },
+  "unset llm_model": {
+    "ok": {
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset llm_network_retries": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset llm_provider": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset llm_rate_limit_enabled": {
+    "err": true
+  },
+  "unset llm_rate_limit_interval": {
+    "err": true
+  },
+  "unset llm_rate_limit_requests": {
+    "err": true
+  },
+  "unset llm_reasoning": {
+    "err": true
+  },
+  "unset llm_record_path": {
+    "err": true
+  },
+  "unset llm_request_deadline_seconds": {
+    "err": true
+  },
+  "unset llm_request_timeout_seconds": {
+    "err": true
+  },
+  "unset llm_streaming": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset llm_structured_output_mode": {
+    "err": true
+  },
+  "unset llm_temperature": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset log_level": {
+    "err": true
+  },
+  "unset logs_root_directory": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset migration_db_url": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset monitoring_tool": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset no_such_key": {
+    "err": true
+  },
+  "unset ontology_file_path": {
+    "err": true
+  },
+  "unset ontology_matching_strategy": {
+    "err": true
+  },
+  "unset ontology_resolver": {
+    "err": true
+  },
+  "unset otel_exporter_otlp_endpoint": {
+    "err": true
+  },
+  "unset otel_exporter_otlp_headers": {
+    "err": true
+  },
+  "unset otel_exporter_otlp_protocol": {
+    "err": true
+  },
+  "unset otel_service_name": {
+    "err": true
+  },
+  "unset otel_span_processor": {
+    "err": true
+  },
+  "unset otel_traces_sampler": {
+    "err": true
+  },
+  "unset otel_traces_sampler_arg": {
+    "err": true
+  },
+  "unset relational_db_url": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset session_ttl_seconds": {
+    "err": true
+  },
+  "unset single_process": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset storage_backend": {
+    "err": true
+  },
+  "unset storage_bucket_name": {
+    "err": true
+  },
+  "unset summarization_model": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset summarization_schema": {
+    "err": true
+  },
+  "unset system_root_directory": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset transcription_model": {
+    "err": true
+  },
+  "unset vector_db_host": {
+    "err": true
+  },
+  "unset vector_db_key": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset vector_db_name": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset vector_db_password": {
+    "err": true
+  },
+  "unset vector_db_port": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset vector_db_provider": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset vector_db_url": {
+    "ok": {
+      "llm_model": "changed",
+      "chunk_size": 7,
+      "db_port": 1
+    }
+  },
+  "unset vector_db_username": {
+    "err": true
+  }
+}
