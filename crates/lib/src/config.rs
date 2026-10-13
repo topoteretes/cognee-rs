@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, RwLock, RwLockReadGuard};
+use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard};
 
 use serde::{Deserialize, Serialize};
 
@@ -1238,29 +1238,78 @@ impl From<cognee_config_core::KeyError> for ConfigError {
 /// assert_eq!(cfg.read().llm_model, "gpt-4o");
 /// ```
 pub struct ConfigManager {
+    // Lock order: `schema`, then `inner`, then `invalid`. A method that holds
+    // more than one of them must take them in this order, or it can deadlock
+    // against `extend_schema`.
     inner: Arc<RwLock<Settings>>,
     version: Arc<AtomicU64>,
     /// The component config sections this manager knows: the built-in ones,
     /// plus those of a custom registry added by
     /// [`ConfigManager::extend_schema`].
     schema: Arc<RwLock<ConfigSchema>>,
+    /// Bulk-loaded values of a known key that had the wrong type, as
+    /// `(canonical key, reason)`. They were dropped, and
+    /// [`ConfigManager::check_strict`] reports them until the key is set again.
+    invalid: Arc<Mutex<Vec<(String, String)>>>,
+}
+
+/// Bring settings that were loaded in bulk (deserialized from a config file or
+/// a binding's settings object) into canonical form against `schema`, and
+/// return the values of a known key that had the wrong type.
+///
+/// `Settings::sections` is a `#[serde(flatten)]` catch-all, so a `Settings`
+/// key serde does not know by that name lands in it too: the
+/// `#[serde(skip)]` fields (`llm_args`, `summarization_schema`) and key
+/// aliases (`embedding_model`). Those are moved out and applied through the
+/// key registry first, so only component section keys stay in `sections`.
+fn normalize_bulk(schema: &ConfigSchema, settings: &mut Settings) -> Vec<(String, String)> {
+    let mut invalid = Vec::new();
+    let core: Vec<(String, &'static KeySpec)> = settings
+        .sections
+        .keys()
+        .filter_map(|key| key_spec(key).map(|spec| (key.clone(), spec)))
+        .collect();
+    for (key, spec) in core {
+        let Some(value) = settings.sections.remove(&key) else {
+            continue;
+        };
+        if let Err(error) = (spec.set)(settings, &key, value) {
+            let reason = match error {
+                ConfigError::TypeMismatch { reason, .. } => reason,
+                other => other.to_string(),
+            };
+            tracing::warn!(key, reason, "config value of the wrong type");
+            invalid.push((spec.key.to_string(), reason));
+        }
+    }
+    invalid.extend(schema.normalize_lenient(&mut settings.sections).invalid);
+    invalid
 }
 
 impl ConfigManager {
     /// Create a new `ConfigManager` wrapping the given settings.
     ///
-    /// Section values in `settings.sections` are checked against the built-in
+    /// Bulk-loaded values in `settings` are checked against the built-in
     /// schema: aliases become canonical keys, a value of the wrong type is
-    /// dropped with a warning, and an unknown key is kept with a warning (see
-    /// [`ConfigManager::check_strict`]).
+    /// dropped and reported by [`ConfigManager::check_strict`], and an
+    /// unknown key is kept with a warning (an error under strict mode, again
+    /// at `check_strict`).
     pub fn new(settings: Settings) -> Self {
-        let schema = builtin_schema().clone();
+        Self::with_schema(settings, builtin_schema().clone())
+    }
+
+    /// [`ConfigManager::new`] for a build whose component registry adds
+    /// config sections of its own: `schema` is the full schema (see
+    /// [`schema_with`]), so the values of those sections are recognized from
+    /// the start rather than reported as unknown first.
+    pub fn with_schema(settings: Settings, schema: ConfigSchema) -> Self {
         let mut settings = settings;
-        schema.normalize_lenient(&mut settings.sections);
+        let invalid = normalize_bulk(&schema, &mut settings);
         Self {
             inner: Arc::new(RwLock::new(settings)),
             version: Arc::new(AtomicU64::new(0)),
             schema: Arc::new(RwLock::new(schema)),
+            invalid: Arc::new(Mutex::new(invalid)),
         }
     }
 
@@ -1272,9 +1321,19 @@ impl ConfigManager {
         other: &ConfigSchema,
     ) -> Result<(), cognee_config_core::SchemaError> {
         let mut schema = self.schema.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+        let before = schema.sections().len();
         schema.merge(other)?;
+        if schema.sections().len() == before {
+            // Nothing new (e.g. the schema already came from `with_schema`):
+            // the values were normalized against these sections already.
+            return Ok(());
+        }
         let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
-        schema.normalize_lenient(&mut s.sections);
+        let invalid = normalize_bulk(&schema, &mut s);
+        self.invalid
+            .lock()
+            .expect("lock poison is unrecoverable") // lock poison is unrecoverable
+            .extend(invalid);
         Ok(())
     }
 
@@ -1286,23 +1345,62 @@ impl ConfigManager {
             .clone()
     }
 
-    /// With `strict_config` on, fail if the loaded configuration holds a key
-    /// that no registered setting owns. Lenient (the default), always `Ok`:
-    /// unknown keys were already reported as warnings.
+    /// Fail if the configuration that was loaded in bulk (a config file, a
+    /// binding's settings object) held a value of the wrong type for a known
+    /// key, or, with `strict_config` on, a key that no registered setting
+    /// owns. Otherwise `Ok`: unknown keys were already reported as warnings.
     ///
     /// Explicit [`ConfigManager::set`] calls apply the policy themselves; this
-    /// covers keys that arrived in bulk (a config file, a binding's settings
-    /// object), which are checked when the configuration is first used.
+    /// covers keys that arrived in bulk, which are checked when the
+    /// configuration is first used.
     pub fn check_strict(&self) -> Result<(), ConfigError> {
+        let schema = self.schema.read().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
         let s = self.read();
+        if let Some((key, reason)) = self
+            .invalid
+            .lock()
+            .expect("lock poison is unrecoverable") // lock poison is unrecoverable
+            .first()
+        {
+            return Err(ConfigError::TypeMismatch {
+                key: key.clone(),
+                reason: reason.clone(),
+            });
+        }
         if !s.strict_config {
             return Ok(());
         }
-        let schema = self.schema.read().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
         match schema.unknown_keys(&s.sections).first() {
             Some(key) => Err(ConfigError::UnknownKey((*key).to_string())),
             None => Ok(()),
         }
+    }
+
+    /// Forget a reported wrongly typed bulk value of `key` (canonical): the
+    /// key was just set explicitly.
+    fn clear_invalid(&self, key: &str) {
+        self.invalid
+            .lock()
+            .expect("lock poison is unrecoverable") // lock poison is unrecoverable
+            .retain(|(k, _)| k != key);
+    }
+
+    /// Every key whose value is a credential (a `Settings` row or a section
+    /// setting marked `secret`), as it appears in the serialized `Settings`.
+    /// Anything that shows the configuration must mask these.
+    pub fn secret_keys(&self) -> Vec<&'static str> {
+        let schema = self.schema.read().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+        keys()
+            .iter()
+            .filter(|spec| spec.secret)
+            .map(|spec| spec.key)
+            .chain(
+                schema
+                    .key_defs()
+                    .filter(|def| def.secret)
+                    .map(|def| def.key),
+            )
+            .collect()
     }
 
     /// Convenience constructor: `Settings::load_from_env()` + wrap.
@@ -1319,9 +1417,8 @@ impl ConfigManager {
         extra: &ConfigSchema,
     ) -> Result<Self, cognee_config_core::SchemaError> {
         let schema = schema_with(extra)?;
-        let cm = Self::new(Settings::load_from_env_with_schema(&schema));
-        cm.extend_schema(extra)?;
-        Ok(cm)
+        let settings = Settings::load_from_env_with_schema(&schema);
+        Ok(Self::with_schema(settings, schema))
     }
 
     /// Obtain a read-lock on the current settings.
@@ -1346,6 +1443,7 @@ impl Clone for ConfigManager {
             inner: Arc::clone(&self.inner),
             version: Arc::clone(&self.version),
             schema: Arc::clone(&self.schema),
+            invalid: Arc::clone(&self.invalid),
         }
     }
 }
@@ -2263,17 +2361,19 @@ impl ConfigManager {
             let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
             (spec.set)(&mut s, key, value)?;
             drop(s);
+            self.clear_invalid(spec.key);
             self.bump_version();
             return Ok(());
         }
         let schema = self.schema.read().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
         let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
         if schema.key_def(key).is_some() {
-            schema
+            let canonical = schema
                 .set(&mut s.sections, key, &value)
                 .map_err(ConfigError::from)?;
             drop(s);
             drop(schema);
+            self.clear_invalid(canonical);
             self.bump_version();
             return Ok(());
         }
@@ -2321,14 +2421,13 @@ impl ConfigManager {
     /// The current value of `key` (a `Settings` key, a section key, or an
     /// alias of either) as JSON, unmasked. `None` for an unknown key.
     pub fn get(&self, key: &str) -> Option<serde_json::Value> {
+        // Lock order: `schema` before `inner` (see `ConfigManager`).
+        let schema = self.schema.read().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
         let s = self.read();
         if let Some(spec) = key_spec(key) {
             return Some((spec.get)(&s));
         }
-        self.schema
-            .read()
-            .expect("lock poison is unrecoverable") // lock poison is unrecoverable
-            .get(&s.sections, key)
+        schema.get(&s.sections, key)
     }
 }
 
@@ -2931,6 +3030,127 @@ mod tests {
         cm.config().set("custom_x", serde_json::json!(9)).unwrap();
         let section: CustomSection = cm.config().read().backend_context().section();
         assert_eq!(section.x, 9);
+    }
+
+    fn custom_schema() -> ConfigSchema {
+        let mut extra = ConfigSchema::new();
+        extra
+            .add(<CustomSection as cognee_config_core::ConfigSection>::schema())
+            .unwrap();
+        schema_with(&extra).unwrap()
+    }
+
+    /// A bulk-loaded section value of the wrong type is an error at the first
+    /// fallible step, strict mode or not, until the key is set again.
+    #[test]
+    fn wrongly_typed_bulk_section_value_is_reported() {
+        let settings: Settings =
+            serde_json::from_value(serde_json::json!({ "custom_x": "big" })).unwrap();
+        let cm = ConfigManager::with_schema(settings, custom_schema());
+        match cm.check_strict() {
+            Err(ConfigError::TypeMismatch { key, .. }) => assert_eq!(key, "test.custom.x"),
+            other => panic!("expected a type mismatch, got {other:?}"),
+        }
+        assert_eq!(
+            cm.get("test.custom.x"),
+            Some(serde_json::json!(1)),
+            "default"
+        );
+        cm.set("custom_x", serde_json::json!(3)).unwrap();
+        cm.check_strict().unwrap();
+    }
+
+    /// `Settings` keys that serde does not know by that name (the
+    /// `#[serde(skip)]` fields and key aliases) land in the flattened
+    /// `sections` map; `ConfigManager::new` applies them as settings instead
+    /// of treating them as unknown section keys.
+    #[test]
+    fn bulk_loaded_settings_keys_are_not_unknown_section_keys() {
+        let settings: Settings = serde_json::from_value(serde_json::json!({
+            "strict_config": true,
+            "llm_args": { "max_tokens": 100 },
+            "embedding_model": "x",
+        }))
+        .unwrap();
+        let cm = ConfigManager::new(settings);
+        cm.check_strict().unwrap();
+        let s = cm.read();
+        assert_eq!(s.llm_args.get("max_tokens"), Some(&serde_json::json!(100)));
+        assert_eq!(s.embedding_model_name, "x");
+        assert!(s.sections.is_empty(), "{:?}", s.sections);
+    }
+
+    /// A wrongly typed bulk value of a `Settings` key routed through the
+    /// flatten map is reported like a section value.
+    #[test]
+    fn wrongly_typed_bulk_settings_alias_is_reported() {
+        let settings: Settings =
+            serde_json::from_value(serde_json::json!({ "embedding_model": 5 })).unwrap();
+        let cm = ConfigManager::new(settings);
+        assert!(matches!(
+            cm.check_strict(),
+            Err(ConfigError::TypeMismatch { .. })
+        ));
+    }
+
+    /// Settings built with the full schema recognize a custom section's values
+    /// from the start: nothing is reported as unknown, and re-adding the same
+    /// sections is a no-op.
+    #[test]
+    fn with_schema_knows_custom_sections_up_front() {
+        let mut settings = Settings {
+            strict_config: true,
+            ..Settings::default()
+        };
+        settings
+            .sections
+            .insert("test.custom.x".into(), serde_json::json!(5));
+        let schema = custom_schema();
+        let cm = ConfigManager::with_schema(settings, schema.clone());
+        cm.check_strict().unwrap();
+        cm.extend_schema(&schema).unwrap();
+        cm.check_strict().unwrap();
+        assert_eq!(cm.get("test.custom.x"), Some(serde_json::json!(5)));
+    }
+
+    /// `check_strict`/`get` and `extend_schema` take the two locks in the same
+    /// order, so they cannot deadlock against each other.
+    #[test]
+    fn extend_schema_does_not_deadlock_against_readers() {
+        let cm = ConfigManager::new(Settings {
+            strict_config: true,
+            ..Settings::default()
+        });
+        let readers: Vec<_> = (0..4)
+            .map(|_| {
+                let cm = cm.clone();
+                std::thread::spawn(move || {
+                    for _ in 0..2000 {
+                        let _ = cm.check_strict();
+                        let _ = cm.get("test.custom.x");
+                    }
+                })
+            })
+            .collect();
+        for _ in 0..200 {
+            let mut extra = ConfigSchema::new();
+            extra
+                .add(<CustomSection as cognee_config_core::ConfigSection>::schema())
+                .unwrap();
+            cm.extend_schema(&extra).unwrap();
+        }
+        for reader in readers {
+            reader.join().unwrap();
+        }
+    }
+
+    /// `secret_keys` covers the registry rows and secret section settings.
+    #[test]
+    fn secret_keys_cover_registry_rows() {
+        let keys = ConfigManager::new(Settings::default()).secret_keys();
+        assert!(keys.contains(&"llm_api_key"));
+        assert!(keys.contains(&"llm_fallback_api_key"));
+        assert!(!keys.contains(&"llm_model"));
     }
 
     /// A key owned by a component config section is settable by its

@@ -343,8 +343,8 @@ pub unsafe extern "C" fn cg_sdk_config_set_graph_db_config(
 
 /// Read back the current configuration as a JSON string.
 ///
-/// Fields listed in `cognee_bindings_common::redact::SECRET_FIELDS`
-/// (e.g. `llm_api_key`, `embedding_api_key`, `vector_db_key`) are replaced
+/// Secret fields (`llm_api_key`, `embedding_api_key`, `vector_db_key`, and
+/// every setting the configuration schema marks as a secret) are replaced
 /// with `"***REDACTED***"` before the JSON is serialized to the output string.
 ///
 /// On success `*out_json` is set to a heap-allocated UTF-8 JSON string. The
@@ -368,20 +368,14 @@ pub unsafe extern "C" fn cg_sdk_config_get(
     }
     let state = unsafe { &*sdk };
 
-    // Serialize the current settings under a read lock.
-    let mut value = {
-        let settings = state.state.cm.settings();
-        match serde_json::to_value(&*settings) {
-            Ok(v) => v,
-            Err(e) => {
-                set_last_error(format!("failed to serialize settings: {e}"));
-                return CgErrorCode::RuntimeError;
-            }
+    // Serialize the current settings with the secret fields blanked.
+    let value = match cognee_bindings_common::redacted_settings_json(state.state.cm.config()) {
+        Ok(v) => v,
+        Err(e) => {
+            set_last_error(format!("failed to serialize settings: {e}"));
+            return CgErrorCode::RuntimeError;
         }
     };
-
-    // Blank the secret fields in-place before returning to the C caller.
-    cognee_bindings_common::redact_config_json(&mut value);
 
     let json_str = match serde_json::to_string(&value) {
         Ok(s) => s,

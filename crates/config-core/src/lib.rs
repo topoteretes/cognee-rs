@@ -28,8 +28,8 @@ use std::collections::BTreeMap;
 
 pub mod section;
 pub use section::{
-    ConfigSchema, ConfigSection, ConfigValue, ConfigValues, KeyDef, KeyError, SchemaError,
-    SectionSchema, unknown_key,
+    ConfigSchema, ConfigSection, ConfigValue, ConfigValues, KeyDef, KeyError, LenientReport,
+    SchemaError, SectionSchema, unknown_key,
 };
 
 /// Read-only view over an environment.

@@ -31,5 +31,5 @@ pub mod wire;
 pub use error::SdkError;
 pub use graph_backend::{GraphBackendFactory, register_graph_backend};
 pub use handle::{DefaultUserBootstrap, HandleState};
-pub use redact::redact_config_json;
+pub use redact::{redact_config_json, redacted_settings_json};
 pub use services::CogneeServices;

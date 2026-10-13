@@ -17,6 +17,7 @@
 /// new secret field here protects every binding at once.
 pub const SECRET_FIELDS: &[&str] = &[
     "llm_api_key",
+    "llm_fallback_api_key",
     "embedding_api_key",
     "vector_db_key",
     "vector_db_password",
@@ -30,6 +31,37 @@ pub const SECRET_FIELDS: &[&str] = &[
 
 const REDACTED: &str = "***REDACTED***";
 
+/// The current settings of `config` as a JSON object, with every secret
+/// masked: the keys in [`SECRET_FIELDS`] plus every key the configuration
+/// schema marks as a secret ([`ConfigManager::secret_keys`]), which covers the
+/// component section settings flattened into the serialized `Settings` (e.g.
+/// `"llm.<adapter>.api_key"`). This is what every binding's `config.get()`
+/// returns.
+///
+/// [`ConfigManager::secret_keys`]: cognee::config::ConfigManager::secret_keys
+pub fn redacted_settings_json(
+    config: &cognee::config::ConfigManager,
+) -> serde_json::Result<serde_json::Value> {
+    let secret = config.secret_keys();
+    let mut value = serde_json::to_value(&*config.read())?;
+    redact_config_json(&mut value);
+    redact_keys(&mut value, &secret);
+    Ok(value)
+}
+
+/// Mask the non-null values of `keys` in a JSON object, in place.
+fn redact_keys(value: &mut serde_json::Value, keys: &[&str]) {
+    if let Some(obj) = value.as_object_mut() {
+        for key in keys {
+            if let Some(v) = obj.get_mut(*key)
+                && !v.is_null()
+            {
+                *v = serde_json::Value::String(REDACTED.to_string());
+            }
+        }
+    }
+}
+
 /// Redact secret values in a config JSON object in place.
 ///
 /// Every key in [`SECRET_FIELDS`] whose value is non-null is replaced with
@@ -42,14 +74,8 @@ const REDACTED: &str = "***REDACTED***";
 /// serialization is flat, but the recursion is cheap and future-proofs the
 /// helper against schema changes.
 pub fn redact_config_json(value: &mut serde_json::Value) {
+    redact_keys(value, SECRET_FIELDS);
     if let Some(obj) = value.as_object_mut() {
-        for key in SECRET_FIELDS {
-            if let Some(v) = obj.get_mut(*key)
-                && !v.is_null()
-            {
-                *v = serde_json::Value::String(REDACTED.to_string());
-            }
-        }
         // Recurse into nested config sub-objects (e.g. llm/embedding/vector/graph).
         for (_k, v) in obj.iter_mut() {
             if v.is_object() {
@@ -74,6 +100,7 @@ mod tests {
     fn redacts_all_secret_fields_flat() {
         let mut value = json!({
             "llm_api_key": "sk-abc",
+            "llm_fallback_api_key": "sk-fallback",
             "embedding_api_key": "emb-key",
             "vector_db_key": "vec-key",
             "vector_db_password": "vec-pass",
@@ -152,5 +179,54 @@ mod tests {
         let mut value = json!("just a string");
         redact_config_json(&mut value);
         assert_eq!(value, json!("just a string"));
+    }
+
+    /// Every `Settings` row marked `secret` in the key registry is masked by
+    /// the binding path, including ones missing from `SECRET_FIELDS`.
+    #[test]
+    fn every_registry_secret_is_redacted() {
+        let cm = cognee::config::ConfigManager::new(cognee::config::Settings::default());
+        let secrets: Vec<&str> = cognee::config::keys()
+            .iter()
+            .filter(|spec| spec.secret)
+            .map(|spec| spec.key)
+            .collect();
+        assert!(secrets.contains(&"llm_fallback_api_key"));
+        for key in &secrets {
+            cm.set(key, json!("hunter2"))
+                .expect("secret rows take a string");
+        }
+        let value = redacted_settings_json(&cm).expect("serializes");
+        for key in &secrets {
+            assert_eq!(value[*key], json!(REDACTED), "{key} leaked");
+        }
+        assert!(!value.to_string().contains("hunter2"));
+    }
+
+    cognee_config_core::config_section! {
+        /// A section with a credential.
+        pub struct SecretDemo in "test.redact" {
+            /// A token.
+            pub api_key: String = String::new() => { env: [], alias: [], secret: true },
+            /// Not a secret.
+            pub model: String = String::new() => { env: [], alias: [], secret: false },
+        }
+    }
+
+    /// A section setting declared `secret: true` is masked even though it is
+    /// flattened into the serialized `Settings` under a dotted key.
+    #[test]
+    fn secret_section_keys_are_redacted() {
+        use cognee_config_core::{ConfigSchema, ConfigSection};
+        let cm = cognee::config::ConfigManager::new(cognee::config::Settings::default());
+        let mut schema = ConfigSchema::new();
+        schema.add(SecretDemo::schema()).expect("no collision");
+        cm.extend_schema(&schema).expect("no collision");
+        cm.set("test.redact.api_key", json!("sk-section"))
+            .expect("set");
+        cm.set("test.redact.model", json!("m")).expect("set");
+        let value = redacted_settings_json(&cm).expect("serializes");
+        assert_eq!(value["test.redact.api_key"], json!(REDACTED));
+        assert_eq!(value["test.redact.model"], json!("m"));
     }
 }

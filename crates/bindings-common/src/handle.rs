@@ -99,10 +99,23 @@ impl HandleState {
     /// the OSS built-in registry this is byte-for-byte equivalent to
     /// [`from_settings`](Self::from_settings).
     pub fn from_settings_with_registry(settings: Settings, registry: ComponentRegistry) -> Self {
-        let cm = Arc::new(ComponentManager::with_registry(
-            ConfigManager::new(settings),
-            registry,
-        ));
+        // Check the settings against the registry's full schema up front, so
+        // values of its own sections are not first reported as unknown keys.
+        // A schema collision is logged by `ComponentManager::with_registry`.
+        let config = match registry
+            .config_schema()
+            .and_then(|extra| cognee::config::schema_with(&extra))
+        {
+            Ok(schema) => ConfigManager::with_schema(settings, schema),
+            Err(_) => ConfigManager::new(settings),
+        };
+        Self::from_config_with_registry(config, registry)
+    }
+
+    /// Construct around an existing `ConfigManager`, whose schema already
+    /// includes the registry's sections or gets them added here.
+    fn from_config_with_registry(config: ConfigManager, registry: ComponentRegistry) -> Self {
+        let cm = Arc::new(ComponentManager::with_registry(config, registry));
         HandleState {
             cm,
             services: TokioMutex::new(None),
@@ -127,10 +140,7 @@ impl HandleState {
             .map_err(|e| SdkError::Validation(e.to_string()))?;
         let config = ConfigManager::from_env_with_schema(&schema)
             .map_err(|e| SdkError::Validation(e.to_string()))?;
-        Ok(Self::from_settings_with_registry(
-            config.read().clone(),
-            registry,
-        ))
+        Ok(Self::from_config_with_registry(config, registry))
     }
 
     /// Attach a DB-backed default-user bootstrap hook (builder).

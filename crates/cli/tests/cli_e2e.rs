@@ -168,6 +168,75 @@ fn config_unset_restores_default_llm_provider() {
     assert_eq!(config_value(&config_home, "llm_provider"), "openai");
 }
 
+/// `config set` of an unknown key fails under strict mode, including strict
+/// mode turned on only through the environment.
+#[test]
+fn config_set_unknown_key_fails_with_env_strict_mode() {
+    let config_home = TempDir::new().expect("temp dir should be created");
+
+    make_cmd(&config_home)
+        .env("COGNEE_STRICT_CONFIG", "true")
+        .args(["config", "set", "llm_modle", "gpt-4o"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("Unknown config key"));
+
+    make_cmd(&config_home)
+        .env("COGNEE_STRICT_CONFIG", "true")
+        .args(["config", "unset", "llm_modle", "--force"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("Unknown config key"));
+}
+
+/// Without strict mode, `config set` of an unknown key warns, does not claim
+/// success, and writes nothing.
+#[test]
+fn config_set_unknown_key_changes_nothing_when_lenient() {
+    let config_home = TempDir::new().expect("temp dir should be created");
+
+    make_cmd(&config_home)
+        .env_remove("COGNEE_STRICT_CONFIG")
+        .args(["config", "set", "llm_modle", "gpt-4o"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("nothing was changed"))
+        .stdout(predicate::str::contains("Success").not());
+
+    assert!(
+        !config_home
+            .path()
+            .join("cognee-rust")
+            .join("config.json")
+            .exists()
+            && !config_home
+                .path()
+                .join("Library")
+                .join("Application Support")
+                .join("cognee-rust")
+                .join("config.json")
+                .exists(),
+        "no config file is written for an unknown key"
+    );
+}
+
+/// `config get` resolves the same aliases `config set` accepts.
+#[test]
+fn config_get_accepts_an_alias() {
+    let config_home = TempDir::new().expect("temp dir should be created");
+
+    make_cmd(&config_home)
+        .args(["config", "set", "embedding_model", "\"my-embedder\""])
+        .assert()
+        .success();
+
+    make_cmd(&config_home)
+        .args(["config", "get", "embedding_model"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("my-embedder"));
+}
+
 #[test]
 fn search_rejects_invalid_top_k() {
     let config_home = TempDir::new().expect("temp dir should be created");

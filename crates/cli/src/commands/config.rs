@@ -1,9 +1,10 @@
 use serde_json::Value;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::cli::{ConfigAction, ConfigArgs};
 use crate::config_store::{
-    ConfigDocument, as_flat_map, known_keys, load_config, save_config, set_value, unset_key,
+    ConfigDocument, effective_strict, get_value, is_known_key, known_keys, load_config,
+    reject_unknown, save_config, set_value, unset_key,
 };
 use crate::error::CliError;
 
@@ -19,14 +20,9 @@ pub fn run(args: ConfigArgs) -> Result<(), CliError> {
 
 fn handle_get(key: Option<&str>) -> Result<(), CliError> {
     let config = load_config()?;
-    let flat = as_flat_map(&config.settings);
 
     if let Some(key) = key {
-        let value = flat.get(key).ok_or_else(|| {
-            CliError::Validation(format!(
-                "Unknown config key '{key}'. Use 'cognee-cli config list' to see supported keys."
-            ))
-        })?;
+        let value = get_value(&config.settings, key)?;
         info!("{key}: {value}");
         return Ok(());
     }
@@ -43,6 +39,11 @@ fn handle_get(key: Option<&str>) -> Result<(), CliError> {
 
 fn handle_set(key: &str, raw_value: &str) -> Result<(), CliError> {
     let mut config = load_config()?;
+    if !is_known_key(key) {
+        reject_unknown(key, effective_strict(&config.settings))?;
+        warn_unchanged(key);
+        return Ok(());
+    }
     let parsed = serde_json::from_str::<Value>(raw_value)
         .unwrap_or_else(|_| Value::String(raw_value.to_string()));
 
@@ -69,6 +70,14 @@ fn handle_unset(key: &str, force: bool) -> Result<(), CliError> {
     }
 
     let mut config = load_config()?;
+    // A stale entry no component owns (e.g. written by a build with more
+    // features) is removed even in strict mode: that is how a config is
+    // repaired.
+    if !is_known_key(key) && !config.settings.sections.contains_key(key) {
+        reject_unknown(key, effective_strict(&config.settings))?;
+        warn_unchanged(key);
+        return Ok(());
+    }
     unset_key(&mut config.settings, key)?;
     save_config(&config)?;
 
@@ -87,6 +96,14 @@ fn handle_reset(force: bool) -> Result<(), CliError> {
 
     info!("Success: Configuration reset to defaults");
     Ok(())
+}
+
+/// An unknown key in lenient mode: say so, and leave the file untouched.
+fn warn_unchanged(key: &str) {
+    warn!(
+        "Unknown config key '{key}': nothing was changed. Use 'cognee-cli config list' to \
+         see supported keys (set strict_config / COGNEE_STRICT_CONFIG=true to make this an error)."
+    );
 }
 
 fn confirm(prompt: &str) -> Result<bool, CliError> {

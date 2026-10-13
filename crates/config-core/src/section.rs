@@ -380,14 +380,27 @@ impl ConfigSchema {
     }
 }
 
+/// What [`ConfigSchema::normalize_lenient`] found wrong with a bulk-loaded
+/// set of values.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LenientReport {
+    /// Keys that match no registered setting. They are kept in the values.
+    pub unknown: Vec<String>,
+    /// Known keys whose value has the wrong type, as `(canonical key,
+    /// reason)`. Their values are dropped, so the setting keeps its default.
+    pub invalid: Vec<(String, String)>,
+}
+
 impl ConfigSchema {
     /// [`ConfigSchema::normalize`] for values that arrive in bulk at startup
-    /// (a config file, a binding's settings object), where one bad entry must
-    /// not stop the process: aliases are rewritten, a value of the wrong type
-    /// is dropped with a warning, and an unknown key is kept with a warning.
-    /// Returns the unknown keys, so the caller can enforce strict mode later.
-    pub fn normalize_lenient(&self, values: &mut ConfigValues) -> Vec<String> {
-        let mut unknown = Vec::new();
+    /// (a config file, a binding's settings object), where the whole set must
+    /// be read before anything can fail: aliases are rewritten, a value of the
+    /// wrong type is dropped and reported, and an unknown key is kept with a
+    /// warning. The caller turns the report into an error at its next
+    /// fallible step: a wrongly typed value always, an unknown key under
+    /// strict mode.
+    pub fn normalize_lenient(&self, values: &mut ConfigValues) -> LenientReport {
+        let mut report = LenientReport::default();
         let entries = std::mem::take(values);
         for (key, value) in entries {
             match self.key_def(&key) {
@@ -396,19 +409,20 @@ impl ConfigSchema {
                         values.insert(def.key.to_string(), canonical);
                     }
                     Err(reason) => {
-                        tracing::warn!(key, reason, "ignoring config value of the wrong type");
+                        tracing::warn!(key, reason, "config value of the wrong type");
+                        report.invalid.push((def.key.to_string(), reason));
                     }
                 },
                 None => {
                     // Warn now; strict mode turns it into an error at the
                     // caller's next fallible step.
                     let _ = unknown_key(&key, false);
-                    unknown.push(key.clone());
+                    report.unknown.push(key.clone());
                     values.insert(key, value);
                 }
             }
         }
-        unknown
+        report
     }
 
     /// Keys of `values` that match no registered setting.
@@ -636,6 +650,35 @@ mod tests {
         assert_eq!(
             schema.normalize(&mut values, true),
             Err(KeyError::Unknown("stale.key".into()))
+        );
+    }
+
+    #[test]
+    fn normalize_lenient_reports_wrong_types_and_keeps_unknown_keys() {
+        let schema = schema();
+        let mut values: ConfigValues = [
+            ("demo_size".to_string(), json!("big")),
+            ("demo.flag".to_string(), json!(true)),
+            ("stale.key".to_string(), json!(1)),
+        ]
+        .into();
+        let report = schema.normalize_lenient(&mut values);
+        assert_eq!(report.unknown, vec!["stale.key".to_string()]);
+        assert_eq!(report.invalid.len(), 1);
+        assert_eq!(
+            report.invalid[0].0, "demo.size",
+            "reported under the canonical key"
+        );
+        assert!(
+            !values.contains_key("demo.size"),
+            "the wrong value is dropped"
+        );
+        assert!(!values.contains_key("demo_size"));
+        assert_eq!(values.get("demo.flag"), Some(&json!(true)));
+        assert_eq!(
+            values.get("stale.key"),
+            Some(&json!(1)),
+            "unknown keys are kept"
         );
     }
 

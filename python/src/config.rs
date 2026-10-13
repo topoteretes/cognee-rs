@@ -77,10 +77,8 @@ impl PyCogneeConfig {
     /// Secret fields (``llm_api_key``, ``embedding_api_key``, etc.) are replaced
     /// with ``"***REDACTED***"`` before being returned.
     fn get(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let settings = self.inner.cm.config().read().clone();
-        let mut value = serde_json::to_value(&settings)
+        let value = cognee_bindings_common::redacted_settings_json(self.inner.cm.config())
             .map_err(|e| PyRuntimeError::new_err(format!("failed to serialize settings: {e}")))?;
-        cognee_bindings_common::redact_config_json(&mut value);
         serde_to_py(py, &value)
     }
 

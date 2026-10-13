@@ -59,4 +59,5 @@ base64      = { workspace = true }
 tracing     = { workspace = true }
 
 [dev-dependencies]
+cognee-config-core = { path = "../config-core", version = "0.2.0" }
 tempfile = "3"

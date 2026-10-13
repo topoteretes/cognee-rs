@@ -139,21 +139,17 @@ pub extern "system" fn Java_ai_cognee_internal_Native_getConfig<'l>(
         // SAFETY: live for this synchronous call via Java's `dispatch`
         // (op/close read lock + reachabilityFence). See `handle_ref`.
         let state = unsafe { handle_ref(handle) };
-        let mut value = {
-            let settings = state.cm.settings();
-            match serde_json::to_value(&*settings) {
-                Ok(v) => v,
-                Err(e) => {
-                    throw_cognee_exception(
-                        env,
-                        "RUNTIME_ERROR",
-                        &format!("failed to serialize settings: {e}"),
-                    );
-                    return std::ptr::null_mut();
-                }
+        let value = match cognee_bindings_common::redacted_settings_json(state.cm.config()) {
+            Ok(v) => v,
+            Err(e) => {
+                throw_cognee_exception(
+                    env,
+                    "RUNTIME_ERROR",
+                    &format!("failed to serialize settings: {e}"),
+                );
+                return std::ptr::null_mut();
             }
         };
-        cognee_bindings_common::redact_config_json(&mut value);
         match env.new_string(value.to_string()) {
             Ok(s) => s.into_raw(),
             Err(_) => std::ptr::null_mut(),

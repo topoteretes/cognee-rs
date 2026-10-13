@@ -214,6 +214,40 @@ fn cli_error(error: ConfigError) -> CliError {
     }
 }
 
+/// Whether `key` (or an alias) names a setting of this build: a `Settings`
+/// key or a key of a compiled-in component config section.
+pub fn is_known_key(key: &str) -> bool {
+    key_spec(key).is_some() || builtin_schema().key_def(key).is_some()
+}
+
+/// Whether strict mode is on for this invocation: the saved `strict_config`
+/// with the environment (`COGNEE_STRICT_CONFIG`) overlaid, as every other
+/// command sees it. The env value is only read, never saved.
+pub fn effective_strict(settings: &Settings) -> bool {
+    let mut effective = settings.clone();
+    effective.overlay_from_env();
+    effective.strict_config
+}
+
+/// The unknown-key policy of `config set` / `config unset` for a `key` that
+/// [`is_known_key`] rejected: an error under strict mode, else `Ok`, and the
+/// caller changes nothing.
+pub fn reject_unknown(key: &str, strict: bool) -> Result<(), CliError> {
+    if strict {
+        return Err(cli_error(ConfigError::UnknownKey(key.to_string())));
+    }
+    Ok(())
+}
+
+/// `config get <key>`: the value of a setting, addressed by its key or an
+/// alias.
+pub fn get_value(settings: &Settings, key: &str) -> Result<Value, CliError> {
+    reject_unpersisted(key)?;
+    settings
+        .get_key(key)
+        .ok_or_else(|| cli_error(ConfigError::UnknownKey(key.to_string())))
+}
+
 pub fn as_flat_map(settings: &Settings) -> BTreeMap<&'static str, Value> {
     known_keys()
         .into_iter()

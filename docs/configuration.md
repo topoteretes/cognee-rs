@@ -106,8 +106,20 @@ the policy is a setting:
 | `true` | `UnknownKey` error | error at first use: the CLI command, or the handle's first operation |
 
 `cognee-cli config unset <key>` removes a stale entry even in strict mode, so a
-config can always be repaired. A value of the wrong type for a known key is always
-an error.
+config can always be repaired. `cognee-cli config set` / `unset` see strict mode
+the way every other command does: the saved `strict_config` with
+`COGNEE_STRICT_CONFIG` overlaid.
+
+A value of the wrong type for a known key is always an error. From `set` it fails
+the call; in a loaded config it is dropped (the setting keeps its default) and the
+error is raised at first use, as for an unknown key in strict mode, until the key
+is set again. A loaded config may also carry `Settings` keys under a name serde
+does not know (the in-memory `llm_args` / `summarization_schema`, or an alias such
+as `embedding_model`); those are applied as the setting they name, not treated as
+unknown.
+
+A setting marked `secret` (a registry row or a section key) is masked as
+`***REDACTED***` in every binding's `config.get()` output.
 
 ### How the rule is enforced
 
