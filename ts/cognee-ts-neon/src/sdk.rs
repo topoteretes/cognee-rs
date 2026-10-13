@@ -119,6 +119,9 @@ pub fn cognee_new(mut cx: FunctionContext) -> JsResult<JsBox<CogneeHandle>> {
                 .or_else(|e| cx.throw_error(format!("failed to serialize base settings: {e}")))?;
             if let serde_json::Value::Object(ref mut base_map) = merged {
                 for (key, value) in provided {
+                    // Canonical key: the base holds `llm.api_key`, and an
+                    // alias beside it would lose to it (see the helper).
+                    let key = cognee_bindings_common::canonical_settings_key(&key).into_owned();
                     base_map.insert(key, value);
                 }
             }

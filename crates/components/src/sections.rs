@@ -155,7 +155,7 @@ config_section! {
         pub vision_model: Option<String> = None => {
             env: ["LLM_VISION_MODEL"], alias: ["llm_vision_model"], secret: false,
         },
-        /// Model used for audio transcription.
+        /// Model used for audio transcription; blank uses the default.
         pub transcription_model: String = cognee_llm::OpenAIAdapter::DEFAULT_TRANSCRIPTION_MODEL.to_string() => {
             env: ["TRANSCRIPTION_MODEL"], alias: ["transcription_model"], secret: false,
         },

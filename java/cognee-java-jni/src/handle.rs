@@ -101,6 +101,9 @@ fn build_settings(settings_json: &str) -> Result<Settings, SdkError> {
         .map_err(|e| SdkError::Runtime(format!("failed to serialize base settings: {e}")))?;
     if let serde_json::Value::Object(ref mut base_map) = merged {
         for (k, v) in map {
+            // Canonical key: the base holds `llm.api_key`, and an alias
+            // beside it would lose to it (see the helper).
+            let k = cognee_bindings_common::canonical_settings_key(&k).into_owned();
             base_map.insert(k, v);
         }
     }

@@ -539,8 +539,7 @@ impl Settings {
             (spec.reset)(self, &Settings::default());
             return Ok(());
         }
-        if let Some(def) = builtin_schema().key_def(key) {
-            self.sections.remove(def.key);
+        if builtin_schema().remove(&mut self.sections, key).is_some() {
             return Ok(());
         }
         // A stale entry no component owns (e.g. written by a build with more

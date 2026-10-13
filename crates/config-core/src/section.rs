@@ -353,8 +353,19 @@ impl ConfigSchema {
             key: key.to_string(),
             reason,
         })?;
+        remove_aliases(def, values);
         values.insert(def.key.to_string(), canonical);
         Ok(def.key)
+    }
+
+    /// Remove `key` (canonical or alias) from `values`, together with every
+    /// alias spelling of it, so the setting falls back to its default.
+    /// Returns the canonical key, or `None` for an unknown key.
+    pub fn remove(&self, values: &mut ConfigValues, key: &str) -> Option<&'static str> {
+        let def = self.key_def(key)?;
+        remove_aliases(def, values);
+        values.remove(def.key);
+        Some(def.key)
     }
 
     /// The value of `key` (canonical or alias): the one in `values`, else the
@@ -384,10 +395,17 @@ impl ConfigSchema {
     /// handled by the unknown-key policy and, when lenient, *kept*, so a
     /// config written by a build with more components is not destroyed by one
     /// with fewer. A value of the wrong type is always an error.
+    ///
+    /// When a setting is present under both its canonical key and an alias,
+    /// the canonical value wins and the alias is dropped, whatever order the
+    /// two spellings sort in.
     pub fn normalize(&self, values: &mut ConfigValues, strict: bool) -> Result<(), KeyError> {
         let entries = std::mem::take(values);
-        for (key, value) in entries {
+        for (key, value) in self.canonical_first(entries) {
             match self.key_def(&key) {
+                Some(def) if def.key != key && values.contains_key(def.key) => {
+                    shadowed_alias(&key, def.key);
+                }
                 Some(def) => {
                     let canonical = (def.validate)(&value)
                         .map_err(|reason| KeyError::Invalid { key, reason })?;
@@ -401,6 +419,38 @@ impl ConfigSchema {
         }
         Ok(())
     }
+}
+
+impl ConfigSchema {
+    /// `entries` reordered so every alias comes after all canonical (and
+    /// unknown) keys. Normalizing walks this order, so a canonical value is
+    /// in place before any alias of it is seen, and the alias is dropped.
+    ///
+    /// Without it the outcome would depend on how the spellings sort: a
+    /// `BTreeMap` puts `llm.api_key` before its alias `llm_api_key` ('.' <
+    /// '_'), so a stale alias read from an old config file would overwrite
+    /// the canonical value an env var or a `set` just put there.
+    fn canonical_first(&self, entries: ConfigValues) -> Vec<(String, Value)> {
+        let (canonical, aliases): (Vec<_>, Vec<_>) = entries
+            .into_iter()
+            .partition(|(key, _)| self.key_def(key).is_none_or(|def| def.key == key));
+        canonical.into_iter().chain(aliases).collect()
+    }
+}
+
+/// Every alias spelling of `def` removed from `values`.
+fn remove_aliases(def: &KeyDef, values: &mut ConfigValues) {
+    for alias in def.aliases {
+        values.remove(*alias);
+    }
+}
+
+fn shadowed_alias(alias: &str, canonical: &str) {
+    tracing::warn!(
+        alias,
+        canonical,
+        "config value under an alias is ignored: the canonical key is also set"
+    );
 }
 
 /// What [`ConfigSchema::normalize_lenient`] found wrong with a bulk-loaded
@@ -425,8 +475,11 @@ impl ConfigSchema {
     pub fn normalize_lenient(&self, values: &mut ConfigValues) -> LenientReport {
         let mut report = LenientReport::default();
         let entries = std::mem::take(values);
-        for (key, value) in entries {
+        for (key, value) in self.canonical_first(entries) {
             match self.key_def(&key) {
+                Some(def) if def.key != key && values.contains_key(def.key) => {
+                    shadowed_alias(&key, def.key);
+                }
                 Some(def) => match (def.validate)(&value) {
                     Ok(canonical) => {
                         values.insert(def.key.to_string(), canonical);
@@ -686,6 +739,46 @@ mod tests {
             schema.set(&mut values, "nope", &json!(1)),
             Err(KeyError::Unknown("nope".into()))
         );
+    }
+
+    /// A stale alias (e.g. from an old config file) must not overwrite the
+    /// canonical value set beside it, even though `demo.size` sorts before
+    /// `demo_size` and so is walked first.
+    #[test]
+    fn normalize_lets_the_canonical_key_win_over_an_alias() {
+        let schema = schema();
+        let both = || -> ConfigValues {
+            [
+                ("demo.size".to_string(), json!(10)),
+                ("demo_size".to_string(), json!(3)),
+            ]
+            .into()
+        };
+
+        let mut values = both();
+        schema.normalize(&mut values, true).unwrap();
+        assert_eq!(values.get("demo.size"), Some(&json!(10)));
+        assert!(!values.contains_key("demo_size"), "the alias is dropped");
+
+        let mut values = both();
+        let report = schema.normalize_lenient(&mut values);
+        assert_eq!(report, LenientReport::default());
+        assert_eq!(values.get("demo.size"), Some(&json!(10)));
+        assert!(!values.contains_key("demo_size"));
+    }
+
+    #[test]
+    fn set_and_remove_clear_alias_spellings() {
+        let schema = schema();
+        let mut values: ConfigValues = [("demo_size".to_string(), json!(3))].into();
+        schema.set(&mut values, "demo.size", &json!(5)).unwrap();
+        assert_eq!(values.get("demo.size"), Some(&json!(5)));
+        assert!(!values.contains_key("demo_size"), "set drops a stale alias");
+
+        values.insert("demo_size".to_string(), json!(3));
+        assert_eq!(schema.remove(&mut values, "demo_size"), Some("demo.size"));
+        assert!(values.is_empty(), "remove clears every spelling");
+        assert_eq!(schema.remove(&mut values, "nope"), None);
     }
 
     #[test]

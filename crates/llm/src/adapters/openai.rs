@@ -1169,8 +1169,17 @@ impl OpenAIAdapter {
     }
 
     /// Configure the model used for audio transcription (default: `"whisper-1"`).
+    ///
+    /// A blank `model` means "unset" and keeps the current one, the way
+    /// [`with_vision_model`](Self::with_vision_model) treats an empty model:
+    /// config files written before the setting was wired carry
+    /// `"transcription_model": ""`, and sending `model=""` makes the provider
+    /// reject every transcription.
     pub fn with_transcription_model(mut self, model: impl Into<String>) -> Self {
-        self.transcription_model = model.into();
+        let model = model.into();
+        if !model.trim().is_empty() {
+            self.transcription_model = model;
+        }
         self
     }
 
@@ -4594,6 +4603,20 @@ mod tests {
             .unwrap()
             .with_transcription_model("whisper-large-v3");
         assert_eq!(adapter.transcription_model(), "whisper-large-v3");
+    }
+
+    /// A legacy config's `"transcription_model": ""` must not reach the wire
+    /// as `model=""`: blank means unset, so the default stays.
+    #[test]
+    fn test_transcription_model_blank_keeps_default() {
+        let adapter = OpenAIAdapter::new("gpt-4", "key", None)
+            .unwrap()
+            .with_transcription_model("")
+            .with_transcription_model("  ");
+        assert_eq!(
+            adapter.transcription_model(),
+            OpenAIAdapter::DEFAULT_TRANSCRIPTION_MODEL
+        );
     }
 
     #[test]

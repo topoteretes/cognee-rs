@@ -40,4 +40,23 @@ describe("repro: Cognee constructor accepts documented camelCase settings", () =
     expect(cfg.llmModel).toBe("gpt-4.1");
     expect(cfg.chunkSize).toBe(128);
   });
+
+  it("round-trips a config.get() result through the constructor", () => {
+    // Section keys read back with their dots as word breaks
+    // (`llm.auto_rate_limit` -> `llmAutoRateLimit`); the constructor must map
+    // that spelling back to the canonical key rather than keep it as unknown.
+    const c = new Cognee({
+      llmModel: "gpt-4o-mini",
+      autoRateLimit: false,
+      transcriptionModel: "whisper-large-v3",
+    });
+    const before = c.config.get();
+    expect(before.llmAutoRateLimit).toBe(false);
+    expect(before.llmOpenaiCompatibleTranscriptionModel).toBe("whisper-large-v3");
+
+    const after = new Cognee(before).config.get();
+    expect(after.llmModel).toBe("gpt-4o-mini");
+    expect(after.llmAutoRateLimit).toBe(false);
+    expect(after.llmOpenaiCompatibleTranscriptionModel).toBe("whisper-large-v3");
+  });
 });

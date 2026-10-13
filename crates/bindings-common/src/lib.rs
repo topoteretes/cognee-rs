@@ -9,6 +9,7 @@
 //! | [`graph_backend`] | name-keyed registry letting a linked-in crate serve the `graphBackend` cognify opt |
 //! | [`handle`] | [`HandleState`] struct — shareable inner state of the SDK handle |
 //! | [`services`] | [`CogneeServices`] struct — fully-wired engine + service bundle |
+//! | [`settings_keys`] | [`canonical_settings_key`] — the key a settings-object entry is merged under |
 //! | [`wire`] | neon-free JSON helpers: `cognify_result_json`, `marshal_inputs`, `marshal_one`, `marshal_bytes` |
 //!
 //! ## What does NOT live here
@@ -25,6 +26,7 @@ pub mod handle;
 pub mod ops;
 pub mod redact;
 pub mod services;
+pub mod settings_keys;
 pub mod wire;
 
 // Top-level re-exports for ergonomic `use cognee_bindings_common::SdkError` etc.
@@ -33,3 +35,4 @@ pub use graph_backend::{GraphBackendFactory, register_graph_backend};
 pub use handle::{DefaultUserBootstrap, HandleState};
 pub use redact::{config_snapshot, redact_config_json};
 pub use services::CogneeServices;
+pub use settings_keys::canonical_settings_key;

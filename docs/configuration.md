@@ -91,8 +91,17 @@ Section values travel inside `Settings`, in its flattened `sections` map, so
 config files and binding settings objects carry them unchanged. A factory reads
 its typed section from the build context with `ctx.section::<T>()`. A section key,
 its canonical key and its aliases are all accepted by `ConfigManager::set` /
-`get`. Two sections claiming the same key, alias or primary env var is a
-registration error. So is a section claiming a `Settings` key.
+`get`; `set` and `unset` also clear any alias spelling of the setting. When a
+loaded config carries one setting under both its canonical key and an alias, the
+canonical value wins and the alias is dropped with a warning, so a stale flat key
+(`llm_api_key` from an older config file) never overrides what an env var, a CLI
+flag or `set` wrote under `llm.api_key`. `cognee-cli` rewrites those flat keys to
+canonical ones when it loads a pre-v4 config file. The TS and Java constructors
+also accept a section key with its dots flattened to underscores
+(`llm_auto_rate_limit`), so the camelCase keys a TS `config.get()` returns
+(`llmAutoRateLimit`) can be passed back to `new Cognee(...)`. Two sections
+claiming the same key, alias or primary env var is a registration error. So is a
+section claiming a `Settings` key.
 
 ### Unknown keys and strict mode
 

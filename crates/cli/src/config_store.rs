@@ -26,7 +26,17 @@ use std::path::{Path, PathBuf};
 /// `Some(0.0)` would put an explicit `temperature: 0.0` on every Bedrock call
 /// for a user who never chose one, which is the extreme of the very setting
 /// this release stopped sending by default.
-const CURRENT_VERSION: u32 = 3;
+/// Version 4: settings that stopped being `Settings` fields and became
+/// component config sections (first the LLM ones: `llm_model`, `llm_api_key`,
+/// `llm_max_retries`, `transcription_model`, ...) have namespaced canonical
+/// keys (`llm.model`, `llm.api_key`, ...) and keep the old flat names as
+/// aliases. The step canonicalizes every alias of the built-in schema, so it
+/// covers each setting that moves into a section. Every pre-v4
+/// file carries those flat names (again: the whole struct was serialised), so
+/// `migrate_document` rewrites them to the canonical keys. Left as aliases,
+/// they would sit beside the canonical keys that env vars, CLI flags and
+/// `config set` write, and `config unset` would leave them behind.
+const CURRENT_VERSION: u32 = 4;
 
 /// The version-1 sentinel for "auto-calculate the chunk size".
 const LEGACY_AUTO_CHUNK_SIZE: u32 = 1500;
@@ -154,6 +164,35 @@ fn migrate_document(document: &mut ConfigDocument) {
             document.settings.sections.remove("llm.temperature");
         }
         document.version = 3;
+    }
+    if document.version < 4 {
+        // v3 -> v4: canonicalize every flat key that is now an alias of a
+        // section key. When a file somehow holds both spellings, the
+        // canonical one is the newer write and is kept.
+        canonicalize_section_aliases(&mut document.settings.sections);
+        document.version = 4;
+    }
+}
+
+/// Rewrite every key of `sections` that is an alias of a built-in section
+/// setting to its canonical key; an alias whose canonical key is also
+/// present is dropped.
+fn canonicalize_section_aliases(sections: &mut BTreeMap<String, Value>) {
+    let schema = builtin_schema();
+    let aliases: Vec<(String, &'static str)> = sections
+        .keys()
+        .filter_map(|key| {
+            schema
+                .key_def(key)
+                .filter(|def| def.key != key)
+                .map(|def| (key.clone(), def.key))
+        })
+        .collect();
+    for (alias, canonical) in aliases {
+        let Some(value) = sections.remove(&alias) else {
+            continue;
+        };
+        sections.entry(canonical.to_string()).or_insert(value);
     }
 }
 
@@ -372,6 +411,81 @@ mod tests {
         };
         migrate_document(&mut document);
         assert_eq!(document.settings.llm().temperature, Some(0.7));
+    }
+
+    /// A config.json written before v4 (by any earlier cognee-cli)
+    /// serialised the flat LLM fields: `"llm_api_key": ""`,
+    /// `"llm_max_retries": 3`, ... Parse one exactly as `load_config` does.
+    fn legacy_v3_document() -> ConfigDocument {
+        let mut document: ConfigDocument = serde_json::from_value(serde_json::json!({
+            "version": 3,
+            "settings": {
+                "llm_api_key": "",
+                "llm_model": "old-model",
+                "llm_max_retries": 3,
+                "transcription_model": "",
+            }
+        }))
+        .expect("legacy document parses");
+        migrate_document(&mut document);
+        document
+    }
+
+    #[test]
+    fn migrating_v3_rewrites_flat_llm_keys_to_canonical_keys() {
+        let document = legacy_v3_document();
+        assert_eq!(document.version, CURRENT_VERSION);
+        let sections = &document.settings.sections;
+        for alias in [
+            "llm_api_key",
+            "llm_model",
+            "llm_max_retries",
+            "transcription_model",
+        ] {
+            assert!(!sections.contains_key(alias), "alias {alias} must be gone");
+        }
+        assert_eq!(
+            sections.get("llm.model"),
+            Some(&serde_json::json!("old-model"))
+        );
+        assert_eq!(sections.get("llm.max_retries"), Some(&serde_json::json!(3)));
+    }
+
+    /// The upgrade hazard itself: the file's `"llm_api_key": ""` must not
+    /// overwrite `LLM_API_KEY` from the env, nor its `"llm_max_retries": 3`
+    /// the `--llm-max-retries` flag, once `ConfigManager` normalizes them.
+    #[test]
+    fn a_legacy_file_does_not_shadow_env_or_cli_overrides() {
+        let mut settings = legacy_v3_document().settings;
+        settings.overlay_from(&cognee::config::MapEnv::new().with("LLM_API_KEY", "sk-x"));
+        settings
+            .sections
+            .insert("llm.max_retries".to_string(), serde_json::json!(10));
+        let cm = cognee::config::ConfigManager::new(settings);
+        let llm = cm.read().llm();
+        assert_eq!(llm.api_key, "sk-x");
+        assert_eq!(llm.max_retries, 10);
+        assert_eq!(llm.model, "old-model", "the file's own value still applies");
+    }
+
+    /// `config set` / `config unset` of a flat name act on the one value the
+    /// runtime reads, even if a stale alias spelling is still around.
+    #[test]
+    fn set_and_unset_by_alias_leave_no_stale_spelling() {
+        let mut settings = Settings::default();
+        settings
+            .sections
+            .insert("llm_model".to_string(), serde_json::json!("stale"));
+        set_value(&mut settings, "llm_model", Value::String("fresh".into())).expect("set");
+        assert_eq!(settings.llm().model, "fresh");
+        assert_eq!(get_value(&settings, "llm_model").expect("get"), "fresh");
+
+        settings
+            .sections
+            .insert("llm_model".to_string(), serde_json::json!("stale"));
+        unset_key(&mut settings, "llm_model").expect("unset");
+        assert!(!settings.sections.contains_key("llm_model"));
+        assert!(!settings.sections.contains_key("llm.model"));
     }
 
     /// `single_process` must be a first-class CLI key on every surface the
