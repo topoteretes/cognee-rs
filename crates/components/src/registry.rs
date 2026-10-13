@@ -1364,6 +1364,155 @@ mod tests {
         );
     }
 
+    // ── storage selection ────────────────────────────────────────────────
+
+    fn storage_ctx(backend: &str, root: &std::path::Path) -> BackendBuildContext {
+        let mut ctx = test_ctx();
+        ctx.data_root_directory = root.to_path_buf();
+        ctx.sections
+            .insert("storage.backend".to_string(), serde_json::json!(backend));
+        ctx
+    }
+
+    // An empty backend is the default `local`, and the id is matched trimmed
+    // and case-insensitively, like every other provider id.
+    #[tokio::test]
+    #[allow(clippy::expect_used, reason = "test module: fail loudly")]
+    async fn build_storage_defaults_to_local_and_matches_case_insensitively() {
+        let reg = ComponentRegistry::with_builtins();
+        let dir = tempfile::tempdir().expect("tempdir");
+        for backend in ["", "   ", "local", " LOCAL "] {
+            let storage = reg
+                .build_storage(&storage_ctx(backend, dir.path()))
+                .await
+                .unwrap_or_else(|e| panic!("backend {backend:?} must build local storage: {e}"));
+            assert!(
+                storage.get_full_path("x").starts_with(dir.path()),
+                "backend {backend:?} must be the local storage under data_root_directory"
+            );
+        }
+    }
+
+    // An unknown backend is a config error naming the key and the registered
+    // ids — never a silent fallback to local storage.
+    #[tokio::test]
+    #[allow(clippy::expect_used, reason = "test module: fail loudly")]
+    async fn build_storage_errors_on_an_unknown_backend() {
+        let reg = ComponentRegistry::with_builtins();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let err = match reg.build_storage(&storage_ctx("nope", dir.path())).await {
+            Ok(_) => panic!("an unknown storage backend must not build"),
+            Err(e) => e,
+        };
+        let msg = err.to_string();
+        assert!(matches!(err, ComponentError::Config(_)), "{err:?}");
+        assert!(msg.contains("storage_backend"), "{msg}");
+        assert!(msg.contains("nope"), "{msg}");
+        assert!(
+            msg.contains("local"),
+            "the registered ids are listed: {msg}"
+        );
+    }
+
+    // ── ontology resolver selection ──────────────────────────────────────
+
+    fn ontology_fixture() -> String {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../ontology/tests/fixtures/owl_terms.ttl")
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    fn ontology_ctx(resolver: &str, file_path: &str) -> BackendBuildContext {
+        let mut ctx = test_ctx();
+        ctx.sections
+            .insert("ontology.resolver".to_string(), serde_json::json!(resolver));
+        ctx.sections.insert(
+            "ontology.file_path".to_string(),
+            serde_json::json!(file_path),
+        );
+        ctx
+    }
+
+    /// Whether `resolver` actually loaded the fixture: the no-op resolver
+    /// matches nothing, the RDF one knows the fixture's `Person` class.
+    #[allow(clippy::expect_used, reason = "test module: fail loudly")]
+    fn knows_person(resolver: &Arc<dyn OntologyResolver>) -> bool {
+        resolver
+            .find_closest_match("Person", "classes")
+            .expect("lookup")
+            .is_some()
+    }
+
+    // No path means no ontology — the no-op resolver — whatever the resolver
+    // id says, because the short-circuit precedes the resolver lookup.
+    #[tokio::test]
+    #[allow(clippy::expect_used, reason = "test module: fail loudly")]
+    async fn build_ontology_resolver_without_a_path_is_the_noop_resolver() {
+        let reg = ComponentRegistry::with_builtins();
+        for (resolver, path) in [("rdflib", ""), ("bogus", ""), ("rdflib", "   ")] {
+            let built = reg
+                .build_ontology_resolver(&ontology_ctx(resolver, path), None)
+                .await
+                .unwrap_or_else(|e| panic!("{resolver:?}/{path:?} must be the no-op: {e}"));
+            assert!(!knows_person(&built), "{resolver:?}/{path:?}");
+        }
+    }
+
+    // A configured path loads through the resolver id, matched trimmed and
+    // case-insensitively.
+    #[tokio::test]
+    #[allow(clippy::expect_used, reason = "test module: fail loudly")]
+    async fn build_ontology_resolver_loads_the_configured_path() {
+        let reg = ComponentRegistry::with_builtins();
+        for resolver in ["rdflib", " RDFLIB ", ""] {
+            let built = reg
+                .build_ontology_resolver(&ontology_ctx(resolver, &ontology_fixture()), None)
+                .await
+                .unwrap_or_else(|e| panic!("resolver {resolver:?} must load: {e}"));
+            assert!(knows_person(&built), "resolver {resolver:?}");
+        }
+    }
+
+    // An unknown resolver id with a path is a config error naming the key.
+    #[tokio::test]
+    async fn build_ontology_resolver_errors_on_an_unknown_resolver() {
+        let reg = ComponentRegistry::with_builtins();
+        let err = match reg
+            .build_ontology_resolver(&ontology_ctx("bogus", &ontology_fixture()), None)
+            .await
+        {
+            Ok(_) => panic!("an unknown resolver id must not build"),
+            Err(e) => e,
+        };
+        let msg = err.to_string();
+        assert!(matches!(err, ComponentError::Config(_)), "{err:?}");
+        assert!(msg.contains("ontology_resolver"), "{msg}");
+        assert!(msg.contains("bogus"), "{msg}");
+    }
+
+    // The per-call path (the CLI's `--ontology-file`) overrides
+    // `ontology.file_path` both ways: a path loads with nothing configured,
+    // and an empty one turns a configured ontology off.
+    #[tokio::test]
+    #[allow(clippy::expect_used, reason = "test module: fail loudly")]
+    async fn build_ontology_resolver_per_call_path_overrides_the_configured_one() {
+        let reg = ComponentRegistry::with_builtins();
+        let fixture = ontology_fixture();
+
+        let built = reg
+            .build_ontology_resolver(&ontology_ctx("rdflib", ""), Some(&fixture))
+            .await
+            .expect("the per-call path loads");
+        assert!(knows_person(&built));
+
+        let built = reg
+            .build_ontology_resolver(&ontology_ctx("rdflib", &fixture), Some(""))
+            .await
+            .expect("an empty per-call path is the no-op");
+        assert!(!knows_person(&built));
+    }
+
     fn test_ctx() -> BackendBuildContext {
         BackendBuildContext {
             sections: Default::default(),

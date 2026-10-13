@@ -207,6 +207,12 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
             .await
             .map_err(|e| CliError::Runtime(format!("{e}")))?;
 
+        // `graph_extraction.backend`: an unregistered kind fails here, before
+        // any extraction, rather than silently running the LLM extractor.
+        let graph_backend = cm.configured_graph_extractor().await.map_err(|error| {
+            CliError::Runtime(format!("Graph extractor initialization failed: {error}"))
+        })?;
+
         // `--ontology-file` overrides `ontology.file_path`; neither means none.
         let ontology_resolver = cm
             .ontology_resolver(args.ontology_file.as_deref())
@@ -226,6 +232,9 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
             .with_chunk_strategy(chunk_strategy)
             .with_max_parallel_extractions(effective_max_parallel)
             .with_temporal_cognify(args.temporal_cognify);
+        if let Some(backend) = graph_backend {
+            cognify_config = cognify_config.with_graph_backend(backend);
+        }
         if let Some(transcriber) = cm
             .transcriber()
             .await

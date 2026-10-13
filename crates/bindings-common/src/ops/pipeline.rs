@@ -116,6 +116,31 @@ pub async fn cognify_config_with_opts(
     Ok(cfg)
 }
 
+/// The cached [`CogneeServices::cognify_config`] with only the graph-extraction
+/// backend resolved: `opts["graphBackend"]`, else the configured
+/// `graph_extraction.backend`.
+///
+/// For the operations that cognify as a sub-step (`remember`, `improve`,
+/// `update`): their opts are not cognify opts, so the chunking overrides of
+/// [`cognify_config_with_opts`] do not apply, but the extractor must — the
+/// configured default is a per-handle setting, and an operation that skipped
+/// it would silently extract with the LLM where `cognify` would not. Call it
+/// before any side effect so an unregistered kind fails before data is written
+/// or deleted.
+///
+/// # Errors
+/// As [`cognify_config_with_opts`].
+pub async fn cognify_config_with_graph_backend(
+    svc: &CogneeServices,
+    opts: &serde_json::Value,
+) -> Result<cognee::cognify::CognifyConfig, SdkError> {
+    let mut cfg = svc.cognify_config.clone();
+    if let Some(backend) = graph_backend_from_opts(&svc.component_manager, opts).await? {
+        cfg = cfg.with_graph_backend(backend);
+    }
+    Ok(cfg)
+}
+
 // ---------------------------------------------------------------------------
 // Result marshalling helpers.
 // ---------------------------------------------------------------------------

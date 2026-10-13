@@ -470,3 +470,114 @@ fn the_llm_kind_is_reserved() {
             .is_err()
     );
 }
+
+// ---------------------------------------------------------------------------
+// 5. Every cognify-bearing operation honours the configured default.
+// ---------------------------------------------------------------------------
+
+/// `remember`, `improve` and `update` cognify as a sub-step, so they must
+/// resolve `graph_extraction.backend` like `cognify` does — an operation that
+/// skipped it would silently extract with the LLM where `cognify` refuses.
+/// Each must refuse an unregistered default before writing or deleting
+/// anything.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unregistered_default_is_refused_by_every_cognify_bearing_op() {
+    let dir = TempDir::new().expect("tempdir");
+    let state = HandleState::from_settings(settings_under(&dir));
+    state
+        .cm
+        .config()
+        .set("graph_extraction.backend", json!("absent-op-default-xyz"))
+        .expect("known key");
+
+    let input = json!({ "type": "text", "text": "Alice knows Bob." });
+
+    let err = cognee_bindings_common::ops::memory::run_remember(
+        &state,
+        input.clone(),
+        "remember_ds",
+        &json!({}),
+    )
+    .await
+    .expect_err("remember must refuse an unregistered default");
+    assert!(matches!(err, SdkError::Validation(_)), "got {err:?}");
+    assert!(err.to_string().contains("absent-op-default-xyz"), "{err}");
+
+    let err = cognee_bindings_common::ops::memory::run_improve(
+        &state,
+        &json!({ "datasetName": "remember_ds" }),
+    )
+    .await
+    .expect_err("improve must refuse an unregistered default");
+    assert!(matches!(err, SdkError::Validation(_)), "got {err:?}");
+    assert!(err.to_string().contains("absent-op-default-xyz"), "{err}");
+
+    let err = cognee_bindings_common::ops::data::update(
+        &state,
+        &uuid::Uuid::new_v4().to_string(),
+        input,
+        "remember_ds",
+        &json!({}),
+    )
+    .await
+    .expect_err("update must refuse an unregistered default");
+    assert!(matches!(err, SdkError::Validation(_)), "got {err:?}");
+    assert!(err.to_string().contains("absent-op-default-xyz"), "{err}");
+
+    // Refused before side effects: `remember` ingested nothing.
+    let datasets = cognee_bindings_common::ops::datasets::list_datasets(&state)
+        .await
+        .expect("list datasets");
+    assert_eq!(
+        datasets.as_array().map(Vec::len),
+        Some(0),
+        "remember must not ingest before refusing: {datasets}"
+    );
+}
+
+/// The sub-step resolution attaches the configured default backend, and a
+/// per-call `graphBackend` still wins over it.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_sub_step_config_carries_the_configured_default() {
+    use cognee_bindings_common::ops::pipeline::cognify_config_with_graph_backend;
+
+    let dir = TempDir::new().expect("tempdir");
+    let state = HandleState::from_settings_with_registry(settings_under(&dir), stub_registry());
+    state
+        .cm
+        .config()
+        .set("graph_extractor", json!("stub-registry"))
+        .expect("known alias");
+    let svc = state.services().await.expect("warm");
+
+    let cfg = cognify_config_with_graph_backend(&svc, &json!({ "chunkSize": 99 }))
+        .await
+        .expect("config");
+    assert_eq!(
+        cfg.graph_backend
+            .as_ref()
+            .expect("default backend")
+            .0
+            .name(),
+        "stub-default"
+    );
+    assert_ne!(
+        cfg.max_chunk_size,
+        Some(99),
+        "sub-step opts are not cognify chunking opts"
+    );
+
+    let cfg = cognify_config_with_graph_backend(&svc, &json!({ "graphBackend": "llm" }))
+        .await
+        .expect("config");
+    assert!(cfg.graph_backend.is_none());
+
+    // The library-side accessor the CLI uses resolves the same default.
+    let backend = svc
+        .component_manager
+        .configured_graph_extractor()
+        .await
+        .expect("registered")
+        .expect("a backend, not the LLM");
+    assert_eq!(backend.name(), "stub-default");
+}

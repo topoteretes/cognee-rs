@@ -575,6 +575,80 @@ fn add_url_rejects_loopback_target() {
     drop(server);
 }
 
+/// `graph_extraction.backend` (`GRAPH_EXTRACTOR`) is honoured by the CLI's
+/// cognify paths: a kind nothing is registered under fails the command, naming
+/// the kind, instead of silently extracting with the LLM. `add-and-cognify`
+/// refuses before ingesting anything.
+#[test]
+fn cognify_refuses_an_unregistered_graph_extractor() {
+    let config_home = TempDir::new().expect("temp dir should be created");
+    let workdir = TempDir::new().expect("temp dir should be created");
+    let db_file_path = workdir.path().join("cognee.db");
+    let db_url = format!("sqlite://{}", db_file_path.display());
+    std::fs::File::create(&db_file_path).expect("sqlite database file should be created");
+
+    config_set(
+        &config_home,
+        workdir.path(),
+        "default_user_id",
+        "\"00000000-0000-0000-0000-000000000000\"",
+    );
+    config_set(
+        &config_home,
+        workdir.path(),
+        "data_root_directory",
+        &format!("\"{}\"", workdir.path().join("cognee_data").display()),
+    );
+    config_set(
+        &config_home,
+        workdir.path(),
+        "relational_db_url",
+        &format!("\"{db_url}\""),
+    );
+
+    make_cmd_in(&config_home, workdir.path())
+        .env("GRAPH_EXTRACTOR", "no-such-extractor-cli")
+        .env("MOCK_EMBEDDING", "true")
+        .env("LLM_API_KEY", "sk-test")
+        .args([
+            "add-and-cognify",
+            "Alice knows Bob.",
+            "--dataset-name",
+            "gx_ds",
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("no-such-extractor-cli"));
+    let conn = Connection::open(&db_file_path).expect("open sqlite database");
+    let has_data_table: bool = conn
+        .query_row(
+            "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type = 'table' AND name = 'data'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("query sqlite_master");
+    if has_data_table {
+        assert_eq!(
+            count_data_rows(&db_file_path),
+            0,
+            "add-and-cognify must refuse before ingesting"
+        );
+    }
+
+    make_cmd_in(&config_home, workdir.path())
+        .args(["add", "Alice knows Bob.", "--dataset-name", "gx_ds"])
+        .assert()
+        .success();
+    make_cmd_in(&config_home, workdir.path())
+        .env("GRAPH_EXTRACTOR", "no-such-extractor-cli")
+        .env("MOCK_EMBEDDING", "true")
+        .env("LLM_API_KEY", "sk-test")
+        .args(["cognify", "--datasets", "gx_ds"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("no-such-extractor-cli"));
+}
+
 #[test]
 fn delete_all_preview_and_force_execution() {
     let config_home = TempDir::new().expect("temp dir should be created");

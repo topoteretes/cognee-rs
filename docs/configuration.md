@@ -1340,6 +1340,15 @@ per-call `graphBackend` cognify option (a kind string, or `{"kind": …, …tuni
 overrides the default. A kind nothing is registered under is an error; cognify
 never falls back to the LLM extractor silently.
 
+Every operation that cognifies honours the setting: `cognify` and
+`add-and-cognify` in the CLI and the bindings, and the operations that cognify
+as a sub-step (`remember`, `improve`, and the bindings' `update`). Each one
+resolves the extractor before any side effect, so an unregistered kind fails
+before data is ingested or deleted. Library callers that build a `CognifyConfig`
+themselves get the configured backend from
+`ComponentManager::configured_graph_extractor` and attach it with
+`with_graph_backend`.
+
 ## System paths, users & datasets
 
 | Env var | `Settings` field | Default |

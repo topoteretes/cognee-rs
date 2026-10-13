@@ -212,6 +212,11 @@ pub async fn update(
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
+    // Resolved before `update` deletes the old item: an unregistered extractor
+    // kind fails here, with nothing deleted.
+    let cognify_config =
+        super::pipeline::cognify_config_with_graph_backend(svc.as_ref(), opts).await?;
+
     let result = cognee_update(
         data_id,
         new_data,
@@ -232,7 +237,7 @@ pub async fn update(
         svc.embedding_engine.clone(),
         Some(svc.database.clone()),
         svc.ontology_resolver.clone(),
-        &svc.cognify_config,
+        &cognify_config,
     )
     .await
     .map_err(|e| SdkError::Runtime(format!("update failed: {e}")))?;

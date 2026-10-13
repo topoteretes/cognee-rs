@@ -42,6 +42,15 @@ pub fn run(args: RememberArgs, cm: Arc<ComponentManager>) -> Result<(), CliError
         .collect::<Vec<_>>();
 
     crate::teardown::run_command(Arc::clone(&cm), async {
+        // `graph_extraction.backend`, resolved before any side effect: an
+        // unregistered kind is an error, never a silent LLM-extractor run.
+        let mut cognify_config = CognifyConfig::default();
+        if let Some(backend) = cm.configured_graph_extractor().await.map_err(|error| {
+            CliError::Runtime(format!("Graph extractor initialization failed: {error}"))
+        })? {
+            cognify_config = cognify_config.with_graph_backend(backend);
+        }
+
         let storage = cm
             .storage()
             .await
@@ -94,7 +103,7 @@ pub fn run(args: RememberArgs, cm: Arc<ComponentManager>) -> Result<(), CliError
         let session_manager = Arc::new(SessionManager::new(Arc::clone(&session_store)));
 
         let ontology_resolver: Arc<dyn OntologyResolver> = Arc::new(NoOpOntologyResolver::new());
-        let cognify_config = Arc::new(CognifyConfig::default());
+        let cognify_config = Arc::new(cognify_config);
 
         let result = remember(
             inputs,

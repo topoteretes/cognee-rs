@@ -37,6 +37,13 @@ pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), Cli
     }
 
     crate::teardown::run_command(Arc::clone(&cm), async {
+        // `graph_extraction.backend`, resolved before the add: an unregistered
+        // kind must not get the documents ingested by a call that was always
+        // going to fail (nor silently fall back to the LLM extractor).
+        let graph_backend = cm.configured_graph_extractor().await.map_err(|error| {
+            CliError::Runtime(format!("Graph extractor initialization failed: {error}"))
+        })?;
+
         let database = cm
             .database()
             .await
@@ -146,6 +153,9 @@ pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), Cli
             .with_chunk_strategy(chunk_strategy)
             .with_max_parallel_extractions(effective_max_parallel)
             .with_summarization(!summarization_model.is_empty());
+        if let Some(backend) = graph_backend {
+            cognify_config = cognify_config.with_graph_backend(backend);
+        }
         if let Some(transcriber) = cm
             .transcriber()
             .await

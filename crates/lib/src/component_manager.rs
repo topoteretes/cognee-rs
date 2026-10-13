@@ -272,6 +272,27 @@ impl ComponentManager {
         }
     }
 
+    /// The configured `graph_extraction.backend`, built — what a cognify run
+    /// uses when the caller made no per-call selection.
+    ///
+    /// The configured kind is passed to the factory as its spec (a bare
+    /// string), the same shape the bindings use for the configured default.
+    /// `Ok(None)` is cognify's own LLM extractor; every entry point that builds
+    /// a [`cognee_cognify::CognifyConfig`] from configuration attaches a
+    /// `Some` with `with_graph_backend`, so the key is honoured everywhere.
+    ///
+    /// # Errors
+    /// As [`Self::graph_extractor`]: an unregistered kind is an error, never a
+    /// silent fallback to the LLM extractor.
+    pub async fn configured_graph_extractor(
+        &self,
+    ) -> Result<Option<Arc<dyn cognee_cognify::graph_backend::ChunkGraphExtractor>>, ComponentError>
+    {
+        let kind = self.settings().graph_extraction().backend;
+        let spec = serde_json::Value::String(kind.clone());
+        self.graph_extractor(Some(&kind), &spec).await
+    }
+
     /// Return the [`Transcriber`] for the configured LLM provider, if supported.
     ///
     /// Returns `Ok(Some(_))` for OpenAI-compatible providers that expose audio

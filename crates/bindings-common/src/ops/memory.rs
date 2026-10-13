@@ -236,7 +236,10 @@ pub async fn run_remember(
     let svc = state.services().await?;
     let owner_id = state.owner_id().await?;
 
-    let cognify_config = Arc::new(svc.cognify_config.clone());
+    // Resolved before `remember` writes anything: an unregistered extractor
+    // kind fails here instead of after ingestion.
+    let cognify_config =
+        Arc::new(super::pipeline::cognify_config_with_graph_backend(svc.as_ref(), opts).await?);
 
     let result = remember(
         inputs,
@@ -393,6 +396,8 @@ pub async fn run_improve(
 
     let svc = state.services().await?;
     let owner_id = state.owner_id().await?;
+    let cognify_config =
+        super::pipeline::cognify_config_with_graph_backend(svc.as_ref(), opts).await?;
 
     let result = cognee::api::improve(ImproveParams {
         dataset_name,
@@ -418,7 +423,7 @@ pub async fn run_improve(
         session_manager: Some(svc.session_manager.clone()),
         add_pipeline: Some(svc.add_pipeline.as_ref()),
         checkpoint_store: Some(svc.checkpoint_store.clone()),
-        cognify_config: &svc.cognify_config,
+        cognify_config: &cognify_config,
     })
     .await
     .map_err(|e| SdkError::Runtime(format!("improve failed: {e}")))?;

@@ -44,6 +44,15 @@ pub fn run(args: ImproveArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
     };
 
     crate::teardown::run_command(Arc::clone(&cm), async {
+        // `graph_extraction.backend`, resolved before any side effect: an
+        // unregistered kind is an error, never a silent LLM-extractor run.
+        let mut cognify_config = CognifyConfig::default();
+        if let Some(backend) = cm.configured_graph_extractor().await.map_err(|error| {
+            CliError::Runtime(format!("Graph extractor initialization failed: {error}"))
+        })? {
+            cognify_config = cognify_config.with_graph_backend(backend);
+        }
+
         let storage = cm
             .storage()
             .await
@@ -92,7 +101,6 @@ pub fn run(args: ImproveArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
         let checkpoint_store = Arc::new(SeaOrmCheckpointStore::new(Arc::clone(&database)));
 
         let ontology_resolver: Arc<dyn OntologyResolver> = Arc::new(NoOpOntologyResolver::new());
-        let cognify_config = CognifyConfig::default();
 
         let result = improve(ImproveParams {
             dataset_name: args.dataset_name.clone(),
