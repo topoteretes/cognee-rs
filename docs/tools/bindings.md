@@ -35,7 +35,7 @@ the keys.
 | Analytics state | `is_telemetry_enabled()` | `isTelemetryEnabled()` | `Cognee.isTelemetryEnabled()` | `cognee_is_telemetry_enabled()` |
 
 Analytics are on by default (opt-out). The switch wins over `TELEMETRY_DISABLED` /
-`ENV`, which are read once, on import. Logging and OTLP setup latch on their first
+`ENV`, which are read when an event is sent (so a `.env` loaded later counts). Logging and OTLP setup latch on their first
 call. The argument-less forms (`setup_logging()`, `cognee_setup_logging()`, …) are
 unchanged and read the environment only.
 

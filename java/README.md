@@ -180,7 +180,7 @@ Cognee.setTelemetryEnabled(false);   // wins over TELEMETRY_DISABLED / ENV
 boolean on = Cognee.isTelemetryEnabled();
 ```
 
-The environment is the default, read once when the library loads:
+The environment is the default, read when an event is sent:
 `TELEMETRY_DISABLED` (any non-empty value) or `ENV=test|dev` disable it, and
 `COGNEE_HOST_SDK` suppresses this binding's analytics when the host is an
 embedding SDK that sends its own. `Cognee.initTelemetry()` re-arms and returns
@@ -246,7 +246,7 @@ The public API (`ai.cognee.*`) carries class/method Javadoc; the internal shim
 | `OPENAI_MODEL` | LLM model name (default: `gpt-4o-mini`). |
 | `COGNEE_JAVA_LIB_PATH` | Load this cdylib directly instead of the bundled per-platform library (dev). |
 | `COGNEE_HOST_SDK` | Suppress binding-armed analytics when the host is an embedding SDK. |
-| `TELEMETRY_DISABLED`, `ENV` | Analytics opt-out defaults, read once on load; `setTelemetryEnabled()` wins. |
+| `TELEMETRY_DISABLED`, `ENV` | Analytics opt-out defaults, read when an event is sent; `setTelemetryEnabled()` wins. |
 | `RUST_LOG`, `LOG_LEVEL` | `tracing-subscriber` env-filter level overrides. |
 | `COGNEE_LOG_*`, `LOG_FILE_NAME` | Defaults for `setupLogging()`; its options win. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, `OTEL_*` | Defaults for `initOtlp()`; its options win. |

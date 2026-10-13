@@ -222,7 +222,7 @@ Tested on Linux x86_64 (CI) and Android aarch64 (slim build, ONNX local embeddin
 | `RUST_LOG`, `LOG_LEVEL` | `tracing-subscriber` env-filter level overrides. |
 | `COGNEE_LOG_*`, `LOG_FILE_NAME` | Defaults for `cognee_setup_logging*()` — see docs/configuration.md (Logging section). |
 | `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, `OTEL_*` | Defaults for `cognee_init_otlp*()`. |
-| `TELEMETRY_DISABLED`, `ENV` | Analytics opt-out defaults, read once; `cognee_set_telemetry_enabled()` wins. |
+| `TELEMETRY_DISABLED`, `ENV` | Analytics opt-out defaults, read when an event is sent; `cognee_set_telemetry_enabled()` wins. |
 
 All env-var values can also be passed programmatically as JSON to `cg_sdk_new()` or
 via `cg_sdk_config_set_str()`, which take precedence over environment variables.

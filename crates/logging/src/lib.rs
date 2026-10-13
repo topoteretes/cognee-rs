@@ -16,6 +16,7 @@ mod paths;
 
 pub use config::{
     ConsoleStream, LOGGING_SETTING_KEYS, LogFormat, LogRotation, LoggingConfig, LoggingConfigError,
+    normalize_level_filter,
 };
 pub use formatter::PythonPlainFormatter;
 pub use init::{BoxedLayer, LogGuards, default_filter, env_filter, init_logging};

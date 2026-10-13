@@ -487,7 +487,7 @@ pub enum OutputFormatArg {
 /// `COGNEE_LOGS_DIR` when they are set, so the two sources agree.)
 pub fn lower_logging_settings(cfg: &mut cognee_logging::LoggingConfig, settings: &Settings) {
     if cfg.level_filter.is_none() && !settings.log_level.is_empty() {
-        cfg.level_filter = Some(settings.log_level.clone());
+        cfg.level_filter = Some(cognee_logging::normalize_level_filter(&settings.log_level));
     }
     if cfg.logs_dir_override.is_none() && !settings.logs_root_directory.is_empty() {
         cfg.logs_dir_override = Some(std::path::PathBuf::from(&settings.logs_root_directory));

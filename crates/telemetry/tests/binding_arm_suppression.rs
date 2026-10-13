@@ -43,7 +43,6 @@ use cognee_telemetry::{TelemetryConfig, configure, send_telemetry};
 struct IsolatedEnv {
     _home: TempDir,
     prev_home: Option<String>,
-    prev_config: TelemetryConfig,
 }
 
 impl IsolatedEnv {
@@ -55,7 +54,6 @@ impl IsolatedEnv {
         unsafe {
             std::env::set_var("HOME", home.path());
         }
-        let prev_config = cognee_telemetry::current_config();
         configure(TelemetryConfig {
             enabled: true,
             tracking_id: Some("fixed-anon-arm-test".into()),
@@ -66,7 +64,6 @@ impl IsolatedEnv {
         Self {
             _home: home,
             prev_home,
-            prev_config,
         }
     }
 }
@@ -80,7 +77,7 @@ impl Drop for IsolatedEnv {
                 None => std::env::remove_var("HOME"),
             }
         }
-        configure(self.prev_config.clone());
+        cognee_telemetry::reset_to_env();
     }
 }
 

@@ -21,8 +21,9 @@ at debug under the `cognee.telemetry` target only).
 The switch is **process-wide** (one dispatcher per process, whichever SDK handle
 emits the event) and is configured by
 [`TelemetryConfig`](../../crates/telemetry/src/config.rs): defaults (on) <
-environment < code. The environment is resolved once, on first use (in a language
-binding, on import); an explicit call wins over it in both directions.
+environment < code. The environment is read when an event is sent (so a `.env`
+loaded after startup is honoured); an explicit call wins over it in both directions
+until `reset_to_env`.
 
 | How | Effect |
 |---|---|
@@ -45,7 +46,7 @@ Events carry several non-PII identifiers:
 |---|---|---|
 | `anonymous_id` | random uuid4 (override with `TRACKING_ID` / `TelemetryConfig::tracking_id`) | `<project_root>/.anon_id` |
 | `persistent_id` | random uuid4 | `~/.cognee/.persistent_id` (machine-local; survives `forget(everything=True)`) |
-| `api_key_tracking_id` / `api_key_hash` | deterministic PBKDF2-HMAC-SHA256 of the resolved LLM API key (`llm.api_key`, registered with `set_llm_api_key` by every `ComponentManager`) | not stored (cached in memory per key and salt) |
+| `api_key_tracking_id` / `api_key_hash` | deterministic PBKDF2-HMAC-SHA256 of the resolved LLM API key (`llm.api_key` of the live `ComponentManager`s; empty if they disagree) | not stored (cached in memory per key and salt) |
 | `user_id` | passed by the caller | — |
 
 `api_key_hash` is a backward-compatibility alias carrying the same value as
@@ -67,9 +68,9 @@ Each event is a JSON object:
 
 ## Environment variables
 
-Read once, by `TelemetryConfig::from_env()`, the first time the process
-configuration is needed. Each has a `TelemetryConfig` field settable from code
-(`cognee::telemetry::configure`).
+Read by `TelemetryConfig::from_env()` when an event is sent, unless code has pinned
+the configuration. Each has a `TelemetryConfig` field settable from code
+(`cognee::telemetry::configure`; `set_enabled` pins only `enabled`).
 
 | Variable | Field | Default | Effect |
 |---|---|---|---|
@@ -81,10 +82,21 @@ configuration is needed. Each has a `TelemetryConfig` field settable from code
 | `TELEMETRY_REQUEST_TIMEOUT` | `request_timeout_secs` | `5` | HTTP timeout in seconds, clamped to `[1, 60]`. |
 | `COGNEE_TELEMETRY_PROXY_URL_FOR_TESTS` | `endpoint_override` | _(unset)_ | Test-harness collector; honoured only while `COGNEE_TELEMETRY_INTEGRATION_TEST` is non-empty. |
 
-`LLM_API_KEY` is not read here: the hashed key is the resolved `llm.api_key`, so a
-key set from code or the CLI config store is the one reported. An embedder that
-calls `send_telemetry` without a `ComponentManager` registers it with
-`cognee::telemetry::set_llm_api_key`.
+The `api_key_tracking_id` in each event is a salted hash of the **resolved** LLM key
+(`llm.api_key`, from env, a config file or code). Every `ComponentManager` holds a
+`cognee::telemetry::LlmKeyRegistration` for its key, updated when its configuration
+changes and dropped with the manager; embedders without a manager call
+`cognee::telemetry::set_llm_api_key`. The `LLM_API_KEY` variable is not read by the
+analytics client itself. When every live registration uses the same key, its hash is
+reported; when live handles use *different* keys, process-wide events cannot be
+attributed to one of them and the id is reported empty rather than mislabelled.
+
+*Divergence from Python:* Python hashes `os.getenv("LLM_API_KEY")` only. Rust hashes
+the key it actually uses, which can also come from its `OPENAI_TOKEN` alias, a config
+file or code. The derivation is identical (PBKDF2-HMAC-SHA256, same salt), so the same
+key gives the same id in both SDKs, which is what cross-SDK grouping needs; a Rust
+process configured only through `OPENAI_TOKEN` reports an id where a Python process
+without `LLM_API_KEY` (and so without a working LLM) reports none.
 
 ## Logging / troubleshooting
 

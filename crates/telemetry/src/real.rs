@@ -22,8 +22,11 @@ use tokio::sync::Notify;
 
 use crate::UserIdRef;
 use crate::client::client;
-use crate::config::{current_config, is_enabled};
-use crate::ids::{get_anonymous_id, get_api_key_tracking_id, get_persistent_id};
+use crate::config::{current_config, is_enabled_in, with_config};
+use crate::ids::{
+    get_anonymous_id, get_persistent_id,
+    inner_api_key_tracking_id_with_salt as api_key_tracking_id_with_salt,
+};
 use crate::payload::{
     AdditionalProperties, Properties, TelemetryPayload, UserProperties, format_time_field,
 };
@@ -123,11 +126,18 @@ pub(crate) fn send_telemetry_impl(
     user_id: UserIdRef<'_>,
     additional_properties: Option<Value>,
 ) {
-    if !is_enabled() {
+    // One snapshot per event: the switch, and the salt for the key hash.
+    let config = current_config();
+    if !is_enabled_in(&config) {
         return;
     }
 
-    let body = build_body(event_name, user_id, additional_properties);
+    let body = build_body(
+        event_name,
+        user_id,
+        additional_properties,
+        config.api_key_tracking_salt.as_deref(),
+    );
 
     match tokio::runtime::Handle::try_current() {
         Ok(handle) => {
@@ -158,10 +168,11 @@ fn build_body(
     event_name: &str,
     user_id: UserIdRef<'_>,
     additional_properties: Option<Value>,
+    api_key_tracking_salt: Option<&str>,
 ) -> Value {
     let anon = get_anonymous_id();
     let persistent = get_persistent_id();
-    let tracking = get_api_key_tracking_id();
+    let tracking = api_key_tracking_id_with_salt(api_key_tracking_salt);
     let user = match user_id {
         UserIdRef::Uuid(u) => u.to_string(),
         UserIdRef::Symbolic(s) => s.to_string(),
@@ -216,13 +227,14 @@ async fn post(body: Value) {
     }
     // Re-checked here, not only at dispatch: an event queued before
     // `set_enabled(false)` must not leave the process after it.
-    if !is_enabled() {
+    let Some((endpoint, timeout)) = with_config(|c| {
+        is_enabled_in(c).then(|| (c.endpoint().to_string(), c.effective_request_timeout()))
+    }) else {
         return;
-    }
-    let config = current_config();
+    };
     match client()
-        .post(config.endpoint())
-        .timeout(config.effective_request_timeout())
+        .post(&endpoint)
+        .timeout(timeout)
         .json(&body)
         .send()
         .await
@@ -249,7 +261,7 @@ async fn post(body: Value) {
 /// thread until the POST completes (or times out), so by the time it
 /// returns there is nothing left in flight.
 fn spin_up_one_shot(body: Value) {
-    let timeout = current_config().effective_request_timeout();
+    let timeout = with_config(|c| c.effective_request_timeout());
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_io()
         .enable_time()

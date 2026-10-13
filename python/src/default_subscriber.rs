@@ -85,11 +85,10 @@ pub(crate) fn install(py: Python<'_>) {
 
         // (2) Build EnvFilter: RUST_LOG > LOG_LEVEL > the default filter,
         //     resolved by the logging config's boundary like every other
-        //     logging setting. A malformed logging env var is not fatal here:
-        //     fall back to the default filter.
-        let level = cognee_logging::LoggingConfig::from_env()
-            .ok()
-            .and_then(|cfg| cfg.level_filter);
+        //     logging setting. Only the level is read, so a malformed,
+        //     unrelated logging variable cannot drop it, and Python level
+        //     names (`WARNING`) are mapped.
+        let level = cognee_logging::LoggingConfig::level_filter_from_env();
         let filter = cognee_logging::env_filter(level.as_deref());
 
         // (3) Reserve a reload-capable slot for the OTEL layer. Starts

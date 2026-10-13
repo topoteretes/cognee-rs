@@ -26,9 +26,7 @@ pub(crate) fn arg_json(env: &mut JNIEnv, s: &JString) -> Result<serde_json::Valu
         .get_string(s)
         .map(|v| v.into())
         .map_err(|_| SdkError::Validation("invalid JSON string argument".into()))?;
-    let t = raw.trim();
-    if t.is_empty() || t == "null" {
-        return Ok(serde_json::Value::Null);
-    }
-    serde_json::from_str(t).map_err(|e| SdkError::Validation(format!("invalid JSON argument: {e}")))
+    cognee_bindings_common::process_config::parse_optional_json(&raw)
+        .map(Option::unwrap_or_default)
+        .map_err(|e| SdkError::Validation(format!("invalid JSON argument: {e}")))
 }

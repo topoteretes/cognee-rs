@@ -38,6 +38,9 @@ int main(void) {
                         "unknown OpenTelemetry setting") ||
         expect_rejected("otlp malformed json", cognee_init_otlp_with_options("{"),
                         "invalid options JSON") ||
+        expect_rejected("logging invalid utf-8",
+                        cognee_setup_logging_with_options("{\"log_level\": \"\xff\"}"),
+                        "not valid UTF-8") ||
         expect_rejected("logging invalid value",
                         cognee_setup_logging_with_options("{\"log_rotation\": \"weekly\"}"),
                         "log_rotation")) {

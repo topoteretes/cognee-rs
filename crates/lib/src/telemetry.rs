@@ -89,10 +89,12 @@ pub use cognee_telemetry::{
 //
 // Product analytics are process config: one `TelemetryConfig` governs every
 // event the process sends. Env (`TELEMETRY_DISABLED`, `ENV=test|dev`, ...) is
-// the default; `configure` / `set_enabled` from code win over it. Without the
+// the default, read when an event is sent; `configure` / `set_enabled` from
+// code win over it, `reset_to_env` drops them. Without the
 // `telemetry` feature these still exist and `is_enabled()` is always `false`.
 pub use cognee_telemetry::{
-    TelemetryConfig, configure, current_config, flush, is_enabled, set_enabled, set_llm_api_key,
+    LlmKeyRegistration, TelemetryConfig, configure, current_config, flush, is_enabled,
+    reset_to_env, set_enabled, set_llm_api_key,
 };
 
 #[cfg(feature = "telemetry")]

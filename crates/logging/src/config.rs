@@ -196,12 +196,24 @@ impl LoggingConfig {
     /// This is a configuration boundary: it is where logging opens the
     /// process environment. [`LoggingConfig::from_env_source`] reads the
     /// same variables from any [`EnvSource`].
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "config boundary: LoggingConfig is resolved from the process env here"
-    )]
     pub fn from_env() -> Result<Self, LoggingConfigError> {
-        Self::from_env_source(&cognee_config_core::ProcessEnv::new())
+        Self::from_env_source(&process_env())
+    }
+
+    /// The level filter alone, from the process environment: `RUST_LOG`, else
+    /// `LOG_LEVEL` (Python level names mapped, see [`normalize_level_filter`]).
+    ///
+    /// For callers that only need the level — the bindings' import-time bridge
+    /// subscribers — so that a malformed, unrelated logging variable
+    /// (`COGNEE_LOG_ROTATION=weekly`) cannot discard a valid `RUST_LOG`.
+    pub fn level_filter_from_env() -> Option<String> {
+        Self::level_filter_from_env_source(&process_env())
+    }
+
+    /// [`LoggingConfig::level_filter_from_env`], reading from `env`.
+    pub fn level_filter_from_env_source(env: &dyn EnvSource) -> Option<String> {
+        read_nonempty(env, "RUST_LOG")
+            .or_else(|| read_nonempty(env, "LOG_LEVEL").map(|level| normalize_level_filter(&level)))
     }
 
     /// [`LoggingConfig::from_env`], reading from `env` instead of the
@@ -231,8 +243,7 @@ impl LoggingConfig {
         // (task 06-05) can feed it into `EnvFilter::new` as a bare
         // level. When both are unset, leave `None` so init substitutes
         // `default_filter()` (decision 6).
-        let level_filter =
-            read_nonempty(env, "RUST_LOG").or_else(|| read_nonempty(env, "LOG_LEVEL"));
+        let level_filter = Self::level_filter_from_env_source(env);
 
         Ok(Self {
             file_enabled,
@@ -266,7 +277,7 @@ impl LoggingConfig {
     pub fn set(&mut self, key: &str, value: &str) -> Result<(), LoggingConfigError> {
         let non_empty = || (!value.is_empty()).then(|| value.to_string());
         match key {
-            "log_level" => self.level_filter = non_empty(),
+            "log_level" => self.level_filter = non_empty().map(|v| normalize_level_filter(&v)),
             "logs_root_directory" => self.logs_dir_override = non_empty().map(PathBuf::from),
             "log_file" => self.file_enabled = parse_bool_value(value),
             "log_file_name" => self.log_file_name = non_empty().map(PathBuf::from),
@@ -292,6 +303,45 @@ impl LoggingConfig {
         }
         Ok(())
     }
+}
+
+/// The process environment, opened at this crate's one config boundary.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "config boundary: LoggingConfig is resolved from the process env here"
+)]
+fn process_env() -> cognee_config_core::ProcessEnv {
+    cognee_config_core::ProcessEnv::new()
+}
+
+/// Map a bare Python logging level name to its `EnvFilter` spelling, so a
+/// `LOG_LEVEL` shared with the Python SDK means the same thing here.
+///
+/// `EnvFilter` reads a bare word it does not know as a *target* name, so
+/// `LOG_LEVEL=WARNING` used to become "everything from the `WARNING` target,
+/// nothing else" and silenced every cognee log. Case-insensitive:
+///
+/// | Python | `EnvFilter` |
+/// |---|---|
+/// | `CRITICAL`, `FATAL`, `ERROR` | `error` |
+/// | `WARNING`, `WARN` | `warn` |
+/// | `INFO` | `info` |
+/// | `DEBUG` | `debug` |
+/// | `NOTSET`, `TRACE` | `trace` |
+///
+/// Anything else (`off`, a full directive such as `info,cognee=debug`) is
+/// returned unchanged.
+pub fn normalize_level_filter(value: &str) -> String {
+    let trimmed = value.trim();
+    let mapped = match trimmed.to_ascii_lowercase().as_str() {
+        "critical" | "fatal" | "error" => "error",
+        "warning" | "warn" => "warn",
+        "info" => "info",
+        "debug" => "debug",
+        "notset" | "trace" => "trace",
+        _ => return trimmed.to_string(),
+    };
+    mapped.to_string()
 }
 
 fn parse_rotation(var: &'static str, raw: String) -> Result<LogRotation, LoggingConfigError> {
@@ -638,7 +688,8 @@ mod tests {
         let g = EnvGuard::new();
         g.set("LOG_LEVEL", "DEBUG");
         let cfg = LoggingConfig::from_env().expect("parses");
-        assert_eq!(cfg.level_filter.as_deref(), Some("DEBUG"));
+        // Python level names are normalized to EnvFilter spelling.
+        assert_eq!(cfg.level_filter.as_deref(), Some("debug"));
         drop(g);
     }
 
@@ -694,6 +745,67 @@ mod tests {
         assert_eq!(cfg.backup_count, 3);
         assert_eq!(cfg.logs_dir_override, None, "empty means unset");
         assert_eq!(cfg.level_filter.as_deref(), Some("debug"));
+    }
+
+    /// Python level names (a `LOG_LEVEL` shared with the Python SDK) map to
+    /// `EnvFilter` levels instead of being read as a target name.
+    #[test]
+    fn python_level_names_are_normalized() {
+        for (raw, want) in [
+            ("WARNING", "warn"),
+            ("warning", "warn"),
+            ("CRITICAL", "error"),
+            ("FATAL", "error"),
+            ("ERROR", "error"),
+            ("INFO", "info"),
+            ("DEBUG", "debug"),
+            ("NOTSET", "trace"),
+            ("info,cognee=debug", "info,cognee=debug"),
+        ] {
+            let env = cognee_config_core::MapEnv::new().with("LOG_LEVEL", raw);
+            let cfg = LoggingConfig::from_env_source(&env).expect("parses");
+            assert_eq!(cfg.level_filter.as_deref(), Some(want), "LOG_LEVEL={raw}");
+            let mut cfg = LoggingConfig::defaults();
+            cfg.set("log_level", raw).expect("known key");
+            assert_eq!(
+                cfg.level_filter.as_deref(),
+                Some(want),
+                "set log_level={raw}"
+            );
+        }
+        // RUST_LOG is an EnvFilter directive already: passed through as is.
+        let env = cognee_config_core::MapEnv::new().with("RUST_LOG", "warn");
+        assert_eq!(
+            LoggingConfig::level_filter_from_env_source(&env).as_deref(),
+            Some("warn")
+        );
+    }
+
+    /// The level alone survives a malformed, unrelated logging variable.
+    #[test]
+    fn level_filter_ignores_unrelated_bad_vars() {
+        let env = cognee_config_core::MapEnv::new()
+            .with("RUST_LOG", "debug")
+            .with("COGNEE_LOG_ROTATION", "weekly")
+            .with("COGNEE_LOG_BACKUP_COUNT", "abc");
+        assert!(LoggingConfig::from_env_source(&env).is_err());
+        assert_eq!(
+            LoggingConfig::level_filter_from_env_source(&env).as_deref(),
+            Some("debug")
+        );
+    }
+
+    /// The resulting filter actually lets `warn` events through for a
+    /// cognee target (the regression: a bare `WARNING` became a target name).
+    #[test]
+    fn normalized_warning_enables_warn_for_every_target() {
+        use tracing_subscriber::layer::SubscriberExt;
+        let level = normalize_level_filter("WARNING");
+        let subscriber = tracing_subscriber::registry().with(crate::env_filter(Some(&level)));
+        tracing::subscriber::with_default(subscriber, || {
+            assert!(tracing::enabled!(target: "cognee_cognify", tracing::Level::WARN));
+            assert!(!tracing::enabled!(target: "cognee_cognify", tracing::Level::INFO));
+        });
     }
 
     #[test]

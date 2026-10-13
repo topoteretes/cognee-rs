@@ -174,7 +174,7 @@ print(cfg)
 | `RUST_LOG`, `LOG_LEVEL` | Standard `tracing-subscriber` env-filter level overrides. |
 | `COGNEE_LOG_*`, `LOG_FILE_NAME` | Defaults for `setup_logging()`; its `options` dict wins — see docs/configuration.md (Logging section). |
 | `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_SERVICE_NAME` and other `OTEL_*` vars | Defaults for `setup_telemetry()`; its `options` dict wins. |
-| `TELEMETRY_DISABLED`, `ENV` | Analytics opt-out defaults, read once on import; `set_telemetry_enabled()` wins. |
+| `TELEMETRY_DISABLED`, `ENV` | Analytics opt-out defaults, read when an event is sent; `set_telemetry_enabled()` wins. |
 
 ## Operations reference
 
@@ -475,8 +475,9 @@ skip the default subscriber. The host then owns all subscriber setup.
 Analytics emission is **ON by default** — Python-SDK parity. Analytics are
 armed automatically on import (no explicit `setup_telemetry_analytics()` call
 required); `setup_telemetry_analytics()` and `is_telemetry_enabled()` both
-return the effective state. The environment is read once, on import;
-`set_telemetry_enabled()` overrides it in either direction, process-wide.
+return the effective state. The environment is read when an event is sent (so
+a `.env` loaded by the first handle counts); `set_telemetry_enabled()`
+overrides it in either direction, process-wide.
 
 | Condition | Behaviour |
 |---|---|

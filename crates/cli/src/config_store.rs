@@ -36,7 +36,21 @@ use std::path::{Path, PathBuf};
 /// `migrate_document` rewrites them to the canonical keys. Left as aliases,
 /// they would sit beside the canonical keys that env vars, CLI flags and
 /// `config set` write, and `config unset` would leave them behind.
-const CURRENT_VERSION: u32 = 4;
+/// Version 5: `log_level` and `logs_root_directory` became live — the CLI now
+/// lowers them into the logging config — and their defaults changed from
+/// `"info"` / `"./logs"` (never read) to `""` ("use the logging defaults").
+/// Every pre-v5 file carries the old defaults (the whole struct was
+/// serialised), which would otherwise start writing logs into `./logs` of
+/// whatever directory the CLI runs in and replace the default filter (which
+/// keeps noisy crates at `warn`) with a bare `info`. `migrate_document` clears
+/// values equal to the old defaults.
+const CURRENT_VERSION: u32 = 5;
+
+/// The pre-v5 default for `log_level`, persisted as a real value.
+const LEGACY_DEFAULT_LOG_LEVEL: &str = "info";
+
+/// The pre-v5 default for `logs_root_directory`, persisted as a real value.
+const LEGACY_DEFAULT_LOGS_ROOT_DIRECTORY: &str = "./logs";
 
 /// The version-1 sentinel for "auto-calculate the chunk size".
 const LEGACY_AUTO_CHUNK_SIZE: u32 = 1500;
@@ -171,6 +185,20 @@ fn migrate_document(document: &mut ConfigDocument) {
         // canonical one is the newer write and is kept.
         canonicalize_section_aliases(&mut document.settings.sections);
         document.version = 4;
+    }
+    if document.version < 5 {
+        // v4 -> v5: `log_level` / `logs_root_directory` now take effect, and an
+        // empty value means "the logging default". A pre-v5 file's old default
+        // was never a user choice (it was serialised with the whole struct and
+        // never read), so map it back to "unset". A user who did type exactly
+        // `info` gets the default filter, whose baseline is `info` too.
+        if document.settings.log_level == LEGACY_DEFAULT_LOG_LEVEL {
+            document.settings.log_level.clear();
+        }
+        if document.settings.logs_root_directory == LEGACY_DEFAULT_LOGS_ROOT_DIRECTORY {
+            document.settings.logs_root_directory.clear();
+        }
+        document.version = 5;
     }
 }
 
@@ -340,6 +368,59 @@ mod tests {
             "the v1 sentinel must restore auto-calculation"
         );
         assert_eq!(document.version, CURRENT_VERSION);
+    }
+
+    /// SDK-713 upgrade hazard: every pre-v5 config.json carries `"log_level":
+    /// "info"` and `"logs_root_directory": "./logs"` (the old, never-read
+    /// defaults). Now that the CLI lowers both into logging, keeping them would
+    /// move logs into `./logs` of the working directory and drop the default
+    /// filter's noisy-crate suppression.
+    #[test]
+    fn v4_document_clears_the_legacy_logging_defaults() {
+        let mut document: ConfigDocument = serde_json::from_value(serde_json::json!({
+            "version": 4,
+            "settings": { "log_level": "info", "logs_root_directory": "./logs" }
+        }))
+        .expect("v4 document parses");
+        migrate_document(&mut document);
+        assert_eq!(document.settings.log_level, "");
+        assert_eq!(document.settings.logs_root_directory, "");
+        assert_eq!(document.version, CURRENT_VERSION);
+
+        // And the lowered logging config is then the logging default.
+        let mut cfg = cognee_logging::LoggingConfig::defaults();
+        crate::cli::lower_logging_settings(&mut cfg, &document.settings);
+        assert_eq!(cfg.level_filter, None);
+        assert_eq!(cfg.logs_dir_override, None);
+    }
+
+    /// Values a user really chose survive the v5 step.
+    #[test]
+    fn v4_document_keeps_explicit_logging_settings() {
+        let mut document: ConfigDocument = serde_json::from_value(serde_json::json!({
+            "version": 4,
+            "settings": { "log_level": "debug", "logs_root_directory": "/var/log/cognee" }
+        }))
+        .expect("v4 document parses");
+        migrate_document(&mut document);
+        assert_eq!(document.settings.log_level, "debug");
+        assert_eq!(document.settings.logs_root_directory, "/var/log/cognee");
+    }
+
+    /// At the current version the old default spellings are explicit choices.
+    #[test]
+    fn current_document_keeps_info_and_dot_logs() {
+        let mut document = ConfigDocument {
+            version: CURRENT_VERSION,
+            settings: Settings {
+                log_level: "info".into(),
+                logs_root_directory: "./logs".into(),
+                ..Settings::default()
+            },
+        };
+        migrate_document(&mut document);
+        assert_eq!(document.settings.log_level, "info");
+        assert_eq!(document.settings.logs_root_directory, "./logs");
     }
 
     /// A v1 user who chose a real size keeps it — only the sentinel is remapped.

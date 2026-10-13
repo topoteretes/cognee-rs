@@ -38,9 +38,9 @@
 //! * From code: [`set_enabled`]`(false)`, or [`configure`] with a whole
 //!   [`TelemetryConfig`]. An explicit call wins over the environment and
 //!   also drops events that are queued but not yet posted.
-//! * From the environment (the default, resolved once on first use):
-//!   `TELEMETRY_DISABLED=1` (any non-empty value) or `ENV=test` / `ENV=dev`.
-//!   See [`config`] for every variable.
+//! * From the environment (the default, read when an event is sent, so a
+//!   `.env` loaded later is honoured): `TELEMETRY_DISABLED=1` (any non-empty
+//!   value) or `ENV=test` / `ENV=dev`. See [`config`] for every variable.
 //!
 //! At compile time: build `cognee` (or any consumer) with
 //! `--no-default-features`. [`send_telemetry`] and
@@ -72,8 +72,10 @@ pub mod ids;
 pub mod payload;
 pub mod sanitize;
 
-pub use config::{TelemetryConfig, configure, current_config, is_enabled, set_enabled};
-pub use ids::set_llm_api_key;
+pub use config::{
+    TelemetryConfig, configure, current_config, is_enabled, reset_to_env, set_enabled,
+};
+pub use ids::{LlmKeyRegistration, set_llm_api_key};
 
 /// Property value type for `additional_properties`. Resolves to
 /// `serde_json::Value` when the `telemetry` feature is on, or `()`

@@ -7,7 +7,7 @@
  * ``"test"``/``"dev"``, or ``COGNEE_HOST_SDK`` is set — and
  * ``setTelemetryEnabled`` overrides the environment, process-wide. Each
  * scenario spawns its own child process because the environment is
- * resolved once per process and the switch is process-wide.
+ * process-wide and the switch is process-wide too.
  */
 import { spawnSync } from "child_process";
 import * as fs from "fs";
@@ -83,6 +83,19 @@ describe("setupTelemetryAnalytics (Neon)", () => {
 describe("setTelemetryEnabled (Neon, process-wide)", () => {
   it("switches analytics off and on from the default", () => {
     expect(runScript({}, SWITCH)).toBe("true,false,false,true");
+  });
+
+  it("honours an opt-out set after load, under the switch", () => {
+    const script = `
+      const cog = require(${PACKAGE_ROOT});
+      const out = [cog.isTelemetryEnabled()];
+      process.env.TELEMETRY_DISABLED = "1";
+      out.push(cog.isTelemetryEnabled());
+      cog.setTelemetryEnabled(true);
+      out.push(cog.isTelemetryEnabled());
+      process.stdout.write(out.join(","));
+    `;
+    expect(runScript({}, script)).toBe("true,false,true");
   });
 
   it("wins over TELEMETRY_DISABLED in the environment", () => {

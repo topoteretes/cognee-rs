@@ -13,12 +13,16 @@
 //!   resolved `llm.api_key` of the most recently configured handle), with
 //!   a configurable salt. Stable across machines for the same key.
 
+use std::collections::BTreeMap;
+use std::sync::Mutex;
+
 #[cfg(feature = "telemetry")]
 mod inner {
     use hmac::Hmac;
     use once_cell::sync::Lazy;
     use pbkdf2::pbkdf2;
     use sha2::Sha256;
+    use std::collections::HashMap;
     use std::path::{Path, PathBuf};
     use std::sync::Mutex;
     use uuid::Uuid;
@@ -74,7 +78,7 @@ mod inner {
         reason = "Mutex lock poison is unrecoverable — no meaningful recovery possible"
     )]
     pub fn get_anonymous_id() -> String {
-        if let Some(v) = crate::current_config().tracking_id
+        if let Some(v) = crate::config::with_config(|c| c.tracking_id.clone())
             && !v.is_empty()
         {
             return v;
@@ -203,34 +207,30 @@ mod inner {
         new_id
     }
 
-    /// The registered LLM API key (see [`set_llm_api_key`]).
-    static LLM_API_KEY: Lazy<Mutex<Option<String>>> = Lazy::new(|| Mutex::new(None));
-
-    /// Last computed `(key, salt, tracking id)`. PBKDF2 at 100k iterations
-    /// costs tens of milliseconds, so it runs once per distinct key/salt
-    /// pair instead of once per event.
+    /// Computed tracking ids, keyed by `(key, salt)`. PBKDF2 at 100k
+    /// iterations costs tens of milliseconds, so it runs once per distinct
+    /// key/salt pair instead of once per event. Bounded: a process sees a
+    /// handful of keys, and the map is simply cleared if that ever grows.
     #[allow(clippy::type_complexity)]
-    static TRACKING_CACHE: Lazy<Mutex<Option<(String, Vec<u8>, String)>>> =
-        Lazy::new(|| Mutex::new(None));
+    static TRACKING_CACHE: Lazy<Mutex<HashMap<(String, Vec<u8>), String>>> =
+        Lazy::new(|| Mutex::new(HashMap::new()));
+    const TRACKING_CACHE_CAP: usize = 16;
 
-    /// Register the LLM API key hashed into `api_key_tracking_id`.
-    #[allow(
-        clippy::unwrap_used,
-        reason = "Mutex lock poison is unrecoverable — no meaningful recovery possible"
-    )]
-    pub fn set_llm_api_key(key: Option<&str>) {
-        let key = key.filter(|k| !k.is_empty()).map(str::to_string);
-        // lock poison is unrecoverable
-        *LLM_API_KEY.lock().unwrap() = key;
+    /// PBKDF2-HMAC-SHA256 hash of the LLM API key registered for this process
+    /// (see [`super::LlmKeyRegistration`]) with a configurable salt. Returns
+    /// `"ak_<32-hex-chars>"` when exactly one distinct non-empty key is
+    /// registered, empty string otherwise.
+    ///
+    /// Evaluated at every event (decision 11) against the keys registered
+    /// *now*. The hash is cached per key and salt and computed **outside**
+    /// the cache lock, so concurrent events never queue behind a PBKDF2 run.
+    pub fn get_api_key_tracking_id() -> String {
+        let salt = crate::config::with_config(|c| c.api_key_tracking_salt.clone());
+        api_key_tracking_id_with_salt(salt.as_deref())
     }
 
-    /// PBKDF2-HMAC-SHA256 hash of the registered LLM API key with a
-    /// configurable salt. Returns `"ak_<32-hex-chars>"` when a non-empty key
-    /// is registered, empty string otherwise.
-    ///
-    /// Evaluated at every event (decision 11) against the key registered
-    /// *now*, so re-registering a key (a config change) takes effect on the
-    /// next event; the hash itself is cached per key and salt.
+    /// [`get_api_key_tracking_id`] with the salt already resolved (the
+    /// dispatcher reads the configuration once per event).
     #[allow(
         clippy::expect_used,
         reason = "PBKDF2 with dklen=16 ≤ SHA256 output=32 is mathematically guaranteed to succeed"
@@ -239,30 +239,27 @@ mod inner {
         clippy::unwrap_used,
         reason = "Mutex lock poison is unrecoverable — no meaningful recovery possible"
     )]
-    pub fn get_api_key_tracking_id() -> String {
-        // lock poison is unrecoverable
-        let Some(key) = LLM_API_KEY.lock().unwrap().clone() else {
+    pub(crate) fn api_key_tracking_id_with_salt(salt: Option<&str>) -> String {
+        let Some(key) = super::registered_key() else {
             return String::new();
         };
-        let salt: Vec<u8> = crate::current_config()
-            .api_key_tracking_salt
-            .map(String::into_bytes)
-            .unwrap_or_else(|| DEFAULT_SALT.to_vec());
-
+        let salt: Vec<u8> = salt.map_or_else(|| DEFAULT_SALT.to_vec(), |s| s.as_bytes().to_vec());
+        let cache_key = (key, salt);
         // lock poison is unrecoverable
-        let mut cache = TRACKING_CACHE.lock().unwrap();
-        if let Some((k, s, id)) = cache.as_ref()
-            && *k == key
-            && *s == salt
-        {
+        if let Some(id) = TRACKING_CACHE.lock().unwrap().get(&cache_key) {
             return id.clone();
         }
         let mut out = [0u8; DKLEN];
         // PBKDF2 with dklen ≤ HMAC-SHA256 output (32) cannot fail.
-        pbkdf2::<Hmac<Sha256>>(key.as_bytes(), &salt, ITERATIONS, &mut out)
+        pbkdf2::<Hmac<Sha256>>(cache_key.0.as_bytes(), &cache_key.1, ITERATIONS, &mut out)
             .expect("dklen 16 ≤ Sha256 output 32 — invariant holds");
         let id = format!("ak_{}", hex::encode(out));
-        *cache = Some((key, salt, id.clone()));
+        // lock poison is unrecoverable
+        let mut cache = TRACKING_CACHE.lock().unwrap();
+        if cache.len() >= TRACKING_CACHE_CAP {
+            cache.clear();
+        }
+        cache.insert(cache_key, id.clone());
         id
     }
 }
@@ -281,33 +278,139 @@ mod inner {
     pub fn get_api_key_tracking_id() -> String {
         String::new()
     }
-    /// Noop stub: nothing is ever hashed when the `telemetry` feature is
-    /// disabled, so the key is not retained.
-    pub fn set_llm_api_key(_key: Option<&str>) {}
 }
 
 /// Project-local anonymous identifier (uuid4, file-backed at
 /// `<project_root>/.anon_id`). Honours the `tracking_id` override of the
 /// process [`TelemetryConfig`](crate::TelemetryConfig) (`TRACKING_ID`).
 pub use inner::get_anonymous_id;
-/// Deterministic PBKDF2-HMAC-SHA256 hash of the LLM API key registered with
-/// [`set_llm_api_key`], with a configurable salt. Stable across machines for
-/// the same key. Empty when no key is registered.
+/// Deterministic PBKDF2-HMAC-SHA256 hash of the registered LLM API key (see
+/// [`LlmKeyRegistration`] / [`set_llm_api_key`]), with a configurable salt.
+/// Stable across machines for the same key. Empty when no key, or more than
+/// one distinct key, is registered.
 pub use inner::get_api_key_tracking_id;
 /// Machine-local persistent identifier (uuid4, file-backed at
 /// `~/.cognee/.persistent_id`).
 pub use inner::get_persistent_id;
-/// Register the LLM API key whose hash is reported as `api_key_tracking_id`.
+// --- LLM key registry ---------------------------------------------------------
+//
+// `api_key_tracking_id` identifies *which key* a process uses. Events are
+// emitted from code that has no handle on the configuration (pipeline, search,
+// session), so keys are registered process-wide by whoever resolves them: each
+// live `ComponentManager` holds an `LlmKeyRegistration`, and embedders without
+// one call `set_llm_api_key`. A registration disappears with its owner, so a
+// dropped handle's key never lingers.
+//
+// When every live registration agrees on one key, that key is reported. When
+// live handles use *different* keys, the process-wide events cannot be
+// attributed to either, so the id is reported empty rather than mislabelled.
+
+/// Slot used by [`set_llm_api_key`].
+const PROCESS_SLOT: u64 = 0;
+
+struct KeyRegistry {
+    next: u64,
+    live: BTreeMap<u64, String>,
+}
+
+static KEYS: Mutex<KeyRegistry> = Mutex::new(KeyRegistry {
+    next: PROCESS_SLOT + 1,
+    live: BTreeMap::new(),
+});
+
+#[allow(
+    clippy::unwrap_used,
+    reason = "Mutex lock poison is unrecoverable — no meaningful recovery possible"
+)]
+fn set_slot(slot: u64, key: Option<&str>) {
+    // lock poison is unrecoverable
+    let mut keys = KEYS.lock().unwrap();
+    match key.filter(|k| !k.is_empty()) {
+        Some(key) => {
+            keys.live.insert(slot, key.to_string());
+        }
+        None => {
+            keys.live.remove(&slot);
+        }
+    }
+}
+
+/// The key to report: the one distinct non-empty key among the live
+/// registrations, or `None` when there is none or they disagree.
+#[cfg_attr(not(feature = "telemetry"), allow(dead_code))]
+#[allow(
+    clippy::unwrap_used,
+    reason = "Mutex lock poison is unrecoverable — no meaningful recovery possible"
+)]
+fn registered_key() -> Option<String> {
+    // lock poison is unrecoverable
+    let keys = KEYS.lock().unwrap();
+    let mut values = keys.live.values();
+    let first = values.next()?;
+    values.all(|k| k == first).then(|| first.clone())
+}
+
+/// A live registration of the LLM API key one configuration uses, for
+/// `api_key_tracking_id`. Dropping it unregisters the key.
 ///
-/// Process-wide: the most recent registration wins. cognee's
-/// `ComponentManager` registers the resolved `llm.api_key` of its
-/// configuration when it is created and whenever that configuration changes,
-/// so the key set from code, a binding or the CLI config store is the one
-/// hashed (never the raw `LLM_API_KEY` environment variable). An empty or
-/// `None` key clears the registration. Embedders that call
+/// cognee's `ComponentManager` holds one, updated whenever its configuration
+/// changes, so the resolved `llm.api_key` (env, config file or code) is the one
+/// reported — never the raw `LLM_API_KEY` environment variable. See the module
+/// docs for how several live registrations combine.
+#[derive(Debug)]
+pub struct LlmKeyRegistration {
+    slot: u64,
+}
+
+impl LlmKeyRegistration {
+    /// Register `key` (`None` or empty registers nothing yet).
+    #[allow(
+        clippy::unwrap_used,
+        reason = "Mutex lock poison is unrecoverable — no meaningful recovery possible"
+    )]
+    #[must_use = "the key is unregistered when the registration is dropped"]
+    pub fn new(key: Option<&str>) -> Self {
+        let slot = {
+            // lock poison is unrecoverable
+            let mut keys = KEYS.lock().unwrap();
+            let slot = keys.next;
+            keys.next += 1;
+            slot
+        };
+        set_slot(slot, key);
+        Self { slot }
+    }
+
+    /// Replace the registered key (`None` or empty clears it).
+    pub fn update(&self, key: Option<&str>) {
+        set_slot(self.slot, key);
+    }
+
+    /// The key this registration currently holds.
+    #[allow(
+        clippy::unwrap_used,
+        reason = "Mutex lock poison is unrecoverable — no meaningful recovery possible"
+    )]
+    #[must_use]
+    pub fn registered(&self) -> Option<String> {
+        // lock poison is unrecoverable
+        KEYS.lock().unwrap().live.get(&self.slot).cloned()
+    }
+}
+
+impl Drop for LlmKeyRegistration {
+    fn drop(&mut self) {
+        set_slot(self.slot, None);
+    }
+}
+
+/// Register the process-level LLM API key, for embedders that call
 /// [`send_telemetry`](crate::send_telemetry) without a `ComponentManager`
-/// register the key themselves.
-pub use inner::set_llm_api_key;
+/// (which registers its own key through [`LlmKeyRegistration`]). `None` or
+/// empty clears it. Combines with live registrations as described above.
+pub fn set_llm_api_key(key: Option<&str>) {
+    set_slot(PROCESS_SLOT, key);
+}
 
 /// Test-only cache-buster re-export. Gated by `debug_assertions` so it
 /// is not exposed in release builds; integration tests under
@@ -317,6 +420,9 @@ pub use inner::set_llm_api_key;
 #[cfg(all(any(test, debug_assertions), feature = "telemetry"))]
 #[doc(hidden)]
 pub use inner::__test_only_reset_caches;
+
+#[cfg(feature = "telemetry")]
+pub(crate) use inner::api_key_tracking_id_with_salt as inner_api_key_tracking_id_with_salt;
 
 #[cfg(all(test, feature = "telemetry"))]
 #[allow(
@@ -361,7 +467,8 @@ mod ids_tests {
                     None => std::env::remove_var("HOME"),
                 }
             }
-            configure(self.config.clone());
+            let _ = &self.config;
+            crate::reset_to_env();
             set_llm_api_key(None);
         }
     }
@@ -411,6 +518,42 @@ mod ids_tests {
         // SAFETY: still inside the same serial section.
         unsafe { std::env::remove_var("LLM_API_KEY") };
         assert_eq!(id, "");
+    }
+
+    /// A registration's key is reported while it lives, and disappears with
+    /// it; disagreeing live keys are reported as unattributable (empty).
+    #[test]
+    #[serial]
+    fn registrations_combine_and_unregister_on_drop() {
+        let _g = Guard::snapshot();
+        with_salt(None);
+        set_llm_api_key(None);
+        set_llm_api_key(Some("sk-a"));
+        let id_a = get_api_key_tracking_id();
+        set_llm_api_key(None);
+
+        let a = super::LlmKeyRegistration::new(Some("sk-a"));
+        assert_eq!(get_api_key_tracking_id(), id_a, "one live key is reported");
+        let same = super::LlmKeyRegistration::new(Some("sk-a"));
+        assert_eq!(
+            get_api_key_tracking_id(),
+            id_a,
+            "agreeing keys are reported"
+        );
+        let b = super::LlmKeyRegistration::new(Some("sk-b"));
+        assert_eq!(
+            get_api_key_tracking_id(),
+            "",
+            "disagreeing keys are not attributed"
+        );
+        drop(a);
+        drop(same);
+        let id_b = get_api_key_tracking_id();
+        assert!(id_b.starts_with("ak_") && id_b != id_a, "only b remains");
+        b.update(None);
+        assert_eq!(get_api_key_tracking_id(), "", "a cleared key is gone");
+        drop(b);
+        assert_eq!(get_api_key_tracking_id(), "", "nothing lingers after drop");
     }
 
     #[test]

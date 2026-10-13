@@ -59,12 +59,13 @@ pub(crate) unsafe fn options_from_c(ptr: *const c_char) -> Result<Option<serde_j
         return Ok(None);
     }
     // SAFETY: forwarded caller contract; non-null checked above.
-    let raw = unsafe { crate::util::c_str_to_str(ptr) }.map_err(|_| ())?;
-    let raw = raw.trim();
-    if raw.is_empty() || raw == "null" {
-        return Ok(None);
-    }
-    serde_json::from_str(raw).map(Some).map_err(|e| {
+    let raw = unsafe { std::ffi::CStr::from_ptr(ptr) };
+    // Every failure stores its own message, so `cg_last_error_message()` never
+    // reports a stale error from an earlier call.
+    let raw = raw.to_str().map_err(|e| {
+        set_last_error(format!("options JSON is not valid UTF-8: {e}"));
+    })?;
+    cognee_bindings_common::process_config::parse_optional_json(raw).map_err(|e| {
         set_last_error(format!("invalid options JSON: {e}"));
     })
 }

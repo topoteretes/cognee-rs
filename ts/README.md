@@ -421,7 +421,7 @@ value as `isTelemetryEnabled()`.
 | `MOCK_EMBEDDING` | Set `true` to use deterministic SHA-256-derived mock embeddings (no model download); `zero` gives all-zero vectors instead. |
 | `COGNEE_BINDING_SUPPRESS_LOGS` | Suppress the auto-installed stderr fmt subscriber. |
 | `COGNEE_HOST_SDK` | Suppress binding-armed analytics when the host is an embedding SDK. |
-| `TELEMETRY_DISABLED`, `ENV` | Analytics opt-out defaults, read once on load; `setTelemetryEnabled()` wins. |
+| `TELEMETRY_DISABLED`, `ENV` | Analytics opt-out defaults, read when an event is sent; `setTelemetryEnabled()` wins. |
 | `RUST_LOG`, `LOG_LEVEL` | `tracing-subscriber` env-filter level overrides. |
 | `COGNEE_LOG_*`, `LOG_FILE_NAME` | Defaults for `setupLogging()`; its options win. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, `OTEL_*` | Defaults for `setupTelemetry()`; its options win. |

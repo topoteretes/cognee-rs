@@ -9,15 +9,17 @@
 //!
 //! 1. **Defaults** — [`TelemetryConfig::default`]: analytics **on** (Python SDK
 //!    parity, opt-out).
-//! 2. **Process environment** — resolved once, by [`TelemetryConfig::from_env`],
-//!    the first time the process configuration is needed (the first event, a
-//!    binding's import-time arming, or an [`is_enabled`] call).
-//! 3. **Explicit code** — [`configure`] replaces the whole configuration and
-//!    [`set_enabled`] flips the master switch. Either one wins over the
-//!    environment, and stays in force until the next explicit call.
+//! 2. **Process environment** — [`TelemetryConfig::from_env`], read when the
+//!    configuration is needed (each event), so a `.env` file loaded after
+//!    startup (by `Settings::overlay_from_env`) or a variable set later is
+//!    honoured, as it was before this configuration existed.
+//! 3. **Explicit code** — [`set_enabled`] pins the master switch and
+//!    [`configure`] pins the whole configuration. Either wins over the
+//!    environment and stays in force until the next explicit call;
+//!    [`reset_to_env`] returns to the environment.
 //!
-//! Because the environment is read once, changing `TELEMETRY_DISABLED` after the
-//! first event has no effect; call [`set_enabled`] instead.
+//! `set_enabled` pins only `enabled`: the other fields keep following the
+//! environment. `configure` pins every field (and clears a `set_enabled`).
 //!
 //! # Environment variables (read only by [`TelemetryConfig::from_env_source`])
 //!
@@ -37,7 +39,7 @@
 //! handle), so a key set from code or from the CLI config store is the one
 //! reported.
 
-use std::sync::{OnceLock, RwLock};
+use std::sync::RwLock;
 
 use cognee_config_core::EnvSource;
 
@@ -164,14 +166,48 @@ impl TelemetryConfig {
     }
 }
 
-static STATE: OnceLock<RwLock<TelemetryConfig>> = OnceLock::new();
-
-/// The process-wide slot, resolved from the environment on first use.
-fn state() -> &'static RwLock<TelemetryConfig> {
-    STATE.get_or_init(|| RwLock::new(TelemetryConfig::from_env()))
+/// What code has pinned over the environment layer.
+struct Overrides {
+    /// Set by [`configure`]: the whole configuration, replacing the env layer.
+    configured: Option<TelemetryConfig>,
+    /// Set by [`set_enabled`]: the master switch alone.
+    enabled: Option<bool>,
 }
 
-/// Replace the process-wide analytics configuration. Wins over the environment.
+static STATE: RwLock<Overrides> = RwLock::new(Overrides {
+    configured: None,
+    enabled: None,
+});
+
+/// Run `f` against the effective configuration: the configured one, or the
+/// environment as it is now, with a pinned switch applied. Clones only when a
+/// switch has to be applied over a configured value.
+#[allow(
+    clippy::unwrap_used,
+    reason = "RwLock poisoning only follows a panic while holding the lock; no meaningful recovery"
+)]
+pub(crate) fn with_config<R>(f: impl FnOnce(&TelemetryConfig) -> R) -> R {
+    // lock poison is unrecoverable
+    let overrides = STATE.read().unwrap();
+    match (&overrides.configured, overrides.enabled) {
+        (Some(config), None) => f(config),
+        (Some(config), Some(enabled)) => f(&TelemetryConfig {
+            enabled,
+            ..config.clone()
+        }),
+        (None, enabled) => {
+            let mut config = TelemetryConfig::from_env();
+            if let Some(enabled) = enabled {
+                config.enabled = enabled;
+            }
+            f(&config)
+        }
+    }
+}
+
+/// Pin the whole process-wide analytics configuration. Wins over the
+/// environment (which is then no longer consulted) and clears a previous
+/// [`set_enabled`].
 ///
 /// Applies to every event sent afterwards, including events already queued but
 /// not yet posted: a POST checks the switch again right before it leaves the
@@ -181,18 +217,15 @@ fn state() -> &'static RwLock<TelemetryConfig> {
     reason = "RwLock poisoning only follows a panic while holding the lock; no meaningful recovery"
 )]
 pub fn configure(config: TelemetryConfig) {
-    if let Err(rejected) = STATE.set(RwLock::new(config)) {
-        // Already initialised: overwrite in place.
-        let config = rejected
-            .into_inner()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // lock poison is unrecoverable
-        *state().write().unwrap() = config;
-    }
+    // lock poison is unrecoverable
+    let mut overrides = STATE.write().unwrap();
+    overrides.configured = Some(config);
+    overrides.enabled = None;
 }
 
 /// Turn product analytics on or off for the whole process. Wins over the
-/// environment (`TELEMETRY_DISABLED`, `ENV`); every other setting is kept.
+/// environment (`TELEMETRY_DISABLED`, `ENV`); every other setting keeps its
+/// current source.
 ///
 /// Disabling also drops events that are queued but not yet posted.
 #[allow(
@@ -201,18 +234,26 @@ pub fn configure(config: TelemetryConfig) {
 )]
 pub fn set_enabled(enabled: bool) {
     // lock poison is unrecoverable
-    state().write().unwrap().enabled = enabled;
+    STATE.write().unwrap().enabled = Some(enabled);
 }
 
-/// A snapshot of the process-wide analytics configuration.
+/// Drop everything pinned by [`configure`] / [`set_enabled`]: the
+/// configuration follows the environment again.
 #[allow(
     clippy::unwrap_used,
     reason = "RwLock poisoning only follows a panic while holding the lock; no meaningful recovery"
 )]
+pub fn reset_to_env() {
+    // lock poison is unrecoverable
+    let mut overrides = STATE.write().unwrap();
+    overrides.configured = None;
+    overrides.enabled = None;
+}
+
+/// A snapshot of the effective process-wide analytics configuration.
 #[must_use]
 pub fn current_config() -> TelemetryConfig {
-    // lock poison is unrecoverable
-    state().read().unwrap().clone()
+    with_config(TelemetryConfig::clone)
 }
 
 /// Whether an event sent now would actually be posted.
@@ -222,17 +263,13 @@ pub fn current_config() -> TelemetryConfig {
 /// * [`TelemetryConfig::enabled`] is set;
 /// * no host SDK suppresses this process's binding emissions (see
 ///   [`TelemetryConfig::host_sdk`]).
-#[allow(
-    clippy::unwrap_used,
-    reason = "RwLock poisoning only follows a panic while holding the lock; no meaningful recovery"
-)]
 #[must_use]
 pub fn is_enabled() -> bool {
-    if !cfg!(feature = "telemetry") {
-        return false;
-    }
-    // lock poison is unrecoverable
-    let config = state().read().unwrap();
+    cfg!(feature = "telemetry") && with_config(is_enabled_in)
+}
+
+/// [`is_enabled`] against a configuration already in hand.
+pub(crate) fn is_enabled_in(config: &TelemetryConfig) -> bool {
     config.enabled && !(crate::env::is_binding_armed() && config.host_sdk.is_some())
 }
 

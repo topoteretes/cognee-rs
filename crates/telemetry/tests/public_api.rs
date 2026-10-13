@@ -36,10 +36,9 @@ fn callable_with_optional_uuid_user_id() {
 #[test]
 #[serial]
 fn process_switch_round_trips() {
-    let before = cognee_telemetry::current_config();
     cognee_telemetry::set_enabled(false);
     assert!(!cognee_telemetry::is_enabled());
     cognee_telemetry::set_enabled(true);
     assert!(cognee_telemetry::is_enabled());
-    cognee_telemetry::configure(before);
+    cognee_telemetry::reset_to_env();
 }

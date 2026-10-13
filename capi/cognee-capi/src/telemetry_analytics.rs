@@ -13,7 +13,7 @@
 //!   reports the same state.
 //!
 //! The environment is the default (`TELEMETRY_DISABLED`, `ENV` in {test,
-//! dev}), resolved once, on first use. `COGNEE_HOST_SDK` lets an embedding
+//! dev}), read when an event is sent. `COGNEE_HOST_SDK` lets an embedding
 //! host SDK suppress this binding's emissions (decision 10).
 
 use std::ffi::c_int;

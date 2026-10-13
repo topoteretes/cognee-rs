@@ -25,6 +25,20 @@ use cognee_logging::LoggingConfig;
 use cognee_observability::EnvSettingsView;
 use serde_json::Value;
 
+/// Parse an optional JSON argument handed over a binding boundary (a JNI
+/// string, a C `const char*`): empty, all-whitespace and `null` mean "none".
+///
+/// # Errors
+///
+/// The text is not valid JSON.
+pub fn parse_optional_json(raw: &str) -> Result<Option<Value>, serde_json::Error> {
+    let raw = raw.trim();
+    if raw.is_empty() || raw == "null" {
+        return Ok(None);
+    }
+    serde_json::from_str(raw).map(Some)
+}
+
 /// The resolved logging configuration for a binding's `setup_logging`:
 /// [`LoggingConfig::from_env`] (the process-config boundary) overlaid with
 /// `options`.
@@ -232,6 +246,18 @@ mod tests {
         let err = apply_otel_options(EnvSettingsView::default(), Some(&json!({"otel_x": "1"})))
             .unwrap_err();
         assert!(err.contains("unknown OpenTelemetry setting"), "{err}");
+    }
+
+    #[test]
+    fn optional_json_treats_blank_and_null_as_none() {
+        for raw in ["", "  ", "null", " null "] {
+            assert_eq!(parse_optional_json(raw).expect("valid"), None, "{raw:?}");
+        }
+        assert_eq!(
+            parse_optional_json(r#"{"a":1}"#).expect("valid"),
+            Some(json!({"a": 1}))
+        );
+        assert!(parse_optional_json("{").is_err());
     }
 
     #[test]

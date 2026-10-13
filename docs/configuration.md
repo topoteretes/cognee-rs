@@ -1723,11 +1723,12 @@ process sends, whichever handle emits it. It is not a `Settings` key and not a
 | `TELEMETRY_API_KEY_TRACKING_SALT` | `api_key_tracking_salt` | well-known default | PBKDF2 salt for `api_key_tracking_id`. |
 | `COGNEE_TELEMETRY_PROXY_URL_FOR_TESTS` | `endpoint_override` | _(unset)_ | Collector override for test harnesses; honoured only while `COGNEE_TELEMETRY_INTEGRATION_TEST` is non-empty. |
 
-**Precedence:** defaults (on) < environment < code. The environment is resolved
-**once**, the first time the configuration is needed (in a binding, on import), so
-changing `TELEMETRY_DISABLED` afterwards has no effect; use the switch instead. An
-explicit call wins over the environment in both directions, and disabling also
-drops events that are queued but not yet sent.
+**Precedence:** defaults (on) < environment < code. The environment is read when an
+event is sent, so a `.env` loaded when the first handle is built, or a variable set
+later, is honoured. An explicit call wins over the environment in both directions
+and stays in force until the next one: `set_enabled` pins only the switch,
+`configure` pins every field, `reset_to_env` returns to the environment. Disabling
+also drops events that are queued but not yet sent.
 
 | Surface | Turn analytics off | Query |
 |---|---|---|
@@ -1745,11 +1746,20 @@ Building without the `telemetry` cargo feature compiles analytics out entirely;
 the switch still exists and `is_enabled()` is always `false`.
 
 The `api_key_tracking_id` in each event is a salted hash of the **resolved** LLM key
-(`llm.api_key`, from env, a config file or code): every `ComponentManager` registers
-it with `cognee::telemetry::set_llm_api_key` when it is created and when its
-configuration changes. The `LLM_API_KEY` environment variable is no longer read by
-the analytics client itself. In a process with several handles, the most recently
-created or reconfigured one wins.
+(`llm.api_key`, from env, a config file or code). Every `ComponentManager` holds a
+`cognee::telemetry::LlmKeyRegistration` for its key, updated when its configuration
+changes and dropped with the manager; embedders without a manager call
+`cognee::telemetry::set_llm_api_key`. The `LLM_API_KEY` variable is not read by the
+analytics client itself. When every live registration uses the same key, its hash is
+reported; when live handles use *different* keys, process-wide events cannot be
+attributed to one of them and the id is reported empty rather than mislabelled.
+
+*Divergence from Python:* Python hashes `os.getenv("LLM_API_KEY")` only. Rust hashes
+the key it actually uses, which can also come from its `OPENAI_TOKEN` alias, a config
+file or code. The derivation is identical (PBKDF2-HMAC-SHA256, same salt), so the same
+key gives the same id in both SDKs, which is what cross-SDK grouping needs; a Rust
+process configured only through `OPENAI_TOKEN` reports an id where a Python process
+without `LLM_API_KEY` (and so without a working LLM) reports none.
 
 ## HTTP server
 

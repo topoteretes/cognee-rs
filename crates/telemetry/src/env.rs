@@ -70,20 +70,72 @@ pub fn proxy_url() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg_attr(not(feature = "telemetry"), allow(unused_imports))]
     use crate::{TelemetryConfig, configure, current_config, is_enabled, set_enabled};
     use serial_test::serial;
 
     /// Every test here mutates the process-wide configuration, so all of them
-    /// are `#[serial]` and restore a known state on exit.
-    struct Restore(TelemetryConfig);
+    /// are `#[serial]` and return to the environment-following state on exit.
+    struct Restore;
     impl Drop for Restore {
         fn drop(&mut self) {
-            configure(self.0.clone());
+            crate::reset_to_env();
             reset_binding_armed();
         }
     }
     fn snapshot() -> Restore {
-        Restore(current_config())
+        crate::reset_to_env();
+        Restore
+    }
+
+    /// The environment layer is live: a variable set after the first event
+    /// (e.g. by a `.env` loaded when the first handle is built) is honoured,
+    /// while a pinned switch still wins over it.
+    #[test]
+    #[serial]
+    #[cfg(feature = "telemetry")]
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "tests drive configuration through the process env"
+    )]
+    fn env_set_after_first_use_is_honoured_and_switch_wins() {
+        let _r = snapshot();
+        // SAFETY: `#[serial]` orders this against every other env-mutating
+        //   test in the crate.
+        unsafe {
+            std::env::remove_var("TELEMETRY_DISABLED");
+            std::env::remove_var("ENV");
+        }
+        assert!(is_enabled(), "first use: default on");
+        // SAFETY: as above.
+        unsafe { std::env::set_var("TELEMETRY_DISABLED", "1") };
+        assert!(!is_enabled(), "a later opt-out is honoured");
+        set_enabled(true);
+        assert!(is_enabled(), "the explicit switch wins over the env");
+        crate::reset_to_env();
+        assert!(!is_enabled(), "reset returns to the env layer");
+        // SAFETY: as above.
+        unsafe { std::env::remove_var("TELEMETRY_DISABLED") };
+        assert!(is_enabled());
+    }
+
+    /// `set_enabled` pins only the switch; other fields keep following the env.
+    #[test]
+    #[serial]
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "tests drive configuration through the process env"
+    )]
+    fn set_enabled_keeps_env_for_other_fields() {
+        let _r = snapshot();
+        set_enabled(false);
+        // SAFETY: `#[serial]` orders this against every other env-mutating test.
+        unsafe { std::env::set_var("TRACKING_ID", "from-env-later") };
+        let tracking = current_config().tracking_id;
+        // SAFETY: as above.
+        unsafe { std::env::remove_var("TRACKING_ID") };
+        assert_eq!(tracking.as_deref(), Some("from-env-later"));
+        assert!(!current_config().enabled);
     }
 
     #[test]

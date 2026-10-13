@@ -11,8 +11,8 @@
 //!   and reports the same state as `is_telemetry_enabled()`.
 //!
 //! The environment is the default: `TELEMETRY_DISABLED` (any non-empty value)
-//! or `ENV` in {`test`, `dev`} disable, resolved once when the module is
-//! imported. The Rust-specific `COGNEE_HOST_SDK` sentinel additionally lets an
+//! or `ENV` in {`test`, `dev`} disable, read when an event is sent (so a
+//! `.env` loaded by the first handle counts). The Rust-specific `COGNEE_HOST_SDK` sentinel additionally lets an
 //! embedding host SDK suppress this binding's emissions to avoid
 //! double-counting (decision 10).
 
