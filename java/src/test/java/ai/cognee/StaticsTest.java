@@ -12,9 +12,9 @@ class StaticsTest {
     @Test
     void staticsAreIdempotentAndSafe() {
         assertNotNull(Cognee.version());
-        assertDoesNotThrow(Cognee::setupLogging);
-        assertDoesNotThrow(Cognee::setupLogging); // idempotent
-        assertDoesNotThrow(Cognee::initOtlp);
+        assertDoesNotThrow(() -> Cognee.setupLogging());
+        assertDoesNotThrow(() -> Cognee.setupLogging()); // idempotent
+        assertDoesNotThrow(() -> Cognee.initOtlp());
         // initTelemetry reports whether analytics are effective for this process;
         // the decision is stable, so repeated calls must agree.
         boolean effective = Cognee.initTelemetry();
