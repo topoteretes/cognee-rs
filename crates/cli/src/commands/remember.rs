@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use cognee::add::AddPipeline;
 use cognee::api::remember;
-use cognee::cognify::CognifyConfig;
 use cognee::core::RayonThreadPool;
 use cognee::models::DataInput;
 use cognee::ontology::{NoOpOntologyResolver, OntologyResolver};
@@ -44,7 +43,7 @@ pub fn run(args: RememberArgs, cm: Arc<ComponentManager>) -> Result<(), CliError
     crate::teardown::run_command(Arc::clone(&cm), async {
         // `graph_extraction.backend`, resolved before any side effect: an
         // unregistered kind is an error, never a silent LLM-extractor run.
-        let mut cognify_config = CognifyConfig::default();
+        let mut cognify_config = cm.settings().cognify_config();
         if let Some(backend) = cm.configured_graph_extractor().await.map_err(|error| {
             CliError::Runtime(format!("Graph extractor initialization failed: {error}"))
         })? {
@@ -99,7 +98,11 @@ pub fn run(args: RememberArgs, cm: Arc<ComponentManager>) -> Result<(), CliError
             .session_store()
             .await
             .map_err(|e| CliError::Runtime(format!("session store init failed: {e}")))?;
-        let session_manager = Arc::new(SessionManager::new(Arc::clone(&session_store)));
+        let feedback_llm_timeout = cm.settings().feedback_llm_timeout();
+        let session_manager = Arc::new(
+            SessionManager::new(Arc::clone(&session_store))
+                .with_feedback_llm_timeout(feedback_llm_timeout),
+        );
 
         let ontology_resolver: Arc<dyn OntologyResolver> = Arc::new(NoOpOntologyResolver::new());
         let cognify_config = Arc::new(cognify_config);

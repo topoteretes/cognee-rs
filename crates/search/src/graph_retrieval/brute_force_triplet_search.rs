@@ -64,25 +64,6 @@ const SEARCH_COLLECTIONS: [(&str, &str); 6] = [
     ("Triplet", "text"),
 ];
 
-/// Opt-in hub-expansion cap: `COGNEE_TRIPLET_NEIGHBOR_CAP=<n>` keeps, per
-/// vector-search seed, every neighbour that is itself a seed plus at most `n`
-/// other neighbours (see [`NeighborhoodScope::max_neighbors_per_seed`]).
-/// Unset (the default) keeps the full depth-1 neighbourhood, which is
-/// result-identical to a full-graph load. A cap truncates hub fan-out and so
-/// CHANGES results: edges from a hub seed to its dropped neighbours never
-/// reach the ranking (they carry the non-seed penalty, so they rank below
-/// seed-to-seed edges, but they can still make the top k).
-#[allow(
-    clippy::disallowed_methods,
-    reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
-)]
-fn neighbor_cap() -> Option<usize> {
-    std::env::var("COGNEE_TRIPLET_NEIGHBOR_CAP")
-        .ok()
-        .and_then(|v| v.trim().parse::<usize>().ok())
-        .filter(|n| *n > 0)
-}
-
 #[derive(Debug, Clone)]
 pub struct GraphRetrievalConfig {
     pub top_k: usize,
@@ -102,6 +83,17 @@ pub struct GraphRetrievalConfig {
     /// "OR" (default): include neighbors of ANY named node.
     /// "AND": include only neighbors connected to ALL named nodes.
     pub node_name_filter_operator: String,
+    /// Opt-in hub-expansion cap (`search.triplet_neighbor_cap`,
+    /// `COGNEE_TRIPLET_NEIGHBOR_CAP`): `Some(n)` keeps, per
+    /// vector-search seed, every neighbour that is itself a seed plus at most `n`
+    /// other neighbours (see [`NeighborhoodScope::max_neighbors_per_seed`]).
+    /// Unset (the default) keeps the full depth-1 neighbourhood, which is
+    /// result-identical to a full-graph load. A cap truncates hub fan-out and so
+    /// CHANGES results: edges from a hub seed to its dropped neighbours never
+    /// reach the ranking (they carry the non-seed penalty, so they rank below
+    /// seed-to-seed edges, but they can still make the top k).
+    /// `None` and `Some(0)` both mean uncapped.
+    pub neighbor_cap: Option<usize>,
 }
 
 impl Default for GraphRetrievalConfig {
@@ -114,6 +106,7 @@ impl Default for GraphRetrievalConfig {
             node_type: None,
             node_name: None,
             node_name_filter_operator: "OR".to_string(),
+            neighbor_cap: None,
         }
     }
 }
@@ -325,7 +318,7 @@ pub async fn brute_force_triplet_search(
         // Postgres CTE has no ORDER BY).
         let mut seed_ids: Vec<String> = candidate_node_ids.iter().cloned().collect();
         seed_ids.sort_unstable();
-        match neighbor_cap() {
+        match config.neighbor_cap.filter(|n| *n > 0) {
             None => {
                 graph_db
                     .get_neighborhood(&seed_ids, NEIGHBORHOOD_DEPTH)

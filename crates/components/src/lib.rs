@@ -44,10 +44,11 @@ pub use context::{
 pub use error::ComponentError;
 pub use registry::{ComponentRegistry, LLM_GRAPH_EXTRACTOR, default_graph_provider};
 pub use sections::{
-    AnthropicConfig, AwsConfig, EmbeddingConfig, FsSessionConfig, GraphConfig,
-    GraphExtractionConfig, LlmConfig, OllamaEmbeddingConfig, OnnxEmbeddingConfig, OntologyConfig,
-    OpenAiCompatibleConfig, OpenAiCompatibleEmbeddingConfig, RedisSessionConfig, RelationalConfig,
-    SessionConfig, StorageConfig, VectorConfig,
+    AnthropicConfig, AwsConfig, CognifySettings, EmbeddingConfig, FsSessionConfig, GraphConfig,
+    GraphExtractionConfig, HybridSearchSettings, LlmConfig, OllamaEmbeddingConfig,
+    OnnxEmbeddingConfig, OntologyConfig, OpenAiCompatibleConfig, OpenAiCompatibleEmbeddingConfig,
+    RedisSessionConfig, RelationalConfig, SearchSettings, SessionConfig, StorageConfig,
+    VectorConfig,
 };
 pub use traits::{
     EmbeddingFactory, GraphDbFactory, GraphExtractorFactory, LlmFactory, OntologyResolverFactory,

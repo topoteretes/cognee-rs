@@ -285,6 +285,11 @@ impl ComponentRegistry {
             <crate::sections::GraphConfig as cognee_config_core::ConfigSection>::schema(),
             <crate::sections::RelationalConfig as cognee_config_core::ConfigSection>::schema(),
             <crate::sections::SessionConfig as cognee_config_core::ConfigSection>::schema(),
+            // Engine sections: settings of the pipelines rather than of a
+            // pluggable component.
+            <crate::sections::CognifySettings as cognee_config_core::ConfigSection>::schema(),
+            <crate::sections::SearchSettings as cognee_config_core::ConfigSection>::schema(),
+            <crate::sections::HybridSearchSettings as cognee_config_core::ConfigSection>::schema(),
             <crate::sections::StorageConfig as cognee_config_core::ConfigSection>::schema(),
             <crate::sections::OntologyConfig as cognee_config_core::ConfigSection>::schema(),
             <crate::sections::GraphExtractionConfig as cognee_config_core::ConfigSection>::schema(),

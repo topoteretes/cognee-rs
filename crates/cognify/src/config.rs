@@ -255,16 +255,18 @@ pub struct CognifyConfig {
     /// Python parameter: data_per_batch (default: 20)
     pub data_per_batch: usize,
 
-    /// How to count tokens when chunking text.
-    /// Default is determined at construction time via [`TokenCounterKind::from_env`].
+    /// How to count tokens when chunking text. Default `TikToken` (what an
+    /// unconfigured, OpenAI-family deployment resolves to); cognee sets it
+    /// from `cognify.token_counter` and the embedding provider via
+    /// [`TokenCounterKind::resolve`].
     pub token_counter_kind: TokenCounterKind,
 
     /// Whether a chunk's size is the tokenizer's verdict on the whole span
     /// (the default) or the legacy sum over words counted in isolation.
     ///
-    /// Default is determined at construction time via
-    /// [`TokenCountMode::from_env`], i.e. [`TokenCountMode::Span`] unless
-    /// `COGNEE_LEGACY_PER_WORD_TOKEN_COUNT` opts back in. Per-word counting
+    /// Default [`TokenCountMode::Span`]; the
+    /// `cognify.legacy_per_word_token_count` setting
+    /// (`COGNEE_LEGACY_PER_WORD_TOKEN_COUNT`) opts back in. Per-word counting
     /// over-states a span by ~1.7x on English prose, so it fills chunks to
     /// roughly 60% of the configured budget; it is retained because it is what
     /// Python 1.5.x still does, and is therefore the setting that reproduces
@@ -437,31 +439,6 @@ fn default_chunk_failure_ratio_threshold() -> f64 {
     FailurePolicy::DEFAULT_CHUNK_FAILURE_RATIO_THRESHOLD
 }
 
-/// Read a boolean environment variable, accepting the spellings the rest of
-/// the workspace accepts (`true`/`1`/`yes`, case-insensitive).
-#[allow(
-    clippy::disallowed_methods,
-    reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
-)]
-fn env_bool(name: &str) -> Option<bool> {
-    let raw = std::env::var(name).ok()?;
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "true" | "1" | "yes" => Some(true),
-        "false" | "0" | "no" => Some(false),
-        _ => None,
-    }
-}
-
-/// Read and parse an environment variable, ignoring unparseable values so a
-/// typo falls back to the default rather than failing the process.
-#[allow(
-    clippy::disallowed_methods,
-    reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
-)]
-fn env_parsed<T: std::str::FromStr>(name: &str) -> Option<T> {
-    std::env::var(name).ok()?.trim().parse().ok()
-}
-
 /// Serde default for [`CognifyConfig::failure_report_cap`].
 fn default_failure_report_cap() -> usize {
     FailurePolicy::DEFAULT_REPORT_CAP
@@ -493,25 +470,15 @@ impl Default for CognifyConfig {
             create_web_page_nodes: true,
             data_per_batch: 20,
 
-            token_counter_kind: TokenCounterKind::from_env(),
-            token_count_mode: TokenCountMode::from_env(),
-
-            // Read from the environment like `token_counter_kind` above, so
-            // every construction path picks them up. `failure_stop` honours
-            // Python's own variable name; the rest are Rust-only extensions and
-            // say so with a `COGNEE_COGNIFY_` prefix.
-            failure_stop: FailureStop::from_env().unwrap_or_default(),
-            rollback_scope: RollbackScope::from_env().unwrap_or_default(),
-            tolerate_summarization_failures: env_bool(
-                "COGNEE_COGNIFY_TOLERATE_SUMMARIZATION_FAILURES",
-            )
-            .unwrap_or(false),
-            chunk_failure_ratio_threshold: env_parsed("COGNEE_COGNIFY_MAX_CHUNK_FAILURE_RATIO")
-                .filter(|r: &f64| r.is_finite() && *r > 0.0 && *r <= 1.0)
-                .unwrap_or_else(default_chunk_failure_ratio_threshold),
-            failure_report_cap: env_parsed("COGNEE_COGNIFY_FAILURE_REPORT_CAP")
-                .filter(|cap: &usize| *cap > 0)
-                .unwrap_or_else(default_failure_report_cap),
+            // Plain defaults: cognee fills these from the `cognify` config
+            // section when it lowers `Settings` (`Settings::cognify_config`).
+            token_counter_kind: TokenCounterKind::TikToken,
+            token_count_mode: TokenCountMode::Span,
+            failure_stop: FailureStop::default(),
+            rollback_scope: RollbackScope::default(),
+            tolerate_summarization_failures: false,
+            chunk_failure_ratio_threshold: default_chunk_failure_ratio_threshold(),
+            failure_report_cap: default_failure_report_cap(),
 
             graph_schema: None,
             summary_schema: None,
@@ -1261,11 +1228,8 @@ mod tests {
     fn a_400_token_overlap_survives_the_auto_calculated_chunk_size() {
         let embed = MockEmbedding { max_seq: 512 };
         let llm = MockLlm::with_ctx(4096);
-        // Counter pinned explicitly. `Default::default()` reads
-        // `TokenCounterKind::from_env()`, so leaving it ambient made the expected
-        // value depend on whatever EMBEDDING_PROVIDER the developer's shell had —
-        // and, once budgets became unit-converted, on which cargo features the
-        // test binary happened to be built with.
+        // Counter pinned explicitly: once budgets became unit-converted, the
+        // expected value depends on which cargo features back the counter.
         let resolved = CognifyConfig {
             max_chunk_size: None,
             chunk_overlap: 400,

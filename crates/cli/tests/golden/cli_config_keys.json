@@ -21,6 +21,13 @@
     "chunk_strategy",
     "classification_model",
     "cognee_tracing_enabled",
+    "cognify.failure_report_cap",
+    "cognify.legacy_per_word_token_count",
+    "cognify.max_chunk_failure_ratio",
+    "cognify.raise_incremental_loading_errors",
+    "cognify.rollback_scope",
+    "cognify.token_counter",
+    "cognify.tolerate_summarization_failures",
     "data_root_directory",
     "db_sslmode",
     "default_dataset_name",
@@ -116,6 +123,14 @@
     "relational.provider",
     "relational.url",
     "relational.username",
+    "search.allow_cypher_query",
+    "search.hybrid.max_context_tokens",
+    "search.hybrid.overflow_summary_file",
+    "search.hybrid.summarize_batch",
+    "search.hybrid.summarize_overflow",
+    "search.triplet_neighbor_cap",
+    "session.abandon_after_seconds",
+    "session.feedback_llm_timeout_ms",
     "session.store",
     "session_ttl_seconds",
     "single_process",
@@ -243,6 +258,21 @@
     "relational.username",
     "relational.password",
     "session.store",
+    "session.feedback_llm_timeout_ms",
+    "session.abandon_after_seconds",
+    "cognify.token_counter",
+    "cognify.legacy_per_word_token_count",
+    "cognify.raise_incremental_loading_errors",
+    "cognify.rollback_scope",
+    "cognify.tolerate_summarization_failures",
+    "cognify.max_chunk_failure_ratio",
+    "cognify.failure_report_cap",
+    "search.allow_cypher_query",
+    "search.triplet_neighbor_cap",
+    "search.hybrid.max_context_tokens",
+    "search.hybrid.summarize_overflow",
+    "search.hybrid.summarize_batch",
+    "search.hybrid.overflow_summary_file",
     "storage.backend",
     "storage.bucket_name",
     "ontology.file_path",
@@ -275,6 +305,53 @@
     "embedding.ollama.huggingface_tokenizer",
     "embedding.openai_compatible.api_version"
   ],
+  "set allow_cypher_query <- \"\"": {
+    "err": true
+  },
+  "set allow_cypher_query <- \"1\"": {
+    "err": true
+  },
+  "set allow_cypher_query <- \"s\"": {
+    "err": true
+  },
+  "set allow_cypher_query <- \"true\"": {
+    "err": true
+  },
+  "set allow_cypher_query <- -1": {
+    "err": true
+  },
+  "set allow_cypher_query <- 0": {
+    "err": true
+  },
+  "set allow_cypher_query <- 1": {
+    "err": true
+  },
+  "set allow_cypher_query <- 1.5": {
+    "err": true
+  },
+  "set allow_cypher_query <- 5000000000": {
+    "err": true
+  },
+  "set allow_cypher_query <- 70000": {
+    "err": true
+  },
+  "set allow_cypher_query <- [1]": {
+    "err": true
+  },
+  "set allow_cypher_query <- false": {
+    "ok": {
+      "search.allow_cypher_query": false
+    }
+  },
+  "set allow_cypher_query <- null": {
+    "err": true
+  },
+  "set allow_cypher_query <- true": {
+    "ok": {}
+  },
+  "set allow_cypher_query <- {\"a\":1}": {
+    "err": true
+  },
   "set anthropic_base_url <- \"\"": {
     "ok": {
       "llm.anthropic.base_url": ""
@@ -2104,6 +2181,359 @@
     }
   },
   "set cognee_tracing_enabled <- {\"a\":1}": {
+    "err": true
+  },
+  "set cognify.failure_report_cap <- \"\"": {
+    "err": true
+  },
+  "set cognify.failure_report_cap <- \"1\"": {
+    "err": true
+  },
+  "set cognify.failure_report_cap <- \"s\"": {
+    "err": true
+  },
+  "set cognify.failure_report_cap <- \"true\"": {
+    "err": true
+  },
+  "set cognify.failure_report_cap <- -1": {
+    "err": true
+  },
+  "set cognify.failure_report_cap <- 0": {
+    "ok": {
+      "cognify.failure_report_cap": 0
+    }
+  },
+  "set cognify.failure_report_cap <- 1": {
+    "ok": {
+      "cognify.failure_report_cap": 1
+    }
+  },
+  "set cognify.failure_report_cap <- 1.5": {
+    "err": true
+  },
+  "set cognify.failure_report_cap <- 5000000000": {
+    "err": true
+  },
+  "set cognify.failure_report_cap <- 70000": {
+    "ok": {
+      "cognify.failure_report_cap": 70000
+    }
+  },
+  "set cognify.failure_report_cap <- [1]": {
+    "err": true
+  },
+  "set cognify.failure_report_cap <- false": {
+    "err": true
+  },
+  "set cognify.failure_report_cap <- null": {
+    "err": true
+  },
+  "set cognify.failure_report_cap <- true": {
+    "err": true
+  },
+  "set cognify.failure_report_cap <- {\"a\":1}": {
+    "err": true
+  },
+  "set cognify.legacy_per_word_token_count <- \"\"": {
+    "err": true
+  },
+  "set cognify.legacy_per_word_token_count <- \"1\"": {
+    "err": true
+  },
+  "set cognify.legacy_per_word_token_count <- \"s\"": {
+    "err": true
+  },
+  "set cognify.legacy_per_word_token_count <- \"true\"": {
+    "err": true
+  },
+  "set cognify.legacy_per_word_token_count <- -1": {
+    "err": true
+  },
+  "set cognify.legacy_per_word_token_count <- 0": {
+    "err": true
+  },
+  "set cognify.legacy_per_word_token_count <- 1": {
+    "err": true
+  },
+  "set cognify.legacy_per_word_token_count <- 1.5": {
+    "err": true
+  },
+  "set cognify.legacy_per_word_token_count <- 5000000000": {
+    "err": true
+  },
+  "set cognify.legacy_per_word_token_count <- 70000": {
+    "err": true
+  },
+  "set cognify.legacy_per_word_token_count <- [1]": {
+    "err": true
+  },
+  "set cognify.legacy_per_word_token_count <- false": {
+    "ok": {}
+  },
+  "set cognify.legacy_per_word_token_count <- null": {
+    "err": true
+  },
+  "set cognify.legacy_per_word_token_count <- true": {
+    "ok": {
+      "cognify.legacy_per_word_token_count": true
+    }
+  },
+  "set cognify.legacy_per_word_token_count <- {\"a\":1}": {
+    "err": true
+  },
+  "set cognify.max_chunk_failure_ratio <- \"\"": {
+    "err": true
+  },
+  "set cognify.max_chunk_failure_ratio <- \"1\"": {
+    "err": true
+  },
+  "set cognify.max_chunk_failure_ratio <- \"s\"": {
+    "err": true
+  },
+  "set cognify.max_chunk_failure_ratio <- \"true\"": {
+    "err": true
+  },
+  "set cognify.max_chunk_failure_ratio <- -1": {
+    "ok": {
+      "cognify.max_chunk_failure_ratio": -1.0
+    }
+  },
+  "set cognify.max_chunk_failure_ratio <- 0": {
+    "ok": {
+      "cognify.max_chunk_failure_ratio": 0.0
+    }
+  },
+  "set cognify.max_chunk_failure_ratio <- 1": {
+    "ok": {
+      "cognify.max_chunk_failure_ratio": 1.0
+    }
+  },
+  "set cognify.max_chunk_failure_ratio <- 1.5": {
+    "ok": {
+      "cognify.max_chunk_failure_ratio": 1.5
+    }
+  },
+  "set cognify.max_chunk_failure_ratio <- 5000000000": {
+    "ok": {
+      "cognify.max_chunk_failure_ratio": 5000000000.0
+    }
+  },
+  "set cognify.max_chunk_failure_ratio <- 70000": {
+    "ok": {
+      "cognify.max_chunk_failure_ratio": 70000.0
+    }
+  },
+  "set cognify.max_chunk_failure_ratio <- [1]": {
+    "err": true
+  },
+  "set cognify.max_chunk_failure_ratio <- false": {
+    "err": true
+  },
+  "set cognify.max_chunk_failure_ratio <- null": {
+    "err": true
+  },
+  "set cognify.max_chunk_failure_ratio <- true": {
+    "err": true
+  },
+  "set cognify.max_chunk_failure_ratio <- {\"a\":1}": {
+    "err": true
+  },
+  "set cognify.raise_incremental_loading_errors <- \"\"": {
+    "err": true
+  },
+  "set cognify.raise_incremental_loading_errors <- \"1\"": {
+    "err": true
+  },
+  "set cognify.raise_incremental_loading_errors <- \"s\"": {
+    "err": true
+  },
+  "set cognify.raise_incremental_loading_errors <- \"true\"": {
+    "err": true
+  },
+  "set cognify.raise_incremental_loading_errors <- -1": {
+    "err": true
+  },
+  "set cognify.raise_incremental_loading_errors <- 0": {
+    "err": true
+  },
+  "set cognify.raise_incremental_loading_errors <- 1": {
+    "err": true
+  },
+  "set cognify.raise_incremental_loading_errors <- 1.5": {
+    "err": true
+  },
+  "set cognify.raise_incremental_loading_errors <- 5000000000": {
+    "err": true
+  },
+  "set cognify.raise_incremental_loading_errors <- 70000": {
+    "err": true
+  },
+  "set cognify.raise_incremental_loading_errors <- [1]": {
+    "err": true
+  },
+  "set cognify.raise_incremental_loading_errors <- false": {
+    "ok": {
+      "cognify.raise_incremental_loading_errors": false
+    }
+  },
+  "set cognify.raise_incremental_loading_errors <- null": {
+    "ok": {}
+  },
+  "set cognify.raise_incremental_loading_errors <- true": {
+    "ok": {
+      "cognify.raise_incremental_loading_errors": true
+    }
+  },
+  "set cognify.raise_incremental_loading_errors <- {\"a\":1}": {
+    "err": true
+  },
+  "set cognify.rollback_scope <- \"\"": {
+    "ok": {}
+  },
+  "set cognify.rollback_scope <- \"1\"": {
+    "ok": {
+      "cognify.rollback_scope": "1"
+    }
+  },
+  "set cognify.rollback_scope <- \"s\"": {
+    "ok": {
+      "cognify.rollback_scope": "s"
+    }
+  },
+  "set cognify.rollback_scope <- \"true\"": {
+    "ok": {
+      "cognify.rollback_scope": "true"
+    }
+  },
+  "set cognify.rollback_scope <- -1": {
+    "err": true
+  },
+  "set cognify.rollback_scope <- 0": {
+    "err": true
+  },
+  "set cognify.rollback_scope <- 1": {
+    "err": true
+  },
+  "set cognify.rollback_scope <- 1.5": {
+    "err": true
+  },
+  "set cognify.rollback_scope <- 5000000000": {
+    "err": true
+  },
+  "set cognify.rollback_scope <- 70000": {
+    "err": true
+  },
+  "set cognify.rollback_scope <- [1]": {
+    "err": true
+  },
+  "set cognify.rollback_scope <- false": {
+    "err": true
+  },
+  "set cognify.rollback_scope <- null": {
+    "err": true
+  },
+  "set cognify.rollback_scope <- true": {
+    "err": true
+  },
+  "set cognify.rollback_scope <- {\"a\":1}": {
+    "err": true
+  },
+  "set cognify.token_counter <- \"\"": {
+    "ok": {}
+  },
+  "set cognify.token_counter <- \"1\"": {
+    "ok": {
+      "cognify.token_counter": "1"
+    }
+  },
+  "set cognify.token_counter <- \"s\"": {
+    "ok": {
+      "cognify.token_counter": "s"
+    }
+  },
+  "set cognify.token_counter <- \"true\"": {
+    "ok": {
+      "cognify.token_counter": "true"
+    }
+  },
+  "set cognify.token_counter <- -1": {
+    "err": true
+  },
+  "set cognify.token_counter <- 0": {
+    "err": true
+  },
+  "set cognify.token_counter <- 1": {
+    "err": true
+  },
+  "set cognify.token_counter <- 1.5": {
+    "err": true
+  },
+  "set cognify.token_counter <- 5000000000": {
+    "err": true
+  },
+  "set cognify.token_counter <- 70000": {
+    "err": true
+  },
+  "set cognify.token_counter <- [1]": {
+    "err": true
+  },
+  "set cognify.token_counter <- false": {
+    "err": true
+  },
+  "set cognify.token_counter <- null": {
+    "err": true
+  },
+  "set cognify.token_counter <- true": {
+    "err": true
+  },
+  "set cognify.token_counter <- {\"a\":1}": {
+    "err": true
+  },
+  "set cognify.tolerate_summarization_failures <- \"\"": {
+    "err": true
+  },
+  "set cognify.tolerate_summarization_failures <- \"1\"": {
+    "err": true
+  },
+  "set cognify.tolerate_summarization_failures <- \"s\"": {
+    "err": true
+  },
+  "set cognify.tolerate_summarization_failures <- \"true\"": {
+    "err": true
+  },
+  "set cognify.tolerate_summarization_failures <- -1": {
+    "err": true
+  },
+  "set cognify.tolerate_summarization_failures <- 0": {
+    "err": true
+  },
+  "set cognify.tolerate_summarization_failures <- 1": {
+    "err": true
+  },
+  "set cognify.tolerate_summarization_failures <- 1.5": {
+    "err": true
+  },
+  "set cognify.tolerate_summarization_failures <- 5000000000": {
+    "err": true
+  },
+  "set cognify.tolerate_summarization_failures <- 70000": {
+    "err": true
+  },
+  "set cognify.tolerate_summarization_failures <- [1]": {
+    "err": true
+  },
+  "set cognify.tolerate_summarization_failures <- false": {
+    "ok": {}
+  },
+  "set cognify.tolerate_summarization_failures <- null": {
+    "err": true
+  },
+  "set cognify.tolerate_summarization_failures <- true": {
+    "ok": {
+      "cognify.tolerate_summarization_failures": true
+    }
+  },
+  "set cognify.tolerate_summarization_failures <- {\"a\":1}": {
     "err": true
   },
   "set data_root_directory <- \"\"": {
@@ -10320,6 +10750,55 @@
   "set pgvector_maintenance_workers <- {\"a\":1}": {
     "err": true
   },
+  "set raise_incremental_loading_errors <- \"\"": {
+    "err": true
+  },
+  "set raise_incremental_loading_errors <- \"1\"": {
+    "err": true
+  },
+  "set raise_incremental_loading_errors <- \"s\"": {
+    "err": true
+  },
+  "set raise_incremental_loading_errors <- \"true\"": {
+    "err": true
+  },
+  "set raise_incremental_loading_errors <- -1": {
+    "err": true
+  },
+  "set raise_incremental_loading_errors <- 0": {
+    "err": true
+  },
+  "set raise_incremental_loading_errors <- 1": {
+    "err": true
+  },
+  "set raise_incremental_loading_errors <- 1.5": {
+    "err": true
+  },
+  "set raise_incremental_loading_errors <- 5000000000": {
+    "err": true
+  },
+  "set raise_incremental_loading_errors <- 70000": {
+    "err": true
+  },
+  "set raise_incremental_loading_errors <- [1]": {
+    "err": true
+  },
+  "set raise_incremental_loading_errors <- false": {
+    "ok": {
+      "cognify.raise_incremental_loading_errors": false
+    }
+  },
+  "set raise_incremental_loading_errors <- null": {
+    "ok": {}
+  },
+  "set raise_incremental_loading_errors <- true": {
+    "ok": {
+      "cognify.raise_incremental_loading_errors": true
+    }
+  },
+  "set raise_incremental_loading_errors <- {\"a\":1}": {
+    "err": true
+  },
   "set relational.host <- \"\"": {
     "ok": {
       "relational.host": ""
@@ -10787,6 +11266,408 @@
   "set relational_db_url <- {\"a\":1}": {
     "err": true
   },
+  "set search.allow_cypher_query <- \"\"": {
+    "err": true
+  },
+  "set search.allow_cypher_query <- \"1\"": {
+    "err": true
+  },
+  "set search.allow_cypher_query <- \"s\"": {
+    "err": true
+  },
+  "set search.allow_cypher_query <- \"true\"": {
+    "err": true
+  },
+  "set search.allow_cypher_query <- -1": {
+    "err": true
+  },
+  "set search.allow_cypher_query <- 0": {
+    "err": true
+  },
+  "set search.allow_cypher_query <- 1": {
+    "err": true
+  },
+  "set search.allow_cypher_query <- 1.5": {
+    "err": true
+  },
+  "set search.allow_cypher_query <- 5000000000": {
+    "err": true
+  },
+  "set search.allow_cypher_query <- 70000": {
+    "err": true
+  },
+  "set search.allow_cypher_query <- [1]": {
+    "err": true
+  },
+  "set search.allow_cypher_query <- false": {
+    "ok": {
+      "search.allow_cypher_query": false
+    }
+  },
+  "set search.allow_cypher_query <- null": {
+    "err": true
+  },
+  "set search.allow_cypher_query <- true": {
+    "ok": {}
+  },
+  "set search.allow_cypher_query <- {\"a\":1}": {
+    "err": true
+  },
+  "set search.hybrid.max_context_tokens <- \"\"": {
+    "err": true
+  },
+  "set search.hybrid.max_context_tokens <- \"1\"": {
+    "err": true
+  },
+  "set search.hybrid.max_context_tokens <- \"s\"": {
+    "err": true
+  },
+  "set search.hybrid.max_context_tokens <- \"true\"": {
+    "err": true
+  },
+  "set search.hybrid.max_context_tokens <- -1": {
+    "err": true
+  },
+  "set search.hybrid.max_context_tokens <- 0": {
+    "ok": {
+      "search.hybrid.max_context_tokens": 0
+    }
+  },
+  "set search.hybrid.max_context_tokens <- 1": {
+    "ok": {
+      "search.hybrid.max_context_tokens": 1
+    }
+  },
+  "set search.hybrid.max_context_tokens <- 1.5": {
+    "err": true
+  },
+  "set search.hybrid.max_context_tokens <- 5000000000": {
+    "err": true
+  },
+  "set search.hybrid.max_context_tokens <- 70000": {
+    "ok": {
+      "search.hybrid.max_context_tokens": 70000
+    }
+  },
+  "set search.hybrid.max_context_tokens <- [1]": {
+    "err": true
+  },
+  "set search.hybrid.max_context_tokens <- false": {
+    "err": true
+  },
+  "set search.hybrid.max_context_tokens <- null": {
+    "ok": {}
+  },
+  "set search.hybrid.max_context_tokens <- true": {
+    "err": true
+  },
+  "set search.hybrid.max_context_tokens <- {\"a\":1}": {
+    "err": true
+  },
+  "set search.hybrid.overflow_summary_file <- \"\"": {
+    "ok": {}
+  },
+  "set search.hybrid.overflow_summary_file <- \"1\"": {
+    "ok": {
+      "search.hybrid.overflow_summary_file": "1"
+    }
+  },
+  "set search.hybrid.overflow_summary_file <- \"s\"": {
+    "ok": {
+      "search.hybrid.overflow_summary_file": "s"
+    }
+  },
+  "set search.hybrid.overflow_summary_file <- \"true\"": {
+    "ok": {
+      "search.hybrid.overflow_summary_file": "true"
+    }
+  },
+  "set search.hybrid.overflow_summary_file <- -1": {
+    "err": true
+  },
+  "set search.hybrid.overflow_summary_file <- 0": {
+    "err": true
+  },
+  "set search.hybrid.overflow_summary_file <- 1": {
+    "err": true
+  },
+  "set search.hybrid.overflow_summary_file <- 1.5": {
+    "err": true
+  },
+  "set search.hybrid.overflow_summary_file <- 5000000000": {
+    "err": true
+  },
+  "set search.hybrid.overflow_summary_file <- 70000": {
+    "err": true
+  },
+  "set search.hybrid.overflow_summary_file <- [1]": {
+    "err": true
+  },
+  "set search.hybrid.overflow_summary_file <- false": {
+    "err": true
+  },
+  "set search.hybrid.overflow_summary_file <- null": {
+    "err": true
+  },
+  "set search.hybrid.overflow_summary_file <- true": {
+    "err": true
+  },
+  "set search.hybrid.overflow_summary_file <- {\"a\":1}": {
+    "err": true
+  },
+  "set search.hybrid.summarize_batch <- \"\"": {
+    "err": true
+  },
+  "set search.hybrid.summarize_batch <- \"1\"": {
+    "err": true
+  },
+  "set search.hybrid.summarize_batch <- \"s\"": {
+    "err": true
+  },
+  "set search.hybrid.summarize_batch <- \"true\"": {
+    "err": true
+  },
+  "set search.hybrid.summarize_batch <- -1": {
+    "err": true
+  },
+  "set search.hybrid.summarize_batch <- 0": {
+    "ok": {
+      "search.hybrid.summarize_batch": 0
+    }
+  },
+  "set search.hybrid.summarize_batch <- 1": {
+    "ok": {}
+  },
+  "set search.hybrid.summarize_batch <- 1.5": {
+    "err": true
+  },
+  "set search.hybrid.summarize_batch <- 5000000000": {
+    "err": true
+  },
+  "set search.hybrid.summarize_batch <- 70000": {
+    "ok": {
+      "search.hybrid.summarize_batch": 70000
+    }
+  },
+  "set search.hybrid.summarize_batch <- [1]": {
+    "err": true
+  },
+  "set search.hybrid.summarize_batch <- false": {
+    "err": true
+  },
+  "set search.hybrid.summarize_batch <- null": {
+    "err": true
+  },
+  "set search.hybrid.summarize_batch <- true": {
+    "err": true
+  },
+  "set search.hybrid.summarize_batch <- {\"a\":1}": {
+    "err": true
+  },
+  "set search.hybrid.summarize_overflow <- \"\"": {
+    "err": true
+  },
+  "set search.hybrid.summarize_overflow <- \"1\"": {
+    "err": true
+  },
+  "set search.hybrid.summarize_overflow <- \"s\"": {
+    "err": true
+  },
+  "set search.hybrid.summarize_overflow <- \"true\"": {
+    "err": true
+  },
+  "set search.hybrid.summarize_overflow <- -1": {
+    "err": true
+  },
+  "set search.hybrid.summarize_overflow <- 0": {
+    "err": true
+  },
+  "set search.hybrid.summarize_overflow <- 1": {
+    "err": true
+  },
+  "set search.hybrid.summarize_overflow <- 1.5": {
+    "err": true
+  },
+  "set search.hybrid.summarize_overflow <- 5000000000": {
+    "err": true
+  },
+  "set search.hybrid.summarize_overflow <- 70000": {
+    "err": true
+  },
+  "set search.hybrid.summarize_overflow <- [1]": {
+    "err": true
+  },
+  "set search.hybrid.summarize_overflow <- false": {
+    "ok": {}
+  },
+  "set search.hybrid.summarize_overflow <- null": {
+    "err": true
+  },
+  "set search.hybrid.summarize_overflow <- true": {
+    "ok": {
+      "search.hybrid.summarize_overflow": true
+    }
+  },
+  "set search.hybrid.summarize_overflow <- {\"a\":1}": {
+    "err": true
+  },
+  "set search.triplet_neighbor_cap <- \"\"": {
+    "err": true
+  },
+  "set search.triplet_neighbor_cap <- \"1\"": {
+    "err": true
+  },
+  "set search.triplet_neighbor_cap <- \"s\"": {
+    "err": true
+  },
+  "set search.triplet_neighbor_cap <- \"true\"": {
+    "err": true
+  },
+  "set search.triplet_neighbor_cap <- -1": {
+    "err": true
+  },
+  "set search.triplet_neighbor_cap <- 0": {
+    "ok": {
+      "search.triplet_neighbor_cap": 0
+    }
+  },
+  "set search.triplet_neighbor_cap <- 1": {
+    "ok": {
+      "search.triplet_neighbor_cap": 1
+    }
+  },
+  "set search.triplet_neighbor_cap <- 1.5": {
+    "err": true
+  },
+  "set search.triplet_neighbor_cap <- 5000000000": {
+    "err": true
+  },
+  "set search.triplet_neighbor_cap <- 70000": {
+    "ok": {
+      "search.triplet_neighbor_cap": 70000
+    }
+  },
+  "set search.triplet_neighbor_cap <- [1]": {
+    "err": true
+  },
+  "set search.triplet_neighbor_cap <- false": {
+    "err": true
+  },
+  "set search.triplet_neighbor_cap <- null": {
+    "ok": {}
+  },
+  "set search.triplet_neighbor_cap <- true": {
+    "err": true
+  },
+  "set search.triplet_neighbor_cap <- {\"a\":1}": {
+    "err": true
+  },
+  "set session.abandon_after_seconds <- \"\"": {
+    "err": true
+  },
+  "set session.abandon_after_seconds <- \"1\"": {
+    "err": true
+  },
+  "set session.abandon_after_seconds <- \"s\"": {
+    "err": true
+  },
+  "set session.abandon_after_seconds <- \"true\"": {
+    "err": true
+  },
+  "set session.abandon_after_seconds <- -1": {
+    "err": true
+  },
+  "set session.abandon_after_seconds <- 0": {
+    "ok": {
+      "session.abandon_after_seconds": 0
+    }
+  },
+  "set session.abandon_after_seconds <- 1": {
+    "ok": {
+      "session.abandon_after_seconds": 1
+    }
+  },
+  "set session.abandon_after_seconds <- 1.5": {
+    "err": true
+  },
+  "set session.abandon_after_seconds <- 5000000000": {
+    "ok": {
+      "session.abandon_after_seconds": 5000000000
+    }
+  },
+  "set session.abandon_after_seconds <- 70000": {
+    "ok": {
+      "session.abandon_after_seconds": 70000
+    }
+  },
+  "set session.abandon_after_seconds <- [1]": {
+    "err": true
+  },
+  "set session.abandon_after_seconds <- false": {
+    "err": true
+  },
+  "set session.abandon_after_seconds <- null": {
+    "err": true
+  },
+  "set session.abandon_after_seconds <- true": {
+    "err": true
+  },
+  "set session.abandon_after_seconds <- {\"a\":1}": {
+    "err": true
+  },
+  "set session.feedback_llm_timeout_ms <- \"\"": {
+    "err": true
+  },
+  "set session.feedback_llm_timeout_ms <- \"1\"": {
+    "err": true
+  },
+  "set session.feedback_llm_timeout_ms <- \"s\"": {
+    "err": true
+  },
+  "set session.feedback_llm_timeout_ms <- \"true\"": {
+    "err": true
+  },
+  "set session.feedback_llm_timeout_ms <- -1": {
+    "err": true
+  },
+  "set session.feedback_llm_timeout_ms <- 0": {
+    "ok": {
+      "session.feedback_llm_timeout_ms": 0
+    }
+  },
+  "set session.feedback_llm_timeout_ms <- 1": {
+    "ok": {
+      "session.feedback_llm_timeout_ms": 1
+    }
+  },
+  "set session.feedback_llm_timeout_ms <- 1.5": {
+    "err": true
+  },
+  "set session.feedback_llm_timeout_ms <- 5000000000": {
+    "ok": {
+      "session.feedback_llm_timeout_ms": 5000000000
+    }
+  },
+  "set session.feedback_llm_timeout_ms <- 70000": {
+    "ok": {
+      "session.feedback_llm_timeout_ms": 70000
+    }
+  },
+  "set session.feedback_llm_timeout_ms <- [1]": {
+    "err": true
+  },
+  "set session.feedback_llm_timeout_ms <- false": {
+    "err": true
+  },
+  "set session.feedback_llm_timeout_ms <- null": {
+    "err": true
+  },
+  "set session.feedback_llm_timeout_ms <- true": {
+    "err": true
+  },
+  "set session.feedback_llm_timeout_ms <- {\"a\":1}": {
+    "err": true
+  },
   "set session.store <- \"\"": {
     "ok": {
       "session.store": ""
@@ -10838,6 +11719,59 @@
     "err": true
   },
   "set session.store <- {\"a\":1}": {
+    "err": true
+  },
+  "set session_abandon_after_seconds <- \"\"": {
+    "err": true
+  },
+  "set session_abandon_after_seconds <- \"1\"": {
+    "err": true
+  },
+  "set session_abandon_after_seconds <- \"s\"": {
+    "err": true
+  },
+  "set session_abandon_after_seconds <- \"true\"": {
+    "err": true
+  },
+  "set session_abandon_after_seconds <- -1": {
+    "err": true
+  },
+  "set session_abandon_after_seconds <- 0": {
+    "ok": {
+      "session.abandon_after_seconds": 0
+    }
+  },
+  "set session_abandon_after_seconds <- 1": {
+    "ok": {
+      "session.abandon_after_seconds": 1
+    }
+  },
+  "set session_abandon_after_seconds <- 1.5": {
+    "err": true
+  },
+  "set session_abandon_after_seconds <- 5000000000": {
+    "ok": {
+      "session.abandon_after_seconds": 5000000000
+    }
+  },
+  "set session_abandon_after_seconds <- 70000": {
+    "ok": {
+      "session.abandon_after_seconds": 70000
+    }
+  },
+  "set session_abandon_after_seconds <- [1]": {
+    "err": true
+  },
+  "set session_abandon_after_seconds <- false": {
+    "err": true
+  },
+  "set session_abandon_after_seconds <- null": {
+    "err": true
+  },
+  "set session_abandon_after_seconds <- true": {
+    "err": true
+  },
+  "set session_abandon_after_seconds <- {\"a\":1}": {
     "err": true
   },
   "set session_store <- \"\"": {
@@ -12498,6 +13432,13 @@
   "set vector_db_username <- {\"a\":1}": {
     "err": true
   },
+  "unset allow_cypher_query": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
   "unset anthropic_base_url": {
     "ok": {
       "chunk_size": 7,
@@ -12736,6 +13677,55 @@
     }
   },
   "unset cognee_tracing_enabled": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset cognify.failure_report_cap": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset cognify.legacy_per_word_token_count": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset cognify.max_chunk_failure_ratio": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset cognify.raise_incremental_loading_errors": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset cognify.rollback_scope": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset cognify.token_counter": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset cognify.tolerate_summarization_failures": {
     "ok": {
       "chunk_size": 7,
       "llm.model": "changed",
@@ -13859,6 +14849,13 @@
       "relational.port": 1
     }
   },
+  "unset raise_incremental_loading_errors": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
   "unset relational.host": {
     "ok": {
       "chunk_size": 7,
@@ -13921,7 +14918,70 @@
       "relational.port": 1
     }
   },
+  "unset search.allow_cypher_query": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset search.hybrid.max_context_tokens": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset search.hybrid.overflow_summary_file": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset search.hybrid.summarize_batch": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset search.hybrid.summarize_overflow": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset search.triplet_neighbor_cap": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset session.abandon_after_seconds": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset session.feedback_llm_timeout_ms": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
   "unset session.store": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset session_abandon_after_seconds": {
     "ok": {
       "chunk_size": 7,
       "llm.model": "changed",

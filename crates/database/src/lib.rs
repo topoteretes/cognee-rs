@@ -52,6 +52,7 @@ pub use ops::checkpoint::{CheckpointStore, SeaOrmCheckpointStore};
 /// every run-scoped provenance query takes, and callers outside this crate
 /// should not have to name `ops::graph_storage` to build one.
 pub use ops::graph_storage::RunScope;
+pub use ops::session_lifecycle::DEFAULT_ABANDON_AFTER_SECONDS;
 pub use pipelines::sea_orm_impl::SeaOrmPipelineRunRepository;
 pub use pipelines::{
     NoopPipelineRunRepository, PipelineRunClaim, PipelineRunRepository,

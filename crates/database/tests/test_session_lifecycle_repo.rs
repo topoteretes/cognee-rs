@@ -10,10 +10,8 @@
 //! database (`sqlite::memory:`) so they don't interfere even when
 //! `cargo test` runs them in parallel.
 //!
-//! The abandoned-status test temporarily mutates
-//! `SESSION_ABANDON_AFTER_SECONDS` via `std::env::set_var`. To keep
-//! that env-var change isolated from other tests, that test uses
-//! `serial_test::serial` and unsets the var on the way out.
+//! The abandoned-status test passes a 1-second abandonment threshold in its
+//! filters, so it needs no process-global state.
 //!
 //! Python source-of-truth references:
 //!   * `cognee/modules/session_lifecycle/metrics.py` (write paths +
@@ -27,7 +25,8 @@
 
 use chrono::{Duration, Utc};
 use cognee_database::{
-    DatabaseConnection, SessionLifecycleDb, SessionListFilters, connect, initialize,
+    DEFAULT_ABANDON_AFTER_SECONDS, DatabaseConnection, SessionLifecycleDb, SessionListFilters,
+    connect, initialize,
 };
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 use uuid::Uuid;
@@ -54,7 +53,7 @@ async fn test_ensure_and_touch_session_upserts() {
 
     // Fetch initial state.
     let r1 = db
-        .get_session_row(sid, user, &[], false)
+        .get_session_row(sid, user, &[], false, DEFAULT_ABANDON_AFTER_SECONDS)
         .await
         .expect("get_session_row")
         .expect("row exists");
@@ -71,7 +70,7 @@ async fn test_ensure_and_touch_session_upserts() {
         .expect("second ensure");
 
     let r2 = db
-        .get_session_row(sid, user, &[], false)
+        .get_session_row(sid, user, &[], false, DEFAULT_ABANDON_AFTER_SECONDS)
         .await
         .expect("get_session_row")
         .expect("row exists");
@@ -110,7 +109,7 @@ async fn test_ensure_and_touch_session_backfills_dataset_id() {
         .await
         .expect("ensure no ds");
     let r1 = db
-        .get_session_row(sid, user, &[], false)
+        .get_session_row(sid, user, &[], false, DEFAULT_ABANDON_AFTER_SECONDS)
         .await
         .expect("get")
         .expect("row");
@@ -121,7 +120,7 @@ async fn test_ensure_and_touch_session_backfills_dataset_id() {
         .await
         .expect("ensure with ds");
     let r2 = db
-        .get_session_row(sid, user, &[], false)
+        .get_session_row(sid, user, &[], false, DEFAULT_ABANDON_AFTER_SECONDS)
         .await
         .expect("get")
         .expect("row");
@@ -134,7 +133,7 @@ async fn test_ensure_and_touch_session_backfills_dataset_id() {
         .await
         .expect("ensure with other ds");
     let r3 = db
-        .get_session_row(sid, user, &[], false)
+        .get_session_row(sid, user, &[], false, DEFAULT_ABANDON_AFTER_SECONDS)
         .await
         .expect("get")
         .expect("row");
@@ -168,7 +167,7 @@ async fn test_accumulate_usage_increments() {
         .expect("accumulate 3");
 
     let r = db
-        .get_session_row(sid, user, &[], false)
+        .get_session_row(sid, user, &[], false, DEFAULT_ABANDON_AFTER_SECONDS)
         .await
         .expect("get")
         .expect("row");
@@ -221,7 +220,7 @@ async fn test_accumulate_usage_increments() {
         .await
         .expect("post-terminal accumulate is a no-op on session_records");
     let r2 = db
-        .get_session_row(sid, user, &[], false)
+        .get_session_row(sid, user, &[], false, DEFAULT_ABANDON_AFTER_SECONDS)
         .await
         .expect("get")
         .expect("row");
@@ -256,6 +255,7 @@ async fn test_list_session_rows_pagination() {
             offset: 0,
             order_by: "last_activity_at".to_string(),
             descending: true,
+            abandon_after_seconds: DEFAULT_ABANDON_AFTER_SECONDS,
         })
         .await
         .expect("page1");
@@ -276,6 +276,7 @@ async fn test_list_session_rows_pagination() {
             offset: 4,
             order_by: "last_activity_at".to_string(),
             descending: true,
+            abandon_after_seconds: DEFAULT_ABANDON_AFTER_SECONDS,
         })
         .await
         .expect("page3");
@@ -294,6 +295,7 @@ async fn test_list_session_rows_pagination() {
             offset: 0,
             order_by: "DROP TABLE session_records".to_string(),
             descending: true,
+            abandon_after_seconds: DEFAULT_ABANDON_AFTER_SECONDS,
         })
         .await
         .expect("fallback");
@@ -301,16 +303,10 @@ async fn test_list_session_rows_pagination() {
 }
 
 #[tokio::test]
-#[serial_test::serial]
 async fn test_list_session_rows_status_filter_with_abandoned() {
-    // Set the abandonment threshold to 1s so any row whose
-    // last_activity_at is older than 1s reports as abandoned at read
-    // time. We set it via env var because the helper reads it on each
-    // call (Python parity).
-    // SAFETY: the test is marked serial_test::serial so other tests
-    // don't observe this env mutation.
-    unsafe { std::env::set_var("SESSION_ABANDON_AFTER_SECONDS", "1") };
-
+    // An abandonment threshold of 1s (passed in the filters), so any row
+    // whose last_activity_at is older than 1s reports as abandoned at read
+    // time.
     async {
         let db = make_db().await;
         let user = Uuid::new_v4();
@@ -356,6 +352,7 @@ async fn test_list_session_rows_status_filter_with_abandoned() {
                 offset: 0,
                 order_by: "last_activity_at".to_string(),
                 descending: true,
+                abandon_after_seconds: 1,
             })
             .await
             .expect("list abandoned");
@@ -382,6 +379,7 @@ async fn test_list_session_rows_status_filter_with_abandoned() {
                 offset: 0,
                 order_by: "last_activity_at".to_string(),
                 descending: true,
+                abandon_after_seconds: 1,
             })
             .await
             .expect("list running");
@@ -390,12 +388,6 @@ async fn test_list_session_rows_status_filter_with_abandoned() {
         assert_eq!(page_running.sessions[0].effective_status, "running");
     }
     .await;
-
-    // Unset the env var on the success path. If assertions panicked
-    // above, this won't run — but `serial_test::serial` ensures no
-    // other test observes the leaked env var anyway, and the next
-    // test run starts in a fresh process.
-    unsafe { std::env::remove_var("SESSION_ABANDON_AFTER_SECONDS") };
 }
 
 #[tokio::test]
@@ -429,6 +421,7 @@ async fn test_list_session_rows_visibility() {
             offset: 0,
             order_by: "last_activity_at".to_string(),
             descending: true,
+            abandon_after_seconds: DEFAULT_ABANDON_AFTER_SECONDS,
         })
         .await
         .expect("alice list");
@@ -447,6 +440,7 @@ async fn test_list_session_rows_visibility() {
             offset: 0,
             order_by: "last_activity_at".to_string(),
             descending: true,
+            abandon_after_seconds: DEFAULT_ABANDON_AFTER_SECONDS,
         })
         .await
         .expect("alice list with permission");
@@ -513,7 +507,7 @@ async fn test_aggregate_stats_buckets() {
     }
 
     let stats = db
-        .aggregate_stats(user, &[], None)
+        .aggregate_stats(user, &[], None, DEFAULT_ABANDON_AFTER_SECONDS)
         .await
         .expect("aggregate");
 

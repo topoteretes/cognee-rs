@@ -20,7 +20,7 @@
 //!
 //! and the configs are the two Python exposes through
 //! `RAISE_INCREMENTAL_LOADING_ERRORS`, mapped onto Rust's axis-1 the way
-//! `FailureStop::from_env` maps them (asserted below rather than assumed).
+//! `FailureStop::parse` maps them (asserted below rather than assumed).
 //!
 //! Emitting rather than asserting is deliberate: the comparison lives in
 //! `compare.py`, which sees both SDKs' observations at once. This file is the
@@ -424,22 +424,17 @@ async fn read_pipeline_status(db: &DatabaseConnection, data_id: Uuid) -> Option<
 /// The Rust config each Python `RAISE_INCREMENTAL_LOADING_ERRORS` value maps
 /// onto.
 ///
-/// The value is set in the environment and read back through the SDK's own
-/// `FailureStop::from_env`, not hard-coded: the claim under test includes "one
-/// `.env` configures both SDKs identically", so the mapping the comparison
-/// rests on must come from the shipped parser. `set_var` is sound here because
-/// this binary holds exactly one test and nothing else reads the environment
-/// concurrently.
+/// The value goes through the SDK's own `FailureStop::parse`, not a hard-coded
+/// mapping: the claim under test includes "one `.env` configures both SDKs
+/// identically", so the mapping the comparison rests on must come from the
+/// shipped parser.
 fn config_for(name: &str) -> CognifyConfig {
     let raw = match name {
         "raise_true" => "true",
         "raise_false" => "false",
         other => panic!("unknown config {other}"),
     };
-    unsafe {
-        std::env::set_var("RAISE_INCREMENTAL_LOADING_ERRORS", raw);
-    }
-    let stop = FailureStop::from_env().expect("the SDK parses both Python values");
+    let stop = FailureStop::parse(raw).expect("the SDK parses both Python values");
     CognifyConfig::default()
         .with_chunk_size(1500)
         .with_chunks_per_batch(1)

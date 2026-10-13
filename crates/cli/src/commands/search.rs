@@ -76,9 +76,14 @@ pub fn run(args: SearchArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
             .session_store()
             .await
             .map_err(|e| CliError::Runtime(format!("session store init failed: {e}")))?;
-        let session_manager = Arc::new(SessionManager::new(session_store));
+        let feedback_llm_timeout = cm.settings().feedback_llm_timeout();
+        let session_manager = Arc::new(
+            SessionManager::new(session_store).with_feedback_llm_timeout(feedback_llm_timeout),
+        );
+        let search_tuning = cm.settings().search_tuning();
         let orchestrator =
             SearchBuilder::new(vector_db, embedding_engine, graph_db, llm, database.clone())
+                .with_tuning(search_tuning)
                 .with_session_manager(session_manager)
                 .with_dataset_resolver(database as Arc<dyn IngestDb>)
                 .build();

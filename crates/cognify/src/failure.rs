@@ -40,8 +40,8 @@ use uuid::Uuid;
 /// stops; unset, every item runs and `run_tasks.py:174-179` raises afterwards
 /// because one errored. Either way Python sweeps the whole run — the flag
 /// chooses *when to stop*, never *what survives*, which is exactly this axis.
-/// [`FailureStop::from_env`] reads that variable so one `.env` configures both
-/// SDKs identically.
+/// The `cognify.raise_incremental_loading_errors` setting binds that
+/// variable, so one `.env` configures both SDKs identically.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum FailureStop {
     /// Stop scheduling further work in the failing stage once a failure has
@@ -66,31 +66,23 @@ pub enum FailureStop {
 }
 
 impl FailureStop {
-    /// Read the Python-compatible environment variable.
-    ///
-    /// Accepts Python's bare `RAISE_INCREMENTAL_LOADING_ERRORS` and the
-    /// `COGNEE_`-prefixed alias, the same dual-name shape this workspace
-    /// already uses for `CHUNK_SIZE` and friends. The boolean is Python's, so
-    /// its polarity is inverted relative to the variant names: raising on the
-    /// first error *is* stopping early.
-    ///
-    /// Returns `None` when unset or unparseable, leaving the caller's default
-    /// in place rather than guessing.
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
-    )]
-    pub fn from_env() -> Option<Self> {
-        let raw = std::env::var("RAISE_INCREMENTAL_LOADING_ERRORS")
-            .or_else(|_| std::env::var("COGNEE_RAISE_INCREMENTAL_LOADING_ERRORS"))
-            .ok()?;
-        Self::parse_env_value(&raw)
+    /// The stop mode for Python's `RAISE_INCREMENTAL_LOADING_ERRORS` boolean
+    /// (`cognify.raise_incremental_loading_errors`). Its polarity is inverted
+    /// relative to the variant names: raising on the first error *is* stopping
+    /// early.
+    #[must_use]
+    pub fn from_raise_errors(raise: bool) -> Self {
+        if raise {
+            Self::FailFast
+        } else {
+            Self::RunToEnd
+        }
     }
 
-    /// The parsing half of [`Self::from_env`], split out so it is testable
-    /// without mutating process-global environment state — which races across
-    /// parallel test binaries.
-    pub(crate) fn parse_env_value(raw: &str) -> Option<Self> {
+    /// Parse the Python-compatible boolean spellings (`true`/`1`/`yes`,
+    /// `false`/`0`/`no`). `None` when unrecognised, leaving the caller's
+    /// default in place rather than guessing.
+    pub fn parse(raw: &str) -> Option<Self> {
         match raw.trim().to_ascii_lowercase().as_str() {
             "true" | "1" | "yes" => Some(Self::FailFast),
             "false" | "0" | "no" => Some(Self::RunToEnd),
@@ -137,7 +129,7 @@ pub enum RollbackScope {
     /// Remove nothing: whatever the run wrote before it failed stays.
     ///
     /// A library-level escape hatch, and deliberately **not selectable from
-    /// the environment** — the env parser has no spelling for it — because
+    /// configuration** — the config parser has no spelling for it — because
     /// what it leaves behind is permanent. A run that wrote graph edges and
     /// died before the vector stage leaves those edges with no `Triplet_text`
     /// and no `EdgeType_relationship_name` point. The retry does not repair
@@ -153,31 +145,20 @@ pub enum RollbackScope {
 }
 
 impl RollbackScope {
-    /// Read `COGNEE_COGNIFY_ROLLBACK_SCOPE`.
+    /// Parse the `cognify.rollback_scope` setting
+    /// (`COGNEE_COGNIFY_ROLLBACK_SCOPE`).
     ///
     /// Prefixed and namespaced because this axis has no Python counterpart at
     /// all — Python always sweeps the whole run — so the name should read as a
     /// Rust extension rather than a parity feature.
     ///
-    /// Only [`Self::WholeRun`] and [`Self::FailedItems`] are reachable this
-    /// way — see [`Self::Nothing`] for why the third variant is not.
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
-    )]
-    pub fn from_env() -> Option<Self> {
-        Self::parse_env_value(&std::env::var("COGNEE_COGNIFY_ROLLBACK_SCOPE").ok()?)
-    }
-
-    /// See [`FailureStop::parse_env_value`] for why this is split out.
-    ///
     /// [`Self::Nothing`] has no spelling here on purpose: it is the one scope
     /// whose leftovers no retry can repair, so no deployment should be able to
-    /// select it by setting a variable. `nothing` / `none` are rejected like
+    /// select it through configuration. `nothing` / `none` are rejected like
     /// any other unknown value, leaving the caller's default in place; a
     /// caller that really wants it asks for it in code, through
     /// [`crate::CognifyConfig::with_rollback_scope`].
-    pub(crate) fn parse_env_value(raw: &str) -> Option<Self> {
+    pub fn parse(raw: &str) -> Option<Self> {
         match raw
             .trim()
             .to_ascii_lowercase()
@@ -766,21 +747,21 @@ mod tests {
     fn python_raise_flag_maps_onto_the_stop_axis() {
         for raw in ["true", "TRUE", " True ", "1", "yes"] {
             assert_eq!(
-                FailureStop::parse_env_value(raw),
+                FailureStop::parse(raw),
                 Some(FailureStop::FailFast),
                 "raising on the first error is stopping early: {raw:?}"
             );
         }
         for raw in ["false", "False", "0", "no"] {
             assert_eq!(
-                FailureStop::parse_env_value(raw),
+                FailureStop::parse(raw),
                 Some(FailureStop::RunToEnd),
                 "not raising means every item still runs: {raw:?}"
             );
         }
         // Unparseable leaves the caller's default alone rather than guessing.
         for raw in ["", "maybe", "2"] {
-            assert_eq!(FailureStop::parse_env_value(raw), None, "{raw:?}");
+            assert_eq!(FailureStop::parse(raw), None, "{raw:?}");
         }
     }
 
@@ -789,23 +770,20 @@ mod tests {
     #[test]
     fn the_stop_default_matches_pythons_unset_default() {
         // Python: `os.getenv("RAISE_INCREMENTAL_LOADING_ERRORS", "true")`.
-        assert_eq!(
-            FailureStop::parse_env_value("true"),
-            Some(FailureStop::default())
-        );
+        assert_eq!(FailureStop::parse("true"), Some(FailureStop::default()));
     }
 
     #[test]
     fn rollback_scope_env_values_parse() {
         assert_eq!(
-            RollbackScope::parse_env_value("whole_run"),
+            RollbackScope::parse("whole_run"),
             Some(RollbackScope::WholeRun)
         );
         assert_eq!(
-            RollbackScope::parse_env_value("failed-items"),
+            RollbackScope::parse("failed-items"),
             Some(RollbackScope::FailedItems)
         );
-        assert_eq!(RollbackScope::parse_env_value("everything"), None);
+        assert_eq!(RollbackScope::parse("everything"), None);
     }
 
     /// `Nothing` is a code-only escape hatch: the artifacts a run wrote before
@@ -817,7 +795,7 @@ mod tests {
     fn nothing_cannot_be_selected_from_the_environment() {
         for raw in ["nothing", "NOTHING", "Nothing", "none", "NONE", "no-thing"] {
             assert_eq!(
-                RollbackScope::parse_env_value(raw),
+                RollbackScope::parse(raw),
                 None,
                 "the environment must not be able to select `Nothing`: {raw:?}"
             );
@@ -826,11 +804,11 @@ mod tests {
         // The other two axis values keep working, so this rejection is not a
         // blanket break of the variable.
         assert_eq!(
-            RollbackScope::parse_env_value("whole_run"),
+            RollbackScope::parse("whole_run"),
             Some(RollbackScope::WholeRun)
         );
         assert_eq!(
-            RollbackScope::parse_env_value("failed_items"),
+            RollbackScope::parse("failed_items"),
             Some(RollbackScope::FailedItems)
         );
     }

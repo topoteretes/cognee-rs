@@ -153,6 +153,42 @@ const EDGE_TYPE_FIELD: &str = "relationship_name";
 /// stays default-off. **Global-context (`include_global_context_index` /
 /// `global_context_index_top_k`):** still accepted on the wire but inert — no
 /// global-context section is produced (locked deferral).
+/// The HYBRID_COMPLETION context budget and overflow handling (the
+/// `search.hybrid` settings).
+#[derive(Debug, Clone, PartialEq)]
+pub struct HybridBudget {
+    /// Overrides the window the budget is computed from.
+    ///
+    /// `None` — the normal case — budgets against whatever the LLM adapter
+    /// reports as its context length, which is the number that is actually
+    /// true. The override exists because that number is a property of a model
+    /// file and a runtime, so it is exactly the kind of thing that is wrong on
+    /// somebody's device, and because comparing a budgeted answer against an
+    /// unbudgeted one on the same build is the only honest way to tell whether
+    /// the budgeting helped. `Some(0)` turns the budget off entirely.
+    pub max_context_tokens: Option<u32>,
+    /// Summarize overflow passages with the answering model, at query time,
+    /// instead of dropping them.
+    pub summarize_overflow: bool,
+    /// How many passages go into one summarization call (`1` is a call each).
+    pub summarize_batch: usize,
+    /// A JSON object mapping chunk id → summary sentence. `None` means no
+    /// precomputed overflow summaries: a passage that does not fit is simply
+    /// left out, which is the behaviour this is being measured against.
+    pub overflow_summary_file: Option<std::path::PathBuf>,
+}
+
+impl Default for HybridBudget {
+    fn default() -> Self {
+        Self {
+            max_context_tokens: None,
+            summarize_overflow: false,
+            summarize_batch: 1,
+            overflow_summary_file: None,
+        }
+    }
+}
+
 pub struct HybridRetriever {
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
@@ -179,9 +215,17 @@ pub struct HybridRetriever {
     system_prompt_path: Option<String>,
     user_prompt_template: Option<String>,
     generation_options: Option<GenerationOptions>,
+    budget: HybridBudget,
 }
 
 impl HybridRetriever {
+    /// Set the context budget and overflow handling (`search.hybrid`).
+    #[must_use]
+    pub fn with_budget(mut self, budget: HybridBudget) -> Self {
+        self.budget = budget;
+        self
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         vector_db: Arc<dyn VectorDB>,
@@ -226,6 +270,7 @@ impl HybridRetriever {
             system_prompt_path,
             user_prompt_template,
             generation_options,
+            budget: HybridBudget::default(),
         }
     }
 
@@ -475,6 +520,7 @@ impl HybridRetriever {
             self.llm.max_context_length(),
             self.completion_reserve_tokens(),
             overhead_chars,
+            self.budget.max_context_tokens,
         );
         if unbudgeted.len() <= budget {
             return (unbudgeted, false, Vec::new());
@@ -875,7 +921,8 @@ impl SearchRetriever for HybridRetriever {
         };
         let overhead = overhead_system + overhead_template + session.formatted_history.len();
 
-        let mut overflow_summaries = overflow::known(&chunks);
+        let mut overflow_summaries =
+            overflow::known(&chunks, self.budget.overflow_summary_file.as_deref());
         let (mut context_text, budgeted, unsummarized) =
             self.assemble_context(&chunks, &entities, &facts, overhead, &overflow_summaries);
 
@@ -894,7 +941,7 @@ impl SearchRetriever for HybridRetriever {
         // passages this question actually pushed out are summarized, and only
         // once each — `overflow::known()` above already carries everything
         // earlier questions paid for.
-        if budgeted && !unsummarized.is_empty() && overflow::summarization_enabled() {
+        if budgeted && !unsummarized.is_empty() && self.budget.summarize_overflow {
             let to_summarize: Vec<(String, String)> = unsummarized
                 .iter()
                 .filter_map(|id| {
@@ -906,9 +953,12 @@ impl SearchRetriever for HybridRetriever {
                 })
                 .collect();
             if !to_summarize.is_empty() {
-                let produced =
-                    overflow::summarize(self.llm.as_ref(), &to_summarize, overflow::batch_size())
-                        .await;
+                let produced = overflow::summarize(
+                    self.llm.as_ref(),
+                    &to_summarize,
+                    self.budget.summarize_batch.max(1),
+                )
+                .await;
                 if !produced.is_empty() {
                     overflow_summaries.extend(produced);
                     let (rebuilt, _, _) = self.assemble_context(

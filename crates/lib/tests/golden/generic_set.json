@@ -1,4 +1,64 @@
 {
+  "allow_cypher_query <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "allow_cypher_query"
+  },
+  "allow_cypher_query <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "allow_cypher_query"
+  },
+  "allow_cypher_query <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "allow_cypher_query"
+  },
+  "allow_cypher_query <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "allow_cypher_query"
+  },
+  "allow_cypher_query <- -1": {
+    "err": "TypeMismatch",
+    "key": "allow_cypher_query"
+  },
+  "allow_cypher_query <- 0": {
+    "err": "TypeMismatch",
+    "key": "allow_cypher_query"
+  },
+  "allow_cypher_query <- 1": {
+    "err": "TypeMismatch",
+    "key": "allow_cypher_query"
+  },
+  "allow_cypher_query <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "allow_cypher_query"
+  },
+  "allow_cypher_query <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "allow_cypher_query"
+  },
+  "allow_cypher_query <- 70000": {
+    "err": "TypeMismatch",
+    "key": "allow_cypher_query"
+  },
+  "allow_cypher_query <- [1]": {
+    "err": "TypeMismatch",
+    "key": "allow_cypher_query"
+  },
+  "allow_cypher_query <- false": {
+    "ok": {
+      "search.allow_cypher_query": false
+    }
+  },
+  "allow_cypher_query <- null": {
+    "err": "TypeMismatch",
+    "key": "allow_cypher_query"
+  },
+  "allow_cypher_query <- true": {
+    "ok": {}
+  },
+  "allow_cypher_query <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "allow_cypher_query"
+  },
   "anthropic_base_url <- \"\"": {
     "ok": {
       "llm.anthropic.base_url": ""
@@ -2196,6 +2256,440 @@
   "cognee_tracing_enabled <- {\"a\":1}": {
     "err": "TypeMismatch",
     "key": "cognee_tracing_enabled"
+  },
+  "cognify.failure_report_cap <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.failure_report_cap"
+  },
+  "cognify.failure_report_cap <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.failure_report_cap"
+  },
+  "cognify.failure_report_cap <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.failure_report_cap"
+  },
+  "cognify.failure_report_cap <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.failure_report_cap"
+  },
+  "cognify.failure_report_cap <- -1": {
+    "err": "TypeMismatch",
+    "key": "cognify.failure_report_cap"
+  },
+  "cognify.failure_report_cap <- 0": {
+    "ok": {
+      "cognify.failure_report_cap": 0
+    }
+  },
+  "cognify.failure_report_cap <- 1": {
+    "ok": {
+      "cognify.failure_report_cap": 1
+    }
+  },
+  "cognify.failure_report_cap <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "cognify.failure_report_cap"
+  },
+  "cognify.failure_report_cap <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "cognify.failure_report_cap"
+  },
+  "cognify.failure_report_cap <- 70000": {
+    "ok": {
+      "cognify.failure_report_cap": 70000
+    }
+  },
+  "cognify.failure_report_cap <- [1]": {
+    "err": "TypeMismatch",
+    "key": "cognify.failure_report_cap"
+  },
+  "cognify.failure_report_cap <- false": {
+    "err": "TypeMismatch",
+    "key": "cognify.failure_report_cap"
+  },
+  "cognify.failure_report_cap <- null": {
+    "err": "TypeMismatch",
+    "key": "cognify.failure_report_cap"
+  },
+  "cognify.failure_report_cap <- true": {
+    "err": "TypeMismatch",
+    "key": "cognify.failure_report_cap"
+  },
+  "cognify.failure_report_cap <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "cognify.failure_report_cap"
+  },
+  "cognify.legacy_per_word_token_count <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.legacy_per_word_token_count"
+  },
+  "cognify.legacy_per_word_token_count <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.legacy_per_word_token_count"
+  },
+  "cognify.legacy_per_word_token_count <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.legacy_per_word_token_count"
+  },
+  "cognify.legacy_per_word_token_count <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.legacy_per_word_token_count"
+  },
+  "cognify.legacy_per_word_token_count <- -1": {
+    "err": "TypeMismatch",
+    "key": "cognify.legacy_per_word_token_count"
+  },
+  "cognify.legacy_per_word_token_count <- 0": {
+    "err": "TypeMismatch",
+    "key": "cognify.legacy_per_word_token_count"
+  },
+  "cognify.legacy_per_word_token_count <- 1": {
+    "err": "TypeMismatch",
+    "key": "cognify.legacy_per_word_token_count"
+  },
+  "cognify.legacy_per_word_token_count <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "cognify.legacy_per_word_token_count"
+  },
+  "cognify.legacy_per_word_token_count <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "cognify.legacy_per_word_token_count"
+  },
+  "cognify.legacy_per_word_token_count <- 70000": {
+    "err": "TypeMismatch",
+    "key": "cognify.legacy_per_word_token_count"
+  },
+  "cognify.legacy_per_word_token_count <- [1]": {
+    "err": "TypeMismatch",
+    "key": "cognify.legacy_per_word_token_count"
+  },
+  "cognify.legacy_per_word_token_count <- false": {
+    "ok": {}
+  },
+  "cognify.legacy_per_word_token_count <- null": {
+    "err": "TypeMismatch",
+    "key": "cognify.legacy_per_word_token_count"
+  },
+  "cognify.legacy_per_word_token_count <- true": {
+    "ok": {
+      "cognify.legacy_per_word_token_count": true
+    }
+  },
+  "cognify.legacy_per_word_token_count <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "cognify.legacy_per_word_token_count"
+  },
+  "cognify.max_chunk_failure_ratio <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.max_chunk_failure_ratio"
+  },
+  "cognify.max_chunk_failure_ratio <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.max_chunk_failure_ratio"
+  },
+  "cognify.max_chunk_failure_ratio <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.max_chunk_failure_ratio"
+  },
+  "cognify.max_chunk_failure_ratio <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.max_chunk_failure_ratio"
+  },
+  "cognify.max_chunk_failure_ratio <- -1": {
+    "ok": {
+      "cognify.max_chunk_failure_ratio": -1.0
+    }
+  },
+  "cognify.max_chunk_failure_ratio <- 0": {
+    "ok": {
+      "cognify.max_chunk_failure_ratio": 0.0
+    }
+  },
+  "cognify.max_chunk_failure_ratio <- 1": {
+    "ok": {
+      "cognify.max_chunk_failure_ratio": 1.0
+    }
+  },
+  "cognify.max_chunk_failure_ratio <- 1.5": {
+    "ok": {
+      "cognify.max_chunk_failure_ratio": 1.5
+    }
+  },
+  "cognify.max_chunk_failure_ratio <- 5000000000": {
+    "ok": {
+      "cognify.max_chunk_failure_ratio": 5000000000.0
+    }
+  },
+  "cognify.max_chunk_failure_ratio <- 70000": {
+    "ok": {
+      "cognify.max_chunk_failure_ratio": 70000.0
+    }
+  },
+  "cognify.max_chunk_failure_ratio <- [1]": {
+    "err": "TypeMismatch",
+    "key": "cognify.max_chunk_failure_ratio"
+  },
+  "cognify.max_chunk_failure_ratio <- false": {
+    "err": "TypeMismatch",
+    "key": "cognify.max_chunk_failure_ratio"
+  },
+  "cognify.max_chunk_failure_ratio <- null": {
+    "err": "TypeMismatch",
+    "key": "cognify.max_chunk_failure_ratio"
+  },
+  "cognify.max_chunk_failure_ratio <- true": {
+    "err": "TypeMismatch",
+    "key": "cognify.max_chunk_failure_ratio"
+  },
+  "cognify.max_chunk_failure_ratio <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "cognify.max_chunk_failure_ratio"
+  },
+  "cognify.raise_incremental_loading_errors <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.raise_incremental_loading_errors"
+  },
+  "cognify.raise_incremental_loading_errors <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.raise_incremental_loading_errors"
+  },
+  "cognify.raise_incremental_loading_errors <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.raise_incremental_loading_errors"
+  },
+  "cognify.raise_incremental_loading_errors <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.raise_incremental_loading_errors"
+  },
+  "cognify.raise_incremental_loading_errors <- -1": {
+    "err": "TypeMismatch",
+    "key": "cognify.raise_incremental_loading_errors"
+  },
+  "cognify.raise_incremental_loading_errors <- 0": {
+    "err": "TypeMismatch",
+    "key": "cognify.raise_incremental_loading_errors"
+  },
+  "cognify.raise_incremental_loading_errors <- 1": {
+    "err": "TypeMismatch",
+    "key": "cognify.raise_incremental_loading_errors"
+  },
+  "cognify.raise_incremental_loading_errors <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "cognify.raise_incremental_loading_errors"
+  },
+  "cognify.raise_incremental_loading_errors <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "cognify.raise_incremental_loading_errors"
+  },
+  "cognify.raise_incremental_loading_errors <- 70000": {
+    "err": "TypeMismatch",
+    "key": "cognify.raise_incremental_loading_errors"
+  },
+  "cognify.raise_incremental_loading_errors <- [1]": {
+    "err": "TypeMismatch",
+    "key": "cognify.raise_incremental_loading_errors"
+  },
+  "cognify.raise_incremental_loading_errors <- false": {
+    "ok": {
+      "cognify.raise_incremental_loading_errors": false
+    }
+  },
+  "cognify.raise_incremental_loading_errors <- null": {
+    "ok": {}
+  },
+  "cognify.raise_incremental_loading_errors <- true": {
+    "ok": {
+      "cognify.raise_incremental_loading_errors": true
+    }
+  },
+  "cognify.raise_incremental_loading_errors <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "cognify.raise_incremental_loading_errors"
+  },
+  "cognify.rollback_scope <- \"\"": {
+    "ok": {}
+  },
+  "cognify.rollback_scope <- \"1\"": {
+    "ok": {
+      "cognify.rollback_scope": "1"
+    }
+  },
+  "cognify.rollback_scope <- \"s\"": {
+    "ok": {
+      "cognify.rollback_scope": "s"
+    }
+  },
+  "cognify.rollback_scope <- \"true\"": {
+    "ok": {
+      "cognify.rollback_scope": "true"
+    }
+  },
+  "cognify.rollback_scope <- -1": {
+    "err": "TypeMismatch",
+    "key": "cognify.rollback_scope"
+  },
+  "cognify.rollback_scope <- 0": {
+    "err": "TypeMismatch",
+    "key": "cognify.rollback_scope"
+  },
+  "cognify.rollback_scope <- 1": {
+    "err": "TypeMismatch",
+    "key": "cognify.rollback_scope"
+  },
+  "cognify.rollback_scope <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "cognify.rollback_scope"
+  },
+  "cognify.rollback_scope <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "cognify.rollback_scope"
+  },
+  "cognify.rollback_scope <- 70000": {
+    "err": "TypeMismatch",
+    "key": "cognify.rollback_scope"
+  },
+  "cognify.rollback_scope <- [1]": {
+    "err": "TypeMismatch",
+    "key": "cognify.rollback_scope"
+  },
+  "cognify.rollback_scope <- false": {
+    "err": "TypeMismatch",
+    "key": "cognify.rollback_scope"
+  },
+  "cognify.rollback_scope <- null": {
+    "err": "TypeMismatch",
+    "key": "cognify.rollback_scope"
+  },
+  "cognify.rollback_scope <- true": {
+    "err": "TypeMismatch",
+    "key": "cognify.rollback_scope"
+  },
+  "cognify.rollback_scope <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "cognify.rollback_scope"
+  },
+  "cognify.token_counter <- \"\"": {
+    "ok": {}
+  },
+  "cognify.token_counter <- \"1\"": {
+    "ok": {
+      "cognify.token_counter": "1"
+    }
+  },
+  "cognify.token_counter <- \"s\"": {
+    "ok": {
+      "cognify.token_counter": "s"
+    }
+  },
+  "cognify.token_counter <- \"true\"": {
+    "ok": {
+      "cognify.token_counter": "true"
+    }
+  },
+  "cognify.token_counter <- -1": {
+    "err": "TypeMismatch",
+    "key": "cognify.token_counter"
+  },
+  "cognify.token_counter <- 0": {
+    "err": "TypeMismatch",
+    "key": "cognify.token_counter"
+  },
+  "cognify.token_counter <- 1": {
+    "err": "TypeMismatch",
+    "key": "cognify.token_counter"
+  },
+  "cognify.token_counter <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "cognify.token_counter"
+  },
+  "cognify.token_counter <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "cognify.token_counter"
+  },
+  "cognify.token_counter <- 70000": {
+    "err": "TypeMismatch",
+    "key": "cognify.token_counter"
+  },
+  "cognify.token_counter <- [1]": {
+    "err": "TypeMismatch",
+    "key": "cognify.token_counter"
+  },
+  "cognify.token_counter <- false": {
+    "err": "TypeMismatch",
+    "key": "cognify.token_counter"
+  },
+  "cognify.token_counter <- null": {
+    "err": "TypeMismatch",
+    "key": "cognify.token_counter"
+  },
+  "cognify.token_counter <- true": {
+    "err": "TypeMismatch",
+    "key": "cognify.token_counter"
+  },
+  "cognify.token_counter <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "cognify.token_counter"
+  },
+  "cognify.tolerate_summarization_failures <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.tolerate_summarization_failures"
+  },
+  "cognify.tolerate_summarization_failures <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.tolerate_summarization_failures"
+  },
+  "cognify.tolerate_summarization_failures <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.tolerate_summarization_failures"
+  },
+  "cognify.tolerate_summarization_failures <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.tolerate_summarization_failures"
+  },
+  "cognify.tolerate_summarization_failures <- -1": {
+    "err": "TypeMismatch",
+    "key": "cognify.tolerate_summarization_failures"
+  },
+  "cognify.tolerate_summarization_failures <- 0": {
+    "err": "TypeMismatch",
+    "key": "cognify.tolerate_summarization_failures"
+  },
+  "cognify.tolerate_summarization_failures <- 1": {
+    "err": "TypeMismatch",
+    "key": "cognify.tolerate_summarization_failures"
+  },
+  "cognify.tolerate_summarization_failures <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "cognify.tolerate_summarization_failures"
+  },
+  "cognify.tolerate_summarization_failures <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "cognify.tolerate_summarization_failures"
+  },
+  "cognify.tolerate_summarization_failures <- 70000": {
+    "err": "TypeMismatch",
+    "key": "cognify.tolerate_summarization_failures"
+  },
+  "cognify.tolerate_summarization_failures <- [1]": {
+    "err": "TypeMismatch",
+    "key": "cognify.tolerate_summarization_failures"
+  },
+  "cognify.tolerate_summarization_failures <- false": {
+    "ok": {}
+  },
+  "cognify.tolerate_summarization_failures <- null": {
+    "err": "TypeMismatch",
+    "key": "cognify.tolerate_summarization_failures"
+  },
+  "cognify.tolerate_summarization_failures <- true": {
+    "ok": {
+      "cognify.tolerate_summarization_failures": true
+    }
+  },
+  "cognify.tolerate_summarization_failures <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "cognify.tolerate_summarization_failures"
   },
   "data_root_directory <- \"\"": {
     "ok": {
@@ -12217,6 +12711,67 @@
     "err": "TypeMismatch",
     "key": "pgvector_maintenance_workers"
   },
+  "raise_incremental_loading_errors <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "raise_incremental_loading_errors"
+  },
+  "raise_incremental_loading_errors <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "raise_incremental_loading_errors"
+  },
+  "raise_incremental_loading_errors <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "raise_incremental_loading_errors"
+  },
+  "raise_incremental_loading_errors <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "raise_incremental_loading_errors"
+  },
+  "raise_incremental_loading_errors <- -1": {
+    "err": "TypeMismatch",
+    "key": "raise_incremental_loading_errors"
+  },
+  "raise_incremental_loading_errors <- 0": {
+    "err": "TypeMismatch",
+    "key": "raise_incremental_loading_errors"
+  },
+  "raise_incremental_loading_errors <- 1": {
+    "err": "TypeMismatch",
+    "key": "raise_incremental_loading_errors"
+  },
+  "raise_incremental_loading_errors <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "raise_incremental_loading_errors"
+  },
+  "raise_incremental_loading_errors <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "raise_incremental_loading_errors"
+  },
+  "raise_incremental_loading_errors <- 70000": {
+    "err": "TypeMismatch",
+    "key": "raise_incremental_loading_errors"
+  },
+  "raise_incremental_loading_errors <- [1]": {
+    "err": "TypeMismatch",
+    "key": "raise_incremental_loading_errors"
+  },
+  "raise_incremental_loading_errors <- false": {
+    "ok": {
+      "cognify.raise_incremental_loading_errors": false
+    }
+  },
+  "raise_incremental_loading_errors <- null": {
+    "ok": {}
+  },
+  "raise_incremental_loading_errors <- true": {
+    "ok": {
+      "cognify.raise_incremental_loading_errors": true
+    }
+  },
+  "raise_incremental_loading_errors <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "raise_incremental_loading_errors"
+  },
   "relational.host <- \"\"": {
     "ok": {
       "relational.host": ""
@@ -12785,6 +13340,501 @@
     "err": "TypeMismatch",
     "key": "relational_db_url"
   },
+  "search.allow_cypher_query <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "search.allow_cypher_query"
+  },
+  "search.allow_cypher_query <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "search.allow_cypher_query"
+  },
+  "search.allow_cypher_query <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "search.allow_cypher_query"
+  },
+  "search.allow_cypher_query <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "search.allow_cypher_query"
+  },
+  "search.allow_cypher_query <- -1": {
+    "err": "TypeMismatch",
+    "key": "search.allow_cypher_query"
+  },
+  "search.allow_cypher_query <- 0": {
+    "err": "TypeMismatch",
+    "key": "search.allow_cypher_query"
+  },
+  "search.allow_cypher_query <- 1": {
+    "err": "TypeMismatch",
+    "key": "search.allow_cypher_query"
+  },
+  "search.allow_cypher_query <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "search.allow_cypher_query"
+  },
+  "search.allow_cypher_query <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "search.allow_cypher_query"
+  },
+  "search.allow_cypher_query <- 70000": {
+    "err": "TypeMismatch",
+    "key": "search.allow_cypher_query"
+  },
+  "search.allow_cypher_query <- [1]": {
+    "err": "TypeMismatch",
+    "key": "search.allow_cypher_query"
+  },
+  "search.allow_cypher_query <- false": {
+    "ok": {
+      "search.allow_cypher_query": false
+    }
+  },
+  "search.allow_cypher_query <- null": {
+    "err": "TypeMismatch",
+    "key": "search.allow_cypher_query"
+  },
+  "search.allow_cypher_query <- true": {
+    "ok": {}
+  },
+  "search.allow_cypher_query <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "search.allow_cypher_query"
+  },
+  "search.hybrid.max_context_tokens <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "search.hybrid.max_context_tokens"
+  },
+  "search.hybrid.max_context_tokens <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "search.hybrid.max_context_tokens"
+  },
+  "search.hybrid.max_context_tokens <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "search.hybrid.max_context_tokens"
+  },
+  "search.hybrid.max_context_tokens <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "search.hybrid.max_context_tokens"
+  },
+  "search.hybrid.max_context_tokens <- -1": {
+    "err": "TypeMismatch",
+    "key": "search.hybrid.max_context_tokens"
+  },
+  "search.hybrid.max_context_tokens <- 0": {
+    "ok": {
+      "search.hybrid.max_context_tokens": 0
+    }
+  },
+  "search.hybrid.max_context_tokens <- 1": {
+    "ok": {
+      "search.hybrid.max_context_tokens": 1
+    }
+  },
+  "search.hybrid.max_context_tokens <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "search.hybrid.max_context_tokens"
+  },
+  "search.hybrid.max_context_tokens <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "search.hybrid.max_context_tokens"
+  },
+  "search.hybrid.max_context_tokens <- 70000": {
+    "ok": {
+      "search.hybrid.max_context_tokens": 70000
+    }
+  },
+  "search.hybrid.max_context_tokens <- [1]": {
+    "err": "TypeMismatch",
+    "key": "search.hybrid.max_context_tokens"
+  },
+  "search.hybrid.max_context_tokens <- false": {
+    "err": "TypeMismatch",
+    "key": "search.hybrid.max_context_tokens"
+  },
+  "search.hybrid.max_context_tokens <- null": {
+    "ok": {}
+  },
+  "search.hybrid.max_context_tokens <- true": {
+    "err": "TypeMismatch",
+    "key": "search.hybrid.max_context_tokens"
+  },
+  "search.hybrid.max_context_tokens <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "search.hybrid.max_context_tokens"
+  },
+  "search.hybrid.overflow_summary_file <- \"\"": {
+    "ok": {}
+  },
+  "search.hybrid.overflow_summary_file <- \"1\"": {
+    "ok": {
+      "search.hybrid.overflow_summary_file": "1"
+    }
+  },
+  "search.hybrid.overflow_summary_file <- \"s\"": {
+    "ok": {
+      "search.hybrid.overflow_summary_file": "s"
+    }
+  },
+  "search.hybrid.overflow_summary_file <- \"true\"": {
+    "ok": {
+      "search.hybrid.overflow_summary_file": "true"
+    }
+  },
+  "search.hybrid.overflow_summary_file <- -1": {
+    "err": "TypeMismatch",
+    "key": "search.hybrid.overflow_summary_file"
+  },
+  "search.hybrid.overflow_summary_file <- 0": {
+    "err": "TypeMismatch",
+    "key": "search.hybrid.overflow_summary_file"
+  },
+  "search.hybrid.overflow_summary_file <- 1": {
+    "err": "TypeMismatch",
+    "key": "search.hybrid.overflow_summary_file"
+  },
+  "search.hybrid.overflow_summary_file <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "search.hybrid.overflow_summary_file"
+  },
+  "search.hybrid.overflow_summary_file <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "search.hybrid.overflow_summary_file"
+  },
+  "search.hybrid.overflow_summary_file <- 70000": {
+    "err": "TypeMismatch",
+    "key": "search.hybrid.overflow_summary_file"
+  },
+  "search.hybrid.overflow_summary_file <- [1]": {
+    "err": "TypeMismatch",
+    "key": "search.hybrid.overflow_summary_file"
+  },
+  "search.hybrid.overflow_summary_file <- false": {
+    "err": "TypeMismatch",
+    "key": "search.hybrid.overflow_summary_file"
+  },
+  "search.hybrid.overflow_summary_file <- null": {
+    "err": "TypeMismatch",
+    "key": "search.hybrid.overflow_summary_file"
+  },
+  "search.hybrid.overflow_summary_file <- true": {
+    "err": "TypeMismatch",
+    "key": "search.hybrid.overflow_summary_file"
+  },
+  "search.hybrid.overflow_summary_file <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "search.hybrid.overflow_summary_file"
+  },
+  "search.hybrid.summarize_batch <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "search.hybrid.summarize_batch"
+  },
+  "search.hybrid.summarize_batch <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "search.hybrid.summarize_batch"
+  },
+  "search.hybrid.summarize_batch <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "search.hybrid.summarize_batch"
+  },
+  "search.hybrid.summarize_batch <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "search.hybrid.summarize_batch"
+  },
+  "search.hybrid.summarize_batch <- -1": {
+    "err": "TypeMismatch",
+    "key": "search.hybrid.summarize_batch"
+  },
+  "search.hybrid.summarize_batch <- 0": {
+    "ok": {
+      "search.hybrid.summarize_batch": 0
+    }
+  },
+  "search.hybrid.summarize_batch <- 1": {
+    "ok": {}
+  },
+  "search.hybrid.summarize_batch <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "search.hybrid.summarize_batch"
+  },
+  "search.hybrid.summarize_batch <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "search.hybrid.summarize_batch"
+  },
+  "search.hybrid.summarize_batch <- 70000": {
+    "ok": {
+      "search.hybrid.summarize_batch": 70000
+    }
+  },
+  "search.hybrid.summarize_batch <- [1]": {
+    "err": "TypeMismatch",
+    "key": "search.hybrid.summarize_batch"
+  },
+  "search.hybrid.summarize_batch <- false": {
+    "err": "TypeMismatch",
+    "key": "search.hybrid.summarize_batch"
+  },
+  "search.hybrid.summarize_batch <- null": {
+    "err": "TypeMismatch",
+    "key": "search.hybrid.summarize_batch"
+  },
+  "search.hybrid.summarize_batch <- true": {
+    "err": "TypeMismatch",
+    "key": "search.hybrid.summarize_batch"
+  },
+  "search.hybrid.summarize_batch <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "search.hybrid.summarize_batch"
+  },
+  "search.hybrid.summarize_overflow <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "search.hybrid.summarize_overflow"
+  },
+  "search.hybrid.summarize_overflow <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "search.hybrid.summarize_overflow"
+  },
+  "search.hybrid.summarize_overflow <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "search.hybrid.summarize_overflow"
+  },
+  "search.hybrid.summarize_overflow <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "search.hybrid.summarize_overflow"
+  },
+  "search.hybrid.summarize_overflow <- -1": {
+    "err": "TypeMismatch",
+    "key": "search.hybrid.summarize_overflow"
+  },
+  "search.hybrid.summarize_overflow <- 0": {
+    "err": "TypeMismatch",
+    "key": "search.hybrid.summarize_overflow"
+  },
+  "search.hybrid.summarize_overflow <- 1": {
+    "err": "TypeMismatch",
+    "key": "search.hybrid.summarize_overflow"
+  },
+  "search.hybrid.summarize_overflow <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "search.hybrid.summarize_overflow"
+  },
+  "search.hybrid.summarize_overflow <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "search.hybrid.summarize_overflow"
+  },
+  "search.hybrid.summarize_overflow <- 70000": {
+    "err": "TypeMismatch",
+    "key": "search.hybrid.summarize_overflow"
+  },
+  "search.hybrid.summarize_overflow <- [1]": {
+    "err": "TypeMismatch",
+    "key": "search.hybrid.summarize_overflow"
+  },
+  "search.hybrid.summarize_overflow <- false": {
+    "ok": {}
+  },
+  "search.hybrid.summarize_overflow <- null": {
+    "err": "TypeMismatch",
+    "key": "search.hybrid.summarize_overflow"
+  },
+  "search.hybrid.summarize_overflow <- true": {
+    "ok": {
+      "search.hybrid.summarize_overflow": true
+    }
+  },
+  "search.hybrid.summarize_overflow <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "search.hybrid.summarize_overflow"
+  },
+  "search.triplet_neighbor_cap <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "search.triplet_neighbor_cap"
+  },
+  "search.triplet_neighbor_cap <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "search.triplet_neighbor_cap"
+  },
+  "search.triplet_neighbor_cap <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "search.triplet_neighbor_cap"
+  },
+  "search.triplet_neighbor_cap <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "search.triplet_neighbor_cap"
+  },
+  "search.triplet_neighbor_cap <- -1": {
+    "err": "TypeMismatch",
+    "key": "search.triplet_neighbor_cap"
+  },
+  "search.triplet_neighbor_cap <- 0": {
+    "ok": {
+      "search.triplet_neighbor_cap": 0
+    }
+  },
+  "search.triplet_neighbor_cap <- 1": {
+    "ok": {
+      "search.triplet_neighbor_cap": 1
+    }
+  },
+  "search.triplet_neighbor_cap <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "search.triplet_neighbor_cap"
+  },
+  "search.triplet_neighbor_cap <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "search.triplet_neighbor_cap"
+  },
+  "search.triplet_neighbor_cap <- 70000": {
+    "ok": {
+      "search.triplet_neighbor_cap": 70000
+    }
+  },
+  "search.triplet_neighbor_cap <- [1]": {
+    "err": "TypeMismatch",
+    "key": "search.triplet_neighbor_cap"
+  },
+  "search.triplet_neighbor_cap <- false": {
+    "err": "TypeMismatch",
+    "key": "search.triplet_neighbor_cap"
+  },
+  "search.triplet_neighbor_cap <- null": {
+    "ok": {}
+  },
+  "search.triplet_neighbor_cap <- true": {
+    "err": "TypeMismatch",
+    "key": "search.triplet_neighbor_cap"
+  },
+  "search.triplet_neighbor_cap <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "search.triplet_neighbor_cap"
+  },
+  "session.abandon_after_seconds <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "session.abandon_after_seconds"
+  },
+  "session.abandon_after_seconds <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "session.abandon_after_seconds"
+  },
+  "session.abandon_after_seconds <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "session.abandon_after_seconds"
+  },
+  "session.abandon_after_seconds <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "session.abandon_after_seconds"
+  },
+  "session.abandon_after_seconds <- -1": {
+    "err": "TypeMismatch",
+    "key": "session.abandon_after_seconds"
+  },
+  "session.abandon_after_seconds <- 0": {
+    "ok": {
+      "session.abandon_after_seconds": 0
+    }
+  },
+  "session.abandon_after_seconds <- 1": {
+    "ok": {
+      "session.abandon_after_seconds": 1
+    }
+  },
+  "session.abandon_after_seconds <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "session.abandon_after_seconds"
+  },
+  "session.abandon_after_seconds <- 5000000000": {
+    "ok": {
+      "session.abandon_after_seconds": 5000000000
+    }
+  },
+  "session.abandon_after_seconds <- 70000": {
+    "ok": {
+      "session.abandon_after_seconds": 70000
+    }
+  },
+  "session.abandon_after_seconds <- [1]": {
+    "err": "TypeMismatch",
+    "key": "session.abandon_after_seconds"
+  },
+  "session.abandon_after_seconds <- false": {
+    "err": "TypeMismatch",
+    "key": "session.abandon_after_seconds"
+  },
+  "session.abandon_after_seconds <- null": {
+    "err": "TypeMismatch",
+    "key": "session.abandon_after_seconds"
+  },
+  "session.abandon_after_seconds <- true": {
+    "err": "TypeMismatch",
+    "key": "session.abandon_after_seconds"
+  },
+  "session.abandon_after_seconds <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "session.abandon_after_seconds"
+  },
+  "session.feedback_llm_timeout_ms <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "session.feedback_llm_timeout_ms"
+  },
+  "session.feedback_llm_timeout_ms <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "session.feedback_llm_timeout_ms"
+  },
+  "session.feedback_llm_timeout_ms <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "session.feedback_llm_timeout_ms"
+  },
+  "session.feedback_llm_timeout_ms <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "session.feedback_llm_timeout_ms"
+  },
+  "session.feedback_llm_timeout_ms <- -1": {
+    "err": "TypeMismatch",
+    "key": "session.feedback_llm_timeout_ms"
+  },
+  "session.feedback_llm_timeout_ms <- 0": {
+    "ok": {
+      "session.feedback_llm_timeout_ms": 0
+    }
+  },
+  "session.feedback_llm_timeout_ms <- 1": {
+    "ok": {
+      "session.feedback_llm_timeout_ms": 1
+    }
+  },
+  "session.feedback_llm_timeout_ms <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "session.feedback_llm_timeout_ms"
+  },
+  "session.feedback_llm_timeout_ms <- 5000000000": {
+    "ok": {
+      "session.feedback_llm_timeout_ms": 5000000000
+    }
+  },
+  "session.feedback_llm_timeout_ms <- 70000": {
+    "ok": {
+      "session.feedback_llm_timeout_ms": 70000
+    }
+  },
+  "session.feedback_llm_timeout_ms <- [1]": {
+    "err": "TypeMismatch",
+    "key": "session.feedback_llm_timeout_ms"
+  },
+  "session.feedback_llm_timeout_ms <- false": {
+    "err": "TypeMismatch",
+    "key": "session.feedback_llm_timeout_ms"
+  },
+  "session.feedback_llm_timeout_ms <- null": {
+    "err": "TypeMismatch",
+    "key": "session.feedback_llm_timeout_ms"
+  },
+  "session.feedback_llm_timeout_ms <- true": {
+    "err": "TypeMismatch",
+    "key": "session.feedback_llm_timeout_ms"
+  },
+  "session.feedback_llm_timeout_ms <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "session.feedback_llm_timeout_ms"
+  },
   "session.store <- \"\"": {
     "ok": {
       "session.store": ""
@@ -12848,6 +13898,70 @@
   "session.store <- {\"a\":1}": {
     "err": "TypeMismatch",
     "key": "session.store"
+  },
+  "session_abandon_after_seconds <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "session_abandon_after_seconds"
+  },
+  "session_abandon_after_seconds <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "session_abandon_after_seconds"
+  },
+  "session_abandon_after_seconds <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "session_abandon_after_seconds"
+  },
+  "session_abandon_after_seconds <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "session_abandon_after_seconds"
+  },
+  "session_abandon_after_seconds <- -1": {
+    "err": "TypeMismatch",
+    "key": "session_abandon_after_seconds"
+  },
+  "session_abandon_after_seconds <- 0": {
+    "ok": {
+      "session.abandon_after_seconds": 0
+    }
+  },
+  "session_abandon_after_seconds <- 1": {
+    "ok": {
+      "session.abandon_after_seconds": 1
+    }
+  },
+  "session_abandon_after_seconds <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "session_abandon_after_seconds"
+  },
+  "session_abandon_after_seconds <- 5000000000": {
+    "ok": {
+      "session.abandon_after_seconds": 5000000000
+    }
+  },
+  "session_abandon_after_seconds <- 70000": {
+    "ok": {
+      "session.abandon_after_seconds": 70000
+    }
+  },
+  "session_abandon_after_seconds <- [1]": {
+    "err": "TypeMismatch",
+    "key": "session_abandon_after_seconds"
+  },
+  "session_abandon_after_seconds <- false": {
+    "err": "TypeMismatch",
+    "key": "session_abandon_after_seconds"
+  },
+  "session_abandon_after_seconds <- null": {
+    "err": "TypeMismatch",
+    "key": "session_abandon_after_seconds"
+  },
+  "session_abandon_after_seconds <- true": {
+    "err": "TypeMismatch",
+    "key": "session_abandon_after_seconds"
+  },
+  "session_abandon_after_seconds <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "session_abandon_after_seconds"
   },
   "session_store <- \"\"": {
     "ok": {

@@ -28,8 +28,6 @@
 //!     fallback at `get_sessions_router.py:148-158` because SQLite has
 //!     no `EXTRACT(epoch ...)`.
 
-use std::env;
-
 use chrono::{DateTime, Duration, Utc};
 use cognee_utils::tracing_keys::{COGNEE_DB_ROW_COUNT, COGNEE_DB_SYSTEM};
 use sea_orm::{
@@ -49,34 +47,19 @@ use crate::traits::{
 use crate::types::DatabaseError;
 use crate::uuid_hex;
 
-/// Read the abandonment threshold (seconds) from the environment.
-/// Default `1800` (30 min) — Decision 12. Mirrors Python's
-/// `_abandon_after_seconds` at `metrics.py:47-52`: a non-numeric or
-/// empty value falls through to the default.
-#[allow(
-    clippy::disallowed_methods,
-    reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
-)]
-pub fn abandon_after_seconds() -> i64 {
-    env::var("SESSION_ABANDON_AFTER_SECONDS")
-        .ok()
-        .and_then(|s| {
-            let trimmed = s.trim().to_string();
-            if trimmed.is_empty() {
-                None
-            } else {
-                trimmed.parse::<i64>().ok()
-            }
-        })
-        .unwrap_or(1800)
-}
+/// The default abandonment threshold in seconds (30 min) — Decision 12,
+/// Python's `_abandon_after_seconds` default at `metrics.py:47-52`. Callers
+/// pass the configured `session.abandon_after_seconds`
+/// (`SESSION_ABANDON_AFTER_SECONDS`).
+pub const DEFAULT_ABANDON_AFTER_SECONDS: u64 = 1800;
 
 /// Compute the `<` cutoff for `last_activity_at` that flips a running
 /// row to `abandoned`. Centralized so callers (effective-status
 /// expression in raw SQL, status-bucket query, list query) all use the
 /// same wall-clock snapshot.
-fn abandon_threshold_ts() -> DateTime<Utc> {
-    Utc::now() - Duration::seconds(abandon_after_seconds())
+fn abandon_threshold_ts(abandon_after_seconds: u64) -> DateTime<Utc> {
+    let seconds = i64::try_from(abandon_after_seconds).unwrap_or(i64::MAX);
+    Utc::now() - Duration::try_seconds(seconds).unwrap_or(Duration::MAX)
 }
 
 /// Render the `effective_status` SQL fragment used inside SELECT lists.
@@ -362,6 +345,7 @@ pub async fn get_session_row(
     user_id: Uuid,
     permitted_dataset_ids: &[Uuid],
     prefer_other_owner: bool,
+    abandon_after_seconds: u64,
 ) -> Result<Option<SessionRowWithStatus>, DatabaseError> {
     Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
     let user_hex = uuid_hex::to_hex(user_id);
@@ -402,7 +386,7 @@ pub async fn get_session_row(
         rows[0].clone()
     };
 
-    let threshold = abandon_threshold_ts();
+    let threshold = abandon_threshold_ts(abandon_after_seconds);
     let effective = compute_effective_status(&chosen, threshold);
     Span::current().record(COGNEE_DB_ROW_COUNT, 1i64);
     Ok(Some(SessionRowWithStatus {
@@ -476,7 +460,7 @@ pub async fn list_session_rows(
 ) -> Result<SessionListPage, DatabaseError> {
     Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
     let backend = db.get_database_backend();
-    let threshold = abandon_threshold_ts();
+    let threshold = abandon_threshold_ts(filters.abandon_after_seconds);
     let (eff_sql, eff_param) = effective_status_sql_fragment(threshold);
     let user_hex = uuid_hex::to_hex(filters.user_id);
 
@@ -636,6 +620,7 @@ pub async fn aggregate_stats(
     user_id: Uuid,
     permitted_dataset_ids: &[Uuid],
     since: Option<DateTime<Utc>>,
+    abandon_after_seconds: u64,
 ) -> Result<SessionStats, DatabaseError> {
     Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
     let backend = db.get_database_backend();
@@ -734,7 +719,7 @@ pub async fn aggregate_stats(
     };
 
     // ---- (c) Status buckets ---------------------------------------------
-    let threshold = abandon_threshold_ts();
+    let threshold = abandon_threshold_ts(abandon_after_seconds);
     let (eff_sql, eff_param) = effective_status_sql_fragment(threshold);
     // SELECT params: eff_param first, then base_params (where).
     let mut bucket_params: Vec<Value> = Vec::with_capacity(base_params.len() + 1);
@@ -934,6 +919,7 @@ impl SessionLifecycleDb for DatabaseConnection {
         user_id: Uuid,
         permitted_dataset_ids: &[Uuid],
         prefer_other_owner: bool,
+        abandon_after_seconds: u64,
     ) -> Result<Option<SessionRowWithStatus>, DatabaseError> {
         get_session_row(
             self,
@@ -941,6 +927,7 @@ impl SessionLifecycleDb for DatabaseConnection {
             user_id,
             permitted_dataset_ids,
             prefer_other_owner,
+            abandon_after_seconds,
         )
         .await
     }
@@ -957,8 +944,16 @@ impl SessionLifecycleDb for DatabaseConnection {
         user_id: Uuid,
         permitted_dataset_ids: &[Uuid],
         since: Option<DateTime<Utc>>,
+        abandon_after_seconds: u64,
     ) -> Result<SessionStats, DatabaseError> {
-        aggregate_stats(self, user_id, permitted_dataset_ids, since).await
+        aggregate_stats(
+            self,
+            user_id,
+            permitted_dataset_ids,
+            since,
+            abandon_after_seconds,
+        )
+        .await
     }
 
     async fn cost_by_model(

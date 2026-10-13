@@ -1,9 +1,10 @@
-//! Chunking configuration — tokenizer selection via environment variables.
+//! Chunking configuration — tokenizer selection.
 //!
-//! [`TokenCounterKind`] selects which token counting implementation to use based on
-//! environment variables and the active embedding provider. Call [`TokenCounterKind::from_env`]
-//! at pipeline construction time to pick the best available counter automatically, then
-//! call [`TokenCounterKind::build`] to construct the counter.
+//! [`TokenCounterKind`] selects which token counting implementation to use from the
+//! configured counter and the active embedding provider. Call
+//! [`TokenCounterKind::resolve`] at pipeline construction time (cognee does it when it
+//! lowers `Settings` into a `CognifyConfig`), then [`TokenCounterKind::build`] to
+//! construct the counter.
 
 use std::path::PathBuf;
 
@@ -29,7 +30,7 @@ pub enum TokenCounterKind {
 }
 
 impl TokenCounterKind {
-    /// Determine the best available token counter from the environment.
+    /// Determine the best available token counter from configuration.
     ///
     /// Mirrors Python's `LiteLLMEmbeddingEngine.get_tokenizer()` logic, which selects a
     /// tokenizer based on the provider and stores it on the engine instance. Python's
@@ -38,82 +39,70 @@ impl TokenCounterKind {
     /// decouples them (`TokenCounterKind` is independent of the engine), but the selection
     /// logic below preserves the same provider → tokenizer mapping.
     ///
-    /// Priority order (highest wins):
-    /// 1. `COGNEE_TOKEN_COUNTER=tiktoken` → TikToken
-    /// 2. `COGNEE_TOKEN_COUNTER=huggingface` or `COGNEE_TOKEN_COUNTER=hf` → check
-    ///    `HUGGINGFACE_TOKENIZER`
-    /// 3. `HUGGINGFACE_TOKENIZER` env var is set → HuggingFace { model_id }
-    /// 4. `EMBEDDING_PROVIDER=onnx` or `fastembed` and `EMBEDDING_TOKENIZER_PATH` is set
-    ///    and the file exists → HuggingFaceFile
-    /// 5. `EMBEDDING_PROVIDER=openai` or `openai_compatible` → TikToken
-    /// 6. `EMBEDDING_PROVIDER=ollama` and `HUGGINGFACE_TOKENIZER` set → HuggingFace
+    /// Inputs (empty means unset): `token_counter` (`cognify.token_counter`),
+    /// `hf_tokenizer` (a HuggingFace model id), `embedding_provider` and
+    /// `tokenizer_path` (the ONNX tokenizer file). Priority order (highest wins):
+    /// 1. `token_counter = tiktoken` → TikToken; `word` → Word
+    /// 2. `token_counter = huggingface` / `hf` with an `hf_tokenizer` → HuggingFace
+    /// 3. an `hf_tokenizer` → HuggingFace { model_id }
+    /// 4. provider `onnx` / `fastembed` with an existing `tokenizer_path` file →
+    ///    HuggingFaceFile
+    /// 5. provider `openai` / `openai_compatible` / `bedrock` (and an empty
+    ///    provider: Python's default is `openai`) → TikToken
+    /// 6. provider `ollama` with an `hf_tokenizer` → HuggingFace
     /// 7. Fallback → Word
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
-    )]
-    pub fn from_env() -> Self {
-        // Priority 1 & 2: explicit COGNEE_TOKEN_COUNTER override
-        if let Ok(counter) = std::env::var("COGNEE_TOKEN_COUNTER") {
-            match counter.to_lowercase().as_str() {
-                "tiktoken" => return TokenCounterKind::TikToken,
-                "word" => return TokenCounterKind::Word,
-                "huggingface" | "hf" => {
-                    if let Ok(model_id) = std::env::var("HUGGINGFACE_TOKENIZER")
-                        && !model_id.trim().is_empty()
-                    {
-                        return TokenCounterKind::HuggingFace { model_id };
-                    }
-                    // explicit hf requested but no model id — fall through to other priorities
+    pub fn resolve(
+        token_counter: &str,
+        hf_tokenizer: &str,
+        embedding_provider: &str,
+        tokenizer_path: &str,
+    ) -> Self {
+        let hf_model = || {
+            let id = hf_tokenizer.trim();
+            (!id.is_empty()).then(|| TokenCounterKind::HuggingFace {
+                model_id: id.to_string(),
+            })
+        };
+        // Priority 1 & 2: explicit token counter override
+        match token_counter.trim().to_lowercase().as_str() {
+            "tiktoken" => return TokenCounterKind::TikToken,
+            "word" => return TokenCounterKind::Word,
+            // explicit hf without a model id falls through to other priorities
+            "huggingface" | "hf" => {
+                if let Some(kind) = hf_model() {
+                    return kind;
                 }
-                _ => {}
             }
+            _ => {}
         }
 
-        // Priority 3: HUGGINGFACE_TOKENIZER set (any provider)
-        if let Ok(model_id) = std::env::var("HUGGINGFACE_TOKENIZER")
-            && !model_id.trim().is_empty()
-        {
-            return TokenCounterKind::HuggingFace { model_id };
+        // Priority 3: a HuggingFace tokenizer (any provider)
+        if let Some(kind) = hf_model() {
+            return kind;
         }
 
-        // Priority 4–6: based on EMBEDDING_PROVIDER
-        // Python's default embedding provider is `openai`, whose default tokenizer is
-        // tiktoken cl100k_base. Match that when EMBEDDING_PROVIDER is unset so an
-        // out-of-box OpenAI-family setup counts BPE tokens, not whitespace.
-        // Users who explicitly set EMBEDDING_PROVIDER=onnx (or point to a tokenizer
-        // file via EMBEDDING_TOKENIZER_PATH) get the HuggingFaceFile path as before.
-        let provider = std::env::var("EMBEDDING_PROVIDER")
-            .unwrap_or_else(|_| "openai".to_string())
-            .to_lowercase();
-
+        // Priority 4–6: based on the embedding provider. Python's default
+        // embedding provider is `openai`, whose default tokenizer is tiktoken
+        // cl100k_base, so an unset provider counts BPE tokens, not whitespace.
+        let provider = embedding_provider.trim().to_lowercase();
         match provider.as_str() {
             "onnx" | "fastembed" => {
                 // Try to reuse the ONNX engine's tokenizer file
-                if let Ok(path) = std::env::var("EMBEDDING_TOKENIZER_PATH") {
-                    let p = PathBuf::from(&path);
-                    if p.exists() {
-                        return TokenCounterKind::HuggingFaceFile { path: p };
-                    }
+                let p = PathBuf::from(tokenizer_path.trim());
+                if !tokenizer_path.trim().is_empty() && p.exists() {
+                    return TokenCounterKind::HuggingFaceFile { path: p };
                 }
                 // No tokenizer file available — fall through to Word
                 TokenCounterKind::Word
             }
-            "openai" | "openai_compatible" => TokenCounterKind::TikToken,
+            "" | "openai" | "openai_compatible" => TokenCounterKind::TikToken,
             // Titan's tokenizer is not published, so no counter here is exact.
             // cl100k BPE is the closest available proxy: both are byte-level BPE
             // over a ~100k vocabulary and agree within a few percent on prose,
             // where whitespace counting is off by ~35% and in the wrong unit
             // entirely. `fit_token_budget` absorbs the residual difference.
             "bedrock" => TokenCounterKind::TikToken,
-            "ollama" => {
-                if let Ok(model_id) = std::env::var("HUGGINGFACE_TOKENIZER")
-                    && !model_id.trim().is_empty()
-                {
-                    return TokenCounterKind::HuggingFace { model_id };
-                }
-                TokenCounterKind::Word
-            }
+            // ollama without a HuggingFace tokenizer (priority 3 above)
             _ => TokenCounterKind::Word,
         }
     }
@@ -270,43 +259,52 @@ impl TokenCounterKind {
 mod tests {
     use super::*;
 
-    /// When no env vars are set the default provider is treated as `openai`, which maps
-    /// to `TikToken` — matching Python's out-of-box cl100k_base tokenizer.
-    ///
-    /// # Safety
-    /// `std::env::remove_var` is marked `unsafe` in edition 2024.  Tests run
-    /// single-threaded under the project harness (`--test-threads=1`), so there
-    /// are no concurrent readers of the modified env vars.
+    /// With nothing configured the default provider is treated as `openai`, which
+    /// maps to `TikToken` — matching Python's out-of-box cl100k_base tokenizer.
     #[test]
-    fn from_env_defaults_to_tiktoken_for_openai_family() {
-        unsafe {
-            std::env::remove_var("EMBEDDING_PROVIDER");
-            std::env::remove_var("COGNEE_TOKEN_COUNTER");
-            std::env::remove_var("HUGGINGFACE_TOKENIZER");
-            std::env::remove_var("EMBEDDING_TOKENIZER_PATH");
-        }
+    fn resolve_defaults_to_tiktoken_for_openai_family() {
         assert!(matches!(
-            TokenCounterKind::from_env(),
+            TokenCounterKind::resolve("", "", "", ""),
+            TokenCounterKind::TikToken
+        ));
+        assert!(matches!(
+            TokenCounterKind::resolve("", "", "openai", ""),
             TokenCounterKind::TikToken
         ));
     }
 
-    /// Explicitly setting EMBEDDING_PROVIDER=onnx still falls back to Word when
-    /// no tokenizer file is available (existing ONNX-user behaviour is unchanged).
+    /// The onnx provider falls back to Word when no tokenizer file is available.
     #[test]
-    fn from_env_onnx_without_tokenizer_falls_back_to_word() {
-        unsafe {
-            std::env::set_var("EMBEDDING_PROVIDER", "onnx");
-            std::env::remove_var("COGNEE_TOKEN_COUNTER");
-            std::env::remove_var("HUGGINGFACE_TOKENIZER");
-            std::env::remove_var("EMBEDDING_TOKENIZER_PATH");
-        }
+    fn resolve_onnx_without_tokenizer_falls_back_to_word() {
         assert!(matches!(
-            TokenCounterKind::from_env(),
+            TokenCounterKind::resolve("", "", "onnx", ""),
             TokenCounterKind::Word
         ));
-        // Restore
-        unsafe { std::env::remove_var("EMBEDDING_PROVIDER") };
+        assert!(matches!(
+            TokenCounterKind::resolve("", "", "onnx", "/definitely/not/here.json"),
+            TokenCounterKind::Word
+        ));
+    }
+
+    /// An explicit counter wins; `hf` without a model id falls through.
+    #[test]
+    fn resolve_honours_the_explicit_counter() {
+        assert!(matches!(
+            TokenCounterKind::resolve("word", "", "openai", ""),
+            TokenCounterKind::Word
+        ));
+        assert!(matches!(
+            TokenCounterKind::resolve("hf", "", "openai", ""),
+            TokenCounterKind::TikToken
+        ));
+        assert!(matches!(
+            TokenCounterKind::resolve("", "bert-base-uncased", "ollama", ""),
+            TokenCounterKind::HuggingFace { .. }
+        ));
+        assert!(matches!(
+            TokenCounterKind::resolve("", "", "ollama", ""),
+            TokenCounterKind::Word
+        ));
     }
 
     #[test]
@@ -354,19 +352,9 @@ mod tests {
     /// derives its budget from the embedding model's TOKEN limit, so a word
     /// counter spends it in the wrong unit — 8191 words measured ~11100 Titan
     /// tokens and every embed call 400d against Titan v2's 8192 cap.
-    ///
-    /// # Safety
-    /// Same as the sibling tests: env mutation under a single-threaded harness.
     #[test]
     fn bedrock_gets_a_bpe_counter_not_whitespace() {
-        unsafe {
-            std::env::remove_var("COGNEE_TOKEN_COUNTER");
-            std::env::remove_var("HUGGINGFACE_TOKENIZER");
-            std::env::remove_var("EMBEDDING_TOKENIZER_PATH");
-            std::env::set_var("EMBEDDING_PROVIDER", "bedrock");
-        }
-        let kind = TokenCounterKind::from_env();
-        unsafe { std::env::remove_var("EMBEDDING_PROVIDER") };
+        let kind = TokenCounterKind::resolve("", "", "bedrock", "");
         assert!(
             matches!(kind, TokenCounterKind::TikToken),
             "bedrock must count BPE tokens, not whitespace words: {kind:?}",

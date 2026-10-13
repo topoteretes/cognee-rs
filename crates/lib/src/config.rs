@@ -339,6 +339,95 @@ impl Settings {
         self.section()
     }
 
+    /// Lower these settings into the [`CognifyConfig`](cognee_cognify::CognifyConfig)
+    /// a cognify run starts from: chunking, parallelism, the token counter
+    /// (`cognify.token_counter`, else derived from the embedding provider) and
+    /// the failure policy (the `cognify` section). Per-call options are applied
+    /// on top by the caller.
+    pub fn cognify_config(&self) -> cognee_cognify::CognifyConfig {
+        use cognee_cognify::{FailureStop, RollbackScope};
+
+        let cognify = self.section::<cognee_components::CognifySettings>();
+        let embedding = self.embedding();
+        let onnx = self.section::<cognee_components::OnnxEmbeddingConfig>();
+        let ollama = self.section::<cognee_components::OllamaEmbeddingConfig>();
+        let token_counter = cognee_chunking::TokenCounterKind::resolve(
+            &cognify.token_counter,
+            ollama.huggingface_tokenizer.as_deref().unwrap_or_default(),
+            &embedding.provider,
+            &onnx.tokenizer_path,
+        );
+        let chunk_strategy = match self.chunk_strategy.to_uppercase().as_str() {
+            "RECURSIVE" => cognee_cognify::ChunkStrategy::Recursive,
+            _ => cognee_cognify::ChunkStrategy::Paragraph,
+        };
+        let mut cfg = cognee_cognify::CognifyConfig::default()
+            .with_chunk_size_opt(self.chunk_size.map(|n| n as usize))
+            .with_chunk_overlap(self.chunk_overlap as usize)
+            .with_chunk_strategy(chunk_strategy)
+            .with_max_parallel_extractions(self.llm_max_parallel_requests.max(1) as usize)
+            .with_token_counter(token_counter)
+            .with_token_count_mode(cognee_chunking::TokenCountMode::from_legacy_flag(
+                cognify.legacy_per_word_token_count,
+            ))
+            .with_summarization_failure_tolerance(cognify.tolerate_summarization_failures);
+        if let Some(raise) = cognify.raise_incremental_loading_errors {
+            cfg = cfg.with_failure_stop(FailureStop::from_raise_errors(raise));
+        }
+        if !cognify.rollback_scope.trim().is_empty() {
+            match RollbackScope::parse(&cognify.rollback_scope) {
+                Some(scope) => cfg = cfg.with_rollback_scope(scope),
+                None => tracing::warn!(
+                    value = cognify.rollback_scope,
+                    "cognify.rollback_scope: expected `whole_run` or `failed_items`; using the default"
+                ),
+            }
+        }
+        let ratio = cognify.max_chunk_failure_ratio;
+        if ratio.is_finite() && ratio > 0.0 && ratio <= 1.0 {
+            cfg = cfg.with_chunk_failure_ratio_threshold(ratio);
+        } else {
+            tracing::warn!(
+                ratio,
+                "cognify.max_chunk_failure_ratio must be in (0, 1]; using the default"
+            );
+        }
+        if cognify.failure_report_cap > 0 {
+            cfg = cfg.with_failure_report_cap(cognify.failure_report_cap as usize);
+        }
+        cfg
+    }
+
+    /// The retriever tuning a `SearchBuilder` is built with (the `search` and
+    /// `search.hybrid` sections).
+    pub fn search_tuning(&self) -> cognee_search::SearchTuning {
+        let search = self.section::<cognee_components::SearchSettings>();
+        let hybrid = self.section::<cognee_components::HybridSearchSettings>();
+        let file = hybrid.overflow_summary_file.trim();
+        cognee_search::SearchTuning {
+            allow_cypher_query: search.allow_cypher_query,
+            triplet_neighbor_cap: search
+                .triplet_neighbor_cap
+                .filter(|cap| *cap > 0)
+                .map(|cap| cap as usize),
+            hybrid: cognee_search::HybridBudget {
+                max_context_tokens: hybrid.max_context_tokens,
+                summarize_overflow: hybrid.summarize_overflow,
+                summarize_batch: (hybrid.summarize_batch as usize).max(1),
+                overflow_summary_file: (!file.is_empty()).then(|| std::path::PathBuf::from(file)),
+            },
+        }
+    }
+
+    /// How long a session manager's trace-step feedback LLM call may take
+    /// (`session.feedback_llm_timeout_ms`).
+    pub fn feedback_llm_timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(
+            self.section::<cognee_components::SessionConfig>()
+                .feedback_llm_timeout_ms,
+        )
+    }
+
     /// The relational kind section (`relational.*`): backend, URL and
     /// connection parts.
     pub fn relational(&self) -> cognee_components::RelationalConfig {
@@ -2575,6 +2664,83 @@ mod tests {
     /// `overlay_from` reads only the `EnvSource` it is given — no process-env
     /// mutation, so no `#[serial]` — and keeps `overlay_from_env`'s rules:
     /// aliases fall back, empty values count as unset.
+    /// The engine sections lower into the pipeline configs: the env vars the
+    /// engines used to read themselves reach `CognifyConfig`, `SearchTuning`
+    /// and the session manager's timeout through `Settings`.
+    #[test]
+    fn engine_sections_lower_into_the_pipeline_configs() {
+        use cognee_cognify::{FailureStop, RollbackScope};
+
+        let env = MapEnv::new()
+            .with("COGNEE_TOKEN_COUNTER", "word")
+            .with("COGNEE_LEGACY_PER_WORD_TOKEN_COUNT", "1")
+            .with("RAISE_INCREMENTAL_LOADING_ERRORS", "false")
+            .with("COGNEE_COGNIFY_ROLLBACK_SCOPE", "failed-items")
+            .with("COGNEE_COGNIFY_TOLERATE_SUMMARIZATION_FAILURES", "true")
+            .with("COGNEE_COGNIFY_MAX_CHUNK_FAILURE_RATIO", "0.5")
+            .with("COGNEE_COGNIFY_FAILURE_REPORT_CAP", "7")
+            .with("ALLOW_CYPHER_QUERY", "false")
+            .with("COGNEE_TRIPLET_NEIGHBOR_CAP", "12")
+            .with("COGNEE_HYBRID_MAX_CONTEXT_TOKENS", "0")
+            .with("COGNEE_HYBRID_SUMMARIZE_OVERFLOW", "1")
+            .with("COGNEE_HYBRID_SUMMARIZE_BATCH", "4")
+            .with("COGNEE_FEEDBACK_LLM_TIMEOUT_MS", "250");
+        let mut s = Settings::default();
+        s.overlay_from(&env);
+
+        let cognify = s.cognify_config();
+        assert!(matches!(
+            cognify.token_counter_kind,
+            cognee_chunking::TokenCounterKind::Word
+        ));
+        assert_eq!(
+            cognify.token_count_mode,
+            cognee_chunking::TokenCountMode::PerWord
+        );
+        assert_eq!(cognify.failure_stop, FailureStop::RunToEnd);
+        assert_eq!(cognify.rollback_scope, RollbackScope::FailedItems);
+        assert!(cognify.tolerate_summarization_failures);
+        assert_eq!(cognify.chunk_failure_ratio_threshold, 0.5);
+        assert_eq!(cognify.failure_report_cap, 7);
+
+        let tuning = s.search_tuning();
+        assert!(!tuning.allow_cypher_query);
+        assert_eq!(tuning.triplet_neighbor_cap, Some(12));
+        assert_eq!(tuning.hybrid.max_context_tokens, Some(0));
+        assert!(tuning.hybrid.summarize_overflow);
+        assert_eq!(tuning.hybrid.summarize_batch, 4);
+
+        assert_eq!(
+            s.feedback_llm_timeout(),
+            std::time::Duration::from_millis(250)
+        );
+    }
+
+    /// With nothing configured the lowered configs keep the engines'
+    /// historical defaults, and an out-of-range failure ratio falls back.
+    #[test]
+    fn engine_sections_default_to_the_historical_behaviour() {
+        let mut s = Settings::default();
+        s.overlay_from(&MapEnv::new());
+        let cognify = s.cognify_config();
+        let default = cognee_cognify::CognifyConfig::default();
+        assert_eq!(cognify.failure_stop, default.failure_stop);
+        assert_eq!(cognify.rollback_scope, default.rollback_scope);
+        assert_eq!(
+            cognify.chunk_failure_ratio_threshold,
+            default.chunk_failure_ratio_threshold
+        );
+        assert_eq!(s.search_tuning(), cognee_search::SearchTuning::default());
+        assert_eq!(s.feedback_llm_timeout(), std::time::Duration::from_secs(8));
+
+        let mut s = Settings::default();
+        s.overlay_from(&MapEnv::new().with("COGNEE_COGNIFY_MAX_CHUNK_FAILURE_RATIO", "3"));
+        assert_eq!(
+            s.cognify_config().chunk_failure_ratio_threshold,
+            default.chunk_failure_ratio_threshold
+        );
+    }
+
     #[test]
     fn overlay_from_reads_only_the_given_env_source() {
         let env = MapEnv::new()

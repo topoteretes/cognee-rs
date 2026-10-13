@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 /// what Python 1.5.x still does (`get_word_size(word)` per word, from
 /// `cognee/tasks/chunks/chunk_by_sentence.py`). Selecting it restores byte-level
 /// chunk-boundary parity with Python at the cost of the over-count. It is
-/// opt-in and off by default; see [`TokenCountMode::from_env`].
+/// opt-in and off by default; see [`TokenCountMode::from_legacy_flag`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TokenCountMode {
@@ -31,28 +31,15 @@ pub enum TokenCountMode {
 }
 
 impl TokenCountMode {
-    /// Environment variable that opts back in to the legacy per-word count.
-    pub const ENV_VAR: &'static str = "COGNEE_LEGACY_PER_WORD_TOKEN_COUNT";
-
-    /// Read the mode from the environment.
-    ///
-    /// Returns [`TokenCountMode::PerWord`] only when `COGNEE_LEGACY_PER_WORD_TOKEN_COUNT`
-    /// is set to a truthy value (`1`, `true`, `yes`, `on`, case-insensitive).
-    /// Anything else — unset, empty, `0`, or unrecognised — is
-    /// [`TokenCountMode::Span`], so the correct count is what an unconfigured
-    /// deployment gets.
+    /// The mode for the `cognify.legacy_per_word_token_count` setting:
+    /// [`TokenCountMode::PerWord`] only when the legacy count is asked for, so
+    /// the correct count is what an unconfigured deployment gets.
     #[must_use]
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
-    )]
-    pub fn from_env() -> Self {
-        match std::env::var(Self::ENV_VAR) {
-            Ok(v) => match v.trim().to_ascii_lowercase().as_str() {
-                "1" | "true" | "yes" | "on" => TokenCountMode::PerWord,
-                _ => TokenCountMode::Span,
-            },
-            Err(_) => TokenCountMode::Span,
+    pub fn from_legacy_flag(legacy_per_word: bool) -> Self {
+        if legacy_per_word {
+            TokenCountMode::PerWord
+        } else {
+            TokenCountMode::Span
         }
     }
 }
@@ -194,39 +181,18 @@ mod tests {
     }
 
     /// The correct count is what an unconfigured deployment gets. Only an
-    /// explicit, truthy opt-in brings the legacy over-count back.
-    ///
-    /// # Safety
-    /// `std::env::set_var` / `remove_var` are `unsafe` in edition 2024. Tests
-    /// run single-threaded under the project harness (`--test-threads=1`), so
-    /// there are no concurrent readers of the modified variable.
+    /// explicit opt-in brings the legacy over-count back.
     #[test]
     fn legacy_per_word_counting_is_opt_in() {
-        unsafe { std::env::remove_var(TokenCountMode::ENV_VAR) };
-        assert_eq!(TokenCountMode::from_env(), TokenCountMode::Span);
         assert_eq!(TokenCountMode::default(), TokenCountMode::Span);
-
-        for truthy in ["1", "true", "TRUE", "Yes", " on "] {
-            unsafe { std::env::set_var(TokenCountMode::ENV_VAR, truthy) };
-            assert_eq!(
-                TokenCountMode::from_env(),
-                TokenCountMode::PerWord,
-                "{truthy:?} should opt in to the legacy count",
-            );
-        }
-
-        // Anything unrecognised means the default, not the legacy behaviour:
-        // a typo must not silently halve the chunk size.
-        for falsy in ["0", "false", "no", "", "off", "maybe"] {
-            unsafe { std::env::set_var(TokenCountMode::ENV_VAR, falsy) };
-            assert_eq!(
-                TokenCountMode::from_env(),
-                TokenCountMode::Span,
-                "{falsy:?} should leave the default in place",
-            );
-        }
-
-        unsafe { std::env::remove_var(TokenCountMode::ENV_VAR) };
+        assert_eq!(
+            TokenCountMode::from_legacy_flag(false),
+            TokenCountMode::Span
+        );
+        assert_eq!(
+            TokenCountMode::from_legacy_flag(true),
+            TokenCountMode::PerWord
+        );
     }
 }
 

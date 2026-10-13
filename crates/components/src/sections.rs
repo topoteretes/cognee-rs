@@ -621,6 +621,16 @@ config_section! {
         pub store: String = "relational".to_string() => {
             env: ["COGNEE_SESSION_STORE"], alias: ["session_store"], secret: false,
         },
+        /// How long the LLM call that writes a trace step's session feedback
+        /// may take, in milliseconds, before the step is stored without it.
+        pub feedback_llm_timeout_ms: u64 = 8000 => {
+            env: ["COGNEE_FEEDBACK_LLM_TIMEOUT_MS"], alias: [], secret: false,
+        },
+        /// A session idle this long (seconds) counts as abandoned in session
+        /// listings and statistics.
+        pub abandon_after_seconds: u64 = 1800 => {
+            env: ["SESSION_ABANDON_AFTER_SECONDS"], alias: ["session_abandon_after_seconds"], secret: false,
+        },
     }
 }
 
@@ -655,6 +665,88 @@ config_section! {
         /// Redis password.
         pub password: String = String::new() => {
             env: ["CACHE_PASSWORD"], alias: ["cache_password"], secret: true,
+        },
+    }
+}
+
+config_section! {
+    /// The cognify pipeline: token counting and failure handling. An engine
+    /// section, registered with the kind sections.
+    pub struct CognifySettings in "cognify" {
+        /// Token counter for chunk sizing: `tiktoken`, `word`, `huggingface`
+        /// (uses `embedding.ollama.huggingface_tokenizer`). Empty derives it
+        /// from the embedding provider.
+        pub token_counter: String = String::new() => {
+            env: ["COGNEE_TOKEN_COUNTER"], alias: [], secret: false,
+        },
+        /// Restore the legacy per-word token count (over-counts; off).
+        pub legacy_per_word_token_count: bool = false => {
+            env: ["COGNEE_LEGACY_PER_WORD_TOKEN_COUNT"], alias: [], secret: false,
+        },
+        /// Stop the run at the first failed data item (`true`, the default
+        /// when unset) or process every item and report (`false`).
+        pub raise_incremental_loading_errors: Option<bool> = None => {
+            env: ["RAISE_INCREMENTAL_LOADING_ERRORS", "COGNEE_RAISE_INCREMENTAL_LOADING_ERRORS"],
+            alias: ["raise_incremental_loading_errors"], secret: false,
+        },
+        /// What a failed run rolls back: `whole_run` (default) or
+        /// `failed_items`.
+        pub rollback_scope: String = String::new() => {
+            env: ["COGNEE_COGNIFY_ROLLBACK_SCOPE"], alias: [], secret: false,
+        },
+        /// Keep a data item whose summarization failed instead of failing it.
+        pub tolerate_summarization_failures: bool = false => {
+            env: ["COGNEE_COGNIFY_TOLERATE_SUMMARIZATION_FAILURES"], alias: [], secret: false,
+        },
+        /// Share of failed chunks (0, 1] above which a data item fails.
+        pub max_chunk_failure_ratio: f64 = 0.05 => {
+            env: ["COGNEE_COGNIFY_MAX_CHUNK_FAILURE_RATIO"], alias: [], secret: false,
+        },
+        /// Failures listed individually in a run's report (> 0).
+        pub failure_report_cap: u32 = 100 => {
+            env: ["COGNEE_COGNIFY_FAILURE_REPORT_CAP"], alias: [], secret: false,
+        },
+    }
+}
+
+config_section! {
+    /// Search and retrieval. An engine section, registered with the kind
+    /// sections.
+    pub struct SearchSettings in "search" {
+        /// Allow the CYPHER and NATURAL_LANGUAGE search types to run graph
+        /// queries (Python's `ALLOW_CYPHER_QUERY`).
+        pub allow_cypher_query: bool = true => {
+            env: ["ALLOW_CYPHER_QUERY"], alias: ["allow_cypher_query"], secret: false,
+        },
+        /// Neighbours expanded per seed node in triplet search; unset or 0
+        /// is uncapped.
+        pub triplet_neighbor_cap: Option<u32> = None => {
+            env: ["COGNEE_TRIPLET_NEIGHBOR_CAP"], alias: [], secret: false,
+        },
+    }
+}
+
+config_section! {
+    /// The HYBRID_COMPLETION retriever's context budget. An engine section.
+    pub struct HybridSearchSettings in "search.hybrid" {
+        /// Context budget in tokens; unset uses the LLM's context length, 0
+        /// turns budgeting off.
+        pub max_context_tokens: Option<u32> = None => {
+            env: ["COGNEE_HYBRID_MAX_CONTEXT_TOKENS"], alias: [], secret: false,
+        },
+        /// Summarize passages that overflow the budget instead of dropping
+        /// them.
+        pub summarize_overflow: bool = false => {
+            env: ["COGNEE_HYBRID_SUMMARIZE_OVERFLOW"], alias: [], secret: false,
+        },
+        /// Overflow passages summarized per LLM call (>= 1).
+        pub summarize_batch: u32 = 1 => {
+            env: ["COGNEE_HYBRID_SUMMARIZE_BATCH"], alias: [], secret: false,
+        },
+        /// JSON file of precomputed overflow summaries (passage → summary);
+        /// empty means none.
+        pub overflow_summary_file: String = String::new() => {
+            env: ["COGNEE_HYBRID_OVERFLOW_SUMMARY_FILE"], alias: [], secret: false,
         },
     }
 }

@@ -52,39 +52,23 @@ pub(crate) const CHARS_PER_TOKEN: usize = 3;
 /// still guarantees the passages a third of the budget.
 const GRAPH_SECTION_SHARE: f64 = 2.0 / 3.0;
 
-/// Overrides the window the budget is computed from.
-///
-/// Unset — the normal case — the retriever budgets against whatever the LLM
-/// adapter reports as its context length, which is the number that is
-/// actually true. This exists because that number is a property of a model
-/// file and a runtime, so it is exactly the kind of thing that is wrong on
-/// somebody's device, and because comparing a budgeted answer against an
-/// unbudgeted one on the same build is the only honest way to tell whether
-/// the budgeting helped. `0` turns the budget off entirely.
-const MAX_CONTEXT_TOKENS_ENV: &str = "COGNEE_HYBRID_MAX_CONTEXT_TOKENS";
-
 /// The character budget available to the context sections.
 ///
 /// `max_context_tokens` is the model's whole window — prompt *and* answer —
 /// so the completion reserve comes off it first, then the prompt scaffolding
 /// (system prompt, question, template) that is not negotiable.
 ///
-/// [`usize::MAX`] means "do not budget": either the model's window is bigger
-/// than anything the retriever can emit, or someone set
-/// `COGNEE_HYBRID_MAX_CONTEXT_TOKENS=0`.
-#[allow(
-    clippy::disallowed_methods,
-    reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
-)]
+/// `override_tokens` replaces the window (`search.hybrid.max_context_tokens`;
+/// see [`super::HybridBudget::max_context_tokens`]). [`usize::MAX`] means "do
+/// not budget": either the model's window is bigger than anything the
+/// retriever can emit, or the override is `0`.
 pub(crate) fn context_budget_chars(
     max_context_tokens: u32,
     reserved_completion_tokens: u32,
     overhead_chars: usize,
+    override_tokens: Option<u32>,
 ) -> usize {
-    let max_context_tokens = match std::env::var(MAX_CONTEXT_TOKENS_ENV)
-        .ok()
-        .and_then(|value| value.trim().parse::<u32>().ok())
-    {
+    let max_context_tokens = match override_tokens {
         Some(0) => return usize::MAX,
         Some(override_tokens) => override_tokens,
         None => max_context_tokens,
@@ -154,13 +138,16 @@ mod tests {
     fn budget_subtracts_the_completion_reserve_and_the_scaffolding() {
         // 4096-token window, 1024 held back for the answer, 300 chars of
         // system prompt and question: 3072 * 3 - 300.
-        assert_eq!(context_budget_chars(4096, 1024, 300), 8916);
+        assert_eq!(context_budget_chars(4096, 1024, 300, None), 8916);
     }
 
     #[test]
     fn budget_never_underflows() {
-        assert_eq!(context_budget_chars(1024, 4096, 0), 0);
-        assert_eq!(context_budget_chars(4096, 1024, usize::MAX), 0);
+        assert_eq!(context_budget_chars(1024, 4096, 0, None), 0);
+        assert_eq!(context_budget_chars(4096, 1024, usize::MAX, None), 0);
+        // The override replaces the model's window; 0 turns budgeting off.
+        assert_eq!(context_budget_chars(1024, 1024, 300, Some(4096)), 8916);
+        assert_eq!(context_budget_chars(4096, 1024, 300, Some(0)), usize::MAX);
     }
 
     #[test]

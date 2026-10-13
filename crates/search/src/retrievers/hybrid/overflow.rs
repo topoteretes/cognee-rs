@@ -43,24 +43,13 @@
 //! in.
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::{Mutex, OnceLock, PoisonError};
 
 use cognee_llm::{Llm, Message};
 
 use super::results::{display_value, payload, result_id};
 use crate::types::SearchItem;
-
-/// Points at a JSON object mapping chunk id → summary sentence. Unset, there
-/// are no overflow summaries and a passage that does not fit is simply left
-/// out, which is the behaviour this is being measured against.
-const OVERFLOW_SUMMARY_FILE_ENV: &str = "COGNEE_HYBRID_OVERFLOW_SUMMARY_FILE";
-
-/// Set to `1` to summarize overflow passages with the answering model, at
-/// query time, instead of dropping them.
-const SUMMARIZE_ENV: &str = "COGNEE_HYBRID_SUMMARIZE_OVERFLOW";
-
-/// How many passages to put in one summarization call. `1` is a call each.
-const BATCH_ENV: &str = "COGNEE_HYBRID_SUMMARIZE_BATCH";
 
 /// What the model is told to produce. The shape matters: these sentences are
 /// the *only* representation of a passage that did not fit, so a summary that
@@ -97,21 +86,11 @@ fn cache() -> &'static Mutex<HashMap<String, String>> {
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Whether query-time summarization is switched on.
-#[allow(
-    clippy::disallowed_methods,
-    reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
-)]
-pub(crate) fn summarization_enabled() -> bool {
-    std::env::var(SUMMARIZE_ENV)
-        .map(|v| v == "1")
-        .unwrap_or(false)
-}
-
-/// Everything already known for `chunks`, by chunk id: the sideload file,
-/// then the in-process cache (which wins where both have one).
-pub(crate) fn known(chunks: &[SearchItem]) -> HashMap<String, String> {
-    let mut summaries = load();
+/// Everything already known for `chunks`, by chunk id: the sideload file at
+/// `summary_file` (if any), then the in-process cache (which wins where both
+/// have one).
+pub(crate) fn known(chunks: &[SearchItem], summary_file: Option<&Path>) -> HashMap<String, String> {
+    let mut summaries = summary_file.map(load).unwrap_or_default();
     // A poisoned lock means some other thread panicked mid-write. The cache is
     // a memo, not state anything depends on, so recovering the guard and
     // carrying on is strictly better than propagating the panic.
@@ -234,35 +213,15 @@ pub(crate) async fn summarize(
     produced
 }
 
-/// How many passages one summarization call should take.
-#[allow(
-    clippy::disallowed_methods,
-    reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
-)]
-pub(crate) fn batch_size() -> usize {
-    std::env::var(BATCH_ENV)
-        .ok()
-        .and_then(|value| value.trim().parse::<usize>().ok())
-        .unwrap_or(1)
-        .max(1)
-}
-
 /// Read the overflow summaries, or an empty map.
 ///
-/// Fails open in every direction — unset variable, missing file, malformed
-/// JSON — because this is diagnostic scaffolding and a broken experiment
-/// should degrade to the behaviour without it, not break search.
-#[allow(
-    clippy::disallowed_methods,
-    reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
-)]
-pub(crate) fn load() -> HashMap<String, String> {
-    let Ok(path) = std::env::var(OVERFLOW_SUMMARY_FILE_ENV) else {
-        return HashMap::new();
-    };
-    if path.is_empty() {
-        return HashMap::new();
-    }
+/// `path` is a JSON object mapping chunk id → summary sentence
+/// (`search.hybrid.overflow_summary_file`). Fails open in every direction —
+/// missing file, malformed JSON — because this is diagnostic scaffolding and a
+/// broken experiment should degrade to the behaviour without it, not break
+/// search.
+pub(crate) fn load(path: &Path) -> HashMap<String, String> {
+    let path = path.display().to_string();
     let contents = match std::fs::read_to_string(&path) {
         Ok(contents) => contents,
         Err(error) => {

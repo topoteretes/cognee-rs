@@ -24,6 +24,7 @@ pub struct SessionManager {
     default_session_id: String,
     history_limit: usize,
     llm: Option<Arc<dyn Llm>>,
+    feedback_llm_timeout: std::time::Duration,
 }
 
 impl SessionManager {
@@ -33,7 +34,17 @@ impl SessionManager {
             default_session_id: DEFAULT_SESSION_ID.to_string(),
             history_limit: DEFAULT_HISTORY_LIMIT,
             llm: None,
+            feedback_llm_timeout: feedback::DEFAULT_FEEDBACK_LLM_TIMEOUT,
         }
+    }
+
+    /// How long the LLM call that writes a trace step's feedback may take
+    /// before the step is stored with the deterministic fallback
+    /// (`session.feedback_llm_timeout_ms`; default 8 s).
+    #[must_use]
+    pub fn with_feedback_llm_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.feedback_llm_timeout = timeout;
+        self
     }
 
     pub fn with_llm(mut self, llm: Arc<dyn Llm>) -> Self {
@@ -341,6 +352,7 @@ impl SessionManager {
             if let Some(llm) = self.llm.as_ref() {
                 feedback::generate_session_feedback(
                     llm.as_ref(),
+                    self.feedback_llm_timeout,
                     origin_function,
                     status,
                     method_return_value.as_ref(),

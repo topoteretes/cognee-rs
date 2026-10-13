@@ -963,13 +963,16 @@ chunk_size null` restores the auto-calculation.
 Precedence on the HTTP server: per-request `chunkSize` on the cognify/remember
 payload > `COGNEE_CHUNK_SIZE` > auto.
 
-The token counter is env-selected:
+The token counter is chosen by the `cognify` engine section (registered with the
+kind sections), resolved when cognee lowers `Settings` into a `CognifyConfig`
+(`Settings::cognify_config`; `CognifyConfig::default()` itself reads nothing):
 
-| Env var | Purpose | Default |
-|---|---|---|
-| `COGNEE_TOKEN_COUNTER` | `tiktoken` / `word` / `huggingface`(`hf`) | auto from embedding provider |
-| `HUGGINGFACE_TOKENIZER` | model id when counter = `huggingface` | _(empty)_ |
-| `COGNEE_LEGACY_PER_WORD_TOKEN_COUNT` | restore the legacy per-word token count (`1`/`true`/`yes`/`on`) | `false` |
+| Env var | Key | Purpose | Default |
+|---|---|---|---|
+| `COGNEE_TOKEN_COUNTER` | `cognify.token_counter` | `tiktoken` / `word` / `huggingface`(`hf`) | auto from embedding provider |
+| `HUGGINGFACE_TOKENIZER` | `embedding.ollama.huggingface_tokenizer` | model id when counter = `huggingface` | _(empty)_ |
+| `EMBEDDING_TOKENIZER_PATH` | `embedding.onnx.tokenizer_path` | tokenizer file for the `onnx` provider's counter, used when it exists | `./target/models/bge-small-tokenizer.json` |
+| `COGNEE_LEGACY_PER_WORD_TOKEN_COUNT` | `cognify.legacy_per_word_token_count` | restore the legacy per-word token count (`1`/`true`/`yes`/`on`) | `false` |
 
 ### `COGNEE_LEGACY_PER_WORD_TOKEN_COUNT` — a deliberate divergence from Python
 
@@ -1004,19 +1007,18 @@ by propagating. The report rides every stage output to `CognifyResult.failures`
 (on success) or to `CognifyError::RunFailed` (when the run failed). Whether the
 run fails is decided once, at the end, from two independent axes.
 
-Each is a `CognifyConfig` builder, and each is also read from the environment
-at construction time. None of them adds a `Settings` field, so
-`GET /api/v1/settings` keeps the shape the parity suite compares against
-Python's — which is also how Python exposes its own equivalent flag: through
-the environment only, never through `CognifyConfig`.
+Each is a `CognifyConfig` builder, and each is also a key of the `cognify` engine
+section, which `Settings::cognify_config` applies. They live in the section, not as
+`Settings` fields, so `GET /api/v1/settings` keeps the shape the parity suite
+compares against Python's.
 
-| Builder | Field | Env var | Default |
-|---|---|---|---|
-| `with_failure_stop` | `failure_stop` | `RAISE_INCREMENTAL_LOADING_ERRORS` / `COGNEE_RAISE_INCREMENTAL_LOADING_ERRORS` | `FailFast` |
-| `with_rollback_scope` | `rollback_scope` | `COGNEE_COGNIFY_ROLLBACK_SCOPE` (`whole_run` / `failed_items` only) | `WholeRun` |
-| `with_summarization_failure_tolerance` | `tolerate_summarization_failures` | `COGNEE_COGNIFY_TOLERATE_SUMMARIZATION_FAILURES` | `false` |
-| `with_chunk_failure_ratio_threshold` | `chunk_failure_ratio_threshold` | `COGNEE_COGNIFY_MAX_CHUNK_FAILURE_RATIO` | `0.05` |
-| `with_failure_report_cap` | `failure_report_cap` | `COGNEE_COGNIFY_FAILURE_REPORT_CAP` | `100` |
+| Builder | Field | Env var | Key | Default |
+|---|---|---|---|---|
+| `with_failure_stop` | `failure_stop` | `RAISE_INCREMENTAL_LOADING_ERRORS` / `COGNEE_RAISE_INCREMENTAL_LOADING_ERRORS` | `cognify.raise_incremental_loading_errors` (`raise_incremental_loading_errors`) | `FailFast` (unset) |
+| `with_rollback_scope` | `rollback_scope` | `COGNEE_COGNIFY_ROLLBACK_SCOPE` (`whole_run` / `failed_items` only) | `cognify.rollback_scope` | `WholeRun` |
+| `with_summarization_failure_tolerance` | `tolerate_summarization_failures` | `COGNEE_COGNIFY_TOLERATE_SUMMARIZATION_FAILURES` | `cognify.tolerate_summarization_failures` | `false` |
+| `with_chunk_failure_ratio_threshold` | `chunk_failure_ratio_threshold` | `COGNEE_COGNIFY_MAX_CHUNK_FAILURE_RATIO` | `cognify.max_chunk_failure_ratio` | `0.05` |
+| `with_failure_report_cap` | `failure_report_cap` | `COGNEE_COGNIFY_FAILURE_REPORT_CAP` | `cognify.failure_report_cap` | `100` |
 
 **Axis 1 shares Python's variable name.** `RAISE_INCREMENTAL_LOADING_ERRORS` is
 Python's own flag (`run_tasks_data_item.py:200`, default `true`), so one `.env`
@@ -1029,9 +1031,11 @@ what this axis means here. The `COGNEE_`-prefixed alias follows the same
 dual-name convention as `CHUNK_SIZE` / `COGNEE_CHUNK_SIZE`.
 
 **The other four are Rust-only** and say so with a `COGNEE_COGNIFY_` prefix:
-Python has no counterpart for any of them. An unset or unparseable value leaves
-the default in place rather than failing the process, and out-of-range values
-(a ratio outside `0..=1`, a zero cap) are ignored the same way.
+Python has no counterpart for any of them. An unset value leaves the default in
+place, and out-of-range values (a ratio outside `0..=1`, a zero cap, an unknown
+rollback scope) are ignored with a warning rather than failing the process.
+`raise_incremental_loading_errors` is a boolean: `true`/`1`/`yes`/`on` is
+`FailFast`, any other set value is `RunToEnd`, unset is the default.
 
 **Axis 1 — when to stop.** `FailFast` stops the failing stage from scheduling
 further work once a failure has been recorded; the files that already completed
@@ -1086,7 +1090,7 @@ would rather keep the partial result raises
 completed files once the run is fatal.
 
 A third variant, `Nothing`, removes nothing — and it is **not selectable from
-the environment**. `COGNEE_COGNIFY_ROLLBACK_SCOPE=nothing` (or `none`) is
+configuration**. `COGNEE_COGNIFY_ROLLBACK_SCOPE=nothing` (or `none`) is
 rejected like any other unknown value and leaves the default in place; the
 variant is reachable only in code, via
 `CognifyConfig::with_rollback_scope(RollbackScope::Nothing)`. It is off the
@@ -1204,11 +1208,24 @@ other way round. Callers who want both graphs over one dataset must set
 Set `with_incremental_loading(false)` to restore the previous behaviour and
 reprocess everything on every run.
 
-## Search — triplet retriever hub cap
+## Search
 
-| Env var | Default | Effect |
-|---|---|---|
-| `COGNEE_TRIPLET_NEIGHBOR_CAP` | _(unset — uncapped)_ | Per vector-search seed, keep every neighbour that is itself a seed plus at most `n` other neighbours (the smallest ids in byte order), then score the subgraph induced on what is kept. |
+The `search` and `search.hybrid` engine sections tune the standard retrievers;
+cognee hands them to `SearchBuilder::with_tuning` (`Settings::search_tuning`).
+
+| Env var | Key (alias) | Default | Effect |
+|---|---|---|---|
+| `ALLOW_CYPHER_QUERY` | `search.allow_cypher_query` (`allow_cypher_query`) | `true` | `false` refuses the CYPHER and NATURAL_LANGUAGE search types (Python's flag; `true`/`1`/`yes`/`on` allow). |
+| `COGNEE_HYBRID_MAX_CONTEXT_TOKENS` | `search.hybrid.max_context_tokens` | _(unset — the LLM's context length)_ | HYBRID_COMPLETION context budget in tokens; `0` turns budgeting off. |
+| `COGNEE_HYBRID_SUMMARIZE_OVERFLOW` | `search.hybrid.summarize_overflow` | `false` | Summarize passages that overflow the budget instead of dropping them. |
+| `COGNEE_HYBRID_SUMMARIZE_BATCH` | `search.hybrid.summarize_batch` | `1` | Overflow passages per summarization call. |
+| `COGNEE_HYBRID_OVERFLOW_SUMMARY_FILE` | `search.hybrid.overflow_summary_file` | _(empty)_ | JSON object of precomputed overflow summaries (chunk id → summary). |
+
+### Triplet retriever hub cap
+
+| Env var | Key | Default | Effect |
+|---|---|---|---|
+| `COGNEE_TRIPLET_NEIGHBOR_CAP` | `search.triplet_neighbor_cap` | _(unset — uncapped)_ | Per vector-search seed, keep every neighbour that is itself a seed plus at most `n` other neighbours (the smallest ids in byte order), then score the subgraph induced on what is kept. |
 
 **Opt-in, and it changes results.** Unset — the default, and what every
 deployment runs unless it says otherwise — the triplet retriever loads the full
@@ -1411,6 +1428,8 @@ store id is an error.
 | `COGNEE_SESSION_DIR` | `session.fs.directory` (`session_directory`; `fs` builds) | `<system_root>/sessions` |
 | `CACHE_HOST` / `CACHE_PORT` | `session.redis.host` / `.port` (`cache_host` / `cache_port`; `redis` builds) | `localhost` / `6379` |
 | `CACHE_USERNAME` / `CACHE_PASSWORD` | `session.redis.username` / `.password` (`cache_*`; `redis` builds) | _(empty)_ |
+| `COGNEE_FEEDBACK_LLM_TIMEOUT_MS` | `session.feedback_llm_timeout_ms` | `8000` (trace-step feedback LLM call) |
+| `SESSION_ABANDON_AFTER_SECONDS` | `session.abandon_after_seconds` (`session_abandon_after_seconds`) | `1800` (idle running session reads as `abandoned`) |
 | `CACHE_BACKEND` | `cache_backend` | `fs` (Python parity; not read — use `session.store`) |
 | `SESSION_TTL_SECONDS` | `session_ttl_seconds` | `604800` (7d) |
 | `CACHING` | `enable_caching` | `true` |

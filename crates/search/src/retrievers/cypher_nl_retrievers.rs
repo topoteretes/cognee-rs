@@ -1,4 +1,3 @@
-use std::env;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -81,23 +80,16 @@ Get all nodes connected to John
 MATCH (n:Entity {'name': 'John'})--(neighbor)
 RETURN n, neighbor";
 
-#[allow(
-    clippy::disallowed_methods,
-    reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
-)]
-fn cypher_queries_enabled() -> bool {
-    env::var("ALLOW_CYPHER_QUERY")
-        .unwrap_or_else(|_| "true".to_string())
-        .to_lowercase()
-        != "false"
-}
-
-fn ensure_cypher_queries_enabled() -> Result<(), SearchError> {
-    if cypher_queries_enabled() {
+/// Refuse when graph-query search types are disabled (`search.allow_cypher_query`,
+/// Python's `ALLOW_CYPHER_QUERY`).
+fn ensure_cypher_queries_enabled(allowed: bool) -> Result<(), SearchError> {
+    if allowed {
         Ok(())
     } else {
         Err(SearchError::InvalidInput(
-            "Cypher query search types are disabled via ALLOW_CYPHER_QUERY=false".to_string(),
+            "Cypher query search types are disabled (search.allow_cypher_query / \
+             ALLOW_CYPHER_QUERY=false)"
+                .to_string(),
         ))
     }
 }
@@ -121,11 +113,23 @@ fn context_to_rows(context: SearchContext) -> Vec<Vec<Value>> {
 
 pub struct CypherSearchRetriever {
     graph_db: Arc<dyn GraphDBTrait>,
+    allow_cypher_query: bool,
 }
 
 impl CypherSearchRetriever {
     pub fn new(graph_db: Arc<dyn GraphDBTrait>) -> Self {
-        Self { graph_db }
+        Self {
+            graph_db,
+            allow_cypher_query: true,
+        }
+    }
+
+    /// Allow or refuse running queries (`search.allow_cypher_query`;
+    /// allowed by default).
+    #[must_use]
+    pub fn with_allow_cypher_query(mut self, allowed: bool) -> Self {
+        self.allow_cypher_query = allowed;
+        self
     }
 }
 
@@ -140,7 +144,7 @@ impl SearchRetriever for CypherSearchRetriever {
         query: &str,
         _params: &SearchParams,
     ) -> Result<SearchContext, SearchError> {
-        ensure_cypher_queries_enabled()?;
+        ensure_cypher_queries_enabled(self.allow_cypher_query)?;
 
         if self.graph_db.is_empty().await? {
             return Ok(vec![]);
@@ -160,7 +164,7 @@ impl SearchRetriever for CypherSearchRetriever {
         let output_context = match context {
             Some(existing_context) => existing_context,
             None => {
-                ensure_cypher_queries_enabled()?;
+                ensure_cypher_queries_enabled(self.allow_cypher_query)?;
                 if self.graph_db.is_empty().await? {
                     vec![]
                 } else {
@@ -181,6 +185,7 @@ pub struct NaturalLanguageRetriever {
     llm: Arc<dyn Llm>,
     max_attempts: usize,
     generation_options: Option<GenerationOptions>,
+    allow_cypher_query: bool,
 }
 
 impl NaturalLanguageRetriever {
@@ -195,7 +200,16 @@ impl NaturalLanguageRetriever {
             llm,
             max_attempts: max_attempts.unwrap_or(DEFAULT_NL_MAX_ATTEMPTS),
             generation_options,
+            allow_cypher_query: true,
         }
+    }
+
+    /// Allow or refuse running generated queries (`search.allow_cypher_query`;
+    /// allowed by default).
+    #[must_use]
+    pub fn with_allow_cypher_query(mut self, allowed: bool) -> Self {
+        self.allow_cypher_query = allowed;
+        self
     }
 
     async fn get_graph_schema(&self) -> Result<(Vec<Vec<Value>>, Vec<Vec<Value>>), SearchError> {
@@ -327,7 +341,7 @@ impl SearchRetriever for NaturalLanguageRetriever {
         query: &str,
         _params: &SearchParams,
     ) -> Result<SearchContext, SearchError> {
-        ensure_cypher_queries_enabled()?;
+        ensure_cypher_queries_enabled(self.allow_cypher_query)?;
 
         if self.graph_db.is_empty().await? {
             return Ok(vec![]);
@@ -604,6 +618,32 @@ mod tests {
             SearchOutput::GraphQueryRows(rows) => assert_eq!(rows.len(), 1),
             _ => panic!("expected graph query rows"),
         }
+    }
+
+    /// `search.allow_cypher_query = false` refuses the query instead of
+    /// running it.
+    #[tokio::test]
+    async fn a_disallowed_cypher_query_is_refused() {
+        let graph_db = Arc::new(TestGraphDb {
+            empty: false,
+            reject_unseeded: false,
+            rows_by_query: std::collections::HashMap::from([(
+                "MATCH (n) RETURN n".to_string(),
+                vec![vec![json!({"name": "Alice"})]],
+            )]),
+        });
+
+        let retriever = CypherSearchRetriever::new(graph_db).with_allow_cypher_query(false);
+        let err = retriever
+            .get_completion(
+                "MATCH (n) RETURN n",
+                None,
+                &SessionContext::default(),
+                &SearchParams::default(),
+            )
+            .await
+            .expect_err("disallowed");
+        assert!(matches!(err, SearchError::InvalidInput(_)), "{err:?}");
     }
 
     #[tokio::test]

@@ -156,7 +156,14 @@ async fn session_lifecycle_aggregate_stats_emits_span() {
     let db = make_db().await;
 
     // Read-only path; no rows in DB is fine.
-    let _: Result<_, _> = SessionLifecycleDb::aggregate_stats(&db, Uuid::new_v4(), &[], None).await;
+    let _: Result<_, _> = SessionLifecycleDb::aggregate_stats(
+        &db,
+        Uuid::new_v4(),
+        &[],
+        None,
+        cognee_database::DEFAULT_ABANDON_AFTER_SECONDS,
+    )
+    .await;
     // Compile-time check that CostByModelRow is exported (used elsewhere in
     // this file's imports list to mirror the SessionLifecycleDb facet).
     let _phantom: Option<CostByModelRow> = None;

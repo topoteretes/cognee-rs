@@ -15,7 +15,7 @@ use cognee::ComponentManager;
 use cognee::PipelineContext;
 use cognee::add::AddPipeline;
 use cognee::api::get_or_create_default_user;
-use cognee::cognify::{ChunkStrategy, CognifyConfig};
+use cognee::cognify::CognifyConfig;
 use cognee::core::{CpuPool, RayonThreadPool};
 use cognee::database::{
     CheckpointStore, DeleteDb, IngestDb, PipelineRunRepository, RelationalDb, SearchHistoryDb,
@@ -365,8 +365,13 @@ impl CogneeServices {
             .session_store()
             .await
             .map_err(|e| SdkError::ServiceBuild(format!("session store: {e}")))?;
-        let session_manager = Arc::new(SessionManager::new(Arc::clone(&session_store)));
+        let feedback_llm_timeout = cm.settings().feedback_llm_timeout();
+        let session_manager = Arc::new(
+            SessionManager::new(Arc::clone(&session_store))
+                .with_feedback_llm_timeout(feedback_llm_timeout),
+        );
 
+        let search_tuning = cm.settings().search_tuning();
         let search_orchestrator = Arc::new(
             SearchBuilder::new(
                 Arc::clone(&vector_db),
@@ -375,6 +380,7 @@ impl CogneeServices {
                 Arc::clone(&llm),
                 Arc::clone(&database) as Arc<dyn SearchHistoryDb>,
             )
+            .with_tuning(search_tuning)
             .with_session_manager(Arc::clone(&session_manager))
             .with_dataset_resolver(Arc::clone(&database) as Arc<dyn IngestDb>)
             .build(),
@@ -389,18 +395,7 @@ impl CogneeServices {
 
         // CognifyConfig from Settings. `with_temporal_cognify` is a per-call
         // flag (not a Settings field) and is left at default here.
-        let cognify_config = {
-            let s = cm.settings();
-            let chunk_strategy = match s.chunk_strategy.to_uppercase().as_str() {
-                "RECURSIVE" => ChunkStrategy::Recursive,
-                _ => ChunkStrategy::Paragraph,
-            };
-            CognifyConfig::default()
-                .with_chunk_size_opt(s.chunk_size.map(|n| n as usize))
-                .with_chunk_overlap(s.chunk_overlap as usize)
-                .with_chunk_strategy(chunk_strategy)
-                .with_max_parallel_extractions(s.llm_max_parallel_requests.max(1) as usize)
-        };
+        let cognify_config = cm.settings().cognify_config();
 
         let checkpoint_store: Arc<dyn CheckpointStore> = Arc::clone(&database).checkpoints();
 

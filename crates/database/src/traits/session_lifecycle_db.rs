@@ -59,6 +59,10 @@ pub struct SessionListFilters {
     pub order_by: String,
     /// Direction. `true` → DESC.
     pub descending: bool,
+    /// Idle seconds after which a running session counts as `abandoned`
+    /// (`session.abandon_after_seconds`; default
+    /// [`DEFAULT_ABANDON_AFTER_SECONDS`](crate::ops::session_lifecycle::DEFAULT_ABANDON_AFTER_SECONDS)).
+    pub abandon_after_seconds: u64,
 }
 
 /// Wraps a stored `session_records` row plus the read-time effective
@@ -171,6 +175,7 @@ pub trait SessionLifecycleDb: Send + Sync {
         user_id: Uuid,
         permitted_dataset_ids: &[Uuid],
         prefer_other_owner: bool,
+        abandon_after_seconds: u64,
     ) -> Result<Option<SessionRowWithStatus>, DatabaseError>;
 
     /// Paginated list with `effective_status` filter support. Mirrors
@@ -187,6 +192,7 @@ pub trait SessionLifecycleDb: Send + Sync {
         user_id: Uuid,
         permitted_dataset_ids: &[Uuid],
         since: Option<DateTime<Utc>>,
+        abandon_after_seconds: u64,
     ) -> Result<SessionStats, DatabaseError>;
 
     /// Per-model attribution for `GET /sessions/cost-by-model`.

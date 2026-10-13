@@ -23,20 +23,9 @@ Rules:\n\
 - Do not invent details that are not present in the input.\n\
 - If the return value is already short, rewrite it as a clear sentence.\n";
 
-const DEFAULT_FEEDBACK_LLM_TIMEOUT: Duration = Duration::from_secs(8);
-
-#[allow(
-    clippy::disallowed_methods,
-    reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
-)]
-fn feedback_llm_timeout() -> Duration {
-    if let Ok(raw) = std::env::var("COGNEE_FEEDBACK_LLM_TIMEOUT_MS")
-        && let Ok(ms) = raw.parse::<u64>()
-    {
-        return Duration::from_millis(ms);
-    }
-    DEFAULT_FEEDBACK_LLM_TIMEOUT
-}
+/// How long the feedback LLM call may take by default
+/// (`session.feedback_llm_timeout_ms`).
+pub(crate) const DEFAULT_FEEDBACK_LLM_TIMEOUT: Duration = Duration::from_secs(8);
 
 pub(crate) const FEEDBACK_MAX_LEN: usize = 500;
 pub(crate) const SERIALIZED_RETURN_MAX_LEN: usize = 1000;
@@ -113,6 +102,7 @@ fn serialize_return_value(value: &Value) -> String {
 
 pub(crate) async fn generate_session_feedback(
     llm: &dyn Llm,
+    llm_timeout: Duration,
     origin_function: &str,
     status: &str,
     method_return_value: Option<&Value>,
@@ -140,7 +130,7 @@ pub(crate) async fn generate_session_feedback(
 
     let model_name = llm.model().to_string();
     let call = llm.generate(messages, Some(options));
-    match timeout(feedback_llm_timeout(), call).await {
+    match timeout(llm_timeout, call).await {
         Ok(Ok(resp)) => {
             let scrubbed = scrub_feedback(&resp.content);
             if scrubbed.is_empty() {
@@ -169,7 +159,7 @@ pub(crate) async fn generate_session_feedback(
         Err(_elapsed) => {
             tracing::warn!(
                 model = %model_name,
-                timeout_ms = feedback_llm_timeout().as_millis() as u64,
+                timeout_ms = llm_timeout.as_millis() as u64,
                 "trace feedback LLM call timed out; using deterministic fallback"
             );
             fallback_feedback(origin_function, status, error_message)

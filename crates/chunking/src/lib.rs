@@ -9,7 +9,7 @@
 //!   where the link would be unresolved on a `--target wasm32` doc build)
 //! - [`token_counter`] — the [`token_counter::TokenCounter`] trait and its
 //!   `WordCounter` / `HuggingFaceTokenCounter` / `TikTokenCounter` impls,
-//!   selected by [`config`] (`TokenCounterKind::from_env`), plus
+//!   selected by [`config`] (`TokenCounterKind::resolve`), plus
 //!   [`token_counter::TokenCountMode`], which decides whether a chunk's size is
 //!   the tokenizer's verdict on the whole span (the default) or the legacy sum
 //!   over words in isolation

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use cognee::cognify::{ChunkStrategy, CognifyConfig, CognifyResult, FailureReport, cognify};
+use cognee::cognify::{CognifyResult, FailureReport, cognify};
 use cognee::database::{PipelineRunRepository, RelationalDb};
 use cognee::{ComponentManager, PipelineContext};
 use tracing::{debug, info, warn};
@@ -219,15 +219,9 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
                 CliError::Runtime(format!("Ontology initialization failed: {error}"))
             })?;
 
-        let chunk_strategy = match cm.settings().chunk_strategy.to_uppercase().as_str() {
-            "RECURSIVE" => ChunkStrategy::Recursive,
-            _ => ChunkStrategy::Paragraph,
-        };
-
-        let mut cognify_config = CognifyConfig::default()
+        let base_config = cm.settings().cognify_config();
+        let mut cognify_config = base_config
             .with_chunk_size_opt(effective_chunk_size.map(|n| n as usize))
-            .with_chunk_overlap(cm.settings().chunk_overlap as usize)
-            .with_chunk_strategy(chunk_strategy)
             .with_max_parallel_extractions(effective_max_parallel)
             .with_temporal_cognify(args.temporal_cognify);
         if let Some(backend) = graph_backend {

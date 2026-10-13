@@ -16,7 +16,7 @@ use std::time::Instant;
 use cognee::add::AddPipeline;
 use cognee::api::prune::{PruneTarget, prune_data, prune_system};
 use cognee::api::{DatasetDb, DatasetManager};
-use cognee::cognify::{ChunkStrategy, CognifyConfig, TokenCounterKind, cognify};
+use cognee::cognify::{TokenCounterKind, cognify};
 use cognee::core::RayonThreadPool;
 use cognee::database::{IngestDb, PipelineRunRepository};
 use cognee::models::DataInput;
@@ -761,24 +761,16 @@ async fn phase_cognify(
     let pipeline_run_repo: Arc<dyn PipelineRunRepository> = Arc::clone(&database).pipeline_runs();
     let ontology_resolver: Arc<dyn OntologyResolver> = Arc::new(NoOpOntologyResolver::new());
 
-    let chunk_strategy = match cm.settings().chunk_strategy.to_uppercase().as_str() {
-        "RECURSIVE" => ChunkStrategy::Recursive,
-        _ => ChunkStrategy::Paragraph,
-    };
     let cognify_config = {
-        let s = cm.settings();
-        CognifyConfig::default()
-            .with_chunk_size_opt(s.chunk_size.map(|n| n as usize))
-            .with_chunk_overlap(s.chunk_overlap as usize)
-            .with_chunk_strategy(chunk_strategy)
-            .with_max_parallel_extractions(s.llm_max_parallel_requests.max(1) as usize)
+        let base = cm.settings().cognify_config();
+        base
             // Pin the token counter so chunk boundaries are deterministic and
-            // independent of ambient env. CognifyConfig::default() derives the
-            // counter from TokenCounterKind::from_env() (reads EMBEDDING_PROVIDER
-            // / COGNEE_TOKEN_COUNTER / a discovered .env, with a silent WordCounter
-            // fallback). That made the record/replay cassette hash depend on the
-            // host environment, not the commit — a cassette recorded in one env
-            // replayed to empty-graph fallbacks in another. gpt-4o-mini uses
+            // independent of the host. The configured counter derives from the
+            // embedding provider / `cognify.token_counter` (and a discovered
+            // .env, with a silent WordCounter fallback), which made the
+            // record/replay cassette hash depend on the host environment, not
+            // the commit — a cassette recorded in one env replayed to
+            // empty-graph fallbacks in another. gpt-4o-mini uses
             // cl100k, so TikToken is the correct, portable choice for the bench.
             .with_token_counter(TokenCounterKind::TikToken)
     };
@@ -861,8 +853,12 @@ async fn bench_search_orchestrator(
     let database = cm.database().await.map_err(|e| e.to_string())?;
 
     let session_store = cm.session_store().await.map_err(|e| e.to_string())?;
-    let session_manager = Arc::new(SessionManager::new(session_store));
+    let feedback_llm_timeout = cm.settings().feedback_llm_timeout();
+    let session_manager = Arc::new(
+        SessionManager::new(session_store).with_feedback_llm_timeout(feedback_llm_timeout),
+    );
     let search_history_db = Arc::clone(&database) as Arc<dyn cognee::database::SearchHistoryDb>;
+    let search_tuning = cm.settings().search_tuning();
     Ok(SearchBuilder::new(
         vector_db,
         embedding_engine,
@@ -870,6 +866,7 @@ async fn bench_search_orchestrator(
         llm,
         search_history_db,
     )
+    .with_tuning(search_tuning)
     .with_session_manager(session_manager)
     .with_dataset_resolver(Arc::clone(&database) as Arc<dyn IngestDb>)
     .build())

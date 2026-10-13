@@ -100,6 +100,7 @@ pub struct TemporalRetriever {
     wide_search_top_k: usize,
     triplet_distance_penalty: f32,
     feedback_influence: f32,
+    neighbor_cap: Option<usize>,
     temporal_interval_prompt: Option<String>,
     system_prompt: Option<String>,
     system_prompt_path: Option<String>,
@@ -108,6 +109,14 @@ pub struct TemporalRetriever {
 }
 
 impl TemporalRetriever {
+    /// Cap the neighbours expanded per seed node in triplet search
+    /// (`search.triplet_neighbor_cap`); `None` is uncapped.
+    #[must_use]
+    pub fn with_neighbor_cap(mut self, cap: Option<usize>) -> Self {
+        self.neighbor_cap = cap;
+        self
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         vector_db: Arc<dyn VectorDB>,
@@ -133,6 +142,7 @@ impl TemporalRetriever {
             triplet_distance_penalty: triplet_distance_penalty
                 .unwrap_or(DEFAULT_TRIPLET_DISTANCE_PENALTY),
             feedback_influence: 0.0,
+            neighbor_cap: None,
             temporal_interval_prompt,
             system_prompt,
             system_prompt_path,
@@ -176,6 +186,7 @@ impl TemporalRetriever {
             triplet_distance_penalty: params
                 .triplet_distance_penalty_or(self.triplet_distance_penalty),
             feedback_influence: params.feedback_influence_or(self.feedback_influence),
+            neighbor_cap: self.neighbor_cap,
             node_type: params.node_type.clone(),
             node_name: params.node_name.clone(),
             node_name_filter_operator: params

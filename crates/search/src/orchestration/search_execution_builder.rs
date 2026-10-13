@@ -13,12 +13,49 @@ use crate::retrievers::{
     ChunksRetriever, CodingRulesRetriever, CompletionRetriever, CypherSearchRetriever,
     FeedbackRetriever, FeelingLuckyRetriever, GraphCompletionContextExtensionRetriever,
     GraphCompletionCotRetriever, GraphCompletionRetriever, GraphSummaryCompletionRetriever,
-    HybridRetriever, LexicalRetriever, NaturalLanguageRetriever, SearchRetrieverRef,
+    HybridBudget, HybridRetriever, LexicalRetriever, NaturalLanguageRetriever, SearchRetrieverRef,
     SummariesRetriever, TemporalRetriever, TripletRetriever,
 };
 use crate::types::SearchType;
 
+/// Tuning the standard retrievers are built with (the `search` and
+/// `search.hybrid` settings).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SearchTuning {
+    /// Allow the CYPHER and NATURAL_LANGUAGE search types to run graph queries
+    /// (Python's `ALLOW_CYPHER_QUERY`). Default `true`.
+    pub allow_cypher_query: bool,
+    /// Neighbours expanded per seed node in triplet search; `None` (the
+    /// default) is uncapped. See
+    /// [`GraphRetrievalConfig::neighbor_cap`](crate::graph_retrieval::GraphRetrievalConfig::neighbor_cap).
+    pub triplet_neighbor_cap: Option<usize>,
+    /// The HYBRID_COMPLETION context budget.
+    pub hybrid: HybridBudget,
+}
+
+impl Default for SearchTuning {
+    fn default() -> Self {
+        Self {
+            allow_cypher_query: true,
+            triplet_neighbor_cap: None,
+            hybrid: HybridBudget::default(),
+        }
+    }
+}
+
+/// The engines the standard retrievers are built over.
+struct StandardEngines {
+    vector_db: Arc<dyn VectorDB>,
+    embedding_engine: Arc<dyn EmbeddingEngine>,
+    graph_db: Arc<dyn GraphDBTrait>,
+    llm: Arc<dyn Llm>,
+}
+
 pub struct SearchBuilder {
+    engines: StandardEngines,
+    tuning: SearchTuning,
+    /// Retrievers registered with [`Self::register_retriever`]; they replace
+    /// the standard retriever of the same search type.
     retrievers: HashMap<SearchType, SearchRetrieverRef>,
     database: Arc<dyn SearchHistoryDb>,
     dataset_resolver: Option<Arc<dyn IngestDb>>,
@@ -35,13 +72,28 @@ impl SearchBuilder {
         database: Arc<dyn SearchHistoryDb>,
     ) -> Self {
         Self {
+            engines: StandardEngines {
+                vector_db,
+                embedding_engine,
+                graph_db,
+                llm,
+            },
+            tuning: SearchTuning::default(),
             retrievers: HashMap::new(),
             database,
             dataset_resolver: None,
             acl_db: None,
             session_manager: None,
         }
-        .register_standard_retrievers(vector_db, embedding_engine, graph_db, llm)
+    }
+
+    /// Tune the standard retrievers (`search` / `search.hybrid` settings).
+    /// They are built in [`Self::build`], so the order of builder calls does
+    /// not matter.
+    #[must_use]
+    pub fn with_tuning(mut self, tuning: SearchTuning) -> Self {
+        self.tuning = tuning;
+        self
     }
 
     pub fn with_session_manager(mut self, session_manager: Arc<SessionManager>) -> Self {
@@ -70,14 +122,18 @@ impl SearchBuilder {
         self
     }
 
-    fn register_standard_retrievers(
-        mut self,
-        vector_db: Arc<dyn VectorDB>,
-        embedding_engine: Arc<dyn EmbeddingEngine>,
-        graph_db: Arc<dyn GraphDBTrait>,
-        llm: Arc<dyn Llm>,
-    ) -> Self {
-        self.retrievers.insert(
+    fn standard_retrievers(
+        engines: StandardEngines,
+        tuning: &SearchTuning,
+    ) -> HashMap<SearchType, SearchRetrieverRef> {
+        let StandardEngines {
+            vector_db,
+            embedding_engine,
+            graph_db,
+            llm,
+        } = engines;
+        let mut retrievers: HashMap<SearchType, SearchRetrieverRef> = HashMap::new();
+        retrievers.insert(
             SearchType::Chunks,
             Arc::new(ChunksRetriever::new(
                 Arc::clone(&vector_db),
@@ -86,7 +142,7 @@ impl SearchBuilder {
             )),
         );
 
-        self.retrievers.insert(
+        retrievers.insert(
             SearchType::Summaries,
             Arc::new(SummariesRetriever::new(
                 Arc::clone(&vector_db),
@@ -95,7 +151,7 @@ impl SearchBuilder {
             )),
         );
 
-        self.retrievers.insert(
+        retrievers.insert(
             SearchType::RagCompletion,
             Arc::new(CompletionRetriever::new(
                 Arc::clone(&vector_db),
@@ -109,7 +165,7 @@ impl SearchBuilder {
             )),
         );
 
-        self.retrievers.insert(
+        retrievers.insert(
             SearchType::TripletCompletion,
             Arc::new(TripletRetriever::new(
                 Arc::clone(&vector_db),
@@ -123,110 +179,126 @@ impl SearchBuilder {
             )),
         );
 
-        self.retrievers.insert(
+        retrievers.insert(
             SearchType::GraphCompletion,
-            Arc::new(GraphCompletionRetriever::new(
-                Arc::clone(&vector_db),
-                Arc::clone(&embedding_engine),
-                Arc::clone(&graph_db),
-                Arc::clone(&llm),
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-            )),
+            Arc::new(
+                GraphCompletionRetriever::new(
+                    Arc::clone(&vector_db),
+                    Arc::clone(&embedding_engine),
+                    Arc::clone(&graph_db),
+                    Arc::clone(&llm),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .with_neighbor_cap(tuning.triplet_neighbor_cap),
+            ),
         );
 
-        self.retrievers.insert(
+        retrievers.insert(
             SearchType::GraphSummaryCompletion,
-            Arc::new(GraphSummaryCompletionRetriever::new(
-                Arc::clone(&vector_db),
-                Arc::clone(&embedding_engine),
-                Arc::clone(&graph_db),
-                Arc::clone(&llm),
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-            )),
+            Arc::new(
+                GraphSummaryCompletionRetriever::new(
+                    Arc::clone(&vector_db),
+                    Arc::clone(&embedding_engine),
+                    Arc::clone(&graph_db),
+                    Arc::clone(&llm),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .with_neighbor_cap(tuning.triplet_neighbor_cap),
+            ),
         );
 
-        self.retrievers.insert(
+        retrievers.insert(
             SearchType::GraphCompletionContextExtension,
-            Arc::new(GraphCompletionContextExtensionRetriever::new(
-                Arc::clone(&vector_db),
-                Arc::clone(&embedding_engine),
-                Arc::clone(&graph_db),
-                Arc::clone(&llm),
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-            )),
+            Arc::new(
+                GraphCompletionContextExtensionRetriever::new(
+                    Arc::clone(&vector_db),
+                    Arc::clone(&embedding_engine),
+                    Arc::clone(&graph_db),
+                    Arc::clone(&llm),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .with_neighbor_cap(tuning.triplet_neighbor_cap),
+            ),
         );
 
-        self.retrievers.insert(
+        retrievers.insert(
             SearchType::GraphCompletionCot,
-            Arc::new(GraphCompletionCotRetriever::new(
-                Arc::clone(&vector_db),
-                Arc::clone(&embedding_engine),
-                Arc::clone(&graph_db),
-                Arc::clone(&llm),
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-            )),
+            Arc::new(
+                GraphCompletionCotRetriever::new(
+                    Arc::clone(&vector_db),
+                    Arc::clone(&embedding_engine),
+                    Arc::clone(&graph_db),
+                    Arc::clone(&llm),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .with_neighbor_cap(tuning.triplet_neighbor_cap),
+            ),
         );
 
-        self.retrievers.insert(
+        retrievers.insert(
             SearchType::Cypher,
-            Arc::new(CypherSearchRetriever::new(Arc::clone(&graph_db))),
+            Arc::new(
+                CypherSearchRetriever::new(Arc::clone(&graph_db))
+                    .with_allow_cypher_query(tuning.allow_cypher_query),
+            ),
         );
 
-        self.retrievers.insert(
+        retrievers.insert(
             SearchType::NaturalLanguage,
-            Arc::new(NaturalLanguageRetriever::new(
-                Arc::clone(&graph_db),
-                Arc::clone(&llm),
-                None,
-                None,
-            )),
+            Arc::new(
+                NaturalLanguageRetriever::new(Arc::clone(&graph_db), Arc::clone(&llm), None, None)
+                    .with_allow_cypher_query(tuning.allow_cypher_query),
+            ),
         );
 
-        self.retrievers.insert(
+        retrievers.insert(
             SearchType::Temporal,
-            Arc::new(TemporalRetriever::new(
-                Arc::clone(&vector_db),
-                Arc::clone(&embedding_engine),
-                Arc::clone(&graph_db),
-                Arc::clone(&llm),
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-            )),
+            Arc::new(
+                TemporalRetriever::new(
+                    Arc::clone(&vector_db),
+                    Arc::clone(&embedding_engine),
+                    Arc::clone(&graph_db),
+                    Arc::clone(&llm),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .with_neighbor_cap(tuning.triplet_neighbor_cap),
+            ),
         );
 
-        self.retrievers.insert(
+        retrievers.insert(
             SearchType::ChunksLexical,
             Arc::new(LexicalRetriever::new(
                 Arc::clone(&graph_db),
@@ -237,32 +309,35 @@ impl SearchBuilder {
             )),
         );
 
-        self.retrievers.insert(
+        retrievers.insert(
             SearchType::HybridCompletion,
-            Arc::new(HybridRetriever::new(
-                Arc::clone(&vector_db),
-                Arc::clone(&embedding_engine),
-                Arc::clone(&graph_db),
-                Arc::clone(&llm),
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-            )),
+            Arc::new(
+                HybridRetriever::new(
+                    Arc::clone(&vector_db),
+                    Arc::clone(&embedding_engine),
+                    Arc::clone(&graph_db),
+                    Arc::clone(&llm),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .with_budget(tuning.hybrid.clone()),
+            ),
         );
 
-        self.retrievers.insert(
+        retrievers.insert(
             SearchType::Feedback,
             Arc::new(FeedbackRetriever::new(
                 Arc::clone(&graph_db),
@@ -272,13 +347,13 @@ impl SearchBuilder {
             )),
         );
 
-        self.retrievers.insert(
+        retrievers.insert(
             SearchType::CodingRules,
             Arc::new(CodingRulesRetriever::new(Arc::clone(&graph_db), None)),
         );
 
-        let feeling_lucky_retrievers = self.retrievers.clone();
-        self.retrievers.insert(
+        let feeling_lucky_retrievers = retrievers.clone();
+        retrievers.insert(
             SearchType::FeelingLucky,
             Arc::new(FeelingLuckyRetriever::new(
                 llm,
@@ -288,12 +363,14 @@ impl SearchBuilder {
             )),
         );
 
-        self
+        retrievers
     }
 
     pub fn build(self) -> SearchOrchestrator {
+        let mut retrievers = Self::standard_retrievers(self.engines, &self.tuning);
+        retrievers.extend(self.retrievers);
         let mut registry = SearchTypeRegistry::new();
-        for retriever in self.retrievers.values() {
+        for retriever in retrievers.values() {
             registry.register(Arc::clone(retriever));
         }
 
