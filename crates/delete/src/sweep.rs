@@ -95,11 +95,12 @@ pub struct SweepOutcome {
 /// this machinery exists to remove. Refusing to construct is the honest
 /// failure; every real caller has both stores.
 ///
-/// Takes the concrete [`RelationalDb`] rather than the crate's
-/// [`DeleteDb`](crate::DeleteDb) abstraction: none of the run-scoped ledger
-/// queries a sweep needs exist on that trait, and the ledger code here is
-/// exercised against real in-memory SQLite rather than a mock, so there is
-/// nothing for the indirection to buy.
+/// Takes the backend-neutral [`RelationalDb`] trait object rather than the
+/// crate's narrower [`DeleteDb`](crate::DeleteDb) abstraction: the run-scoped
+/// ledger queries a sweep needs live on
+/// [`ProvenanceDb`](cognee_database::ProvenanceDb), not on `DeleteDb`, and
+/// `RelationalDb` carries both for any relational backend. The ledger code here
+/// is exercised against real in-memory SQLite rather than a mock.
 pub struct RunSweeper {
     database: Arc<dyn RelationalDb>,
     graph_db: Arc<dyn GraphDBTrait>,

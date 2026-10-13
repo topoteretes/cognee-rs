@@ -44,8 +44,10 @@ use crate::SdkError;
 pub struct CogneeServices {
     // 6 raw engines from `ComponentManager` (the `PipelineContext` surface).
     pub storage: Arc<dyn StorageTrait>,
-    /// Concrete SeaORM connection. `DatabaseConnection` implements every DB
-    /// trait, so derived services coerce it via `Arc::clone(&database) as Arc<dyn …>`.
+    /// The relational backend, as built by the `ComponentManager` registry.
+    /// [`RelationalDb`] has every per-domain DB trait as a supertrait, so derived
+    /// services upcast it with `Arc::clone(&database) as Arc<dyn IngestDb>` (etc.),
+    /// or use its accessors such as `pipeline_runs()` and `checkpoints()`.
     pub database: Arc<dyn RelationalDb>,
     pub graph_db: Arc<dyn GraphDBTrait>,
     pub vector_db: Arc<dyn VectorDB>,
