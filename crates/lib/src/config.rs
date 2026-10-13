@@ -1058,7 +1058,7 @@ impl From<cognee_config_core::KeyError> for ConfigError {
 ///
 /// cfg.set_llm_model("gpt-4o");
 /// assert_eq!(cfg.version(), 1);
-/// assert_eq!(cfg.read().llm_model, "gpt-4o");
+/// assert_eq!(cfg.read().llm().model, "gpt-4o");
 /// ```
 pub struct ConfigManager {
     // Lock order: `schema`, then `inner`, then `invalid`. A method that holds
