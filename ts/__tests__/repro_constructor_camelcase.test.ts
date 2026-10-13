@@ -42,21 +42,27 @@ describe("repro: Cognee constructor accepts documented camelCase settings", () =
   });
 
   it("round-trips a config.get() result through the constructor", () => {
-    // Section keys read back with their dots as word breaks
-    // (`llm.auto_rate_limit` -> `llmAutoRateLimit`); the constructor must map
-    // that spelling back to the canonical key rather than keep it as unknown.
+    // A section key with a Python alias reads back under that alias's
+    // camelCase (`llm.auto_rate_limit` -> `auto_rate_limit` ->
+    // `autoRateLimit`); one without an alias reads back with its dots as word
+    // breaks (`llm.debug_requests` -> `llmDebugRequests`). The constructor
+    // must map both spellings back to the canonical key rather than keep them
+    // as unknown.
     const c = new Cognee({
       llmModel: "gpt-4o-mini",
       autoRateLimit: false,
       transcriptionModel: "whisper-large-v3",
+      llmDebugRequests: true,
     });
     const before = c.config.get();
-    expect(before.llmAutoRateLimit).toBe(false);
-    expect(before.llmOpenaiCompatibleTranscriptionModel).toBe("whisper-large-v3");
+    expect(before.autoRateLimit).toBe(false);
+    expect(before.transcriptionModel).toBe("whisper-large-v3");
+    expect(before.llmDebugRequests).toBe(true);
 
     const after = new Cognee(before).config.get();
     expect(after.llmModel).toBe("gpt-4o-mini");
-    expect(after.llmAutoRateLimit).toBe(false);
-    expect(after.llmOpenaiCompatibleTranscriptionModel).toBe("whisper-large-v3");
+    expect(after.autoRateLimit).toBe(false);
+    expect(after.transcriptionModel).toBe("whisper-large-v3");
+    expect(after.llmDebugRequests).toBe(true);
   });
 });

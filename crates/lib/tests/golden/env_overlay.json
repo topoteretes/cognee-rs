@@ -1892,7 +1892,9 @@
   "COGNEE_PGVECTOR_HNSW_EF_CONSTRUCTION=\"42\"": {
     "vector.pgvector.hnsw_ef_construction": 42
   },
-  "COGNEE_PGVECTOR_HNSW_EF_CONSTRUCTION=\"5000000000\"": {},
+  "COGNEE_PGVECTOR_HNSW_EF_CONSTRUCTION=\"5000000000\"": {
+    "vector.pgvector.hnsw_ef_construction": 5000000000
+  },
   "COGNEE_PGVECTOR_HNSW_EF_CONSTRUCTION=\"70000\"": {
     "vector.pgvector.hnsw_ef_construction": 70000
   },
@@ -1922,7 +1924,9 @@
   "COGNEE_PGVECTOR_HNSW_M=\"42\"": {
     "vector.pgvector.hnsw_m": 42
   },
-  "COGNEE_PGVECTOR_HNSW_M=\"5000000000\"": {},
+  "COGNEE_PGVECTOR_HNSW_M=\"5000000000\"": {
+    "vector.pgvector.hnsw_m": 5000000000
+  },
   "COGNEE_PGVECTOR_HNSW_M=\"70000\"": {
     "vector.pgvector.hnsw_m": 70000
   },
@@ -1952,7 +1956,9 @@
   "COGNEE_PGVECTOR_MAINTENANCE_WORKERS=\"42\"": {
     "vector.pgvector.maintenance_workers": 42
   },
-  "COGNEE_PGVECTOR_MAINTENANCE_WORKERS=\"5000000000\"": {},
+  "COGNEE_PGVECTOR_MAINTENANCE_WORKERS=\"5000000000\"": {
+    "vector.pgvector.maintenance_workers": 5000000000
+  },
   "COGNEE_PGVECTOR_MAINTENANCE_WORKERS=\"70000\"": {
     "vector.pgvector.maintenance_workers": 70000
   },
@@ -1982,7 +1988,9 @@
   "COGNEE_PGVECTOR_MAINTENANCE_WORK_MEM_MB=\"42\"": {
     "vector.pgvector.maintenance_work_mem_mb": 42
   },
-  "COGNEE_PGVECTOR_MAINTENANCE_WORK_MEM_MB=\"5000000000\"": {},
+  "COGNEE_PGVECTOR_MAINTENANCE_WORK_MEM_MB=\"5000000000\"": {
+    "vector.pgvector.maintenance_work_mem_mb": 5000000000
+  },
   "COGNEE_PGVECTOR_MAINTENANCE_WORK_MEM_MB=\"70000\"": {
     "vector.pgvector.maintenance_work_mem_mb": 70000
   },

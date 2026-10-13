@@ -407,6 +407,26 @@ pub(crate) fn non_empty(value: &Option<String>) -> Option<String> {
 /// The default vector backend: `lancedb`, except on an Android build without
 /// the `lancedb` feature, whose effective backend has always been in-memory
 /// brute-force.
+///
+/// `lancedb` is kept as the literal default so existing configs boot without
+/// edits. It is not a fallback: the registry ERRORS when no factory is
+/// registered under the provider id, naming the feature to rebuild with, so a
+/// consumer that drops the `lancedb` feature (default-on in `cognee` and every
+/// binding) must set `vector.provider` explicitly. Production deployments
+/// should set `pgvector` (with `vector.url`) for durable storage.
+///
+/// Android is the one first-party profile that drops `lancedb`
+/// (`cognee/android-default`: the Arrow + lance native stack does not
+/// cross-compile). Its effective backend has always been brute-force anyway —
+/// when the feature IS present, `LanceDbFactory::build` falls back to
+/// brute-force on Android — so naming brute-force here keeps that behaviour
+/// and stops a stock Android build from erroring on a provider whose factory
+/// was never registered.
+///
+/// This covers only the *default*. An explicit `lancedb` still arrives from a
+/// persisted config.json or `VECTOR_DB_PROVIDER`; that is absorbed by
+/// `ANDROID_LANCEDB_FALLBACK` in `ComponentRegistry::resolve_vector_key`. Keep
+/// the two in step.
 fn default_vector_provider() -> String {
     if cfg!(all(target_os = "android", not(feature = "lancedb"))) {
         "brute-force".to_string()

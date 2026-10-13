@@ -71,8 +71,10 @@ impl ConfigValue for bool {
 macro_rules! unsigned_config_value {
     ($($t:ty),*) => {$(
         impl ConfigValue for $t {
+            /// Surrounding whitespace (a common `.env` / YAML artifact) is
+            /// ignored.
             fn parse_env(raw: &str) -> Option<Self> {
-                raw.parse().ok()
+                raw.trim().parse().ok()
             }
             fn from_json(value: &Value) -> Result<Self, String> {
                 value
@@ -91,8 +93,9 @@ macro_rules! unsigned_config_value {
 unsigned_config_value!(u16, u32, u64, usize);
 
 impl ConfigValue for f64 {
+    /// Surrounding whitespace is ignored.
     fn parse_env(raw: &str) -> Option<Self> {
-        raw.parse().ok()
+        raw.trim().parse().ok()
     }
     fn from_json(value: &Value) -> Result<Self, String> {
         value
@@ -681,6 +684,14 @@ mod tests {
         assert_eq!(keys, ["demo.size", "demo.token", "demo.flag"]);
         assert!(Demo::schema().keys[1].secret);
         assert_eq!(Demo::schema().keys[0].doc.trim(), "A size.");
+    }
+
+    #[test]
+    fn numeric_env_values_ignore_surrounding_whitespace() {
+        assert_eq!(<u32 as ConfigValue>::parse_env(" 48 "), Some(48));
+        assert_eq!(<u64 as ConfigValue>::parse_env("\t7\n"), Some(7));
+        assert_eq!(<f64 as ConfigValue>::parse_env(" 0.5 "), Some(0.5));
+        assert_eq!(<u32 as ConfigValue>::parse_env(" 4 8 "), None);
     }
 
     #[test]

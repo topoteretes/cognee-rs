@@ -13,10 +13,12 @@ use cognee::config::{builtin_schema, key_spec};
 ///   wins, so an alias left as-is would lose to the env value it was meant
 ///   to override.
 /// - A section key with its dots flattened to underscores
-///   (`llm_auto_rate_limit` for `llm.auto_rate_limit`) is accepted too: it is
-///   what a camelCase read-back key (`llmAutoRateLimit`, from a binding's
-///   `config.get()`) turns into on its way back in, so a get-then-construct
-///   round trip keeps every setting.
+///   (`llm_debug_requests` for `llm.debug_requests`) is accepted too: it is
+///   what the camelCase read-back key of an alias-less section setting
+///   (`llmDebugRequests`, from a binding's `config.get()`) turns into on its
+///   way back in, so a get-then-construct round trip keeps every setting. (A
+///   section key with an alias reads back under the alias's camelCase, which
+///   the first rule already maps.)
 /// - Anything else (a `Settings` key or alias, an unknown key) is unchanged.
 pub fn canonical_settings_key(key: &str) -> Cow<'_, str> {
     let schema = builtin_schema();

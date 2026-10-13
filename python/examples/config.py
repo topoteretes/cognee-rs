@@ -123,19 +123,23 @@ def main() -> None:
     print("\n=== Final config read-back (secrets redacted) ===")
     final_cfg = cognee.config.get()
     # Print only the keys we explicitly set to keep output manageable.
+    # Read-back uses the canonical section keys (`llm.model`, `vector.provider`,
+    # ...); the bulk setters above also accept the flat Python aliases
+    # (`llm_model`, `vector_db_provider`, ...), but `get()` never returns those.
     keys_to_show = [
-        "llm_model",
-        "llm_api_key",
-        "llm_temperature",
-        "llm_max_retries",
-        "embedding_provider",
-        "embedding_dimensions",
-        "vector_db_provider",
-        "graph_database_provider",
+        "llm.model",
+        "llm.api_key",
+        "llm.temperature",
+        "llm.max_retries",
+        "embedding.provider",
+        "embedding.dimensions",
+        "vector.provider",
+        "graph.provider",
     ]
     for key in keys_to_show:
-        if key in final_cfg:
-            print(f"  {key} = {final_cfg[key]!r}")
+        # A missing key means it was renamed: fail loudly rather than print nothing.
+        assert key in final_cfg, f"config.get() has no {key!r}"
+        print(f"  {key} = {final_cfg[key]!r}")
 
     print("\nConfig example complete.")
 

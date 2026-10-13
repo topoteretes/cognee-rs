@@ -10082,7 +10082,9 @@
     "err": true
   },
   "set pgvector_hnsw_ef_construction <- 5000000000": {
-    "err": true
+    "ok": {
+      "vector.pgvector.hnsw_ef_construction": 5000000000
+    }
   },
   "set pgvector_hnsw_ef_construction <- 70000": {
     "ok": {
@@ -10133,7 +10135,9 @@
     "err": true
   },
   "set pgvector_hnsw_m <- 5000000000": {
-    "err": true
+    "ok": {
+      "vector.pgvector.hnsw_m": 5000000000
+    }
   },
   "set pgvector_hnsw_m <- 70000": {
     "ok": {
@@ -10184,7 +10188,9 @@
     "err": true
   },
   "set pgvector_maintenance_work_mem_mb <- 5000000000": {
-    "err": true
+    "ok": {
+      "vector.pgvector.maintenance_work_mem_mb": 5000000000
+    }
   },
   "set pgvector_maintenance_work_mem_mb <- 70000": {
     "ok": {
@@ -10235,7 +10241,9 @@
     "err": true
   },
   "set pgvector_maintenance_workers <- 5000000000": {
-    "err": true
+    "ok": {
+      "vector.pgvector.maintenance_workers": 5000000000
+    }
   },
   "set pgvector_maintenance_workers <- 70000": {
     "ok": {
@@ -11016,7 +11024,9 @@
     "err": true
   },
   "set vector.pgvector.hnsw_ef_construction <- 5000000000": {
-    "err": true
+    "ok": {
+      "vector.pgvector.hnsw_ef_construction": 5000000000
+    }
   },
   "set vector.pgvector.hnsw_ef_construction <- 70000": {
     "ok": {
@@ -11067,7 +11077,9 @@
     "err": true
   },
   "set vector.pgvector.hnsw_m <- 5000000000": {
-    "err": true
+    "ok": {
+      "vector.pgvector.hnsw_m": 5000000000
+    }
   },
   "set vector.pgvector.hnsw_m <- 70000": {
     "ok": {
@@ -11118,7 +11130,9 @@
     "err": true
   },
   "set vector.pgvector.maintenance_work_mem_mb <- 5000000000": {
-    "err": true
+    "ok": {
+      "vector.pgvector.maintenance_work_mem_mb": 5000000000
+    }
   },
   "set vector.pgvector.maintenance_work_mem_mb <- 70000": {
     "ok": {
@@ -11169,7 +11183,9 @@
     "err": true
   },
   "set vector.pgvector.maintenance_workers <- 5000000000": {
-    "err": true
+    "ok": {
+      "vector.pgvector.maintenance_workers": 5000000000
+    }
   },
   "set vector.pgvector.maintenance_workers <- 70000": {
     "ok": {

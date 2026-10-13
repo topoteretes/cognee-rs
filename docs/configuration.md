@@ -98,8 +98,11 @@ canonical value wins and the alias is dropped with a warning, so a stale flat ke
 flag or `set` wrote under `llm.api_key`. `cognee-cli` rewrites those flat keys to
 canonical ones when it loads a pre-v4 config file. The TS and Java constructors
 also accept a section key with its dots flattened to underscores
-(`llm_auto_rate_limit`), so the camelCase keys a TS `config.get()` returns
-(`llmAutoRateLimit`) can be passed back to `new Cognee(...)`. Two sections
+(`llm_debug_requests`), so the camelCase keys a TS `config.get()` returns can be
+passed back to `new Cognee(...)`: a section key with a Python alias reads back
+under the alias's camelCase (`llm.auto_rate_limit` -> `autoRateLimit`), one
+without an alias with its dots as word breaks (`llm.debug_requests` ->
+`llmDebugRequests`). Two sections
 claiming the same key, alias or primary env var is a registration error. So is a
 section claiming a `Settings` key.
 
@@ -734,8 +737,9 @@ Notes:
   `max_worker_processes` still allow, down to zero (a serial build). The only
   cost of over-asking is a slower build, so no server-side configuration is
   required to adopt the defaults.
-- A blank, negative or non-numeric env value is ignored and the default applies;
-  an out-of-range value clamps. A typo in a deployment environment should not
+- Surrounding whitespace in an env value is ignored. A blank, negative or
+  non-numeric env value is ignored and the default applies; an out-of-range
+  value (however large) clamps. A typo in a deployment environment should not
   take the store down.
 
 ## Graph database

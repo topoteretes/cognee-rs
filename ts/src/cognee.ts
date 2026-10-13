@@ -109,10 +109,13 @@ const SETTINGS_KEY_ALIASES: Record<string, string> = {
  * (camel→snake is idempotent on them), so both spellings are accepted — fixing
  * silently-ignored camelCase constructor args.
  *
- * A component section key read back by `config.get()` (`llm.auto_rate_limit`
- * -> `llmAutoRateLimit`) arrives here as `llm_auto_rate_limit`; the native
- * constructor maps that flattened spelling back to the canonical key, so a
- * `new Cognee(other.config.get())` round trip keeps every setting.
+ * A component section key read back by `config.get()` comes back either under
+ * its Python alias's camelCase (`llm.auto_rate_limit` -> `autoRateLimit`,
+ * arriving here as the alias `auto_rate_limit`) or, when it has no alias, with
+ * its dots as word breaks (`llm.debug_requests` -> `llmDebugRequests`,
+ * arriving here as `llm_debug_requests`); the native constructor maps both
+ * spellings back to the canonical key, so a `new Cognee(other.config.get())`
+ * round trip keeps every setting.
  */
 function normalizeSettings(settings: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};

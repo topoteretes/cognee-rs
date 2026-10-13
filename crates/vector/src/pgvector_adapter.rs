@@ -109,7 +109,8 @@ const MERGED_METADATA: &str = "COALESCE((
 /// 20 queries near 0.02-0.06 at any ef_search <= 200 — and m = 24 /
 /// ef_construction = 128 raised it to 0.9985 for ~1.75x the build time at
 /// the same index size.
-/// Default `m`; `COGNEE_PGVECTOR_HNSW_M` overrides it — see [`tuning`].
+/// Default `m`; `vector.pgvector.hnsw_m` (`COGNEE_PGVECTOR_HNSW_M`) overrides
+/// it — see [`PgVectorConfig`].
 const HNSW_M: u32 = 24;
 
 /// HNSW build-time candidate list size (pgvector's default is 64); see
@@ -300,7 +301,9 @@ const HNSW_INSERT_MIN_BATCH: usize = 250;
 
 /// Lower / upper bound of the `maintenance_work_mem` (kB) an index rebuild
 /// runs under: pgvector's default, and 2 GB. The upper bound is what
-/// `COGNEE_PGVECTOR_MAINTENANCE_WORK_MEM_MB` overrides (see [`tuning`]).
+/// `vector.pgvector.maintenance_work_mem_mb`
+/// (`COGNEE_PGVECTOR_MAINTENANCE_WORK_MEM_MB`) overrides (see
+/// [`PgVectorConfig`]).
 const HNSW_BUILD_BUDGET_MIN_KB: i64 = 64 * 1024;
 const HNSW_BUILD_BUDGET_MAX_KB: i64 = 2 * 1024 * 1024;
 
@@ -327,20 +330,20 @@ cognee_config_core::config_section! {
     /// zero, where the build runs serially.
     pub struct PgVectorConfig in "vector.pgvector" {
         /// `m` of every HNSW index built from now on (2–100).
-        pub hnsw_m: u32 = HNSW_M => {
+        pub hnsw_m: u64 = u64::from(HNSW_M) => {
             env: ["COGNEE_PGVECTOR_HNSW_M"], alias: ["pgvector_hnsw_m"], secret: false,
         },
         /// `ef_construction` of those builds (`2 * m`–1000).
-        pub hnsw_ef_construction: u32 = HNSW_EF_CONSTRUCTION => {
+        pub hnsw_ef_construction: u64 = u64::from(HNSW_EF_CONSTRUCTION) => {
             env: ["COGNEE_PGVECTOR_HNSW_EF_CONSTRUCTION"], alias: ["pgvector_hnsw_ef_construction"], secret: false,
         },
         /// `max_parallel_maintenance_workers` for every build (0–64); unset uses
         /// 4 for a rebuild and 7 for a bulk load.
-        pub maintenance_workers: Option<u32> = None => {
+        pub maintenance_workers: Option<u64> = None => {
             env: ["COGNEE_PGVECTOR_MAINTENANCE_WORKERS"], alias: ["pgvector_maintenance_workers"], secret: false,
         },
         /// Ceiling of the per-build `maintenance_work_mem`, in MB (64–65536).
-        pub maintenance_work_mem_mb: u32 = (HNSW_BUILD_BUDGET_MAX_KB / 1024) as u32 => {
+        pub maintenance_work_mem_mb: u64 = (HNSW_BUILD_BUDGET_MAX_KB / 1024) as u64 => {
             env: ["COGNEE_PGVECTOR_MAINTENANCE_WORK_MEM_MB"], alias: ["pgvector_maintenance_work_mem_mb"], secret: false,
         },
     }
@@ -363,15 +366,26 @@ impl PgVectorTuning {
     /// (pgvector requires `ef_construction >= 2 * m`, so the floor follows `m`
     /// and every `CREATE INDEX` stays valid); workers to at most 64; the
     /// memory ceiling to 64–65536 MB.
+    ///
+    /// The fields are `u64` (not the `u32` the adapter applies) so a value
+    /// past `u32::MAX` still clamps to the ceiling instead of failing to parse
+    /// and silently falling back to the default.
     pub fn from_config(config: &PgVectorConfig) -> Self {
-        let hnsw_m = config.hnsw_m.clamp(2, 100);
+        let clamp_u32 = |v: u64, min: u32, max: u32| {
+            // In range after the clamp, so the fallback is unreachable.
+            u32::try_from(v.clamp(u64::from(min), u64::from(max))).unwrap_or(max)
+        };
+        let hnsw_m = clamp_u32(config.hnsw_m, 2, 100);
         let floor = hnsw_m * 2;
         Self {
             hnsw_m,
-            hnsw_ef_construction: config.hnsw_ef_construction.clamp(floor, 1000.max(floor)),
-            maintenance_workers: config.maintenance_workers.map(|w| w.min(64)),
-            build_budget_max_kb: i64::from(config.maintenance_work_mem_mb.clamp(64, 64 * 1024))
-                * 1024,
+            hnsw_ef_construction: clamp_u32(config.hnsw_ef_construction, floor, 1000.max(floor)),
+            maintenance_workers: config.maintenance_workers.map(|w| clamp_u32(w, 0, 64)),
+            build_budget_max_kb: i64::from(clamp_u32(
+                config.maintenance_work_mem_mb,
+                64,
+                64 * 1024,
+            )) * 1024,
         }
     }
 
@@ -402,7 +416,7 @@ mod tuning_tests {
     /// Out-of-range values clamp rather than propagate into DDL.
     #[test]
     fn out_of_range_values_clamp() {
-        let tuning = |m: u32, ef: u32, workers: Option<u32>, mem: u32| {
+        let tuning = |m: u64, ef: u64, workers: Option<u64>, mem: u64| {
             PgVectorTuning::from_config(&PgVectorConfig {
                 hnsw_m: m,
                 hnsw_ef_construction: ef,
@@ -418,6 +432,31 @@ mod tuning_tests {
         assert_eq!(tuning(24, 128, Some(500), 2048).maintenance_workers(4), 64);
         assert_eq!(tuning(24, 128, None, 2048).maintenance_workers(4), 4);
         assert_eq!(tuning(24, 128, None, 1).build_budget_max_kb, 64 * 1024);
+    }
+
+    /// Env values parse like the pre-section `env_u64` did: surrounding
+    /// whitespace is ignored, and a value past `u32::MAX` clamps to the
+    /// ceiling rather than being dropped in favour of the default.
+    #[test]
+    fn env_values_trim_and_clamp_past_u32() {
+        use cognee_config_core::{ConfigSchema, ConfigSection, ConfigValues, MapEnv};
+        let mut schema = ConfigSchema::new();
+        schema
+            .add(PgVectorConfig::schema())
+            .expect("a single section never collides");
+        let from_env = |pairs: &[(&str, &str)]| {
+            let env: MapEnv = pairs.iter().copied().collect();
+            let mut values = ConfigValues::new();
+            schema.overlay_env(&mut values, &env);
+            PgVectorTuning::from_config(&PgVectorConfig::from_values(&values))
+        };
+        assert_eq!(from_env(&[("COGNEE_PGVECTOR_HNSW_M", " 48 ")]).hnsw_m, 48);
+        let huge = from_env(&[
+            ("COGNEE_PGVECTOR_HNSW_M", "5000000000"),
+            ("COGNEE_PGVECTOR_MAINTENANCE_WORK_MEM_MB", "5000000000"),
+        ]);
+        assert_eq!(huge.hnsw_m, 100);
+        assert_eq!(huge.build_budget_max_kb, 64 * 1024 * 1024);
     }
 
     /// The defaults are the measured constants.

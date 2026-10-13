@@ -11929,8 +11929,9 @@
     "key": "pgvector_hnsw_ef_construction"
   },
   "pgvector_hnsw_ef_construction <- 5000000000": {
-    "err": "TypeMismatch",
-    "key": "pgvector_hnsw_ef_construction"
+    "ok": {
+      "vector.pgvector.hnsw_ef_construction": 5000000000
+    }
   },
   "pgvector_hnsw_ef_construction <- 70000": {
     "ok": {
@@ -11992,8 +11993,9 @@
     "key": "pgvector_hnsw_m"
   },
   "pgvector_hnsw_m <- 5000000000": {
-    "err": "TypeMismatch",
-    "key": "pgvector_hnsw_m"
+    "ok": {
+      "vector.pgvector.hnsw_m": 5000000000
+    }
   },
   "pgvector_hnsw_m <- 70000": {
     "ok": {
@@ -12055,8 +12057,9 @@
     "key": "pgvector_maintenance_work_mem_mb"
   },
   "pgvector_maintenance_work_mem_mb <- 5000000000": {
-    "err": "TypeMismatch",
-    "key": "pgvector_maintenance_work_mem_mb"
+    "ok": {
+      "vector.pgvector.maintenance_work_mem_mb": 5000000000
+    }
   },
   "pgvector_maintenance_work_mem_mb <- 70000": {
     "ok": {
@@ -12118,8 +12121,9 @@
     "key": "pgvector_maintenance_workers"
   },
   "pgvector_maintenance_workers <- 5000000000": {
-    "err": "TypeMismatch",
-    "key": "pgvector_maintenance_workers"
+    "ok": {
+      "vector.pgvector.maintenance_workers": 5000000000
+    }
   },
   "pgvector_maintenance_workers <- 70000": {
     "ok": {
@@ -13076,8 +13080,9 @@
     "key": "vector.pgvector.hnsw_ef_construction"
   },
   "vector.pgvector.hnsw_ef_construction <- 5000000000": {
-    "err": "TypeMismatch",
-    "key": "vector.pgvector.hnsw_ef_construction"
+    "ok": {
+      "vector.pgvector.hnsw_ef_construction": 5000000000
+    }
   },
   "vector.pgvector.hnsw_ef_construction <- 70000": {
     "ok": {
@@ -13139,8 +13144,9 @@
     "key": "vector.pgvector.hnsw_m"
   },
   "vector.pgvector.hnsw_m <- 5000000000": {
-    "err": "TypeMismatch",
-    "key": "vector.pgvector.hnsw_m"
+    "ok": {
+      "vector.pgvector.hnsw_m": 5000000000
+    }
   },
   "vector.pgvector.hnsw_m <- 70000": {
     "ok": {
@@ -13202,8 +13208,9 @@
     "key": "vector.pgvector.maintenance_work_mem_mb"
   },
   "vector.pgvector.maintenance_work_mem_mb <- 5000000000": {
-    "err": "TypeMismatch",
-    "key": "vector.pgvector.maintenance_work_mem_mb"
+    "ok": {
+      "vector.pgvector.maintenance_work_mem_mb": 5000000000
+    }
   },
   "vector.pgvector.maintenance_work_mem_mb <- 70000": {
     "ok": {
@@ -13265,8 +13272,9 @@
     "key": "vector.pgvector.maintenance_workers"
   },
   "vector.pgvector.maintenance_workers <- 5000000000": {
-    "err": "TypeMismatch",
-    "key": "vector.pgvector.maintenance_workers"
+    "ok": {
+      "vector.pgvector.maintenance_workers": 5000000000
+    }
   },
   "vector.pgvector.maintenance_workers <- 70000": {
     "ok": {

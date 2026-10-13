@@ -785,37 +785,6 @@ impl Default for Settings {
                 as u32,
             graph_prompt_path: "generate_graph_prompt.txt".to_string(),
 
-            // OSS default: legacy `"lancedb"` is kept as the literal value so
-            // existing configs continue to boot without edits. It is not a
-            // fallback — `ComponentManager::init_vector_db` hands the provider id
-            // to `ComponentRegistry::build_vector`, which ERRORS when no factory
-            // is registered under it. Production deployments should explicitly set
-            // `vector_db_provider="pgvector"` (and supply `vector_db_url`) for
-            // durable storage. T5's earlier flip to `"pgvector"` broke OSS bindings
-            // (their defaults don't enable the `pgvector` Cargo feature), so
-            // `"lancedb"` remains the lowest-friction default — but note it is now
-            // itself behind the `lancedb` feature (default-on in `cognee`, in
-            // every binding, and in `cognee-http-server`). A consumer that
-            // drops that
-            // feature MUST set `vector_db_provider` explicitly; the registry's
-            // unsupported-provider error names the feature to rebuild with.
-            //
-            // Android is the one first-party profile that does drop it:
-            // `cognee/android-default` omits `lancedb` because the Arrow + lance
-            // native stack does not cross-compile. Its effective backend has
-            // always been in-memory brute-force anyway — when the feature IS
-            // present, `LanceDbFactory::build` falls back to brute-force on
-            // Android rather than opening a store. Naming brute-force directly
-            // there keeps that behaviour and stops a stock Android build from
-            // erroring on a provider whose factory was never registered. Every
-            // other slim consumer keeps the loud failure described above.
-            //
-            // This default covers only a *default* `Settings`. An explicit
-            // "lancedb" still reaches the registry from a persisted config.json
-            // (the CLI serializes the whole struct, so any `config set` writes
-            // the provider back) or from `VECTOR_DB_PROVIDER`; those are
-            // absorbed by `ANDROID_LANCEDB_FALLBACK` in
-            // `ComponentRegistry::resolve_vector_key`. Keep the two in step.
             chunk_strategy: "PARAGRAPH".to_string(),
             chunk_engine: "DEFAULT_ENGINE".to_string(),
             chunk_size: None,
@@ -1028,8 +997,8 @@ impl ConfigManager {
     /// The whole configuration as one JSON object: every `Settings` field, and
     /// every setting of every known component section under its canonical key
     /// with its current or default value. Unknown section entries are kept.
-    /// With `mask = Some(marker)`, non-empty section secrets are replaced by
-    /// `marker` (callers mask `Settings` secrets themselves, e.g. with
+    /// With `mask = Some(marker)`, every non-null section secret (an empty one
+    /// too, so its presence leaks nothing) is replaced by `marker` (callers mask `Settings` secrets themselves, e.g. with
     /// `cognee_bindings_common::redact_config_json`).
     pub fn snapshot(&self, mask: Option<&str>) -> serde_json::Value {
         // Lock order: `schema` before `inner` (see `ConfigManager`).
