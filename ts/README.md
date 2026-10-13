@@ -369,7 +369,8 @@ import {
   shutdown,
   setupLogging,
   setupTelemetry,
-  setupTelemetryAnalytics,
+  setTelemetryEnabled,
+  isTelemetryEnabled,
 } from '@cognee/cognee-ts';
 
 // Boot the Rust tokio runtime (required before any async op).
@@ -378,14 +379,17 @@ init();
 // Alternatively boot with a fixed worker-thread count.
 initWithThreads(4);
 
-// Optional: add file logging (reads COGNEE_LOG_*, LOG_FILE_NAME, LOG_LEVEL).
-setupLogging();
+// Optional: add file logging. Env (COGNEE_LOG_*, LOG_FILE_NAME, LOG_LEVEL) is
+// the default; options win. Process-wide; the first call wins.
+setupLogging({ logLevel: "debug", logsRootDirectory: "/var/log/cognee" });
 
-// Optional: enable OTLP trace export (reads OTEL_* env vars).
-setupTelemetry();
+// Optional: enable OTLP trace export. Env (OTEL_*) is the default; options win.
+setupTelemetry({ otelExporterOtlpEndpoint: "http://collector:4317" });
 
-// Optional: enable product-analytics emission (returns true if armed).
-const armed = setupTelemetryAnalytics();
+// Product analytics are on by default. Turn them off for the whole process
+// (wins over TELEMETRY_DISABLED / ENV):
+setTelemetryEnabled(false);
+isTelemetryEnabled(); // false
 
 // Tear the runtime down (e.g. before process exit).
 shutdown();
@@ -396,6 +400,11 @@ deterministic, per-tenant ID generation.
 
 Set `COGNEE_BINDING_SUPPRESS_LOGS=1` before `require`ing the module to skip the
 auto-installed stderr subscriber if your host manages the logging pipeline.
+
+Logging, OTLP export and analytics are process-wide, so a handle's
+`config.set(...)` does not reach them — configure them with these functions.
+`setupTelemetryAnalytics()` (arm + report) still exists and returns the same
+value as `isTelemetryEnabled()`.
 
 ## Environment variables
 
@@ -412,10 +421,10 @@ auto-installed stderr subscriber if your host manages the logging pipeline.
 | `MOCK_EMBEDDING` | Set `true` to use deterministic SHA-256-derived mock embeddings (no model download); `zero` gives all-zero vectors instead. |
 | `COGNEE_BINDING_SUPPRESS_LOGS` | Suppress the auto-installed stderr fmt subscriber. |
 | `COGNEE_HOST_SDK` | Suppress binding-armed analytics when the host is an embedding SDK. |
-| `TELEMETRY_DISABLED`, `ENV` | Standard analytics opt-outs for `setupTelemetryAnalytics()`. |
+| `TELEMETRY_DISABLED`, `ENV` | Analytics opt-out defaults, read once on load; `setTelemetryEnabled()` wins. |
 | `RUST_LOG`, `LOG_LEVEL` | `tracing-subscriber` env-filter level overrides. |
-| `COGNEE_LOG_*`, `LOG_FILE_NAME` | Consumed by `setupLogging()`. |
-| `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, `OTEL_*` | Consumed by `setupTelemetry()`. |
+| `COGNEE_LOG_*`, `LOG_FILE_NAME` | Defaults for `setupLogging()`; its options win. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, `OTEL_*` | Defaults for `setupTelemetry()`; its options win. |
 
 ---
 

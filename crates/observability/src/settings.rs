@@ -29,7 +29,37 @@ pub trait SettingsView: Send + Sync {
     fn traces_sampler(&self) -> &str;
     /// Mirrors `Settings.otel_traces_sampler_arg`.
     fn traces_sampler_arg(&self) -> &str;
+    /// Mirrors `Settings.otel_deployment_environment`: the
+    /// `deployment.environment.name` resource attribute (env: `ENV`).
+    ///
+    /// Provided so implementors outside this workspace keep compiling; they
+    /// report [`DEFAULT_DEPLOYMENT_ENVIRONMENT`] unless they override it.
+    fn deployment_environment(&self) -> &str {
+        DEFAULT_DEPLOYMENT_ENVIRONMENT
+    }
 }
+
+/// Default `deployment.environment.name` when `ENV` is unset.
+pub const DEFAULT_DEPLOYMENT_ENVIRONMENT: &str = "development";
+
+/// The settings keys [`EnvSettingsView::set`] accepts — the same names as the
+/// matching `cognee::Settings` fields.
+pub const OTEL_SETTING_KEYS: &[&str] = &[
+    "cognee_tracing_enabled",
+    "otel_service_name",
+    "otel_exporter_otlp_endpoint",
+    "otel_exporter_otlp_headers",
+    "otel_exporter_otlp_protocol",
+    "otel_span_processor",
+    "otel_traces_sampler",
+    "otel_traces_sampler_arg",
+    "otel_deployment_environment",
+];
+
+/// [`EnvSettingsView::set`] was given a key outside [`OTEL_SETTING_KEYS`].
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("unknown OpenTelemetry setting {0:?} (expected one of: {keys})", keys = OTEL_SETTING_KEYS.join(", "))]
+pub struct UnknownOtelSetting(pub String);
 
 // Defaults mirror `cognee::Settings::default()` (config.rs lines 644-651).
 // Kept here so callers that don't depend on `cognee` still get the same
@@ -45,10 +75,13 @@ pub(crate) const DEFAULT_SPAN_PROCESSOR: &str = "batch";
 pub(crate) const DEFAULT_TRACES_SAMPLER: &str = "";
 pub(crate) const DEFAULT_TRACES_SAMPLER_ARG: &str = "";
 
-/// Snapshot of OTEL-relevant env vars usable as a [`SettingsView`].
+/// Snapshot of OTEL-relevant settings usable as a [`SettingsView`]: the
+/// process-config counterpart of the `otel_*` fields of `cognee::Settings`.
 ///
-/// Lets crates that don't depend on `cognee::Settings` (e.g. the HTTP
-/// server) drive [`crate::init_telemetry`] directly from the environment.
+/// Lets callers that initialise tracing before any `Settings` exists (the
+/// language bindings, an HTTP server) drive [`crate::init_telemetry`]:
+/// defaults, overlaid with the environment ([`EnvSettingsView::from_env`]),
+/// overlaid with explicit values from code ([`EnvSettingsView::set`]).
 #[derive(Debug, Clone)]
 pub struct EnvSettingsView {
     tracing_enabled: bool,
@@ -59,6 +92,7 @@ pub struct EnvSettingsView {
     span_processor: String,
     traces_sampler: String,
     traces_sampler_arg: String,
+    deployment_environment: String,
 }
 
 impl Default for EnvSettingsView {
@@ -72,56 +106,94 @@ impl Default for EnvSettingsView {
             span_processor: DEFAULT_SPAN_PROCESSOR.to_string(),
             traces_sampler: DEFAULT_TRACES_SAMPLER.to_string(),
             traces_sampler_arg: DEFAULT_TRACES_SAMPLER_ARG.to_string(),
+            deployment_environment: DEFAULT_DEPLOYMENT_ENVIRONMENT.to_string(),
         }
     }
 }
 
 impl EnvSettingsView {
-    /// Read all eight OTEL env vars. Missing or empty vars fall back to
-    /// the same defaults as `cognee::Settings::default()`.
+    /// Read the OTEL env vars (`COGNEE_TRACING_ENABLED`, `OTEL_*`, `ENV`).
+    /// Missing or empty vars fall back to the same defaults as
+    /// `cognee::Settings::default()`.
     ///
     /// This is a configuration boundary: it is where tracing setup opens the
     /// process environment. [`EnvSettingsView::from_env_source`] reads the same
     /// variables from any [`EnvSource`].
+    pub fn from_env() -> Self {
+        Self::from_env_over(Self::default())
+    }
+
+    /// [`EnvSettingsView::from_env`] over caller-chosen defaults, e.g. a
+    /// binding's own default service name:
+    /// `EnvSettingsView::from_env_over(EnvSettingsView::default().with_service_name("cognee.python-binding"))`.
+    /// A variable that is set wins over the default; an unset one keeps it.
     #[allow(
         clippy::disallowed_methods,
         reason = "config boundary: the OTel settings are resolved from the process env here"
     )]
-    pub fn from_env() -> Self {
-        Self::from_env_source(&cognee_config_core::ProcessEnv::new())
+    pub fn from_env_over(defaults: Self) -> Self {
+        defaults.overlay(&cognee_config_core::ProcessEnv::new())
     }
 
     /// [`EnvSettingsView::from_env`], reading from `env` instead of the
     /// process environment.
     pub fn from_env_source(env: &dyn EnvSource) -> Self {
-        let mut view = Self::default();
+        Self::default().overlay(env)
+    }
 
+    /// Overlay the variables set in `env` onto `self`.
+    #[must_use]
+    pub fn overlay(mut self, env: &dyn EnvSource) -> Self {
         if let Some(v) = read_env(env, "COGNEE_TRACING_ENABLED") {
-            view.tracing_enabled = cognee_utils::parse_env_bool(&v);
+            self.tracing_enabled = cognee_utils::parse_env_bool(&v);
         }
-        if let Some(v) = read_env(env, "OTEL_SERVICE_NAME") {
-            view.service_name = v;
+        for (var, field) in [
+            ("OTEL_SERVICE_NAME", &mut self.service_name),
+            ("OTEL_EXPORTER_OTLP_ENDPOINT", &mut self.otlp_endpoint),
+            ("OTEL_EXPORTER_OTLP_HEADERS", &mut self.otlp_headers),
+            ("OTEL_EXPORTER_OTLP_PROTOCOL", &mut self.otlp_protocol),
+            ("OTEL_SPAN_PROCESSOR", &mut self.span_processor),
+            ("OTEL_TRACES_SAMPLER", &mut self.traces_sampler),
+            ("OTEL_TRACES_SAMPLER_ARG", &mut self.traces_sampler_arg),
+            ("ENV", &mut self.deployment_environment),
+        ] {
+            if let Some(v) = read_env(env, var) {
+                *field = v;
+            }
         }
-        if let Some(v) = read_env(env, "OTEL_EXPORTER_OTLP_ENDPOINT") {
-            view.otlp_endpoint = v;
-        }
-        if let Some(v) = read_env(env, "OTEL_EXPORTER_OTLP_HEADERS") {
-            view.otlp_headers = v;
-        }
-        if let Some(v) = read_env(env, "OTEL_EXPORTER_OTLP_PROTOCOL") {
-            view.otlp_protocol = v;
-        }
-        if let Some(v) = read_env(env, "OTEL_SPAN_PROCESSOR") {
-            view.span_processor = v;
-        }
-        if let Some(v) = read_env(env, "OTEL_TRACES_SAMPLER") {
-            view.traces_sampler = v;
-        }
-        if let Some(v) = read_env(env, "OTEL_TRACES_SAMPLER_ARG") {
-            view.traces_sampler_arg = v;
-        }
+        self
+    }
 
-        view
+    /// Replace the default service name (`cognee`). Meant to be applied to
+    /// the defaults, before the environment, so `OTEL_SERVICE_NAME` still wins.
+    #[must_use]
+    pub fn with_service_name(mut self, name: impl Into<String>) -> Self {
+        self.service_name = name.into();
+        self
+    }
+
+    /// Set one setting from code, by its `cognee::Settings` key (see
+    /// [`OTEL_SETTING_KEYS`]). `cognee_tracing_enabled` takes a boolean
+    /// spelled `true|1|yes|on` / anything else; every other key takes the
+    /// value verbatim. Wins over the environment.
+    pub fn set(&mut self, key: &str, value: &str) -> Result<(), UnknownOtelSetting> {
+        let field = match key {
+            "cognee_tracing_enabled" => {
+                self.tracing_enabled = cognee_utils::parse_env_bool(value);
+                return Ok(());
+            }
+            "otel_service_name" => &mut self.service_name,
+            "otel_exporter_otlp_endpoint" => &mut self.otlp_endpoint,
+            "otel_exporter_otlp_headers" => &mut self.otlp_headers,
+            "otel_exporter_otlp_protocol" => &mut self.otlp_protocol,
+            "otel_span_processor" => &mut self.span_processor,
+            "otel_traces_sampler" => &mut self.traces_sampler,
+            "otel_traces_sampler_arg" => &mut self.traces_sampler_arg,
+            "otel_deployment_environment" => &mut self.deployment_environment,
+            other => return Err(UnknownOtelSetting(other.to_string())),
+        };
+        *field = value.to_string();
+        Ok(())
     }
 }
 
@@ -156,6 +228,9 @@ impl SettingsView for EnvSettingsView {
     fn traces_sampler_arg(&self) -> &str {
         &self.traces_sampler_arg
     }
+    fn deployment_environment(&self) -> &str {
+        &self.deployment_environment
+    }
 }
 
 #[cfg(test)]
@@ -186,6 +261,7 @@ mod tests {
             "OTEL_SPAN_PROCESSOR",
             "OTEL_TRACES_SAMPLER",
             "OTEL_TRACES_SAMPLER_ARG",
+            "ENV",
         ] {
             // Safety: tests serialize via ENV_LOCK; no other thread reads
             // the env concurrently here.
@@ -207,6 +283,10 @@ mod tests {
         assert_eq!(view.span_processor(), DEFAULT_SPAN_PROCESSOR);
         assert_eq!(view.traces_sampler(), DEFAULT_TRACES_SAMPLER);
         assert_eq!(view.traces_sampler_arg(), DEFAULT_TRACES_SAMPLER_ARG);
+        assert_eq!(
+            view.deployment_environment(),
+            DEFAULT_DEPLOYMENT_ENVIRONMENT
+        );
     }
 
     #[test]
@@ -274,6 +354,41 @@ mod tests {
             view.otlp_endpoint(),
             EnvSettingsView::default().otlp_endpoint(),
             "empty means unset"
+        );
+    }
+
+    #[test]
+    fn env_feeds_deployment_environment() {
+        let env = cognee_config_core::MapEnv::new().with("ENV", "staging");
+        assert_eq!(
+            EnvSettingsView::from_env_source(&env).deployment_environment(),
+            "staging"
+        );
+    }
+
+    /// Precedence: caller default < environment < explicit `set`.
+    #[test]
+    fn default_service_name_env_and_set_precedence() {
+        let base = EnvSettingsView::default().with_service_name("cognee.test-binding");
+        let unset = base.clone().overlay(&cognee_config_core::MapEnv::new());
+        assert_eq!(unset.service_name(), "cognee.test-binding");
+
+        let env = cognee_config_core::MapEnv::new().with("OTEL_SERVICE_NAME", "from-env");
+        let mut view = base.overlay(&env);
+        assert_eq!(view.service_name(), "from-env");
+
+        view.set("otel_service_name", "from-code")
+            .expect("known key");
+        view.set("cognee_tracing_enabled", "true")
+            .expect("known key");
+        view.set("otel_deployment_environment", "prod")
+            .expect("known key");
+        assert_eq!(view.service_name(), "from-code");
+        assert!(view.tracing_enabled());
+        assert_eq!(view.deployment_environment(), "prod");
+        assert_eq!(
+            view.set("otel_nope", "x"),
+            Err(UnknownOtelSetting("otel_nope".into()))
         );
     }
 }

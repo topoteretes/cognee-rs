@@ -46,7 +46,7 @@ Parsing notes:
 | Scope | Config struct | Built by |
 |---|---|---|
 | **Instance** | `Settings`, behind `ConfigManager` | each SDK handle / CLI run, from `Settings::load_from_env()` or `Settings::overlay_from(&dyn EnvSource)` |
-| **Process** | `LoggingConfig`, the observability settings, product telemetry | once per process, because each configures a process-wide singleton (the `tracing` subscriber, the OTLP exporter, the analytics dispatcher) |
+| **Process** | `LoggingConfig`, the observability settings (`EnvSettingsView`), product analytics (`TelemetryConfig`) | once per process, because each configures a process-wide singleton (the `tracing` subscriber, the OTLP exporter, the analytics dispatcher). Env is the default; a programmatic call (`init_logging`, a binding's `setup_*` options, `cognee::telemetry::set_enabled` / `configure`) wins. See [Logging](#logging) and [Observability & telemetry](#observability--telemetry). |
 
 ### Component config sections
 
@@ -142,7 +142,8 @@ A setting marked `secret` (a registry row or a section key) is masked as
   instead of mutating the shared process environment:
   * `Settings::overlay_from(&dyn EnvSource)`
   * `LoggingConfig::from_env_source(&dyn EnvSource)`
-  * `EnvSettingsView::from_env_source(&dyn EnvSource)`
+  * `EnvSettingsView::from_env_source(&dyn EnvSource)` (and `overlay`)
+  * `TelemetryConfig::from_env_source(&dyn EnvSource)`
 
   The `from_env()` / `overlay_from_env()` entry points are thin boundaries over them.
 * The root [`clippy.toml`](../clippy.toml) bans the following:
@@ -1599,8 +1600,8 @@ flag-gated only — provider overload does not switch it on automatically.
 
 > **Canonical table.** Binding READMEs and `.env.example` link here. cognee writes
 > structured logs to **stdout** and (when writable) to a rotating file. File logging
-> is owned by [`cognee-logging`](../crates/logging/), initialised by the CLI and HTTP
-> server via `cognee_logging::init_logging`.
+> is owned by [`cognee-logging`](../crates/logging/): the CLI installs it at startup,
+> the language bindings when you call their `setup_logging` entry point.
 >
 > **Exception — machine-readable CLI output.** `cognee-cli` sends console logs to
 > **stderr** for any invocation whose stdout is a contract with a program:
@@ -1609,16 +1610,54 @@ flag-gated only — provider overload does not switch it on automatically.
 > unparseable (a leading timestamp is read as a JSON number). Human-facing
 > `pretty` output, and every other subcommand, still log to stdout.
 
-| Env var | Default | Purpose |
-|---|---|---|
-| `COGNEE_LOG_FILE` | `true` | Master file-logging toggle (`false`/`0`/`no` disables). |
-| `COGNEE_LOGS_DIR` | `~/.cognee/logs` | Log directory (falls back to `/tmp/cognee_logs` if unwritable). |
-| `COGNEE_LOG_FORMAT` | `plain` | `plain` (Python-compatible) or `json`. Applies to stdout + file. |
-| `COGNEE_LOG_ROTATION` | `daily` | `daily` / `hourly` / `minutely` / `never`. |
-| `COGNEE_LOG_BACKUP_COUNT` | `5` | Rotated files retained by age. |
-| `COGNEE_LOG_MAX_FILES` | `10` | Hard cap on retained log files. |
-| `LOG_FILE_NAME` | _(timestamped)_ | Override the log file name. |
-| `RUST_LOG` / `LOG_LEVEL` | `info` | Level filter (`RUST_LOG` preferred). |
+Logging configures a process-wide singleton (the `tracing` subscriber), so it is
+**process config**: one [`LoggingConfig`](../crates/logging/src/config.rs), resolved
+once, at startup. Its only window onto the environment is
+`LoggingConfig::from_env_source` (the `from_env()` boundary). Every field is also
+settable from code: assign it, or use `LoggingConfig::set(key, value)` with the
+option keys below.
+
+| Env var | Option key | Default | Purpose |
+|---|---|---|---|
+| `COGNEE_LOG_FILE` | `log_file` | `true` | Master file-logging toggle (`false`/`0`/`no` disables). |
+| `COGNEE_LOGS_DIR` | `logs_root_directory` | `~/.cognee/logs` | Log directory (falls back to `/tmp/cognee_logs` if unwritable). |
+| `COGNEE_LOG_FORMAT` | `log_format` | `plain` | `plain` (Python-compatible) or `json`. Applies to stdout + file. |
+| `COGNEE_LOG_ROTATION` | `log_rotation` | `daily` | `daily` / `hourly` / `minutely` / `never`. |
+| `COGNEE_LOG_BACKUP_COUNT` | `log_backup_count` | `5` | Rotated files retained by age. |
+| `COGNEE_LOG_MAX_FILES` | `log_max_files` | `10` | Hard cap on retained log files. |
+| `COGNEE_LOG_MAX_BYTES` | `log_max_bytes` | _(unset)_ | Accepted for Python parity, ignored (size-based rotation is not supported); a warning is logged. |
+| `LOG_FILE_NAME` | `log_file_name` | _(timestamped)_ | Override the log file name. |
+| `RUST_LOG` / `LOG_LEVEL` | `log_level` | cognee's default filter | Level filter (`RUST_LOG` preferred). The default is `info` with noisy libraries (`ort`, `reqwest`, `sqlx`, …) at `warn`. |
+| — | `console_stream` | `stdout` | `stdout` or `stderr`. |
+
+**Precedence:** defaults < environment < options from code.
+
+* **CLI.** The CLI loads `Settings` before it installs logging, so the two
+  `Settings` keys `log_level` and `logs_root_directory` (default empty: use the
+  logging default) are lowered into the logging config. Each fills only what the
+  logging environment left unset: `RUST_LOG` > `LOG_LEVEL` > the config file's
+  `log_level` > the default filter, and `COGNEE_LOGS_DIR` > the config file's
+  `logs_root_directory` > `~/.cognee/logs`. So `cognee-cli config set log_level debug`
+  persists a level.
+* **Bindings.** A binding installs logging from a module-level function that runs
+  before any handle exists, so a handle's `Settings` (and `config.set("log_level", …)`)
+  do **not** affect logging there. Pass the options to the entry point instead; they
+  win over the environment. The first call wins, later calls are no-ops.
+
+| Binding | Entry point |
+|---|---|
+| Rust | `cognee_logging::init_logging(LoggingConfig::from_env()?, layers)`; set fields or call `cfg.set(key, value)` first |
+| Python | `cognee_py.setup_logging({"log_level": "debug", "logs_root_directory": "/var/log/cognee"})` |
+| TypeScript | `setupLogging({ logLevel: "debug", logsRootDirectory: "/var/log/cognee" })` |
+| Java | `Cognee.setupLogging(Map.of("log_level", "debug"))` |
+| C | `cognee_setup_logging_with_options("{\"log_level\":\"debug\"}")` |
+
+Option keys are snake_case; the bindings also accept camelCase (`logLevel`). An
+unknown key or an invalid value is an error (Python `ValueError`, a JS exception,
+`CogneeException` with `VALIDATION_ERROR`, C return code `2` with
+`cg_last_error_message()`). The default bridge subscriber a binding installs on
+import (into Python `logging`, or stderr) reads its level filter through the same
+`LoggingConfig` boundary (`RUST_LOG` > `LOG_LEVEL` > default).
 
 > **Multi-process warning** — when several cognee processes share one log file via
 > `LOG_FILE_NAME`, rotation is not coordinated; concurrent rotation can corrupt the
@@ -1630,17 +1669,87 @@ flag-gated only — provider overload does not switch it on automatically.
 cognee emits OpenTelemetry traces (behind the `telemetry` feature) and opt-out
 product analytics. The **deep references** are
 [observability/opentelemetry.md](observability/opentelemetry.md) and
-[observability/send_telemetry.md](observability/send_telemetry.md); the env surface:
+[observability/send_telemetry.md](observability/send_telemetry.md).
 
-| Env var | Default | Purpose |
+### OpenTelemetry traces
+
+| Env var | `Settings` / option key | Default | Purpose |
+|---|---|---|---|
+| `COGNEE_TRACING_ENABLED` | `cognee_tracing_enabled` | `false` | Activate OTLP trace export. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `otel_exporter_otlp_endpoint` | _(empty)_ | OTLP collector endpoint (non-empty also activates tracing). |
+| `OTEL_SERVICE_NAME` | `otel_service_name` | `cognee` (CLI); `cognee.<binding>-binding` in a binding | Service name attribute. |
+| `OTEL_EXPORTER_OTLP_HEADERS` / `_PROTOCOL` | `otel_exporter_otlp_headers` / `otel_exporter_otlp_protocol` | _(empty)_ / `grpc` | Exporter headers / protocol. |
+| `OTEL_SPAN_PROCESSOR` | `otel_span_processor` | `batch` | `batch` or `simple`. |
+| `OTEL_TRACES_SAMPLER` / `_ARG` | `otel_traces_sampler` / `otel_traces_sampler_arg` | _(empty)_ | Sampler selection. |
+| `ENV` | `otel_deployment_environment` | `development` | The `deployment.environment.name` resource attribute. |
+
+**Precedence:** defaults < environment < code. The exporter is process-wide too, but
+where it reads its settings depends on who initialises it:
+
+* **CLI** — from `Settings` (defaults < config file < env < `--flags`), so
+  `cognee-cli config set otel_exporter_otlp_endpoint …` works.
+* **Rust embedders** — `cognee::telemetry::init_telemetry(&settings)` takes any
+  `SettingsView`: a `Settings`, or an `EnvSettingsView` (env only, plus
+  `EnvSettingsView::set(key, value)` from code).
+* **Bindings** — from a module-level function that runs before any handle exists,
+  so a handle's `Settings` do not apply. The binding's default service name
+  (`cognee.python-binding`, `cognee.node-binding`, `cognee.java-binding`,
+  `cognee.capi-binding`) is a *default*: `OTEL_SERVICE_NAME` and an explicit
+  `otel_service_name` option both win over it, and the process environment is never
+  modified. Options use the `Settings` key names above (camelCase also accepted):
+
+| Binding | Entry point |
+|---|---|
+| Python | `cognee_py.setup_telemetry({"otel_exporter_otlp_endpoint": "http://collector:4317"})` |
+| TypeScript | `setupTelemetry({ otelExporterOtlpEndpoint: "http://collector:4317" })` |
+| Java | `Cognee.initOtlp(Map.of("otel_exporter_otlp_endpoint", "http://collector:4317"))` |
+| C | `cognee_init_otlp_with_options("{\"otel_exporter_otlp_endpoint\":\"http://collector:4317\"}")` |
+
+### Product analytics
+
+Product analytics are **on by default** (opt-out, matching the Python SDK). The
+switch is **process-wide**: one
+[`TelemetryConfig`](../crates/telemetry/src/config.rs) governs every event the
+process sends, whichever handle emits it. It is not a `Settings` key and not a
+`cognee-cli config` key.
+
+| Env var | `TelemetryConfig` field | Default | Purpose |
+|---|---|---|---|
+| `TELEMETRY_DISABLED` | `enabled` = `false` when set to any non-empty value | _(unset)_ | Opt out. |
+| `ENV` | `enabled` = `false` when `test` or `dev` | _(unset)_ | Opt out in test/dev environments. |
+| `COGNEE_HOST_SDK` | `host_sdk` | _(unset)_ | Set by a host SDK that embeds a binding and sends its own analytics; suppresses that binding's events (not the CLI's) to avoid double counting. |
+| `TELEMETRY_REQUEST_TIMEOUT` | `request_timeout_secs` | `5` | HTTP timeout, clamped to `[1, 60]`. |
+| `TRACKING_ID` | `tracking_id` | _(unset)_ | Fixed `anonymous_id`. |
+| `TELEMETRY_API_KEY_TRACKING_SALT` | `api_key_tracking_salt` | well-known default | PBKDF2 salt for `api_key_tracking_id`. |
+| `COGNEE_TELEMETRY_PROXY_URL_FOR_TESTS` | `endpoint_override` | _(unset)_ | Collector override for test harnesses; honoured only while `COGNEE_TELEMETRY_INTEGRATION_TEST` is non-empty. |
+
+**Precedence:** defaults (on) < environment < code. The environment is resolved
+**once**, the first time the configuration is needed (in a binding, on import), so
+changing `TELEMETRY_DISABLED` afterwards has no effect; use the switch instead. An
+explicit call wins over the environment in both directions, and disabling also
+drops events that are queued but not yet sent.
+
+| Surface | Turn analytics off | Query |
 |---|---|---|
-| `COGNEE_TRACING_ENABLED` | `false` | Activate OTLP trace export. |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | _(empty)_ | OTLP collector endpoint (non-empty also activates tracing). |
-| `OTEL_SERVICE_NAME` | `cognee` | Service name attribute. |
-| `OTEL_EXPORTER_OTLP_HEADERS` / `_PROTOCOL` | _(empty)_ / `grpc` | Exporter headers / protocol. |
-| `OTEL_SPAN_PROCESSOR` | `batch` | `batch` or `simple`. |
-| `OTEL_TRACES_SAMPLER` / `_ARG` | _(empty)_ | Sampler selection. |
-| `TELEMETRY_DISABLED`, `ENV=test\|dev` | _(unset)_ | Opt out of product analytics. |
+| Rust | `cognee::telemetry::set_enabled(false)`, or `configure(TelemetryConfig { .. })` | `cognee::telemetry::is_enabled()` |
+| CLI | `cognee-cli --no-telemetry <command>` (or `TELEMETRY_DISABLED=1`) | — |
+| Python | `cognee_py.set_telemetry_enabled(False)` | `cognee_py.is_telemetry_enabled()` |
+| TypeScript | `setTelemetryEnabled(false)` | `isTelemetryEnabled()` |
+| Java | `Cognee.setTelemetryEnabled(false)` | `Cognee.isTelemetryEnabled()` |
+| C | `cognee_set_telemetry_enabled(0)` | `cognee_is_telemetry_enabled()` |
+
+The existing `setup_telemetry_analytics()` / `setupTelemetryAnalytics()` /
+`Cognee.initTelemetry()` / `cognee_init_telemetry()` arm the binding (which
+importing it already does) and report the same state as the query functions.
+Building without the `telemetry` cargo feature compiles analytics out entirely;
+the switch still exists and `is_enabled()` is always `false`.
+
+The `api_key_tracking_id` in each event is a salted hash of the **resolved** LLM key
+(`llm.api_key`, from env, a config file or code): every `ComponentManager` registers
+it with `cognee::telemetry::set_llm_api_key` when it is created and when its
+configuration changes. The `LLM_API_KEY` environment variable is no longer read by
+the analytics client itself. In a process with several handles, the most recently
+created or reconfigured one wins.
 
 ## HTTP server
 

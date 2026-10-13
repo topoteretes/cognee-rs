@@ -6,7 +6,7 @@
 //! armed/not-armed bool. This test proves the actual behaviour on the
 //! HTTP wire against a mockito server:
 //!
-//!   * Before arming, `COGNEE_HOST_SDK` does NOT suppress (decision 10:
+//!   * Before arming, a host SDK (`COGNEE_HOST_SDK`) does NOT suppress (decision 10:
 //!     the sentinel scopes to binding-armed emitters only) — a POST
 //!     still fires.
 //!   * After `arm_binding_emission()`, `COGNEE_HOST_SDK` suppresses —
@@ -38,51 +38,58 @@ use serial_test::serial;
 use tempfile::TempDir;
 
 use cognee_telemetry::env::{arm_binding_emission, is_binding_armed};
-use cognee_telemetry::send_telemetry;
-
-const ENV_VARS: &[&str] = &[
-    "HOME",
-    "TRACKING_ID",
-    "TELEMETRY_DISABLED",
-    "ENV",
-    "COGNEE_HOST_SDK",
-    "COGNEE_TELEMETRY_INTEGRATION_TEST",
-    "COGNEE_TELEMETRY_PROXY_URL_FOR_TESTS",
-];
+use cognee_telemetry::{TelemetryConfig, configure, send_telemetry};
 
 struct IsolatedEnv {
     _home: TempDir,
+    prev_home: Option<String>,
+    prev_config: TelemetryConfig,
 }
 
 impl IsolatedEnv {
     fn install(server_url: &str) -> Self {
         let home = TempDir::new().expect("tempdir");
-        // SAFETY: Rust 2024 makes set_var/remove_var unsafe; `#[serial]`
-        //   orders this against every other env-mutating test in the
-        //   binary, so there is no concurrent reader/writer.
+        let prev_home = std::env::var("HOME").ok();
+        // SAFETY: Rust 2024 makes set_var unsafe; `#[serial]` orders this
+        //   against every other env-mutating test in the binary.
         unsafe {
             std::env::set_var("HOME", home.path());
-            std::env::set_var("TRACKING_ID", "fixed-anon-arm-test");
-            std::env::remove_var("TELEMETRY_DISABLED");
-            std::env::remove_var("ENV");
-            std::env::remove_var("COGNEE_HOST_SDK");
-            std::env::set_var("COGNEE_TELEMETRY_INTEGRATION_TEST", "1");
-            std::env::set_var("COGNEE_TELEMETRY_PROXY_URL_FOR_TESTS", server_url);
         }
+        let prev_config = cognee_telemetry::current_config();
+        configure(TelemetryConfig {
+            enabled: true,
+            tracking_id: Some("fixed-anon-arm-test".into()),
+            endpoint_override: Some(server_url.to_string()),
+            ..TelemetryConfig::default()
+        });
         cognee_telemetry::ids::__test_only_reset_caches();
-        Self { _home: home }
+        Self {
+            _home: home,
+            prev_home,
+            prev_config,
+        }
     }
 }
 
 impl Drop for IsolatedEnv {
     fn drop(&mut self) {
-        for k in ENV_VARS {
-            // SAFETY: same serial section as `install`.
-            unsafe {
-                std::env::remove_var(k);
+        // SAFETY: same serial section as `install`.
+        unsafe {
+            match &self.prev_home {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
             }
         }
+        configure(self.prev_config.clone());
     }
+}
+
+/// Set (or clear) the host-SDK sentinel, keeping the rest of the config.
+fn set_host_sdk(host: Option<&str>) {
+    configure(TelemetryConfig {
+        host_sdk: host.map(str::to_string),
+        ..cognee_telemetry::current_config()
+    });
 }
 
 /// Fire one event and return how many new POSTs landed within the
@@ -131,10 +138,7 @@ async fn host_sdk_suppresses_only_when_binding_armed() {
     // Phase A — NOT yet armed, COGNEE_HOST_SDK set: must still emit
     // (decision 10 — the sentinel only scopes to binding-armed emitters).
     assert!(!is_binding_armed(), "precondition: process starts unarmed");
-    // SAFETY: serial section.
-    unsafe {
-        std::env::set_var("COGNEE_HOST_SDK", "python");
-    }
+    set_host_sdk(Some("python"));
     assert_eq!(
         delta_after_send(&hits, true).await,
         1,
@@ -151,10 +155,7 @@ async fn host_sdk_suppresses_only_when_binding_armed() {
     );
 
     // Phase C — armed, sentinel cleared: emits again.
-    // SAFETY: serial section.
-    unsafe {
-        std::env::remove_var("COGNEE_HOST_SDK");
-    }
+    set_host_sdk(None);
     assert_eq!(
         delta_after_send(&hits, true).await,
         1,

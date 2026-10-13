@@ -14,7 +14,9 @@ mod formatter;
 mod init;
 mod paths;
 
-pub use config::{ConsoleStream, LogFormat, LogRotation, LoggingConfig, LoggingConfigError};
+pub use config::{
+    ConsoleStream, LOGGING_SETTING_KEYS, LogFormat, LogRotation, LoggingConfig, LoggingConfigError,
+};
 pub use formatter::PythonPlainFormatter;
-pub use init::{BoxedLayer, LogGuards, default_filter, init_logging};
+pub use init::{BoxedLayer, LogGuards, default_filter, env_filter, init_logging};
 pub use paths::{cleanup_old_logs, propagate_log_file_name, resolve_logs_dir};

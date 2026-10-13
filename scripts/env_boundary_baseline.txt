@@ -1,7 +1,6 @@
 # Direct process-env access sites in production code, per file.
 # Maintained by scripts/check_env_boundary.sh --update; may only go down
 # except for a deliberate, reviewed new config boundary.
-2 capi/cognee-capi/src/telemetry_otlp.rs
 1 crates/cli/src/config_store.rs
 2 crates/config-core/src/lib.rs
 1 crates/database/src/single_process.rs
@@ -12,15 +11,10 @@
 1 crates/llm/src/adapters/bedrock/aws/env.rs
 1 crates/llm/src/adapters/bedrock/aws/region.rs
 1 crates/logging/src/config.rs
-1 crates/logging/src/init.rs
 2 crates/logging/src/paths.rs
-1 crates/observability/src/init.rs
 1 crates/observability/src/settings.rs
-7 crates/telemetry/src/env.rs
-3 crates/telemetry/src/ids.rs
+1 crates/telemetry/src/config.rs
 1 crates/visualization/src/paths.rs
-3 java/cognee-java-jni/src/sdk_static.rs
+1 java/cognee-java-jni/src/sdk_static.rs
 1 python/src/default_subscriber.rs
-2 python/src/telemetry_otlp.rs
 1 ts/cognee-ts-neon/src/default_subscriber.rs
-2 ts/cognee-ts-neon/src/telemetry_otlp.rs

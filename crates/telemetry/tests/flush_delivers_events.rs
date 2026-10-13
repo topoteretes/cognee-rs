@@ -15,10 +15,6 @@
 //! down together with the runtime under test, and counting arrivals server-side
 //! avoids any inference from client-side state.
 #![cfg(feature = "telemetry")]
-#![allow(
-    clippy::disallowed_methods,
-    reason = "tests drive configuration through the process env"
-)]
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -101,19 +97,15 @@ fn serve(mut stream: TcpStream, arrived: &AtomicUsize) {
 
 /// Point telemetry at `url` and make sure it is enabled for this test.
 ///
-/// The proxy override is only honoured when `COGNEE_TELEMETRY_INTEGRATION_TEST`
-/// is set (see `env::proxy_url`), which is exactly what this is. `ENV=test`
-/// disables telemetry outright and the harness may well be running with it set,
-/// so it is cleared too — hence `#[serial]` on every test in this file.
+/// Programmatic configuration wins over whatever `TELEMETRY_DISABLED` / `ENV`
+/// the harness runs with. It is process-wide, hence `#[serial]` on every test
+/// in this file.
 fn configure(url: &str) {
-    // SAFETY: single-threaded section of a `#[serial]` test; no other thread is
-    // reading the environment at this point.
-    unsafe {
-        std::env::set_var("COGNEE_TELEMETRY_INTEGRATION_TEST", "1");
-        std::env::set_var("COGNEE_TELEMETRY_PROXY_URL_FOR_TESTS", url);
-        std::env::remove_var("TELEMETRY_DISABLED");
-        std::env::remove_var("ENV");
-    }
+    cognee_telemetry::configure(cognee_telemetry::TelemetryConfig {
+        enabled: true,
+        endpoint_override: Some(url.to_string()),
+        ..cognee_telemetry::TelemetryConfig::default()
+    });
 }
 
 /// Wait for any POST left over from another test in this process to finish.

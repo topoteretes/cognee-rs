@@ -7,16 +7,17 @@ use crate::panic_hook;
 
 static GLOBAL_RUNTIME: OnceLock<AsyncRuntime> = OnceLock::new();
 
-/// Arm product-analytics emission so the `COGNEE_HOST_SDK` clause inside
-/// `cognee_telemetry::env::is_disabled` becomes authoritative for any
-/// binding-hosted `send_telemetry` call (decision 10). Idempotent.
+/// Arm product-analytics emission so the host-SDK sentinel
+/// (`COGNEE_HOST_SDK`) becomes authoritative for any binding-hosted
+/// `send_telemetry` call (decision 10). Idempotent.
 ///
 /// Mirrors the auto-arm the PyO3/Neon bindings perform at module load,
 /// so a C embedder gets uniform on-by-default analytics (Python-SDK
 /// parity) with `COGNEE_HOST_SDK` deferral working even without an
 /// explicit `cognee_init_telemetry()` call. Arming only ever *adds*
-/// suppression — emission is still gated per event by `is_disabled()`
-/// (`TELEMETRY_DISABLED` / `ENV` / `COGNEE_HOST_SDK`). No-op when the
+/// suppression — emission is still gated per event by
+/// `cognee_telemetry::is_enabled()` (the process switch, defaulting to
+/// `TELEMETRY_DISABLED` / `ENV`, and `COGNEE_HOST_SDK`). No-op when the
 /// `telemetry` feature is disabled.
 #[cfg(feature = "telemetry")]
 #[inline]

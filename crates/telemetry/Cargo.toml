@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Opt-in product-analytics telemetry for the cognee AI-memory pipeline."
+description = "Opt-out product-analytics telemetry for the cognee AI-memory pipeline."
 repository.workspace = true
 homepage.workspace = true
 keywords.workspace = true
@@ -38,6 +38,7 @@ telemetry = [
 # Always-on. The crate exposes a public function and an error type
 # regardless of feature state, so these unconditional deps cover the
 # noop path.
+cognee-config-core = { path = "../config-core", version = "0.2.0" }
 thiserror.workspace = true
 tracing.workspace = true
 tokio = { workspace = true }

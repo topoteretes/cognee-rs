@@ -5,9 +5,9 @@
 //! every public API call so the cognee maintainers have an aggregate
 //! view of how the SDK is exercised.
 //!
-//! Enabled by default (locked decision 1 — Python parity). The runtime
-//! check happens **before** any identity derivation or HTTP code path,
-//! so disabling at runtime costs zero.
+//! Enabled by default (locked decision 1 — Python parity, opt-out). The
+//! runtime check happens **before** any identity derivation or HTTP code
+//! path, so disabling at runtime costs zero.
 //!
 //! See [`docs/observability/send_telemetry.md`][user-doc] for the full
 //! operator-facing reference (payload schema, salt rotation, privacy
@@ -32,25 +32,21 @@
 //!
 //! # Opt-out
 //!
-//! At runtime: `TELEMETRY_DISABLED=1` (any non-empty value) or
-//! `ENV=test` / `ENV=dev`.
+//! The switch is **process-wide** (one dispatcher per process), and
+//! configured through [`TelemetryConfig`]:
+//!
+//! * From code: [`set_enabled`]`(false)`, or [`configure`] with a whole
+//!   [`TelemetryConfig`]. An explicit call wins over the environment and
+//!   also drops events that are queued but not yet posted.
+//! * From the environment (the default, resolved once on first use):
+//!   `TELEMETRY_DISABLED=1` (any non-empty value) or `ENV=test` / `ENV=dev`.
+//!   See [`config`] for every variable.
 //!
 //! At compile time: build `cognee` (or any consumer) with
 //! `--no-default-features`. [`send_telemetry`] and
 //! [`try_send_telemetry`] still exist in the public surface but are
 //! compiled to noop bodies — no `reqwest`, no `tokio` runtime
-//! fallback, no PBKDF2 cost.
-//!
-//! # Environment variables
-//!
-//! | Var | Default | Effect |
-//! |---|---|---|
-//! | `TELEMETRY_DISABLED` | unset | Any non-empty value disables. Read on every call. |
-//! | `ENV` | unset | If `test` or `dev`, disables. Read on every call. |
-//! | `LLM_API_KEY` | unset | Source of `api_key_tracking_id` (locked decision 11 — read at every event-emission, never cached). |
-//! | `TRACKING_ID` | unset | Override `anonymous_id`. |
-//! | `TELEMETRY_API_KEY_TRACKING_SALT` | `cognee.telemetry.api-key-tracking.v1` | PBKDF2 salt override (locked decision 12). |
-//! | `TELEMETRY_REQUEST_TIMEOUT` | `5` | HTTP timeout in seconds. Clamped to `[1, 60]`. Read once per process. |
+//! fallback, no PBKDF2 cost — and [`is_enabled`] is always `false`.
 //!
 //! # Logging
 //!
@@ -70,10 +66,14 @@ mod noop;
 #[cfg(feature = "telemetry")]
 mod real;
 
+pub mod config;
 pub mod env;
 pub mod ids;
 pub mod payload;
 pub mod sanitize;
+
+pub use config::{TelemetryConfig, configure, current_config, is_enabled, set_enabled};
+pub use ids::set_llm_api_key;
 
 /// Property value type for `additional_properties`. Resolves to
 /// `serde_json::Value` when the `telemetry` feature is on, or `()`
@@ -193,7 +193,7 @@ pub fn cognee_version() -> &'static str {
 ///
 /// Returns immediately; the HTTP POST is dispatched on a detached
 /// tokio task with a 5-second (configurable via
-/// `TELEMETRY_REQUEST_TIMEOUT`) total timeout. Errors are swallowed
+/// [`TelemetryConfig::request_timeout_secs`]) total timeout. Errors are swallowed
 /// at debug level on the `cognee.telemetry` tracing target. When
 /// called outside a tokio runtime, falls back to a one-shot
 /// single-thread runtime (locked decision 5) and logs a `warn`-level
@@ -204,19 +204,9 @@ pub fn cognee_version() -> &'static str {
 /// - the `telemetry` cargo feature is disabled at compile time
 ///   (function still exists but compiles to an empty body, so
 ///   consuming code stays binary-compatible across feature flips),
-/// - `TELEMETRY_DISABLED` is set to a non-empty value at runtime,
-/// - `ENV` is `"test"` or `"dev"`.
-///
-/// # Environment variables
-///
-/// | Var | Default | Effect |
-/// |---|---|---|
-/// | `TELEMETRY_DISABLED` | unset | Any non-empty value disables. |
-/// | `ENV` | unset | If `test` or `dev`, disables. |
-/// | `LLM_API_KEY` | unset | Hashed into `api_key_tracking_id` (read at every call). |
-/// | `TRACKING_ID` | unset | Override `anonymous_id`. |
-/// | `TELEMETRY_API_KEY_TRACKING_SALT` | (well-known default) | Override PBKDF2 salt. |
-/// | `TELEMETRY_REQUEST_TIMEOUT` | `5` | Total HTTP timeout (seconds), clamped `[1, 60]`. |
+/// - [`is_enabled`] is `false`: switched off with [`set_enabled`] /
+///   [`configure`], or by `TELEMETRY_DISABLED` / `ENV=test|dev` in the
+///   environment the process configuration was resolved from.
 ///
 /// See the [user-facing
 /// guide](https://github.com/topoteretes/cognee-rs/blob/main/docs/observability/send_telemetry.md)
@@ -276,7 +266,7 @@ pub async fn flush(timeout: std::time::Duration) -> bool {
 /// (e.g. backpressure rejection) can be surfaced without a breaking
 /// change to the signature. Honours the same opt-out and runtime
 /// fallback semantics as [`send_telemetry`]; see that function's
-/// rustdoc for env-var details.
+/// rustdoc for configuration details.
 pub fn try_send_telemetry<'a>(
     event_name: &str,
     user_id: impl Into<UserIdRef<'a>>,

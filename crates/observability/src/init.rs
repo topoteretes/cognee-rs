@@ -151,7 +151,7 @@ mod telemetry_real {
     ) -> Result<opentelemetry_sdk::trace::SdkTracerProvider, TelemetryInitError> {
         use opentelemetry_sdk::trace::SdkTracerProvider;
 
-        let resource = build_resource(settings.service_name());
+        let resource = build_resource(settings.service_name(), settings.deployment_environment());
         let exporter = build_exporter(settings)?;
 
         let mut builder = SdkTracerProvider::builder().with_resource(resource);
@@ -161,16 +161,10 @@ mod telemetry_real {
         Ok(builder.build())
     }
 
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
-    )]
-    fn build_resource(service_name: &str) -> opentelemetry_sdk::Resource {
+    fn build_resource(service_name: &str, environment: &str) -> opentelemetry_sdk::Resource {
         use opentelemetry::KeyValue;
         use opentelemetry_sdk::Resource;
         use opentelemetry_semantic_conventions::resource as semres;
-
-        let env = std::env::var("ENV").unwrap_or_else(|_| "development".to_string());
 
         // `deployment.environment.name` is gated behind the
         // `semconv_experimental` feature in 0.31; spell it out as a
@@ -179,7 +173,7 @@ mod telemetry_real {
             .with_attributes([
                 KeyValue::new(semres::SERVICE_NAME, service_name.to_string()),
                 KeyValue::new(semres::SERVICE_VERSION, env!("CARGO_PKG_VERSION")),
-                KeyValue::new("deployment.environment.name", env),
+                KeyValue::new("deployment.environment.name", environment.to_string()),
             ])
             .build()
     }

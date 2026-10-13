@@ -343,6 +343,7 @@ static KEYS: &[KeySpec] = &[
     row!(otel_span_processor: str, env ["OTEL_SPAN_PROCESSOR"]),
     row!(otel_traces_sampler: str, env ["OTEL_TRACES_SAMPLER"]),
     row!(otel_traces_sampler_arg: str, env ["OTEL_TRACES_SAMPLER_ARG"]),
+    row!(otel_deployment_environment: str, env ["ENV"]),
     // -- Feature flags ------------------------------------------------------
     row!(enable_last_accessed: bool, env ["ENABLE_LAST_ACCESSED"]),
     row!(strict_config: bool, env ["COGNEE_STRICT_CONFIG"]),

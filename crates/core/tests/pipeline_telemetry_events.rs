@@ -66,59 +66,56 @@ impl CpuPool for StubPool {
     }
 }
 
-/// Set of env vars touched by each test. Centralised so `IsolatedEnv`
-/// is the single place that knows what to reset on Drop.
-const ENV_VARS: &[&str] = &[
-    "HOME",
-    "TRACKING_ID",
-    "LLM_API_KEY",
-    "TELEMETRY_API_KEY_TRACKING_SALT",
-    "TELEMETRY_DISABLED",
-    "ENV",
-    "TELEMETRY_REQUEST_TIMEOUT",
-    "COGNEE_TELEMETRY_INTEGRATION_TEST",
-    "COGNEE_TELEMETRY_PROXY_URL_FOR_TESTS",
-];
-
-/// Install a fresh, isolated env: a temp HOME, a fixed TRACKING_ID,
-/// no LLM_API_KEY (so PBKDF2 is skipped — this saves ~50ms/event),
-/// and the mockito URL injected via the gap-02-09 test override.
+/// Install a fresh, isolated telemetry state: a temp HOME, and a process
+/// configuration with a fixed tracking id pointing at the mockito server. No
+/// LLM key is registered, so PBKDF2 is skipped (this saves ~50ms/event).
+/// Restores HOME and the previous configuration on drop.
 struct IsolatedEnv {
     _home: TempDir,
+    prev_home: Option<String>,
+    prev_config: cognee_telemetry::TelemetryConfig,
 }
 
 impl IsolatedEnv {
     fn install(server_url: &str) -> Self {
         let home = TempDir::new().expect("tempdir");
+        let prev_home = std::env::var("HOME").ok();
         // SAFETY: `#[serial]` orders this against every other env-mutating
-        //   test in the binary; no concurrent reader/writer of these vars
-        //   exists while this body runs.
+        //   test in the binary; no concurrent reader/writer of HOME exists
+        //   while this body runs.
         unsafe {
             std::env::set_var("HOME", home.path());
-            std::env::set_var("TRACKING_ID", "fixed-anon-pipeline-tests");
-            std::env::remove_var("LLM_API_KEY");
-            std::env::remove_var("TELEMETRY_API_KEY_TRACKING_SALT");
-            std::env::remove_var("TELEMETRY_DISABLED");
-            std::env::remove_var("ENV");
-            std::env::remove_var("TELEMETRY_REQUEST_TIMEOUT");
-            std::env::set_var("COGNEE_TELEMETRY_INTEGRATION_TEST", "1");
-            std::env::set_var("COGNEE_TELEMETRY_PROXY_URL_FOR_TESTS", server_url);
         }
-        // Wipe identity caches so the new HOME / TRACKING_ID take effect.
+        let prev_config = cognee_telemetry::current_config();
+        // Explicit configuration wins over the harness's TELEMETRY_DISABLED /
+        // ENV.
+        cognee_telemetry::configure(cognee_telemetry::TelemetryConfig {
+            enabled: true,
+            tracking_id: Some("fixed-anon-pipeline-tests".into()),
+            endpoint_override: Some(server_url.to_string()),
+            ..cognee_telemetry::TelemetryConfig::default()
+        });
+        cognee_telemetry::set_llm_api_key(None);
+        // Wipe identity caches so the new HOME takes effect.
         cognee_telemetry::ids::__test_only_reset_caches();
-        Self { _home: home }
+        Self {
+            _home: home,
+            prev_home,
+            prev_config,
+        }
     }
 }
 
 impl Drop for IsolatedEnv {
     fn drop(&mut self) {
-        for k in ENV_VARS {
-            // SAFETY: Drop runs inside the same `#[serial]` section as
-            //   `install`, so no concurrent access exists.
-            unsafe {
-                std::env::remove_var(k);
+        // SAFETY: Drop runs inside the same `#[serial]` section as `install`.
+        unsafe {
+            match &self.prev_home {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
             }
         }
+        cognee_telemetry::configure(self.prev_config.clone());
     }
 }
 
@@ -521,7 +518,7 @@ async fn pipeline_run_errored_fires_after_retries_exhausted() {
 }
 
 // ---------------------------------------------------------------------------
-// 4.3.4 — Opt-out via TELEMETRY_DISABLED produces zero POSTs
+// 4.3.4 — Opt-out via the process switch produces zero POSTs
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -535,12 +532,7 @@ async fn telemetry_disabled_emits_zero_events() {
         .create_async()
         .await;
     let _env = IsolatedEnv::install(&server.url());
-    // SAFETY: still inside the same `#[serial]` section as `_env`'s
-    //   `install`. `_env`'s Drop will remove TELEMETRY_DISABLED on
-    //   exit.
-    unsafe {
-        std::env::set_var("TELEMETRY_DISABLED", "1");
-    }
+    cognee_telemetry::set_enabled(false);
 
     let task = Task::async_fn_typed(|_: &i32, _| Box::pin(async move { Ok(Box::new(0_i32)) }));
     let pipeline = Pipeline::new("opt-out")

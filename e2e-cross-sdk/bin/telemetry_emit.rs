@@ -6,10 +6,15 @@
 //! Python proxy at `COGNEE_TELEMETRY_PROXY_URL_FOR_TESTS`.
 //!
 //! Honours decisions 2 (proxy URL override via the integration-test
-//! env), 11 (`LLM_API_KEY` read at emission time inside `send_telemetry`),
-//! and 12 (`COGNEE_TELEMETRY_API_KEY_SALT` override accepted by the
-//! identity helpers when set). This binary itself does not touch
-//! identity derivation — the leaf crate handles all of that.
+//! env), 11 (the LLM API key hashed at emission time) and 12
+//! (`TELEMETRY_API_KEY_TRACKING_SALT` override accepted by the identity
+//! helpers when set).
+//!
+//! Product analytics hash the *resolved* LLM key, registered with
+//! `set_llm_api_key` — `ComponentManager` does that for every handle. This
+//! binary calls `send_telemetry` without a manager, so it resolves `Settings`
+//! from the environment (as the CLI and bindings do) and registers the key
+//! itself; `LLM_API_KEY` therefore still drives the parity comparison.
 //!
 //! See docs/telemetry/02/10-cross-sdk-parity.md §4.3.
 
@@ -18,6 +23,9 @@ use std::time::Duration;
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() {
+    let settings = cognee::config::Settings::load_from_env();
+    telemetry::set_llm_api_key(Some(&settings.llm().api_key));
+
     let props = serde_json::json!({
         "target": "everything",
         "cognee_version": "cross-sdk-test",

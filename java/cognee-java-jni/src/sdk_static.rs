@@ -1,7 +1,10 @@
 //! Module-level statics: logging, OTLP telemetry, product analytics.
 //!
 //! These mirror the neon binding's `logging.rs`, `telemetry_analytics.rs`,
-//! `telemetry_otlp.rs`, and `default_subscriber.rs`. The default stderr
+//! `telemetry_otlp.rs`, and `default_subscriber.rs`. Logging and OTLP are
+//! process config, resolved through the path every binding shares
+//! ([`cognee_bindings_common::process_config`]): defaults < environment <
+//! the optional options JSON passed from Java. The default stderr
 //! subscriber is installed once from [`JNI_OnLoad`](crate::JNI_OnLoad) via
 //! [`install_default_subscriber`], reserving a reload slot so `initOtlp()` can
 //! swap a real OTEL layer in without re-initialising the global subscriber.
@@ -9,14 +12,13 @@
 use std::sync::{Mutex, Once, OnceLock};
 
 use jni::JNIEnv;
-use jni::objects::JClass;
+use jni::objects::{JClass, JString};
 use jni::sys::jboolean;
-use tracing_subscriber::{
-    EnvFilter, Registry, fmt, layer::SubscriberExt, reload, util::SubscriberInitExt,
-};
+use tracing_subscriber::{Registry, fmt, layer::SubscriberExt, reload, util::SubscriberInitExt};
 
+use cognee_bindings_common::process_config;
 use cognee_observability::{
-    BoxedTelemetryLayer, EnvSettingsView, TelemetryGuard, init_telemetry, is_tracing_enabled,
+    BoxedTelemetryLayer, TelemetryGuard, init_telemetry, is_tracing_enabled,
 };
 
 use crate::guard_void;
@@ -25,11 +27,24 @@ use crate::guard_void;
 
 static LOG_GUARDS: OnceLock<Mutex<Option<cognee_logging::LogGuards>>> = OnceLock::new();
 
-/// `setupLogging()` — env-driven, idempotent.
+/// Read the optional options-JSON argument, throwing `VALIDATION_ERROR` on
+/// malformed JSON.
+fn options_arg(env: &mut JNIEnv, options_json: &JString) -> Option<serde_json::Value> {
+    match crate::args::arg_json(env, options_json) {
+        Ok(v) => Some(v),
+        Err(e) => {
+            crate::errors::throw_cognee_exception(env, e.code(), &e.to_string());
+            None
+        }
+    }
+}
+
+/// `setupLogging(String optionsJson)` — env < options, idempotent.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_ai_cognee_internal_Native_setupLogging<'l>(
     mut env: JNIEnv<'l>,
     _class: JClass<'l>,
+    options_json: JString<'l>,
 ) {
     guard_void(&mut env, |env| {
         let slot = LOG_GUARDS.get_or_init(|| Mutex::new(None));
@@ -38,7 +53,10 @@ pub extern "system" fn Java_ai_cognee_internal_Native_setupLogging<'l>(
         if lock.is_some() {
             return; // idempotent
         }
-        match cognee_logging::LoggingConfig::from_env() {
+        let Some(options) = options_arg(env, &options_json) else {
+            return;
+        };
+        match process_config::logging_config(Some(&options)) {
             Ok(cfg) => {
                 let guards = cognee_logging::init_logging(
                     cfg,
@@ -47,39 +65,26 @@ pub extern "system" fn Java_ai_cognee_internal_Native_setupLogging<'l>(
                 *lock = Some(guards);
             }
             Err(e) => {
-                crate::errors::throw_cognee_exception(
-                    env,
-                    "RUNTIME_ERROR",
-                    &format!("invalid logging config: {e}"),
-                );
+                crate::errors::throw_cognee_exception(env, "VALIDATION_ERROR", &e);
             }
         }
     })
 }
 
-// --- initTelemetry / analytics arming (port of telemetry_analytics.rs) ---
+// --- initTelemetry / analytics switch (port of telemetry_analytics.rs) ---
 
-static ANALYTICS_ARMED: OnceLock<Mutex<Option<bool>>> = OnceLock::new();
-
-/// Shared arming logic; also called from `JNI_OnLoad` so the `COGNEE_HOST_SDK`
-/// clause inside `is_disabled` is authoritative for any binding-hosted
+/// Shared arming logic; also called from `JNI_OnLoad` so the host-SDK
+/// sentinel (`COGNEE_HOST_SDK`) is authoritative for any binding-hosted
 /// `send_telemetry` call. Arming only ever *adds* suppression — it never
-/// enables emission. Idempotent.
+/// enables emission. Idempotent; returns whether analytics are enabled.
 pub(crate) fn arm_analytics() -> bool {
-    let slot = ANALYTICS_ARMED.get_or_init(|| Mutex::new(None));
-    // lock poison is unrecoverable
-    let mut lock = slot.lock().expect("lock poison is unrecoverable");
-    if let Some(armed) = *lock {
-        return armed;
-    }
     cognee_telemetry::env::arm_binding_emission();
-    let armed = !cognee_telemetry::env::is_disabled();
-    *lock = Some(armed);
-    armed
+    cognee_telemetry::is_enabled()
 }
 
-/// `initTelemetry() -> boolean` — arm product analytics per the per-binding
-/// policy (ON unless TELEMETRY_DISABLED / ENV∈{test,dev} / COGNEE_HOST_SDK).
+/// `initTelemetry() -> boolean` — arm product analytics and report whether
+/// they are enabled (ON unless switched off, TELEMETRY_DISABLED /
+/// ENV∈{test,dev}, or COGNEE_HOST_SDK).
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_ai_cognee_internal_Native_initTelemetry<'l>(
     mut env: JNIEnv<'l>,
@@ -87,6 +92,28 @@ pub extern "system" fn Java_ai_cognee_internal_Native_initTelemetry<'l>(
 ) -> jboolean {
     // Boolean return: default `false` (0) on panic.
     crate::guard_jlong(&mut env, |_env| arm_analytics() as jni::sys::jlong) as jboolean
+}
+
+/// `setTelemetryEnabled(boolean)` — process-wide analytics switch; wins over
+/// the environment.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_ai_cognee_internal_Native_setTelemetryEnabled<'l>(
+    mut env: JNIEnv<'l>,
+    _class: JClass<'l>,
+    enabled: jboolean,
+) {
+    guard_void(&mut env, |_env| cognee_telemetry::set_enabled(enabled != 0))
+}
+
+/// `isTelemetryEnabled() -> boolean`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_ai_cognee_internal_Native_isTelemetryEnabled<'l>(
+    mut env: JNIEnv<'l>,
+    _class: JClass<'l>,
+) -> jboolean {
+    crate::guard_jlong(&mut env, |_env| {
+        cognee_telemetry::is_enabled() as jni::sys::jlong
+    }) as jboolean
 }
 
 // --- default subscriber (port of default_subscriber.rs) ---
@@ -121,8 +148,13 @@ pub(crate) fn install_default_subscriber() {
             return;
         }
 
-        let filter = EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| EnvFilter::new(cognee_logging::default_filter()));
+        // RUST_LOG > LOG_LEVEL > the default filter, resolved by the logging
+        // config's boundary like every other logging setting. A malformed
+        // logging env var is not fatal here: fall back to the default filter.
+        let level = cognee_logging::LoggingConfig::from_env()
+            .ok()
+            .and_then(|cfg| cfg.level_filter);
+        let filter = cognee_logging::env_filter(level.as_deref());
 
         // Reserve a reload-capable slot for the OTEL layer, starting empty.
         let (otel_slot, handle) = reload::Layer::new(None::<BoxedTelemetryLayer<Registry>>);
@@ -142,28 +174,15 @@ static OTEL_GUARD: OnceLock<Mutex<Option<TelemetryGuard>>> = OnceLock::new();
 
 const SERVICE_NAME_DEFAULT: &str = "cognee.java-binding";
 
-/// Apply binding-specific default `OTEL_SERVICE_NAME` when unset.
-#[allow(
-    clippy::disallowed_methods,
-    reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
-)]
-fn apply_default_service_name(default: &str) {
-    let current = std::env::var("OTEL_SERVICE_NAME").unwrap_or_default();
-    if current.is_empty() {
-        // SAFETY: single write, guarded by the OnceLock-protected slot in
-        // `initOtlp`; mirrors python/src/telemetry_otlp.rs.
-        unsafe {
-            std::env::set_var("OTEL_SERVICE_NAME", default);
-        }
-    }
-}
-
-/// `initOtlp()` — install OTLP export from env (idempotent). Service-name
-/// default `cognee.java-binding`. Ports telemetry_otlp.rs + default_subscriber.rs.
+/// `initOtlp(String optionsJson)` — install OTLP export (idempotent). Settings
+/// resolve as the binding default service name `cognee.java-binding` < env <
+/// options; the environment is never modified. Ports telemetry_otlp.rs +
+/// default_subscriber.rs.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_ai_cognee_internal_Native_initOtlp<'l>(
     mut env: JNIEnv<'l>,
     _class: JClass<'l>,
+    options_json: JString<'l>,
 ) {
     guard_void(&mut env, |env| {
         let slot = OTEL_GUARD.get_or_init(|| Mutex::new(None));
@@ -173,9 +192,16 @@ pub extern "system" fn Java_ai_cognee_internal_Native_initOtlp<'l>(
             return; // idempotent
         }
 
-        apply_default_service_name(SERVICE_NAME_DEFAULT);
-
-        let settings = EnvSettingsView::from_env();
+        let Some(options) = options_arg(env, &options_json) else {
+            return;
+        };
+        let settings = match process_config::otel_settings(SERVICE_NAME_DEFAULT, Some(&options)) {
+            Ok(settings) => settings,
+            Err(e) => {
+                crate::errors::throw_cognee_exception(env, "VALIDATION_ERROR", &e);
+                return;
+            }
+        };
         if !is_tracing_enabled(&settings) {
             *lock = Some(TelemetryGuard::noop());
             return;

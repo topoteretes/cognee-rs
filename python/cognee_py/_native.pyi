@@ -913,31 +913,59 @@ class Cognee:
 # Module-level functions
 # ---------------------------------------------------------------------------
 
-def setup_logging() -> None:
-    """Initialize cognee's file-based logging subsystem from environment variables.
+def setup_logging(options: dict[str, Any] | None = None) -> None:
+    """Initialize cognee's file-based logging subsystem.
 
-    All configuration is via env vars set *before* calling this function:
-    ``COGNEE_LOG_FILE``, ``COGNEE_LOGS_DIR``, ``LOG_FILE_NAME``,
+    Logging is process-wide and is configured here, not from a ``Cognee``
+    handle's settings. Values resolve as defaults < environment
+    (``COGNEE_LOG_FILE``, ``COGNEE_LOGS_DIR``, ``LOG_FILE_NAME``,
     ``COGNEE_LOG_ROTATION``, ``COGNEE_LOG_FORMAT``,
-    ``COGNEE_LOG_BACKUP_COUNT``, ``LOG_LEVEL``, ``RUST_LOG``.
+    ``COGNEE_LOG_BACKUP_COUNT``, ``COGNEE_LOG_MAX_FILES``, ``LOG_LEVEL``,
+    ``RUST_LOG``) < ``options``.
+
+    ``options`` keys: ``log_level``, ``logs_root_directory``, ``log_file``,
+    ``log_file_name``, ``log_rotation``, ``log_format``,
+    ``log_backup_count``, ``log_max_files``, ``console_stream``. An unknown
+    key or an invalid value raises ``ValueError``.
 
     Idempotent: calling more than once is a no-op (first call wins).
     """
     ...
 
-def setup_telemetry() -> None:
-    """Initialize the OpenTelemetry tracing pipeline.
+def setup_telemetry(options: dict[str, Any] | None = None) -> None:
+    """Initialize OpenTelemetry (OTLP) trace export.
 
-    Reads ``OTEL_EXPORTER_OTLP_ENDPOINT``, ``COGNEE_TRACING_ENABLED``, and
-    related env vars.  Idempotent.
+    Process-wide. Values resolve as the binding default service name
+    (``cognee.python-binding``) < environment (``COGNEE_TRACING_ENABLED``,
+    ``OTEL_*``, ``ENV``) < ``options``. ``options`` keys mirror the
+    ``Settings`` keys: ``cognee_tracing_enabled``, ``otel_service_name``,
+    ``otel_exporter_otlp_endpoint``, ``otel_exporter_otlp_headers``,
+    ``otel_exporter_otlp_protocol``, ``otel_span_processor``,
+    ``otel_traces_sampler``, ``otel_traces_sampler_arg``,
+    ``otel_deployment_environment``. No-op unless tracing is enabled or an
+    endpoint is set. Idempotent (first call wins).
     """
     ...
 
-def setup_telemetry_analytics() -> None:
-    """Arm the product-analytics client (opt-out via ``TELEMETRY_DISABLED``).
+def setup_telemetry_analytics() -> bool:
+    """Arm the product-analytics client and report whether it is enabled.
 
-    Idempotent.
+    Analytics are on by default (opt-out). Armed automatically on import;
+    returns the same value as :func:`is_telemetry_enabled`.
     """
+    ...
+
+def set_telemetry_enabled(enabled: bool) -> None:
+    """Turn product analytics on or off for the whole process.
+
+    Process-wide (every ``Cognee`` handle), and wins over
+    ``TELEMETRY_DISABLED`` / ``ENV`` in the environment. Disabling also
+    drops events that are queued but not yet sent.
+    """
+    ...
+
+def is_telemetry_enabled() -> bool:
+    """Whether product analytics are currently enabled for this process."""
     ...
 
 # Cloud ops (`serve` / `disconnect`) are not part of the OSS `cognee-py`

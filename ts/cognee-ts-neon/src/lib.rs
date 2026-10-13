@@ -258,26 +258,35 @@ fn main(mut cx: ModuleContext) -> NeonResult<()> {
     cx.export_function("getConfig", config::get_config)?;
     cx.export_function("configKeyAliases", config::get_config_key_aliases)?;
 
-    // Logging entrypoint (gap-06): argument-less, idempotent.
+    // Logging entrypoint (gap-06): optional options object, idempotent.
     cx.export_function("setupLogging", logging::setup_logging)?;
 
-    // Telemetry (OTLP) entrypoint (gap-07 task 05): argument-less,
+    // Telemetry (OTLP) entrypoint (gap-07 task 05): optional options object,
     // idempotent. Composes the OTEL layer on top of the default
     // stderr subscriber installed above.
     cx.export_function("setupTelemetry", telemetry_otlp::setup_telemetry)?;
 
     // Analytics entrypoint (gap-07 task 06): argument-less, idempotent.
-    // Arms `send_telemetry` per the Python-SDK parity policy (ON unless
-    // TELEMETRY_DISABLED / ENV in {test,dev} / COGNEE_HOST_SDK is set).
-    // Decisions 10, 12.
+    // Arms the binding and reports whether analytics are effective (ON
+    // unless switched off, TELEMETRY_DISABLED / ENV in {test,dev}, or
+    // COGNEE_HOST_SDK). Decisions 10, 12.
     cx.export_function(
         "setupTelemetryAnalytics",
         telemetry_analytics::setup_telemetry_analytics,
     )?;
+    // Process-wide analytics switch (SDK-713): wins over the environment.
+    cx.export_function(
+        "setTelemetryEnabled",
+        telemetry_analytics::set_telemetry_enabled,
+    )?;
+    cx.export_function(
+        "isTelemetryEnabled",
+        telemetry_analytics::is_telemetry_enabled,
+    )?;
     // Arm analytics automatically on module load so telemetry is ON by
     // default (Python-SDK parity) without requiring an explicit
-    // `setupTelemetryAnalytics()` call. Idempotent; honours the standard
-    // opt-out env vars at emission time via `is_disabled()`.
+    // `setupTelemetryAnalytics()` call. Idempotent; the environment is
+    // resolved here, and `setTelemetryEnabled` overrides it later.
     let _ = telemetry_analytics::arm();
 
     // Values

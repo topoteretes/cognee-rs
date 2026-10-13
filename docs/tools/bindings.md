@@ -16,6 +16,29 @@ Module-level helpers exist in each binding for logging/telemetry setup. The
 `serve()` / `disconnect()` cloud helpers are not part of the OSS bindings. The full per-language method list lives in each
 binding's README and its generated docs.
 
+## Process-wide configuration (logging, OTLP, analytics)
+
+Logging, OpenTelemetry export and product analytics each configure a
+process-wide singleton, so they are **not** handle settings: a handle's
+`config.set(...)` does not reach them. Each binding exposes the same module-level
+surface, resolved by one shared path (`cognee_bindings_common::process_config`):
+**defaults < environment < options passed from code**. See
+[configuration.md § Logging](../configuration.md#logging) and
+[§ Observability & telemetry](../configuration.md#observability--telemetry) for
+the keys.
+
+| | Python | TypeScript | Java | C |
+|---|---|---|---|---|
+| Logging | `setup_logging(options=None)` | `setupLogging(options?)` | `Cognee.setupLogging(Map)` | `cognee_setup_logging_with_options(json)` |
+| OTLP export | `setup_telemetry(options=None)` | `setupTelemetry(options?)` | `Cognee.initOtlp(Map)` | `cognee_init_otlp_with_options(json)` |
+| Analytics off/on | `set_telemetry_enabled(bool)` | `setTelemetryEnabled(bool)` | `Cognee.setTelemetryEnabled(boolean)` | `cognee_set_telemetry_enabled(int)` |
+| Analytics state | `is_telemetry_enabled()` | `isTelemetryEnabled()` | `Cognee.isTelemetryEnabled()` | `cognee_is_telemetry_enabled()` |
+
+Analytics are on by default (opt-out). The switch wins over `TELEMETRY_DISABLED` /
+`ENV`, which are read once, on import. Logging and OTLP setup latch on their first
+call. The argument-less forms (`setup_logging()`, `cognee_setup_logging()`, …) are
+unchanged and read the environment only.
+
 ## Configuration
 
 All four delegate to the same `ConfigManager` in `cognee-bindings-common`; the

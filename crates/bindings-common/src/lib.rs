@@ -1,5 +1,5 @@
-//! `cognee-bindings-common` — shared SDK facade for the Neon JS and C API
-//! bindings.
+//! `cognee-bindings-common` — shared SDK facade for the Python, Neon JS, Java
+//! and C API bindings.
 //!
 //! ## What lives here
 //!
@@ -8,6 +8,7 @@
 //! | [`error`] | [`SdkError`] enum + [`SdkError::code()`] — portable, no neon/FFI imports |
 //! | [`graph_backend`] | resolves the `graphBackend` cognify opt (else `graph_extraction.backend`) through the handle's component registry, plus the legacy process-wide shim |
 //! | [`handle`] | [`HandleState`] struct — shareable inner state of the SDK handle |
+//! | [`process_config`] | logging / OpenTelemetry process config every binding resolves the same way: defaults < env < options from code |
 //! | [`services`] | [`CogneeServices`] struct — fully-wired engine + service bundle |
 //! | [`settings_keys`] | [`canonical_settings_key`] — the key a settings-object entry is merged under |
 //! | [`wire`] | neon-free JSON helpers: `cognify_result_json`, `marshal_inputs`, `marshal_one`, `marshal_bytes` |
@@ -24,6 +25,7 @@ pub mod error;
 pub mod graph_backend;
 pub mod handle;
 pub mod ops;
+pub mod process_config;
 pub mod redact;
 pub mod services;
 pub mod settings_keys;

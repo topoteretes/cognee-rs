@@ -18,10 +18,6 @@
 //! before it goes away. This test asserts the delivered count both ways round, so
 //! it fails if the flush ever moves back out.
 #![cfg(feature = "telemetry")]
-#![allow(
-    clippy::disallowed_methods,
-    reason = "tests drive configuration through the process env"
-)]
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -111,14 +107,14 @@ fn serve(mut stream: TcpStream, arrived: &AtomicUsize) {
 }
 
 /// Point telemetry at `url` and make sure it is enabled for this test.
+/// Programmatic configuration wins over the harness's `TELEMETRY_DISABLED` /
+/// `ENV`.
 fn configure(url: &str) {
-    // SAFETY: single-threaded section of a `#[serial]` test.
-    unsafe {
-        std::env::set_var("COGNEE_TELEMETRY_INTEGRATION_TEST", "1");
-        std::env::set_var("COGNEE_TELEMETRY_PROXY_URL_FOR_TESTS", url);
-        std::env::remove_var("TELEMETRY_DISABLED");
-        std::env::remove_var("ENV");
-    }
+    cognee::telemetry::configure(cognee::telemetry::TelemetryConfig {
+        enabled: true,
+        endpoint_override: Some(url.to_string()),
+        ..cognee::telemetry::TelemetryConfig::default()
+    });
 }
 
 /// A cold manager: the teardown must not need a warm one, and this test is about

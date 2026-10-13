@@ -134,7 +134,9 @@ public final class Native {
     public static native void exportCogx(long handle, String destination, String optsJson,
             CompletableFuture<String> future);
     // module-level statics
-    public static native void setupLogging();
-    public static native void initOtlp();
+    public static native void setupLogging(String optionsJson);
+    public static native void initOtlp(String optionsJson);
     public static native boolean initTelemetry();
+    public static native void setTelemetryEnabled(boolean enabled);
+    public static native boolean isTelemetryEnabled();
 }

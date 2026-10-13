@@ -66,6 +66,17 @@ pub fn default_filter() -> &'static str {
      qdrant_shard=warn"
 }
 
+/// The `EnvFilter` for a resolved [`LoggingConfig::level_filter`]: the given
+/// directive, or [`default_filter`] when it is `None`. A malformed directive
+/// falls back to a plain `info` filter, so a typo never aborts startup.
+///
+/// The language bindings use this for their import-time default subscriber,
+/// so `RUST_LOG` / `LOG_LEVEL` are interpreted in exactly one place.
+pub fn env_filter(level_filter: Option<&str>) -> EnvFilter {
+    EnvFilter::try_new(level_filter.unwrap_or(default_filter()))
+        .unwrap_or_else(|_| EnvFilter::new("info"))
+}
+
 /// Install the global `tracing` subscriber for the process.
 ///
 /// Composition order:
@@ -89,21 +100,12 @@ pub fn default_filter() -> &'static str {
 /// `tracing::info!("Logging initialized", ...)` line — the cross-SDK
 /// file-presence assertion in task 06-10 uses this string as a grep
 /// anchor.
-#[allow(
-    clippy::disallowed_methods,
-    reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
-)]
 pub fn init_logging<I>(cfg: LoggingConfig, extra_layers: I) -> LogGuards
 where
     I: IntoIterator<Item = BoxedLayer>,
 {
     // (1) EnvFilter.
-    let filter_directive = cfg
-        .level_filter
-        .clone()
-        .unwrap_or_else(|| default_filter().to_string());
-    let env_filter =
-        EnvFilter::try_new(&filter_directive).unwrap_or_else(|_| EnvFilter::new("info"));
+    let env_filter = env_filter(cfg.level_filter.as_deref());
 
     // (2) Console layer per cfg.format, on the stream cfg selects. The CLI
     // picks stderr so that `--output-format json` leaves stdout as pure data;
@@ -199,7 +201,7 @@ where
         tracing::info!(format = ?cfg.format, "Logging initialized (stdout only)");
     }
 
-    if std::env::var_os("COGNEE_LOG_MAX_BYTES").is_some() {
+    if cfg.max_bytes.is_some() {
         tracing::warn!(
             "COGNEE_LOG_MAX_BYTES is accepted for parity but ignored: \
              size-based rotation is not yet supported (see decision 1)"

@@ -9,6 +9,11 @@ pub struct Cli {
     #[arg(long)]
     pub debug: bool,
 
+    /// Turn product analytics off for this invocation. Same effect as
+    /// `TELEMETRY_DISABLED=1`; wins over the environment either way.
+    #[arg(long, global = true)]
+    pub no_telemetry: bool,
+
     #[command(subcommand)]
     pub command: Commands,
 }
@@ -470,6 +475,25 @@ pub enum OutputFormatArg {
     Simple,
 }
 
+/// Lower the logging keys of `Settings` into the logging config.
+///
+/// The CLI initialises logging after loading `Settings` (defaults < config file
+/// < env), so `log_level` and `logs_root_directory` set with
+/// `cognee-cli config set` take effect here. Each only fills a value the
+/// logging environment left unset, which keeps the documented precedence:
+/// `RUST_LOG` > `LOG_LEVEL` > the config file's `log_level` > cognee's default
+/// filter, and `COGNEE_LOGS_DIR` > the config file's `logs_root_directory` >
+/// `~/.cognee/logs`. (`Settings` already carries `LOG_LEVEL` /
+/// `COGNEE_LOGS_DIR` when they are set, so the two sources agree.)
+pub fn lower_logging_settings(cfg: &mut cognee_logging::LoggingConfig, settings: &Settings) {
+    if cfg.level_filter.is_none() && !settings.log_level.is_empty() {
+        cfg.level_filter = Some(settings.log_level.clone());
+    }
+    if cfg.logs_dir_override.is_none() && !settings.logs_root_directory.is_empty() {
+        cfg.logs_dir_override = Some(std::path::PathBuf::from(&settings.logs_root_directory));
+    }
+}
+
 /// Which stream the console log layer should use for this invocation.
 ///
 /// Any invocation whose stdout is a **contract with a program** gets stderr,
@@ -778,6 +802,48 @@ mod tests {
 
     fn parse(argv: &[&str]) -> Cli {
         Cli::try_parse_from(argv).expect("argv should parse")
+    }
+
+    /// `--no-telemetry` is global: accepted before or after the subcommand.
+    #[test]
+    fn no_telemetry_flag_is_global() {
+        assert!(!parse(&["cognee-cli", "search", "q"]).no_telemetry);
+        assert!(parse(&["cognee-cli", "--no-telemetry", "search", "q"]).no_telemetry);
+        assert!(parse(&["cognee-cli", "search", "q", "--no-telemetry"]).no_telemetry);
+    }
+
+    /// Config-file logging keys fill only what the logging env left unset.
+    #[test]
+    fn lower_logging_settings_fills_only_unset_values() {
+        let settings = Settings {
+            log_level: "debug".into(),
+            logs_root_directory: "/from/config".into(),
+            ..Settings::default()
+        };
+
+        let mut cfg = cognee_logging::LoggingConfig::defaults();
+        lower_logging_settings(&mut cfg, &settings);
+        assert_eq!(cfg.level_filter.as_deref(), Some("debug"));
+        assert_eq!(
+            cfg.logs_dir_override.as_deref(),
+            Some(std::path::Path::new("/from/config"))
+        );
+
+        let mut cfg = cognee_logging::LoggingConfig::defaults();
+        cfg.level_filter = Some("trace".into()); // RUST_LOG
+        cfg.logs_dir_override = Some("/from/env".into());
+        lower_logging_settings(&mut cfg, &settings);
+        assert_eq!(cfg.level_filter.as_deref(), Some("trace"));
+        assert_eq!(
+            cfg.logs_dir_override.as_deref(),
+            Some(std::path::Path::new("/from/env"))
+        );
+
+        // Empty settings (the defaults) leave the logging defaults alone.
+        let mut cfg = cognee_logging::LoggingConfig::defaults();
+        lower_logging_settings(&mut cfg, &Settings::default());
+        assert_eq!(cfg.level_filter, None);
+        assert_eq!(cfg.logs_dir_override, None);
     }
 
     /// The regression this guards: the flag parsed fine before SDK-511 and was

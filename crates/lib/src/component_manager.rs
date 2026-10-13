@@ -55,6 +55,14 @@ impl CloseSharedStores {
     }
 }
 
+/// Register the resolved LLM API key with product analytics, which hash it into
+/// `api_key_tracking_id`. The key is the configured `llm.api_key` (env, config
+/// file or code), never a raw environment read. Process-wide: the most recently
+/// created or reconfigured manager wins.
+fn register_telemetry_llm_key(settings: &Settings) {
+    cognee_telemetry::set_llm_api_key(Some(&settings.llm().api_key));
+}
+
 /// Manages shared, lazily-initialized pipeline components.
 ///
 /// Each component is created on first access and cached for subsequent calls.
@@ -110,6 +118,7 @@ impl ComponentManager {
             }
             Err(error) => tracing::error!(%error, "component config sections not registered"),
         }
+        register_telemetry_llm_key(&config.read());
         Self {
             config,
             registry,
@@ -167,7 +176,13 @@ impl ComponentManager {
         }
         // No `.await` between the config read and storing the result, so the
         // (non-`Send`) settings guard never crosses an await point.
-        let ctx = self.config.read().backend_context();
+        let ctx = {
+            let settings = self.config.read();
+            // The configuration changed (or this is the first build): keep the
+            // key reported by product analytics in step with it.
+            register_telemetry_llm_key(&settings);
+            settings.backend_context()
+        };
         *guard = Some((current_ver, ctx.clone()));
         ctx
     }

@@ -129,6 +129,12 @@ pub struct Settings {
     pub system_root_directory: String,
     pub data_root_directory: String,
     pub cache_root_directory: String,
+    /// Log directory, lowered into the logging config by the CLI (which
+    /// initialises logging after loading `Settings`). Empty means the
+    /// `cognee-logging` default: `~/.cognee/logs`, falling back to
+    /// `/tmp/cognee_logs` (Python parity). Language bindings initialise
+    /// logging before any handle exists, so there it is passed to
+    /// `setup_logging(...)` instead; see docs/configuration.md § Logging.
     pub logs_root_directory: String,
     pub monitoring_tool: String,
 
@@ -182,6 +188,10 @@ pub struct Settings {
     pub enable_access_control: bool,
 
     // -- Logging -----------------------------------------------------------------
+    /// Log level filter (an `EnvFilter` directive such as `debug`), lowered
+    /// into the logging config by the CLI. `RUST_LOG` wins over it. Empty
+    /// means cognee's default filter (`info`, with noisy libraries at `warn`).
+    /// Language bindings pass it to `setup_logging(...)` instead.
     pub log_level: String,
 
     // -- Rate limiting -----------------------------------------------------------
@@ -213,6 +223,10 @@ pub struct Settings {
     /// `traceidratio` / `parentbased_traceidratio` samplers, which expect
     /// a 0.0–1.0 ratio. Empty string means: do not override.
     pub otel_traces_sampler_arg: String,
+
+    /// The `deployment.environment.name` resource attribute on exported
+    /// spans. Env: `ENV` (default `development`).
+    pub otel_deployment_environment: String,
 
     // -- Feature flags -----------------------------------------------------------
     pub enable_last_accessed: bool,
@@ -856,8 +870,9 @@ impl Default for Settings {
             system_root_directory: "./.cognee_system".to_string(),
             data_root_directory: "./.data_storage".to_string(),
             cache_root_directory: "./.cognee_cache".to_string(),
-            // Intentional divergence from Python default (~/.cognee/logs): edge/Android targets need a relative path.
-            logs_root_directory: "./logs".to_string(),
+            // Empty: the cognee-logging default (~/.cognee/logs, falling back to
+            // /tmp/cognee_logs when that is not writable), as in Python.
+            logs_root_directory: String::new(),
             monitoring_tool: "none".to_string(),
 
             classification_model: String::new(),
@@ -898,8 +913,8 @@ impl Default for Settings {
             default_user_password: String::new(),
             enable_access_control: false,
 
-            // Logging
-            log_level: "info".to_string(),
+            // Logging. Empty: cognee's default filter (info, noisy crates at warn).
+            log_level: String::new(),
 
             // Storage backend
 
@@ -912,6 +927,7 @@ impl Default for Settings {
             otel_span_processor: "batch".to_string(),
             otel_traces_sampler: String::new(),
             otel_traces_sampler_arg: String::new(),
+            otel_deployment_environment: "development".to_string(),
 
             // Feature flags
             enable_last_accessed: false,
@@ -3828,7 +3844,7 @@ mod tests {
         assert!(s.enable_caching);
         assert!(!s.auto_feedback);
         assert!(!s.enable_access_control);
-        assert_eq!(s.log_level, "info");
+        assert_eq!(s.log_level, "");
         assert!(!s.llm().rate_limit_enabled);
         assert_eq!(s.llm().rate_limit_requests, 60);
         assert_eq!(s.llm().rate_limit_interval, 60);
@@ -3844,6 +3860,7 @@ mod tests {
         assert_eq!(s.otel_span_processor, "batch");
         assert_eq!(s.otel_traces_sampler, "");
         assert_eq!(s.otel_traces_sampler_arg, "");
+        assert_eq!(s.otel_deployment_environment, "development");
         assert!(!s.enable_last_accessed);
         #[cfg(not(target_os = "android"))]
         assert_eq!(s.embedding().provider, "openai");
@@ -3958,7 +3975,7 @@ mod tests {
         assert_eq!(settings.graph().provider, "ladybug");
         #[cfg(all(not(feature = "ladybug"), feature = "pggraph"))]
         assert_eq!(settings.graph().provider, "postgres");
-        assert_eq!(settings.logs_root_directory, "./logs");
+        assert_eq!(settings.logs_root_directory, "");
     }
 
     #[test]

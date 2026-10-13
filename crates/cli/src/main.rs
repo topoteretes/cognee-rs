@@ -20,6 +20,13 @@ use tracing::error;
 fn run(mut settings: Settings) -> Result<(), CliError> {
     let cli = Cli::parse();
 
+    // Product analytics are process config: env (`TELEMETRY_DISABLED`,
+    // `ENV=test|dev`) is the default, and the flag wins over it. Applied before
+    // any command can emit an event.
+    if cli.no_telemetry {
+        cognee::telemetry::set_enabled(false);
+    }
+
     // Priority: defaults < JSON config < env vars (settings already overlaid in
     // main) < per-invocation CLI flags, applied here.
     //
@@ -129,11 +136,10 @@ fn main() -> StdExitCode {
         }
     };
 
-    // Decision 6 (default filter via init_logging) + decision 8
-    // (env-var-only — no new CLI flags). The env-var surface lives in
-    // `cognee-logging::LoggingConfig`; if parsing fails we keep startup
-    // alive by falling back to the documented defaults instead of
-    // aborting before any log line could surface the problem.
+    // Decision 6 (default filter via init_logging). The env-var surface lives
+    // in `cognee-logging::LoggingConfig`; if parsing fails we keep startup
+    // alive by falling back to the documented defaults instead of aborting
+    // before any log line could surface the problem.
     let mut logging_cfg = match cognee_logging::LoggingConfig::from_env() {
         Ok(cfg) => cfg,
         Err(err) => {
@@ -141,6 +147,7 @@ fn main() -> StdExitCode {
             cognee_logging::LoggingConfig::defaults()
         }
     };
+    cognee_cli::cli::lower_logging_settings(&mut logging_cfg, &settings);
     // `--output-format json` needs a clean stdout to stay parseable. Scoped to
     // that mode rather than applied to every invocation — see
     // `cognee_cli::cli::console_stream_for` for why.

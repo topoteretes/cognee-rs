@@ -26,11 +26,19 @@ CgErrorCode cg_init_with_threads(size_t n);
 void cg_shutdown(void);
 void cg_string_destroy(char* s);
 
-/* Logging (gap-06): argument-less, idempotent.
+/* Logging (gap-06): process-wide, idempotent (the first call wins).
  * Initializes cognee's logging subsystem from environment variables
  * (COGNEE_LOG_*, LOG_FILE_NAME, LOG_LEVEL, RUST_LOG).
  * Returns 0 on success (or idempotent re-call), non-zero on error. */
 int cognee_setup_logging(void);
+
+/* Same as cognee_setup_logging, with a JSON object of options that win over
+ * the environment (NULL = none). Keys: log_level, logs_root_directory,
+ * log_file, log_file_name, log_rotation, log_format, log_backup_count,
+ * log_max_files, console_stream.
+ * Returns: 0 = success/no-op, 1 = lock poison, 2 = invalid configuration
+ * (message in cg_last_error_message()). */
+int cognee_setup_logging_with_options(const char* options_json);
 
 /* OTLP telemetry (gap-07): argument-less, idempotent.
  * Initializes OpenTelemetry export from environment variables
@@ -44,17 +52,34 @@ int cognee_setup_logging(void);
  * directly reach the collector. See docs/telemetry/07. */
 int cognee_init_otlp(void);
 
-/* Product-analytics arming (gap-07 task 06): argument-less, idempotent.
- * Arms cognee product-analytics emission for this process subject to
- * the per-binding policy (decision 11): emission is armed unless
- * TELEMETRY_DISABLED is set, ENV is "test"/"dev", or COGNEE_HOST_SDK
- * is set to any non-empty value. When armed, future calls to
- * cognee_telemetry::env::is_disabled inside the bindings honour the
- * COGNEE_HOST_SDK sentinel (decision 10).
- * Returns: 0 = armed, 1 = not armed (policy suppressed),
- *          2 = lock poison (should not happen).
- * Safe to call multiple times; the first call latches the decision. */
+/* Same as cognee_init_otlp, with a JSON object of options that win over the
+ * environment (NULL = none), keyed like the otel_* settings:
+ * cognee_tracing_enabled, otel_service_name, otel_exporter_otlp_endpoint,
+ * otel_exporter_otlp_headers, otel_exporter_otlp_protocol,
+ * otel_span_processor, otel_traces_sampler, otel_traces_sampler_arg,
+ * otel_deployment_environment. The binding default service name
+ * (cognee.capi-binding) applies when neither OTEL_SERVICE_NAME nor
+ * otel_service_name is given; the environment is never modified.
+ * Returns: 0 = success/no-op, 1 = lock poison, 2 = invalid options or init
+ * failure (message in cg_last_error_message()). */
+int cognee_init_otlp_with_options(const char* options_json);
+
+/* Product analytics (gap-07 task 06, SDK-713). ON by default (opt-out);
+ * the switch is process-wide (every CgSdk handle).
+ *
+ * cognee_init_telemetry arms analytics for this process (cg_init does too)
+ * and reports whether they are enabled: 0 = enabled, 1 = disabled
+ * (switched off, TELEMETRY_DISABLED set, ENV "test"/"dev", or
+ * COGNEE_HOST_SDK set). Idempotent. */
 int cognee_init_telemetry(void);
+
+/* Turn product analytics on (non-zero) or off (0) for the whole process.
+ * Wins over TELEMETRY_DISABLED / ENV in the environment; disabling also drops
+ * events queued but not yet sent. Returns 0. */
+int cognee_set_telemetry_enabled(int enabled);
+
+/* 1 when product analytics are currently enabled for this process, else 0. */
+int cognee_is_telemetry_enabled(void);
 
 typedef struct CgValue CgValue;
 typedef struct CgValueIter CgValueIter;

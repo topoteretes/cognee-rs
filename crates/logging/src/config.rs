@@ -6,12 +6,19 @@
 //! resolve filesystem paths, or emit `tracing` events — those concerns
 //! land in tasks 06-03 / 06-04 / 06-05.
 //!
-//! Note: `COGNEE_LOG_MAX_BYTES` is intentionally **not** parsed here.
-//! Per decision 1 in the parent doc, size-based rotation is deferred
-//! for v1 and the variable is accepted as a documented no-op. The
-//! init layer (task 06-05) is responsible for any warn-on-set
-//! behavior; keeping `from_env` free of `tracing::*` calls lets unit
-//! tests run without a subscriber.
+//! Every field is also settable from code: assign it directly, or use
+//! [`LoggingConfig::set`] with a string key (what the language bindings'
+//! `setup_logging(options)` entry points do). Logging configures a
+//! process-wide singleton (the `tracing` subscriber), so this is *process*
+//! config: it is resolved once, before any SDK handle exists, and
+//! [`LoggingConfig::from_env_source`] is its only window onto the
+//! environment.
+//!
+//! Note: `COGNEE_LOG_MAX_BYTES` is captured (as [`LoggingConfig::max_bytes`])
+//! but not honoured. Per decision 1 in the parent doc, size-based rotation
+//! is deferred for v1 and the variable is accepted as a documented no-op.
+//! The init layer warns when it is set; keeping `from_env` free of
+//! `tracing::*` calls lets unit tests run without a subscriber.
 
 use cognee_config_core::EnvSource;
 use std::path::PathBuf;
@@ -78,7 +85,26 @@ pub enum LoggingConfigError {
         #[source]
         source: std::num::ParseIntError,
     },
+    /// [`LoggingConfig::set`] was given a key outside [`LOGGING_SETTING_KEYS`].
+    #[error("unknown logging setting {0:?} (expected one of: {keys})", keys = LOGGING_SETTING_KEYS.join(", "))]
+    UnknownKey(String),
 }
+
+/// The keys [`LoggingConfig::set`] accepts. `log_level` and
+/// `logs_root_directory` share their names with the `cognee::Settings` keys
+/// they correspond to.
+pub const LOGGING_SETTING_KEYS: &[&str] = &[
+    "log_level",
+    "logs_root_directory",
+    "log_file",
+    "log_file_name",
+    "log_rotation",
+    "log_format",
+    "log_backup_count",
+    "log_max_files",
+    "log_max_bytes",
+    "console_stream",
+];
 
 /// Parsed view of every env var that influences logging setup.
 ///
@@ -130,6 +156,10 @@ pub struct LoggingConfig {
     /// env var was set, and the init layer should substitute the
     /// default library-noise-suppressing filter (decision 6).
     pub level_filter: Option<String>,
+    /// Raw `COGNEE_LOG_MAX_BYTES`. Accepted for Python parity but ignored:
+    /// size-based rotation is not supported yet (decision 1), so
+    /// [`crate::init_logging`] only warns when this is set.
+    pub max_bytes: Option<String>,
 }
 
 impl LoggingConfig {
@@ -151,6 +181,7 @@ impl LoggingConfig {
             max_files: 10,
             console_stream: ConsoleStream::Stdout,
             level_filter: None,
+            max_bytes: None,
         }
     }
 
@@ -183,38 +214,17 @@ impl LoggingConfig {
 
         let rotation = match read_nonempty(env, "COGNEE_LOG_ROTATION") {
             None => LogRotation::Daily,
-            Some(raw) => match raw.to_ascii_lowercase().as_str() {
-                "daily" => LogRotation::Daily,
-                "hourly" => LogRotation::Hourly,
-                "minutely" => LogRotation::Minutely,
-                "never" => LogRotation::Never,
-                _ => {
-                    return Err(LoggingConfigError::InvalidValue {
-                        var: "COGNEE_LOG_ROTATION",
-                        value: raw,
-                        expected: "daily, hourly, minutely, never",
-                    });
-                }
-            },
+            Some(raw) => parse_rotation("COGNEE_LOG_ROTATION", raw)?,
         };
 
         let format = match read_nonempty(env, "COGNEE_LOG_FORMAT") {
             None => LogFormat::Plain,
-            Some(raw) => match raw.to_ascii_lowercase().as_str() {
-                "plain" => LogFormat::Plain,
-                "json" => LogFormat::Json,
-                _ => {
-                    return Err(LoggingConfigError::InvalidValue {
-                        var: "COGNEE_LOG_FORMAT",
-                        value: raw,
-                        expected: "plain, json",
-                    });
-                }
-            },
+            Some(raw) => parse_format("COGNEE_LOG_FORMAT", raw)?,
         };
 
         let backup_count = parse_usize(env, "COGNEE_LOG_BACKUP_COUNT", 5)?;
         let max_files = parse_usize(env, "COGNEE_LOG_MAX_FILES", 10)?;
+        let max_bytes = read_nonempty(env, "COGNEE_LOG_MAX_BYTES");
 
         // Decision 7: RUST_LOG wins over LOG_LEVEL. When only
         // LOG_LEVEL is set, surface it verbatim so the init layer
@@ -234,8 +244,92 @@ impl LoggingConfig {
             max_files,
             console_stream: ConsoleStream::Stdout,
             level_filter,
+            max_bytes,
         })
     }
+
+    /// Set one setting from code, by key (see [`LOGGING_SETTING_KEYS`]).
+    /// Wins over the environment the config was resolved from.
+    ///
+    /// | Key | Field | Value |
+    /// |---|---|---|
+    /// | `log_level` | [`level_filter`](Self::level_filter) | an `EnvFilter` directive (`debug`, `info,cognee=trace`); empty restores the default filter |
+    /// | `logs_root_directory` | [`logs_dir_override`](Self::logs_dir_override) | a directory; empty restores the default |
+    /// | `log_file` | [`file_enabled`](Self::file_enabled) | `false`/`0`/`no` disable, anything else enables |
+    /// | `log_file_name` | [`log_file_name`](Self::log_file_name) | a path; empty restores the default |
+    /// | `log_rotation` | [`rotation`](Self::rotation) | `daily`, `hourly`, `minutely`, `never` |
+    /// | `log_format` | [`format`](Self::format) | `plain`, `json` |
+    /// | `log_backup_count` | [`backup_count`](Self::backup_count) | an integer |
+    /// | `log_max_files` | [`max_files`](Self::max_files) | an integer |
+    /// | `log_max_bytes` | [`max_bytes`](Self::max_bytes) | accepted, ignored (warns) |
+    /// | `console_stream` | [`console_stream`](Self::console_stream) | `stdout`, `stderr` |
+    pub fn set(&mut self, key: &str, value: &str) -> Result<(), LoggingConfigError> {
+        let non_empty = || (!value.is_empty()).then(|| value.to_string());
+        match key {
+            "log_level" => self.level_filter = non_empty(),
+            "logs_root_directory" => self.logs_dir_override = non_empty().map(PathBuf::from),
+            "log_file" => self.file_enabled = parse_bool_value(value),
+            "log_file_name" => self.log_file_name = non_empty().map(PathBuf::from),
+            "log_rotation" => self.rotation = parse_rotation("log_rotation", value.to_string())?,
+            "log_format" => self.format = parse_format("log_format", value.to_string())?,
+            "log_backup_count" => self.backup_count = parse_usize_value("log_backup_count", value)?,
+            "log_max_files" => self.max_files = parse_usize_value("log_max_files", value)?,
+            "log_max_bytes" => self.max_bytes = non_empty(),
+            "console_stream" => {
+                self.console_stream = match value.to_ascii_lowercase().as_str() {
+                    "stdout" => ConsoleStream::Stdout,
+                    "stderr" => ConsoleStream::Stderr,
+                    _ => {
+                        return Err(LoggingConfigError::InvalidValue {
+                            var: "console_stream",
+                            value: value.to_string(),
+                            expected: "stdout, stderr",
+                        });
+                    }
+                }
+            }
+            other => return Err(LoggingConfigError::UnknownKey(other.to_string())),
+        }
+        Ok(())
+    }
+}
+
+fn parse_rotation(var: &'static str, raw: String) -> Result<LogRotation, LoggingConfigError> {
+    match raw.to_ascii_lowercase().as_str() {
+        "daily" => Ok(LogRotation::Daily),
+        "hourly" => Ok(LogRotation::Hourly),
+        "minutely" => Ok(LogRotation::Minutely),
+        "never" => Ok(LogRotation::Never),
+        _ => Err(LoggingConfigError::InvalidValue {
+            var,
+            value: raw,
+            expected: "daily, hourly, minutely, never",
+        }),
+    }
+}
+
+fn parse_format(var: &'static str, raw: String) -> Result<LogFormat, LoggingConfigError> {
+    match raw.to_ascii_lowercase().as_str() {
+        "plain" => Ok(LogFormat::Plain),
+        "json" => Ok(LogFormat::Json),
+        _ => Err(LoggingConfigError::InvalidValue {
+            var,
+            value: raw,
+            expected: "plain, json",
+        }),
+    }
+}
+
+fn parse_usize_value(var: &'static str, value: &str) -> Result<usize, LoggingConfigError> {
+    value
+        .parse::<usize>()
+        .map_err(|source| LoggingConfigError::InvalidInt { var, source })
+}
+
+/// Python-compatible boolean (`logging_utils.py:501`): anything other than
+/// `false`/`0`/`no` (case-insensitive) is truthy.
+fn parse_bool_value(value: &str) -> bool {
+    !matches!(value.to_ascii_lowercase().as_str(), "false" | "0" | "no")
 }
 
 /// Read an env var, returning `None` for unset *or* empty values.
@@ -253,10 +347,7 @@ fn read_nonempty(env: &dyn EnvSource, name: &str) -> Option<String> {
 fn parse_bool(env: &dyn EnvSource, name: &str, default: bool) -> bool {
     match read_nonempty(env, name) {
         None => default,
-        Some(value) => {
-            let lower = value.to_ascii_lowercase();
-            !matches!(lower.as_str(), "false" | "0" | "no")
-        }
+        Some(value) => parse_bool_value(&value),
     }
 }
 
@@ -269,9 +360,7 @@ fn parse_usize(
 ) -> Result<usize, LoggingConfigError> {
     match read_nonempty(env, name) {
         None => Ok(default),
-        Some(value) => value
-            .parse::<usize>()
-            .map_err(|source| LoggingConfigError::InvalidInt { var: name, source }),
+        Some(value) => parse_usize_value(name, &value),
     }
 }
 
@@ -605,5 +694,63 @@ mod tests {
         assert_eq!(cfg.backup_count, 3);
         assert_eq!(cfg.logs_dir_override, None, "empty means unset");
         assert_eq!(cfg.level_filter.as_deref(), Some("debug"));
+    }
+
+    #[test]
+    fn max_bytes_is_captured_not_honoured() {
+        let env = cognee_config_core::MapEnv::new().with("COGNEE_LOG_MAX_BYTES", "1048576");
+        let cfg = LoggingConfig::from_env_source(&env).expect("parses");
+        assert_eq!(cfg.max_bytes.as_deref(), Some("1048576"));
+    }
+
+    /// `set` wins over the environment, by key, for every field.
+    #[test]
+    fn set_overrides_env_values() {
+        let env = cognee_config_core::MapEnv::new()
+            .with("LOG_LEVEL", "warn")
+            .with("COGNEE_LOGS_DIR", "/from/env");
+        let mut cfg = LoggingConfig::from_env_source(&env).expect("parses");
+        cfg.set("log_level", "debug").expect("known key");
+        cfg.set("logs_root_directory", "/from/code")
+            .expect("known key");
+        cfg.set("log_file", "no").expect("known key");
+        cfg.set("log_file_name", "/tmp/x.log").expect("known key");
+        cfg.set("log_rotation", "Hourly").expect("known key");
+        cfg.set("log_format", "json").expect("known key");
+        cfg.set("log_backup_count", "2").expect("known key");
+        cfg.set("log_max_files", "3").expect("known key");
+        cfg.set("console_stream", "stderr").expect("known key");
+        assert_eq!(cfg.level_filter.as_deref(), Some("debug"));
+        assert_eq!(cfg.logs_dir_override, Some(PathBuf::from("/from/code")));
+        assert!(!cfg.file_enabled);
+        assert_eq!(cfg.log_file_name, Some(PathBuf::from("/tmp/x.log")));
+        assert_eq!(cfg.rotation, LogRotation::Hourly);
+        assert_eq!(cfg.format, LogFormat::Json);
+        assert_eq!(cfg.backup_count, 2);
+        assert_eq!(cfg.max_files, 3);
+        assert_eq!(cfg.console_stream, ConsoleStream::Stderr);
+
+        // Empty restores the default for the optional ones.
+        cfg.set("log_level", "").expect("known key");
+        assert_eq!(cfg.level_filter, None);
+
+        assert!(matches!(
+            cfg.set("log_rotation", "weekly"),
+            Err(LoggingConfigError::InvalidValue {
+                var: "log_rotation",
+                ..
+            })
+        ));
+        assert!(matches!(
+            cfg.set("log_max_files", "x"),
+            Err(LoggingConfigError::InvalidInt {
+                var: "log_max_files",
+                ..
+            })
+        ));
+        assert!(matches!(
+            cfg.set("nope", "x"),
+            Err(LoggingConfigError::UnknownKey(k)) if k == "nope"
+        ));
     }
 }

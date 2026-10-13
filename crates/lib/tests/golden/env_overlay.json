@@ -4066,6 +4066,70 @@
   "ENABLE_LAST_ACCESSED=\"{\\\"a\\\":1}\"": {},
   "ENABLE_LAST_ACCESSED=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
   "ENABLE_LAST_ACCESSED=\"{\\\"ssl\\\":true}\"": {},
+  "ENV=\"  \"": {
+    "otel_deployment_environment": "  "
+  },
+  "ENV=\"\"": {},
+  "ENV=\"-1\"": {
+    "otel_deployment_environment": "-1"
+  },
+  "ENV=\"0\"": {
+    "otel_deployment_environment": "0"
+  },
+  "ENV=\"1\"": {
+    "otel_deployment_environment": "1"
+  },
+  "ENV=\"1.5\"": {
+    "otel_deployment_environment": "1.5"
+  },
+  "ENV=\"42\"": {
+    "otel_deployment_environment": "42"
+  },
+  "ENV=\"5000000000\"": {
+    "otel_deployment_environment": "5000000000"
+  },
+  "ENV=\"70000\"": {
+    "otel_deployment_environment": "70000"
+  },
+  "ENV=\"TRUE\"": {
+    "otel_deployment_environment": "TRUE"
+  },
+  "ENV=\"[1]\"": {
+    "otel_deployment_environment": "[1]"
+  },
+  "ENV=\"abc\"": {
+    "otel_deployment_environment": "abc"
+  },
+  "ENV=\"false\"": {
+    "otel_deployment_environment": "false"
+  },
+  "ENV=\"no\"": {
+    "otel_deployment_environment": "no"
+  },
+  "ENV=\"on\"": {
+    "otel_deployment_environment": "on"
+  },
+  "ENV=\"require\"": {
+    "otel_deployment_environment": "require"
+  },
+  "ENV=\"true\"": {
+    "otel_deployment_environment": "true"
+  },
+  "ENV=\"v\"": {
+    "otel_deployment_environment": "v"
+  },
+  "ENV=\"yes\"": {
+    "otel_deployment_environment": "yes"
+  },
+  "ENV=\"{\\\"a\\\":1}\"": {
+    "otel_deployment_environment": "{\"a\":1}"
+  },
+  "ENV=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
+    "otel_deployment_environment": "{\"ssl\":\"verify-full\"}"
+  },
+  "ENV=\"{\\\"ssl\\\":true}\"": {
+    "otel_deployment_environment": "{\"ssl\":true}"
+  },
   "GRAPH_DATABASE_HOST=\"  \"": {
     "graph.host": "  "
   },

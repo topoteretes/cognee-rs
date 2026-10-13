@@ -378,16 +378,18 @@ export interface NativeBindings {
   // Canonical section key -> its plain (Python-compatible) alias.
   configKeyAliases(handle: NativeBox): Record<string, string>;
 
-  // Logging (gap-06): argument-less, idempotent.
-  setupLogging(): void;
+  // Logging (gap-06): optional options object, idempotent.
+  setupLogging(options?: Record<string, unknown> | null): void;
 
-  // Telemetry (gap-07 task 05): argument-less, idempotent.
-  setupTelemetry(): void;
+  // Telemetry (gap-07 task 05): optional options object, idempotent.
+  setupTelemetry(options?: Record<string, unknown> | null): void;
 
-  // Analytics (gap-07 task 06): argument-less, idempotent. Returns
-  // `true` if armed by this call (or a prior call), `false` if the
-  // per-binding policy suppressed emission.
+  // Analytics (gap-07 task 06): arms the binding, idempotent. Returns
+  // whether analytics are currently enabled for the process.
   setupTelemetryAnalytics(): boolean;
+  // Process-wide analytics switch (SDK-713).
+  setTelemetryEnabled(enabled: boolean): void;
+  isTelemetryEnabled(): boolean;
 
   // Values
   valueFromNumber(n: number): NativeBox;

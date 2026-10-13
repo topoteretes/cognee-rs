@@ -54,3 +54,51 @@ def test_setup_logging_is_idempotent(tmp_path, monkeypatch):
     # the singleton is already populated.
     setup_logging()
     setup_logging()
+
+
+def test_setup_logging_options_in_fresh_process(tmp_path):
+    """``setup_logging(options)`` wins over the env: the log directory comes
+    from the options dict even though ``COGNEE_LOGS_DIR`` points elsewhere.
+    Runs in a fresh interpreter so this call is the first (it latches)."""
+    import subprocess
+    import sys
+
+    env_dir = tmp_path / "from_env"
+    code_dir = tmp_path / "from_code"
+    code = (
+        "import cognee_py\n"
+        f"cognee_py.setup_logging({{'logs_root_directory': {str(code_dir)!r}, "
+        "'log_rotation': 'never', 'logLevel': 'info'})\n"
+    )
+    # Suppress the import-time bridge subscriber so setup_logging's own
+    # subscriber (and its file sink) is the one installed.
+    env = {
+        **os.environ,
+        "COGNEE_LOGS_DIR": str(env_dir),
+        "COGNEE_BINDING_SUPPRESS_LOGS": "1",
+    }
+    env.pop("LOG_FILE_NAME", None)
+    res = subprocess.run(
+        [sys.executable, "-c", code], env=env, capture_output=True, text=True, timeout=30
+    )
+    assert res.returncode == 0, res.stderr
+    assert code_dir.is_dir() and any(code_dir.iterdir()), list(tmp_path.iterdir())
+    assert not env_dir.exists()
+
+
+def test_setup_logging_rejects_bad_option_in_fresh_process():
+    import subprocess
+    import sys
+
+    code = (
+        "import cognee_py\n"
+        "try:\n"
+        "    cognee_py.setup_logging({'log_rotation': 'weekly'})\n"
+        "except ValueError as e:\n"
+        "    print('ValueError')\n"
+    )
+    res = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, timeout=30
+    )
+    assert res.returncode == 0, res.stderr
+    assert res.stdout.strip() == "ValueError", res.stdout

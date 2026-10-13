@@ -27,63 +27,60 @@ use serde_json::Value;
 use serial_test::serial;
 use tempfile::TempDir;
 
-use cognee_telemetry::send_telemetry;
+use cognee_telemetry::{TelemetryConfig, send_telemetry};
 
-/// Set of env vars touched by each test. Centralised so `IsolatedEnv`
-/// is the single place that knows what to reset.
-const ENV_VARS: &[&str] = &[
-    "HOME",
-    "TRACKING_ID",
-    "LLM_API_KEY",
-    "TELEMETRY_API_KEY_TRACKING_SALT",
-    "TELEMETRY_DISABLED",
-    "ENV",
-    "TELEMETRY_REQUEST_TIMEOUT",
-    "COGNEE_TELEMETRY_INTEGRATION_TEST",
-    "COGNEE_TELEMETRY_PROXY_URL_FOR_TESTS",
-];
-
-/// Set up an isolated env: a temp HOME, a fixed TRACKING_ID, a fresh
-/// LLM_API_KEY, and the mockito URL injected via the test override.
+/// Isolated telemetry state: a temp HOME (for the persistent id), and a
+/// process configuration pointing at the mockito server with a fixed
+/// tracking id and a registered LLM key. Restores HOME and the previous
+/// configuration on drop.
 struct IsolatedEnv {
     _home: TempDir,
+    prev_home: Option<String>,
+    prev_config: TelemetryConfig,
 }
 
 impl IsolatedEnv {
     fn install(server_url: &str) -> Self {
         let home = TempDir::new().expect("tempdir");
-        // Workspace uses Rust edition 2024 where `set_var` /
-        // `remove_var` are `unsafe`. `#[serial]` orders this against
-        // every other env-mutating test in the binary.
-        // SAFETY: serial section, no concurrent reader/writer of these
-        //   vars while this body runs.
+        let prev_home = std::env::var("HOME").ok();
+        // Workspace uses Rust edition 2024 where `set_var` is `unsafe`.
+        // SAFETY: `#[serial]` orders this against every other env-mutating
+        //   test in the binary, so there is no concurrent reader/writer.
         unsafe {
             std::env::set_var("HOME", home.path());
-            std::env::set_var("TRACKING_ID", "fixed-anon-12345");
-            std::env::set_var("LLM_API_KEY", "sk-test-fixture");
-            std::env::remove_var("TELEMETRY_API_KEY_TRACKING_SALT");
-            std::env::remove_var("TELEMETRY_DISABLED");
-            std::env::remove_var("ENV");
-            std::env::remove_var("TELEMETRY_REQUEST_TIMEOUT");
-            std::env::set_var("COGNEE_TELEMETRY_INTEGRATION_TEST", "1");
-            std::env::set_var("COGNEE_TELEMETRY_PROXY_URL_FOR_TESTS", server_url);
         }
+        let prev_config = cognee_telemetry::current_config();
+        // Explicit configuration wins over whatever TELEMETRY_DISABLED / ENV
+        // the harness runs with.
+        cognee_telemetry::configure(TelemetryConfig {
+            enabled: true,
+            tracking_id: Some("fixed-anon-12345".into()),
+            endpoint_override: Some(server_url.to_string()),
+            ..TelemetryConfig::default()
+        });
+        cognee_telemetry::set_llm_api_key(Some("sk-test-fixture"));
         // Wipe the persistent-id / anon-id caches so the new HOME
         // takes effect.
         cognee_telemetry::ids::__test_only_reset_caches();
-        Self { _home: home }
+        Self {
+            _home: home,
+            prev_home,
+            prev_config,
+        }
     }
 }
 
 impl Drop for IsolatedEnv {
     fn drop(&mut self) {
-        for k in ENV_VARS {
-            // SAFETY: Drop runs inside the same `#[serial]` section as
-            //   `install`, so no concurrent access exists.
-            unsafe {
-                std::env::remove_var(k);
+        // SAFETY: Drop runs inside the same `#[serial]` section as `install`.
+        unsafe {
+            match &self.prev_home {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
             }
         }
+        cognee_telemetry::configure(self.prev_config.clone());
+        cognee_telemetry::set_llm_api_key(None);
     }
 }
 
@@ -200,7 +197,7 @@ async fn schema_parity_against_reference() {
 
 #[tokio::test]
 #[serial]
-async fn opt_out_via_telemetry_disabled() {
+async fn opt_out_via_set_enabled() {
     let mut server = Server::new_async().await;
     let mock = server
         .mock("POST", "/")
@@ -209,11 +206,8 @@ async fn opt_out_via_telemetry_disabled() {
         .create_async()
         .await;
     let _env = IsolatedEnv::install(&server.url());
-    // SAFETY: `#[serial]` orders this against every other env-mutating
-    //   test; `_env`'s Drop will remove TELEMETRY_DISABLED on exit.
-    unsafe {
-        std::env::set_var("TELEMETRY_DISABLED", "1");
-    }
+    cognee_telemetry::set_enabled(false);
+    assert!(!cognee_telemetry::is_enabled());
 
     send_telemetry("cognee.forget", "user", None);
 
@@ -241,14 +235,10 @@ async fn fire_and_forget_does_not_block_caller() {
         .create_async()
         .await;
     let _env = IsolatedEnv::install(&server.url());
-    // Clear LLM_API_KEY so the caller doesn't pay the PBKDF2 100k-iteration
-    // cost (decision 11: hashed at every call, never cached). This test
-    // measures the proxy-stall propagation only — body assembly cost is
-    // covered elsewhere.
-    // SAFETY: still inside the same `#[serial]` section as `_env`'s install.
-    unsafe {
-        std::env::remove_var("LLM_API_KEY");
-    }
+    // Clear the LLM key so the caller doesn't pay the PBKDF2 100k-iteration
+    // cost on a cold cache. This test measures the proxy-stall propagation
+    // only — body assembly cost is covered elsewhere.
+    cognee_telemetry::set_llm_api_key(None);
 
     let start = tokio::time::Instant::now();
     send_telemetry("cognee.forget", "user", None);
@@ -263,4 +253,32 @@ async fn fire_and_forget_does_not_block_caller() {
     // fire-and-forget. The mockito assertion is intentionally not
     // checked here.
     let _ = mock;
+}
+
+/// Disabling drops events that were already queued: the POST re-checks the
+/// switch right before it leaves the process.
+#[tokio::test]
+#[serial]
+async fn set_enabled_false_drops_queued_events() {
+    let mut server = Server::new_async().await;
+    let mock = server
+        .mock("POST", "/")
+        .with_status(200)
+        .expect(0)
+        .create_async()
+        .await;
+    let _env = IsolatedEnv::install(&server.url());
+
+    // A current-thread runtime cannot run the spawned POST until this task
+    // yields, so the event is queued but not yet posted when the switch flips.
+    let rt = tokio::runtime::Handle::current();
+    assert_eq!(
+        rt.runtime_flavor(),
+        tokio::runtime::RuntimeFlavor::CurrentThread
+    );
+    send_telemetry("cognee.forget", "user", None);
+    cognee_telemetry::set_enabled(false);
+
+    assert!(cognee_telemetry::flush(Duration::from_secs(5)).await);
+    mock.assert_async().await;
 }

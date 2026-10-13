@@ -50,20 +50,29 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cancellation::cancellation_pair, m)?)?;
     m.add_class::<progress::PyProgressToken>()?;
 
-    // Logging entrypoint (gap-06): argument-less, idempotent.
+    // Logging entrypoint (gap-06): optional options dict, idempotent.
     m.add_function(wrap_pyfunction!(logging::setup_logging, m)?)?;
 
-    // Telemetry (OTLP) entrypoint (gap-07 task 05): argument-less,
+    // Telemetry (OTLP) entrypoint (gap-07 task 05): optional options dict,
     // idempotent. Composes the OTEL layer on top of the default
     // tracing → Python `logging` bridge installed above.
     m.add_function(wrap_pyfunction!(telemetry_otlp::setup_telemetry, m)?)?;
 
     // Analytics entrypoint (gap-07 task 06): argument-less, idempotent.
-    // Arms `send_telemetry` per the Python-SDK parity policy (ON unless
-    // TELEMETRY_DISABLED / ENV in {test,dev} / COGNEE_HOST_SDK is set).
-    // Decisions 10, 12.
+    // Arms the binding and reports whether analytics are effective (ON
+    // unless switched off, TELEMETRY_DISABLED / ENV in {test,dev}, or
+    // COGNEE_HOST_SDK). Decisions 10, 12.
     m.add_function(wrap_pyfunction!(
         telemetry_analytics::setup_telemetry_analytics,
+        m
+    )?)?;
+    // Process-wide analytics switch (SDK-713): wins over the environment.
+    m.add_function(wrap_pyfunction!(
+        telemetry_analytics::set_telemetry_enabled,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        telemetry_analytics::is_telemetry_enabled,
         m
     )?)?;
     // Arm analytics automatically on import so telemetry is ON by default

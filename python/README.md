@@ -172,9 +172,9 @@ print(cfg)
 | `COGNEE_BINDING_SUPPRESS_LOGS` | Suppress the auto-installed `pyo3-log` bridge. |
 | `COGNEE_HOST_SDK` | Set by an upstream/host `cognee` SDK to suppress this binding's analytics emission (avoids double-counting). |
 | `RUST_LOG`, `LOG_LEVEL` | Standard `tracing-subscriber` env-filter level overrides. |
-| `COGNEE_LOG_*`, `LOG_FILE_NAME` | Consumed by `setup_logging()` — see docs/configuration.md (Logging section). |
-| `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_SERVICE_NAME` and other `OTEL_*` vars | Consumed by `setup_telemetry()`. |
-| `TELEMETRY_DISABLED`, `ENV` | Honoured by `setup_telemetry_analytics()` via `cognee_telemetry::env::is_disabled`. |
+| `COGNEE_LOG_*`, `LOG_FILE_NAME` | Defaults for `setup_logging()`; its `options` dict wins — see docs/configuration.md (Logging section). |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_SERVICE_NAME` and other `OTEL_*` vars | Defaults for `setup_telemetry()`; its `options` dict wins. |
+| `TELEMETRY_DISABLED`, `ENV` | Analytics opt-out defaults, read once on import; `set_telemetry_enabled()` wins. |
 
 ## Operations reference
 
@@ -438,16 +438,21 @@ Cloud `serve` / `disconnect` are not part of the OSS `cognee_py` package.
 ```python
 import cognee_py
 
-# Optional: file logging (reads COGNEE_LOG_*, LOG_FILE_NAME, LOG_LEVEL).
-cognee_py.setup_logging()
+# Optional: file logging. Env (COGNEE_LOG_*, LOG_FILE_NAME, LOG_LEVEL) is the
+# default; the options dict wins. Process-wide; the first call wins.
+cognee_py.setup_logging({"log_level": "debug", "logs_root_directory": "/var/log/cognee"})
 
-# Optional: OTLP trace export (reads OTEL_* env vars).
-cognee_py.setup_telemetry()
+# Optional: OTLP trace export. Env (OTEL_*) is the default; options win.
+cognee_py.setup_telemetry({"otel_exporter_otlp_endpoint": "http://collector:4317"})
 
-# Optional: product-analytics emission (returns True if armed).
-armed = cognee_py.setup_telemetry_analytics()
-print(f"analytics armed: {armed}")
+# Product analytics are on by default. Turn them off for the whole process
+# (wins over TELEMETRY_DISABLED / ENV):
+cognee_py.set_telemetry_enabled(False)
+print(cognee_py.is_telemetry_enabled())  # False
 ```
+
+Logging, OTLP export and analytics are process-wide, so a handle's
+`config.set(...)` does not reach them — configure them with these functions.
 
 When `cognee_py` is imported, a minimal default subscriber is installed:
 a `pyo3-log` bridge that forwards every Rust `tracing::*` event into Python's
@@ -469,14 +474,17 @@ skip the default subscriber. The host then owns all subscriber setup.
 
 Analytics emission is **ON by default** — Python-SDK parity. Analytics are
 armed automatically on import (no explicit `setup_telemetry_analytics()` call
-required); the function is still exposed and returns the effective state.
+required); `setup_telemetry_analytics()` and `is_telemetry_enabled()` both
+return the effective state. The environment is read once, on import;
+`set_telemetry_enabled()` overrides it in either direction, process-wide.
 
 | Condition | Behaviour |
 |---|---|
-| No opt-out env set | Armed. `setup_telemetry_analytics()` returns `True`. |
-| `TELEMETRY_DISABLED=<non-empty>` | Suppressed. Returns `False`. |
-| `ENV` is `test` / `dev` | Suppressed. Returns `False`. |
+| No opt-out env set | Enabled. `is_telemetry_enabled()` returns `True`. |
+| `TELEMETRY_DISABLED=<non-empty>` | Disabled. Returns `False`. |
+| `ENV` is `test` / `dev` | Disabled. Returns `False`. |
 | `COGNEE_HOST_SDK=<any non-empty>` | Suppressed (defers to the host SDK). Returns `False`. |
+| `set_telemetry_enabled(False)` / `(True)` | Disabled / enabled, whatever the env says (`COGNEE_HOST_SDK` still suppresses). |
 
 **Important — if you run this binding underneath another `cognee` SDK that is
 already the canonical sender of `send_telemetry` events:** set

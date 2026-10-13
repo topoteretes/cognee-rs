@@ -13,6 +13,14 @@
 //! `cognee_telemetry::send_telemetry` and
 //! `cognee_telemetry::TelemetryError` are always available — they
 //! exist regardless of feature state in the leaf crate).
+//!
+//! # Turning product analytics off
+//!
+//! ```no_run
+//! // Process-wide; wins over TELEMETRY_DISABLED / ENV in the environment.
+//! cognee::telemetry::set_enabled(false);
+//! assert!(!cognee::telemetry::is_enabled());
+//! ```
 
 // --- gap 01: OTEL/observability surface (feature-gated) ---------------------
 
@@ -58,6 +66,10 @@ impl SettingsView for Settings {
     fn traces_sampler_arg(&self) -> &str {
         &self.otel_traces_sampler_arg
     }
+
+    fn deployment_environment(&self) -> &str {
+        &self.otel_deployment_environment
+    }
 }
 
 // --- gap 02: send_telemetry product-analytics surface (always available) ----
@@ -71,6 +83,16 @@ impl SettingsView for Settings {
 
 pub use cognee_telemetry::{
     PropertyValue, TelemetryError, UserIdRef, send_telemetry, try_send_telemetry,
+};
+
+// --- process-wide product-analytics switch (always available) ---------------
+//
+// Product analytics are process config: one `TelemetryConfig` governs every
+// event the process sends. Env (`TELEMETRY_DISABLED`, `ENV=test|dev`, ...) is
+// the default; `configure` / `set_enabled` from code win over it. Without the
+// `telemetry` feature these still exist and `is_enabled()` is always `false`.
+pub use cognee_telemetry::{
+    TelemetryConfig, configure, current_config, flush, is_enabled, set_enabled, set_llm_api_key,
 };
 
 #[cfg(feature = "telemetry")]

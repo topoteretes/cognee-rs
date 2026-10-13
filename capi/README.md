@@ -220,22 +220,26 @@ Tested on Linux x86_64 (CI) and Android aarch64 (slim build, ONNX local embeddin
 | `EMBEDDING_API_KEY` | Embedding API key (falls back to `OPENAI_TOKEN`). |
 | `MOCK_EMBEDDING` | Set `true` to use deterministic SHA-256-derived mock embeddings (no model download); `zero` gives all-zero vectors instead. |
 | `RUST_LOG`, `LOG_LEVEL` | `tracing-subscriber` env-filter level overrides. |
-| `COGNEE_LOG_*`, `LOG_FILE_NAME` | Consumed by `cognee_setup_logging()` — see docs/configuration.md (Logging section). |
-| `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, `OTEL_*` | Consumed by `cognee_init_otlp()`. |
-| `TELEMETRY_DISABLED`, `ENV` | Analytics opt-outs for `cognee_init_telemetry()`. |
+| `COGNEE_LOG_*`, `LOG_FILE_NAME` | Defaults for `cognee_setup_logging*()` — see docs/configuration.md (Logging section). |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, `OTEL_*` | Defaults for `cognee_init_otlp*()`. |
+| `TELEMETRY_DISABLED`, `ENV` | Analytics opt-out defaults, read once; `cognee_set_telemetry_enabled()` wins. |
 
 All env-var values can also be passed programmatically as JSON to `cg_sdk_new()` or
 via `cg_sdk_config_set_str()`, which take precedence over environment variables.
+Logging, OTLP export and product analytics are process-wide rather than handle
+settings: configure them with the functions below.
 
 ## Initialisation helpers
 
-Three optional, idempotent, argument-less init functions extend the base `cg_init()`:
+Optional, idempotent, process-wide functions extend the base `cg_init()`.
+Configuration resolves as defaults < environment < the options JSON:
 
 | Function | Effect |
 |---|---|
-| `cognee_setup_logging()` | File + stdout logging from `COGNEE_LOG_*`, `LOG_LEVEL`, `RUST_LOG` |
-| `cognee_init_otlp()` | OpenTelemetry OTLP export from `COGNEE_TRACING_ENABLED` / `OTEL_*` |
-| `cognee_init_telemetry()` | Arms product-analytics (suppressed by `TELEMETRY_DISABLED`, `ENV=test/dev`) |
+| `cognee_setup_logging()` / `cognee_setup_logging_with_options(json)` | File + stdout logging from `COGNEE_LOG_*`, `LOG_LEVEL`, `RUST_LOG`; options (`{"log_level":"debug"}`) win |
+| `cognee_init_otlp()` / `cognee_init_otlp_with_options(json)` | OpenTelemetry OTLP export from `COGNEE_TRACING_ENABLED` / `OTEL_*`; options (`{"otel_exporter_otlp_endpoint":"…"}`) win |
+| `cognee_set_telemetry_enabled(int)` / `cognee_is_telemetry_enabled()` | Product analytics (on by default) off/on for the whole process; wins over `TELEMETRY_DISABLED`, `ENV=test/dev` |
+| `cognee_init_telemetry()` | Arms product-analytics (`cg_init` already does) and reports `0` = enabled, `1` = disabled |
 
 None of them are required; the C binding installs no default subscriber so you get no noise
 unless you call them.

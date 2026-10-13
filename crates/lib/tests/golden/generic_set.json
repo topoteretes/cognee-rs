@@ -11276,9 +11276,7 @@
     "key": "llm_vision_model"
   },
   "log_level <- \"\"": {
-    "ok": {
-      "log_level": ""
-    }
+    "ok": {}
   },
   "log_level <- \"1\"": {
     "ok": {
@@ -11340,9 +11338,7 @@
     "key": "log_level"
   },
   "logs_root_directory <- \"\"": {
-    "ok": {
-      "logs_root_directory": ""
-    }
+    "ok": {}
   },
   "logs_root_directory <- \"1\"": {
     "ok": {
@@ -12015,6 +12011,70 @@
   "ontology_resolver <- {\"a\":1}": {
     "err": "TypeMismatch",
     "key": "ontology_resolver"
+  },
+  "otel_deployment_environment <- \"\"": {
+    "ok": {
+      "otel_deployment_environment": ""
+    }
+  },
+  "otel_deployment_environment <- \"1\"": {
+    "ok": {
+      "otel_deployment_environment": "1"
+    }
+  },
+  "otel_deployment_environment <- \"s\"": {
+    "ok": {
+      "otel_deployment_environment": "s"
+    }
+  },
+  "otel_deployment_environment <- \"true\"": {
+    "ok": {
+      "otel_deployment_environment": "true"
+    }
+  },
+  "otel_deployment_environment <- -1": {
+    "err": "TypeMismatch",
+    "key": "otel_deployment_environment"
+  },
+  "otel_deployment_environment <- 0": {
+    "err": "TypeMismatch",
+    "key": "otel_deployment_environment"
+  },
+  "otel_deployment_environment <- 1": {
+    "err": "TypeMismatch",
+    "key": "otel_deployment_environment"
+  },
+  "otel_deployment_environment <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "otel_deployment_environment"
+  },
+  "otel_deployment_environment <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "otel_deployment_environment"
+  },
+  "otel_deployment_environment <- 70000": {
+    "err": "TypeMismatch",
+    "key": "otel_deployment_environment"
+  },
+  "otel_deployment_environment <- [1]": {
+    "err": "TypeMismatch",
+    "key": "otel_deployment_environment"
+  },
+  "otel_deployment_environment <- false": {
+    "err": "TypeMismatch",
+    "key": "otel_deployment_environment"
+  },
+  "otel_deployment_environment <- null": {
+    "err": "TypeMismatch",
+    "key": "otel_deployment_environment"
+  },
+  "otel_deployment_environment <- true": {
+    "err": "TypeMismatch",
+    "key": "otel_deployment_environment"
+  },
+  "otel_deployment_environment <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "otel_deployment_environment"
   },
   "otel_exporter_otlp_endpoint <- \"\"": {
     "ok": {}

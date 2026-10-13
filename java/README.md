@@ -105,7 +105,7 @@ Every async op returns a `CompletableFuture<T>`. The generated
 | Data lifecycle | `forget(ForgetTarget[, tenant])`, `update(...)`, `pruneData()`, `pruneSystem([PruneSystemOptions])` |
 | Visualization | `visualize([VisualizeOptions])`, `visualizeToFile(VisualizeOptions)` |
 | Sub-surfaces | `datasets()`, `sessions()`, `users()`, `notebooks()`, `config()` |
-| Module statics | `Cognee.setupLogging()`, `Cognee.initOtlp()`, `Cognee.initTelemetry()`, `Cognee.version()` |
+| Module statics | `Cognee.setupLogging([Map])`, `Cognee.initOtlp([Map])`, `Cognee.setTelemetryEnabled(boolean)`, `Cognee.isTelemetryEnabled()`, `Cognee.initTelemetry()`, `Cognee.version()` |
 
 Inputs are built with the `DataInput` factories: `DataInput.text(String)`,
 `DataInput.file(String path)`, `DataInput.url(String)`, and
@@ -171,16 +171,26 @@ Map<String, Object> current = cfg.get();
 
 ## Telemetry opt-out
 
-Product analytics follow the shared opt-out policy and are **off unless armed**
-by calling `Cognee.initTelemetry()` (which returns whether analytics are
-effective for this process). Even when armed, emission is suppressed when:
+Product analytics are **on by default** (opt-out, matching the Python SDK) and
+armed when the native library loads. The switch is **process-wide** (every
+`Cognee` handle):
 
-- `COGNEE_HOST_SDK` is set — signals the host is an embedding SDK, so the
-  binding must not emit its own analytics; or
-- `TELEMETRY_DISABLED` (or `ENV`) requests the standard opt-out.
+```java
+Cognee.setTelemetryEnabled(false);   // wins over TELEMETRY_DISABLED / ENV
+boolean on = Cognee.isTelemetryEnabled();
+```
 
-`Cognee.setupLogging()` and `Cognee.initOtlp()` (OTLP trace export) are likewise
-opt-in and read their configuration from environment variables. See
+The environment is the default, read once when the library loads:
+`TELEMETRY_DISABLED` (any non-empty value) or `ENV=test|dev` disable it, and
+`COGNEE_HOST_SDK` suppresses this binding's analytics when the host is an
+embedding SDK that sends its own. `Cognee.initTelemetry()` re-arms and returns
+the same value as `isTelemetryEnabled()`.
+
+`Cognee.setupLogging(Map)` and `Cognee.initOtlp(Map)` (OTLP trace export) are
+likewise process-wide: their options win over the environment
+(`Map.of("log_level", "debug")`, `Map.of("otel_exporter_otlp_endpoint", "http://collector:4317")`),
+and the argument-less forms read the environment only. See
+[docs/configuration.md](../docs/configuration.md#observability--telemetry) and
 [docs/observability/send_telemetry.md](../docs/observability/send_telemetry.md).
 
 ## Architecture
@@ -236,10 +246,10 @@ The public API (`ai.cognee.*`) carries class/method Javadoc; the internal shim
 | `OPENAI_MODEL` | LLM model name (default: `gpt-4o-mini`). |
 | `COGNEE_JAVA_LIB_PATH` | Load this cdylib directly instead of the bundled per-platform library (dev). |
 | `COGNEE_HOST_SDK` | Suppress binding-armed analytics when the host is an embedding SDK. |
-| `TELEMETRY_DISABLED`, `ENV` | Standard analytics opt-outs for `initTelemetry()`. |
+| `TELEMETRY_DISABLED`, `ENV` | Analytics opt-out defaults, read once on load; `setTelemetryEnabled()` wins. |
 | `RUST_LOG`, `LOG_LEVEL` | `tracing-subscriber` env-filter level overrides. |
-| `COGNEE_LOG_*`, `LOG_FILE_NAME` | Consumed by `setupLogging()`. |
-| `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, `OTEL_*` | Consumed by `initOtlp()`. |
+| `COGNEE_LOG_*`, `LOG_FILE_NAME` | Defaults for `setupLogging()`; its options win. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, `OTEL_*` | Defaults for `initOtlp()`; its options win. |
 
 ## References
 

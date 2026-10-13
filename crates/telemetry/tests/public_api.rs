@@ -3,10 +3,6 @@
 //! `tests/dispatch_with_mockito.rs` in task 02-09.
 
 #![cfg(feature = "telemetry")]
-#![allow(
-    clippy::disallowed_methods,
-    reason = "tests drive configuration through the process env"
-)]
 
 use cognee_telemetry::send_telemetry;
 use serde_json::json;
@@ -17,33 +13,33 @@ use serial_test::serial;
 fn callable_with_uuid_user_id() {
     let id = uuid::Uuid::new_v4();
     // No assertion: this is a compile-time and "doesn't panic" check.
-    // Set TELEMETRY_DISABLED so we don't try to hit the network.
-    // SAFETY: `#[serial]` orders this against every other env-mutating
-    //   test in the crate; nothing else reads/writes
-    //   TELEMETRY_DISABLED while this body runs.
-    unsafe {
-        std::env::set_var("TELEMETRY_DISABLED", "1");
-    }
+    // Switch analytics off so we don't try to hit the network.
+    cognee_telemetry::set_enabled(false);
     send_telemetry("test.event", id, Some(json!({"k": "v"})));
 }
 
 #[test]
 #[serial]
 fn callable_with_str_user_id() {
-    // SAFETY: see callable_with_uuid_user_id.
-    unsafe {
-        std::env::set_var("TELEMETRY_DISABLED", "1");
-    }
+    cognee_telemetry::set_enabled(false);
     send_telemetry("test.event", "anonymous", None);
 }
 
 #[test]
 #[serial]
 fn callable_with_optional_uuid_user_id() {
-    // SAFETY: see callable_with_uuid_user_id.
-    unsafe {
-        std::env::set_var("TELEMETRY_DISABLED", "1");
-    }
+    cognee_telemetry::set_enabled(false);
     let id: Option<uuid::Uuid> = None;
     send_telemetry("test.event", id, None);
+}
+
+#[test]
+#[serial]
+fn process_switch_round_trips() {
+    let before = cognee_telemetry::current_config();
+    cognee_telemetry::set_enabled(false);
+    assert!(!cognee_telemetry::is_enabled());
+    cognee_telemetry::set_enabled(true);
+    assert!(cognee_telemetry::is_enabled());
+    cognee_telemetry::configure(before);
 }

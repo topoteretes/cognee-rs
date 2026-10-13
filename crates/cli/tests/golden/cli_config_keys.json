@@ -108,6 +108,7 @@
     "ontology.file_path",
     "ontology.matching_strategy",
     "ontology.resolver",
+    "otel_deployment_environment",
     "otel_exporter_otlp_endpoint",
     "otel_exporter_otlp_headers",
     "otel_exporter_otlp_protocol",
@@ -187,6 +188,7 @@
     "otel_span_processor",
     "otel_traces_sampler",
     "otel_traces_sampler_arg",
+    "otel_deployment_environment",
     "enable_last_accessed",
     "strict_config",
     "single_process",
@@ -9556,9 +9558,7 @@
     "err": true
   },
   "set log_level <- \"\"": {
-    "ok": {
-      "log_level": ""
-    }
+    "ok": {}
   },
   "set log_level <- \"1\"": {
     "ok": {
@@ -9609,9 +9609,7 @@
     "err": true
   },
   "set logs_root_directory <- \"\"": {
-    "ok": {
-      "logs_root_directory": ""
-    }
+    "ok": {}
   },
   "set logs_root_directory <- \"1\"": {
     "ok": {
@@ -10173,6 +10171,59 @@
     "err": true
   },
   "set ontology_resolver <- {\"a\":1}": {
+    "err": true
+  },
+  "set otel_deployment_environment <- \"\"": {
+    "ok": {
+      "otel_deployment_environment": ""
+    }
+  },
+  "set otel_deployment_environment <- \"1\"": {
+    "ok": {
+      "otel_deployment_environment": "1"
+    }
+  },
+  "set otel_deployment_environment <- \"s\"": {
+    "ok": {
+      "otel_deployment_environment": "s"
+    }
+  },
+  "set otel_deployment_environment <- \"true\"": {
+    "ok": {
+      "otel_deployment_environment": "true"
+    }
+  },
+  "set otel_deployment_environment <- -1": {
+    "err": true
+  },
+  "set otel_deployment_environment <- 0": {
+    "err": true
+  },
+  "set otel_deployment_environment <- 1": {
+    "err": true
+  },
+  "set otel_deployment_environment <- 1.5": {
+    "err": true
+  },
+  "set otel_deployment_environment <- 5000000000": {
+    "err": true
+  },
+  "set otel_deployment_environment <- 70000": {
+    "err": true
+  },
+  "set otel_deployment_environment <- [1]": {
+    "err": true
+  },
+  "set otel_deployment_environment <- false": {
+    "err": true
+  },
+  "set otel_deployment_environment <- null": {
+    "err": true
+  },
+  "set otel_deployment_environment <- true": {
+    "err": true
+  },
+  "set otel_deployment_environment <- {\"a\":1}": {
     "err": true
   },
   "set otel_exporter_otlp_endpoint <- \"\"": {
@@ -14766,6 +14817,13 @@
     }
   },
   "unset ontology_resolver": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset otel_deployment_environment": {
     "ok": {
       "chunk_size": 7,
       "llm.model": "changed",

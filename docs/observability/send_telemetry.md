@@ -18,11 +18,24 @@ at debug under the `cognee.telemetry` target only).
 
 ## Opting out
 
+The switch is **process-wide** (one dispatcher per process, whichever SDK handle
+emits the event) and is configured by
+[`TelemetryConfig`](../../crates/telemetry/src/config.rs): defaults (on) <
+environment < code. The environment is resolved once, on first use (in a language
+binding, on import); an explicit call wins over it in both directions.
+
 | How | Effect |
 |---|---|
-| `TELEMETRY_DISABLED=1` (any non-empty value) | Disables at runtime. Checked on every call before any identity derivation or HTTP work, so the cost is zero. |
-| `ENV=test` or `ENV=dev` | Disables at runtime. |
-| Build with `--no-default-features` | Disables at compile time. `send_telemetry` / `try_send_telemetry` remain in the public surface but compile to no-op bodies — no `reqwest`, no tokio fallback, no PBKDF2 cost. |
+| `cognee::telemetry::set_enabled(false)` (Rust), `set_telemetry_enabled(False)` (Python), `setTelemetryEnabled(false)` (TS), `Cognee.setTelemetryEnabled(false)` (Java), `cognee_set_telemetry_enabled(0)` (C) | Disables for the whole process, from code. Also drops events queued but not yet posted. `is_enabled()` / the binding equivalents report the state. |
+| `cognee-cli --no-telemetry …` | Disables for one CLI invocation. |
+| `TELEMETRY_DISABLED=1` (any non-empty value) | Disables, as the environment default. |
+| `ENV=test` or `ENV=dev` | Disables, as the environment default. |
+| Build with `--no-default-features` | Disables at compile time. `send_telemetry` / `try_send_telemetry` remain in the public surface but compile to no-op bodies — no `reqwest`, no tokio fallback, no PBKDF2 cost — and `is_enabled()` is always `false`. |
+
+The check happens before any identity derivation or HTTP work, so a disabled
+process pays nothing per event. See
+[configuration.md § Product analytics](../configuration.md#product-analytics) for the
+per-binding API.
 
 ## Identity
 
@@ -30,9 +43,9 @@ Events carry several non-PII identifiers:
 
 | Field | Source | Storage |
 |---|---|---|
-| `anonymous_id` | random uuid4 (override with `TRACKING_ID`) | `<project_root>/.anon_id` |
+| `anonymous_id` | random uuid4 (override with `TRACKING_ID` / `TelemetryConfig::tracking_id`) | `<project_root>/.anon_id` |
 | `persistent_id` | random uuid4 | `~/.cognee/.persistent_id` (machine-local; survives `forget(everything=True)`) |
-| `api_key_tracking_id` / `api_key_hash` | deterministic PBKDF2-HMAC-SHA256 of `LLM_API_KEY` | not stored (re-derived per event) |
+| `api_key_tracking_id` / `api_key_hash` | deterministic PBKDF2-HMAC-SHA256 of the resolved LLM API key (`llm.api_key`, registered with `set_llm_api_key` by every `ComponentManager`) | not stored (cached in memory per key and salt) |
 | `user_id` | passed by the caller | — |
 
 `api_key_hash` is a backward-compatibility alias carrying the same value as
@@ -54,14 +67,24 @@ Each event is a JSON object:
 
 ## Environment variables
 
-| Variable | Default | Effect |
-|---|---|---|
-| `TELEMETRY_DISABLED` | _(unset)_ | Any non-empty value disables. Read on every call. |
-| `ENV` | _(unset)_ | `test` or `dev` disables. Read on every call. |
-| `LLM_API_KEY` | _(unset)_ | Source of `api_key_tracking_id`; read at every event, never cached. |
-| `TRACKING_ID` | _(unset)_ | Overrides `anonymous_id`. |
-| `TELEMETRY_API_KEY_TRACKING_SALT` | `cognee.telemetry.api-key-tracking.v1` | PBKDF2 salt override (rotate to invalidate prior api-key ids). |
-| `TELEMETRY_REQUEST_TIMEOUT` | `5` | HTTP timeout in seconds, clamped to `[1, 60]`. Read once per process. |
+Read once, by `TelemetryConfig::from_env()`, the first time the process
+configuration is needed. Each has a `TelemetryConfig` field settable from code
+(`cognee::telemetry::configure`).
+
+| Variable | Field | Default | Effect |
+|---|---|---|---|
+| `TELEMETRY_DISABLED` | `enabled` | _(unset)_ | Any non-empty value disables. |
+| `ENV` | `enabled` | _(unset)_ | `test` or `dev` disables. |
+| `COGNEE_HOST_SDK` | `host_sdk` | _(unset)_ | Suppresses a language binding's events when a host SDK sends its own. |
+| `TRACKING_ID` | `tracking_id` | _(unset)_ | Overrides `anonymous_id`. |
+| `TELEMETRY_API_KEY_TRACKING_SALT` | `api_key_tracking_salt` | `cognee.telemetry.api-key-tracking.v1` | PBKDF2 salt override (rotate to invalidate prior api-key ids). |
+| `TELEMETRY_REQUEST_TIMEOUT` | `request_timeout_secs` | `5` | HTTP timeout in seconds, clamped to `[1, 60]`. |
+| `COGNEE_TELEMETRY_PROXY_URL_FOR_TESTS` | `endpoint_override` | _(unset)_ | Test-harness collector; honoured only while `COGNEE_TELEMETRY_INTEGRATION_TEST` is non-empty. |
+
+`LLM_API_KEY` is not read here: the hashed key is the resolved `llm.api_key`, so a
+key set from code or the CLI config store is the one reported. An embedder that
+calls `send_telemetry` without a `ComponentManager` registers it with
+`cognee::telemetry::set_llm_api_key`.
 
 ## Logging / troubleshooting
 

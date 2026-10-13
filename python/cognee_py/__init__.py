@@ -98,6 +98,8 @@ from cognee_py._native import (
     setup_logging,
     setup_telemetry,
     setup_telemetry_analytics,
+    set_telemetry_enabled,
+    is_telemetry_enabled,
 )
 # Cloud ops (`serve` / `disconnect`) are not part of the OSS `cognee-py`
 # package, which does not expose them.
@@ -213,6 +215,8 @@ __all__ = [
     "setup_logging",
     "setup_telemetry",
     "setup_telemetry_analytics",
+    "set_telemetry_enabled",
+    "is_telemetry_enabled",
     # Watcher factory
     "Watcher",
     # Drop-in upstream cognee SDK compatibility layer

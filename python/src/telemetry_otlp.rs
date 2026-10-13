@@ -6,14 +6,14 @@
 //!
 //! Behaviour:
 //!
-//! 1. Apply binding-specific `OTEL_SERVICE_NAME` default
-//!    (`cognee.python-binding`) when the env var is unset/empty — gap
-//!    07 decision 8.
-//! 2. Build [`cognee_observability::EnvSettingsView::from_env`] and
-//!    short-circuit when [`cognee_observability::is_tracing_enabled`]
-//!    returns `false` (no `COGNEE_TRACING_ENABLED`, no
-//!    `OTEL_EXPORTER_OTLP_ENDPOINT`). A noop guard is stashed so
-//!    repeat calls remain cheap.
+//! 1. Resolve the OTel settings through the path every binding shares
+//!    ([`cognee_bindings_common::process_config::otel_settings`]):
+//!    the binding default service name (`cognee.python-binding`, gap 07
+//!    decision 8) < the environment (`COGNEE_TRACING_ENABLED`, `OTEL_*`,
+//!    `ENV`) < the `options` dict. The environment is never modified.
+//! 2. Short-circuit when [`cognee_observability::is_tracing_enabled`]
+//!    returns `false` (tracing not enabled, no endpoint). A noop guard is
+//!    stashed so repeat calls remain cheap.
 //! 3. Otherwise call `init_telemetry::<Registry>(&settings)` to get a
 //!    `(BoxedTelemetryLayer<Registry>, TelemetryGuard)` pair.
 //! 4. Swap the layer into the reload slot exposed by
@@ -24,31 +24,41 @@
 //! 5. Stash the [`TelemetryGuard`] in
 //!    `OTEL_GUARD: OnceLock<Mutex<Option<TelemetryGuard>>>` so the
 //!    OTEL pipeline lives until process exit — gap 07 decision 12.
+//!
+//! OTLP export is process config: it is initialised once, before any handle
+//! exists, so it does not read a handle's `Settings`; pass the same `otel_*`
+//! keys in `options` instead.
 
 use std::sync::{Mutex, OnceLock};
 
-use cognee_observability::{EnvSettingsView, TelemetryGuard, init_telemetry, is_tracing_enabled};
+use cognee_observability::{TelemetryGuard, init_telemetry, is_tracing_enabled};
 use pyo3::prelude::*;
 use tracing_subscriber::Registry;
 
 use crate::default_subscriber::OTEL_RELOAD_HANDLE;
+use crate::json::py_to_serde;
 
 static OTEL_GUARD: OnceLock<Mutex<Option<TelemetryGuard>>> = OnceLock::new();
 
 const SERVICE_NAME_DEFAULT: &str = "cognee.python-binding";
 
-/// Initialise OpenTelemetry export from environment variables.
+/// Initialise OpenTelemetry export.
 ///
-/// Reads `COGNEE_TRACING_ENABLED`, `OTEL_EXPORTER_OTLP_ENDPOINT`,
-/// `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_SERVICE_NAME` and related
-/// `OTEL_*` env vars. When neither `COGNEE_TRACING_ENABLED=true` nor a
-/// non-empty `OTEL_EXPORTER_OTLP_ENDPOINT` is set, the function returns
-/// successfully without installing anything (no-config = no-op).
+/// Settings resolve as binding default < environment (`COGNEE_TRACING_ENABLED`,
+/// `OTEL_*`, `ENV`) < `options` (optional dict keyed like the `Settings`
+/// fields: `cognee_tracing_enabled`, `otel_service_name`,
+/// `otel_exporter_otlp_endpoint`, `otel_exporter_otlp_headers`,
+/// `otel_exporter_otlp_protocol`, `otel_span_processor`,
+/// `otel_traces_sampler`, `otel_traces_sampler_arg`,
+/// `otel_deployment_environment`). When tracing is neither enabled nor given
+/// an endpoint, the function returns successfully without installing anything
+/// (no-config = no-op).
 ///
-/// Idempotent: the first non-noop call wins; subsequent calls return
-/// `None` without touching the installed provider.
+/// Idempotent: the first call wins; subsequent calls return `None` without
+/// touching the installed provider.
 #[pyfunction]
-pub fn setup_telemetry() -> PyResult<()> {
+#[pyo3(signature = (options=None))]
+pub fn setup_telemetry(options: Option<Bound<'_, PyAny>>) -> PyResult<()> {
     let slot = OTEL_GUARD.get_or_init(|| Mutex::new(None));
     // lock poison is unrecoverable
     #[allow(clippy::expect_used, reason = "lock poison is unrecoverable")]
@@ -57,10 +67,14 @@ pub fn setup_telemetry() -> PyResult<()> {
         return Ok(());
     }
 
-    // Decision 8: apply binding-specific default service name.
-    apply_default_service_name(SERVICE_NAME_DEFAULT);
-
-    let settings = EnvSettingsView::from_env();
+    // Decision 8: the binding-specific service name is a default, below the
+    // environment and the options.
+    let options = options.as_ref().map(py_to_serde).transpose()?;
+    let settings = cognee_bindings_common::process_config::otel_settings(
+        SERVICE_NAME_DEFAULT,
+        options.as_ref(),
+    )
+    .map_err(pyo3::exceptions::PyValueError::new_err)?;
     if !is_tracing_enabled(&settings) {
         // Not configured — leave the reload slot empty and stash a
         // sentinel guard so a re-call short-circuits cheaply.
@@ -89,30 +103,4 @@ pub fn setup_telemetry() -> PyResult<()> {
 
     *lock = Some(guard);
     Ok(())
-}
-
-/// Apply binding-specific default `OTEL_SERVICE_NAME` when unset.
-///
-/// The user's explicit env var always wins — this only patches the
-/// default so dashboards can distinguish embedded use from
-/// `cognee-cli` traces, or from `cognee-http-server` traces (that server
-/// now ships outside this repository). Gap 07 decision 8.
-#[allow(
-    clippy::disallowed_methods,
-    reason = "config-unification: legacy direct env read, to be moved behind a config boundary"
-)]
-fn apply_default_service_name(default: &str) {
-    let current = std::env::var("OTEL_SERVICE_NAME").unwrap_or_default();
-    if current.is_empty() {
-        // SAFETY: `set_var` is `unsafe` in Rust 2024 because env
-        // mutation is process-global UB if concurrent with other
-        // env reads/writes. We mutate once per process at the
-        // top of `setup_telemetry()`, guarded by the idempotent
-        // OnceLock slot, before reading the env into
-        // `EnvSettingsView::from_env`. Hosts that call this from
-        // multiple threads still funnel through the mutex above.
-        unsafe {
-            std::env::set_var("OTEL_SERVICE_NAME", default);
-        }
-    }
 }

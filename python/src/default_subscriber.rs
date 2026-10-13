@@ -35,9 +35,7 @@ use std::sync::{Once, OnceLock};
 use pyo3::prelude::*;
 use tracing::field::{Field, Visit};
 use tracing_log::AsLog;
-use tracing_subscriber::{
-    EnvFilter, Layer, Registry, layer::SubscriberExt, reload, util::SubscriberInitExt,
-};
+use tracing_subscriber::{Layer, Registry, layer::SubscriberExt, reload, util::SubscriberInitExt};
 
 static INIT: Once = Once::new();
 
@@ -85,9 +83,14 @@ pub(crate) fn install(py: Python<'_>) {
         //     host's prior setup wins.
         let _ = pyo3_log::try_init();
 
-        // (2) Build EnvFilter: RUST_LOG > cognee_logging::default_filter().
-        let filter = EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| EnvFilter::new(cognee_logging::default_filter()));
+        // (2) Build EnvFilter: RUST_LOG > LOG_LEVEL > the default filter,
+        //     resolved by the logging config's boundary like every other
+        //     logging setting. A malformed logging env var is not fatal here:
+        //     fall back to the default filter.
+        let level = cognee_logging::LoggingConfig::from_env()
+            .ok()
+            .and_then(|cfg| cfg.level_filter);
+        let filter = cognee_logging::env_filter(level.as_deref());
 
         // (3) Reserve a reload-capable slot for the OTEL layer. Starts
         //     empty (None); `setup_telemetry()` (gap 07 task 05) swaps

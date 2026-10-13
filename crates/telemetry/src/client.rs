@@ -8,12 +8,13 @@
 //! Pool sizing is intentionally small (2 idle per host) because the
 //! proxy is a single host and large pools waste sockets in
 //! long-running CLI processes.
+//!
+//! The client carries no timeout of its own: each request sets the timeout of
+//! the process [`crate::TelemetryConfig`] in force when it is sent, so a
+//! [`crate::configure`] call takes effect without rebuilding the client.
 
 use once_cell::sync::Lazy;
 use reqwest::Client;
-use std::time::Duration;
-
-use crate::env::request_timeout_secs;
 
 #[allow(
     clippy::expect_used,
@@ -21,7 +22,6 @@ use crate::env::request_timeout_secs;
 )]
 static HTTP: Lazy<Client> = Lazy::new(|| {
     Client::builder()
-        .timeout(Duration::from_secs(request_timeout_secs()))
         .pool_max_idle_per_host(2)
         .user_agent(concat!(
             "cognee-rust/",
@@ -33,11 +33,6 @@ static HTTP: Lazy<Client> = Lazy::new(|| {
 });
 
 /// Borrow the process-wide reqwest client.
-///
-/// The `Lazy` initialiser reads `request_timeout_secs()` **once** at
-/// first use. Changing `TELEMETRY_REQUEST_TIMEOUT` mid-process does
-/// not re-affect already-built clients — same as Python, where the
-/// timeout is read once via `int(os.getenv(...))`.
 pub fn client() -> &'static Client {
     &HTTP
 }

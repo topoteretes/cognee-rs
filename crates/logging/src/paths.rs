@@ -220,6 +220,7 @@ mod tests {
             backup_count: 5,
             max_files: 10,
             level_filter: None,
+            max_bytes: None,
         }
     }
 

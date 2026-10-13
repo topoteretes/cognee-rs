@@ -100,7 +100,7 @@ cognee-rs/
 
 **cognee-observability** — OpenTelemetry tracing pipeline. Bridges `#[tracing::instrument]` sites into an OTLP exporter. Entry point: `init_telemetry` (tracing layer + RAII `TelemetryGuard`). Activated by `COGNEE_TRACING_ENABLED=true` or a non-empty `OTEL_EXPORTER_OTLP_ENDPOINT`; real exporter behind the `telemetry` feature. See [observability/opentelemetry.md](observability/opentelemetry.md).
 
-**cognee-telemetry** — Product-analytics client (`send_telemetry`). Fire-and-forget POST to `https://test.prometh.ai` per public API call; opt out with `TELEMETRY_DISABLED`, `ENV=test|dev`, or `--no-default-features`. See [observability/send_telemetry.md](observability/send_telemetry.md).
+**cognee-telemetry** — Product-analytics client (`send_telemetry`). Fire-and-forget POST to `https://test.prometh.ai` per public API call; on by default, with a process-wide switch (`TelemetryConfig`, `set_enabled` / `is_enabled`, exposed by every binding and the CLI's `--no-telemetry`); env opt-outs `TELEMETRY_DISABLED`, `ENV=test|dev`; compiled out with `--no-default-features`. See [observability/send_telemetry.md](observability/send_telemetry.md).
 
 **cognee-logging** — Shared file-based logging: rotation, the Python-compatible plain-text formatter, and a noise-suppressing `EnvFilter`. Entry point: `init_logging`, called by the CLI and HTTP server. Env-var surface documented in [configuration.md §logging](configuration.md#logging).
 

@@ -424,21 +424,68 @@ public final class Cognee implements AutoCloseable {
         return exportCogx(destination, null);
     }
 
-    // --- module-level statics ---
-    /** Initialize file logging from env vars (idempotent). */
+    // --- module-level statics (process-wide configuration) ---
+    /** Initialize file logging from env vars (idempotent; the first call wins). */
     public static void setupLogging() {
-        Native.setupLogging();
+        Native.setupLogging(null);
+    }
+
+    /**
+     * Initialize file logging. Logging is process-wide and configured here,
+     * not from a handle's settings: values resolve as defaults &lt; environment
+     * ({@code COGNEE_LOG_*}, {@code LOG_FILE_NAME}, {@code LOG_LEVEL},
+     * {@code RUST_LOG}) &lt; {@code options}. Keys (snake_ or camelCase):
+     * {@code log_level}, {@code logs_root_directory}, {@code log_file},
+     * {@code log_file_name}, {@code log_rotation}, {@code log_format},
+     * {@code log_backup_count}, {@code log_max_files}, {@code console_stream}.
+     * Idempotent; the first call wins.
+     *
+     * @throws CogneeException ({@code VALIDATION_ERROR}) on an unknown key or
+     *         an invalid value
+     */
+    public static void setupLogging(java.util.Map<String, ?> options) {
+        Native.setupLogging(options == null ? null : ai.cognee.internal.Json.toJson(options));
     }
 
     /** Install OpenTelemetry OTLP export from env vars (idempotent). */
     public static void initOtlp() {
-        Native.initOtlp();
+        Native.initOtlp(null);
     }
 
-    /** Arm product-analytics emission (per the opt-out policy); returns whether
-     *  analytics are effective for this process. */
+    /**
+     * Install OpenTelemetry OTLP export. Process-wide; values resolve as the
+     * binding default service name ({@code cognee.java-binding}) &lt;
+     * environment ({@code COGNEE_TRACING_ENABLED}, {@code OTEL_*},
+     * {@code ENV}) &lt; {@code options}, keyed like the {@code otel_*}
+     * settings ({@code cognee_tracing_enabled}, {@code otel_service_name},
+     * {@code otel_exporter_otlp_endpoint}, ...). Idempotent; the first call
+     * wins.
+     *
+     * @throws CogneeException ({@code VALIDATION_ERROR}) on an unknown key
+     */
+    public static void initOtlp(java.util.Map<String, ?> options) {
+        Native.initOtlp(options == null ? null : ai.cognee.internal.Json.toJson(options));
+    }
+
+    /** Arm product-analytics emission (also done when the library loads);
+     *  returns whether analytics are enabled for this process. */
     public static boolean initTelemetry() {
         return Native.initTelemetry();
+    }
+
+    /**
+     * Turn product analytics on or off for the whole process (every handle).
+     * Analytics are on by default (opt-out); this wins over
+     * {@code TELEMETRY_DISABLED} / {@code ENV} in the environment, and
+     * disabling also drops events queued but not yet sent.
+     */
+    public static void setTelemetryEnabled(boolean enabled) {
+        Native.setTelemetryEnabled(enabled);
+    }
+
+    /** Whether product analytics are currently enabled for this process. */
+    public static boolean isTelemetryEnabled() {
+        return Native.isTelemetryEnabled();
     }
 
     /** The native/SDK version string. */
