@@ -139,20 +139,6 @@ const ENTITY_FIELD: &str = "name";
 const EDGE_TYPE_DATA_TYPE: &str = "EdgeType";
 const EDGE_TYPE_FIELD: &str = "relationship_name";
 
-/// Completion retriever fusing the chunk lane (P1-07) and the entity/facts lane
-/// (P1-08) into a single `SearchType::HybridCompletion` retriever.
-///
-/// Port of Python's `HybridRetriever` (`hybrid_retriever.py`). Embeds the query
-/// once, runs the chunk lane and the entity/facts lane concurrently, tags each
-/// lane's output with a `"kind"` payload discriminator, and renders the
-/// sectioned prompt context Python feeds the LLM.
-///
-/// **Truth-subspace (`use_truth_weight`):** live as of Phase 2 (P2-07) — when
-/// set and exactly one dataset is in scope, the chunk lane is re-ranked by
-/// truth-subspace alignment; it fails open to baseline ranking on any error and
-/// stays default-off. **Global-context (`include_global_context_index` /
-/// `global_context_index_top_k`):** still accepted on the wire but inert — no
-/// global-context section is produced (locked deferral).
 /// The HYBRID_COMPLETION context budget and overflow handling (the
 /// `search.hybrid` settings).
 #[derive(Debug, Clone, PartialEq)]
@@ -189,6 +175,20 @@ impl Default for HybridBudget {
     }
 }
 
+/// Completion retriever fusing the chunk lane (P1-07) and the entity/facts lane
+/// (P1-08) into a single `SearchType::HybridCompletion` retriever.
+///
+/// Port of Python's `HybridRetriever` (`hybrid_retriever.py`). Embeds the query
+/// once, runs the chunk lane and the entity/facts lane concurrently, tags each
+/// lane's output with a `"kind"` payload discriminator, and renders the
+/// sectioned prompt context Python feeds the LLM.
+///
+/// **Truth-subspace (`use_truth_weight`):** live as of Phase 2 (P2-07) — when
+/// set and exactly one dataset is in scope, the chunk lane is re-ranked by
+/// truth-subspace alignment; it fails open to baseline ranking on any error and
+/// stays default-off. **Global-context (`include_global_context_index` /
+/// `global_context_index_top_k`):** still accepted on the wire but inert — no
+/// global-context section is produced (locked deferral).
 pub struct HybridRetriever {
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
@@ -740,6 +740,14 @@ fn item_to_fact(item: &SearchItem) -> FactResult {
 impl SearchRetriever for HybridRetriever {
     fn search_type(&self) -> SearchType {
         SearchType::HybridCompletion
+    }
+
+    #[cfg(test)]
+    fn applied_tuning(&self) -> crate::retrievers::AppliedTuning {
+        crate::retrievers::AppliedTuning {
+            hybrid: Some(self.budget.clone()),
+            ..Default::default()
+        }
     }
 
     async fn get_context(

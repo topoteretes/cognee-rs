@@ -9,7 +9,7 @@
 //! Keys are namespaced (`<section>.<field>`); each keeps the Python SDK's flat
 //! name as an alias (`llm_model`), and the env vars it has always had.
 
-use cognee_config_core::config_section;
+use cognee_config_core::{StrictBool, config_section};
 use serde_json::{Map, Value};
 
 use crate::context::AwsInputs;
@@ -684,8 +684,11 @@ config_section! {
             env: ["COGNEE_LEGACY_PER_WORD_TOKEN_COUNT"], alias: [], secret: false,
         },
         /// Stop the run at the first failed data item (`true`, the default
-        /// when unset) or process every item and report (`false`).
-        pub raise_incremental_loading_errors: Option<bool> = None => {
+        /// when unset) or process every item and report (`false`). From env,
+        /// a value that is not a recognised boolean (`true|1|yes|on`,
+        /// `false|0|no|off`) is ignored with a warning, so a typo keeps the
+        /// fail-fast default instead of switching to run-to-end.
+        pub raise_incremental_loading_errors: Option<StrictBool> = None => {
             env: ["RAISE_INCREMENTAL_LOADING_ERRORS", "COGNEE_RAISE_INCREMENTAL_LOADING_ERRORS"],
             alias: ["raise_incremental_loading_errors"], secret: false,
         },
@@ -714,8 +717,11 @@ config_section! {
     /// sections.
     pub struct SearchSettings in "search" {
         /// Allow the CYPHER and NATURAL_LANGUAGE search types to run graph
-        /// queries (Python's `ALLOW_CYPHER_QUERY`).
-        pub allow_cypher_query: bool = true => {
+        /// queries (Python's `ALLOW_CYPHER_QUERY`). Only an explicit
+        /// `false|0|no|off` disables them; any other value from env is
+        /// ignored with a warning and keeps them enabled, as in Python, which
+        /// disables only on `false`.
+        pub allow_cypher_query: StrictBool = StrictBool(true) => {
             env: ["ALLOW_CYPHER_QUERY"], alias: ["allow_cypher_query"], secret: false,
         },
         /// Neighbours expanded per seed node in triplet search; unset or 0

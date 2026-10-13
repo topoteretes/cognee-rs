@@ -16,6 +16,8 @@ pub use advanced_graph_retrievers::{
     GraphCompletionContextExtensionRetriever, GraphCompletionCotRetriever,
     GraphSummaryCompletionRetriever,
 };
+#[cfg(test)]
+pub(crate) use base_retriever::AppliedTuning;
 pub use base_retriever::{SearchRetriever, SearchRetrieverRef};
 #[allow(
     unused_imports,

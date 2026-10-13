@@ -921,4 +921,74 @@ mod tests {
             }
         }
     }
+
+    /// `with_tuning` must reach every standard retriever that consumes a
+    /// knob: each is wired by a hand-written builder call, so a dropped one
+    /// would silently fall back to the default for that search type.
+    #[test]
+    fn tuning_reaches_every_retriever_that_consumes_it() {
+        use super::{SearchTuning, StandardEngines};
+        use crate::retrievers::AppliedTuning;
+        use crate::retrievers::HybridBudget;
+
+        let tuning = SearchTuning {
+            allow_cypher_query: false,
+            triplet_neighbor_cap: Some(7),
+            hybrid: HybridBudget {
+                max_context_tokens: Some(321),
+                summarize_overflow: true,
+                summarize_batch: 3,
+                overflow_summary_file: Some("summaries.json".into()),
+            },
+        };
+        assert_ne!(tuning, SearchTuning::default(), "every knob is non-default");
+        let retrievers = SearchBuilder::standard_retrievers(
+            StandardEngines {
+                vector_db: Arc::new(TestVectorDb),
+                embedding_engine: Arc::new(TestEmbedding),
+                graph_db: Arc::new(TestGraphDb),
+                llm: Arc::new(TestLlm),
+            },
+            &tuning,
+        );
+
+        let capped = AppliedTuning {
+            neighbor_cap: Some(tuning.triplet_neighbor_cap),
+            ..Default::default()
+        };
+        let cypher = AppliedTuning {
+            allow_cypher_query: Some(tuning.allow_cypher_query),
+            ..Default::default()
+        };
+        let hybrid = AppliedTuning {
+            hybrid: Some(tuning.hybrid.clone()),
+            ..Default::default()
+        };
+        let expected = [
+            (SearchType::GraphCompletion, &capped),
+            (SearchType::GraphCompletionCot, &capped),
+            (SearchType::GraphCompletionContextExtension, &capped),
+            (SearchType::GraphSummaryCompletion, &capped),
+            (SearchType::Temporal, &capped),
+            (SearchType::Cypher, &cypher),
+            (SearchType::NaturalLanguage, &cypher),
+            (SearchType::HybridCompletion, &hybrid),
+        ];
+        for (search_type, want) in expected {
+            let retriever = retrievers
+                .get(&search_type)
+                .unwrap_or_else(|| panic!("{search_type:?} is a standard retriever"));
+            assert_eq!(&retriever.applied_tuning(), want, "{search_type:?}");
+        }
+        // Every other standard retriever consumes no tuning knob.
+        for (search_type, retriever) in &retrievers {
+            if !expected.iter().any(|(t, _)| t == search_type) {
+                assert_eq!(
+                    retriever.applied_tuning(),
+                    AppliedTuning::default(),
+                    "{search_type:?}"
+                );
+            }
+        }
+    }
 }

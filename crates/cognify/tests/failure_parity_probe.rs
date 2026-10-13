@@ -19,8 +19,9 @@
 //!   markers and artifacts.
 //!
 //! and the configs are the two Python exposes through
-//! `RAISE_INCREMENTAL_LOADING_ERRORS`, mapped onto Rust's axis-1 the way
-//! `FailureStop::parse` maps them (asserted below rather than assumed).
+//! `RAISE_INCREMENTAL_LOADING_ERRORS`, mapped onto Rust's axis-1 the way the
+//! `cognify.raise_incremental_loading_errors` setting maps them (asserted
+//! below rather than assumed).
 //!
 //! Emitting rather than asserting is deliberate: the comparison lives in
 //! `compare.py`, which sees both SDKs' observations at once. This file is the
@@ -39,6 +40,7 @@ use std::sync::Arc;
 
 use cognee_cognify::failure::{FailureStop, RollbackScope};
 use cognee_cognify::{CognifyConfig, CognifyError, cognify};
+use cognee_config_core::{ConfigValue, StrictBool};
 use cognee_database::ops::data::{create_data, get_cognify_completed_data_ids};
 use cognee_database::ops::datasets::{attach_data_to_dataset, create_dataset};
 use cognee_database::ops::graph_storage::{get_edges_by_dataset, get_nodes_by_dataset};
@@ -424,17 +426,20 @@ async fn read_pipeline_status(db: &DatabaseConnection, data_id: Uuid) -> Option<
 /// The Rust config each Python `RAISE_INCREMENTAL_LOADING_ERRORS` value maps
 /// onto.
 ///
-/// The value goes through the SDK's own `FailureStop::parse`, not a hard-coded
-/// mapping: the claim under test includes "one `.env` configures both SDKs
-/// identically", so the mapping the comparison rests on must come from the
-/// shipped parser.
+/// The value goes through the setting's own env parser (a `StrictBool`) and
+/// `FailureStop::from_raise_errors`, not a hard-coded mapping: the claim under
+/// test includes "one `.env` configures both SDKs identically", so the mapping
+/// the comparison rests on must come from the shipped parser.
 fn config_for(name: &str) -> CognifyConfig {
     let raw = match name {
         "raise_true" => "true",
         "raise_false" => "false",
         other => panic!("unknown config {other}"),
     };
-    let stop = FailureStop::parse(raw).expect("the SDK parses both Python values");
+    let raise = <StrictBool as ConfigValue>::parse_env(raw)
+        .expect("the SDK parses both Python values")
+        .get();
+    let stop = FailureStop::from_raise_errors(raise);
     CognifyConfig::default()
         .with_chunk_size(1500)
         .with_chunks_per_batch(1)

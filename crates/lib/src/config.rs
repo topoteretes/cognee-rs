@@ -372,7 +372,7 @@ impl Settings {
             ))
             .with_summarization_failure_tolerance(cognify.tolerate_summarization_failures);
         if let Some(raise) = cognify.raise_incremental_loading_errors {
-            cfg = cfg.with_failure_stop(FailureStop::from_raise_errors(raise));
+            cfg = cfg.with_failure_stop(FailureStop::from_raise_errors(raise.get()));
         }
         if !cognify.rollback_scope.trim().is_empty() {
             match RollbackScope::parse(&cognify.rollback_scope) {
@@ -405,7 +405,7 @@ impl Settings {
         let hybrid = self.section::<cognee_components::HybridSearchSettings>();
         let file = hybrid.overflow_summary_file.trim();
         cognee_search::SearchTuning {
-            allow_cypher_query: search.allow_cypher_query,
+            allow_cypher_query: search.allow_cypher_query.get(),
             triplet_neighbor_cap: search
                 .triplet_neighbor_cap
                 .filter(|cap| *cap > 0)
@@ -2739,6 +2739,50 @@ mod tests {
             s.cognify_config().chunk_failure_ratio_threshold,
             default.chunk_failure_ratio_threshold
         );
+    }
+
+    /// An unrecognised boolean in one of the two fail-safe engine flags keeps
+    /// its default instead of reading as `false`: a typo in
+    /// `RAISE_INCREMENTAL_LOADING_ERRORS` stays fail-fast, and only an
+    /// explicit falsy `ALLOW_CYPHER_QUERY` disables graph queries (Python
+    /// disables only on `false`).
+    #[test]
+    fn engine_flags_ignore_unrecognised_booleans() {
+        use cognee_cognify::FailureStop;
+
+        for raw in ["ture", "2", "enabled", "  "] {
+            let mut s = Settings::default();
+            s.overlay_from(
+                &MapEnv::new()
+                    .with("RAISE_INCREMENTAL_LOADING_ERRORS", raw)
+                    .with("ALLOW_CYPHER_QUERY", raw),
+            );
+            assert_eq!(
+                s.cognify_config().failure_stop,
+                FailureStop::FailFast,
+                "{raw:?}"
+            );
+            assert!(s.search_tuning().allow_cypher_query, "{raw:?}");
+        }
+        for (raw, stop) in [
+            ("true", FailureStop::FailFast),
+            ("YES", FailureStop::FailFast),
+            ("0", FailureStop::RunToEnd),
+            ("off", FailureStop::RunToEnd),
+        ] {
+            let mut s = Settings::default();
+            s.overlay_from(
+                &MapEnv::new()
+                    .with("RAISE_INCREMENTAL_LOADING_ERRORS", raw)
+                    .with("ALLOW_CYPHER_QUERY", raw),
+            );
+            assert_eq!(s.cognify_config().failure_stop, stop, "{raw:?}");
+            assert_eq!(
+                s.search_tuning().allow_cypher_query,
+                stop == FailureStop::FailFast,
+                "{raw:?}"
+            );
+        }
     }
 
     #[test]

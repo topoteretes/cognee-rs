@@ -373,6 +373,14 @@ impl SearchRetriever for TemporalRetriever {
         SearchType::Temporal
     }
 
+    #[cfg(test)]
+    fn applied_tuning(&self) -> crate::retrievers::AppliedTuning {
+        crate::retrievers::AppliedTuning {
+            neighbor_cap: Some(self.neighbor_cap),
+            ..Default::default()
+        }
+    }
+
     async fn get_context(
         &self,
         query: &str,

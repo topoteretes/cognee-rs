@@ -68,6 +68,60 @@ impl ConfigValue for bool {
     }
 }
 
+/// A boolean setting that refuses to guess. From env, `true | 1 | yes | on`
+/// is true and `false | 0 | no | off` is false (trimmed, case-insensitive);
+/// anything else is malformed, so it is ignored with a warning and the
+/// setting keeps its previous value (its default when nothing else set it).
+///
+/// Use it instead of `bool` where an unrecognised value must not silently pick
+/// a side: `bool`'s "anything else is false" would turn a typo such as `ture`
+/// into an explicit `false`. Its JSON form is a plain boolean, so it is set
+/// exactly like a `bool` key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct StrictBool(pub bool);
+
+impl StrictBool {
+    /// The wrapped value.
+    #[must_use]
+    pub fn get(self) -> bool {
+        self.0
+    }
+}
+
+impl From<bool> for StrictBool {
+    fn from(value: bool) -> Self {
+        Self(value)
+    }
+}
+
+impl From<StrictBool> for bool {
+    fn from(value: StrictBool) -> Self {
+        value.0
+    }
+}
+
+impl ConfigValue for StrictBool {
+    fn parse_env(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "true" | "1" | "yes" | "on" => Some(Self(true)),
+            "false" | "0" | "no" | "off" => Some(Self(false)),
+            _ => {
+                tracing::warn!(
+                    value = raw,
+                    "ignoring config value: expected true/1/yes/on or false/0/no/off"
+                );
+                None
+            }
+        }
+    }
+    fn from_json(value: &Value) -> Result<Self, String> {
+        bool::from_json(value).map(Self)
+    }
+    fn to_json(&self) -> Value {
+        Value::Bool(self.0)
+    }
+}
+
 macro_rules! unsigned_config_value {
     ($($t:ty),*) => {$(
         impl ConfigValue for $t {
@@ -692,6 +746,37 @@ mod tests {
         assert_eq!(<u64 as ConfigValue>::parse_env("\t7\n"), Some(7));
         assert_eq!(<f64 as ConfigValue>::parse_env(" 0.5 "), Some(0.5));
         assert_eq!(<u32 as ConfigValue>::parse_env(" 4 8 "), None);
+    }
+
+    /// `StrictBool` recognises both polarities and refuses everything else,
+    /// where `bool` would read every unrecognised value as `false`.
+    #[test]
+    fn strict_bool_refuses_unrecognised_values() {
+        for raw in ["true", " TRUE ", "1", "yes", "On"] {
+            assert_eq!(
+                StrictBool::parse_env(raw),
+                Some(StrictBool(true)),
+                "{raw:?}"
+            );
+        }
+        for raw in ["false", "False", "0", "no", " off "] {
+            assert_eq!(
+                StrictBool::parse_env(raw),
+                Some(StrictBool(false)),
+                "{raw:?}"
+            );
+        }
+        for raw in ["ture", "2", "enabled", "y", "  "] {
+            assert_eq!(StrictBool::parse_env(raw), None, "{raw:?}");
+            assert_eq!(
+                <bool as ConfigValue>::parse_env(raw),
+                Some(false),
+                "{raw:?}"
+            );
+        }
+        assert_eq!(StrictBool::from_json(&json!(true)), Ok(StrictBool(true)));
+        assert!(StrictBool::from_json(&json!("true")).is_err());
+        assert_eq!(StrictBool(false).to_json(), json!(false));
     }
 
     #[test]

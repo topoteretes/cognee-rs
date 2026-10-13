@@ -1,35 +1,19 @@
 {
   "<empty env>": {},
-  "ALLOW_CYPHER_QUERY=\"  \"": {
-    "search.allow_cypher_query": false
-  },
+  "ALLOW_CYPHER_QUERY=\"  \"": {},
   "ALLOW_CYPHER_QUERY=\"\"": {},
-  "ALLOW_CYPHER_QUERY=\"-1\"": {
-    "search.allow_cypher_query": false
-  },
+  "ALLOW_CYPHER_QUERY=\"-1\"": {},
   "ALLOW_CYPHER_QUERY=\"0\"": {
     "search.allow_cypher_query": false
   },
   "ALLOW_CYPHER_QUERY=\"1\"": {},
-  "ALLOW_CYPHER_QUERY=\"1.5\"": {
-    "search.allow_cypher_query": false
-  },
-  "ALLOW_CYPHER_QUERY=\"42\"": {
-    "search.allow_cypher_query": false
-  },
-  "ALLOW_CYPHER_QUERY=\"5000000000\"": {
-    "search.allow_cypher_query": false
-  },
-  "ALLOW_CYPHER_QUERY=\"70000\"": {
-    "search.allow_cypher_query": false
-  },
+  "ALLOW_CYPHER_QUERY=\"1.5\"": {},
+  "ALLOW_CYPHER_QUERY=\"42\"": {},
+  "ALLOW_CYPHER_QUERY=\"5000000000\"": {},
+  "ALLOW_CYPHER_QUERY=\"70000\"": {},
   "ALLOW_CYPHER_QUERY=\"TRUE\"": {},
-  "ALLOW_CYPHER_QUERY=\"[1]\"": {
-    "search.allow_cypher_query": false
-  },
-  "ALLOW_CYPHER_QUERY=\"abc\"": {
-    "search.allow_cypher_query": false
-  },
+  "ALLOW_CYPHER_QUERY=\"[1]\"": {},
+  "ALLOW_CYPHER_QUERY=\"abc\"": {},
   "ALLOW_CYPHER_QUERY=\"false\"": {
     "search.allow_cypher_query": false
   },
@@ -37,23 +21,13 @@
     "search.allow_cypher_query": false
   },
   "ALLOW_CYPHER_QUERY=\"on\"": {},
-  "ALLOW_CYPHER_QUERY=\"require\"": {
-    "search.allow_cypher_query": false
-  },
+  "ALLOW_CYPHER_QUERY=\"require\"": {},
   "ALLOW_CYPHER_QUERY=\"true\"": {},
-  "ALLOW_CYPHER_QUERY=\"v\"": {
-    "search.allow_cypher_query": false
-  },
+  "ALLOW_CYPHER_QUERY=\"v\"": {},
   "ALLOW_CYPHER_QUERY=\"yes\"": {},
-  "ALLOW_CYPHER_QUERY=\"{\\\"a\\\":1}\"": {
-    "search.allow_cypher_query": false
-  },
-  "ALLOW_CYPHER_QUERY=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "search.allow_cypher_query": false
-  },
-  "ALLOW_CYPHER_QUERY=\"{\\\"ssl\\\":true}\"": {
-    "search.allow_cypher_query": false
-  },
+  "ALLOW_CYPHER_QUERY=\"{\\\"a\\\":1}\"": {},
+  "ALLOW_CYPHER_QUERY=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
+  "ALLOW_CYPHER_QUERY=\"{\\\"ssl\\\":true}\"": {},
   "ANTHROPIC_API_BASE=\"  \"": {
     "llm.anthropic.base_url": "  "
   },
@@ -2221,40 +2195,24 @@
   "COGNEE_PGVECTOR_MAINTENANCE_WORK_MEM_MB=\"{\\\"a\\\":1}\"": {},
   "COGNEE_PGVECTOR_MAINTENANCE_WORK_MEM_MB=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
   "COGNEE_PGVECTOR_MAINTENANCE_WORK_MEM_MB=\"{\\\"ssl\\\":true}\"": {},
-  "COGNEE_RAISE_INCREMENTAL_LOADING_ERRORS=\"  \"": {
-    "cognify.raise_incremental_loading_errors": false
-  },
+  "COGNEE_RAISE_INCREMENTAL_LOADING_ERRORS=\"  \"": {},
   "COGNEE_RAISE_INCREMENTAL_LOADING_ERRORS=\"\"": {},
-  "COGNEE_RAISE_INCREMENTAL_LOADING_ERRORS=\"-1\"": {
-    "cognify.raise_incremental_loading_errors": false
-  },
+  "COGNEE_RAISE_INCREMENTAL_LOADING_ERRORS=\"-1\"": {},
   "COGNEE_RAISE_INCREMENTAL_LOADING_ERRORS=\"0\"": {
     "cognify.raise_incremental_loading_errors": false
   },
   "COGNEE_RAISE_INCREMENTAL_LOADING_ERRORS=\"1\"": {
     "cognify.raise_incremental_loading_errors": true
   },
-  "COGNEE_RAISE_INCREMENTAL_LOADING_ERRORS=\"1.5\"": {
-    "cognify.raise_incremental_loading_errors": false
-  },
-  "COGNEE_RAISE_INCREMENTAL_LOADING_ERRORS=\"42\"": {
-    "cognify.raise_incremental_loading_errors": false
-  },
-  "COGNEE_RAISE_INCREMENTAL_LOADING_ERRORS=\"5000000000\"": {
-    "cognify.raise_incremental_loading_errors": false
-  },
-  "COGNEE_RAISE_INCREMENTAL_LOADING_ERRORS=\"70000\"": {
-    "cognify.raise_incremental_loading_errors": false
-  },
+  "COGNEE_RAISE_INCREMENTAL_LOADING_ERRORS=\"1.5\"": {},
+  "COGNEE_RAISE_INCREMENTAL_LOADING_ERRORS=\"42\"": {},
+  "COGNEE_RAISE_INCREMENTAL_LOADING_ERRORS=\"5000000000\"": {},
+  "COGNEE_RAISE_INCREMENTAL_LOADING_ERRORS=\"70000\"": {},
   "COGNEE_RAISE_INCREMENTAL_LOADING_ERRORS=\"TRUE\"": {
     "cognify.raise_incremental_loading_errors": true
   },
-  "COGNEE_RAISE_INCREMENTAL_LOADING_ERRORS=\"[1]\"": {
-    "cognify.raise_incremental_loading_errors": false
-  },
-  "COGNEE_RAISE_INCREMENTAL_LOADING_ERRORS=\"abc\"": {
-    "cognify.raise_incremental_loading_errors": false
-  },
+  "COGNEE_RAISE_INCREMENTAL_LOADING_ERRORS=\"[1]\"": {},
+  "COGNEE_RAISE_INCREMENTAL_LOADING_ERRORS=\"abc\"": {},
   "COGNEE_RAISE_INCREMENTAL_LOADING_ERRORS=\"false\"": {
     "cognify.raise_incremental_loading_errors": false
   },
@@ -2264,27 +2222,17 @@
   "COGNEE_RAISE_INCREMENTAL_LOADING_ERRORS=\"on\"": {
     "cognify.raise_incremental_loading_errors": true
   },
-  "COGNEE_RAISE_INCREMENTAL_LOADING_ERRORS=\"require\"": {
-    "cognify.raise_incremental_loading_errors": false
-  },
+  "COGNEE_RAISE_INCREMENTAL_LOADING_ERRORS=\"require\"": {},
   "COGNEE_RAISE_INCREMENTAL_LOADING_ERRORS=\"true\"": {
     "cognify.raise_incremental_loading_errors": true
   },
-  "COGNEE_RAISE_INCREMENTAL_LOADING_ERRORS=\"v\"": {
-    "cognify.raise_incremental_loading_errors": false
-  },
+  "COGNEE_RAISE_INCREMENTAL_LOADING_ERRORS=\"v\"": {},
   "COGNEE_RAISE_INCREMENTAL_LOADING_ERRORS=\"yes\"": {
     "cognify.raise_incremental_loading_errors": true
   },
-  "COGNEE_RAISE_INCREMENTAL_LOADING_ERRORS=\"{\\\"a\\\":1}\"": {
-    "cognify.raise_incremental_loading_errors": false
-  },
-  "COGNEE_RAISE_INCREMENTAL_LOADING_ERRORS=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "cognify.raise_incremental_loading_errors": false
-  },
-  "COGNEE_RAISE_INCREMENTAL_LOADING_ERRORS=\"{\\\"ssl\\\":true}\"": {
-    "cognify.raise_incremental_loading_errors": false
-  },
+  "COGNEE_RAISE_INCREMENTAL_LOADING_ERRORS=\"{\\\"a\\\":1}\"": {},
+  "COGNEE_RAISE_INCREMENTAL_LOADING_ERRORS=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
+  "COGNEE_RAISE_INCREMENTAL_LOADING_ERRORS=\"{\\\"ssl\\\":true}\"": {},
   "COGNEE_RECORD_LLM=\"  \"": {
     "llm.record_path": "  "
   },
@@ -6907,40 +6855,24 @@
   "OTEL_TRACES_SAMPLER_ARG=\"{\\\"ssl\\\":true}\"": {
     "otel_traces_sampler_arg": "{\"ssl\":true}"
   },
-  "RAISE_INCREMENTAL_LOADING_ERRORS=\"  \"": {
-    "cognify.raise_incremental_loading_errors": false
-  },
+  "RAISE_INCREMENTAL_LOADING_ERRORS=\"  \"": {},
   "RAISE_INCREMENTAL_LOADING_ERRORS=\"\"": {},
-  "RAISE_INCREMENTAL_LOADING_ERRORS=\"-1\"": {
-    "cognify.raise_incremental_loading_errors": false
-  },
+  "RAISE_INCREMENTAL_LOADING_ERRORS=\"-1\"": {},
   "RAISE_INCREMENTAL_LOADING_ERRORS=\"0\"": {
     "cognify.raise_incremental_loading_errors": false
   },
   "RAISE_INCREMENTAL_LOADING_ERRORS=\"1\"": {
     "cognify.raise_incremental_loading_errors": true
   },
-  "RAISE_INCREMENTAL_LOADING_ERRORS=\"1.5\"": {
-    "cognify.raise_incremental_loading_errors": false
-  },
-  "RAISE_INCREMENTAL_LOADING_ERRORS=\"42\"": {
-    "cognify.raise_incremental_loading_errors": false
-  },
-  "RAISE_INCREMENTAL_LOADING_ERRORS=\"5000000000\"": {
-    "cognify.raise_incremental_loading_errors": false
-  },
-  "RAISE_INCREMENTAL_LOADING_ERRORS=\"70000\"": {
-    "cognify.raise_incremental_loading_errors": false
-  },
+  "RAISE_INCREMENTAL_LOADING_ERRORS=\"1.5\"": {},
+  "RAISE_INCREMENTAL_LOADING_ERRORS=\"42\"": {},
+  "RAISE_INCREMENTAL_LOADING_ERRORS=\"5000000000\"": {},
+  "RAISE_INCREMENTAL_LOADING_ERRORS=\"70000\"": {},
   "RAISE_INCREMENTAL_LOADING_ERRORS=\"TRUE\"": {
     "cognify.raise_incremental_loading_errors": true
   },
-  "RAISE_INCREMENTAL_LOADING_ERRORS=\"[1]\"": {
-    "cognify.raise_incremental_loading_errors": false
-  },
-  "RAISE_INCREMENTAL_LOADING_ERRORS=\"abc\"": {
-    "cognify.raise_incremental_loading_errors": false
-  },
+  "RAISE_INCREMENTAL_LOADING_ERRORS=\"[1]\"": {},
+  "RAISE_INCREMENTAL_LOADING_ERRORS=\"abc\"": {},
   "RAISE_INCREMENTAL_LOADING_ERRORS=\"false\"": {
     "cognify.raise_incremental_loading_errors": false
   },
@@ -6950,27 +6882,17 @@
   "RAISE_INCREMENTAL_LOADING_ERRORS=\"on\"": {
     "cognify.raise_incremental_loading_errors": true
   },
-  "RAISE_INCREMENTAL_LOADING_ERRORS=\"require\"": {
-    "cognify.raise_incremental_loading_errors": false
-  },
+  "RAISE_INCREMENTAL_LOADING_ERRORS=\"require\"": {},
   "RAISE_INCREMENTAL_LOADING_ERRORS=\"true\"": {
     "cognify.raise_incremental_loading_errors": true
   },
-  "RAISE_INCREMENTAL_LOADING_ERRORS=\"v\"": {
-    "cognify.raise_incremental_loading_errors": false
-  },
+  "RAISE_INCREMENTAL_LOADING_ERRORS=\"v\"": {},
   "RAISE_INCREMENTAL_LOADING_ERRORS=\"yes\"": {
     "cognify.raise_incremental_loading_errors": true
   },
-  "RAISE_INCREMENTAL_LOADING_ERRORS=\"{\\\"a\\\":1}\"": {
-    "cognify.raise_incremental_loading_errors": false
-  },
-  "RAISE_INCREMENTAL_LOADING_ERRORS=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "cognify.raise_incremental_loading_errors": false
-  },
-  "RAISE_INCREMENTAL_LOADING_ERRORS=\"{\\\"ssl\\\":true}\"": {
-    "cognify.raise_incremental_loading_errors": false
-  },
+  "RAISE_INCREMENTAL_LOADING_ERRORS=\"{\\\"a\\\":1}\"": {},
+  "RAISE_INCREMENTAL_LOADING_ERRORS=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
+  "RAISE_INCREMENTAL_LOADING_ERRORS=\"{\\\"ssl\\\":true}\"": {},
   "SESSION_ABANDON_AFTER_SECONDS=\"  \"": {},
   "SESSION_ABANDON_AFTER_SECONDS=\"\"": {},
   "SESSION_ABANDON_AFTER_SECONDS=\"-1\"": {},

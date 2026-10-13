@@ -78,17 +78,6 @@ impl FailureStop {
             Self::RunToEnd
         }
     }
-
-    /// Parse the Python-compatible boolean spellings (`true`/`1`/`yes`,
-    /// `false`/`0`/`no`). `None` when unrecognised, leaving the caller's
-    /// default in place rather than guessing.
-    pub fn parse(raw: &str) -> Option<Self> {
-        match raw.trim().to_ascii_lowercase().as_str() {
-            "true" | "1" | "yes" => Some(Self::FailFast),
-            "false" | "0" | "no" => Some(Self::RunToEnd),
-            _ => None,
-        }
-    }
 }
 
 /// Axis 2 — what a failed run removes.
@@ -745,24 +734,19 @@ mod tests {
     /// backwards would silently turn every default run into a run-to-end.
     #[test]
     fn python_raise_flag_maps_onto_the_stop_axis() {
-        for raw in ["true", "TRUE", " True ", "1", "yes"] {
-            assert_eq!(
-                FailureStop::parse(raw),
-                Some(FailureStop::FailFast),
-                "raising on the first error is stopping early: {raw:?}"
-            );
-        }
-        for raw in ["false", "False", "0", "no"] {
-            assert_eq!(
-                FailureStop::parse(raw),
-                Some(FailureStop::RunToEnd),
-                "not raising means every item still runs: {raw:?}"
-            );
-        }
-        // Unparseable leaves the caller's default alone rather than guessing.
-        for raw in ["", "maybe", "2"] {
-            assert_eq!(FailureStop::parse(raw), None, "{raw:?}");
-        }
+        assert_eq!(
+            FailureStop::from_raise_errors(true),
+            FailureStop::FailFast,
+            "raising on the first error is stopping early"
+        );
+        assert_eq!(
+            FailureStop::from_raise_errors(false),
+            FailureStop::RunToEnd,
+            "not raising means every item still runs"
+        );
+        // Parsing the env spelling (and ignoring an unrecognised one, which
+        // keeps this default) is the config section's job:
+        // `cognify.raise_incremental_loading_errors` is a `StrictBool`.
     }
 
     /// The default must equal Python's default, or a shared `.env` that sets
@@ -770,7 +754,7 @@ mod tests {
     #[test]
     fn the_stop_default_matches_pythons_unset_default() {
         // Python: `os.getenv("RAISE_INCREMENTAL_LOADING_ERRORS", "true")`.
-        assert_eq!(FailureStop::parse("true"), Some(FailureStop::default()));
+        assert_eq!(FailureStop::from_raise_errors(true), FailureStop::default());
     }
 
     #[test]

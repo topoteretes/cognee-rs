@@ -139,6 +139,14 @@ impl SearchRetriever for CypherSearchRetriever {
         SearchType::Cypher
     }
 
+    #[cfg(test)]
+    fn applied_tuning(&self) -> crate::retrievers::AppliedTuning {
+        crate::retrievers::AppliedTuning {
+            allow_cypher_query: Some(self.allow_cypher_query),
+            ..Default::default()
+        }
+    }
+
     async fn get_context(
         &self,
         query: &str,
@@ -334,6 +342,14 @@ impl NaturalLanguageRetriever {
 impl SearchRetriever for NaturalLanguageRetriever {
     fn search_type(&self) -> SearchType {
         SearchType::NaturalLanguage
+    }
+
+    #[cfg(test)]
+    fn applied_tuning(&self) -> crate::retrievers::AppliedTuning {
+        crate::retrievers::AppliedTuning {
+            allow_cypher_query: Some(self.allow_cypher_query),
+            ..Default::default()
+        }
     }
 
     async fn get_context(

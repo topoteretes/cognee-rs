@@ -7,9 +7,31 @@ use crate::types::{SearchContext, SearchError, SearchOutput, SearchParams, Searc
 
 pub type SearchRetrieverRef = Arc<dyn SearchRetriever>;
 
+/// The [`SearchTuning`](crate::orchestration::SearchTuning) knobs a retriever
+/// was built with, for tests that check `SearchBuilder` wires the tuning into
+/// every retriever that consumes it. `None` means "this retriever has no such
+/// knob".
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct AppliedTuning {
+    /// `search.triplet_neighbor_cap` (itself optional: `None` is uncapped).
+    pub neighbor_cap: Option<Option<usize>>,
+    /// `search.allow_cypher_query`.
+    pub allow_cypher_query: Option<bool>,
+    /// The `search.hybrid` budget.
+    pub hybrid: Option<super::HybridBudget>,
+}
+
 #[async_trait]
 pub trait SearchRetriever: Send + Sync {
     fn search_type(&self) -> SearchType;
+
+    /// The tuning knobs this retriever was built with (test-only
+    /// introspection; see [`AppliedTuning`]).
+    #[cfg(test)]
+    fn applied_tuning(&self) -> AppliedTuning {
+        AppliedTuning::default()
+    }
 
     async fn get_context(
         &self,

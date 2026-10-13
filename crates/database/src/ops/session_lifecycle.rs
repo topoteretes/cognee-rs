@@ -57,9 +57,19 @@ pub const DEFAULT_ABANDON_AFTER_SECONDS: u64 = 1800;
 /// row to `abandoned`. Centralized so callers (effective-status
 /// expression in raw SQL, status-bucket query, list query) all use the
 /// same wall-clock snapshot.
+///
+/// `abandon_after_seconds` is an unbounded setting, so the subtraction
+/// saturates instead of panicking (chrono's `DateTime - TimeDelta` panics
+/// out of range). It also never goes before the Unix epoch: no session was
+/// active earlier, so an earlier cutoff abandons nothing more, and an
+/// extreme one (chrono reaches ±262,000 years) is not a timestamp Postgres
+/// can bind.
 fn abandon_threshold_ts(abandon_after_seconds: u64) -> DateTime<Utc> {
-    let seconds = i64::try_from(abandon_after_seconds).unwrap_or(i64::MAX);
-    Utc::now() - Duration::try_seconds(seconds).unwrap_or(Duration::MAX)
+    i64::try_from(abandon_after_seconds)
+        .ok()
+        .and_then(Duration::try_seconds)
+        .and_then(|age| Utc::now().checked_sub_signed(age))
+        .map_or(DateTime::UNIX_EPOCH, |ts| ts.max(DateTime::UNIX_EPOCH))
 }
 
 /// Render the `effective_status` SQL fragment used inside SELECT lists.
@@ -963,5 +973,38 @@ impl SessionLifecycleDb for DatabaseConnection {
         since: Option<DateTime<Utc>>,
     ) -> Result<Vec<CostByModelRow>, DatabaseError> {
         cost_by_model(self, user_id, permitted_dataset_ids, since).await
+    }
+}
+
+#[cfg(test)]
+mod abandon_threshold_tests {
+    use super::*;
+
+    /// A huge `session.abandon_after_seconds` must saturate, not panic every
+    /// session get/list/stats call.
+    #[test]
+    fn huge_abandon_after_saturates_at_the_epoch() {
+        for seconds in [
+            u64::MAX,
+            i64::MAX as u64,
+            10_000_000_000_000,
+            99_999_999_999_999,
+        ] {
+            assert_eq!(
+                abandon_threshold_ts(seconds),
+                DateTime::<Utc>::UNIX_EPOCH,
+                "{seconds}"
+            );
+        }
+    }
+
+    #[test]
+    fn ordinary_abandon_after_is_measured_back_from_now() {
+        let before = Utc::now();
+        let ts = abandon_threshold_ts(DEFAULT_ABANDON_AFTER_SECONDS);
+        let after = Utc::now();
+        let window = Duration::seconds(DEFAULT_ABANDON_AFTER_SECONDS as i64);
+        assert!(ts >= before - window && ts <= after - window);
+        assert!(abandon_threshold_ts(0) >= before);
     }
 }

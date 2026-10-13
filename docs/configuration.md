@@ -1034,8 +1034,10 @@ dual-name convention as `CHUNK_SIZE` / `COGNEE_CHUNK_SIZE`.
 Python has no counterpart for any of them. An unset value leaves the default in
 place, and out-of-range values (a ratio outside `0..=1`, a zero cap, an unknown
 rollback scope) are ignored with a warning rather than failing the process.
-`raise_incremental_loading_errors` is a boolean: `true`/`1`/`yes`/`on` is
-`FailFast`, any other set value is `RunToEnd`, unset is the default.
+`raise_incremental_loading_errors` is a strict boolean: `true`/`1`/`yes`/`on`
+is `FailFast`, `false`/`0`/`no`/`off` is `RunToEnd`, and any other value is
+ignored with a warning, so a typo such as `ture` keeps the `FailFast` default
+rather than silently switching to the costlier run-to-end mode.
 
 **Axis 1 — when to stop.** `FailFast` stops the failing stage from scheduling
 further work once a failure has been recorded; the files that already completed
@@ -1215,7 +1217,7 @@ cognee hands them to `SearchBuilder::with_tuning` (`Settings::search_tuning`).
 
 | Env var | Key (alias) | Default | Effect |
 |---|---|---|---|
-| `ALLOW_CYPHER_QUERY` | `search.allow_cypher_query` (`allow_cypher_query`) | `true` | `false` refuses the CYPHER and NATURAL_LANGUAGE search types (Python's flag; `true`/`1`/`yes`/`on` allow). |
+| `ALLOW_CYPHER_QUERY` | `search.allow_cypher_query` (`allow_cypher_query`) | `true` | `false` (or `0`/`no`/`off`) refuses the CYPHER and NATURAL_LANGUAGE search types (Python's flag). Any other value is ignored with a warning and keeps them allowed, as Python disables only on `false`. |
 | `COGNEE_HYBRID_MAX_CONTEXT_TOKENS` | `search.hybrid.max_context_tokens` | _(unset — the LLM's context length)_ | HYBRID_COMPLETION context budget in tokens; `0` turns budgeting off. |
 | `COGNEE_HYBRID_SUMMARIZE_OVERFLOW` | `search.hybrid.summarize_overflow` | `false` | Summarize passages that overflow the budget instead of dropping them. |
 | `COGNEE_HYBRID_SUMMARIZE_BATCH` | `search.hybrid.summarize_batch` | `1` | Overflow passages per summarization call. |

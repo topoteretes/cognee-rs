@@ -198,6 +198,14 @@ impl SearchRetriever for GraphSummaryCompletionRetriever {
         SearchType::GraphSummaryCompletion
     }
 
+    #[cfg(test)]
+    fn applied_tuning(&self) -> crate::retrievers::AppliedTuning {
+        crate::retrievers::AppliedTuning {
+            neighbor_cap: Some(self.core.neighbor_cap),
+            ..Default::default()
+        }
+    }
+
     async fn get_context(
         &self,
         query: &str,
@@ -332,6 +340,14 @@ impl GraphCompletionContextExtensionRetriever {
 impl SearchRetriever for GraphCompletionContextExtensionRetriever {
     fn search_type(&self) -> SearchType {
         SearchType::GraphCompletionContextExtension
+    }
+
+    #[cfg(test)]
+    fn applied_tuning(&self) -> crate::retrievers::AppliedTuning {
+        crate::retrievers::AppliedTuning {
+            neighbor_cap: Some(self.core.neighbor_cap),
+            ..Default::default()
+        }
     }
 
     async fn get_context(
@@ -491,6 +507,14 @@ impl GraphCompletionCotRetriever {
 impl SearchRetriever for GraphCompletionCotRetriever {
     fn search_type(&self) -> SearchType {
         SearchType::GraphCompletionCot
+    }
+
+    #[cfg(test)]
+    fn applied_tuning(&self) -> crate::retrievers::AppliedTuning {
+        crate::retrievers::AppliedTuning {
+            neighbor_cap: Some(self.core.neighbor_cap),
+            ..Default::default()
+        }
     }
 
     async fn get_context(
