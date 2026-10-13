@@ -53,6 +53,29 @@ impl RedisSessionStore {
         Ok(Self { conn })
     }
 
+    /// Connect to Redis at `host:port` with optional credentials.
+    ///
+    /// Unlike [`Self::new`], nothing is spliced into a URL: the host and the
+    /// credentials travel as separate fields (as Python's `RedisAdapter`
+    /// passes them as separate kwargs), so a password with URL-reserved
+    /// characters (`@`, `/`, `#`, `%`, …) or a bare IPv6 host such as `::1`
+    /// reaches the server verbatim. An empty username or password means
+    /// "none".
+    pub async fn connect(
+        host: &str,
+        port: u16,
+        username: &str,
+        password: &str,
+    ) -> Result<Self, SessionError> {
+        let client = redis::Client::open(connection_info(host, port, username, password))
+            .map_err(|e| SessionError::StoreError(format!("redis client error: {e}")))?;
+        let conn = client
+            .get_multiplexed_async_connection()
+            .await
+            .map_err(|e| SessionError::StoreError(format!("redis connection error: {e}")))?;
+        Ok(Self { conn })
+    }
+
     /// Build from an already-established connection.
     pub fn from_connection(conn: MultiplexedConnection) -> Self {
         Self { conn }
@@ -62,6 +85,20 @@ impl RedisSessionStore {
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
+
+/// The connection info for [`RedisSessionStore::connect`]: TCP `host:port`,
+/// database 0, and the credentials as-is (empty → `None`).
+fn connection_info(host: &str, port: u16, username: &str, password: &str) -> redis::ConnectionInfo {
+    let non_empty = |s: &str| (!s.is_empty()).then(|| s.to_string());
+    redis::ConnectionInfo {
+        addr: redis::ConnectionAddr::Tcp(host.to_string(), port),
+        redis: redis::RedisConnectionInfo {
+            username: non_empty(username),
+            password: non_empty(password),
+            ..Default::default()
+        },
+    }
+}
 
 fn session_key(user_id: Option<&str>, session_id: &str) -> String {
     let uid = user_id.unwrap_or("default");
@@ -402,5 +439,47 @@ impl SessionStore for RedisSessionStore {
                     .map_err(|e| SessionError::StoreError(format!("json parse error: {e}")))
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::connection_info;
+
+    #[test]
+    fn credentials_with_url_reserved_characters_are_passed_verbatim() {
+        let info = connection_info("localhost", 6379, "us@er", "p@ss/w#rd%2F");
+        match &info.addr {
+            redis::ConnectionAddr::Tcp(host, port) => {
+                assert_eq!(host, "localhost");
+                assert_eq!(*port, 6379);
+            }
+            other => panic!("expected a TCP address, got {other:?}"),
+        }
+        assert_eq!(info.redis.username.as_deref(), Some("us@er"));
+        assert_eq!(info.redis.password.as_deref(), Some("p@ss/w#rd%2F"));
+        assert_eq!(info.redis.db, 0);
+    }
+
+    #[test]
+    fn an_ipv6_host_needs_no_brackets() {
+        let info = connection_info("::1", 6380, "", "");
+        match &info.addr {
+            redis::ConnectionAddr::Tcp(host, port) => {
+                assert_eq!(host, "::1");
+                assert_eq!(*port, 6380);
+            }
+            other => panic!("expected a TCP address, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn empty_credentials_mean_none() {
+        let info = connection_info("h", 1, "", "");
+        assert_eq!(info.redis.username, None);
+        assert_eq!(info.redis.password, None);
+        let info = connection_info("h", 1, "", "secret");
+        assert_eq!(info.redis.username, None);
+        assert_eq!(info.redis.password.as_deref(), Some("secret"));
     }
 }

@@ -93,15 +93,17 @@ impl SessionStoreFactory for RedisSessionFactory {
         _database: Arc<dyn RelationalDb>,
     ) -> Result<Arc<dyn SessionStore>, ComponentError> {
         let cfg = ctx.section::<crate::sections::RedisSessionConfig>();
-        let auth = match (cfg.username.is_empty(), cfg.password.is_empty()) {
-            (true, true) => String::new(),
-            (true, false) => format!(":{}@", cfg.password),
-            (false, _) => format!("{}:{}@", cfg.username, cfg.password),
-        };
-        let url = format!("redis://{auth}{}:{}", cfg.host, cfg.port);
-        let store = cognee_session::RedisSessionStore::new(&url)
-            .await
-            .map_err(|e| ComponentError::SessionStore(e.to_string()))?;
+        // Host and credentials go in as separate fields, never spliced into a
+        // `redis://user:pass@host` URL: a password with `@`/`/`/`#`/`%` or a
+        // bare IPv6 host would otherwise mis-parse.
+        let store = cognee_session::RedisSessionStore::connect(
+            &cfg.host,
+            cfg.port,
+            &cfg.username,
+            &cfg.password,
+        )
+        .await
+        .map_err(|e| ComponentError::SessionStore(e.to_string()))?;
         Ok(Arc::new(store))
     }
 }

@@ -832,9 +832,18 @@ fn unsupported_msg(field: &str, provider: &str, supported: &[String]) -> String 
             "postgres" | "postgresql" => " Rebuild with the `postgres` crate feature to enable it.",
             _ => "",
         },
+        // A prebuilt cognee-cli or binding cannot be rebuilt by its user, and
+        // may inherit a COGNEE_SESSION_STORE meant for the HTTP server, so the
+        // hint also names the way out that needs no rebuild.
         "session_store" => match p.as_str() {
-            "fs" => " Rebuild with the `session-fs` crate feature to enable it.",
-            "redis" => " Rebuild with the `session-redis` crate feature to enable it.",
+            "fs" => {
+                " Rebuild with the `session-fs` crate feature to enable it, or set \
+                 session.store (COGNEE_SESSION_STORE) to `relational` for this process."
+            }
+            "redis" => {
+                " Rebuild with the `session-redis` crate feature to enable it, or set \
+                 session.store (COGNEE_SESSION_STORE) to `relational` for this process."
+            }
             _ => "",
         },
         "llm_provider" => match p.as_str() {
@@ -1752,6 +1761,8 @@ mod tests {
             Err(e) => e.to_string(),
         };
         assert!(msg.contains("session-redis"), "{msg}");
+        // The no-rebuild way out (a prebuilt CLI/binding) is named too.
+        assert!(msg.contains("to `relational`"), "{msg}");
         // Its settings are not registered either.
         let schema = reg.config_schema().expect("schema");
         assert!(schema.key_def("cache_host").is_none());

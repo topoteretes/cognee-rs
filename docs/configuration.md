@@ -1395,6 +1395,16 @@ A store compiled out by its feature brings no keys: in a default build the `CACH
 … variables are not read, and setting `cache_host` is an unknown key. An unregistered
 store id is an error.
 
+> **Behaviour change for `cognee-cli` and the bindings.** `cognee-cli`
+> (`search`/`recall`/`remember`/`improve`/`bench`) and the Python/TS/Java/C bindings
+> used to build the relational store unconditionally and ignore
+> `COGNEE_SESSION_STORE`. They now honour `session.store` like every other entry
+> point — but they ship only the relational store (neither `session-fs` nor
+> `session-redis` is enabled in their builds). So `fs` or `redis`, values the HTTP
+> server accepts, are now an error there ("unsupported session_store …"). If such a
+> process shares the server's environment, unset `COGNEE_SESSION_STORE` or set it to
+> `relational` for it.
+
 | Env var | Key (alias) | Default |
 |---|---|---|
 | `COGNEE_SESSION_STORE` | `session.store` (`session_store`) | `relational` |
