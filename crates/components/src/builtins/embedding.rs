@@ -55,11 +55,6 @@ pub fn onnx_asset_defaults() -> OnnxAssetDefaults {
     }
 }
 
-/// Parse a provider id (case-insensitive) into an [`EmbeddingProvider`], or
-/// `None` if it is not a recognized backend. This is the *single* source of
-/// truth for the provider-id set: validity is `is_some()`, and config mapping
-/// falls back to `onnx` via `unwrap_or`. The recognized ids mirror
-/// `EmbeddingProvider`'s serde `snake_case` names.
 /// Reject a non-empty but unrecognized provider id.
 ///
 /// This is the guard that keeps [`build_embedding_config`]'s
@@ -87,6 +82,11 @@ pub(crate) fn validate_provider_id(provider: &str, mock: bool) -> Result<(), Com
     Ok(())
 }
 
+/// Parse a provider id (case-insensitive) into an [`EmbeddingProvider`], or
+/// `None` if it is not a recognized backend. This is the *single* source of
+/// truth for the provider-id set: validity is `is_some()`, and config mapping
+/// falls back to `onnx` via `unwrap_or`. The recognized ids mirror
+/// `EmbeddingProvider`'s serde `snake_case` names.
 fn parse_embedding_provider(provider: &str) -> Option<EmbeddingProvider> {
     match provider.trim().to_lowercase().as_str() {
         "onnx" => Some(EmbeddingProvider::Onnx),
@@ -96,8 +96,9 @@ fn parse_embedding_provider(provider: &str) -> Option<EmbeddingProvider> {
         "ollama" => Some(EmbeddingProvider::Ollama),
         // Ungated on purpose: the id is a recognised backend regardless of the
         // build's features, so `EMBEDDING_PROVIDER=bedrock` is never rejected
-        // here as a typo. A build without `cognee-embedding/bedrock` gives the
-        // honest error later, from `create_engine`'s `NotImplemented` arm.
+        // here as a typo. A build without the `bedrock` feature registers no
+        // `bedrock` factory, so the registry reports it as not available in
+        // this build instead.
         "bedrock" => Some(EmbeddingProvider::Bedrock),
         "mock" => Some(EmbeddingProvider::Mock),
         _ => None,
@@ -188,6 +189,11 @@ pub fn build_embedding_config(
 /// adapters' `embedding_pacer()` lookups resolve. Without this the admission
 /// points are dead and `EMBEDDING_RATE_LIMIT_ENABLED` does nothing. Idempotent
 /// (first call wins), like the LLM pacer.
+///
+/// Called by [`crate::ComponentRegistry::build_embedding`] before it picks a
+/// factory, so it covers externally registered factories too. The call in
+/// [`DefaultEmbeddingFactory::build`] keeps a factory used on its own (outside
+/// a registry) paced as well.
 pub(crate) fn install_embedding_pacer(ctx: &BackendBuildContext) {
     cognee_utils::pacing::init_embedding_pacer(
         ctx.embedding.rate_limit_requests,

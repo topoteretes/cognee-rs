@@ -309,11 +309,16 @@ config_section! {
         pub batch_size: u32 = 36 => {
             env: ["EMBEDDING_BATCH_SIZE"], alias: ["embedding_batch_size"], secret: false,
         },
-        /// Maximum input tokens per text; also caps cognify's auto chunk size.
+        /// Maximum input tokens per text for the local ONNX provider
+        /// (`onnx`/`fastembed`): it truncates input and is the embedding term
+        /// of cognify's auto chunk size. Remote providers ignore it and use
+        /// `embedding.max_completion_tokens` instead.
         pub max_sequence_length: u32 = 512 => {
             env: ["EMBEDDING_MAX_SEQUENCE_LENGTH"], alias: ["embedding_max_sequence_length"], secret: false,
         },
-        /// Input-token limit of the remote embedding API.
+        /// Input-token limit of the remote embedding API (`openai`,
+        /// `openai_compatible`, `ollama`, `bedrock`); for those providers it is
+        /// also the embedding term of cognify's auto chunk size.
         pub max_completion_tokens: u32 = 8191 => {
             env: ["EMBEDDING_MAX_COMPLETION_TOKENS"], alias: ["embedding_max_completion_tokens"], secret: false,
         },

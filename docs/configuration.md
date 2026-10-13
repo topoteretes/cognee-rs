@@ -599,8 +599,8 @@ each key is accepted as an alias, shown in brackets.
 | `EMBEDDING_DIMENSIONS` | `embedding.dimensions` (`embedding_dimensions`) | `1536` (`384` on Android) |
 | `EMBEDDING_ENDPOINT` | `embedding.endpoint` (`embedding_endpoint`) | _(empty)_ |
 | `EMBEDDING_API_KEY` (falls back to `LLM_API_KEY`) | `embedding.api_key` (`embedding_api_key`) | _(empty)_ |
-| `EMBEDDING_MAX_SEQUENCE_LENGTH` | `embedding.max_sequence_length` (`embedding_max_sequence_length`) | `512` |
-| `EMBEDDING_MAX_COMPLETION_TOKENS` | `embedding.max_completion_tokens` (`embedding_max_completion_tokens`) | `8191` (input-token limit of a remote embedding API) |
+| `EMBEDDING_MAX_SEQUENCE_LENGTH` | `embedding.max_sequence_length` (`embedding_max_sequence_length`) | `512` (local ONNX/fastembed only; remote providers use `EMBEDDING_MAX_COMPLETION_TOKENS`) |
+| `EMBEDDING_MAX_COMPLETION_TOKENS` | `embedding.max_completion_tokens` (`embedding_max_completion_tokens`) | `8191` (input-token limit of a remote embedding API; the embedding term of the chunk-size auto-calculation for remote providers) |
 | `EMBEDDING_BATCH_SIZE` | `embedding.batch_size` (`embedding_batch_size`) | `36` (texts per embedding request; raise for providers that allow larger batches. The OpenAI-compatible engine also dispatches up to 8 sub-batches concurrently) |
 | `EMBEDDING_RATE_LIMIT_ENABLED` / `_REQUESTS` / `_INTERVAL` | `embedding.rate_limit_*` (`embedding_rate_limit_*`) | `false` / `60` / `60` |
 | `MOCK_EMBEDDING` | `embedding.mock` (`mock_embedding`) | _(empty)_. `true`/`1`/`yes`/`deterministic` select the mock engine with deterministic SHA-256-derived vectors; `zero` selects all-zero vectors (cosine KNN then returns nothing) |

@@ -338,12 +338,11 @@ pub fn run(args: BenchArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
         cm.config().set_llm_mock(true);
         cm.config().set_llm_cassette(&cassette);
         // Deterministic mock embeddings (T5) so search is meaningful offline.
-        // `init_embedding_engine` reads MOCK_EMBEDDING as well as the provider.
-        // SAFETY: single-threaded set during CLI startup, before any async
-        // task or component reads the environment.
-        unsafe {
-            std::env::set_var("MOCK_EMBEDDING", "deterministic");
-        }
+        // `MOCK_EMBEDDING` is bound once at config load (`embedding.mock`), so
+        // the mode is set through the config here, not the environment.
+        cm.config()
+            .set("embedding.mock", serde_json::json!("deterministic"))
+            .map_err(|e| CliError::Validation(format!("embedding.mock: {e}")))?;
         cm.config().set_embedding_provider("mock");
         // Dummy key so any config validation that inspects it passes.
         cm.config().set_llm_api_key("mock-key");
