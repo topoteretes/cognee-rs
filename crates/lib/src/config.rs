@@ -393,13 +393,16 @@ impl Settings {
 
     /// Returns the effective relational DB connection URL.
     ///
-    /// When `db_provider` is `"postgres"`, builds
+    /// When `db_provider` is `"postgres"` or `"postgresql"` (trimmed and
+    /// case-insensitive, the same normalisation the component registry uses
+    /// to pick the relational factory), builds
     /// `postgres://username:password@host:port/name` from the individual
     /// `db_*` fields (matching Python's `DB_PROVIDER`/`DB_HOST`/… env vars).
     /// Otherwise returns `relational_db_url` verbatim.
     pub fn resolved_relational_db_url(&self) -> String {
         let relational = self.relational();
-        if relational.provider == "postgres" {
+        let provider = relational.provider.trim().to_ascii_lowercase();
+        if matches!(provider.as_str(), "postgres" | "postgresql") {
             with_sslmode(
                 format!(
                     "postgres://{}:{}@{}:{}/{}",
@@ -3936,6 +3939,49 @@ mod tests {
             s.resolved_relational_db_url(),
             "postgres://postgres:pw@db.internal:5432/cognee?sslmode=require"
         );
+    }
+
+    #[test]
+    fn relational_postgres_url_is_built_for_every_provider_spelling_the_registry_accepts() {
+        // The registry selects the SeaORM factory for `postgres` and
+        // `postgresql` after trimming and lowercasing; URL resolution must
+        // agree, or the Postgres factory silently connects to the SQLite
+        // default URL.
+        for provider in ["postgresql", " Postgres ", "POSTGRESQL"] {
+            let s = Settings {
+                sections: [
+                    (
+                        "relational.provider".to_string(),
+                        serde_json::json!(provider.to_string()),
+                    ),
+                    (
+                        "relational.host".to_string(),
+                        serde_json::json!("db.internal".to_string()),
+                    ),
+                    ("relational.port".to_string(), serde_json::json!(5432)),
+                    (
+                        "relational.name".to_string(),
+                        serde_json::json!("cognee".to_string()),
+                    ),
+                    (
+                        "relational.username".to_string(),
+                        serde_json::json!("postgres".to_string()),
+                    ),
+                    (
+                        "relational.password".to_string(),
+                        serde_json::json!("pw".to_string()),
+                    ),
+                ]
+                .into(),
+                db_sslmode: String::new(),
+                ..Settings::default()
+            };
+            assert_eq!(
+                s.resolved_relational_db_url(),
+                "postgres://postgres:pw@db.internal:5432/cognee",
+                "provider {provider:?}"
+            );
+        }
     }
 
     #[test]

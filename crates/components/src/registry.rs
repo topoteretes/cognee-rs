@@ -14,6 +14,7 @@ use cognee_ontology::{NoOpOntologyResolver, OntologyResolver};
 use cognee_storage::StorageTrait;
 use cognee_vector::VectorDB;
 
+#[cfg(any(feature = "sqlite", feature = "postgres"))]
 use crate::builtins::database::SeaOrmRelationalFactory;
 use crate::builtins::embedding::DefaultEmbeddingFactory;
 use crate::builtins::llm::{self, OpenAiCompatibleLlmFactory};
@@ -1580,6 +1581,8 @@ mod tests {
         assert!(!knows_person(&built));
     }
 
+    // Needs the SQLite driver (and, for the first, the built-in SQLite factory).
+    #[cfg(feature = "sqlite")]
     #[tokio::test]
     async fn build_database_selects_by_provider_and_falls_back_to_the_url_scheme() {
         let reg = ComponentRegistry::with_builtins();
@@ -1613,6 +1616,8 @@ mod tests {
         );
     }
 
+    // Needs the SQLite driver (and, for the first, the built-in SQLite factory).
+    #[cfg(feature = "sqlite")]
     #[tokio::test]
     async fn a_registered_relational_factory_is_selected_and_brings_its_section() {
         cognee_config_core::config_section! {
