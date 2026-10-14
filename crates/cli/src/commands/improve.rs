@@ -14,6 +14,11 @@ use crate::cli::ImproveArgs;
 use crate::error::CliError;
 
 pub fn run(args: ImproveArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
+    // `--dataset-name`, else the `default_dataset_name` setting.
+    let dataset_name = args
+        .dataset_name
+        .clone()
+        .unwrap_or_else(|| cm.settings().default_dataset_name.clone());
     let settings = cm.settings();
     let owner_id = Uuid::parse_str(&settings.default_user_id).map_err(|error| {
         CliError::Validation(format!(
@@ -104,7 +109,7 @@ pub fn run(args: ImproveArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
         let ontology_resolver: Arc<dyn OntologyResolver> = Arc::new(NoOpOntologyResolver::new());
 
         let result = improve(ImproveParams {
-            dataset_name: args.dataset_name.clone(),
+            dataset_name: dataset_name.clone(),
             session_ids,
             node_name,
             owner_id,

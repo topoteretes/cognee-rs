@@ -507,6 +507,45 @@ fn add_succeeds_with_local_temp_paths() {
         .success();
 }
 
+/// Without `--dataset-name`, `add` writes into the `default_dataset_name`
+/// setting (`COGNEE_DEFAULT_DATASET_NAME`), not a hard-coded `main_dataset`.
+#[test]
+fn add_defaults_to_the_configured_dataset_name() {
+    let config_home = TempDir::new().expect("temp dir should be created");
+    let workdir = TempDir::new().expect("temp dir should be created");
+    let db_file_path = workdir.path().join("cognee.db");
+    std::fs::File::create(&db_file_path).expect("sqlite database file should be created");
+
+    config_set(
+        &config_home,
+        workdir.path(),
+        "data_root_directory",
+        &format!("\"{}\"", workdir.path().join("cognee_data").display()),
+    );
+    config_set(
+        &config_home,
+        workdir.path(),
+        "relational_db_url",
+        &format!("\"sqlite://{}\"", db_file_path.display()),
+    );
+
+    make_cmd_in(&config_home, workdir.path())
+        .env("COGNEE_DEFAULT_DATASET_NAME", "configured_default")
+        .args(["add", "hello from the default dataset"])
+        .assert()
+        .success();
+
+    let conn = Connection::open(&db_file_path).expect("open sqlite database");
+    let names: Vec<String> = conn
+        .prepare("SELECT name FROM datasets")
+        .expect("prepare")
+        .query_map([], |row| row.get(0))
+        .expect("query datasets")
+        .collect::<Result<_, _>>()
+        .expect("read dataset names");
+    assert_eq!(names, vec!["configured_default".to_string()]);
+}
+
 /// `cognee-cli add <url>` refuses loopback / private targets (SSRF guard):
 /// the command fails before any request reaches the local server and no data
 /// row is written. HTML-from-URL extraction itself is covered by the

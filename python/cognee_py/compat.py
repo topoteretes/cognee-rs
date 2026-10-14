@@ -67,7 +67,7 @@ from __future__ import annotations
 import os
 import pathlib
 import re
-from typing import Any, Union
+from typing import Any, Optional, Union
 
 from . import Cognee, CogneeValidationError, SearchType
 
@@ -131,6 +131,13 @@ def _handle() -> Cognee:
     if _default_handle is None:
         _default_handle = Cognee()
     return _default_handle
+
+
+def _default_dataset_name() -> str:
+    """The handle's ``default_dataset_name`` setting
+    (``COGNEE_DEFAULT_DATASET_NAME``, default ``"main_dataset"``)."""
+    name = _handle().config.get().get("default_dataset_name")
+    return name if isinstance(name, str) and name else "main_dataset"
 
 
 def reset_default_handle() -> None:
@@ -205,12 +212,15 @@ def _coerce_inputs(
 
 async def add(
     data: Any,
-    dataset_name: str = "main_dataset",
+    dataset_name: Optional[str] = None,
     *,
     raw: bool = False,
     **kwargs,
 ) -> Any:
     """Ingest one or more data items into *dataset_name*.
+
+    When *dataset_name* is ``None`` the ``default_dataset_name`` setting
+    (``COGNEE_DEFAULT_DATASET_NAME``, default ``"main_dataset"``) is used.
 
     Accepts the same input shapes as the upstream ``cognee.add()``:
     plain strings, file paths, URL strings, bytes, dicts, or lists of these.
@@ -227,6 +237,8 @@ async def add(
     # Single-element list: pass the dict directly (handle.add normalises it).
     inputs = descriptors if len(descriptors) != 1 else descriptors[0]
     opts = kwargs if kwargs else None
+    if dataset_name is None:
+        dataset_name = _default_dataset_name()
     result = await _handle().add(inputs, dataset_name, opts or None)
     return result if raw else _rekey(result)
 
@@ -240,7 +252,8 @@ async def cognify(
     """Extract a knowledge graph from previously-ingested data.
 
     *datasets* mirrors the upstream argument name.  When ``None`` the default
-    dataset (``"main_dataset"``) is processed.
+    dataset (the ``default_dataset_name`` setting, ``"main_dataset"`` unless
+    configured) is processed.
 
     By default returns the result dict with **snake_case** keys: ``chunks``,
     ``entities``, ``edges``, ``summaries``, ``embeddings``,
@@ -249,7 +262,7 @@ async def cognify(
     Pass ``raw=True`` to receive the native camelCase dict
     (``alreadyCompleted``, ``priorPipelineRunId``).
     """
-    dataset_name = datasets if isinstance(datasets, str) else "main_dataset"
+    dataset_name = datasets if isinstance(datasets, str) else _default_dataset_name()
     opts = kwargs if kwargs else None
     result = await _handle().cognify(dataset_name, opts or None)
     return result if raw else _rekey(result)
@@ -257,7 +270,7 @@ async def cognify(
 
 async def add_and_cognify(
     data: Any,
-    dataset_name: str = "main_dataset",
+    dataset_name: Optional[str] = None,
     *,
     raw: bool = False,
     **kwargs,
@@ -275,6 +288,8 @@ async def add_and_cognify(
     descriptors = _coerce_inputs(data)
     inputs = descriptors if len(descriptors) != 1 else descriptors[0]
     opts = kwargs if kwargs else None
+    if dataset_name is None:
+        dataset_name = _default_dataset_name()
     result = await _handle().add_and_cognify(inputs, dataset_name, opts or None)
     if raw:
         return result

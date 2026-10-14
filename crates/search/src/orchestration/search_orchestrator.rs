@@ -147,6 +147,12 @@ pub struct SearchOrchestrator {
     /// after each successful retrieval. Disabled by default to avoid unexpected
     /// write traffic on read-only deployments.
     enable_access_tracking: bool,
+    /// Whether a session search detects feedback when the request leaves
+    /// `auto_feedback_detection` unset.
+    auto_feedback_default: bool,
+    /// System prompt file for requests that name neither a system prompt nor
+    /// a prompt path.
+    default_system_prompt_path: Option<String>,
 }
 
 impl SearchOrchestrator {
@@ -159,6 +165,8 @@ impl SearchOrchestrator {
             session_manager: None,
             llm: None,
             enable_access_tracking: false,
+            auto_feedback_default: false,
+            default_system_prompt_path: None,
         }
     }
 
@@ -205,6 +213,29 @@ impl SearchOrchestrator {
     /// rather than persisted.
     pub fn with_access_tracking(mut self) -> Self {
         self.enable_access_tracking = true;
+        self
+    }
+
+    /// `(access tracking, auto-feedback default)`, for the builder's tests.
+    #[cfg(test)]
+    pub(crate) fn tuning_flags(&self) -> (bool, bool) {
+        (self.enable_access_tracking, self.auto_feedback_default)
+    }
+
+    /// Whether session searches detect feedback in the user's message when a
+    /// request leaves `auto_feedback_detection` unset (the `auto_feedback`
+    /// setting). Detection also needs an LLM ([`Self::with_llm`]).
+    pub fn with_auto_feedback_default(mut self, enabled: bool) -> Self {
+        self.auto_feedback_default = enabled;
+        self
+    }
+
+    /// The system prompt file used when a request names neither
+    /// `system_prompt` nor `system_prompt_path` (the
+    /// `default_system_prompt_path` setting). `None` leaves each retriever's
+    /// own default.
+    pub fn with_default_system_prompt_path(mut self, path: Option<String>) -> Self {
+        self.default_system_prompt_path = path;
         self
     }
 
@@ -364,6 +395,22 @@ impl SearchOrchestrator {
         request: &SearchRequest,
     ) -> Result<SearchResponse, crate::types::SearchError> {
         emit_search_started(request);
+
+        let defaulted_request;
+        let request: &SearchRequest = if request.system_prompt.is_none()
+            && request.system_prompt_path.is_none()
+            && let Some(path) = &self.default_system_prompt_path
+        {
+            let mut clone = request.clone();
+            clone.system_prompt_path = Some(path.clone());
+            defaulted_request = clone;
+            &defaulted_request
+        } else {
+            request
+        };
+        let auto_feedback = request
+            .auto_feedback_detection
+            .unwrap_or(self.auto_feedback_default);
 
         let retriever: crate::retrievers::SearchRetrieverRef =
             if let Some(ref custom_type) = request.custom_search_type {
@@ -648,7 +695,7 @@ impl SearchOrchestrator {
         // Matches Python `session_manager.py:461-469`.
         let last_qa_id: Option<String> = if let (Some(session_id), Some(sm)) =
             (&request.session_id, &self.session_manager)
-            && request.auto_feedback_detection.unwrap_or(false)
+            && auto_feedback
             && !session_id.is_empty()
         {
             sm.latest_qa_id(Some(session_id), user_id_str.as_deref())
@@ -660,7 +707,7 @@ impl SearchOrchestrator {
 
         // Auto-feedback detection: if session is active and detection is enabled,
         // check if the user message contains feedback before routing to the retriever.
-        if request.auto_feedback_detection.unwrap_or(false)
+        if auto_feedback
             && let (Some(session_id), Some(llm)) = (&request.session_id, &self.llm)
             && !session_id.is_empty()
         {

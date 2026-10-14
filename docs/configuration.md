@@ -1032,6 +1032,16 @@ kind sections), resolved when cognee lowers `Settings` into a `CognifyConfig`
 | `EMBEDDING_TOKENIZER_PATH` | `embedding.onnx.tokenizer_path` | tokenizer file for the `onnx` provider's counter, used when it exists | `./target/models/bge-small-tokenizer.json` |
 | `COGNEE_LEGACY_PER_WORD_TOKEN_COUNT` | `cognify.legacy_per_word_token_count` | restore the legacy per-word token count (`1`/`true`/`yes`/`on`) | `false` |
 
+`Settings::cognify_config` also applies the batch sizes, the graph-extraction
+prompt and the summary schema:
+
+| Env var | Key (alias) | Purpose | Default |
+|---|---|---|---|
+| `CHUNKS_PER_BATCH` | `cognify.chunks_per_batch` (`chunks_per_batch`) | chunks per graph-extraction batch (Python's `CognifyConfig.chunks_per_batch`); `0` keeps the default | `2000` |
+| `COGNEE_DATA_PER_BATCH` | `cognify.data_per_batch` (`data_per_batch`) | data items per temporal-cognify batch (Python's `data_per_batch` parameter, which has no env var); `0` keeps the default | `20` |
+| — | `graph_prompt_path` | graph-extraction system prompt file. The default (Python's file name for the built-in prompt) and an empty value use the compiled-in prompt; any other value is read as the prompt text, a relative path against the working directory. An unreadable file keeps the built-in prompt, with a warning. Unlike Python, the file is sent verbatim, not rendered as a template. | `generate_graph_prompt.txt` |
+| — | `summarization_schema` (code only: `ConfigManager::set_summarization_schema`, `set`) | JSON schema of the summary output (Python's `summarization_model`); must have a string `summary` | _(unset — the built-in `SummarizedContent` shape)_ |
+
 ### `COGNEE_LEGACY_PER_WORD_TOKEN_COUNT` — a deliberate divergence from Python
 
 By default a chunk's size is the tokenizer's count of the chunk itself. Until
@@ -1281,6 +1291,15 @@ cognee hands them to `SearchBuilder::with_tuning` (`Settings::search_tuning`).
 | `COGNEE_HYBRID_SUMMARIZE_BATCH` | `search.hybrid.summarize_batch` | `1` | Overflow passages per summarization call. |
 | `COGNEE_HYBRID_OVERFLOW_SUMMARY_FILE` | `search.hybrid.overflow_summary_file` | _(empty)_ | JSON object of precomputed overflow summaries (chunk id → summary). |
 
+Three `Settings` fields tune the search orchestrator itself, lowered by the same
+`Settings::search_tuning`:
+
+| Env var | `Settings` field | Default | Effect |
+|---|---|---|---|
+| `ENABLE_LAST_ACCESSED` | `enable_last_accessed` | `false` | Update `last_accessed` on the source data records of each search's context (Python's flag, also default off). |
+| `AUTO_FEEDBACK` | `auto_feedback` | `false` | Detect feedback in a session search's message (one extra LLM call per session turn) when the request leaves `auto_feedback_detection` unset. **Python defaults it to `true`**; Rust keeps it off so a session search makes no extra LLM call unless asked. |
+| — | `default_system_prompt_path` | `answer_simple_question.txt` | System prompt file for a search that names neither a system prompt nor a prompt path. The default (Python's file name for the built-in prompt) and an empty value leave each retriever's own compiled-in prompt; any other value is read as a file. Rust-only (Python has no such setting). |
+
 ### Triplet retriever hub cap
 
 | Env var | Key | Default | Effect |
@@ -1449,7 +1468,7 @@ themselves get the configured backend from
 | `COGNEE_DATA_ROOT_DIRECTORY` | `data_root_directory` | `./.data_storage` |
 | `CACHE_ROOT_DIRECTORY` | `cache_root_directory` | `./.cognee_cache` |
 | `COGNEE_DEFAULT_USER_ID` | `default_user_id` | nil UUID |
-| `COGNEE_DEFAULT_DATASET_NAME` | `default_dataset_name` | `main_dataset` |
+| `COGNEE_DEFAULT_DATASET_NAME` | `default_dataset_name` | `main_dataset` (the dataset `cognee-cli add`/`add-and-cognify`/`remember`/`improve` and the Python compat `add`/`cognify`/`add_and_cognify` use without an explicit one) |
 | `DEFAULT_USER_EMAIL` / `DEFAULT_USER_PASSWORD` | … | `default_user@example.com` / _(empty)_ |
 | `ENABLE_BACKEND_ACCESS_CONTROL` | `enable_access_control` | `false`; `true` only with application-provided access control (below) |
 

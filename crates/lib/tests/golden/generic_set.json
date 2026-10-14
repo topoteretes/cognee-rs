@@ -2135,6 +2135,69 @@
     "err": "TypeMismatch",
     "key": "chunk_strategy"
   },
+  "chunks_per_batch <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "chunks_per_batch"
+  },
+  "chunks_per_batch <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "chunks_per_batch"
+  },
+  "chunks_per_batch <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "chunks_per_batch"
+  },
+  "chunks_per_batch <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "chunks_per_batch"
+  },
+  "chunks_per_batch <- -1": {
+    "err": "TypeMismatch",
+    "key": "chunks_per_batch"
+  },
+  "chunks_per_batch <- 0": {
+    "ok": {
+      "cognify.chunks_per_batch": 0
+    }
+  },
+  "chunks_per_batch <- 1": {
+    "ok": {
+      "cognify.chunks_per_batch": 1
+    }
+  },
+  "chunks_per_batch <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "chunks_per_batch"
+  },
+  "chunks_per_batch <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "chunks_per_batch"
+  },
+  "chunks_per_batch <- 70000": {
+    "ok": {
+      "cognify.chunks_per_batch": 70000
+    }
+  },
+  "chunks_per_batch <- [1]": {
+    "err": "TypeMismatch",
+    "key": "chunks_per_batch"
+  },
+  "chunks_per_batch <- false": {
+    "err": "TypeMismatch",
+    "key": "chunks_per_batch"
+  },
+  "chunks_per_batch <- null": {
+    "err": "TypeMismatch",
+    "key": "chunks_per_batch"
+  },
+  "chunks_per_batch <- true": {
+    "err": "TypeMismatch",
+    "key": "chunks_per_batch"
+  },
+  "chunks_per_batch <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "chunks_per_batch"
+  },
   "classification_model <- \"\"": {
     "ok": {}
   },
@@ -2256,6 +2319,132 @@
   "cognee_tracing_enabled <- {\"a\":1}": {
     "err": "TypeMismatch",
     "key": "cognee_tracing_enabled"
+  },
+  "cognify.chunks_per_batch <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.chunks_per_batch"
+  },
+  "cognify.chunks_per_batch <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.chunks_per_batch"
+  },
+  "cognify.chunks_per_batch <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.chunks_per_batch"
+  },
+  "cognify.chunks_per_batch <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.chunks_per_batch"
+  },
+  "cognify.chunks_per_batch <- -1": {
+    "err": "TypeMismatch",
+    "key": "cognify.chunks_per_batch"
+  },
+  "cognify.chunks_per_batch <- 0": {
+    "ok": {
+      "cognify.chunks_per_batch": 0
+    }
+  },
+  "cognify.chunks_per_batch <- 1": {
+    "ok": {
+      "cognify.chunks_per_batch": 1
+    }
+  },
+  "cognify.chunks_per_batch <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "cognify.chunks_per_batch"
+  },
+  "cognify.chunks_per_batch <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "cognify.chunks_per_batch"
+  },
+  "cognify.chunks_per_batch <- 70000": {
+    "ok": {
+      "cognify.chunks_per_batch": 70000
+    }
+  },
+  "cognify.chunks_per_batch <- [1]": {
+    "err": "TypeMismatch",
+    "key": "cognify.chunks_per_batch"
+  },
+  "cognify.chunks_per_batch <- false": {
+    "err": "TypeMismatch",
+    "key": "cognify.chunks_per_batch"
+  },
+  "cognify.chunks_per_batch <- null": {
+    "err": "TypeMismatch",
+    "key": "cognify.chunks_per_batch"
+  },
+  "cognify.chunks_per_batch <- true": {
+    "err": "TypeMismatch",
+    "key": "cognify.chunks_per_batch"
+  },
+  "cognify.chunks_per_batch <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "cognify.chunks_per_batch"
+  },
+  "cognify.data_per_batch <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.data_per_batch"
+  },
+  "cognify.data_per_batch <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.data_per_batch"
+  },
+  "cognify.data_per_batch <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.data_per_batch"
+  },
+  "cognify.data_per_batch <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.data_per_batch"
+  },
+  "cognify.data_per_batch <- -1": {
+    "err": "TypeMismatch",
+    "key": "cognify.data_per_batch"
+  },
+  "cognify.data_per_batch <- 0": {
+    "ok": {
+      "cognify.data_per_batch": 0
+    }
+  },
+  "cognify.data_per_batch <- 1": {
+    "ok": {
+      "cognify.data_per_batch": 1
+    }
+  },
+  "cognify.data_per_batch <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "cognify.data_per_batch"
+  },
+  "cognify.data_per_batch <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "cognify.data_per_batch"
+  },
+  "cognify.data_per_batch <- 70000": {
+    "ok": {
+      "cognify.data_per_batch": 70000
+    }
+  },
+  "cognify.data_per_batch <- [1]": {
+    "err": "TypeMismatch",
+    "key": "cognify.data_per_batch"
+  },
+  "cognify.data_per_batch <- false": {
+    "err": "TypeMismatch",
+    "key": "cognify.data_per_batch"
+  },
+  "cognify.data_per_batch <- null": {
+    "err": "TypeMismatch",
+    "key": "cognify.data_per_batch"
+  },
+  "cognify.data_per_batch <- true": {
+    "err": "TypeMismatch",
+    "key": "cognify.data_per_batch"
+  },
+  "cognify.data_per_batch <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "cognify.data_per_batch"
   },
   "cognify.failure_report_cap <- \"\"": {
     "err": "TypeMismatch",
@@ -2690,6 +2879,69 @@
   "cognify.tolerate_summarization_failures <- {\"a\":1}": {
     "err": "TypeMismatch",
     "key": "cognify.tolerate_summarization_failures"
+  },
+  "data_per_batch <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "data_per_batch"
+  },
+  "data_per_batch <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "data_per_batch"
+  },
+  "data_per_batch <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "data_per_batch"
+  },
+  "data_per_batch <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "data_per_batch"
+  },
+  "data_per_batch <- -1": {
+    "err": "TypeMismatch",
+    "key": "data_per_batch"
+  },
+  "data_per_batch <- 0": {
+    "ok": {
+      "cognify.data_per_batch": 0
+    }
+  },
+  "data_per_batch <- 1": {
+    "ok": {
+      "cognify.data_per_batch": 1
+    }
+  },
+  "data_per_batch <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "data_per_batch"
+  },
+  "data_per_batch <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "data_per_batch"
+  },
+  "data_per_batch <- 70000": {
+    "ok": {
+      "cognify.data_per_batch": 70000
+    }
+  },
+  "data_per_batch <- [1]": {
+    "err": "TypeMismatch",
+    "key": "data_per_batch"
+  },
+  "data_per_batch <- false": {
+    "err": "TypeMismatch",
+    "key": "data_per_batch"
+  },
+  "data_per_batch <- null": {
+    "err": "TypeMismatch",
+    "key": "data_per_batch"
+  },
+  "data_per_batch <- true": {
+    "err": "TypeMismatch",
+    "key": "data_per_batch"
+  },
+  "data_per_batch <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "data_per_batch"
   },
   "data_root_directory <- \"\"": {
     "ok": {

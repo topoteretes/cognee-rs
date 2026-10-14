@@ -1137,6 +1137,36 @@
   "CACHING=\"{\\\"ssl\\\":true}\"": {
     "enable_caching": false
   },
+  "CHUNKS_PER_BATCH=\"  \"": {},
+  "CHUNKS_PER_BATCH=\"\"": {},
+  "CHUNKS_PER_BATCH=\"-1\"": {},
+  "CHUNKS_PER_BATCH=\"0\"": {
+    "cognify.chunks_per_batch": 0
+  },
+  "CHUNKS_PER_BATCH=\"1\"": {
+    "cognify.chunks_per_batch": 1
+  },
+  "CHUNKS_PER_BATCH=\"1.5\"": {},
+  "CHUNKS_PER_BATCH=\"42\"": {
+    "cognify.chunks_per_batch": 42
+  },
+  "CHUNKS_PER_BATCH=\"5000000000\"": {},
+  "CHUNKS_PER_BATCH=\"70000\"": {
+    "cognify.chunks_per_batch": 70000
+  },
+  "CHUNKS_PER_BATCH=\"TRUE\"": {},
+  "CHUNKS_PER_BATCH=\"[1]\"": {},
+  "CHUNKS_PER_BATCH=\"abc\"": {},
+  "CHUNKS_PER_BATCH=\"false\"": {},
+  "CHUNKS_PER_BATCH=\"no\"": {},
+  "CHUNKS_PER_BATCH=\"on\"": {},
+  "CHUNKS_PER_BATCH=\"require\"": {},
+  "CHUNKS_PER_BATCH=\"true\"": {},
+  "CHUNKS_PER_BATCH=\"v\"": {},
+  "CHUNKS_PER_BATCH=\"yes\"": {},
+  "CHUNKS_PER_BATCH=\"{\\\"a\\\":1}\"": {},
+  "CHUNKS_PER_BATCH=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
+  "CHUNKS_PER_BATCH=\"{\\\"ssl\\\":true}\"": {},
   "CHUNK_OVERLAP=\"  \"": {},
   "CHUNK_OVERLAP=\"\"": {},
   "CHUNK_OVERLAP=\"-1\"": {},
@@ -1433,6 +1463,36 @@
   "COGNEE_COGNIFY_TOLERATE_SUMMARIZATION_FAILURES=\"{\\\"a\\\":1}\"": {},
   "COGNEE_COGNIFY_TOLERATE_SUMMARIZATION_FAILURES=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
   "COGNEE_COGNIFY_TOLERATE_SUMMARIZATION_FAILURES=\"{\\\"ssl\\\":true}\"": {},
+  "COGNEE_DATA_PER_BATCH=\"  \"": {},
+  "COGNEE_DATA_PER_BATCH=\"\"": {},
+  "COGNEE_DATA_PER_BATCH=\"-1\"": {},
+  "COGNEE_DATA_PER_BATCH=\"0\"": {
+    "cognify.data_per_batch": 0
+  },
+  "COGNEE_DATA_PER_BATCH=\"1\"": {
+    "cognify.data_per_batch": 1
+  },
+  "COGNEE_DATA_PER_BATCH=\"1.5\"": {},
+  "COGNEE_DATA_PER_BATCH=\"42\"": {
+    "cognify.data_per_batch": 42
+  },
+  "COGNEE_DATA_PER_BATCH=\"5000000000\"": {},
+  "COGNEE_DATA_PER_BATCH=\"70000\"": {
+    "cognify.data_per_batch": 70000
+  },
+  "COGNEE_DATA_PER_BATCH=\"TRUE\"": {},
+  "COGNEE_DATA_PER_BATCH=\"[1]\"": {},
+  "COGNEE_DATA_PER_BATCH=\"abc\"": {},
+  "COGNEE_DATA_PER_BATCH=\"false\"": {},
+  "COGNEE_DATA_PER_BATCH=\"no\"": {},
+  "COGNEE_DATA_PER_BATCH=\"on\"": {},
+  "COGNEE_DATA_PER_BATCH=\"require\"": {},
+  "COGNEE_DATA_PER_BATCH=\"true\"": {},
+  "COGNEE_DATA_PER_BATCH=\"v\"": {},
+  "COGNEE_DATA_PER_BATCH=\"yes\"": {},
+  "COGNEE_DATA_PER_BATCH=\"{\\\"a\\\":1}\"": {},
+  "COGNEE_DATA_PER_BATCH=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
+  "COGNEE_DATA_PER_BATCH=\"{\\\"ssl\\\":true}\"": {},
   "COGNEE_DATA_ROOT_DIRECTORY=\"  \"": {
     "data_root_directory": "  "
   },

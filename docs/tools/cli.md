@@ -18,11 +18,11 @@ feature-gated).
 
 | Command | Purpose | Notable flags | Feature gate |
 |---|---|---|---|
-| `remember <data…>` | Store memory: `add` + `cognify` + (by default) `improve`. `<data…>` is inline text and/or file paths | `-d/--dataset-name` (`main_dataset`), `--session-id`, `--no-improve` (default OFF — improve runs by default), `--tenant-id` | — |
+| `remember <data…>` | Store memory: `add` + `cognify` + (by default) `improve`. `<data…>` is inline text and/or file paths | `-d/--dataset-name` (the `default_dataset_name` setting, `main_dataset`), `--session-id`, `--no-improve` (default OFF — improve runs by default), `--tenant-id` | — |
 | `recall <query>` | Query memory with auto-routing (session-aware + graph-backed) | `-t/--query-type` (optional — omit to auto-route), `-d/--datasets` (repeatable), `-k/--top-k` (10), `--session-id`, `-f/--output-format` (`pretty`/`json`/`simple`, default `pretty`) | — |
-| `improve` | Enrich memory / bridge sessions (feedback + enrichment stages) | `-d/--dataset-name` (`main_dataset`), `--session-id` (repeatable), `--node-name` (repeatable), `--feedback-alpha` (`0.1`), `--tenant-id` | — |
+| `improve` | Enrich memory / bridge sessions (feedback + enrichment stages) | `-d/--dataset-name` (the `default_dataset_name` setting, `main_dataset`), `--session-id` (repeatable), `--node-name` (repeatable), `--feedback-alpha` (`0.1`), `--tenant-id` | — |
 | `forget` | Remove memory (a dataset, a single data item, or everything) | `-d/--dataset-name` \| `--data-id` (UUID; requires `--dataset-name`; conflicts with `--all`) \| `--all`, `--tenant-id` | — |
-| `add <inputs…>` | Ingest text / file paths / HTTP(S) URLs into a dataset | `-d/--dataset-name` (`main_dataset`), `--tenant-id` | — |
+| `add <inputs…>` | Ingest text / file paths / HTTP(S) URLs into a dataset | `-d/--dataset-name` (the `default_dataset_name` setting, `main_dataset`), `--tenant-id` | — |
 | `cognify` | Build the knowledge graph from one or more datasets | `-d/--datasets`, `--chunk-size`, `--chunker` (`TextChunker`/`LangchainChunker`/`CsvChunker`), `--ontology-file`, `-b/--background`, `--llm-max-retries`, `--llm-max-parallel-requests`, `--temporal-cognify` | — |
 | `add-and-cognify <inputs…>` | `add` then `cognify` in one step | union of the above | — |
 | `memify` | Enrich an existing graph with triplet embeddings | `-d/--datasets`, `--node-type`, `--node-name`, `--batch-size` (100) | — |

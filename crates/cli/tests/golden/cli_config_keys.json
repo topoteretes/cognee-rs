@@ -21,6 +21,8 @@
     "chunk_strategy",
     "classification_model",
     "cognee_tracing_enabled",
+    "cognify.chunks_per_batch",
+    "cognify.data_per_batch",
     "cognify.failure_report_cap",
     "cognify.legacy_per_word_token_count",
     "cognify.max_chunk_failure_ratio",
@@ -269,6 +271,8 @@
     "cognify.tolerate_summarization_failures",
     "cognify.max_chunk_failure_ratio",
     "cognify.failure_report_cap",
+    "cognify.chunks_per_batch",
+    "cognify.data_per_batch",
     "search.allow_cypher_query",
     "search.triplet_neighbor_cap",
     "search.hybrid.max_context_tokens",
@@ -2087,6 +2091,57 @@
   "set chunk_strategy <- {\"a\":1}": {
     "err": true
   },
+  "set chunks_per_batch <- \"\"": {
+    "err": true
+  },
+  "set chunks_per_batch <- \"1\"": {
+    "err": true
+  },
+  "set chunks_per_batch <- \"s\"": {
+    "err": true
+  },
+  "set chunks_per_batch <- \"true\"": {
+    "err": true
+  },
+  "set chunks_per_batch <- -1": {
+    "err": true
+  },
+  "set chunks_per_batch <- 0": {
+    "ok": {
+      "cognify.chunks_per_batch": 0
+    }
+  },
+  "set chunks_per_batch <- 1": {
+    "ok": {
+      "cognify.chunks_per_batch": 1
+    }
+  },
+  "set chunks_per_batch <- 1.5": {
+    "err": true
+  },
+  "set chunks_per_batch <- 5000000000": {
+    "err": true
+  },
+  "set chunks_per_batch <- 70000": {
+    "ok": {
+      "cognify.chunks_per_batch": 70000
+    }
+  },
+  "set chunks_per_batch <- [1]": {
+    "err": true
+  },
+  "set chunks_per_batch <- false": {
+    "err": true
+  },
+  "set chunks_per_batch <- null": {
+    "err": true
+  },
+  "set chunks_per_batch <- true": {
+    "err": true
+  },
+  "set chunks_per_batch <- {\"a\":1}": {
+    "err": true
+  },
   "set classification_model <- \"\"": {
     "ok": {}
   },
@@ -2183,6 +2238,108 @@
     }
   },
   "set cognee_tracing_enabled <- {\"a\":1}": {
+    "err": true
+  },
+  "set cognify.chunks_per_batch <- \"\"": {
+    "err": true
+  },
+  "set cognify.chunks_per_batch <- \"1\"": {
+    "err": true
+  },
+  "set cognify.chunks_per_batch <- \"s\"": {
+    "err": true
+  },
+  "set cognify.chunks_per_batch <- \"true\"": {
+    "err": true
+  },
+  "set cognify.chunks_per_batch <- -1": {
+    "err": true
+  },
+  "set cognify.chunks_per_batch <- 0": {
+    "ok": {
+      "cognify.chunks_per_batch": 0
+    }
+  },
+  "set cognify.chunks_per_batch <- 1": {
+    "ok": {
+      "cognify.chunks_per_batch": 1
+    }
+  },
+  "set cognify.chunks_per_batch <- 1.5": {
+    "err": true
+  },
+  "set cognify.chunks_per_batch <- 5000000000": {
+    "err": true
+  },
+  "set cognify.chunks_per_batch <- 70000": {
+    "ok": {
+      "cognify.chunks_per_batch": 70000
+    }
+  },
+  "set cognify.chunks_per_batch <- [1]": {
+    "err": true
+  },
+  "set cognify.chunks_per_batch <- false": {
+    "err": true
+  },
+  "set cognify.chunks_per_batch <- null": {
+    "err": true
+  },
+  "set cognify.chunks_per_batch <- true": {
+    "err": true
+  },
+  "set cognify.chunks_per_batch <- {\"a\":1}": {
+    "err": true
+  },
+  "set cognify.data_per_batch <- \"\"": {
+    "err": true
+  },
+  "set cognify.data_per_batch <- \"1\"": {
+    "err": true
+  },
+  "set cognify.data_per_batch <- \"s\"": {
+    "err": true
+  },
+  "set cognify.data_per_batch <- \"true\"": {
+    "err": true
+  },
+  "set cognify.data_per_batch <- -1": {
+    "err": true
+  },
+  "set cognify.data_per_batch <- 0": {
+    "ok": {
+      "cognify.data_per_batch": 0
+    }
+  },
+  "set cognify.data_per_batch <- 1": {
+    "ok": {
+      "cognify.data_per_batch": 1
+    }
+  },
+  "set cognify.data_per_batch <- 1.5": {
+    "err": true
+  },
+  "set cognify.data_per_batch <- 5000000000": {
+    "err": true
+  },
+  "set cognify.data_per_batch <- 70000": {
+    "ok": {
+      "cognify.data_per_batch": 70000
+    }
+  },
+  "set cognify.data_per_batch <- [1]": {
+    "err": true
+  },
+  "set cognify.data_per_batch <- false": {
+    "err": true
+  },
+  "set cognify.data_per_batch <- null": {
+    "err": true
+  },
+  "set cognify.data_per_batch <- true": {
+    "err": true
+  },
+  "set cognify.data_per_batch <- {\"a\":1}": {
     "err": true
   },
   "set cognify.failure_report_cap <- \"\"": {
@@ -2536,6 +2693,57 @@
     }
   },
   "set cognify.tolerate_summarization_failures <- {\"a\":1}": {
+    "err": true
+  },
+  "set data_per_batch <- \"\"": {
+    "err": true
+  },
+  "set data_per_batch <- \"1\"": {
+    "err": true
+  },
+  "set data_per_batch <- \"s\"": {
+    "err": true
+  },
+  "set data_per_batch <- \"true\"": {
+    "err": true
+  },
+  "set data_per_batch <- -1": {
+    "err": true
+  },
+  "set data_per_batch <- 0": {
+    "ok": {
+      "cognify.data_per_batch": 0
+    }
+  },
+  "set data_per_batch <- 1": {
+    "ok": {
+      "cognify.data_per_batch": 1
+    }
+  },
+  "set data_per_batch <- 1.5": {
+    "err": true
+  },
+  "set data_per_batch <- 5000000000": {
+    "err": true
+  },
+  "set data_per_batch <- 70000": {
+    "ok": {
+      "cognify.data_per_batch": 70000
+    }
+  },
+  "set data_per_batch <- [1]": {
+    "err": true
+  },
+  "set data_per_batch <- false": {
+    "err": true
+  },
+  "set data_per_batch <- null": {
+    "err": true
+  },
+  "set data_per_batch <- true": {
+    "err": true
+  },
+  "set data_per_batch <- {\"a\":1}": {
     "err": true
   },
   "set data_root_directory <- \"\"": {
@@ -13718,6 +13926,13 @@
       "relational.port": 1
     }
   },
+  "unset chunks_per_batch": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
   "unset classification_model": {
     "ok": {
       "chunk_size": 7,
@@ -13726,6 +13941,20 @@
     }
   },
   "unset cognee_tracing_enabled": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset cognify.chunks_per_batch": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset cognify.data_per_batch": {
     "ok": {
       "chunk_size": 7,
       "llm.model": "changed",
@@ -13775,6 +14004,13 @@
     }
   },
   "unset cognify.tolerate_summarization_failures": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset data_per_batch": {
     "ok": {
       "chunk_size": 7,
       "llm.model": "changed",

@@ -709,6 +709,16 @@ config_section! {
         pub failure_report_cap: u32 = 100 => {
             env: ["COGNEE_COGNIFY_FAILURE_REPORT_CAP"], alias: [], secret: false,
         },
+        /// Chunks per graph-extraction batch (Python's
+        /// `CognifyConfig.chunks_per_batch`); 0 uses the default, 2000.
+        pub chunks_per_batch: u32 = 2000 => {
+            env: ["CHUNKS_PER_BATCH"], alias: ["chunks_per_batch"], secret: false,
+        },
+        /// Data items per batch in temporal cognify (Python's `data_per_batch`
+        /// parameter); 0 uses the default, 20.
+        pub data_per_batch: u32 = 20 => {
+            env: ["COGNEE_DATA_PER_BATCH"], alias: ["data_per_batch"], secret: false,
+        },
     }
 }
 

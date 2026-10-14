@@ -363,8 +363,10 @@ pub struct AddArgs {
     #[arg(required = true)]
     pub data: Vec<String>,
 
-    #[arg(long = "dataset-name", short = 'd', default_value = "main_dataset")]
-    pub dataset_name: String,
+    /// Dataset name; defaults to the `default_dataset_name` setting
+    /// (`COGNEE_DEFAULT_DATASET_NAME`, default `main_dataset`).
+    #[arg(long = "dataset-name", short = 'd')]
+    pub dataset_name: Option<String>,
 
     #[arg(long = "tenant-id")]
     pub tenant_id: Option<String>,
@@ -421,8 +423,10 @@ pub struct AddAndCognifyArgs {
     #[arg(required = true)]
     pub data: Vec<String>,
 
-    #[arg(long = "dataset-name", short = 'd', default_value = "main_dataset")]
-    pub dataset_name: String,
+    /// Dataset name; defaults to the `default_dataset_name` setting
+    /// (`COGNEE_DEFAULT_DATASET_NAME`, default `main_dataset`).
+    #[arg(long = "dataset-name", short = 'd')]
+    pub dataset_name: Option<String>,
 
     #[arg(long = "chunk-size")]
     pub chunk_size: Option<u32>,
@@ -600,8 +604,10 @@ pub struct RememberArgs {
     #[arg(required = true)]
     pub data: Vec<String>,
 
-    #[arg(long = "dataset-name", short = 'd', default_value = "main_dataset")]
-    pub dataset_name: String,
+    /// Dataset name; defaults to the `default_dataset_name` setting
+    /// (`COGNEE_DEFAULT_DATASET_NAME`, default `main_dataset`).
+    #[arg(long = "dataset-name", short = 'd')]
+    pub dataset_name: Option<String>,
 
     /// Store in the given session cache instead of the permanent graph.
     #[arg(long = "session-id")]
@@ -674,8 +680,10 @@ pub struct ForgetArgs {
 /// graph, default enrichment (memify), and sync graph edges back into sessions.
 #[derive(Debug, Args)]
 pub struct ImproveArgs {
-    #[arg(long = "dataset-name", short = 'd', default_value = "main_dataset")]
-    pub dataset_name: String,
+    /// Dataset name; defaults to the `default_dataset_name` setting
+    /// (`COGNEE_DEFAULT_DATASET_NAME`, default `main_dataset`).
+    #[arg(long = "dataset-name", short = 'd')]
+    pub dataset_name: Option<String>,
 
     /// Session id(s) to bridge into the permanent graph. Repeatable.
     #[arg(long = "session-id")]

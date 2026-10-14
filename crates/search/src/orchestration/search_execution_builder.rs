@@ -31,6 +31,17 @@ pub struct SearchTuning {
     pub triplet_neighbor_cap: Option<usize>,
     /// The HYBRID_COMPLETION context budget.
     pub hybrid: HybridBudget,
+    /// Update `last_accessed` on the source data records of each search's
+    /// context (Python's `ENABLE_LAST_ACCESSED`). Default `false`.
+    pub access_tracking: bool,
+    /// Detect feedback in session searches when the request leaves
+    /// `auto_feedback_detection` unset (Python's `AUTO_FEEDBACK`). Default
+    /// `false`.
+    pub auto_feedback: bool,
+    /// System prompt file used when a request names neither a system prompt
+    /// nor a prompt path; `None` (the default) leaves each retriever's own
+    /// default prompt.
+    pub default_system_prompt_path: Option<String>,
 }
 
 impl Default for SearchTuning {
@@ -39,6 +50,9 @@ impl Default for SearchTuning {
             allow_cypher_query: true,
             triplet_neighbor_cap: None,
             hybrid: HybridBudget::default(),
+            access_tracking: false,
+            auto_feedback: false,
+            default_system_prompt_path: None,
         }
     }
 }
@@ -367,6 +381,8 @@ impl SearchBuilder {
     }
 
     pub fn build(self) -> SearchOrchestrator {
+        // The orchestrator's own LLM runs session feedback detection.
+        let llm = Arc::clone(&self.engines.llm);
         let mut retrievers = Self::standard_retrievers(self.engines, &self.tuning);
         retrievers.extend(self.retrievers);
         let mut registry = SearchTypeRegistry::new();
@@ -374,13 +390,16 @@ impl SearchBuilder {
             registry.register(Arc::clone(retriever));
         }
 
-        let mut orchestrator = SearchOrchestrator::new(registry).with_database(self.database);
+        let mut orchestrator = SearchOrchestrator::new(registry)
+            .with_database(self.database)
+            .with_llm(llm)
+            .with_auto_feedback_default(self.tuning.auto_feedback)
+            .with_default_system_prompt_path(self.tuning.default_system_prompt_path);
+        if self.tuning.access_tracking {
+            orchestrator = orchestrator.with_access_tracking();
+        }
         if let Some(resolver) = self.dataset_resolver {
-            // Auto-enable access tracking when an IngestDb resolver is available,
-            // so last_accessed timestamps on Data records are updated on every search.
-            orchestrator = orchestrator
-                .with_dataset_resolver(resolver)
-                .with_access_tracking();
+            orchestrator = orchestrator.with_dataset_resolver(resolver);
         }
         if let Some(acl_db) = self.acl_db {
             orchestrator = orchestrator.with_acl_db(acl_db);
@@ -732,6 +751,142 @@ mod tests {
         }
     }
 
+    fn request(search_type: SearchType) -> SearchRequest {
+        SearchRequest {
+            query_text: "hello".to_string(),
+            search_type,
+            top_k: Some(3),
+            datasets: None,
+            dataset_ids: None,
+            system_prompt: None,
+            system_prompt_path: None,
+            only_context: Some(false),
+            use_combined_context: Some(false),
+            session_id: None,
+            node_type: None,
+            node_name: None,
+            node_name_filter_operator: None,
+            wide_search_top_k: None,
+            triplet_distance_penalty: None,
+            save_interaction: None,
+            user_id: None,
+            tenant_id: None,
+            verbose: None,
+            feedback_influence: None,
+            retriever_specific_config: None,
+            response_schema: None,
+            custom_search_type: None,
+            auto_feedback_detection: None,
+            neighborhood_depth: None,
+            neighborhood_seed_top_k: None,
+            summarize_context: None,
+        }
+    }
+
+    fn builder() -> SearchBuilder {
+        SearchBuilder::new(
+            Arc::new(TestVectorDb),
+            Arc::new(TestEmbedding),
+            Arc::new(TestGraphDb),
+            Arc::new(TestLlm),
+            Arc::new(TestDatabase),
+        )
+    }
+
+    /// Answers with the system prompt path the retriever was handed.
+    struct PromptPathRetriever;
+
+    #[async_trait]
+    impl SearchRetriever for PromptPathRetriever {
+        fn search_type(&self) -> SearchType {
+            SearchType::Chunks
+        }
+
+        async fn get_context(
+            &self,
+            _query: &str,
+            _params: &SearchParams,
+        ) -> Result<SearchContext, SearchError> {
+            Ok(vec![])
+        }
+
+        async fn get_completion(
+            &self,
+            _query: &str,
+            _context: Option<SearchContext>,
+            _session: &SessionContext,
+            params: &SearchParams,
+        ) -> Result<SearchOutput, SearchError> {
+            Ok(SearchOutput::Text(
+                params.system_prompt_path.clone().unwrap_or_default(),
+            ))
+        }
+    }
+
+    async fn prompt_path_seen(
+        orchestrator: &super::SearchOrchestrator,
+        req: SearchRequest,
+    ) -> String {
+        match orchestrator.search(&req).await.unwrap().result {
+            SearchOutput::Text(text) => text,
+            other => panic!("expected text, got {other:?}"),
+        }
+    }
+
+    /// `default_system_prompt_path` reaches a request that names no prompt,
+    /// and never overrides one that does.
+    #[tokio::test]
+    async fn default_system_prompt_path_fills_only_an_unset_prompt() {
+        let orchestrator = builder()
+            .with_tuning(super::SearchTuning {
+                default_system_prompt_path: Some("/prompts/custom.txt".to_string()),
+                ..super::SearchTuning::default()
+            })
+            .register_retriever(Arc::new(PromptPathRetriever))
+            .build();
+
+        let plain = request(SearchType::Chunks);
+        assert_eq!(
+            prompt_path_seen(&orchestrator, plain).await,
+            "/prompts/custom.txt"
+        );
+
+        let mut explicit = request(SearchType::Chunks);
+        explicit.system_prompt_path = Some("/prompts/explicit.txt".to_string());
+        assert_eq!(
+            prompt_path_seen(&orchestrator, explicit).await,
+            "/prompts/explicit.txt"
+        );
+
+        let mut inline = request(SearchType::Chunks);
+        inline.system_prompt = Some("inline".to_string());
+        assert_eq!(prompt_path_seen(&orchestrator, inline).await, "");
+
+        // Unset: the retriever keeps its own default.
+        let untuned = builder()
+            .register_retriever(Arc::new(PromptPathRetriever))
+            .build();
+        assert_eq!(
+            prompt_path_seen(&untuned, request(SearchType::Chunks)).await,
+            ""
+        );
+    }
+
+    /// `access_tracking` and `auto_feedback` reach the orchestrator, and
+    /// are off unless set.
+    #[test]
+    fn orchestrator_knobs_reach_the_orchestrator() {
+        assert_eq!(builder().build().tuning_flags(), (false, false));
+        let tuned = builder()
+            .with_tuning(super::SearchTuning {
+                access_tracking: true,
+                auto_feedback: true,
+                ..super::SearchTuning::default()
+            })
+            .build();
+        assert_eq!(tuned.tuning_flags(), (true, true));
+    }
+
     #[tokio::test]
     async fn executes_search_via_builder_entrypoint() {
         let orchestrator = SearchBuilder::new(
@@ -940,6 +1095,9 @@ mod tests {
                 summarize_batch: 3,
                 overflow_summary_file: Some("summaries.json".into()),
             },
+            // Orchestrator-level knobs, not retriever ones; covered by
+            // `orchestrator_knobs_reach_the_orchestrator`.
+            ..SearchTuning::default()
         };
         assert_ne!(tuning, SearchTuning::default(), "every knob is non-default");
         let retrievers = SearchBuilder::standard_retrievers(

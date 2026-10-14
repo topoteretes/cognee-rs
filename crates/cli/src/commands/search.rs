@@ -9,7 +9,6 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::cli::{OutputFormatArg, QueryTypeArg, SearchArgs};
-use crate::config_store::DEFAULT_SYSTEM_PROMPT_PATH;
 use crate::error::CliError;
 
 pub fn run(args: SearchArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
@@ -34,20 +33,12 @@ pub fn run(args: SearchArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
         ))
     })?;
 
-    // `--system-prompt` is inline prompt text and takes precedence. Otherwise
-    // fall back to a prompt file path (`--system-prompt-path`, then the
-    // configured default, then the built-in default filename).
-    let (inline_system_prompt, system_prompt_path) = if let Some(inline) = args.system_prompt {
-        (Some(inline), None)
-    } else {
-        let path = args.system_prompt_path.unwrap_or_else(|| {
-            if settings.default_system_prompt_path.is_empty() {
-                DEFAULT_SYSTEM_PROMPT_PATH.to_string()
-            } else {
-                settings.default_system_prompt_path.clone()
-            }
-        });
-        (None, Some(path))
+    // `--system-prompt` is inline prompt text and takes precedence over
+    // `--system-prompt-path`. With neither, the orchestrator applies the
+    // `default_system_prompt_path` setting (see `Settings::search_tuning`).
+    let (inline_system_prompt, system_prompt_path) = match args.system_prompt {
+        Some(inline) => (Some(inline), None),
+        None => (None, args.system_prompt_path),
     };
 
     crate::teardown::run_command(Arc::clone(&cm), async {

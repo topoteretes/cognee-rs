@@ -23,6 +23,17 @@ pub use keys::{KeySpec, builtin_schema, key_spec, keys, schema_with};
 
 pub const DEFAULT_SYSTEM_PROMPT_PATH: &str = "answer_simple_question.txt";
 
+/// The default `graph_prompt_path`: Python's file name for the built-in
+/// graph-extraction prompt, which Rust compiles in.
+pub const DEFAULT_GRAPH_PROMPT_PATH: &str = "generate_graph_prompt.txt";
+
+/// Whether a prompt-path setting selects the built-in prompt: empty, or the
+/// built-in prompt's own file name.
+fn is_builtin_prompt_path(path: &str, builtin: &str) -> bool {
+    let path = path.trim();
+    path.is_empty() || path == builtin
+}
+
 /// Assemble a `postgres://user:pass@host:port/dbname` URL with percent-encoded
 /// credentials. Shared by the vector and graph URL resolvers.
 ///
@@ -414,7 +425,54 @@ impl Settings {
         if cognify.failure_report_cap > 0 {
             cfg = cfg.with_failure_report_cap(cognify.failure_report_cap as usize);
         }
+        // 0 keeps the default, like Python's `chunks_per_batch or 2000`.
+        if cognify.chunks_per_batch > 0 {
+            cfg = cfg.with_chunks_per_batch(cognify.chunks_per_batch as usize);
+        }
+        if cognify.data_per_batch > 0 {
+            cfg = cfg.with_data_per_batch(cognify.data_per_batch as usize);
+        }
+        if let Some(schema) = &self.summarization_schema {
+            // Validated when it was set; checked again because a bulk-loaded
+            // config could still carry one that fails.
+            match cognee_cognify::config::validate_summary_schema(schema) {
+                Ok(()) => cfg.summary_schema = Some(schema.clone()),
+                Err(error) => tracing::warn!(
+                    %error,
+                    "summarization_schema is invalid; using the built-in summary shape"
+                ),
+            }
+        }
+        if let Some(prompt) = self.graph_extraction_prompt() {
+            cfg = cfg.with_custom_prompt(prompt);
+        }
         cfg
+    }
+
+    /// The graph-extraction system prompt `graph_prompt_path` selects, or
+    /// `None` for the built-in one.
+    ///
+    /// Empty or [`DEFAULT_GRAPH_PROMPT_PATH`] means the built-in prompt. Any
+    /// other value is a file read as the prompt text (a relative path resolves
+    /// against the working directory). A file that cannot be read keeps the
+    /// built-in prompt, with a warning, as an unreadable search prompt path
+    /// does. A per-call custom prompt still wins over this.
+    pub fn graph_extraction_prompt(&self) -> Option<String> {
+        if is_builtin_prompt_path(&self.graph_prompt_path, DEFAULT_GRAPH_PROMPT_PATH) {
+            return None;
+        }
+        let path = self.graph_prompt_path.trim();
+        match std::fs::read_to_string(path) {
+            Ok(prompt) => Some(prompt),
+            Err(error) => {
+                tracing::warn!(
+                    graph_prompt_path = path,
+                    %error,
+                    "graph prompt path not readable; using the built-in graph prompt"
+                );
+                None
+            }
+        }
     }
 
     /// The retriever tuning a `SearchBuilder` is built with (the `search` and
@@ -435,6 +493,15 @@ impl Settings {
                 summarize_batch: (hybrid.summarize_batch as usize).max(1),
                 overflow_summary_file: (!file.is_empty()).then(|| std::path::PathBuf::from(file)),
             },
+            access_tracking: self.enable_last_accessed,
+            auto_feedback: self.auto_feedback,
+            // The built-in prompt's file name selects the retrievers' own
+            // defaults: the Rust SDK compiles its prompts in.
+            default_system_prompt_path: (!is_builtin_prompt_path(
+                &self.default_system_prompt_path,
+                DEFAULT_SYSTEM_PROMPT_PATH,
+            ))
+            .then(|| self.default_system_prompt_path.trim().to_string()),
         }
     }
 
@@ -896,7 +963,7 @@ impl Default for Settings {
             // 1024-descriptor budget is shared with every open store.
             llm_max_parallel_requests: cognee_cognify::config::DEFAULT_MAX_PARALLEL_EXTRACTIONS
                 as u32,
-            graph_prompt_path: "generate_graph_prompt.txt".to_string(),
+            graph_prompt_path: DEFAULT_GRAPH_PROMPT_PATH.to_string(),
 
             chunk_strategy: "PARAGRAPH".to_string(),
             chunk_engine: "DEFAULT_ENGINE".to_string(),
@@ -1746,9 +1813,9 @@ impl ConfigManager {
     ///
     /// Mirrors Python's `cognee.config.set_summarization_model(CustomSchema)`:
     /// accepts a JSON Schema `Value` describing the expected LLM output. The
-    /// schema **must** contain a `summary` string field. The stored value is
-    /// intended to be read by callers when constructing a `CognifyConfig` via
-    /// `CognifyConfig::with_summary_schema`.
+    /// schema **must** contain a `summary` string field.
+    /// [`Settings::cognify_config`] applies it, so every cognify run started
+    /// from these settings requests this shape from the LLM.
     ///
     /// Returns `Err` if the schema fails validation (missing `summary` field).
     pub fn set_summarization_schema(
@@ -2799,6 +2866,104 @@ mod tests {
     /// `overlay_from` reads only the `EnvSource` it is given — no process-env
     /// mutation, so no `#[serial]` — and keeps `overlay_from_env`'s rules:
     /// aliases fall back, empty values count as unset.
+    /// SDK-1070: settings that were accepted but inert reach their consumer
+    /// when set through `ConfigManager` (and so through every binding's `set`
+    /// and `cognee-cli config set`).
+    #[test]
+    fn formerly_inert_settings_reach_cognify_and_search() {
+        let dir = tempfile::tempdir().unwrap();
+        let prompt = dir.path().join("graph_prompt.txt");
+        std::fs::write(&prompt, "extract a graph, custom edition").unwrap();
+        let search_prompt = dir.path().join("system_prompt.txt");
+
+        let cm = ConfigManager::new(Settings::default());
+        cm.set("chunks_per_batch", serde_json::json!(64)).unwrap();
+        cm.set("cognify.data_per_batch", serde_json::json!(3))
+            .unwrap();
+        cm.set(
+            "graph_prompt_path",
+            serde_json::json!(prompt.to_str().unwrap()),
+        )
+        .unwrap();
+        cm.set_summarization_schema(serde_json::json!({
+            "type": "object",
+            "properties": {"summary": {"type": "string"}, "tone": {"type": "string"}},
+            "required": ["summary"],
+        }))
+        .unwrap();
+        cm.set("enable_last_accessed", serde_json::json!(true))
+            .unwrap();
+        cm.set("auto_feedback", serde_json::json!(true)).unwrap();
+        cm.set(
+            "default_system_prompt_path",
+            serde_json::json!(search_prompt.to_str().unwrap()),
+        )
+        .unwrap();
+
+        let settings = cm.read();
+        let cognify = settings.cognify_config();
+        assert_eq!(cognify.chunks_per_batch, 64);
+        assert_eq!(cognify.data_per_batch, 3);
+        assert_eq!(
+            cognify.custom_extraction_prompt.as_deref(),
+            Some("extract a graph, custom edition")
+        );
+        assert_eq!(
+            cognify.summary_schema.as_ref().unwrap()["properties"]["tone"]["type"],
+            "string"
+        );
+
+        let tuning = settings.search_tuning();
+        assert!(tuning.access_tracking);
+        assert!(tuning.auto_feedback);
+        assert_eq!(
+            tuning.default_system_prompt_path.as_deref(),
+            search_prompt.to_str()
+        );
+    }
+
+    /// The defaults keep the historical pipeline: Python's batch sizes, the
+    /// built-in prompts (their Python file names select them), no schema,
+    /// no access tracking and no automatic feedback detection.
+    #[test]
+    fn formerly_inert_settings_default_to_the_builtin_behaviour() {
+        let s = Settings::default();
+        let cognify = s.cognify_config();
+        assert_eq!(cognify.chunks_per_batch, 2000);
+        assert_eq!(cognify.data_per_batch, 20);
+        assert!(cognify.custom_extraction_prompt.is_none());
+        assert!(cognify.summary_schema.is_none());
+        let tuning = s.search_tuning();
+        assert!(!tuning.access_tracking);
+        assert!(!tuning.auto_feedback);
+        assert!(tuning.default_system_prompt_path.is_none());
+
+        // `0` keeps the default batch sizes; an unreadable prompt file keeps
+        // the built-in prompt.
+        let mut s = Settings::default();
+        s.set_key("chunks_per_batch", serde_json::json!(0)).unwrap();
+        s.set_key("data_per_batch", serde_json::json!(0)).unwrap();
+        s.graph_prompt_path = "/definitely/not/a/prompt.txt".to_string();
+        let cognify = s.cognify_config();
+        assert_eq!(cognify.chunks_per_batch, 2000);
+        assert_eq!(cognify.data_per_batch, 20);
+        assert!(cognify.custom_extraction_prompt.is_none());
+    }
+
+    /// `CHUNKS_PER_BATCH` is Python's env name; `COGNEE_DATA_PER_BATCH` the
+    /// Rust one (Python has none).
+    #[test]
+    fn cognify_batch_sizes_bind_from_env() {
+        let env = MapEnv::new()
+            .with("CHUNKS_PER_BATCH", "128")
+            .with("COGNEE_DATA_PER_BATCH", "5");
+        let mut s = Settings::default();
+        s.overlay_from(&env);
+        let cognify = s.cognify_config();
+        assert_eq!(cognify.chunks_per_batch, 128);
+        assert_eq!(cognify.data_per_batch, 5);
+    }
+
     /// The engine sections lower into the pipeline configs: the env vars the
     /// engines used to read themselves reach `CognifyConfig`, `SearchTuning`
     /// and the session manager's timeout through `Settings`.
