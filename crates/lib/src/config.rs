@@ -2609,24 +2609,29 @@ mod tests {
         assert_eq!(s.ontology().file_path, "");
     }
 
-    /// Python's `CACHE_BACKEND` selects the session store, but only when it
-    /// is set, and `COGNEE_SESSION_STORE` wins over it.
+    /// Python's `CACHE_BACKEND` binds `session.cache_backend`, the fallback
+    /// the registry uses while `session.store` (`COGNEE_SESSION_STORE`) is
+    /// unset; it never overwrites an explicit store choice.
     #[test]
     fn cache_backend_is_a_fallback_for_the_session_store() {
-        let store = |env: MapEnv| {
+        let session = |env: MapEnv| {
             let mut s = Settings::default();
             s.overlay_from(&env);
-            s.section::<cognee_components::SessionConfig>().store
+            let session = s.section::<cognee_components::SessionConfig>();
+            (session.store, session.cache_backend)
         };
-        assert_eq!(store(MapEnv::new()), "relational");
-        assert_eq!(store(MapEnv::new().with("CACHE_BACKEND", "redis")), "redis");
+        assert_eq!(session(MapEnv::new()), (String::new(), String::new()));
         assert_eq!(
-            store(
+            session(MapEnv::new().with("CACHE_BACKEND", "redis")),
+            (String::new(), "redis".to_string())
+        );
+        assert_eq!(
+            session(
                 MapEnv::new()
                     .with("CACHE_BACKEND", "redis")
                     .with("COGNEE_SESSION_STORE", "fs")
             ),
-            "fs"
+            ("fs".to_string(), "redis".to_string())
         );
 
         let cm = ConfigManager::new(Settings::default());
@@ -2635,9 +2640,41 @@ mod tests {
             .unwrap();
         cm.set("enable_caching", serde_json::json!(false)).unwrap();
         let session = cm.read().section::<cognee_components::SessionConfig>();
-        assert_eq!(session.store, "fs");
+        assert_eq!(session.cache_backend, "fs");
+        assert_eq!(session.store, "");
         assert_eq!(session.ttl_seconds, 60);
         assert!(!session.caching);
+    }
+
+    /// A non-positive `SESSION_TTL_SECONDS` is kept, not dropped as
+    /// malformed, and means "never expire", as in Python's cache adapters.
+    #[test]
+    fn a_non_positive_session_ttl_never_expires() {
+        let ttl = |env: MapEnv| {
+            let mut s = Settings::default();
+            s.overlay_from(&env);
+            let session = s.section::<cognee_components::SessionConfig>();
+            (session.ttl_seconds, session.effective_ttl_seconds())
+        };
+        assert_eq!(ttl(MapEnv::new()), (604_800, 604_800));
+        assert_eq!(
+            ttl(MapEnv::new().with("SESSION_TTL_SECONDS", "-1")),
+            (-1, 0)
+        );
+        assert_eq!(
+            ttl(MapEnv::new().with("SESSION_TTL_SECONDS", " 0 ")),
+            (0, 0)
+        );
+        assert_eq!(
+            ttl(MapEnv::new().with("SESSION_TTL_SECONDS", "60")),
+            (60, 60)
+        );
+
+        let cm = ConfigManager::new(Settings::default());
+        cm.set("session_ttl_seconds", serde_json::json!(-5))
+            .unwrap();
+        let session = cm.read().section::<cognee_components::SessionConfig>();
+        assert_eq!(session.effective_ttl_seconds(), 0);
     }
 
     /// `monitoring_tool` accepts only `none`, as Python's `get_observe` does;
@@ -4305,7 +4342,9 @@ mod tests {
         let s = Settings::default();
         assert!(s.llm().args.is_empty());
         let session = s.section::<cognee_components::SessionConfig>();
-        assert_eq!(session.store, "relational");
+        // Unset: `CACHE_BACKEND`, else the `relational` store.
+        assert_eq!(session.store, "");
+        assert_eq!(session.cache_backend, "");
         let redis = s.section::<cognee_components::RedisSessionConfig>();
         assert_eq!(redis.host, "localhost");
         assert_eq!(redis.port, 6379);

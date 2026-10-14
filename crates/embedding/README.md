@@ -105,6 +105,12 @@ the files referenced by the config to already exist:
 - Model: `./target/models/BGE-Small-v1.5-model_quantized.onnx`
 - Tokenizer: `./target/models/bge-small-tokenizer.json`
 
+These are `OnnxEmbeddingConfig::default()`'s paths for this crate used on its
+own; `OnnxEmbeddingConfig::bge_small(dir)` takes an explicit directory. The
+`cognee` SDK resolves its own default instead: `EMBEDDING_MODEL_PATH` /
+`EMBEDDING_TOKENIZER_PATH`, else files under `<cache_root_directory>/models`
+(default `./.cognee_cache/models`).
+
 ## Models Supported
 
 ### BGE-Small-v1.5 (default)

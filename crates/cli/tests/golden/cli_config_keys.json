@@ -131,6 +131,7 @@
     "search.hybrid.summarize_overflow",
     "search.triplet_neighbor_cap",
     "session.abandon_after_seconds",
+    "session.cache_backend",
     "session.caching",
     "session.feedback_llm_timeout_ms",
     "session.store",
@@ -258,6 +259,7 @@
     "relational.username",
     "relational.password",
     "session.store",
+    "session.cache_backend",
     "session.caching",
     "session.ttl_seconds",
     "session.feedback_llm_timeout_ms",
@@ -1776,23 +1778,21 @@
     "err": true
   },
   "set cache_backend <- \"\"": {
-    "ok": {
-      "session.store": ""
-    }
+    "ok": {}
   },
   "set cache_backend <- \"1\"": {
     "ok": {
-      "session.store": "1"
+      "session.cache_backend": "1"
     }
   },
   "set cache_backend <- \"s\"": {
     "ok": {
-      "session.store": "s"
+      "session.cache_backend": "s"
     }
   },
   "set cache_backend <- \"true\"": {
     "ok": {
-      "session.store": "true"
+      "session.cache_backend": "true"
     }
   },
   "set cache_backend <- -1": {
@@ -11901,6 +11901,57 @@
   "set session.abandon_after_seconds <- {\"a\":1}": {
     "err": true
   },
+  "set session.cache_backend <- \"\"": {
+    "ok": {}
+  },
+  "set session.cache_backend <- \"1\"": {
+    "ok": {
+      "session.cache_backend": "1"
+    }
+  },
+  "set session.cache_backend <- \"s\"": {
+    "ok": {
+      "session.cache_backend": "s"
+    }
+  },
+  "set session.cache_backend <- \"true\"": {
+    "ok": {
+      "session.cache_backend": "true"
+    }
+  },
+  "set session.cache_backend <- -1": {
+    "err": true
+  },
+  "set session.cache_backend <- 0": {
+    "err": true
+  },
+  "set session.cache_backend <- 1": {
+    "err": true
+  },
+  "set session.cache_backend <- 1.5": {
+    "err": true
+  },
+  "set session.cache_backend <- 5000000000": {
+    "err": true
+  },
+  "set session.cache_backend <- 70000": {
+    "err": true
+  },
+  "set session.cache_backend <- [1]": {
+    "err": true
+  },
+  "set session.cache_backend <- false": {
+    "err": true
+  },
+  "set session.cache_backend <- null": {
+    "err": true
+  },
+  "set session.cache_backend <- true": {
+    "err": true
+  },
+  "set session.cache_backend <- {\"a\":1}": {
+    "err": true
+  },
   "set session.caching <- \"\"": {
     "err": true
   },
@@ -12002,9 +12053,7 @@
     "err": true
   },
   "set session.store <- \"\"": {
-    "ok": {
-      "session.store": ""
-    }
+    "ok": {}
   },
   "set session.store <- \"1\"": {
     "ok": {
@@ -12067,7 +12116,9 @@
     "err": true
   },
   "set session.ttl_seconds <- -1": {
-    "err": true
+    "ok": {
+      "session.ttl_seconds": -1
+    }
   },
   "set session.ttl_seconds <- 0": {
     "ok": {
@@ -12161,9 +12212,7 @@
     "err": true
   },
   "set session_store <- \"\"": {
-    "ok": {
-      "session.store": ""
-    }
+    "ok": {}
   },
   "set session_store <- \"1\"": {
     "ok": {
@@ -12226,7 +12275,9 @@
     "err": true
   },
   "set session_ttl_seconds <- -1": {
-    "err": true
+    "ok": {
+      "session.ttl_seconds": -1
+    }
   },
   "set session_ttl_seconds <- 0": {
     "ok": {
@@ -15389,6 +15440,13 @@
     }
   },
   "unset session.abandon_after_seconds": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset session.cache_backend": {
     "ok": {
       "chunk_size": 7,
       "llm.model": "changed",

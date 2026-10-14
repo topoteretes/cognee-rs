@@ -12,16 +12,27 @@ use crate::types::{SessionQAEntry, SessionTraceStep};
 /// It mirrors Python's session manager without a cache engine
 /// (`SessionManager.is_available == False`): every read finds an empty
 /// session, updates and deletes find nothing, and the graph-context snapshot
-/// is dropped. The two writes that must hand back an id, a Q&A entry and a
-/// trace step, fail with [`SessionError::Disabled`]: a search ignores that
-/// and answers without session history, while storing into a session
-/// (`remember` with a session id) reports it, as Python's `remember` raises
-/// "Session cache unavailable".
+/// is dropped, and [`SessionStore::is_available`] is `false`. The two writes
+/// that must hand back an id, a Q&A entry and a trace step, fail with
+/// [`SessionError::Disabled`]. Callers handle that as Python does:
+///
+/// - a search ignores it and answers without session history;
+/// - `remember(data, session_id)` logs "session cache not available" and
+///   still succeeds, as Python's `_add_to_session` does;
+/// - `remember_entry` (a typed Q&A / trace / feedback entry) checks
+///   `is_available` before any other work and fails with `Disabled`, as
+///   Python's `_dispatch_session_entry` raises "Session cache unavailable";
+/// - [`crate::SessionManager::add_agent_trace_step`] checks it too, so no
+///   feedback LLM call is made for a step that cannot be stored.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct DisabledSessionStore;
 
 #[async_trait]
 impl SessionStore for DisabledSessionStore {
+    fn is_available(&self) -> bool {
+        false
+    }
+
     async fn create_qa_entry(
         &self,
         _session_id: &str,
@@ -128,6 +139,7 @@ mod tests {
     #[tokio::test]
     async fn reads_are_empty_and_writes_report_disabled() {
         let store = DisabledSessionStore;
+        assert!(!store.is_available());
         assert!(matches!(
             store.create_qa_entry("s", None, "q", "a", None).await,
             Err(SessionError::Disabled)

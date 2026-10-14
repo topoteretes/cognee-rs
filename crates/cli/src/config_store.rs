@@ -46,7 +46,8 @@ use std::path::{Path, PathBuf};
 /// values equal to the old defaults.
 /// Version 6: `cache_backend`, `session_ttl_seconds` and `enable_caching`
 /// stopped being `Settings` fields and became aliases of the `session`
-/// section's `store`, `ttl_seconds` and `caching`, which now take effect, as
+/// section's `cache_backend` (the fallback for `store`), `ttl_seconds` and
+/// `caching`, which now take effect, as
 /// do `embedding.onnx.model_path` / `tokenizer_path` derived from
 /// `cache_root_directory`. A pre-v6 file carries `"cache_backend": "fs"` (the
 /// old default, never read), which would otherwise switch every upgraded CLI
@@ -564,6 +565,7 @@ mod tests {
         let sections = &document.settings.sections;
         assert!(!sections.contains_key("cache_backend"));
         assert!(!sections.contains_key("session.store"));
+        assert!(!sections.contains_key("session.cache_backend"));
         assert!(!sections.contains_key("embedding.onnx.model_path"));
         assert_eq!(
             sections.get("embedding.onnx.tokenizer_path"),
@@ -577,13 +579,15 @@ mod tests {
             sections.get("session.caching"),
             Some(&serde_json::json!(true))
         );
+        // Unset: the registry then selects the `relational` store.
         assert_eq!(
             document.settings.get_key("session.store"),
-            Some(serde_json::json!("relational"))
+            Some(serde_json::json!(""))
         );
     }
 
-    /// A deliberately chosen store survives the upgrade.
+    /// A deliberately chosen store survives the upgrade, as the `CACHE_BACKEND`
+    /// fallback (an id this build lacks then falls back to `relational`).
     #[test]
     fn migrating_v5_keeps_an_explicit_cache_backend() {
         let mut document: ConfigDocument = serde_json::from_value(serde_json::json!({
@@ -593,9 +597,10 @@ mod tests {
         .expect("v5 document");
         migrate_document(&mut document);
         assert_eq!(
-            document.settings.sections.get("session.store"),
+            document.settings.sections.get("session.cache_backend"),
             Some(&serde_json::json!("redis"))
         );
+        assert!(!document.settings.sections.contains_key("session.store"));
     }
 
     fn legacy_v3_document() -> ConfigDocument {

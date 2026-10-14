@@ -657,10 +657,20 @@ config_section! {
     pub struct SessionConfig in "session" {
         /// Store id selecting the session-store factory: `relational` (the
         /// relational database; `seaorm`, and Python's `sqlite` and
-        /// `postgres`, are the same store), `fs`, `redis`. Python's
-        /// `CACHE_BACKEND` is read when `COGNEE_SESSION_STORE` is unset.
-        pub store: String = "relational".to_string() => {
-            env: ["COGNEE_SESSION_STORE", "CACHE_BACKEND"], alias: ["session_store", "cache_backend"], secret: false,
+        /// `postgres`, are the same store), `fs`, `redis`, or an externally
+        /// registered id. An id with no registered factory is an error. Empty
+        /// (the default) falls back to `cache_backend`, then `relational`.
+        pub store: String = String::new() => {
+            env: ["COGNEE_SESSION_STORE"], alias: ["session_store"], secret: false,
+        },
+        /// Python's `CACHE_BACKEND`: the store used while `store` is empty.
+        /// Unlike `store`, an id with no registered factory here (Python's
+        /// `turso` / `tapes`, or `redis` / `fs` on a build without their
+        /// feature) does not fail: it is reported with a warning and the
+        /// `relational` store is used, so a `.env` shared with Python cannot
+        /// take down a stock build.
+        pub cache_backend: String = String::new() => {
+            env: ["CACHE_BACKEND"], alias: ["cache_backend"], secret: false,
         },
         /// Keep session memory at all (Python's `CACHING`). Off, every session
         /// read is empty and every write fails, whatever the store.
@@ -668,9 +678,10 @@ config_section! {
             env: ["CACHING"], alias: ["enable_caching", "caching"], secret: false,
         },
         /// Seconds a session lives after its last write, on the stores that
-        /// expire sessions (`redis`, `fs`); 0 never expires (Python's
-        /// `SESSION_TTL_SECONDS`).
-        pub ttl_seconds: u64 = 604_800 => {
+        /// expire sessions (`redis`, `fs`); 0 or a negative value never
+        /// expires, as with Python's `SESSION_TTL_SECONDS` (see
+        /// [`SessionConfig::effective_ttl_seconds`]).
+        pub ttl_seconds: i64 = 604_800 => {
             env: ["SESSION_TTL_SECONDS"], alias: ["session_ttl_seconds"], secret: false,
         },
         /// How long the LLM call that writes a trace step's session feedback
@@ -683,6 +694,16 @@ config_section! {
         pub abandon_after_seconds: u64 = 1800 => {
             env: ["SESSION_ABANDON_AFTER_SECONDS"], alias: ["session_abandon_after_seconds"], secret: false,
         },
+    }
+}
+
+impl SessionConfig {
+    /// The session expiry the stores apply, in seconds; `0` never expires.
+    /// A non-positive `ttl_seconds` means "never expire", as Python's cache
+    /// adapters treat any `session_ttl_seconds` that is not `> 0`.
+    #[must_use]
+    pub fn effective_ttl_seconds(&self) -> u64 {
+        u64::try_from(self.ttl_seconds).unwrap_or(0)
     }
 }
 

@@ -577,15 +577,87 @@ jobs:
             --require-test relational_pgvector_pggraph_coexist_in_one_database
 
   # ── Aggregate status (single required check for branch protection) ────
+  # ── Redis session store (mirror of ci.yml's `redis-session`) ──
+  # Keyless: a public Redis image and no LLM. Fork PRs only, like the Postgres
+  # lanes; the `notify` aggregator below therefore accepts `skipped`.
+  redis-session:
+    name: Test (Redis session lane)
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.head.repo.full_name != github.repository
+
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      REDIS_TEST_URL: redis://127.0.0.1:6379
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install mold linker
+        uses: rui314/setup-mold@v1
+        with:
+          make-default: true
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      # Restore-only, like the Postgres lanes: this lane builds two crates with
+      # a non-default feature set, so saving would only fork the shared key.
+      - name: Cache cargo/target (test, restore-only)
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: workspace-test-v6
+          save-if: "false"
+
+      # `session.ttl_seconds` on Redis: the store arms an expiry on every key
+      # a write touches (`session_ttl_expires_every_written_key`), and the
+      # registry hands the configured TTL to the store it builds
+      # (`the_redis_session_store_applies_the_session_ttl`). Both skip with
+      # `REDIS_TEST_URL not set — skipping …` when the URL is absent, and a
+      # skip still reports `ok`, so the guard step below is what makes this
+      # lane mean anything. `--no-default-features --features sqlite,…` keeps
+      # the components build off the lancedb / ladybug native stacks.
+      - name: Run Redis session-store TTL tests
+        run: |
+          set -o pipefail
+          cargo test -p cognee-session --features redis --lib \
+            session_ttl_expires_every_written_key -- --nocapture \
+            2>&1 | tee redis-session.log
+          cargo test -p cognee-components --no-default-features \
+            --features sqlite,session-redis --lib \
+            the_redis_session_store_applies_the_session_ttl -- --nocapture \
+            2>&1 | tee redis-components.log
+
+      - name: Assert the suite really executed
+        run: |
+          bash scripts/ci/assert_pg_suite_ran.sh --label RedisSession \
+            --log redis-session.log    --min-tests 1 \
+            --log redis-components.log --min-tests 1 \
+            --require-test session_ttl_expires_every_written_key \
+            --require-test the_redis_session_store_applies_the_session_ttl
+
   notify:
     name: Community Checks Status
-    needs: [ lint, test-no-secrets, pggraph-postgres, pgvector-postgres, pg-single-db-postgres ]
+    needs: [ lint, test-no-secrets, pggraph-postgres, pgvector-postgres, pg-single-db-postgres, redis-session ]
     runs-on: ubuntu-latest
     if: ${{ !cancelled() }}
     steps:
       - name: Check status
         run: |
-          # `skipped` is the expected result for the three Postgres lanes on an
+          # `skipped` is the expected result for the Postgres and Redis lanes on an
           # in-repo PR, where they are gated off because ci.yml runs the same
           # lanes. Any other non-success value (failure / cancelled) must still
           # fail.
@@ -596,7 +668,9 @@ jobs:
                 ( "${{ needs.pgvector-postgres.result }}" == "success" ||
                   "${{ needs.pgvector-postgres.result }}" == "skipped" ) &&
                 ( "${{ needs.pg-single-db-postgres.result }}" == "success" ||
-                  "${{ needs.pg-single-db-postgres.result }}" == "skipped" ) ]]; then
+                  "${{ needs.pg-single-db-postgres.result }}" == "skipped" ) &&
+                ( "${{ needs.redis-session.result }}" == "success" ||
+                  "${{ needs.redis-session.result }}" == "skipped" ) ]]; then
             echo "All community checks passed!"
           else
             echo "One or more community checks failed."

@@ -38,6 +38,12 @@ impl SessionManager {
         }
     }
 
+    /// Whether the store keeps anything (Python's `is_available`); `false`
+    /// while session memory is switched off (`session.caching`).
+    pub fn is_available(&self) -> bool {
+        self.store.is_available()
+    }
+
     /// How long the LLM call that writes a trace step's feedback may take
     /// before the step is stored with the deterministic fallback
     /// (`session.feedback_llm_timeout_ms`; default 8 s).
@@ -346,6 +352,10 @@ impl SessionManager {
         error_message: &str,
         generate_feedback: bool,
     ) -> Result<String, SessionError> {
+        // Nothing can be stored: fail before the (paid) feedback LLM call.
+        if !self.store.is_available() {
+            return Err(SessionError::Disabled);
+        }
         let resolved_id = self.resolve_session_id(session_id);
         let trace_id = uuid::Uuid::new_v4().to_string();
         let session_feedback = if generate_feedback {

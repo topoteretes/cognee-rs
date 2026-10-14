@@ -1297,6 +1297,79 @@ jobs:
             --require-test pggraph_purges_legacy_row_from_default_table_on_upgrade \
             --require-test close_releases_the_pool_while_the_adapter_is_still_held
 
+  # ── Redis session store (service container) ──
+  # The only tests that prove `session.ttl_seconds` reaches Redis keys need a
+  # live server; without this lane they skip into a green no-op everywhere.
+  # Keyless, so it is mirrored in community.yml for fork PRs.
+  redis-session:
+    name: Test (Redis session lane)
+    needs: lint
+    runs-on: ubuntu-latest
+
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      REDIS_TEST_URL: redis://127.0.0.1:6379
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install mold linker
+        uses: rui314/setup-mold@v1
+        with:
+          make-default: true
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      # Restore-only, like the Postgres lanes: this lane builds two crates with
+      # a non-default feature set, so saving would only fork the shared key.
+      - name: Cache cargo/target (test, restore-only)
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: workspace-test-v6
+          save-if: "false"
+
+      # `session.ttl_seconds` on Redis: the store arms an expiry on every key
+      # a write touches (`session_ttl_expires_every_written_key`), and the
+      # registry hands the configured TTL to the store it builds
+      # (`the_redis_session_store_applies_the_session_ttl`). Both skip with
+      # `REDIS_TEST_URL not set — skipping …` when the URL is absent, and a
+      # skip still reports `ok`, so the guard step below is what makes this
+      # lane mean anything. `--no-default-features --features sqlite,…` keeps
+      # the components build off the lancedb / ladybug native stacks.
+      - name: Run Redis session-store TTL tests
+        run: |
+          set -o pipefail
+          cargo test -p cognee-session --features redis --lib \
+            session_ttl_expires_every_written_key -- --nocapture \
+            2>&1 | tee redis-session.log
+          cargo test -p cognee-components --no-default-features \
+            --features sqlite,session-redis --lib \
+            the_redis_session_store_applies_the_session_ttl -- --nocapture \
+            2>&1 | tee redis-components.log
+
+      - name: Assert the suite really executed
+        run: |
+          bash scripts/ci/assert_pg_suite_ran.sh --label RedisSession \
+            --log redis-session.log    --min-tests 1 \
+            --log redis-components.log --min-tests 1 \
+            --require-test session_ttl_expires_every_written_key \
+            --require-test the_redis_session_store_applies_the_session_ttl
+
   # ── Stage 3: Language binding checks (depend on lint, parallel with `test`) ──
   # Gated on `lint` (not `test`) so the binding builds run concurrently with the
   # workspace test run instead of serially after it — the C API job in particular
@@ -1594,7 +1667,7 @@ jobs:
   # cognee `notify` aggregator.
   notify:
     name: Test Suite Status
-    needs: [ lint, msrv, wasm, test, docs-and-extras, pgvector-postgres, pg-single-db-postgres, pggraph-postgres, capi-check, python-check, ts-check, java-check ]
+    needs: [ lint, msrv, wasm, test, docs-and-extras, pgvector-postgres, pg-single-db-postgres, pggraph-postgres, redis-session, capi-check, python-check, ts-check, java-check ]
     runs-on: ubuntu-latest
     if: >-
       !cancelled() &&
@@ -1611,6 +1684,7 @@ jobs:
                 "${{ needs.pgvector-postgres.result }}" == "success" &&
                 "${{ needs.pg-single-db-postgres.result }}" == "success" &&
                 "${{ needs.pggraph-postgres.result }}" == "success" &&
+                "${{ needs.redis-session.result }}" == "success" &&
                 "${{ needs.capi-check.result }}" == "success" &&
                 "${{ needs.python-check.result }}" == "success" &&
                 "${{ needs.ts-check.result }}" == "success" &&

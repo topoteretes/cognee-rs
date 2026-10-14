@@ -29,6 +29,15 @@ pub struct SessionQAUpdate {
 /// Analogous to Python's `CacheDBInterface`. All backends implement this trait.
 #[async_trait]
 pub trait SessionStore: Send + Sync {
+    /// Whether this store keeps anything (Python's
+    /// `SessionManager.is_available`). `false` only for
+    /// [`crate::DisabledSessionStore`], the store selected while session
+    /// memory is switched off; callers that would do work only to store it
+    /// in a session check this first.
+    fn is_available(&self) -> bool {
+        true
+    }
+
     /// Store a Q&A entry in the session. Returns the generated `qa_id`.
     async fn create_qa_entry(
         &self,

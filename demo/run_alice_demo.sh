@@ -8,7 +8,8 @@
 # All state is isolated in a per-run work directory so this never pollutes
 # the repo root or your global cognee state. LLM credentials are read from
 # the project-root `.env` (OPENAI_URL / OPENAI_TOKEN / OPENAI_MODEL); ONNX
-# embeddings auto-download to target/models on first run.
+# embeddings, when selected, auto-download to <cache_root_directory>/models
+# (default ./.cognee_cache/models) on first run.
 #
 # If no PDF path is given, the Alice in Wonderland PDF is lazily downloaded to a
 # temp cache ($PDF_CACHE_DIR) on first run and reused thereafter.
@@ -173,8 +174,8 @@ export EMBEDDING_PROVIDER="${EMBEDDING_PROVIDER:-openai}"
 export EMBEDDING_MODEL="${EMBEDDING_MODEL:-text-embedding-3-small}"
 export EMBEDDING_DIMENSIONS="${EMBEDDING_DIMENSIONS:-1536}"
 
-# Run from PROJECT_ROOT so `.env` is loaded and the target/models embedding
-# cache is reused across runs.
+# Run from PROJECT_ROOT so `.env` is loaded and the ./.cognee_cache/models
+# embedding cache is reused across runs.
 cd "$PROJECT_ROOT"
 
 bold "Alice in Wonderland — cognee-rust demo"

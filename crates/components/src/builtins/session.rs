@@ -71,7 +71,9 @@ impl SessionStoreFactory for FsSessionFactory {
         } else {
             std::path::PathBuf::from(configured)
         };
-        let ttl = ctx.section::<crate::sections::SessionConfig>().ttl_seconds;
+        let ttl = ctx
+            .section::<crate::sections::SessionConfig>()
+            .effective_ttl_seconds();
         Ok(Arc::new(
             cognee_session::FsSessionStore::new(directory).with_session_ttl_seconds(ttl),
         ))
@@ -110,7 +112,10 @@ impl SessionStoreFactory for RedisSessionFactory {
         )
         .await
         .map_err(|e| ComponentError::SessionStore(e.to_string()))?
-        .with_session_ttl_seconds(ctx.section::<crate::sections::SessionConfig>().ttl_seconds);
+        .with_session_ttl_seconds(
+            ctx.section::<crate::sections::SessionConfig>()
+                .effective_ttl_seconds(),
+        );
         Ok(Arc::new(store))
     }
 }

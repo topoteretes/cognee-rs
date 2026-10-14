@@ -125,6 +125,9 @@ pub fn build_embedding_config(
     cache_root_directory: &std::path::Path,
 ) -> EmbeddingConfig {
     use cognee_config_core::ConfigSection as _;
+    // Read only by the `onnx` block below.
+    #[cfg(not(feature = "onnx"))]
+    let _ = cache_root_directory;
 
     let provider = if inputs.mock {
         EmbeddingProvider::Mock

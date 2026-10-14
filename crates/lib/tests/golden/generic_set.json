@@ -1755,23 +1755,21 @@
     "key": "aws_web_identity_token"
   },
   "cache_backend <- \"\"": {
-    "ok": {
-      "session.store": ""
-    }
+    "ok": {}
   },
   "cache_backend <- \"1\"": {
     "ok": {
-      "session.store": "1"
+      "session.cache_backend": "1"
     }
   },
   "cache_backend <- \"s\"": {
     "ok": {
-      "session.store": "s"
+      "session.cache_backend": "s"
     }
   },
   "cache_backend <- \"true\"": {
     "ok": {
-      "session.store": "true"
+      "session.cache_backend": "true"
     }
   },
   "cache_backend <- -1": {
@@ -14129,6 +14127,68 @@
     "err": "TypeMismatch",
     "key": "session.abandon_after_seconds"
   },
+  "session.cache_backend <- \"\"": {
+    "ok": {}
+  },
+  "session.cache_backend <- \"1\"": {
+    "ok": {
+      "session.cache_backend": "1"
+    }
+  },
+  "session.cache_backend <- \"s\"": {
+    "ok": {
+      "session.cache_backend": "s"
+    }
+  },
+  "session.cache_backend <- \"true\"": {
+    "ok": {
+      "session.cache_backend": "true"
+    }
+  },
+  "session.cache_backend <- -1": {
+    "err": "TypeMismatch",
+    "key": "session.cache_backend"
+  },
+  "session.cache_backend <- 0": {
+    "err": "TypeMismatch",
+    "key": "session.cache_backend"
+  },
+  "session.cache_backend <- 1": {
+    "err": "TypeMismatch",
+    "key": "session.cache_backend"
+  },
+  "session.cache_backend <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "session.cache_backend"
+  },
+  "session.cache_backend <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "session.cache_backend"
+  },
+  "session.cache_backend <- 70000": {
+    "err": "TypeMismatch",
+    "key": "session.cache_backend"
+  },
+  "session.cache_backend <- [1]": {
+    "err": "TypeMismatch",
+    "key": "session.cache_backend"
+  },
+  "session.cache_backend <- false": {
+    "err": "TypeMismatch",
+    "key": "session.cache_backend"
+  },
+  "session.cache_backend <- null": {
+    "err": "TypeMismatch",
+    "key": "session.cache_backend"
+  },
+  "session.cache_backend <- true": {
+    "err": "TypeMismatch",
+    "key": "session.cache_backend"
+  },
+  "session.cache_backend <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "session.cache_backend"
+  },
   "session.caching <- \"\"": {
     "err": "TypeMismatch",
     "key": "session.caching"
@@ -14254,9 +14314,7 @@
     "key": "session.feedback_llm_timeout_ms"
   },
   "session.store <- \"\"": {
-    "ok": {
-      "session.store": ""
-    }
+    "ok": {}
   },
   "session.store <- \"1\"": {
     "ok": {
@@ -14334,8 +14392,9 @@
     "key": "session.ttl_seconds"
   },
   "session.ttl_seconds <- -1": {
-    "err": "TypeMismatch",
-    "key": "session.ttl_seconds"
+    "ok": {
+      "session.ttl_seconds": -1
+    }
   },
   "session.ttl_seconds <- 0": {
     "ok": {
@@ -14446,9 +14505,7 @@
     "key": "session_abandon_after_seconds"
   },
   "session_store <- \"\"": {
-    "ok": {
-      "session.store": ""
-    }
+    "ok": {}
   },
   "session_store <- \"1\"": {
     "ok": {
@@ -14526,8 +14583,9 @@
     "key": "session_ttl_seconds"
   },
   "session_ttl_seconds <- -1": {
-    "err": "TypeMismatch",
-    "key": "session_ttl_seconds"
+    "ok": {
+      "session.ttl_seconds": -1
+    }
   },
   "session_ttl_seconds <- 0": {
     "ok": {

@@ -155,8 +155,11 @@ list with sizes rather than trusting a copy of it here. Two things are deliberat
 in `--all`, because nothing in `scripts/check_all.sh` or the per-binding check scripts
 brings them back:
 
-- **`target/models`** — downloaded ONNX/tokenizer files, the default `EMBEDDING_MODEL_PATH`
-  and the source `scripts/android-build-and-deploy.sh` stages models from. It is preserved
+- **`target/models`** — downloaded ONNX/tokenizer files: the test harness's model cache
+  (`COGNEE_TEST_MODEL_DIR`), the SDK's pre-`cache_root_directory` default
+  `EMBEDDING_MODEL_PATH`, and the source `scripts/android-build-and-deploy.sh` stages models
+  from. (The SDK default is now `<cache_root_directory>/models`, `./.cognee_cache/models`,
+  which this script never touches.) It is preserved
   across the root `cargo clean` (stashed and restored); pass `--include-models` to drop it.
 - **`capi/CogneeSDK.xcframework`** — ~6.6 GB, 20–30 min to rebuild via
   `capi/scripts/build_xcframework.sh`, and `ios/Package.swift` cannot resolve without it.

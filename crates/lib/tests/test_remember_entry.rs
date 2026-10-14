@@ -534,3 +534,87 @@ fn _ensure_types_reachable() {
         let _ = UsedGraphElementIds::default();
     };
 }
+
+/// With session memory switched off (`session.caching`, Python's
+/// `CACHING=false`), every typed entry fails with `Disabled` before any
+/// other work, as Python's `_dispatch_session_entry` raises "Session cache
+/// unavailable" first: no `session_records` row is upserted and no feedback
+/// LLM call is made.
+#[tokio::test]
+async fn test_entries_with_session_memory_disabled_fail_before_any_work() {
+    use cognee::database::{connect, initialize};
+    use cognee_database::RelationalDb;
+    use cognee_llm::Llm;
+
+    let store: Arc<dyn SessionStore> = Arc::new(cognee_session::DisabledSessionStore);
+    let sm = Arc::new(SessionManager::new(Arc::clone(&store)));
+    let db = connect("sqlite::memory:")
+        .await
+        .expect("connect in-memory sqlite");
+    initialize(&db).await.expect("initialize schema");
+    let db: Arc<dyn RelationalDb> = Arc::new(db);
+    let llm = Arc::new(cognee_test_utils::MockLlm::new(vec![
+        "generated feedback".to_string(),
+    ]));
+    let owner = Uuid::new_v4();
+
+    let entries = [
+        MemoryEntry::Trace(TraceEntry {
+            origin_function: "search".into(),
+            status: "success".into(),
+            method_params: None,
+            method_return_value: Some(serde_json::json!({"hits": 3})),
+            memory_query: String::new(),
+            memory_context: String::new(),
+            error_message: String::new(),
+            generate_feedback_with_llm: true,
+        }),
+        MemoryEntry::Qa(QAEntry {
+            question: "Q".into(),
+            answer: "A".into(),
+            context: String::new(),
+            feedback_text: None,
+            feedback_score: None,
+            used_graph_element_ids: None,
+        }),
+        MemoryEntry::Feedback(FeedbackEntry {
+            qa_id: Uuid::new_v4().to_string(),
+            feedback_text: Some("nice".into()),
+            feedback_score: Some(5),
+        }),
+    ];
+    for entry in entries {
+        let kind = entry.type_str();
+        let err = remember_entry(
+            entry,
+            "ds",
+            "sess-off",
+            owner,
+            None,
+            Some(Arc::clone(&db)),
+            Some(Arc::clone(&store)),
+            Some(Arc::clone(&sm)),
+            Some(llm.clone() as Arc<dyn Llm>),
+        )
+        .await
+        .expect_err("a typed entry needs session memory");
+        assert!(
+            matches!(err, ApiError::Session(SessionError::Disabled)),
+            "{kind}: {err:?}"
+        );
+    }
+
+    assert!(
+        db.get_session_row("sess-off", owner, &[], false, 1800)
+            .await
+            .expect("read session row")
+            .is_none(),
+        "no session_records row may be upserted"
+    );
+    // The queued response is still there: the feedback LLM was never called.
+    let resp = llm
+        .generate(vec![cognee_llm::Message::user("probe")], None)
+        .await
+        .expect("mock generate");
+    assert_eq!(resp.content, "generated feedback");
+}

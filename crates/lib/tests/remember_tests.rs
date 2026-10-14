@@ -152,6 +152,54 @@ async fn remember_session_stores_qa_entry() {
     assert_eq!(entries[0].question, "");
 }
 
+/// With session memory switched off (`session.caching`, Python's
+/// `CACHING=false`), `remember(data, session_id)` still succeeds: Python's
+/// `_add_to_session` only logs "session cache not available" and returns.
+#[tokio::test]
+async fn remember_session_with_caching_off_succeeds_without_storing() {
+    let h = make_harness().await;
+    let owner = Uuid::new_v4();
+    let session_id = "sess-caching-off";
+    let store: Arc<dyn SessionStore> = Arc::new(cognee_session::DisabledSessionStore);
+    let manager = Arc::new(SessionManager::new(Arc::clone(&store)));
+
+    let result = remember(
+        vec![DataInput::Text("alpha beta gamma".to_string())],
+        "ds_caching_off",
+        Some(session_id),
+        /* self_improvement= */ false,
+        owner,
+        None,
+        Arc::clone(&h.add_pipeline),
+        mock_llm(),
+        Arc::clone(&h.storage),
+        h.graph_db.clone() as Arc<_>,
+        h.vector_db.clone() as Arc<_>,
+        h.embedding_engine.clone() as Arc<_>,
+        Some(h.db.clone()),
+        Some(Arc::clone(&store)),
+        Some(manager),
+        Some(h.checkpoint_store.clone() as Arc<_>),
+        Arc::clone(&h.ontology),
+        Arc::new(CognifyConfig::default()),
+    )
+    .await
+    .expect("remember with caching off must not fail");
+
+    assert_eq!(result.status, RememberStatus::SessionStored);
+    assert_eq!(
+        result.session_ids.as_deref(),
+        Some([session_id.to_string()].as_slice())
+    );
+    assert!(
+        store
+            .get_all_qa_entries(session_id, Some(&owner.to_string()))
+            .await
+            .expect("read")
+            .is_empty()
+    );
+}
+
 #[tokio::test]
 async fn remember_session_self_improvement_runs_inline() {
     let h = make_harness().await;

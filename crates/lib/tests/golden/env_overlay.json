@@ -956,68 +956,68 @@
     "aws.web_identity_token": "{\"ssl\":true}"
   },
   "CACHE_BACKEND=\"  \"": {
-    "session.store": "  "
+    "session.cache_backend": "  "
   },
   "CACHE_BACKEND=\"\"": {},
   "CACHE_BACKEND=\"-1\"": {
-    "session.store": "-1"
+    "session.cache_backend": "-1"
   },
   "CACHE_BACKEND=\"0\"": {
-    "session.store": "0"
+    "session.cache_backend": "0"
   },
   "CACHE_BACKEND=\"1\"": {
-    "session.store": "1"
+    "session.cache_backend": "1"
   },
   "CACHE_BACKEND=\"1.5\"": {
-    "session.store": "1.5"
+    "session.cache_backend": "1.5"
   },
   "CACHE_BACKEND=\"42\"": {
-    "session.store": "42"
+    "session.cache_backend": "42"
   },
   "CACHE_BACKEND=\"5000000000\"": {
-    "session.store": "5000000000"
+    "session.cache_backend": "5000000000"
   },
   "CACHE_BACKEND=\"70000\"": {
-    "session.store": "70000"
+    "session.cache_backend": "70000"
   },
   "CACHE_BACKEND=\"TRUE\"": {
-    "session.store": "TRUE"
+    "session.cache_backend": "TRUE"
   },
   "CACHE_BACKEND=\"[1]\"": {
-    "session.store": "[1]"
+    "session.cache_backend": "[1]"
   },
   "CACHE_BACKEND=\"abc\"": {
-    "session.store": "abc"
+    "session.cache_backend": "abc"
   },
   "CACHE_BACKEND=\"false\"": {
-    "session.store": "false"
+    "session.cache_backend": "false"
   },
   "CACHE_BACKEND=\"no\"": {
-    "session.store": "no"
+    "session.cache_backend": "no"
   },
   "CACHE_BACKEND=\"on\"": {
-    "session.store": "on"
+    "session.cache_backend": "on"
   },
   "CACHE_BACKEND=\"require\"": {
-    "session.store": "require"
+    "session.cache_backend": "require"
   },
   "CACHE_BACKEND=\"true\"": {
-    "session.store": "true"
+    "session.cache_backend": "true"
   },
   "CACHE_BACKEND=\"v\"": {
-    "session.store": "v"
+    "session.cache_backend": "v"
   },
   "CACHE_BACKEND=\"yes\"": {
-    "session.store": "yes"
+    "session.cache_backend": "yes"
   },
   "CACHE_BACKEND=\"{\\\"a\\\":1}\"": {
-    "session.store": "{\"a\":1}"
+    "session.cache_backend": "{\"a\":1}"
   },
   "CACHE_BACKEND=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "session.store": "{\"ssl\":\"verify-full\"}"
+    "session.cache_backend": "{\"ssl\":\"verify-full\"}"
   },
   "CACHE_BACKEND=\"{\\\"ssl\\\":true}\"": {
-    "session.store": "{\"ssl\":true}"
+    "session.cache_backend": "{\"ssl\":true}"
   },
   "CACHE_ROOT_DIRECTORY=\"  \"": {
     "cache_root_directory": "  "
@@ -7137,7 +7137,9 @@
   "SESSION_ABANDON_AFTER_SECONDS=\"{\\\"ssl\\\":true}\"": {},
   "SESSION_TTL_SECONDS=\"  \"": {},
   "SESSION_TTL_SECONDS=\"\"": {},
-  "SESSION_TTL_SECONDS=\"-1\"": {},
+  "SESSION_TTL_SECONDS=\"-1\"": {
+    "session.ttl_seconds": -1
+  },
   "SESSION_TTL_SECONDS=\"0\"": {
     "session.ttl_seconds": 0
   },

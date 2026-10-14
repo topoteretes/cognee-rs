@@ -515,7 +515,8 @@ mod tests {
 
     /// `with_session_ttl_seconds` arms an expiry on every key a write
     /// touches; without it nothing expires. Needs a Redis server:
-    /// `REDIS_TEST_URL=redis://127.0.0.1:6379`; skipped when unset.
+    /// `REDIS_TEST_URL=redis://127.0.0.1:6379`; skipped when unset. CI runs
+    /// it in the `redis-session` lane.
     #[tokio::test]
     #[allow(
         clippy::disallowed_methods,
@@ -532,7 +533,9 @@ mod tests {
             .ok()
             .filter(|u| !u.is_empty())
         else {
-            eprintln!("skipping: REDIS_TEST_URL is not set");
+            // The `REDIS_TEST_URL not set … skipping` shape is what the CI
+            // lane's `assert_pg_suite_ran.sh` guard fails on.
+            eprintln!("REDIS_TEST_URL not set — skipping session_ttl_expires_every_written_key");
             return;
         };
         let session = format!("ttl-{}", uuid::Uuid::new_v4());

@@ -146,6 +146,21 @@ macro_rules! unsigned_config_value {
 }
 unsigned_config_value!(u16, u32, u64, usize);
 
+impl ConfigValue for i64 {
+    /// Surrounding whitespace is ignored.
+    fn parse_env(raw: &str) -> Option<Self> {
+        raw.trim().parse().ok()
+    }
+    fn from_json(value: &Value) -> Result<Self, String> {
+        value
+            .as_i64()
+            .ok_or_else(|| "expected an integer (i64)".to_string())
+    }
+    fn to_json(&self) -> Value {
+        Value::from(*self)
+    }
+}
+
 impl ConfigValue for f64 {
     /// Surrounding whitespace is ignored.
     fn parse_env(raw: &str) -> Option<Self> {

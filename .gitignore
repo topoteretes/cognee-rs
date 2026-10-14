@@ -73,6 +73,8 @@ cognee.db
 cognee.db-wal
 cognee.db-shm
 .cognee_system/
+# Default cache_root_directory: the auto-downloaded ONNX embedding model.
+.cognee_cache/
 
 results/
 ghlogs/

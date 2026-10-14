@@ -1570,14 +1570,14 @@ store id is an error.
 
 | Env var | Key (alias) | Default |
 |---|---|---|
-| `COGNEE_SESSION_STORE` | `session.store` (`session_store`, `cache_backend`) | `relational` |
+| `COGNEE_SESSION_STORE` | `session.store` (`session_store`) | _(empty: `CACHE_BACKEND`, else `relational`)_ |
 | `COGNEE_SESSION_DIR` | `session.fs.directory` (`session_directory`; `session-fs` builds only) | `<system_root>/sessions` |
 | `CACHE_HOST` / `CACHE_PORT` | `session.redis.host` / `.port` (`cache_host` / `cache_port`; `session-redis` builds only) | `localhost` / `6379` |
 | `CACHE_USERNAME` / `CACHE_PASSWORD` | `session.redis.username` / `.password` (`cache_*`; `session-redis` builds only) | _(empty)_ |
 | `COGNEE_FEEDBACK_LLM_TIMEOUT_MS` | `session.feedback_llm_timeout_ms` | `8000` (trace-step feedback LLM call) |
 | `SESSION_ABANDON_AFTER_SECONDS` | `session.abandon_after_seconds` (`session_abandon_after_seconds`) | `1800` (idle running session reads as `abandoned`) |
-| `CACHE_BACKEND` | `session.store` (`cache_backend`): read only when `COGNEE_SESSION_STORE` is unset | _(unset)_ |
-| `SESSION_TTL_SECONDS` | `session.ttl_seconds` (`session_ttl_seconds`) | `604800` (7d); `0` never expires |
+| `CACHE_BACKEND` | `session.cache_backend` (`cache_backend`): used only while `session.store` is empty; an id this build lacks falls back to `relational` with a warning | _(empty)_ |
+| `SESSION_TTL_SECONDS` | `session.ttl_seconds` (`session_ttl_seconds`) | `604800` (7d); `0` or a negative value never expires |
 | `CACHING` | `session.caching` (`enable_caching`, `caching`) | `true` |
 | `LLM_RATE_LIMIT_ENABLED` / `_REQUESTS` / `_INTERVAL` | `llm.rate_limit_*` (see [LLM](#llm)) | `false` / `60` / `60` |
 | `EMBEDDING_RATE_LIMIT_ENABLED` / `_REQUESTS` / `_INTERVAL` | … | `false` / `60` / `60` |
@@ -1585,12 +1585,18 @@ store id is an error.
 
 **Python's session-cache settings.** Python selects its session cache with
 `CACHE_BACKEND` (`redis`, `fs`, `sqlite`, `postgres`, `turso`, `tapes`; default
-`sqlite`). Here it is a fallback for `COGNEE_SESSION_STORE`: it selects the store
-only when set, and `COGNEE_SESSION_STORE` wins when both are. `sqlite` and
-`postgres` select the `relational` store (Rust keeps sessions in the relational
-database, not a separate `cache.db`); `fs` and `redis` need their build features,
-and `turso` / `tapes` are not built in, so they are an error like any unregistered
-id. Unset, the default stays `relational`.
+`sqlite`). Here it binds `session.cache_backend`, a fallback for
+`session.store` (`COGNEE_SESSION_STORE`): it is used only while `session.store` is
+empty, and an explicit `session.store` always wins. `sqlite` and `postgres` select
+the `relational` store (Rust keeps sessions in the relational database, not a
+separate `cache.db`); `fs` and `redis` need their build features, and `turso` /
+`tapes` are not built in. Unlike `session.store`, a `CACHE_BACKEND` value naming a
+store this build does not provide is **not** an error: it is logged as a warning
+and the `relational` store is used, so a `.env` shared with Python (which documents
+`CACHE_BACKEND=redis` next to `CACHE_HOST`) cannot take down a stock `cognee-cli`
+or binding, none of which ship the `fs` or `redis` store. To insist on a store and
+fail when it is missing, set `session.store` (`COGNEE_SESSION_STORE`) instead.
+Both unset, the store is `relational`.
 
 `session.ttl_seconds` expires a session's entries, trace steps and graph-context
 snapshot that long after its last write, as Python does. The `redis` store sets a
@@ -1600,9 +1606,15 @@ per row, which the Rust session tables have no column for.
 
 `session.caching = false` (`CACHING=false`) switches session memory off, as in
 Python: whatever the store, session reads are empty, a search answers without
-session history and stores nothing, storing into a session (`remember` with a
-session id) fails with "session memory is disabled", and `auto_feedback` has no
-effect.
+session history and stores nothing, and `auto_feedback` has no effect.
+`remember(data, session_id=…)` still succeeds and only logs "session cache not
+available", as Python's `_add_to_session` does; a typed entry (`remember_entry`:
+Q&A, trace or feedback) fails with "session memory is disabled" before doing any
+work (no `session_records` upsert, no feedback LLM call), as Python's
+`_dispatch_session_entry` raises "Session cache unavailable".
+
+A negative `SESSION_TTL_SECONDS` is accepted and, like `0`, never expires a
+session, as in Python, whose cache adapters set an expiry only for a value `> 0`.
 
 ### How retries and pacing interact
 

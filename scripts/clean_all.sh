@@ -23,8 +23,11 @@
 #                      java/target, capi/build*, ios/.build, python/dist,
 #                      *.egg-info and __pycache__ dirs.
 #   --include-models   also delete target/models. Kept by default: it holds
-#                      downloaded ONNX/tokenizer files (the default
+#                      downloaded ONNX/tokenizer files (the test harness's
+#                      COGNEE_TEST_MODEL_DIR, and the SDK's legacy default
 #                      EMBEDDING_MODEL_PATH) that no check script re-downloads.
+#                      The SDK's current default, ./.cognee_cache/models
+#                      (<cache_root_directory>/models), is never touched.
 #   --xcframework      also delete capi/CogneeSDK.xcframework. Not in --all:
 #                      rebuilding it costs 20–30 min via
 #                      capi/scripts/build_xcframework.sh, and ios/Package.swift
@@ -84,9 +87,11 @@ ALL_ARTIFACTS=(
     "python/"*.egg-info
 )
 
-# target/models holds downloaded embedding models: the default
-# EMBEDDING_MODEL_PATH / EMBEDDING_TOKENIZER_PATH (docs/configuration.md) and
-# the staging source for scripts/android-build-and-deploy.sh. `cargo clean`
+# target/models holds downloaded embedding models: the test harness's model
+# cache (COGNEE_TEST_MODEL_DIR), the SDK's legacy default EMBEDDING_MODEL_PATH /
+# EMBEDDING_TOKENIZER_PATH (now <cache_root_directory>/models, outside target/;
+# docs/configuration.md) and the staging source for
+# scripts/android-build-and-deploy.sh. `cargo clean`
 # removes ./target wholesale and nothing re-downloads them, so stash the dir
 # across the root clean unless --include-models is given.
 MODELS_DIR="target/models"

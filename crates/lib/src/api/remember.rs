@@ -561,15 +561,23 @@ async fn remember_session(
     let user_id_str = owner_id.to_string();
 
     // Store as a Q&A entry (question="" since this is ingestion, not a query).
-    store
+    // With session memory switched off this is not an error: Python's
+    // `_add_to_session` logs and returns, and remember still reports the
+    // session and runs the improve bridge.
+    match store
         .create_qa_entry(session_id, Some(&user_id_str), "", &combined_text, None)
-        .await?;
-
-    info!(
-        session_id = session_id,
-        text_len = combined_text.len(),
-        "remember: stored data in session cache"
-    );
+        .await
+    {
+        Ok(_) => info!(
+            session_id = session_id,
+            text_len = combined_text.len(),
+            "remember: stored data in session cache"
+        ),
+        Err(cognee_session::SessionError::Disabled) => {
+            warn!("remember: session cache not available (enable CACHING=true)");
+        }
+        Err(e) => return Err(e.into()),
+    }
 
     // Optional self-improvement via improve() — inline (synchronous).
     let mut improve_error: Option<String> = None;
@@ -661,6 +669,10 @@ async fn remember_session(
 /// **Behavior**:
 /// - Empty `session_id` returns `Err(ApiError::InvalidArgument)` (Python
 ///   parity: `ValueError` → HTTP 400 at the handler boundary).
+/// - Session memory switched off (`session.caching`, Python's
+///   `CACHING=false`) returns `Err(ApiError::Session(SessionError::Disabled))`
+///   before any other work, for every entry type (Python parity: the
+///   "Session cache unavailable" `RuntimeError`).
 /// - Best-effort pre-upsert via [`SessionLifecycleDb::ensure_and_touch_session`];
 ///   any failure is logged at `debug` level and swallowed (Python parity:
 ///   `try/except` around the pre-upsert at `remember.py:232-253`).
@@ -713,6 +725,11 @@ pub async fn remember_entry(
     let base_session_manager = session_manager.ok_or_else(|| {
         ApiError::InvalidArgument("SessionManager is required for typed memory entries".to_string())
     })?;
+    // Python's `_dispatch_session_entry` raises "Session cache unavailable"
+    // before anything else: no session_records upsert, no feedback LLM call.
+    if !base_session_manager.is_available() {
+        return Err(cognee_session::SessionError::Disabled.into());
+    }
     let sm = if let Some(llm) = llm.clone() {
         Arc::new(base_session_manager.as_ref().clone().with_llm(llm))
     } else {
