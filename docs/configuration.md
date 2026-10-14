@@ -39,7 +39,12 @@ So: `defaults < config.json < .env < env < code`.
 Parsing notes:
 * Booleans accept `true|1|yes|on` and `false|0|no` (`cognee_utils::parse_env_bool`).
 * Empty env values are treated as unset.
-* Numeric vars that fail to parse are ignored.
+* Numeric vars that fail to parse are ignored, and the previous value (usually
+  the default) stays in effect. A value outside the field's integer type counts
+  as a parse failure, so a port of `70000`, `-1` or `5000000000` keeps the
+  default. Any in-range value is accepted as-is, `0` included. Every port key
+  (`VECTOR_DB_PORT`, `GRAPH_DATABASE_PORT`, `DB_PORT`, `CACHE_PORT`) behaves this
+  way, as does every other integer key; the config goldens pin it.
 
 ### Two scopes
 
@@ -1450,9 +1455,9 @@ store id is an error.
 | Env var | Key (alias) | Default |
 |---|---|---|
 | `COGNEE_SESSION_STORE` | `session.store` (`session_store`) | `relational` |
-| `COGNEE_SESSION_DIR` | `session.fs.directory` (`session_directory`; `fs` builds) | `<system_root>/sessions` |
-| `CACHE_HOST` / `CACHE_PORT` | `session.redis.host` / `.port` (`cache_host` / `cache_port`; `redis` builds) | `localhost` / `6379` |
-| `CACHE_USERNAME` / `CACHE_PASSWORD` | `session.redis.username` / `.password` (`cache_*`; `redis` builds) | _(empty)_ |
+| `COGNEE_SESSION_DIR` | `session.fs.directory` (`session_directory`; `session-fs` builds only) | `<system_root>/sessions` |
+| `CACHE_HOST` / `CACHE_PORT` | `session.redis.host` / `.port` (`cache_host` / `cache_port`; `session-redis` builds only) | `localhost` / `6379` |
+| `CACHE_USERNAME` / `CACHE_PASSWORD` | `session.redis.username` / `.password` (`cache_*`; `session-redis` builds only) | _(empty)_ |
 | `COGNEE_FEEDBACK_LLM_TIMEOUT_MS` | `session.feedback_llm_timeout_ms` | `8000` (trace-step feedback LLM call) |
 | `SESSION_ABANDON_AFTER_SECONDS` | `session.abandon_after_seconds` (`session_abandon_after_seconds`) | `1800` (idle running session reads as `abandoned`) |
 | `CACHE_BACKEND` | `cache_backend` | `fs` (Python parity; not read — use `session.store`) |

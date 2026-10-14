@@ -218,6 +218,11 @@ name = "pg_shared_db_single_stack"
 path = "tests/pg_shared_db_single_stack.rs"
 required-features = ["pggraph", "pgvector", "postgres"]
 
+[[test]]
+name = "config_key_golden_session_stores"
+path = "tests/config_key_golden_session_stores.rs"
+required-features = ["session-fs", "session-redis"]
+
 [dev-dependencies]
 cognee-test-utils = { path = "../test-utils" }
 cognee-storage = { path = "../storage", features = ["testing"] }

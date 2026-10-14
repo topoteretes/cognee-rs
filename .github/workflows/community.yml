@@ -108,6 +108,18 @@ jobs:
       - name: config-boundary ratchet
         run: bash scripts/check_env_boundary.sh
 
+      # The `session.fs` / `session.redis` config sections exist only when
+      # `cognee`'s `session-fs` / `session-redis` features are on, and nothing
+      # in the workspace enables them, so every other run of these goldens
+      # compiles them out. This is the only lane that pins their env vars and
+      # keys. `config_key_golden_session_stores` declares required-features, so
+      # dropping `--features` here fails loudly instead of running zero tests.
+      # Mirror of the step of the same name in ci.yml (lint).
+      - name: Test (config key golden, feature-gated session stores)
+        run: |
+          cargo test -p cognee --features session-fs,session-redis \
+            --test config_key_golden --test config_key_golden_session_stores
+
   # ── Secret-free workspace tests ───────────────────────────────────────
   test-no-secrets:
     name: Test (no secrets)

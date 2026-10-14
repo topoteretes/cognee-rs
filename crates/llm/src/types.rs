@@ -147,9 +147,18 @@ pub struct TokenUsage {
 /// then legacy `functions`, then `response_format: {"type": "json_object"}` —
 /// because an OpenAI-compatible endpoint may accept any one of the three and
 /// reject the others, and nothing in the protocol advertises which. The cascade
-/// is a Rust-only mechanism: Python pins one instructor mode per provider from a
-/// static table (`instructor_modes.py`) and exposes `llm_instructor_mode` to
-/// override it. This knob is the counterpart of that override.
+/// is a Rust-only mechanism: Python's `instructor` framework pins one instructor
+/// mode per provider from a static table (`instructor_modes.py`) and exposes
+/// `llm_instructor_mode` to override it.
+///
+/// This knob covers similar ground but is **not** an alias of that override, and
+/// Rust does not read `LLM_INSTRUCTOR_MODE`. Python reads it only on the
+/// `instructor` framework, not on its default `litellm_native` framework. It
+/// takes `instructor.Mode` values (`json_schema_mode`, `tool_call`,
+/// `anthropic_tools`, …), and empty there means the provider's table entry, not
+/// a cascade. It applies to every adapter, while this knob applies only to the
+/// OpenAI-compatible adapter. See docs/configuration.md § "Structured-output
+/// request shape" for a value translation.
 ///
 /// [`Self::Auto`] keeps the cascade, bounded per mode by the adapter's own miss
 /// probe. [`Self::Tools`], [`Self::Functions`] and [`Self::Json`] each **pin**

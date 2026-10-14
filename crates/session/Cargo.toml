@@ -16,8 +16,8 @@ workspace = true
 
 [features]
 default = []
-# Opt-in: not enabled by any aggregating crate; build with
-# -p cognee-session --features redis
+# Opt-in. `cognee`'s `session-redis` feature (via `cognee-components/session-redis`)
+# enables it and registers the store; nothing in the workspace turns that on.
 redis = ["dep:redis"]
 fs = []
 # Session entries in the relational database, through `cognee_database::SessionQaDb`.

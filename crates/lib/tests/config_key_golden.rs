@@ -11,11 +11,12 @@
 //! to them is a behaviour change; review the diff. Regenerate with
 //! `UPDATE_GOLDEN=1 cargo test -p cognee --test config_key_golden`.
 //!
-//! Config sections a cargo feature compiles in (see [`FEATURE_SECTIONS`]) are
-//! pinned in their own snapshots, `<feature>.env_overlay.json` and
-//! `<feature>.generic_set.json`, so the default-build snapshots stay valid
-//! whatever is enabled. Regenerate those with the features on:
-//! `UPDATE_GOLDEN=1 cargo test -p cognee --features session-fs,session-redis --test config_key_golden`.
+//! Config sections that only a cargo feature compiles in (see
+//! `config_key_golden_support::FEATURE_SECTIONS`) are left out of these
+//! snapshots, so the snapshots stay valid whatever is enabled. When the registry
+//! does register one, `registry_binds_exactly_the_pinned_env_vars` expects its
+//! env vars too. Their own snapshots are pinned by
+//! `config_key_golden_session_stores`.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -26,11 +27,16 @@
     reason = "tests drive configuration through the process env"
 )]
 
-use std::collections::BTreeMap;
-use std::path::PathBuf;
+mod config_key_golden_support;
 
-use cognee::config::{ConfigError, ConfigManager, MapEnv, Settings};
-use serde_json::{Map, Value, json};
+use std::collections::BTreeMap;
+
+use cognee::config::{ConfigManager, MapEnv, Settings};
+use config_key_golden_support::{
+    FEATURE_SECTIONS, check_golden, diff_from_default, env_probe_cases, overlay, section_set_keys,
+    set_probe_cases,
+};
+use serde_json::{Value, json};
 
 /// Every env var `Settings::overlay_from` binds, in the order the loader has
 /// always read them.
@@ -186,92 +192,15 @@ const ENV_VARS: &[&str] = &[
     "COGNEE_PGVECTOR_MAINTENANCE_WORK_MEM_MB",
 ];
 
-/// A config section a cargo feature of `cognee` compiles in, with the env vars
-/// it binds. The default-build lists above exclude these; a build with the
-/// feature pins them through [`pinned_env_vars`] and the per-feature goldens.
-struct FeatureSection {
-    /// The `cognee` cargo feature; also the golden file prefix.
-    feature: &'static str,
-    /// Key prefix of the section's settings (`<section>.`).
-    key_prefix: &'static str,
-    /// Every env var the section binds.
-    env_vars: &'static [&'static str],
-}
-
-/// Every feature-gated section, enabled or not, so `set_keys` can leave
-/// them out of the default-build golden.
-const FEATURE_SECTIONS: &[FeatureSection] = &[
-    FeatureSection {
-        feature: "session-fs",
-        key_prefix: "session.fs.",
-        env_vars: &["COGNEE_SESSION_DIR"],
-    },
-    FeatureSection {
-        feature: "session-redis",
-        key_prefix: "session.redis.",
-        env_vars: &[
-            "CACHE_HOST",
-            "CACHE_PORT",
-            "CACHE_USERNAME",
-            "CACHE_PASSWORD",
-        ],
-    },
-];
-
-/// The feature-gated sections this build compiles in.
-fn enabled_feature_sections() -> Vec<&'static FeatureSection> {
-    let enabled = [
-        ("session-fs", cfg!(feature = "session-fs")),
-        ("session-redis", cfg!(feature = "session-redis")),
-    ];
-    FEATURE_SECTIONS
-        .iter()
-        .filter(|fs| {
-            enabled
-                .iter()
-                .find(|(name, _)| *name == fs.feature)
-                .map(|(_, on)| *on)
-                .unwrap_or_else(|| panic!("feature {} missing from `enabled`", fs.feature))
-        })
-        .collect()
-}
-
-/// Every env var this build is expected to bind: the default build's plus
-/// those of each enabled feature-gated section.
+/// Every env var this build is expected to bind: the default build's, plus
+/// those of each feature-gated section the registry actually registers.
 fn pinned_env_vars() -> Vec<&'static str> {
     let mut vars = ENV_VARS.to_vec();
-    for fs in enabled_feature_sections() {
+    for fs in FEATURE_SECTIONS.iter().filter(|fs| fs.is_registered()) {
         vars.extend_from_slice(fs.env_vars);
     }
     vars
 }
-
-/// Raw env values probed against every variable: empty and whitespace,
-/// numbers in and out of each integer range, every bool spelling, and JSON.
-const ENV_PROBES: &[&str] = &[
-    "v",
-    "",
-    "  ",
-    "0",
-    "1",
-    "42",
-    "70000",
-    "5000000000",
-    "-1",
-    "1.5",
-    "true",
-    "TRUE",
-    "on",
-    "yes",
-    "no",
-    "false",
-    "abc",
-    "{\"a\":1}",
-    "[1]",
-    "{\"ssl\":true}",
-    "{\"ssl\":\"verify-full\"}",
-    "require",
-];
 
 /// Primary/alias pairs, probed for precedence.
 const ENV_ALIASES: &[(&str, &str)] = &[
@@ -288,71 +217,10 @@ const ENV_ALIASES: &[(&str, &str)] = &[
     ("ANTHROPIC_BASE_URL", "ANTHROPIC_API_BASE"),
 ];
 
-/// JSON values probed against every key.
-fn set_probes() -> Vec<Value> {
-    vec![
-        json!("s"),
-        json!(""),
-        json!("1"),
-        json!("true"),
-        json!(0),
-        json!(1),
-        json!(70000),
-        json!(5_000_000_000_u64),
-        json!(-1),
-        json!(1.5),
-        json!(true),
-        json!(false),
-        Value::Null,
-        json!({"a": 1}),
-        json!([1]),
-    ]
-}
-
-/// The fields of `s` that differ from `Settings::default()`. The two
-/// `#[serde(skip)]` fields are compared by hand so they are covered too.
-/// Effective values (every `Settings` field and every built-in section
-/// setting, current or default) that differ from a default configuration.
-fn diff_from_default(s: &Settings) -> Value {
-    let default = Settings::default();
-    let now = ConfigManager::new(s.clone()).snapshot(None);
-    let base = ConfigManager::new(default.clone()).snapshot(None);
-    let mut out = Map::new();
-    for (key, value) in now.as_object().unwrap() {
-        if base.get(key) != Some(value) {
-            out.insert(key.clone(), value.clone());
-        }
-    }
-    if s.summarization_schema != default.summarization_schema {
-        out.insert(
-            "summarization_schema".into(),
-            s.summarization_schema.clone().unwrap_or(Value::Null),
-        );
-    }
-    Value::Object(out)
-}
-
-fn overlay(env: &MapEnv) -> Value {
-    let mut s = Settings::default();
-    s.overlay_from(env);
-    diff_from_default(&s)
-}
-
-fn set_outcome(key: &str, value: Value) -> Value {
-    let cm = ConfigManager::new(Settings::default());
-    match cm.set(key, value) {
-        Ok(()) => json!({ "ok": diff_from_default(&cm.read()) }),
-        Err(ConfigError::UnknownKey(k)) => json!({ "err": "UnknownKey", "key": k }),
-        Err(ConfigError::TypeMismatch { key, .. }) => {
-            json!({ "err": "TypeMismatch", "key": key })
-        }
-    }
-}
-
 /// Every key `ConfigManager::set` is asked about: all serialized `Settings`
 /// fields, the two `#[serde(skip)]` fields, the `embedding_model` alias, and
-/// a key that does not exist. Settings of feature-gated sections are left
-/// out; [`feature_section_set_keys`] covers them.
+/// a key that does not exist. Feature-gated sections are left out;
+/// `config_key_golden_session_stores` covers them.
 fn set_keys() -> Vec<String> {
     let mut keys: Vec<String> = serde_json::to_value(Settings::default())
         .unwrap()
@@ -371,78 +239,10 @@ fn set_keys() -> Vec<String> {
         .into_iter()
         .map(String::from),
     );
-    for def in cognee::config::builtin_schema().key_defs() {
-        if FEATURE_SECTIONS
-            .iter()
-            .any(|fs| def.key.starts_with(fs.key_prefix))
-        {
-            continue;
-        }
-        keys.push(def.key.to_string());
-        keys.extend(def.aliases.iter().map(|a| a.to_string()));
-    }
+    keys.extend(section_set_keys(None));
     keys.sort();
     keys.dedup();
     keys
-}
-
-/// The keys and flat aliases of one feature-gated section.
-fn feature_section_set_keys(fs: &FeatureSection) -> Vec<String> {
-    let mut keys = Vec::new();
-    for def in cognee::config::builtin_schema().key_defs() {
-        if def.key.starts_with(fs.key_prefix) {
-            keys.push(def.key.to_string());
-            keys.extend(def.aliases.iter().map(|a| a.to_string()));
-        }
-    }
-    keys.sort();
-    keys.dedup();
-    keys
-}
-
-fn check_golden(name: &str, actual: &Value) {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/golden")
-        .join(name);
-    let rendered = serde_json::to_string_pretty(actual).unwrap() + "\n";
-    if std::env::var_os("UPDATE_GOLDEN").is_some() {
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, &rendered).unwrap();
-        return;
-    }
-    let expected = std::fs::read_to_string(&path).unwrap_or_else(|e| {
-        panic!(
-            "missing golden {}: {e}. Run with UPDATE_GOLDEN=1 to create it.",
-            path.display()
-        )
-    });
-    if expected != rendered {
-        let expected: Value = serde_json::from_str(&expected).unwrap();
-        // Name the first differing case so the failure is actionable.
-        let (exp, act) = (expected.as_object().unwrap(), actual.as_object().unwrap());
-        let first = exp
-            .keys()
-            .chain(act.keys())
-            .find(|k| exp.get(*k) != act.get(*k))
-            .cloned()
-            .unwrap_or_default();
-        panic!(
-            "golden {name} differs, first at {first:?}:\n  expected {}\n  actual   {}\n\
-             If the change is intended, re-run with UPDATE_GOLDEN=1 and review the diff.",
-            exp.get(&first).map(Value::to_string).unwrap_or_default(),
-            act.get(&first).map(Value::to_string).unwrap_or_default(),
-        );
-    }
-}
-
-/// Env-overlay cases for every probe against each of `vars`.
-fn env_probe_cases(vars: &[&str], cases: &mut BTreeMap<String, Value>) {
-    for var in vars {
-        for probe in ENV_PROBES {
-            let env = MapEnv::new().with(*var, *probe);
-            cases.insert(format!("{var}={probe:?}"), overlay(&env));
-        }
-    }
 }
 
 #[test]
@@ -470,11 +270,7 @@ fn env_overlay_matches_golden() {
 #[test]
 fn generic_set_matches_golden() {
     let mut cases = BTreeMap::new();
-    for key in set_keys() {
-        for probe in set_probes() {
-            cases.insert(format!("{key} <- {probe}"), set_outcome(&key, probe));
-        }
-    }
+    set_probe_cases(&set_keys(), &mut cases);
     // `system_root_directory` cascades into the paths derived from it.
     let cm = ConfigManager::new(Settings::default());
     cm.set("graph_file_path", json!("./.cognee_system/custom_graph"))
@@ -521,37 +317,4 @@ fn registry_binds_exactly_the_pinned_env_vars() {
     let mut pinned = pinned_env_vars();
     pinned.sort_unstable();
     assert_eq!(bound, pinned);
-}
-
-/// Each enabled feature-gated section: its env binding and its keys, pinned
-/// in `<feature>.env_overlay.json` / `<feature>.generic_set.json`. A no-op
-/// in a build with none enabled; CI runs it with them on.
-#[test]
-fn feature_sections_match_golden() {
-    for fs in enabled_feature_sections() {
-        let mut env_cases = BTreeMap::new();
-        env_probe_cases(fs.env_vars, &mut env_cases);
-        check_golden(
-            &format!("{}.env_overlay.json", fs.feature),
-            &Value::Object(env_cases.into_iter().collect()),
-        );
-
-        let keys = feature_section_set_keys(fs);
-        assert!(
-            !keys.is_empty(),
-            "feature {} is enabled but registers no `{}*` keys",
-            fs.feature,
-            fs.key_prefix
-        );
-        let mut set_cases = BTreeMap::new();
-        for key in keys {
-            for probe in set_probes() {
-                set_cases.insert(format!("{key} <- {probe}"), set_outcome(&key, probe));
-            }
-        }
-        check_golden(
-            &format!("{}.generic_set.json", fs.feature),
-            &Value::Object(set_cases.into_iter().collect()),
-        );
-    }
 }

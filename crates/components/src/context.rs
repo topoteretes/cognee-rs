@@ -276,9 +276,11 @@ pub struct LlmInputs {
     /// send, from `LLM_STRUCTURED_OUTPUT_MODE` (`auto` | `json_schema` |
     /// `tools` | `functions` | `json`). [`StructuredOutputMode::Auto`] keeps the
     /// three-mode cascade; `tools` / `functions` / `json` each pin that one
-    /// shape and never send the others. The counterpart of Python's
-    /// `llm_instructor_mode`. Applied via
-    /// `OpenAIAdapter::with_structured_output_mode`.
+    /// shape and never send the others. Applied via
+    /// `OpenAIAdapter::with_structured_output_mode`. Rust deliberately does not
+    /// read Python's `llm_instructor_mode` (`LLM_INSTRUCTOR_MODE`): it takes
+    /// different values with different semantics. See docs/configuration.md
+    /// § "Structured-output request shape".
     ///
     /// `json_schema` is **not** a pin — it puts constrained decoding *ahead* of
     /// the cascade and demotes back into it when the endpoint refuses the

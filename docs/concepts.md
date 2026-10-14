@@ -89,8 +89,11 @@ permanent graph memory (see the memory API in [operations.md](operations.md)).
 The store backend is pluggable.
 
 Rust: `SessionStore` trait in [`cognee-session`](../crates/session/), with
-`FsSessionStore` (feature `fs`), `RedisSessionStore`, and `RelationalSessionStore`
-backends.
+`FsSessionStore` (crate feature `fs`), `RedisSessionStore` (crate feature `redis`),
+and `RelationalSessionStore` backends. Setting `session.store = "fs"` or `"redis"`
+requires a `cognee` built with its `session-fs` / `session-redis` feature. Those
+features register the store factory and its `session.fs` / `session.redis` config
+section; enabling `cognee-session/fs` or `cognee-session/redis` alone does neither.
 
 ### Node Sets
 

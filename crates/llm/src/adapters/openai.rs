@@ -104,7 +104,7 @@ use crate::types::{
 ///
 /// Python needs no equivalent: it pins one instructor mode per provider from a
 /// static table (`instructor_modes.py`) and stays there, overridable by
-/// `llm_instructor_mode`. The cascade is Rust-only, so bounding it is bounding
+/// `llm_instructor_mode` on its `instructor` framework. The cascade is Rust-only, so bounding it is bounding
 /// our own mechanism rather than diverging from Python.
 ///
 /// The memory is deliberately **not** permanent. Once tripped it still lets one
@@ -962,9 +962,9 @@ impl OpenAIAdapter {
     /// Choose the structured-output request shape.
     ///
     /// Wired from `LLM_STRUCTURED_OUTPUT_MODE` (`auto` | `json_schema` | `tools`
-    /// | `functions` | `json`), the counterpart of Python's
-    /// `llm_instructor_mode`. See [`StructuredOutputMode`] for what each value
-    /// sends and [`structured_output_mode`](Self::structured_output_mode) for
+    /// | `functions` | `json`). It is not an alias of Python's
+    /// `llm_instructor_mode`. See [`StructuredOutputMode`] for why, for what
+    /// each value sends, and [`structured_output_mode`](Self::structured_output_mode) for
     /// why this exists alongside the miss probe.
     ///
     /// `tools`, `functions` and `json` each **pin** one shape and disable the
