@@ -313,7 +313,9 @@ static KEYS: &[KeySpec] = &[
     },
     // -- LLM ----------------------------------------------------------------
     row!(llm_max_parallel_requests: u32, env ["LLM_MAX_PARALLEL_REQUESTS"]),
-    row!(graph_prompt_path: str, env []),
+    // Python's `LLMConfig.graph_prompt_path` (a `BaseSettings` field, so
+    // `GRAPH_PROMPT_PATH` binds it there too).
+    row!(graph_prompt_path: str, env ["GRAPH_PROMPT_PATH"]),
     // -- Chunking -----------------------------------------------------------
     row!(chunk_strategy: str, env []),
     row!(chunk_engine: str, env []),

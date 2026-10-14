@@ -12,11 +12,12 @@ use crate::cli::{AddAndCognifyArgs, ChunkerArg};
 use crate::error::CliError;
 
 pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
-    // `--dataset-name`, else the `default_dataset_name` setting.
+    // `--dataset-name`, else the `default_dataset_name` setting (`main_dataset`
+    // when it is blank).
     let dataset_name = args
         .dataset_name
         .clone()
-        .unwrap_or_else(|| cm.settings().default_dataset_name.clone());
+        .unwrap_or_else(|| cm.settings().effective_default_dataset_name().to_owned());
     let settings = cm.settings();
     // `None` all the way down selects the auto-calculation (Python `chunk_size=None`).
     let effective_chunk_size = args.chunk_size.or(settings.chunk_size);

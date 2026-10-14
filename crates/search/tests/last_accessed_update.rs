@@ -288,5 +288,30 @@ async fn test_search_updates_last_accessed_timestamp() {
     );
 
     println!("Monotonic check passed: {second_last_accessed} >= {first_ts}");
+
+    // ── Third search: the default path (no only_context, no datasets) ────────
+    // The orchestrator does not fetch the context for scoping here, so it
+    // must fetch it for tracking (Python tracks on every retrieval).
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let before_default_search = Utc::now();
+    orchestrator
+        .search(&SearchRequest {
+            only_context: Some(false),
+            ..search_request.clone()
+        })
+        .await
+        .expect("default-path search should succeed");
+    let third_last_accessed = ops::data::get_data(&database, data_id)
+        .await
+        .expect("get_data after default-path search")
+        .expect("data should exist")
+        .last_accessed
+        .expect("last_accessed should be set after default-path search");
+    assert!(
+        third_last_accessed >= before_default_search,
+        "a default-path search must update last_accessed: \
+         {third_last_accessed} >= {before_default_search}"
+    );
+
     println!("test_search_updates_last_accessed_timestamp PASSED");
 }

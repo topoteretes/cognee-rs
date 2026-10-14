@@ -26,6 +26,53 @@ use crate::error::CognifyError;
 /// text closes that gap. Any future re-sync from Python MUST preserve this line.
 const DEFAULT_GRAPH_PROMPT: &str = include_str!("prompts/generate_graph_prompt.txt");
 
+/// Python's file name for [`DEFAULT_GRAPH_PROMPT`].
+pub const DEFAULT_GRAPH_PROMPT_NAME: &str = "generate_graph_prompt.txt";
+
+/// The graph-extraction prompt variants Python ships beside its default in
+/// `cognee/infrastructure/llm/prompts`, keyed by their Python file name.
+/// Python resolves a relative `graph_prompt_path` against that directory, so
+/// these names select a prompt there; Rust compiles them in. Vendored verbatim
+/// (they contain no template syntax, so they are sent as-is in both SDKs).
+const GRAPH_PROMPT_VARIANTS: &[(&str, &str)] = &[
+    (
+        "generate_graph_prompt_strict.txt",
+        include_str!("prompts/generate_graph_prompt_strict.txt"),
+    ),
+    (
+        "generate_graph_prompt_simple.txt",
+        include_str!("prompts/generate_graph_prompt_simple.txt"),
+    ),
+    (
+        "generate_graph_prompt_guided.txt",
+        include_str!("prompts/generate_graph_prompt_guided.txt"),
+    ),
+    (
+        "generate_graph_prompt_oneshot.txt",
+        include_str!("prompts/generate_graph_prompt_oneshot.txt"),
+    ),
+];
+
+/// The compiled-in graph-extraction prompt Python ships under `name` (a file
+/// name in Python's `cognee/infrastructure/llm/prompts`), or `None` when
+/// `name` is not one of them. [`DEFAULT_GRAPH_PROMPT_NAME`] returns the
+/// default prompt.
+pub fn builtin_graph_prompt(name: &str) -> Option<&'static str> {
+    if name == DEFAULT_GRAPH_PROMPT_NAME {
+        return Some(DEFAULT_GRAPH_PROMPT);
+    }
+    GRAPH_PROMPT_VARIANTS
+        .iter()
+        .find(|(file, _)| *file == name)
+        .map(|(_, prompt)| *prompt)
+}
+
+/// The file names [`builtin_graph_prompt`] recognizes, default first.
+pub fn builtin_graph_prompt_names() -> impl Iterator<Item = &'static str> {
+    std::iter::once(DEFAULT_GRAPH_PROMPT_NAME)
+        .chain(GRAPH_PROMPT_VARIANTS.iter().map(|(file, _)| *file))
+}
+
 /// Appended to the system prompt when extracting a group of chunks in one call.
 /// It turns the single-graph task into a per-chunk one so results map back by
 /// index (issue #19, multi-chunk batching).
@@ -613,6 +660,30 @@ mod tests {
         // Both should get the same node
         assert_eq!(via_extract.node_count(), via_facts.node_count());
         assert_eq!(via_extract.nodes[0].id, via_facts.nodes[0].id);
+    }
+
+    #[test]
+    fn builtin_graph_prompt_resolves_python_prompt_names() {
+        assert_eq!(
+            builtin_graph_prompt("generate_graph_prompt.txt"),
+            Some(DEFAULT_GRAPH_PROMPT)
+        );
+        for name in [
+            "generate_graph_prompt_strict.txt",
+            "generate_graph_prompt_simple.txt",
+            "generate_graph_prompt_guided.txt",
+            "generate_graph_prompt_oneshot.txt",
+        ] {
+            let prompt = builtin_graph_prompt(name).expect("known variant");
+            assert!(!prompt.trim().is_empty(), "{name} is empty");
+            assert_ne!(prompt, DEFAULT_GRAPH_PROMPT, "{name} is the default");
+        }
+        assert_eq!(builtin_graph_prompt("generate_graph_prompt_nope.txt"), None);
+        assert_eq!(
+            builtin_graph_prompt("./generate_graph_prompt_simple.txt"),
+            None
+        );
+        assert_eq!(builtin_graph_prompt_names().count(), 5);
     }
 
     #[test]

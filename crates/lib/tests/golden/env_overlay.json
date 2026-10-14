@@ -4826,6 +4826,70 @@
   "GRAPH_MAX_DB_SIZE=\"{\\\"a\\\":1}\"": {},
   "GRAPH_MAX_DB_SIZE=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
   "GRAPH_MAX_DB_SIZE=\"{\\\"ssl\\\":true}\"": {},
+  "GRAPH_PROMPT_PATH=\"  \"": {
+    "graph_prompt_path": "  "
+  },
+  "GRAPH_PROMPT_PATH=\"\"": {},
+  "GRAPH_PROMPT_PATH=\"-1\"": {
+    "graph_prompt_path": "-1"
+  },
+  "GRAPH_PROMPT_PATH=\"0\"": {
+    "graph_prompt_path": "0"
+  },
+  "GRAPH_PROMPT_PATH=\"1\"": {
+    "graph_prompt_path": "1"
+  },
+  "GRAPH_PROMPT_PATH=\"1.5\"": {
+    "graph_prompt_path": "1.5"
+  },
+  "GRAPH_PROMPT_PATH=\"42\"": {
+    "graph_prompt_path": "42"
+  },
+  "GRAPH_PROMPT_PATH=\"5000000000\"": {
+    "graph_prompt_path": "5000000000"
+  },
+  "GRAPH_PROMPT_PATH=\"70000\"": {
+    "graph_prompt_path": "70000"
+  },
+  "GRAPH_PROMPT_PATH=\"TRUE\"": {
+    "graph_prompt_path": "TRUE"
+  },
+  "GRAPH_PROMPT_PATH=\"[1]\"": {
+    "graph_prompt_path": "[1]"
+  },
+  "GRAPH_PROMPT_PATH=\"abc\"": {
+    "graph_prompt_path": "abc"
+  },
+  "GRAPH_PROMPT_PATH=\"false\"": {
+    "graph_prompt_path": "false"
+  },
+  "GRAPH_PROMPT_PATH=\"no\"": {
+    "graph_prompt_path": "no"
+  },
+  "GRAPH_PROMPT_PATH=\"on\"": {
+    "graph_prompt_path": "on"
+  },
+  "GRAPH_PROMPT_PATH=\"require\"": {
+    "graph_prompt_path": "require"
+  },
+  "GRAPH_PROMPT_PATH=\"true\"": {
+    "graph_prompt_path": "true"
+  },
+  "GRAPH_PROMPT_PATH=\"v\"": {
+    "graph_prompt_path": "v"
+  },
+  "GRAPH_PROMPT_PATH=\"yes\"": {
+    "graph_prompt_path": "yes"
+  },
+  "GRAPH_PROMPT_PATH=\"{\\\"a\\\":1}\"": {
+    "graph_prompt_path": "{\"a\":1}"
+  },
+  "GRAPH_PROMPT_PATH=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
+    "graph_prompt_path": "{\"ssl\":\"verify-full\"}"
+  },
+  "GRAPH_PROMPT_PATH=\"{\\\"ssl\\\":true}\"": {
+    "graph_prompt_path": "{\"ssl\":true}"
+  },
   "HUGGINGFACE_TOKENIZER=\"  \"": {
     "embedding.ollama.huggingface_tokenizer": "  "
   },

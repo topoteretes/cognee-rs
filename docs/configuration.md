@@ -1039,7 +1039,7 @@ prompt and the summary schema:
 |---|---|---|---|
 | `CHUNKS_PER_BATCH` | `cognify.chunks_per_batch` (`chunks_per_batch`) | chunks per graph-extraction batch (Python's `CognifyConfig.chunks_per_batch`); `0` keeps the default | `2000` |
 | `COGNEE_DATA_PER_BATCH` | `cognify.data_per_batch` (`data_per_batch`) | data items per temporal-cognify batch (Python's `data_per_batch` parameter, which has no env var); `0` keeps the default | `20` |
-| — | `graph_prompt_path` | graph-extraction system prompt file. The default (Python's file name for the built-in prompt) and an empty value use the compiled-in prompt; any other value is read as the prompt text, a relative path against the working directory. An unreadable file keeps the built-in prompt, with a warning. Unlike Python, the file is sent verbatim, not rendered as a template. | `generate_graph_prompt.txt` |
+| `GRAPH_PROMPT_PATH` | `graph_prompt_path` | graph-extraction system prompt. The default and an empty value use the compiled-in prompt. The names of the other prompts Python ships in its prompts directory — `generate_graph_prompt_strict.txt`, `generate_graph_prompt_simple.txt`, `generate_graph_prompt_guided.txt`, `generate_graph_prompt_oneshot.txt` — select those prompts, compiled in, as Python resolves a relative name against that directory. Any other value is a file read as the prompt text, a relative path against the working directory. An unreadable file keeps the built-in prompt, with a warning. Unlike Python, a file is sent verbatim, not rendered as a template (the built-in prompts contain no template syntax). | `generate_graph_prompt.txt` |
 | — | `summarization_schema` (code only: `ConfigManager::set_summarization_schema`, `set`) | JSON schema of the summary output (Python's `summarization_model`); must have a string `summary` | _(unset — the built-in `SummarizedContent` shape)_ |
 
 ### `COGNEE_LEGACY_PER_WORD_TOKEN_COUNT` — a deliberate divergence from Python
@@ -1296,7 +1296,7 @@ Three `Settings` fields tune the search orchestrator itself, lowered by the same
 
 | Env var | `Settings` field | Default | Effect |
 |---|---|---|---|
-| `ENABLE_LAST_ACCESSED` | `enable_last_accessed` | `false` | Update `last_accessed` on the source data records of each search's context (Python's flag, also default off). |
+| `ENABLE_LAST_ACCESSED` | `enable_last_accessed` | `false` | Update `last_accessed` on the source data records of every search's retrieved context, as Python does on every retrieval (Python's flag, also default off). On a plain completion search the context is then fetched by the search itself and handed to the retriever, so it is still fetched once. `FEEDBACK` searches retrieve no data and are not tracked. |
 | `AUTO_FEEDBACK` | `auto_feedback` | `false` | Detect feedback in a session search's message (one extra LLM call per session turn) when the request leaves `auto_feedback_detection` unset. **Python defaults it to `true`**; Rust keeps it off so a session search makes no extra LLM call unless asked. |
 | — | `default_system_prompt_path` | `answer_simple_question.txt` | System prompt file for a search that names neither a system prompt nor a prompt path. The default (Python's file name for the built-in prompt) and an empty value leave each retriever's own compiled-in prompt; any other value is read as a file. Rust-only (Python has no such setting). |
 
@@ -1468,7 +1468,7 @@ themselves get the configured backend from
 | `COGNEE_DATA_ROOT_DIRECTORY` | `data_root_directory` | `./.data_storage` |
 | `CACHE_ROOT_DIRECTORY` | `cache_root_directory` | `./.cognee_cache` |
 | `COGNEE_DEFAULT_USER_ID` | `default_user_id` | nil UUID |
-| `COGNEE_DEFAULT_DATASET_NAME` | `default_dataset_name` | `main_dataset` (the dataset `cognee-cli add`/`add-and-cognify`/`remember`/`improve` and the Python compat `add`/`cognify`/`add_and_cognify` use without an explicit one) |
+| `COGNEE_DEFAULT_DATASET_NAME` | `default_dataset_name` | `main_dataset` (the dataset `cognee-cli add`/`add-and-cognify`/`remember`/`improve` and the Python compat `add`/`cognify`/`add_and_cognify` use without an explicit one; a blank value falls back to `main_dataset`) |
 | `DEFAULT_USER_EMAIL` / `DEFAULT_USER_PASSWORD` | … | `default_user@example.com` / _(empty)_ |
 | `ENABLE_BACKEND_ACCESS_CONTROL` | `enable_access_control` | `false`; `true` only with application-provided access control (below) |
 

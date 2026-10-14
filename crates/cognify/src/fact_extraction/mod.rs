@@ -8,5 +8,7 @@
 pub mod extractor;
 pub mod models;
 
-pub use extractor::FactExtractor;
+pub use extractor::{
+    DEFAULT_GRAPH_PROMPT_NAME, FactExtractor, builtin_graph_prompt, builtin_graph_prompt_names,
+};
 pub use models::{Edge, GraphModel, KnowledgeGraph, Node};

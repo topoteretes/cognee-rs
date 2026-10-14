@@ -135,9 +135,11 @@ def _handle() -> Cognee:
 
 def _default_dataset_name() -> str:
     """The handle's ``default_dataset_name`` setting
-    (``COGNEE_DEFAULT_DATASET_NAME``, default ``"main_dataset"``)."""
+    (``COGNEE_DEFAULT_DATASET_NAME``, default ``"main_dataset"``). A blank
+    value falls back to ``"main_dataset"``, as the Rust
+    ``Settings::effective_default_dataset_name`` the CLI uses does."""
     name = _handle().config.get().get("default_dataset_name")
-    return name if isinstance(name, str) and name else "main_dataset"
+    return name if isinstance(name, str) and name.strip() else "main_dataset"
 
 
 def reset_default_handle() -> None:

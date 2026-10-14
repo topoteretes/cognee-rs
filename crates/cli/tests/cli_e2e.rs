@@ -507,10 +507,10 @@ fn add_succeeds_with_local_temp_paths() {
         .success();
 }
 
-/// Without `--dataset-name`, `add` writes into the `default_dataset_name`
-/// setting (`COGNEE_DEFAULT_DATASET_NAME`), not a hard-coded `main_dataset`.
-#[test]
-fn add_defaults_to_the_configured_dataset_name() {
+/// Runs `cognee-cli add` without `--dataset-name` and with
+/// `COGNEE_DEFAULT_DATASET_NAME=<default_dataset_name>`, returning the names of
+/// the datasets it created.
+fn datasets_after_add_with_default_name(default_dataset_name: &str) -> Vec<String> {
     let config_home = TempDir::new().expect("temp dir should be created");
     let workdir = TempDir::new().expect("temp dir should be created");
     let db_file_path = workdir.path().join("cognee.db");
@@ -530,20 +530,38 @@ fn add_defaults_to_the_configured_dataset_name() {
     );
 
     make_cmd_in(&config_home, workdir.path())
-        .env("COGNEE_DEFAULT_DATASET_NAME", "configured_default")
+        .env("COGNEE_DEFAULT_DATASET_NAME", default_dataset_name)
         .args(["add", "hello from the default dataset"])
         .assert()
         .success();
 
     let conn = Connection::open(&db_file_path).expect("open sqlite database");
-    let names: Vec<String> = conn
-        .prepare("SELECT name FROM datasets")
+    conn.prepare("SELECT name FROM datasets")
         .expect("prepare")
         .query_map([], |row| row.get(0))
         .expect("query datasets")
         .collect::<Result<_, _>>()
-        .expect("read dataset names");
-    assert_eq!(names, vec!["configured_default".to_string()]);
+        .expect("read dataset names")
+}
+
+/// Without `--dataset-name`, `add` writes into the `default_dataset_name`
+/// setting (`COGNEE_DEFAULT_DATASET_NAME`), not a hard-coded `main_dataset`.
+#[test]
+fn add_defaults_to_the_configured_dataset_name() {
+    assert_eq!(
+        datasets_after_add_with_default_name("configured_default"),
+        vec!["configured_default".to_string()]
+    );
+}
+
+/// A blank `default_dataset_name` falls back to `main_dataset` — as the
+/// Python compat layer does — instead of creating a dataset named "  ".
+#[test]
+fn add_with_a_blank_default_dataset_name_uses_main_dataset() {
+    assert_eq!(
+        datasets_after_add_with_default_name("  "),
+        vec!["main_dataset".to_string()]
+    );
 }
 
 /// `cognee-cli add <url>` refuses loopback / private targets (SSRF guard):

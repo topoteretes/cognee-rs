@@ -23,6 +23,10 @@ pub use keys::{KeySpec, builtin_schema, key_spec, keys, schema_with};
 
 pub const DEFAULT_SYSTEM_PROMPT_PATH: &str = "answer_simple_question.txt";
 
+/// The default `default_dataset_name`, and the dataset a blank one falls back
+/// to (see [`Settings::effective_default_dataset_name`]).
+pub const DEFAULT_DATASET_NAME: &str = "main_dataset";
+
 /// The default `graph_prompt_path`: Python's file name for the built-in
 /// graph-extraction prompt, which Rust compiles in.
 pub const DEFAULT_GRAPH_PROMPT_PATH: &str = "generate_graph_prompt.txt";
@@ -449,26 +453,51 @@ impl Settings {
         cfg
     }
 
+    /// The dataset an operation without an explicit one writes to: the
+    /// `default_dataset_name` setting, or [`DEFAULT_DATASET_NAME`] when that
+    /// is empty or whitespace. Every entry point (the CLI commands, the
+    /// Python compat layer) resolves it this way, so a blank setting never
+    /// creates a dataset with a blank name.
+    pub fn effective_default_dataset_name(&self) -> &str {
+        if self.default_dataset_name.trim().is_empty() {
+            DEFAULT_DATASET_NAME
+        } else {
+            &self.default_dataset_name
+        }
+    }
+
     /// The graph-extraction system prompt `graph_prompt_path` selects, or
-    /// `None` for the built-in one.
+    /// `None` for the built-in default.
     ///
-    /// Empty or [`DEFAULT_GRAPH_PROMPT_PATH`] means the built-in prompt. Any
-    /// other value is a file read as the prompt text (a relative path resolves
-    /// against the working directory). A file that cannot be read keeps the
-    /// built-in prompt, with a warning, as an unreadable search prompt path
-    /// does. A per-call custom prompt still wins over this.
+    /// Empty or [`DEFAULT_GRAPH_PROMPT_PATH`] means the built-in default. The
+    /// names of the other prompts Python ships in its prompts directory
+    /// (`generate_graph_prompt_strict.txt`, `_simple.txt`, `_guided.txt`,
+    /// `_oneshot.txt`) select those prompts, compiled in — Python resolves a
+    /// relative `graph_prompt_path` against that directory. Any other value is
+    /// a file read as the prompt text (a relative path resolves against the
+    /// working directory). A file that cannot be read keeps the built-in
+    /// prompt, with a warning, as an unreadable search prompt path does. A
+    /// per-call custom prompt still wins over this.
     pub fn graph_extraction_prompt(&self) -> Option<String> {
         if is_builtin_prompt_path(&self.graph_prompt_path, DEFAULT_GRAPH_PROMPT_PATH) {
             return None;
         }
         let path = self.graph_prompt_path.trim();
+        if let Some(prompt) = cognee_cognify::fact_extraction::builtin_graph_prompt(path) {
+            return Some(prompt.to_owned());
+        }
         match std::fs::read_to_string(path) {
             Ok(prompt) => Some(prompt),
             Err(error) => {
+                let builtin_names = cognee_cognify::fact_extraction::builtin_graph_prompt_names()
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 tracing::warn!(
                     graph_prompt_path = path,
                     %error,
-                    "graph prompt path not readable; using the built-in graph prompt"
+                    builtin_prompt_names = %builtin_names,
+                    "graph prompt path is neither a built-in prompt name nor a readable file; \
+                     using the built-in graph prompt"
                 );
                 None
             }
@@ -938,7 +967,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             default_user_id: "00000000-0000-0000-0000-000000000000".to_string(),
-            default_dataset_name: "main_dataset".to_string(),
+            default_dataset_name: DEFAULT_DATASET_NAME.to_string(),
             system_root_directory: "./.cognee_system".to_string(),
             data_root_directory: "./.data_storage".to_string(),
             cache_root_directory: "./.cognee_cache".to_string(),
@@ -2948,6 +2977,74 @@ mod tests {
         assert_eq!(cognify.chunks_per_batch, 2000);
         assert_eq!(cognify.data_per_batch, 20);
         assert!(cognify.custom_extraction_prompt.is_none());
+    }
+
+    /// Python resolves a relative `graph_prompt_path` against its prompts
+    /// directory, so the names of the variants it ships there select them —
+    /// compiled in, without touching the filesystem (no such file exists in
+    /// the working directory here).
+    #[test]
+    fn python_graph_prompt_variant_names_select_compiled_in_prompts() {
+        let mut s = Settings {
+            graph_prompt_path: " generate_graph_prompt_oneshot.txt ".to_string(),
+            ..Settings::default()
+        };
+        let oneshot = cognee_cognify::fact_extraction::builtin_graph_prompt(
+            "generate_graph_prompt_oneshot.txt",
+        )
+        .expect("oneshot is a built-in variant");
+        assert_eq!(s.graph_extraction_prompt().as_deref(), Some(oneshot));
+        assert_eq!(
+            s.cognify_config().custom_extraction_prompt.as_deref(),
+            Some(oneshot)
+        );
+
+        for name in [
+            "generate_graph_prompt_strict.txt",
+            "generate_graph_prompt_simple.txt",
+            "generate_graph_prompt_guided.txt",
+        ] {
+            s.graph_prompt_path = name.to_string();
+            assert_eq!(
+                s.graph_extraction_prompt().as_deref(),
+                cognee_cognify::fact_extraction::builtin_graph_prompt(name),
+                "{name}"
+            );
+        }
+
+        // The default's own name still means "no custom prompt".
+        s.graph_prompt_path = DEFAULT_GRAPH_PROMPT_PATH.to_string();
+        assert!(s.graph_extraction_prompt().is_none());
+    }
+
+    /// A blank `default_dataset_name` falls back to `main_dataset`, as the
+    /// Python compat layer does, instead of naming a dataset "".
+    #[test]
+    fn blank_default_dataset_name_falls_back_to_main_dataset() {
+        let mut s = Settings::default();
+        assert_eq!(s.effective_default_dataset_name(), "main_dataset");
+        for blank in ["", "  ", "\t"] {
+            s.default_dataset_name = blank.to_string();
+            assert_eq!(s.effective_default_dataset_name(), DEFAULT_DATASET_NAME);
+        }
+        s.default_dataset_name = "notes".to_string();
+        assert_eq!(s.effective_default_dataset_name(), "notes");
+    }
+
+    /// `GRAPH_PROMPT_PATH` binds `graph_prompt_path`, as Python's
+    /// `LLMConfig` (a `BaseSettings`) reads it from the environment.
+    #[test]
+    fn graph_prompt_path_binds_from_env() {
+        let env = MapEnv::new().with("GRAPH_PROMPT_PATH", "generate_graph_prompt_simple.txt");
+        let mut s = Settings::default();
+        s.overlay_from(&env);
+        assert_eq!(s.graph_prompt_path, "generate_graph_prompt_simple.txt");
+        assert_eq!(
+            s.graph_extraction_prompt().as_deref(),
+            cognee_cognify::fact_extraction::builtin_graph_prompt(
+                "generate_graph_prompt_simple.txt"
+            )
+        );
     }
 
     /// `CHUNKS_PER_BATCH` is Python's env name; `COGNEE_DATA_PER_BATCH` the

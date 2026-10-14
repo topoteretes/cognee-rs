@@ -1,7 +1,9 @@
 use crate::orchestration::{
     SearchTypeRegistry, merge_scoped_contexts, prepare_search_result, scope_context_by_datasets,
 };
-use crate::types::{SearchError, SearchOutput, SearchParams, SearchRequest, SearchResponse};
+use crate::types::{
+    SearchContext, SearchError, SearchOutput, SearchParams, SearchRequest, SearchResponse,
+};
 use crate::utils::detect_feedback;
 use cognee_database::{AclDb, IngestDb, SearchHistoryDb, SearchHistoryEntry};
 use cognee_llm::Llm;
@@ -382,6 +384,38 @@ impl SearchOrchestrator {
         Ok(())
     }
 
+    /// Update `last_accessed` on the `Data` records a retrieval returned
+    /// (the `enable_last_accessed` setting). Failures are logged, never
+    /// surfaced: tracking must not fail the search.
+    async fn track_access(&self, ctx: &SearchContext) {
+        if ctx.is_empty() {
+            return;
+        }
+        let Some(resolver) = &self.dataset_resolver else {
+            // No IngestDb wired — log the accessed data IDs at debug level so
+            // operators can see the tracking would have fired.
+            let accessed_ids: Vec<&str> = ctx
+                .iter()
+                .filter_map(|item| item.payload.get("data_id").and_then(|v| v.as_str()))
+                .collect();
+            if !accessed_ids.is_empty() {
+                tracing::debug!(
+                    data_ids = ?accessed_ids,
+                    "access tracking: would update last_accessed for {} data records \
+                     but no IngestDb resolver is wired",
+                    accessed_ids.len()
+                );
+            }
+            return;
+        };
+        if let Err(e) = crate::utils::update_node_access_timestamps(resolver.as_ref(), ctx).await {
+            tracing::warn!(
+                error = %e,
+                "access tracking: failed to persist last_accessed timestamps"
+            );
+        }
+    }
+
     #[tracing::instrument(
         name = "cognee.search",
         skip(self, request),
@@ -563,37 +597,8 @@ impl SearchOrchestrator {
         let base_context = if include_context {
             let ctx = retriever.get_context(&request.query_text, &params).await?;
 
-            if self.enable_access_tracking && !ctx.is_empty() {
-                if let Some(resolver) = &self.dataset_resolver {
-                    if let Err(e) =
-                        crate::utils::update_node_access_timestamps(resolver.as_ref(), &ctx).await
-                    {
-                        tracing::warn!(
-                            error = %e,
-                            "access tracking: failed to persist last_accessed timestamps"
-                        );
-                    }
-                } else {
-                    // No IngestDb wired — log the accessed data IDs at debug
-                    // level so operators can see the tracking would have fired.
-                    let accessed_ids: Vec<String> = ctx
-                        .iter()
-                        .filter_map(|item| {
-                            item.payload
-                                .get("data_id")
-                                .and_then(|v| v.as_str())
-                                .map(String::from)
-                        })
-                        .collect();
-                    if !accessed_ids.is_empty() {
-                        tracing::debug!(
-                            data_ids = ?accessed_ids,
-                            "access tracking: would update last_accessed for {} data records \
-                             but no IngestDb resolver is wired",
-                            accessed_ids.len()
-                        );
-                    }
-                }
+            if self.enable_access_tracking {
+                self.track_access(&ctx).await;
             }
 
             Some(ctx)
@@ -771,27 +776,41 @@ impl SearchOrchestrator {
             // If no feedback, or feedback with follow-up, proceed normally.
         }
 
-        // P1-10 parity: an unscoped hybrid completion still needs its retrieved
-        // context so the session cache can record `used_graph_element_ids`.
-        // On the default path `include_context`
-        // (`only_context || use_combined_context || use_dataset_scope`) is false,
-        // so `context` is `None` and the hybrid retriever would fetch its context
-        // privately inside `get_completion` — leaving the orchestrator blind to the
-        // graph elements that produced the answer, making the P1-10 feature inert.
-        // Python's `HybridRetriever.get_completion` computes
-        // `extract_context_object_ids(retrieved_objects)` on EVERY completion path
-        // (`hybrid_retriever.py:242-296`). We fetch the context here once and hand
-        // it to `get_completion`, so the retriever does not fetch twice and the
-        // answer is unchanged. This is deliberately scoped to the hybrid retriever
-        // (so other search types are untouched) and only when a session will
-        // actually be saved. Access tracking stays gated on `include_context`
-        // above and is intentionally not re-run here.
-        let context = if context.is_none()
-            && request.session_id.is_some()
+        // When the orchestrator did not fetch the context above
+        // (`include_context` is `only_context || use_combined_context ||
+        // use_dataset_scope`, false on the default path), the retriever would
+        // fetch it privately inside `get_completion`. Two things need that
+        // context here, so it is fetched once and handed to `get_completion`
+        // — every built-in retriever uses a provided context instead of
+        // fetching its own, so the answer is unchanged and nothing is fetched
+        // twice:
+        //
+        // - Access tracking (`enable_last_accessed`). Python updates
+        //   `last_accessed` on every retrieval
+        //   (`session_aware_completion.py`, after `get_retrieved_objects`), so
+        //   a plain completion search with no dataset scope must track too.
+        //   `Feedback` is skipped: its "context" is an LLM analysis of the
+        //   message, carries no data ids, and fetching it would add an LLM
+        //   call.
+        // - P1-10 parity: an unscoped hybrid completion needs its retrieved
+        //   context so the session cache can record `used_graph_element_ids`.
+        //   Python's `HybridRetriever.get_completion` computes
+        //   `extract_context_object_ids(retrieved_objects)` on EVERY
+        //   completion path (`hybrid_retriever.py:242-296`). Scoped to the
+        //   hybrid retriever and only when a session will actually be saved.
+        let fetch_for_tracking = self.enable_access_tracking
+            && retriever.search_type() != crate::types::SearchType::Feedback;
+        let fetch_for_session = request.session_id.is_some()
             && self.session_manager.is_some()
-            && retriever.search_type() == crate::types::SearchType::HybridCompletion
-        {
-            Some(retriever.get_context(&request.query_text, &params).await?)
+            && retriever.search_type() == crate::types::SearchType::HybridCompletion;
+        let context = if context.is_none() && (fetch_for_tracking || fetch_for_session) {
+            let ctx = retriever.get_context(&request.query_text, &params).await?;
+            // `context` is `None` only when `include_context` was false, so the
+            // tracking above has not run for this search.
+            if self.enable_access_tracking {
+                self.track_access(&ctx).await;
+            }
+            Some(ctx)
         } else {
             context
         };
@@ -2672,5 +2691,198 @@ mod tests {
     fn used_ids_empty_and_none_return_none() {
         assert!(super::build_used_graph_element_ids(None).is_none());
         assert!(super::build_used_graph_element_ids(Some(&[])).is_none());
+    }
+
+    // ── Access tracking on the default completion path ───────────────────
+
+    /// A completion retriever whose context points at one `Data` row.
+    /// Counts `get_context` calls and records whether `get_completion` was
+    /// handed a context.
+    struct AccessTrackingRetriever {
+        search_type: SearchType,
+        data_id: Uuid,
+        context_fetches: std::sync::atomic::AtomicUsize,
+        completion_got_context: std::sync::atomic::AtomicBool,
+    }
+
+    impl AccessTrackingRetriever {
+        fn new(search_type: SearchType, data_id: Uuid) -> Self {
+            Self {
+                search_type,
+                data_id,
+                context_fetches: std::sync::atomic::AtomicUsize::new(0),
+                completion_got_context: std::sync::atomic::AtomicBool::new(false),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl SearchRetriever for AccessTrackingRetriever {
+        fn search_type(&self) -> SearchType {
+            self.search_type
+        }
+
+        async fn get_context(
+            &self,
+            _query: &str,
+            _params: &SearchParams,
+        ) -> Result<SearchContext, SearchError> {
+            self.context_fetches
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(vec![crate::types::SearchItem {
+                id: None,
+                score: Some(0.9),
+                payload: json!({ "data_id": self.data_id.to_string(), "text": "t" }),
+            }])
+        }
+
+        async fn get_completion(
+            &self,
+            _query: &str,
+            context: Option<SearchContext>,
+            _session: &SessionContext,
+            _params: &SearchParams,
+        ) -> Result<SearchOutput, SearchError> {
+            self.completion_got_context
+                .store(context.is_some(), std::sync::atomic::Ordering::SeqCst);
+            Ok(SearchOutput::Text("answer".to_string()))
+        }
+    }
+
+    async fn seed_data_row(db: &cognee_database::DatabaseConnection) -> Uuid {
+        let id = Uuid::new_v4();
+        let data = cognee_models::Data::builder(
+            id,
+            format!("data-{id}"),
+            "file:///tmp/raw",
+            "file:///tmp/raw",
+            "txt",
+            "text/plain",
+            format!("hash-{id}"),
+            Uuid::new_v4(),
+        )
+        .build();
+        db_ops::data::create_data(db, data)
+            .await
+            .expect("seed data");
+        id
+    }
+
+    /// A plain completion search — no `only_context`, no combined context, no
+    /// dataset scope — the CLI's default `search`.
+    fn default_completion_request(search_type: SearchType) -> SearchRequest {
+        SearchRequest {
+            search_type,
+            only_context: Some(false),
+            ..dataset_request_template()
+        }
+    }
+
+    /// Scenario: `enable_last_accessed` is on and a plain completion search
+    /// runs with no dataset scope, so the orchestrator does not fetch the
+    /// context for scoping.
+    /// Expected: the orchestrator still fetches the context once, hands it to
+    /// `get_completion`, and updates `last_accessed` (Python tracks on every
+    /// retrieval).
+    #[tokio::test]
+    async fn access_tracking_fires_on_default_completion_path() {
+        let db = fresh_db().await;
+        let data_id = seed_data_row(&db).await;
+        let retriever = Arc::new(AccessTrackingRetriever::new(
+            SearchType::GraphCompletion,
+            data_id,
+        ));
+        let mut registry = SearchTypeRegistry::new();
+        registry.register(retriever.clone());
+        let orchestrator = super::SearchOrchestrator::new(registry)
+            .with_dataset_resolver(db.clone() as Arc<dyn IngestDb>)
+            .with_access_tracking();
+
+        orchestrator
+            .search(&default_completion_request(SearchType::GraphCompletion))
+            .await
+            .unwrap();
+
+        let row = db_ops::data::get_data(&db, data_id).await.unwrap().unwrap();
+        assert!(
+            row.last_accessed.is_some(),
+            "a default completion search must update last_accessed"
+        );
+        assert_eq!(
+            retriever
+                .context_fetches
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "the context is fetched exactly once"
+        );
+        assert!(
+            retriever
+                .completion_got_context
+                .load(std::sync::atomic::Ordering::SeqCst),
+            "the fetched context is handed to get_completion, not refetched"
+        );
+    }
+
+    /// Scenario: same search with `enable_last_accessed` off (the default).
+    /// Expected: no prefetch and no write — the retriever fetches its own
+    /// context as before.
+    #[tokio::test]
+    async fn default_completion_path_untouched_without_access_tracking() {
+        let db = fresh_db().await;
+        let data_id = seed_data_row(&db).await;
+        let retriever = Arc::new(AccessTrackingRetriever::new(
+            SearchType::GraphCompletion,
+            data_id,
+        ));
+        let mut registry = SearchTypeRegistry::new();
+        registry.register(retriever.clone());
+        let orchestrator = super::SearchOrchestrator::new(registry)
+            .with_dataset_resolver(db.clone() as Arc<dyn IngestDb>);
+
+        orchestrator
+            .search(&default_completion_request(SearchType::GraphCompletion))
+            .await
+            .unwrap();
+
+        let row = db_ops::data::get_data(&db, data_id).await.unwrap().unwrap();
+        assert!(row.last_accessed.is_none());
+        assert_eq!(
+            retriever
+                .context_fetches
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+        assert!(
+            !retriever
+                .completion_got_context
+                .load(std::sync::atomic::Ordering::SeqCst)
+        );
+    }
+
+    /// Scenario: `Feedback` search with tracking on. Its `get_context` is an
+    /// LLM analysis of the message and carries no data ids.
+    /// Expected: no prefetch, so tracking adds no LLM call.
+    #[tokio::test]
+    async fn access_tracking_does_not_prefetch_feedback_context() {
+        let db = fresh_db().await;
+        let data_id = seed_data_row(&db).await;
+        let retriever = Arc::new(AccessTrackingRetriever::new(SearchType::Feedback, data_id));
+        let mut registry = SearchTypeRegistry::new();
+        registry.register(retriever.clone());
+        let orchestrator = super::SearchOrchestrator::new(registry)
+            .with_dataset_resolver(db.clone() as Arc<dyn IngestDb>)
+            .with_access_tracking();
+
+        orchestrator
+            .search(&default_completion_request(SearchType::Feedback))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            retriever
+                .context_fetches
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
     }
 }
