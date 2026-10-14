@@ -124,7 +124,9 @@ fn llm_args_with_temperature(
 }
 
 /// The temperature an option-less call sends: the folded `temperature` of
-/// [`llm_args_with_temperature`], so an `LLM_ARGS` value wins there too.
+/// [`llm_args_with_temperature`], so an `LLM_ARGS` value wins there too, and
+/// applies even with `llm.temperature` unset (it used to be shadowed by the
+/// built-in `0.0` an option-less call puts in its body).
 fn option_less_temperature(args: &serde_json::Map<String, serde_json::Value>) -> Option<f32> {
     #[allow(
         clippy::cast_possible_truncation,
@@ -567,5 +569,15 @@ mod tests {
         let args = llm_args_with_temperature(&ctx(Some(0.7), json!({"temperature": 0.2})));
         assert_eq!(args.get("temperature"), Some(&json!(0.2)));
         assert_eq!(option_less_temperature(&args), Some(0.2));
+    }
+
+    /// With `llm.temperature` unset, a `temperature` in `LLM_ARGS` alone still
+    /// becomes the option-less default: it is no longer shadowed by the
+    /// built-in `0.0`.
+    #[test]
+    fn llm_args_temperature_applies_with_the_setting_unset() {
+        let args = llm_args_with_temperature(&ctx(None, json!({"temperature": 1.0})));
+        assert_eq!(args.get("temperature"), Some(&json!(1.0)));
+        assert_eq!(option_less_temperature(&args), Some(1.0));
     }
 }

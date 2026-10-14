@@ -355,11 +355,14 @@ applied it). The OpenAI-compatible, Azure and Anthropic factories fold it into
 `LLM_ARGS` as `temperature`, as Python's `fold_sampling_params_into_llm_args`
 does, so a `temperature` in `LLM_ARGS` itself wins. It is sent on every call
 that does not pick a temperature itself: requests whose options carry none
-(graph extraction) and option-less calls (search completions), which otherwise
-send `0.0`. A temperature a call picks (summarization's `0.3`) wins, and
-reasoning models, which reject it, never receive one. Unset, nothing changes:
-extraction sends none and option-less calls send `0.0`. Unlike Python, Rust does
-not pin `0.0` for local inference servers when the variable is unset.
+(graph extraction) and option-less calls, plain or structured (search
+completions, feedback detection), which otherwise send `0.0`. A temperature a
+call picks (summarization's `0.3`) wins, and reasoning models, which reject it,
+never receive one. Unset, these providers
+send a `temperature` from `LLM_ARGS` if it has one: on option-less calls too,
+where until SDK-1070 the built-in `0.0` shadowed it. Otherwise extraction sends
+none and option-less calls send `0.0`, as before. Unlike Python, Rust does not
+pin `0.0` for local inference servers when the variable is unset.
 
 `LLM_STREAMING` has no effect. Python's `llm_streaming` is likewise unread by
 its OpenAI and Azure adapters (its own `LLMConfig` says so, beside

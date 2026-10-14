@@ -590,8 +590,8 @@ pub struct OpenAIAdapter {
     /// matching the historical [`GenerationOptions::default`] cap so an adapter
     /// built without config behaves exactly as before.
     default_max_tokens: Option<u32>,
-    /// Temperature of an option-less [`generate`](Self::generate) call,
-    /// replacing [`GenerationOptions::default`]'s `0.0` (the configured
+    /// Temperature of an option-less call ([`generate`](Self::generate) and
+    /// structured output), replacing [`GenerationOptions::default`]'s `0.0` (the configured
     /// `llm_temperature`, see [`with_default_temperature`](Self::with_default_temperature)).
     default_temperature: Option<f32>,
     /// Whether this adapter's `(model, base_url)` pair is an OpenAI reasoning
@@ -946,8 +946,8 @@ impl OpenAIAdapter {
         self
     }
 
-    /// Set the temperature of an option-less [`generate`](Self::generate) call,
-    /// lowered from `llm_temperature`. `None` keeps
+    /// Set the temperature of an option-less call ([`generate`](Self::generate)
+    /// and structured output), lowered from `llm_temperature`. `None` keeps
     /// [`GenerationOptions::default`]'s. A caller's own options win; calls
     /// whose options carry no temperature get the configured one through
     /// [`with_extra_args`](Self::with_extra_args) instead (`LLM_ARGS`, which
@@ -1005,16 +1005,20 @@ impl OpenAIAdapter {
     /// `generate` call while leaving explicit callers (and, separately,
     /// structured extraction) alone.
     fn resolve_options(&self, options: Option<GenerationOptions>) -> GenerationOptions {
-        match options {
-            Some(opts) => opts,
-            None => {
-                let defaults = GenerationOptions::default();
-                GenerationOptions {
-                    max_tokens: self.default_max_tokens,
-                    temperature: self.default_temperature.or(defaults.temperature),
-                    ..defaults
-                }
-            }
+        options.unwrap_or_else(|| self.option_less_defaults(self.default_max_tokens))
+    }
+
+    /// The options of an option-less call, [`generate`](Self::generate) and
+    /// structured output alike: [`GenerationOptions::default`] with the
+    /// configured [`default_temperature`](Self::default_temperature) and the
+    /// given output cap (the two paths cap differently, see
+    /// [`resolve_options`](Self::resolve_options) and `structured_output_impl`).
+    fn option_less_defaults(&self, max_tokens: Option<u32>) -> GenerationOptions {
+        let defaults = GenerationOptions::default();
+        GenerationOptions {
+            max_tokens,
+            temperature: self.default_temperature.or(defaults.temperature),
+            ..defaults
         }
     }
 
@@ -2335,9 +2339,12 @@ impl OpenAIAdapter {
         // Spelled out rather than left to `unwrap_or_default()`, which supplied
         // this same 16384 only as a side effect of the old `Default`. The cap is
         // wanted here and not in `Default`, so it belongs here.
-        let opts = options.unwrap_or(GenerationOptions {
-            max_tokens: Some(Self::DEFAULT_MAX_COMPLETION_TOKENS),
-            ..GenerationOptions::default()
+        //
+        // The temperature, unlike the cap, is the configured one
+        // (`LLM_TEMPERATURE`): the request body carries it explicitly, so
+        // `extra_args` could not fill it in afterwards.
+        let opts = options.unwrap_or_else(|| {
+            self.option_less_defaults(Some(Self::DEFAULT_MAX_COMPLETION_TOKENS))
         });
         // Align the advertised `required` array with what instructor sends on its
         // default TOOLS path (every non-default property is required). See
