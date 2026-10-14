@@ -195,11 +195,11 @@ pub struct Settings {
     pub default_system_prompt_path: String,
 
     // -- Session / cache ---------------------------------------------------------
-    /// Session store backend: `"fs"`, `"redis"`, or `"seaorm"`.
-    pub cache_backend: String,
-    /// Session time-to-live in seconds (default: 604 800 = 7 days).
-    pub session_ttl_seconds: u64,
-    pub enable_caching: bool,
+    // The session store, TTL and the caching switch live in the `session`
+    // section (`session.store` / `.ttl_seconds` / `.caching`, aliases
+    // `cache_backend` / `session_ttl_seconds` / `enable_caching`).
+    /// Detect feedback in session searches by default (`AUTO_FEEDBACK`); only
+    /// while `session.caching` is on, as in Python.
     pub auto_feedback: bool,
 
     // -- Authentication / ACL ----------------------------------------------------
@@ -389,7 +389,9 @@ impl Settings {
             &cognify.token_counter,
             ollama.huggingface_tokenizer.as_deref().unwrap_or_default(),
             &embedding.provider,
-            &onnx.tokenizer_path,
+            &onnx
+                .resolved_tokenizer_path(std::path::Path::new(&self.cache_root_directory))
+                .to_string_lossy(),
         );
         let chunk_strategy = match self.chunk_strategy.to_uppercase().as_str() {
             "RECURSIVE" => cognee_cognify::ChunkStrategy::Recursive,
@@ -523,7 +525,9 @@ impl Settings {
                 overflow_summary_file: (!file.is_empty()).then(|| std::path::PathBuf::from(file)),
             },
             access_tracking: self.enable_last_accessed,
-            auto_feedback: self.auto_feedback,
+            // Python's `is_auto_feedback_enabled`: `caching and auto_feedback`.
+            auto_feedback: self.auto_feedback
+                && self.section::<cognee_components::SessionConfig>().caching,
             // The built-in prompt's file name selects the retrievers' own
             // defaults: the Rust SDK compiles its prompts in.
             default_system_prompt_path: (!is_builtin_prompt_path(
@@ -701,6 +705,7 @@ impl Settings {
             sections: self.sections.clone(),
             data_root_directory: PathBuf::from(&self.data_root_directory),
             system_root_directory: PathBuf::from(&self.system_root_directory),
+            cache_root_directory: PathBuf::from(&self.cache_root_directory),
             relational_db_url: self.resolved_relational_db_url(),
             graph_provider,
             graph_file_path: self.graph().file_path.clone(),
@@ -1005,9 +1010,6 @@ impl Default for Settings {
             default_system_prompt_path: DEFAULT_SYSTEM_PROMPT_PATH.to_string(),
 
             // Session / cache
-            cache_backend: "fs".to_string(),
-            session_ttl_seconds: 604800,
-            enable_caching: true,
             auto_feedback: false,
 
             // Authentication / ACL
@@ -1818,11 +1820,14 @@ impl ConfigManager {
         self.bump_version();
     }
 
-    pub fn set_monitoring_tool(&self, tool: &str) {
-        let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
-        s.monitoring_tool = tool.to_string();
-        drop(s);
-        self.bump_version();
+    /// Set the monitoring tool. Only `none` is supported, as in Python, whose
+    /// `get_observe` raises `UnsupportedObserverError` for any other tool;
+    /// tracing goes through OpenTelemetry instead.
+    pub fn set_monitoring_tool(&self, tool: &str) -> Result<(), ConfigError> {
+        self.set(
+            "monitoring_tool",
+            serde_json::Value::String(tool.to_string()),
+        )
     }
 
     pub fn set_classification_model(&self, model: &str) {
@@ -2604,16 +2609,108 @@ mod tests {
         assert_eq!(s.ontology().file_path, "");
     }
 
+    /// Python's `CACHE_BACKEND` selects the session store, but only when it
+    /// is set, and `COGNEE_SESSION_STORE` wins over it.
     #[test]
-    #[serial_test::serial]
-    fn overlay_picks_up_cache_backend() {
-        // SAFETY: test is serial — no other thread reads/writes env concurrently.
-        unsafe { std::env::set_var("CACHE_BACKEND", "redis") };
-        let mut s = Settings::default();
-        s.overlay_from_env();
-        unsafe { std::env::remove_var("CACHE_BACKEND") };
+    fn cache_backend_is_a_fallback_for_the_session_store() {
+        let store = |env: MapEnv| {
+            let mut s = Settings::default();
+            s.overlay_from(&env);
+            s.section::<cognee_components::SessionConfig>().store
+        };
+        assert_eq!(store(MapEnv::new()), "relational");
+        assert_eq!(store(MapEnv::new().with("CACHE_BACKEND", "redis")), "redis");
+        assert_eq!(
+            store(
+                MapEnv::new()
+                    .with("CACHE_BACKEND", "redis")
+                    .with("COGNEE_SESSION_STORE", "fs")
+            ),
+            "fs"
+        );
 
-        assert_eq!(s.cache_backend, "redis");
+        let cm = ConfigManager::new(Settings::default());
+        cm.set("cache_backend", serde_json::json!("fs")).unwrap();
+        cm.set("session_ttl_seconds", serde_json::json!(60))
+            .unwrap();
+        cm.set("enable_caching", serde_json::json!(false)).unwrap();
+        let session = cm.read().section::<cognee_components::SessionConfig>();
+        assert_eq!(session.store, "fs");
+        assert_eq!(session.ttl_seconds, 60);
+        assert!(!session.caching);
+    }
+
+    /// `monitoring_tool` accepts only `none`, as Python's `get_observe` does;
+    /// `MONITORING_TOOL` binds it, an unsupported env value is ignored.
+    #[test]
+    fn monitoring_tool_accepts_only_none() {
+        let cm = ConfigManager::new(Settings::default());
+        cm.set_monitoring_tool("NONE").unwrap();
+        assert_eq!(cm.read().monitoring_tool, "none");
+        let err = cm.set_monitoring_tool("langfuse").unwrap_err();
+        assert!(err.to_string().contains("only `none`"), "{err}");
+        assert!(
+            cm.set("monitoring_tool", serde_json::json!("langsmith"))
+                .is_err()
+        );
+        assert_eq!(cm.read().monitoring_tool, "none");
+
+        let mut s = Settings::default();
+        s.overlay_from(&MapEnv::new().with("MONITORING_TOOL", "langfuse"));
+        assert_eq!(s.monitoring_tool, "none");
+        s.overlay_from(&MapEnv::new().with("MONITORING_TOOL", " None "));
+        assert_eq!(s.monitoring_tool, "none");
+    }
+
+    /// `cache_root_directory` places the default ONNX model and tokenizer
+    /// (and so where they are downloaded); explicit paths still win.
+    #[test]
+    fn cache_root_directory_places_the_default_onnx_files() {
+        let cm = ConfigManager::new(Settings::default());
+        cm.set(
+            "cache_root_directory",
+            serde_json::json!("/var/cache/cognee"),
+        )
+        .unwrap();
+        let ctx = cm.read().backend_context();
+        assert_eq!(
+            ctx.cache_root_directory,
+            std::path::PathBuf::from("/var/cache/cognee")
+        );
+        let onnx = cm
+            .read()
+            .section::<cognee_components::OnnxEmbeddingConfig>();
+        assert_eq!(
+            onnx.resolved_model_path(&ctx.cache_root_directory),
+            std::path::PathBuf::from(
+                "/var/cache/cognee/models/BGE-Small-v1.5-model_quantized.onnx"
+            )
+        );
+        assert_eq!(
+            onnx.resolved_tokenizer_path(&ctx.cache_root_directory),
+            std::path::PathBuf::from("/var/cache/cognee/models/bge-small-tokenizer.json")
+        );
+
+        cm.set("embedding_model_path", serde_json::json!("/models/m.onnx"))
+            .unwrap();
+        let onnx = cm
+            .read()
+            .section::<cognee_components::OnnxEmbeddingConfig>();
+        assert_eq!(
+            onnx.resolved_model_path(&ctx.cache_root_directory),
+            std::path::PathBuf::from("/models/m.onnx")
+        );
+    }
+
+    /// `auto_feedback` takes effect only while session caching is on
+    /// (Python's `is_auto_feedback_enabled`).
+    #[test]
+    fn auto_feedback_needs_session_caching() {
+        let cm = ConfigManager::new(Settings::default());
+        cm.set("auto_feedback", serde_json::json!(true)).unwrap();
+        assert!(cm.read().search_tuning().auto_feedback);
+        cm.set("session.caching", serde_json::json!(false)).unwrap();
+        assert!(!cm.read().search_tuning().auto_feedback);
     }
 
     #[test]
@@ -4207,12 +4304,13 @@ mod tests {
     fn default_values_are_correct() {
         let s = Settings::default();
         assert!(s.llm().args.is_empty());
-        assert_eq!(s.cache_backend, "fs");
+        let session = s.section::<cognee_components::SessionConfig>();
+        assert_eq!(session.store, "relational");
         let redis = s.section::<cognee_components::RedisSessionConfig>();
         assert_eq!(redis.host, "localhost");
         assert_eq!(redis.port, 6379);
-        assert_eq!(s.session_ttl_seconds, 604800);
-        assert!(s.enable_caching);
+        assert_eq!(session.ttl_seconds, 604800);
+        assert!(session.caching);
         assert!(!s.auto_feedback);
         assert!(!s.enable_access_control);
         assert_eq!(s.log_level, "");

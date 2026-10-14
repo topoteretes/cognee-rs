@@ -691,8 +691,8 @@ is compiled in:
 
 | Env var (aliases) | Key (alias) | Provider | Default |
 |---|---|---|---|
-| `EMBEDDING_MODEL_PATH` / `COGNEE_E2E_EMBED_MODEL_PATH` | `embedding.onnx.model_path` (`embedding_model_path`) | `onnx` / `fastembed` (`onnx` feature) | `./target/models/BGE-Small-v1.5-model_quantized.onnx` |
-| `EMBEDDING_TOKENIZER_PATH` / `COGNEE_E2E_TOKENIZER_PATH` | `embedding.onnx.tokenizer_path` (`embedding_tokenizer_path`) | `onnx` / `fastembed` | `./target/models/bge-small-tokenizer.json` |
+| `EMBEDDING_MODEL_PATH` / `COGNEE_E2E_EMBED_MODEL_PATH` | `embedding.onnx.model_path` (`embedding_model_path`) | `onnx` / `fastembed` (`onnx` feature) | _(empty: `<cache_root_directory>/models/BGE-Small-v1.5-model_quantized.onnx`)_ |
+| `EMBEDDING_TOKENIZER_PATH` / `COGNEE_E2E_TOKENIZER_PATH` | `embedding.onnx.tokenizer_path` (`embedding_tokenizer_path`) | `onnx` / `fastembed` | _(empty: `<cache_root_directory>/models/bge-small-tokenizer.json`)_ |
 | `EMBEDDING_ONNX_BATCH_SIZE` | `embedding.onnx.batch_size` (`embedding_onnx_batch_size`) | `onnx` / `fastembed` | `32` (inference batch size; independent of `embedding.batch_size`. Lower it under memory pressure on edge devices) |
 | `EMBEDDING_API_VERSION` | `embedding.openai_compatible.api_version` (`embedding_api_version`) | `openai` / `openai_compatible` (Azure `api-version`) | _(unset)_ |
 | `HUGGINGFACE_TOKENIZER` | `embedding.ollama.huggingface_tokenizer` (`huggingface_tokenizer`) | `ollama` | _(unset)_ |
@@ -1048,7 +1048,7 @@ kind sections), resolved when cognee lowers `Settings` into a `CognifyConfig`
 |---|---|---|---|
 | `COGNEE_TOKEN_COUNTER` | `cognify.token_counter` | `tiktoken` / `word` / `huggingface`(`hf`) | auto from embedding provider |
 | `HUGGINGFACE_TOKENIZER` | `embedding.ollama.huggingface_tokenizer` | model id when counter = `huggingface` | _(empty)_ |
-| `EMBEDDING_TOKENIZER_PATH` | `embedding.onnx.tokenizer_path` | tokenizer file for the `onnx` provider's counter, used when it exists | `./target/models/bge-small-tokenizer.json` |
+| `EMBEDDING_TOKENIZER_PATH` | `embedding.onnx.tokenizer_path` | tokenizer file for the `onnx` provider's counter, used when it exists | `<cache_root_directory>/models/bge-small-tokenizer.json` |
 | `COGNEE_LEGACY_PER_WORD_TOKEN_COUNT` | `cognify.legacy_per_word_token_count` | restore the legacy per-word token count (`1`/`true`/`yes`/`on`) | `false` |
 
 `Settings::cognify_config` also applies the batch sizes, the graph-extraction
@@ -1316,7 +1316,7 @@ Three `Settings` fields tune the search orchestrator itself, lowered by the same
 | Env var | `Settings` field | Default | Effect |
 |---|---|---|---|
 | `ENABLE_LAST_ACCESSED` | `enable_last_accessed` | `false` | Update `last_accessed` on the source data records of every search's retrieved context, as Python does on every retrieval (Python's flag, also default off). On a plain completion search the context is then fetched by the search itself and handed to the retriever, so it is still fetched once. `FEEDBACK` searches retrieve no data and are not tracked. |
-| `AUTO_FEEDBACK` | `auto_feedback` | `false` | Detect feedback in a session search's message (one extra LLM call per session turn) when the request leaves `auto_feedback_detection` unset. **Python defaults it to `true`**; Rust keeps it off so a session search makes no extra LLM call unless asked. |
+| `AUTO_FEEDBACK` | `auto_feedback` | `false` | Detect feedback in a session search's message (one extra LLM call per session turn) when the request leaves `auto_feedback_detection` unset, and only while `session.caching` is on (Python's `caching and auto_feedback`). **Python defaults it to `true`**; Rust keeps it off so a session search makes no extra LLM call unless asked. |
 | — | `default_system_prompt_path` | `answer_simple_question.txt` | System prompt file for a search that names neither a system prompt nor a prompt path. The default (Python's file name for the built-in prompt) and an empty value leave each retriever's own compiled-in prompt; any other value is read as a file. Rust-only (Python has no such setting). |
 
 ### Triplet retriever hub cap
@@ -1485,10 +1485,10 @@ themselves get the configured backend from
 |---|---|---|
 | `COGNEE_SYSTEM_ROOT_DIRECTORY` | `system_root_directory` | `./.cognee_system` |
 | `COGNEE_DATA_ROOT_DIRECTORY` | `data_root_directory` | `./.data_storage` |
-| `CACHE_ROOT_DIRECTORY` | `cache_root_directory` | `./.cognee_cache` |
+| `CACHE_ROOT_DIRECTORY` | `cache_root_directory` | `./.cognee_cache` (the default ONNX model and tokenizer live, and are downloaded, under `<cache_root_directory>/models`; until SDK-1070 they defaulted to `./target/models`) |
 | `COGNEE_DEFAULT_USER_ID` | `default_user_id` | nil UUID |
 | `COGNEE_DEFAULT_DATASET_NAME` | `default_dataset_name` | `main_dataset` (the dataset `cognee-cli add`/`add-and-cognify`/`remember`/`improve` and the Python compat `add`/`cognify`/`add_and_cognify` use without an explicit one; a blank value falls back to `main_dataset`) |
-| `DEFAULT_USER_EMAIL` / `DEFAULT_USER_PASSWORD` | … | `default_user@example.com` / _(empty)_ |
+| `DEFAULT_USER_EMAIL` / `DEFAULT_USER_PASSWORD` | `default_user_email` / `default_user_password` | `default_user@example.com` / _(empty)_ (the password has no effect in this repository: the OSS build has no user accounts or login to give it to; Python uses it to make the default user loginable on its API server) |
 | `ENABLE_BACKEND_ACCESS_CONTROL` | `enable_access_control` | `false`; `true` only with application-provided access control (below) |
 
 Setting `system_root_directory` cascades to the default `graph_file_path` and
@@ -1570,18 +1570,39 @@ store id is an error.
 
 | Env var | Key (alias) | Default |
 |---|---|---|
-| `COGNEE_SESSION_STORE` | `session.store` (`session_store`) | `relational` |
+| `COGNEE_SESSION_STORE` | `session.store` (`session_store`, `cache_backend`) | `relational` |
 | `COGNEE_SESSION_DIR` | `session.fs.directory` (`session_directory`; `session-fs` builds only) | `<system_root>/sessions` |
 | `CACHE_HOST` / `CACHE_PORT` | `session.redis.host` / `.port` (`cache_host` / `cache_port`; `session-redis` builds only) | `localhost` / `6379` |
 | `CACHE_USERNAME` / `CACHE_PASSWORD` | `session.redis.username` / `.password` (`cache_*`; `session-redis` builds only) | _(empty)_ |
 | `COGNEE_FEEDBACK_LLM_TIMEOUT_MS` | `session.feedback_llm_timeout_ms` | `8000` (trace-step feedback LLM call) |
 | `SESSION_ABANDON_AFTER_SECONDS` | `session.abandon_after_seconds` (`session_abandon_after_seconds`) | `1800` (idle running session reads as `abandoned`) |
-| `CACHE_BACKEND` | `cache_backend` | `fs` (Python parity; not read — use `session.store`) |
-| `SESSION_TTL_SECONDS` | `session_ttl_seconds` | `604800` (7d) |
-| `CACHING` | `enable_caching` | `true` |
+| `CACHE_BACKEND` | `session.store` (`cache_backend`): read only when `COGNEE_SESSION_STORE` is unset | _(unset)_ |
+| `SESSION_TTL_SECONDS` | `session.ttl_seconds` (`session_ttl_seconds`) | `604800` (7d); `0` never expires |
+| `CACHING` | `session.caching` (`enable_caching`, `caching`) | `true` |
 | `LLM_RATE_LIMIT_ENABLED` / `_REQUESTS` / `_INTERVAL` | `llm.rate_limit_*` (see [LLM](#llm)) | `false` / `60` / `60` |
 | `EMBEDDING_RATE_LIMIT_ENABLED` / `_REQUESTS` / `_INTERVAL` | … | `false` / `60` / `60` |
 | `AUTO_RATE_LIMIT` | `llm.auto_rate_limit` (`auto_rate_limit`) | `true` |
+
+**Python's session-cache settings.** Python selects its session cache with
+`CACHE_BACKEND` (`redis`, `fs`, `sqlite`, `postgres`, `turso`, `tapes`; default
+`sqlite`). Here it is a fallback for `COGNEE_SESSION_STORE`: it selects the store
+only when set, and `COGNEE_SESSION_STORE` wins when both are. `sqlite` and
+`postgres` select the `relational` store (Rust keeps sessions in the relational
+database, not a separate `cache.db`); `fs` and `redis` need their build features,
+and `turso` / `tapes` are not built in, so they are an error like any unregistered
+id. Unset, the default stays `relational`.
+
+`session.ttl_seconds` expires a session's entries, trace steps and graph-context
+snapshot that long after its last write, as Python does. The `redis` store sets a
+key expiry; the `fs` store deletes an expired file when it is next read. The
+`relational` store does not expire sessions: Python's SQL cache keeps an expiry
+per row, which the Rust session tables have no column for.
+
+`session.caching = false` (`CACHING=false`) switches session memory off, as in
+Python: whatever the store, session reads are empty, a search answers without
+session history and stores nothing, storing into a session (`remember` with a
+session id) fails with "session memory is disabled", and `auto_feedback` has no
+effect.
 
 ### How retries and pacing interact
 
@@ -1826,6 +1847,7 @@ product analytics. The **deep references** are
 | `OTEL_SPAN_PROCESSOR` | `otel_span_processor` | `batch` | `batch` or `simple`. |
 | `OTEL_TRACES_SAMPLER` / `_ARG` | `otel_traces_sampler` / `otel_traces_sampler_arg` | _(empty)_ | Sampler selection. |
 | `ENV` | `otel_deployment_environment` | `development` | The `deployment.environment.name` resource attribute. |
+| `MONITORING_TOOL` | `monitoring_tool` | `none` | Python's observer selection. Only `none` is supported, as in Python, whose `get_observe` rejects every other tool: setting another is an error, and from env it is ignored with a warning. Tracing goes through the OpenTelemetry settings above. |
 
 **Precedence:** defaults < environment < code. The exporter is process-wide too, but
 where it reads its settings depends on who initialises it:

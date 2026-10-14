@@ -135,6 +135,10 @@ mod kind {
             .ok_or_else(|| mismatch(key, "expected a string"))
     }
 
+    #[allow(
+        dead_code,
+        reason = "used by the `u64` row kind; no row needs it today"
+    )]
     pub(super) fn as_u64(key: &str, value: &Value) -> Result<u64, ConfigError> {
         value
             .as_u64()
@@ -276,6 +280,23 @@ pub(super) fn access_control_not_provided() -> ConfigError {
     }
 }
 
+/// The canonical `monitoring_tool`: `none` (also for an empty value), or why
+/// the value is not supported. Python's `Observer` names `llmlite` and
+/// `langsmith` too, but its `get_observe` rejects every tool but `none`;
+/// tracing goes through OpenTelemetry instead (`COGNEE_TRACING_ENABLED`,
+/// `OTEL_*`).
+fn monitoring_tool(value: &str) -> Result<String, String> {
+    let tool = value.trim().to_ascii_lowercase();
+    if tool.is_empty() || tool == "none" {
+        Ok("none".to_string())
+    } else {
+        Err(format!(
+            "unsupported monitoring tool '{tool}': only `none` is supported; trace \
+             through OpenTelemetry (COGNEE_TRACING_ENABLED, OTEL_EXPORTER_OTLP_ENDPOINT)"
+        ))
+    }
+}
+
 /// The registry. Field order follows `Settings`.
 static KEYS: &[KeySpec] = &[
     // -- System paths, users & datasets -------------------------------------
@@ -285,7 +306,32 @@ static KEYS: &[KeySpec] = &[
     row!(data_root_directory: str, env ["COGNEE_DATA_ROOT_DIRECTORY"]),
     row!(cache_root_directory: str, env ["CACHE_ROOT_DIRECTORY"]),
     row!(logs_root_directory: str, env ["COGNEE_LOGS_DIR"]),
-    row!(monitoring_tool: str, env []),
+    KeySpec {
+        key: "monitoring_tool",
+        key_aliases: &[],
+        env: &["MONITORING_TOOL"],
+        secret: false,
+        persisted: true,
+        // Python's `get_observe` supports only `none` and raises
+        // `UnsupportedObserverError` for any other tool. Setting one fails the
+        // same way; from env, an unsupported value is ignored with a warning,
+        // as a value that does not parse is for every other key.
+        overlay: |s, env| {
+            if let Some(v) = first_set(env, &["MONITORING_TOOL"]) {
+                match monitoring_tool(&v) {
+                    Ok(tool) => s.monitoring_tool = tool,
+                    Err(reason) => tracing::warn!(value = v, "MONITORING_TOOL: {reason}; ignored"),
+                }
+            }
+        },
+        set: |s, key, v| {
+            s.monitoring_tool =
+                monitoring_tool(&as_string(key, &v)?).map_err(|r| mismatch(key, &r))?;
+            Ok(())
+        },
+        get: |s| Value::String(s.monitoring_tool.clone()),
+        reset: |s, d| s.monitoring_tool = d.monitoring_tool.clone(),
+    },
     // -- Cognify models -----------------------------------------------------
     row!(classification_model: str, env []),
     row!(summarization_model: str, env []),
@@ -349,9 +395,8 @@ static KEYS: &[KeySpec] = &[
     },
     row!(default_system_prompt_path: str, env []),
     // -- Session / cache ----------------------------------------------------
-    row!(cache_backend: str, env ["CACHE_BACKEND"]),
-    row!(session_ttl_seconds: u64, env ["SESSION_TTL_SECONDS"]),
-    row!(enable_caching: bool, env ["CACHING"]),
+    // `cache_backend`, `session_ttl_seconds` and `enable_caching` are aliases
+    // of the `session` section's `store`, `ttl_seconds` and `caching`.
     row!(auto_feedback: bool, env ["AUTO_FEEDBACK"]),
     // -- Authentication / ACL -----------------------------------------------
     row!(default_user_email: str, env ["DEFAULT_USER_EMAIL"]),

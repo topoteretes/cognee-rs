@@ -44,7 +44,32 @@ use std::path::{Path, PathBuf};
 /// whatever directory the CLI runs in and replace the default filter (which
 /// keeps noisy crates at `warn`) with a bare `info`. `migrate_document` clears
 /// values equal to the old defaults.
-const CURRENT_VERSION: u32 = 5;
+/// Version 6: `cache_backend`, `session_ttl_seconds` and `enable_caching`
+/// stopped being `Settings` fields and became aliases of the `session`
+/// section's `store`, `ttl_seconds` and `caching`, which now take effect, as
+/// do `embedding.onnx.model_path` / `tokenizer_path` derived from
+/// `cache_root_directory`. A pre-v6 file carries `"cache_backend": "fs"` (the
+/// old default, never read), which would otherwise switch every upgraded CLI
+/// to the filesystem session store, and the old `./target/models/...` ONNX
+/// defaults, which would keep `cache_root_directory` from placing the model.
+/// `migrate_document` drops those old defaults and canonicalizes the aliases.
+const CURRENT_VERSION: u32 = 6;
+
+/// The pre-v6 default for `cache_backend`, persisted but never read.
+const LEGACY_DEFAULT_CACHE_BACKEND: &str = "fs";
+
+/// The pre-v6 defaults for the ONNX model and tokenizer paths, persisted with
+/// the whole struct.
+const LEGACY_DEFAULT_ONNX_PATHS: [(&str, &str); 2] = [
+    (
+        "embedding.onnx.model_path",
+        "./target/models/BGE-Small-v1.5-model_quantized.onnx",
+    ),
+    (
+        "embedding.onnx.tokenizer_path",
+        "./target/models/bge-small-tokenizer.json",
+    ),
+];
 
 /// The pre-v5 default for `log_level`, persisted as a real value.
 const LEGACY_DEFAULT_LOG_LEVEL: &str = "info";
@@ -199,6 +224,26 @@ fn migrate_document(document: &mut ConfigDocument) {
             document.settings.logs_root_directory.clear();
         }
         document.version = 5;
+    }
+    if document.version < 6 {
+        // v5 -> v6: the session-cache flat keys became section aliases and
+        // take effect. `cache_backend` was never read, so its persisted
+        // default must not now select the `fs` store; the old ONNX path
+        // defaults must not now override the `cache_root_directory`
+        // derivation.
+        let sections = &mut document.settings.sections;
+        if sections.get("cache_backend").and_then(Value::as_str)
+            == Some(LEGACY_DEFAULT_CACHE_BACKEND)
+        {
+            sections.remove("cache_backend");
+        }
+        canonicalize_section_aliases(sections);
+        for (key, legacy) in LEGACY_DEFAULT_ONNX_PATHS {
+            if sections.get(key).and_then(Value::as_str) == Some(legacy) {
+                sections.remove(key);
+            }
+        }
+        document.version = 6;
     }
 }
 
@@ -497,6 +542,62 @@ mod tests {
     /// A config.json written before v4 (by any earlier cognee-cli)
     /// serialised the flat LLM fields: `"llm_api_key": ""`,
     /// `"llm_max_retries": 3`, ... Parse one exactly as `load_config` does.
+    /// A v5 file carries the old session-cache and ONNX defaults, which were
+    /// never user choices: migrating drops them, so the relational store and
+    /// the `cache_root_directory` model location apply, and moves the other
+    /// flat session keys to their canonical keys.
+    #[test]
+    fn migrating_v5_drops_the_legacy_session_and_onnx_defaults() {
+        let mut document: ConfigDocument = serde_json::from_value(serde_json::json!({
+            "version": 5,
+            "settings": {
+                "cache_backend": "fs",
+                "session_ttl_seconds": 604800,
+                "enable_caching": true,
+                "embedding.onnx.model_path": "./target/models/BGE-Small-v1.5-model_quantized.onnx",
+                "embedding.onnx.tokenizer_path": "/custom/tokenizer.json",
+            }
+        }))
+        .expect("v5 document");
+        migrate_document(&mut document);
+        assert_eq!(document.version, CURRENT_VERSION);
+        let sections = &document.settings.sections;
+        assert!(!sections.contains_key("cache_backend"));
+        assert!(!sections.contains_key("session.store"));
+        assert!(!sections.contains_key("embedding.onnx.model_path"));
+        assert_eq!(
+            sections.get("embedding.onnx.tokenizer_path"),
+            Some(&serde_json::json!("/custom/tokenizer.json"))
+        );
+        assert_eq!(
+            sections.get("session.ttl_seconds"),
+            Some(&serde_json::json!(604800))
+        );
+        assert_eq!(
+            sections.get("session.caching"),
+            Some(&serde_json::json!(true))
+        );
+        assert_eq!(
+            document.settings.get_key("session.store"),
+            Some(serde_json::json!("relational"))
+        );
+    }
+
+    /// A deliberately chosen store survives the upgrade.
+    #[test]
+    fn migrating_v5_keeps_an_explicit_cache_backend() {
+        let mut document: ConfigDocument = serde_json::from_value(serde_json::json!({
+            "version": 5,
+            "settings": { "cache_backend": "redis" }
+        }))
+        .expect("v5 document");
+        migrate_document(&mut document);
+        assert_eq!(
+            document.settings.sections.get("session.store"),
+            Some(&serde_json::json!("redis"))
+        );
+    }
+
     fn legacy_v3_document() -> ConfigDocument {
         let mut document: ConfigDocument = serde_json::from_value(serde_json::json!({
             "version": 3,

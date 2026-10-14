@@ -106,7 +106,8 @@ fn parse_embedding_provider(provider: &str) -> Option<EmbeddingProvider> {
 }
 
 /// Map resolved [`EmbeddingInputs`] plus the provider sections in `sections`
-/// to a `cognee_embedding::EmbeddingConfig`.
+/// to a `cognee_embedding::EmbeddingConfig`. `cache_root_directory` roots the
+/// default ONNX model and tokenizer files.
 ///
 /// Empty and unrecognized provider strings map to `onnx`; the registry rejects a
 /// non-empty unrecognized id before a factory is chosen, so a typo surfaces as an
@@ -121,6 +122,7 @@ fn parse_embedding_provider(provider: &str) -> Option<EmbeddingProvider> {
 pub fn build_embedding_config(
     inputs: &EmbeddingInputs,
     sections: &cognee_config_core::ConfigValues,
+    cache_root_directory: &std::path::Path,
 ) -> EmbeddingConfig {
     use cognee_config_core::ConfigSection as _;
 
@@ -172,8 +174,8 @@ pub fn build_embedding_config(
         let (pooling, query_instruction) =
             cognee_embedding::OnnxEmbeddingConfig::recipe_for(&inputs.model);
         config.onnx = cognee_embedding::OnnxEmbeddingConfig {
-            model_path: PathBuf::from(onnx.model_path),
-            tokenizer_path: PathBuf::from(onnx.tokenizer_path),
+            model_path: onnx.resolved_model_path(cache_root_directory),
+            tokenizer_path: onnx.resolved_tokenizer_path(cache_root_directory),
             model_name: inputs.model.clone(),
             dimensions: inputs.dimensions,
             max_sequence_length: inputs.max_sequence_length,
@@ -208,7 +210,7 @@ pub(crate) async fn build_mock_embedding(
 ) -> Result<Arc<dyn EmbeddingEngine>, ComponentError> {
     let mut inputs = ctx.embedding.clone();
     inputs.mock = true;
-    build_embedding_config(&inputs, &ctx.sections)
+    build_embedding_config(&inputs, &ctx.sections, &ctx.cache_root_directory)
         .create_engine()
         .await
         .map_err(|e| ComponentError::EmbeddingEngine(format!("embedding engine init failed: {e}")))
@@ -255,7 +257,7 @@ impl EmbeddingFactory for DefaultEmbeddingFactory {
         install_embedding_pacer(ctx);
         let mut inputs = ctx.embedding.clone();
         inputs.provider = self.provider.to_string();
-        build_embedding_config(&inputs, &ctx.sections)
+        build_embedding_config(&inputs, &ctx.sections, &ctx.cache_root_directory)
             .create_engine()
             .await
             .map_err(|e| {
@@ -369,19 +371,39 @@ mod tests {
         // build_embedding_config maps an unknown provider to onnx (the factory
         // is what rejects it); mock overrides the provider regardless.
         assert_eq!(
-            build_embedding_config(&inputs("azure", false), &Default::default()).provider,
+            build_embedding_config(
+                &inputs("azure", false),
+                &Default::default(),
+                std::path::Path::new("")
+            )
+            .provider,
             EmbeddingProvider::Onnx
         );
         assert_eq!(
-            build_embedding_config(&inputs("openai", true), &Default::default()).provider,
+            build_embedding_config(
+                &inputs("openai", true),
+                &Default::default(),
+                std::path::Path::new("")
+            )
+            .provider,
             EmbeddingProvider::Mock
         );
         assert_eq!(
-            build_embedding_config(&inputs("ollama", false), &Default::default()).provider,
+            build_embedding_config(
+                &inputs("ollama", false),
+                &Default::default(),
+                std::path::Path::new("")
+            )
+            .provider,
             EmbeddingProvider::Ollama
         );
         assert_eq!(
-            build_embedding_config(&inputs("bedrock", false), &Default::default()).provider,
+            build_embedding_config(
+                &inputs("bedrock", false),
+                &Default::default(),
+                std::path::Path::new("")
+            )
+            .provider,
             EmbeddingProvider::Bedrock
         );
     }
@@ -406,7 +428,7 @@ mod tests {
         .map(|(k, v)| (k.to_string(), serde_json::json!(v)))
         .collect();
 
-        let config = build_embedding_config(&inputs, &sections);
+        let config = build_embedding_config(&inputs, &sections, std::path::Path::new(""));
 
         let aws = <crate::sections::AwsConfig as cognee_config_core::ConfigSection>::from_values(
             &sections,

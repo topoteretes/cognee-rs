@@ -360,12 +360,14 @@ impl EmbeddingConfig {
 config_section! {
     /// The local ONNX (fastembed) embedding provider (`onnx` feature).
     pub struct OnnxEmbeddingConfig in "embedding.onnx" {
-        /// Model file.
-        pub model_path: String = "./target/models/BGE-Small-v1.5-model_quantized.onnx".to_string() => {
+        /// Model file, downloaded there when missing; empty derives
+        /// `<cache_root_directory>/models/BGE-Small-v1.5-model_quantized.onnx`.
+        pub model_path: String = String::new() => {
             env: ["EMBEDDING_MODEL_PATH", "COGNEE_E2E_EMBED_MODEL_PATH"], alias: ["embedding_model_path"], secret: false,
         },
-        /// Tokenizer file.
-        pub tokenizer_path: String = "./target/models/bge-small-tokenizer.json".to_string() => {
+        /// Tokenizer file, downloaded there when missing; empty derives
+        /// `<cache_root_directory>/models/bge-small-tokenizer.json`.
+        pub tokenizer_path: String = String::new() => {
             env: ["EMBEDDING_TOKENIZER_PATH", "COGNEE_E2E_TOKENIZER_PATH"], alias: ["embedding_tokenizer_path"], secret: false,
         },
         /// Inference batch size (leading tensor dimension), independent of
@@ -373,6 +375,42 @@ config_section! {
         pub batch_size: u32 = 32 => {
             env: ["EMBEDDING_ONNX_BATCH_SIZE"], alias: ["embedding_onnx_batch_size"], secret: false,
         },
+    }
+}
+
+impl OnnxEmbeddingConfig {
+    /// File name of the default model under `<cache_root_directory>/models`.
+    pub const DEFAULT_MODEL_FILE: &'static str = "BGE-Small-v1.5-model_quantized.onnx";
+    /// File name of the default tokenizer under `<cache_root_directory>/models`.
+    pub const DEFAULT_TOKENIZER_FILE: &'static str = "bge-small-tokenizer.json";
+
+    /// The model file: `model_path`, or the default file under
+    /// `<cache_root>/models` when it is empty.
+    pub fn resolved_model_path(&self, cache_root: &std::path::Path) -> std::path::PathBuf {
+        resolve_model_file(&self.model_path, cache_root, Self::DEFAULT_MODEL_FILE)
+    }
+
+    /// The tokenizer file: `tokenizer_path`, or the default file under
+    /// `<cache_root>/models` when it is empty.
+    pub fn resolved_tokenizer_path(&self, cache_root: &std::path::Path) -> std::path::PathBuf {
+        resolve_model_file(
+            &self.tokenizer_path,
+            cache_root,
+            Self::DEFAULT_TOKENIZER_FILE,
+        )
+    }
+}
+
+fn resolve_model_file(
+    configured: &str,
+    cache_root: &std::path::Path,
+    default_file: &str,
+) -> std::path::PathBuf {
+    let configured = configured.trim();
+    if configured.is_empty() {
+        cache_root.join("models").join(default_file)
+    } else {
+        std::path::PathBuf::from(configured)
     }
 }
 
@@ -618,9 +656,22 @@ config_section! {
     /// Session (Q&A history) storage. Registered by the session-store kind.
     pub struct SessionConfig in "session" {
         /// Store id selecting the session-store factory: `relational` (the
-        /// relational database; `seaorm` is the same store), `fs`, `redis`.
+        /// relational database; `seaorm`, and Python's `sqlite` and
+        /// `postgres`, are the same store), `fs`, `redis`. Python's
+        /// `CACHE_BACKEND` is read when `COGNEE_SESSION_STORE` is unset.
         pub store: String = "relational".to_string() => {
-            env: ["COGNEE_SESSION_STORE"], alias: ["session_store"], secret: false,
+            env: ["COGNEE_SESSION_STORE", "CACHE_BACKEND"], alias: ["session_store", "cache_backend"], secret: false,
+        },
+        /// Keep session memory at all (Python's `CACHING`). Off, every session
+        /// read is empty and every write fails, whatever the store.
+        pub caching: bool = true => {
+            env: ["CACHING"], alias: ["enable_caching", "caching"], secret: false,
+        },
+        /// Seconds a session lives after its last write, on the stores that
+        /// expire sessions (`redis`, `fs`); 0 never expires (Python's
+        /// `SESSION_TTL_SECONDS`).
+        pub ttl_seconds: u64 = 604_800 => {
+            env: ["SESSION_TTL_SECONDS"], alias: ["session_ttl_seconds"], secret: false,
         },
         /// How long the LLM call that writes a trace step's session feedback
         /// may take, in milliseconds, before the step is stored without it.

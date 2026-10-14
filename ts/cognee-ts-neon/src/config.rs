@@ -194,7 +194,15 @@ string_setter!(
 );
 
 // Other
-string_setter!(config_set_monitoring_tool, set_monitoring_tool);
+/// `configSetMonitoringTool(handle, tool)` — throws for any tool but `none`.
+pub fn config_set_monitoring_tool(mut cx: FunctionContext) -> JsResult<JsUndefined> {
+    let handle = cx.argument::<JsBox<CogneeHandle>>(0)?;
+    let value = cx.argument::<JsString>(1)?.value(&mut cx);
+    match handle.state.cm.config().set_monitoring_tool(&value) {
+        Ok(()) => Ok(cx.undefined()),
+        Err(e) => throw_config_error(&mut cx, e),
+    }
+}
 string_setter!(config_set_classification_model, set_classification_model);
 string_setter!(config_set_summarization_model, set_summarization_model);
 

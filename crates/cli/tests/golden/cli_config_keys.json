@@ -13,7 +13,6 @@
     "aws.session_token",
     "aws.sts_endpoint",
     "aws.web_identity_token",
-    "cache_backend",
     "cache_root_directory",
     "chunk_engine",
     "chunk_overlap",
@@ -55,7 +54,6 @@
     "embedding.rate_limit_interval",
     "embedding.rate_limit_requests",
     "enable_access_control",
-    "enable_caching",
     "enable_last_accessed",
     "graph.file_path",
     "graph.filename",
@@ -133,9 +131,10 @@
     "search.hybrid.summarize_overflow",
     "search.triplet_neighbor_cap",
     "session.abandon_after_seconds",
+    "session.caching",
     "session.feedback_llm_timeout_ms",
     "session.store",
-    "session_ttl_seconds",
+    "session.ttl_seconds",
     "single_process",
     "storage.backend",
     "storage.bucket_name",
@@ -174,9 +173,6 @@
     "chunk_overlap",
     "db_sslmode",
     "default_system_prompt_path",
-    "cache_backend",
-    "session_ttl_seconds",
-    "enable_caching",
     "auto_feedback",
     "default_user_email",
     "default_user_password",
@@ -262,6 +258,8 @@
     "relational.username",
     "relational.password",
     "session.store",
+    "session.caching",
+    "session.ttl_seconds",
     "session.feedback_llm_timeout_ms",
     "session.abandon_after_seconds",
     "cognify.token_counter",
@@ -1779,22 +1777,22 @@
   },
   "set cache_backend <- \"\"": {
     "ok": {
-      "cache_backend": ""
+      "session.store": ""
     }
   },
   "set cache_backend <- \"1\"": {
     "ok": {
-      "cache_backend": "1"
+      "session.store": "1"
     }
   },
   "set cache_backend <- \"s\"": {
     "ok": {
-      "cache_backend": "s"
+      "session.store": "s"
     }
   },
   "set cache_backend <- \"true\"": {
     "ok": {
-      "cache_backend": "true"
+      "session.store": "true"
     }
   },
   "set cache_backend <- -1": {
@@ -1881,6 +1879,53 @@
     "err": true
   },
   "set cache_root_directory <- {\"a\":1}": {
+    "err": true
+  },
+  "set caching <- \"\"": {
+    "err": true
+  },
+  "set caching <- \"1\"": {
+    "err": true
+  },
+  "set caching <- \"s\"": {
+    "err": true
+  },
+  "set caching <- \"true\"": {
+    "err": true
+  },
+  "set caching <- -1": {
+    "err": true
+  },
+  "set caching <- 0": {
+    "err": true
+  },
+  "set caching <- 1": {
+    "err": true
+  },
+  "set caching <- 1.5": {
+    "err": true
+  },
+  "set caching <- 5000000000": {
+    "err": true
+  },
+  "set caching <- 70000": {
+    "err": true
+  },
+  "set caching <- [1]": {
+    "err": true
+  },
+  "set caching <- false": {
+    "ok": {
+      "session.caching": false
+    }
+  },
+  "set caching <- null": {
+    "err": true
+  },
+  "set caching <- true": {
+    "ok": {}
+  },
+  "set caching <- {\"a\":1}": {
     "err": true
   },
   "set chunk_engine <- \"\"": {
@@ -3938,9 +3983,7 @@
     "err": true
   },
   "set embedding.onnx.model_path <- \"\"": {
-    "ok": {
-      "embedding.onnx.model_path": ""
-    }
+    "ok": {}
   },
   "set embedding.onnx.model_path <- \"1\"": {
     "ok": {
@@ -3991,9 +4034,7 @@
     "err": true
   },
   "set embedding.onnx.tokenizer_path <- \"\"": {
-    "ok": {
-      "embedding.onnx.tokenizer_path": ""
-    }
+    "ok": {}
   },
   "set embedding.onnx.tokenizer_path <- \"1\"": {
     "ok": {
@@ -4764,9 +4805,7 @@
     "err": true
   },
   "set embedding_model_path <- \"\"": {
-    "ok": {
-      "embedding.onnx.model_path": ""
-    }
+    "ok": {}
   },
   "set embedding_model_path <- \"1\"": {
     "ok": {
@@ -5070,9 +5109,7 @@
     "err": true
   },
   "set embedding_tokenizer_path <- \"\"": {
-    "ok": {
-      "embedding.onnx.tokenizer_path": ""
-    }
+    "ok": {}
   },
   "set embedding_tokenizer_path <- \"1\"": {
     "ok": {
@@ -5202,7 +5239,7 @@
   },
   "set enable_caching <- false": {
     "ok": {
-      "enable_caching": false
+      "session.caching": false
     }
   },
   "set enable_caching <- null": {
@@ -9968,24 +10005,16 @@
     "err": true
   },
   "set monitoring_tool <- \"\"": {
-    "ok": {
-      "monitoring_tool": ""
-    }
+    "ok": {}
   },
   "set monitoring_tool <- \"1\"": {
-    "ok": {
-      "monitoring_tool": "1"
-    }
+    "err": true
   },
   "set monitoring_tool <- \"s\"": {
-    "ok": {
-      "monitoring_tool": "s"
-    }
+    "err": true
   },
   "set monitoring_tool <- \"true\"": {
-    "ok": {
-      "monitoring_tool": "true"
-    }
+    "err": true
   },
   "set monitoring_tool <- -1": {
     "err": true
@@ -11872,6 +11901,53 @@
   "set session.abandon_after_seconds <- {\"a\":1}": {
     "err": true
   },
+  "set session.caching <- \"\"": {
+    "err": true
+  },
+  "set session.caching <- \"1\"": {
+    "err": true
+  },
+  "set session.caching <- \"s\"": {
+    "err": true
+  },
+  "set session.caching <- \"true\"": {
+    "err": true
+  },
+  "set session.caching <- -1": {
+    "err": true
+  },
+  "set session.caching <- 0": {
+    "err": true
+  },
+  "set session.caching <- 1": {
+    "err": true
+  },
+  "set session.caching <- 1.5": {
+    "err": true
+  },
+  "set session.caching <- 5000000000": {
+    "err": true
+  },
+  "set session.caching <- 70000": {
+    "err": true
+  },
+  "set session.caching <- [1]": {
+    "err": true
+  },
+  "set session.caching <- false": {
+    "ok": {
+      "session.caching": false
+    }
+  },
+  "set session.caching <- null": {
+    "err": true
+  },
+  "set session.caching <- true": {
+    "ok": {}
+  },
+  "set session.caching <- {\"a\":1}": {
+    "err": true
+  },
   "set session.feedback_llm_timeout_ms <- \"\"": {
     "err": true
   },
@@ -11976,6 +12052,59 @@
     "err": true
   },
   "set session.store <- {\"a\":1}": {
+    "err": true
+  },
+  "set session.ttl_seconds <- \"\"": {
+    "err": true
+  },
+  "set session.ttl_seconds <- \"1\"": {
+    "err": true
+  },
+  "set session.ttl_seconds <- \"s\"": {
+    "err": true
+  },
+  "set session.ttl_seconds <- \"true\"": {
+    "err": true
+  },
+  "set session.ttl_seconds <- -1": {
+    "err": true
+  },
+  "set session.ttl_seconds <- 0": {
+    "ok": {
+      "session.ttl_seconds": 0
+    }
+  },
+  "set session.ttl_seconds <- 1": {
+    "ok": {
+      "session.ttl_seconds": 1
+    }
+  },
+  "set session.ttl_seconds <- 1.5": {
+    "err": true
+  },
+  "set session.ttl_seconds <- 5000000000": {
+    "ok": {
+      "session.ttl_seconds": 5000000000
+    }
+  },
+  "set session.ttl_seconds <- 70000": {
+    "ok": {
+      "session.ttl_seconds": 70000
+    }
+  },
+  "set session.ttl_seconds <- [1]": {
+    "err": true
+  },
+  "set session.ttl_seconds <- false": {
+    "err": true
+  },
+  "set session.ttl_seconds <- null": {
+    "err": true
+  },
+  "set session.ttl_seconds <- true": {
+    "err": true
+  },
+  "set session.ttl_seconds <- {\"a\":1}": {
     "err": true
   },
   "set session_abandon_after_seconds <- \"\"": {
@@ -12101,12 +12230,12 @@
   },
   "set session_ttl_seconds <- 0": {
     "ok": {
-      "session_ttl_seconds": 0
+      "session.ttl_seconds": 0
     }
   },
   "set session_ttl_seconds <- 1": {
     "ok": {
-      "session_ttl_seconds": 1
+      "session.ttl_seconds": 1
     }
   },
   "set session_ttl_seconds <- 1.5": {
@@ -12114,12 +12243,12 @@
   },
   "set session_ttl_seconds <- 5000000000": {
     "ok": {
-      "session_ttl_seconds": 5000000000
+      "session.ttl_seconds": 5000000000
     }
   },
   "set session_ttl_seconds <- 70000": {
     "ok": {
-      "session_ttl_seconds": 70000
+      "session.ttl_seconds": 70000
     }
   },
   "set session_ttl_seconds <- [1]": {
@@ -13899,6 +14028,13 @@
       "relational.port": 1
     }
   },
+  "unset caching": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
   "unset chunk_engine": {
     "ok": {
       "chunk_size": 7,
@@ -15259,6 +15395,13 @@
       "relational.port": 1
     }
   },
+  "unset session.caching": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
   "unset session.feedback_llm_timeout_ms": {
     "ok": {
       "chunk_size": 7,
@@ -15267,6 +15410,13 @@
     }
   },
   "unset session.store": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset session.ttl_seconds": {
     "ok": {
       "chunk_size": 7,
       "llm.model": "changed",

@@ -8,4 +8,9 @@ pub enum SessionError {
 
     #[error("invalid parameter: {0}")]
     InvalidParameter(String),
+
+    /// Session memory is switched off (`session.caching`, Python's
+    /// `CACHING=false`); see [`crate::DisabledSessionStore`].
+    #[error("session memory is disabled; set CACHING=true (session.caching) to enable it")]
+    Disabled,
 }

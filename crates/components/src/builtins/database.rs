@@ -140,6 +140,7 @@ mod tests {
             sections: Default::default(),
             data_root_directory: std::path::PathBuf::from("/tmp"),
             system_root_directory: std::path::PathBuf::from("/tmp"),
+            cache_root_directory: std::path::PathBuf::from("/tmp/cognee-test-cache"),
             relational_db_url: url,
             graph_provider: "ladybug".to_string(),
             graph_file_path: String::new(),

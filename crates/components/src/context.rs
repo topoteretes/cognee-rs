@@ -26,6 +26,9 @@ pub struct BackendBuildContext {
     /// Root for system state; graph / vector backends derive default paths from
     /// it when their explicit path is unset.
     pub system_root_directory: PathBuf,
+    /// Root for caches (`cache_root_directory`); the local ONNX embedding
+    /// model and tokenizer default to files under `<cache_root>/models`.
+    pub cache_root_directory: PathBuf,
     /// Fully-resolved relational DB URL (sqlite:… or postgres://…).
     pub relational_db_url: String,
 

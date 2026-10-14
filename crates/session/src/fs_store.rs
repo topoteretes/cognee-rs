@@ -44,6 +44,9 @@ struct FsQAEntry {
 /// Filesystem-backed session store.
 pub struct FsSessionStore {
     base_dir: PathBuf,
+    /// How long a session file lives after its last write; `None` never
+    /// expires.
+    session_ttl: Option<std::time::Duration>,
 }
 
 impl FsSessionStore {
@@ -53,7 +56,42 @@ impl FsSessionStore {
     pub fn new(base_dir: impl Into<PathBuf>) -> Self {
         Self {
             base_dir: base_dir.into(),
+            session_ttl: None,
         }
+    }
+
+    /// Expire a session's files (Q&A entries, trace steps, graph context)
+    /// this many seconds after their last write, as Python's `FSCacheAdapter`
+    /// does with `session_ttl_seconds` (its `diskcache` expiry, refreshed on
+    /// every write). An expired file is deleted when it is next read. `0`
+    /// never expires them, the behaviour of a store built without this call.
+    #[must_use]
+    pub fn with_session_ttl_seconds(mut self, seconds: u64) -> Self {
+        self.session_ttl = (seconds > 0).then(|| std::time::Duration::from_secs(seconds));
+        self
+    }
+
+    /// Delete `path` if it was last written longer ago than the session TTL,
+    /// so the read that follows finds nothing.
+    async fn expire(&self, path: &Path) -> Result<(), SessionError> {
+        let Some(ttl) = self.session_ttl else {
+            return Ok(());
+        };
+        let modified = match fs::metadata(path).await.and_then(|m| m.modified()) {
+            Ok(modified) => modified,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(SessionError::StoreError(format!("fs stat error: {e}"))),
+        };
+        // A clock that went backwards reads as "just written".
+        let age = modified.elapsed().unwrap_or_default();
+        if age > ttl {
+            match fs::remove_file(path).await {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(SessionError::StoreError(format!("fs delete error: {e}"))),
+            }
+        }
+        Ok(())
     }
 }
 
@@ -216,6 +254,7 @@ impl SessionStore for FsSessionStore {
         let qa_id = Uuid::new_v4().to_string();
         let entry = build_entry(&qa_id, question, answer, context);
 
+        self.expire(&path).await?;
         let mut entries = load_entries(&path).await?;
         entries.push(entry);
         save_entries(&path, &entries).await?;
@@ -230,6 +269,7 @@ impl SessionStore for FsSessionStore {
         last_n: usize,
     ) -> Result<Vec<SessionQAEntry>, SessionError> {
         let path = session_file(&self.base_dir, user_id, session_id);
+        self.expire(&path).await?;
         let entries = load_entries(&path).await?;
 
         let start = entries.len().saturating_sub(last_n);
@@ -245,6 +285,7 @@ impl SessionStore for FsSessionStore {
         user_id: Option<&str>,
     ) -> Result<Vec<SessionQAEntry>, SessionError> {
         let path = session_file(&self.base_dir, user_id, session_id);
+        self.expire(&path).await?;
         let entries = load_entries(&path).await?;
         Ok(entries
             .iter()
@@ -278,6 +319,7 @@ impl SessionStore for FsSessionStore {
         qa_id: &str,
     ) -> Result<bool, SessionError> {
         let path = session_file(&self.base_dir, user_id, session_id);
+        self.expire(&path).await?;
         let mut entries = load_entries(&path).await?;
         let before = entries.len();
         entries.retain(|e| e.qa_id != qa_id);
@@ -322,6 +364,7 @@ impl SessionStore for FsSessionStore {
         updates: SessionQAUpdate,
     ) -> Result<bool, SessionError> {
         let path = session_file(&self.base_dir, user_id, session_id);
+        self.expire(&path).await?;
         let mut entries = load_entries(&path).await?;
 
         let Some(entry) = entries.iter_mut().find(|e| e.qa_id == qa_id) else {
@@ -339,6 +382,7 @@ impl SessionStore for FsSessionStore {
         user_id: Option<&str>,
     ) -> Result<Option<String>, SessionError> {
         let path = graph_context_file(&self.base_dir, user_id, session_id);
+        self.expire(&path).await?;
         match fs::read_to_string(&path).await {
             Ok(contents) if !contents.is_empty() => {
                 // Stored as a JSON string
@@ -379,6 +423,7 @@ impl SessionStore for FsSessionStore {
         step: SessionTraceStep,
     ) -> Result<String, SessionError> {
         let path = trace_session_file(&self.base_dir, user_id, session_id);
+        self.expire(&path).await?;
         let mut steps = load_trace_steps(&path).await?;
         let trace_id = step.trace_id.clone();
         steps.push(step);
@@ -392,6 +437,7 @@ impl SessionStore for FsSessionStore {
         session_id: &str,
     ) -> Result<Vec<SessionTraceStep>, SessionError> {
         let path = trace_session_file(&self.base_dir, user_id, session_id);
+        self.expire(&path).await?;
         load_trace_steps(&path).await
     }
 }
@@ -404,6 +450,63 @@ impl SessionStore for FsSessionStore {
 )]
 mod tests {
     use super::*;
+
+    /// Push `path`'s last write `age` into the past.
+    fn age_file(path: &Path, age: std::time::Duration) {
+        let file = std::fs::File::options().write(true).open(path).unwrap();
+        file.set_modified(std::time::SystemTime::now() - age)
+            .unwrap();
+    }
+
+    /// With a TTL, a session file not written for longer than it reads as
+    /// gone (and is deleted); a fresh one, or any file without a TTL, stays.
+    #[tokio::test]
+    async fn session_ttl_expires_files_not_written_within_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = FsSessionStore::new(dir.path()).with_session_ttl_seconds(60);
+        store
+            .create_qa_entry("s", Some("u"), "q", "a", None)
+            .await
+            .unwrap();
+        store
+            .set_graph_context("s", Some("u"), "ctx")
+            .await
+            .unwrap();
+        assert_eq!(
+            store
+                .get_all_qa_entries("s", Some("u"))
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+
+        let qa = session_file(dir.path(), Some("u"), "s");
+        let gc = graph_context_file(dir.path(), Some("u"), "s");
+        age_file(&qa, std::time::Duration::from_secs(120));
+        age_file(&gc, std::time::Duration::from_secs(120));
+
+        let untimed = FsSessionStore::new(dir.path());
+        assert_eq!(
+            untimed
+                .get_all_qa_entries("s", Some("u"))
+                .await
+                .unwrap()
+                .len(),
+            1,
+            "without a TTL nothing expires"
+        );
+
+        assert!(
+            store
+                .get_all_qa_entries("s", Some("u"))
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(!qa.exists(), "the expired file is deleted");
+        assert_eq!(store.get_graph_context("s", Some("u")).await.unwrap(), None);
+    }
 
     #[tokio::test]
     async fn create_and_read_entry_has_no_feedback() {

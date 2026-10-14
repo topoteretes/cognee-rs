@@ -956,68 +956,68 @@
     "aws.web_identity_token": "{\"ssl\":true}"
   },
   "CACHE_BACKEND=\"  \"": {
-    "cache_backend": "  "
+    "session.store": "  "
   },
   "CACHE_BACKEND=\"\"": {},
   "CACHE_BACKEND=\"-1\"": {
-    "cache_backend": "-1"
+    "session.store": "-1"
   },
   "CACHE_BACKEND=\"0\"": {
-    "cache_backend": "0"
+    "session.store": "0"
   },
   "CACHE_BACKEND=\"1\"": {
-    "cache_backend": "1"
+    "session.store": "1"
   },
   "CACHE_BACKEND=\"1.5\"": {
-    "cache_backend": "1.5"
+    "session.store": "1.5"
   },
   "CACHE_BACKEND=\"42\"": {
-    "cache_backend": "42"
+    "session.store": "42"
   },
   "CACHE_BACKEND=\"5000000000\"": {
-    "cache_backend": "5000000000"
+    "session.store": "5000000000"
   },
   "CACHE_BACKEND=\"70000\"": {
-    "cache_backend": "70000"
+    "session.store": "70000"
   },
   "CACHE_BACKEND=\"TRUE\"": {
-    "cache_backend": "TRUE"
+    "session.store": "TRUE"
   },
   "CACHE_BACKEND=\"[1]\"": {
-    "cache_backend": "[1]"
+    "session.store": "[1]"
   },
   "CACHE_BACKEND=\"abc\"": {
-    "cache_backend": "abc"
+    "session.store": "abc"
   },
   "CACHE_BACKEND=\"false\"": {
-    "cache_backend": "false"
+    "session.store": "false"
   },
   "CACHE_BACKEND=\"no\"": {
-    "cache_backend": "no"
+    "session.store": "no"
   },
   "CACHE_BACKEND=\"on\"": {
-    "cache_backend": "on"
+    "session.store": "on"
   },
   "CACHE_BACKEND=\"require\"": {
-    "cache_backend": "require"
+    "session.store": "require"
   },
   "CACHE_BACKEND=\"true\"": {
-    "cache_backend": "true"
+    "session.store": "true"
   },
   "CACHE_BACKEND=\"v\"": {
-    "cache_backend": "v"
+    "session.store": "v"
   },
   "CACHE_BACKEND=\"yes\"": {
-    "cache_backend": "yes"
+    "session.store": "yes"
   },
   "CACHE_BACKEND=\"{\\\"a\\\":1}\"": {
-    "cache_backend": "{\"a\":1}"
+    "session.store": "{\"a\":1}"
   },
   "CACHE_BACKEND=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "cache_backend": "{\"ssl\":\"verify-full\"}"
+    "session.store": "{\"ssl\":\"verify-full\"}"
   },
   "CACHE_BACKEND=\"{\\\"ssl\\\":true}\"": {
-    "cache_backend": "{\"ssl\":true}"
+    "session.store": "{\"ssl\":true}"
   },
   "CACHE_ROOT_DIRECTORY=\"  \"": {
     "cache_root_directory": "  "
@@ -1084,58 +1084,58 @@
     "cache_root_directory": "{\"ssl\":true}"
   },
   "CACHING=\"  \"": {
-    "enable_caching": false
+    "session.caching": false
   },
   "CACHING=\"\"": {},
   "CACHING=\"-1\"": {
-    "enable_caching": false
+    "session.caching": false
   },
   "CACHING=\"0\"": {
-    "enable_caching": false
+    "session.caching": false
   },
   "CACHING=\"1\"": {},
   "CACHING=\"1.5\"": {
-    "enable_caching": false
+    "session.caching": false
   },
   "CACHING=\"42\"": {
-    "enable_caching": false
+    "session.caching": false
   },
   "CACHING=\"5000000000\"": {
-    "enable_caching": false
+    "session.caching": false
   },
   "CACHING=\"70000\"": {
-    "enable_caching": false
+    "session.caching": false
   },
   "CACHING=\"TRUE\"": {},
   "CACHING=\"[1]\"": {
-    "enable_caching": false
+    "session.caching": false
   },
   "CACHING=\"abc\"": {
-    "enable_caching": false
+    "session.caching": false
   },
   "CACHING=\"false\"": {
-    "enable_caching": false
+    "session.caching": false
   },
   "CACHING=\"no\"": {
-    "enable_caching": false
+    "session.caching": false
   },
   "CACHING=\"on\"": {},
   "CACHING=\"require\"": {
-    "enable_caching": false
+    "session.caching": false
   },
   "CACHING=\"true\"": {},
   "CACHING=\"v\"": {
-    "enable_caching": false
+    "session.caching": false
   },
   "CACHING=\"yes\"": {},
   "CACHING=\"{\\\"a\\\":1}\"": {
-    "enable_caching": false
+    "session.caching": false
   },
   "CACHING=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "enable_caching": false
+    "session.caching": false
   },
   "CACHING=\"{\\\"ssl\\\":true}\"": {
-    "enable_caching": false
+    "session.caching": false
   },
   "CHUNKS_PER_BATCH=\"  \"": {},
   "CHUNKS_PER_BATCH=\"\"": {},
@@ -6211,6 +6211,28 @@
   "MOCK_LLM_CASSETTE=\"{\\\"ssl\\\":true}\"": {
     "llm.cassette": "{\"ssl\":true}"
   },
+  "MONITORING_TOOL=\"  \"": {},
+  "MONITORING_TOOL=\"\"": {},
+  "MONITORING_TOOL=\"-1\"": {},
+  "MONITORING_TOOL=\"0\"": {},
+  "MONITORING_TOOL=\"1\"": {},
+  "MONITORING_TOOL=\"1.5\"": {},
+  "MONITORING_TOOL=\"42\"": {},
+  "MONITORING_TOOL=\"5000000000\"": {},
+  "MONITORING_TOOL=\"70000\"": {},
+  "MONITORING_TOOL=\"TRUE\"": {},
+  "MONITORING_TOOL=\"[1]\"": {},
+  "MONITORING_TOOL=\"abc\"": {},
+  "MONITORING_TOOL=\"false\"": {},
+  "MONITORING_TOOL=\"no\"": {},
+  "MONITORING_TOOL=\"on\"": {},
+  "MONITORING_TOOL=\"require\"": {},
+  "MONITORING_TOOL=\"true\"": {},
+  "MONITORING_TOOL=\"v\"": {},
+  "MONITORING_TOOL=\"yes\"": {},
+  "MONITORING_TOOL=\"{\\\"a\\\":1}\"": {},
+  "MONITORING_TOOL=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
+  "MONITORING_TOOL=\"{\\\"ssl\\\":true}\"": {},
   "ONTOLOGY_FILE_PATH=\"  \"": {
     "ontology.file_path": "  "
   },
@@ -7117,20 +7139,20 @@
   "SESSION_TTL_SECONDS=\"\"": {},
   "SESSION_TTL_SECONDS=\"-1\"": {},
   "SESSION_TTL_SECONDS=\"0\"": {
-    "session_ttl_seconds": 0
+    "session.ttl_seconds": 0
   },
   "SESSION_TTL_SECONDS=\"1\"": {
-    "session_ttl_seconds": 1
+    "session.ttl_seconds": 1
   },
   "SESSION_TTL_SECONDS=\"1.5\"": {},
   "SESSION_TTL_SECONDS=\"42\"": {
-    "session_ttl_seconds": 42
+    "session.ttl_seconds": 42
   },
   "SESSION_TTL_SECONDS=\"5000000000\"": {
-    "session_ttl_seconds": 5000000000
+    "session.ttl_seconds": 5000000000
   },
   "SESSION_TTL_SECONDS=\"70000\"": {
-    "session_ttl_seconds": 70000
+    "session.ttl_seconds": 70000
   },
   "SESSION_TTL_SECONDS=\"TRUE\"": {},
   "SESSION_TTL_SECONDS=\"[1]\"": {},

@@ -177,6 +177,7 @@ export interface CogneeConfigObject {
   setOntologyResolver(v: string): void;
   setOntologyMatchingStrategy(v: string): void;
   // Other
+  /** Only `"none"` is supported (Python parity); any other tool throws. */
   setMonitoringTool(v: string): void;
   setClassificationModel(v: string): void;
   setSummarizationModel(v: string): void;

@@ -46,6 +46,7 @@ async fn build_embedding_installs_the_pacer_for_a_custom_factory() {
         sections: Default::default(),
         data_root_directory: std::path::PathBuf::from("/tmp/cognee-test"),
         system_root_directory: std::path::PathBuf::from("/tmp/cognee-test"),
+        cache_root_directory: std::path::PathBuf::from("/tmp/cognee-test-cache"),
         relational_db_url: "sqlite::memory:".to_string(),
         graph_provider: String::new(),
         graph_file_path: String::new(),

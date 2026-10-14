@@ -8,6 +8,7 @@
 //!   (feature `relational-store`, over any `cognee_database::SessionQaDb`)
 //!   — the backing implementations
 
+mod disabled_store;
 mod error;
 mod feedback;
 mod improve_lock;
@@ -24,6 +25,7 @@ mod redis_store;
 #[cfg(feature = "relational-store")]
 mod relational_store;
 
+pub use disabled_store::DisabledSessionStore;
 pub use error::SessionError;
 pub use improve_lock::{ImproveLockGuard, release_improve_lock, try_acquire_improve_lock};
 pub use session_manager::SessionManager;
