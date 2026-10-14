@@ -71,6 +71,10 @@ pub struct AnthropicAdapter {
     /// from `LLM_ARGS` (Python `llm_config.llm_args`). Empty = no-op. Explicit
     /// request keys always win, so this only fills gaps (e.g. `top_p`).
     extra_args: serde_json::Map<String, Value>,
+    /// Temperature of an option-less call, replacing
+    /// [`GenerationOptions::default`]'s `0.0` (the configured
+    /// `llm_temperature`).
+    default_temperature: Option<f32>,
 }
 
 impl AnthropicAdapter {
@@ -133,6 +137,7 @@ impl AnthropicAdapter {
             pacer: None,
             max_completion_tokens: Self::DEFAULT_MAX_COMPLETION_TOKENS,
             extra_args: serde_json::Map::new(),
+            default_temperature: None,
         })
     }
 
@@ -280,6 +285,28 @@ impl AnthropicAdapter {
     pub fn with_extra_args(mut self, args: serde_json::Map<String, Value>) -> Self {
         self.extra_args = args;
         self
+    }
+
+    /// Set the temperature of an option-less call, lowered from
+    /// `llm_temperature`. `None` keeps [`GenerationOptions::default`]'s. A
+    /// caller's own options win; options without a temperature get the
+    /// configured one through [`with_extra_args`](Self::with_extra_args)
+    /// (`LLM_ARGS`, which the factory folds it into).
+    pub fn with_default_temperature(mut self, temperature: Option<f32>) -> Self {
+        self.default_temperature = temperature;
+        self
+    }
+
+    /// The options of a call: the caller's, or the defaults with the
+    /// configured temperature.
+    fn resolve_options(&self, options: Option<GenerationOptions>) -> GenerationOptions {
+        options.unwrap_or_else(|| {
+            let defaults = GenerationOptions::default();
+            GenerationOptions {
+                temperature: self.default_temperature.or(defaults.temperature),
+                ..defaults
+            }
+        })
     }
 
     /// Documented output-token cap per Anthropic model family, mirroring the
@@ -733,7 +760,7 @@ impl AnthropicAdapter {
         options: Option<GenerationOptions>,
         validator: Option<StructuredOutputValidator<'_>>,
     ) -> LlmResult<Value> {
-        let opts = options.unwrap_or_default();
+        let opts = self.resolve_options(options);
         let mut body = self.base_request(&messages, &opts);
         body["tools"] = json!([{
             "name": STRUCTURED_OUTPUT_TOOL,
@@ -941,7 +968,7 @@ impl Llm for AnthropicAdapter {
         messages: Vec<Message>,
         options: Option<GenerationOptions>,
     ) -> LlmResult<GenerationResponse> {
-        let opts = options.unwrap_or_default();
+        let opts = self.resolve_options(options);
         let mut body = self.base_request(&messages, &opts);
         if let Some(stop) = opts.stop.as_ref()
             && !stop.is_empty()

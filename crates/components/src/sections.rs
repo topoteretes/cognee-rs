@@ -51,7 +51,8 @@ config_section! {
         pub temperature: Option<f64> = None => {
             env: ["LLM_TEMPERATURE"], alias: ["llm_temperature"], secret: false,
         },
-        /// Stream responses.
+        /// Stream responses (Python's `llm_streaming`). Lowered into
+        /// `LlmInputs::streaming`; no built-in adapter streams.
         pub streaming: bool = false => {
             env: ["LLM_STREAMING"], alias: ["llm_streaming"], secret: false,
         },

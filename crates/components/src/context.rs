@@ -250,12 +250,14 @@ pub struct LlmInputs {
     ///
     /// A per-call `GenerationOptions.temperature` still wins over this.
     ///
-    /// SCOPE: only `BedrockLlmFactory` consumes this today. The OpenAI-compatible,
-    /// Azure and Anthropic factories ignore it, so an operator on those providers
-    /// sets `LLM_TEMPERATURE` and nothing reaches the wire. Python folds the value
-    /// into `llm_args`, which every one of its adapters merges, so closing that gap
-    /// means adding `with_default_temperature` to the other factories — tracked
-    /// separately rather than bundled into the Bedrock incident fix.
+    /// Every built-in factory applies it. The OpenAI-compatible, Azure and
+    /// Anthropic factories fold it into `llm_args` as `temperature` (Python's
+    /// `fold_sampling_params_into_llm_args`; a `temperature` given in
+    /// `LLM_ARGS` itself wins), which fills any request whose options carry no
+    /// temperature, and also make it the temperature of an option-less call
+    /// in place of `GenerationOptions::default`'s `0.0`. Bedrock does both
+    /// through `with_default_temperature`. The OpenAI-compatible adapter never
+    /// sends a temperature to a reasoning model, which rejects it.
     pub temperature: Option<f32>,
     /// Extra request parameters merged into every chat-completion request body,
     /// lowered from `LLM_ARGS` (Python `llm_config.llm_args`). Empty = no-op.
@@ -296,6 +298,10 @@ pub struct LlmInputs {
 
     /// Dump every request/response body to stderr (`llm.debug_requests`).
     pub debug_requests: bool,
+    /// Stream responses (`llm.streaming`, Python's `llm_streaming`). No
+    /// built-in adapter streams (the `Llm` trait has no streaming call), so
+    /// they ignore it; it is lowered for externally registered factories.
+    pub streaming: bool,
 }
 
 /// Caller-supplied AWS parameters for the Bedrock LLM adapter and embedding

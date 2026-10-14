@@ -285,7 +285,7 @@ for the adapter.
 | `LLM_REASONING` | `llm.reasoning` (`llm_reasoning`) | `auto` |
 | `LLM_STRUCTURED_OUTPUT_MODE` | `llm.structured_output_mode` (`llm_structured_output_mode`) | `auto` |
 | `LLM_TEMPERATURE` | `llm.temperature` (`llm_temperature`) | *unset — no `temperature` is sent* |
-| `LLM_STREAMING` | `llm.streaming` (`llm_streaming`) | `false` |
+| `LLM_STREAMING` | `llm.streaming` (`llm_streaming`) | `false` (accepted for Python parity; no effect, see below) |
 | `LLM_MAX_COMPLETION_TOKENS` / `LLM_MAX_TOKENS` | `llm.max_completion_tokens` (`llm_max_completion_tokens`) | `16384` |
 | `LLM_ARGS` | `llm.args` (`llm_args`) | _(empty)_ |
 | `LLM_MAX_RETRIES` | `llm.max_retries` (`llm_max_retries`) | `3` |
@@ -349,6 +349,22 @@ lenient handling of the other optional LLM knobs. And two paths do not see it at
 all: the **HTTP server has no `LLM_ARGS` equivalent** (it defaults `llm_args` to
 an empty map, so a server deployment cannot raise a cap this way), and the
 vision/transcription path bypasses the merge.
+
+`LLM_TEMPERATURE` reaches every built-in provider (until SDK-1070 only Bedrock
+applied it). The OpenAI-compatible, Azure and Anthropic factories fold it into
+`LLM_ARGS` as `temperature`, as Python's `fold_sampling_params_into_llm_args`
+does, so a `temperature` in `LLM_ARGS` itself wins. It is sent on every call
+that does not pick a temperature itself: requests whose options carry none
+(graph extraction) and option-less calls (search completions), which otherwise
+send `0.0`. A temperature a call picks (summarization's `0.3`) wins, and
+reasoning models, which reject it, never receive one. Unset, nothing changes:
+extraction sends none and option-less calls send `0.0`. Unlike Python, Rust does
+not pin `0.0` for local inference servers when the variable is unset.
+
+`LLM_STREAMING` has no effect. Python's `llm_streaming` is likewise unread by
+its OpenAI and Azure adapters (its own `LLMConfig` says so, beside
+`llm_answer_streaming`), and no Rust adapter streams: the `Llm` trait has no
+token-streaming call for a stream to reach.
 
 A fallback LLM (`llm.fallback_provider/_model/_endpoint/_api_key`, aliases
 `llm_fallback_*`) is configurable programmatically (no env binding) but not used

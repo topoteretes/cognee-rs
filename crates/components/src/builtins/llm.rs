@@ -98,6 +98,43 @@ fn request_deadline(ctx: &BackendBuildContext) -> Option<std::time::Duration> {
     Some(std::time::Duration::from_secs(deadline))
 }
 
+/// `llm_args` with `llm.temperature` folded in as `temperature`, Python's
+/// `fold_sampling_params_into_llm_args`: only when a temperature is set, and a
+/// `temperature` already in `LLM_ARGS` wins. Every adapter merges these args
+/// into a request only where the request has no such key, so a per-call
+/// `GenerationOptions.temperature` still wins, and the OpenAI-compatible
+/// adapter still drops `temperature` for reasoning models, which reject it.
+fn llm_args_with_temperature(
+    ctx: &BackendBuildContext,
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut args = ctx.llm.llm_args.clone();
+    if let Some(temperature) = ctx.llm.temperature
+        && !args.contains_key("temperature")
+        // Through the shortest decimal form, so `0.7_f32` is sent as `0.7`
+        // and not as its widened `0.699999988079071`.
+        && let Some(value) = temperature
+            .to_string()
+            .parse::<f64>()
+            .ok()
+            .and_then(serde_json::Number::from_f64)
+    {
+        args.insert("temperature".to_string(), serde_json::Value::Number(value));
+    }
+    args
+}
+
+/// The temperature an option-less call sends: the folded `temperature` of
+/// [`llm_args_with_temperature`], so an `LLM_ARGS` value wins there too.
+fn option_less_temperature(args: &serde_json::Map<String, serde_json::Value>) -> Option<f32> {
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "GenerationOptions carries f32; a sampling temperature has no precision to lose"
+    )]
+    args.get("temperature")
+        .and_then(serde_json::Value::as_f64)
+        .map(|t| t as f32)
+}
+
 use crate::context::BackendBuildContext;
 use crate::error::ComponentError;
 use crate::sections::{AnthropicConfig, OpenAiCompatibleConfig};
@@ -138,6 +175,7 @@ impl LlmFactory for OpenAiCompatibleLlmFactory {
 
     async fn build(&self, ctx: &BackendBuildContext) -> Result<Arc<dyn Llm>, ComponentError> {
         install_pacer(ctx);
+        let llm_args = llm_args_with_temperature(ctx);
         let adapter = build_openai_compatible_adapter(
             &ctx.llm.provider,
             &ctx.llm.model,
@@ -151,7 +189,8 @@ impl LlmFactory for OpenAiCompatibleLlmFactory {
         // without this line it would silently stay at the adapter default.
         .with_network_retries(ctx.llm.network_retries)
         .with_min_retry_elapsed(min_retry_elapsed(ctx))
-        .with_extra_args(ctx.llm.llm_args.clone())
+        .with_default_temperature(option_less_temperature(&llm_args))
+        .with_extra_args(llm_args)
         .with_default_max_tokens(Some(ctx.llm.max_completion_tokens))
         .with_reasoning_override(ctx.llm.reasoning_override)
         .with_structured_output_mode(ctx.llm.structured_output_mode)
@@ -232,6 +271,7 @@ impl LlmFactory for AnthropicLlmFactory {
         // Python; the override exists for proxy / gateway / Bedrock-compatible
         // endpoints.
         install_pacer(ctx);
+        let llm_args = llm_args_with_temperature(ctx);
         let adapter = AnthropicAdapter::new(
             ctx.llm.model.clone(),
             ctx.llm.api_key.clone(),
@@ -242,7 +282,8 @@ impl LlmFactory for AnthropicLlmFactory {
         .with_network_retries(ctx.llm.network_retries)
         .with_min_retry_elapsed(min_retry_elapsed(ctx))
         .with_max_completion_tokens(ctx.llm.max_completion_tokens)
-        .with_extra_args(ctx.llm.llm_args.clone())
+        .with_default_temperature(option_less_temperature(&llm_args))
+        .with_extra_args(llm_args)
         // Both were unreachable on this adapter before SDK-624 — no setter
         // existed — so `LLM_REQUEST_DEADLINE_SECONDS` and the two timeout knobs
         // were inert here while working on the OpenAI-compatible path.
@@ -302,6 +343,7 @@ impl LlmFactory for AzureLlmFactory {
         // explicit-endpoint OpenAI adapter (which enforces endpoint + key), then
         // switch to api-key auth and the api-version query.
         install_pacer(ctx);
+        let llm_args = llm_args_with_temperature(ctx);
         let adapter = build_openai_compatible_adapter(
             "custom",
             &ctx.llm.model,
@@ -313,7 +355,8 @@ impl LlmFactory for AzureLlmFactory {
         .with_network_retries(ctx.llm.network_retries)
         .with_min_retry_elapsed(min_retry_elapsed(ctx))
         .with_api_version(api_version)
-        .with_extra_args(ctx.llm.llm_args.clone())
+        .with_default_temperature(option_less_temperature(&llm_args))
+        .with_extra_args(llm_args)
         // Honour the operator's completion ceiling on Azure too, matching the
         // OpenAI-compatible factory: without this, option-less generate() calls
         // (search/recall/feedback) fall back to the adapter's hardcoded 16384 and
@@ -481,5 +524,48 @@ pub(crate) fn wrap_recording(
              rebuild with the `mock-llm` feature"
                 .to_string(),
         ))
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
+mod tests {
+    use serde_json::json;
+
+    use super::{llm_args_with_temperature, option_less_temperature};
+    use crate::context::BackendBuildContext;
+
+    fn ctx(temperature: Option<f32>, args: serde_json::Value) -> BackendBuildContext {
+        let mut ctx = crate::registry::tests::test_ctx();
+        ctx.llm.temperature = temperature;
+        ctx.llm.llm_args = args.as_object().unwrap().clone();
+        ctx
+    }
+
+    /// `llm.temperature` is folded into the args every adapter merges (so a
+    /// request whose options carry no temperature, such as graph extraction,
+    /// gets it), in its shortest decimal form, and only when set.
+    #[test]
+    fn temperature_is_folded_into_llm_args_when_set() {
+        let args = llm_args_with_temperature(&ctx(Some(0.7), json!({"top_p": 0.5})));
+        assert_eq!(args.get("temperature"), Some(&json!(0.7)));
+        assert_eq!(args.get("top_p"), Some(&json!(0.5)));
+        assert_eq!(option_less_temperature(&args), Some(0.7));
+
+        let unset = llm_args_with_temperature(&ctx(None, json!({})));
+        assert!(unset.get("temperature").is_none());
+        assert_eq!(option_less_temperature(&unset), None);
+    }
+
+    /// A `temperature` in `LLM_ARGS` wins, as in Python's fold.
+    #[test]
+    fn llm_args_temperature_wins_over_the_setting() {
+        let args = llm_args_with_temperature(&ctx(Some(0.7), json!({"temperature": 0.2})));
+        assert_eq!(args.get("temperature"), Some(&json!(0.2)));
+        assert_eq!(option_less_temperature(&args), Some(0.2));
     }
 }

@@ -590,6 +590,10 @@ pub struct OpenAIAdapter {
     /// matching the historical [`GenerationOptions::default`] cap so an adapter
     /// built without config behaves exactly as before.
     default_max_tokens: Option<u32>,
+    /// Temperature of an option-less [`generate`](Self::generate) call,
+    /// replacing [`GenerationOptions::default`]'s `0.0` (the configured
+    /// `llm_temperature`, see [`with_default_temperature`](Self::with_default_temperature)).
+    default_temperature: Option<f32>,
     /// Whether this adapter's `(model, base_url)` pair is an OpenAI reasoning
     /// model that needs the reasoning parameter shape. Computed once at
     /// construction (both inputs are fixed there) so the per-request build path
@@ -901,6 +905,7 @@ impl OpenAIAdapter {
             debug_requests: false,
             extra_args: serde_json::Map::new(),
             default_max_tokens: Some(Self::DEFAULT_MAX_COMPLETION_TOKENS),
+            default_temperature: None,
             reasoning_model,
             // Off unless configured, so constructing an adapter directly (tests,
             // embedders, downstream users of the crate) keeps the historical
@@ -938,6 +943,17 @@ impl OpenAIAdapter {
     /// stray `setLlmMaxCompletionTokens(0)` must not break `recall`/`search`.
     pub fn with_default_max_tokens(mut self, value: Option<u32>) -> Self {
         self.default_max_tokens = value.filter(|&v| v > 0);
+        self
+    }
+
+    /// Set the temperature of an option-less [`generate`](Self::generate) call,
+    /// lowered from `llm_temperature`. `None` keeps
+    /// [`GenerationOptions::default`]'s. A caller's own options win; calls
+    /// whose options carry no temperature get the configured one through
+    /// [`with_extra_args`](Self::with_extra_args) instead (`LLM_ARGS`, which
+    /// the factory folds it into). Reasoning models never receive one.
+    pub fn with_default_temperature(mut self, temperature: Option<f32>) -> Self {
+        self.default_temperature = temperature;
         self
     }
 
@@ -991,10 +1007,14 @@ impl OpenAIAdapter {
     fn resolve_options(&self, options: Option<GenerationOptions>) -> GenerationOptions {
         match options {
             Some(opts) => opts,
-            None => GenerationOptions {
-                max_tokens: self.default_max_tokens,
-                ..GenerationOptions::default()
-            },
+            None => {
+                let defaults = GenerationOptions::default();
+                GenerationOptions {
+                    max_tokens: self.default_max_tokens,
+                    temperature: self.default_temperature.or(defaults.temperature),
+                    ..defaults
+                }
+            }
         }
     }
 

@@ -756,6 +756,7 @@ impl Settings {
                 cassette: llm.cassette.clone(),
                 record_path: llm.record_path.clone(),
                 debug_requests: llm.debug_requests,
+                streaming: llm.streaming,
             },
         }
     }

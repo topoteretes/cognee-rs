@@ -128,11 +128,10 @@ fn extraction_options() -> GenerationOptions {
     // repetition, the suspected trigger for the runaway generations that
     // truncated three chunks of a 55-chunk document.
     //
-    // Deliberately NOT fixed here: nothing threads the configured
-    // `llm_temperature` (crates/lib/src/config.rs) into cognify, so an operator
-    // who sets one is ignored. Matching 1.5.x fully means honouring an
-    // explicitly-set value and omitting it otherwise, which needs the same
-    // set-vs-default distinction `llm_max_completion_tokens` also lacks.
+    // An operator-set `llm.temperature` still reaches these calls: every
+    // built-in LLM factory folds it into the adapter's `LLM_ARGS`, which fill a
+    // request that carries no temperature of its own (SDK-1070), as 1.5.x does.
+    // Unset, nothing is sent.
     GenerationOptions {
         temperature: None,
         max_tokens: None,

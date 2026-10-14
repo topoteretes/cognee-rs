@@ -441,13 +441,28 @@ impl BedrockAdapter {
 
     /// Set the operator-configured temperature (`llm_temperature`).
     ///
-    /// `None` means the operator set none, so no `temperature` reaches the wire
-    /// and the model's own default applies. A per-call
-    /// `GenerationOptions::temperature` still wins over this.
+    /// It fills a call whose options carry no temperature, and is the
+    /// temperature of an option-less call in place of
+    /// [`GenerationOptions::default`]'s `0.0`. `None` means the operator set
+    /// none: options without a temperature then send none, and an option-less
+    /// call keeps `0.0`. A per-call `GenerationOptions::temperature` still wins.
     #[must_use]
     pub fn with_default_temperature(mut self, temperature: Option<f32>) -> Self {
         self.default_temperature = temperature;
         self
+    }
+
+    /// The options of a call: the caller's, or the defaults with the
+    /// configured temperature in place of [`GenerationOptions::default`]'s
+    /// `0.0`, which would otherwise shadow it in `inference_config`.
+    fn resolve_options(&self, options: Option<GenerationOptions>) -> GenerationOptions {
+        options.unwrap_or_else(|| {
+            let defaults = GenerationOptions::default();
+            GenerationOptions {
+                temperature: self.default_temperature.or(defaults.temperature),
+                ..defaults
+            }
+        })
     }
 
     /// Set `LLM_ARGS`, merged into `additionalModelRequestFields`. Explicit
@@ -853,7 +868,7 @@ impl BedrockAdapter {
         options: Option<GenerationOptions>,
         validator: Option<StructuredOutputValidator<'_>>,
     ) -> LlmResult<Value> {
-        let opts = options.unwrap_or_default();
+        let opts = self.resolve_options(options);
         let mut body = self.base_request(&messages, &opts);
         // §1.4.3: the branch is read from the capability table, never hard-coded.
         converse::apply_structured_output(&mut body, json_schema, &self.caps);
@@ -1158,7 +1173,7 @@ impl Llm for BedrockAdapter {
         messages: Vec<Message>,
         options: Option<GenerationOptions>,
     ) -> LlmResult<GenerationResponse> {
-        let opts = options.unwrap_or_default();
+        let opts = self.resolve_options(options);
         let body = self.base_request(&messages, &opts);
         let response = self.call_converse(&body).await?;
         Ok(GenerationResponse {

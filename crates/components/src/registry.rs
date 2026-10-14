@@ -875,7 +875,7 @@ fn unsupported_msg(field: &str, provider: &str, supported: &[String]) -> String 
     clippy::expect_used,
     reason = "test code — panics are acceptable failures"
 )]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     // A build that drops `lancedb` on Android must not hard-error on a provider
@@ -1794,7 +1794,7 @@ mod tests {
         assert!(std::fs::read_dir(dir.path()).expect("dir").next().is_some());
     }
 
-    fn test_ctx() -> BackendBuildContext {
+    pub(crate) fn test_ctx() -> BackendBuildContext {
         BackendBuildContext {
             sections: Default::default(),
             data_root_directory: std::path::PathBuf::from("/tmp/cognee-test-data"),
@@ -1825,6 +1825,7 @@ mod tests {
             llm: crate::context::LlmInputs {
                 api_version: String::new(),
                 debug_requests: false,
+                streaming: false,
                 temperature: None,
                 provider: "openai".to_string(),
                 model: "gpt-4o-mini".to_string(),
