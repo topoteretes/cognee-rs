@@ -142,4 +142,9 @@ pub trait SearchRetriever: Send + Sync {
         }
         Ok(results)
     }
+
+    /// Why this retriever cannot serve searches over the current data, if it cannot.
+    async fn unavailable_reason(&self) -> Option<String> {
+        None
+    }
 }

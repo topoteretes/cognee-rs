@@ -263,7 +263,7 @@ pub fn build_search_request(
     opts: &serde_json::Value,
     owner_id: Uuid,
 ) -> Result<SearchRequest, SdkError> {
-    // searchType (default GRAPH_COMPLETION)
+    // searchType (default HYBRID_COMPLETION)
     let search_type = match opts.get("searchType").and_then(|v| v.as_str()) {
         Some(s) => parse_search_type(s)?,
         None => SearchType::default(),

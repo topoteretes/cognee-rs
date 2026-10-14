@@ -284,7 +284,7 @@ async def test_compat_upstream_style_script(tmp_path):
 @SKIP_IF_NO_SEARCH
 @pytest.mark.asyncio
 async def test_compat_search_default_type(tmp_path):
-    """search() with no query_type defaults to GRAPH_COMPLETION."""
+    """search() with no query_type defaults to HYBRID_COMPLETION."""
     _patch_default_handle(tmp_path)
     await cognee.add("Bob likes Python programming.")
     await cognee.cognify()

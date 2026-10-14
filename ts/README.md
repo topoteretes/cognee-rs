@@ -176,7 +176,7 @@ const { add, cognify } = await c.addAndCognify(
 
 ### search
 
-Query the knowledge graph. Defaults to `GRAPH_COMPLETION`.
+Query the knowledge graph. Defaults to `HYBRID_COMPLETION`.
 
 ```ts
 const result = await c.search("What is the capital of France?");

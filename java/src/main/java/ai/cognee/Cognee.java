@@ -245,7 +245,7 @@ public final class Cognee implements AutoCloseable {
     }
 
     // --- search ---
-    /** Query the knowledge graph (defaults to {@code GRAPH_COMPLETION}). */
+    /** Query the knowledge graph (defaults to {@code HYBRID_COMPLETION}). */
     public CompletableFuture<SearchResponse> search(String query) {
         return search(query, null);
     }

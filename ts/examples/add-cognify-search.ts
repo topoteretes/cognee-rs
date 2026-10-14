@@ -124,8 +124,8 @@ async function main(): Promise<void> {
 
   // ── Step 5: search ─────────────────────────────────────────────────────────
   //
-  // Queries the knowledge graph. The default search type is GRAPH_COMPLETION,
-  // which uses the LLM to synthesize an answer from the retrieved graph context.
+  // Queries the knowledge graph. The default search type is HYBRID_COMPLETION,
+  // which uses the LLM to synthesize an answer from the retrieved context.
   const query = "Who designed the Eiffel Tower?";
   console.log(`\nSearching: "${query}"`);
   const searchResult = await cognee.search(query);

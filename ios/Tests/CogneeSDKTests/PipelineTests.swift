@@ -199,10 +199,10 @@ final class PipelineTests: XCTestCase {
 
         // ── 5. Search — brute-force vector search over the stored chunks ────
         //     `searchType: CHUNKS` is required for an offline content assertion:
-        //     the default GRAPH_COMPLETION calls `llm.generate`, and the cassette
+        //     the default HYBRID_COMPLETION calls `llm.generate`, and the cassette
         //     holds only `structured_output` entries (KnowledgeGraph +
         //     SummarizedContent), so that call misses and replays an *empty*
-        //     completion. GRAPH_COMPLETION also strips `context`/`graphs` from
+        //     completion. HYBRID_COMPLETION also strips `context`/`graphs` from
         //     the response unless verbose/onlyContext is set, leaving nothing to
         //     match on. CHUNKS runs pure vector retrieval and returns the chunk
         //     payloads (`result.data[].payload.text`), which do carry the prose.

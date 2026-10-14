@@ -489,7 +489,7 @@ void cg_sdk_add_and_cognify(const CgSdk*        sdk,
  *
  * query must be a non-null null-terminated UTF-8 string.
  * opts_json may be NULL or a JSON object with optional keys:
- *   "searchType"            — SCREAMING_SNAKE_CASE (default: GRAPH_COMPLETION)
+ *   "searchType"            — SCREAMING_SNAKE_CASE (default: HYBRID_COMPLETION)
  *   "datasets"              — JSON string array of dataset names
  *   "datasetIds"            — JSON UUID string array
  *   "topK"                  — integer

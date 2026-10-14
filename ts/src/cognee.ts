@@ -582,7 +582,7 @@ export class Cognee {
   /**
    * Search the knowledge graph.
    *
-   * `opts.searchType` defaults to `"GRAPH_COMPLETION"`. All 15
+   * `opts.searchType` defaults to `"HYBRID_COMPLETION"`. All 15
    * SCREAMING_SNAKE_CASE variants are supported.
    */
   async search(

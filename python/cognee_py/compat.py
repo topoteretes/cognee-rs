@@ -306,7 +306,7 @@ async def add_and_cognify(
 
 async def search(
     query_text: str = "",
-    query_type: Union[SearchType, str] = SearchType.GRAPH_COMPLETION,
+    query_type: Union[SearchType, str] = SearchType.HYBRID_COMPLETION,
     top_k: int = 10,
     *,
     datasets=None,

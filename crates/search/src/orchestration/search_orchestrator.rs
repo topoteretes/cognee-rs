@@ -1,3 +1,4 @@
+use crate::orchestration::hybrid_fallback::{passed_graph_only_knob, requested_graph_only_filter};
 use crate::orchestration::{
     SearchTypeRegistry, filter_context_to_datasets, prepare_search_result,
     scope_context_by_datasets,
@@ -5,7 +6,7 @@ use crate::orchestration::{
 use crate::retrievers::DatasetScoping;
 use crate::types::{
     SearchContext, SearchError, SearchOutput, SearchParams, SearchPrompt, SearchRequest,
-    SearchResponse,
+    SearchResponse, SearchType,
 };
 use crate::utils::detect_feedback;
 use cognee_database::{AclDb, IngestDb, SearchHistoryDb, SearchHistoryEntry};
@@ -460,6 +461,48 @@ impl SearchOrchestrator {
         }
     }
 
+    async fn resolve_retriever(
+        &self,
+        request: &SearchRequest,
+    ) -> Result<crate::retrievers::SearchRetrieverRef, SearchError> {
+        if let Some(ref custom_type) = request.custom_search_type {
+            return self.registry.get_by_name(custom_type).ok_or_else(|| {
+                SearchError::InvalidInput(format!(
+                    "No custom retriever registered for '{custom_type}'"
+                ))
+            });
+        }
+        let retriever = self.registry.get(request.search_type)?;
+        if request.search_type == SearchType::HybridCompletion {
+            return self.hybrid_or_fallback(retriever, request).await;
+        }
+        Ok(retriever)
+    }
+
+    async fn hybrid_or_fallback(
+        &self,
+        hybrid: crate::retrievers::SearchRetrieverRef,
+        request: &SearchRequest,
+    ) -> Result<crate::retrievers::SearchRetrieverRef, SearchError> {
+        if let Some(knob) = passed_graph_only_knob(request) {
+            return Err(SearchError::InvalidHybridSearchConfig(format!(
+                "{knob} requires search_type GRAPH_COMPLETION"
+            )));
+        }
+        let reason = match requested_graph_only_filter(request) {
+            Some(filter) => Some(format!("{filter} is set")),
+            None => hybrid.unavailable_reason().await,
+        };
+        if let Some(reason) = reason {
+            tracing::warn!(
+                %reason,
+                "HYBRID_COMPLETION cannot serve this search; falling back to GRAPH_COMPLETION"
+            );
+            return self.registry.get(SearchType::GraphCompletion);
+        }
+        Ok(hybrid)
+    }
+
     #[tracing::instrument(
         name = "cognee.search",
         skip(self, request),
@@ -490,16 +533,11 @@ impl SearchOrchestrator {
             .auto_feedback_detection
             .unwrap_or(self.auto_feedback_default);
 
-        let retriever: crate::retrievers::SearchRetrieverRef =
-            if let Some(ref custom_type) = request.custom_search_type {
-                self.registry.get_by_name(custom_type).ok_or_else(|| {
-                    SearchError::InvalidInput(format!(
-                        "No community retriever registered for '{custom_type}'"
-                    ))
-                })?
-            } else {
-                self.registry.get(request.search_type)?
-            };
+        let retriever = self.resolve_retriever(request).await?;
+        let search_type = match request.custom_search_type {
+            Some(_) => request.search_type,
+            None => retriever.search_type(),
+        };
         let scoping = retriever.dataset_scoping();
 
         // Authorize caller-supplied dataset UUIDs. Python runs every explicit
@@ -719,7 +757,7 @@ impl SearchOrchestrator {
         if acl_scoped && !use_dataset_scope {
             // The caller may read no dataset at all: nothing to search.
             let response = prepare_search_result(
-                request.search_type,
+                search_type,
                 SearchOutput::Items(Vec::new()),
                 None,
                 request.dataset_ids.clone(),
@@ -846,7 +884,7 @@ impl SearchOrchestrator {
                 None => SearchOutput::Items(output_context.clone()),
             };
             let mut response = prepare_search_result(
-                request.search_type,
+                search_type,
                 result,
                 Some(output_context),
                 request.dataset_ids.clone(),
@@ -941,7 +979,7 @@ impl SearchOrchestrator {
                         .response_to_user
                         .unwrap_or_else(|| "Thank you for your feedback!".to_string());
                     let response = prepare_search_result(
-                        request.search_type,
+                        search_type,
                         SearchOutput::Text(acknowledgment),
                         None,
                         request.dataset_ids.clone(),
@@ -978,11 +1016,11 @@ impl SearchOrchestrator {
         //   `extract_context_object_ids(retrieved_objects)` on EVERY
         //   completion path (`hybrid_retriever.py:242-296`). Scoped to the
         //   hybrid retriever and only when a session will actually be saved.
-        let fetch_for_tracking = self.enable_access_tracking
-            && retriever.search_type() != crate::types::SearchType::Feedback;
+        let fetch_for_tracking =
+            self.enable_access_tracking && retriever.search_type() != SearchType::Feedback;
         let fetch_for_session = request.session_id.is_some()
             && self.session_manager.is_some()
-            && retriever.search_type() == crate::types::SearchType::HybridCompletion;
+            && retriever.search_type() == SearchType::HybridCompletion;
         let context = if context.is_none() && (fetch_for_tracking || fetch_for_session) {
             let ctx = retriever.get_context(&request.query_text, &params).await?;
             // `context` is `None` only when `include_context` was false, so the
@@ -1037,7 +1075,7 @@ impl SearchOrchestrator {
         }
 
         let mut response = prepare_search_result(
-            request.search_type,
+            search_type,
             output,
             context,
             request.dataset_ids.clone(),
@@ -3758,5 +3796,93 @@ mod tests {
                 .load(std::sync::atomic::Ordering::SeqCst),
             0
         );
+    }
+
+    struct FakeTypedRetriever {
+        search_type: SearchType,
+        unavailable_reason: Option<String>,
+    }
+
+    #[async_trait]
+    impl SearchRetriever for FakeTypedRetriever {
+        fn search_type(&self) -> SearchType {
+            self.search_type
+        }
+
+        async fn get_context(
+            &self,
+            _query: &str,
+            _params: &SearchParams,
+        ) -> Result<SearchContext, SearchError> {
+            Ok(vec![])
+        }
+
+        async fn get_completion(
+            &self,
+            _query: &str,
+            _context: Option<SearchContext>,
+            _session: &SessionContext,
+            _params: &SearchParams,
+        ) -> Result<SearchOutput, SearchError> {
+            Ok(SearchOutput::Text(format!("{:?}", self.search_type)))
+        }
+
+        async fn unavailable_reason(&self) -> Option<String> {
+            self.unavailable_reason.clone()
+        }
+    }
+
+    fn hybrid_orchestrator(unavailable_reason: Option<&str>) -> super::SearchOrchestrator {
+        let mut registry = SearchTypeRegistry::new();
+        registry.register(Arc::new(FakeTypedRetriever {
+            search_type: SearchType::HybridCompletion,
+            unavailable_reason: unavailable_reason.map(str::to_string),
+        }));
+        registry.register(Arc::new(FakeTypedRetriever {
+            search_type: SearchType::GraphCompletion,
+            unavailable_reason: None,
+        }));
+        super::SearchOrchestrator::new(registry)
+    }
+
+    fn untyped_request(extra: &str) -> SearchRequest {
+        serde_json::from_str(&format!(r#"{{"query_text": "q"{extra}}}"#)).unwrap()
+    }
+
+    #[tokio::test]
+    async fn untyped_search_runs_hybrid() {
+        let response = hybrid_orchestrator(None)
+            .search(&untyped_request(""))
+            .await
+            .unwrap();
+        assert_eq!(response.search_type, SearchType::HybridCompletion);
+    }
+
+    #[tokio::test]
+    async fn unavailable_hybrid_falls_back_to_graph_completion() {
+        let response = hybrid_orchestrator(Some("DocumentChunk_text collection missing"))
+            .search(&untyped_request(""))
+            .await
+            .unwrap();
+        assert_eq!(response.search_type, SearchType::GraphCompletion);
+        assert!(matches!(response.result, SearchOutput::Text(ref t) if t == "GraphCompletion"));
+    }
+
+    #[tokio::test]
+    async fn graph_only_filter_falls_back_to_graph_completion() {
+        let response = hybrid_orchestrator(None)
+            .search(&untyped_request(r#", "neighborhood_depth": 2"#))
+            .await
+            .unwrap();
+        assert_eq!(response.search_type, SearchType::GraphCompletion);
+    }
+
+    #[tokio::test]
+    async fn graph_only_knob_is_rejected_on_hybrid() {
+        let error = hybrid_orchestrator(None)
+            .search(&untyped_request(r#", "wide_search_top_k": 100"#))
+            .await
+            .unwrap_err();
+        assert!(matches!(error, SearchError::InvalidHybridSearchConfig(_)));
     }
 }
