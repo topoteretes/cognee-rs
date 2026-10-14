@@ -1,0 +1,502 @@
+{
+  "cache_host <- \"\"": {
+    "ok": {
+      "session.redis.host": ""
+    }
+  },
+  "cache_host <- \"1\"": {
+    "ok": {
+      "session.redis.host": "1"
+    }
+  },
+  "cache_host <- \"s\"": {
+    "ok": {
+      "session.redis.host": "s"
+    }
+  },
+  "cache_host <- \"true\"": {
+    "ok": {
+      "session.redis.host": "true"
+    }
+  },
+  "cache_host <- -1": {
+    "err": "TypeMismatch",
+    "key": "cache_host"
+  },
+  "cache_host <- 0": {
+    "err": "TypeMismatch",
+    "key": "cache_host"
+  },
+  "cache_host <- 1": {
+    "err": "TypeMismatch",
+    "key": "cache_host"
+  },
+  "cache_host <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "cache_host"
+  },
+  "cache_host <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "cache_host"
+  },
+  "cache_host <- 70000": {
+    "err": "TypeMismatch",
+    "key": "cache_host"
+  },
+  "cache_host <- [1]": {
+    "err": "TypeMismatch",
+    "key": "cache_host"
+  },
+  "cache_host <- false": {
+    "err": "TypeMismatch",
+    "key": "cache_host"
+  },
+  "cache_host <- null": {
+    "err": "TypeMismatch",
+    "key": "cache_host"
+  },
+  "cache_host <- true": {
+    "err": "TypeMismatch",
+    "key": "cache_host"
+  },
+  "cache_host <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "cache_host"
+  },
+  "cache_password <- \"\"": {
+    "ok": {}
+  },
+  "cache_password <- \"1\"": {
+    "ok": {
+      "session.redis.password": "1"
+    }
+  },
+  "cache_password <- \"s\"": {
+    "ok": {
+      "session.redis.password": "s"
+    }
+  },
+  "cache_password <- \"true\"": {
+    "ok": {
+      "session.redis.password": "true"
+    }
+  },
+  "cache_password <- -1": {
+    "err": "TypeMismatch",
+    "key": "cache_password"
+  },
+  "cache_password <- 0": {
+    "err": "TypeMismatch",
+    "key": "cache_password"
+  },
+  "cache_password <- 1": {
+    "err": "TypeMismatch",
+    "key": "cache_password"
+  },
+  "cache_password <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "cache_password"
+  },
+  "cache_password <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "cache_password"
+  },
+  "cache_password <- 70000": {
+    "err": "TypeMismatch",
+    "key": "cache_password"
+  },
+  "cache_password <- [1]": {
+    "err": "TypeMismatch",
+    "key": "cache_password"
+  },
+  "cache_password <- false": {
+    "err": "TypeMismatch",
+    "key": "cache_password"
+  },
+  "cache_password <- null": {
+    "err": "TypeMismatch",
+    "key": "cache_password"
+  },
+  "cache_password <- true": {
+    "err": "TypeMismatch",
+    "key": "cache_password"
+  },
+  "cache_password <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "cache_password"
+  },
+  "cache_port <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "cache_port"
+  },
+  "cache_port <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "cache_port"
+  },
+  "cache_port <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "cache_port"
+  },
+  "cache_port <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "cache_port"
+  },
+  "cache_port <- -1": {
+    "err": "TypeMismatch",
+    "key": "cache_port"
+  },
+  "cache_port <- 0": {
+    "ok": {
+      "session.redis.port": 0
+    }
+  },
+  "cache_port <- 1": {
+    "ok": {
+      "session.redis.port": 1
+    }
+  },
+  "cache_port <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "cache_port"
+  },
+  "cache_port <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "cache_port"
+  },
+  "cache_port <- 70000": {
+    "err": "TypeMismatch",
+    "key": "cache_port"
+  },
+  "cache_port <- [1]": {
+    "err": "TypeMismatch",
+    "key": "cache_port"
+  },
+  "cache_port <- false": {
+    "err": "TypeMismatch",
+    "key": "cache_port"
+  },
+  "cache_port <- null": {
+    "err": "TypeMismatch",
+    "key": "cache_port"
+  },
+  "cache_port <- true": {
+    "err": "TypeMismatch",
+    "key": "cache_port"
+  },
+  "cache_port <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "cache_port"
+  },
+  "cache_username <- \"\"": {
+    "ok": {}
+  },
+  "cache_username <- \"1\"": {
+    "ok": {
+      "session.redis.username": "1"
+    }
+  },
+  "cache_username <- \"s\"": {
+    "ok": {
+      "session.redis.username": "s"
+    }
+  },
+  "cache_username <- \"true\"": {
+    "ok": {
+      "session.redis.username": "true"
+    }
+  },
+  "cache_username <- -1": {
+    "err": "TypeMismatch",
+    "key": "cache_username"
+  },
+  "cache_username <- 0": {
+    "err": "TypeMismatch",
+    "key": "cache_username"
+  },
+  "cache_username <- 1": {
+    "err": "TypeMismatch",
+    "key": "cache_username"
+  },
+  "cache_username <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "cache_username"
+  },
+  "cache_username <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "cache_username"
+  },
+  "cache_username <- 70000": {
+    "err": "TypeMismatch",
+    "key": "cache_username"
+  },
+  "cache_username <- [1]": {
+    "err": "TypeMismatch",
+    "key": "cache_username"
+  },
+  "cache_username <- false": {
+    "err": "TypeMismatch",
+    "key": "cache_username"
+  },
+  "cache_username <- null": {
+    "err": "TypeMismatch",
+    "key": "cache_username"
+  },
+  "cache_username <- true": {
+    "err": "TypeMismatch",
+    "key": "cache_username"
+  },
+  "cache_username <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "cache_username"
+  },
+  "session.redis.host <- \"\"": {
+    "ok": {
+      "session.redis.host": ""
+    }
+  },
+  "session.redis.host <- \"1\"": {
+    "ok": {
+      "session.redis.host": "1"
+    }
+  },
+  "session.redis.host <- \"s\"": {
+    "ok": {
+      "session.redis.host": "s"
+    }
+  },
+  "session.redis.host <- \"true\"": {
+    "ok": {
+      "session.redis.host": "true"
+    }
+  },
+  "session.redis.host <- -1": {
+    "err": "TypeMismatch",
+    "key": "session.redis.host"
+  },
+  "session.redis.host <- 0": {
+    "err": "TypeMismatch",
+    "key": "session.redis.host"
+  },
+  "session.redis.host <- 1": {
+    "err": "TypeMismatch",
+    "key": "session.redis.host"
+  },
+  "session.redis.host <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "session.redis.host"
+  },
+  "session.redis.host <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "session.redis.host"
+  },
+  "session.redis.host <- 70000": {
+    "err": "TypeMismatch",
+    "key": "session.redis.host"
+  },
+  "session.redis.host <- [1]": {
+    "err": "TypeMismatch",
+    "key": "session.redis.host"
+  },
+  "session.redis.host <- false": {
+    "err": "TypeMismatch",
+    "key": "session.redis.host"
+  },
+  "session.redis.host <- null": {
+    "err": "TypeMismatch",
+    "key": "session.redis.host"
+  },
+  "session.redis.host <- true": {
+    "err": "TypeMismatch",
+    "key": "session.redis.host"
+  },
+  "session.redis.host <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "session.redis.host"
+  },
+  "session.redis.password <- \"\"": {
+    "ok": {}
+  },
+  "session.redis.password <- \"1\"": {
+    "ok": {
+      "session.redis.password": "1"
+    }
+  },
+  "session.redis.password <- \"s\"": {
+    "ok": {
+      "session.redis.password": "s"
+    }
+  },
+  "session.redis.password <- \"true\"": {
+    "ok": {
+      "session.redis.password": "true"
+    }
+  },
+  "session.redis.password <- -1": {
+    "err": "TypeMismatch",
+    "key": "session.redis.password"
+  },
+  "session.redis.password <- 0": {
+    "err": "TypeMismatch",
+    "key": "session.redis.password"
+  },
+  "session.redis.password <- 1": {
+    "err": "TypeMismatch",
+    "key": "session.redis.password"
+  },
+  "session.redis.password <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "session.redis.password"
+  },
+  "session.redis.password <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "session.redis.password"
+  },
+  "session.redis.password <- 70000": {
+    "err": "TypeMismatch",
+    "key": "session.redis.password"
+  },
+  "session.redis.password <- [1]": {
+    "err": "TypeMismatch",
+    "key": "session.redis.password"
+  },
+  "session.redis.password <- false": {
+    "err": "TypeMismatch",
+    "key": "session.redis.password"
+  },
+  "session.redis.password <- null": {
+    "err": "TypeMismatch",
+    "key": "session.redis.password"
+  },
+  "session.redis.password <- true": {
+    "err": "TypeMismatch",
+    "key": "session.redis.password"
+  },
+  "session.redis.password <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "session.redis.password"
+  },
+  "session.redis.port <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "session.redis.port"
+  },
+  "session.redis.port <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "session.redis.port"
+  },
+  "session.redis.port <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "session.redis.port"
+  },
+  "session.redis.port <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "session.redis.port"
+  },
+  "session.redis.port <- -1": {
+    "err": "TypeMismatch",
+    "key": "session.redis.port"
+  },
+  "session.redis.port <- 0": {
+    "ok": {
+      "session.redis.port": 0
+    }
+  },
+  "session.redis.port <- 1": {
+    "ok": {
+      "session.redis.port": 1
+    }
+  },
+  "session.redis.port <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "session.redis.port"
+  },
+  "session.redis.port <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "session.redis.port"
+  },
+  "session.redis.port <- 70000": {
+    "err": "TypeMismatch",
+    "key": "session.redis.port"
+  },
+  "session.redis.port <- [1]": {
+    "err": "TypeMismatch",
+    "key": "session.redis.port"
+  },
+  "session.redis.port <- false": {
+    "err": "TypeMismatch",
+    "key": "session.redis.port"
+  },
+  "session.redis.port <- null": {
+    "err": "TypeMismatch",
+    "key": "session.redis.port"
+  },
+  "session.redis.port <- true": {
+    "err": "TypeMismatch",
+    "key": "session.redis.port"
+  },
+  "session.redis.port <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "session.redis.port"
+  },
+  "session.redis.username <- \"\"": {
+    "ok": {}
+  },
+  "session.redis.username <- \"1\"": {
+    "ok": {
+      "session.redis.username": "1"
+    }
+  },
+  "session.redis.username <- \"s\"": {
+    "ok": {
+      "session.redis.username": "s"
+    }
+  },
+  "session.redis.username <- \"true\"": {
+    "ok": {
+      "session.redis.username": "true"
+    }
+  },
+  "session.redis.username <- -1": {
+    "err": "TypeMismatch",
+    "key": "session.redis.username"
+  },
+  "session.redis.username <- 0": {
+    "err": "TypeMismatch",
+    "key": "session.redis.username"
+  },
+  "session.redis.username <- 1": {
+    "err": "TypeMismatch",
+    "key": "session.redis.username"
+  },
+  "session.redis.username <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "session.redis.username"
+  },
+  "session.redis.username <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "session.redis.username"
+  },
+  "session.redis.username <- 70000": {
+    "err": "TypeMismatch",
+    "key": "session.redis.username"
+  },
+  "session.redis.username <- [1]": {
+    "err": "TypeMismatch",
+    "key": "session.redis.username"
+  },
+  "session.redis.username <- false": {
+    "err": "TypeMismatch",
+    "key": "session.redis.username"
+  },
+  "session.redis.username <- null": {
+    "err": "TypeMismatch",
+    "key": "session.redis.username"
+  },
+  "session.redis.username <- true": {
+    "err": "TypeMismatch",
+    "key": "session.redis.username"
+  },
+  "session.redis.username <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "session.redis.username"
+  }
+}

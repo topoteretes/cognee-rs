@@ -1,0 +1,126 @@
+{
+  "session.fs.directory <- \"\"": {
+    "ok": {}
+  },
+  "session.fs.directory <- \"1\"": {
+    "ok": {
+      "session.fs.directory": "1"
+    }
+  },
+  "session.fs.directory <- \"s\"": {
+    "ok": {
+      "session.fs.directory": "s"
+    }
+  },
+  "session.fs.directory <- \"true\"": {
+    "ok": {
+      "session.fs.directory": "true"
+    }
+  },
+  "session.fs.directory <- -1": {
+    "err": "TypeMismatch",
+    "key": "session.fs.directory"
+  },
+  "session.fs.directory <- 0": {
+    "err": "TypeMismatch",
+    "key": "session.fs.directory"
+  },
+  "session.fs.directory <- 1": {
+    "err": "TypeMismatch",
+    "key": "session.fs.directory"
+  },
+  "session.fs.directory <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "session.fs.directory"
+  },
+  "session.fs.directory <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "session.fs.directory"
+  },
+  "session.fs.directory <- 70000": {
+    "err": "TypeMismatch",
+    "key": "session.fs.directory"
+  },
+  "session.fs.directory <- [1]": {
+    "err": "TypeMismatch",
+    "key": "session.fs.directory"
+  },
+  "session.fs.directory <- false": {
+    "err": "TypeMismatch",
+    "key": "session.fs.directory"
+  },
+  "session.fs.directory <- null": {
+    "err": "TypeMismatch",
+    "key": "session.fs.directory"
+  },
+  "session.fs.directory <- true": {
+    "err": "TypeMismatch",
+    "key": "session.fs.directory"
+  },
+  "session.fs.directory <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "session.fs.directory"
+  },
+  "session_directory <- \"\"": {
+    "ok": {}
+  },
+  "session_directory <- \"1\"": {
+    "ok": {
+      "session.fs.directory": "1"
+    }
+  },
+  "session_directory <- \"s\"": {
+    "ok": {
+      "session.fs.directory": "s"
+    }
+  },
+  "session_directory <- \"true\"": {
+    "ok": {
+      "session.fs.directory": "true"
+    }
+  },
+  "session_directory <- -1": {
+    "err": "TypeMismatch",
+    "key": "session_directory"
+  },
+  "session_directory <- 0": {
+    "err": "TypeMismatch",
+    "key": "session_directory"
+  },
+  "session_directory <- 1": {
+    "err": "TypeMismatch",
+    "key": "session_directory"
+  },
+  "session_directory <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "session_directory"
+  },
+  "session_directory <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "session_directory"
+  },
+  "session_directory <- 70000": {
+    "err": "TypeMismatch",
+    "key": "session_directory"
+  },
+  "session_directory <- [1]": {
+    "err": "TypeMismatch",
+    "key": "session_directory"
+  },
+  "session_directory <- false": {
+    "err": "TypeMismatch",
+    "key": "session_directory"
+  },
+  "session_directory <- null": {
+    "err": "TypeMismatch",
+    "key": "session_directory"
+  },
+  "session_directory <- true": {
+    "err": "TypeMismatch",
+    "key": "session_directory"
+  },
+  "session_directory <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "session_directory"
+  }
+}

@@ -10,6 +10,12 @@
 //! The snapshots pin behaviour across refactors of the config code. A change
 //! to them is a behaviour change; review the diff. Regenerate with
 //! `UPDATE_GOLDEN=1 cargo test -p cognee --test config_key_golden`.
+//!
+//! Config sections a cargo feature compiles in (see [`FEATURE_SECTIONS`]) are
+//! pinned in their own snapshots, `<feature>.env_overlay.json` and
+//! `<feature>.generic_set.json`, so the default-build snapshots stay valid
+//! whatever is enabled. Regenerate those with the features on:
+//! `UPDATE_GOLDEN=1 cargo test -p cognee --features session-fs,session-redis --test config_key_golden`.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -180,6 +186,66 @@ const ENV_VARS: &[&str] = &[
     "COGNEE_PGVECTOR_MAINTENANCE_WORK_MEM_MB",
 ];
 
+/// A config section a cargo feature of `cognee` compiles in, with the env vars
+/// it binds. The default-build lists above exclude these; a build with the
+/// feature pins them through [`pinned_env_vars`] and the per-feature goldens.
+struct FeatureSection {
+    /// The `cognee` cargo feature; also the golden file prefix.
+    feature: &'static str,
+    /// Key prefix of the section's settings (`<section>.`).
+    key_prefix: &'static str,
+    /// Every env var the section binds.
+    env_vars: &'static [&'static str],
+}
+
+/// Every feature-gated section, enabled or not, so `set_keys` can leave
+/// them out of the default-build golden.
+const FEATURE_SECTIONS: &[FeatureSection] = &[
+    FeatureSection {
+        feature: "session-fs",
+        key_prefix: "session.fs.",
+        env_vars: &["COGNEE_SESSION_DIR"],
+    },
+    FeatureSection {
+        feature: "session-redis",
+        key_prefix: "session.redis.",
+        env_vars: &[
+            "CACHE_HOST",
+            "CACHE_PORT",
+            "CACHE_USERNAME",
+            "CACHE_PASSWORD",
+        ],
+    },
+];
+
+/// The feature-gated sections this build compiles in.
+fn enabled_feature_sections() -> Vec<&'static FeatureSection> {
+    let enabled = [
+        ("session-fs", cfg!(feature = "session-fs")),
+        ("session-redis", cfg!(feature = "session-redis")),
+    ];
+    FEATURE_SECTIONS
+        .iter()
+        .filter(|fs| {
+            enabled
+                .iter()
+                .find(|(name, _)| *name == fs.feature)
+                .map(|(_, on)| *on)
+                .unwrap_or_else(|| panic!("feature {} missing from `enabled`", fs.feature))
+        })
+        .collect()
+}
+
+/// Every env var this build is expected to bind: the default build's plus
+/// those of each enabled feature-gated section.
+fn pinned_env_vars() -> Vec<&'static str> {
+    let mut vars = ENV_VARS.to_vec();
+    for fs in enabled_feature_sections() {
+        vars.extend_from_slice(fs.env_vars);
+    }
+    vars
+}
+
 /// Raw env values probed against every variable: empty and whitespace,
 /// numbers in and out of each integer range, every bool spelling, and JSON.
 const ENV_PROBES: &[&str] = &[
@@ -285,7 +351,8 @@ fn set_outcome(key: &str, value: Value) -> Value {
 
 /// Every key `ConfigManager::set` is asked about: all serialized `Settings`
 /// fields, the two `#[serde(skip)]` fields, the `embedding_model` alias, and
-/// a key that does not exist.
+/// a key that does not exist. Settings of feature-gated sections are left
+/// out; [`feature_section_set_keys`] covers them.
 fn set_keys() -> Vec<String> {
     let mut keys: Vec<String> = serde_json::to_value(Settings::default())
         .unwrap()
@@ -305,8 +372,28 @@ fn set_keys() -> Vec<String> {
         .map(String::from),
     );
     for def in cognee::config::builtin_schema().key_defs() {
+        if FEATURE_SECTIONS
+            .iter()
+            .any(|fs| def.key.starts_with(fs.key_prefix))
+        {
+            continue;
+        }
         keys.push(def.key.to_string());
         keys.extend(def.aliases.iter().map(|a| a.to_string()));
+    }
+    keys.sort();
+    keys.dedup();
+    keys
+}
+
+/// The keys and flat aliases of one feature-gated section.
+fn feature_section_set_keys(fs: &FeatureSection) -> Vec<String> {
+    let mut keys = Vec::new();
+    for def in cognee::config::builtin_schema().key_defs() {
+        if def.key.starts_with(fs.key_prefix) {
+            keys.push(def.key.to_string());
+            keys.extend(def.aliases.iter().map(|a| a.to_string()));
+        }
     }
     keys.sort();
     keys.dedup();
@@ -348,16 +435,21 @@ fn check_golden(name: &str, actual: &Value) {
     }
 }
 
-#[test]
-fn env_overlay_matches_golden() {
-    let mut cases = BTreeMap::new();
-    cases.insert("<empty env>".to_string(), overlay(&MapEnv::new()));
-    for var in ENV_VARS {
+/// Env-overlay cases for every probe against each of `vars`.
+fn env_probe_cases(vars: &[&str], cases: &mut BTreeMap<String, Value>) {
+    for var in vars {
         for probe in ENV_PROBES {
             let env = MapEnv::new().with(*var, *probe);
             cases.insert(format!("{var}={probe:?}"), overlay(&env));
         }
     }
+}
+
+#[test]
+fn env_overlay_matches_golden() {
+    let mut cases = BTreeMap::new();
+    cases.insert("<empty env>".to_string(), overlay(&MapEnv::new()));
+    env_probe_cases(ENV_VARS, &mut cases);
     for (primary, alias) in ENV_ALIASES {
         let both = MapEnv::new().with(*primary, "1").with(*alias, "2");
         cases.insert(format!("{primary}=1 + {alias}=2"), overlay(&both));
@@ -426,7 +518,40 @@ fn registry_binds_exactly_the_pinned_env_vars() {
         .collect();
     bound.sort_unstable();
     bound.dedup();
-    let mut pinned = ENV_VARS.to_vec();
+    let mut pinned = pinned_env_vars();
     pinned.sort_unstable();
     assert_eq!(bound, pinned);
+}
+
+/// Each enabled feature-gated section: its env binding and its keys, pinned
+/// in `<feature>.env_overlay.json` / `<feature>.generic_set.json`. A no-op
+/// in a build with none enabled; CI runs it with them on.
+#[test]
+fn feature_sections_match_golden() {
+    for fs in enabled_feature_sections() {
+        let mut env_cases = BTreeMap::new();
+        env_probe_cases(fs.env_vars, &mut env_cases);
+        check_golden(
+            &format!("{}.env_overlay.json", fs.feature),
+            &Value::Object(env_cases.into_iter().collect()),
+        );
+
+        let keys = feature_section_set_keys(fs);
+        assert!(
+            !keys.is_empty(),
+            "feature {} is enabled but registers no `{}*` keys",
+            fs.feature,
+            fs.key_prefix
+        );
+        let mut set_cases = BTreeMap::new();
+        for key in keys {
+            for probe in set_probes() {
+                set_cases.insert(format!("{key} <- {probe}"), set_outcome(&key, probe));
+            }
+        }
+        check_golden(
+            &format!("{}.generic_set.json", fs.feature),
+            &Value::Object(set_cases.into_iter().collect()),
+        );
+    }
 }

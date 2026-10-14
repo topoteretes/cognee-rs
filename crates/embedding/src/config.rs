@@ -190,7 +190,7 @@ impl OnnxEmbeddingConfig {
     /// name.
     ///
     /// Callers that point the ONNX engine at an arbitrary local file (the
-    /// `EMBEDDING_ONNX_*` path) still get the right recipe for a recognised
+    /// `EMBEDDING_MODEL_PATH` path) still get the right recipe for a recognised
     /// family instead of silently inheriting BGE's. Families:
     ///
     /// * **BGE** (`bge-*`) — CLS pooling, and a query instruction chosen per
@@ -871,7 +871,7 @@ mod tests {
     }
 
     /// `recipe_for` keys off the model family, so an operator who points
-    /// `EMBEDDING_ONNX_MODEL_PATH` at some other export does not silently
+    /// `EMBEDDING_MODEL_PATH` at some other export does not silently
     /// inherit BGE's recipe. Unknown names must land on mean/none — the
     /// sentence-transformers default — rather than on CLS, which on a
     /// mean-trained model reads one arbitrary token.

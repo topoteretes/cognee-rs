@@ -512,8 +512,30 @@ mode fails the call rather than falling through — the error names the pin, so 
 mode the endpoint cannot actually speak is diagnosable rather than silent. An
 unrecognised value falls back to `auto`.
 
-This is the counterpart of Python cognee's `llm_instructor_mode`; Python picks
-one mode per provider from a static table and has no cascade to bound.
+**Python's `LLM_INSTRUCTOR_MODE` is not an alias for this.** It covers similar
+ground but does not mean the same thing, so Rust does not read it. If a shared
+`.env` sets `LLM_INSTRUCTOR_MODE`, translate it to `LLM_STRUCTURED_OUTPUT_MODE`
+yourself. The two differ in four ways:
+
+- **When it applies.** Python reads `llm_instructor_mode` only on its
+  `instructor` structured-output framework (`STRUCTURED_OUTPUT_FRAMEWORK=instructor`).
+  The default framework, `litellm_native`, ignores it. Aliasing it would make a
+  value that does nothing in Python change behaviour in Rust.
+- **Values.** Python takes an `instructor.Mode` value: `json_schema_mode`,
+  `tool_call`, `tools_strict`, `markdown_json_mode`, `anthropic_tools`,
+  `mistral_tools` and so on, many of them specific to one provider. Only
+  `json_mode` and `function_call` are also spelled the same in Rust; anything
+  else falls back to `auto` here.
+- **Empty value.** Empty means the provider's entry in Python's static table
+  (`instructor_modes.py`, for example `json_schema_mode` for OpenAI). In Rust,
+  `auto` means the cascade.
+- **Scope and pinning.** Python's mode applies to every adapter, and
+  `json_schema_mode` is a pin. Rust's knob applies only to the OpenAI-compatible
+  adapter, and `json_schema` is not a pin (see below).
+
+Rough translation: `json_schema_mode` → `json_schema`; `tool_call` /
+`tools_strict` / `parallel_tool_call` → `tools`; `function_call` → `functions`;
+`json_mode` / `markdown_json_mode` → `json`.
 
 #### `json_schema` — constrained decoding
 
@@ -1464,7 +1486,8 @@ These knobs form one resilience stack, matching Python cognee's:
   8s doubling to a 128s ceiling, and a `Retry-After` header is honoured (capped
   at 60s) when the provider sends one. Set `LLM_MIN_RETRY_SECONDS=0` to fail
   fast on attempts alone. The elapsed time measured against this floor excludes
-  time spent queued for an `LLM_MAX_IN_FLIGHT` slot: the floor is a "keep
+  time spent queued for an in-flight slot (the
+  `LLM_MAX_PARALLEL_REQUESTS` ceiling): the floor is a "keep
   retrying for at least this long" guarantee, so counting queue time against it
   could only ever end the ladder earlier, and a call that waited minutes for a
   slot would give up having barely retried at all.

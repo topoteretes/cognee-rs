@@ -124,6 +124,17 @@ cargo test -p cognee-ingestion --no-default-features --features pdf-pure-rust \
 
 echo ""
 echo "================================================================"
+echo "=== Rust: Test (config key golden, feature-gated session stores) ==="
+echo "================================================================"
+# The `session.fs` / `session.redis` config sections are compiled in only by
+# `cognee`'s `session-fs` / `session-redis` features, which nothing in the
+# workspace enables, so every other run of this golden leaves them out. This is
+# the only lane that pins their env vars and keys. MIRROR of the step of the
+# same name in .github/workflows/ci.yml.
+cargo test -p cognee --features session-fs,session-redis --test config_key_golden
+
+echo ""
+echo "================================================================"
 echo "=== Rust: Compilation check (Postgres-only backends: no onnx/ladybug/lancedb) ==="
 echo "================================================================"
 # Guards the seam a downstream consumer uses to drop the embedded backends —

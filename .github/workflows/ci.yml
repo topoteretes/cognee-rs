@@ -334,6 +334,16 @@ jobs:
           cargo test -p cognee-ingestion --no-default-features \
             --features pdf-pure-rust --test pdf_pure_rust_fixture_extraction
 
+      # The `session.fs` / `session.redis` config sections exist only when
+      # `cognee`'s `session-fs` / `session-redis` features are on, and nothing
+      # in the workspace enables them, so every other run of this golden
+      # compiles them out. This is the only lane that pins their env vars and
+      # keys. Mirrored in scripts/check_all.sh.
+      - name: Test (config key golden, feature-gated session stores)
+        run: |
+          cargo test -p cognee --features session-fs,session-redis \
+            --test config_key_golden
+
       - name: License presence (every published crate)
         run: |
           cargo metadata --no-deps --format-version 1 \
