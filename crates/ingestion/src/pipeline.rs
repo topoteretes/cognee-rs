@@ -765,6 +765,38 @@ fn is_html_url_metadata(metadata: &UrlMetadata) -> bool {
     metadata.essence == "text/html" || metadata.essence == "application/xhtml+xml"
 }
 
+/// Record the add call's `node_set` under `external_metadata["node_set"]`.
+///
+/// Python's `ingest_data` does `ext_metadata["node_set"] = effective_node_set`
+/// for every item when the set is non-empty, after merging the item's own
+/// metadata — so the call's node set wins over a `node_set` key the item
+/// carried. Cognify reads the node set back from there, not from the
+/// `Data.node_set` column (`classify_documents.update_node_set`, ported in
+/// `cognee_models::document`), so without the key a document — and every
+/// chunk, summary and entity derived from it — is never tagged, and a
+/// `node_name` search never finds it.
+///
+/// Metadata that is not a JSON object is kept under
+/// `data_item_external_metadata_raw`, as [`merge_external_metadata`] keeps it.
+fn with_node_set_in_external_metadata(
+    external_metadata: Option<&str>,
+    node_set: &[String],
+) -> Result<Option<String>, serde_json::Error> {
+    if node_set.is_empty() {
+        return Ok(external_metadata.map(str::to_string));
+    }
+    let mut merged = match external_metadata.map(serde_json::from_str::<serde_json::Value>) {
+        None => serde_json::Map::new(),
+        Some(Ok(serde_json::Value::Object(object))) => object,
+        Some(_) => serde_json::Map::from_iter([(
+            "data_item_external_metadata_raw".to_string(),
+            serde_json::Value::String(external_metadata.unwrap_or_default().to_string()),
+        )]),
+    };
+    merged.insert("node_set".to_string(), serde_json::json!(node_set));
+    serde_json::to_string(&serde_json::Value::Object(merged)).map(Some)
+}
+
 fn merge_external_metadata(
     data_item_metadata: Option<String>,
     url_metadata: Option<&UrlMetadata>,
@@ -954,6 +986,8 @@ pub fn make_persist_data_task_with_acl(
 #[derive(Debug, Clone, Default)]
 struct AddParamsInjection {
     node_set_json: Option<String>,
+    /// The same `node_set`, unserialised, for `external_metadata["node_set"]`.
+    node_set: Option<Vec<String>>,
     importance_weight: Option<f64>,
     target_dataset_id: Option<Uuid>,
     /// Identity locks serializing dataset create-and-grant against concurrent
@@ -979,6 +1013,19 @@ fn make_persist_data_task_with_acl_and_params(
         // Decision 7 (LIB-06): inject add-specific params inside the task.
         if let Some(ref ns) = add_params.node_set_json {
             processed.node_set = Some(ns.clone());
+        }
+        if let Some(ref node_set) = add_params.node_set {
+            processed.external_metadata = match with_node_set_in_external_metadata(
+                processed.external_metadata.as_deref(),
+                node_set,
+            ) {
+                Ok(metadata) => metadata,
+                Err(e) => {
+                    return Box::pin(async move {
+                        Err(format!("Failed to record node_set in external_metadata: {e}").into())
+                    });
+                }
+            };
         }
         if let Some(w) = add_params.importance_weight {
             processed.importance_weight = Some(w);
@@ -1309,6 +1356,7 @@ impl AddPipeline {
             .map_err(|e| format!("Failed to serialize node_set: {e}"))?;
         let add_params_inj = AddParamsInjection {
             node_set_json,
+            node_set: params.node_set.clone(),
             importance_weight: params.importance_weight,
             target_dataset_id: params.dataset_id,
             dataset_locks: self.dataset_locks.clone(),
@@ -2571,5 +2619,95 @@ mod tests {
             result[0].external_metadata, None,
             "DataItem with no external_metadata should produce None on Data"
         );
+    }
+
+    #[test]
+    fn node_set_is_recorded_in_external_metadata_like_python() {
+        let set = vec!["alpha".to_string(), "beta".to_string()];
+        let parse = |s: Option<String>| -> serde_json::Value {
+            serde_json::from_str(&s.expect("metadata written")).expect("json")
+        };
+
+        // No node set: the metadata is left exactly as it was.
+        assert_eq!(
+            with_node_set_in_external_metadata(Some("{\"a\":1}"), &[]).unwrap(),
+            Some("{\"a\":1}".to_string())
+        );
+        assert_eq!(with_node_set_in_external_metadata(None, &[]).unwrap(), None);
+
+        // No metadata: Python's `get_external_metadata_dict` starts from `{}`.
+        assert_eq!(
+            parse(with_node_set_in_external_metadata(None, &set).unwrap()),
+            serde_json::json!({"node_set": ["alpha", "beta"]})
+        );
+
+        // The item's own keys survive; the call's node set replaces an item
+        // `node_set` key, as `ext_metadata["node_set"] = ...` does.
+        assert_eq!(
+            parse(
+                with_node_set_in_external_metadata(
+                    Some("{\"source\":\"crm\",\"node_set\":[\"stale\"]}"),
+                    &set
+                )
+                .unwrap()
+            ),
+            serde_json::json!({"source": "crm", "node_set": ["alpha", "beta"]})
+        );
+
+        // Metadata that is not an object is kept raw, as `merge_external_metadata` keeps it.
+        assert_eq!(
+            parse(with_node_set_in_external_metadata(Some("not json"), &set).unwrap()),
+            serde_json::json!({
+                "data_item_external_metadata_raw": "not json",
+                "node_set": ["alpha", "beta"],
+            })
+        );
+    }
+
+    /// `add(node_set=[...])` must tag what cognify builds from the data: the
+    /// node set reaches the `Document` (and from there every chunk) only
+    /// through `external_metadata["node_set"]`. Before this, it reached the
+    /// `Data.node_set` column alone, so no document was ever tagged and a
+    /// `node_name` search never found data added with a node set.
+    #[tokio::test]
+    async fn add_with_node_set_tags_the_document_cognify_builds() {
+        let (pipeline, _db) = make_pipeline().await;
+        let params = AddParams {
+            node_set: Some(vec!["alpha".to_string()]),
+            ..AddParams::default()
+        };
+        let data = pipeline
+            .add_with_params(
+                vec![DataInput::Text(
+                    "Alice maintains the billing service.".into(),
+                )],
+                "node_set_ds",
+                Uuid::new_v4(),
+                None,
+                &params,
+            )
+            .await
+            .expect("add");
+        assert_eq!(data.len(), 1);
+        let metadata: serde_json::Value = serde_json::from_str(
+            data[0]
+                .external_metadata
+                .as_deref()
+                .expect("external_metadata written"),
+        )
+        .expect("json");
+        assert_eq!(metadata["node_set"], serde_json::json!(["alpha"]));
+        assert_eq!(data[0].node_set.as_deref(), Some("[\"alpha\"]"));
+
+        let documents = cognee_models::classify_documents(&data);
+        assert_eq!(documents.len(), 1);
+        let sets = documents[0]
+            .base
+            .belongs_to_set
+            .as_ref()
+            .expect("the document is tagged with its node set");
+        assert_eq!(sets.len(), 1);
+        assert_eq!(sets[0]["name"], "alpha");
+        assert_eq!(documents[0].base.source_node_set.as_deref(), Some("alpha"));
     }
 }
