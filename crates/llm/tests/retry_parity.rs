@@ -203,20 +203,70 @@ async fn unknown_model_is_terminal() {
 }
 
 #[tokio::test]
-async fn not_implemented_is_terminal_and_typed() {
-    // 501 is the one entry in the terminal set with no Python counterpart. HTTP
-    // defines it as the server lacking the capability, so no wait can help.
-    //
-    // The *variant* is asserted here, not just the terminality, because it is a
-    // public `generate` contract and because the structured-output demotion
-    // ladder matches on `FeatureNotSupported` rather than on a formatted string
-    // (SDK-630). The json_schema tests observe this only through the fallback,
-    // so without this case a regression could keep demotion working while
-    // `generate` started retrying or returning a different error.
-    let error = assert_terminal(501, "Error making prediction", "501").await;
+async fn a_501_on_an_unconstrained_request_is_retried() {
+    // Baseten's gpt-oss-120b answers `501 {"error":"Error making prediction"}`
+    // when a request shape it serves fails mid-generation, and the same request
+    // succeeds when re-sent (SDK-938). So outside constrained decoding a 501 is
+    // a transient 5xx, as in Python, whose terminal set has no 501.
+    let server = MockServer::start_async().await;
+    let pacer = test_pacer();
+    let failing = server
+        .mock_async(|when, then| {
+            when.method(POST).path("/chat/completions");
+            then.status(501)
+                .header("retry-after", "1")
+                .body(r#"{"error":"Error making prediction"}"#);
+        })
+        .await;
+
+    let result = openai_adapter(&server, &pacer)
+        .generate(prompt(), None)
+        .await;
+
+    assert!(result.is_err(), "an exhausted budget must surface an error");
     assert!(
-        matches!(error, LlmError::FeatureNotSupported(_)),
-        "501 must surface as FeatureNotSupported, got {error:?}",
+        failing.calls_async().await >= 2,
+        "an unconstrained 501 is transient and must be retried, got {} request(s)",
+        failing.calls_async().await
+    );
+}
+
+#[tokio::test]
+async fn a_501_on_a_constrained_request_is_terminal_and_typed() {
+    // On a `response_format: json_schema` request a 501 is the endpoint refusing
+    // that request shape, which no wait changes: one request, surfaced as
+    // `FeatureNotSupported`, which the structured-output demotion ladder matches
+    // on (SDK-630). A retried 501 would arrive as `MaxRetriesExceeded` instead
+    // and the ladder could never fire.
+    let server = MockServer::start_async().await;
+    let pacer = test_pacer();
+    let refusing = server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path("/chat/completions")
+                .body_includes("\"json_schema\"")
+                .body_includes("\"strict\":true");
+            then.status(501)
+                .body(r#"{"error":"Error making prediction"}"#);
+        })
+        .await;
+
+    let adapter = openai_adapter(&server, &pacer)
+        .with_structured_output_mode(cognee_llm::StructuredOutputMode::JsonSchema)
+        .with_structured_output_retries(1);
+    let _ = adapter
+        .create_structured_output_raw(
+            "input",
+            "system",
+            &serde_json::json!({"type": "object", "properties": {"x": {"type": "string"}}}),
+            None,
+        )
+        .await;
+
+    assert_eq!(
+        refusing.calls_async().await,
+        1,
+        "a constrained 501 is a refused shape — exactly one strict request, then demotion"
     );
 }
 

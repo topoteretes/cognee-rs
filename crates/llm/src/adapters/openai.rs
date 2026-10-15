@@ -1607,6 +1607,12 @@ impl OpenAIAdapter {
         let url = self.endpoint_url("chat/completions");
         tracing::Span::current().record("url", url.as_str());
         let debug_enabled = self.debug_requests;
+        // Whether this is a constrained-decoding request; decides what a 501
+        // means (see the status mapping below).
+        let constrained = request_body
+            .pointer("/response_format/type")
+            .and_then(Value::as_str)
+            == Some("json_schema");
 
         if debug_enabled {
             let pretty_request = serde_json::to_string_pretty(&request_body)
@@ -1827,30 +1833,40 @@ impl OpenAIAdapter {
                     429 if quota_exhausted => LlmError::PaymentRequired(error_body),
                     429 => LlmError::RateLimitExceeded(error_body),
                     400 => LlmError::InvalidResponse(format!("Bad request: {error_body}")),
-                    // 501 Not Implemented is the server saying it does not
-                    // support the functionality the request needs — by
-                    // definition not a transient condition, and the answer
-                    // Baseten's gpt-oss-120b gives to a constrained-decoding
+                    // 501 on a constrained-decoding request (`response_format:
+                    // json_schema`) is the endpoint refusing that request
+                    // shape — what Baseten's gpt-oss-120b answers to every such
                     // request. Typed rather than folded into `ApiError` so the
                     // structured-output demotion ladder can recognise "this
                     // endpoint will not accept this request shape" without
-                    // pattern-matching on a formatted string.
-                    501 => LlmError::FeatureNotSupported(error_body),
+                    // pattern-matching on a formatted string, and terminal
+                    // below so that ladder can fire.
+                    501 if constrained => LlmError::FeatureNotSupported(error_body),
+                    // Any other 501 is a failed answer, not a refused shape:
+                    // Baseten returns the very same `{"error":"Error making
+                    // prediction"}` when a tool-call, function or JSON-mode
+                    // request — shapes it serves — fails mid-generation, and the
+                    // same request succeeds when re-sent (SDK-938, where this
+                    // was killing whole cassette recordings). Retried like any
+                    // other 5xx, as Python does: its terminal set has no 501.
                     _ => LlmError::ApiError(format!("HTTP {status}: {error_body}")),
                 };
 
                 // Non-retryable: bad request, auth, billing (402), unknown model
-                // (404), quota exhaustion, and 501. The first five mirror
-                // Python's terminal set in `should_retry_llm_exception`;
-                // retrying any of them only burns the budget a recoverable error
-                // will need. 501 is a Rust-only addition and is terminal for the
-                // same reason, one step stronger: HTTP defines it as the server
-                // lacking the capability, so no wait can make it succeed. It
-                // matters that this is terminal — a retried 501 arrives as
-                // `MaxRetriesExceeded`, which the structured-output cascade
-                // treats as fatal, so the json_schema demotion below could never
-                // fire and the mode would fail the call instead of falling back.
-                if matches!(code, 400..=402 | 404 | 501) || quota_exhausted {
+                // (404), quota exhaustion, and a 501 on a constrained request.
+                // The first five mirror Python's terminal set in
+                // `should_retry_llm_exception`; retrying any of them only burns
+                // the budget a recoverable error will need. The constrained 501
+                // is a Rust-only addition: it is a refused request shape, which
+                // no wait changes, and it matters that it is terminal — a
+                // retried 501 arrives as `MaxRetriesExceeded`, which the
+                // structured-output cascade treats as fatal, so the json_schema
+                // demotion could never fire and the mode would fail the call
+                // instead of falling back. Every other 501 is retried (above).
+                if matches!(code, 400..=402 | 404)
+                    || (code == 501 && constrained)
+                    || quota_exhausted
+                {
                     return Err(err);
                 }
 
