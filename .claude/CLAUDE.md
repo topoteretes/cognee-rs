@@ -99,7 +99,7 @@ Several suites need a live Postgres and are **silently skipped** without it — 
 | `DB_PROVIDER=postgres` + `DB_HOST`/`DB_PORT`/`DB_NAME`/`DB_USERNAME`/`DB_PASSWORD` | `pgvector_span_instrumentation.rs` (3), plus `crates/ingestion/tests/{integration_deduplication,tenant_isolation,image_audio_add}.rs` and `crates/database/tests/migration_compat.rs` — **the ingestion/migration ones are still unwired in CI** | **no** | `pgvector/pgvector:pg16` | `cargo test -p cognee-vector --features pgvector,testing --test pgvector_span_instrumentation -- --nocapture` |
 | `PGVECTOR_TEST_URL` | `crates/vector/src/pgvector_adapter.rs` inline (2) | yes | `pgvector/pgvector:pg16` | `cargo test -p cognee-vector --features pgvector,testing --lib -- --nocapture` |
 | `TEST_POSTGRES_URL` | `crates/lib/tests/pg_shared_db_single_stack.rs` (1), `crates/lib/tests/pg_full_stack_e2e.rs` (1, needs an LLM), `crates/database/tests/provenance_batch.rs` (2 of 3) | yes | `pgvector/pgvector:pg16` | `cargo test -p cognee --test pg_shared_db_single_stack -- --nocapture` |
-| `PGGRAPH_TEST_URL` | `crates/graph/tests/pg_graph_integration.rs` (32), `pg_graph_adapter.rs` inline (2) | yes | `postgres:16` | `cargo nextest run -p cognee-graph --features postgres,testing --test pg_graph_integration --success-output immediate` |
+| `PGGRAPH_TEST_URL` | `crates/graph/tests/pg_graph_integration.rs` (55), `pg_graph_adapter.rs` inline (4) | yes | `postgres:16` | `cargo nextest run -p cognee-graph --features postgres,testing --test pg_graph_integration --success-output immediate` |
 
 ```bash
 docker run --rm -d --name cognee-pgv-test \

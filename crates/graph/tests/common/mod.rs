@@ -168,6 +168,9 @@ pub async fn test_add_nodes_repeated_id_in_one_batch(db: &dyn GraphDBTrait) {
         .await
         .unwrap();
 
+    // Every node, not just the entities' type: the corruption also moved the
+    // repeated row's name and properties, and it could land on rn_t2 (already
+    // an EntityType) without changing any type at all.
     let (nodes, _) = db.get_graph_data().await.unwrap();
     assert_eq!(
         nodes.len(),
@@ -175,17 +178,44 @@ pub async fn test_add_nodes_repeated_id_in_one_batch(db: &dyn GraphDBTrait) {
         "{:?}",
         nodes.iter().map(|n| &n.0).collect::<Vec<_>>()
     );
+    let expected: HashMap<String, (&str, String, i64)> = (0..3)
+        .map(|i| {
+            (
+                format!("rn_e{i}"),
+                ("Entity", format!("Entity {i}"), i64::from(i)),
+            )
+        })
+        .chain([
+            (
+                "rn_t1".to_string(),
+                ("EntityType", "person (last)".to_string(), 1),
+            ),
+            (
+                "rn_t2".to_string(),
+                ("EntityType", "timestamp".to_string(), 0),
+            ),
+        ])
+        .collect();
     for (id, props) in &nodes {
-        let node_type = props.get("type").and_then(|v| v.as_str());
-        if id.starts_with("rn_e") {
-            assert_eq!(node_type, Some("Entity"), "{id} was overwritten: {props:?}");
-        }
+        let (node_type, name, value) = expected
+            .get(id)
+            .unwrap_or_else(|| panic!("unexpected node {id}: {props:?}"));
+        assert_eq!(
+            props.get("type").and_then(|v| v.as_str()),
+            Some(*node_type),
+            "{id}: {props:?}"
+        );
+        assert_eq!(
+            props.get("name").and_then(|v| v.as_str()),
+            Some(name.as_str()),
+            "{id}: {props:?}"
+        );
+        assert_eq!(
+            props.get("value").and_then(|v| v.as_i64()),
+            Some(*value),
+            "{id}: {props:?}"
+        );
     }
-    let person = db.get_node("rn_t1").await.unwrap().expect("person exists");
-    assert_eq!(
-        person.get("name").and_then(|v| v.as_str()),
-        Some("person (last)")
-    );
 }
 
 /// An edge repeated inside a single batch write is one edge, last properties

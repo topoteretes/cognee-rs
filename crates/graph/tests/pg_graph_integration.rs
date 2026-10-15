@@ -224,6 +224,8 @@ mod from_connection {
     use cognee_graph::PgGraphAdapter;
 
     pggraph_from_connection_test!(test_add_nodes_batch);
+    pggraph_from_connection_test!(test_add_nodes_repeated_id_in_one_batch);
+    pggraph_from_connection_test!(test_add_edges_repeated_key_in_one_batch);
     pggraph_from_connection_test!(test_get_nodes_batch);
     pggraph_from_connection_test!(test_delete_nodes_batch);
     pggraph_from_connection_test!(test_add_edges_batch);

@@ -782,32 +782,37 @@ impl GraphDBTrait for PgGraphAdapter {
             return Ok(());
         }
 
-        // Serialize and deduplicate by id (last wins), keeping first-seen order.
-        let mut order: Vec<String> = Vec::with_capacity(nodes.len());
-        let mut seen: HashMap<String, NodeRow> = HashMap::with_capacity(nodes.len());
-        for node in &nodes {
-            let row = Self::serialize_node_to_row(node)?;
-            if !seen.contains_key(&row.id) {
-                order.push(row.id.clone());
-            }
-            seen.insert(row.id.clone(), row);
-        }
+        // One row per id before batching — see `crate::dedup`: Postgres
+        // rejects a batch whose `ON CONFLICT DO UPDATE` would touch one row
+        // twice. Keyed on the sanitized id, which is what the conflict target
+        // compares (`serialize_node_to_row` strips NULs from it). Each id takes
+        // everything from its last occurrence and `created_at` from its first:
+        // `ON CONFLICT` never updates `created_at`, so that is what the same
+        // upserts issued one by one leave. Only survivors are serialized, one
+        // batch at a time.
+        let survivors = crate::dedup::first_and_last_occurrence(
+            nodes
+                .iter()
+                .map(|node| sanitize_str(node.get("id").and_then(Value::as_str).unwrap_or(""))),
+        );
 
         // One `INSERT … SELECT FROM unnest(…)` per `WRITE_BATCH` rows: every
         // column travels as a single array parameter, so the statement text
         // (and its cached prepared plan) is the same for every batch, and a
         // batch costs one round trip instead of `rows / 100`.
-        for chunk in order.chunks(WRITE_BATCH) {
+        for chunk in survivors.chunks(WRITE_BATCH) {
             let mut ids = Vec::with_capacity(chunk.len());
             let mut names = Vec::with_capacity(chunk.len());
             let mut types = Vec::with_capacity(chunk.len());
             let mut props = Vec::with_capacity(chunk.len());
             let mut created = Vec::with_capacity(chunk.len());
             let mut updated = Vec::with_capacity(chunk.len());
-            for id in chunk {
-                let Some(row) = seen.remove(id) else {
-                    continue;
-                };
+            for &(first, last) in chunk {
+                let mut row = Self::serialize_node_to_row(&nodes[last])?;
+                if first != last {
+                    row.created_at = parse_audit_timestamp(nodes[first].get("created_at"))
+                        .unwrap_or_else(Utc::now);
+                }
                 ids.push(row.id);
                 names.push(row.name);
                 types.push(row.node_type);
@@ -834,7 +839,7 @@ impl GraphDBTrait for PgGraphAdapter {
             .await
             .map_err(|e| GraphDBError::NodeError(format!("Failed to upsert nodes: {e}")))?;
         }
-        if order.len() >= ANALYZE_MIN_ROWS {
+        if survivors.len() >= ANALYZE_MIN_ROWS {
             self.analyze_if_never_analyzed("graph_node").await;
         }
 
@@ -1457,53 +1462,48 @@ impl GraphDBTrait for PgGraphAdapter {
 
         let now = Utc::now();
 
-        // Sanitize *before* deduplicating, not after. The `ON CONFLICT` target
-        // below is the sanitized triple, so two edges differing only by an
-        // embedded NUL must collapse into one entry here. Keying the dedup map
-        // on the raw triple would let both survive into a single
-        // `INSERT ... ON CONFLICT DO UPDATE`, which Postgres rejects with
-        // `21000: ON CONFLICT DO UPDATE command cannot affect row a second
-        // time` — aborting the whole chunk. `add_nodes_raw` gets this right by
-        // construction because it dedups on the already-sanitized `row.id`.
+        // One row per edge before batching — see `crate::dedup`. Sanitize
+        // *before* deduplicating, not after: the `ON CONFLICT` target below is
+        // the sanitized triple, so two edges differing only by an embedded NUL
+        // must collapse into one row here. Keying on the raw triple would let
+        // both survive into a single `INSERT ... ON CONFLICT DO UPDATE`, which
+        // Postgres rejects with `21000: ON CONFLICT DO UPDATE command cannot
+        // affect row a second time` — aborting the whole chunk.
         //
-        // The map holds a *borrow* of the properties and serializes only the
-        // survivors: `to_value` + `sanitize_json` on an entry that the next
-        // duplicate immediately overwrites is pure waste.
-        type EdgeProps = HashMap<Cow<'static, str>, Value>;
-        let mut order: Vec<(String, String, String)> = Vec::with_capacity(edges.len());
-        let mut seen: HashMap<(String, String, String), &EdgeProps> =
-            HashMap::with_capacity(edges.len());
-        for edge in edges {
-            let key = (
-                sanitize_str(&edge.0).into_owned(),
-                sanitize_str(&edge.1).into_owned(),
-                sanitize_str(&edge.2).into_owned(),
-            );
-            if seen.insert(key.clone(), &edge.3).is_none() {
-                order.push(key);
-            }
-        }
+        // The last occurrence wins, and only survivors' properties are
+        // serialized: `to_value` + `sanitize_json` on an entry the next
+        // duplicate overwrites is pure waste.
+        let mut keys: Vec<(String, String, String)> = edges
+            .iter()
+            .map(|edge| {
+                (
+                    sanitize_str(&edge.0).into_owned(),
+                    sanitize_str(&edge.1).into_owned(),
+                    sanitize_str(&edge.2).into_owned(),
+                )
+            })
+            .collect();
+        let survivors = crate::dedup::first_and_last_occurrence(keys.iter());
 
         // One `INSERT … SELECT FROM unnest(…)` per `WRITE_BATCH` edges (see
         // `add_nodes_raw`). All rows of a call share one `created_at`, as
         // before.
         let now = now.to_rfc3339();
-        for chunk in order.chunks_mut(WRITE_BATCH) {
+        for chunk in survivors.chunks(WRITE_BATCH) {
             let mut src = Vec::with_capacity(chunk.len());
             let mut dst = Vec::with_capacity(chunk.len());
             let mut rel = Vec::with_capacity(chunk.len());
             let mut props = Vec::with_capacity(chunk.len());
-            for key in chunk.iter_mut() {
-                let Some(p) = seen.get(key) else {
-                    continue;
-                };
+            for &(_, last) in chunk {
                 // Edge properties carry LLM-authored descriptions and, through
                 // them, source text — same NUL exposure as node properties.
-                let json = serde_json::to_value(p).map_err(GraphDBError::SerializationError)?;
+                let json = serde_json::to_value(&edges[last].3)
+                    .map_err(GraphDBError::SerializationError)?;
                 props.push(sanitize_json(json));
-                src.push(std::mem::take(&mut key.0));
-                dst.push(std::mem::take(&mut key.1));
-                rel.push(std::mem::take(&mut key.2));
+                let (s, t, r) = std::mem::take(&mut keys[last]);
+                src.push(s);
+                dst.push(t);
+                rel.push(r);
             }
             self
                 .execute_tuned(Statement::from_sql_and_values(
@@ -1525,7 +1525,7 @@ impl GraphDBTrait for PgGraphAdapter {
                 .await
                 .map_err(|e| GraphDBError::EdgeError(format!("Failed to upsert edges: {e}")))?;
         }
-        if order.len() >= ANALYZE_MIN_ROWS {
+        if survivors.len() >= ANALYZE_MIN_ROWS {
             self.analyze_if_never_analyzed("graph_edge").await;
         }
         Ok(())
@@ -2948,6 +2948,54 @@ mod session_tuning_tests {
                 caller_pool.close().await.unwrap();
             },
         )
+        .await;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Batch dedup tests
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
+mod batch_dedup_tests {
+    use super::PgGraphAdapter;
+    use super::shared_db_migration_tests::with_temp_db;
+    use crate::traits::GraphDBTrait;
+    use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
+    use serde_json::json;
+
+    /// A repeated id in one `add_nodes_raw` call: `created_at` comes from the
+    /// first occurrence (`ON CONFLICT` never updates it, so one-by-one upserts
+    /// keep it), everything else from the last.
+    #[tokio::test]
+    async fn repeated_id_keeps_the_first_created_at() {
+        with_temp_db("repeated_id_keeps_the_first_created_at", |url| async move {
+            let adapter = PgGraphAdapter::new(&url).await.unwrap();
+            adapter
+                .add_nodes_raw(vec![
+                    json!({"id": "x", "name": "first", "type": "T", "created_at": "2020-01-01T00:00:00Z"}),
+                    json!({"id": "y", "name": "other", "type": "T"}),
+                    json!({"id": "x", "name": "last", "type": "T", "created_at": "2024-06-01T00:00:00Z"}),
+                ])
+                .await
+                .unwrap();
+            let row = adapter
+                .db
+                .query_one(Statement::from_string(
+                    DatabaseBackend::Postgres,
+                    "SELECT name, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS created \
+                     FROM graph_node WHERE id = 'x'",
+                ))
+                .await
+                .unwrap()
+                .expect("x exists");
+            assert_eq!(row.try_get::<String>("", "name").unwrap(), "last");
+            assert_eq!(row.try_get::<String>("", "created").unwrap(), "2020-01-01");
+        })
         .await;
     }
 }

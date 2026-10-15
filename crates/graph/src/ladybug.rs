@@ -1132,31 +1132,39 @@ impl GraphDBTrait for LadybugAdapter {
             GraphDBError::ConnectionError(format!("Failed to create connection: {e}"))
         })?;
 
-        // Deduplicate by id (last wins, first-seen order) before batching, as
-        // the Postgres adapter does. The engine mishandles one id repeated
-        // inside a single `UNWIND … MERGE`: the repeated row's `type` and
-        // `properties` land on an unrelated *existing* node, so writing
-        // `[person, timestamp, person]` EntityTypes turned some Entity into an
-        // EntityType. Last-wins is what the same MERGEs issued one by one
-        // would leave behind.
-        let mut order: Vec<String> = Vec::with_capacity(nodes.len());
-        let mut by_id: HashMap<String, NodeProperties> = HashMap::with_capacity(nodes.len());
-        for node in &nodes {
-            let p = self.serialize_to_node_props(node)?;
-            if !by_id.contains_key(&p.id) {
-                order.push(p.id.clone());
-            }
-            by_id.insert(p.id.clone(), p);
-        }
-        let deduped: Vec<NodeProperties> = order.iter().filter_map(|id| by_id.remove(id)).collect();
+        // One row per id before batching — see `crate::dedup`. The engine
+        // mishandles an id repeated inside a single `UNWIND … MERGE` that sets
+        // two or more columns (lbug 0.14.1): the repeated row is written onto
+        // the node at the first row offset, so writing `[person, timestamp,
+        // person]` EntityTypes turned an Entity into an EntityType. Reduced to
+        // raw Cypher in `tests::lbug_engine_still_corrupts_on_a_repeated_merge_key`,
+        // which fails once an lbug upgrade fixes it. A batch with distinct ids
+        // has not been seen to trigger it, which is what this guarantees.
+        //
+        // Each surviving id takes everything from its last occurrence and the
+        // `created_at` column from its first — the column is set only `ON
+        // CREATE`, so that is what the same MERGEs issued one by one leave.
+        // Deduplicating on the raw id (what `serialize_to_node_props` keys on)
+        // before serializing means a duplicate is never serialized, and only
+        // one batch of rows is serialized at a time.
+        let survivors = crate::dedup::first_and_last_occurrence(
+            nodes
+                .iter()
+                .map(|node| node.get("id").and_then(Value::as_str).unwrap_or("")),
+        );
 
         // Process in batches. Each batch is a single `UNWIND … MERGE` query
         // (mirrors the Python Ladybug adapter) instead of a per-node
         // exists-check + CREATE/SET — one round-trip per batch, and MERGE makes
         // it idempotent without the extra COUNT query.
-        for chunk in deduped.chunks(BATCH_SIZE) {
+        for chunk in survivors.chunks(BATCH_SIZE) {
             let mut items = Vec::with_capacity(chunk.len());
-            for p in chunk {
+            for &(first, last) in chunk {
+                let mut p = self.serialize_to_node_props(&nodes[last])?;
+                if first != last {
+                    p.created_at = parse_audit_timestamp(nodes[first].get("created_at"))
+                        .unwrap_or_else(Utc::now);
+                }
                 items.push(format!(
                     "{{id:'{}', name:'{}', type:'{}', properties:'{}', created_at:'{}', updated_at:'{}'}}",
                     Self::escape_cypher_string(&p.id),
@@ -1474,23 +1482,21 @@ impl GraphDBTrait for LadybugAdapter {
         // Ladybug adapter), replacing the per-edge exists-check + CREATE/SET.
         const BATCH_SIZE: usize = 500;
         let now = Utc::now().format("%Y-%m-%d %H:%M:%S%.6f").to_string();
-        // Deduplicate by (source, target, relationship) — last wins, first-seen
-        // order — for the same reason as `add_nodes_raw`: a key repeated inside
-        // one `UNWIND … MERGE` aborts the engine (`KU_UNREACHABLE` in
-        // csr_node_group.cpp) and fails the whole write.
-        let mut order: Vec<(&str, &str, &str)> = Vec::with_capacity(edges.len());
-        let mut by_key: HashMap<(&str, &str, &str), &EdgeData> =
-            HashMap::with_capacity(edges.len());
-        for edge in edges {
-            let key = (edge.0.as_str(), edge.1.as_str(), edge.2.as_str());
-            if by_key.insert(key, edge).is_none() {
-                order.push(key);
-            }
-        }
-        let edges: Vec<&EdgeData> = order
-            .iter()
-            .filter_map(|key| by_key.get(key).copied())
-            .collect();
+        // One row per `(source, target, relationship)` before batching — see
+        // `crate::dedup`. A key repeated inside one `UNWIND … MERGE` aborts the
+        // engine (`KU_UNREACHABLE` in csr_node_group.cpp, lbug 0.14.1) and
+        // fails the whole write. The last occurrence wins: `ON MATCH` replaces
+        // the properties, and `created_at` is the call's `now` for every row.
+        //
+        // Keyed on the raw strings, unlike Postgres, which keys on the
+        // NUL-sanitized triple because Postgres text drops NULs: Ladybug stores
+        // `"r\0x"` and `"rx"` as distinct keys, so they are distinct edges here.
+        let survivors = crate::dedup::first_and_last_occurrence(
+            edges
+                .iter()
+                .map(|edge| (edge.0.as_str(), edge.1.as_str(), edge.2.as_str())),
+        );
+        let edges: Vec<&EdgeData> = survivors.iter().map(|&(_, last)| &edges[last]).collect();
         for chunk in edges.chunks(BATCH_SIZE) {
             let mut items = Vec::with_capacity(chunk.len());
             for edge in chunk {
@@ -2512,10 +2518,119 @@ mod tests {
         (adapter, temp_dir)
     }
 
+    /// A repeated id in one `add_nodes_raw` call: the `created_at` column
+    /// comes from the first occurrence (it is set only `ON CREATE`, so one-by-
+    /// one MERGEs keep it), everything else from the last.
+    #[tokio::test]
+    #[serial]
+    async fn repeated_id_keeps_the_first_created_at_column() {
+        let (adapter, _dir) = setup_adapter().await;
+        adapter
+            .add_nodes_raw(vec![
+                json!({"id": "x", "name": "first", "type": "T", "created_at": "2020-01-01T00:00:00Z"}),
+                json!({"id": "y", "name": "other", "type": "T"}),
+                json!({"id": "x", "name": "last", "type": "T", "created_at": "2024-06-01T00:00:00Z"}),
+            ])
+            .await
+            .unwrap();
+        let rows = adapter
+            .execute_query("MATCH (n:Node) WHERE n.id = 'x' RETURN n.name, n.created_at")
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0][0], json!("last"));
+        let created = rows[0][1].as_str().unwrap_or_default().to_string();
+        assert!(
+            created.starts_with("2020-01-01"),
+            "created_at column: {created:?}"
+        );
+    }
+
+    /// Ladybug keeps keys that differ only by a NUL byte distinct, so the
+    /// batch dedup keys on the raw strings (Postgres, whose text drops NULs,
+    /// keys on the sanitized ones). Two such edges in one batch are two edges,
+    /// and the write succeeds.
+    #[tokio::test]
+    #[serial]
+    async fn nul_distinct_keys_stay_distinct_in_one_batch() {
+        let (adapter, _dir) = setup_adapter().await;
+        adapter
+            .add_nodes_raw(vec![
+                json!({"id": "a", "type": "T"}),
+                json!({"id": "b", "type": "T"}),
+                json!({"id": "n\u{0}", "type": "X"}),
+                json!({"id": "n", "type": "Y"}),
+            ])
+            .await
+            .unwrap();
+        adapter
+            .add_edges(&[
+                ("a".into(), "b".into(), "r\u{0}x".into(), HashMap::new()),
+                ("a".into(), "b".into(), "rx".into(), HashMap::new()),
+            ])
+            .await
+            .unwrap();
+        let (nodes, edges) = adapter.get_graph_data().await.unwrap();
+        assert_eq!(nodes.len(), 4);
+        let mut rels: Vec<String> = edges.into_iter().map(|e| e.2).collect();
+        rels.sort();
+        assert_eq!(rels, vec!["r\u{0}x".to_string(), "rx".to_string()]);
+    }
+
     /// Regression: lbug supports a single batched `UNWIND … MERGE` (inline
     /// struct list) and it is idempotent — the basis for the batched
     /// `add_nodes_raw`/`add_edges` upserts that replaced per-item exists-check
     /// + CREATE/SET.
+    /// Canary for the engine bug the batch dedup in `add_nodes_raw` works
+    /// around (see `crate::dedup`). With lbug 0.14.1, a key repeated inside one
+    /// `UNWIND … MERGE` whose SET clauses touch two or more columns writes the
+    /// repeated row onto the node at the first row offset (`e0` here). One SET
+    /// column does not trigger it. Raw Cypher, no adapter code involved.
+    /// Tracked in SDK-1128 (to be reported upstream at LadybugDB/ladybug).
+    ///
+    /// This asserts the bug is **still present**. When an lbug upgrade fixes
+    /// it, this test fails: then the dedup is no longer a correctness guard
+    /// (it is still worth keeping for the edge abort and as plain hygiene) and
+    /// this canary should be deleted along with the comment that points here.
+    #[tokio::test]
+    #[serial]
+    async fn lbug_engine_still_corrupts_on_a_repeated_merge_key() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = SystemConfig::default().max_db_size(DEFAULT_MAX_DB_SIZE);
+        let db =
+            Database::new(temp_dir.path().join("canary.db").to_str().unwrap(), config).unwrap();
+        let conn = Connection::new(&db).unwrap();
+        conn.query("CREATE NODE TABLE Node(id STRING PRIMARY KEY, name STRING, type STRING)")
+            .unwrap();
+        let merge = |rows: &str| {
+            format!(
+                "UNWIND [{rows}] AS node MERGE (n:Node {{id: node.id}}) \
+                 ON CREATE SET n.name = node.name, n.type = node.type \
+                 ON MATCH SET n.name = node.name, n.type = node.type"
+            )
+        };
+        conn.query(&merge(
+            "{id:'e0', name:'e0', type:'Entity'}, {id:'e1', name:'e1', type:'Entity'}",
+        ))
+        .unwrap();
+        conn.query(&merge(
+            "{id:'t1', name:'t1', type:'EntityType'}, {id:'t2', name:'t2', type:'EntityType'}, \
+             {id:'t1', name:'t1', type:'EntityType'}",
+        ))
+        .unwrap();
+        let e0_type = conn
+            .query("MATCH (n:Node) WHERE n.id = 'e0' RETURN n.type")
+            .unwrap()
+            .next()
+            .and_then(|row| row.into_iter().next())
+            .map(|v| format!("{v:?}"))
+            .unwrap_or_default();
+        assert!(
+            e0_type.contains("EntityType"),
+            "lbug no longer writes a repeated MERGE row onto e0 (e0.type = {e0_type}): the \
+             engine bug behind the batch dedup looks fixed — see this test's doc comment"
+        );
+    }
+
     #[tokio::test]
     #[serial]
     async fn ladybug_supports_idempotent_unwind_merge_batch() {

@@ -22,6 +22,8 @@
 //! db.add_node(&entity).await?;
 //! ```
 
+#[cfg(any(feature = "ladybug", feature = "postgres"))]
+mod dedup;
 mod error;
 mod formatted;
 mod traits;
