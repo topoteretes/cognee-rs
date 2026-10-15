@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use tracing::warn;
 use uuid::Uuid;
 
-use crate::graph_integration::{GraphEdgePair, GraphNodePair};
+use crate::graph_integration::{GraphEdgePair, GraphNodePair, TimestampNode};
 
 /// Fold a list of freshly built triplets down to one per **point id**, picking
 /// the survivor deterministically (SDK-778, the `Triplet_text` half).
@@ -74,11 +74,39 @@ pub fn create_triplets_from_graph(
     nodes: &[GraphNodePair],
     edges: &[GraphEdgePair],
 ) -> Vec<Triplet> {
-    // Build node lookup map (id -> node) for O(1) access
-    let node_map: HashMap<Uuid, &GraphNodePair> = nodes
-        .iter()
-        .map(|node| (node.entity.base.id, node))
-        .collect();
+    create_triplets_from_graph_with_timestamps(nodes, &[], edges)
+}
+
+/// [`create_triplets_from_graph`] over a graph that also holds Timestamp nodes.
+///
+/// A Timestamp is not embedded (empty `index_fields`), so it contributes an
+/// empty node text — the same `""` Python's `_extract_embeddable_text_from_datapoint`
+/// returns for it — and a `born_at` edge still yields a triplet carrying the
+/// entity and the edge text, named after the time string.
+pub fn create_triplets_from_graph_with_timestamps(
+    nodes: &[GraphNodePair],
+    timestamps: &[TimestampNode],
+    edges: &[GraphEdgePair],
+) -> Vec<Triplet> {
+    // Build node lookup map (id -> (name, embeddable text)) for O(1) access
+    let mut node_map: HashMap<Uuid, (String, String)> = HashMap::new();
+    for node in timestamps {
+        node_map.insert(
+            node.timestamp.base.id,
+            (node.timestamp.name.clone(), String::new()),
+        );
+    }
+    for node in nodes {
+        // Embeddable text: "name: description", or the name alone.
+        let text = if !node.entity.description.is_empty() {
+            format!("{}: {}", node.entity.name, node.entity.description)
+        } else {
+            node.entity.name.clone()
+        }
+        .trim()
+        .to_string();
+        node_map.insert(node.entity.base.id, (node.entity.name.clone(), text));
+    }
 
     let mut triplets = Vec::new();
     let mut skipped_count = 0;
@@ -94,35 +122,11 @@ pub fn create_triplets_from_graph(
         }
 
         #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
-        let source_node = source_node
+        let (source_name, source_text) = source_node
             .expect("source_node is Some; None case was handled by the is_none() check above");
         #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
-        let target_node = target_node
+        let (target_name, target_text) = target_node
             .expect("target_node is Some; None case was handled by the is_none() check above");
-
-        // Extract embeddable text from source node (name: description)
-        let source_text = if !source_node.entity.description.is_empty() {
-            format!(
-                "{}: {}",
-                source_node.entity.name, source_node.entity.description
-            )
-        } else {
-            source_node.entity.name.clone()
-        }
-        .trim()
-        .to_string();
-
-        // Extract embeddable text from target node
-        let target_text = if !target_node.entity.description.is_empty() {
-            format!(
-                "{}: {}",
-                target_node.entity.name, target_node.entity.description
-            )
-        } else {
-            target_node.entity.name.clone()
-        }
-        .trim()
-        .to_string();
 
         // Get relationship text: prefer the nonblank `edge_text` property,
         // falling back to the relationship name. Mirrors Python's
@@ -158,10 +162,7 @@ pub fn create_triplets_from_graph(
             edge.relationship_name.clone(),
             text,
         )
-        .with_names(
-            source_node.entity.name.clone(),
-            target_node.entity.name.clone(),
-        );
+        .with_names(source_name.clone(), target_name.clone());
 
         triplets.push(triplet);
     }
@@ -204,7 +205,7 @@ mod tests {
 
         GraphNodePair {
             entity,
-            entity_type,
+            entity_type: Some(entity_type),
         }
     }
 

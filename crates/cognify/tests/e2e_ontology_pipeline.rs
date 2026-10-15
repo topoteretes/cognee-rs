@@ -228,10 +228,11 @@ async fn e2e_ontology_pipeline_add_cognify_search() {
     };
 
     assert!(
-        cognify_result
-            .entities
-            .iter()
-            .any(|pair| pair.entity_type.is_ontology_valid()),
+        cognify_result.entities.iter().any(|pair| pair
+            .entity_type
+            .as_ref()
+            .unwrap()
+            .is_ontology_valid()),
         "Expected at least one ontology-valid entity type"
     );
 

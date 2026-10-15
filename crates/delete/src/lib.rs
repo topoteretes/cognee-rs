@@ -5746,11 +5746,11 @@ mod tests {
                     is_a: None,
                     description: format!("description of {name}"),
                 },
-                entity_type: EntityType {
+                entity_type: Some(EntityType {
                     base: DataPoint::new("EntityType", None),
                     name: "Generic".to_string(),
                     description: "Generic type".to_string(),
-                },
+                }),
             }
         }
 

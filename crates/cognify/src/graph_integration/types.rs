@@ -3,7 +3,7 @@
 //! Defines the pair types used for converting LLM-layer knowledge graphs
 //! to storage-layer entities.
 
-use cognee_models::{Entity, EntityType};
+use cognee_models::{Entity, EntityType, Timestamp};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -17,8 +17,25 @@ pub struct GraphNodePair {
     /// The entity instance (e.g., "TechCorp")
     pub entity: Entity,
 
-    /// The entity type (e.g., "Organization")
-    pub entity_type: EntityType,
+    /// The entity type (e.g., "Organization"), or `None` when the extracted
+    /// type has no name — an empty or punctuation-only type from the LLM.
+    /// Python's `_get_or_create_entity_type` returns `None` there rather than
+    /// storing an EntityType named "", so the entity has no `is_a` edge.
+    pub entity_type: Option<EntityType>,
+}
+
+/// A `Timestamp` node built from an extracted node the LLM typed "Timestamp".
+///
+/// Unlike an entity it has no `EntityType` and is not embedded; its id derives
+/// from the normalized time string, so every chunk that names the same time
+/// lands on one node. `description` is the extraction's description of the
+/// first declaration — the `Timestamp` datapoint itself has no such field, but
+/// the chunk's `contains` edge text quotes it, as Python's
+/// `_link_chunk_to_entity` does.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TimestampNode {
+    pub timestamp: Timestamp,
+    pub description: String,
 }
 
 /// An edge in the storage layer with source/target entities.
@@ -153,6 +170,11 @@ impl ArtifactProducers {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
     use cognee_models::{Entity, EntityType};
@@ -233,10 +255,10 @@ mod tests {
 
         let node_pair = GraphNodePair {
             entity,
-            entity_type,
+            entity_type: Some(entity_type),
         };
 
         assert_eq!(node_pair.entity.name, "TechCorp");
-        assert_eq!(node_pair.entity_type.name, "Organization");
+        assert_eq!(node_pair.entity_type.as_ref().unwrap().name, "Organization");
     }
 }

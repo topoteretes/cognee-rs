@@ -235,7 +235,7 @@ async fn cognify_e2e_stamps_with_expected_task_names() {
     }
     for pair in &result.entities {
         record(&pair.entity.base);
-        record(&pair.entity_type.base);
+        record(&pair.entity_type.as_ref().unwrap().base);
     }
     for s in &result.summaries {
         record(&s.base);
@@ -282,7 +282,7 @@ async fn cognify_e2e_stamps_with_expected_task_names() {
             "Entity comes from Python's fused extract_graph_and_summarize stage"
         );
         assert_eq!(
-            pair.entity_type.base.topological_rank,
+            pair.entity_type.as_ref().unwrap().base.topological_rank,
             Some(3),
             "EntityType comes from the same fused Python stage"
         );

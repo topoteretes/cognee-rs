@@ -80,7 +80,11 @@ impl Entity {
         }
     }
 
-    /// Create Entity from LLM-extracted Node.
+    /// Create Entity from LLM-extracted Node, with an id derived from the
+    /// LLM's **node id**.
+    ///
+    /// The cognify pipeline no longer uses this: it derives entity ids from the
+    /// node *name*, as current Python does (see the note in the body).
     ///
     /// # Arguments
     /// * `node_id` - Original node ID from LLM extraction
@@ -103,10 +107,11 @@ impl Entity {
             dataset_id,
         );
 
-        // Python `_create_entity_node` hashes the LLM-supplied node id (not the
-        // display name) into the id — `Entity(id=Entity.id_for(node_id), …)`
-        // (expand_with_nodes_and_edges.py:183,209). Override the name-derived id
-        // from `new` with the node-id-derived one for faithful parity.
+        // Node-id-derived id: what older Python (`_create_entity_node`) did.
+        // Current Python derives the id from the *name* instead, with ordinal
+        // ids for same-name nodes in one graph, and so does the cognify
+        // expansion (`entity_ids_by_node_id` in cognee-cognify); it no longer
+        // calls this constructor.
         entity.base.id = Self::id_for(&node_id);
 
         entity

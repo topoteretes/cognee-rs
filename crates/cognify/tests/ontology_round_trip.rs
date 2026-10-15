@@ -110,7 +110,7 @@ async fn test_ontology_round_trip_with_real_resolver() {
         .find(|n| n.entity.name == "techcorp")
         .expect("TechCorp entity should exist");
     assert!(
-        tc_node.entity_type.is_ontology_valid(),
+        tc_node.entity_type.as_ref().unwrap().is_ontology_valid(),
         "TechCorp's type should be ontology-valid (Organization ~= Organisation)"
     );
 
@@ -120,7 +120,7 @@ async fn test_ontology_round_trip_with_real_resolver() {
         .find(|n| n.entity.name == "alice")
         .expect("Alice entity should exist");
     assert!(
-        alice_node.entity_type.is_ontology_valid(),
+        alice_node.entity_type.as_ref().unwrap().is_ontology_valid(),
         "Alice's type (Person) should be ontology-valid"
     );
 
@@ -130,7 +130,7 @@ async fn test_ontology_round_trip_with_real_resolver() {
         .find(|n| n.entity.name == "deepsort")
         .expect("DeepSort entity should exist");
     assert!(
-        algo_node.entity_type.is_ontology_valid(),
+        algo_node.entity_type.as_ref().unwrap().is_ontology_valid(),
         "DeepSort's type (Algorithm) should be ontology-valid"
     );
 
@@ -187,9 +187,9 @@ async fn test_ontology_unmatched_type_not_validated() {
     assert_eq!(nodes.len(), 1);
     let gadget = &nodes[0];
     assert_eq!(gadget.entity.name, "widget");
-    assert_eq!(gadget.entity_type.name, "gadget");
+    assert_eq!(gadget.entity_type.as_ref().unwrap().name, "gadget");
     assert!(
-        !gadget.entity_type.is_ontology_valid(),
+        !gadget.entity_type.as_ref().unwrap().is_ontology_valid(),
         "Gadget should NOT be ontology-valid (not in ontology)"
     );
 }
@@ -224,6 +224,6 @@ async fn test_ontology_noop_resolver_leaves_everything_unvalidated() {
     .await;
 
     assert_eq!(nodes.len(), 1);
-    assert!(!nodes[0].entity_type.is_ontology_valid());
+    assert!(!nodes[0].entity_type.as_ref().unwrap().is_ontology_valid());
     assert!(!nodes[0].entity.base.ontology_valid);
 }

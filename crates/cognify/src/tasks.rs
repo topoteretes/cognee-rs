@@ -57,7 +57,7 @@ use tracing::{debug, info, warn};
 use url::Url;
 use uuid::Uuid;
 
-use crate::config::CognifyConfig;
+use crate::config::{CognifyConfig, ExtractionStrategy};
 use crate::error::CognifyError;
 use crate::fact_extraction::{FactExtractor, KnowledgeGraph};
 use crate::failure::{
@@ -65,8 +65,8 @@ use crate::failure::{
 };
 use crate::graph_backend::{ChunkGraphExtractor, ChunkRef, ExtractionContext, GraphBackendError};
 use crate::graph_integration::{
-    ArtifactProducers, GraphEdgePair, GraphNodePair, deduplicate_nodes_and_edges,
-    expand_with_nodes_and_edges_with_stats, retrieve_existing_edges,
+    ArtifactProducers, Expansion, GraphEdgePair, GraphNodePair, TimestampNode,
+    deduplicate_nodes_and_edges, expand_extracted_graphs, retrieve_existing_edges,
 };
 use crate::pipeline::{CognifyResult, IndexedFieldsStats};
 use crate::qualification::{Qualification, check_pipeline_run_qualification};
@@ -144,6 +144,10 @@ pub struct ExtractedGraphData {
     /// Classified documents — carried forward for DLT FK edge extraction.
     pub documents: Vec<Document>,
     pub entities: Vec<GraphNodePair>,
+    /// Timestamp nodes extracted alongside the entities (already stored in the
+    /// graph DB, with their ownership rows). Each producing chunk's
+    /// `contains` already names them.
+    pub timestamps: Vec<TimestampNode>,
     pub edges: Vec<GraphEdgePair>,
     /// Every chunk that produced each merged entity and edge. Carried through
     /// to [`upsert_provenance`], which turns it into one ownership row per
@@ -218,6 +222,8 @@ pub struct SummarizedData {
     /// Classified documents — carried forward for DLT FK edge extraction.
     pub documents: Vec<Document>,
     pub entities: Vec<GraphNodePair>,
+    /// Forwarded verbatim from [`ExtractedGraphData::timestamps`].
+    pub timestamps: Vec<TimestampNode>,
     pub edges: Vec<GraphEdgePair>,
     /// Forwarded verbatim from [`ExtractedGraphData::producers`].
     pub producers: ArtifactProducers,
@@ -663,9 +669,24 @@ pub async fn extract_chunks_from_documents(
 /// they behave exactly as before.
 fn chunk_entity_links(
     nodes: &[GraphNodePair],
+    timestamps: &[TimestampNode],
     producers: &ArtifactProducers,
 ) -> HashMap<Uuid, Vec<serde_json::Value>> {
     let mut chunk_entity_map: HashMap<Uuid, Vec<serde_json::Value>> = HashMap::new();
+
+    // Every chunk that named a time links to its Timestamp node (Python
+    // `_link_chunk_to_entity` runs for Timestamps too). They always have a
+    // producer: expansion records one for every declaration.
+    for node in timestamps {
+        let timestamp_id = node.timestamp.base.id;
+        let timestamp_ref = json!(timestamp_id.to_string());
+        for chunk_id in producers.entity_chunks(timestamp_id) {
+            chunk_entity_map
+                .entry(*chunk_id)
+                .or_default()
+                .push(timestamp_ref.clone());
+        }
+    }
 
     for node_pair in nodes {
         let entity_ref = json!(node_pair.entity.base.id.to_string());
@@ -693,6 +714,35 @@ fn chunk_entity_links(
     }
 
     chunk_entity_map
+}
+
+/// The date hints for every chunk, keyed by chunk id.
+///
+/// Computed once per document over that document's chunks in `chunk_index`
+/// order ([`crate::temporal_hints::document_temporal_hints`]), so the rolling
+/// base flows forward through the document and never crosses into another.
+fn chunk_temporal_hints(chunks: &[DocumentChunk]) -> HashMap<Uuid, Vec<String>> {
+    let mut by_document: HashMap<Uuid, Vec<&DocumentChunk>> = HashMap::new();
+    for chunk in chunks {
+        by_document
+            .entry(chunk.document_id)
+            .or_default()
+            .push(chunk);
+    }
+    let mut hints = HashMap::new();
+    for mut document_chunks in by_document.into_values() {
+        document_chunks.sort_by_key(|chunk| chunk.chunk_index);
+        let texts: Vec<&str> = document_chunks.iter().map(|c| c.text.as_str()).collect();
+        for (chunk, lines) in document_chunks
+            .iter()
+            .zip(crate::temporal_hints::document_temporal_hints(&texts))
+        {
+            if !lines.is_empty() {
+                hints.insert(chunk.base.id, lines);
+            }
+        }
+    }
+    hints
 }
 
 /// What one backend-driven extraction pass produced.
@@ -934,6 +984,7 @@ pub async fn extract_graph_from_data(
             chunks: input.chunks.clone(),
             documents: input.documents.clone(),
             entities: vec![],
+            timestamps: vec![],
             edges: vec![],
             producers: ArtifactProducers::default(),
             backend_summaries: vec![],
@@ -973,6 +1024,7 @@ pub async fn extract_graph_from_data(
             chunks: input.chunks.clone(),
             documents: input.documents.clone(),
             entities: vec![],
+            timestamps: vec![],
             edges: vec![],
             producers: ArtifactProducers::default(),
             backend_summaries: vec![],
@@ -1021,6 +1073,19 @@ pub async fn extract_graph_from_data(
         backend_summaries = outcome.summaries;
         aborted_at = outcome.aborted_at;
     } else {
+        // Date hints for the default prompt, computed per document over the
+        // whole extraction set before batching, so a chunk's hints do not
+        // depend on where a batch boundary falls (Python
+        // `_temporal_hints_for`). A custom prompt receives none, and neither
+        // does the cascade, whose stages have their own prompts.
+        let mut temporal_hints = if config.custom_extraction_prompt.is_none()
+            && config.extraction_strategy == ExtractionStrategy::SinglePass
+        {
+            chunk_temporal_hints(&chunks_for_extraction)
+        } else {
+            HashMap::new()
+        };
+
         for (batch_idx, batch) in chunks_for_extraction.chunks(batch_size).enumerate() {
             let fact_extractor = FactExtractor::new(Arc::clone(&llm));
 
@@ -1028,11 +1093,17 @@ pub async fn extract_graph_from_data(
             // Mapping a stream over borrowed `&chunk` references trips a
             // higher-ranked-lifetime inference bug when the surrounding future is
             // boxed (same workaround as `SummaryExtractor::summarize_chunks`).
-            let inputs: Vec<(Uuid, String)> = batch
+            let inputs: Vec<(Uuid, String, Vec<String>)> = batch
                 .iter()
-                .map(|chunk| (chunk.base.id, chunk.text.clone()))
+                .map(|chunk| {
+                    (
+                        chunk.base.id,
+                        chunk.text.clone(),
+                        temporal_hints.remove(&chunk.base.id).unwrap_or_default(),
+                    )
+                })
                 .collect();
-            let chunk_ids: Vec<Uuid> = inputs.iter().map(|(id, _)| *id).collect();
+            let chunk_ids: Vec<Uuid> = inputs.iter().map(|(id, _, _)| *id).collect();
             // Parallel to `chunk_ids`: a failure is attributed to its file, and the
             // stream items carry only the chunk id and text.
             let chunk_documents: Vec<Uuid> = batch.iter().map(|chunk| chunk.document_id).collect();
@@ -1058,12 +1129,27 @@ pub async fn extract_graph_from_data(
             // Making that lazy would mean borrowing `&chunk` across the stream, which
             // is the higher-ranked-lifetime case the comment there describes.
             let mut indexed_results: Vec<_> = futures::stream::iter(inputs.into_iter().enumerate())
-                .map(|(index, (_, text))| {
+                .map(|(index, (_, text, hints))| {
                     let extractor = fact_extractor.clone();
                     let prompt = config.custom_extraction_prompt.clone();
+                    let strategy = config.extraction_strategy;
                     async move {
                         let result = tokio::spawn(async move {
-                            extractor.extract_facts(&text, prompt.as_deref()).await
+                            match strategy {
+                                ExtractionStrategy::SinglePass => {
+                                    extractor
+                                        .extract_facts_with_hints(&text, prompt.as_deref(), &hints)
+                                        .await
+                                }
+                                ExtractionStrategy::Cascade { rounds } => {
+                                    crate::fact_extraction::cascade::cascade_extract(
+                                        extractor.llm(),
+                                        &text,
+                                        rounds,
+                                    )
+                                    .await
+                                }
+                            }
                         })
                         .await;
                         (index, result)
@@ -1267,18 +1353,25 @@ pub async fn extract_graph_from_data(
         .map(|chunk| (chunk.base.id, chunk.base.importance_weight.unwrap_or(0.5)))
         .collect();
 
-    let (nodes, edges, claimed_existing_edges, producers, edge_resolution) =
-        expand_with_nodes_and_edges_with_stats(
-            all_graphs,
-            input.dataset_id,
-            &chunk_node_sets,
-            &chunk_importance_weights,
-            &existing_edges_set,
-            ontology_resolver.as_ref(),
-            user_label_owned.as_deref(),
-            task_rank,
-        )
-        .await;
+    let Expansion {
+        nodes,
+        edges,
+        claimed_existing_edges,
+        producers,
+        stats: edge_resolution,
+        timestamps,
+        ..
+    } = expand_extracted_graphs(
+        all_graphs,
+        input.dataset_id,
+        &chunk_node_sets,
+        &chunk_importance_weights,
+        &existing_edges_set,
+        ontology_resolver.as_ref(),
+        user_label_owned.as_deref(),
+        task_rank,
+    )
+    .await;
 
     // Endpoint resolution is lossy: the model routinely emits edges referencing
     // node ids it never declared. Report the rate once per run rather than
@@ -1318,10 +1411,11 @@ pub async fn extract_graph_from_data(
     // below, which must both see the text the `EdgeType` row is keyed on.
     // Edges an earlier run already wrote (`claimed_existing_edges`) keep the
     // text they were written with.
-    stamp_extracted_edge_text(&mut dedup_result);
+    stamp_extracted_edge_text(&mut dedup_result, &timestamps);
 
-    // Build chunk_id → entity IDs mapping from the deduplicated nodes.
-    let chunk_entity_map = chunk_entity_links(&dedup_result.unique_nodes, &producers);
+    // Build chunk_id → entity and Timestamp IDs mapping from the deduplicated
+    // nodes.
+    let chunk_entity_map = chunk_entity_links(&dedup_result.unique_nodes, &timestamps, &producers);
 
     // Populate DocumentChunk.contains with extracted entity IDs
     let mut updated_chunks = surviving_chunks;
@@ -1356,6 +1450,7 @@ pub async fn extract_graph_from_data(
         // exclusive to the earlier file, so deleting that file no longer takes
         // the edge away from this one.
         &claimed_existing_edges,
+        &timestamps,
         &producers,
     )
     .await?;
@@ -1370,6 +1465,17 @@ pub async fn extract_graph_from_data(
         .add_nodes(&entity_refs)
         .await
         .map_err(CognifyError::from)?;
+    // Timestamp nodes: not embedded, no EntityType; written before the edges
+    // that point at them.
+    if !timestamps.is_empty() {
+        let timestamp_refs: Vec<&cognee_models::Timestamp> =
+            timestamps.iter().map(|node| &node.timestamp).collect();
+        graph_db
+            .add_nodes(&timestamp_refs)
+            .await
+            .map_err(CognifyError::from)?;
+        info!("Upserted {} Timestamp nodes", timestamp_refs.len());
+    }
 
     let edge_data: Vec<_> = dedup_result
         .unique_edges
@@ -1409,6 +1515,7 @@ pub async fn extract_graph_from_data(
         chunks: updated_chunks,
         documents: surviving_documents,
         entities: dedup_result.unique_nodes,
+        timestamps,
         edges: dedup_result.unique_edges,
         producers,
         backend_summaries,
@@ -1759,6 +1866,7 @@ pub async fn extract_custom_graph_from_data<M: crate::fact_extraction::GraphMode
             chunks: input.chunks.clone(),
             documents: input.documents.clone(),
             entities: vec![],
+            timestamps: vec![],
             edges: vec![],
             producers: ArtifactProducers::default(),
             backend_summaries: vec![],
@@ -1795,6 +1903,7 @@ pub async fn extract_custom_graph_from_data<M: crate::fact_extraction::GraphMode
             chunks: updated_chunks,
             documents: input.documents.clone(),
             entities: vec![],
+            timestamps: vec![],
             edges: vec![],
             producers: ArtifactProducers::default(),
             backend_summaries: vec![],
@@ -1932,6 +2041,7 @@ pub async fn extract_custom_graph_from_data<M: crate::fact_extraction::GraphMode
             .cloned()
             .collect(),
         entities: vec![],
+        timestamps: vec![],
         edges: vec![],
         producers: ArtifactProducers::default(),
         backend_summaries: vec![],
@@ -2213,7 +2323,9 @@ pub async fn add_data_points(
     }
     for pair in &input.entities {
         extractable_items.push(&pair.entity as &dyn crate::graph_extraction::GraphExtractable);
-        extractable_items.push(&pair.entity_type as &dyn crate::graph_extraction::GraphExtractable);
+        if let Some(entity_type) = &pair.entity_type {
+            extractable_items.push(entity_type as &dyn crate::graph_extraction::GraphExtractable);
+        }
     }
 
     let mut structural_edges = crate::graph_extraction::get_graph_from_model(&extractable_items);
@@ -2270,7 +2382,7 @@ pub async fn add_data_points(
         let entity_type_refs: Vec<&cognee_models::EntityType> = input
             .entities
             .iter()
-            .map(|pair| &pair.entity_type)
+            .filter_map(|pair| pair.entity_type.as_ref())
             .collect();
         graph_db
             .add_nodes(&entity_type_refs)
@@ -2402,6 +2514,7 @@ pub async fn add_data_points(
     let indexed_fields = index_data_points(
         &input.chunks,
         &input.entities,
+        &input.timestamps,
         &input.summaries,
         &input.documents,
         &input.edges,
@@ -3291,13 +3404,21 @@ pub async fn add_temporal_data_points(
 /// Stamp the default `edge_text` on extracted edges that have none — an LLM
 /// edge with a blank description, or an ontology edge (Python
 /// `ensure_default_edge_properties` over the same edges).
-fn stamp_extracted_edge_text(dedup_result: &mut crate::graph_integration::DeduplicationResult) {
+fn stamp_extracted_edge_text(
+    dedup_result: &mut crate::graph_integration::DeduplicationResult,
+    timestamps: &[TimestampNode],
+) {
     use crate::graph_extraction::{EdgeLabels, ensure_default_edge_text_for_pairs};
 
     let mut labels = EdgeLabels::default();
+    for node in timestamps {
+        labels.insert(node.timestamp.base.id, &node.timestamp.name);
+    }
     for pair in &dedup_result.unique_nodes {
         labels.insert(pair.entity.base.id, &pair.entity.name);
-        labels.insert(pair.entity_type.base.id, &pair.entity_type.name);
+        if let Some(entity_type) = &pair.entity_type {
+            labels.insert(entity_type.base.id, &entity_type.name);
+        }
     }
     let unlabelled = ensure_default_edge_text_for_pairs(&mut dedup_result.unique_edges, &labels);
     if unlabelled > 0 {
@@ -3333,9 +3454,18 @@ fn stamp_structural_edge_text(structural_edges: &mut [EdgeData], input: &Summari
     let mut mentions: HashMap<String, String> = HashMap::new();
     for pair in &input.entities {
         labels.insert(pair.entity.base.id, &pair.entity.name);
-        labels.insert(pair.entity_type.base.id, &pair.entity_type.name);
+        if let Some(entity_type) = &pair.entity_type {
+            labels.insert(entity_type.base.id, &entity_type.name);
+        }
         if let Some(text) = chunk_mentions_text(&pair.entity.name, &pair.entity.description) {
             mentions.insert(pair.entity.base.id.to_string(), text);
+        }
+    }
+    for node in &input.timestamps {
+        let timestamp = &node.timestamp;
+        labels.insert(timestamp.base.id, &timestamp.name);
+        if let Some(text) = chunk_mentions_text(&timestamp.name, &node.description) {
+            mentions.insert(timestamp.base.id.to_string(), text);
         }
     }
 
@@ -4725,6 +4855,50 @@ fn entity_provenance_rows(
     rows
 }
 
+/// Ownership rows for the Timestamp nodes graph extraction produced: one per
+/// data item that named the time, exactly as [`entity_provenance_rows`] does
+/// for a merged entity, so deleting one file never takes a Timestamp another
+/// file still dates a fact with. `indexed_fields` is empty — Timestamps are
+/// not embedded, so deletion issues no vector delete for them.
+fn timestamp_provenance_rows(
+    id: LedgerIdentity,
+    timestamps: &[TimestampNode],
+    chunk_data_map: &HashMap<Uuid, Uuid>,
+    producers: &ArtifactProducers,
+) -> Vec<cognee_database::GraphNode> {
+    let mut rows = Vec::new();
+    for node in timestamps {
+        let timestamp = &node.timestamp;
+        let mut data_ids =
+            producing_data_ids(producers.entity_chunks(timestamp.base.id), chunk_data_map);
+        if data_ids.is_empty() {
+            data_ids.push(Uuid::nil());
+        }
+        for data_id in data_ids {
+            rows.push(cognee_database::GraphNode {
+                id: provenance_node_id(
+                    id.tenant_id,
+                    id.user_id,
+                    id.dataset_id,
+                    data_id,
+                    timestamp.base.id,
+                ),
+                slug: timestamp.base.id,
+                user_id: id.user_id,
+                data_id,
+                dataset_id: id.dataset_id,
+                pipeline_run_id: id.pipeline_run_id,
+                label: Some(timestamp.name.clone()),
+                node_type: timestamp.base.data_type.clone(),
+                indexed_fields: json!([]),
+                attributes: serde_json::to_value(timestamp).ok(),
+                created_at: Utc::now(),
+            });
+        }
+    }
+    rows
+}
+
 /// Ownership rows for the semantic edges produced by graph extraction.
 ///
 /// One row per data item that produced the edge — the same one-to-many relation
@@ -4834,6 +5008,7 @@ fn semantic_edge_provenance_rows(
 /// graph is exactly what the extraction dedup filter exists to prevent — but
 /// their ownership rows are what keeps an earlier file's deletion from taking
 /// a still-referenced edge with it.
+#[allow(clippy::too_many_arguments)]
 async fn record_extraction_ownership(
     db: &dyn RelationalDb,
     id: LedgerIdentity,
@@ -4844,12 +5019,19 @@ async fn record_extraction_ownership(
     // `edges` because an earlier run had already written them to the graph.
     // They are ownership-only: rows here, no graph or vector write anywhere.
     claimed_existing_edges: &[GraphEdgePair],
+    timestamps: &[TimestampNode],
     producers: &ArtifactProducers,
 ) -> Result<(), CognifyError> {
     let chunk_data_map = chunk_document_map(chunks);
     let entity_data_map = entity_document_map(entities, &chunk_data_map);
 
-    let prov_nodes = entity_provenance_rows(id, entities, &chunk_data_map, producers);
+    let mut prov_nodes = entity_provenance_rows(id, entities, &chunk_data_map, producers);
+    prov_nodes.extend(timestamp_provenance_rows(
+        id,
+        timestamps,
+        &chunk_data_map,
+        producers,
+    ));
     let mut prov_edges =
         semantic_edge_provenance_rows(id, edges, &chunk_data_map, &entity_data_map, producers);
     prov_edges.extend(semantic_edge_provenance_rows(
@@ -4972,8 +5154,7 @@ async fn upsert_provenance(
     }
 
     // EntityTypes
-    for pair in entities {
-        let et = &pair.entity_type;
+    for et in entities.iter().filter_map(|pair| pair.entity_type.as_ref()) {
         // EntityType rows carry a nil `data_id`: one type is shared by every
         // entity of that type, so there is no single producing file. Note this
         // is *not* Python's shape — `upsert_nodes` stamps the ctx `data_id` on
@@ -5249,6 +5430,7 @@ async fn reuse_or_embed(
 async fn index_data_points(
     chunks: &[DocumentChunk],
     entities: &[GraphNodePair],
+    timestamps: &[TimestampNode],
     summaries: &[TextSummary],
     documents: &[Document],
     edges: &[GraphEdgePair],
@@ -5279,6 +5461,7 @@ async fn index_data_points(
     let indexed = index_data_points_windowed(
         chunks,
         entities,
+        timestamps,
         summaries,
         documents,
         edges,
@@ -5321,6 +5504,7 @@ async fn announce_index_write(
 async fn index_data_points_windowed(
     chunks: &[DocumentChunk],
     entities: &[GraphNodePair],
+    timestamps: &[TimestampNode],
     summaries: &[TextSummary],
     documents: &[Document],
     edges: &[GraphEdgePair],
@@ -5457,8 +5641,11 @@ async fn index_data_points_windowed(
                             "text",
                             serde_json::Value::String(entity.entity.name.clone()),
                         )
-                        .with_metadata("dataset_id", json!(dataset_id.to_string()))
-                        .with_metadata("entity_type", json!(entity.entity_type.name.clone()));
+                        .with_metadata("dataset_id", json!(dataset_id.to_string()));
+                    // An untyped entity (blank extracted type) has no type name.
+                    if let Some(entity_type) = &entity.entity_type {
+                        point = point.with_metadata("entity_type", json!(entity_type.name.clone()));
+                    }
                     // `description` diverges from Python, whose `IndexSchema` row
                     // carries only `text`. The hybrid retriever renders it as the
                     // line under `### {name}` — a slot the prompt template keeps
@@ -5496,7 +5683,7 @@ async fn index_data_points_windowed(
         let mut seen_ids = std::collections::HashSet::new();
         let unique_entity_types: Vec<&cognee_models::EntityType> = entities
             .iter()
-            .map(|pair| &pair.entity_type)
+            .filter_map(|pair| pair.entity_type.as_ref())
             .filter(|et| seen_ids.insert(et.base.id))
             .collect();
 
@@ -5624,9 +5811,9 @@ async fn index_data_points_windowed(
 
     // 4. Index triplets (if enabled in config)
     if config.embed_triplets && !edges.is_empty() && !entities.is_empty() {
-        use crate::triplet_creation::create_triplets_from_graph;
+        use crate::triplet_creation::create_triplets_from_graph_with_timestamps;
 
-        let triplets = create_triplets_from_graph(entities, edges);
+        let triplets = create_triplets_from_graph_with_timestamps(entities, timestamps, edges);
 
         if !triplets.is_empty() {
             if !vector_db
@@ -6254,13 +6441,15 @@ pub fn make_extract_graph_task_with_rank(
                     user_label.as_deref(),
                     rank,
                 );
-                stamp_provenance(
-                    &mut pair.entity_type.base,
-                    COGNIFY_PIPELINE_STAMP_NAME,
-                    EXTRACT_GRAPH_TASK_NAME,
-                    user_label.as_deref(),
-                    rank,
-                );
+                if let Some(entity_type) = pair.entity_type.as_mut() {
+                    stamp_provenance(
+                        &mut entity_type.base,
+                        COGNIFY_PIPELINE_STAMP_NAME,
+                        EXTRACT_GRAPH_TASK_NAME,
+                        user_label.as_deref(),
+                        rank,
+                    );
+                }
             }
             // Chunks/documents carried forward — idempotent re-stamp keeps
             // their upstream `source_task` intact via the `is_none` guard.
@@ -6431,6 +6620,7 @@ fn merge_graph_and_summaries(
         chunks: graph.chunks,
         documents: graph.documents,
         entities: graph.entities,
+        timestamps: graph.timestamps,
         edges: graph.edges,
         producers: graph.producers,
         summaries,
@@ -6633,13 +6823,15 @@ pub fn make_add_data_points_task_with_rank(
                     user_label.as_deref(),
                     rank,
                 );
-                stamp_provenance(
-                    &mut pair.entity_type.base,
-                    COGNIFY_PIPELINE_STAMP_NAME,
-                    ADD_DATA_POINTS_TASK_NAME,
-                    user_label.as_deref(),
-                    rank,
-                );
+                if let Some(entity_type) = pair.entity_type.as_mut() {
+                    stamp_provenance(
+                        &mut entity_type.base,
+                        COGNIFY_PIPELINE_STAMP_NAME,
+                        ADD_DATA_POINTS_TASK_NAME,
+                        user_label.as_deref(),
+                        rank,
+                    );
+                }
             }
             for summary in &mut result.summaries {
                 stamp_provenance(
@@ -7494,14 +7686,14 @@ mod tests {
         let entity_id = entity.base.id;
         let nodes = vec![GraphNodePair {
             entity,
-            entity_type,
+            entity_type: Some(entity_type),
         }];
 
         let mut producers = ArtifactProducers::default();
         producers.record_entity(entity_id, chunk_a);
         producers.record_entity(entity_id, chunk_b);
 
-        let links = chunk_entity_links(&nodes, &producers);
+        let links = chunk_entity_links(&nodes, &[], &producers);
 
         let expected = vec![json!(entity_id.to_string())];
         assert_eq!(
@@ -7531,10 +7723,10 @@ mod tests {
         let entity_id = entity.base.id;
         let nodes = vec![GraphNodePair {
             entity,
-            entity_type,
+            entity_type: Some(entity_type),
         }];
 
-        let links = chunk_entity_links(&nodes, &ArtifactProducers::default());
+        let links = chunk_entity_links(&nodes, &[], &ArtifactProducers::default());
 
         assert_eq!(links.len(), 1);
         assert_eq!(
@@ -7597,7 +7789,7 @@ mod tests {
         let entity_id = entity.base.id;
         let entities = vec![GraphNodePair {
             entity,
-            entity_type,
+            entity_type: Some(entity_type),
         }];
 
         let mut producers = ArtifactProducers::default();
@@ -7663,7 +7855,7 @@ mod tests {
         let entity_id = entity.base.id;
         let entities = vec![GraphNodePair {
             entity,
-            entity_type,
+            entity_type: Some(entity_type),
         }];
 
         let mut producers = ArtifactProducers::default();
@@ -7715,7 +7907,7 @@ mod tests {
         let entity_id = entity.base.id;
         let entities = vec![GraphNodePair {
             entity,
-            entity_type,
+            entity_type: Some(entity_type),
         }];
 
         upsert_provenance(
@@ -7779,11 +7971,11 @@ mod tests {
         let entities = vec![
             GraphNodePair {
                 entity: alice,
-                entity_type: entity_type.clone(),
+                entity_type: Some(entity_type.clone()),
             },
             GraphNodePair {
                 entity: bob,
-                entity_type,
+                entity_type: Some(entity_type),
             },
         ];
 
@@ -7872,11 +8064,11 @@ mod tests {
         let entities = vec![
             GraphNodePair {
                 entity: alice,
-                entity_type: entity_type.clone(),
+                entity_type: Some(entity_type.clone()),
             },
             GraphNodePair {
                 entity: bob,
-                entity_type,
+                entity_type: Some(entity_type),
             },
         ];
 
@@ -7941,11 +8133,11 @@ mod tests {
             let entities = vec![
                 GraphNodePair {
                     entity: alice,
-                    entity_type: entity_type.clone(),
+                    entity_type: Some(entity_type.clone()),
                 },
                 GraphNodePair {
                     entity: bob,
-                    entity_type,
+                    entity_type: Some(entity_type),
                 },
             ];
 
@@ -8546,7 +8738,7 @@ mod tests {
 
         GraphNodePair {
             entity,
-            entity_type,
+            entity_type: Some(entity_type),
         }
     }
 
@@ -8595,6 +8787,7 @@ mod tests {
         index_data_points(
             &chunks,
             &entities,
+            &[],
             &summaries,
             &[],
             &[],
@@ -8775,6 +8968,7 @@ mod tests {
                 index_data_points_windowed(
                     chunks,
                     entities,
+                    &[],
                     summaries,
                     documents,
                     &[],
@@ -8861,6 +9055,7 @@ mod tests {
         index_data_points(
             &chunks,
             &entities,
+            &[],
             &summaries,
             &documents,
             &[],
@@ -8921,6 +9116,7 @@ mod tests {
         index_data_points(
             &chunks,
             &[],
+            &[],
             &summaries,
             &[],
             &[],
@@ -8968,6 +9164,7 @@ mod tests {
         index_data_points(
             &[],
             &entities,
+            &[],
             &[],
             &[],
             &[],
@@ -9050,6 +9247,7 @@ mod tests {
             index_data_points(
                 chunks,
                 entities,
+                &[],
                 summaries,
                 &[],
                 &[],
@@ -9150,6 +9348,7 @@ mod tests {
             chunks: vec![chunk],
             documents: vec![document],
             entities: vec![],
+            timestamps: vec![],
             edges: vec![],
             producers: ArtifactProducers::default(),
             summaries: vec![],
@@ -9224,6 +9423,7 @@ mod tests {
             chunks: chunks.clone(),
             documents: vec![],
             entities,
+            timestamps: vec![],
             edges: vec![],
             producers: ArtifactProducers::default(),
             summaries,
@@ -9382,7 +9582,7 @@ mod tests {
         )
         .await;
         let mut dedup_result = deduplicate_nodes_and_edges(nodes, edges);
-        stamp_extracted_edge_text(&mut dedup_result);
+        stamp_extracted_edge_text(&mut dedup_result, &[]);
 
         let name_of = |id: Uuid| {
             dedup_result
@@ -10081,6 +10281,7 @@ mod tests {
             chunks: vec![kept_chunk.clone()],
             documents: vec![test_document_with_metadata(kept_doc, None)],
             entities: vec![],
+            timestamps: vec![],
             edges: vec![],
             producers: ArtifactProducers::default(),
             backend_summaries: vec![],
@@ -10148,6 +10349,7 @@ mod tests {
             chunks: vec![kept_chunk.clone()],
             documents: vec![test_document_with_metadata(kept_doc, None)],
             entities: vec![],
+            timestamps: vec![],
             edges: vec![],
             producers: ArtifactProducers::default(),
             backend_summaries: vec![],
@@ -10200,6 +10402,7 @@ mod tests {
             chunks: vec![chunk.clone()],
             documents: vec![test_document_with_metadata(doc, None)],
             entities: vec![],
+            timestamps: vec![],
             edges: vec![],
             producers: ArtifactProducers::default(),
             backend_summaries: vec![],
@@ -10254,6 +10457,7 @@ mod tests {
             chunks: vec![],
             documents: vec![],
             entities: vec![],
+            timestamps: vec![],
             edges: vec![],
             producers: ArtifactProducers::default(),
             backend_summaries: vec![],
@@ -10883,6 +11087,7 @@ mod tests {
             chunks: vec![test_chunk(Uuid::new_v4(), doc_id, "Hello world")],
             documents: vec![test_document_with_metadata(doc_id, None)],
             entities: vec![],
+            timestamps: vec![],
             edges: vec![],
             producers: ArtifactProducers::default(),
             summaries: vec![],
@@ -10948,6 +11153,7 @@ mod tests {
             chunks: vec![test_chunk(Uuid::new_v4(), doc_id, "Hello world")],
             documents: vec![test_document_with_metadata(doc_id, None)],
             entities: vec![],
+            timestamps: vec![],
             edges: vec![],
             producers: ArtifactProducers::default(),
             summaries: vec![],
@@ -11026,8 +11232,9 @@ mod tests {
             documents: vec![test_document_with_metadata(doc_id, None)],
             entities: vec![GraphNodePair {
                 entity,
-                entity_type,
+                entity_type: Some(entity_type),
             }],
+            timestamps: vec![],
             edges: vec![],
             producers: ArtifactProducers::default(),
             summaries: vec![],
@@ -11136,6 +11343,7 @@ mod tests {
             chunks: vec![test_chunk(Uuid::new_v4(), doc_id, "Alice works at Acme.")],
             documents: vec![test_document_with_metadata(doc_id, None)],
             entities: vec![],
+            timestamps: vec![],
             edges: vec![GraphEdgePair::new(source, target, dirty)],
             producers: ArtifactProducers::default(),
             summaries: vec![],
@@ -11232,6 +11440,7 @@ mod tests {
             chunks: graph_data.chunks,
             documents: graph_data.documents,
             entities: graph_data.entities,
+            timestamps: graph_data.timestamps,
             edges: graph_data.edges,
             producers: graph_data.producers,
             summaries: vec![],
@@ -12350,6 +12559,7 @@ mod tests {
             chunks: vec![test_chunk(Uuid::new_v4(), doc_id, "Hello world")],
             documents: vec![test_document_with_metadata(doc_id, None)],
             entities: vec![],
+            timestamps: vec![],
             edges: vec![],
             producers: ArtifactProducers::default(),
             summaries: vec![],

@@ -32,12 +32,17 @@ pub mod summarization;
 pub mod tasks;
 /// Temporal extraction module.
 pub mod temporal_extraction;
+/// Deterministic date hints for the default graph prompt.
+pub mod temporal_hints;
 
 pub use temporal_extraction::{TemporalEntityEnricher, TemporalEventExtractor};
 /// Triplet creation module.
 pub mod triplet_creation;
 
-pub use config::{ChunkStrategy, CognifyConfig, ConfigError, CustomChunker, GraphBackendHandle};
+pub use config::{
+    ChunkStrategy, CognifyConfig, ConfigError, CustomChunker, ExtractionStrategy,
+    GraphBackendHandle,
+};
 pub use dataset_resolver::{DatasetRef, DatasetResolver, cognify_dataset_refs, cognify_datasets};
 pub use edge_reindex::{EdgeReindexOptions, EdgeReindexReport, reindex_edge_types};
 pub use error::CognifyError;
@@ -51,9 +56,9 @@ pub use graph_backend::{
 };
 pub use graph_extraction::{GraphExtractable, Relationship, get_graph_from_model};
 pub use graph_integration::{
-    DeduplicationResult, EdgeResolutionStats, GraphEdgePair, GraphNodePair,
-    deduplicate_nodes_and_edges, expand_with_nodes_and_edges,
-    expand_with_nodes_and_edges_with_stats,
+    DeduplicationResult, EdgeResolutionStats, Expansion, GraphEdgePair, GraphNodePair,
+    TimestampNode, deduplicate_nodes_and_edges, expand_extracted_graphs,
+    expand_with_nodes_and_edges, expand_with_nodes_and_edges_with_stats,
 };
 pub use memify::{
     CuratorBatchOutput, DistillError, DistillSessionsResult, DistillationResult,
@@ -84,4 +89,6 @@ pub use tasks::{
     make_extract_graph_task, make_extract_temporal_events_task, make_summarize_text_task,
     summarize_text,
 };
-pub use triplet_creation::create_triplets_from_graph;
+pub use triplet_creation::{
+    create_triplets_from_graph, create_triplets_from_graph_with_timestamps,
+};

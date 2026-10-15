@@ -410,6 +410,20 @@ impl Settings {
         if let Some(raise) = cognify.raise_incremental_loading_errors {
             cfg = cfg.with_failure_stop(FailureStop::from_raise_errors(raise.get()));
         }
+        let cascade_rounds = match cognify.cascade_rounds {
+            0 => cognee_cognify::fact_extraction::cascade::DEFAULT_CASCADE_ROUNDS,
+            n => n as usize,
+        };
+        match cognee_cognify::ExtractionStrategy::parse(
+            &cognify.extraction_strategy,
+            cascade_rounds,
+        ) {
+            Some(strategy) => cfg = cfg.with_extraction_strategy(strategy),
+            None => tracing::warn!(
+                value = cognify.extraction_strategy,
+                "cognify.extraction_strategy: expected `single_pass` or `cascade`; using the default"
+            ),
+        }
         if !cognify.rollback_scope.trim().is_empty() {
             match RollbackScope::parse(&cognify.rollback_scope) {
                 Some(scope) => cfg = cfg.with_rollback_scope(scope),

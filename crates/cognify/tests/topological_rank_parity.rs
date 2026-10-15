@@ -233,10 +233,10 @@ async fn cognify_stamps_the_python_topological_ranks() {
             pair.entity.name
         );
         assert_eq!(
-            pair.entity_type.base.topological_rank,
+            pair.entity_type.as_ref().unwrap().base.topological_rank,
             Some(PY_ENTITY_RANK),
             "EntityType '{}' comes from the same fused Python task (slot 3)",
-            pair.entity_type.name
+            pair.entity_type.as_ref().unwrap().name
         );
     }
 
@@ -347,10 +347,10 @@ async fn extract_graph_rank_is_overridable_for_custom_pipelines() {
             pair.entity.name
         );
         assert_eq!(
-            pair.entity_type.base.topological_rank,
+            pair.entity_type.as_ref().unwrap().base.topological_rank,
             Some(CUSTOM_RANK),
             "EntityType '{}' must carry the caller-supplied rank",
-            pair.entity_type.name
+            pair.entity_type.as_ref().unwrap().name
         );
     }
 }

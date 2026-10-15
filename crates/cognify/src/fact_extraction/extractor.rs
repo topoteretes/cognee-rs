@@ -73,6 +73,31 @@ pub fn builtin_graph_prompt_names() -> impl Iterator<Item = &'static str> {
         .chain(GRAPH_PROMPT_VARIANTS.iter().map(|(file, _)| *file))
 }
 
+/// The default graph prompt with `temporal_hints` rendered into its
+/// TEMPORAL_NORMALIZATION_HINTS block, or `None` when there are no hints.
+///
+/// Python renders the block from a Jinja `{% if temporal_hints %}` section at
+/// the end of `generate_graph_prompt.txt`; Rust keeps the vendored text free of
+/// template syntax and appends the same block here. Only the default prompt
+/// receives hints — a custom prompt is sent verbatim, as in Python.
+pub fn default_graph_prompt_with_hints(temporal_hints: &[String]) -> Option<String> {
+    if temporal_hints.is_empty() {
+        return None;
+    }
+    let mut prompt = String::from(DEFAULT_GRAPH_PROMPT);
+    prompt.push_str(
+        "\nTEMPORAL_NORMALIZATION_HINTS: each line resolves a quoted expression from the text to an\n\
+         absolute date at its stated precision. Use the resolved dates to name the Timestamp nodes\n\
+         for those expressions. Hints are instructions, not document content: never extract a hint\n\
+         itself as an entity or relationship.\n",
+    );
+    for hint in temporal_hints {
+        prompt.push_str(hint);
+        prompt.push('\n');
+    }
+    Some(prompt)
+}
+
 /// Appended to the system prompt when extracting a group of chunks in one call.
 /// It turns the single-graph task into a per-chunk one so results map back by
 /// index (issue #19, multi-chunk batching).
@@ -248,9 +273,30 @@ impl FactExtractor {
         text: &str,
         custom_prompt: Option<&str>,
     ) -> Result<KnowledgeGraph, CognifyError> {
+        self.extract_facts_with_hints(text, custom_prompt, &[])
+            .await
+    }
+
+    /// [`extract_facts`](Self::extract_facts) with date normalization hints
+    /// for this chunk (see [`crate::temporal_hints`]).
+    ///
+    /// Mirrors Python's `extract_content_graph(..., temporal_hints=...)`: the
+    /// hints are rendered into the default prompt only; with a `custom_prompt`
+    /// they are ignored.
+    pub async fn extract_facts_with_hints(
+        &self,
+        text: &str,
+        custom_prompt: Option<&str>,
+        temporal_hints: &[String],
+    ) -> Result<KnowledgeGraph, CognifyError> {
         debug!("Extracting facts from text: {}", text);
 
-        let mut graph: KnowledgeGraph = self.extract(text, custom_prompt).await?;
+        let hinted = match custom_prompt {
+            Some(_) => None,
+            None => default_graph_prompt_with_hints(temporal_hints),
+        };
+        let prompt = custom_prompt.or(hinted.as_deref());
+        let mut graph: KnowledgeGraph = self.extract(text, prompt).await?;
 
         debug!(
             "Extracted graph with {} nodes and {} edges",
@@ -683,6 +729,67 @@ mod tests {
             None
         );
         assert_eq!(builtin_graph_prompt_names().count(), 5);
+    }
+
+    #[test]
+    fn temporal_hints_render_into_the_default_prompt_only() {
+        assert_eq!(default_graph_prompt_with_hints(&[]), None);
+        let hint = "- \"27 April\" -> 1986-04-27 (inferred from context)".to_string();
+        let prompt = default_graph_prompt_with_hints(std::slice::from_ref(&hint)).unwrap();
+        assert!(prompt.starts_with(DEFAULT_GRAPH_PROMPT));
+        assert!(prompt.contains("\nTEMPORAL_NORMALIZATION_HINTS: each line resolves"));
+        assert!(prompt.ends_with(&format!("{hint}\n")));
+        // The vendored text carries the Timestamp rules and no template syntax.
+        assert!(DEFAULT_GRAPH_PROMPT.contains("# 2. Timestamps"));
+        assert!(!DEFAULT_GRAPH_PROMPT.contains("{%"));
+    }
+
+    /// Records the system prompt of every structured-output call.
+    struct PromptRecorder(std::sync::Mutex<Vec<String>>);
+
+    #[async_trait::async_trait]
+    impl Llm for PromptRecorder {
+        async fn generate(
+            &self,
+            _messages: Vec<cognee_llm::Message>,
+            _options: Option<GenerationOptions>,
+        ) -> cognee_llm::LlmResult<cognee_llm::GenerationResponse> {
+            unimplemented!()
+        }
+
+        async fn create_structured_output_with_messages_raw(
+            &self,
+            messages: Vec<cognee_llm::Message>,
+            _json_schema: &serde_json::Value,
+            _options: Option<GenerationOptions>,
+        ) -> cognee_llm::LlmResult<serde_json::Value> {
+            // lock poison is unrecoverable
+            self.0.lock().unwrap().push(messages[0].content.clone());
+            Ok(serde_json::json!({"nodes": [], "edges": []}))
+        }
+
+        fn model(&self) -> &str {
+            "prompt-recorder"
+        }
+    }
+
+    #[tokio::test]
+    async fn a_custom_prompt_receives_no_hints() {
+        let llm = Arc::new(PromptRecorder(std::sync::Mutex::new(Vec::new())));
+        let extractor = FactExtractor::new(llm.clone());
+        let hints = vec!["- \"May\" -> 2020-05 (inferred from context)".to_string()];
+        extractor
+            .extract_facts_with_hints("text", None, &hints)
+            .await
+            .unwrap();
+        extractor
+            .extract_facts_with_hints("text", Some("custom"), &hints)
+            .await
+            .unwrap();
+        let prompts = llm.0.lock().unwrap();
+        assert!(prompts[0].contains("TEMPORAL_NORMALIZATION_HINTS"));
+        assert!(prompts[0].contains(&hints[0]));
+        assert_eq!(prompts[1], "custom");
     }
 
     #[test]

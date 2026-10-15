@@ -195,6 +195,13 @@ pub struct CognifyConfig {
     /// If None, uses default prompts from cognee_llm
     pub custom_extraction_prompt: Option<String>,
 
+    /// How the LLM graph extraction builds each chunk's graph: one
+    /// structured-output call (the default, Python's `cognify()`), or the
+    /// multi-round cascade (Python's `extract_graph_from_data_v2`). Ignored
+    /// when a [`Self::graph_backend`] replaces LLM extraction.
+    #[serde(default)]
+    pub extraction_strategy: ExtractionStrategy,
+
     /// Enable text summarization stage.
     /// Python behavior: Always runs if summarization_model is set
     /// Default: true (matches Python)
@@ -420,6 +427,35 @@ impl std::fmt::Debug for GraphBackendHandle {
     }
 }
 
+/// How graph extraction asks the LLM for each chunk's graph.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ExtractionStrategy {
+    /// One structured-output call per chunk with the default graph prompt
+    /// (and its date hints). Python's `cognify()`.
+    #[default]
+    SinglePass,
+    /// Three stages — nodes, relationship names, edge triplets — each run for
+    /// `rounds` rounds, so `3 × rounds` calls per chunk. Python's
+    /// `extract_graph_from_data_v2` (`n_rounds`, default 2); see
+    /// [`crate::fact_extraction::cascade`]. A custom extraction prompt does not
+    /// apply: each stage has its own prompts.
+    Cascade { rounds: usize },
+}
+
+impl ExtractionStrategy {
+    /// Parse a configured name: `single_pass` (or empty) and `cascade`,
+    /// case-insensitive. `None` for anything else.
+    pub fn parse(name: &str, cascade_rounds: usize) -> Option<Self> {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "" | "single_pass" | "single-pass" => Some(Self::SinglePass),
+            "cascade" => Some(Self::Cascade {
+                rounds: cascade_rounds.max(1),
+            }),
+            _ => None,
+        }
+    }
+}
+
 /// Chunking strategy options.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ChunkStrategy {
@@ -454,6 +490,7 @@ impl Default for CognifyConfig {
             chunks_per_batch: DEFAULT_CHUNKS_PER_BATCH,
             max_parallel_extractions: DEFAULT_MAX_PARALLEL_EXTRACTIONS,
             custom_extraction_prompt: None,
+            extraction_strategy: ExtractionStrategy::default(),
 
             enable_summarization: true,
 
@@ -529,6 +566,12 @@ impl CognifyConfig {
     /// Set chunk overlap (for recursive chunking).
     pub fn with_chunk_overlap(mut self, overlap: usize) -> Self {
         self.chunk_overlap = overlap;
+        self
+    }
+
+    /// Set the graph extraction strategy (see [`ExtractionStrategy`]).
+    pub fn with_extraction_strategy(mut self, strategy: ExtractionStrategy) -> Self {
+        self.extraction_strategy = strategy;
         self
     }
 

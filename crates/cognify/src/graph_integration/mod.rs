@@ -14,6 +14,7 @@ pub mod types;
 pub use db_deduplication::retrieve_existing_edges;
 pub use deduplication::{DeduplicationResult, deduplicate_nodes_and_edges};
 pub use expansion::{
-    EdgeResolutionStats, expand_with_nodes_and_edges, expand_with_nodes_and_edges_with_stats,
+    EdgeResolutionStats, Expansion, expand_extracted_graphs, expand_with_nodes_and_edges,
+    expand_with_nodes_and_edges_with_stats,
 };
-pub use types::{ArtifactProducers, GraphEdgePair, GraphNodePair};
+pub use types::{ArtifactProducers, GraphEdgePair, GraphNodePair, TimestampNode};

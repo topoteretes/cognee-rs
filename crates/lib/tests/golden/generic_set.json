@@ -2378,6 +2378,69 @@
     "err": "TypeMismatch",
     "key": "cognee_tracing_enabled"
   },
+  "cognify.cascade_rounds <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.cascade_rounds"
+  },
+  "cognify.cascade_rounds <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.cascade_rounds"
+  },
+  "cognify.cascade_rounds <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.cascade_rounds"
+  },
+  "cognify.cascade_rounds <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.cascade_rounds"
+  },
+  "cognify.cascade_rounds <- -1": {
+    "err": "TypeMismatch",
+    "key": "cognify.cascade_rounds"
+  },
+  "cognify.cascade_rounds <- 0": {
+    "ok": {
+      "cognify.cascade_rounds": 0
+    }
+  },
+  "cognify.cascade_rounds <- 1": {
+    "ok": {
+      "cognify.cascade_rounds": 1
+    }
+  },
+  "cognify.cascade_rounds <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "cognify.cascade_rounds"
+  },
+  "cognify.cascade_rounds <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "cognify.cascade_rounds"
+  },
+  "cognify.cascade_rounds <- 70000": {
+    "ok": {
+      "cognify.cascade_rounds": 70000
+    }
+  },
+  "cognify.cascade_rounds <- [1]": {
+    "err": "TypeMismatch",
+    "key": "cognify.cascade_rounds"
+  },
+  "cognify.cascade_rounds <- false": {
+    "err": "TypeMismatch",
+    "key": "cognify.cascade_rounds"
+  },
+  "cognify.cascade_rounds <- null": {
+    "err": "TypeMismatch",
+    "key": "cognify.cascade_rounds"
+  },
+  "cognify.cascade_rounds <- true": {
+    "err": "TypeMismatch",
+    "key": "cognify.cascade_rounds"
+  },
+  "cognify.cascade_rounds <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "cognify.cascade_rounds"
+  },
   "cognify.chunks_per_batch <- \"\"": {
     "err": "TypeMismatch",
     "key": "cognify.chunks_per_batch"
@@ -2503,6 +2566,68 @@
   "cognify.data_per_batch <- {\"a\":1}": {
     "err": "TypeMismatch",
     "key": "cognify.data_per_batch"
+  },
+  "cognify.extraction_strategy <- \"\"": {
+    "ok": {}
+  },
+  "cognify.extraction_strategy <- \"1\"": {
+    "ok": {
+      "cognify.extraction_strategy": "1"
+    }
+  },
+  "cognify.extraction_strategy <- \"s\"": {
+    "ok": {
+      "cognify.extraction_strategy": "s"
+    }
+  },
+  "cognify.extraction_strategy <- \"true\"": {
+    "ok": {
+      "cognify.extraction_strategy": "true"
+    }
+  },
+  "cognify.extraction_strategy <- -1": {
+    "err": "TypeMismatch",
+    "key": "cognify.extraction_strategy"
+  },
+  "cognify.extraction_strategy <- 0": {
+    "err": "TypeMismatch",
+    "key": "cognify.extraction_strategy"
+  },
+  "cognify.extraction_strategy <- 1": {
+    "err": "TypeMismatch",
+    "key": "cognify.extraction_strategy"
+  },
+  "cognify.extraction_strategy <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "cognify.extraction_strategy"
+  },
+  "cognify.extraction_strategy <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "cognify.extraction_strategy"
+  },
+  "cognify.extraction_strategy <- 70000": {
+    "err": "TypeMismatch",
+    "key": "cognify.extraction_strategy"
+  },
+  "cognify.extraction_strategy <- [1]": {
+    "err": "TypeMismatch",
+    "key": "cognify.extraction_strategy"
+  },
+  "cognify.extraction_strategy <- false": {
+    "err": "TypeMismatch",
+    "key": "cognify.extraction_strategy"
+  },
+  "cognify.extraction_strategy <- null": {
+    "err": "TypeMismatch",
+    "key": "cognify.extraction_strategy"
+  },
+  "cognify.extraction_strategy <- true": {
+    "err": "TypeMismatch",
+    "key": "cognify.extraction_strategy"
+  },
+  "cognify.extraction_strategy <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "cognify.extraction_strategy"
   },
   "cognify.failure_report_cap <- \"\"": {
     "err": "TypeMismatch",

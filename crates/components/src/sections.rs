@@ -792,6 +792,18 @@ config_section! {
         pub data_per_batch: u32 = 20 => {
             env: ["COGNEE_DATA_PER_BATCH"], alias: ["data_per_batch"], secret: false,
         },
+        /// Graph extraction strategy: `single_pass` (default; one LLM call per
+        /// chunk) or `cascade` (Python's multi-round
+        /// `extract_graph_from_data_v2`: nodes, relationship names, edge
+        /// triplets). Rust-only knob; Python reaches the cascade only from its
+        /// eval framework.
+        pub extraction_strategy: String = String::new() => {
+            env: ["COGNEE_COGNIFY_EXTRACTION_STRATEGY"], alias: [], secret: false,
+        },
+        /// Rounds per cascade stage (Python's `n_rounds`); 0 uses the default, 2.
+        pub cascade_rounds: u32 = 2 => {
+            env: ["COGNEE_COGNIFY_CASCADE_ROUNDS"], alias: [], secret: false,
+        },
     }
 }
 

@@ -226,7 +226,7 @@ async fn test_memify_idempotent_ids_match_cognify() {
         let entity_type = EntityType::new("Generic", "Generic type", None);
         GraphNodePair {
             entity,
-            entity_type,
+            entity_type: Some(entity_type),
         }
     }
 

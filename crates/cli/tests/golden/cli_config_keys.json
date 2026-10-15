@@ -20,8 +20,10 @@
     "chunk_strategy",
     "classification_model",
     "cognee_tracing_enabled",
+    "cognify.cascade_rounds",
     "cognify.chunks_per_batch",
     "cognify.data_per_batch",
+    "cognify.extraction_strategy",
     "cognify.failure_report_cap",
     "cognify.legacy_per_word_token_count",
     "cognify.max_chunk_failure_ratio",
@@ -273,6 +275,8 @@
     "cognify.failure_report_cap",
     "cognify.chunks_per_batch",
     "cognify.data_per_batch",
+    "cognify.extraction_strategy",
+    "cognify.cascade_rounds",
     "search.allow_cypher_query",
     "search.triplet_neighbor_cap",
     "search.hybrid.max_context_tokens",
@@ -2285,6 +2289,57 @@
   "set cognee_tracing_enabled <- {\"a\":1}": {
     "err": true
   },
+  "set cognify.cascade_rounds <- \"\"": {
+    "err": true
+  },
+  "set cognify.cascade_rounds <- \"1\"": {
+    "err": true
+  },
+  "set cognify.cascade_rounds <- \"s\"": {
+    "err": true
+  },
+  "set cognify.cascade_rounds <- \"true\"": {
+    "err": true
+  },
+  "set cognify.cascade_rounds <- -1": {
+    "err": true
+  },
+  "set cognify.cascade_rounds <- 0": {
+    "ok": {
+      "cognify.cascade_rounds": 0
+    }
+  },
+  "set cognify.cascade_rounds <- 1": {
+    "ok": {
+      "cognify.cascade_rounds": 1
+    }
+  },
+  "set cognify.cascade_rounds <- 1.5": {
+    "err": true
+  },
+  "set cognify.cascade_rounds <- 5000000000": {
+    "err": true
+  },
+  "set cognify.cascade_rounds <- 70000": {
+    "ok": {
+      "cognify.cascade_rounds": 70000
+    }
+  },
+  "set cognify.cascade_rounds <- [1]": {
+    "err": true
+  },
+  "set cognify.cascade_rounds <- false": {
+    "err": true
+  },
+  "set cognify.cascade_rounds <- null": {
+    "err": true
+  },
+  "set cognify.cascade_rounds <- true": {
+    "err": true
+  },
+  "set cognify.cascade_rounds <- {\"a\":1}": {
+    "err": true
+  },
   "set cognify.chunks_per_batch <- \"\"": {
     "err": true
   },
@@ -2385,6 +2440,57 @@
     "err": true
   },
   "set cognify.data_per_batch <- {\"a\":1}": {
+    "err": true
+  },
+  "set cognify.extraction_strategy <- \"\"": {
+    "ok": {}
+  },
+  "set cognify.extraction_strategy <- \"1\"": {
+    "ok": {
+      "cognify.extraction_strategy": "1"
+    }
+  },
+  "set cognify.extraction_strategy <- \"s\"": {
+    "ok": {
+      "cognify.extraction_strategy": "s"
+    }
+  },
+  "set cognify.extraction_strategy <- \"true\"": {
+    "ok": {
+      "cognify.extraction_strategy": "true"
+    }
+  },
+  "set cognify.extraction_strategy <- -1": {
+    "err": true
+  },
+  "set cognify.extraction_strategy <- 0": {
+    "err": true
+  },
+  "set cognify.extraction_strategy <- 1": {
+    "err": true
+  },
+  "set cognify.extraction_strategy <- 1.5": {
+    "err": true
+  },
+  "set cognify.extraction_strategy <- 5000000000": {
+    "err": true
+  },
+  "set cognify.extraction_strategy <- 70000": {
+    "err": true
+  },
+  "set cognify.extraction_strategy <- [1]": {
+    "err": true
+  },
+  "set cognify.extraction_strategy <- false": {
+    "err": true
+  },
+  "set cognify.extraction_strategy <- null": {
+    "err": true
+  },
+  "set cognify.extraction_strategy <- true": {
+    "err": true
+  },
+  "set cognify.extraction_strategy <- {\"a\":1}": {
     "err": true
   },
   "set cognify.failure_report_cap <- \"\"": {
@@ -14134,6 +14240,13 @@
       "relational.port": 1
     }
   },
+  "unset cognify.cascade_rounds": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
   "unset cognify.chunks_per_batch": {
     "ok": {
       "chunk_size": 7,
@@ -14142,6 +14255,13 @@
     }
   },
   "unset cognify.data_per_batch": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset cognify.extraction_strategy": {
     "ok": {
       "chunk_size": 7,
       "llm.model": "changed",

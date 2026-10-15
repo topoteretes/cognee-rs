@@ -7,14 +7,16 @@ use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 use cognee_core::{HasDataPoint, ProvenanceContext, stamp_tree};
-use cognee_models::{Entity, EntityType};
+use cognee_models::{Entity, EntityType, Timestamp};
 use cognee_ontology::traits::OntologyEdge;
 use cognee_ontology::{AttachedOntologyNode, NodeCategory, OntologyResolver};
 use cognee_utils::{generate_edge_name, generate_node_name, normalize_identifier};
 use tracing::{debug, warn};
 
 use crate::fact_extraction::{KnowledgeGraph, Node};
-use crate::graph_integration::types::{ArtifactProducers, GraphEdgePair, GraphNodePair};
+use crate::graph_integration::types::{
+    ArtifactProducers, GraphEdgePair, GraphNodePair, TimestampNode,
+};
 
 /// How many distinct unresolved endpoint references to name in the summary log.
 const UNRESOLVED_SAMPLE_LIMIT: usize = 10;
@@ -408,6 +410,13 @@ pub async fn expand_with_nodes_and_edges(
 /// claim bucket rather than the write bucket. `dropped()` therefore stays a
 /// count of edges this pass could not build at all, and `attempted -
 /// dropped()` stays an upper bound on `graph_edges.len()`.
+///
+/// # Timestamps
+///
+/// This view predates Timestamp nodes and has no slot for them: the
+/// Timestamp nodes [`expand_extracted_graphs`] builds are left out, and so are
+/// the edges that point at them, so the result stays self-consistent. The
+/// pipeline uses [`expand_extracted_graphs`].
 #[allow(clippy::too_many_arguments)]
 pub async fn expand_with_nodes_and_edges_with_stats(
     graphs: Vec<(Uuid, KnowledgeGraph)>,
@@ -425,6 +434,184 @@ pub async fn expand_with_nodes_and_edges_with_stats(
     ArtifactProducers,
     EdgeResolutionStats,
 ) {
+    let expansion = expand_extracted_graphs(
+        graphs,
+        dataset_id,
+        chunk_node_sets,
+        chunk_importance_weights,
+        existing_edges_set,
+        ontology_resolver,
+        user_label,
+        task_rank,
+    )
+    .await;
+    let timestamp_ids: HashSet<Uuid> = expansion
+        .timestamps
+        .iter()
+        .map(|node| node.timestamp.base.id)
+        .collect();
+    let untimed = |edge: &GraphEdgePair| {
+        !timestamp_ids.contains(&edge.source_entity_id)
+            && !timestamp_ids.contains(&edge.target_entity_id)
+    };
+    (
+        expansion.nodes,
+        expansion.edges.into_iter().filter(untimed).collect(),
+        expansion
+            .claimed_existing_edges
+            .into_iter()
+            .filter(untimed)
+            .collect(),
+        expansion.producers,
+        expansion.stats,
+    )
+}
+
+/// What one expansion pass produced. See [`expand_with_nodes_and_edges`] for
+/// the meaning of every field but `timestamps`.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct Expansion {
+    pub nodes: Vec<GraphNodePair>,
+    pub edges: Vec<GraphEdgePair>,
+    pub claimed_existing_edges: Vec<GraphEdgePair>,
+    /// Every chunk that produced each entity, Timestamp and edge.
+    pub producers: ArtifactProducers,
+    pub stats: EdgeResolutionStats,
+    /// The Timestamp nodes: one per normalized time string, whichever chunks
+    /// named it. Extracted nodes the LLM typed "Timestamp" whose name parses
+    /// ([`Timestamp::from_text`]) become these instead of entities, so the
+    /// `*_at` edges pointing at them anchor facts to real times. A
+    /// "Timestamp" whose name does not parse stays an ordinary entity.
+    pub timestamps: Vec<TimestampNode>,
+}
+
+/// The extracted graph with only the first node for each graph-local id.
+///
+/// Port of Python's `_remove_duplicate_extracted_nodes_by_id`: a model that
+/// declares one id twice gets the first declaration kept and the rest dropped
+/// with a warning — lossy, but an id must name one node for its edges to mean
+/// anything.
+fn without_duplicate_node_ids(mut graph: KnowledgeGraph) -> KnowledgeGraph {
+    let mut seen: HashSet<String> = HashSet::new();
+    graph.nodes.retain(|node| {
+        if seen.insert(node.id.clone()) {
+            true
+        } else {
+            warn!("Ignoring duplicate extracted node ID: {}", node.id);
+            false
+        }
+    });
+    graph
+}
+
+/// The final entity id for every graph-local node id of one chunk's graph.
+///
+/// Port of Python's `_calculate_entity_ids_by_extracted_node_id`. An entity's
+/// id derives from its **name** (`Entity.id_for(name)`), so the same name in
+/// two chunks or two documents is one entity. Several nodes sharing a name
+/// within one graph stay distinct: ordered by (type, description, id), each
+/// gets a deterministic graph-scoped id `Entity.id_for(name, chunk_id,
+/// ordinal)`, ordinals from 1. Expects node ids already made unique
+/// ([`without_duplicate_node_ids`]).
+fn entity_ids_by_node_id(graph: &KnowledgeGraph, chunk_id: Uuid) -> HashMap<String, Uuid> {
+    let mut by_name: HashMap<Uuid, Vec<&Node>> = HashMap::new();
+    let mut order: Vec<Uuid> = Vec::new();
+    for node in &graph.nodes {
+        let name_based = Entity::id_for(&node.name);
+        let group = by_name.entry(name_based).or_default();
+        if group.is_empty() {
+            order.push(name_based);
+        }
+        group.push(node);
+    }
+
+    let chunk = chunk_id.to_string();
+    let mut ids = HashMap::new();
+    for name_based in order {
+        let mut group = by_name.remove(&name_based).unwrap_or_default();
+        if let [only] = group.as_slice() {
+            ids.insert(only.id.clone(), name_based);
+            continue;
+        }
+        group.sort_by_cached_key(|node| {
+            (
+                generate_node_name(&node.node_type),
+                generate_node_name(&node.description),
+                generate_node_name(&node.id),
+            )
+        });
+        for (ordinal, node) in group.into_iter().enumerate() {
+            let ordinal = (ordinal + 1).to_string();
+            ids.insert(
+                node.id.clone(),
+                cognee_utils::data_point_id_for("Entity", &[&node.name, &chunk, &ordinal]),
+            );
+        }
+    }
+    ids
+}
+
+/// The extracted graph with every parseable timestamp on the target side of its
+/// edges.
+///
+/// Port of Python's `_with_timestamps_as_leaves`. The prompt asks for
+/// timestamps as leaves (`marie_curie -born_at-> 1867`). When the LLM draws the
+/// edge the other way (`1898 -discovery_of-> radium`) the fact is still that
+/// radium is tied to 1898, so the edge is reversed and keeps its name. An edge
+/// between two timestamps has no entity to live on and is dropped.
+fn with_timestamps_as_leaves(mut graph: KnowledgeGraph) -> KnowledgeGraph {
+    let timestamp_ids: HashSet<String> = graph
+        .nodes
+        .iter()
+        .filter(|node| {
+            is_timestamp_type(&node.node_type) && Timestamp::from_text(&node.name).is_some()
+        })
+        .map(|node| normalize_identifier(&node.id))
+        .collect();
+    if timestamp_ids.is_empty() {
+        return graph;
+    }
+    graph.edges.retain_mut(|edge| {
+        if !timestamp_ids.contains(&normalize_identifier(&edge.source_node_id)) {
+            return true;
+        }
+        if timestamp_ids.contains(&normalize_identifier(&edge.target_node_id)) {
+            warn!(
+                "Dropping edge {:?} between timestamps {:?} and {:?}",
+                edge.relationship_name, edge.source_node_id, edge.target_node_id
+            );
+            return false;
+        }
+        debug!(
+            "Reversing edge {:?} drawn from timestamp {:?} to {:?}",
+            edge.relationship_name, edge.source_node_id, edge.target_node_id
+        );
+        std::mem::swap(&mut edge.source_node_id, &mut edge.target_node_id);
+        true
+    });
+    graph
+}
+
+/// Whether an extracted node's type is "Timestamp" (normalized as Python's
+/// `generate_node_name(type) == "timestamp"`).
+fn is_timestamp_type(node_type: &str) -> bool {
+    generate_node_name(node_type) == "timestamp"
+}
+
+/// [`expand_with_nodes_and_edges_with_stats`], additionally returning the
+/// Timestamp nodes. This is the form the cognify pipeline uses.
+#[allow(clippy::too_many_arguments)]
+pub async fn expand_extracted_graphs(
+    graphs: Vec<(Uuid, KnowledgeGraph)>,
+    dataset_id: Uuid,
+    chunk_node_sets: &HashMap<Uuid, Vec<serde_json::Value>>,
+    chunk_importance_weights: &HashMap<Uuid, f64>,
+    existing_edges_set: &HashSet<String>,
+    ontology_resolver: &dyn OntologyResolver,
+    user_label: Option<&str>,
+    task_rank: Option<i32>,
+) -> Expansion {
     // Function-local visited set for the pre-stamp pass. The executor's
     // per-run set sees the same DataPoints during its own walk and
     // short-circuits via the `if dp.source_pipeline.is_none()` guard
@@ -463,6 +650,10 @@ pub async fn expand_with_nodes_and_edges_with_stats(
     // same most-recent-declaration rule as the id map above.
     let mut name_to_entity_id: HashMap<String, Option<(Uuid, ChunkPosition)>> = HashMap::new();
 
+    // Timestamp nodes by id, in first-declaration order.
+    let mut timestamp_map: HashMap<Uuid, TimestampNode> = HashMap::new();
+    let mut timestamp_order: Vec<Uuid> = Vec::new();
+
     let mut stats = EdgeResolutionStats::default();
     // A bounded sample of unresolved endpoint references, for the summary line.
     let mut unresolved_sample: Vec<String> = Vec::new();
@@ -490,7 +681,77 @@ pub async fn expand_with_nodes_and_edges_with_stats(
             .copied()
             .unwrap_or(0.5);
 
+        let graph = with_timestamps_as_leaves(without_duplicate_node_ids(graph));
+        let entity_ids = entity_ids_by_node_id(&graph, chunk_id);
+
         for node in graph.nodes {
+            // A node the LLM typed "Timestamp" whose name parses becomes a
+            // shared Timestamp node (Python `_get_or_create_timestamp`); one
+            // that does not parse stays an ordinary entity below.
+            if is_timestamp_type(&node.node_type) {
+                if let Some(timestamp) = Timestamp::from_text(&node.name) {
+                    let timestamp_id = timestamp.base.id;
+                    if let std::collections::hash_map::Entry::Vacant(e) =
+                        timestamp_map.entry(timestamp_id)
+                    {
+                        let mut timestamp = timestamp;
+                        timestamp.base.importance_weight = Some(chunk_importance_weight);
+                        pre_stamp_extraction(
+                            &mut timestamp,
+                            user_label,
+                            task_rank,
+                            &mut local_visited,
+                        );
+                        timestamp_order.push(timestamp_id);
+                        e.insert(TimestampNode {
+                            timestamp,
+                            description: node.description.clone(),
+                        });
+                    }
+
+                    // Register the node id (and its names) for edge resolution
+                    // the way an entity's first declaration does, or move the
+                    // origin forward on a re-declaration.
+                    let id_key = normalize_identifier(&node.id);
+                    match node_id_to_entity_id.get_mut(&id_key) {
+                        Some((entity, origin)) if *entity == timestamp_id => {
+                            *origin = position;
+                            refresh_name_alias_origin(
+                                &mut name_to_entity_id,
+                                &node.name,
+                                timestamp_id,
+                                position,
+                            );
+                        }
+                        _ => {
+                            register_name_alias(
+                                &mut name_to_entity_id,
+                                &node.name,
+                                timestamp_id,
+                                &id_key,
+                                position,
+                            );
+                            if let Some(registered) = timestamp_map.get(&timestamp_id) {
+                                register_name_alias(
+                                    &mut name_to_entity_id,
+                                    &registered.timestamp.timestamp_str,
+                                    timestamp_id,
+                                    &id_key,
+                                    position,
+                                );
+                            }
+                            node_id_to_entity_id.insert(id_key, (timestamp_id, position));
+                        }
+                    }
+                    producers.record_entity(timestamp_id, chunk_id);
+                    continue;
+                }
+                warn!(
+                    "Timestamp {:?} is not a normalized time string; kept as an entity",
+                    node.name
+                );
+            }
+
             // Step 1: Create or get EntityType (with ontology subgraph expansion)
             //
             // The *stored* type name is normalized (lowercase, apostrophes
@@ -509,113 +770,132 @@ pub async fn expand_with_nodes_and_edges_with_stats(
             // produce two entries carrying the same (normalization-insensitive)
             // id.
             let normalized_type_name = generate_node_name(&node.node_type);
-            let type_key = format!("{normalized_type_name}_type");
+            // An empty or punctuation-only type would become an EntityType
+            // named "", which every reader shows as a type with no label;
+            // Python's `_get_or_create_entity_type` leaves the entity untyped
+            // instead (no EntityType node, no `is_a` edge).
+            let entity_type: Option<EntityType> = if normalized_type_name.trim().is_empty() {
+                None
+            } else {
+                let type_key = format!("{normalized_type_name}_type");
 
-            // Check if this key was already remapped to a canonical form
-            let effective_key = key_mapping
-                .get(&type_key)
-                .cloned()
-                .unwrap_or_else(|| type_key.clone());
+                // Check if this key was already remapped to a canonical form
+                let effective_key = key_mapping
+                    .get(&type_key)
+                    .cloned()
+                    .unwrap_or_else(|| type_key.clone());
 
-            if !type_map.contains_key(&effective_key) {
-                let mut et = EntityType::from_node_type(&normalized_type_name, Some(dataset_id));
-                // Python: `importance_weight=data_chunk.importance_weight`
-                // (expand_with_nodes_and_edges.py:163).
-                et.base.importance_weight = Some(chunk_importance_weight);
-                pre_stamp_extraction(&mut et, user_label, task_rank, &mut local_visited);
+                if !type_map.contains_key(&effective_key) {
+                    let mut et =
+                        EntityType::from_node_type(&normalized_type_name, Some(dataset_id));
+                    // Python: `importance_weight=data_chunk.importance_weight`
+                    // (expand_with_nodes_and_edges.py:163).
+                    et.base.importance_weight = Some(chunk_importance_weight);
+                    pre_stamp_extraction(&mut et, user_label, task_rank, &mut local_visited);
 
-                if ontology_resolver.is_loaded() {
-                    match ontology_resolver.get_subgraph(&node.node_type, "classes", true) {
-                        Ok((onto_nodes, onto_edges, Some(root_node))) => {
-                            // Python normalizes the ontology-supplied name too
-                            // before storing it
-                            // (`construct_data_points_and_edges_with_ontology.py:223`),
-                            // while deriving the id from the raw name — the two
-                            // agree because `id_for` normalizes anyway.
-                            let canonical_name = generate_node_name(&root_node.name);
+                    if ontology_resolver.is_loaded() {
+                        match ontology_resolver.get_subgraph(&node.node_type, "classes", true) {
+                            Ok((onto_nodes, onto_edges, Some(root_node))) => {
+                                // Python normalizes the ontology-supplied name too
+                                // before storing it
+                                // (`construct_data_points_and_edges_with_ontology.py:223`),
+                                // while deriving the id from the raw name — the two
+                                // agree because `id_for` normalizes anyway.
+                                let canonical_name = generate_node_name(&root_node.name);
 
-                            // Canonicalize: rename + regenerate deterministic ID
-                            et.mark_ontology_valid(Some(canonical_name.clone()));
-                            et.base.id = EntityType::id_for(&canonical_name);
+                                // Canonicalize: rename + regenerate deterministic ID
+                                et.mark_ontology_valid(Some(canonical_name.clone()));
+                                et.base.id = EntityType::id_for(&canonical_name);
 
-                            // Record key mapping if canonical differs
-                            let new_type_key = format!("{canonical_name}_type");
-                            if new_type_key != type_key {
-                                key_mapping.insert(type_key.clone(), new_type_key.clone());
-                            }
-
-                            // Process ontology subgraph nodes and edges
-                            process_ontology_nodes(
-                                &onto_nodes,
-                                dataset_id,
-                                chunk_importance_weight,
-                                &node_map,
-                                &type_map,
-                                &mut ontology_types_map,
-                                &mut ontology_entities_map,
-                                user_label,
-                                task_rank,
-                                &mut local_visited,
-                            );
-                            // The resolver returns the matched root class
-                            // *separately* from `onto_nodes` (it is not in the
-                            // node list). An ontology `is_a` edge whose endpoint
-                            // names that root must still resolve to the root's
-                            // class id, so include it in the category lookup for
-                            // edge resolution only — NOT in `process_ontology_nodes`,
-                            // which would double-create it (the main loop already
-                            // created the canonical type node).
-                            let mut edge_category_nodes = onto_nodes.clone();
-                            edge_category_nodes.push(root_node.clone());
-                            process_ontology_edges(
-                                &edge_category_nodes,
-                                &onto_edges,
-                                existing_edges_set,
-                                &mut ontology_edge_keys,
-                                &mut ontology_edges_out,
-                            );
-
-                            // Insert under canonical key
-                            type_map.insert(
+                                // Record key mapping if canonical differs
+                                let new_type_key = format!("{canonical_name}_type");
                                 if new_type_key != type_key {
-                                    new_type_key
-                                } else {
-                                    effective_key.clone()
-                                },
-                                et,
-                            );
-                        }
-                        Ok((_, _, None)) => {
-                            // No match in ontology
-                            type_map.insert(effective_key.clone(), et);
-                        }
-                        Err(e) => {
-                            warn!(
-                                "Ontology subgraph extraction failed for '{}': {}",
-                                node.node_type, e
-                            );
-                            type_map.insert(effective_key.clone(), et);
-                        }
-                    }
-                } else {
-                    type_map.insert(effective_key.clone(), et);
-                }
-            }
+                                    key_mapping.insert(type_key.clone(), new_type_key.clone());
+                                }
 
-            // Re-resolve the effective key (may have been remapped above)
-            let resolved_key = key_mapping
-                .get(&type_key)
-                .cloned()
-                .unwrap_or_else(|| type_key.clone());
-            #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
-            let entity_type = type_map
-                .get(&resolved_key)
-                .expect("entity type was just inserted or already existed");
+                                // Process ontology subgraph nodes and edges
+                                process_ontology_nodes(
+                                    &onto_nodes,
+                                    dataset_id,
+                                    chunk_importance_weight,
+                                    &node_map,
+                                    &type_map,
+                                    &mut ontology_types_map,
+                                    &mut ontology_entities_map,
+                                    user_label,
+                                    task_rank,
+                                    &mut local_visited,
+                                );
+                                // The resolver returns the matched root class
+                                // *separately* from `onto_nodes` (it is not in the
+                                // node list). An ontology `is_a` edge whose endpoint
+                                // names that root must still resolve to the root's
+                                // class id, so include it in the category lookup for
+                                // edge resolution only — NOT in `process_ontology_nodes`,
+                                // which would double-create it (the main loop already
+                                // created the canonical type node).
+                                let mut edge_category_nodes = onto_nodes.clone();
+                                edge_category_nodes.push(root_node.clone());
+                                process_ontology_edges(
+                                    &edge_category_nodes,
+                                    &onto_edges,
+                                    existing_edges_set,
+                                    &mut ontology_edge_keys,
+                                    &mut ontology_edges_out,
+                                );
+
+                                // Insert under canonical key
+                                type_map.insert(
+                                    if new_type_key != type_key {
+                                        new_type_key
+                                    } else {
+                                        effective_key.clone()
+                                    },
+                                    et,
+                                );
+                            }
+                            Ok((_, _, None)) => {
+                                // No match in ontology
+                                type_map.insert(effective_key.clone(), et);
+                            }
+                            Err(e) => {
+                                warn!(
+                                    "Ontology subgraph extraction failed for '{}': {}",
+                                    node.node_type, e
+                                );
+                                type_map.insert(effective_key.clone(), et);
+                            }
+                        }
+                    } else {
+                        type_map.insert(effective_key.clone(), et);
+                    }
+                }
+
+                // Re-resolve the effective key (may have been remapped above)
+                let resolved_key = key_mapping
+                    .get(&type_key)
+                    .cloned()
+                    .unwrap_or_else(|| type_key.clone());
+                #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
+                let entity_type = type_map
+                    .get(&resolved_key)
+                    .expect("entity type was just inserted or already existed");
+                Some(entity_type.clone())
+            };
 
             // Step 2: Create Entity
             // Cloned into the `entry` call below so the key survives for the
             // canonical-name lookup after the match.
-            let entity_key = format!("{}_entity", node.id);
+            //
+            // Keyed on the final entity id, which derives from the node's
+            // name (see `entity_ids_by_node_id`), so the same name declared by
+            // two chunks lands on one entity — the first declaration's
+            // description wins, as in Python.
+            #[allow(clippy::expect_used, reason = "every node of this graph has an id")]
+            let entity_id = *entity_ids
+                .get(&node.id)
+                .expect("entity_ids_by_node_id covers every node of the graph");
+            let entity_key = format!("{entity_id}_entity");
 
             // Validate entity against ontology "individuals" with subgraph expansion.
             // Collect subgraph data for deferred processing (after insert releases borrow).
@@ -625,6 +905,7 @@ pub async fn expand_with_nodes_and_edges_with_stats(
             {
                 let mut entity_pair = create_entity_node(
                     &node,
+                    entity_id,
                     entity_type.clone(), // Pass the shared entity_type
                     dataset_id,
                     chunk_id,
@@ -941,7 +1222,7 @@ pub async fn expand_with_nodes_and_edges_with_stats(
         );
         graph_nodes.push(GraphNodePair {
             entity,
-            entity_type: et,
+            entity_type: Some(et),
         });
     }
 
@@ -1011,13 +1292,19 @@ pub async fn expand_with_nodes_and_edges_with_stats(
     // Ontology-derived nodes and edges appended above have no producing chunk
     // and therefore no producer entry; callers fall back to today's behavior
     // for them.
-    (
-        graph_nodes,
-        graph_edges,
+    let timestamps = timestamp_order
+        .into_iter()
+        .filter_map(|id| timestamp_map.remove(&id))
+        .collect();
+
+    Expansion {
+        nodes: graph_nodes,
+        edges: graph_edges,
         claimed_existing_edges,
         producers,
         stats,
-    )
+        timestamps,
+    }
 }
 
 /// Helper: Create Entity from Node.
@@ -1032,12 +1319,16 @@ pub async fn expand_with_nodes_and_edges_with_stats(
 /// in rather than overwriting — preserving dataset scoping while making the
 /// entity discoverable by a node_name-scoped (NodeSet-filtered) search.
 ///
+/// `entity_type` is `None` for an untyped entity (blank extracted type): the
+/// entity then has no `is_a`.
+///
 /// `importance_weight` is the source chunk's `importance_weight`, stamped onto
 /// the entity to mirror Python's `Entity(importance_weight=data_chunk.importance_weight)`
 /// (expand_with_nodes_and_edges.py:229).
 fn create_entity_node(
     node: &Node,
-    entity_type: EntityType,
+    entity_id: Uuid,
+    entity_type: Option<EntityType>,
     dataset_id: Uuid,
     chunk_id: Uuid,
     chunk_belongs_to_set: Option<&Vec<serde_json::Value>>,
@@ -1053,15 +1344,18 @@ fn create_entity_node(
     // The description is deliberately left untouched: Python passes
     // `description=extracted_node.description` through unnormalized (line 57).
     //
-    // The id does not move — `Entity::from_node` derives it from `node.id`,
-    // and `Entity::id_for` normalizes its input regardless.
-    let entity = Entity::from_node(
-        &node.id,
+    // `entity_id` is the caller's name-based (or graph-scoped ordinal) id —
+    // see `entity_ids_by_node_id`. The LLM's own node id is kept in metadata.
+    let mut entity = Entity::new(
         generate_node_name(&node.name),
+        entity_type.as_ref().map(|et| et.base.id),
         &node.description,
-        entity_type.base.id,
         Some(dataset_id),
     );
+    entity.base.id = entity_id;
+    entity
+        .base
+        .set_metadata("original_node_id", serde_json::json!(node.id));
 
     // Store chunk_id reference in metadata
     let mut entity_with_chunk = entity;
@@ -1184,7 +1478,7 @@ fn process_ontology_nodes(
 
                 let pair = GraphNodePair {
                     entity,
-                    entity_type: placeholder_et,
+                    entity_type: Some(placeholder_et),
                 };
                 ontology_entities_map.insert(dedup_key, pair);
             }
@@ -1297,6 +1591,269 @@ mod tests {
         }
     }
 
+    // ----- Timestamp nodes (temporal-memify-10) -----
+
+    fn node(id: &str, name: &str, node_type: &str, description: &str) -> Node {
+        Node {
+            id: id.to_string(),
+            name: name.to_string(),
+            node_type: node_type.to_string(),
+            description: description.to_string(),
+        }
+    }
+
+    fn edge(source: &str, target: &str, relationship: &str) -> Edge {
+        Edge {
+            source_node_id: source.to_string(),
+            target_node_id: target.to_string(),
+            relationship_name: relationship.to_string(),
+            description: None,
+        }
+    }
+
+    async fn expand(graphs: Vec<(Uuid, KnowledgeGraph)>) -> Expansion {
+        expand_extracted_graphs(
+            graphs,
+            Uuid::new_v4(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            &noop(),
+            None,
+            None,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn a_parseable_timestamp_node_becomes_a_shared_timestamp() {
+        let first = KnowledgeGraph {
+            nodes: vec![
+                node("marie_curie", "Marie Curie", "Person", "A physicist"),
+                node("1867", "1867", "Timestamp", "Her birth year"),
+            ],
+            edges: vec![edge("marie_curie", "1867", "born_at")],
+        };
+        let second = KnowledgeGraph {
+            nodes: vec![
+                node("pierre", "Pierre Curie", "Person", "A physicist"),
+                node("year_1867", "1867", "timestamp", ""),
+            ],
+            edges: vec![edge("pierre", "year_1867", "mentioned_at")],
+        };
+        let (chunk_a, chunk_b) = (Uuid::new_v4(), Uuid::new_v4());
+        let out = expand(vec![(chunk_a, first), (chunk_b, second)]).await;
+
+        // One Timestamp, no Entity or EntityType for it.
+        assert_eq!(out.timestamps.len(), 1);
+        let ts = &out.timestamps[0];
+        assert_eq!(ts.timestamp.timestamp_str, "1867");
+        assert_eq!(ts.timestamp.base.id, Timestamp::id_for("1867"));
+        assert_eq!(ts.description, "Her birth year");
+        assert_eq!(out.nodes.len(), 2);
+        assert!(
+            out.nodes
+                .iter()
+                .all(|n| n.entity_type.as_ref().unwrap().name == "person")
+        );
+
+        // Both `*_at` edges resolve to the Timestamp, and both chunks produced it.
+        assert_eq!(out.edges.len(), 2);
+        assert!(
+            out.edges
+                .iter()
+                .all(|e| e.target_entity_id == ts.timestamp.base.id)
+        );
+        assert_eq!(
+            out.producers.entity_chunks(ts.timestamp.base.id),
+            &[chunk_a, chunk_b]
+        );
+        assert_eq!(out.stats.dropped(), 0);
+    }
+
+    #[tokio::test]
+    async fn edges_from_a_timestamp_are_reversed_and_between_timestamps_dropped() {
+        let graph = KnowledgeGraph {
+            nodes: vec![
+                node("radium", "Radium", "Element", ""),
+                node("1898", "1898", "Timestamp", ""),
+                node("1902", "1902", "Timestamp", ""),
+            ],
+            edges: vec![
+                edge("1898", "radium", "discovery_of"),
+                edge("1898", "1902", "precedes"),
+            ],
+        };
+        let out = expand(vec![(Uuid::new_v4(), graph)]).await;
+
+        assert_eq!(out.timestamps.len(), 2);
+        assert_eq!(out.edges.len(), 1);
+        let reversed = &out.edges[0];
+        assert_eq!(reversed.relationship_name, "discovery_of");
+        assert_eq!(reversed.source_entity_id, Entity::id_for("radium"));
+        assert_eq!(reversed.target_entity_id, Timestamp::id_for("1898"));
+    }
+
+    #[tokio::test]
+    async fn an_unparseable_timestamp_stays_an_entity() {
+        let graph = KnowledgeGraph {
+            nodes: vec![node("spring", "that spring", "Timestamp", "")],
+            edges: vec![],
+        };
+        let out = expand(vec![(Uuid::new_v4(), graph)]).await;
+        assert!(out.timestamps.is_empty());
+        assert_eq!(out.nodes.len(), 1);
+        assert_eq!(out.nodes[0].entity_type.as_ref().unwrap().name, "timestamp");
+    }
+
+    #[tokio::test]
+    async fn prose_and_span_timestamps_are_normalized() {
+        let graph = KnowledgeGraph {
+            nodes: vec![
+                node("war", "Napoleonic Wars", "Event", ""),
+                node("d", "23 March 1947", "Timestamp", ""),
+                node("s", "from 1803 to 1815", "Timestamp", ""),
+            ],
+            edges: vec![edge("war", "s", "lasted_during")],
+        };
+        let out = expand(vec![(Uuid::new_v4(), graph)]).await;
+        let strs: Vec<&str> = out
+            .timestamps
+            .iter()
+            .map(|t| t.timestamp.timestamp_str.as_str())
+            .collect();
+        assert_eq!(strs, vec!["1947-03-23", "1803/1815"]);
+        assert_eq!(
+            out.edges[0].target_entity_id,
+            Timestamp::id_for("1803/1815")
+        );
+    }
+
+    // ----- Identity rules (extraction-04) -----
+
+    #[tokio::test]
+    async fn entity_ids_derive_from_the_name_not_the_llm_node_id() {
+        let first = KnowledgeGraph {
+            nodes: vec![node("alice_1", "Alice", "Person", "First")],
+            edges: vec![],
+        };
+        let second = KnowledgeGraph {
+            nodes: vec![node("a", "Alice", "Person", "Second")],
+            edges: vec![],
+        };
+        let out = expand(vec![(Uuid::new_v4(), first), (Uuid::new_v4(), second)]).await;
+        // Python: `Entity.id_for(node.name)` — one entity across chunks, the
+        // first declaration's description kept.
+        assert_eq!(out.nodes.len(), 1);
+        assert_eq!(out.nodes[0].entity.base.id, Entity::id_for("Alice"));
+        assert_eq!(out.nodes[0].entity.description, "First");
+        assert_eq!(
+            out.nodes[0].entity.base.get_metadata("original_node_id"),
+            Some(&serde_json::json!("alice_1"))
+        );
+    }
+
+    #[tokio::test]
+    async fn same_name_nodes_in_one_graph_get_ordinal_ids() {
+        let chunk_id = Uuid::new_v4();
+        let graph = KnowledgeGraph {
+            nodes: vec![
+                node("mercury_planet", "Mercury", "Planet", "Closest to the sun"),
+                node("mercury_element", "Mercury", "Element", "A liquid metal"),
+                node("venus", "Venus", "Planet", ""),
+            ],
+            edges: vec![
+                edge("mercury_planet", "venus", "neighbours"),
+                edge("mercury_element", "venus", "named_alongside"),
+            ],
+        };
+        let out = expand(vec![(chunk_id, graph)]).await;
+
+        // Ordered by (type, description, id): element before planet.
+        let chunk = chunk_id.to_string();
+        let element = cognee_utils::data_point_id_for("Entity", &["Mercury", &chunk, "1"]);
+        let planet = cognee_utils::data_point_id_for("Entity", &["Mercury", &chunk, "2"]);
+        let ids: HashSet<Uuid> = out.nodes.iter().map(|n| n.entity.base.id).collect();
+        assert_eq!(
+            ids,
+            HashSet::from([element, planet, Entity::id_for("Venus")])
+        );
+        // Python: uuid5(NAMESPACE_OID, f"Entity:mercury|{chunk_id}|1").
+        assert_eq!(
+            element,
+            Uuid::new_v5(
+                &Uuid::NAMESPACE_OID,
+                format!("Entity:mercury|{chunk}|1").as_bytes()
+            )
+        );
+        // Each edge still resolves to its own Mercury.
+        let source_of = |rel: &str| {
+            out.edges
+                .iter()
+                .find(|e| e.relationship_name == rel)
+                .map(|e| e.source_entity_id)
+        };
+        assert_eq!(source_of("neighbours"), Some(planet));
+        assert_eq!(source_of("named_alongside"), Some(element));
+    }
+
+    #[tokio::test]
+    async fn a_duplicate_node_id_keeps_the_first_declaration() {
+        let graph = KnowledgeGraph {
+            nodes: vec![
+                node("x", "Alice", "Person", ""),
+                node("x", "Bob", "Person", ""),
+            ],
+            edges: vec![],
+        };
+        let out = expand(vec![(Uuid::new_v4(), graph)]).await;
+        assert_eq!(out.nodes.len(), 1);
+        assert_eq!(out.nodes[0].entity.name, "alice");
+    }
+
+    #[tokio::test]
+    async fn a_blank_type_leaves_the_entity_untyped() {
+        let graph = KnowledgeGraph {
+            nodes: vec![node("thing", "Thing", " ", ""), node("x", "X", "'", "")],
+            edges: vec![],
+        };
+        let out = expand(vec![(Uuid::new_v4(), graph)]).await;
+        assert_eq!(out.nodes.len(), 2);
+        for pair in &out.nodes {
+            assert!(pair.entity_type.is_none(), "{:?}", pair.entity.name);
+            assert_eq!(pair.entity.is_a, None);
+        }
+    }
+
+    #[tokio::test]
+    async fn the_legacy_view_leaves_timestamps_and_their_edges_out() {
+        let graph = KnowledgeGraph {
+            nodes: vec![
+                node("alice", "Alice", "Person", ""),
+                node("acme", "Acme", "Organization", ""),
+                node("2020", "2020", "Timestamp", ""),
+            ],
+            edges: vec![
+                edge("alice", "2020", "joined_at"),
+                edge("alice", "acme", "works_at"),
+            ],
+        };
+        let (nodes, edges, _, _) = expand_with_nodes_and_edges(
+            vec![(Uuid::new_v4(), graph)],
+            Uuid::new_v4(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            &noop(),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(nodes.len(), 2);
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].relationship_name, "works_at");
+    }
+
     #[tokio::test]
     async fn test_expand_single_graph() {
         let graph = create_test_graph();
@@ -1377,11 +1934,11 @@ mod tests {
         )
         .await;
 
-        // The merge still yields one entity per node id …
+        // The merge still yields one entity per name …
         assert_eq!(nodes.len(), 2);
 
         // … but both chunks are recorded as its producers, in first-seen order.
-        let alice_id = Entity::id_for("alice_1");
+        let alice_id = Entity::id_for("Alice");
         assert_eq!(producers.entity_chunks(alice_id), [chunk_a, chunk_b]);
     }
 
@@ -1421,8 +1978,8 @@ mod tests {
         let chunk_id = Uuid::new_v4();
         let dataset_id = Uuid::new_v4();
 
-        let alice_id = Entity::id_for("alice_1");
-        let techcorp_id = Entity::id_for("techcorp_1");
+        let alice_id = Entity::id_for("Alice");
+        let techcorp_id = Entity::id_for("TechCorp");
         let existing = HashSet::from([format!("{alice_id}_{techcorp_id}_works_at")]);
 
         let (_nodes, edges, claimed_edges, producers) = expand_with_nodes_and_edges(
@@ -1506,12 +2063,18 @@ mod tests {
 
         // Check that entity types are created
         for node_pair in &nodes {
-            assert!(!node_pair.entity_type.name.is_empty());
-            assert_eq!(node_pair.entity_type.base.data_type, "EntityType");
+            assert!(!node_pair.entity_type.as_ref().unwrap().name.is_empty());
+            assert_eq!(
+                node_pair.entity_type.as_ref().unwrap().base.data_type,
+                "EntityType"
+            );
         }
 
         // Verify types
-        let types: Vec<String> = nodes.iter().map(|n| n.entity_type.name.clone()).collect();
+        let types: Vec<String> = nodes
+            .iter()
+            .map(|n| n.entity_type.as_ref().unwrap().name.clone())
+            .collect();
         assert!(types.contains(&"organization".to_string()));
         assert!(types.contains(&"person".to_string()));
     }
@@ -1536,7 +2099,10 @@ mod tests {
 
         // Check that entities reference their types
         for node_pair in &nodes {
-            assert_eq!(node_pair.entity.is_a, Some(node_pair.entity_type.base.id));
+            assert_eq!(
+                node_pair.entity.is_a,
+                Some(node_pair.entity_type.as_ref().unwrap().base.id)
+            );
         }
     }
 
@@ -1658,10 +2224,10 @@ mod tests {
                 pair.entity.name
             );
             assert_eq!(
-                pair.entity_type.base.importance_weight,
+                pair.entity_type.as_ref().unwrap().base.importance_weight,
                 Some(0.9),
                 "entity_type '{}' should inherit its chunk's importance_weight",
-                pair.entity_type.name
+                pair.entity_type.as_ref().unwrap().name
             );
         }
     }
@@ -1689,7 +2255,10 @@ mod tests {
         assert!(!nodes.is_empty(), "expected at least one node");
         for pair in &nodes {
             assert_eq!(pair.entity.base.importance_weight, Some(0.5));
-            assert_eq!(pair.entity_type.base.importance_weight, Some(0.5));
+            assert_eq!(
+                pair.entity_type.as_ref().unwrap().base.importance_weight,
+                Some(0.5)
+            );
         }
     }
 
@@ -1728,12 +2297,20 @@ mod tests {
 
         let legalentity = nodes
             .iter()
-            .find(|n| n.entity.name == "legalentity" || n.entity_type.name == "legalentity")
+            .find(|n| {
+                n.entity.name == "legalentity"
+                    || n.entity_type.as_ref().unwrap().name == "legalentity"
+            })
             .expect("expected ontology-derived 'legalentity' node");
 
         // The ontology-derived class type carries the chunk's importance_weight.
         assert_eq!(
-            legalentity.entity_type.base.importance_weight,
+            legalentity
+                .entity_type
+                .as_ref()
+                .unwrap()
+                .base
+                .importance_weight,
             Some(0.9),
             "ontology-derived type should inherit the chunk's importance_weight"
         );
@@ -2613,17 +3190,17 @@ mod tests {
             // All entity types should be ontology-valid (both "Organization"
             // and "Person" are matched by MockOntologyResolver via get_subgraph)
             assert!(
-                node_pair.entity_type.is_ontology_valid(),
+                node_pair.entity_type.as_ref().unwrap().is_ontology_valid(),
                 "EntityType '{}' should be ontology-valid",
-                node_pair.entity_type.name
+                node_pair.entity_type.as_ref().unwrap().name
             );
 
             if node_pair.entity.name == "techcorp" {
                 // "Organization" → canonical "organisation" (lowercase from uri_to_key)
-                assert_eq!(node_pair.entity_type.name, "organisation");
+                assert_eq!(node_pair.entity_type.as_ref().unwrap().name, "organisation");
             } else if node_pair.entity.name == "alice_canonical" {
                 // "Person" → canonical "person" (lowercase from uri_to_key)
-                assert_eq!(node_pair.entity_type.name, "person");
+                assert_eq!(node_pair.entity_type.as_ref().unwrap().name, "person");
                 // Alice is matched as individual and canonicalized
                 assert!(
                     node_pair.entity.base.ontology_valid,
@@ -2663,9 +3240,9 @@ mod tests {
         // With NoOp resolver nothing should be ontology-validated
         for node_pair in &nodes {
             assert!(
-                !node_pair.entity_type.is_ontology_valid(),
+                !node_pair.entity_type.as_ref().unwrap().is_ontology_valid(),
                 "EntityType '{}' should NOT be ontology-valid with NoOp resolver",
-                node_pair.entity_type.name
+                node_pair.entity_type.as_ref().unwrap().name
             );
             assert!(
                 !node_pair.entity.base.ontology_valid,
@@ -2828,9 +3405,12 @@ mod tests {
         assert_eq!(pair.entity.base.id, Entity::id_for("MyCar"));
         assert_eq!(pair.entity.name, "mycar");
         // Placeholder type
-        assert_eq!(pair.entity_type.name, "OntologyIndividual");
         assert_eq!(
-            pair.entity_type.base.id,
+            pair.entity_type.as_ref().unwrap().name,
+            "OntologyIndividual"
+        );
+        assert_eq!(
+            pair.entity_type.as_ref().unwrap().base.id,
             EntityType::id_for("OntologyIndividual")
         );
     }
@@ -2966,9 +3546,9 @@ mod tests {
         );
 
         // The ancestor "legalentity" should be present as an ontology-derived node
-        let legalentity_node = nodes
-            .iter()
-            .find(|n| n.entity.name == "legalentity" || n.entity_type.name == "legalentity");
+        let legalentity_node = nodes.iter().find(|n| {
+            n.entity.name == "legalentity" || n.entity_type.as_ref().unwrap().name == "legalentity"
+        });
         assert!(
             legalentity_node.is_some(),
             "Expected ontology-derived 'legalentity' node in output"
@@ -2976,7 +3556,10 @@ mod tests {
 
         // The ancestor should be ontology-valid
         if let Some(le) = legalentity_node {
-            assert!(le.entity_type.base.ontology_valid || le.entity.base.ontology_valid);
+            assert!(
+                le.entity_type.as_ref().unwrap().base.ontology_valid
+                    || le.entity.base.ontology_valid
+            );
         }
     }
 
@@ -3131,12 +3714,18 @@ mod tests {
         // Both should share the same EntityType (canonicalized to "organisation")
         let tc = nodes.iter().find(|n| n.entity.name == "techcorp").unwrap();
         let ac = nodes.iter().find(|n| n.entity.name == "acmecorp").unwrap();
-        assert_eq!(tc.entity_type.base.id, ac.entity_type.base.id);
+        assert_eq!(
+            tc.entity_type.as_ref().unwrap().base.id,
+            ac.entity_type.as_ref().unwrap().base.id
+        );
 
         // There should be exactly 1 legalentity derived node (not duplicated)
         let legalentity_count = nodes
             .iter()
-            .filter(|n| n.entity.name == "legalentity" || n.entity_type.name == "legalentity")
+            .filter(|n| {
+                n.entity.name == "legalentity"
+                    || n.entity_type.as_ref().unwrap().name == "legalentity"
+            })
             .count();
         assert_eq!(
             legalentity_count, 1,
@@ -3196,12 +3785,12 @@ mod tests {
             .unwrap();
 
         // Organization type is canonicalized and validated
-        assert!(tc.entity_type.is_ontology_valid());
-        assert_eq!(tc.entity_type.name, "organisation");
+        assert!(tc.entity_type.as_ref().unwrap().is_ontology_valid());
+        assert_eq!(tc.entity_type.as_ref().unwrap().name, "organisation");
 
         // Concept type is NOT in the ontology
-        assert!(!qt.entity_type.is_ontology_valid());
-        assert_eq!(qt.entity_type.name, "concept");
+        assert!(!qt.entity_type.as_ref().unwrap().is_ontology_valid());
+        assert_eq!(qt.entity_type.as_ref().unwrap().name, "concept");
     }
 
     #[tokio::test]
@@ -3235,28 +3824,43 @@ mod tests {
         assert!(!nodes.is_empty(), "expected at least one node");
         for pair in &nodes {
             assert_eq!(
-                pair.entity_type.base.source_pipeline.as_deref(),
+                pair.entity_type
+                    .as_ref()
+                    .unwrap()
+                    .base
+                    .source_pipeline
+                    .as_deref(),
                 Some("cognify_pipeline"),
                 "EntityType '{}' should be pre-stamped with cognify_pipeline",
-                pair.entity_type.name
+                pair.entity_type.as_ref().unwrap().name
             );
             assert_eq!(
-                pair.entity_type.base.topological_rank,
+                pair.entity_type.as_ref().unwrap().base.topological_rank,
                 Some(CALLER_RANK),
                 "EntityType '{}' should carry the caller-supplied task_rank",
-                pair.entity_type.name
+                pair.entity_type.as_ref().unwrap().name
             );
             assert_eq!(
-                pair.entity_type.base.source_task.as_deref(),
+                pair.entity_type
+                    .as_ref()
+                    .unwrap()
+                    .base
+                    .source_task
+                    .as_deref(),
                 Some("extract_graph_from_data"),
                 "EntityType '{}' should be pre-stamped with extract_graph_from_data",
-                pair.entity_type.name
+                pair.entity_type.as_ref().unwrap().name
             );
             assert_eq!(
-                pair.entity_type.base.source_user.as_deref(),
+                pair.entity_type
+                    .as_ref()
+                    .unwrap()
+                    .base
+                    .source_user
+                    .as_deref(),
                 Some("alice@example.com"),
                 "EntityType '{}' should carry the supplied user_label",
-                pair.entity_type.name
+                pair.entity_type.as_ref().unwrap().name
             );
 
             assert_eq!(

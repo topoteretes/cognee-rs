@@ -65,7 +65,7 @@ mod tests {
         let entity_type = EntityType::from_node_type(type_name, None);
         GraphNodePair {
             entity,
-            entity_type,
+            entity_type: Some(entity_type),
         }
     }
 
