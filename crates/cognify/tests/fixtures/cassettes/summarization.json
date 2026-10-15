@@ -1,14 +1,14 @@
 {
   "version": 1,
-  "model": "openai/gpt-oss-120b",
+  "model": "gpt-4.1-mini",
   "entries": {
     "387b736045e82244049e1078a34201d94c067a03f44d957791fac5135ebe61ae": {
       "method": "structured_output",
       "user_input_preview": "\nQuantum computing represents a paradigm shift in computation. Unlike classical computers \nthat use bits, quantum comput",
       "schema_name": "SummarizedContent",
       "response": {
-        "description": "Quantum computing uses qubits in superposition to achieve exponential speedups over classical computers that use bits, representing a paradigm shift in computation.",
-        "summary": "Quantum computers employ qubits capable of superposition, enabling exponentially faster solutions compared to classical bit-based computers."
+        "summary": "Quantum computing is a new computational paradigm using qubits in superposition states, enabling exponential speedup for some problems compared to classical computers.",
+        "description": "Quantum computing represents a paradigm shift in computation. Unlike classical computers that use bits, quantum computers use qubits that can exist in superposition states. This allows them to solve certain problems exponentially faster than traditional computers."
       }
     },
     "66d8e212656178a5e475902bd6a7be383fd927b85ddd586457fce61f88796985": {
@@ -16,8 +16,8 @@
       "user_input_preview": "\nQuantum computing represents a paradigm shift in computation. Unlike classical computers \nthat use bits, quantum comput",
       "schema_name": "SummarizedContent",
       "response": {
-        "description": "Quantum computing is a new computational paradigm that uses qubits, which can exist in superposition, unlike classical bits. This capability enables quantum computers to solve certain problems exponentially faster than traditional computers.",
-        "summary": "Quantum computing uses qubits in superposition to achieve exponential speedups over classical computers for specific problems."
+        "summary": "Quantum computing uses qubits in superposition to perform computations exponentially faster than classical computers.",
+        "description": "Quantum computing is a new computational paradigm that differs from classical computing by using qubits instead of bits. Qubits can exist in superposition states, enabling quantum computers to solve specific problems much faster than traditional computers, potentially achieving exponential speedups."
       }
     },
     "faa749dbc29a9858f82f2591975f3bf77552007a75523af1c64b5ab951316eb9": {
@@ -25,8 +25,8 @@
       "user_input_preview": "\nArtificial intelligence has made remarkable progress over the past decade, transforming \nindustries ranging from health",
       "schema_name": "SummarizedContent",
       "response": {
-        "description": "Artificial intelligence has rapidly progressed over the past decade, impacting healthcare and transportation through advanced machine learning, autonomous vehicles, and natural language processing. Large language models using transformer architectures enable diverse tasks, while raising ethical issues like bias, privacy, and environmental impact, prompting researchers and policymakers to create responsible AI frameworks. Future growth will rely on edge computing, efficient architectures, and multi‑modal learning across text, images, and audio.",
-        "summary": "AI's decade‑long advances span healthcare, transportation, and language technologies, bring ethical challenges, and point toward edge‑based, multi‑modal future applications."
+        "summary": "This chunk discusses the progress, applications, and ethical considerations of artificial intelligence, focusing on machine learning, large language models, and future trends.",
+        "description": "Artificial intelligence has significantly advanced in the past decade, impacting industries like healthcare and transportation. Machine learning algorithms now diagnose diseases with expert-level accuracy, and autonomous vehicles are becoming common. Large language models, especially transformer-based architectures, have driven progress by enabling tasks such as translation, summarization, code generation, and creative writing. These models learn from vast data, capturing complex language patterns. Ethical concerns include bias, privacy, and environmental impacts of training large models, prompting researchers and policymakers to seek responsible AI development frameworks. Future AI integration will accelerate with edge computing and efficient models enabling AI on personal devices, alongside multi-modal learning that processes text, images, and audio together."
       }
     }
   }

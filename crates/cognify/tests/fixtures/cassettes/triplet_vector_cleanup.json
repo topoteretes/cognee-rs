@@ -1,457 +1,775 @@
 {
   "version": 1,
-  "model": "openai/gpt-oss-120b",
+  "model": "gpt-4.1-mini",
   "entries": {
-    "3d8acd1ff4f2deec219dc511a868f74f13b601e916175d3fb92f09e61028166f": {
-      "method": "structured_output",
-      "user_input_preview": "Artificial intelligence (AI) is the intelligence of machines or software, as opposed to the intelligence of living being",
-      "schema_name": "KnowledgeGraph",
-      "response": {
-        "edges": [
-          {
-            "relationship_name": "field_of",
-            "source_node_id": "Artificial intelligence",
-            "target_node_id": "Computer science"
-          },
-          {
-            "relationship_name": "application",
-            "source_node_id": "Artificial intelligence",
-            "target_node_id": "Google Search"
-          },
-          {
-            "relationship_name": "application",
-            "source_node_id": "Artificial intelligence",
-            "target_node_id": "YouTube"
-          },
-          {
-            "relationship_name": "application",
-            "source_node_id": "Artificial intelligence",
-            "target_node_id": "Amazon"
-          },
-          {
-            "relationship_name": "application",
-            "source_node_id": "Artificial intelligence",
-            "target_node_id": "Netflix"
-          },
-          {
-            "relationship_name": "application",
-            "source_node_id": "Artificial intelligence",
-            "target_node_id": "Google Assistant"
-          },
-          {
-            "relationship_name": "application",
-            "source_node_id": "Artificial intelligence",
-            "target_node_id": "Siri"
-          },
-          {
-            "relationship_name": "application",
-            "source_node_id": "Artificial intelligence",
-            "target_node_id": "Alexa"
-          },
-          {
-            "relationship_name": "application",
-            "source_node_id": "Artificial intelligence",
-            "target_node_id": "Waymo"
-          },
-          {
-            "relationship_name": "application",
-            "source_node_id": "Artificial intelligence",
-            "target_node_id": "ChatGPT"
-          },
-          {
-            "relationship_name": "application",
-            "source_node_id": "Artificial intelligence",
-            "target_node_id": "AI art"
-          },
-          {
-            "relationship_name": "application",
-            "source_node_id": "Artificial intelligence",
-            "target_node_id": "Chess"
-          },
-          {
-            "relationship_name": "application",
-            "source_node_id": "Artificial intelligence",
-            "target_node_id": "Go"
-          },
-          {
-            "relationship_name": "type_of",
-            "source_node_id": "Large language models",
-            "target_node_id": "Artificial intelligence"
-          },
-          {
-            "relationship_name": "developed_by",
-            "source_node_id": "GPT-4",
-            "target_node_id": "OpenAI"
-          },
-          {
-            "relationship_name": "developed_by",
-            "source_node_id": "PaLM",
-            "target_node_id": "Google"
-          },
-          {
-            "relationship_name": "released_by",
-            "source_node_id": "LLaMA",
-            "target_node_id": "Meta"
-          },
-          {
-            "relationship_name": "developed_by",
-            "source_node_id": "Claude",
-            "target_node_id": "Anthropic"
-          },
-          {
-            "relationship_name": "uses",
-            "source_node_id": "Large language models",
-            "target_node_id": "Transformer architectures"
-          },
-          {
-            "relationship_name": "uses",
-            "source_node_id": "Transformer architectures",
-            "target_node_id": "Self-attention mechanisms"
-          },
-          {
-            "relationship_name": "training_method",
-            "source_node_id": "Large language models",
-            "target_node_id": "Next token prediction"
-          },
-          {
-            "relationship_name": "alignment_method",
-            "source_node_id": "Large language models",
-            "target_node_id": "Reinforcement learning from human feedback"
-          },
-          {
-            "relationship_name": "research_focus",
-            "source_node_id": "AI safety and alignment research",
-            "target_node_id": "AI safety"
-          },
-          {
-            "relationship_name": "conducted_by",
-            "source_node_id": "AI safety and alignment research",
-            "target_node_id": "Anthropic"
-          },
-          {
-            "relationship_name": "conducted_by",
-            "source_node_id": "AI safety and alignment research",
-            "target_node_id": "DeepMind"
-          },
-          {
-            "relationship_name": "conducted_by",
-            "source_node_id": "AI safety and alignment research",
-            "target_node_id": "OpenAI"
-          }
-        ],
-        "nodes": [
-          {
-            "description": "Intelligence of machines or software, as opposed to the intelligence of living beings, primarily of humans.",
-            "id": "Artificial intelligence",
-            "name": "Artificial intelligence",
-            "type": "CONCEPT"
-          },
-          {
-            "description": "Field of research that develops and studies methods and software enabling machines to perceive environment and act toward defined goals.",
-            "id": "Computer science",
-            "name": "Computer science",
-            "type": "CONCEPT"
-          },
-          {
-            "description": "Advanced web search engine.",
-            "id": "Google Search",
-            "name": "Google Search",
-            "type": "CONCEPT"
-          },
-          {
-            "description": "Video-sharing platform that uses recommendation systems powered by AI.",
-            "id": "YouTube",
-            "name": "YouTube",
-            "type": "ORGANIZATION"
-          },
-          {
-            "description": "E‑commerce company that uses AI recommendation systems.",
-            "id": "Amazon",
-            "name": "Amazon",
-            "type": "ORGANIZATION"
-          },
-          {
-            "description": "Streaming service that uses AI recommendation systems.",
-            "id": "Netflix",
-            "name": "Netflix",
-            "type": "ORGANIZATION"
-          },
-          {
-            "description": "Google's voice‑assistant powered by AI.",
-            "id": "Google Assistant",
-            "name": "Google Assistant",
-            "type": "CONCEPT"
-          },
-          {
-            "description": "Apple's voice‑assistant powered by AI.",
-            "id": "Siri",
-            "name": "Siri",
-            "type": "CONCEPT"
-          },
-          {
-            "description": "Amazon's voice‑assistant powered by AI.",
-            "id": "Alexa",
-            "name": "Alexa",
-            "type": "CONCEPT"
-          },
-          {
-            "description": "Company developing autonomous vehicles using AI.",
-            "id": "Waymo",
-            "name": "Waymo",
-            "type": "ORGANIZATION"
-          },
-          {
-            "description": "Conversational AI tool developed by OpenAI.",
-            "id": "ChatGPT",
-            "name": "ChatGPT",
-            "type": "CONCEPT"
-          },
-          {
-            "description": "AI‑generated visual artwork tools.",
-            "id": "AI art",
-            "name": "AI art",
-            "type": "CONCEPT"
-          },
-          {
-            "description": "Strategy board game where AI has achieved superhuman play.",
-            "id": "Chess",
-            "name": "Chess",
-            "type": "CONCEPT"
-          },
-          {
-            "description": "Ancient board game where AI has achieved superhuman play.",
-            "id": "Go",
-            "name": "Go",
-            "type": "CONCEPT"
-          },
-          {
-            "description": "Class of models that process large amounts of text data to generate language output.",
-            "id": "Large language models",
-            "name": "Large language models",
-            "type": "CONCEPT"
-          },
-          {
-            "description": "A highly capable language model developed by OpenAI.",
-            "id": "GPT-4",
-            "name": "GPT-4",
-            "type": "CONCEPT"
-          },
-          {
-            "description": "Organization that developed GPT-4 and conducts AI safety research.",
-            "id": "OpenAI",
-            "name": "OpenAI",
-            "type": "ORGANIZATION"
-          },
-          {
-            "description": "A language model developed by Google demonstrating strong reasoning and multilingual abilities.",
-            "id": "PaLM",
-            "name": "PaLM",
-            "type": "CONCEPT"
-          },
-          {
-            "description": "Technology company that developed PaLM.",
-            "id": "Google",
-            "name": "Google",
-            "type": "ORGANIZATION"
-          },
-          {
-            "description": "Open‑weights language model released by Meta.",
-            "id": "LLaMA",
-            "name": "LLaMA",
-            "type": "CONCEPT"
-          },
-          {
-            "description": "Parent company of Meta that released LLaMA.",
-            "id": "Meta",
-            "name": "Meta",
-            "type": "ORGANIZATION"
-          },
-          {
-            "description": "A language model developed by Anthropic emphasizing safety and helpfulness.",
-            "id": "Claude",
-            "name": "Claude",
-            "type": "CONCEPT"
-          },
-          {
-            "description": "Organization that developed Claude and works on AI safety research.",
-            "id": "Anthropic",
-            "name": "Anthropic",
-            "type": "ORGANIZATION"
-          },
-          {
-            "description": "Neural network architecture that uses self‑attention to process sequences.",
-            "id": "Transformer architectures",
-            "name": "Transformer architectures",
-            "type": "CONCEPT"
-          },
-          {
-            "description": "Mechanism within transformers that allows each token to attend to others.",
-            "id": "Self-attention mechanisms",
-            "name": "Self-attention mechanisms",
-            "type": "CONCEPT"
-          },
-          {
-            "description": "Training objective where models predict the next token in a sequence.",
-            "id": "Next token prediction",
-            "name": "Next token prediction",
-            "type": "CONCEPT"
-          },
-          {
-            "description": "Method that fine‑tunes models using human feedback to align behavior.",
-            "id": "Reinforcement learning from human feedback",
-            "name": "Reinforcement learning from human feedback",
-            "type": "CONCEPT"
-          },
-          {
-            "description": "Research area focused on ensuring AI systems behave as intended and avoid harm.",
-            "id": "AI safety and alignment research",
-            "name": "AI safety and alignment research",
-            "type": "CONCEPT"
-          },
-          {
-            "description": "Aspect of AI research concerned with preventing harmful outputs and ensuring robustness.",
-            "id": "AI safety",
-            "name": "AI safety",
-            "type": "CONCEPT"
-          },
-          {
-            "description": "AI research organization owned by Alphabet, involved in AI safety work.",
-            "id": "DeepMind",
-            "name": "DeepMind",
-            "type": "ORGANIZATION"
-          }
-        ]
-      }
-    },
-    "4caa4117c78855222e3ffe4031b67607f64f8552f87154e29f8f26d9f234056e": {
+    "8f94e2ed2eb5e9b23392150f0888eb999a44a9906dd7a21444932ccb7a53bb50": {
       "method": "structured_output",
       "user_input_preview": "Quantum computing leverages quantum mechanical phenomena like superposition and entanglement to perform computations. Qu",
       "schema_name": "KnowledgeGraph",
       "response": {
-        "edges": [
-          {
-            "relationship_name": "leverages",
-            "source_node_id": "Quantum computing",
-            "target_node_id": "Superposition"
-          },
-          {
-            "relationship_name": "leverages",
-            "source_node_id": "Quantum computing",
-            "target_node_id": "Entanglement"
-          },
-          {
-            "relationship_name": "enable",
-            "source_node_id": "Qubit",
-            "target_node_id": "Quantum computers"
-          },
-          {
-            "relationship_name": "invests_in",
-            "source_node_id": "IBM",
-            "target_node_id": "Quantum hardware"
-          },
-          {
-            "relationship_name": "invests_in",
-            "source_node_id": "IBM",
-            "target_node_id": "Quantum error correction"
-          },
-          {
-            "relationship_name": "invests_in",
-            "source_node_id": "Google",
-            "target_node_id": "Quantum hardware"
-          },
-          {
-            "relationship_name": "invests_in",
-            "source_node_id": "Google",
-            "target_node_id": "Quantum error correction"
-          },
-          {
-            "relationship_name": "invests_in",
-            "source_node_id": "Microsoft",
-            "target_node_id": "Quantum hardware"
-          },
-          {
-            "relationship_name": "invests_in",
-            "source_node_id": "Microsoft",
-            "target_node_id": "Quantum error correction"
-          },
-          {
-            "relationship_name": "solve_faster_than",
-            "source_node_id": "Quantum computers",
-            "target_node_id": "Classical computers"
-          }
-        ],
         "nodes": [
           {
-            "description": "Quantum computing leverages quantum mechanical phenomena like superposition and entanglement to perform computations.",
-            "id": "Quantum computing",
-            "name": "Quantum computing",
-            "type": "CONCEPT"
+            "id": "Quantum Computing",
+            "name": "Quantum Computing",
+            "type": "CONCEPT",
+            "description": "Quantum computing leverages quantum mechanical phenomena like superposition and entanglement to perform computations."
           },
           {
-            "description": "Quantum mechanical phenomena such as superposition and entanglement are used in quantum computing.",
-            "id": "Quantum mechanical phenomena",
-            "name": "Quantum mechanical phenomena",
-            "type": "CONCEPT"
-          },
-          {
-            "description": "Superposition is a quantum mechanical phenomenon where a system can be in multiple states simultaneously.",
             "id": "Superposition",
             "name": "Superposition",
-            "type": "CONCEPT"
+            "type": "CONCEPT",
+            "description": "Superposition is a quantum mechanical phenomenon involved in quantum computing."
           },
           {
-            "description": "Entanglement is a quantum mechanical phenomenon linking particles such that the state of one instantly influences the other.",
             "id": "Entanglement",
             "name": "Entanglement",
-            "type": "CONCEPT"
+            "type": "CONCEPT",
+            "description": "Entanglement is a quantum mechanical phenomenon involved in quantum computing."
           },
           {
-            "description": "Quantum bits (qubits) can exist in multiple states simultaneously.",
-            "id": "Qubit",
-            "name": "Qubit",
-            "type": "CONCEPT"
+            "id": "Quantum Bit",
+            "name": "Quantum Bit",
+            "type": "CONCEPT",
+            "description": "Quantum bits (qubits) can exist in multiple states simultaneously, enabling quantum computers to solve certain problems exponentially faster than classical computers."
           },
           {
-            "description": "Quantum computers can solve certain problems exponentially faster than classical computers.",
-            "id": "Quantum computers",
-            "name": "Quantum computers",
-            "type": "CONCEPT"
+            "id": "Quantum Computer",
+            "name": "Quantum Computer",
+            "type": "CONCEPT",
+            "description": "Quantum computers use quantum bits to perform computations exponentially faster than classical computers on certain problems."
           },
           {
-            "description": "IBM is a company investing heavily in quantum hardware and quantum error correction research.",
+            "id": "Classical Computer",
+            "name": "Classical Computer",
+            "type": "CONCEPT",
+            "description": "Classical computers are traditional computers that quantum computers can outperform on certain problems."
+          },
+          {
             "id": "IBM",
             "name": "IBM",
-            "type": "ORGANIZATION"
+            "type": "ORGANIZATION",
+            "description": "IBM is a company investing heavily in quantum hardware and quantum error correction research."
           },
           {
-            "description": "Google is a company investing heavily in quantum hardware and quantum error correction research.",
             "id": "Google",
             "name": "Google",
-            "type": "ORGANIZATION"
+            "type": "ORGANIZATION",
+            "description": "Google is a company investing heavily in quantum hardware and quantum error correction research."
           },
           {
-            "description": "Microsoft is a company investing heavily in quantum hardware and quantum error correction research.",
             "id": "Microsoft",
             "name": "Microsoft",
-            "type": "ORGANIZATION"
+            "type": "ORGANIZATION",
+            "description": "Microsoft is a company investing heavily in quantum hardware and quantum error correction research."
           },
           {
-            "description": "Quantum hardware refers to the physical devices used to build quantum computers.",
-            "id": "Quantum hardware",
-            "name": "Quantum hardware",
-            "type": "CONCEPT"
+            "id": "Quantum Hardware",
+            "name": "Quantum Hardware",
+            "type": "CONCEPT",
+            "description": "Quantum hardware is the physical technology used to build quantum computers."
           },
           {
-            "description": "Quantum error correction research aims to protect quantum information from errors.",
-            "id": "Quantum error correction",
-            "name": "Quantum error correction",
-            "type": "CONCEPT"
+            "id": "Quantum Error Correction Research",
+            "name": "Quantum Error Correction Research",
+            "type": "CONCEPT",
+            "description": "Quantum error correction research is the study and development of techniques to correct errors in quantum computing systems."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "Quantum Computing",
+            "target_node_id": "Superposition",
+            "relationship_name": "involves",
+            "description": "Quantum computing involves the quantum mechanical phenomenon of Superposition."
           },
           {
-            "description": "Classical computers are traditional computers that quantum computers can outperform on certain problems.",
-            "id": "Classical computers",
-            "name": "Classical computers",
-            "type": "CONCEPT"
+            "source_node_id": "Quantum Computing",
+            "target_node_id": "Entanglement",
+            "relationship_name": "involves",
+            "description": "Quantum computing involves the quantum mechanical phenomenon of Entanglement."
+          },
+          {
+            "source_node_id": "Quantum Bit",
+            "target_node_id": "Quantum Computer",
+            "relationship_name": "used_in",
+            "description": "Quantum bits are used in Quantum computers."
+          },
+          {
+            "source_node_id": "Quantum Bit",
+            "target_node_id": "Quantum Computer",
+            "relationship_name": "enables_speedup_over",
+            "description": "Quantum bits enable Quantum computers to solve certain problems exponentially faster than Classical computers."
+          },
+          {
+            "source_node_id": "Quantum Computer",
+            "target_node_id": "Classical Computer",
+            "relationship_name": "outperforms_on_certain_problems",
+            "description": "Quantum computers can solve certain problems exponentially faster than Classical computers."
+          },
+          {
+            "source_node_id": "IBM",
+            "target_node_id": "Quantum Hardware",
+            "relationship_name": "invests_in",
+            "description": "IBM invests heavily in Quantum Hardware."
+          },
+          {
+            "source_node_id": "IBM",
+            "target_node_id": "Quantum Error Correction Research",
+            "relationship_name": "invests_in",
+            "description": "IBM invests heavily in Quantum Error Correction Research."
+          },
+          {
+            "source_node_id": "Google",
+            "target_node_id": "Quantum Hardware",
+            "relationship_name": "invests_in",
+            "description": "Google invests heavily in Quantum Hardware."
+          },
+          {
+            "source_node_id": "Google",
+            "target_node_id": "Quantum Error Correction Research",
+            "relationship_name": "invests_in",
+            "description": "Google invests heavily in Quantum Error Correction Research."
+          },
+          {
+            "source_node_id": "Microsoft",
+            "target_node_id": "Quantum Hardware",
+            "relationship_name": "invests_in",
+            "description": "Microsoft invests heavily in Quantum Hardware."
+          },
+          {
+            "source_node_id": "Microsoft",
+            "target_node_id": "Quantum Error Correction Research",
+            "relationship_name": "invests_in",
+            "description": "Microsoft invests heavily in Quantum Error Correction Research."
+          }
+        ]
+      }
+    },
+    "fac3621b02fd8323238b3f0452fe55dd976f1f3e6b9bc2f5c0d13edef888f778": {
+      "method": "structured_output",
+      "user_input_preview": "Artificial intelligence (AI) is the intelligence of machines or software, as opposed to the intelligence of living being",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "nodes": [
+          {
+            "id": "Artificial_Intelligence",
+            "name": "Artificial Intelligence",
+            "type": "CONCEPT",
+            "description": "Artificial intelligence (AI) is the intelligence of machines or software, enabling them to perceive their environment and take actions to achieve defined goals."
+          },
+          {
+            "id": "Machine_Intelligence",
+            "name": "Machine Intelligence",
+            "type": "CONCEPT",
+            "description": "Intelligence exhibited by machines or software, as opposed to biological intelligence of living beings primarily humans."
+          },
+          {
+            "id": "Human_Intelligence",
+            "name": "Human Intelligence",
+            "type": "CONCEPT",
+            "description": "Intelligence of living beings, primarily humans."
+          },
+          {
+            "id": "Computer_Science",
+            "name": "Computer Science",
+            "type": "CONCEPT",
+            "description": "Field of research that develops and studies methods and software for enabling machine intelligence."
+          },
+          {
+            "id": "AI_Machines",
+            "name": "AI Machines",
+            "type": "CONCEPT",
+            "description": "Machines called AIs that use learning and intelligence to take actions to achieve defined goals."
+          },
+          {
+            "id": "High_Profile_AI_Applications",
+            "name": "High-profile AI Applications",
+            "type": "CONCEPT",
+            "description": "Notable applications of Artificial Intelligence including web search engines, recommendation systems, voice interaction, autonomous vehicles, generative and creative tools, and superhuman play in strategy games."
+          },
+          {
+            "id": "Google_Search",
+            "name": "Google Search",
+            "type": "CONCEPT",
+            "description": "Advanced web search engine application of AI."
+          },
+          {
+            "id": "Recommendation_Systems",
+            "name": "Recommendation Systems",
+            "type": "CONCEPT",
+            "description": "Systems used by YouTube, Amazon, and Netflix that recommend content using AI."
+          },
+          {
+            "id": "YouTube",
+            "name": "YouTube",
+            "type": "ORGANIZATION",
+            "description": "Platform using AI-powered recommendation systems."
+          },
+          {
+            "id": "Amazon",
+            "name": "Amazon",
+            "type": "ORGANIZATION",
+            "description": "Company using AI-powered recommendation systems."
+          },
+          {
+            "id": "Netflix",
+            "name": "Netflix",
+            "type": "ORGANIZATION",
+            "description": "Company using AI-powered recommendation systems."
+          },
+          {
+            "id": "Speech_Interaction_Applications",
+            "name": "Speech Interaction Applications",
+            "type": "CONCEPT",
+            "description": "AI applications enabling interaction via human speech."
+          },
+          {
+            "id": "Google_Assistant",
+            "name": "Google Assistant",
+            "type": "CONCEPT",
+            "description": "AI application for interaction via human speech."
+          },
+          {
+            "id": "Siri",
+            "name": "Siri",
+            "type": "CONCEPT",
+            "description": "AI application for interaction via human speech."
+          },
+          {
+            "id": "Alexa",
+            "name": "Alexa",
+            "type": "CONCEPT",
+            "description": "AI application for interaction via human speech."
+          },
+          {
+            "id": "Autonomous_Vehicles",
+            "name": "Autonomous Vehicles",
+            "type": "CONCEPT",
+            "description": "Vehicles that operate autonomously using AI, such as those by Waymo."
+          },
+          {
+            "id": "Waymo",
+            "name": "Waymo",
+            "type": "ORGANIZATION",
+            "description": "Company developing autonomous vehicles using AI."
+          },
+          {
+            "id": "Generative_and_Creative_Tools",
+            "name": "Generative and Creative Tools",
+            "type": "CONCEPT",
+            "description": "AI tools for generative and creative purposes like ChatGPT and AI art."
+          },
+          {
+            "id": "ChatGPT",
+            "name": "ChatGPT",
+            "type": "CONCEPT",
+            "description": "Generative AI tool able to generate text."
+          },
+          {
+            "id": "AI_Art",
+            "name": "AI Art",
+            "type": "CONCEPT",
+            "description": "AI-powered generative art tools."
+          },
+          {
+            "id": "Superhuman_Play_and_Analysis_in_Strategy_Games",
+            "name": "Superhuman Play and Analysis in Strategy Games",
+            "type": "CONCEPT",
+            "description": "AI achieving superhuman play and analysis capabilities in games such as chess and Go."
+          },
+          {
+            "id": "Chess",
+            "name": "Chess",
+            "type": "CONCEPT",
+            "description": "Strategy game with superhuman play by AI."
+          },
+          {
+            "id": "Go",
+            "name": "Go",
+            "type": "CONCEPT",
+            "description": "Strategy game with superhuman play by AI."
+          },
+          {
+            "id": "Large_Language_Models",
+            "name": "Large Language Models",
+            "type": "CONCEPT",
+            "description": "A type of AI trained on enormous amounts of text data."
+          },
+          {
+            "id": "GPT-4",
+            "name": "GPT-4",
+            "type": "CONCEPT",
+            "description": "A large language model developed by OpenAI, capable of generating coherent text, writing code, and answering complex questions."
+          },
+          {
+            "id": "OpenAI",
+            "name": "OpenAI",
+            "type": "ORGANIZATION",
+            "description": "Organization that developed the large language model GPT-4."
+          },
+          {
+            "id": "PaLM",
+            "name": "PaLM",
+            "type": "CONCEPT",
+            "description": "Large language model developed by Google demonstrating strong reasoning and multilingual capabilities."
+          },
+          {
+            "id": "Google",
+            "name": "Google",
+            "type": "ORGANIZATION",
+            "description": "Organization that developed the large language model PaLM and web search engine Google Search."
+          },
+          {
+            "id": "LLaMA",
+            "name": "LLaMA",
+            "type": "CONCEPT",
+            "description": "An open-weights large language model released by Meta that has enabled widespread research and experimentation."
+          },
+          {
+            "id": "Meta",
+            "name": "Meta",
+            "type": "ORGANIZATION",
+            "description": "Organization that released the open-weights large language model LLaMA."
+          },
+          {
+            "id": "Claude",
+            "name": "Claude",
+            "type": "CONCEPT",
+            "description": "Large language model developed by Anthropic emphasizing safety and helpfulness."
+          },
+          {
+            "id": "Anthropic",
+            "name": "Anthropic",
+            "type": "ORGANIZATION",
+            "description": "Organization that developed the large language model Claude and works on AI safety and alignment research."
+          },
+          {
+            "id": "Transformer_Architectures",
+            "name": "Transformer Architectures",
+            "type": "CONCEPT",
+            "description": "Model architecture used by large language models, featuring self-attention mechanisms."
+          },
+          {
+            "id": "Self-attention_Mechanisms",
+            "name": "Self-attention Mechanisms",
+            "type": "CONCEPT",
+            "description": "Mechanism in transformer architectures that learns relationships between tokens in text."
+          },
+          {
+            "id": "Training_Process_of_LLMs",
+            "name": "Training Process of LLMs",
+            "type": "CONCEPT",
+            "description": "Process during which large language models predict the next token in a sequence to learn grammar, facts, and reasoning patterns from datasets."
+          },
+          {
+            "id": "Fine-tuning",
+            "name": "Fine-tuning",
+            "type": "CONCEPT",
+            "description": "Process used to align large language model behavior with human preferences after initial training."
+          },
+          {
+            "id": "Reinforcement_Learning_from_Human_Feedback",
+            "name": "Reinforcement Learning from Human Feedback",
+            "type": "CONCEPT",
+            "description": "A technique to align large language models with human preferences by fine-tuning with human feedback."
+          },
+          {
+            "id": "Capabilities_of_Modern_AI_Systems",
+            "name": "Capabilities of Modern AI Systems",
+            "type": "CONCEPT",
+            "description": "The advanced abilities of AI systems in natural language processing, computer vision, and multimodal processing."
+          },
+          {
+            "id": "Natural_Language_Processing",
+            "name": "Natural Language Processing",
+            "type": "CONCEPT",
+            "description": "Field of AI enabling models to perform question answering, summarization, translation, and creative writing."
+          },
+          {
+            "id": "Computer_Vision",
+            "name": "Computer Vision",
+            "type": "CONCEPT",
+            "description": "Field of AI where deep learning models achieve high accuracy in image classification."
+          },
+          {
+            "id": "Multimodal_Models",
+            "name": "Multimodal Models",
+            "type": "CONCEPT",
+            "description": "AI models that process multiple types of input such as text and images."
+          },
+          {
+            "id": "AI_Safety_and_Alignment_Research",
+            "name": "AI Safety and Alignment Research",
+            "type": "CONCEPT",
+            "description": "Research field focused on ensuring AI systems behave as intended and mitigate unintended harm."
+          },
+          {
+            "id": "DeepMind",
+            "name": "DeepMind",
+            "type": "ORGANIZATION",
+            "description": "Organization working on AI safety and alignment research."
+          },
+          {
+            "id": "Economic_and_Social_Impacts_of_AI",
+            "name": "Economic and Social Impacts of AI",
+            "type": "CONCEPT",
+            "description": "Effects of AI on jobs, scientific discovery, and policymaking."
+          },
+          {
+            "id": "Automation",
+            "name": "Automation",
+            "type": "CONCEPT",
+            "description": "Use of AI to perform tasks that may displace or create jobs."
+          },
+          {
+            "id": "Scientific_Discovery",
+            "name": "Scientific Discovery",
+            "type": "CONCEPT",
+            "description": "Acceleration of research in domains such as drug development, materials science, and climate modeling using AI tools."
+          },
+          {
+            "id": "Drug_Development",
+            "name": "Drug Development",
+            "type": "CONCEPT",
+            "description": "Domain in scientific discovery accelerated by AI-powered tools."
+          },
+          {
+            "id": "Materials_Science",
+            "name": "Materials Science",
+            "type": "CONCEPT",
+            "description": "Domain in scientific discovery accelerated by AI-powered tools."
+          },
+          {
+            "id": "Climate_Modeling",
+            "name": "Climate Modeling",
+            "type": "CONCEPT",
+            "description": "Domain in scientific discovery accelerated by AI-powered tools."
+          },
+          {
+            "id": "Policymakers",
+            "name": "Policymakers",
+            "type": "CONCEPT",
+            "description": "Actors developing regulations to govern AI deployment."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "Artificial_Intelligence",
+            "target_node_id": "Machine_Intelligence",
+            "relationship_name": "is_a",
+            "description": "Artificial Intelligence is a type of machine intelligence."
+          },
+          {
+            "source_node_id": "Artificial_Intelligence",
+            "target_node_id": "Computer_Science",
+            "relationship_name": "field_of_research_in",
+            "description": "Artificial Intelligence is a field of research in computer science."
+          },
+          {
+            "source_node_id": "Artificial_Intelligence",
+            "target_node_id": "AI_Machines",
+            "relationship_name": "enables",
+            "description": "Artificial Intelligence enables machines called AIs to act to achieve defined goals."
+          },
+          {
+            "source_node_id": "AI_Machines",
+            "target_node_id": "Machine_Intelligence",
+            "relationship_name": "exhibits",
+            "description": "AI Machines exhibit machine intelligence."
+          },
+          {
+            "source_node_id": "AI_Machines",
+            "target_node_id": "Artificial_Intelligence",
+            "relationship_name": "are_called",
+            "description": "Machines that use learning and intelligence to act for goals are called AIs."
+          },
+          {
+            "source_node_id": "High_Profile_AI_Applications",
+            "target_node_id": "Google_Search",
+            "relationship_name": "includes",
+            "description": "High-profile applications of AI include Google Search."
+          },
+          {
+            "source_node_id": "High_Profile_AI_Applications",
+            "target_node_id": "Recommendation_Systems",
+            "relationship_name": "includes",
+            "description": "High-profile applications of AI include recommendation systems."
+          },
+          {
+            "source_node_id": "Recommendation_Systems",
+            "target_node_id": "YouTube",
+            "relationship_name": "used_by",
+            "description": "Recommendation systems are used by YouTube."
+          },
+          {
+            "source_node_id": "Recommendation_Systems",
+            "target_node_id": "Amazon",
+            "relationship_name": "used_by",
+            "description": "Recommendation systems are used by Amazon."
+          },
+          {
+            "source_node_id": "Recommendation_Systems",
+            "target_node_id": "Netflix",
+            "relationship_name": "used_by",
+            "description": "Recommendation systems are used by Netflix."
+          },
+          {
+            "source_node_id": "High_Profile_AI_Applications",
+            "target_node_id": "Speech_Interaction_Applications",
+            "relationship_name": "includes",
+            "description": "High-profile AI applications include speech interaction applications."
+          },
+          {
+            "source_node_id": "Speech_Interaction_Applications",
+            "target_node_id": "Google_Assistant",
+            "relationship_name": "includes",
+            "description": "Speech interaction applications include Google Assistant."
+          },
+          {
+            "source_node_id": "Speech_Interaction_Applications",
+            "target_node_id": "Siri",
+            "relationship_name": "includes",
+            "description": "Speech interaction applications include Siri."
+          },
+          {
+            "source_node_id": "Speech_Interaction_Applications",
+            "target_node_id": "Alexa",
+            "relationship_name": "includes",
+            "description": "Speech interaction applications include Alexa."
+          },
+          {
+            "source_node_id": "High_Profile_AI_Applications",
+            "target_node_id": "Autonomous_Vehicles",
+            "relationship_name": "includes",
+            "description": "High-profile AI applications include autonomous vehicles."
+          },
+          {
+            "source_node_id": "Autonomous_Vehicles",
+            "target_node_id": "Waymo",
+            "relationship_name": "developed_by",
+            "description": "Autonomous vehicles such as those developed by Waymo."
+          },
+          {
+            "source_node_id": "High_Profile_AI_Applications",
+            "target_node_id": "Generative_and_Creative_Tools",
+            "relationship_name": "includes",
+            "description": "High-profile AI applications include generative and creative tools."
+          },
+          {
+            "source_node_id": "Generative_and_Creative_Tools",
+            "target_node_id": "ChatGPT",
+            "relationship_name": "includes",
+            "description": "Generative and creative tools include ChatGPT."
+          },
+          {
+            "source_node_id": "Generative_and_Creative_Tools",
+            "target_node_id": "AI_Art",
+            "relationship_name": "includes",
+            "description": "Generative and creative tools include AI art."
+          },
+          {
+            "source_node_id": "High_Profile_AI_Applications",
+            "target_node_id": "Superhuman_Play_and_Analysis_in_Strategy_Games",
+            "relationship_name": "includes",
+            "description": "High-profile AI applications include superhuman play and analysis in strategy games."
+          },
+          {
+            "source_node_id": "Superhuman_Play_and_Analysis_in_Strategy_Games",
+            "target_node_id": "Chess",
+            "relationship_name": "includes",
+            "description": "Superhuman play and analysis in strategy games includes chess."
+          },
+          {
+            "source_node_id": "Superhuman_Play_and_Analysis_in_Strategy_Games",
+            "target_node_id": "Go",
+            "relationship_name": "includes",
+            "description": "Superhuman play and analysis in strategy games includes Go."
+          },
+          {
+            "source_node_id": "Large_Language_Models",
+            "target_node_id": "Artificial_Intelligence",
+            "relationship_name": "is_a_type_of",
+            "description": "Large language models are a type of artificial intelligence."
+          },
+          {
+            "source_node_id": "GPT-4",
+            "target_node_id": "Large_Language_Models",
+            "relationship_name": "is_a",
+            "description": "GPT-4 is a large language model."
+          },
+          {
+            "source_node_id": "GPT-4",
+            "target_node_id": "OpenAI",
+            "relationship_name": "developed_by",
+            "description": "GPT-4 was developed by OpenAI."
+          },
+          {
+            "source_node_id": "PaLM",
+            "target_node_id": "Large_Language_Models",
+            "relationship_name": "is_a",
+            "description": "PaLM is a large language model."
+          },
+          {
+            "source_node_id": "PaLM",
+            "target_node_id": "Google",
+            "relationship_name": "developed_by",
+            "description": "PaLM was developed by Google."
+          },
+          {
+            "source_node_id": "LLaMA",
+            "target_node_id": "Large_Language_Models",
+            "relationship_name": "is_a",
+            "description": "LLaMA is a large language model."
+          },
+          {
+            "source_node_id": "LLaMA",
+            "target_node_id": "Meta",
+            "relationship_name": "released_by",
+            "description": "LLaMA was released by Meta."
+          },
+          {
+            "source_node_id": "Claude",
+            "target_node_id": "Large_Language_Models",
+            "relationship_name": "is_a",
+            "description": "Claude is a large language model."
+          },
+          {
+            "source_node_id": "Claude",
+            "target_node_id": "Anthropic",
+            "relationship_name": "developed_by",
+            "description": "Claude was developed by Anthropic."
+          },
+          {
+            "source_node_id": "Large_Language_Models",
+            "target_node_id": "Transformer_Architectures",
+            "relationship_name": "use",
+            "description": "Large language models use transformer architectures."
+          },
+          {
+            "source_node_id": "Transformer_Architectures",
+            "target_node_id": "Self-attention_Mechanisms",
+            "relationship_name": "include",
+            "description": "Transformer architectures include self-attention mechanisms."
+          },
+          {
+            "source_node_id": "Training_Process_of_LLMs",
+            "target_node_id": "Large_Language_Models",
+            "relationship_name": "used_in_training",
+            "description": "The training process of LLMs is used in training large language models."
+          },
+          {
+            "source_node_id": "Training_Process_of_LLMs",
+            "target_node_id": "Transformer_Architectures",
+            "relationship_name": "uses",
+            "description": "The training process of LLMs uses transformer architectures."
+          },
+          {
+            "source_node_id": "Training_Process_of_LLMs",
+            "target_node_id": "Self-attention_Mechanisms",
+            "relationship_name": "uses",
+            "description": "The training process of LLMs uses self-attention mechanisms."
+          },
+          {
+            "source_node_id": "Fine-tuning",
+            "target_node_id": "Large_Language_Models",
+            "relationship_name": "applied_to",
+            "description": "Fine-tuning is applied to large language models to align their behavior with human preferences."
+          },
+          {
+            "source_node_id": "Reinforcement_Learning_from_Human_Feedback",
+            "target_node_id": "Large_Language_Models",
+            "relationship_name": "used_to_align",
+            "description": "Reinforcement learning from human feedback is used to align large language models with human preferences."
+          },
+          {
+            "source_node_id": "Capabilities_of_Modern_AI_Systems",
+            "target_node_id": "Artificial_Intelligence",
+            "relationship_name": "represent",
+            "description": "Capabilities of modern AI systems represent advanced possibilities of artificial intelligence."
+          },
+          {
+            "source_node_id": "Capabilities_of_Modern_AI_Systems",
+            "target_node_id": "Natural_Language_Processing",
+            "relationship_name": "include",
+            "description": "Capabilities of modern AI systems include natural language processing."
+          },
+          {
+            "source_node_id": "Capabilities_of_Modern_AI_Systems",
+            "target_node_id": "Computer_Vision",
+            "relationship_name": "include",
+            "description": "Capabilities of modern AI systems include computer vision."
+          },
+          {
+            "source_node_id": "Capabilities_of_Modern_AI_Systems",
+            "target_node_id": "Multimodal_Models",
+            "relationship_name": "include",
+            "description": "Capabilities of modern AI systems include multimodal models."
+          },
+          {
+            "source_node_id": "AI_Safety_and_Alignment_Research",
+            "target_node_id": "Artificial_Intelligence",
+            "relationship_name": "focuses_on",
+            "description": "AI safety and alignment research focuses on artificial intelligence systems behaving as intended and avoiding harm."
+          },
+          {
+            "source_node_id": "AI_Safety_and_Alignment_Research",
+            "target_node_id": "Anthropic",
+            "relationship_name": "carried_out_by",
+            "description": "AI safety and alignment research is carried out by Anthropic."
+          },
+          {
+            "source_node_id": "AI_Safety_and_Alignment_Research",
+            "target_node_id": "DeepMind",
+            "relationship_name": "carried_out_by",
+            "description": "AI safety and alignment research is carried out by DeepMind."
+          },
+          {
+            "source_node_id": "AI_Safety_and_Alignment_Research",
+            "target_node_id": "OpenAI",
+            "relationship_name": "carried_out_by",
+            "description": "AI safety and alignment research is carried out by OpenAI."
+          },
+          {
+            "source_node_id": "Economic_and_Social_Impacts_of_AI",
+            "target_node_id": "Artificial_Intelligence",
+            "relationship_name": "result_from",
+            "description": "Economic and social impacts result from artificial intelligence."
+          },
+          {
+            "source_node_id": "Economic_and_Social_Impacts_of_AI",
+            "target_node_id": "Automation",
+            "relationship_name": "include",
+            "description": "Economic and social impacts of AI include automation."
+          },
+          {
+            "source_node_id": "Economic_and_Social_Impacts_of_AI",
+            "target_node_id": "Scientific_Discovery",
+            "relationship_name": "include",
+            "description": "Economic and social impacts of AI include acceleration of scientific discovery."
+          },
+          {
+            "source_node_id": "Scientific_Discovery",
+            "target_node_id": "Drug_Development",
+            "relationship_name": "includes",
+            "description": "Scientific discovery accelerated by AI includes drug development."
+          },
+          {
+            "source_node_id": "Scientific_Discovery",
+            "target_node_id": "Materials_Science",
+            "relationship_name": "includes",
+            "description": "Scientific discovery accelerated by AI includes materials science."
+          },
+          {
+            "source_node_id": "Scientific_Discovery",
+            "target_node_id": "Climate_Modeling",
+            "relationship_name": "includes",
+            "description": "Scientific discovery accelerated by AI includes climate modeling."
+          },
+          {
+            "source_node_id": "Policymakers",
+            "target_node_id": "Artificial_Intelligence",
+            "relationship_name": "govern",
+            "description": "Policymakers develop regulations to govern AI deployment."
           }
         ]
       }
