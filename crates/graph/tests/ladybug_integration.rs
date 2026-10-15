@@ -48,6 +48,8 @@ ladybug_test!(test_get_nodes_batch);
 ladybug_test!(test_delete_node);
 ladybug_test!(test_delete_nodes_batch);
 ladybug_test!(test_node_upsert_same_id);
+ladybug_test!(test_add_nodes_repeated_id_in_one_batch);
+ladybug_test!(test_add_edges_repeated_key_in_one_batch);
 ladybug_test!(test_add_and_has_edge);
 ladybug_test!(test_add_edges_batch);
 ladybug_test!(test_edge_upsert_same_key);

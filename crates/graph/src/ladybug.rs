@@ -1132,14 +1132,31 @@ impl GraphDBTrait for LadybugAdapter {
             GraphDBError::ConnectionError(format!("Failed to create connection: {e}"))
         })?;
 
+        // Deduplicate by id (last wins, first-seen order) before batching, as
+        // the Postgres adapter does. The engine mishandles one id repeated
+        // inside a single `UNWIND … MERGE`: the repeated row's `type` and
+        // `properties` land on an unrelated *existing* node, so writing
+        // `[person, timestamp, person]` EntityTypes turned some Entity into an
+        // EntityType. Last-wins is what the same MERGEs issued one by one
+        // would leave behind.
+        let mut order: Vec<String> = Vec::with_capacity(nodes.len());
+        let mut by_id: HashMap<String, NodeProperties> = HashMap::with_capacity(nodes.len());
+        for node in &nodes {
+            let p = self.serialize_to_node_props(node)?;
+            if !by_id.contains_key(&p.id) {
+                order.push(p.id.clone());
+            }
+            by_id.insert(p.id.clone(), p);
+        }
+        let deduped: Vec<NodeProperties> = order.iter().filter_map(|id| by_id.remove(id)).collect();
+
         // Process in batches. Each batch is a single `UNWIND … MERGE` query
         // (mirrors the Python Ladybug adapter) instead of a per-node
         // exists-check + CREATE/SET — one round-trip per batch, and MERGE makes
         // it idempotent without the extra COUNT query.
-        for chunk in nodes.chunks(BATCH_SIZE) {
+        for chunk in deduped.chunks(BATCH_SIZE) {
             let mut items = Vec::with_capacity(chunk.len());
-            for node in chunk {
-                let p = self.serialize_to_node_props(node)?;
+            for p in chunk {
                 items.push(format!(
                     "{{id:'{}', name:'{}', type:'{}', properties:'{}', created_at:'{}', updated_at:'{}'}}",
                     Self::escape_cypher_string(&p.id),
@@ -1457,6 +1474,23 @@ impl GraphDBTrait for LadybugAdapter {
         // Ladybug adapter), replacing the per-edge exists-check + CREATE/SET.
         const BATCH_SIZE: usize = 500;
         let now = Utc::now().format("%Y-%m-%d %H:%M:%S%.6f").to_string();
+        // Deduplicate by (source, target, relationship) — last wins, first-seen
+        // order — for the same reason as `add_nodes_raw`: a key repeated inside
+        // one `UNWIND … MERGE` aborts the engine (`KU_UNREACHABLE` in
+        // csr_node_group.cpp) and fails the whole write.
+        let mut order: Vec<(&str, &str, &str)> = Vec::with_capacity(edges.len());
+        let mut by_key: HashMap<(&str, &str, &str), &EdgeData> =
+            HashMap::with_capacity(edges.len());
+        for edge in edges {
+            let key = (edge.0.as_str(), edge.1.as_str(), edge.2.as_str());
+            if by_key.insert(key, edge).is_none() {
+                order.push(key);
+            }
+        }
+        let edges: Vec<&EdgeData> = order
+            .iter()
+            .filter_map(|key| by_key.get(key).copied())
+            .collect();
         for chunk in edges.chunks(BATCH_SIZE) {
             let mut items = Vec::with_capacity(chunk.len());
             for edge in chunk {

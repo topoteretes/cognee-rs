@@ -126,6 +126,8 @@ pggraph_test!(test_get_nodes_batch);
 pggraph_test!(test_delete_node);
 pggraph_test!(test_delete_nodes_batch);
 pggraph_test!(test_node_upsert_same_id);
+pggraph_test!(test_add_nodes_repeated_id_in_one_batch);
+pggraph_test!(test_add_edges_repeated_key_in_one_batch);
 pggraph_test!(test_add_and_has_edge);
 pggraph_test!(test_add_edges_batch);
 pggraph_test!(test_edge_upsert_same_key);
