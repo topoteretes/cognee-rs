@@ -849,6 +849,14 @@ impl CognifyConfig {
             ));
         }
 
+        // Zero rounds would run no cascade stage at all: every chunk would come
+        // back as an empty graph, with no LLM call and no error.
+        if self.extraction_strategy == (ExtractionStrategy::Cascade { rounds: 0 }) {
+            return Err(ConfigError::InvalidParameter(
+                "extraction_strategy cascade rounds must be greater than 0".to_string(),
+            ));
+        }
+
         if !self.chunk_failure_ratio_threshold.is_finite()
             || !(0.0..=1.0).contains(&self.chunk_failure_ratio_threshold)
         {
@@ -913,6 +921,16 @@ pub fn validate_summary_schema(schema: &serde_json::Value) -> Result<(), ConfigE
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zero_cascade_rounds_are_rejected() {
+        let config = CognifyConfig::default()
+            .with_extraction_strategy(ExtractionStrategy::Cascade { rounds: 0 });
+        assert!(config.validate().is_err());
+        let config = CognifyConfig::default()
+            .with_extraction_strategy(ExtractionStrategy::Cascade { rounds: 1 });
+        assert!(config.validate().is_ok());
+    }
     use async_trait::async_trait;
     use cognee_embedding::error::EmbeddingResult;
     use cognee_llm::types::GenerationOptions;

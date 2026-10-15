@@ -3633,10 +3633,14 @@ impl Transcriber for OpenAIAdapter {
                     });
                 }
                 Err(e) => {
-                    // Terminal failures, mirroring the set `call_api` refuses at
-                    // its own retry gate (HTTP 400..=402, 404, 501, and a
-                    // quota-exhausted 429 — which `call_transcription_api` maps
-                    // to `PaymentRequired`). Retrying any of them only burns the
+                    // Terminal failures: HTTP 400..=402, 404, a quota-exhausted
+                    // 429 (which `call_transcription_api` maps to
+                    // `PaymentRequired`) — the set `call_api` refuses too — and
+                    // any 501. That last one deliberately differs from
+                    // `call_api`, which retries a 501 unless the request is
+                    // constrained decoding (SDK-938): here a 501 means the
+                    // endpoint does not implement /audio/transcriptions at all,
+                    // so no retry can help. Retrying any of these only burns the
                     // budget a recoverable error will need.
                     if matches!(
                         e,

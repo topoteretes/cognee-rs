@@ -42,7 +42,8 @@ pub use memory::{FeedbackEntry, MemoryEntry, QAEntry, TraceEntry};
 pub use permission::permissions;
 pub use temporal_event::*;
 pub use timestamp::{
-    Timestamp, TimestampPrecision, month_from_word, normalize_absolute_date, timestamp_overlaps,
+    TimePeriod, Timestamp, TimestampPrecision, month_from_word, normalize_absolute_date,
+    parse_time_period, timestamp_overlaps,
 };
 pub use triplet::Triplet;
 pub use user::User;

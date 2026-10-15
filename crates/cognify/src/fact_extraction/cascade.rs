@@ -276,7 +276,13 @@ pub async fn extract_edge_triplets(
             ],
         );
         let extracted: KnowledgeGraph = ask(llm, &input, TRIPLETS_SYSTEM).await?;
-        for node in extracted.nodes {
+        for mut node in extracted.nodes {
+            // A node with no name is named after its id *before* the
+            // per-name dedup (Python `Node.__init__` does it on construction);
+            // otherwise every unnamed node would collapse into the first.
+            if node.name.is_empty() {
+                node.name = node.id.clone();
+            }
             if node_name_set.insert(node.name.clone()) {
                 node_names.push(node.name.clone());
                 node_ids.insert(node.id.clone());
@@ -312,15 +318,7 @@ pub async fn cascade_extract(
     let nodes = extract_nodes(llm, text, n_rounds).await?;
     let (nodes, relationship_names) =
         extract_content_nodes_and_relationship_names(llm, text, &nodes, n_rounds).await?;
-    let mut graph = extract_edge_triplets(llm, text, &nodes, &relationship_names, n_rounds).await?;
-    // Same post-processing as single-pass extraction: a node with no name is
-    // named after its id (Python `Node.__init__`).
-    for node in &mut graph.nodes {
-        if node.name.is_empty() {
-            node.name = node.id.clone();
-        }
-    }
-    Ok(graph)
+    extract_edge_triplets(llm, text, &nodes, &relationship_names, n_rounds).await
 }
 
 #[cfg(test)]
@@ -424,6 +422,52 @@ mod tests {
         fn model(&self) -> &str {
             "staged"
         }
+    }
+
+    /// Answers the triplet stage with two unnamed nodes and an edge between them.
+    struct UnnamedNodesLlm;
+
+    #[async_trait::async_trait]
+    impl Llm for UnnamedNodesLlm {
+        async fn generate(
+            &self,
+            _messages: Vec<Message>,
+            _options: Option<GenerationOptions>,
+        ) -> LlmResult<GenerationResponse> {
+            unimplemented!()
+        }
+
+        async fn create_structured_output_with_messages_raw(
+            &self,
+            _messages: Vec<Message>,
+            _json_schema: &serde_json::Value,
+            _options: Option<GenerationOptions>,
+        ) -> LlmResult<serde_json::Value> {
+            Ok(serde_json::json!({
+                "nodes": [
+                    {"id": "ada", "name": "", "type": "Person", "description": ""},
+                    {"id": "engine", "name": "", "type": "Machine", "description": ""}
+                ],
+                "edges": [
+                    {"source_node_id": "ada", "target_node_id": "engine", "relationship_name": "designed"}
+                ]
+            }))
+        }
+
+        fn model(&self) -> &str {
+            "unnamed"
+        }
+    }
+
+    #[tokio::test]
+    async fn unnamed_nodes_are_named_after_their_id_before_the_dedup() {
+        let llm: Arc<dyn Llm> = Arc::new(UnnamedNodesLlm);
+        let graph = extract_edge_triplets(&llm, "text", &[], &[], 1)
+            .await
+            .unwrap();
+        let names: Vec<&str> = graph.nodes.iter().map(|n| n.name.as_str()).collect();
+        assert_eq!(names, vec!["ada", "engine"]);
+        assert_eq!(graph.edges.len(), 1);
     }
 
     #[tokio::test]

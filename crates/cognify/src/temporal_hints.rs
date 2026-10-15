@@ -18,8 +18,10 @@
 //! * dates with a stated four-digit year (anything
 //!   [`cognee_models::normalize_absolute_date`] accepts, including ISO forms) —
 //!   these advance the base and produce no hint;
-//! * a capitalised month name with an optional day and no year ("27 April",
-//!   "April 27th", "in May") — hinted at the base's year;
+//! * a capitalised month name with an adjacent day and no year ("27 April",
+//!   "April 27th"), or a bare one after a word that introduces it ("in May",
+//!   "by June") — hinted at the base's year. A bare capitalised month alone is
+//!   too often a sentence-initial "May …" or a first name to hint;
 //! * `<number> <day|week|month|year>(s) <later|earlier|ago>` — hinted as an
 //!   offset from the base.
 //!
@@ -29,7 +31,7 @@
 //! finder errs the same way Python's anchor gate does: towards precision.
 
 use chrono::{Datelike, Duration, Months, NaiveDate};
-use cognee_models::{Timestamp, TimestampPrecision, month_from_word};
+use cognee_models::{TimestampPrecision, month_from_word, parse_time_period};
 
 /// One whitespace-delimited word with surrounding punctuation stripped, and its
 /// byte span in the source text.
@@ -136,25 +138,48 @@ fn absolute_at(text: &str, words: &[Word<'_>], index: usize) -> Option<(usize, N
             continue;
         }
         let candidate = &text[run[0].start..run[len - 1].end];
-        if let Some(ts) = Timestamp::from_text(candidate)
-            && ts.precision != TimestampPrecision::Span
+        if let Some(period) = parse_time_period(candidate)
+            && period.precision != TimestampPrecision::Span
         {
-            let date = NaiveDate::from_ymd_opt(ts.year, ts.month, ts.day)?;
-            return Some((len, date));
+            return Some((len, period.lower.date()));
         }
     }
     None
 }
 
-/// A capitalised month with an optional adjacent day and no year: `(words
-/// consumed, month, day)`.
+/// Words that make a bare month name a date: "in May", "by April", "since
+/// June". Without a day, a capitalised month name is otherwise often a
+/// sentence-initial "May …" or a first name ("April joined"), and a bogus hint
+/// is misinformation.
+fn introduces_a_month(word: &str) -> bool {
+    matches!(
+        word.to_ascii_lowercase().as_str(),
+        "in" | "of"
+            | "by"
+            | "since"
+            | "until"
+            | "till"
+            | "during"
+            | "before"
+            | "after"
+            | "from"
+            | "through"
+            | "early"
+            | "late"
+            | "mid"
+    )
+}
+
+/// A capitalised month with an adjacent day, or a bare one after a word that
+/// introduces it, and no year: `(words consumed, month, day)`.
 fn yearless_at(words: &[Word<'_>], index: usize) -> Option<(usize, u32, Option<u32>)> {
     let first = words[index].text;
     let next = words.get(index + 1).map(|w| w.text);
     let (len, month, day) = if let Some(month) = capitalised_month(first) {
         match next.and_then(day_number) {
             Some(day) => (2, month, Some(day)),
-            None => (1, month, None),
+            None if index > 0 && introduces_a_month(words[index - 1].text) => (1, month, None),
+            None => return None,
         }
     } else {
         let day = day_number(first)?;
@@ -354,6 +379,15 @@ mod tests {
             lines,
             vec!["- \"5 July\" -> 2021-07-05 (inferred from context)"]
         );
+    }
+
+    #[test]
+    fn a_bare_month_needs_a_word_that_introduces_it() {
+        let (lines, _) = hint_lines(
+            "Founded in 2020. May we never repeat it. April joined the team. By June it grew.",
+            None,
+        );
+        assert_eq!(lines, vec!["- \"June\" -> 2020-06 (inferred from context)"]);
     }
 
     const FIRST: &str = "On 26 April 1986 the reactor exploded.";

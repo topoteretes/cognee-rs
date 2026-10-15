@@ -552,47 +552,6 @@ fn entity_ids_by_node_id(graph: &KnowledgeGraph, chunk_id: Uuid) -> HashMap<Stri
     ids
 }
 
-/// The extracted graph with every parseable timestamp on the target side of its
-/// edges.
-///
-/// Port of Python's `_with_timestamps_as_leaves`. The prompt asks for
-/// timestamps as leaves (`marie_curie -born_at-> 1867`). When the LLM draws the
-/// edge the other way (`1898 -discovery_of-> radium`) the fact is still that
-/// radium is tied to 1898, so the edge is reversed and keeps its name. An edge
-/// between two timestamps has no entity to live on and is dropped.
-fn with_timestamps_as_leaves(mut graph: KnowledgeGraph) -> KnowledgeGraph {
-    let timestamp_ids: HashSet<String> = graph
-        .nodes
-        .iter()
-        .filter(|node| {
-            is_timestamp_type(&node.node_type) && Timestamp::from_text(&node.name).is_some()
-        })
-        .map(|node| normalize_identifier(&node.id))
-        .collect();
-    if timestamp_ids.is_empty() {
-        return graph;
-    }
-    graph.edges.retain_mut(|edge| {
-        if !timestamp_ids.contains(&normalize_identifier(&edge.source_node_id)) {
-            return true;
-        }
-        if timestamp_ids.contains(&normalize_identifier(&edge.target_node_id)) {
-            warn!(
-                "Dropping edge {:?} between timestamps {:?} and {:?}",
-                edge.relationship_name, edge.source_node_id, edge.target_node_id
-            );
-            return false;
-        }
-        debug!(
-            "Reversing edge {:?} drawn from timestamp {:?} to {:?}",
-            edge.relationship_name, edge.source_node_id, edge.target_node_id
-        );
-        std::mem::swap(&mut edge.source_node_id, &mut edge.target_node_id);
-        true
-    });
-    graph
-}
-
 /// Whether an extracted node's type is "Timestamp" (normalized as Python's
 /// `generate_node_name(type) == "timestamp"`).
 fn is_timestamp_type(node_type: &str) -> bool {
@@ -681,7 +640,7 @@ pub async fn expand_extracted_graphs(
             .copied()
             .unwrap_or(0.5);
 
-        let graph = with_timestamps_as_leaves(without_duplicate_node_ids(graph));
+        let graph = without_duplicate_node_ids(graph);
         let entity_ids = entity_ids_by_node_id(&graph, chunk_id);
 
         for node in graph.nodes {
@@ -1013,57 +972,67 @@ pub async fn expand_extracted_graphs(
             }
 
             // Record this chunk as a producer whether or not it was the chunk
-            // that created the entity, and refresh the registry origin to this
-            // chunk. Read back out of `node_id_to_entity_id` rather than from
-            // the vacant branch so the id is the canonical one after an
-            // ontology individual rewrote `entity.base.id`, and so the occupied
-            // branch is covered by the same lines.
+            // that created the entity, register this declaration's node id
+            // against it, and refresh the registry origins to this chunk.
             //
-            // The origin has to follow the **most recent** declaration at or
-            // before this chunk, not the first. `node_map` is keyed on the raw
-            // node id and spans the pass, so a chunk that re-declares a node id
-            // an earlier chunk already declared skips the vacant branch
-            // entirely — yet that chunk has the node in its own wave and would
-            // lose nothing to a flush. Attributing to the first declaration
-            // would count such a resolution as cross-chunk and, because
-            // extraction re-declares a recurring entity in every chunk that
-            // mentions it, drag `max_cross_chunk_distance` toward the corpus
-            // length. That is the opposite of the signal this counter exists to
-            // give.
+            // The entity is read back out of `node_map`, not from the vacant
+            // branch: it may be one an earlier chunk created under the same
+            // name (ids derive from the name now), and after an ontology
+            // individual rewrote `entity.base.id` that map holds the canonical
+            // id. So the node id is registered here, on every declaration —
+            // a later chunk that names an existing entity under a node id of
+            // its own ("a" for an earlier "alice_1") must still resolve its
+            // edges, own the entity and link it from its chunk.
+            //
+            // The origin follows the **most recent** declaration at or before
+            // this chunk, not the first: extraction re-declares a recurring
+            // entity in every chunk that mentions it, and attributing to the
+            // first declaration would count a chunk-local resolution as
+            // cross-chunk and drag `max_cross_chunk_distance` toward the corpus
+            // length — the opposite of the signal that counter exists to give.
+            #[allow(
+                clippy::expect_used,
+                reason = "the entry was just filled or already existed"
+            )]
+            let entity_id = node_map
+                .get(&entity_key)
+                .map(|pair| pair.entity.base.id)
+                .expect("node_map holds this node's entity after the vacant check");
             let id_key = normalize_identifier(&node.id);
-            let declared_entity = node_id_to_entity_id
-                .get_mut(&id_key)
-                .map(|(entity, origin)| {
-                    *origin = position;
-                    *entity
-                });
-
-            if let Some(entity_id) = declared_entity {
-                // Keep the alias origins in step with the id origin above — and
-                // *only* the origins. This runs on re-declarations, where the
-                // name the LLM chose this time may differ from the one that
-                // registered the node; registering it here would widen the alias
-                // set and, worse, poison a name another entity already owns,
-                // turning endpoints that resolve today into `Ambiguous` drops.
-                // Creation stays in the vacant branch, exactly as the sibling
-                // `node_id_to_entity_id` insert does.
-                refresh_name_alias_origin(&mut name_to_entity_id, &node.name, entity_id, position);
-                // Borrowed straight out of `node_map`: the two maps are distinct
-                // locals, so holding a shared borrow of one across a mutable
-                // borrow of the other is fine, and this runs once per node. The
-                // lookup is what picks up an ontology-canonicalised name, whose
-                // alias the declaring chunk registered under that same name.
-                if let Some(pair) = node_map.get(&entity_key) {
-                    refresh_name_alias_origin(
+            match node_id_to_entity_id.get_mut(&id_key) {
+                Some((entity, origin)) if *entity == entity_id => *origin = position,
+                _ => {
+                    // First declaration of this node id, or the model reusing an
+                    // id an earlier chunk gave a different entity: this chunk's
+                    // edges mean this entity, as Python resolves them per chunk.
+                    register_name_alias(
                         &mut name_to_entity_id,
-                        &pair.entity.name,
+                        &node.name,
                         entity_id,
+                        &id_key,
                         position,
                     );
+                    node_id_to_entity_id.insert(id_key, (entity_id, position));
                 }
-
-                producers.record_entity(entity_id, chunk_id);
             }
+
+            // Keep the alias origins in step with the id origin above — and
+            // *only* the origins: a re-declaration's name may differ from the
+            // one that registered the entity, and registering it as a new alias
+            // could poison a name another entity already owns. The `node_map`
+            // lookup picks up an ontology-canonicalised name, whose alias the
+            // declaring chunk registered under that same name.
+            refresh_name_alias_origin(&mut name_to_entity_id, &node.name, entity_id, position);
+            if let Some(pair) = node_map.get(&entity_key) {
+                refresh_name_alias_origin(
+                    &mut name_to_entity_id,
+                    &pair.entity.name,
+                    entity_id,
+                    position,
+                );
+            }
+
+            producers.record_entity(entity_id, chunk_id);
         }
 
         // Step 3: Create Edges (skip if already in database)
@@ -1138,6 +1107,35 @@ pub async fn expand_extracted_graphs(
                     );
                     continue;
                 }
+            };
+
+            // Timestamps are leaves (Python `_with_timestamps_as_leaves`). The
+            // prompt asks for `marie_curie -born_at-> 1867`; when the model
+            // draws it the other way (`1898 -discovery_of-> radium`) the fact is
+            // still that radium is tied to 1898, so the edge is reversed and
+            // keeps its name. An edge between two timestamps has no entity to
+            // live on and is dropped. Decided on the *resolved* endpoints, so a
+            // timestamp declared by an earlier chunk, or reached through its
+            // name alias, counts too.
+            let (source_entity_id, target_entity_id) = match (
+                timestamp_map.contains_key(&source_entity_id),
+                timestamp_map.contains_key(&target_entity_id),
+            ) {
+                (true, true) => {
+                    warn!(
+                        "Dropping edge {:?} between timestamps {:?} and {:?}",
+                        edge.relationship_name, edge.source_node_id, edge.target_node_id
+                    );
+                    continue;
+                }
+                (true, false) => {
+                    debug!(
+                        "Reversing edge {:?} drawn from timestamp {:?} to {:?}",
+                        edge.relationship_name, edge.source_node_id, edge.target_node_id
+                    );
+                    (target_entity_id, source_entity_id)
+                }
+                _ => (source_entity_id, target_entity_id),
             };
 
             // Whether the edge is already in the graph database. It is still
@@ -1751,6 +1749,72 @@ mod tests {
             out.nodes[0].entity.base.get_metadata("original_node_id"),
             Some(&serde_json::json!("alice_1"))
         );
+    }
+
+    #[tokio::test]
+    async fn a_later_chunk_naming_an_entity_under_a_new_node_id_still_resolves_and_owns_it() {
+        let first = KnowledgeGraph {
+            nodes: vec![node("alice_1", "Alice", "Person", "")],
+            edges: vec![],
+        };
+        let second = KnowledgeGraph {
+            nodes: vec![
+                node("a", "Alice", "Person", ""),
+                node("acme", "Acme", "Organization", ""),
+            ],
+            edges: vec![edge("a", "acme", "works_at")],
+        };
+        let (chunk_a, chunk_b) = (Uuid::new_v4(), Uuid::new_v4());
+        let out = expand(vec![(chunk_a, first), (chunk_b, second)]).await;
+
+        let alice = Entity::id_for("Alice");
+        assert_eq!(out.stats.dropped(), 0, "{:?}", out.stats);
+        assert_eq!(out.edges.len(), 1);
+        assert_eq!(out.edges[0].source_entity_id, alice);
+        assert_eq!(out.edges[0].target_entity_id, Entity::id_for("Acme"));
+        // Both chunks own Alice, so deleting the first file keeps her.
+        assert_eq!(out.producers.entity_chunks(alice), &[chunk_a, chunk_b]);
+    }
+
+    #[tokio::test]
+    async fn a_node_id_reused_for_another_entity_resolves_to_that_chunks_entity() {
+        let first = KnowledgeGraph {
+            nodes: vec![
+                node("1", "Carol", "Person", ""),
+                node("alice", "Alice", "Person", ""),
+            ],
+            edges: vec![],
+        };
+        let second = KnowledgeGraph {
+            nodes: vec![
+                node("1", "Alice", "Person", ""),
+                node("acme", "Acme", "Organization", ""),
+            ],
+            edges: vec![edge("1", "acme", "works_at")],
+        };
+        let out = expand(vec![(Uuid::new_v4(), first), (Uuid::new_v4(), second)]).await;
+        assert_eq!(out.edges.len(), 1);
+        assert_eq!(
+            out.edges[0].source_entity_id,
+            Entity::id_for("Alice"),
+            "in the second chunk, node id 1 is Alice, not the first chunk's Carol"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_edge_from_a_timestamp_declared_in_an_earlier_chunk_is_reversed() {
+        let first = KnowledgeGraph {
+            nodes: vec![node("1898", "1898", "Timestamp", "")],
+            edges: vec![],
+        };
+        let second = KnowledgeGraph {
+            nodes: vec![node("radium", "Radium", "Element", "")],
+            edges: vec![edge("1898", "radium", "discovery_of")],
+        };
+        let out = expand(vec![(Uuid::new_v4(), first), (Uuid::new_v4(), second)]).await;
+        assert_eq!(out.edges.len(), 1);
+        assert_eq!(out.edges[0].source_entity_id, Entity::id_for("radium"));
+        assert_eq!(out.edges[0].target_entity_id, Timestamp::id_for("1898"));
     }
 
     #[tokio::test]
@@ -2736,17 +2800,16 @@ mod tests {
         assert_eq!(stats.max_cross_chunk_distance, 0);
     }
 
-    /// A re-declaration must refresh alias *origins* without registering new
-    /// name→entity mappings.
+    /// A node id re-declared under another name follows the name.
     ///
-    /// The distinction is not cosmetic: `register_name_alias` poisons a name a
-    /// second entity claims. Chunk 2 below re-declares the already-known node id
-    /// `nova_labs` under the short name "Nova", which chunk 0 gave to a
-    /// different entity. Registering on that re-declaration poisons "Nova" and
-    /// drops the edge as `Ambiguous`; only first declarations may register, so
-    /// the chunk-0 mapping stands and the edge resolves.
+    /// Entity ids derive from the name (Python `Entity.id_for(name)`), so when
+    /// chunk 2 re-declares node id `nova_labs` as "Nova" — the name chunk 0 gave
+    /// `nova_corp` — that node *is* the Nova entity, and chunk 2's node id points
+    /// at it from then on. The name "Nova" keeps resolving to that one entity
+    /// (never `Ambiguous`), and because chunk 2 declared it itself, the
+    /// resolution is chunk-local.
     #[tokio::test]
-    async fn test_redeclared_node_does_not_register_a_conflicting_name_alias() {
+    async fn test_a_redeclared_node_id_follows_the_name_it_is_given() {
         let graphs = vec![
             KnowledgeGraph {
                 nodes: vec![node_named("nova_corp", "Nova")],
@@ -2757,13 +2820,14 @@ mod tests {
                 edges: vec![],
             },
             KnowledgeGraph {
-                // Re-declares `nova_labs`, but the model picked the short name
-                // this time — the one chunk 0 already gave to `nova_corp`.
                 nodes: vec![
                     node_named("nova_labs", "Nova"),
                     node_named("bohr", "Niels Bohr"),
                 ],
-                edges: vec![edge_between("Nova", "bohr")],
+                edges: vec![
+                    edge_between("Nova", "bohr"),
+                    edge_between("nova_labs", "bohr"),
+                ],
             },
         ]
         .into_iter()
@@ -2782,26 +2846,21 @@ mod tests {
         )
         .await;
 
-        assert_eq!(
-            stats.dropped_ambiguous_name, 0,
-            "a re-declaration must not poison a name another entity owns"
-        );
-        assert_eq!(edges.len(), 1, "the edge still resolves and is emitted");
-        assert_eq!(stats.resolved_by_name, 1);
-
-        // It resolves to chunk 0's entity — the one that registered the alias —
-        // not to the re-declaring node.
-        let nova_corp_id = nodes
+        assert_eq!(stats.dropped(), 0, "{stats:?}");
+        let nova_id = nodes
             .iter()
             .find(|p| p.entity.name == "nova")
             .map(|p| p.entity.base.id)
-            .expect("the chunk-0 `nova_corp` node is present");
-        assert_eq!(edges[0].source_entity_id, nova_corp_id);
-
-        // ...and the origin refresh is untouched: the alias still dates from
-        // chunk 0, two chunks back from the edge that read it.
-        assert_eq!(stats.resolved_by_name_cross_chunk, 1);
-        assert_eq!(stats.max_cross_chunk_distance, 2);
+            .expect("the Nova entity is present");
+        assert_eq!(nova_id, Entity::id_for("Nova"));
+        // Both edges — by name and by the re-pointed node id — reach Nova.
+        assert_eq!(
+            edges.len(),
+            1,
+            "same (source, target, relationship) twice is one edge"
+        );
+        assert_eq!(edges[0].source_entity_id, nova_id);
+        assert_eq!(stats.resolved_cross_chunk(), 0);
     }
 
     /// An edge referencing only its own chunk's nodes is chunk-local, so

@@ -6,8 +6,10 @@
 //! (`normalize_absolute_date`).
 //!
 //! Default cognify turns every node the LLM typed "Timestamp" whose name parses
-//! here into one of these, so `*_at` edges point at real times and the TEMPORAL
-//! search type can ask the graph which candidates are dated inside a window.
+//! here into one of these, so `*_at` edges point at real times — the graph a
+//! timestamp-anchored TEMPORAL retrieval reads (Python's
+//! `TemporalHybridRetriever`; the Rust port is SDK-1061 — today's
+//! Event-based `TemporalRetriever` does not use these nodes).
 
 use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime, Timelike};
 use serde::{Deserialize, Serialize};
@@ -101,7 +103,13 @@ impl Timestamp {
     /// (`1950-02-30`, `0000`), or year 9999, whose exclusive end would need year
     /// 10000.
     pub fn from_text(text: &str) -> Option<Self> {
-        point_from_text(text).or_else(|| span_from_text(text))
+        let period = parse_time_period(text)?;
+        Some(Self::build(
+            period.normalized,
+            period.precision,
+            period.lower,
+            period.time_until,
+        ))
     }
 
     fn build(
@@ -143,6 +151,29 @@ impl HasDataPoint for Timestamp {
     fn data_point_mut(&mut self) -> &mut DataPoint {
         &mut self.base
     }
+}
+
+/// The period a time string names, without building a [`Timestamp`] datapoint.
+///
+/// What [`Timestamp::from_text`] parses, for callers that only need the
+/// answer — the date-hint finder probes many word windows per chunk, and a
+/// full datapoint (id, metadata map) per probe is wasted work.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TimePeriod {
+    /// The normalized string (`1947-03-23`, `1803/1815`): the Timestamp's
+    /// `timestamp_str` and identity.
+    pub normalized: String,
+    pub precision: TimestampPrecision,
+    /// Lower bound of the period (unstated parts at their earliest value).
+    pub lower: NaiveDateTime,
+    /// Exclusive upper bound, in ms since the epoch (UTC).
+    pub time_until: i64,
+}
+
+/// Parse a time string into the period it names; see [`Timestamp::from_text`]
+/// for what is accepted.
+pub fn parse_time_period(text: &str) -> Option<TimePeriod> {
+    point_period(text).or_else(|| span_period(text))
 }
 
 /// Whether a Timestamp's period `[time_at, time_until)` meets the half-open
@@ -258,8 +289,8 @@ fn period_end(lower: NaiveDateTime, precision: TimestampPrecision) -> Option<Nai
     (end.year() <= 9999).then_some(end)
 }
 
-/// A single-point `Timestamp` (no spans); see [`Timestamp::from_text`].
-fn point_from_text(text: &str) -> Option<Timestamp> {
+/// A single-point period (no spans); see [`Timestamp::from_text`].
+fn point_period(text: &str) -> Option<TimePeriod> {
     let trimmed = text.trim();
     let (normalized_str, normalized) = match match_normalized(trimmed) {
         Some(n) => (trimmed.to_string(), n),
@@ -277,12 +308,12 @@ fn point_from_text(text: &str) -> Option<Timestamp> {
     let lower = NaiveDate::from_ymd_opt(normalized.year, normalized.month, normalized.day)?
         .and_hms_opt(normalized.hour, normalized.minute, normalized.second)?;
     let upper = period_end(lower, normalized.precision)?;
-    Some(Timestamp::build(
-        normalized_str,
-        normalized.precision,
+    Some(TimePeriod {
+        normalized: normalized_str,
+        precision: normalized.precision,
         lower,
-        upper.and_utc().timestamp_millis(),
-    ))
+        time_until: upper.and_utc().timestamp_millis(),
+    })
 }
 
 // ── Spans ─────────────────────────────────────────────────────────────────────
@@ -339,30 +370,25 @@ fn split_span(text: &str) -> Option<(&str, &str)> {
     None
 }
 
-/// The span `Timestamp` for `<start>/<end>` or a prose period, or `None`.
+/// The span period for `<start>/<end>` or a prose period, or `None`.
 ///
 /// Both halves must parse as points and the start must come first; the span
 /// runs from the start's lower bound to the end's exclusive upper bound, so
 /// `1803/1815` is `[1803-01-01, 1816-01-01)`. The calendar fields are the
 /// start's.
-fn span_from_text(text: &str) -> Option<Timestamp> {
+fn span_period(text: &str) -> Option<TimePeriod> {
     let (start, end) = split_span(text)?;
-    let start = point_from_text(start)?;
-    let end = point_from_text(end)?;
-    if start.time_at >= end.time_at {
+    let start = point_period(start)?;
+    let end = point_period(end)?;
+    if start.lower >= end.lower {
         return None;
     }
-    let lower = NaiveDate::from_ymd_opt(start.year, start.month, start.day)?.and_hms_opt(
-        start.hour,
-        start.minute,
-        start.second,
-    )?;
-    Some(Timestamp::build(
-        format!("{}/{}", start.timestamp_str, end.timestamp_str),
-        TimestampPrecision::Span,
-        lower,
-        end.time_until,
-    ))
+    Some(TimePeriod {
+        normalized: format!("{}/{}", start.normalized, end.normalized),
+        precision: TimestampPrecision::Span,
+        lower: start.lower,
+        time_until: end.time_until,
+    })
 }
 
 // ── Absolute dates in prose ───────────────────────────────────────────────────
