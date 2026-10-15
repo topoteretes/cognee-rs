@@ -45,7 +45,7 @@ uuid = { workspace = true, features = ["serde", "v4", "v5"] }
 
 [dev-dependencies]
 cognee-core      = { path = "../core" }
-cognee-database  = { path = "../database" }
+cognee-database  = { path = "../database", features = ["sqlite"] }
 cognee-embedding  = { path = "../embedding", features = ["onnx"] }
 cognee-graph      = { path = "../graph", features = ["testing", "ladybug"] }
 cognee-vector     = { path = "../vector", features = ["testing"] }
