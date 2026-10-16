@@ -2,6 +2,7 @@ use std::sync::OnceLock;
 
 use sea_orm_migration::prelude::*;
 
+mod helpers;
 mod m20260914_000001_baseline;
 mod m20260915_000001_pipeline_run_claims;
 mod m20260916_000001_provenance_edge_id_rekey_guard;
