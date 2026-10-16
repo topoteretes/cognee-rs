@@ -74,6 +74,16 @@ pub const DEFAULT_MAX_PARALLEL_EXTRACTIONS: usize = 1000;
 #[cfg(any(target_os = "android", target_os = "ios"))]
 pub const DEFAULT_MAX_PARALLEL_EXTRACTIONS: usize = 128;
 
+/// How a chunk links to the custom DataPoint graph extracted from it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChunkAttachment {
+    /// Link to the stored root, or to the children replacing a transparent root.
+    Direct,
+    /// Link to every node the custom graph storage walk persists.
+    All,
+}
+
 /// Configuration for the cognify pipeline.
 ///
 /// Design Principles:
@@ -333,6 +343,11 @@ pub struct CognifyConfig {
     #[serde(skip)]
     pub graph_schema: Option<serde_json::Value>,
 
+    /// Attachment breadth for custom runtime graph models. `None` has the same
+    /// behavior as [`ChunkAttachment::Direct`], matching Python.
+    #[serde(skip)]
+    pub chunk_attachment: Option<ChunkAttachment>,
+
     /// Optional JSON schema for the summarization output.
     ///
     /// Mirrors Python's `CognifyConfig.summarization_model` (a Pydantic class,
@@ -518,6 +533,7 @@ impl Default for CognifyConfig {
             failure_report_cap: default_failure_report_cap(),
 
             graph_schema: None,
+            chunk_attachment: None,
             summary_schema: None,
             custom_chunker: None,
             transcriber: None,
@@ -678,6 +694,12 @@ impl CognifyConfig {
         self
     }
 
+    /// Set how chunks attach to a custom runtime graph.
+    pub fn with_chunk_attachment(mut self, attachment: ChunkAttachment) -> Self {
+        self.chunk_attachment = Some(attachment);
+        self
+    }
+
     /// Set a custom JSON schema for summarization output (Python `summarization_model` parity).
     ///
     /// The schema must contain a string `summary` field — the pipeline reads
@@ -808,6 +830,16 @@ impl CognifyConfig {
     ///
     /// Returns an error if any parameters are invalid.
     pub fn validate(&self) -> Result<(), ConfigError> {
+        if self.chunk_attachment.is_some() && self.graph_schema.is_none() {
+            return Err(ConfigError::InvalidParameter(
+                "chunk_attachment requires graph_schema".to_string(),
+            ));
+        }
+        if self.chunk_attachment.is_some() && self.temporal_cognify {
+            return Err(ConfigError::InvalidParameter(
+                "chunk_attachment is not supported with temporal_cognify".to_string(),
+            ));
+        }
         // Only an *explicit* chunk size can be validated here: an auto-calculated
         // one is derived from the engines at pipeline time and is always >= 1.
         if self.max_chunk_size == Some(0) {
@@ -1393,6 +1425,31 @@ mod tests {
         assert_eq!(
             crate::summarization::SummaryExtractor::DEFAULT_MAX_PARALLEL,
             CognifyConfig::default().max_parallel_extractions,
+        );
+    }
+
+    #[test]
+    fn chunk_attachment_requires_custom_non_temporal_graph() {
+        assert!(
+            CognifyConfig::default()
+                .with_chunk_attachment(ChunkAttachment::Direct)
+                .validate()
+                .is_err()
+        );
+        assert!(
+            CognifyConfig::default()
+                .with_graph_schema(serde_json::json!({"title": "Graph", "properties": {}}))
+                .with_chunk_attachment(ChunkAttachment::All)
+                .with_temporal_cognify(true)
+                .validate()
+                .is_err()
+        );
+        assert!(
+            CognifyConfig::default()
+                .with_graph_schema(serde_json::json!({"title": "Graph", "properties": {}}))
+                .with_chunk_attachment(ChunkAttachment::Direct)
+                .validate()
+                .is_ok()
         );
     }
 }
