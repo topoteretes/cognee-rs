@@ -9,7 +9,7 @@ and [operations.md](../operations.md).
 |---|---|
 | [external-providers.md](external-providers.md) | Plug in a vector / graph / LLM backend from a crate outside this repository — the factory traits, `ComponentRegistry`, and what `BackendBuildContext` hands you (including resolved Postgres URLs). |
 | [custom-prompts.md](custom-prompts.md) | Override the LLM prompt used for entity/relationship extraction in cognify. |
-| [custom-graph-schema.md](custom-graph-schema.md) | Supply a custom summarization schema (wired) and a custom graph-extraction schema (set-but-not-consumed in the standalone pipeline). |
+| [custom-graph-schema.md](custom-graph-schema.md) | Supply custom summarization and runtime graph-extraction schemas. |
 | [ontology.md](ontology.md) | Ground extraction with an RDF/OWL/JSON-LD ontology. |
 | [temporal-cognify.md](temporal-cognify.md) | Extract events/timestamps and query them with temporal recall. |
 | [memify-node-filtering.md](memify-node-filtering.md) | Scope memify enrichment to specific node types / names (node sets). |
