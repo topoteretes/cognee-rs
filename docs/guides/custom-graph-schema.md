@@ -22,7 +22,7 @@ fails at config time rather than mid-pipeline.
 ### Example (programmatic)
 
 ```rust
-use cognee_cognify::CognifyConfig;
+use cognee_cognify::{ChunkAttachment, CognifyConfig};
 use serde_json::json;
 
 let schema = json!({
@@ -53,36 +53,77 @@ extractor requests the custom schema when it is `Some`
 settings.set_summarization_schema(schema)?;  // crates/lib/src/config.rs
 ```
 
-## Graph extraction schema — set but NOT consumed (standalone pipeline)
+## Graph extraction schema — wired
 
-### What it does (in Python)
+### What it does
 
-Python's `graph_model` lets you replace the default `KnowledgeGraph` extraction
-shape with a custom Pydantic model.
+Replaces the default `KnowledgeGraph` extraction shape with the JSON Schema
+produced by a custom Pydantic graph model. Rust compiles that schema at runtime,
+requests structured output from the LLM, walks the returned model, and persists
+its nodes and relationships through the normal graph, provenance, and vector
+indexing stages.
 
-### Status in Rust
+### Schema contract
 
-`CognifyConfig.graph_schema` exists and has a builder
-([`CognifyConfig::with_graph_schema`](../../crates/cognify/src/config.rs)), **but
-the standalone cognify graph-extraction task does not read it.** A `graph_schema`
-you set on `CognifyConfig` is effectively a no-op for the in-process pipeline.
+Pass the JSON Schema emitted by Pydantic's `model_json_schema()`. Local `$defs`
+and `#/$defs/...` references are supported. External references are rejected so
+the schema is self-contained and deterministic. The DataPoint `metadata`
+property is consumed by the storage walk and removed from the schema sent to
+the LLM; descriptive JSON Schema annotations remain available to guide it.
 
-Its only live consumers today are:
+Every stored model must ultimately expose at least one DataPoint-shaped object.
+Python encodes runtime policy in the `metadata` property's default object. Its
+`identity_fields` determine the stable UUID, `index_fields` select vectorized
+scalar fields, and `transparent: true` makes a structural container disappear
+during persistence so its DataPoint descendants take its place.
 
-- **Dataset-config persistence** — stored/retrieved via
-  [`crates/database/src/ops/dataset_configurations.rs`](../../crates/database/src/ops/dataset_configurations.rs).
-- **HTTP server** — accepted on dataset-config payloads by the HTTP server,
-  which is not part of this repository
-  (and validated by `graph_schema_to_graph_model` in
-  [`crates/llm/src/dynamic_model.rs`](../../crates/llm/src/dynamic_model.rs)).
+### Example (programmatic)
 
-See [docs/roadmap/cognify-compatibility-plan.md](../roadmap/cognify-compatibility-plan.md)
-— wiring `graph_schema` into the extraction task is tracked as follow-up work.
+```rust
+use cognee_cognify::CognifyConfig;
+use serde_json::json;
 
-To customize extraction today, use a [custom prompt](custom-prompts.md) instead.
+let schema = json!({
+    "title": "ResearchGraph",
+    "type": "object",
+    "properties": {
+        "paper": { "$ref": "#/$defs/Paper" },
+        "metadata": {
+            "type": "object",
+            "default": { "transparent": true }
+        }
+    },
+    "required": ["paper"],
+    "$defs": {
+        "Paper": {
+            "title": "Paper",
+            "type": "object",
+            "properties": {
+                "title": { "type": "string" },
+                "metadata": {
+                    "type": "object",
+                    "default": {
+                        "identity_fields": ["title"],
+                        "index_fields": ["title"]
+                    }
+                }
+            },
+            "required": ["title"]
+        }
+    }
+});
+
+let config = CognifyConfig::default()
+    .with_graph_schema(schema)
+    .with_chunk_attachment(ChunkAttachment::Direct);
+```
+
+By default each chunk links directly to the custom graph root. Use
+`with_chunk_attachment(ChunkAttachment::All)` to link it to every persisted
+DataPoint reached by the transparent storage walk.
 
 ## Pointers
 
-- [`CognifyConfig`](../../crates/cognify/src/config.rs) — `summary_schema`, `graph_schema`, builders, `validate_summary_schema`.
+- [`CognifyConfig`](../../crates/cognify/src/config.rs) — schema and chunk-attachment configuration.
+- [`crates/cognify/src/dynamic_graph.rs`](../../crates/cognify/src/dynamic_graph.rs) — runtime schema compiler, validation, identity, and storage walk.
 - [`crates/cognify/src/summarization/extractor.rs`](../../crates/cognify/src/summarization/extractor.rs) — summary schema consumption.
-- [roadmap/cognify-compatibility-plan.md](../roadmap/cognify-compatibility-plan.md) — graph_schema gap.

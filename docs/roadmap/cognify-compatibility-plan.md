@@ -23,7 +23,7 @@ reflect them.
 
 ### Findings surfaced during planning (not blocking, noted for awareness)
 
-- `CognifyConfig.graph_schema` ([config.rs:125](../../crates/cognify/src/config.rs#L125)) is **set but not consumed** by the core cognify graph-extraction task — its only live consumers are dataset-config persistence and the HTTP server. The ticket lists "custom graph schemas" as implemented; in the standalone pipeline path it is effectively a no-op. Item 4 must therefore *actually wire* `summary_schema` rather than copy the `graph_schema` pattern verbatim. A follow-up to wire `graph_schema` into the task may be worth a separate ticket.
+- `CognifyConfig.graph_schema` was originally stored but not consumed by the core graph-extraction task. SDK-1124 subsequently wired Pydantic-compatible runtime schemas through extraction, transparent graph walking, provenance, graph persistence, and vector indexing. Item 4's summary-schema wiring remains independent of that path.
 - `PgGraphAdapter::new()` runs its own migrations internally (no separate `initialize()` call, unlike `LadybugAdapter`) and also exposes `from_connection(db)` to share an existing SeaORM connection — directly useful for the Item 3 hybrid adapter.
 - The `Llm` trait already exposes a dynamic-schema path (`create_structured_output_raw(text, prompt, &Value, opts)` returning a raw `Value`), so Item 4 needs no new LLM API.
 
