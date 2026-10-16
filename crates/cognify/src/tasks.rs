@@ -41,7 +41,7 @@ use cognee_ingestion::loaders::audio::AudioLoader;
 #[cfg(feature = "image-loader")]
 use cognee_ingestion::loaders::image::ImageLoader;
 use cognee_ingestion::loaders::{LoaderOutput, LoaderRegistry};
-use cognee_llm::Llm;
+use cognee_llm::{GenerationOptions, Llm};
 use cognee_models::{
     Data, Document, DocumentChunk, EdgeType, Embedding, Entity, TemporalEvent,
     classify_documents as model_classify_documents,
@@ -58,6 +58,7 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::config::{CognifyConfig, ExtractionStrategy};
+use crate::dynamic_graph::{DynamicGraph, DynamicGraphSchema};
 use crate::error::CognifyError;
 use crate::fact_extraction::{FactExtractor, KnowledgeGraph};
 use crate::failure::{
@@ -233,6 +234,23 @@ pub struct SummarizedData {
     pub tenant_id: Option<Uuid>,
     /// Forwarded from [`ExtractedGraphData::failures`], plus this stage's own
     /// summarization failures.
+    pub failures: FailureReport,
+}
+
+/// A custom runtime graph together with the chunk and source item that
+/// produced it. Attribution travels with the graph so filtering failed items
+/// cannot separate artifacts from their ownership identity.
+#[derive(Debug, Clone)]
+pub struct AttributedDynamicGraph {
+    pub graph: DynamicGraph,
+    pub chunk_id: Uuid,
+    pub data_id: Uuid,
+}
+
+/// Output of runtime-schema graph extraction before attachment and storage.
+#[derive(Debug, Clone)]
+pub struct DynamicExtractionData {
+    pub graphs: Vec<AttributedDynamicGraph>,
     pub failures: FailureReport,
 }
 
@@ -1833,6 +1851,145 @@ fn web_page_provenance_edge_row(
 // ---------------------------------------------------------------------------
 // Task 3b: extract_custom_graph_from_data (custom graph model path)
 // ---------------------------------------------------------------------------
+
+/// Extract custom DataPoint graphs from chunks using a runtime JSON Schema.
+///
+/// This is the object-safe counterpart of [`extract_custom_graph_from_data`].
+/// Python creates Pydantic classes at runtime; Rust compiles the same schema
+/// boundary into [`DynamicGraphSchema`] and asks the object-safe LLM API for a
+/// raw structured value. Persistence is deliberately a later step so the
+/// fused extraction/summarization task retains its current ownership boundary.
+pub async fn extract_dynamic_graphs_from_data(
+    input: &ExtractedChunks,
+    llm: Arc<dyn Llm>,
+    config: &CognifyConfig,
+) -> Result<DynamicExtractionData, CognifyError> {
+    let schema_value = config.graph_schema.as_ref().ok_or_else(|| {
+        CognifyError::ConfigError(
+            "runtime custom graph extraction requires CognifyConfig.graph_schema".to_string(),
+        )
+    })?;
+    let schema = Arc::new(
+        DynamicGraphSchema::compile(schema_value)
+            .map_err(|error| CognifyError::ConfigError(error.to_string()))?,
+    );
+    let dlt_doc_ids: HashSet<Uuid> = input
+        .documents
+        .iter()
+        .filter(|document| document.document_type == "dlt_row")
+        .map(|document| document.base.id)
+        .collect();
+    let chunks: Vec<&DocumentChunk> = input
+        .chunks
+        .iter()
+        .filter(|chunk| !dlt_doc_ids.contains(&chunk.document_id))
+        .collect();
+    if chunks.is_empty() {
+        return Ok(DynamicExtractionData {
+            graphs: Vec::new(),
+            failures: input.failures.clone(),
+        });
+    }
+
+    let failure_policy = config.failure_policy();
+    let max_parallel = config.max_parallel_extractions.max(1);
+    let prompt = config
+        .custom_extraction_prompt
+        .clone()
+        .unwrap_or_else(|| FactExtractor::default_graph_prompt().to_string());
+    let dataset_id = input.dataset_id;
+    let mut failures = input.failures.clone();
+    let mut graphs = Vec::new();
+    let mut aborted = false;
+
+    for (batch_index, batch) in chunks.chunks(config.chunks_per_batch).enumerate() {
+        let mut results: Vec<_> = futures::stream::iter(batch.iter().enumerate())
+            .map(|(position, chunk)| {
+                let llm = Arc::clone(&llm);
+                let schema = Arc::clone(&schema);
+                let prompt = prompt.clone();
+                let text = chunk.text.clone();
+                let chunk_id = chunk.base.id;
+                let data_id = chunk.document_id;
+                async move {
+                    let result = async {
+                        let answer = llm
+                            .create_structured_output_raw(
+                                &text,
+                                &prompt,
+                                schema.llm_schema(),
+                                Some(GenerationOptions {
+                                    temperature: None,
+                                    max_tokens: None,
+                                    ..Default::default()
+                                }),
+                            )
+                            .await
+                            .map_err(|error| CognifyError::LlmError(error.to_string()))?;
+                        schema
+                            .materialize(&answer, dataset_id)
+                            .map_err(|error| CognifyError::GraphExtractionError(error.to_string()))
+                    }
+                    .await;
+                    (position, chunk_id, data_id, result)
+                }
+            })
+            .buffer_unordered(max_parallel)
+            .collect()
+            .await;
+        results.sort_by_key(|(position, _, _, _)| *position);
+
+        let mut batch_failed = false;
+        for (_, chunk_id, data_id, result) in results {
+            match result {
+                Ok(graph) => graphs.push(AttributedDynamicGraph {
+                    graph,
+                    chunk_id,
+                    data_id,
+                }),
+                Err(error) => {
+                    warn!(%data_id, %chunk_id, "dynamic graph extraction failed: {error}");
+                    failures.record(StageFailure {
+                        stage: FailureStage::GraphExtraction,
+                        data_id,
+                        chunk_id: Some(chunk_id),
+                        error: error.to_string(),
+                        fails_item: true,
+                    });
+                    batch_failed = true;
+                }
+            }
+        }
+
+        if batch_failed && failure_policy.stop == FailureStop::FailFast {
+            aborted = true;
+            for chunk in chunks
+                .iter()
+                .skip((batch_index + 1) * config.chunks_per_batch)
+            {
+                failures.mark_unreached(chunk.document_id);
+            }
+            break;
+        }
+    }
+
+    if aborted && failure_policy.scope != RollbackScope::FailedItems {
+        return Err(CognifyError::RunFailed {
+            report: Box::new(failures),
+        });
+    }
+    if aborted {
+        let excluded: HashSet<Uuid> = failures
+            .failed_items()
+            .iter()
+            .chain(failures.unreached_items().iter())
+            .copied()
+            .collect();
+        graphs.retain(|graph| !excluded.contains(&graph.data_id));
+    }
+
+    Ok(DynamicExtractionData { graphs, failures })
+}
 
 /// Extract a custom graph model from chunks via LLM (Task 3 — custom model variant).
 ///
