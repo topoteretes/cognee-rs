@@ -1232,7 +1232,6 @@ mod tests {
             node_name_filter_operator: None,
             wide_search_top_k: None,
             triplet_distance_penalty: None,
-            save_interaction: None,
             user_id: None,
             tenant_id: None,
             verbose: None,
@@ -1280,7 +1279,6 @@ mod tests {
             node_name_filter_operator: None,
             wide_search_top_k: None,
             triplet_distance_penalty: None,
-            save_interaction: None,
             user_id: None,
             tenant_id: None,
             verbose: None,
@@ -1333,7 +1331,6 @@ mod tests {
             node_name_filter_operator: None,
             wide_search_top_k: None,
             triplet_distance_penalty: None,
-            save_interaction: None,
             user_id: None,
             tenant_id: None,
             verbose: None,
@@ -1413,7 +1410,6 @@ mod tests {
             node_name_filter_operator: None,
             wide_search_top_k: None,
             triplet_distance_penalty: None,
-            save_interaction: None,
             user_id: None,
             tenant_id: None,
             verbose: None,
@@ -1516,7 +1512,6 @@ mod tests {
             node_name_filter_operator: None,
             wide_search_top_k: None,
             triplet_distance_penalty: None,
-            save_interaction: None,
             user_id: None,
             tenant_id: None,
             verbose: None,
@@ -1711,7 +1706,6 @@ mod tests {
             node_name_filter_operator: None,
             wide_search_top_k: None,
             triplet_distance_penalty: None,
-            save_interaction: None,
             user_id: None,
             tenant_id: None,
             verbose: Some(true),
@@ -1737,7 +1731,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn persists_query_and_result_when_save_interaction_enabled() {
+    async fn persists_query_and_result_by_default() {
         let mut registry = SearchTypeRegistry::new();
         registry.register(Arc::new(FakeChunksRetriever));
 
@@ -1763,7 +1757,6 @@ mod tests {
             node_name_filter_operator: None,
             wide_search_top_k: None,
             triplet_distance_penalty: None,
-            save_interaction: Some(true),
             user_id: None,
             tenant_id: None,
             verbose: None,
@@ -1864,7 +1857,6 @@ mod tests {
                 node_name_filter_operator: None,
                 wide_search_top_k: None,
                 triplet_distance_penalty: None,
-                save_interaction: None,
                 user_id: None,
                 tenant_id: None,
                 verbose: None,
@@ -1893,7 +1885,6 @@ mod tests {
                 node_name_filter_operator: None,
                 wide_search_top_k: None,
                 triplet_distance_penalty: None,
-                save_interaction: None,
                 user_id: None,
                 tenant_id: None,
                 verbose: None,
@@ -1941,7 +1932,6 @@ mod tests {
             node_name_filter_operator: None,
             wide_search_top_k: None,
             triplet_distance_penalty: None,
-            save_interaction: None,
             user_id: None,
             tenant_id: None,
             verbose: None,
@@ -2042,7 +2032,6 @@ mod tests {
             node_name_filter_operator: None,
             wide_search_top_k: None,
             triplet_distance_penalty: None,
-            save_interaction: Some(false),
             user_id: None,
             tenant_id: None,
             verbose: None,
@@ -3515,7 +3504,6 @@ mod tests {
             node_name_filter_operator: None,
             wide_search_top_k: None,
             triplet_distance_penalty: None,
-            save_interaction: None,
             user_id: None,
             tenant_id: None,
             verbose: None,

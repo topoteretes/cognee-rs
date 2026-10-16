@@ -25,10 +25,6 @@ pub struct SearchRequest {
     pub node_name_filter_operator: Option<String>,
     pub wide_search_top_k: Option<usize>,
     pub triplet_distance_penalty: Option<f32>,
-    /// Whether to persist this query and its result to the search history database.
-    /// Defaults to `true` when omitted, matching the Python SDK behavior where every
-    /// search is logged unconditionally. Set to `Some(false)` to opt out of logging.
-    pub save_interaction: Option<bool>,
     #[serde(default)]
     pub user_id: Option<Uuid>,
     /// Tenant the requester belongs to, used to scope `datasets` name

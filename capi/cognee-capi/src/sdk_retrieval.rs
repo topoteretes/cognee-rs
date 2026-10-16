@@ -54,7 +54,6 @@ use crate::sdk_ops::parse_c_str_or_fire;
 ///                              or the bare context for non-completion types
 ///   "useCombinedContext"     — boolean
 ///   "verbose"                — boolean
-///   "saveInteraction"        — boolean (default true)
 ///   "autoFeedbackDetection"  — boolean
 ///
 /// `userId` from opts is ignored; `user_id` in `SearchRequest` is always set

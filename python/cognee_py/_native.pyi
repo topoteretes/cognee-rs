@@ -720,8 +720,7 @@ class Cognee:
         ``nodeType``, ``node_name`` / ``nodeName``, ``node_name_filter_operator``
         / ``nodeNameFilterOperator``, ``only_context`` /
         ``onlyContext``, ``use_combined_context`` / ``useCombinedContext``,
-        ``verbose``, ``save_interaction`` / ``saveInteraction``,
-        ``auto_feedback_detection`` / ``autoFeedbackDetection``.
+        ``verbose``, ``auto_feedback_detection`` / ``autoFeedbackDetection``.
         """
         ...
 

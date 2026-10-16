@@ -72,7 +72,7 @@ fn response_text(response: &SearchResponse) -> String {
 }
 
 /// Build a `SearchRequest` with all optional fields set to `None`.
-fn make_request(query: &str, search_type: SearchType, save: Option<bool>) -> SearchRequest {
+fn make_request(query: &str, search_type: SearchType) -> SearchRequest {
     SearchRequest {
         query_text: query.to_string(),
         search_type,
@@ -89,7 +89,6 @@ fn make_request(query: &str, search_type: SearchType, save: Option<bool>) -> Sea
         node_name_filter_operator: None,
         wide_search_top_k: None,
         triplet_distance_penalty: None,
-        save_interaction: save,
         user_id: None,
         tenant_id: None,
         verbose: None,
@@ -277,7 +276,7 @@ async fn test_search_type_matrix() {
 
     let query = "Next to which country is Germany located?";
 
-    // Graph-based search types — save interactions for history tracking
+    // Graph-based search types
     let graph_search_types = [
         SearchType::GraphCompletion,
         SearchType::GraphCompletionCot,
@@ -294,10 +293,10 @@ async fn test_search_type_matrix() {
         SearchType::Temporal,
     ];
 
-    // Execute graph-based searches (save_interaction = true for history tracking)
+    // Execute graph-based searches
     for search_type in graph_search_types {
         let response = orchestrator
-            .search(&make_request(query, search_type, Some(true)))
+            .search(&make_request(query, search_type))
             .await
             .unwrap_or_else(|e| panic!("search {search_type:?} failed: {e}"));
 
@@ -320,7 +319,7 @@ async fn test_search_type_matrix() {
     // Execute retrieval-only searches
     for search_type in retrieval_search_types {
         let response = orchestrator
-            .search(&make_request(query, search_type, Some(false)))
+            .search(&make_request(query, search_type))
             .await
             .unwrap_or_else(|e| panic!("search {search_type:?} failed: {e}"));
 
@@ -348,7 +347,6 @@ async fn test_search_type_matrix() {
         node_name_filter_operator: None,
         wide_search_top_k: None,
         triplet_distance_penalty: None,
-        save_interaction: Some(false),
         user_id: None,
         tenant_id: None,
         verbose: None,
@@ -394,7 +392,6 @@ async fn test_search_type_matrix() {
         node_name_filter_operator: None,
         wide_search_top_k: None,
         triplet_distance_penalty: None,
-        save_interaction: Some(false),
         user_id: None,
         tenant_id: None,
         verbose: None,

@@ -18,7 +18,7 @@
  * What it does
  * ------------
  * 1. Adds text and runs cognify so the graph has content.
- * 2. Searches with saveInteraction: true to persist a QA entry to a session.
+ * 2. Searches with a sessionId to persist a QA entry to that session.
  * 3. Retrieves the stored session history.
  * 4. Adds and then removes feedback on a QA entry.
  * 5. Stores and reads back a graph-context snapshot on the session.
@@ -73,15 +73,12 @@ async function main(): Promise<void> {
 
   // ── Step 2: search and save the interaction ────────────────────────────────
   //
-  // Passing saveInteraction: true (or sessionId) persists a QA entry so it
-  // can be retrieved later from session history.
+  // Passing sessionId persists a QA entry so it can be retrieved later from
+  // session history.
   const sessionId = "example-session-001";
   const query = "What did Isaac Newton discover?";
   console.log(`\nSearching with sessionId="${sessionId}": "${query}"`);
-  await cognee.search(query, {
-    saveInteraction: true,
-    sessionId,
-  });
+  await cognee.search(query, { sessionId });
   console.log("Search saved to session history.");
 
   // ── Step 3: retrieve session history ──────────────────────────────────────

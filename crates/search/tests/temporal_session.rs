@@ -140,7 +140,6 @@ fn temporal_request(query: &str, session_id: Option<&str>) -> SearchRequest {
         node_name_filter_operator: None,
         wide_search_top_k: None,
         triplet_distance_penalty: None,
-        save_interaction: Some(true),
         user_id: None,
         tenant_id: None,
         verbose: None,
