@@ -43,7 +43,7 @@ use cognee_ingestion::loaders::image::ImageLoader;
 use cognee_ingestion::loaders::{LoaderOutput, LoaderRegistry};
 use cognee_llm::{GenerationOptions, Llm, Message, MessageRole};
 use cognee_models::{
-    Data, Document, DocumentChunk, EdgeType, Embedding, Entity, TemporalEvent,
+    Data, Document, DocumentChunk, EdgeType, Embedding, Entity, TemporalEvent, Triplet,
     classify_documents as model_classify_documents,
 };
 use cognee_ontology::OntologyResolver;
@@ -2747,7 +2747,7 @@ pub async fn add_data_points(
     // Otherwise the index pass embeds those texts itself, a window at a time,
     // and no corpus-sized set of vectors is ever held (SDK-711): it already
     // embeds whatever has no precomputed vector, so the work done is the same.
-    let embeddings = if config.retain_embeddings {
+    let mut embeddings = if config.retain_embeddings {
         generate_embeddings(
             &input.chunks,
             &input.entities,
@@ -2776,16 +2776,30 @@ pub async fn add_data_points(
         &embeddings,
     )
     .await?;
-    index_dynamic_data_points(
-        dynamic_nodes.values(),
+    let mut dynamic_node_values: Vec<_> = dynamic_nodes.values().collect();
+    dynamic_node_values.sort_by_key(|node| node.base.id);
+    let dynamic_embeddings = index_dynamic_data_points(
+        &dynamic_node_values,
         input.dataset_id,
         input.user_id,
         input.tenant_id,
-        embedding_engine,
-        vector_db,
+        Arc::clone(&embedding_engine),
+        Arc::clone(&vector_db),
+        config.retain_embeddings,
         &mut indexed_fields,
     )
     .await?;
+    embeddings.extend(dynamic_embeddings);
+    if config.embed_triplets {
+        index_dynamic_triplets(
+            &dynamic_node_values,
+            &dynamic_relationships,
+            embedding_engine,
+            vector_db,
+            &mut indexed_fields,
+        )
+        .await?;
+    }
 
     Ok(CognifyResult {
         chunks: input.chunks.clone(),
@@ -2809,48 +2823,46 @@ pub async fn add_data_points(
 
 /// Index every declared `index_fields` property of runtime custom DataPoints.
 async fn index_dynamic_data_points<'a>(
-    nodes: impl Iterator<Item = &'a crate::dynamic_graph::DynamicDataPoint>,
+    nodes: &[&'a crate::dynamic_graph::DynamicDataPoint],
     dataset_id: Uuid,
     user_id: Option<Uuid>,
     tenant_id: Option<Uuid>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
     vector_db: Arc<dyn VectorDB>,
+    retain_embeddings: bool,
     stats: &mut IndexedFieldsStats,
-) -> Result<(), CognifyError> {
-    let mut collections: HashMap<
-        (String, String),
-        Vec<(Uuid, String, HashMap<String, serde_json::Value>)>,
-    > = HashMap::new();
+) -> Result<Vec<Embedding>, CognifyError> {
+    let mut collections = BTreeSet::new();
     for node in nodes {
         for field in &node.index_fields {
-            let Some(value) = node.properties.get(field) else {
-                continue;
-            };
-            let text = value
-                .as_str()
-                .map(str::to_string)
-                .unwrap_or_else(|| value.to_string());
-            if text.trim().is_empty() {
-                continue;
+            if node.properties.get(field).is_some_and(|value| {
+                value
+                    .as_str()
+                    .map(str::trim)
+                    .map_or(true, |text| !text.is_empty())
+            }) {
+                collections.insert((node.base.data_type.clone(), field.clone()));
             }
-            let mut metadata = node.base.vector_metadata();
-            metadata.extend(node.properties.clone());
-            metadata.insert("field".to_string(), json!(field));
-            metadata.insert("dataset_id".to_string(), json!(dataset_id.to_string()));
-            if let Some(user_id) = user_id {
-                metadata.insert("user_id".to_string(), json!(user_id.to_string()));
-            }
-            if let Some(tenant_id) = tenant_id {
-                metadata.insert("tenant_id".to_string(), json!(tenant_id.to_string()));
-            }
-            collections
-                .entry((node.base.data_type.clone(), field.clone()))
-                .or_default()
-                .push((node.base.id, text, metadata));
         }
     }
 
-    for ((data_type, field), entries) in collections {
+    let window = cognee_vector::write_window_points(embedding_engine.dimension());
+    let mut retained = Vec::new();
+    let bulk = BulkLoadGuard::begin(vector_db.as_ref()).await.ok();
+    for (data_type, field) in collections {
+        let matching: Vec<_> = nodes
+            .iter()
+            .copied()
+            .filter(|node| node.base.data_type == data_type && node.index_fields.contains(&field))
+            .filter_map(|node| {
+                let value = node.properties.get(&field)?;
+                let text = value
+                    .as_str()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| value.to_string());
+                (!text.trim().is_empty()).then_some((node, text))
+            })
+            .collect();
         if !vector_db
             .has_collection(&data_type, &field)
             .await
@@ -2861,26 +2873,140 @@ async fn index_dynamic_data_points<'a>(
                 .await
                 .map_err(|error| CognifyError::VectorDBError(error.to_string()))?;
         }
-        let texts: Vec<&str> = entries.iter().map(|(_, text, _)| text.as_str()).collect();
+        announce_index_write(&vector_db, &data_type, &field, matching.len()).await?;
+        for entries in matching.chunks(window) {
+            let texts: Vec<&str> = entries.iter().map(|(_, text)| text.as_str()).collect();
+            let vectors = embedding_engine
+                .embed(&texts)
+                .await
+                .map_err(|error| CognifyError::EmbeddingError(error.to_string()))?;
+            let points: Vec<VectorPoint> = entries
+                .iter()
+                .zip(vectors)
+                .map(|((node, text), vector)| {
+                    if retain_embeddings {
+                        retained.push(Embedding::new(
+                            node.base.id,
+                            data_type.clone(),
+                            field.clone(),
+                            vector.clone(),
+                        ));
+                    }
+                    let mut metadata = node.base.vector_metadata();
+                    metadata.extend(node.properties.clone());
+                    metadata.insert("field".to_string(), json!(field));
+                    metadata.insert("text".to_string(), json!(text));
+                    metadata.insert("dataset_id".to_string(), json!(dataset_id.to_string()));
+                    if let Some(user_id) = user_id {
+                        metadata.insert("user_id".to_string(), json!(user_id.to_string()));
+                    }
+                    if let Some(tenant_id) = tenant_id {
+                        metadata.insert("tenant_id".to_string(), json!(tenant_id.to_string()));
+                    }
+                    VectorPoint {
+                        id: node.base.id,
+                        vector,
+                        metadata,
+                    }
+                })
+                .collect();
+            vector_db
+                .index_points(&data_type, &field, &points)
+                .await
+                .map_err(|error| CognifyError::VectorDBError(error.to_string()))?;
+        }
+        stats.record(&data_type, &field, matching.len());
+    }
+    if let Some(bulk) = bulk {
+        bulk.finish()
+            .await
+            .map_err(|error| CognifyError::VectorDBError(error.to_string()))?;
+    }
+    Ok(retained)
+}
+
+async fn index_dynamic_triplets(
+    nodes: &[&crate::dynamic_graph::DynamicDataPoint],
+    relationships: &HashSet<crate::dynamic_graph::DynamicRelationship>,
+    embedding_engine: Arc<dyn EmbeddingEngine>,
+    vector_db: Arc<dyn VectorDB>,
+    stats: &mut IndexedFieldsStats,
+) -> Result<(), CognifyError> {
+    let node_by_id: HashMap<Uuid, &&crate::dynamic_graph::DynamicDataPoint> =
+        nodes.iter().map(|node| (node.base.id, node)).collect();
+    let node_text = |node: &&crate::dynamic_graph::DynamicDataPoint| {
+        node.index_fields
+            .first()
+            .and_then(|field| node.properties.get(field))
+            .map(|value| {
+                value
+                    .as_str()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| value.to_string())
+            })
+            .unwrap_or_default()
+    };
+    let mut triplets: Vec<Triplet> = relationships
+        .iter()
+        .filter_map(|relationship| {
+            let source = node_by_id.get(&relationship.source)?;
+            let target = node_by_id.get(&relationship.target)?;
+            let source_text = node_text(source);
+            let target_text = node_text(target);
+            let text = format!("{source_text}-›{}-›{target_text}", relationship.field_name);
+            Some(Triplet::new(
+                relationship.source,
+                relationship.target,
+                relationship.field_name.clone(),
+                text,
+            ))
+        })
+        .collect();
+    triplets.sort_by_key(|triplet| triplet.id);
+    triplets.dedup_by_key(|triplet| triplet.id);
+    if triplets.is_empty() {
+        return Ok(());
+    }
+    if !vector_db
+        .has_collection("Triplet", "text")
+        .await
+        .map_err(|error| CognifyError::VectorDBError(error.to_string()))?
+    {
+        vector_db
+            .create_collection("Triplet", "text", embedding_engine.dimension())
+            .await
+            .map_err(|error| CognifyError::VectorDBError(error.to_string()))?;
+    }
+    announce_index_write(&vector_db, "Triplet", "text", triplets.len()).await?;
+    let window = cognee_vector::write_window_points(embedding_engine.dimension());
+    for entries in triplets.chunks(window) {
+        let texts: Vec<_> = entries
+            .iter()
+            .map(|triplet| triplet.text.as_str())
+            .collect();
         let vectors = embedding_engine
             .embed(&texts)
             .await
             .map_err(|error| CognifyError::EmbeddingError(error.to_string()))?;
-        let points: Vec<VectorPoint> = entries
-            .into_iter()
+        let points: Vec<_> = entries
+            .iter()
             .zip(vectors)
-            .map(|((id, _, metadata), vector)| VectorPoint {
-                id,
-                vector,
-                metadata,
+            .map(|(triplet, vector)| {
+                VectorPoint::new(triplet.id, vector)
+                    .with_metadata("type", json!("Triplet"))
+                    .with_metadata("field", json!("text"))
+                    .with_metadata("text", json!(triplet.text))
+                    .with_metadata("source_id", json!(triplet.source_entity_id.to_string()))
+                    .with_metadata("target_id", json!(triplet.target_entity_id.to_string()))
+                    .with_metadata("relationship", json!(triplet.relationship_name))
             })
             .collect();
         vector_db
-            .index_points(&data_type, &field, &points)
+            .index_points("Triplet", "text", &points)
             .await
             .map_err(|error| CognifyError::VectorDBError(error.to_string()))?;
-        stats.record(&data_type, &field, points.len());
     }
+    stats.triplet_count += triplets.len();
     Ok(())
 }
 
@@ -9952,7 +10078,11 @@ mod tests {
             Arc::new(MockEmbeddingEngine::new(8)),
             &db,
             Some(Uuid::new_v4()),
-            &CognifyConfig::default(),
+            &CognifyConfig {
+                retain_embeddings: true,
+                embed_triplets: true,
+                ..CognifyConfig::default()
+            },
         )
         .await
         .expect("dynamic graph persists");
@@ -9978,9 +10108,27 @@ mod tests {
                 .get_payload("Company", "name", company_id)
                 .is_some()
         );
-        assert!(vector_db.get_payload("Person", "name", person_id).is_some());
+        let person_payload = vector_db
+            .get_payload("Person", "name", person_id)
+            .expect("person vector payload");
+        assert_eq!(person_payload.get("text"), Some(&json!("Alice")));
         assert_eq!(result.indexed_fields.get("Company", "name"), 1);
         assert_eq!(result.indexed_fields.get("Person", "name"), 1);
+        assert_eq!(result.embedding_count, result.embeddings.len());
+        assert_eq!(result.embedding_count, 3, "chunk plus two dynamic fields");
+        let triplet_id = Triplet::new(
+            company_id,
+            person_id,
+            "employees".to_string(),
+            "Acme-›employees-›Alice".to_string(),
+        )
+        .id;
+        assert!(
+            vector_db
+                .get_payload("Triplet", "text", triplet_id)
+                .is_some(),
+            "dynamic relationship should be searchable as a triplet"
+        );
     }
 
     #[tokio::test]
