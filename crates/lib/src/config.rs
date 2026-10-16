@@ -207,6 +207,10 @@ pub struct Settings {
     pub default_user_password: String,
     pub enable_access_control: bool,
 
+    // -- Search history ----------------------------------------------------------
+    /// Record searches in search history (`COGNEE_LOG_SEARCH_HISTORY`).
+    pub log_search_history: bool,
+
     // -- Logging -----------------------------------------------------------------
     /// Log level filter (an `EnvFilter` directive such as `debug`), lowered
     /// into the logging config by the CLI. `RUST_LOG` wins over it. Empty
@@ -1030,6 +1034,9 @@ impl Default for Settings {
             default_user_email: "default_user@example.com".to_string(),
             default_user_password: String::new(),
             enable_access_control: false,
+
+            // Search history
+            log_search_history: true,
 
             // Logging. Empty: cognee's default filter (info, noisy crates at warn).
             log_level: String::new(),
@@ -3499,6 +3506,16 @@ mod tests {
         cm.set("chunk_size", serde_json::json!(2048))
             .expect("set should succeed");
         assert_eq!(cm.read().chunk_size, Some(2048));
+    }
+
+    #[test]
+    fn config_manager_turns_off_search_history() {
+        let cm = ConfigManager::new(Settings::default());
+        assert!(cm.read().log_search_history);
+
+        cm.set("log_search_history", serde_json::json!(false))
+            .expect("set should succeed");
+        assert!(!cm.read().log_search_history);
     }
 
     /// Lenient by default: an unknown key is a warning, changes nothing and
