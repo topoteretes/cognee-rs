@@ -57,7 +57,7 @@ use tracing::{debug, info, warn};
 use url::Url;
 use uuid::Uuid;
 
-use crate::config::{CognifyConfig, ExtractionStrategy};
+use crate::config::{ChunkAttachment, CognifyConfig, ExtractionStrategy};
 use crate::dynamic_graph::{DynamicGraph, DynamicGraphSchema};
 use crate::error::CognifyError;
 use crate::fact_extraction::{FactExtractor, KnowledgeGraph};
@@ -155,6 +155,8 @@ pub struct ExtractedGraphData {
     /// (artifact, data item). Not serialized anywhere — see
     /// [`ArtifactProducers`].
     pub producers: ArtifactProducers,
+    /// Runtime custom graphs awaiting the ordinary persistence stage.
+    pub dynamic_graphs: Vec<AttributedDynamicGraph>,
     /// Summaries a [`crate::graph_backend::ChunkGraphExtractor`] produced from
     /// the graphs above. Empty on the LLM path, and empty whenever the
     /// configured backend does not report
@@ -228,6 +230,8 @@ pub struct SummarizedData {
     pub edges: Vec<GraphEdgePair>,
     /// Forwarded verbatim from [`ExtractedGraphData::producers`].
     pub producers: ArtifactProducers,
+    /// Runtime custom graphs forwarded from extraction.
+    pub dynamic_graphs: Vec<AttributedDynamicGraph>,
     pub summaries: Vec<TextSummary>,
     pub dataset_id: Uuid,
     pub user_id: Option<Uuid>,
@@ -1005,6 +1009,7 @@ pub async fn extract_graph_from_data(
             timestamps: vec![],
             edges: vec![],
             producers: ArtifactProducers::default(),
+            dynamic_graphs: vec![],
             backend_summaries: vec![],
             dataset_id: input.dataset_id,
             user_id: input.user_id,
@@ -1045,6 +1050,7 @@ pub async fn extract_graph_from_data(
             timestamps: vec![],
             edges: vec![],
             producers: ArtifactProducers::default(),
+            dynamic_graphs: vec![],
             backend_summaries: vec![],
             dataset_id: input.dataset_id,
             user_id: input.user_id,
@@ -1536,6 +1542,7 @@ pub async fn extract_graph_from_data(
         timestamps,
         edges: dedup_result.unique_edges,
         producers,
+        dynamic_graphs: vec![],
         backend_summaries,
         dataset_id: input.dataset_id,
         user_id: input.user_id,
@@ -1879,10 +1886,11 @@ pub async fn extract_dynamic_graphs_from_data(
         .filter(|document| document.document_type == "dlt_row")
         .map(|document| document.base.id)
         .collect();
-    let chunks: Vec<&DocumentChunk> = input
+    let chunks: Vec<(String, Uuid, Uuid)> = input
         .chunks
         .iter()
         .filter(|chunk| !dlt_doc_ids.contains(&chunk.document_id))
+        .map(|chunk| (chunk.text.clone(), chunk.base.id, chunk.document_id))
         .collect();
     if chunks.is_empty() {
         return Ok(DynamicExtractionData {
@@ -1903,14 +1911,12 @@ pub async fn extract_dynamic_graphs_from_data(
     let mut aborted = false;
 
     for (batch_index, batch) in chunks.chunks(config.chunks_per_batch).enumerate() {
-        let mut results: Vec<_> = futures::stream::iter(batch.iter().enumerate())
-            .map(|(position, chunk)| {
+        let owned_batch: Vec<_> = batch.to_vec();
+        let mut results: Vec<_> = futures::stream::iter(owned_batch.into_iter().enumerate())
+            .map(|(position, (text, chunk_id, data_id))| {
                 let llm = Arc::clone(&llm);
                 let schema = Arc::clone(&schema);
                 let prompt = prompt.clone();
-                let text = chunk.text.clone();
-                let chunk_id = chunk.base.id;
-                let data_id = chunk.document_id;
                 async move {
                     // Spawned like the other extractors: CPU-bound validation
                     // spreads across the runtime, and a panicking chunk becomes
@@ -1993,7 +1999,7 @@ pub async fn extract_dynamic_graphs_from_data(
                 .iter()
                 .skip((batch_index + 1) * config.chunks_per_batch)
             {
-                failures.mark_unreached(chunk.document_id);
+                failures.mark_unreached(chunk.2);
             }
             break;
         }
@@ -2052,6 +2058,7 @@ pub async fn extract_custom_graph_from_data<M: crate::fact_extraction::GraphMode
             timestamps: vec![],
             edges: vec![],
             producers: ArtifactProducers::default(),
+            dynamic_graphs: vec![],
             backend_summaries: vec![],
             dataset_id: input.dataset_id,
             user_id: input.user_id,
@@ -2089,6 +2096,7 @@ pub async fn extract_custom_graph_from_data<M: crate::fact_extraction::GraphMode
             timestamps: vec![],
             edges: vec![],
             producers: ArtifactProducers::default(),
+            dynamic_graphs: vec![],
             backend_summaries: vec![],
             dataset_id: input.dataset_id,
             user_id: input.user_id,
@@ -2227,6 +2235,7 @@ pub async fn extract_custom_graph_from_data<M: crate::fact_extraction::GraphMode
         timestamps: vec![],
         edges: vec![],
         producers: ArtifactProducers::default(),
+        dynamic_graphs: vec![],
         backend_summaries: vec![],
         dataset_id: input.dataset_id,
         user_id: input.user_id,
@@ -2516,14 +2525,18 @@ pub async fn add_data_points(
     // the graph edges and their `EdgeType` rows are keyed on.
     stamp_structural_edge_text(&mut structural_edges, input);
 
+    let ledger_identity = LedgerIdentity::new(
+        input.tenant_id,
+        input.user_id,
+        input.dataset_id,
+        pipeline_run_id,
+    );
+    record_dynamic_graph_ownership(db, ledger_identity, &input.dynamic_graphs, &input.chunks)
+        .await?;
+
     upsert_provenance(
         db,
-        LedgerIdentity::new(
-            input.tenant_id,
-            input.user_id,
-            input.dataset_id,
-            pipeline_run_id,
-        ),
+        ledger_identity,
         &input.chunks,
         &input.entities,
         &input.edges,
@@ -2593,6 +2606,47 @@ pub async fn add_data_points(
         info!("Stored {} documents as graph nodes", doc_refs.len());
     }
 
+    // Runtime custom models use raw node writes because their concrete Rust
+    // types do not exist. Deduplicate across chunks by the Python-compatible
+    // identity UUID before one batch upsert.
+    let mut dynamic_nodes = HashMap::new();
+    let mut dynamic_relationships = HashSet::new();
+    for attributed in &input.dynamic_graphs {
+        let stored = attributed.graph.stored_graph();
+        for node in stored.nodes {
+            dynamic_nodes.entry(node.base.id).or_insert(node);
+        }
+        dynamic_relationships.extend(stored.relationships);
+    }
+    if !dynamic_nodes.is_empty() {
+        graph_db
+            .add_nodes_raw(
+                dynamic_nodes
+                    .values()
+                    .map(crate::dynamic_graph::DynamicDataPoint::to_graph_value)
+                    .collect(),
+            )
+            .await
+            .map_err(CognifyError::from)?;
+    }
+    if !dynamic_relationships.is_empty() {
+        let edges: Vec<EdgeData> = dynamic_relationships
+            .iter()
+            .map(|relationship| {
+                (
+                    relationship.source.to_string(),
+                    relationship.target.to_string(),
+                    relationship.field_name.clone(),
+                    HashMap::new(),
+                )
+            })
+            .collect();
+        graph_db
+            .add_edges(&edges)
+            .await
+            .map_err(CognifyError::from)?;
+    }
+
     // Build EdgeTypes keyed on each edge's retrieval text
     // (port of Python's create_edge_type_datapoints + index_graph_edges).
     //
@@ -2623,12 +2677,16 @@ pub async fn add_data_points(
             relationship,
         )
     });
+    let dynamic_relationship_texts = dynamic_relationships
+        .iter()
+        .map(|relationship| relationship.field_name.clone());
     let mut edge_types = build_edge_types(
         input
             .edges
             .iter()
             .map(edge_retrieval_text)
-            .chain(structural_texts),
+            .chain(structural_texts)
+            .chain(dynamic_relationship_texts),
         input.dataset_id,
     );
 
@@ -2677,7 +2735,24 @@ pub async fn add_data_points(
     }
 
     // One vector per chunk, entity and summary, whether or not they are kept.
-    let embedding_count = input.chunks.len() + input.entities.len() + input.summaries.len();
+    let dynamic_embedding_count: usize = dynamic_nodes
+        .values()
+        .map(|node| {
+            node.index_fields
+                .iter()
+                .filter(|field| {
+                    node.properties.get(*field).is_some_and(|value| {
+                        value
+                            .as_str()
+                            .map(str::trim)
+                            .map_or(true, |text| !text.is_empty())
+                    })
+                })
+                .count()
+        })
+        .sum();
+    let embedding_count =
+        input.chunks.len() + input.entities.len() + input.summaries.len() + dynamic_embedding_count;
     // Retained vectors are generated up front and reused by the index pass.
     // Otherwise the index pass embeds those texts itself, a window at a time,
     // and no corpus-sized set of vectors is ever held (SDK-711): it already
@@ -2694,7 +2769,7 @@ pub async fn add_data_points(
         Vec::new()
     };
 
-    let indexed_fields = index_data_points(
+    let mut indexed_fields = index_data_points(
         &input.chunks,
         &input.entities,
         &input.timestamps,
@@ -2705,10 +2780,20 @@ pub async fn add_data_points(
         input.dataset_id,
         input.user_id,
         input.tenant_id,
-        embedding_engine,
-        vector_db,
+        Arc::clone(&embedding_engine),
+        Arc::clone(&vector_db),
         config,
         &embeddings,
+    )
+    .await?;
+    index_dynamic_data_points(
+        dynamic_nodes.values(),
+        input.dataset_id,
+        input.user_id,
+        input.tenant_id,
+        embedding_engine,
+        vector_db,
+        &mut indexed_fields,
     )
     .await?;
 
@@ -2730,6 +2815,83 @@ pub async fn add_data_points(
         // under every configuration and propagates as its own error variant.
         failures: input.failures.clone(),
     })
+}
+
+/// Index every declared `index_fields` property of runtime custom DataPoints.
+async fn index_dynamic_data_points<'a>(
+    nodes: impl Iterator<Item = &'a crate::dynamic_graph::DynamicDataPoint>,
+    dataset_id: Uuid,
+    user_id: Option<Uuid>,
+    tenant_id: Option<Uuid>,
+    embedding_engine: Arc<dyn EmbeddingEngine>,
+    vector_db: Arc<dyn VectorDB>,
+    stats: &mut IndexedFieldsStats,
+) -> Result<(), CognifyError> {
+    let mut collections: HashMap<
+        (String, String),
+        Vec<(Uuid, String, HashMap<String, serde_json::Value>)>,
+    > = HashMap::new();
+    for node in nodes {
+        for field in &node.index_fields {
+            let Some(value) = node.properties.get(field) else {
+                continue;
+            };
+            let text = value
+                .as_str()
+                .map(str::to_string)
+                .unwrap_or_else(|| value.to_string());
+            if text.trim().is_empty() {
+                continue;
+            }
+            let mut metadata = node.base.vector_metadata();
+            metadata.extend(node.properties.clone());
+            metadata.insert("field".to_string(), json!(field));
+            metadata.insert("dataset_id".to_string(), json!(dataset_id.to_string()));
+            if let Some(user_id) = user_id {
+                metadata.insert("user_id".to_string(), json!(user_id.to_string()));
+            }
+            if let Some(tenant_id) = tenant_id {
+                metadata.insert("tenant_id".to_string(), json!(tenant_id.to_string()));
+            }
+            collections
+                .entry((node.base.data_type.clone(), field.clone()))
+                .or_default()
+                .push((node.base.id, text, metadata));
+        }
+    }
+
+    for ((data_type, field), entries) in collections {
+        if !vector_db
+            .has_collection(&data_type, &field)
+            .await
+            .map_err(|error| CognifyError::VectorDBError(error.to_string()))?
+        {
+            vector_db
+                .create_collection(&data_type, &field, embedding_engine.dimension())
+                .await
+                .map_err(|error| CognifyError::VectorDBError(error.to_string()))?;
+        }
+        let texts: Vec<&str> = entries.iter().map(|(_, text, _)| text.as_str()).collect();
+        let vectors = embedding_engine
+            .embed(&texts)
+            .await
+            .map_err(|error| CognifyError::EmbeddingError(error.to_string()))?;
+        let points: Vec<VectorPoint> = entries
+            .into_iter()
+            .zip(vectors)
+            .map(|((id, _, metadata), vector)| VectorPoint {
+                id,
+                vector,
+                metadata,
+            })
+            .collect();
+        vector_db
+            .index_points(&data_type, &field, &points)
+            .await
+            .map_err(|error| CognifyError::VectorDBError(error.to_string()))?;
+        stats.record(&data_type, &field, points.len());
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -5177,6 +5339,112 @@ fn semantic_edge_provenance_rows(
     rows
 }
 
+/// Record runtime custom graph ownership before either artifact store sees it.
+async fn record_dynamic_graph_ownership(
+    db: &dyn RelationalDb,
+    id: LedgerIdentity,
+    graphs: &[AttributedDynamicGraph],
+    chunks: &[DocumentChunk],
+) -> Result<(), CognifyError> {
+    let mut nodes = Vec::new();
+    let mut edges = Vec::new();
+    for attributed in graphs {
+        let stored = attributed.graph.stored_graph();
+        for node in stored.nodes {
+            let label = node
+                .index_fields
+                .first()
+                .and_then(|field| node.properties.get(field))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+                .unwrap_or_else(|| node.base.id.to_string());
+            nodes.push(cognee_database::GraphNode {
+                id: provenance_node_id(
+                    id.tenant_id,
+                    id.user_id,
+                    id.dataset_id,
+                    attributed.data_id,
+                    node.base.id,
+                ),
+                slug: node.base.id,
+                user_id: id.user_id,
+                data_id: attributed.data_id,
+                dataset_id: id.dataset_id,
+                pipeline_run_id: id.pipeline_run_id,
+                label: Some(label),
+                node_type: node.base.data_type.clone(),
+                indexed_fields: json!(node.index_fields),
+                attributes: Some(node.to_graph_value()),
+                created_at: Utc::now(),
+            });
+        }
+        for relationship in stored.relationships {
+            edges.push(cognee_database::GraphEdge {
+                id: provenance_edge_id(
+                    id.tenant_id,
+                    id.user_id,
+                    id.dataset_id,
+                    attributed.data_id,
+                    relationship.source,
+                    &relationship.field_name,
+                    relationship.target,
+                ),
+                slug: triplet_slug(
+                    relationship.source,
+                    &relationship.field_name,
+                    relationship.target,
+                ),
+                user_id: id.user_id,
+                data_id: attributed.data_id,
+                dataset_id: id.dataset_id,
+                pipeline_run_id: id.pipeline_run_id,
+                source_node_id: relationship.source,
+                destination_node_id: relationship.target,
+                relationship_name: relationship.field_name.clone(),
+                label: None,
+                attributes: None,
+                created_at: Utc::now(),
+            });
+        }
+        if let Some(chunk) = chunks
+            .iter()
+            .find(|chunk| chunk.base.id == attributed.chunk_id)
+        {
+            for target in chunk
+                .contains
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .filter_map(|target| Uuid::parse_str(target).ok())
+            {
+                edges.push(cognee_database::GraphEdge {
+                    id: provenance_edge_id(
+                        id.tenant_id,
+                        id.user_id,
+                        id.dataset_id,
+                        attributed.data_id,
+                        chunk.base.id,
+                        "contains",
+                        target,
+                    ),
+                    slug: triplet_slug(chunk.base.id, "contains", target),
+                    user_id: id.user_id,
+                    data_id: attributed.data_id,
+                    dataset_id: id.dataset_id,
+                    pipeline_run_id: id.pipeline_run_id,
+                    source_node_id: chunk.base.id,
+                    destination_node_id: target,
+                    relationship_name: "contains".to_string(),
+                    label: None,
+                    attributes: None,
+                    created_at: Utc::now(),
+                });
+            }
+        }
+    }
+    cognee_database::ProvenanceDb::upsert_provenance_graph(db, &nodes, &edges).await?;
+    Ok(())
+}
+
 /// Record ownership of the entities and semantic edges a run is about to write
 /// to the graph, in one transaction, before the graph sees them.
 ///
@@ -6589,18 +6857,53 @@ pub fn make_extract_graph_task_with_rank(
         let user_label = user_label_from_ctx(&ctx);
         let pipeline_run_id = pipeline_run_id_from_ctx(&ctx);
         Box::pin(async move {
-            let mut graph_data = extract_graph_from_data(
-                &input,
-                llm,
-                Arc::clone(&graph_db),
-                ontology_resolver,
-                &*db,
-                pipeline_run_id,
-                &config,
-                user_label.as_deref(),
-                (rank > 0).then_some(rank),
-            )
-            .await?;
+            let mut graph_data = if config.graph_schema.is_some() {
+                let extracted = extract_dynamic_graphs_from_data(&input, llm, &config).await?;
+                let mut chunks = input.chunks.clone();
+                let attachment = config.chunk_attachment.unwrap_or(ChunkAttachment::Direct);
+                for attributed in &extracted.graphs {
+                    let targets = match attachment {
+                        ChunkAttachment::Direct => attributed.graph.direct_attachment_targets(),
+                        ChunkAttachment::All => attributed.graph.all_attachment_targets(),
+                    };
+                    if let Some(chunk) = chunks
+                        .iter_mut()
+                        .find(|chunk| chunk.base.id == attributed.chunk_id)
+                    {
+                        chunk.contains = targets
+                            .into_iter()
+                            .map(|target| json!(target.to_string()))
+                            .collect();
+                    }
+                }
+                ExtractedGraphData {
+                    chunks,
+                    documents: input.documents.clone(),
+                    entities: vec![],
+                    timestamps: vec![],
+                    edges: vec![],
+                    producers: ArtifactProducers::default(),
+                    dynamic_graphs: extracted.graphs,
+                    backend_summaries: vec![],
+                    dataset_id: input.dataset_id,
+                    user_id: input.user_id,
+                    tenant_id: input.tenant_id,
+                    failures: extracted.failures,
+                }
+            } else {
+                extract_graph_from_data(
+                    &input,
+                    llm,
+                    Arc::clone(&graph_db),
+                    ontology_resolver,
+                    &*db,
+                    pipeline_run_id,
+                    &config,
+                    user_label.as_deref(),
+                    (rank > 0).then_some(rank),
+                )
+                .await?
+            };
             if config.create_web_page_nodes {
                 create_web_page_nodes(
                     &graph_data.documents,
@@ -6627,6 +6930,17 @@ pub fn make_extract_graph_task_with_rank(
                 if let Some(entity_type) = pair.entity_type.as_mut() {
                     stamp_provenance(
                         &mut entity_type.base,
+                        COGNIFY_PIPELINE_STAMP_NAME,
+                        EXTRACT_GRAPH_TASK_NAME,
+                        user_label.as_deref(),
+                        rank,
+                    );
+                }
+            }
+            for attributed in &mut graph_data.dynamic_graphs {
+                for node in &mut attributed.graph.nodes {
+                    stamp_provenance(
+                        &mut node.base,
                         COGNIFY_PIPELINE_STAMP_NAME,
                         EXTRACT_GRAPH_TASK_NAME,
                         user_label.as_deref(),
@@ -6806,6 +7120,7 @@ fn merge_graph_and_summaries(
         timestamps: graph.timestamps,
         edges: graph.edges,
         producers: graph.producers,
+        dynamic_graphs: graph.dynamic_graphs,
         summaries,
         dataset_id: graph.dataset_id,
         user_id: graph.user_id,
@@ -9575,6 +9890,164 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn add_data_points_stores_indexes_and_links_dynamic_graphs() {
+        use cognee_embedding::MockEmbeddingEngine;
+        use cognee_vector::MockVectorDB;
+
+        let dataset_id = Uuid::new_v4();
+        let document_id = Uuid::new_v4();
+        let chunk_id = Uuid::new_v4();
+        let schema = DynamicGraphSchema::compile(&json!({
+            "$defs": {
+                "Person": {
+                    "title": "Person",
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "metadata": {"type": "object", "default": {
+                            "index_fields": ["name"], "identity_fields": ["name"]
+                        }}
+                    },
+                    "required": ["name"]
+                }
+            },
+            "title": "Company",
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "employees": {"type": "array", "items": {"$ref": "#/$defs/Person"}},
+                "metadata": {"type": "object", "default": {
+                    "index_fields": ["name"], "identity_fields": ["name"]
+                }}
+            },
+            "required": ["name", "employees"]
+        }))
+        .expect("schema compiles");
+        let graph = schema
+            .materialize(
+                &json!({"name": "Acme", "employees": [{"name": "Alice"}]}),
+                dataset_id,
+            )
+            .expect("answer materializes");
+        let company_id = graph.root;
+        let person_id = Uuid::new_v5(&Uuid::NAMESPACE_OID, b"Person:alice");
+        let mut chunk = test_chunk(chunk_id, document_id, "Alice works at Acme");
+        chunk.contains = vec![json!(company_id.to_string())];
+        let input = SummarizedData {
+            chunks: vec![chunk],
+            documents: vec![test_document_with_metadata(document_id, None)],
+            entities: vec![],
+            timestamps: vec![],
+            edges: vec![],
+            producers: ArtifactProducers::default(),
+            dynamic_graphs: vec![AttributedDynamicGraph {
+                graph,
+                chunk_id,
+                data_id: document_id,
+            }],
+            summaries: vec![],
+            dataset_id,
+            user_id: Some(Uuid::new_v4()),
+            tenant_id: None,
+            failures: FailureReport::default(),
+        };
+        let graph_db = Arc::new(cognee_graph::MockGraphDB::new());
+        let vector_db = Arc::new(MockVectorDB::new());
+        let db = ledger_db(dataset_id).await;
+
+        let result = add_data_points(
+            &input,
+            graph_db.clone(),
+            vector_db.clone(),
+            Arc::new(MockEmbeddingEngine::new(8)),
+            &db,
+            Some(Uuid::new_v4()),
+            &CognifyConfig::default(),
+        )
+        .await
+        .expect("dynamic graph persists");
+
+        assert!(
+            graph_db
+                .has_node(&company_id.to_string())
+                .await
+                .expect("company lookup")
+        );
+        assert!(
+            graph_db
+                .has_node(&person_id.to_string())
+                .await
+                .expect("person lookup")
+        );
+        assert!(
+            graph_db.edge_count() >= 3,
+            "is_part_of, contains and employees"
+        );
+        assert!(
+            vector_db
+                .get_payload("Company", "name", company_id)
+                .is_some()
+        );
+        assert!(vector_db.get_payload("Person", "name", person_id).is_some());
+        assert_eq!(result.indexed_fields.get("Company", "name"), 1);
+        assert_eq!(result.indexed_fields.get("Person", "name"), 1);
+    }
+
+    #[tokio::test]
+    async fn dynamic_extraction_consumes_configured_graph_schema() {
+        let dataset_id = Uuid::new_v4();
+        let document_id = Uuid::new_v4();
+        let chunk = test_chunk(Uuid::new_v4(), document_id, "Acme employs Alice");
+        let input = ExtractedChunks {
+            chunks: vec![chunk.clone()],
+            documents: vec![test_document_with_metadata(document_id, None)],
+            dataset_id,
+            user_id: None,
+            tenant_id: None,
+            failures: FailureReport::default(),
+        };
+        let schema = json!({
+            "$defs": {
+                "Person": {
+                    "title": "Person",
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "metadata": {"type": "object", "default": {
+                            "index_fields": ["name"], "identity_fields": ["name"]
+                        }}
+                    },
+                    "required": ["name"]
+                }
+            },
+            "title": "Company",
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "employees": {"type": "array", "items": {"$ref": "#/$defs/Person"}},
+                "metadata": {"type": "object", "default": {
+                    "index_fields": ["name"], "identity_fields": ["name"]
+                }}
+            },
+            "required": ["name", "employees"]
+        });
+        let config = CognifyConfig::default().with_graph_schema(schema);
+        let llm: Arc<dyn Llm> = Arc::new(cognee_test_utils::MockLlm::new(vec![
+            json!({"name": "Acme", "employees": [{"name": "Alice"}]}).to_string(),
+        ]));
+
+        let extracted = extract_dynamic_graphs_from_data(&input, llm, &config)
+            .await
+            .expect("runtime extraction succeeds");
+
+        assert!(extracted.failures.is_empty());
+        assert_eq!(extracted.graphs.len(), 1);
+        assert_eq!(extracted.graphs[0].chunk_id, chunk.base.id);
+        assert_eq!(extracted.graphs[0].graph.nodes.len(), 2);
+        assert_eq!(extracted.graphs[0].graph.relationships.len(), 1);
+    }
+
+    #[tokio::test]
     async fn add_data_points_stores_document_node_and_indexes_document_name() {
         use cognee_embedding::MockEmbeddingEngine;
         use cognee_vector::MockVectorDB;
@@ -9598,6 +10071,7 @@ mod tests {
             timestamps: vec![],
             edges: vec![],
             producers: ArtifactProducers::default(),
+            dynamic_graphs: vec![],
             summaries: vec![],
             dataset_id,
             user_id: None,
@@ -9673,6 +10147,7 @@ mod tests {
             timestamps: vec![],
             edges: vec![],
             producers: ArtifactProducers::default(),
+            dynamic_graphs: vec![],
             summaries,
             dataset_id,
             user_id: None,
@@ -10531,6 +11006,7 @@ mod tests {
             timestamps: vec![],
             edges: vec![],
             producers: ArtifactProducers::default(),
+            dynamic_graphs: vec![],
             backend_summaries: vec![],
             dataset_id: Uuid::new_v4(),
             user_id: None,
@@ -10599,6 +11075,7 @@ mod tests {
             timestamps: vec![],
             edges: vec![],
             producers: ArtifactProducers::default(),
+            dynamic_graphs: vec![],
             backend_summaries: vec![],
             dataset_id: Uuid::new_v4(),
             user_id: None,
@@ -10652,6 +11129,7 @@ mod tests {
             timestamps: vec![],
             edges: vec![],
             producers: ArtifactProducers::default(),
+            dynamic_graphs: vec![],
             backend_summaries: vec![],
             dataset_id: Uuid::new_v4(),
             user_id: None,
@@ -10707,6 +11185,7 @@ mod tests {
             timestamps: vec![],
             edges: vec![],
             producers: ArtifactProducers::default(),
+            dynamic_graphs: vec![],
             backend_summaries: vec![],
             dataset_id: Uuid::new_v4(),
             user_id: None,
@@ -11337,6 +11816,7 @@ mod tests {
             timestamps: vec![],
             edges: vec![],
             producers: ArtifactProducers::default(),
+            dynamic_graphs: vec![],
             summaries: vec![],
             dataset_id,
             user_id: Some(Uuid::new_v4()),
@@ -11403,6 +11883,7 @@ mod tests {
             timestamps: vec![],
             edges: vec![],
             producers: ArtifactProducers::default(),
+            dynamic_graphs: vec![],
             summaries: vec![],
             dataset_id,
             user_id: Some(Uuid::new_v4()),
@@ -11484,6 +11965,7 @@ mod tests {
             timestamps: vec![],
             edges: vec![],
             producers: ArtifactProducers::default(),
+            dynamic_graphs: vec![],
             summaries: vec![],
             dataset_id,
             user_id: Some(Uuid::new_v4()),
@@ -11593,6 +12075,7 @@ mod tests {
             timestamps: vec![],
             edges: vec![GraphEdgePair::new(source, target, dirty)],
             producers: ArtifactProducers::default(),
+            dynamic_graphs: vec![],
             summaries: vec![],
             dataset_id,
             user_id: Some(user_id),
@@ -11690,6 +12173,7 @@ mod tests {
             timestamps: graph_data.timestamps,
             edges: graph_data.edges,
             producers: graph_data.producers,
+            dynamic_graphs: graph_data.dynamic_graphs,
             summaries: vec![],
             dataset_id,
             user_id: input.user_id,
@@ -12809,6 +13293,7 @@ mod tests {
             timestamps: vec![],
             edges: vec![],
             producers: ArtifactProducers::default(),
+            dynamic_graphs: vec![],
             summaries: vec![],
             dataset_id,
             user_id: Some(Uuid::new_v4()),
