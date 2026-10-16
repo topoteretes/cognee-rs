@@ -10,6 +10,7 @@ use std::collections::{HashMap, HashSet};
 use cognee_models::DataPoint;
 use serde_json::{Map, Value};
 use thiserror::Error;
+use tracing::warn;
 use uuid::Uuid;
 
 const DATA_POINT_FIELDS: &[&str] = &[
@@ -72,6 +73,8 @@ enum DynamicFieldKind {
 /// A runtime DataPoint produced from a custom model answer.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DynamicDataPoint {
+    /// Per-answer object identity used while resolving transparent containers.
+    pub occurrence_id: Uuid,
     /// Standard storage metadata and provenance fields.
     pub base: DataPoint,
     /// Custom scalar properties belonging to this node.
@@ -106,6 +109,7 @@ pub struct DynamicRelationship {
 #[derive(Debug, Clone, PartialEq)]
 pub struct DynamicGraph {
     pub root: Uuid,
+    pub root_occurrence: Uuid,
     pub nodes: Vec<DynamicDataPoint>,
     pub relationships: Vec<DynamicRelationship>,
 }
@@ -120,34 +124,45 @@ pub struct StoredDynamicGraph {
 impl DynamicGraph {
     /// Walk the runtime graph using Python's transparent-container rules.
     pub fn stored_graph(&self) -> StoredDynamicGraph {
-        let node_map: HashMap<Uuid, &DynamicDataPoint> =
-            self.nodes.iter().map(|node| (node.base.id, node)).collect();
+        let node_map: HashMap<Uuid, &DynamicDataPoint> = self
+            .nodes
+            .iter()
+            .map(|node| (node.occurrence_id, node))
+            .collect();
         let mut walker = DynamicWalker {
             graph: self,
             node_map,
-            nodes: HashMap::new(),
-            relationships: HashSet::new(),
+            nodes: Vec::new(),
+            seen_node_ids: HashSet::new(),
+            relationships: Vec::new(),
+            seen_relationships: HashSet::new(),
             expanded: HashSet::new(),
         };
-        walker.walk(self.root, &mut HashSet::new());
+        walker.walk(self.root_occurrence, &mut HashSet::new());
         StoredDynamicGraph {
-            nodes: walker.nodes.into_values().cloned().collect(),
-            relationships: walker.relationships.into_iter().collect(),
+            nodes: walker.nodes.into_iter().cloned().collect(),
+            relationships: walker.relationships,
         }
     }
 
     /// Chunk targets for Python's `direct` attachment mode. A stored root is
     /// the sole target; a transparent root is replaced by its stored children.
     pub fn direct_attachment_targets(&self) -> Vec<Uuid> {
-        let node_map: HashMap<Uuid, &DynamicDataPoint> =
-            self.nodes.iter().map(|node| (node.base.id, node)).collect();
+        let node_map: HashMap<Uuid, &DynamicDataPoint> = self
+            .nodes
+            .iter()
+            .map(|node| (node.occurrence_id, node))
+            .collect();
         if node_map
-            .get(&self.root)
+            .get(&self.root_occurrence)
             .is_some_and(|node| !node.transparent)
         {
             return vec![self.root];
         }
-        transparent_children(self, &node_map, self.root, &mut HashSet::new())
+        transparent_children(self, &node_map, self.root_occurrence, &mut HashSet::new())
+            .into_iter()
+            .filter_map(|occurrence| node_map.get(&occurrence).map(|node| node.base.id))
+            .collect()
     }
 
     /// Chunk targets for Python's `all` attachment mode.
@@ -163,8 +178,10 @@ impl DynamicGraph {
 struct DynamicWalker<'a> {
     graph: &'a DynamicGraph,
     node_map: HashMap<Uuid, &'a DynamicDataPoint>,
-    nodes: HashMap<Uuid, &'a DynamicDataPoint>,
-    relationships: HashSet<DynamicRelationship>,
+    nodes: Vec<&'a DynamicDataPoint>,
+    seen_node_ids: HashSet<Uuid>,
+    relationships: Vec<DynamicRelationship>,
+    seen_relationships: HashSet<DynamicRelationship>,
     expanded: HashSet<Uuid>,
 }
 
@@ -179,6 +196,13 @@ impl DynamicWalker<'_> {
         };
 
         if node.transparent {
+            if !node.properties.is_empty() {
+                warn!(
+                    node_type = %node.base.data_type,
+                    fields = ?node.properties.keys().collect::<Vec<_>>(),
+                    "dropping scalar properties from transparent custom graph node"
+                );
+            }
             active.remove(&id);
             let children = transparent_children(self.graph, &self.node_map, id, active);
             for child in children {
@@ -188,7 +212,9 @@ impl DynamicWalker<'_> {
             return;
         }
 
-        self.nodes.entry(id).or_insert(node);
+        if self.seen_node_ids.insert(node.base.id) {
+            self.nodes.push(node);
+        }
         let outgoing: Vec<DynamicRelationship> = self
             .graph
             .relationships
@@ -207,11 +233,17 @@ impl DynamicWalker<'_> {
                 vec![relationship.target]
             };
             for target in targets {
-                self.relationships.insert(DynamicRelationship {
-                    source: id,
-                    target,
+                let Some(target_node) = self.node_map.get(&target) else {
+                    continue;
+                };
+                let stored = DynamicRelationship {
+                    source: node.base.id,
+                    target: target_node.base.id,
                     field_name: relationship.field_name.clone(),
-                });
+                };
+                if self.seen_relationships.insert(stored.clone()) {
+                    self.relationships.push(stored);
+                }
                 self.walk(target, active);
             }
         }
@@ -368,10 +400,17 @@ impl DynamicGraphSchema {
         dataset_id: Uuid,
     ) -> Result<DynamicGraph, DynamicGraphError> {
         let mut graph = Materializer::new(self, dataset_id);
-        let root = graph.visit(&self.root, answer)?;
+        let root_occurrence = graph.visit(&self.root, answer)?;
+        let root = graph
+            .nodes
+            .iter()
+            .find(|node| node.occurrence_id == root_occurrence)
+            .map(|node| node.base.id)
+            .expect("materializer records every visited object");
         Ok(DynamicGraph {
             root,
-            nodes: graph.nodes.into_values().collect(),
+            root_occurrence,
+            nodes: graph.nodes,
             relationships: graph.relationships,
         })
     }
@@ -573,7 +612,7 @@ fn string_list(value: Option<&Value>) -> Vec<String> {
 struct Materializer<'a> {
     schema: &'a DynamicGraphSchema,
     dataset_id: Uuid,
-    nodes: HashMap<Uuid, DynamicDataPoint>,
+    nodes: Vec<DynamicDataPoint>,
     relationships: Vec<DynamicRelationship>,
 }
 
@@ -582,7 +621,7 @@ impl<'a> Materializer<'a> {
         Self {
             schema,
             dataset_id,
-            nodes: HashMap::new(),
+            nodes: Vec::new(),
             relationships: Vec::new(),
         }
     }
@@ -656,7 +695,9 @@ impl<'a> Materializer<'a> {
             base.metadata
                 .insert("transparent".to_string(), Value::Bool(true));
         }
-        self.nodes.entry(id).or_insert_with(|| DynamicDataPoint {
+        let occurrence_id = Uuid::new_v4();
+        self.nodes.push(DynamicDataPoint {
+            occurrence_id,
             base,
             properties,
             index_fields: model.index_fields.clone(),
@@ -679,7 +720,7 @@ impl<'a> Materializer<'a> {
                 for child in values {
                     let target = self.visit(&target_model, child)?;
                     self.relationships.push(DynamicRelationship {
-                        source: id,
+                        source: occurrence_id,
                         target,
                         field_name: field_name.clone(),
                     });
@@ -687,13 +728,13 @@ impl<'a> Materializer<'a> {
             } else {
                 let target = self.visit(&target_model, value)?;
                 self.relationships.push(DynamicRelationship {
-                    source: id,
+                    source: occurrence_id,
                     target,
                     field_name,
                 });
             }
         }
-        Ok(id)
+        Ok(occurrence_id)
     }
 }
 
@@ -1050,6 +1091,7 @@ mod tests {
             let mut base = DataPoint::new("Person", Some(Uuid::nil()));
             base.id = Uuid::new_v5(&Uuid::NAMESPACE_OID, format!("Person:{name}").as_bytes());
             DynamicDataPoint {
+                occurrence_id: base.id,
                 base,
                 properties: Map::from_iter([("name".to_string(), json!(name))]),
                 index_fields: vec!["name".to_string()],
@@ -1061,6 +1103,7 @@ mod tests {
         let mut container_base = DataPoint::new("Container", Some(Uuid::nil()));
         container_base.id = Uuid::new_v4();
         let container = DynamicDataPoint {
+            occurrence_id: container_base.id,
             base: container_base,
             properties: Map::new(),
             index_fields: Vec::new(),
@@ -1068,6 +1111,7 @@ mod tests {
         };
         let graph = DynamicGraph {
             root: owner.base.id,
+            root_occurrence: owner.occurrence_id,
             nodes: vec![owner.clone(), container.clone(), child.clone()],
             relationships: vec![
                 DynamicRelationship {
@@ -1090,6 +1134,67 @@ mod tests {
             source: owner.base.id,
             target: child.base.id,
             field_name: "team".to_string(),
+        }));
+    }
+
+    #[test]
+    fn distinct_transparent_instances_with_same_node_id_keep_their_children() {
+        let schema = json!({
+            "$defs": {
+                "Person": {
+                    "title": "Person", "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "metadata": {"type": "object", "default": {
+                            "identity_fields": ["name"], "index_fields": ["name"]
+                        }}
+                    }, "required": ["name"]
+                },
+                "Group": {
+                    "title": "Group", "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "members": {"type": "array", "items": {"$ref": "#/$defs/Person"}},
+                        "metadata": {"type": "object", "default": {
+                            "identity_fields": ["name"], "index_fields": ["name"],
+                            "transparent": true
+                        }}
+                    }, "required": ["name", "members"]
+                }
+            },
+            "title": "Holder", "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "left": {"$ref": "#/$defs/Group"},
+                "right": {"$ref": "#/$defs/Group"},
+                "metadata": {"type": "object", "default": {
+                    "identity_fields": ["name"], "index_fields": ["name"]
+                }}
+            }, "required": ["name", "left", "right"]
+        });
+        let graph = DynamicGraphSchema::compile(&schema)
+            .unwrap()
+            .materialize(
+                &json!({
+                    "name": "Holder",
+                    "left": {"name": "Team", "members": [{"name": "Alice"}]},
+                    "right": {"name": "Team", "members": [{"name": "Bob"}]}
+                }),
+                Uuid::nil(),
+            )
+            .unwrap();
+        let stored = graph.stored_graph();
+        let alice = Uuid::new_v5(&Uuid::NAMESPACE_OID, b"Person:alice");
+        let bob = Uuid::new_v5(&Uuid::NAMESPACE_OID, b"Person:bob");
+        assert!(stored.relationships.contains(&DynamicRelationship {
+            source: graph.root,
+            target: alice,
+            field_name: "left".to_string(),
+        }));
+        assert!(stored.relationships.contains(&DynamicRelationship {
+            source: graph.root,
+            target: bob,
+            field_name: "right".to_string(),
         }));
     }
 }
