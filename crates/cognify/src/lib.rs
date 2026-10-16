@@ -42,13 +42,13 @@ pub use temporal_extraction::{TemporalEntityEnricher, TemporalEventExtractor};
 pub mod triplet_creation;
 
 pub use config::{
-    ChunkStrategy, CognifyConfig, ConfigError, CustomChunker, ExtractionStrategy,
+    ChunkAttachment, ChunkStrategy, CognifyConfig, ConfigError, CustomChunker, ExtractionStrategy,
     GraphBackendHandle,
 };
 pub use dataset_resolver::{DatasetRef, DatasetResolver, cognify_dataset_refs, cognify_datasets};
 pub use dynamic_graph::{
     DynamicDataPoint, DynamicGraph, DynamicGraphError, DynamicGraphSchema, DynamicModelSchema,
-    DynamicRelationship,
+    DynamicRelationship, StoredDynamicGraph,
 };
 pub use edge_reindex::{EdgeReindexOptions, EdgeReindexReport, reindex_edge_types};
 pub use error::CognifyError;

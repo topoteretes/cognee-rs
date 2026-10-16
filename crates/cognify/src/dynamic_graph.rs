@@ -110,6 +110,150 @@ pub struct DynamicGraph {
     pub relationships: Vec<DynamicRelationship>,
 }
 
+/// The graph artifacts produced by the Python-compatible storage walk.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StoredDynamicGraph {
+    pub nodes: Vec<DynamicDataPoint>,
+    pub relationships: Vec<DynamicRelationship>,
+}
+
+impl DynamicGraph {
+    /// Walk the runtime graph using Python's transparent-container rules.
+    pub fn stored_graph(&self) -> StoredDynamicGraph {
+        let node_map: HashMap<Uuid, &DynamicDataPoint> =
+            self.nodes.iter().map(|node| (node.base.id, node)).collect();
+        let mut walker = DynamicWalker {
+            graph: self,
+            node_map,
+            nodes: HashMap::new(),
+            relationships: HashSet::new(),
+            expanded: HashSet::new(),
+        };
+        walker.walk(self.root, &mut HashSet::new());
+        StoredDynamicGraph {
+            nodes: walker.nodes.into_values().cloned().collect(),
+            relationships: walker.relationships.into_iter().collect(),
+        }
+    }
+
+    /// Chunk targets for Python's `direct` attachment mode. A stored root is
+    /// the sole target; a transparent root is replaced by its stored children.
+    pub fn direct_attachment_targets(&self) -> Vec<Uuid> {
+        let node_map: HashMap<Uuid, &DynamicDataPoint> =
+            self.nodes.iter().map(|node| (node.base.id, node)).collect();
+        if node_map
+            .get(&self.root)
+            .is_some_and(|node| !node.transparent)
+        {
+            return vec![self.root];
+        }
+        transparent_children(self, &node_map, self.root, &mut HashSet::new())
+    }
+
+    /// Chunk targets for Python's `all` attachment mode.
+    pub fn all_attachment_targets(&self) -> Vec<Uuid> {
+        self.stored_graph()
+            .nodes
+            .into_iter()
+            .map(|node| node.base.id)
+            .collect()
+    }
+}
+
+struct DynamicWalker<'a> {
+    graph: &'a DynamicGraph,
+    node_map: HashMap<Uuid, &'a DynamicDataPoint>,
+    nodes: HashMap<Uuid, &'a DynamicDataPoint>,
+    relationships: HashSet<DynamicRelationship>,
+    expanded: HashSet<Uuid>,
+}
+
+impl DynamicWalker<'_> {
+    fn walk(&mut self, id: Uuid, active: &mut HashSet<Uuid>) {
+        if self.expanded.contains(&id) || !active.insert(id) {
+            return;
+        }
+        let Some(node) = self.node_map.get(&id).copied() else {
+            active.remove(&id);
+            return;
+        };
+
+        if node.transparent {
+            active.remove(&id);
+            let children = transparent_children(self.graph, &self.node_map, id, active);
+            for child in children {
+                self.walk(child, active);
+            }
+            self.expanded.insert(id);
+            return;
+        }
+
+        self.nodes.entry(id).or_insert(node);
+        let outgoing: Vec<DynamicRelationship> = self
+            .graph
+            .relationships
+            .iter()
+            .filter(|relationship| relationship.source == id)
+            .cloned()
+            .collect();
+        for relationship in outgoing {
+            let targets = if self
+                .node_map
+                .get(&relationship.target)
+                .is_some_and(|target| target.transparent)
+            {
+                transparent_children(self.graph, &self.node_map, relationship.target, active)
+            } else {
+                vec![relationship.target]
+            };
+            for target in targets {
+                self.relationships.insert(DynamicRelationship {
+                    source: id,
+                    target,
+                    field_name: relationship.field_name.clone(),
+                });
+                self.walk(target, active);
+            }
+        }
+        self.expanded.insert(id);
+        active.remove(&id);
+    }
+}
+
+fn transparent_children(
+    graph: &DynamicGraph,
+    node_map: &HashMap<Uuid, &DynamicDataPoint>,
+    container: Uuid,
+    active: &mut HashSet<Uuid>,
+) -> Vec<Uuid> {
+    if !active.insert(container) {
+        return Vec::new();
+    }
+    let mut children = Vec::new();
+    let mut seen = HashSet::new();
+    for relationship in graph
+        .relationships
+        .iter()
+        .filter(|relationship| relationship.source == container)
+    {
+        let targets = if node_map
+            .get(&relationship.target)
+            .is_some_and(|node| node.transparent)
+        {
+            transparent_children(graph, node_map, relationship.target, active)
+        } else {
+            vec![relationship.target]
+        };
+        for target in targets {
+            if seen.insert(target) {
+                children.push(target);
+            }
+        }
+    }
+    active.remove(&container);
+    children
+}
+
 /// Invalid schema or response errors detected before persistence.
 #[derive(Debug, Error, Clone, PartialEq)]
 pub enum DynamicGraphError {
@@ -877,5 +1021,75 @@ mod tests {
             error,
             DynamicGraphError::InvalidScalarValue { .. }
         ));
+    }
+
+    #[test]
+    fn transparent_root_is_replaced_by_children() {
+        let compiled = DynamicGraphSchema::compile(&schema()).expect("schema should compile");
+        let graph = compiled
+            .materialize(
+                &json!({
+                    "name": "Container",
+                    "employees": [{"name": "Alice"}, {"name": "Bob"}]
+                }),
+                Uuid::nil(),
+            )
+            .expect("answer should materialize");
+
+        let stored = graph.stored_graph();
+        assert_eq!(stored.nodes.len(), 2);
+        assert!(stored.relationships.is_empty());
+        assert!(!stored.nodes.iter().any(|node| node.base.id == graph.root));
+        assert_eq!(graph.direct_attachment_targets().len(), 2);
+        assert_eq!(graph.all_attachment_targets().len(), 2);
+    }
+
+    #[test]
+    fn transparent_target_preserves_owning_field_edge() {
+        let person = |name: &str| {
+            let mut base = DataPoint::new("Person", Some(Uuid::nil()));
+            base.id = Uuid::new_v5(&Uuid::NAMESPACE_OID, format!("Person:{name}").as_bytes());
+            DynamicDataPoint {
+                base,
+                properties: Map::from_iter([("name".to_string(), json!(name))]),
+                index_fields: vec!["name".to_string()],
+                transparent: false,
+            }
+        };
+        let owner = person("owner");
+        let child = person("child");
+        let mut container_base = DataPoint::new("Container", Some(Uuid::nil()));
+        container_base.id = Uuid::new_v4();
+        let container = DynamicDataPoint {
+            base: container_base,
+            properties: Map::new(),
+            index_fields: Vec::new(),
+            transparent: true,
+        };
+        let graph = DynamicGraph {
+            root: owner.base.id,
+            nodes: vec![owner.clone(), container.clone(), child.clone()],
+            relationships: vec![
+                DynamicRelationship {
+                    source: owner.base.id,
+                    target: container.base.id,
+                    field_name: "team".to_string(),
+                },
+                DynamicRelationship {
+                    source: container.base.id,
+                    target: child.base.id,
+                    field_name: "members".to_string(),
+                },
+            ],
+        };
+
+        let stored = graph.stored_graph();
+        assert_eq!(stored.nodes.len(), 2);
+        assert_eq!(stored.relationships.len(), 1);
+        assert!(stored.relationships.contains(&DynamicRelationship {
+            source: owner.base.id,
+            target: child.base.id,
+            field_name: "team".to_string(),
+        }));
     }
 }

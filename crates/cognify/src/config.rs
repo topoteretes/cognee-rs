@@ -74,6 +74,16 @@ pub const DEFAULT_MAX_PARALLEL_EXTRACTIONS: usize = 1000;
 #[cfg(any(target_os = "android", target_os = "ios"))]
 pub const DEFAULT_MAX_PARALLEL_EXTRACTIONS: usize = 128;
 
+/// How a chunk links to the custom DataPoint graph extracted from it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChunkAttachment {
+    /// Link to the stored root, or to the children replacing a transparent root.
+    Direct,
+    /// Link to every node the custom graph storage walk persists.
+    All,
+}
+
 /// Configuration for the cognify pipeline.
 ///
 /// Design Principles:
@@ -333,6 +343,11 @@ pub struct CognifyConfig {
     #[serde(skip)]
     pub graph_schema: Option<serde_json::Value>,
 
+    /// Attachment breadth for custom runtime graph models. `None` has the same
+    /// behavior as [`ChunkAttachment::Direct`], matching Python.
+    #[serde(skip)]
+    pub chunk_attachment: Option<ChunkAttachment>,
+
     /// Optional JSON schema for the summarization output.
     ///
     /// Mirrors Python's `CognifyConfig.summarization_model` (a Pydantic class,
@@ -518,6 +533,7 @@ impl Default for CognifyConfig {
             failure_report_cap: default_failure_report_cap(),
 
             graph_schema: None,
+            chunk_attachment: None,
             summary_schema: None,
             custom_chunker: None,
             transcriber: None,
@@ -675,6 +691,12 @@ impl CognifyConfig {
     /// Set a custom JSON Schema for graph extraction.
     pub fn with_graph_schema(mut self, schema: serde_json::Value) -> Self {
         self.graph_schema = Some(schema);
+        self
+    }
+
+    /// Set how chunks attach to a custom runtime graph.
+    pub fn with_chunk_attachment(mut self, attachment: ChunkAttachment) -> Self {
+        self.chunk_attachment = Some(attachment);
         self
     }
 
