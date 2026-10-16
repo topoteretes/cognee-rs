@@ -1425,6 +1425,15 @@ effect in Phase 1 — passing `true` must behave identically to the default:
 The HTTP-facing degradation notes live with the server's search-router docs,
 which are not part of this repository.
 
+## Search — history
+
+| Env var | `Settings` field | Default |
+|---|---|---|
+| `COGNEE_LOG_SEARCH_HISTORY` | `log_search_history` | `true` |
+
+When on, each search records one query row and one result row. They carry the
+searched dataset's `dataset_id` when exactly one dataset was searched.
+
 ## Ontology
 
 The `ontology` section is registered by the ontology-resolver kind. Resolvers are

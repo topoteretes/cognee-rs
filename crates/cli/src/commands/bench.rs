@@ -869,6 +869,7 @@ async fn bench_search_orchestrator(
     .with_tuning(search_tuning)
     .with_session_manager(session_manager)
     .with_dataset_resolver(Arc::clone(&database) as Arc<dyn IngestDb>)
+    .with_search_history_logging(cm.settings().log_search_history)
     .build())
 }
 

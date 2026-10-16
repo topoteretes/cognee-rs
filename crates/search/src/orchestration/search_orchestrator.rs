@@ -1,4 +1,5 @@
 use crate::orchestration::hybrid_fallback::{passed_graph_only_knob, requested_graph_only_filter};
+use crate::orchestration::search_history::{history_query_type, history_row, log_history_row};
 use crate::orchestration::{
     SearchTypeRegistry, filter_context_to_datasets, prepare_search_result,
     scope_context_by_datasets,
@@ -179,6 +180,9 @@ pub struct SearchOrchestrator {
     /// System prompt file for requests that name neither a system prompt nor
     /// a prompt path.
     default_system_prompt_path: Option<String>,
+    /// When `true` (the default), searches are recorded in the wired
+    /// `database`'s search history.
+    log_search_history: bool,
 }
 
 impl SearchOrchestrator {
@@ -193,6 +197,7 @@ impl SearchOrchestrator {
             enable_access_tracking: false,
             auto_feedback_default: false,
             default_system_prompt_path: None,
+            log_search_history: true,
         }
     }
 
@@ -276,6 +281,12 @@ impl SearchOrchestrator {
     /// own default.
     pub fn with_default_system_prompt_path(mut self, path: Option<String>) -> Self {
         self.default_system_prompt_path = path;
+        self
+    }
+
+    /// Turn search-history recording on or off (`COGNEE_LOG_SEARCH_HISTORY`).
+    pub fn with_search_history_logging(mut self, enabled: bool) -> Self {
+        self.log_search_history = enabled;
         self
     }
 
@@ -741,18 +752,6 @@ impl SearchOrchestrator {
                 retriever.search_type()
             )));
         }
-        let should_save_interaction = request.save_interaction.unwrap_or(true);
-        let query_type = format!("{:?}", request.search_type);
-        let mut logged_query_id = None;
-
-        if should_save_interaction
-            && let Some(database) = &self.database
-            && let Ok(query_id) = database
-                .log_query(&request.query_text, &query_type, request.user_id, None)
-                .await
-        {
-            logged_query_id = Some(query_id);
-        }
 
         if acl_scoped && !use_dataset_scope {
             // The caller may read no dataset at all: nothing to search.
@@ -765,8 +764,7 @@ impl SearchOrchestrator {
                 request.use_combined_context(),
                 request.verbose(),
             );
-            self.log_result_if_enabled(logged_query_id, &response, request.user_id)
-                .await;
+            self.log_search_history(request, &response).await;
             emit_search_completed(request);
             return Ok(response);
         }
@@ -902,8 +900,7 @@ impl SearchOrchestrator {
                 response.context = Some(scoped_context_map);
             }
 
-            self.log_result_if_enabled(logged_query_id, &response, request.user_id)
-                .await;
+            self.log_search_history(request, &response).await;
 
             emit_search_completed(request);
             return Ok(response);
@@ -1090,8 +1087,7 @@ impl SearchOrchestrator {
             response.context = Some(scoped_context_map);
         }
 
-        self.log_result_if_enabled(logged_query_id, &response, request.user_id)
-            .await;
+        self.log_search_history(request, &response).await;
 
         emit_search_completed(request);
         Ok(response)
@@ -1140,20 +1136,15 @@ impl SearchOrchestrator {
         }
     }
 
-    async fn log_result_if_enabled(
-        &self,
-        query_id: Option<uuid::Uuid>,
-        response: &SearchResponse,
-        user_id: Option<uuid::Uuid>,
-    ) {
-        let (Some(query_id), Some(database)) = (query_id, &self.database) else {
+    /// Record the search in history as one query and result row.
+    async fn log_search_history(&self, request: &SearchRequest, response: &SearchResponse) {
+        let Some(database) = self.database.as_ref().filter(|_| self.log_search_history) else {
             return;
         };
-
-        if let Ok(serialized_response) = serde_json::to_string(response) {
-            let _ = database
-                .log_result(query_id, &serialized_response, user_id, None)
-                .await;
+        let query_type = history_query_type(request.search_type);
+        let row = history_row(request, response);
+        if let Err(error) = log_history_row(database.as_ref(), request, &query_type, &row).await {
+            tracing::warn!(%error, "failed to record search history");
         }
     }
 }
@@ -1800,6 +1791,53 @@ mod tests {
                 .iter()
                 .any(|entry| entry.entry_type == SearchHistoryEntryType::Result)
         );
+    }
+
+    async fn history_orchestrator(logging: bool) -> super::SearchOrchestrator {
+        let mut registry = SearchTypeRegistry::new();
+        registry.register(Arc::new(FakeChunksRetriever));
+        let db = connect("sqlite::memory:").await.unwrap();
+        initialize(&db).await.unwrap();
+        super::SearchOrchestrator::new(registry)
+            .with_database(Arc::new(db) as Arc<dyn SearchHistoryDb>)
+            .with_search_history_logging(logging)
+    }
+
+    #[tokio::test]
+    async fn no_history_is_recorded_when_logging_is_off() {
+        let orchestrator = history_orchestrator(false).await;
+        let request: SearchRequest =
+            serde_json::from_str(r#"{"query_text": "hello", "search_type": "CHUNKS"}"#).unwrap();
+
+        orchestrator.search(&request).await.unwrap();
+
+        let history = orchestrator.get_history(None, Some(10)).await.unwrap();
+        assert!(history.is_empty());
+    }
+
+    #[tokio::test]
+    async fn history_records_the_dataset_and_type() {
+        let orchestrator = history_orchestrator(true).await;
+        let dataset = uuid::Uuid::new_v4();
+        let json = format!(
+            r#"{{"query_text": "hello", "search_type": "CHUNKS", "dataset_ids": ["{dataset}"]}}"#
+        );
+        let request: SearchRequest = serde_json::from_str(&json).unwrap();
+
+        orchestrator.search(&request).await.unwrap();
+
+        let history = orchestrator.get_history(None, Some(10)).await.unwrap();
+        assert_eq!(history.len(), 2);
+        assert!(
+            history
+                .iter()
+                .all(|entry| entry.dataset_id == Some(dataset))
+        );
+        let query = history
+            .iter()
+            .find(|entry| entry.entry_type == SearchHistoryEntryType::Query)
+            .unwrap();
+        assert_eq!(query.query_type.as_deref(), Some("CHUNKS"));
     }
 
     #[tokio::test]
