@@ -830,6 +830,16 @@ impl CognifyConfig {
     ///
     /// Returns an error if any parameters are invalid.
     pub fn validate(&self) -> Result<(), ConfigError> {
+        if self.chunk_attachment.is_some() && self.graph_schema.is_none() {
+            return Err(ConfigError::InvalidParameter(
+                "chunk_attachment requires graph_schema".to_string(),
+            ));
+        }
+        if self.chunk_attachment.is_some() && self.temporal_cognify {
+            return Err(ConfigError::InvalidParameter(
+                "chunk_attachment is not supported with temporal_cognify".to_string(),
+            ));
+        }
         // Only an *explicit* chunk size can be validated here: an auto-calculated
         // one is derived from the engines at pipeline time and is always >= 1.
         if self.max_chunk_size == Some(0) {
@@ -1415,6 +1425,31 @@ mod tests {
         assert_eq!(
             crate::summarization::SummaryExtractor::DEFAULT_MAX_PARALLEL,
             CognifyConfig::default().max_parallel_extractions,
+        );
+    }
+
+    #[test]
+    fn chunk_attachment_requires_custom_non_temporal_graph() {
+        assert!(
+            CognifyConfig::default()
+                .with_chunk_attachment(ChunkAttachment::Direct)
+                .validate()
+                .is_err()
+        );
+        assert!(
+            CognifyConfig::default()
+                .with_graph_schema(serde_json::json!({"title": "Graph", "properties": {}}))
+                .with_chunk_attachment(ChunkAttachment::All)
+                .with_temporal_cognify(true)
+                .validate()
+                .is_err()
+        );
+        assert!(
+            CognifyConfig::default()
+                .with_graph_schema(serde_json::json!({"title": "Graph", "properties": {}}))
+                .with_chunk_attachment(ChunkAttachment::Direct)
+                .validate()
+                .is_ok()
         );
     }
 }
