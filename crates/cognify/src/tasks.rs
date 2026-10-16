@@ -41,7 +41,7 @@ use cognee_ingestion::loaders::audio::AudioLoader;
 #[cfg(feature = "image-loader")]
 use cognee_ingestion::loaders::image::ImageLoader;
 use cognee_ingestion::loaders::{LoaderOutput, LoaderRegistry};
-use cognee_llm::{GenerationOptions, Llm};
+use cognee_llm::{GenerationOptions, Llm, Message, MessageRole};
 use cognee_models::{
     Data, Document, DocumentChunk, EdgeType, Embedding, Entity, TemporalEvent,
     classify_documents as model_classify_documents,
@@ -1913,16 +1913,32 @@ pub async fn extract_dynamic_graphs_from_data(
                 let data_id = chunk.document_id;
                 async move {
                     let result = async {
+                        let messages = vec![
+                            Message {
+                                role: MessageRole::System,
+                                content: prompt,
+                            },
+                            Message {
+                                role: MessageRole::User,
+                                content: text,
+                            },
+                        ];
+                        let validator = |answer: &serde_json::Value| {
+                            schema
+                                .materialize(answer, dataset_id)
+                                .map(|_| ())
+                                .map_err(|error| error.to_string())
+                        };
                         let answer = llm
-                            .create_structured_output_raw(
-                                &text,
-                                &prompt,
+                            .create_structured_output_with_messages_raw_validated(
+                                messages,
                                 schema.llm_schema(),
                                 Some(GenerationOptions {
                                     temperature: None,
                                     max_tokens: None,
                                     ..Default::default()
                                 }),
+                                &validator,
                             )
                             .await
                             .map_err(|error| CognifyError::LlmError(error.to_string()))?;
@@ -7260,6 +7276,70 @@ mod tests {
     use crate::graph_integration::expand_with_nodes_and_edges;
     use cognee_models::{DataPoint, Entity, EntityType};
     use cognee_storage::MockStorage;
+
+    struct ValidatingDynamicLlm;
+
+    #[async_trait::async_trait]
+    impl Llm for ValidatingDynamicLlm {
+        async fn generate(
+            &self,
+            _messages: Vec<Message>,
+            _options: Option<GenerationOptions>,
+        ) -> cognee_llm::LlmResult<cognee_llm::GenerationResponse> {
+            unreachable!("dynamic extraction only uses structured output")
+        }
+
+        async fn create_structured_output_with_messages_raw(
+            &self,
+            _messages: Vec<Message>,
+            _json_schema: &serde_json::Value,
+            _options: Option<GenerationOptions>,
+        ) -> cognee_llm::LlmResult<serde_json::Value> {
+            panic!("dynamic extraction must use the validated raw path")
+        }
+
+        async fn create_structured_output_with_messages_raw_validated(
+            &self,
+            _messages: Vec<Message>,
+            _json_schema: &serde_json::Value,
+            _options: Option<GenerationOptions>,
+            validator: cognee_llm::llm_trait::StructuredOutputValidator<'_>,
+        ) -> cognee_llm::LlmResult<serde_json::Value> {
+            assert!(validator(&json!({})).is_err());
+            let answer = json!({"name": "Alice"});
+            validator(&answer).expect("valid answer should pass the retry validator");
+            Ok(answer)
+        }
+
+        fn model(&self) -> &str {
+            "validating-dynamic-test"
+        }
+    }
+
+    #[tokio::test]
+    async fn dynamic_extraction_threads_materialization_into_llm_retries() {
+        let document_id = Uuid::new_v4();
+        let input = ExtractedChunks {
+            chunks: vec![test_chunk(Uuid::new_v4(), document_id, "Alice")],
+            documents: Vec::new(),
+            dataset_id: Uuid::new_v4(),
+            user_id: None,
+            tenant_id: None,
+            failures: FailureReport::default(),
+        };
+        let config = CognifyConfig::default().with_graph_schema(json!({
+            "title": "Person",
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+            "required": ["name"]
+        }));
+        let result =
+            extract_dynamic_graphs_from_data(&input, Arc::new(ValidatingDynamicLlm), &config)
+                .await
+                .expect("valid repaired answer should be accepted");
+        assert_eq!(result.graphs.len(), 1);
+        assert!(result.failures.is_empty());
+    }
 
     /// SDK-778: retrieval texts that differ only in case, spacing or
     /// apostrophes collapse onto one `EdgeType` point id, and the counts of
