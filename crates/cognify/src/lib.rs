@@ -4,6 +4,8 @@
 pub mod config;
 /// Dataset resolver module.
 pub mod dataset_resolver;
+/// Runtime custom graph schemas and DataPoints.
+pub mod dynamic_graph;
 /// Whole-graph repair for `EdgeType` vector rows a killed run never wrote.
 pub mod edge_reindex;
 /// Error types module.
@@ -44,6 +46,10 @@ pub use config::{
     GraphBackendHandle,
 };
 pub use dataset_resolver::{DatasetRef, DatasetResolver, cognify_dataset_refs, cognify_datasets};
+pub use dynamic_graph::{
+    DynamicDataPoint, DynamicGraph, DynamicGraphError, DynamicGraphSchema, DynamicModelSchema,
+    DynamicRelationship,
+};
 pub use edge_reindex::{EdgeReindexOptions, EdgeReindexReport, reindex_edge_types};
 pub use error::CognifyError;
 pub use fact_extraction::{Edge, FactExtractor, GraphModel, KnowledgeGraph, Node};
