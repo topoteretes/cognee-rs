@@ -59,6 +59,7 @@ struct DynamicFieldSchema {
     name: String,
     required: bool,
     default: Option<Value>,
+    schema: Value,
     kind: DynamicFieldKind,
 }
 
@@ -140,6 +141,12 @@ pub enum DynamicGraphError {
         field: String,
         expected: &'static str,
     },
+    #[error("custom graph answer field `{model}.{field}` violates its schema: {reason}")]
+    InvalidScalarValue {
+        model: String,
+        field: String,
+        reason: String,
+    },
 }
 
 impl DynamicGraphSchema {
@@ -150,16 +157,31 @@ impl DynamicGraphSchema {
         let root_obj = schema
             .as_object()
             .ok_or(DynamicGraphError::SchemaNotObject)?;
-        let root = root_obj
-            .get("title")
+        let definitions = root_obj.get("$defs").and_then(Value::as_object);
+        let root_definition = root_obj
+            .get("$ref")
             .and_then(Value::as_str)
-            .filter(|title| !title.is_empty())
-            .ok_or(DynamicGraphError::MissingTitle)?
-            .to_string();
+            .map(|reference| reference_target_from_definitions(reference, definitions))
+            .transpose()?;
+        let root = root_definition
+            .clone()
+            .or_else(|| {
+                root_obj
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .filter(|title| !title.is_empty())
+                    .map(str::to_string)
+            })
+            .ok_or(DynamicGraphError::MissingTitle)?;
+        let root_schema = root_definition
+            .as_ref()
+            .and_then(|name| definitions.and_then(|defs| defs.get(name)))
+            .and_then(Value::as_object)
+            .unwrap_or(root_obj);
 
         let mut raw_models: HashMap<String, &Map<String, Value>> = HashMap::new();
-        raw_models.insert(root.clone(), root_obj);
-        if let Some(definitions) = root_obj.get("$defs").and_then(Value::as_object) {
+        raw_models.insert(root.clone(), root_schema);
+        if let Some(definitions) = definitions {
             for (name, definition) in definitions {
                 if let Some(definition) = definition.as_object() {
                     raw_models.insert(name.clone(), definition);
@@ -259,6 +281,7 @@ fn compile_model(
             name: field_name.clone(),
             required: required.contains(field_name.as_str()),
             default,
+            schema: field_schema.clone(),
             kind,
         });
     }
@@ -294,6 +317,15 @@ fn relationship_kind(
     schema: &Value,
     model_names: &HashSet<String>,
 ) -> Result<Option<DynamicFieldKind>, DynamicGraphError> {
+    if let Some(variants) = schema.get("anyOf").and_then(Value::as_array) {
+        let non_null: Vec<&Value> = variants
+            .iter()
+            .filter(|variant| variant.get("type").and_then(Value::as_str) != Some("null"))
+            .collect();
+        if non_null.len() == 1 {
+            return relationship_kind(non_null[0], model_names);
+        }
+    }
     if let Some(reference) = schema.get("$ref").and_then(Value::as_str) {
         return Ok(Some(DynamicFieldKind::Relationship {
             target: reference_target(reference, model_names)?,
@@ -312,6 +344,19 @@ fn relationship_kind(
         }));
     }
     Ok(None)
+}
+
+fn reference_target_from_definitions(
+    reference: &str,
+    definitions: Option<&Map<String, Value>>,
+) -> Result<String, DynamicGraphError> {
+    let Some(target) = reference.strip_prefix("#/$defs/") else {
+        return Err(DynamicGraphError::ExternalReference(reference.to_string()));
+    };
+    if !definitions.is_some_and(|definitions| definitions.contains_key(target)) {
+        return Err(DynamicGraphError::UnknownReference(reference.to_string()));
+    }
+    Ok(target.to_string())
 }
 
 fn reference_target(
@@ -421,6 +466,13 @@ impl<'a> Materializer<'a> {
             };
             match &field.kind {
                 DynamicFieldKind::Scalar => {
+                    validate_scalar_value(value, &field.schema).map_err(|reason| {
+                        DynamicGraphError::InvalidScalarValue {
+                            model: model_name.to_string(),
+                            field: field.name.clone(),
+                            reason,
+                        }
+                    })?;
                     properties.insert(field.name.clone(), value.clone());
                 }
                 DynamicFieldKind::Relationship { target, many } => {
@@ -520,11 +572,116 @@ fn dynamic_id(model: &DynamicModelSchema, properties: &Map<String, Value>) -> Uu
 }
 
 fn normalize_identity_value(value: &Value) -> String {
-    let raw = value
-        .as_str()
-        .map(str::to_string)
-        .unwrap_or_else(|| value.to_string());
-    raw.to_lowercase().replace(' ', "_").replace('\'', "")
+    match value {
+        Value::String(raw) => raw.to_lowercase().replace(' ', "_").replace('\'', ""),
+        _ => python_string(value),
+    }
+}
+
+fn python_string(value: &Value) -> String {
+    match value {
+        Value::Null => "None".to_string(),
+        Value::Bool(true) => "True".to_string(),
+        Value::Bool(false) => "False".to_string(),
+        Value::Number(number) => number.to_string(),
+        Value::String(text) => format!("'{}'", text.replace('\\', "\\\\").replace('\'', "\\'")),
+        Value::Array(values) => format!(
+            "[{}]",
+            values
+                .iter()
+                .map(python_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        Value::Object(values) => format!(
+            "{{{}}}",
+            values
+                .iter()
+                .map(|(key, value)| format!(
+                    "{}: {}",
+                    python_string(&Value::String(key.clone())),
+                    python_string(value)
+                ))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
+}
+
+fn validate_scalar_value(value: &Value, schema: &Value) -> Result<(), String> {
+    if let Some(variants) = schema.get("anyOf").and_then(Value::as_array) {
+        if variants
+            .iter()
+            .any(|variant| validate_scalar_value(value, variant).is_ok())
+        {
+            return Ok(());
+        }
+        return Err("does not match any allowed variant".to_string());
+    }
+    if let Some(expected) = schema.get("type").and_then(Value::as_str) {
+        let matches = match expected {
+            "null" => value.is_null(),
+            "boolean" => value.is_boolean(),
+            "integer" => value.as_i64().is_some() || value.as_u64().is_some(),
+            "number" => value.is_number(),
+            "string" => value.is_string(),
+            "array" => value.is_array(),
+            "object" => value.is_object(),
+            _ => true,
+        };
+        if !matches {
+            return Err(format!("expected {expected}"));
+        }
+    }
+    if let Some(constant) = schema.get("const")
+        && value != constant
+    {
+        return Err("does not equal the declared constant".to_string());
+    }
+    if let Some(choices) = schema.get("enum").and_then(Value::as_array)
+        && !choices.contains(value)
+    {
+        return Err("is not one of the declared enum values".to_string());
+    }
+    if let (Some(text), Some(minimum)) = (
+        value.as_str(),
+        schema.get("minLength").and_then(Value::as_u64),
+    ) && text.chars().count() < minimum as usize
+    {
+        return Err(format!("is shorter than minLength {minimum}"));
+    }
+    if let (Some(text), Some(maximum)) = (
+        value.as_str(),
+        schema.get("maxLength").and_then(Value::as_u64),
+    ) && text.chars().count() > maximum as usize
+    {
+        return Err(format!("is longer than maxLength {maximum}"));
+    }
+    if let Some(items) = value.as_array()
+        && let Some(item_schema) = schema.get("items")
+    {
+        for item in items {
+            validate_scalar_value(item, item_schema)?;
+        }
+    }
+    if let Some(object) = value.as_object() {
+        let properties = schema.get("properties").and_then(Value::as_object);
+        if let Some(required) = schema.get("required").and_then(Value::as_array) {
+            for field in required.iter().filter_map(Value::as_str) {
+                if !object.contains_key(field) {
+                    return Err(format!("is missing required property `{field}`"));
+                }
+            }
+        }
+        if let Some(properties) = properties {
+            for (field, field_value) in object {
+                if let Some(field_schema) = properties.get(field) {
+                    validate_scalar_value(field_value, field_schema)?;
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -629,5 +786,96 @@ mod tests {
                 field: "name".to_string(),
             }
         );
+    }
+
+    #[test]
+    fn materializes_optional_single_and_list_relationships() {
+        let schema = json!({
+            "$defs": {
+                "Child": {
+                    "title": "Child", "type": "object",
+                    "properties": {"name": {"type": "string"}},
+                    "required": ["name"]
+                }
+            },
+            "title": "Root", "type": "object",
+            "properties": {
+                "child": {"anyOf": [{"$ref": "#/$defs/Child"}, {"type": "null"}]},
+                "children": {"anyOf": [
+                    {"type": "array", "items": {"$ref": "#/$defs/Child"}},
+                    {"type": "null"}
+                ]}
+            }
+        });
+        let graph = DynamicGraphSchema::compile(&schema)
+            .expect("optional relationships should compile")
+            .materialize(
+                &json!({"child": {"name": "one"}, "children": [{"name": "two"}]}),
+                Uuid::nil(),
+            )
+            .expect("optional relationships should materialize");
+        assert_eq!(graph.nodes.len(), 3);
+        assert_eq!(graph.relationships.len(), 2);
+    }
+
+    #[test]
+    fn resolves_top_level_ref_and_recursive_model() {
+        let schema = json!({
+            "$defs": {
+                "Node": {
+                    "title": "Node", "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "next": {"anyOf": [{"$ref": "#/$defs/Node"}, {"type": "null"}]}
+                    },
+                    "required": ["name", "next"]
+                }
+            },
+            "$ref": "#/$defs/Node"
+        });
+        let compiled = DynamicGraphSchema::compile(&schema).expect("root ref should compile");
+        assert_eq!(compiled.root_model().name, "Node");
+        let graph = compiled
+            .materialize(&json!({"name": "first", "next": null}), Uuid::nil())
+            .expect("finite recursive answer should materialize");
+        assert_eq!(graph.nodes.len(), 1);
+    }
+
+    #[test]
+    fn identity_values_match_python_stringification() {
+        assert_eq!(normalize_identity_value(&json!(true)), "True");
+        assert_eq!(normalize_identity_value(&Value::Null), "None");
+        assert_eq!(normalize_identity_value(&json!([1, "A"])), "[1, 'A']");
+        assert_eq!(
+            normalize_identity_value(&json!({"enabled": false})),
+            "{'enabled': False}"
+        );
+    }
+
+    #[test]
+    fn validates_scalar_schema_constraints() {
+        let schema = json!({
+            "title": "Constrained", "type": "object",
+            "properties": {
+                "kind": {"type": "string", "enum": ["allowed"]},
+                "count": {"type": "integer"}
+            },
+            "required": ["kind", "count"]
+        });
+        let compiled = DynamicGraphSchema::compile(&schema).expect("schema should compile");
+        let error = compiled
+            .materialize(&json!({"kind": "other", "count": 1}), Uuid::nil())
+            .expect_err("enum violation should fail");
+        assert!(matches!(
+            error,
+            DynamicGraphError::InvalidScalarValue { .. }
+        ));
+        let error = compiled
+            .materialize(&json!({"kind": "allowed", "count": "one"}), Uuid::nil())
+            .expect_err("type violation should fail");
+        assert!(matches!(
+            error,
+            DynamicGraphError::InvalidScalarValue { .. }
+        ));
     }
 }
