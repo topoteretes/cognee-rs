@@ -12,6 +12,7 @@ pub trait SearchHistoryDb: Send + Sync {
         query_text: &str,
         query_type: &str,
         user_id: Option<Uuid>,
+        dataset_id: Option<Uuid>,
     ) -> Result<Uuid, DatabaseError>;
 
     async fn log_result(
@@ -19,6 +20,7 @@ pub trait SearchHistoryDb: Send + Sync {
         query_id: Uuid,
         serialized_result: &str,
         user_id: Option<Uuid>,
+        dataset_id: Option<Uuid>,
     ) -> Result<Uuid, DatabaseError>;
 
     async fn get_history(
@@ -35,8 +37,9 @@ impl SearchHistoryDb for DatabaseConnection {
         query_text: &str,
         query_type: &str,
         user_id: Option<Uuid>,
+        dataset_id: Option<Uuid>,
     ) -> Result<Uuid, DatabaseError> {
-        search_history::log_query(self, query_text, query_type, user_id).await
+        search_history::log_query(self, query_text, query_type, user_id, dataset_id).await
     }
 
     async fn log_result(
@@ -44,8 +47,9 @@ impl SearchHistoryDb for DatabaseConnection {
         query_id: Uuid,
         serialized_result: &str,
         user_id: Option<Uuid>,
+        dataset_id: Option<Uuid>,
     ) -> Result<Uuid, DatabaseError> {
-        search_history::log_result(self, query_id, serialized_result, user_id).await
+        search_history::log_result(self, query_id, serialized_result, user_id, dataset_id).await
     }
 
     async fn get_history(

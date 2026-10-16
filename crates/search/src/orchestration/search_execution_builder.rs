@@ -703,6 +703,7 @@ mod tests {
             _query_text: &str,
             _query_type: &str,
             _user_id: Option<Uuid>,
+            _dataset_id: Option<Uuid>,
         ) -> Result<Uuid, DatabaseError> {
             Ok(Uuid::new_v4())
         }
@@ -712,6 +713,7 @@ mod tests {
             _query_id: Uuid,
             _serialized_result: &str,
             _user_id: Option<Uuid>,
+            _dataset_id: Option<Uuid>,
         ) -> Result<Uuid, DatabaseError> {
             Ok(Uuid::new_v4())
         }

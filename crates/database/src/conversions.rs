@@ -179,6 +179,9 @@ pub(crate) fn query_model_to_history(m: query::Model) -> SearchHistoryEntry {
         user_id: uuid_hex::from_hex_opt(m.user_id.as_deref()).expect(
             "DB stores only valid UUID hex strings; corruption indicates data integrity failure",
         ),
+        dataset_id: uuid_hex::from_hex_opt(m.dataset_id.as_deref()).expect(
+            "DB stores only valid UUID hex strings; corruption indicates data integrity failure",
+        ),
         created_at: m.created_at,
     }
 }
@@ -195,6 +198,9 @@ pub(crate) fn result_model_to_history(m: result_log::Model) -> SearchHistoryEntr
         content: m.serialized_result,
         query_type: None,
         user_id: uuid_hex::from_hex_opt(m.user_id.as_deref()).expect(
+            "DB stores only valid UUID hex strings; corruption indicates data integrity failure",
+        ),
+        dataset_id: uuid_hex::from_hex_opt(m.dataset_id.as_deref()).expect(
             "DB stores only valid UUID hex strings; corruption indicates data integrity failure",
         ),
         created_at: m.created_at,

@@ -10,7 +10,9 @@ pub struct Model {
     #[sea_orm(column_type = "Text")]
     pub serialized_result: String,
     pub user_id: Option<String>,
+    pub dataset_id: Option<String>,
     pub created_at: DateTimeUtc,
+    pub updated_at: Option<DateTimeUtc>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

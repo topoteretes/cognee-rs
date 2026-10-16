@@ -748,7 +748,7 @@ impl SearchOrchestrator {
         if should_save_interaction
             && let Some(database) = &self.database
             && let Ok(query_id) = database
-                .log_query(&request.query_text, &query_type, request.user_id)
+                .log_query(&request.query_text, &query_type, request.user_id, None)
                 .await
         {
             logged_query_id = Some(query_id);
@@ -1152,7 +1152,7 @@ impl SearchOrchestrator {
 
         if let Ok(serialized_response) = serde_json::to_string(response) {
             let _ = database
-                .log_result(query_id, &serialized_response, user_id)
+                .log_result(query_id, &serialized_response, user_id, None)
                 .await;
         }
     }

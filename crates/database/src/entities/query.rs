@@ -9,7 +9,9 @@ pub struct Model {
     pub query_text: String,
     pub query_type: String,
     pub user_id: Option<String>,
+    pub dataset_id: Option<String>,
     pub created_at: DateTimeUtc,
+    pub updated_at: Option<DateTimeUtc>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

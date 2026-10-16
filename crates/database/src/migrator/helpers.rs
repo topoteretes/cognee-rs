@@ -37,6 +37,39 @@ pub(super) async fn has_column(
         .ok_or_else(|| DbErr::Custom("column-existence probe returned no row".to_owned()))?;
     Ok(row.try_get::<i64>("", "cnt")? > 0)
 }
+
+/// Add `column` to `table` unless it already exists.
+pub(super) async fn add_column_if_missing(
+    manager: &SchemaManager<'_>,
+    table: &str,
+    mut column: ColumnDef,
+) -> Result<(), DbErr> {
+    if has_column(manager, table, &column.get_column_name()).await? {
+        return Ok(());
+    }
+    let alter = Table::alter()
+        .table(Alias::new(table))
+        .add_column(&mut column)
+        .to_owned();
+    manager.alter_table(alter).await
+}
+
+/// Drop `column` from `table` if it exists.
+pub(super) async fn drop_column_if_present(
+    manager: &SchemaManager<'_>,
+    table: &str,
+    column: &str,
+) -> Result<(), DbErr> {
+    if !has_column(manager, table, column).await? {
+        return Ok(());
+    }
+    let alter = Table::alter()
+        .table(Alias::new(table))
+        .drop_column(Alias::new(column))
+        .to_owned();
+    manager.alter_table(alter).await
+}
+
 #[cfg(test)]
 #[allow(
     clippy::expect_used,
@@ -46,7 +79,7 @@ mod tests {
     use sea_orm::{ConnectionTrait, Database, DatabaseConnection, Statement};
     use sea_orm_migration::prelude::*;
 
-    use super::has_column;
+    use super::{add_column_if_missing, drop_column_if_present, has_column};
 
     /// An in-memory database with one table, `t (id text)`.
     async fn db_with_table() -> DatabaseConnection {
@@ -67,5 +100,48 @@ mod tests {
 
         assert!(has_column(&manager, "t", "id").await.expect("probe runs"));
         assert!(!has_column(&manager, "t", "nope").await.expect("probe runs"));
+    }
+
+    #[tokio::test]
+    async fn add_column_if_missing_adds_once() {
+        let db = db_with_table().await;
+        let manager = SchemaManager::new(&db);
+        let column = || ColumnDef::new(Alias::new("extra")).text().null().to_owned();
+
+        add_column_if_missing(&manager, "t", column())
+            .await
+            .expect("adds the column");
+        add_column_if_missing(&manager, "t", column())
+            .await
+            .expect("skips an existing column");
+
+        assert!(
+            has_column(&manager, "t", "extra")
+                .await
+                .expect("probe runs")
+        );
+    }
+
+    #[tokio::test]
+    async fn drop_column_if_present_drops_once() {
+        let db = db_with_table().await;
+        let manager = SchemaManager::new(&db);
+        let column = ColumnDef::new(Alias::new("extra")).text().null().to_owned();
+        add_column_if_missing(&manager, "t", column)
+            .await
+            .expect("adds the column");
+
+        drop_column_if_present(&manager, "t", "extra")
+            .await
+            .expect("drops the column");
+        drop_column_if_present(&manager, "t", "extra")
+            .await
+            .expect("skips a missing column");
+
+        assert!(
+            !has_column(&manager, "t", "extra")
+                .await
+                .expect("probe runs")
+        );
     }
 }
