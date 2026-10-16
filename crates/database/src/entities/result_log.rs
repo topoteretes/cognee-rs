@@ -7,7 +7,7 @@ pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub id: String,
     pub query_id: String,
-    #[sea_orm(column_type = "Text")]
+    #[sea_orm(column_type = "Text", column_name = "value")]
     pub serialized_result: String,
     pub user_id: Option<String>,
     pub dataset_id: Option<String>,

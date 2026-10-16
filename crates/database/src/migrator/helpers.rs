@@ -70,6 +70,23 @@ pub(super) async fn drop_column_if_present(
     manager.alter_table(alter).await
 }
 
+/// Rename `from` to `to` in `table` if `from` exists.
+pub(super) async fn rename_column_if_present(
+    manager: &SchemaManager<'_>,
+    table: &str,
+    from: &str,
+    to: &str,
+) -> Result<(), DbErr> {
+    if !has_column(manager, table, from).await? {
+        return Ok(());
+    }
+    let alter = Table::alter()
+        .table(Alias::new(table))
+        .rename_column(Alias::new(from), Alias::new(to))
+        .to_owned();
+    manager.alter_table(alter).await
+}
+
 #[cfg(test)]
 #[allow(
     clippy::expect_used,
@@ -79,7 +96,9 @@ mod tests {
     use sea_orm::{ConnectionTrait, Database, DatabaseConnection, Statement};
     use sea_orm_migration::prelude::*;
 
-    use super::{add_column_if_missing, drop_column_if_present, has_column};
+    use super::{
+        add_column_if_missing, drop_column_if_present, has_column, rename_column_if_present,
+    };
 
     /// An in-memory database with one table, `t (id text)`.
     async fn db_with_table() -> DatabaseConnection {
@@ -143,5 +162,21 @@ mod tests {
                 .await
                 .expect("probe runs")
         );
+    }
+
+    #[tokio::test]
+    async fn rename_column_if_present_renames_once() {
+        let db = db_with_table().await;
+        let manager = SchemaManager::new(&db);
+
+        rename_column_if_present(&manager, "t", "id", "key")
+            .await
+            .expect("renames the column");
+        rename_column_if_present(&manager, "t", "id", "key")
+            .await
+            .expect("skips a missing column");
+
+        assert!(!has_column(&manager, "t", "id").await.expect("probe runs"));
+        assert!(has_column(&manager, "t", "key").await.expect("probe runs"));
     }
 }
