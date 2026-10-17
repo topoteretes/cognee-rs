@@ -308,12 +308,6 @@ pub fn build_search_request(
     let only_context = opts.get("onlyContext").and_then(|v| v.as_bool());
     let use_combined_context = opts.get("useCombinedContext").and_then(|v| v.as_bool());
     let verbose = opts.get("verbose").and_then(|v| v.as_bool());
-    // save_interaction defaults to true (matching Python SDK behavior) when not set.
-    let save_interaction = Some(
-        opts.get("saveInteraction")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true),
-    );
     let auto_feedback_detection = opts.get("autoFeedbackDetection").and_then(|v| v.as_bool());
     // Per-retriever knobs, forwarded verbatim. `SearchRequest` documents these
     // as caller-defined and silently ignores unknown keys, so the binding has
@@ -346,7 +340,6 @@ pub fn build_search_request(
         node_name_filter_operator,
         wide_search_top_k: None,
         triplet_distance_penalty: None,
-        save_interaction,
         // Always populate user_id from owner_id so dataset-name resolution works.
         user_id: Some(owner_id),
         // Read from the same `tenant` opt `add` / `remember` write with

@@ -100,7 +100,6 @@ impl PyCognee {
     ///   result is the user prompt) for the completion types, else the context
     /// - ``use_combined_context`` / ``useCombinedContext`` — bool
     /// - ``verbose`` — bool
-    /// - ``save_interaction`` / ``saveInteraction`` — bool (default ``True``)
     /// - ``auto_feedback_detection`` / ``autoFeedbackDetection`` — bool
     ///
     /// ``userId`` / ``user_id`` in opts is ignored; the owner is always taken

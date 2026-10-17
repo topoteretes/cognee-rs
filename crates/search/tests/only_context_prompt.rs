@@ -152,7 +152,6 @@ fn request(search_type: SearchType, only_context: bool, session_id: Option<&str>
     request.search_type = search_type;
     request.only_context = Some(only_context);
     request.session_id = session_id.map(String::from);
-    request.save_interaction = Some(false);
     request
 }
 

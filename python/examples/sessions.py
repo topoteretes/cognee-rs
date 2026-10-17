@@ -21,7 +21,7 @@ Running
 What it does
 ------------
 1. Adds text and runs cognify so the graph has content.
-2. Searches with ``save_interaction=True`` to persist a QA entry.
+2. Searches with a ``session_id`` to persist a QA entry to that session.
 3. Retrieves the stored session history.
 4. Adds and then removes feedback on a QA entry.
 5. Stores and reads back a graph-context snapshot on the session.
@@ -87,15 +87,12 @@ async def main() -> None:
 
     # ── Step 2: search and save the interaction ────────────────────────────────
     #
-    # Passing save_interaction=True (or session_id) persists a QA entry so it
-    # can be retrieved later from session history.
+    # Passing session_id persists a QA entry so it can be retrieved later from
+    # session history.
     session_id = "example-session-001"
     query = "What did Isaac Newton discover?"
     print(f'\nSearching with session_id={session_id!r}: "{query}"')
-    await cognee.search(
-        query,
-        {"save_interaction": True, "session_id": session_id},
-    )
+    await cognee.search(query, {"session_id": session_id})
     print("Search saved to session history.")
 
     # ── Step 3: retrieve session history ──────────────────────────────────────

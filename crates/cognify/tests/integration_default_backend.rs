@@ -73,7 +73,6 @@ fn make_request(query: &str, search_type: SearchType) -> SearchRequest {
         node_name_filter_operator: None,
         wide_search_top_k: None,
         triplet_distance_penalty: None,
-        save_interaction: None,
         user_id: None,
         tenant_id: None,
         verbose: None,

@@ -105,6 +105,7 @@
     "llm.temperature",
     "llm_max_parallel_requests",
     "log_level",
+    "log_search_history",
     "logs_root_directory",
     "monitoring_tool",
     "ontology.file_path",
@@ -180,6 +181,7 @@
     "default_user_email",
     "default_user_password",
     "enable_access_control",
+    "log_search_history",
     "log_level",
     "cognee_tracing_enabled",
     "otel_service_name",
@@ -9957,6 +9959,53 @@
   "set log_level <- {\"a\":1}": {
     "err": true
   },
+  "set log_search_history <- \"\"": {
+    "err": true
+  },
+  "set log_search_history <- \"1\"": {
+    "err": true
+  },
+  "set log_search_history <- \"s\"": {
+    "err": true
+  },
+  "set log_search_history <- \"true\"": {
+    "err": true
+  },
+  "set log_search_history <- -1": {
+    "err": true
+  },
+  "set log_search_history <- 0": {
+    "err": true
+  },
+  "set log_search_history <- 1": {
+    "err": true
+  },
+  "set log_search_history <- 1.5": {
+    "err": true
+  },
+  "set log_search_history <- 5000000000": {
+    "err": true
+  },
+  "set log_search_history <- 70000": {
+    "err": true
+  },
+  "set log_search_history <- [1]": {
+    "err": true
+  },
+  "set log_search_history <- false": {
+    "ok": {
+      "log_search_history": false
+    }
+  },
+  "set log_search_history <- null": {
+    "err": true
+  },
+  "set log_search_history <- true": {
+    "ok": {}
+  },
+  "set log_search_history <- {\"a\":1}": {
+    "err": true
+  },
   "set logs_root_directory <- \"\"": {
     "ok": {}
   },
@@ -15281,6 +15330,13 @@
     }
   },
   "unset log_level": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset log_search_history": {
     "ok": {
       "chunk_size": 7,
       "llm.model": "changed",

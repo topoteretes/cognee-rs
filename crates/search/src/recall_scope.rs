@@ -533,7 +533,6 @@ pub async fn run_graph(
         node_name: options.and_then(|o| o.node_name.clone()),
         wide_search_top_k: options.and_then(|o| o.wide_search_top_k),
         triplet_distance_penalty: options.and_then(|o| o.triplet_distance_penalty),
-        save_interaction: None,
         user_id: owner_id,
         tenant_id: options.and_then(|o| o.tenant_id),
         verbose: None,

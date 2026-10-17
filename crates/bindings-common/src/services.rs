@@ -383,6 +383,7 @@ impl CogneeServices {
             .with_tuning(search_tuning)
             .with_session_manager(Arc::clone(&session_manager))
             .with_dataset_resolver(Arc::clone(&database) as Arc<dyn IngestDb>)
+            .with_search_history_logging(cm.settings().log_search_history)
             .build(),
         );
 

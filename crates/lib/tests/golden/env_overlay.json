@@ -2221,6 +2221,60 @@
   "COGNEE_LOGS_DIR=\"{\\\"ssl\\\":true}\"": {
     "logs_root_directory": "{\"ssl\":true}"
   },
+  "COGNEE_LOG_SEARCH_HISTORY=\"  \"": {
+    "log_search_history": false
+  },
+  "COGNEE_LOG_SEARCH_HISTORY=\"\"": {},
+  "COGNEE_LOG_SEARCH_HISTORY=\"-1\"": {
+    "log_search_history": false
+  },
+  "COGNEE_LOG_SEARCH_HISTORY=\"0\"": {
+    "log_search_history": false
+  },
+  "COGNEE_LOG_SEARCH_HISTORY=\"1\"": {},
+  "COGNEE_LOG_SEARCH_HISTORY=\"1.5\"": {
+    "log_search_history": false
+  },
+  "COGNEE_LOG_SEARCH_HISTORY=\"42\"": {
+    "log_search_history": false
+  },
+  "COGNEE_LOG_SEARCH_HISTORY=\"5000000000\"": {
+    "log_search_history": false
+  },
+  "COGNEE_LOG_SEARCH_HISTORY=\"70000\"": {
+    "log_search_history": false
+  },
+  "COGNEE_LOG_SEARCH_HISTORY=\"TRUE\"": {},
+  "COGNEE_LOG_SEARCH_HISTORY=\"[1]\"": {
+    "log_search_history": false
+  },
+  "COGNEE_LOG_SEARCH_HISTORY=\"abc\"": {
+    "log_search_history": false
+  },
+  "COGNEE_LOG_SEARCH_HISTORY=\"false\"": {
+    "log_search_history": false
+  },
+  "COGNEE_LOG_SEARCH_HISTORY=\"no\"": {
+    "log_search_history": false
+  },
+  "COGNEE_LOG_SEARCH_HISTORY=\"on\"": {},
+  "COGNEE_LOG_SEARCH_HISTORY=\"require\"": {
+    "log_search_history": false
+  },
+  "COGNEE_LOG_SEARCH_HISTORY=\"true\"": {},
+  "COGNEE_LOG_SEARCH_HISTORY=\"v\"": {
+    "log_search_history": false
+  },
+  "COGNEE_LOG_SEARCH_HISTORY=\"yes\"": {},
+  "COGNEE_LOG_SEARCH_HISTORY=\"{\\\"a\\\":1}\"": {
+    "log_search_history": false
+  },
+  "COGNEE_LOG_SEARCH_HISTORY=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
+    "log_search_history": false
+  },
+  "COGNEE_LOG_SEARCH_HISTORY=\"{\\\"ssl\\\":true}\"": {
+    "log_search_history": false
+  },
   "COGNEE_PGVECTOR_HNSW_EF_CONSTRUCTION=\"  \"": {},
   "COGNEE_PGVECTOR_HNSW_EF_CONSTRUCTION=\"\"": {},
   "COGNEE_PGVECTOR_HNSW_EF_CONSTRUCTION=\"-1\"": {},

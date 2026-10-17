@@ -23,7 +23,6 @@ public final class SearchOptions extends Options {
     public SearchOptions onlyContext(boolean b) { put("onlyContext", b); return this; }
     public SearchOptions useCombinedContext(boolean b) { put("useCombinedContext", b); return this; }
     public SearchOptions verbose(boolean b) { put("verbose", b); return this; }
-    public SearchOptions saveInteraction(boolean b) { put("saveInteraction", b); return this; }
     public SearchOptions autoFeedbackDetection(boolean b) { put("autoFeedbackDetection", b); return this; }
     /**
      * Per-retriever knobs, forwarded verbatim to the retriever the search

@@ -75,6 +75,7 @@ pub struct SearchBuilder {
     dataset_resolver: Option<Arc<dyn IngestDb>>,
     acl_db: Option<Arc<dyn AclDb>>,
     session_manager: Option<Arc<SessionManager>>,
+    log_search_history: bool,
 }
 
 impl SearchBuilder {
@@ -98,6 +99,7 @@ impl SearchBuilder {
             dataset_resolver: None,
             acl_db: None,
             session_manager: None,
+            log_search_history: true,
         }
     }
 
@@ -128,6 +130,12 @@ impl SearchBuilder {
     /// See [`SearchOrchestrator::with_acl_db`].
     pub fn with_acl_db(mut self, acl_db: Arc<dyn AclDb>) -> Self {
         self.acl_db = Some(acl_db);
+        self
+    }
+
+    /// See [`SearchOrchestrator::with_search_history_logging`].
+    pub fn with_search_history_logging(mut self, enabled: bool) -> Self {
+        self.log_search_history = enabled;
         self
     }
 
@@ -395,7 +403,8 @@ impl SearchBuilder {
             .with_database(self.database)
             .with_llm(llm)
             .with_auto_feedback_default(self.tuning.auto_feedback)
-            .with_default_system_prompt_path(self.tuning.default_system_prompt_path);
+            .with_default_system_prompt_path(self.tuning.default_system_prompt_path)
+            .with_search_history_logging(self.log_search_history);
         if self.tuning.access_tracking {
             orchestrator = orchestrator.with_access_tracking();
         }
@@ -703,6 +712,7 @@ mod tests {
             _query_text: &str,
             _query_type: &str,
             _user_id: Option<Uuid>,
+            _dataset_id: Option<Uuid>,
         ) -> Result<Uuid, DatabaseError> {
             Ok(Uuid::new_v4())
         }
@@ -712,6 +722,7 @@ mod tests {
             _query_id: Uuid,
             _serialized_result: &str,
             _user_id: Option<Uuid>,
+            _dataset_id: Option<Uuid>,
         ) -> Result<Uuid, DatabaseError> {
             Ok(Uuid::new_v4())
         }
@@ -769,7 +780,6 @@ mod tests {
             node_name_filter_operator: None,
             wide_search_top_k: None,
             triplet_distance_penalty: None,
-            save_interaction: None,
             user_id: None,
             tenant_id: None,
             verbose: None,
@@ -916,7 +926,6 @@ mod tests {
             node_name_filter_operator: None,
             wide_search_top_k: None,
             triplet_distance_penalty: None,
-            save_interaction: None,
             user_id: None,
             tenant_id: None,
             verbose: None,
@@ -997,7 +1006,6 @@ mod tests {
             node_name_filter_operator: None,
             wide_search_top_k: None,
             triplet_distance_penalty: None,
-            save_interaction: None,
             user_id: None,
             tenant_id: None,
             verbose: None,
@@ -1052,7 +1060,6 @@ mod tests {
             node_name_filter_operator: None,
             wide_search_top_k: None,
             triplet_distance_penalty: None,
-            save_interaction: None,
             user_id: None,
             tenant_id: None,
             verbose: None,

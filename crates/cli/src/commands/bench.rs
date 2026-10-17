@@ -825,7 +825,6 @@ fn bench_search_request(
         wide_search_top_k: None,
         triplet_distance_penalty: None,
         summarize_context: None,
-        save_interaction: Some(false),
         user_id: Some(owner_id),
         tenant_id: None,
         verbose: None,
@@ -869,6 +868,7 @@ async fn bench_search_orchestrator(
     .with_tuning(search_tuning)
     .with_session_manager(session_manager)
     .with_dataset_resolver(Arc::clone(&database) as Arc<dyn IngestDb>)
+    .with_search_history_logging(cm.settings().log_search_history)
     .build())
 }
 

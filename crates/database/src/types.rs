@@ -114,5 +114,7 @@ pub struct SearchHistoryEntry {
     pub content: String,
     pub query_type: Option<String>,
     pub user_id: Option<Uuid>,
+    /// The dataset the search was recorded under; `None` for an unscoped search.
+    pub dataset_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
 }

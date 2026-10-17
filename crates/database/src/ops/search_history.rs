@@ -26,18 +26,20 @@ pub async fn log_query(
     query_text: &str,
     query_type: &str,
     user_id: Option<Uuid>,
+    dataset_id: Option<Uuid>,
 ) -> Result<Uuid, DatabaseError> {
     Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
     let id = Uuid::new_v4();
     let model = query::ActiveModel {
         id: Set(uuid_hex::to_hex(id)),
-        // The caller discards a `log_query` error (`search_orchestrator.rs`
-        // pattern-matches `if let Ok(..)`), so an unsanitized NUL here drops the
-        // query *and* its result from search history with no diagnostic.
+        // An unsanitized NUL would fail the insert and drop the query *and* its
+        // result from search history; the caller only logs that failure.
         query_text: Set(sanitize_str(query_text).into_owned()),
         query_type: Set(query_type.to_string()),
         user_id: Set(uuid_hex::to_hex_opt(user_id)),
+        dataset_id: Set(uuid_hex::to_hex_opt(dataset_id)),
         created_at: Set(Utc::now()),
+        updated_at: Set(None),
     };
     model.insert(db).await.map_err(map_sea_err)?;
     Ok(id)
@@ -55,23 +57,20 @@ pub async fn log_result(
     query_id: Uuid,
     serialized_result: &str,
     user_id: Option<Uuid>,
+    dataset_id: Option<Uuid>,
 ) -> Result<Uuid, DatabaseError> {
     Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
     let id = Uuid::new_v4();
     let model = result_log::ActiveModel {
         id: Set(uuid_hex::to_hex(id)),
         query_id: Set(uuid_hex::to_hex(query_id)),
-        // Defensive only — it cannot fire for today's caller. The single
-        // production caller (`search_orchestrator::log_result_if_enabled`)
-        // passes `serde_json::to_string(&response)`, in which an embedded NUL
-        // has already become the six-character `\u0000` escape: no literal
-        // `0x00` survives for `sanitize_str` to strip, and the `text` column
-        // accepts the escape as ordinary characters either way. The call is
-        // kept because the parameter is a plain `&str` — a future caller
-        // passing raw result text would need it. See `cognee_utils::sanitize`.
+        // The caller stores raw answer text, which may carry a NUL that the
+        // `text` column rejects. See `cognee_utils::sanitize`.
         serialized_result: Set(sanitize_str(serialized_result).into_owned()),
         user_id: Set(uuid_hex::to_hex_opt(user_id)),
+        dataset_id: Set(uuid_hex::to_hex_opt(dataset_id)),
         created_at: Set(Utc::now()),
+        updated_at: Set(None),
     };
     model.insert(db).await.map_err(map_sea_err)?;
     Ok(id)

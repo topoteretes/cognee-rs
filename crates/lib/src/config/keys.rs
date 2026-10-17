@@ -428,6 +428,8 @@ static KEYS: &[KeySpec] = &[
         get: |s| Value::Bool(s.enable_access_control),
         reset: |s, d| s.enable_access_control = d.enable_access_control,
     },
+    // -- Search history -----------------------------------------------------
+    row!(log_search_history: bool, env ["COGNEE_LOG_SEARCH_HISTORY"]),
     // -- Logging ------------------------------------------------------------
     row!(log_level: str, env ["LOG_LEVEL"]),
     // -- Observability ------------------------------------------------------

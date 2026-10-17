@@ -11763,6 +11763,66 @@
     "err": "TypeMismatch",
     "key": "log_level"
   },
+  "log_search_history <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "log_search_history"
+  },
+  "log_search_history <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "log_search_history"
+  },
+  "log_search_history <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "log_search_history"
+  },
+  "log_search_history <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "log_search_history"
+  },
+  "log_search_history <- -1": {
+    "err": "TypeMismatch",
+    "key": "log_search_history"
+  },
+  "log_search_history <- 0": {
+    "err": "TypeMismatch",
+    "key": "log_search_history"
+  },
+  "log_search_history <- 1": {
+    "err": "TypeMismatch",
+    "key": "log_search_history"
+  },
+  "log_search_history <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "log_search_history"
+  },
+  "log_search_history <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "log_search_history"
+  },
+  "log_search_history <- 70000": {
+    "err": "TypeMismatch",
+    "key": "log_search_history"
+  },
+  "log_search_history <- [1]": {
+    "err": "TypeMismatch",
+    "key": "log_search_history"
+  },
+  "log_search_history <- false": {
+    "ok": {
+      "log_search_history": false
+    }
+  },
+  "log_search_history <- null": {
+    "err": "TypeMismatch",
+    "key": "log_search_history"
+  },
+  "log_search_history <- true": {
+    "ok": {}
+  },
+  "log_search_history <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "log_search_history"
+  },
   "logs_root_directory <- \"\"": {
     "ok": {}
   },

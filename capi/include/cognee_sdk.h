@@ -503,7 +503,6 @@ void cg_sdk_add_and_cognify(const CgSdk*        sdk,
  *                             or the bare context for non-completion types
  *   "useCombinedContext"    — boolean
  *   "verbose"               — boolean
- *   "saveInteraction"       — boolean (default true, matching Python SDK)
  *   "autoFeedbackDetection" — boolean
  *
  * Note: "userId" in opts is ignored — user_id in the request is always set

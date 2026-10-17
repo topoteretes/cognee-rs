@@ -164,8 +164,6 @@ export interface CogneeSearchOptions {
   useCombinedContext?: boolean;
   /** Include verbose diagnostics in the response. */
   verbose?: boolean;
-  /** Persist this query+result to search history (defaults to true). */
-  saveInteraction?: boolean;
   /** Detect feedback about the previous response before searching. */
   autoFeedbackDetection?: boolean;
   /**

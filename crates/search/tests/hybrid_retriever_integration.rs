@@ -281,7 +281,6 @@ fn completion_request(query: &str, session_id: &str) -> SearchRequest {
         node_name_filter_operator: None,
         wide_search_top_k: None,
         triplet_distance_penalty: None,
-        save_interaction: Some(false),
         user_id: None,
         tenant_id: None,
         verbose: None,

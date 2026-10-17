@@ -116,7 +116,6 @@ class SearchOpts(TypedDict, total=False):
     only_context: bool
     use_combined_context: bool
     verbose: bool
-    save_interaction: bool
     auto_feedback_detection: bool
     user_id: str
 
