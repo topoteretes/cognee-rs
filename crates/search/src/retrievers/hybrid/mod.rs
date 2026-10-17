@@ -1095,6 +1095,21 @@ impl SearchRetriever for HybridRetriever {
             "HYBRID_COMPLETION does not support query_batch.".to_string(),
         ))
     }
+
+    async fn unavailable_reason(&self) -> Option<String> {
+        // Like Python: skip the check on an empty graph, run hybrid if a backend errors.
+        if self.graph_db.is_empty().await.unwrap_or(true) {
+            return None;
+        }
+        match chunks::has_chunk_collection(self.vector_db.as_ref()).await {
+            Ok(false) => Some("DocumentChunk_text collection missing".to_string()),
+            Ok(true) => None,
+            Err(error) => {
+                debug!(%error, "hybrid chunk collection check failed; running hybrid");
+                None
+            }
+        }
+    }
 }
 
 #[cfg(test)]

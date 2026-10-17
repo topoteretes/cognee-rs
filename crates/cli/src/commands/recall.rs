@@ -107,6 +107,7 @@ pub fn run(args: RecallArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
 fn map_query_type(query_type: QueryTypeArg) -> SearchType {
     match query_type {
         QueryTypeArg::GraphCompletion => SearchType::GraphCompletion,
+        QueryTypeArg::HybridCompletion => SearchType::HybridCompletion,
         QueryTypeArg::RagCompletion => SearchType::RagCompletion,
         QueryTypeArg::Chunks => SearchType::Chunks,
         QueryTypeArg::Summaries => SearchType::Summaries,

@@ -14,7 +14,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use cognee_graph::NodeTruthState;
-use cognee_vector::VectorDB;
+use cognee_vector::{VectorDB, VectorDBResult};
 use uuid::Uuid;
 
 use crate::retrievers::context_items::{search_node_filtered, search_results_to_context};
@@ -35,6 +35,13 @@ const TEXT_FIELD: &str = "text";
 pub(crate) struct HybridChunksResult {
     pub chunks: Vec<SearchItem>,
     pub chunk_summaries: HashMap<String, String>,
+}
+
+/// Whether the `DocumentChunk_text` collection the chunk lane reads exists.
+pub(crate) async fn has_chunk_collection(vector_db: &dyn VectorDB) -> VectorDBResult<bool> {
+    vector_db
+        .has_collection(DOCUMENT_CHUNK_TYPE, TEXT_FIELD)
+        .await
 }
 
 /// Candidate limit for the `TextSummary_text` lane.

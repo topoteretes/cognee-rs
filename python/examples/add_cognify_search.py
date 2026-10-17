@@ -139,8 +139,8 @@ async def main() -> None:
 
     # ── Step 5: search ─────────────────────────────────────────────────────────
     #
-    # Queries the knowledge graph. The default search type is GRAPH_COMPLETION,
-    # which uses the LLM to synthesize an answer from the retrieved graph context.
+    # Queries the knowledge graph. The default search type is HYBRID_COMPLETION,
+    # which uses the LLM to synthesize an answer from the retrieved context.
     query = "Who designed the Eiffel Tower?"
     print(f'\nSearching: "{query}"')
     search_result = await cognee.search(query)

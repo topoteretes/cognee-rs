@@ -130,7 +130,7 @@ export interface NativeBindings {
   // Retrieval ops (Phase 4): search / recall.
   //
   // `cogneeSearch` sends a typed query to the knowledge graph.  `searchType`
-  // defaults to "GRAPH_COMPLETION"; all 15 SCREAMING_SNAKE_CASE variants are
+  // defaults to "HYBRID_COMPLETION"; all 15 SCREAMING_SNAKE_CASE variants are
   // accepted. `SearchResponse` is passed through Rust serde so its shape
   // mirrors `cognee_search::SearchResponse`.
   //

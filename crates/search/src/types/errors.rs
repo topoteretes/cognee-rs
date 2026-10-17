@@ -5,6 +5,9 @@ pub enum SearchError {
     #[error("invalid input: {0}")]
     InvalidInput(String),
 
+    #[error("invalid hybrid search config: {0}")]
+    InvalidHybridSearchConfig(String),
+
     #[error("vector error: {0}")]
     VectorError(String),
 

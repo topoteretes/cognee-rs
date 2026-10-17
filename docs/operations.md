@@ -205,13 +205,16 @@ indexes them into the `Triplet`/`text` vector collection for
 
 Unified orchestration across 16 retrieval strategies selected by `SearchType`
 ([`crates/search/src/types/search_type.rs`](../crates/search/src/types/search_type.rs)):
-`GraphCompletion` (default), `GraphCompletionCot`, `GraphCompletionContextExtension`,
+`GraphCompletion`, `GraphCompletionCot`, `GraphCompletionContextExtension`,
 `GraphSummaryCompletion`, `TripletCompletion`, `RagCompletion`, `Chunks`,
 `Summaries`, `Temporal`, `Cypher`, `NaturalLanguage`, `FeelingLucky`, `Feedback`,
-`CodingRules`, `ChunksLexical`, `HybridCompletion` (combines vector search over
+`CodingRules`, `ChunksLexical`, `HybridCompletion` (default; combines vector search over
 chunks/summaries/entities/edge-facts and
 1-hop graph-neighborhood expansion around matched entities, then answers via
-LLM completion). Entry: [`cognee-search`](../crates/search/)
+LLM completion). A hybrid search falls back to `GraphCompletion` when it sets
+`node_type`, `neighborhood_depth` or `feedback_influence`, or when the
+`DocumentChunk_text` collection is missing; setting `wide_search_top_k` or
+`triplet_distance_penalty` with hybrid is an error. Entry: [`cognee-search`](../crates/search/)
 (`SearchBuilder` / `SearchOrchestrator`).
 
 ## Additional operations

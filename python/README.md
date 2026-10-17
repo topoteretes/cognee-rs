@@ -224,7 +224,7 @@ result = await cognee.add_and_cognify(
 
 #### search
 
-Query the knowledge graph. Defaults to `GRAPH_COMPLETION`.
+Query the knowledge graph. Defaults to `HYBRID_COMPLETION`.
 
 ```python
 result = await cognee.search("What is the capital of France?")

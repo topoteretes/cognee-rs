@@ -84,7 +84,7 @@ impl PyCognee {
     /// Supported ``opts`` keys (both ``snake_case`` and ``camelCase`` accepted):
     ///
     /// - ``search_type`` / ``searchType`` — one of the 16 search strategy strings
-    ///   (default ``"GRAPH_COMPLETION"``).  An unknown value raises
+    ///   (default ``"HYBRID_COMPLETION"``).  An unknown value raises
     ///   ``CogneeValidationError``.
     /// - ``datasets`` — list of dataset name strings to restrict the search
     /// - ``dataset_ids`` / ``datasetIds`` — list of dataset UUID strings

@@ -8,7 +8,6 @@ pub enum SearchType {
     Chunks,
     RagCompletion,
     TripletCompletion,
-    #[default]
     GraphCompletion,
     GraphSummaryCompletion,
     Cypher,
@@ -20,6 +19,7 @@ pub enum SearchType {
     Temporal,
     CodingRules,
     ChunksLexical,
+    #[default]
     HybridCompletion,
 }
 
