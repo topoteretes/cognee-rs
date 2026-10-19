@@ -2122,6 +2122,189 @@ impl GraphDBTrait for PgGraphAdapter {
         );
         self.subgraph_query(&sql, vec![ids.into()]).await
     }
+
+    /// One read of the `Timestamp` rows with the window test in SQL. Port of
+    /// Python's `postgres_demo` adapter query, with its plain
+    /// `(properties->>'time_at')::bigint` casts made total (see
+    /// [`pg_timestamp_period`]) so a malformed row is skipped, as the default
+    /// skips it, instead of failing the statement.
+    async fn get_timestamps_in_range(
+        &self,
+        start_ms: Option<i64>,
+        end_ms: Option<i64>,
+    ) -> GraphDBResult<Vec<crate::WindowTimestamp>> {
+        let sql = format!(
+            "SELECT t.id, t.properties->>'timestamp_str' AS timestamp_str, p.time_at, \
+             COALESCE(p.until_raw, p.time_at + {span}) AS time_until \
+             FROM graph_node t {period} \
+             WHERE t.type = $1 AND p.time_at IS NOT NULL {window} \
+             ORDER BY p.time_at, t.id",
+            span = crate::LEGACY_TIMESTAMP_SPAN_MS,
+            period = pg_timestamp_period("t"),
+            window = pg_window_predicate(2, 3),
+        );
+        let rows = self
+            .query_all_tuned(Statement::from_sql_and_values(
+                DatabaseBackend::Postgres,
+                &sql,
+                [
+                    cognee_models::Timestamp::TYPE_NAME.into(),
+                    sea_orm::Value::BigInt(end_ms),
+                    sea_orm::Value::BigInt(start_ms),
+                ],
+            ))
+            .await
+            .map_err(|e| GraphDBError::QueryError(e.to_string()))?;
+        let mut out = Vec::with_capacity(rows.len());
+        for row in &rows {
+            out.push(crate::WindowTimestamp {
+                id: row
+                    .try_get("", "id")
+                    .map_err(|e| GraphDBError::QueryError(e.to_string()))?,
+                timestamp_str: row.try_get("", "timestamp_str").unwrap_or(None),
+                time_at: row
+                    .try_get("", "time_at")
+                    .map_err(|e| GraphDBError::QueryError(e.to_string()))?,
+                time_until: row
+                    .try_get("", "time_until")
+                    .map_err(|e| GraphDBError::QueryError(e.to_string()))?,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Python's two `postgres_demo` joins — a candidate's edge straight into
+    /// an in-window `Timestamp`, and a candidate chunk's `contains` edge to an
+    /// `Entity` with an edge into one — driven from the candidates' edges, so
+    /// the cost follows the candidate count, not the window.
+    async fn get_temporal_anchors(
+        &self,
+        chunk_ids: &[String],
+        entity_ids: &[String],
+        start_ms: Option<i64>,
+        end_ms: Option<i64>,
+    ) -> GraphDBResult<crate::TemporalAnchors> {
+        let chunk_set: HashSet<String> = chunk_ids.iter().cloned().collect();
+        let entity_set: HashSet<String> = entity_ids.iter().cloned().collect();
+        if chunk_set.is_empty() && entity_set.is_empty() {
+            return Ok(crate::TemporalAnchors::default());
+        }
+        let period = pg_timestamp_period("t");
+        let window = pg_window_predicate(3, 4);
+        let direct_sql = format!(
+            "SELECT DISTINCT e.source_id AS candidate_id, t.id AS timestamp_id \
+             FROM graph_edge e JOIN graph_node t ON t.id = e.target_id {period} \
+             WHERE e.source_id = ANY($1::text[]) AND t.type = $2 \
+             AND p.time_at IS NOT NULL {window}"
+        );
+        let via_sql = format!(
+            "SELECT DISTINCT e1.source_id AS chunk_id, e2.source_id AS entity_id, \
+             t.id AS timestamp_id \
+             FROM graph_edge e1 \
+             JOIN graph_node en ON en.id = e1.target_id \
+             JOIN graph_edge e2 ON e2.source_id = en.id \
+             JOIN graph_node t ON t.id = e2.target_id {period} \
+             WHERE e1.source_id = ANY($1::text[]) AND t.type = $2 \
+             AND p.time_at IS NOT NULL {window} \
+             AND e1.relationship_name = $5 AND en.type = $6"
+        );
+
+        let candidates: Vec<String> = chunk_set.union(&entity_set).cloned().collect();
+        let mut direct_rows = Vec::new();
+        for batch in candidates.chunks(ID_BATCH) {
+            let rows = self
+                .query_all_tuned(Statement::from_sql_and_values(
+                    DatabaseBackend::Postgres,
+                    &direct_sql,
+                    [
+                        batch.to_vec().into(),
+                        cognee_models::Timestamp::TYPE_NAME.into(),
+                        sea_orm::Value::BigInt(end_ms),
+                        sea_orm::Value::BigInt(start_ms),
+                    ],
+                ))
+                .await
+                .map_err(|e| GraphDBError::QueryError(e.to_string()))?;
+            for row in &rows {
+                let candidate: String = row
+                    .try_get("", "candidate_id")
+                    .map_err(|e| GraphDBError::QueryError(e.to_string()))?;
+                let timestamp: String = row
+                    .try_get("", "timestamp_id")
+                    .map_err(|e| GraphDBError::QueryError(e.to_string()))?;
+                direct_rows.push((candidate, timestamp));
+            }
+        }
+
+        let chunks: Vec<String> = chunk_set.iter().cloned().collect();
+        let mut via_rows = Vec::new();
+        for batch in chunks.chunks(ID_BATCH) {
+            let rows = self
+                .query_all_tuned(Statement::from_sql_and_values(
+                    DatabaseBackend::Postgres,
+                    &via_sql,
+                    [
+                        batch.to_vec().into(),
+                        cognee_models::Timestamp::TYPE_NAME.into(),
+                        sea_orm::Value::BigInt(end_ms),
+                        sea_orm::Value::BigInt(start_ms),
+                        crate::temporal::CONTAINS_RELATIONSHIP.into(),
+                        crate::temporal::ENTITY_NODE_TYPE.into(),
+                    ],
+                ))
+                .await
+                .map_err(|e| GraphDBError::QueryError(e.to_string()))?;
+            for row in &rows {
+                let get = |column: &str| -> GraphDBResult<String> {
+                    row.try_get("", column)
+                        .map_err(|e| GraphDBError::QueryError(e.to_string()))
+                };
+                via_rows.push((get("chunk_id")?, get("entity_id")?, get("timestamp_id")?));
+            }
+        }
+        Ok(crate::TemporalAnchors::from_rows(
+            direct_rows,
+            via_rows,
+            &chunk_set,
+        ))
+    }
+}
+
+/// A total `jsonb -> bigint` read of one integer property of `{alias}`, the
+/// SQL form of `cognee_graph::timestamp_period`'s `int(value)`: a JSON number
+/// (truncated toward zero) or a string of digits; anything else is `NULL`.
+/// Python's plain `(properties->>'time_at')::bigint` raises on the first row
+/// whose property is not an integer and fails the whole statement.
+fn pg_json_bigint(alias: &str, key: &str) -> String {
+    format!(
+        "(CASE jsonb_typeof({alias}.properties->'{key}') \
+         WHEN 'number' THEN trunc(({alias}.properties->>'{key}')::numeric)::bigint \
+         WHEN 'string' THEN CASE WHEN ({alias}.properties->>'{key}') ~ '^\\s*-?[0-9]+\\s*$' \
+         THEN btrim({alias}.properties->>'{key}')::bigint END END)"
+    )
+}
+
+/// `CROSS JOIN LATERAL` exposing `p.time_at` and `p.until_raw` (the stored
+/// `time_until`, `NULL` when absent or not an integer) for the node `{alias}`.
+fn pg_timestamp_period(alias: &str) -> String {
+    format!(
+        "CROSS JOIN LATERAL (SELECT {} AS time_at, {} AS until_raw) p",
+        pg_json_bigint(alias, "time_at"),
+        pg_json_bigint(alias, "time_until"),
+    )
+}
+
+/// The half-open window test on [`pg_timestamp_period`]'s columns, with the
+/// window end bound at `$end_param` and the start at `$start_param` (each a
+/// nullable `bigint`; `NULL` leaves that side open). A missing `time_until`
+/// spans one second, as everywhere else.
+fn pg_window_predicate(end_param: usize, start_param: usize) -> String {
+    format!(
+        "AND (${end_param}::bigint IS NULL OR p.time_at < ${end_param}::bigint) \
+         AND (${start_param}::bigint IS NULL OR \
+         COALESCE(p.until_raw, p.time_at + {span}) > ${start_param}::bigint)",
+        span = crate::LEGACY_TIMESTAMP_SPAN_MS,
+    )
 }
 
 // ---------------------------------------------------------------------------

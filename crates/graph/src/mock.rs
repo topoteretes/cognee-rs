@@ -155,7 +155,8 @@ impl MockGraphDB {
     ///
     /// Currently records `"get_graph_data"`, `"get_filtered_graph_data"`,
     /// `"get_candidate_nodes_by_label"`, `"get_nodeset_subgraph"`,
-    /// `"get_neighborhood"`, `"get_node_truth_state"`,
+    /// `"get_neighborhood"`, `"get_timestamps_in_range"`,
+    /// `"get_temporal_anchors"`, `"get_node_truth_state"`,
     /// `"set_node_truth_state"`, `"delete_nodes"`, and `"close"`.
     pub fn get_call_log(&self) -> Vec<String> {
         self.call_log.lock().unwrap().clone() // lock poison is unrecoverable
@@ -725,6 +726,91 @@ impl GraphDBTrait for MockGraphDB {
         Ok((nodes, edges))
     }
 
+    /// A direct scan of the in-memory node store, standing in for the native
+    /// queries of the real adapters.
+    async fn get_timestamps_in_range(
+        &self,
+        start_ms: Option<i64>,
+        end_ms: Option<i64>,
+    ) -> GraphDBResult<Vec<crate::WindowTimestamp>> {
+        self.call_log
+            .lock()
+            .unwrap() // lock poison is unrecoverable
+            .push("get_timestamps_in_range".to_string());
+        let nodes = self.nodes.lock().unwrap(); // lock poison is unrecoverable
+        let mut matches: Vec<crate::WindowTimestamp> = nodes
+            .iter()
+            .filter(|(_, data)| {
+                data.get("type").and_then(Value::as_str)
+                    == Some(cognee_models::Timestamp::TYPE_NAME)
+            })
+            .filter_map(|(id, data)| crate::WindowTimestamp::from_properties(id, data))
+            .filter(|timestamp| timestamp.overlaps(start_ms, end_ms))
+            .collect();
+        crate::temporal::sort_window(&mut matches);
+        Ok(matches)
+    }
+
+    /// The two edge patterns of the native queries (`candidate -> timestamp`
+    /// and `chunk -contains-> entity -> timestamp`), matched over the
+    /// in-memory edge list.
+    async fn get_temporal_anchors(
+        &self,
+        chunk_ids: &[String],
+        entity_ids: &[String],
+        start_ms: Option<i64>,
+        end_ms: Option<i64>,
+    ) -> GraphDBResult<crate::TemporalAnchors> {
+        self.call_log
+            .lock()
+            .unwrap() // lock poison is unrecoverable
+            .push("get_temporal_anchors".to_string());
+        let chunk_set: HashSet<String> = chunk_ids.iter().cloned().collect();
+        let entity_set: HashSet<String> = entity_ids.iter().cloned().collect();
+        let nodes = self.nodes.lock().unwrap(); // lock poison is unrecoverable
+        let edges = self.edges.lock().unwrap(); // lock poison is unrecoverable
+        let node_type = |id: &str| {
+            nodes
+                .get(id)
+                .and_then(|data| data.get("type"))
+                .and_then(Value::as_str)
+        };
+        let in_window = |id: &str| {
+            node_type(id) == Some(cognee_models::Timestamp::TYPE_NAME)
+                && nodes
+                    .get(id)
+                    .and_then(|data| crate::WindowTimestamp::from_properties(id, data))
+                    .is_some_and(|timestamp| timestamp.overlaps(start_ms, end_ms))
+        };
+        let present = |id: &str| nodes.contains_key(id);
+
+        let mut direct: HashSet<(String, String)> = HashSet::new();
+        for (src, tgt, _, _) in edges.iter() {
+            if (chunk_set.contains(src) || entity_set.contains(src))
+                && present(src)
+                && in_window(tgt)
+            {
+                direct.insert((src.clone(), tgt.clone()));
+            }
+        }
+        let mut via: HashSet<(String, String, String)> = HashSet::new();
+        for (chunk, entity, rel, _) in edges.iter() {
+            if !chunk_set.contains(chunk)
+                || !present(chunk)
+                || rel != crate::temporal::CONTAINS_RELATIONSHIP
+                || node_type(entity) != Some(crate::temporal::ENTITY_NODE_TYPE)
+            {
+                continue;
+            }
+            for (src, tgt, _, _) in edges.iter() {
+                if src == entity && in_window(tgt) {
+                    via.insert((chunk.clone(), entity.clone(), tgt.clone()));
+                }
+            }
+        }
+        Ok(crate::TemporalAnchors::from_rows(direct, via, &chunk_set))
+    }
+
     async fn get_node_truth_state(
         &self,
         node_ids: &[String],
@@ -1193,6 +1279,73 @@ mod tests {
         assert!(
             orphans.is_empty(),
             "EdgeType with degree > 0 should not be orphaned"
+        );
+    }
+
+    /// The mock's direct scans agree with the trait defaults the real
+    /// adapters are held to (the shared adapter tests do the same for
+    /// Ladybug and Postgres).
+    #[tokio::test]
+    async fn temporal_reads_match_the_trait_defaults() {
+        let db = MockGraphDB::new();
+        let day = cognee_models::Timestamp::from_text("2020-09-14").unwrap();
+        let year = cognee_models::Timestamp::from_text("2020").unwrap();
+        db.add_nodes(&[&day, &year]).await.unwrap();
+        for (id, node_type) in [
+            ("c1", "DocumentChunk"),
+            ("c2", "DocumentChunk"),
+            ("c3", "DocumentChunk"),
+            ("e1", "Entity"),
+            ("e2", "Entity"),
+        ] {
+            db.add_node_raw(serde_json::json!({"id": id, "name": id, "type": node_type}))
+                .await
+                .unwrap();
+        }
+        let (day_id, year_id) = (day.base.id.to_string(), year.base.id.to_string());
+        for (src, tgt, rel) in [
+            ("c1", day_id.as_str(), "contains"),
+            ("c2", "e1", "contains"),
+            ("e1", year_id.as_str(), "founded_at"),
+            ("e2", day_id.as_str(), "born_at"),
+            ("c3", "e2", "mentions"),
+        ] {
+            db.add_edge(src, tgt, rel, None).await.unwrap();
+        }
+        let chunks: Vec<String> = ["c1", "c2", "c3"].map(String::from).to_vec();
+        let entities = vec!["e2".to_string()];
+        for (start, end) in [
+            (None, None),
+            (Some(day.time_at), Some(day.time_until)),
+            (Some(day.time_until), None),
+            (None, Some(year.time_at)),
+        ] {
+            assert_eq!(
+                db.get_timestamps_in_range(start, end).await.unwrap(),
+                crate::default_timestamps_in_range(&db, start, end)
+                    .await
+                    .unwrap(),
+            );
+            assert_eq!(
+                db.get_temporal_anchors(&chunks, &entities, start, end)
+                    .await
+                    .unwrap(),
+                crate::default_temporal_anchors(&db, &chunks, &entities, start, end)
+                    .await
+                    .unwrap(),
+            );
+        }
+        let anchors = db
+            .get_temporal_anchors(&chunks, &entities, Some(day.time_at), Some(day.time_until))
+            .await
+            .unwrap();
+        assert_eq!(
+            anchors.chunk_ids,
+            ["c1", "c2"].map(String::from).into_iter().collect()
+        );
+        assert_eq!(
+            anchors.entity_ids,
+            ["e1", "e2"].map(String::from).into_iter().collect()
         );
     }
 }

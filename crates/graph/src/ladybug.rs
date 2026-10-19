@@ -8,7 +8,7 @@ use cognee_utils::tracing_keys::{COGNEE_DB_QUERY, COGNEE_DB_ROW_COUNT};
 use lbug::{Connection, Database, SystemConfig, Value as LbugValue};
 use serde_json::{Value, json};
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock, TryLockError};
 use tokio::sync::Mutex;
 use tracing::{Span, instrument};
@@ -775,6 +775,24 @@ impl LadybugAdapter {
         true
     }
 
+    /// A [`WindowTimestamp`](crate::WindowTimestamp) from an `(id,
+    /// properties)` column pair of a `Timestamp` row; `Ok(None)` when the id
+    /// is missing or the node carries no integer `time_at`.
+    fn window_timestamp_from_columns(
+        id: Option<&serde_json::Value>,
+        properties: Option<&serde_json::Value>,
+    ) -> GraphDBResult<Option<crate::WindowTimestamp>> {
+        let Some(id) = id.and_then(|v| v.as_str()) else {
+            return Ok(None);
+        };
+        let props: NodeData = match properties.and_then(|v| v.as_str()) {
+            Some(raw) => serde_json::from_str(&sanitize_json_control_chars(raw))
+                .map_err(GraphDBError::SerializationError)?,
+            None => NodeData::new(),
+        };
+        Ok(crate::WindowTimestamp::from_properties(id, &props))
+    }
+
     fn escape_cypher_string(value: &str) -> String {
         value.replace('\\', "\\\\").replace('\'', "\\'")
     }
@@ -1372,8 +1390,6 @@ impl GraphDBTrait for LadybugAdapter {
     /// workload ever inverts that assumption, the fix is a smaller chunk size
     /// rather than a return to per-edge queries.
     async fn has_edges(&self, edges: &[EdgeData]) -> GraphDBResult<Vec<EdgeData>> {
-        use std::collections::HashSet;
-
         if edges.is_empty() {
             return Ok(vec![]);
         }
@@ -1937,8 +1953,6 @@ impl GraphDBTrait for LadybugAdapter {
         node_names: &[String],
         node_name_filter_operator: &str,
     ) -> GraphDBResult<(Vec<GraphNode>, Vec<EdgeData>)> {
-        use std::collections::HashSet;
-
         // Early return for empty node_names
         if node_names.is_empty() {
             return Ok((Vec::new(), Vec::new()));
@@ -2079,8 +2093,6 @@ impl GraphDBTrait for LadybugAdapter {
         node_ids: &[String],
         depth: usize,
     ) -> GraphDBResult<(Vec<GraphNode>, Vec<EdgeData>)> {
-        use std::collections::HashSet;
-
         if node_ids.is_empty() {
             return Ok((Vec::new(), Vec::new()));
         }
@@ -2171,6 +2183,125 @@ impl GraphDBTrait for LadybugAdapter {
         }
 
         Ok((nodes, edges))
+    }
+
+    /// The `Timestamp` nodes alone (`n.type` is a column), with the window
+    /// test applied to their parsed properties.
+    ///
+    /// Python's Ladybug adapter runs the window test in Cypher through
+    /// `json_extract` on the properties string. That needs Ladybug's JSON
+    /// extension, which this adapter deliberately never installs (see
+    /// [`GraphDBTrait::initialize`]), so the query here narrows to the
+    /// `Timestamp` rows and the comparison runs on the parsed JSON instead —
+    /// the same rows, without the edge table the default scan reads.
+    async fn get_timestamps_in_range(
+        &self,
+        start_ms: Option<i64>,
+        end_ms: Option<i64>,
+    ) -> GraphDBResult<Vec<crate::WindowTimestamp>> {
+        let query = format!(
+            "MATCH (n:Node) WHERE n.type = '{}' RETURN n.id, n.properties",
+            Self::escape_cypher_string(cognee_models::Timestamp::TYPE_NAME)
+        );
+        let mut matches = Vec::new();
+        for row in self.execute_query(&query)? {
+            let Some(timestamp) = Self::window_timestamp_from_columns(row.first(), row.get(1))?
+            else {
+                continue;
+            };
+            if timestamp.overlaps(start_ms, end_ms) {
+                matches.push(timestamp);
+            }
+        }
+        crate::temporal::sort_window(&mut matches);
+        Ok(matches)
+    }
+
+    /// Python's two Cypher patterns — a candidate's edge straight into a
+    /// `Timestamp`, and a candidate chunk's `contains` edge to an `Entity`
+    /// with an edge into one — with the window test run on the parsed
+    /// properties of the timestamps they reach (see
+    /// [`get_timestamps_in_range`](Self::get_timestamps_in_range) for why it
+    /// is not in the query).
+    async fn get_temporal_anchors(
+        &self,
+        chunk_ids: &[String],
+        entity_ids: &[String],
+        start_ms: Option<i64>,
+        end_ms: Option<i64>,
+    ) -> GraphDBResult<crate::TemporalAnchors> {
+        let chunk_set: HashSet<String> = chunk_ids.iter().cloned().collect();
+        let entity_set: HashSet<String> = entity_ids.iter().cloned().collect();
+        if chunk_set.is_empty() && entity_set.is_empty() {
+            return Ok(crate::TemporalAnchors::default());
+        }
+        let timestamp_type = Self::escape_cypher_string(cognee_models::Timestamp::TYPE_NAME);
+        // Parsed once per timestamp id: one node is typically reached by many
+        // candidates.
+        let mut in_window: HashMap<String, bool> = HashMap::new();
+        let mut check = |id_value: Option<&serde_json::Value>,
+                         props_value: Option<&serde_json::Value>|
+         -> GraphDBResult<Option<String>> {
+            let Some(id) = id_value.and_then(|v| v.as_str()) else {
+                return Ok(None);
+            };
+            if let Some(hit) = in_window.get(id) {
+                return Ok(hit.then(|| id.to_string()));
+            }
+            let hit = Self::window_timestamp_from_columns(id_value, props_value)?
+                .is_some_and(|timestamp| timestamp.overlaps(start_ms, end_ms));
+            in_window.insert(id.to_string(), hit);
+            Ok(hit.then(|| id.to_string()))
+        };
+
+        let candidate_list = Self::cypher_id_list(
+            chunk_set
+                .iter()
+                .chain(entity_set.iter())
+                .map(String::as_str),
+        );
+        let direct_query = format!(
+            "MATCH (c:Node)-[r:EDGE]->(t:Node) WHERE c.id IN [{candidate_list}] \
+             AND t.type = '{timestamp_type}' RETURN DISTINCT c.id, t.id, t.properties"
+        );
+        let mut direct_rows = Vec::new();
+        for row in self.execute_query(&direct_query)? {
+            let (Some(candidate), Some(timestamp)) = (
+                row.first().and_then(|v| v.as_str()).map(str::to_string),
+                check(row.get(1), row.get(2))?,
+            ) else {
+                continue;
+            };
+            direct_rows.push((candidate, timestamp));
+        }
+
+        let mut via_rows = Vec::new();
+        if !chunk_set.is_empty() {
+            let chunk_list = Self::cypher_id_list(chunk_set.iter().map(String::as_str));
+            let via_query = format!(
+                "MATCH (c:Node)-[r1:EDGE]->(e:Node)-[r2:EDGE]->(t:Node) \
+                 WHERE c.id IN [{chunk_list}] AND r1.relationship_name = '{}' \
+                 AND e.type = '{}' AND t.type = '{timestamp_type}' \
+                 RETURN DISTINCT c.id, e.id, t.id, t.properties",
+                Self::escape_cypher_string(crate::temporal::CONTAINS_RELATIONSHIP),
+                Self::escape_cypher_string(crate::temporal::ENTITY_NODE_TYPE),
+            );
+            for row in self.execute_query(&via_query)? {
+                let (Some(chunk), Some(entity), Some(timestamp)) = (
+                    row.first().and_then(|v| v.as_str()).map(str::to_string),
+                    row.get(1).and_then(|v| v.as_str()).map(str::to_string),
+                    check(row.get(2), row.get(3))?,
+                ) else {
+                    continue;
+                };
+                via_rows.push((chunk, entity, timestamp));
+            }
+        }
+        Ok(crate::TemporalAnchors::from_rows(
+            direct_rows,
+            via_rows,
+            &chunk_set,
+        ))
     }
 
     // -----------------------------------------------------------------

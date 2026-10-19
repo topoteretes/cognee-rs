@@ -1654,3 +1654,236 @@ pub async fn test_nul_bytes_in_text_are_persistable(db: &dyn GraphDBTrait) {
         "the sanitized spelling of the relationship must also resolve"
     );
 }
+
+// -- temporal reads (SDK-1061) -----------------------------------------------
+
+/// Ids of the Timestamp nodes [`seed_temporal_fixture`] writes.
+struct TemporalFixture {
+    day: String,
+    year: String,
+    legacy: String,
+    later: String,
+}
+
+/// The Timestamp-node graph default cognify writes: chunks `contains` the
+/// timestamps they name and the entities they mention, entities reach
+/// timestamps through `*_at` edges. Plus the shapes that must NOT anchor.
+async fn seed_temporal_fixture(db: &dyn GraphDBTrait) -> TemporalFixture {
+    use cognee_models::Timestamp;
+
+    db.delete_graph().await.unwrap();
+    let day = Timestamp::from_text("1965-03-18").unwrap();
+    let year = Timestamp::from_text("1965").unwrap();
+    let later = Timestamp::from_text("1970-07-01").unwrap();
+    db.add_nodes(&[&day, &year, &later]).await.unwrap();
+
+    // A Timestamp written before `time_until` existed (the temporal-event
+    // pipeline's): it spans one second from noon on the day.
+    let legacy_at = day.time_at + 12 * 3_600_000;
+    db.add_node_raw(json!({
+        "id": "ts_legacy", "name": "noon", "type": "Timestamp", "time_at": legacy_at,
+    }))
+    .await
+    .unwrap();
+    // Not usable as a time: no integer `time_at`, so never in any window.
+    db.add_node_raw(json!({
+        "id": "ts_broken", "name": "broken", "type": "Timestamp", "time_at": "soon",
+    }))
+    .await
+    .unwrap();
+    // Carries a period but is no Timestamp, so the type filter must drop it.
+    db.add_node_raw(json!({
+        "id": "not_a_ts", "name": "imposter", "type": "Entity", "time_at": day.time_at,
+        "time_until": day.time_until,
+    }))
+    .await
+    .unwrap();
+    for (id, node_type) in [
+        ("c_day", "DocumentChunk"),
+        ("c_year", "DocumentChunk"),
+        ("c_via", "DocumentChunk"),
+        ("c_none", "DocumentChunk"),
+        ("c_mentions", "DocumentChunk"),
+        ("c_legacy", "DocumentChunk"),
+        ("c_imposter", "DocumentChunk"),
+        ("c_broken", "DocumentChunk"),
+        ("e_launch", "Entity"),
+        ("e_hub", "Entity"),
+        ("e_later", "Entity"),
+        ("e_typed", "EntityType"),
+    ] {
+        db.add_node_raw(json!({"id": id, "name": id, "type": node_type}))
+            .await
+            .unwrap();
+    }
+    let (day_id, year_id, later_id) = (
+        day.base.id.to_string(),
+        year.base.id.to_string(),
+        later.base.id.to_string(),
+    );
+    for (source, target, relationship) in [
+        ("c_day", day_id.as_str(), "contains"),
+        ("c_year", year_id.as_str(), "contains"),
+        ("c_via", "e_launch", "contains"),
+        ("e_launch", day_id.as_str(), "happened_at"),
+        ("c_via", "e_later", "contains"),
+        ("e_later", later_id.as_str(), "born_at"),
+        ("e_hub", year_id.as_str(), "started_at"),
+        ("c_none", "e_later", "contains"),
+        // Not a `contains` edge: the entity's date does not reach the chunk.
+        ("c_mentions", "e_launch", "mentions"),
+        ("c_legacy", "ts_legacy", "contains"),
+        ("c_imposter", "not_a_ts", "contains"),
+        ("c_broken", "ts_broken", "contains"),
+        // Through a node that is no Entity: not an anchor either.
+        ("c_none", "e_typed", "contains"),
+        ("e_typed", day_id.as_str(), "defined_at"),
+    ] {
+        db.add_edge(source, target, relationship, None)
+            .await
+            .unwrap();
+    }
+    TemporalFixture {
+        day: day_id,
+        year: year_id,
+        legacy: "ts_legacy".to_string(),
+        later: later_id,
+    }
+}
+
+fn id_set(values: &[&str]) -> std::collections::HashSet<String> {
+    values.iter().map(|value| (*value).to_string()).collect()
+}
+
+/// The window shapes the native implementations are compared to the default
+/// on: open, closed, open-ended either way, and one that matches nothing.
+fn temporal_windows(day: &cognee_models::Timestamp) -> [(Option<i64>, Option<i64>); 5] {
+    [
+        (None, None),
+        (Some(day.time_at), Some(day.time_until)),
+        (Some(day.time_until), None),
+        (None, Some(day.time_at)),
+        (Some(0), Some(1)),
+    ]
+}
+
+/// `get_timestamps_in_range` finds the Timestamp nodes overlapping a window,
+/// ordered by `(time_at, id)`, and the backend's implementation agrees with
+/// the trait default (`cognee_graph::default_timestamps_in_range`) on every
+/// window shape.
+pub async fn test_get_timestamps_in_range_matches_default(db: &dyn GraphDBTrait) {
+    let fx = seed_temporal_fixture(db).await;
+    let day = cognee_models::Timestamp::from_text("1965-03-18").unwrap();
+
+    let in_day = db
+        .get_timestamps_in_range(Some(day.time_at), Some(day.time_until))
+        .await
+        .unwrap();
+    let got: Vec<&str> = in_day.iter().map(|ts| ts.id.as_str()).collect();
+    // The year starts first, then the day, then the legacy second at noon.
+    assert_eq!(got, [fx.year.as_str(), fx.day.as_str(), fx.legacy.as_str()]);
+    let day_row = &in_day[1];
+    assert_eq!(day_row.timestamp_str.as_deref(), Some("1965-03-18"));
+    assert_eq!(
+        (day_row.time_at, day_row.time_until),
+        (day.time_at, day.time_until)
+    );
+    assert_eq!(in_day[2].time_until, in_day[2].time_at + 1000);
+
+    // An end equal to a period's start excludes it (half-open window).
+    let before_day = db
+        .get_timestamps_in_range(None, Some(day.time_at))
+        .await
+        .unwrap();
+    assert_eq!(
+        before_day
+            .iter()
+            .map(|ts| ts.id.as_str())
+            .collect::<Vec<_>>(),
+        [fx.year.as_str()]
+    );
+
+    for (start, end) in temporal_windows(&day) {
+        let native = db.get_timestamps_in_range(start, end).await.unwrap();
+        let default = cognee_graph::default_timestamps_in_range(db, start, end)
+            .await
+            .unwrap();
+        assert_eq!(native, default, "window {start:?}..{end:?}");
+    }
+    let everything = db.get_timestamps_in_range(None, None).await.unwrap();
+    assert_eq!(
+        everything.len(),
+        4,
+        "all four parseable Timestamps: {everything:?}"
+    );
+    assert!(everything.iter().any(|ts| ts.id == fx.later));
+}
+
+/// `get_temporal_anchors` finds which candidates reach the window — directly,
+/// or (for a chunk) through an `Entity` it `contains` — and the backend's
+/// implementation agrees with the trait default
+/// (`cognee_graph::default_temporal_anchors`) on every window shape.
+pub async fn test_get_temporal_anchors_matches_default(db: &dyn GraphDBTrait) {
+    let fx = seed_temporal_fixture(db).await;
+    let day = cognee_models::Timestamp::from_text("1965-03-18").unwrap();
+    let chunks: Vec<String> = [
+        "c_day",
+        "c_year",
+        "c_via",
+        "c_none",
+        "c_mentions",
+        "c_legacy",
+        "c_imposter",
+        "c_broken",
+        "c_missing",
+    ]
+    .iter()
+    .map(|id| (*id).to_string())
+    .collect();
+    let entities: Vec<String> = ["e_hub", "e_later", "e_missing"]
+        .iter()
+        .map(|id| (*id).to_string())
+        .collect();
+
+    let anchors = db
+        .get_temporal_anchors(&chunks, &entities, Some(day.time_at), Some(day.time_until))
+        .await
+        .unwrap();
+    assert_eq!(
+        anchors.timestamp_ids,
+        id_set(&[&fx.day, &fx.year, &fx.legacy])
+    );
+    assert_eq!(
+        anchors.chunk_ids,
+        id_set(&["c_day", "c_year", "c_via", "c_legacy"])
+    );
+    // e_hub directly; e_launch through c_via (it is not a candidate itself).
+    assert_eq!(anchors.entity_ids, id_set(&["e_hub", "e_launch"]));
+    assert_eq!(anchors.chunk_timestamps["c_day"], id_set(&[&fx.day]));
+    assert_eq!(anchors.chunk_timestamps["c_year"], id_set(&[&fx.year]));
+    assert_eq!(anchors.chunk_timestamps["c_via"], id_set(&[&fx.day]));
+    assert_eq!(anchors.chunk_timestamps.len(), 4);
+
+    for (start, end) in temporal_windows(&day) {
+        let native = db
+            .get_temporal_anchors(&chunks, &entities, start, end)
+            .await
+            .unwrap();
+        let default = cognee_graph::default_temporal_anchors(db, &chunks, &entities, start, end)
+            .await
+            .unwrap();
+        assert_eq!(native, default, "window {start:?}..{end:?}");
+    }
+    // The open window also reaches the later timestamp, through e_later.
+    let open = db
+        .get_temporal_anchors(&chunks, &entities, None, None)
+        .await
+        .unwrap();
+    assert!(open.timestamp_ids.contains(&fx.later));
+    assert!(open.chunk_ids.contains("c_none"));
+
+    // No candidates: nothing is anchored.
+    let none = db.get_temporal_anchors(&[], &[], None, None).await.unwrap();
+    assert!(none.is_empty());
+    assert_eq!(none, cognee_graph::TemporalAnchors::default());
+}

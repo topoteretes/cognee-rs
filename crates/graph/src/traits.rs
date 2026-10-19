@@ -8,6 +8,7 @@ use serde_json::Value;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
+use crate::temporal::{TemporalAnchors, WindowTimestamp};
 use crate::{EdgeData, GraphDBResult, GraphNode, NodeData};
 
 /// Composite key uniquely identifying an edge in the graph:
@@ -941,6 +942,55 @@ pub trait GraphDBTrait: Send + Sync {
         Ok(apply_neighborhood_scope(
             node_ids, depth, nodes, edges, scope,
         ))
+    }
+
+    /// The `Timestamp` nodes whose period overlaps the half-open window
+    /// `[start_ms, end_ms)`, in ms since the epoch (UTC); `None` leaves that
+    /// side open. A timestamp's period is `[time_at, time_until)` (see
+    /// `cognee_models::Timestamp`), so the test is `time_at < end` and
+    /// `time_until > start`; a node without `time_until` spans one second.
+    /// Ordered by `(time_at, id)`.
+    ///
+    /// Port of Python's `GraphDBInterface.get_timestamps_in_range`. The
+    /// default scans [`get_graph_data`](GraphDBTrait::get_graph_data)
+    /// ([`default_timestamps_in_range`](crate::default_timestamps_in_range));
+    /// `LadybugAdapter`, `PgGraphAdapter` and `MockGraphDB` override it with a
+    /// read of the `Timestamp` nodes alone, and must return the same set.
+    async fn get_timestamps_in_range(
+        &self,
+        start_ms: Option<i64>,
+        end_ms: Option<i64>,
+    ) -> GraphDBResult<Vec<WindowTimestamp>> {
+        crate::temporal::default_timestamps_in_range(self, start_ms, end_ms).await
+    }
+
+    /// Which of the given candidates are attached to a `Timestamp` inside the
+    /// half-open window `[start_ms, end_ms)` (ms since the epoch, UTC; `None`
+    /// leaves a side open).
+    ///
+    /// A chunk is anchored when it has an edge into a matching timestamp, or
+    /// `contains` an `Entity` that has any edge into one — an entity anchored
+    /// to a time carries it into every chunk that mentions it. An entity is
+    /// anchored when any of its edges points at a matching timestamp; the
+    /// relationship name is not inspected. See [`TemporalAnchors`] for the
+    /// result.
+    ///
+    /// Reading from the candidate side keeps the cost proportional to the
+    /// candidate count whatever the window matches. Port of Python's
+    /// `GraphDBInterface.get_temporal_anchors`. The default walks
+    /// [`get_neighborhood`](GraphDBTrait::get_neighborhood)
+    /// ([`default_temporal_anchors`](crate::default_temporal_anchors));
+    /// `LadybugAdapter`, `PgGraphAdapter` and `MockGraphDB` override it with
+    /// a native query, and must return the same anchors.
+    async fn get_temporal_anchors(
+        &self,
+        chunk_ids: &[String],
+        entity_ids: &[String],
+        start_ms: Option<i64>,
+        end_ms: Option<i64>,
+    ) -> GraphDBResult<TemporalAnchors> {
+        crate::temporal::default_temporal_anchors(self, chunk_ids, entity_ids, start_ms, end_ms)
+            .await
     }
 }
 

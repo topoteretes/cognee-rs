@@ -26,6 +26,7 @@
 mod dedup;
 mod error;
 mod formatted;
+mod temporal;
 mod traits;
 mod types;
 
@@ -40,6 +41,10 @@ pub mod mock;
 
 pub use error::{GraphDBError, GraphDBResult};
 pub use formatted::get_formatted_graph_data;
+pub use temporal::{
+    LEGACY_TIMESTAMP_SPAN_MS, TemporalAnchors, WindowTimestamp, default_temporal_anchors,
+    default_timestamps_in_range, timestamp_period,
+};
 pub use traits::{
     EdgeKey, GraphDBTrait, GraphDBTraitExt, NODE_LABEL_KEYS, NeighborhoodScope, NodeTruthState,
     apply_neighborhood_scope, node_label_contains,
