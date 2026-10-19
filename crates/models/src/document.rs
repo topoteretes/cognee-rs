@@ -155,9 +155,9 @@ pub fn classify_documents(data_items: &[Data]) -> Vec<Document> {
 
             // update_node_set: parse external_metadata for node_set array
             // Mirrors Python cognee/tasks/documents/classify_documents.py:update_node_set()
-            if let Some(ref meta_str) = doc.external_metadata
-                && let Ok(meta_val) = serde_json::from_str::<serde_json::Value>(meta_str)
-                && let Some(node_set_array) = meta_val.get("node_set").and_then(|v| v.as_array())
+            if let Some(node_set_value) =
+                node_set_value(doc.external_metadata.as_deref(), data.node_set.as_deref())
+                && let Some(node_set_array) = node_set_value.as_array()
             {
                 // Build NodeSet-like JSON values with deterministic IDs
                 // Python: NodeSet(id=generate_node_id(f"NodeSet:{name}"), name=name)
@@ -190,6 +190,25 @@ pub fn classify_documents(data_items: &[Data]) -> Vec<Document> {
             Some(doc)
         })
         .collect()
+}
+
+/// The `node_set` value a document is tagged from: the `node_set` key of its
+/// `external_metadata` when the key is present (whatever it holds — Python
+/// reads only that key), else the `Data.node_set` column.
+///
+/// The column fallback has no Python counterpart. Before SDK-1129 the Rust
+/// `add` wrote the node set to the column only, so every row ingested with a
+/// node set until then has the column and no metadata key; without the
+/// fallback those rows would stay untagged forever. The key wins when it is
+/// there, so a row that carries both behaves exactly as in Python.
+fn node_set_value(
+    external_metadata: Option<&str>,
+    node_set_column: Option<&str>,
+) -> Option<serde_json::Value> {
+    external_metadata
+        .and_then(|m| serde_json::from_str::<serde_json::Value>(m).ok())
+        .and_then(|v| v.get("node_set").cloned())
+        .or_else(|| node_set_column.and_then(|c| serde_json::from_str(c).ok()))
 }
 
 impl HasDataPoint for Document {
@@ -661,6 +680,76 @@ mod tests {
         // Empty array produces no NodeSet values, so stays unset
         assert!(docs[0].base.belongs_to_set.is_none());
         assert!(docs[0].base.source_node_set.is_none());
+    }
+
+    fn make_data_with_node_set_column(metadata: Option<&str>, column: &str) -> Data {
+        let mut builder = Data::builder(
+            Uuid::new_v4(),
+            "test.txt",
+            "/storage/test",
+            "text://test",
+            "txt",
+            "text/plain",
+            "hash123",
+            Uuid::new_v4(),
+        )
+        .node_set(column);
+        if let Some(metadata) = metadata {
+            builder = builder.external_metadata(metadata);
+        }
+        builder.build()
+    }
+
+    /// Rows ingested before SDK-1129 carry the node set in the `Data.node_set`
+    /// column only; they are tagged from it when the metadata has no
+    /// `node_set` key.
+    #[test]
+    fn node_set_column_tags_rows_without_the_metadata_key() {
+        for metadata in [None, Some(r#"{"other_key": "value"}"#), Some("not json")] {
+            let data = vec![make_data_with_node_set_column(metadata, r#"["legacy"]"#)];
+            let docs = classify_documents(&data);
+            assert_eq!(docs.len(), 1);
+            let bts = docs[0].base.belongs_to_set.as_ref().unwrap();
+            assert_eq!(bts.len(), 1, "metadata {metadata:?}");
+            assert_eq!(bts[0]["name"], "legacy");
+            assert_eq!(docs[0].base.source_node_set.as_deref(), Some("legacy"));
+        }
+    }
+
+    /// The metadata key wins whenever it is present — even holding `null` or
+    /// a non-list — so a row with both behaves exactly as Python's
+    /// `update_node_set`, which reads the key alone.
+    #[test]
+    fn node_set_metadata_key_wins_over_the_column() {
+        let data = vec![make_data_with_node_set_column(
+            Some(r#"{"node_set": ["from_metadata"]}"#),
+            r#"["from_column"]"#,
+        )];
+        let docs = classify_documents(&data);
+        assert_eq!(
+            docs[0].base.source_node_set.as_deref(),
+            Some("from_metadata")
+        );
+
+        for present_but_empty in [r#"{"node_set": null}"#, r#"{"node_set": "x"}"#] {
+            let data = vec![make_data_with_node_set_column(
+                Some(present_but_empty),
+                r#"["from_column"]"#,
+            )];
+            let docs = classify_documents(&data);
+            assert!(docs[0].base.belongs_to_set.is_none(), "{present_but_empty}");
+            assert!(docs[0].base.source_node_set.is_none());
+        }
+    }
+
+    #[test]
+    fn unreadable_node_set_column_leaves_belongs_to_set_unset() {
+        for column in ["not json", r#""a string""#, "[]"] {
+            let data = vec![make_data_with_node_set_column(None, column)];
+            let docs = classify_documents(&data);
+            assert!(docs[0].base.belongs_to_set.is_none(), "{column}");
+            assert!(docs[0].base.source_node_set.is_none());
+        }
     }
 
     #[test]
