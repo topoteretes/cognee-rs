@@ -685,6 +685,7 @@ fn validate_scalar_value(value: &Value, schema: &Value) -> Result<(), String> {
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used)]
 mod tests {
     use serde_json::json;
 
