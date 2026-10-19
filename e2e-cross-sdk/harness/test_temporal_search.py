@@ -2,6 +2,15 @@
 
 Both CLIs are run with --temporal-cognify on the same biography text.
 Node counts are compared with 50% tolerance (LLM is non-deterministic).
+
+The cognify tests check the Event/Timestamp graph the temporal pipeline
+writes. The TEMPORAL search tests do not exercise that graph: TEMPORAL is
+hybrid retrieval reranked by the question's time window in both SDKs
+(Python's ``TemporalHybridRetriever``, ported to Rust by SDK-1061), which
+reads the ``Timestamp`` nodes default cognify attaches to entities.
+On a graph built only by temporal cognify both SDKs therefore answer TEMPORAL
+with plain hybrid results; the Event-based Rust ``TemporalRetriever`` these
+tests were first written against is gone. They only assert a non-empty answer.
 """
 
 import pytest
@@ -135,7 +144,12 @@ def test_temporal_timestamp_count_within_tolerance(both_temporal_cognified):
 
 @requires_openai
 def test_temporal_search_returns_non_empty_results(both_temporal_cognified):
-    """TEMPORAL search must return non-empty output on the Rust SDK."""
+    """TEMPORAL search must return non-empty output on the Rust SDK.
+
+    On this temporal-cognify-only graph the answer is plain hybrid (see the
+    module docstring), so this checks the TEMPORAL lane end to end, not the
+    window rerank.
+    """
     _py_ws, rust_ws = both_temporal_cognified
 
     rust_results = run_rust_search(
@@ -150,7 +164,13 @@ def test_temporal_search_returns_non_empty_results(both_temporal_cognified):
 
 @requires_openai
 def test_temporal_search_with_year_filter(both_temporal_cognified):
-    """TEMPORAL search with a year reference must return results on the Rust SDK."""
+    """TEMPORAL search with a year reference must return results on the Rust SDK.
+
+    The year gives the window extraction a window, but this graph's
+    ``Timestamp`` nodes hang off ``Event`` nodes, which the rerank does not
+    walk (it looks at candidate chunks, ``Entity`` nodes and the entities a
+    chunk ``contains``), so the result is still the plain hybrid fallback.
+    """
     _py_ws, rust_ws = both_temporal_cognified
 
     # The biography fixture contains events from 1889 through 1970.
@@ -216,7 +236,11 @@ def test_temporal_cognify_produces_temporal_edges(both_temporal_cognified):
 
 @requires_openai
 def test_temporal_search_parity_both_sdks_return_non_empty(both_temporal_cognified):
-    """Both Python and Rust SDKs must return non-empty TEMPORAL search results."""
+    """Both Python and Rust SDKs must return non-empty TEMPORAL search results.
+
+    Both run ``TemporalHybridRetriever``, so on this graph both answer with
+    plain hybrid results.
+    """
     py_ws, rust_ws = both_temporal_cognified
 
     python_results = run_python_search(

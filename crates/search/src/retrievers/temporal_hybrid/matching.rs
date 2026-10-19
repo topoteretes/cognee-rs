@@ -57,8 +57,10 @@ pub(crate) enum ExtractedWindow {
 }
 
 /// One boundary as a UTC instant: `Ok(None)` for an open side, `Err(())` for
-/// calendar fields that name no real moment (`2021-02-29`, year 0). Python's
-/// `datetime(**fields, tzinfo=utc)` raises `ValueError` there.
+/// calendar fields that name no real moment (`2021-02-29`, year 0, month 13).
+/// Python's `datetime(**fields, tzinfo=utc)` raises `ValueError` for the
+/// in-range-but-impossible ones; for the out-of-range ones see
+/// [`classify_interval`].
 fn boundary_datetime(
     boundary: Option<&RawExtractedTimestamp>,
 ) -> Result<Option<DateTime<Utc>>, ()> {
@@ -88,6 +90,17 @@ fn boundary_datetime(
 /// Classify an extracted interval. Port of the second half of Python's
 /// `extract_query_interval`: both sides open is `no_time_constraint`; an
 /// impossible date, or a start at or after the end, is `invalid_interval`.
+///
+/// Deliberate divergence: calendar fields outside their range (month 13,
+/// day 32, hour 24, year 0 or above 9999) also land here as
+/// `invalid_interval`, so the search falls back to plain hybrid. In Python
+/// they never reach this step: `QueryInterval`'s `Timestamp` bounds every field
+/// with `ge`/`le` (`cognee/tasks/temporal_graph/models.py`), pydantic rejects
+/// the structured output, and the search fails. Only dates whose fields are
+/// each in range but do not exist together (`2021-02-29`) are
+/// `invalid_interval` on both sides. A malformed window from the model is a
+/// question without a usable date, not a provider outage, so Rust keeps
+/// answering it.
 pub(crate) fn classify_interval(interval: &QueryInterval) -> ExtractedWindow {
     let (Ok(start), Ok(end)) = (
         boundary_datetime(interval.starts_at.as_ref()),

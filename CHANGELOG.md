@@ -30,8 +30,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   search, and stamped its prompt with the machine's *local* date — is removed
   outright, as in Python: graphs built only by temporal cognify now get plain
   hybrid answers. The window prompt is Python's `QUERY_INTERVAL_PROMPT`, which
-  reads no clock; an LLM failure during window extraction now fails the search
-  (Python parity) instead of silently falling back. Other behaviour that follows
+  reads no clock. An LLM or transport failure during window extraction now
+  fails the search, as in Python, instead of silently falling back; a window
+  with out-of-range calendar fields (month 13, year 0) still falls back to plain
+  hybrid with reason `invalid_interval`, where Python's `QueryInterval`
+  validation raises and fails the search. Other behaviour that follows
   Python: an empty graph returns an empty context (not `NotFound`), batches are
   rejected, and `search.triplet_neighbor_cap` no longer applies to TEMPORAL
   (`search.hybrid` does).
@@ -43,7 +46,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shows per lane (default 5) and `candidate_top_k` what the hybrid fetch gathers
   first (default `4 × top_k`; per request,
   `retriever_specific_config.candidate_top_k`, the new
-  `SearchParams::candidate_top_k`). `GraphDBTrait` gains
+  `SearchParams::candidate_top_k`). `SearchParams` is not `#[non_exhaustive]`,
+  so out-of-tree code that builds it with a full struct literal must add
+  `candidate_top_k` or end the literal with `..Default::default()`.
+  `GraphDBTrait` gains
   `get_timestamps_in_range` and `get_temporal_anchors` with default
   implementations, so an out-of-tree backend keeps compiling and working; it may
   override them with a native query that returns the same result as

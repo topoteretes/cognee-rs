@@ -2194,17 +2194,39 @@ impl GraphDBTrait for LadybugAdapter {
     /// [`GraphDBTrait::initialize`]), so the query here narrows to the
     /// `Timestamp` rows and the comparison runs on the parsed JSON instead —
     /// the same rows, without the edge table the default scan reads.
+    ///
+    /// The span records how many `Timestamp` rows were scanned
+    /// (`cognee.db.row_count`) against how many fell in the window
+    /// (`cognee.db.matched_count`), so the cost of the full scan is visible
+    /// as the graph grows.
+    #[instrument(
+        name = "cognee.db.graph.timestamps_in_range",
+        level = "info",
+        skip_all,
+        fields(
+            cognee.db.system = "ladybug",
+            cognee.db.row_count = tracing::field::Empty,
+            cognee.db.matched_count = tracing::field::Empty,
+        ),
+        err,
+    )]
     async fn get_timestamps_in_range(
         &self,
         start_ms: Option<i64>,
         end_ms: Option<i64>,
     ) -> GraphDBResult<Vec<crate::WindowTimestamp>> {
+        // A full scan of the `Timestamp` nodes, each one's properties string
+        // JSON-parsed on every call: without the JSON extension the window
+        // cannot be pushed into the query, so every timestamp is read and
+        // tested here (see the doc comment above).
         let query = format!(
             "MATCH (n:Node) WHERE n.type = '{}' RETURN n.id, n.properties",
             Self::escape_cypher_string(cognee_models::Timestamp::TYPE_NAME)
         );
+        let rows = self.execute_query(&query)?;
+        Span::current().record(COGNEE_DB_ROW_COUNT, rows.len() as i64);
         let mut matches = Vec::new();
-        for row in self.execute_query(&query)? {
+        for row in rows {
             let Some(timestamp) = Self::window_timestamp_from_columns(row.first(), row.get(1))?
             else {
                 continue;
@@ -2213,6 +2235,7 @@ impl GraphDBTrait for LadybugAdapter {
                 matches.push(timestamp);
             }
         }
+        Span::current().record("cognee.db.matched_count", matches.len() as i64);
         crate::temporal::sort_window(&mut matches);
         Ok(matches)
     }

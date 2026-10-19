@@ -2272,14 +2272,22 @@ impl GraphDBTrait for PgGraphAdapter {
 
 /// A total `jsonb -> bigint` read of one integer property of `{alias}`, the
 /// SQL form of `cognee_graph::timestamp_period`'s `int(value)`: a JSON number
-/// (truncated toward zero) or a string of digits; anything else is `NULL`.
-/// Python's plain `(properties->>'time_at')::bigint` raises on the first row
-/// whose property is not an integer and fails the whole statement.
+/// (truncated toward zero) or a string of digits with an optional sign;
+/// anything else is `NULL`. Python's plain `(properties->>'time_at')::bigint`
+/// raises on the first row whose property is not an integer and fails the
+/// whole statement.
+///
+/// The string branch accepts a leading `+` as well as `-` because both other
+/// readers do: Python's `int("+7")` and the default implementation's
+/// `str::parse::<i64>` (`temporal::json_int`). Postgres' `bigint` input
+/// accepts a leading sign too, so the sign never turns a guarded value into a
+/// cast error. An out-of-range magnitude still raises (in either branch),
+/// where the default reader's parse failure yields `None`.
 fn pg_json_bigint(alias: &str, key: &str) -> String {
     format!(
         "(CASE jsonb_typeof({alias}.properties->'{key}') \
          WHEN 'number' THEN trunc(({alias}.properties->>'{key}')::numeric)::bigint \
-         WHEN 'string' THEN CASE WHEN ({alias}.properties->>'{key}') ~ '^\\s*-?[0-9]+\\s*$' \
+         WHEN 'string' THEN CASE WHEN ({alias}.properties->>'{key}') ~ '^\\s*[-+]?[0-9]+\\s*$' \
          THEN btrim({alias}.properties->>'{key}')::bigint END END)"
     )
 }
@@ -3180,5 +3188,31 @@ mod batch_dedup_tests {
             assert_eq!(row.try_get::<String>("", "created").unwrap(), "2020-01-01");
         })
         .await;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Temporal SQL fragments (no database required)
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod temporal_sql_tests {
+    use super::pg_json_bigint;
+
+    /// The string branch must take the same signed integers as
+    /// `temporal::json_int` (`str::parse::<i64>`) and Python's `int()`, which
+    /// both accept a leading `+`. The cast itself is exercised live by the
+    /// `PGGRAPH_TEST_URL`-gated suite; this pins the guard regex, which is
+    /// what decides between a value and `NULL`.
+    #[test]
+    fn pg_json_bigint_string_guard_accepts_either_sign() {
+        let sql = pg_json_bigint("n", "time_at");
+        assert!(
+            sql.contains(r"~ '^\s*[-+]?[0-9]+\s*$'"),
+            "string guard must accept an optional leading + or -: {sql}"
+        );
+        assert!(
+            sql.contains("THEN btrim(n.properties->>'time_at')::bigint"),
+            "the guarded string must still be cast to bigint: {sql}"
+        );
     }
 }

@@ -1386,6 +1386,17 @@ explicit per-lane knob is never capped). The effective defaults are:
 | `use_importance_weight` | `use_importance_weight` | `true` | `use_importance_weight=True` |
 | `node_name` | `node_name` | `None` | reused query node filter |
 | `node_name_filter_operator` | `node_name_filter_operator` | `"OR"` | `"OR"` / `"AND"` |
+| `candidate_top_k` | `candidate_top_k` | `top_k * 4` (TEMPORAL only) | `candidate_top_k` (defaults to `top_k * 4`) |
+
+**TEMPORAL.** `TEMPORAL` search (`SearchType::Temporal`) runs the same hybrid
+fetch, so it reads the same keys, with two differences. The three-layer
+resolution above applies to the `HYBRID_COMPLETION` lanes only: TEMPORAL's
+`top_k` is `SearchRequest.top_k` (default `5`) and is **not** capped at 10. And
+its chunk and entity lanes are sized by `candidate_top_k` and its fact lane by
+`top_k`, overriding `chunks_top_k` / `entities_top_k` / `facts_top_k`; the
+time-window rerank then cuts the candidates back to `top_k`. A `top_k` of `0`
+or a `candidate_top_k` below `top_k` is rejected with `InvalidInput`, as in
+Python.
 
 **Chunk-lane fusion.** `chunk_lane_fusion` chooses how the `DocumentChunk_text`
 lane and the `TextSummary_text` lane are combined:

@@ -339,7 +339,7 @@ impl TemporalHybridRetriever {
             ExtractedWindow::NoWindow(reason) => {
                 diagnostics.reason = Some(reason);
                 warn!("{NO_WINDOW_WARNING}");
-                return Ok(Self::fallback(diagnostics));
+                return Ok(Self::fallback(baseline.into_context(), diagnostics));
             }
         };
         diagnostics.interval = (start, end);
@@ -387,7 +387,7 @@ impl TemporalHybridRetriever {
                 TemporalFallbackReason::NoCandidateOverlap
             });
             warn!("{FALLBACK_WARNING}");
-            return Ok(Self::fallback(diagnostics));
+            return Ok(Self::fallback(baseline.into_context(), diagnostics));
         }
 
         let rank = tightness_rank(
@@ -423,14 +423,16 @@ impl TemporalHybridRetriever {
         })
     }
 
-    /// The baseline as the result.
-    fn fallback(diagnostics: TemporalDiagnostics) -> TemporalRetrieval {
+    /// The baseline as the result. `baseline` is the same context
+    /// `diagnostics.baseline` already holds, moved in rather than cloned out
+    /// of the diagnostics a second time.
+    fn fallback(baseline: SearchContext, diagnostics: TemporalDiagnostics) -> TemporalRetrieval {
         debug!(
             reason = diagnostics.reason.map(TemporalFallbackReason::as_str),
             "TEMPORAL answered with the plain hybrid result"
         );
         TemporalRetrieval {
-            context: diagnostics.baseline.clone(),
+            context: baseline,
             diagnostics,
         }
     }
