@@ -28,6 +28,13 @@ pub trait IngestDb: Send + Sync {
 
     async fn create_data(&self, d: Data) -> Result<Data, DatabaseError>;
 
+    /// Rewrite an existing Data record in full (every column from `d`).
+    ///
+    /// The ingest pipeline uses it on a re-add of content that is already
+    /// stored, where Python's `ingest_data` update branch refreshes the row
+    /// instead of returning it unchanged.
+    async fn update_data(&self, d: Data) -> Result<Data, DatabaseError>;
+
     async fn attach_data_to_dataset(
         &self,
         dataset_id: Uuid,
@@ -83,6 +90,10 @@ impl IngestDb for DatabaseConnection {
 
     async fn create_data(&self, d: Data) -> Result<Data, DatabaseError> {
         data::create_data(self, d).await
+    }
+
+    async fn update_data(&self, d: Data) -> Result<Data, DatabaseError> {
+        data::update_data(self, d).await
     }
 
     async fn attach_data_to_dataset(

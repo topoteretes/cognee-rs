@@ -46,8 +46,11 @@ use crate::url_resolver::resolve_url_input;
 /// struct literal syntax to configure.
 #[derive(Debug, Clone, Default)]
 pub struct AddParams {
-    /// List of node identifiers for graph organisation and access control grouping.
-    /// Stored as a JSON string in `Data.node_set`.
+    /// List of node-set names for graph organisation and access control
+    /// grouping. Stored as a JSON array in `Data.node_set` and under
+    /// `external_metadata["node_set"]`, where cognify reads it back. Every
+    /// name must be non-empty (Python's `validate_node_set_names`); an empty
+    /// list means no node set, exactly like `None`.
     pub node_set: Option<Vec<String>>,
 
     /// Target an existing dataset by UUID instead of name.
@@ -96,8 +99,11 @@ pub struct ProcessedInput {
     pub owner_id: Uuid,
     pub tenant_id: Option<Uuid>,
     pub external_metadata: Option<String>,
-    /// JSON-serialized node set identifiers for graph organisation.
-    pub node_set: Option<String>,
+    /// Node-set names for graph organisation — the add call's
+    /// [`AddParams::node_set`]. [`persist_data`] writes them to the
+    /// `Data.node_set` column and under `external_metadata["node_set"]`; an
+    /// empty list is the same as `None`.
+    pub node_set: Option<Vec<String>>,
     /// Importance weight for ranking (0.0 to 1.0).
     pub importance_weight: Option<f64>,
 }
@@ -119,6 +125,10 @@ pub async fn process_input(
     tenant_id: Option<Uuid>,
 ) -> Result<ProcessedInput, Box<dyn std::error::Error>> {
     use tokio::sync::Mutex;
+
+    // Before anything is fetched or stored, as Python's `ingest_data` checks
+    // a DataItem's `external_metadata["node_set"]` up front.
+    validate_item_node_set(input)?;
 
     let (effective_input, resolved_url_metadata, resolved_label, data_item_metadata) =
         resolve_input_for_processing(input).await?;
@@ -518,11 +528,59 @@ pub async fn persist_data_with_acl_and_locks(
 
     let data_id = processed.data_id;
 
-    if let Some(existing_data) = database.get_data(data_id).await? {
+    // The node set is written here, where the row is built, rather than by
+    // the `AddPipeline` task closure — so every entry point that hands a
+    // `ProcessedInput` with a node set to a `persist_data*` function gets the
+    // same two writes, and so does the re-add path below. Python stores
+    // `None`, not `[]`, for an empty set (`json.dumps(...) if effective_node_set
+    // else None`), so an empty list is treated as no node set.
+    let node_set = processed
+        .node_set
+        .as_deref()
+        .filter(|names| !names.is_empty());
+    if let Some(names) = node_set {
+        validate_node_set_names(names)?;
+    }
+    let node_set_column = node_set
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|e| format!("Failed to serialize node_set: {e}"))?;
+
+    if let Some(mut existing_data) = database.get_data(data_id).await? {
         database.attach_data_to_dataset(dataset.id, data_id).await?;
+        // Python's `ingest_data` update branch rewrites the existing row's
+        // `node_set` and `external_metadata` from the re-add's values. Only
+        // the node set is refreshed here (the rest of the row stays as
+        // stored), and only when the call supplies one: a re-add without a
+        // node set leaves the stored tags alone. The write is skipped when
+        // the row already carries exactly this set, which is the common
+        // re-add (memify's session persist re-adds under one fixed set).
+        if let Some(names) = node_set {
+            let external_metadata = with_node_set_in_external_metadata(
+                existing_data.external_metadata.as_deref(),
+                names,
+            )
+            .map_err(|e| format!("Failed to record node_set in external_metadata: {e}"))?;
+            if existing_data.node_set != node_set_column
+                || existing_data.external_metadata != external_metadata
+            {
+                existing_data.node_set = node_set_column;
+                existing_data.external_metadata = external_metadata;
+                existing_data = database.update_data(existing_data).await?;
+                info!(data_id = %data_id, "node_set refreshed on re-add");
+            }
+        }
         info!(data_id = %data_id, is_duplicate = true, "input processed");
         return Ok(existing_data);
     }
+
+    let external_metadata = match node_set {
+        Some(names) => {
+            with_node_set_in_external_metadata(processed.external_metadata.as_deref(), names)
+                .map_err(|e| format!("Failed to record node_set in external_metadata: {e}"))?
+        }
+        None => processed.external_metadata.clone(),
+    };
 
     let mut data_builder = Data::builder(
         data_id,
@@ -545,11 +603,11 @@ pub async fn persist_data_with_acl_and_locks(
     if let Some(ref lbl) = processed.label {
         data_builder = data_builder.label(lbl.clone());
     }
-    if let Some(ref meta) = processed.external_metadata {
-        data_builder = data_builder.external_metadata(meta.clone());
+    if let Some(meta) = external_metadata {
+        data_builder = data_builder.external_metadata(meta);
     }
-    if let Some(ref ns) = processed.node_set {
-        data_builder = data_builder.node_set(ns.clone());
+    if let Some(column) = node_set_column {
+        data_builder = data_builder.node_set(column);
     }
     if let Some(w) = processed.importance_weight {
         data_builder = data_builder.importance_weight(w);
@@ -765,6 +823,120 @@ fn is_html_url_metadata(metadata: &UrlMetadata) -> bool {
     metadata.essence == "text/html" || metadata.essence == "application/xhtml+xml"
 }
 
+/// What a stored or supplied `external_metadata` string holds, as the two
+/// merges below read it.
+///
+/// Python's `DataItem.external_metadata` is `dict | None`, and `ingest_data`
+/// merges it with `if item_external_metadata: ext_metadata.update(...)` — so
+/// `None` and `{}` are nothing to merge. The Rust `DataInput::DataItem`
+/// carries the metadata as a JSON string, which can also spell "nothing" as
+/// the literal `null` or a blank string; both are read as [`Self::Absent`]
+/// rather than kept verbatim under `data_item_external_metadata_raw`.
+enum ItemMetadata {
+    Absent,
+    Object(serde_json::Map<String, serde_json::Value>),
+    /// Valid JSON that is not an object, or text that is not JSON at all;
+    /// kept verbatim under `data_item_external_metadata_raw` when merged.
+    Raw(String),
+}
+
+fn classify_item_metadata(metadata: Option<&str>) -> ItemMetadata {
+    let Some(metadata) = metadata else {
+        return ItemMetadata::Absent;
+    };
+    if metadata.trim().is_empty() {
+        return ItemMetadata::Absent;
+    }
+    match serde_json::from_str::<serde_json::Value>(metadata) {
+        Ok(serde_json::Value::Null) => ItemMetadata::Absent,
+        Ok(serde_json::Value::Object(object)) => ItemMetadata::Object(object),
+        _ => ItemMetadata::Raw(metadata.to_string()),
+    }
+}
+
+/// The map a merge starts from: the item's own keys, or its raw text under
+/// `data_item_external_metadata_raw`, or nothing.
+fn item_metadata_map(metadata: ItemMetadata) -> serde_json::Map<String, serde_json::Value> {
+    match metadata {
+        ItemMetadata::Absent => serde_json::Map::new(),
+        ItemMetadata::Object(object) => object,
+        ItemMetadata::Raw(raw) => serde_json::Map::from_iter([(
+            "data_item_external_metadata_raw".to_string(),
+            serde_json::Value::String(raw),
+        )]),
+    }
+}
+
+/// Port of Python's `validate_node_set_names` for a list the type system has
+/// already shaped: every name must be non-empty once trimmed.
+///
+/// Python also rejects a value that is not a list and entries that are not
+/// strings; [`AddParams::node_set`] cannot carry either, so only the
+/// non-empty rule is left to check here. The remaining Python check — that
+/// the name survives `NodeSet.id_for` without a `UnicodeEncodeError` — has no
+/// Rust counterpart: a `String` is always valid UTF-8.
+fn validate_node_set_names(names: &[String]) -> Result<(), IngestionError> {
+    for name in names {
+        if name.trim().is_empty() {
+            return Err(IngestionError::InvalidNodeSet {
+                reason: format!(
+                    "node_set entries must be non-empty strings, got {name:?} in {names:?}"
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Port of Python's `validate_node_set_names` for a `node_set` value found in
+/// a data item's `external_metadata`, which arrives as arbitrary JSON.
+///
+/// `null` means no node set; anything else must be an array of non-empty
+/// strings. A bare string is rejected rather than read as one name, so there
+/// is one accepted shape.
+fn validate_node_set_value(value: &serde_json::Value) -> Result<(), IngestionError> {
+    let serde_json::Value::Array(entries) = value else {
+        if value.is_null() {
+            return Ok(());
+        }
+        return Err(IngestionError::InvalidNodeSet {
+            reason: format!("node_set must be a list of names, got {value}"),
+        });
+    };
+    for entry in entries {
+        if entry.as_str().is_none_or(|name| name.trim().is_empty()) {
+            return Err(IngestionError::InvalidNodeSet {
+                reason: format!(
+                    "node_set entries must be non-empty strings, got {entry} in {value}"
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Check a data item's own `external_metadata["node_set"]` the way Python's
+/// `ingest_data` does before anything is stored:
+/// `validate_node_set_names((data_item.external_metadata or {}).get("node_set"))`.
+///
+/// Metadata without the key, or that is not a JSON object, has nothing to
+/// check — [`merge_external_metadata`] keeps such text raw rather than
+/// reading keys from it.
+fn validate_item_node_set(input: &DataInput) -> Result<(), IngestionError> {
+    let DataInput::DataItem {
+        external_metadata, ..
+    } = input
+    else {
+        return Ok(());
+    };
+    if let ItemMetadata::Object(object) = classify_item_metadata(external_metadata.as_deref())
+        && let Some(value) = object.get("node_set")
+    {
+        validate_node_set_value(value)?;
+    }
+    Ok(())
+}
+
 /// Record the add call's `node_set` under `external_metadata["node_set"]`.
 ///
 /// Python's `ingest_data` does `ext_metadata["node_set"] = effective_node_set`
@@ -776,23 +948,15 @@ fn is_html_url_metadata(metadata: &UrlMetadata) -> bool {
 /// chunk, summary and entity derived from it — is never tagged, and a
 /// `node_name` search never finds it.
 ///
-/// Metadata that is not a JSON object is kept under
-/// `data_item_external_metadata_raw`, as [`merge_external_metadata`] keeps it.
+/// The caller passes a non-empty set; metadata that is not a JSON object is
+/// kept under `data_item_external_metadata_raw`, as [`merge_external_metadata`]
+/// keeps it, and `null` or blank metadata is read as none
+/// ([`classify_item_metadata`]).
 fn with_node_set_in_external_metadata(
     external_metadata: Option<&str>,
     node_set: &[String],
 ) -> Result<Option<String>, serde_json::Error> {
-    if node_set.is_empty() {
-        return Ok(external_metadata.map(str::to_string));
-    }
-    let mut merged = match external_metadata.map(serde_json::from_str::<serde_json::Value>) {
-        None => serde_json::Map::new(),
-        Some(Ok(serde_json::Value::Object(object))) => object,
-        Some(_) => serde_json::Map::from_iter([(
-            "data_item_external_metadata_raw".to_string(),
-            serde_json::Value::String(external_metadata.unwrap_or_default().to_string()),
-        )]),
-    };
+    let mut merged = item_metadata_map(classify_item_metadata(external_metadata));
     merged.insert("node_set".to_string(), serde_json::json!(node_set));
     serde_json::to_string(&serde_json::Value::Object(merged)).map(Some)
 }
@@ -802,29 +966,23 @@ fn merge_external_metadata(
     url_metadata: Option<&UrlMetadata>,
 ) -> Result<Option<String>, serde_json::Error> {
     let Some(metadata) = url_metadata else {
-        return Ok(data_item_metadata);
+        // Nothing to merge with: the item's text is stored verbatim, unless
+        // it spells "no metadata".
+        return Ok(data_item_metadata.filter(|item_metadata| {
+            !matches!(
+                classify_item_metadata(Some(item_metadata)),
+                ItemMetadata::Absent
+            )
+        }));
     };
 
-    let mut merged = serde_json::Map::new();
-    let mut user_metadata_object = None;
+    let data_item_metadata = classify_item_metadata(data_item_metadata.as_deref());
+    let user_metadata_object = match &data_item_metadata {
+        ItemMetadata::Object(object) => Some(serde_json::Value::Object(object.clone())),
+        _ => None,
+    };
+    let mut merged = item_metadata_map(data_item_metadata);
     let mut has_conflict = false;
-
-    if let Some(user_metadata) = data_item_metadata {
-        match serde_json::from_str::<serde_json::Value>(&user_metadata) {
-            Ok(serde_json::Value::Object(user_object)) => {
-                user_metadata_object = Some(serde_json::Value::Object(user_object.clone()));
-                for (key, value) in user_object {
-                    merged.insert(key, value);
-                }
-            }
-            _ => {
-                merged.insert(
-                    "data_item_external_metadata_raw".to_string(),
-                    serde_json::Value::String(user_metadata),
-                );
-            }
-        }
-    }
 
     let url_fields = [
         ("source", serde_json::json!("url")),
@@ -977,16 +1135,15 @@ pub fn make_persist_data_task_with_acl(
     )
 }
 
-/// Pre-serialised [`AddParams`] payload injected into [`ProcessedInput`] by
-/// the persist closure. Constructed once per pipeline so the cost of
-/// serialising `node_set` is paid up-front, not per item.
+/// The [`AddParams`] fields the persist closure injects into each
+/// [`ProcessedInput`]. Constructed once per pipeline.
 ///
 /// Locked Decision 7 (LIB-06) — `AddParams` is wired in via the task
 /// closure rather than a `RunSpec` / `TaskContext` extension.
 #[derive(Debug, Clone, Default)]
 struct AddParamsInjection {
-    node_set_json: Option<String>,
-    /// The same `node_set`, unserialised, for `external_metadata["node_set"]`.
+    /// Written to the `Data.node_set` column and `external_metadata["node_set"]`
+    /// by [`persist_data_with_acl_and_locks`].
     node_set: Option<Vec<String>>,
     importance_weight: Option<f64>,
     target_dataset_id: Option<Uuid>,
@@ -1011,21 +1168,8 @@ fn make_persist_data_task_with_acl_and_params(
     TypedTask::async_fn(move |processed: &ProcessedInput, _ctx| {
         let mut processed = processed.clone();
         // Decision 7 (LIB-06): inject add-specific params inside the task.
-        if let Some(ref ns) = add_params.node_set_json {
-            processed.node_set = Some(ns.clone());
-        }
         if let Some(ref node_set) = add_params.node_set {
-            processed.external_metadata = match with_node_set_in_external_metadata(
-                processed.external_metadata.as_deref(),
-                node_set,
-            ) {
-                Ok(metadata) => metadata,
-                Err(e) => {
-                    return Box::pin(async move {
-                        Err(format!("Failed to record node_set in external_metadata: {e}").into())
-                    });
-                }
-            };
+            processed.node_set = Some(node_set.clone());
         }
         if let Some(w) = add_params.importance_weight {
             processed.importance_weight = Some(w);
@@ -1048,7 +1192,7 @@ fn make_persist_data_task_with_acl_and_params(
             )
             .await
             .map(Box::new)
-            .map_err(|e| format!("{e}").into())
+            .map_err(preserve_ingestion_error)
         })
     })
 }
@@ -1347,15 +1491,19 @@ impl AddPipeline {
             .clone()
             .ok_or(IngestionError::MissingBackend { which: "database" })?;
 
-        // ── Pre-serialise add-params (Decision 7) ────────────────────────
-        let node_set_json = params
-            .node_set
-            .as_ref()
-            .map(serde_json::to_string)
-            .transpose()
-            .map_err(|e| format!("Failed to serialize node_set: {e}"))?;
+        // ── Validate node sets before anything is stored ─────────────────
+        // Python's `ingest_data` checks the call's `node_set` and every
+        // DataItem's `external_metadata["node_set"]` first, so a bad name
+        // fails the whole call rather than one item mid-run.
+        if let Some(names) = params.node_set.as_deref() {
+            validate_node_set_names(names)?;
+        }
+        for input in &inputs {
+            validate_item_node_set(input)?;
+        }
+
+        // ── Add-params injected per item (Decision 7) ────────────────────
         let add_params_inj = AddParamsInjection {
-            node_set_json,
             node_set: params.node_set.clone(),
             importance_weight: params.importance_weight,
             target_dataset_id: params.dataset_id,
@@ -1487,6 +1635,11 @@ pub enum IngestionError {
     /// extension (the relevant loader feature is disabled in this build).
     #[error("Unsupported document type at ingest: {document_type}")]
     UnsupportedDocumentType { document_type: String },
+    /// A node set — the add call's or one in a data item's
+    /// `external_metadata["node_set"]` — is not a list of non-empty names.
+    /// Port of Python's `InvalidNodeSetError`, a 400-class client error.
+    #[error("Invalid node_set: {reason}")]
+    InvalidNodeSet { reason: String },
 }
 
 // ---------------------------------------------------------------------------
@@ -2628,18 +2781,16 @@ mod tests {
             serde_json::from_str(&s.expect("metadata written")).expect("json")
         };
 
-        // No node set: the metadata is left exactly as it was.
-        assert_eq!(
-            with_node_set_in_external_metadata(Some("{\"a\":1}"), &[]).unwrap(),
-            Some("{\"a\":1}".to_string())
-        );
-        assert_eq!(with_node_set_in_external_metadata(None, &[]).unwrap(), None);
-
         // No metadata: Python's `get_external_metadata_dict` starts from `{}`.
-        assert_eq!(
-            parse(with_node_set_in_external_metadata(None, &set).unwrap()),
-            serde_json::json!({"node_set": ["alpha", "beta"]})
-        );
+        // JSON `null` and a blank string are no metadata either, not text to
+        // keep raw (Python: `if item_external_metadata:` skips `None`).
+        for absent in [None, Some("null"), Some(""), Some("  \n")] {
+            assert_eq!(
+                parse(with_node_set_in_external_metadata(absent, &set).unwrap()),
+                serde_json::json!({"node_set": ["alpha", "beta"]}),
+                "metadata {absent:?}"
+            );
+        }
 
         // The item's own keys survive; the call's node set replaces an item
         // `node_set` key, as `ext_metadata["node_set"] = ...` does.
@@ -2709,5 +2860,293 @@ mod tests {
         assert_eq!(sets.len(), 1);
         assert_eq!(sets[0]["name"], "alpha");
         assert_eq!(documents[0].base.source_node_set.as_deref(), Some("alpha"));
+    }
+
+    fn metadata_json(data: &Data) -> serde_json::Value {
+        serde_json::from_str(
+            data.external_metadata
+                .as_deref()
+                .expect("external_metadata written"),
+        )
+        .expect("json")
+    }
+
+    /// Python's `ingest_data` update branch rewrites `node_set` and
+    /// `external_metadata` on a re-add of existing content; the Rust dedup
+    /// path used to return the stored row untouched, so content added once
+    /// without a node set could never be tagged afterwards.
+    #[tokio::test]
+    async fn re_add_with_node_set_refreshes_the_stored_row() {
+        let (pipeline, db) = make_pipeline().await;
+        let owner_id = Uuid::new_v4();
+        let input = || vec![DataInput::Text("Re-added content".into())];
+        let with_set = |names: &[&str]| AddParams {
+            node_set: Some(names.iter().map(|n| n.to_string()).collect()),
+            ..AddParams::default()
+        };
+
+        let first = pipeline
+            .add(input(), "re_add_ds", owner_id, None)
+            .await
+            .expect("first add");
+        assert_eq!(first[0].node_set, None);
+        assert_eq!(first[0].external_metadata, None);
+
+        // A re-add that supplies a node set tags the existing row.
+        let second = pipeline
+            .add_with_params(input(), "re_add_ds", owner_id, None, &with_set(&["alpha"]))
+            .await
+            .expect("re-add with node set");
+        assert_eq!(second[0].id, first[0].id);
+        assert_eq!(second[0].node_set.as_deref(), Some("[\"alpha\"]"));
+        assert_eq!(
+            metadata_json(&second[0]),
+            serde_json::json!({"node_set": ["alpha"]})
+        );
+        let stored = cognee_database::IngestDb::get_data(&*db, first[0].id)
+            .await
+            .unwrap()
+            .expect("row exists");
+        assert_eq!(stored.node_set.as_deref(), Some("[\"alpha\"]"));
+        assert_eq!(
+            metadata_json(&stored),
+            serde_json::json!({"node_set": ["alpha"]})
+        );
+        assert!(stored.updated_at.is_some(), "update_data stamps updated_at");
+
+        // A re-add without a node set leaves the stored tags alone.
+        let third = pipeline
+            .add(input(), "re_add_ds", owner_id, None)
+            .await
+            .expect("re-add without node set");
+        assert_eq!(third[0].node_set.as_deref(), Some("[\"alpha\"]"));
+
+        // A re-add with another set replaces it, as `ext_metadata["node_set"] =
+        // effective_node_set` does, and the row is still one row.
+        let fourth = pipeline
+            .add_with_params(
+                input(),
+                "re_add_ds",
+                owner_id,
+                None,
+                &with_set(&["beta", "gamma"]),
+            )
+            .await
+            .expect("re-add with another node set");
+        assert_eq!(fourth[0].node_set.as_deref(), Some("[\"beta\",\"gamma\"]"));
+        assert_eq!(
+            metadata_json(&fourth[0]),
+            serde_json::json!({"node_set": ["beta", "gamma"]})
+        );
+        let dataset =
+            cognee_database::IngestDb::get_dataset_by_name(&*db, "re_add_ds", owner_id, None)
+                .await
+                .unwrap()
+                .unwrap();
+        let rows = cognee_database::DeleteDb::get_dataset_data(&*db, dataset.id)
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+    }
+
+    /// Python: `node_set=json.dumps(effective_node_set) if effective_node_set
+    /// else None` — an empty list is stored as NULL, not `"[]"`, and no
+    /// `node_set` key is written.
+    #[tokio::test]
+    async fn empty_node_set_is_stored_as_null_like_python() {
+        let (pipeline, _db) = make_pipeline().await;
+        let params = AddParams {
+            node_set: Some(vec![]),
+            ..AddParams::default()
+        };
+        let data = pipeline
+            .add_with_params(
+                vec![DataInput::DataItem {
+                    data: Box::new(DataInput::Text("Empty node set".into())),
+                    label: "item".into(),
+                    external_metadata: Some(r#"{"source":"crm"}"#.into()),
+                }],
+                "empty_set_ds",
+                Uuid::new_v4(),
+                None,
+                &params,
+            )
+            .await
+            .expect("add");
+        assert_eq!(data[0].node_set, None);
+        assert_eq!(
+            metadata_json(&data[0]),
+            serde_json::json!({"source": "crm"}),
+            "no node_set key for an empty set"
+        );
+    }
+
+    /// Port of Python's `validate_node_set_names`: the call's names and a
+    /// DataItem's `external_metadata["node_set"]` are checked before
+    /// anything is stored, and the whole call fails.
+    #[tokio::test]
+    async fn invalid_node_sets_are_rejected_before_anything_is_stored() {
+        let (pipeline, db) = make_pipeline().await;
+        let owner_id = Uuid::new_v4();
+
+        let err = pipeline
+            .add_with_params(
+                vec![DataInput::Text("Blank name".into())],
+                "invalid_set_ds",
+                owner_id,
+                None,
+                &AddParams {
+                    node_set: Some(vec!["alpha".into(), "  ".into()]),
+                    ..AddParams::default()
+                },
+            )
+            .await
+            .expect_err("a blank name is rejected");
+        assert!(
+            matches!(
+                err.downcast_ref::<IngestionError>(),
+                Some(IngestionError::InvalidNodeSet { .. })
+            ),
+            "typed error, got: {err}"
+        );
+
+        for bad in [
+            r#"{"node_set": "alpha"}"#,
+            r#"{"node_set": ["alpha", 1]}"#,
+            r#"{"node_set": [""]}"#,
+        ] {
+            let err = pipeline
+                .add(
+                    vec![DataInput::DataItem {
+                        data: Box::new(DataInput::Text("Bad item key".into())),
+                        label: "item".into(),
+                        external_metadata: Some(bad.into()),
+                    }],
+                    "invalid_set_ds",
+                    owner_id,
+                    None,
+                )
+                .await
+                .expect_err("a bad item node_set is rejected");
+            assert!(
+                matches!(
+                    err.downcast_ref::<IngestionError>(),
+                    Some(IngestionError::InvalidNodeSet { .. })
+                ),
+                "metadata {bad}: typed error, got: {err}"
+            );
+        }
+
+        // Nothing was stored: the dataset was never created.
+        assert!(
+            cognee_database::IngestDb::get_dataset_by_name(&*db, "invalid_set_ds", owner_id, None)
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        // `null` means no node set, as `validate_node_set_names(None)` does.
+        let data = pipeline
+            .add(
+                vec![DataInput::DataItem {
+                    data: Box::new(DataInput::Text("Null item key".into())),
+                    label: "item".into(),
+                    external_metadata: Some(r#"{"node_set": null}"#.into()),
+                }],
+                "null_set_ds",
+                owner_id,
+                None,
+            )
+            .await
+            .expect("null is accepted");
+        assert_eq!(data[0].node_set, None);
+    }
+
+    #[test]
+    fn validate_node_set_value_follows_python() {
+        assert!(validate_node_set_value(&serde_json::json!(null)).is_ok());
+        assert!(validate_node_set_value(&serde_json::json!([])).is_ok());
+        assert!(validate_node_set_value(&serde_json::json!(["a", "b c"])).is_ok());
+        for bad in [
+            serde_json::json!("a"),
+            serde_json::json!({"a": 1}),
+            serde_json::json!(1),
+            serde_json::json!(["a", null]),
+            serde_json::json!(["a", " "]),
+        ] {
+            assert!(validate_node_set_value(&bad).is_err(), "{bad}");
+        }
+        assert!(validate_node_set_names(&["a".into()]).is_ok());
+        assert!(validate_node_set_names(&[]).is_ok());
+        assert!(validate_node_set_names(&["a".into(), String::new()]).is_err());
+    }
+
+    /// JSON `null` and a blank string are "no metadata", for both merges.
+    #[test]
+    fn json_null_item_metadata_is_no_metadata() {
+        for absent in [None, Some("null".to_string()), Some(String::new())] {
+            assert_eq!(merge_external_metadata(absent, None).unwrap(), None);
+        }
+        assert_eq!(
+            merge_external_metadata(Some(r#"{"a":1}"#.into()), None).unwrap(),
+            Some(r#"{"a":1}"#.to_string()),
+            "an object is stored verbatim"
+        );
+        assert_eq!(
+            merge_external_metadata(Some("not json".into()), None).unwrap(),
+            Some("not json".to_string()),
+            "other text is stored verbatim, as before"
+        );
+        assert!(matches!(
+            classify_item_metadata(Some("[1]")),
+            ItemMetadata::Raw(raw) if raw == "[1]"
+        ));
+    }
+
+    /// A caller of the public `persist_data` with `ProcessedInput::node_set`
+    /// set gets both writes — the merge lives where the row is built, not in
+    /// the `AddPipeline` task closure.
+    #[tokio::test]
+    async fn persist_data_writes_node_set_to_column_and_metadata() {
+        let db = connect("sqlite::memory:").await.unwrap();
+        initialize(&db).await.unwrap();
+        let storage = MockStorage::new();
+        let owner_id = Uuid::new_v4();
+
+        let mut processed = process_input(
+            &DataInput::DataItem {
+                data: Box::new(DataInput::Text("Direct persist".into())),
+                label: "item".into(),
+                external_metadata: Some(r#"{"source":"crm","node_set":["stale"]}"#.into()),
+            },
+            &storage,
+            HashAlgorithm::Md5,
+            owner_id,
+            None,
+        )
+        .await
+        .unwrap();
+        processed.node_set = Some(vec!["alpha".into()]);
+
+        let data = persist_data(&processed, &db, "direct_ds", owner_id, None)
+            .await
+            .unwrap();
+        assert_eq!(data.node_set.as_deref(), Some("[\"alpha\"]"));
+        assert_eq!(
+            metadata_json(&data),
+            serde_json::json!({"source": "crm", "node_set": ["alpha"]})
+        );
+        let documents = cognee_models::classify_documents(std::slice::from_ref(&data));
+        assert_eq!(documents[0].base.source_node_set.as_deref(), Some("alpha"));
+
+        // Blank names are refused on this entry point too.
+        processed.node_set = Some(vec![String::new()]);
+        let err = persist_data(&processed, &db, "direct_ds", owner_id, None)
+            .await
+            .expect_err("blank name");
+        assert!(matches!(
+            err.downcast_ref::<IngestionError>(),
+            Some(IngestionError::InvalidNodeSet { .. })
+        ));
     }
 }
