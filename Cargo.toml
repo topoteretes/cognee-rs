@@ -209,7 +209,7 @@ url = "2.5"
 # leaves native builds unchanged while every crate's uuid works on wasm.
 # See docs/spike-wasm-config1.md.
 uuid = { version = "1.21", features = ["v4", "v5", "serde", "js"] }
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
 
 # Project rule made enforceable: "no unwrap()/expect() in non-test code"
 # (.claude/CLAUDE.md → Coding Conventions). Test modules re-allow these.

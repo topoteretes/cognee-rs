@@ -24,7 +24,7 @@ pub(crate) fn extract(bytes: &[u8]) -> Result<String, LoaderError> {
     let mut slide_names: Vec<String> = (0..archive.len())
         .filter_map(|i| {
             let file = archive.by_index(i).ok()?;
-            let name = file.name().to_string();
+            let name = file.name().ok()?.into_owned();
             if name.starts_with("ppt/slides/slide") && name.ends_with(".xml") {
                 Some(name)
             } else {
