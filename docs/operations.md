@@ -214,6 +214,24 @@ chunks/summaries/entities/edge-facts and
 LLM completion). Entry: [`cognee-search`](../crates/search/)
 (`SearchBuilder` / `SearchOrchestrator`).
 
+`Temporal` is `HybridCompletion` reranked by the time window the question asks
+about (`TemporalHybridRetriever`, Python's retriever of the same name). The hybrid
+candidate fetch — chunks and entities at `candidate_top_k`, default `4 × top_k`,
+settable as `retriever_specific_config.candidate_top_k` — runs concurrently with an
+LLM call that extracts the window (UTC, start inclusive, end exclusive; relative
+dates are not resolved, so no clock is read). The chunks attached to the
+`Timestamp` nodes inside the window join the candidates, the candidates attached to
+one — directly, or for a chunk through an entity it `contains` — move to the front,
+tightest date first (for "18 March 1965" a chunk dated that day beats one that only
+says "1965"; dates at least as precise as the question keep their similarity order),
+and the same cut plain hybrid uses keeps `top_k`. With nothing to rerank by it
+answers with the plain hybrid result and records why: `empty_graph`,
+`no_time_constraint` / `invalid_interval` (no window), `no_temporal_match`,
+`no_candidate_overlap` (`TemporalHybridRetriever::retrieve` returns these
+diagnostics with the context). The `Timestamp` nodes are default cognify's; the
+`Event` nodes of the separate temporal-cognify pipeline are not read, so such a
+graph gets plain hybrid answers, as in Python.
+
 ## Additional operations
 
 These live in the [`cognee`](../crates/lib/) `api` module (and `DatasetManager`):

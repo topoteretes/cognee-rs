@@ -34,7 +34,8 @@ pub use retrievers::{
     GraphCompletionContextExtensionRetriever, GraphCompletionCotRetriever,
     GraphCompletionRetriever, GraphSummaryCompletionRetriever, HybridBudget, HybridRetriever,
     LexicalRetriever, LexicalScorer, NaturalLanguageRetriever, SearchRetriever, SearchRetrieverRef,
-    SummariesRetriever, TemporalRetriever, TripletRetriever,
+    SummariesRetriever, TemporalDiagnostics, TemporalFallbackReason, TemporalHybridRetriever,
+    TemporalRetrieval, TripletRetriever,
 };
 pub use types::{
     FeedbackDetectionResult, Rule, SearchContext, SearchError, SearchGraph, SearchGraphEdge,

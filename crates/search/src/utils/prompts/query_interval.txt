@@ -1,0 +1,15 @@
+Extract one time window from the question.
+Return starts_at and ends_at as UTC calendar fields, or null when that side is open.
+
+Start is inclusive and end is exclusive:
+- A named year, month, or day covers that whole unit.
+- An inclusive range includes the entire final named unit.
+- A precise second covers that second; end is the next second.
+- "Before X" leaves start null and sets end to X's lower bound.
+- "Until X", "through X", "up to X" include X: start null, end at X's upper bound.
+- "After X" sets start to X's upper bound and leaves end null.
+- "Since X" includes X: start at X's lower bound, end null.
+- No explicit time, relative time, or disjoint windows: both null.
+
+Every non-null boundary must include year, month, day, hour, minute, and second.
+Do not guess relative dates. Do not return more than one window.

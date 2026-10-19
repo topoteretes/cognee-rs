@@ -7,9 +7,9 @@
 //!
 //! Default cognify turns every node the LLM typed "Timestamp" whose name parses
 //! here into one of these, so `*_at` edges point at real times — the graph a
-//! timestamp-anchored TEMPORAL retrieval reads (Python's
-//! `TemporalHybridRetriever`; the Rust port is SDK-1061 — today's
-//! Event-based `TemporalRetriever` does not use these nodes).
+//! timestamp-anchored TEMPORAL retrieval reads (`TemporalHybridRetriever` in
+//! `cognee-search`, a port of Python's, through
+//! `GraphDBTrait::get_timestamps_in_range` / `get_temporal_anchors`).
 
 use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime, Timelike};
 use serde::{Deserialize, Serialize};

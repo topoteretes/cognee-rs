@@ -10,7 +10,7 @@ mod hybrid;
 mod lexical_retriever;
 mod lucky_feedback_rules_retrievers;
 mod summaries_retriever;
-mod temporal_retriever;
+mod temporal_hybrid;
 mod triplet_retriever;
 
 pub use advanced_graph_retrievers::{
@@ -35,5 +35,7 @@ pub use lucky_feedback_rules_retrievers::{
     CodingRulesRetriever, FeedbackRetriever, FeelingLuckyRetriever,
 };
 pub use summaries_retriever::SummariesRetriever;
-pub use temporal_retriever::TemporalRetriever;
+pub use temporal_hybrid::{
+    TemporalDiagnostics, TemporalFallbackReason, TemporalHybridRetriever, TemporalRetrieval,
+};
 pub use triplet_retriever::TripletRetriever;

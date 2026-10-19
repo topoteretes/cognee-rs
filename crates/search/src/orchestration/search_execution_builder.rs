@@ -14,7 +14,7 @@ use crate::retrievers::{
     FeedbackRetriever, FeelingLuckyRetriever, GraphCompletionContextExtensionRetriever,
     GraphCompletionCotRetriever, GraphCompletionRetriever, GraphSummaryCompletionRetriever,
     HybridBudget, HybridRetriever, LexicalRetriever, NaturalLanguageRetriever, SearchRetrieverRef,
-    SummariesRetriever, TemporalRetriever, TripletRetriever,
+    SummariesRetriever, TemporalHybridRetriever, TripletRetriever,
 };
 use crate::types::SearchType;
 
@@ -293,8 +293,12 @@ impl SearchBuilder {
 
         retrievers.insert(
             SearchType::Temporal,
+            // Python maps TEMPORAL to `TemporalHybridRetriever`
+            // (`get_search_type_retriever_instance.py`): hybrid retrieval
+            // reranked by the question's time window, with the same answering
+            // budget as HYBRID_COMPLETION.
             Arc::new(
-                TemporalRetriever::new(
+                TemporalHybridRetriever::new(
                     Arc::clone(&vector_db),
                     Arc::clone(&embedding_engine),
                     Arc::clone(&graph_db),
@@ -305,10 +309,8 @@ impl SearchBuilder {
                     None,
                     None,
                     None,
-                    None,
-                    None,
                 )
-                .with_neighbor_cap(tuning.triplet_neighbor_cap),
+                .with_budget(tuning.hybrid.clone()),
             ),
         );
 
@@ -1128,7 +1130,7 @@ mod tests {
             (SearchType::GraphCompletionCot, &capped),
             (SearchType::GraphCompletionContextExtension, &capped),
             (SearchType::GraphSummaryCompletion, &capped),
-            (SearchType::Temporal, &capped),
+            (SearchType::Temporal, &hybrid),
             (SearchType::Cypher, &cypher),
             (SearchType::NaturalLanguage, &cypher),
             (SearchType::HybridCompletion, &hybrid),

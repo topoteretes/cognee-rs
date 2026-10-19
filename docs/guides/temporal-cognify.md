@@ -11,7 +11,10 @@ Python's `temporal_cognify=True`.
 
 - Your corpus is event-driven (logs, meeting notes, news, changelogs) and you
   want to ask "what happened when?" / "what came before X?".
-- You plan to query with temporal recall (see below).
+
+You do not need it to ask about dates: default cognify already writes the dates
+it extracts as `Timestamp` nodes, and those are what `TEMPORAL` search reads
+(see below).
 
 ## CLI
 
@@ -46,9 +49,14 @@ cognee-cli search "what happened before the launch?" -t TEMPORAL -d my_dataset
 cognee-cli recall "timeline of the project"
 ```
 
-This uses `SearchType::Temporal` and the temporal retriever
-([`crates/search/src/`](../../crates/search/src/)). The recall router can
-auto-select the temporal strategy from the query
+This uses `SearchType::Temporal`, served by `TemporalHybridRetriever`
+([`crates/search/src/retrievers/temporal_hybrid/`](../../crates/search/src/retrievers/temporal_hybrid/)):
+hybrid retrieval reranked by the `Timestamp` nodes inside the question's time
+window (see [operations.md](../operations.md#search-retrieval)). As in Python, it
+reads the `Timestamp` nodes default cognify writes, not the `Event` nodes this
+pipeline adds, so on a graph built only by temporal cognify it answers with plain
+hybrid results. The recall router can auto-select the temporal strategy from the
+query
 ([`crates/search/src/query_router.rs`](../../crates/search/src/query_router.rs)).
 
 ## Pointers

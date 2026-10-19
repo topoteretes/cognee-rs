@@ -13,6 +13,7 @@
 //! private submodules below and is orchestrated via [`retrieve_hybrid_chunks`].
 
 mod budget;
+mod candidates;
 mod chunks;
 mod context;
 mod entities;
@@ -22,10 +23,12 @@ mod pairs;
 mod ranking;
 mod results;
 
+pub(crate) use candidates::{FactCandidates, HybridCandidates, HybridView};
 pub(crate) use chunks::{HybridChunksResult, retrieve_hybrid_chunks, search_collection};
 pub(crate) use context::extract_used_ids;
 pub(crate) use entities::{build_entities, format_entities};
 pub(crate) use facts::{edge_rank_by_id, format_facts};
+pub(crate) use results::{payload_matches_node_filter, result_id};
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -45,12 +48,10 @@ use cognee_vector::VectorDB;
 
 use self::budget::{context_budget_chars, graph_budget_chars, section_cost, take_blocks_within};
 use self::context::{format_hybrid_context, format_passages, format_passages_within_budget};
-use self::entities::{ENTITIES_SECTION_HEADER, EdgeBullet, EntityResult, format_entity};
-use self::facts::{
-    FACTS_SECTION_HEADER, FactResult, fact_bullets, resolve_facts_top_k, select_facts_for_entities,
-};
+use self::entities::{ENTITIES_SECTION_HEADER, format_entity};
+pub(crate) use self::entities::{EdgeBullet, EntityResult};
+use self::facts::{FACTS_SECTION_HEADER, FactResult, fact_bullets};
 use self::ranking::{ChunkLaneFusion, DEFAULT_SUMMARY_LANE_WEIGHT, SUMMARY_LANE_WEIGHT_RANGE};
-use self::results::result_id;
 use crate::retrievers::SearchRetriever;
 use crate::types::{
     SearchContext, SearchError, SearchItem, SearchOutput, SearchParams, SearchType,
@@ -218,6 +219,22 @@ pub struct HybridRetriever {
     budget: HybridBudget,
 }
 
+/// The resolved settings of one hybrid fetch: how many results each lane
+/// fetches and how it ranks and filters them.
+#[derive(Debug, Clone)]
+pub(crate) struct HybridLanes {
+    pub chunks_top_k: usize,
+    pub entities_top_k: usize,
+    pub facts_top_k: usize,
+    pub max_edges_per_entity: usize,
+    pub text_summaries_top_k: Option<usize>,
+    pub use_importance_weight: bool,
+    pub use_truth_weight: bool,
+    pub node_name: Option<Vec<String>>,
+    pub node_name_filter_operator: String,
+    pub fusion: ChunkLaneFusion,
+}
+
 impl HybridRetriever {
     /// Set the context budget and overflow handling (`search.hybrid`).
     #[must_use]
@@ -274,13 +291,146 @@ impl HybridRetriever {
         }
     }
 
+    /// Resolve the lane settings of one HYBRID_COMPLETION request.
+    ///
+    /// Three-layer resolution for the top-k family: request knob -> capped
+    /// `top_k` -> constructor default (see [`lane_top_k`]).
+    fn resolve_lanes(&self, params: &SearchParams) -> HybridLanes {
+        if params
+            .include_global_context_index
+            .unwrap_or(self.include_global_context_index)
+        {
+            debug!(
+                "HYBRID_COMPLETION: include_global_context_index is set but unsupported in \
+                 Phase 1; no global-context section will be produced"
+            );
+        }
+        HybridLanes {
+            chunks_top_k: lane_top_k(params.chunks_top_k, params.top_k, self.chunks_top_k),
+            entities_top_k: lane_top_k(params.entities_top_k, params.top_k, self.entities_top_k),
+            facts_top_k: lane_top_k(params.facts_top_k, params.top_k, self.facts_top_k),
+            text_summaries_top_k: params.text_summaries_top_k.or(self.text_summaries_top_k),
+            ..self.shared_lanes(params)
+        }
+    }
+
+    /// The lane settings that do not size a lane: the request's knob, else
+    /// the constructor's. The top-k fields carry the constructor defaults for
+    /// the caller to replace (plain hybrid in [`Self::resolve_lanes`], TEMPORAL
+    /// from its own `top_k` / `candidate_top_k`), and `text_summaries_top_k`
+    /// is unset.
+    pub(crate) fn shared_lanes(&self, params: &SearchParams) -> HybridLanes {
+        HybridLanes {
+            chunks_top_k: self.chunks_top_k,
+            entities_top_k: self.entities_top_k,
+            facts_top_k: self.facts_top_k,
+            max_edges_per_entity: params
+                .max_edges_per_entity
+                .unwrap_or(self.max_edges_per_entity),
+            text_summaries_top_k: None,
+            use_importance_weight: params
+                .use_importance_weight
+                .unwrap_or(self.use_importance_weight),
+            use_truth_weight: params.use_truth_weight.unwrap_or(self.use_truth_weight),
+            node_name: params.node_name.clone().or_else(|| self.node_name.clone()),
+            node_name_filter_operator: params
+                .node_name_filter_operator
+                .clone()
+                .unwrap_or_else(|| self.node_name_filter_operator.clone()),
+            fusion: chunk_lane_fusion(params),
+        }
+    }
+
+    /// Everything the lanes find for `query`, uncut.
+    ///
+    /// Port of Python's `_fetch_candidates` (`hybrid_retriever.py`). The cut
+    /// and the fact selection happen in [`HybridCandidates::finalize`]: plain
+    /// hybrid cuts to its own limits right away; a retriever that reorders the
+    /// candidates first (the TEMPORAL rerank) cuts afterwards. Embeds the query
+    /// once and runs the chunk lane and the entity/facts lane concurrently.
+    pub(crate) async fn fetch_candidates(
+        &self,
+        query: &str,
+        lanes: &HybridLanes,
+        dataset_id: Option<Uuid>,
+    ) -> Result<HybridCandidates, SearchError> {
+        let node_name = lanes.node_name.as_deref();
+        let node_name_filter_operator = lanes.node_name_filter_operator.as_str();
+
+        // Embed the query once and share the vector across both lanes.
+        let embeddings = self.embedding_engine.embed_query(query).await?;
+        let query_vector = embeddings.into_iter().next().ok_or_else(|| {
+            SearchError::InvalidInput("embedding engine returned no vectors".to_string())
+        })?;
+
+        // Build the truth-subspace context (default-off; fails open to baseline).
+        let (q_coords, truth_state_by_id, current_truth_epoch) = self
+            .build_truth_context(
+                lanes.use_truth_weight,
+                lanes.chunks_top_k,
+                &query_vector,
+                dataset_id,
+                node_name,
+                node_name_filter_operator,
+            )
+            .await;
+
+        let (chunk_result, (entities, fact_candidates)) = tokio::try_join!(
+            retrieve_hybrid_chunks(
+                &self.vector_db,
+                lanes.chunks_top_k,
+                lanes.text_summaries_top_k,
+                node_name,
+                node_name_filter_operator,
+                lanes.fusion,
+                lanes.use_importance_weight,
+                &query_vector,
+                lanes.use_truth_weight,
+                q_coords.as_deref(),
+                truth_state_by_id.as_ref(),
+                current_truth_epoch,
+            ),
+            self.retrieve_entities_and_facts(
+                &query_vector,
+                lanes.entities_top_k,
+                lanes.facts_top_k,
+                lanes.max_edges_per_entity,
+                node_name,
+                node_name_filter_operator,
+            ),
+        )?;
+
+        let HybridChunksResult {
+            chunks,
+            chunk_summaries,
+        } = chunk_result;
+        Ok(HybridCandidates {
+            chunks,
+            chunk_summaries,
+            entities,
+            fact_candidates,
+        })
+    }
+
+    /// The vector store the lanes search (TEMPORAL's window expansion reads
+    /// chunk rows from it by id).
+    pub(crate) fn vector_db(&self) -> &Arc<dyn VectorDB> {
+        &self.vector_db
+    }
+
+    /// The graph the entity lane reads.
+    pub(crate) fn graph_db(&self) -> &Arc<dyn GraphDBTrait> {
+        &self.graph_db
+    }
+
     /// Entity/facts lane: the Rust equivalent of Python's
     /// `_retrieve_entities_and_facts` (`hybrid_retriever.py:157-201`). Runs the
     /// `Entity_name` search (node filter applied) and the
     /// `EdgeType_relationship_name` search (node filter NOT applied)
-    /// concurrently, builds ranked entity edge bullets scoped to the requested
-    /// node set, then selects facts ([`resolve_facts_top_k`],
-    /// [`select_facts_for_entities`]).
+    /// concurrently and builds ranked entity edge bullets scoped to the
+    /// requested node set. Returns the entities and the [`FactCandidates`]; the
+    /// facts themselves are selected by [`HybridCandidates::finalize`] once the
+    /// caller knows which entities it shows.
     ///
     /// An `Entity_name` search failure is not fatal: Python's `search_entities`
     /// logs it and continues without entities (`entities.py:17-40`), which in
@@ -294,7 +444,7 @@ impl HybridRetriever {
         max_edges_per_entity: usize,
         node_name: Option<&[String]>,
         node_name_filter_operator: &str,
-    ) -> Result<(Vec<EntityResult>, Vec<FactResult>), SearchError> {
+    ) -> Result<(Vec<EntityResult>, FactCandidates), SearchError> {
         let max_ranked_bullets = entities_top_k.saturating_mul(max_edges_per_entity);
         let edge_limit = max_ranked_bullets.saturating_add(facts_top_k);
 
@@ -336,16 +486,16 @@ impl HybridRetriever {
         )
         .await;
 
-        let node_scoped = node_name.is_some_and(|names| !names.is_empty());
-        let facts = select_facts_for_entities(
-            &edge_hits,
-            &entities,
-            &reachable_ids,
-            resolve_facts_top_k(&entities, node_scoped, facts_top_k, max_ranked_bullets),
-            node_scoped,
-        );
-
-        Ok((entities, facts))
+        Ok((
+            entities,
+            FactCandidates {
+                edge_hits,
+                reachable_edge_type_ids: reachable_ids,
+                node_scoped: node_name.is_some_and(|names| !names.is_empty()),
+                facts_top_k,
+                entity_edge_budget: max_ranked_bullets,
+            },
+        ))
     }
 
     /// Truth-subspace alignment context for the chunk lane (Python
@@ -918,33 +1068,7 @@ impl SearchRetriever for HybridRetriever {
         query: &str,
         params: &SearchParams,
     ) -> Result<SearchContext, SearchError> {
-        // Three-layer resolution for the top-k family: request knob -> capped
-        // top_k -> constructor default (see [`lane_top_k`]).
-        let chunks_top_k = lane_top_k(params.chunks_top_k, params.top_k, self.chunks_top_k);
-        let entities_top_k = lane_top_k(params.entities_top_k, params.top_k, self.entities_top_k);
-        let facts_top_k = lane_top_k(params.facts_top_k, params.top_k, self.facts_top_k);
-        let max_edges_per_entity = params
-            .max_edges_per_entity
-            .unwrap_or(self.max_edges_per_entity);
-        let text_summaries_top_k = params.text_summaries_top_k.or(self.text_summaries_top_k);
-        let use_importance_weight = params
-            .use_importance_weight
-            .unwrap_or(self.use_importance_weight);
-        let node_name = params.node_name.as_deref().or(self.node_name.as_deref());
-        let node_name_filter_operator = params
-            .node_name_filter_operator
-            .as_deref()
-            .unwrap_or(self.node_name_filter_operator.as_str());
-
-        if params
-            .include_global_context_index
-            .unwrap_or(self.include_global_context_index)
-        {
-            debug!(
-                "HYBRID_COMPLETION: include_global_context_index is set but unsupported in \
-                 Phase 1; no global-context section will be produced"
-            );
-        }
+        let lanes = self.resolve_lanes(params);
         // Python raises `NoDataError` here (`hybrid_retriever.py:102-109`,
         // SDK-270): an empty graph is a state problem, not a query miss, and
         // this is the default search type — it must not answer a fresh install
@@ -953,67 +1077,15 @@ impl SearchRetriever for HybridRetriever {
             return Err(SearchError::NotFound(EMPTY_GRAPH_MESSAGE.to_string()));
         }
 
-        // Embed the query once and share the vector across both lanes.
-        let embeddings = self.embedding_engine.embed_query(query).await?;
-        let query_vector = embeddings.into_iter().next().ok_or_else(|| {
-            SearchError::InvalidInput("embedding engine returned no vectors".to_string())
-        })?;
-
-        // Build the truth-subspace context (default-off; fails open to baseline).
-        let use_truth_weight = params.use_truth_weight.unwrap_or(self.use_truth_weight);
-        let (q_coords, truth_state_by_id, current_truth_epoch) = self
-            .build_truth_context(
-                use_truth_weight,
-                chunks_top_k,
-                &query_vector,
-                params.dataset_id,
-                node_name,
-                node_name_filter_operator,
-            )
-            .await;
-
-        let (chunk_result, (entities, facts)) = tokio::try_join!(
-            retrieve_hybrid_chunks(
-                &self.vector_db,
-                chunks_top_k,
-                text_summaries_top_k,
-                node_name,
-                node_name_filter_operator,
-                chunk_lane_fusion(params),
-                use_importance_weight,
-                &query_vector,
-                use_truth_weight,
-                q_coords.as_deref(),
-                truth_state_by_id.as_ref(),
-                current_truth_epoch,
-            ),
-            self.retrieve_entities_and_facts(
-                &query_vector,
-                entities_top_k,
-                facts_top_k,
-                max_edges_per_entity,
-                node_name,
-                node_name_filter_operator,
-            ),
-        )?;
-
-        let HybridChunksResult {
-            chunks,
-            chunk_summaries,
-        } = chunk_result;
-
-        let mut context: SearchContext =
-            Vec::with_capacity(chunks.len() + entities.len() + facts.len());
-        for chunk in chunks {
-            context.push(tag_chunk_item(chunk, &chunk_summaries));
-        }
-        for entity in &entities {
-            context.push(entity_to_item(entity));
-        }
-        for fact in &facts {
-            context.push(fact_to_item(fact));
-        }
-        Ok(context)
+        // Python's `_retrieve_one`: fetch uncut, then cut to the lane limits
+        // straight away. The lanes already return at most their limits, so the
+        // cut only decides the facts (against the entities shown).
+        let candidates = self
+            .fetch_candidates(query, &lanes, params.dataset_id)
+            .await?;
+        Ok(candidates
+            .finalize(lanes.chunks_top_k, lanes.entities_top_k, None)
+            .into_context())
     }
 
     async fn completion_messages(

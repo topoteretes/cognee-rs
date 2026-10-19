@@ -18,6 +18,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking changes
 
+- **`cognee-search`: `TEMPORAL` search is hybrid retrieval reranked by the
+  question's time window, and `TemporalRetriever` is gone.** `SearchType::Temporal`
+  now maps to the new `TemporalHybridRetriever`, a port of Python's
+  `TemporalHybridRetriever`: it returns `HybridCompletion`-shaped context
+  (`"kind"`-tagged chunks, entities and facts) reordered by the `Timestamp` nodes
+  default cognify writes, and falls back to the plain hybrid result with a reason
+  (`TemporalDiagnostics`, returned by `TemporalHybridRetriever::retrieve`). The
+  Event-based `TemporalRetriever` — which read only the `Event` nodes of the
+  separate temporal-cognify pipeline, answered everything else from triplet
+  search, and stamped its prompt with the machine's *local* date — is removed
+  outright, as in Python: graphs built only by temporal cognify now get plain
+  hybrid answers. The window prompt is Python's `QUERY_INTERVAL_PROMPT`, which
+  reads no clock; an LLM failure during window extraction now fails the search
+  (Python parity) instead of silently falling back. Other behaviour that follows
+  Python: an empty graph returns an empty context (not `NotFound`), batches are
+  rejected, and `search.triplet_neighbor_cap` no longer applies to TEMPORAL
+  (`search.hybrid` does).
+
+  **Migration.** Replace `TemporalRetriever::new(...)` with
+  `TemporalHybridRetriever::new(vector_db, embedding_engine, graph_db, llm,
+  top_k, candidate_top_k, system_prompt, system_prompt_path,
+  user_prompt_template, generation_options)`. Its `top_k` is what the result
+  shows per lane (default 5) and `candidate_top_k` what the hybrid fetch gathers
+  first (default `4 × top_k`; per request,
+  `retriever_specific_config.candidate_top_k`, the new
+  `SearchParams::candidate_top_k`). `GraphDBTrait` gains
+  `get_timestamps_in_range` and `get_temporal_anchors` with default
+  implementations, so an out-of-tree backend keeps compiling and working; it may
+  override them with a native query that returns the same result as
+  `cognee_graph::default_timestamps_in_range` / `default_temporal_anchors`.
+
 - **`cognee-cognify`: summarization is re-typed over `ExtractedChunks`, and the
   two graph/summarize pipeline stages are now one.** Graph extraction and
   summarization run concurrently, as Python's single `extract_graph_and_summarize`

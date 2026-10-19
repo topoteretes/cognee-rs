@@ -114,6 +114,11 @@ pub struct SearchParams {
     /// (HybridCompletion, reserved/inert — Phase 2) Max entries from the global context index.
     /// Target default when `None`: `3`.
     pub global_context_index_top_k: Option<usize>,
+
+    /// (Temporal) How many chunks and entities the hybrid fetch behind a
+    /// TEMPORAL search gathers before the time-window rerank cuts them to
+    /// `top_k` (Python's `candidate_top_k`). Default when `None`: `top_k * 4`.
+    pub candidate_top_k: Option<usize>,
 }
 
 impl SearchParams {
@@ -230,6 +235,12 @@ impl From<&SearchRequest> for SearchParams {
                 .and_then(|c| c.get("global_context_index_top_k"))
                 .and_then(|v| v.as_u64())
                 .map(|v| v as usize),
+            candidate_top_k: req
+                .retriever_specific_config
+                .as_ref()
+                .and_then(|c| c.get("candidate_top_k"))
+                .and_then(|v| v.as_u64())
+                .map(|v| v as usize),
         }
     }
 }
@@ -292,7 +303,8 @@ mod tests {
                 "use_importance_weight": false,
                 "use_truth_weight": true,
                 "include_global_context_index": true,
-                "global_context_index_top_k": 4
+                "global_context_index_top_k": 4,
+                "candidate_top_k": 12
             }
         }"#;
         let req: SearchRequest = serde_json::from_str(json).unwrap();
@@ -308,6 +320,7 @@ mod tests {
         assert_eq!(params.use_truth_weight, Some(true));
         assert_eq!(params.include_global_context_index, Some(true));
         assert_eq!(params.global_context_index_top_k, Some(4));
+        assert_eq!(params.candidate_top_k, Some(12));
     }
 
     #[test]

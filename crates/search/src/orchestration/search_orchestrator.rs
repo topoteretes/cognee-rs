@@ -980,9 +980,14 @@ impl SearchOrchestrator {
         //   hybrid retriever and only when a session will actually be saved.
         let fetch_for_tracking = self.enable_access_tracking
             && retriever.search_type() != crate::types::SearchType::Feedback;
+        // TEMPORAL is hybrid underneath and inherits the same completion path
+        // in Python (`TemporalHybridRetriever` subclasses `HybridRetriever`).
         let fetch_for_session = request.session_id.is_some()
             && self.session_manager.is_some()
-            && retriever.search_type() == crate::types::SearchType::HybridCompletion;
+            && matches!(
+                retriever.search_type(),
+                crate::types::SearchType::HybridCompletion | crate::types::SearchType::Temporal
+            );
         let context = if context.is_none() && (fetch_for_tracking || fetch_for_session) {
             let ctx = retriever.get_context(&request.query_text, &params).await?;
             // `context` is `None` only when `include_context` was false, so the

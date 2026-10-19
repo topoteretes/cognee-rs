@@ -3,696 +3,357 @@
     clippy::expect_used,
     reason = "test code — panics are acceptable failures"
 )]
-//! Integration tests for the TemporalRetriever with pre-populated events
-//! in real backends (LadybugAdapter graph DB).
+//! TEMPORAL search end to end on a graph shaped like default cognify's output.
 //!
-//! These tests require a real LLM for interval extraction and completion.
-//! They skip gracefully when OPENAI_URL / OPENAI_TOKEN env vars are not set.
+//! Default cognify writes every date it extracts as a shared `Timestamp` node:
+//! chunks `contains` the timestamps they name and the entities they mention,
+//! and entities reach timestamps through `*_at` edges. The
+//! [`TemporalHybridRetriever`] runs plain hybrid retrieval, asks the graph which
+//! candidates are attached to a `Timestamp` inside the question's window, and
+//! reranks — so the chunk dated inside the window comes first even when
+//! similarity ranks it last. Python's counterpart is
+//! `tests/integration/retrieval/test_temporal_retriever.py`.
 //!
-//! Run with:
-//!   cargo test --package cognee-search --test temporal_retriever_integration -- --nocapture
-#![allow(
-    clippy::disallowed_methods,
-    reason = "tests drive configuration through the process env"
-)]
+//! The graph is a real `LadybugAdapter` (so its native `get_timestamps_in_range`
+//! / `get_temporal_anchors` run), the vector store is `MockVectorDB`, and the
+//! LLM is scripted: it answers the window extraction with a fixed interval and
+//! the completion with a fixed string. No network, no environment.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
-use cognee_embedding::mock::MockEmbeddingEngine;
+use async_trait::async_trait;
+use cognee_embedding::{EmbeddingEngine, EmbeddingResult};
 use cognee_graph::{GraphDBTrait, GraphDBTraitExt, LadybugAdapter};
-use cognee_llm::{Llm, build_openai_compatible_adapter};
+use cognee_llm::{GenerationOptions, GenerationResponse, Llm, LlmResult, Message};
+use cognee_models::Timestamp;
 use cognee_search::{
-    SearchParams, SessionContext, TemporalRetriever,
+    HybridRetriever, SearchParams, SessionContext, TemporalFallbackReason, TemporalHybridRetriever,
     retrievers::SearchRetriever,
     types::{SearchContext, SearchOutput},
 };
-use cognee_vector::{MockVectorDB, VectorDB};
-use serde_json::json;
+use cognee_vector::{MockVectorDB, VectorDB, VectorPoint};
+use serde_json::{Value, json};
 use tempfile::TempDir;
+use uuid::Uuid;
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+/// Answers the window extraction with `interval`, the completion with
+/// `"answer"`, and keeps the completion prompt.
+struct ScriptedLlm {
+    interval: Value,
+    last_prompt: Mutex<Vec<Message>>,
+}
 
-/// Build an LLM adapter from environment variables, or return `None` to skip.
-fn build_test_llm() -> Option<Arc<dyn Llm>> {
-    let _ = dotenv::dotenv();
-    let url = std::env::var("OPENAI_URL")
-        .ok()
-        .or_else(|| std::env::var("LLM_ENDPOINT").ok())?;
-    let token = std::env::var("OPENAI_TOKEN")
-        .ok()
-        .or_else(|| std::env::var("LLM_API_KEY").ok())?;
-    if url.is_empty() || token.is_empty() {
-        return None;
+#[async_trait]
+impl Llm for ScriptedLlm {
+    async fn generate(
+        &self,
+        messages: Vec<Message>,
+        _options: Option<GenerationOptions>,
+    ) -> LlmResult<GenerationResponse> {
+        *self.last_prompt.lock().unwrap() = messages;
+        Ok(GenerationResponse {
+            content: "answer".to_string(),
+            model: "scripted".to_string(),
+            usage: None,
+            finish_reason: Some("stop".to_string()),
+        })
     }
-    let model = std::env::var("OPENAI_MODEL")
-        .ok()
-        .or_else(|| std::env::var("LLM_MODEL").ok())
-        .unwrap_or_else(|| "gpt-4o-mini".to_string());
-    // Route through the production factory (provider from env, default `openai`)
-    // so litellm-style prefixes like `baseten/openai/gpt-oss-120b` are stripped
-    // exactly as in a real run — building the adapter directly would 404.
-    let provider = std::env::var("LLM_PROVIDER").unwrap_or_else(|_| "openai".to_string());
-    Some(Arc::new(
-        build_openai_compatible_adapter(&provider, &model, &token, &url, 3)
-            .expect("build_openai_compatible_adapter should succeed with valid args"),
-    ))
+
+    async fn create_structured_output_with_messages_raw(
+        &self,
+        _messages: Vec<Message>,
+        _json_schema: &Value,
+        _options: Option<GenerationOptions>,
+    ) -> LlmResult<Value> {
+        Ok(self.interval.clone())
+    }
+
+    fn model(&self) -> &str {
+        "scripted"
+    }
 }
 
-/// Timestamp (epoch milliseconds)
-const TS_2021_01_01: i64 = 1609459200000; // 2021-01-01T00:00:00Z
-const TS_2021_02_01: i64 = 1612137600000; // 2021-02-01T00:00:00Z
-const TS_2021_03_01: i64 = 1614556800000; // 2021-03-01T00:00:00Z
-const TS_2021_07_01: i64 = 1625097600000; // 2021-07-01T00:00:00Z
-const TS_2021_10_01: i64 = 1633046400000; // 2021-10-01T00:00:00Z
+/// Every query embeds to `[1, 0]`, so a row's similarity is set by its own
+/// vector.
+struct FixedQueryEmbedding;
 
-/// Pre-populate a LadybugAdapter graph with 4 known temporal events.
+#[async_trait]
+impl EmbeddingEngine for FixedQueryEmbedding {
+    async fn embed(&self, texts: &[&str]) -> EmbeddingResult<Vec<Vec<f32>>> {
+        Ok(texts.iter().map(|_| vec![1.0, 0.0]).collect())
+    }
+    fn dimension(&self) -> usize {
+        2
+    }
+    fn batch_size(&self) -> usize {
+        8
+    }
+    fn max_sequence_length(&self) -> usize {
+        128
+    }
+}
+
+/// The three chunks, most similar to the question first.
+const CLOSE: &str = "The Soviet space program trained cosmonauts for long missions.";
+const YEAR: &str = "1965 was a busy year for crewed spaceflight.";
+const DAY: &str = "Voskhod 2 carried Alexei Leonov on the first spacewalk.";
+
+fn id(name: &str) -> Uuid {
+    Uuid::new_v5(&Uuid::NAMESPACE_OID, name.as_bytes())
+}
+
+struct Fixture {
+    graph: Arc<dyn GraphDBTrait>,
+    vector: Arc<dyn VectorDB>,
+    _dir: TempDir,
+}
+
+/// A default-cognified graph about the first spacewalk.
 ///
-/// Returns (graph_db, vector_db, embedding_engine, _temp_dir).
-/// The caller must keep `_temp_dir` alive so the graph directory is not deleted.
-async fn setup_temporal_graph() -> (
-    Arc<dyn GraphDBTrait>,
-    Arc<dyn VectorDB>,
-    Arc<dyn cognee_embedding::EmbeddingEngine>,
-    TempDir,
-) {
-    let temp_dir = TempDir::new().expect("TempDir::new should succeed");
+/// - `close` mentions Leonov and carries no date: the best similarity hit.
+/// - `year` names "1965": the year node, which also overlaps the day.
+/// - `day` mentions the Voskhod 2 entity, launched on 1965-03-18 — dated only
+///   through the entity, and the least similar of the three.
+async fn spacewalk_graph() -> Fixture {
+    let dir = TempDir::new().unwrap();
+    let graph = LadybugAdapter::new(dir.path().join("graph").to_str().unwrap())
+        .await
+        .unwrap();
+    graph.initialize().await.unwrap();
 
-    let graph_path = temp_dir.path().join("graph").to_string_lossy().to_string();
-    let graph_db: Arc<dyn GraphDBTrait> = Arc::new(
-        LadybugAdapter::new(&graph_path)
+    let year = Timestamp::from_text("1965").unwrap();
+    let day = Timestamp::from_text("18 March 1965").unwrap();
+    graph.add_nodes(&[&year, &day]).await.unwrap();
+    for (name, node_type) in [
+        ("close", "DocumentChunk"),
+        ("year", "DocumentChunk"),
+        ("day", "DocumentChunk"),
+        ("voskhod 2", "Entity"),
+        ("alexei leonov", "Entity"),
+    ] {
+        graph
+            .add_node_raw(json!({"id": id(name).to_string(), "name": name, "type": node_type}))
             .await
-            .expect("LadybugAdapter::new should succeed"),
-    );
-    graph_db
-        .initialize()
+            .unwrap();
+    }
+    let (year_id, day_id) = (year.base.id.to_string(), day.base.id.to_string());
+    for (source, target, relationship) in [
+        (id("year").to_string(), year_id.clone(), "contains"),
+        (
+            id("day").to_string(),
+            id("voskhod 2").to_string(),
+            "contains",
+        ),
+        (id("voskhod 2").to_string(), day_id.clone(), "launched_at"),
+        (
+            id("day").to_string(),
+            id("alexei leonov").to_string(),
+            "contains",
+        ),
+        (
+            id("close").to_string(),
+            id("alexei leonov").to_string(),
+            "contains",
+        ),
+    ] {
+        graph
+            .add_edge(&source, &target, relationship, None)
+            .await
+            .unwrap();
+    }
+
+    let vector = MockVectorDB::new();
+    vector
+        .create_collection("DocumentChunk", "text", 2)
         .await
-        .expect("graph_db.initialize should succeed");
+        .unwrap();
+    for (name, text, embedding) in [
+        ("close", CLOSE, vec![1.0, 0.0]),
+        ("year", YEAR, vec![0.8, 0.6]),
+        ("day", DAY, vec![0.6, 0.8]),
+    ] {
+        vector
+            .index_points(
+                "DocumentChunk",
+                "text",
+                &[VectorPoint::new(id(name), embedding)
+                    .with_metadata("id", json!(id(name).to_string()))
+                    .with_metadata("text", json!(text))],
+            )
+            .await
+            .unwrap();
+    }
+    vector.create_collection("Entity", "name", 2).await.unwrap();
+    for (name, embedding) in [
+        ("alexei leonov", vec![0.9, 0.1]),
+        ("voskhod 2", vec![0.5, 0.5]),
+    ] {
+        vector
+            .index_points(
+                "Entity",
+                "name",
+                &[VectorPoint::new(id(name), embedding)
+                    .with_metadata("id", json!(id(name).to_string()))
+                    .with_metadata("name", json!(name))],
+            )
+            .await
+            .unwrap();
+    }
 
-    // -- Add Timestamp nodes --
-    graph_db
-        .add_node(&json!({
-            "id": "ts-1",
-            "name": "ts-1",
-            "type": "Timestamp",
-            "time_at": TS_2021_01_01
-        }))
-        .await
-        .expect("add ts-1");
-
-    graph_db
-        .add_node(&json!({
-            "id": "ts-2a",
-            "name": "ts-2a",
-            "type": "Timestamp",
-            "time_at": TS_2021_02_01
-        }))
-        .await
-        .expect("add ts-2a");
-
-    graph_db
-        .add_node(&json!({
-            "id": "ts-2b",
-            "name": "ts-2b",
-            "type": "Timestamp",
-            "time_at": TS_2021_03_01
-        }))
-        .await
-        .expect("add ts-2b");
-
-    graph_db
-        .add_node(&json!({
-            "id": "ts-3",
-            "name": "ts-3",
-            "type": "Timestamp",
-            "time_at": TS_2021_07_01
-        }))
-        .await
-        .expect("add ts-3");
-
-    graph_db
-        .add_node(&json!({
-            "id": "ts-4",
-            "name": "ts-4",
-            "type": "Timestamp",
-            "time_at": TS_2021_10_01
-        }))
-        .await
-        .expect("add ts-4");
-
-    // -- Add Interval node --
-    graph_db
-        .add_node(&json!({
-            "id": "int-1",
-            "name": "int-1",
-            "type": "Interval"
-        }))
-        .await
-        .expect("add int-1");
-
-    // -- Add Event nodes --
-    graph_db
-        .add_node(&json!({
-            "id": "ev-1",
-            "name": "Project Alpha Launch",
-            "type": "Event",
-            "description": "Launched Project Alpha at the beginning of 2021"
-        }))
-        .await
-        .expect("add ev-1");
-
-    graph_db
-        .add_node(&json!({
-            "id": "ev-2",
-            "name": "Team Meeting",
-            "type": "Event",
-            "description": "Monthly team meeting discussing Q1 goals"
-        }))
-        .await
-        .expect("add ev-2");
-
-    graph_db
-        .add_node(&json!({
-            "id": "ev-3",
-            "name": "Product Release",
-            "type": "Event",
-            "description": "Released new product features in July"
-        }))
-        .await
-        .expect("add ev-3");
-
-    graph_db
-        .add_node(&json!({
-            "id": "ev-4",
-            "name": "Company Retreat",
-            "type": "Event",
-            "description": "Annual company retreat in October"
-        }))
-        .await
-        .expect("add ev-4");
-
-    // -- Add edges --
-    // ev-1 -> ts-1 (at)
-    graph_db
-        .add_edge("ev-1", "ts-1", "at", None)
-        .await
-        .expect("add edge ev-1 -> ts-1");
-
-    // ev-2 -> int-1 (during)
-    graph_db
-        .add_edge("ev-2", "int-1", "during", None)
-        .await
-        .expect("add edge ev-2 -> int-1");
-
-    // int-1 -> ts-2a (from)
-    graph_db
-        .add_edge("int-1", "ts-2a", "from", None)
-        .await
-        .expect("add edge int-1 -> ts-2a");
-
-    // int-1 -> ts-2b (to)
-    graph_db
-        .add_edge("int-1", "ts-2b", "to", None)
-        .await
-        .expect("add edge int-1 -> ts-2b");
-
-    // ev-3 -> ts-3 (at)
-    graph_db
-        .add_edge("ev-3", "ts-3", "at", None)
-        .await
-        .expect("add edge ev-3 -> ts-3");
-
-    // ev-4 -> ts-4 (at)
-    graph_db
-        .add_edge("ev-4", "ts-4", "at", None)
-        .await
-        .expect("add edge ev-4 -> ts-4");
-
-    let vector_db: Arc<dyn VectorDB> = Arc::new(MockVectorDB::new());
-    let embedding_engine: Arc<dyn cognee_embedding::EmbeddingEngine> =
-        Arc::new(MockEmbeddingEngine::new(384));
-
-    (graph_db, vector_db, embedding_engine, temp_dir)
+    Fixture {
+        graph: Arc::new(graph),
+        vector: Arc::new(vector),
+        _dir: dir,
+    }
 }
 
-/// Pre-populate a graph with non-temporal entities (for fallback tests).
-async fn setup_non_temporal_graph() -> (
-    Arc<dyn GraphDBTrait>,
-    Arc<dyn VectorDB>,
-    Arc<dyn cognee_embedding::EmbeddingEngine>,
-    TempDir,
-) {
-    let temp_dir = TempDir::new().expect("TempDir::new should succeed");
-
-    let graph_path = temp_dir.path().join("graph").to_string_lossy().to_string();
-    let graph_db: Arc<dyn GraphDBTrait> = Arc::new(
-        LadybugAdapter::new(&graph_path)
-            .await
-            .expect("LadybugAdapter::new should succeed"),
-    );
-    graph_db
-        .initialize()
-        .await
-        .expect("graph_db.initialize should succeed");
-
-    // Add non-temporal entities
-    graph_db
-        .add_node(&json!({
-            "id": "person-1",
-            "name": "Alice",
-            "type": "Person",
-            "description": "Software engineer who works at Figma"
-        }))
-        .await
-        .expect("add person-1");
-
-    graph_db
-        .add_node(&json!({
-            "id": "company-1",
-            "name": "Figma",
-            "type": "Company",
-            "description": "Design tool company"
-        }))
-        .await
-        .expect("add company-1");
-
-    graph_db
-        .add_edge("person-1", "company-1", "works_at", None)
-        .await
-        .expect("add edge person-1 -> company-1");
-
-    let vector_db: Arc<dyn VectorDB> = Arc::new(MockVectorDB::new());
-    let embedding_engine: Arc<dyn cognee_embedding::EmbeddingEngine> =
-        Arc::new(MockEmbeddingEngine::new(384));
-
-    (graph_db, vector_db, embedding_engine, temp_dir)
-}
-
-/// Build a TemporalRetriever from components.
-fn build_retriever(
-    vector_db: Arc<dyn VectorDB>,
-    embedding_engine: Arc<dyn cognee_embedding::EmbeddingEngine>,
-    graph_db: Arc<dyn GraphDBTrait>,
-    llm: Arc<dyn Llm>,
-    top_k: Option<usize>,
-) -> TemporalRetriever {
-    TemporalRetriever::new(
-        vector_db,
-        embedding_engine,
-        graph_db,
+fn temporal(fixture: &Fixture, llm: Arc<ScriptedLlm>) -> TemporalHybridRetriever {
+    TemporalHybridRetriever::new(
+        Arc::clone(&fixture.vector),
+        Arc::new(FixedQueryEmbedding),
+        Arc::clone(&fixture.graph),
         llm,
-        top_k,
-        None, // wide_search_top_k
-        None, // triplet_distance_penalty
-        None, // temporal_interval_prompt
-        None, // system_prompt
-        None, // system_prompt_path
-        None, // user_prompt_template
-        None, // generation_options
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
     )
 }
 
-/// Extract all text from a SearchContext for keyword matching.
-fn context_text(context: &SearchContext) -> String {
+fn scripted(interval: Value) -> Arc<ScriptedLlm> {
+    Arc::new(ScriptedLlm {
+        interval,
+        last_prompt: Mutex::new(vec![]),
+    })
+}
+
+/// The chunk texts of a context, in order.
+fn chunk_texts(context: &SearchContext) -> Vec<String> {
     context
         .iter()
-        .map(|item| item.payload.to_string().to_lowercase())
-        .collect::<Vec<_>>()
-        .join(" ")
+        .filter(|item| item.payload.get("kind").and_then(Value::as_str) == Some("chunk"))
+        .map(|item| item.payload["text"].as_str().unwrap().to_string())
+        .collect()
 }
 
-/// Extract text from SearchOutput.
-fn output_text(output: &SearchOutput) -> String {
-    match output {
-        SearchOutput::Text(text) => text.to_lowercase(),
-        SearchOutput::Texts(texts) => texts.join(" ").to_lowercase(),
-        SearchOutput::Items(items) => items
-            .iter()
-            .map(|item| item.payload.to_string().to_lowercase())
-            .collect::<Vec<_>>()
-            .join(" "),
-        _ => String::new(),
+fn top_2() -> SearchParams {
+    SearchParams {
+        top_k: Some(2),
+        ..SearchParams::default()
     }
 }
 
-// ---------------------------------------------------------------------------
-// Test 1: Time range query for January 2021
-// ---------------------------------------------------------------------------
-
 #[tokio::test]
-async fn temporal_retriever_time_range_query() {
-    let Some(llm) = build_test_llm() else {
-        eprintln!(
-            "OPENAI_URL/OPENAI_TOKEN not set -- skipping temporal_retriever_time_range_query"
-        );
-        return;
-    };
+async fn the_chunk_dated_inside_the_window_ranks_first() {
+    let fixture = spacewalk_graph().await;
+    let llm = scripted(json!({
+        "starts_at": {"year": 1965, "month": 3, "day": 18},
+        "ends_at": {"year": 1965, "month": 3, "day": 19},
+    }));
+    let retriever = temporal(&fixture, Arc::clone(&llm));
 
-    let (graph_db, vector_db, embedding_engine, _temp_dir) = setup_temporal_graph().await;
-    let retriever = build_retriever(
-        Arc::clone(&vector_db),
-        Arc::clone(&embedding_engine),
-        Arc::clone(&graph_db),
-        Arc::clone(&llm),
-        None,
-    );
-
-    let context = match retriever
-        .get_context("What happened in January 2021?", &SearchParams::default())
+    let result = retriever
+        .retrieve("What happened on 18 March 1965?", &top_2())
         .await
-    {
-        Ok(ctx) => ctx,
-        Err(e) => {
-            eprintln!("Skipping: get_context failed: {e}");
-            return;
-        }
-    };
+        .unwrap();
 
-    let text = context_text(&context);
-    println!("temporal_retriever_time_range_query context: {text}");
-
+    assert_eq!(result.diagnostics.reason, None);
+    // The day-dated chunk first (reached through the Voskhod 2 entity), then
+    // the year-dated one; the undated best similarity hit is cut.
+    assert_eq!(chunk_texts(&result.context), [DAY, YEAR]);
+    assert_eq!(chunk_texts(&result.diagnostics.baseline), [CLOSE, YEAR]);
     assert!(
-        !context.is_empty(),
-        "Context should not be empty for January 2021 query"
-    );
-    assert!(
-        text.contains("project alpha"),
-        "Context should contain 'Project Alpha' for January 2021 query; got: {text}"
-    );
-
-    println!("temporal_retriever_time_range_query PASSED");
-}
-
-// ---------------------------------------------------------------------------
-// Test 2: Single month query for July 2021
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn temporal_retriever_single_month_query() {
-    let Some(llm) = build_test_llm() else {
-        eprintln!(
-            "OPENAI_URL/OPENAI_TOKEN not set -- skipping temporal_retriever_single_month_query"
-        );
-        return;
-    };
-
-    let (graph_db, vector_db, embedding_engine, _temp_dir) = setup_temporal_graph().await;
-    let retriever = build_retriever(
-        Arc::clone(&vector_db),
-        Arc::clone(&embedding_engine),
-        Arc::clone(&graph_db),
-        Arc::clone(&llm),
-        None,
+        result
+            .diagnostics
+            .anchors
+            .entity_ids
+            .contains(&id("voskhod 2").to_string())
     );
 
-    let context = match retriever
-        .get_context("What happened in July 2021?", &SearchParams::default())
-        .await
-    {
-        Ok(ctx) => ctx,
-        Err(e) => {
-            eprintln!("Skipping: get_context failed: {e}");
-            return;
-        }
-    };
-
-    let text = context_text(&context);
-    println!("temporal_retriever_single_month_query context: {text}");
-
-    assert!(
-        !context.is_empty(),
-        "Context should not be empty for July 2021 query"
-    );
-    assert!(
-        text.contains("product release"),
-        "Context should contain 'Product Release' for July 2021 query; got: {text}"
-    );
-
-    println!("temporal_retriever_single_month_query PASSED");
-}
-
-// ---------------------------------------------------------------------------
-// Test 3: Non-temporal fallback
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn temporal_retriever_non_temporal_fallback() {
-    let Some(llm) = build_test_llm() else {
-        eprintln!(
-            "OPENAI_URL/OPENAI_TOKEN not set -- skipping temporal_retriever_non_temporal_fallback"
-        );
-        return;
-    };
-
-    let (graph_db, vector_db, embedding_engine, _temp_dir) = setup_non_temporal_graph().await;
-    let retriever = build_retriever(
-        Arc::clone(&vector_db),
-        Arc::clone(&embedding_engine),
-        Arc::clone(&graph_db),
-        Arc::clone(&llm),
-        None,
-    );
-
-    // Query about a non-temporal topic -- the LLM should return None for
-    // the interval, causing the retriever to fall back to triplet context.
-    let context = match retriever
-        .get_context("Who works at Figma?", &SearchParams::default())
-        .await
-    {
-        Ok(ctx) => ctx,
-        Err(e) => {
-            eprintln!("Skipping: get_context failed: {e}");
-            return;
-        }
-    };
-
-    let text = context_text(&context);
-    println!("temporal_retriever_non_temporal_fallback context: {text}");
-
-    // The fallback path uses brute_force_triplet_search which relies on
-    // vector DB collections (Entity/name). With MockVectorDB (empty collections),
-    // the context may be empty or contain graph-based triplet edges.
-    // The key assertion is that it does NOT error out.
-    println!("temporal_retriever_non_temporal_fallback PASSED (no error on fallback path)");
-}
-
-// ---------------------------------------------------------------------------
-// Test 4: Full completion with pre-built context
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn temporal_retriever_full_completion() {
-    let Some(llm) = build_test_llm() else {
-        eprintln!("OPENAI_URL/OPENAI_TOKEN not set -- skipping temporal_retriever_full_completion");
-        return;
-    };
-
-    let (graph_db, vector_db, embedding_engine, _temp_dir) = setup_temporal_graph().await;
-    let retriever = build_retriever(
-        Arc::clone(&vector_db),
-        Arc::clone(&embedding_engine),
-        Arc::clone(&graph_db),
-        Arc::clone(&llm),
-        None,
-    );
-
-    let session = SessionContext::default();
-    let output = match retriever
+    // The answer is generated over the reranked context, day first.
+    let output = retriever
         .get_completion(
-            "What happened in January 2021?",
-            None, // no pre-built context -- retriever fetches its own
-            &session,
-            &SearchParams::default(),
+            "What happened on 18 March 1965?",
+            Some(result.context),
+            &SessionContext::default(),
+            &top_2(),
         )
         .await
-    {
-        Ok(out) => out,
-        Err(e) => {
-            eprintln!("Skipping: get_completion failed: {e}");
-            return;
-        }
-    };
-
-    let text = output_text(&output);
-    println!("temporal_retriever_full_completion output: {text}");
-
-    assert!(
-        !text.is_empty(),
-        "Completion output should be non-empty for temporal query"
-    );
-
-    println!("temporal_retriever_full_completion PASSED");
+        .unwrap();
+    assert!(matches!(output, SearchOutput::Text(ref text) if text == "answer"));
+    let prompt = llm.last_prompt.lock().unwrap().clone();
+    let user = &prompt.last().unwrap().content;
+    let (day_at, year_at) = (user.find(DAY).unwrap(), user.find(YEAR).unwrap());
+    assert!(day_at < year_at, "the day-dated passage leads the prompt");
+    assert!(!user.contains(CLOSE));
 }
 
-// ---------------------------------------------------------------------------
-// Test 5: Completion fallback with non-temporal data
-// ---------------------------------------------------------------------------
-
 #[tokio::test]
-async fn temporal_retriever_completion_fallback() {
-    let Some(llm) = build_test_llm() else {
-        eprintln!(
-            "OPENAI_URL/OPENAI_TOKEN not set -- skipping temporal_retriever_completion_fallback"
-        );
-        return;
-    };
+async fn a_question_without_a_time_window_answers_with_plain_hybrid() {
+    let fixture = spacewalk_graph().await;
+    let retriever = temporal(
+        &fixture,
+        scripted(json!({"starts_at": null, "ends_at": null})),
+    );
 
-    let (graph_db, vector_db, embedding_engine, _temp_dir) = setup_non_temporal_graph().await;
-    let retriever = build_retriever(
-        Arc::clone(&vector_db),
-        Arc::clone(&embedding_engine),
-        Arc::clone(&graph_db),
-        Arc::clone(&llm),
+    let result = retriever
+        .retrieve("Who walked in space first?", &top_2())
+        .await
+        .unwrap();
+    assert_eq!(
+        result.diagnostics.reason,
+        Some(TemporalFallbackReason::NoTimeConstraint)
+    );
+    assert_eq!(chunk_texts(&result.context), [CLOSE, YEAR]);
+
+    // The same chunks plain HYBRID_COMPLETION returns for the question.
+    let hybrid = HybridRetriever::new(
+        Arc::clone(&fixture.vector),
+        Arc::new(FixedQueryEmbedding),
+        Arc::clone(&fixture.graph),
+        scripted(Value::Null),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
         None,
     );
-
-    let session = SessionContext::default();
-    let context = match retriever
-        .get_context("Who works at Figma?", &SearchParams::default())
+    let plain = hybrid
+        .get_context("Who walked in space first?", &top_2())
         .await
-    {
-        Ok(context) => context,
-        Err(e) => {
-            eprintln!("Skipping: get_context failed: {e}");
-            return;
-        }
-    };
-    let context_is_empty = context.is_empty();
-    let output = match retriever
-        .get_completion(
-            "Who works at Figma?",
-            Some(context),
-            &session,
-            &SearchParams::default(),
-        )
-        .await
-    {
-        Ok(out) => out,
-        Err(e) => {
-            eprintln!("Skipping: get_completion failed: {e}");
-            return;
-        }
-    };
-
-    let text = output_text(&output);
-    println!("temporal_retriever_completion_fallback output: {text}");
-
-    if context_is_empty {
-        // No triplet matched (this fixture indexes no vectors): Python's
-        // `skip_completion_on_empty_context` — no answer instead of a
-        // "no context provided" deflection (SDK-270).
-        assert!(
-            matches!(output, SearchOutput::Texts(ref texts) if texts.is_empty()),
-            "an empty fallback context must skip the completion, got {output:?}"
-        );
-    } else {
-        assert!(
-            !text.is_empty(),
-            "Completion output should be non-empty for a non-empty fallback context"
-        );
-    }
-
-    println!("temporal_retriever_completion_fallback PASSED");
+        .unwrap();
+    assert_eq!(chunk_texts(&plain), chunk_texts(&result.context));
 }
 
-// ---------------------------------------------------------------------------
-// Test 6: top_k limits the number of context items
-// ---------------------------------------------------------------------------
-
 #[tokio::test]
-async fn temporal_retriever_top_k_limits() {
-    let Some(llm) = build_test_llm() else {
-        eprintln!("OPENAI_URL/OPENAI_TOKEN not set -- skipping temporal_retriever_top_k_limits");
-        return;
-    };
-
-    let (graph_db, vector_db, embedding_engine, _temp_dir) = setup_temporal_graph().await;
-    let retriever = build_retriever(
-        Arc::clone(&vector_db),
-        Arc::clone(&embedding_engine),
-        Arc::clone(&graph_db),
-        Arc::clone(&llm),
-        Some(2), // top_k=2
+async fn a_window_with_no_dated_data_falls_back_with_a_reason() {
+    let fixture = spacewalk_graph().await;
+    let retriever = temporal(
+        &fixture,
+        scripted(json!({
+            "starts_at": {"year": 1980},
+            "ends_at": {"year": 1981},
+        })),
     );
-
-    let context = match retriever
-        .get_context("What events occurred in 2021?", &SearchParams::default())
+    let result = retriever
+        .retrieve("What happened in 1980?", &top_2())
         .await
-    {
-        Ok(ctx) => ctx,
-        Err(e) => {
-            eprintln!("Skipping: get_context failed: {e}");
-            return;
-        }
-    };
-
-    let text = context_text(&context);
-    println!(
-        "temporal_retriever_top_k_limits context ({} items): {text}",
-        context.len()
+        .unwrap();
+    assert_eq!(
+        result.diagnostics.reason,
+        Some(TemporalFallbackReason::NoTemporalMatch)
     );
-
-    assert!(
-        context.len() <= 2,
-        "With top_k=2, context should have at most 2 items; got {}",
-        context.len()
-    );
-
-    println!("temporal_retriever_top_k_limits PASSED");
-}
-
-// ---------------------------------------------------------------------------
-// Test 7: Multiple events query for all of 2021
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn temporal_retriever_multiple_events() {
-    let Some(llm) = build_test_llm() else {
-        eprintln!("OPENAI_URL/OPENAI_TOKEN not set -- skipping temporal_retriever_multiple_events");
-        return;
-    };
-
-    let (graph_db, vector_db, embedding_engine, _temp_dir) = setup_temporal_graph().await;
-    let retriever = build_retriever(
-        Arc::clone(&vector_db),
-        Arc::clone(&embedding_engine),
-        Arc::clone(&graph_db),
-        Arc::clone(&llm),
-        Some(10), // top_k=10
-    );
-
-    let context = match retriever
-        .get_context("What events occurred in 2021?", &SearchParams::default())
-        .await
-    {
-        Ok(ctx) => ctx,
-        Err(e) => {
-            eprintln!("Skipping: get_context failed: {e}");
-            return;
-        }
-    };
-
-    let text = context_text(&context);
-    println!(
-        "temporal_retriever_multiple_events context ({} items): {text}",
-        context.len()
-    );
-
-    assert!(
-        !context.is_empty(),
-        "Context should not be empty for '2021' query covering all events"
-    );
-
-    // At least one event name should appear in the context
-    let has_event_name = text.contains("project alpha")
-        || text.contains("team meeting")
-        || text.contains("product release")
-        || text.contains("company retreat");
-    assert!(
-        has_event_name,
-        "Context should contain at least one event name; got: {text}"
-    );
-
-    println!("temporal_retriever_multiple_events PASSED");
+    assert_eq!(chunk_texts(&result.context), [CLOSE, YEAR]);
 }

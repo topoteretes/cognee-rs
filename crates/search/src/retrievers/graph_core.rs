@@ -64,22 +64,12 @@ impl GraphRetrieverCore {
         }
     }
 
-    /// The default `top_k`, before a per-request override.
-    pub(crate) fn top_k(&self) -> usize {
-        self.top_k
-    }
-
-    /// The default `wide_search_top_k`, before a per-request override.
-    pub(crate) fn wide_search_top_k(&self) -> usize {
-        self.wide_search_top_k
-    }
-
     /// Python's `NoDataError` on an empty graph
     /// (`graph_completion_retriever.py:139-148`, SDK-270): an empty graph is a
     /// state problem, not a query miss. Raised by the retrievers that inherit
     /// Python's `get_retrieved_objects` check — graph completion and graph
-    /// summary; chain-of-thought, context extension and temporal override that
-    /// method and do not raise.
+    /// summary; chain-of-thought and context extension override that method
+    /// and do not raise.
     pub(crate) async fn ensure_graph_not_empty(&self) -> Result<(), SearchError> {
         if self.graph_db.is_empty().await? {
             return Err(SearchError::NotFound(EMPTY_GRAPH_MESSAGE.to_string()));
