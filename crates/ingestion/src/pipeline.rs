@@ -445,6 +445,29 @@ pub async fn persist_data_with_acl_and_locks(
     target_dataset_id: Option<Uuid>,
     dataset_locks: Option<&DatasetLocks>,
 ) -> Result<Data, Box<dyn std::error::Error>> {
+    // The node set is written here, where the row is built, rather than by
+    // the `AddPipeline` task closure — so every entry point that hands a
+    // `ProcessedInput` with a node set to a `persist_data*` function gets the
+    // same two writes, and so does the re-add path below. Python stores
+    // `None`, not `[]`, for an empty set (`json.dumps(...) if effective_node_set
+    // else None`), so an empty list is treated as no node set.
+    //
+    // Checked before the dataset is resolved: a rejected name must not leave
+    // behind an empty dataset (with its owner grants) that nothing attached
+    // to. `AddPipeline::add_with_params` already refused the call up front;
+    // this is for direct callers of the `persist_data*` entry points.
+    let node_set = processed
+        .node_set
+        .as_deref()
+        .filter(|names| !names.is_empty());
+    if let Some(names) = node_set {
+        validate_node_set_names(names)?;
+    }
+    let node_set_column = node_set
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|e| format!("Failed to serialize node_set: {e}"))?;
+
     // Take the identity lock before looking anything up, on *both* resolution
     // paths.
     //
@@ -528,24 +551,6 @@ pub async fn persist_data_with_acl_and_locks(
 
     let data_id = processed.data_id;
 
-    // The node set is written here, where the row is built, rather than by
-    // the `AddPipeline` task closure — so every entry point that hands a
-    // `ProcessedInput` with a node set to a `persist_data*` function gets the
-    // same two writes, and so does the re-add path below. Python stores
-    // `None`, not `[]`, for an empty set (`json.dumps(...) if effective_node_set
-    // else None`), so an empty list is treated as no node set.
-    let node_set = processed
-        .node_set
-        .as_deref()
-        .filter(|names| !names.is_empty());
-    if let Some(names) = node_set {
-        validate_node_set_names(names)?;
-    }
-    let node_set_column = node_set
-        .map(serde_json::to_string)
-        .transpose()
-        .map_err(|e| format!("Failed to serialize node_set: {e}"))?;
-
     if let Some(mut existing_data) = database.get_data(data_id).await? {
         database.attach_data_to_dataset(dataset.id, data_id).await?;
         // Python's `ingest_data` update branch rewrites the existing row's
@@ -553,21 +558,58 @@ pub async fn persist_data_with_acl_and_locks(
         // the node set is refreshed here (the rest of the row stays as
         // stored), and only when the call supplies one: a re-add without a
         // node set leaves the stored tags alone. The write is skipped when
-        // the row already carries exactly this set, which is the common
-        // re-add (memify's session persist re-adds under one fixed set).
+        // the row already carries this set, which is the common re-add
+        // (memify's session persist re-adds under one fixed set). "Carries"
+        // is decided on the parsed JSON, not the stored text: a row Python
+        // wrote spells the same set `["a", "b"]` (json.dumps spacing) and may
+        // order metadata keys differently, and must not be rewritten on every
+        // re-add.
+        //
+        // The write is a targeted update of the two columns, not a full-row
+        // write of the snapshot read above: a `token_count`, `last_accessed`
+        // or `pipeline_status` a concurrent cognify or search wrote in between
+        // has to survive.
+        //
+        // The cognify completion marker is deliberately left in place, so an
+        // incremental cognify will not re-process the item and the graph keeps
+        // the tags it was built with — the same as Python, where a plain
+        // `add()` skips already-added content (`run_tasks_data_item_incremental`)
+        // and `ingest_data` resets `pipeline_status` only when the content
+        // changed. In both SDKs `update()` is the way to re-tag cognified
+        // content: it drops the item's memory and clears the marker before the
+        // pinned re-add and re-cognify.
         if let Some(names) = node_set {
             let external_metadata = with_node_set_in_external_metadata(
                 existing_data.external_metadata.as_deref(),
                 names,
             )
             .map_err(|e| format!("Failed to record node_set in external_metadata: {e}"))?;
-            if existing_data.node_set != node_set_column
-                || existing_data.external_metadata != external_metadata
-            {
-                existing_data.node_set = node_set_column;
-                existing_data.external_metadata = external_metadata;
-                existing_data = database.update_data(existing_data).await?;
+            if !same_json(
+                existing_data.node_set.as_deref(),
+                node_set_column.as_deref(),
+            ) || !same_json(
+                existing_data.external_metadata.as_deref(),
+                external_metadata.as_deref(),
+            ) {
+                database
+                    .update_data_node_set(
+                        data_id,
+                        node_set_column.as_deref(),
+                        external_metadata.as_deref(),
+                    )
+                    .await?;
                 info!(data_id = %data_id, "node_set refreshed on re-add");
+                // The row as stored now, including the `updated_at` stamp and
+                // whatever another writer put on the other columns meanwhile.
+                // A row deleted in that window is reported from the snapshot.
+                existing_data = match database.get_data(data_id).await? {
+                    Some(fresh) => fresh,
+                    None => {
+                        existing_data.node_set = node_set_column;
+                        existing_data.external_metadata = external_metadata;
+                        existing_data
+                    }
+                };
             }
         }
         info!(data_id = %data_id, is_duplicate = true, "input processed");
@@ -867,6 +909,53 @@ fn item_metadata_map(metadata: ItemMetadata) -> serde_json::Map<String, serde_js
     }
 }
 
+/// Whether two stored JSON texts spell the same value.
+///
+/// Parsed comparison, so `["a","b"]` (serde_json) equals `["a", "b"]`
+/// (Python's `json.dumps`) and two objects with the same keys in another
+/// order are one value. Text that is not JSON is compared as text, and
+/// `None` equals only `None`.
+fn same_json(stored: Option<&str>, candidate: Option<&str>) -> bool {
+    match (stored, candidate) {
+        (None, None) => true,
+        (Some(a), Some(b)) => {
+            if a == b {
+                return true;
+            }
+            match (
+                serde_json::from_str::<serde_json::Value>(a),
+                serde_json::from_str::<serde_json::Value>(b),
+            ) {
+                (Ok(a), Ok(b)) => a == b,
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+/// Check everything an add call is about to store the way Python's
+/// `ingest_data` does before anything is stored: the call's `node_set` and
+/// every `DataItem`'s `external_metadata["node_set"]`.
+///
+/// [`AddPipeline::add_with_params`] runs this first, so a bad name fails the
+/// whole call rather than one item mid-run. It is public for callers that do
+/// irreversible work *before* they add — `cognee::api::update` deletes the
+/// document it replaces first, and must refuse a node set the add would
+/// refuse while the old data is still there.
+pub fn validate_add_inputs(
+    inputs: &[DataInput],
+    node_set: Option<&[String]>,
+) -> Result<(), IngestionError> {
+    if let Some(names) = node_set {
+        validate_node_set_names(names)?;
+    }
+    for input in inputs {
+        validate_item_node_set(input)?;
+    }
+    Ok(())
+}
+
 /// Port of Python's `validate_node_set_names` for a list the type system has
 /// already shaped: every name must be non-empty once trimmed.
 ///
@@ -875,7 +964,7 @@ fn item_metadata_map(metadata: ItemMetadata) -> serde_json::Map<String, serde_js
 /// non-empty rule is left to check here. The remaining Python check — that
 /// the name survives `NodeSet.id_for` without a `UnicodeEncodeError` — has no
 /// Rust counterpart: a `String` is always valid UTF-8.
-fn validate_node_set_names(names: &[String]) -> Result<(), IngestionError> {
+pub fn validate_node_set_names(names: &[String]) -> Result<(), IngestionError> {
     for name in names {
         if name.trim().is_empty() {
             return Err(IngestionError::InvalidNodeSet {
@@ -922,7 +1011,7 @@ fn validate_node_set_value(value: &serde_json::Value) -> Result<(), IngestionErr
 /// Metadata without the key, or that is not a JSON object, has nothing to
 /// check — [`merge_external_metadata`] keeps such text raw rather than
 /// reading keys from it.
-fn validate_item_node_set(input: &DataInput) -> Result<(), IngestionError> {
+pub fn validate_item_node_set(input: &DataInput) -> Result<(), IngestionError> {
     let DataInput::DataItem {
         external_metadata, ..
     } = input
@@ -1494,13 +1583,11 @@ impl AddPipeline {
         // ── Validate node sets before anything is stored ─────────────────
         // Python's `ingest_data` checks the call's `node_set` and every
         // DataItem's `external_metadata["node_set"]` first, so a bad name
-        // fails the whole call rather than one item mid-run.
-        if let Some(names) = params.node_set.as_deref() {
-            validate_node_set_names(names)?;
-        }
-        for input in &inputs {
-            validate_item_node_set(input)?;
-        }
+        // fails the whole call rather than one item mid-run. (`process_input`
+        // and `persist_data*` check their own input again — each is a public
+        // entry point of its own, and the repeat is one metadata parse per
+        // item.)
+        validate_add_inputs(&inputs, params.node_set.as_deref())?;
 
         // ── Add-params injected per item (Decision 7) ────────────────────
         let add_params_inj = AddParamsInjection {
@@ -2916,7 +3003,7 @@ mod tests {
             metadata_json(&stored),
             serde_json::json!({"node_set": ["alpha"]})
         );
-        assert!(stored.updated_at.is_some(), "update_data stamps updated_at");
+        assert!(stored.updated_at.is_some(), "the refresh stamps updated_at");
 
         // A re-add without a node set leaves the stored tags alone.
         let third = pipeline
@@ -3161,5 +3248,281 @@ mod tests {
             err.downcast_ref::<IngestionError>(),
             Some(IngestionError::InvalidNodeSet { .. })
         ));
+    }
+
+    /// A direct `persist_data*` caller whose node set is refused must not
+    /// leave an empty dataset behind: the names are checked before the
+    /// dataset is resolved or created (and before the owner is granted on it).
+    #[tokio::test]
+    async fn persist_data_rejects_the_node_set_before_creating_the_dataset() {
+        let db = connect("sqlite::memory:").await.unwrap();
+        initialize(&db).await.unwrap();
+        let storage = MockStorage::new();
+        let owner_id = Uuid::new_v4();
+        let acl = cognee_test_utils::MockAclDb::new();
+
+        let mut processed = process_input(
+            &DataInput::Text("Orphan check".into()),
+            &storage,
+            HashAlgorithm::Md5,
+            owner_id,
+            None,
+        )
+        .await
+        .unwrap();
+        processed.node_set = Some(vec!["alpha".into(), " ".into()]);
+
+        let err = persist_data_with_acl(
+            &processed,
+            &db,
+            "orphan_ds",
+            owner_id,
+            None,
+            Some(&acl),
+            None,
+        )
+        .await
+        .expect_err("blank name");
+        assert!(matches!(
+            err.downcast_ref::<IngestionError>(),
+            Some(IngestionError::InvalidNodeSet { .. })
+        ));
+
+        assert!(
+            cognee_database::IngestDb::get_dataset_by_name_in_tenant(
+                &db,
+                "orphan_ds",
+                owner_id,
+                None
+            )
+            .await
+            .unwrap()
+            .is_none(),
+            "no dataset was created for the refused call"
+        );
+        assert!(
+            cognee_database::IngestDb::get_data(&db, processed.data_id)
+                .await
+                .unwrap()
+                .is_none(),
+            "no row was created either"
+        );
+        let generated_id = generate_dataset_id("orphan_ds", owner_id, None);
+        assert!(
+            !cognee_database::AclDb::has_permission(&acl, owner_id, generated_id, "write")
+                .await
+                .unwrap(),
+            "no owner grant was written for the dataset that was never created"
+        );
+    }
+
+    /// "Already carries this set" is decided on the parsed JSON: a row Python
+    /// wrote spells the set with `json.dumps` spacing (`["a", "b"]`), and
+    /// re-adding it under the same set must not rewrite the row.
+    #[tokio::test]
+    async fn re_add_under_the_same_set_leaves_a_python_written_row_untouched() {
+        let db = connect("sqlite::memory:").await.unwrap();
+        initialize(&db).await.unwrap();
+        let storage = MockStorage::new();
+        let owner_id = Uuid::new_v4();
+
+        let mut processed = process_input(
+            &DataInput::Text("Python-written row".into()),
+            &storage,
+            HashAlgorithm::Md5,
+            owner_id,
+            None,
+        )
+        .await
+        .unwrap();
+
+        // The row as Python's `ingest_data` stores it for node_set=["a", "b"]:
+        // `json.dumps(effective_node_set)` in the column, and the metadata
+        // dict (a JSON column) rendered with the same spacing.
+        let python_column = r#"["a", "b"]"#;
+        let python_metadata = r#"{"source": "crm", "node_set": ["a", "b"]}"#;
+        let row = Data::builder(
+            processed.data_id,
+            processed.name.clone(),
+            processed.raw_data_uri.clone(),
+            processed.original_location.clone(),
+            "txt",
+            "text/plain",
+            processed.content_hash.clone(),
+            owner_id,
+        )
+        .node_set(python_column)
+        .external_metadata(python_metadata)
+        .build();
+        cognee_database::IngestDb::create_data(&db, row)
+            .await
+            .unwrap();
+
+        processed.node_set = Some(vec!["a".into(), "b".into()]);
+        let data = persist_data(&processed, &db, "python_row_ds", owner_id, None)
+            .await
+            .unwrap();
+        assert_eq!(data.node_set.as_deref(), Some(python_column));
+        assert_eq!(data.external_metadata.as_deref(), Some(python_metadata));
+
+        let stored = cognee_database::IngestDb::get_data(&db, processed.data_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            stored.node_set.as_deref(),
+            Some(python_column),
+            "the Python spelling is kept byte for byte"
+        );
+        assert_eq!(stored.external_metadata.as_deref(), Some(python_metadata));
+        assert_eq!(stored.updated_at, None, "the row was not rewritten");
+
+        // A different set is still a refresh.
+        processed.node_set = Some(vec!["c".into()]);
+        let data = persist_data(&processed, &db, "python_row_ds", owner_id, None)
+            .await
+            .unwrap();
+        assert_eq!(data.node_set.as_deref(), Some(r#"["c"]"#));
+        assert_eq!(
+            metadata_json(&data),
+            serde_json::json!({"source": "crm", "node_set": ["c"]})
+        );
+        assert!(data.updated_at.is_some());
+    }
+
+    /// An `IngestDb` that, after every `get_data`, writes the columns other
+    /// writers own — the way a concurrent cognify (token count, completion
+    /// marker) or search (last access) lands between the pipeline's read of
+    /// the row and its refresh.
+    struct WritesBetweenReadAndRefresh {
+        inner: Arc<cognee_database::DatabaseConnection>,
+        dataset_id: Uuid,
+    }
+
+    #[async_trait::async_trait]
+    impl IngestDb for WritesBetweenReadAndRefresh {
+        async fn get_dataset(
+            &self,
+            id: Uuid,
+        ) -> Result<Option<cognee_models::Dataset>, cognee_database::DatabaseError> {
+            IngestDb::get_dataset(&*self.inner, id).await
+        }
+        async fn create_dataset(
+            &self,
+            dataset: cognee_models::Dataset,
+        ) -> Result<cognee_models::Dataset, cognee_database::DatabaseError> {
+            IngestDb::create_dataset(&*self.inner, dataset).await
+        }
+        async fn list_datasets_by_owner(
+            &self,
+            owner_id: Uuid,
+        ) -> Result<Vec<cognee_models::Dataset>, cognee_database::DatabaseError> {
+            IngestDb::list_datasets_by_owner(&*self.inner, owner_id).await
+        }
+        async fn get_data(&self, id: Uuid) -> Result<Option<Data>, cognee_database::DatabaseError> {
+            let snapshot = IngestDb::get_data(&*self.inner, id).await?;
+            if snapshot.is_some() {
+                ops::data::update_data_token_count(&self.inner, id, 42).await?;
+                ops::data::mark_cognify_pipeline_status_complete(&self.inner, id, self.dataset_id)
+                    .await?;
+            }
+            Ok(snapshot)
+        }
+        async fn create_data(&self, d: Data) -> Result<Data, cognee_database::DatabaseError> {
+            IngestDb::create_data(&*self.inner, d).await
+        }
+        async fn update_data_node_set(
+            &self,
+            data_id: Uuid,
+            node_set: Option<&str>,
+            external_metadata: Option<&str>,
+        ) -> Result<(), cognee_database::DatabaseError> {
+            IngestDb::update_data_node_set(&*self.inner, data_id, node_set, external_metadata).await
+        }
+        async fn attach_data_to_dataset(
+            &self,
+            dataset_id: Uuid,
+            data_id: Uuid,
+        ) -> Result<(), cognee_database::DatabaseError> {
+            IngestDb::attach_data_to_dataset(&*self.inner, dataset_id, data_id).await
+        }
+        async fn update_last_accessed(
+            &self,
+            data_ids: &[Uuid],
+            timestamp: chrono::DateTime<chrono::Utc>,
+        ) -> Result<(), cognee_database::DatabaseError> {
+            IngestDb::update_last_accessed(&*self.inner, data_ids, timestamp).await
+        }
+        async fn get_latest_pipeline_status(
+            &self,
+            pipeline_name: &str,
+            dataset_id: Uuid,
+        ) -> Result<Option<cognee_database::PipelineRunStatus>, cognee_database::DatabaseError>
+        {
+            IngestDb::get_latest_pipeline_status(&*self.inner, pipeline_name, dataset_id).await
+        }
+    }
+
+    /// The re-add refresh writes `node_set` and `external_metadata` only. A
+    /// full-row write of the snapshot read earlier used to roll back whatever
+    /// another writer put on the row in between.
+    #[tokio::test]
+    async fn re_add_refresh_keeps_columns_written_after_its_read() {
+        let db = Arc::new(connect("sqlite::memory:").await.unwrap());
+        initialize(&db).await.unwrap();
+        let storage = MockStorage::new();
+        let owner_id = Uuid::new_v4();
+
+        let mut processed = process_input(
+            &DataInput::Text("Raced row".into()),
+            &storage,
+            HashAlgorithm::Md5,
+            owner_id,
+            None,
+        )
+        .await
+        .unwrap();
+        let first = persist_data(&processed, &*db, "raced_ds", owner_id, None)
+            .await
+            .unwrap();
+        assert_eq!(first.token_count, -1);
+        assert_eq!(first.pipeline_status, None);
+        let dataset_id = generate_dataset_id("raced_ds", owner_id, None);
+
+        let racing = WritesBetweenReadAndRefresh {
+            inner: db.clone(),
+            dataset_id,
+        };
+        processed.node_set = Some(vec!["alpha".into()]);
+        let refreshed = persist_data(&processed, &racing, "raced_ds", owner_id, None)
+            .await
+            .unwrap();
+        assert_eq!(refreshed.node_set.as_deref(), Some(r#"["alpha"]"#));
+
+        let stored = cognee_database::IngestDb::get_data(&*db, processed.data_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.node_set.as_deref(), Some(r#"["alpha"]"#));
+        assert_eq!(
+            metadata_json(&stored),
+            serde_json::json!({"node_set": ["alpha"]})
+        );
+        assert_eq!(
+            stored.token_count, 42,
+            "a token count written after the read survives the refresh"
+        );
+        let status: serde_json::Value =
+            serde_json::from_str(stored.pipeline_status.as_deref().expect("marker kept")).unwrap();
+        assert_eq!(
+            status["cognify_pipeline"][ops::data::pipeline_status_dataset_key(dataset_id)],
+            serde_json::json!(ops::data::DATA_ITEM_PROCESSING_COMPLETED),
+            "the cognify completion marker written after the read survives — and is \
+             deliberately not cleared by a node-set change (Python parity; `update()` \
+             is the re-tag path)"
+        );
+        // The returned row is the stored one, not the stale snapshot.
+        assert_eq!(refreshed.token_count, 42);
+        assert!(refreshed.updated_at.is_some());
     }
 }

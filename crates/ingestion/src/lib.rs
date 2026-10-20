@@ -30,7 +30,7 @@ pub use pipeline::{
     AddParams, AddPipeline, IngestionError, ProcessedInput, build_add_pipeline,
     build_add_pipeline_with_acl, make_persist_data_task, make_persist_data_task_with_acl,
     make_process_input_task, persist_data, persist_data_with_acl, persist_data_with_acl_and_locks,
-    process_input,
+    process_input, validate_add_inputs, validate_item_node_set, validate_node_set_names,
 };
 // `UrlMetadata`/`ResolvedUrlInput` are plain data types and stay always-on so
 // `pipeline.rs` signatures compile without the feature; `resolve_url_input`

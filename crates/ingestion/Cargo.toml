@@ -100,6 +100,9 @@ path = "tests/pdf_pure_rust_fixture_extraction.rs"
 required-features = ["pdf-pure-rust"]
 
 [dev-dependencies]
+# `IngestDb::update_last_accessed` takes a `DateTime<Utc>`; the racing
+# `IngestDb` wrapper in the pipeline tests has to spell it.
+chrono.workspace = true
 cognee-database = { path = "../database", features = ["sqlite"] }
 cognee-delete = { path = "../delete" }
 cognee-graph = { path = "../graph", features = ["testing"] }

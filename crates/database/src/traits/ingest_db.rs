@@ -59,12 +59,23 @@ pub trait IngestDb: Send + Sync {
 
     async fn create_data(&self, d: Data) -> Result<Data, DatabaseError>;
 
-    /// Rewrite an existing Data record in full (every column from `d`).
+    /// Set the `node_set` and `external_metadata` columns of an existing Data
+    /// record (and stamp `updated_at`), leaving every other column as it is.
     ///
     /// The ingest pipeline uses it on a re-add of content that is already
-    /// stored, where Python's `ingest_data` update branch refreshes the row
-    /// instead of returning it unchanged.
-    async fn update_data(&self, d: Data) -> Result<Data, DatabaseError>;
+    /// stored, where Python's `ingest_data` update branch refreshes those two
+    /// fields instead of returning the row unchanged. It replaced a full-row
+    /// `update_data(Data)` (SDK-1129): a full-row write from the pipeline's
+    /// earlier read rolled back any `token_count`, `last_accessed` or
+    /// `pipeline_status` a concurrent cognify or search wrote in between.
+    /// Implementations must not touch other columns. A missing row is
+    /// [`DatabaseError::NotFound`].
+    async fn update_data_node_set(
+        &self,
+        data_id: Uuid,
+        node_set: Option<&str>,
+        external_metadata: Option<&str>,
+    ) -> Result<(), DatabaseError>;
 
     async fn attach_data_to_dataset(
         &self,
@@ -127,8 +138,13 @@ impl IngestDb for DatabaseConnection {
         data::create_data(self, d).await
     }
 
-    async fn update_data(&self, d: Data) -> Result<Data, DatabaseError> {
-        data::update_data(self, d).await
+    async fn update_data_node_set(
+        &self,
+        data_id: Uuid,
+        node_set: Option<&str>,
+        external_metadata: Option<&str>,
+    ) -> Result<(), DatabaseError> {
+        data::update_data_node_set(self, data_id, node_set, external_metadata).await
     }
 
     async fn attach_data_to_dataset(

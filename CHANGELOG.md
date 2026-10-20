@@ -123,6 +123,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Without an ACL the `DatasetManager` per-id methods still perform no
   ownership or tenant check.
 
+- **`cognee-database`: `IngestDb::update_data(Data)` is replaced by
+  `IngestDb::update_data_node_set(data_id, node_set, external_metadata)`
+  (SDK-1129 follow-up).** The full-row method (added in #302 for the re-add
+  node-set refresh) wrote every column from the ingest pipeline's earlier
+  read, rolling back a `token_count`, `last_accessed` or `pipeline_status`
+  written in between by a concurrent cognify or search. The replacement is a
+  targeted `UPDATE` of the two columns plus `updated_at`, returning `()` and
+  `DatabaseError::NotFound` for a missing row. Implementors of `IngestDb`
+  outside this repository rename and narrow the method; the free function
+  `ops::data::update_data` is unchanged. In the same change the ingest
+  pipeline refuses a bad `node_set` *before* it resolves or creates the
+  dataset (no orphan dataset or owner grant is left behind), decides "already
+  carries this set" on parsed JSON (a Python-written `["a", "b"]` row is no
+  longer rewritten on every re-add), and `cognee::api::update` refuses a
+  bad `node_set` before it deletes the document it replaces. The new
+  `cognee_ingestion::validate_add_inputs` / `validate_node_set_names` /
+  `validate_item_node_set` are public for callers that do irreversible work
+  before an add. `classify_documents` no longer falls back to the
+  `Data.node_set` column when `external_metadata` is present but not a JSON
+  object (Python's `update_node_set` returns early there); the fallback now
+  covers exactly the pre-#302 Rust rows — no metadata, or an object without
+  the `node_set` key.
+
 - **`cognee-search`: `TEMPORAL` search is hybrid retrieval reranked by the
   question's time window, and `TemporalRetriever` is gone.** `SearchType::Temporal`
   now maps to the new `TemporalHybridRetriever`, a port of Python's

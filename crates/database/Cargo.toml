@@ -73,6 +73,11 @@ path = "tests/data_update_last_accessed.rs"
 required-features = ["sqlite"]
 
 [[test]]
+name = "data_update_node_set"
+path = "tests/data_update_node_set.rs"
+required-features = ["sqlite"]
+
+[[test]]
 name = "pipeline_status_key_compat"
 path = "tests/pipeline_status_key_compat.rs"
 required-features = ["sqlite"]
