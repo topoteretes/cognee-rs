@@ -108,6 +108,19 @@ pub fn create_triplets_from_graph_with_timestamps(
         node_map.insert(node.entity.base.id, (node.entity.name.clone(), text));
     }
 
+    create_triplets_from_node_texts(&node_map, edges)
+}
+
+/// Build one triplet per edge whose endpoints are both in `node_map`
+/// (`id -> (name, embeddable text)`), then [`fold_triplets_by_id`].
+///
+/// The node-agnostic half of [`create_triplets_from_graph_with_timestamps`],
+/// shared by every node shape that can be reduced to a name and a text —
+/// runtime custom DataPoints included.
+pub(crate) fn create_triplets_from_node_texts(
+    node_map: &HashMap<Uuid, (String, String)>,
+    edges: &[GraphEdgePair],
+) -> Vec<Triplet> {
     let mut triplets = Vec::new();
     let mut skipped_count = 0;
 

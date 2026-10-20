@@ -58,7 +58,9 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::config::{ChunkAttachment, CognifyConfig, ExtractionStrategy};
-use crate::dynamic_graph::{DynamicGraph, DynamicGraphSchema};
+use crate::dynamic_graph::{
+    DynamicDataPoint, DynamicGraph, DynamicGraphSchema, StoredDynamicGraph,
+};
 use crate::error::CognifyError;
 use crate::fact_extraction::{FactExtractor, KnowledgeGraph};
 use crate::failure::{
@@ -256,6 +258,11 @@ pub struct AttributedDynamicGraph {
 pub struct DynamicExtractionData {
     pub graphs: Vec<AttributedDynamicGraph>,
     pub failures: FailureReport,
+    /// Failed and unreached data items a `FailFast` abort excluded. Their
+    /// graphs are already dropped; the caller must drop their chunks and
+    /// documents too, so a partially extracted file never reaches storage.
+    /// Empty unless the run aborted.
+    pub excluded_items: HashSet<Uuid>,
 }
 
 /// One extracted event and the data item whose chunk produced it.
@@ -1896,6 +1903,7 @@ pub async fn extract_dynamic_graphs_from_data(
         return Ok(DynamicExtractionData {
             graphs: Vec::new(),
             failures: input.failures.clone(),
+            excluded_items: HashSet::new(),
         });
     }
 
@@ -2010,17 +2018,77 @@ pub async fn extract_dynamic_graphs_from_data(
             report: Box::new(failures),
         });
     }
-    if aborted {
-        let excluded: HashSet<Uuid> = failures
+    let excluded_items: HashSet<Uuid> = if aborted {
+        failures
             .failed_items()
             .iter()
             .chain(failures.unreached_items().iter())
             .copied()
-            .collect();
-        graphs.retain(|graph| !excluded.contains(&graph.data_id));
-    }
+            .collect()
+    } else {
+        HashSet::new()
+    };
+    graphs.retain(|graph| !excluded_items.contains(&graph.data_id));
 
-    Ok(DynamicExtractionData { graphs, failures })
+    Ok(DynamicExtractionData {
+        graphs,
+        failures,
+        excluded_items,
+    })
+}
+
+/// Turn runtime-schema extraction output into the stage's
+/// [`ExtractedGraphData`]: keep only complete files after a `FailFast` abort,
+/// the same all-or-nothing partition the other extraction paths apply, and
+/// point each chunk's `contains` at its graph per `attachment` (omitted is
+/// [`ChunkAttachment::Direct`], as in Python).
+fn attach_dynamic_graphs(
+    input: &ExtractedChunks,
+    extracted: DynamicExtractionData,
+    attachment: Option<ChunkAttachment>,
+) -> ExtractedGraphData {
+    let excluded = &extracted.excluded_items;
+    let mut chunks: Vec<DocumentChunk> = input
+        .chunks
+        .iter()
+        .filter(|chunk| !excluded.contains(&chunk.document_id))
+        .cloned()
+        .collect();
+    let attachment = attachment.unwrap_or(ChunkAttachment::Direct);
+    for attributed in &extracted.graphs {
+        let targets = match attachment {
+            ChunkAttachment::Direct => attributed.graph.direct_attachment_targets(),
+            ChunkAttachment::All => attributed.graph.all_attachment_targets(),
+        };
+        if let Some(chunk) = chunks
+            .iter_mut()
+            .find(|chunk| chunk.base.id == attributed.chunk_id)
+        {
+            chunk.contains = targets
+                .into_iter()
+                .map(|target| json!(target.to_string()))
+                .collect();
+        }
+    }
+    ExtractedGraphData {
+        chunks,
+        documents: input
+            .documents
+            .iter()
+            .filter(|document| !excluded.contains(&document.base.id))
+            .cloned()
+            .collect(),
+        entities: vec![],
+        timestamps: vec![],
+        edges: vec![],
+        producers: ArtifactProducers::default(),
+        dynamic_graphs: extracted.graphs,
+        backend_summaries: vec![],
+        dataset_id: input.dataset_id,
+        user_id: input.user_id,
+        tenant_id: input.tenant_id,
+        failures: extracted.failures,
+    }
 }
 
 /// Extract a custom graph model from chunks via LLM (Task 3 — custom model variant).
@@ -2521,9 +2589,44 @@ pub async fn add_data_points(
     }
 
     let mut structural_edges = crate::graph_extraction::get_graph_from_model(&extractable_items);
+
+    // Runtime custom graphs: one storage walk per graph, shared by the ledger,
+    // the graph writes and the index pass. Raw node writes are needed because
+    // their concrete Rust types do not exist; nodes are deduplicated across
+    // chunks by their Python-compatible identity UUID.
+    let stored_dynamic: Vec<StoredDynamicGraph> = input
+        .dynamic_graphs
+        .iter()
+        .map(|attributed| attributed.graph.stored_graph())
+        .collect();
+    let mut dynamic_nodes: BTreeMap<Uuid, &DynamicDataPoint> = BTreeMap::new();
+    let mut seen_relationships = HashSet::new();
+    let mut dynamic_edges: Vec<EdgeData> = Vec::new();
+    let now = Utc::now().to_rfc3339();
+    for stored in &stored_dynamic {
+        for node in &stored.nodes {
+            dynamic_nodes.entry(node.base.id).or_insert(node);
+        }
+        for relationship in &stored.relationships {
+            if seen_relationships.insert(relationship) {
+                dynamic_edges.push((
+                    relationship.source.to_string(),
+                    relationship.target.to_string(),
+                    relationship.field_name.clone(),
+                    HashMap::from([(Cow::from("updated_at"), json!(now))]),
+                ));
+            }
+        }
+    }
+
     // Before the ledger write, so the ownership rows carry the same `edge_text`
     // the graph edges and their `EdgeType` rows are keyed on.
-    stamp_structural_edge_text(&mut structural_edges, input);
+    stamp_structural_edge_text(
+        &mut structural_edges,
+        &mut dynamic_edges,
+        input,
+        &dynamic_nodes,
+    );
 
     let ledger_identity = LedgerIdentity::new(
         input.tenant_id,
@@ -2531,8 +2634,15 @@ pub async fn add_data_points(
         input.dataset_id,
         pipeline_run_id,
     );
-    record_dynamic_graph_ownership(db, ledger_identity, &input.dynamic_graphs, &input.chunks)
-        .await?;
+    record_dynamic_graph_ownership(
+        db,
+        ledger_identity,
+        &input.dynamic_graphs,
+        &stored_dynamic,
+        &input.chunks,
+        &structural_edges,
+    )
+    .await?;
 
     upsert_provenance(
         db,
@@ -2606,43 +2716,20 @@ pub async fn add_data_points(
         info!("Stored {} documents as graph nodes", doc_refs.len());
     }
 
-    // Runtime custom models use raw node writes because their concrete Rust
-    // types do not exist. Deduplicate across chunks by the Python-compatible
-    // identity UUID before one batch upsert.
-    let mut dynamic_nodes = HashMap::new();
-    let mut dynamic_relationships = HashSet::new();
-    for attributed in &input.dynamic_graphs {
-        let stored = attributed.graph.stored_graph();
-        for node in stored.nodes {
-            dynamic_nodes.entry(node.base.id).or_insert(node);
-        }
-        dynamic_relationships.extend(stored.relationships);
-    }
     if !dynamic_nodes.is_empty() {
         graph_db
             .add_nodes_raw(
                 dynamic_nodes
                     .values()
-                    .map(crate::dynamic_graph::DynamicDataPoint::to_graph_value)
+                    .map(|node| node.to_graph_value())
                     .collect(),
             )
             .await
             .map_err(CognifyError::from)?;
     }
-    if !dynamic_relationships.is_empty() {
-        let edges: Vec<EdgeData> = dynamic_relationships
-            .iter()
-            .map(|relationship| {
-                (
-                    relationship.source.to_string(),
-                    relationship.target.to_string(),
-                    relationship.field_name.clone(),
-                    HashMap::new(),
-                )
-            })
-            .collect();
+    if !dynamic_edges.is_empty() {
         graph_db
-            .add_edges(&edges)
+            .add_edges(&dynamic_edges)
             .await
             .map_err(CognifyError::from)?;
     }
@@ -2671,22 +2758,24 @@ pub async fn add_data_points(
     // the structural edges' stamped sentences get rows here too — which is
     // what lets a `"Document chunk mentions …"` edge be query-ranked and
     // surface as a fact.
-    let structural_texts = structural_edges.iter().map(|(_, _, relationship, props)| {
-        EdgeType::retrieval_text(
-            props.get("edge_text").and_then(serde_json::Value::as_str),
-            relationship,
-        )
-    });
-    let dynamic_relationship_texts = dynamic_relationships
-        .iter()
-        .map(|relationship| relationship.field_name.clone());
+    // Custom field edges count the same way: Python writes them through the
+    // same `add_data_points` walk.
+    let structural_texts =
+        structural_edges
+            .iter()
+            .chain(&dynamic_edges)
+            .map(|(_, _, relationship, props)| {
+                EdgeType::retrieval_text(
+                    props.get("edge_text").and_then(serde_json::Value::as_str),
+                    relationship,
+                )
+            });
     let mut edge_types = build_edge_types(
         input
             .edges
             .iter()
             .map(edge_retrieval_text)
-            .chain(structural_texts)
-            .chain(dynamic_relationship_texts),
+            .chain(structural_texts),
         input.dataset_id,
     );
 
@@ -2737,19 +2826,7 @@ pub async fn add_data_points(
     // One vector per chunk, entity and summary, whether or not they are kept.
     let dynamic_embedding_count: usize = dynamic_nodes
         .values()
-        .map(|node| {
-            node.index_fields
-                .iter()
-                .filter(|field| {
-                    node.properties.get(*field).is_some_and(|value| {
-                        value
-                            .as_str()
-                            .map(str::trim)
-                            .map_or(true, |text| !text.is_empty())
-                    })
-                })
-                .count()
-        })
+        .map(|node| node.index_field_texts().count())
         .sum();
     let embedding_count =
         input.chunks.len() + input.entities.len() + input.summaries.len() + dynamic_embedding_count;
@@ -2786,29 +2863,22 @@ pub async fn add_data_points(
         &embeddings,
     )
     .await?;
-    let mut dynamic_node_values: Vec<_> = dynamic_nodes.values().collect();
-    dynamic_node_values.sort_by_key(|node| node.base.id);
-    let dynamic_embeddings = index_dynamic_data_points(
-        &dynamic_node_values,
-        input.dataset_id,
-        input.user_id,
-        input.tenant_id,
-        Arc::clone(&embedding_engine),
-        Arc::clone(&vector_db),
-        config.retain_embeddings,
-        &mut indexed_fields,
-    )
-    .await?;
-    embeddings.extend(dynamic_embeddings);
-    if config.embed_triplets {
-        index_dynamic_triplets(
+    if !dynamic_nodes.is_empty() {
+        let dynamic_node_values: Vec<&DynamicDataPoint> = dynamic_nodes.values().copied().collect();
+        let dynamic_embeddings = index_dynamic_graph(
             &dynamic_node_values,
-            &dynamic_relationships,
+            &dynamic_edges,
+            &edge_types,
+            input.dataset_id,
+            input.user_id,
+            input.tenant_id,
             embedding_engine,
             vector_db,
+            config,
             &mut indexed_fields,
         )
         .await?;
+        embeddings.extend(dynamic_embeddings);
     }
 
     Ok(CognifyResult {
@@ -2831,74 +2901,100 @@ pub async fn add_data_points(
     })
 }
 
-/// Index every declared `index_fields` property of runtime custom DataPoints.
-async fn index_dynamic_data_points<'a>(
-    nodes: &[&'a crate::dynamic_graph::DynamicDataPoint],
+/// Vector-index runtime custom DataPoints and, when enabled, their field
+/// triplets, inside a bulk-load scope of their own handled exactly like
+/// [`index_data_points`]': a store that rejects the hint is written without
+/// it, and the scope is finished on success and failure alike.
+#[allow(clippy::too_many_arguments)]
+async fn index_dynamic_graph(
+    nodes: &[&DynamicDataPoint],
+    edges: &[EdgeData],
+    edge_types: &[EdgeType],
     dataset_id: Uuid,
     user_id: Option<Uuid>,
     tenant_id: Option<Uuid>,
-    embedding_engine: Arc<dyn EmbeddingEngine>,
+    engine: Arc<dyn EmbeddingEngine>,
     vector_db: Arc<dyn VectorDB>,
-    retain_embeddings: bool,
+    config: &CognifyConfig,
     stats: &mut IndexedFieldsStats,
 ) -> Result<Vec<Embedding>, CognifyError> {
-    let mut collections = BTreeSet::new();
-    for node in nodes {
-        for field in &node.index_fields {
-            if node.properties.get(field).is_some_and(|value| {
-                value
-                    .as_str()
-                    .map(str::trim)
-                    .map_or(true, |text| !text.is_empty())
-            }) {
-                collections.insert((node.base.data_type.clone(), field.clone()));
-            }
+    let bulk = match BulkLoadGuard::begin(vector_db.as_ref()).await {
+        Ok(guard) => Some(guard),
+        Err(e) => {
+            warn!(error = %e, "index_dynamic_graph: vector store rejected the bulk-load scope");
+            None
+        }
+    };
+    let indexed = index_dynamic_graph_points(
+        nodes, edges, edge_types, dataset_id, user_id, tenant_id, &engine, &vector_db, config,
+        stats,
+    )
+    .await;
+    if let Some(bulk) = bulk
+        && let Err(e) = bulk.finish().await
+    {
+        warn!(error = %e, "index_dynamic_graph: vector store failed to finish its bulk load");
+    }
+    indexed
+}
+
+/// The body of [`index_dynamic_graph`]: one `{type}_{field}` collection per
+/// declared index field (Python `index_data_points`), then the triplets.
+#[allow(clippy::too_many_arguments)]
+async fn index_dynamic_graph_points(
+    nodes: &[&DynamicDataPoint],
+    edges: &[EdgeData],
+    edge_types: &[EdgeType],
+    dataset_id: Uuid,
+    user_id: Option<Uuid>,
+    tenant_id: Option<Uuid>,
+    engine: &Arc<dyn EmbeddingEngine>,
+    vector_db: &Arc<dyn VectorDB>,
+    config: &CognifyConfig,
+    stats: &mut IndexedFieldsStats,
+) -> Result<Vec<Embedding>, CognifyError> {
+    let window = cognee_vector::write_window_points(engine.dimension());
+    let mut collections: BTreeMap<(&str, &str), Vec<(&DynamicDataPoint, String)>> = BTreeMap::new();
+    for &node in nodes {
+        for (field, text) in node.index_field_texts() {
+            collections
+                .entry((node.base.data_type.as_str(), field))
+                .or_default()
+                .push((node, text));
         }
     }
 
-    let window = cognee_vector::write_window_points(embedding_engine.dimension());
     let mut retained = Vec::new();
-    let bulk = BulkLoadGuard::begin(vector_db.as_ref()).await.ok();
-    for (data_type, field) in collections {
-        let matching: Vec<_> = nodes
-            .iter()
-            .copied()
-            .filter(|node| node.base.data_type == data_type && node.index_fields.contains(&field))
-            .filter_map(|node| {
-                let value = node.properties.get(&field)?;
-                let text = value
-                    .as_str()
-                    .map(str::to_string)
-                    .unwrap_or_else(|| value.to_string());
-                (!text.trim().is_empty()).then_some((node, text))
-            })
-            .collect();
+    for ((data_type, field), entries) in collections {
         if !vector_db
-            .has_collection(&data_type, &field)
+            .has_collection(data_type, field)
             .await
             .map_err(|error| CognifyError::VectorDBError(error.to_string()))?
         {
             vector_db
-                .create_collection(&data_type, &field, embedding_engine.dimension())
+                .create_collection(data_type, field, engine.dimension())
                 .await
                 .map_err(|error| CognifyError::VectorDBError(error.to_string()))?;
         }
-        announce_index_write(&vector_db, &data_type, &field, matching.len()).await?;
-        for entries in matching.chunks(window) {
-            let texts: Vec<&str> = entries.iter().map(|(_, text)| text.as_str()).collect();
-            let vectors = embedding_engine
+        announce_index_write(vector_db, data_type, field, entries.len()).await?;
+        for window_entries in entries.chunks(window) {
+            let texts: Vec<&str> = window_entries
+                .iter()
+                .map(|(_, text)| text.as_str())
+                .collect();
+            let vectors = engine
                 .embed(&texts)
                 .await
                 .map_err(|error| CognifyError::EmbeddingError(error.to_string()))?;
-            let points: Vec<VectorPoint> = entries
+            let points: Vec<VectorPoint> = window_entries
                 .iter()
                 .zip(vectors)
                 .map(|((node, text), vector)| {
-                    if retain_embeddings {
+                    if config.retain_embeddings {
                         retained.push(Embedding::new(
                             node.base.id,
-                            data_type.clone(),
-                            field.clone(),
+                            data_type.to_string(),
+                            field.to_string(),
                             vector.clone(),
                         ));
                     }
@@ -2921,103 +3017,56 @@ async fn index_dynamic_data_points<'a>(
                 })
                 .collect();
             vector_db
-                .index_points(&data_type, &field, &points)
+                .index_points(data_type, field, &points)
                 .await
                 .map_err(|error| CognifyError::VectorDBError(error.to_string()))?;
         }
-        stats.record(&data_type, &field, matching.len());
+        stats.record(data_type, field, entries.len());
     }
-    if let Some(bulk) = bulk {
-        bulk.finish()
-            .await
-            .map_err(|error| CognifyError::VectorDBError(error.to_string()))?;
+
+    // Field edges only, as the default path indexes its semantic edges and not
+    // the structural ones. Node text and relationship text follow Python's
+    // `_create_triplets_from_graph`: every index field, and the edge's
+    // stamped `edge_text`.
+    if config.embed_triplets && !edges.is_empty() {
+        let node_map: HashMap<Uuid, (String, String)> = nodes
+            .iter()
+            .map(|node| (node.base.id, (node.label(), node.embeddable_text())))
+            .collect();
+        let edge_pairs: Vec<GraphEdgePair> = edges
+            .iter()
+            .filter_map(|(source, target, relationship, properties)| {
+                let mut pair = GraphEdgePair::new(
+                    Uuid::parse_str(source).ok()?,
+                    Uuid::parse_str(target).ok()?,
+                    relationship.clone(),
+                );
+                if let Some(text) = properties
+                    .get("edge_text")
+                    .and_then(serde_json::Value::as_str)
+                {
+                    pair.properties
+                        .insert("edge_text".to_string(), text.to_string());
+                }
+                Some(pair)
+            })
+            .collect();
+        let triplets =
+            crate::triplet_creation::create_triplets_from_node_texts(&node_map, &edge_pairs);
+        if !triplets.is_empty() {
+            index_triplet_points(
+                &triplets,
+                &edge_pairs,
+                edge_types,
+                engine,
+                vector_db,
+                window,
+            )
+            .await?;
+            stats.triplet_count += triplets.len();
+        }
     }
     Ok(retained)
-}
-
-async fn index_dynamic_triplets(
-    nodes: &[&crate::dynamic_graph::DynamicDataPoint],
-    relationships: &HashSet<crate::dynamic_graph::DynamicRelationship>,
-    embedding_engine: Arc<dyn EmbeddingEngine>,
-    vector_db: Arc<dyn VectorDB>,
-    stats: &mut IndexedFieldsStats,
-) -> Result<(), CognifyError> {
-    let node_by_id: HashMap<Uuid, &&crate::dynamic_graph::DynamicDataPoint> =
-        nodes.iter().map(|node| (node.base.id, node)).collect();
-    let node_text = |node: &&crate::dynamic_graph::DynamicDataPoint| {
-        node.index_fields
-            .first()
-            .and_then(|field| node.properties.get(field))
-            .map(|value| {
-                value
-                    .as_str()
-                    .map(str::to_string)
-                    .unwrap_or_else(|| value.to_string())
-            })
-            .unwrap_or_default()
-    };
-    let mut triplets: Vec<Triplet> = relationships
-        .iter()
-        .filter_map(|relationship| {
-            let source = node_by_id.get(&relationship.source)?;
-            let target = node_by_id.get(&relationship.target)?;
-            let source_text = node_text(source);
-            let target_text = node_text(target);
-            let text = format!("{source_text}-›{}-›{target_text}", relationship.field_name);
-            Some(Triplet::new(
-                relationship.source,
-                relationship.target,
-                relationship.field_name.clone(),
-                text,
-            ))
-        })
-        .collect();
-    triplets.sort_by_key(|triplet| triplet.id);
-    triplets.dedup_by_key(|triplet| triplet.id);
-    if triplets.is_empty() {
-        return Ok(());
-    }
-    if !vector_db
-        .has_collection("Triplet", "text")
-        .await
-        .map_err(|error| CognifyError::VectorDBError(error.to_string()))?
-    {
-        vector_db
-            .create_collection("Triplet", "text", embedding_engine.dimension())
-            .await
-            .map_err(|error| CognifyError::VectorDBError(error.to_string()))?;
-    }
-    announce_index_write(&vector_db, "Triplet", "text", triplets.len()).await?;
-    let window = cognee_vector::write_window_points(embedding_engine.dimension());
-    for entries in triplets.chunks(window) {
-        let texts: Vec<_> = entries
-            .iter()
-            .map(|triplet| triplet.text.as_str())
-            .collect();
-        let vectors = embedding_engine
-            .embed(&texts)
-            .await
-            .map_err(|error| CognifyError::EmbeddingError(error.to_string()))?;
-        let points: Vec<_> = entries
-            .iter()
-            .zip(vectors)
-            .map(|(triplet, vector)| {
-                VectorPoint::new(triplet.id, vector)
-                    .with_metadata("type", json!("Triplet"))
-                    .with_metadata("field", json!("text"))
-                    .with_metadata("text", json!(triplet.text))
-                    .with_metadata("source_id", json!(triplet.source_entity_id.to_string()))
-                    .with_metadata("target_id", json!(triplet.target_entity_id.to_string()))
-                    .with_metadata("relationship", json!(triplet.relationship_name))
-            })
-            .collect();
-        vector_db
-            .index_points("Triplet", "text", &points)
-            .await
-            .map_err(|error| CognifyError::VectorDBError(error.to_string()))?;
-    }
-    stats.triplet_count += triplets.len();
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -3909,10 +3958,23 @@ fn stamp_extracted_edge_text(
 /// Python takes the description from the chunk's own extraction of the
 /// entity; Rust has one deduplicated `Entity` per id by this stage, so every
 /// chunk's `contains` edge to it carries that entity's description.
-fn stamp_structural_edge_text(structural_edges: &mut [EdgeData], input: &SummarizedData) {
+///
+/// Runtime custom DataPoints are labelled with Python's `_get_node_label`
+/// rule ([`DynamicDataPoint::label`]), so a chunk's `contains` edge to one and
+/// each custom field edge get the generic sentence too — Python attaches
+/// custom nodes without the `"Document chunk mentions"` text.
+fn stamp_structural_edge_text(
+    structural_edges: &mut [EdgeData],
+    dynamic_edges: &mut [EdgeData],
+    input: &SummarizedData,
+    dynamic_nodes: &BTreeMap<Uuid, &DynamicDataPoint>,
+) {
     use crate::graph_extraction::{EdgeLabels, chunk_mentions_text, ensure_default_edge_text};
 
     let mut labels = EdgeLabels::default();
+    for (id, node) in dynamic_nodes {
+        labels.insert(*id, &node.label());
+    }
     for chunk in &input.chunks {
         labels.insert(chunk.base.id, &chunk.text);
     }
@@ -3950,7 +4012,8 @@ fn stamp_structural_edge_text(structural_edges: &mut [EdgeData], input: &Summari
             );
         }
     }
-    let unlabelled = ensure_default_edge_text(structural_edges, &labels);
+    let unlabelled = ensure_default_edge_text(structural_edges, &labels)
+        + ensure_default_edge_text(dynamic_edges, &labels);
     if unlabelled > 0 {
         debug!(
             unlabelled,
@@ -5466,22 +5529,38 @@ fn semantic_edge_provenance_rows(
 }
 
 /// Record runtime custom graph ownership before either artifact store sees it.
+///
+/// `stored` is each graph's storage walk, in `graphs` order. Each chunk's
+/// `contains` rows are keyed on the `edge_text` stamped on the matching
+/// structural edge, as [`upsert_provenance`] keys them (Python
+/// `upsert_edges.py`), so both rows for one edge agree on their text.
 async fn record_dynamic_graph_ownership(
     db: &dyn RelationalDb,
     id: LedgerIdentity,
     graphs: &[AttributedDynamicGraph],
+    stored: &[StoredDynamicGraph],
     chunks: &[DocumentChunk],
+    structural_edges: &[EdgeData],
 ) -> Result<(), CognifyError> {
+    let contains_text: HashMap<(&str, &str), &str> = structural_edges
+        .iter()
+        .filter(|(_, _, relationship, _)| relationship == "contains")
+        .filter_map(|(source, target, _, properties)| {
+            let text = properties
+                .get("edge_text")
+                .and_then(serde_json::Value::as_str)?;
+            Some(((source.as_str(), target.as_str()), text))
+        })
+        .collect();
     let mut nodes = Vec::new();
     let mut edges = Vec::new();
-    for attributed in graphs {
-        let stored = attributed.graph.stored_graph();
-        for node in stored.nodes {
-            let label = node
-                .index_fields
-                .first()
-                .and_then(|field| node.properties.get(field))
-                .and_then(serde_json::Value::as_str)
+    for (attributed, stored) in graphs.iter().zip(stored) {
+        for node in &stored.nodes {
+            // Python `upsert_nodes`: the node's `label`, else its `name`,
+            // else its id.
+            let label = ["label", "name"]
+                .iter()
+                .find_map(|field| node.properties.get(*field)?.as_str())
                 .map(str::to_string)
                 .unwrap_or_else(|| node.base.id.to_string());
             nodes.push(cognee_database::GraphNode {
@@ -5504,7 +5583,7 @@ async fn record_dynamic_graph_ownership(
                 created_at: Utc::now(),
             });
         }
-        for relationship in stored.relationships {
+        for relationship in &stored.relationships {
             edges.push(cognee_database::GraphEdge {
                 id: provenance_edge_id(
                     id.tenant_id,
@@ -5536,12 +5615,22 @@ async fn record_dynamic_graph_ownership(
             .iter()
             .find(|chunk| chunk.base.id == attributed.chunk_id)
         {
+            let chunk_id = chunk.base.id.to_string();
             for target in chunk
                 .contains
                 .iter()
                 .filter_map(serde_json::Value::as_str)
                 .filter_map(|target| Uuid::parse_str(target).ok())
             {
+                let target_id = target.to_string();
+                let (row_text, label) =
+                    match contains_text.get(&(chunk_id.as_str(), target_id.as_str())) {
+                        Some(text) => (
+                            sanitize_string(text.to_string()),
+                            Some("contains".to_string()),
+                        ),
+                        None => ("contains".to_string(), None),
+                    };
                 edges.push(cognee_database::GraphEdge {
                     id: provenance_edge_id(
                         id.tenant_id,
@@ -5549,7 +5638,7 @@ async fn record_dynamic_graph_ownership(
                         id.dataset_id,
                         attributed.data_id,
                         chunk.base.id,
-                        "contains",
+                        &row_text,
                         target,
                     ),
                     slug: triplet_slug(chunk.base.id, "contains", target),
@@ -5559,8 +5648,8 @@ async fn record_dynamic_graph_ownership(
                     pipeline_run_id: id.pipeline_run_id,
                     source_node_id: chunk.base.id,
                     destination_node_id: target,
-                    relationship_name: "contains".to_string(),
-                    label: None,
+                    relationship_name: row_text,
+                    label,
                     attributes: None,
                     created_at: Utc::now(),
                 });
@@ -6061,6 +6150,130 @@ async fn index_data_points(
     indexed
 }
 
+/// Write `triplets` to the `Triplet`/`text` collection in windows, copying
+/// each one's `source_*` provenance from the [`EdgeType`] its edge's retrieval
+/// text keys. `edges` are the edges the triplets were built from.
+async fn index_triplet_points(
+    triplets: &[Triplet],
+    edges: &[GraphEdgePair],
+    edge_types: &[EdgeType],
+    engine: &Arc<dyn EmbeddingEngine>,
+    vector_db: &Arc<dyn VectorDB>,
+    window: usize,
+) -> Result<(), CognifyError> {
+    if !vector_db
+        .has_collection("Triplet", "text")
+        .await
+        .map_err(|e| CognifyError::VectorDBError(e.to_string()))?
+    {
+        vector_db
+            .create_collection("Triplet", "text", engine.dimension())
+            .await
+            .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
+    }
+
+    // Index the EdgeType DataPoints so each triplet payload can
+    // inherit its originating edge's provenance (`source_*`) keys per
+    // gap-05/08 §4.4. Triplet itself has no embedded `DataPoint`, so we
+    // narrow the dump to just the five `source_*` keys to avoid
+    // colliding with Triplet's own flat fields (id, type, etc.).
+    //
+    // EdgeTypes are now keyed on each edge's *retrieval text*
+    // (`edge_retrieval_text`: nonblank `edge_text`, else
+    // `relationship_name`) to match Python's `generate_edge_id`, but a
+    // Triplet only carries the bare `relationship_name`. We therefore
+    // map each triplet's (source, target, relationship) tuple to its
+    // edge's retrieval text via the source edges, then look up the
+    // EdgeType by that text — so the provenance copy survives the
+    // Part-3 keying change even when edges carry a description.
+    //
+    // The lookup is keyed on the EdgeType's **derived point id**, not
+    // on its `relationship_name`, because `build_edge_types` folds
+    // spellings that normalize alike onto one DataPoint (SDK-778):
+    // only one of `"is a"` / `"Is A"` / `"is_a"` survives into
+    // `edge_types`, so a raw-text key would miss for every edge that
+    // spelled the relation differently from the survivor and silently
+    // drop that triplet's `source_*` provenance. Routing both sides
+    // through `deterministic_id` makes the lookup follow the same
+    // collapse the writer applied.
+    let edge_type_by_id: std::collections::HashMap<Uuid, &EdgeType> =
+        edge_types.iter().map(|et| (et.base.id, et)).collect();
+    let edge_text_by_triple: std::collections::HashMap<(Uuid, Uuid, &str), String> = edges
+        .iter()
+        .map(|e| {
+            (
+                (
+                    e.source_entity_id,
+                    e.target_entity_id,
+                    e.relationship_name.as_str(),
+                ),
+                edge_retrieval_text(e),
+            )
+        })
+        .collect();
+
+    announce_index_write(vector_db, "Triplet", "text", triplets.len()).await?;
+    for triplet_window in triplets.chunks(window) {
+        let triplet_texts: Vec<_> = triplet_window.iter().map(|t| t.text.as_str()).collect();
+        let triplet_vectors = engine
+            .embed(&triplet_texts)
+            .await
+            .map_err(|e| CognifyError::EmbeddingError(e.to_string()))?;
+
+        let triplet_points: Vec<VectorPoint> = triplet_window
+            .iter()
+            .zip(triplet_vectors)
+            .map(|(triplet, vector)| {
+                let mut point = VectorPoint::new(triplet.id, vector)
+                    .with_metadata("type", json!("Triplet"))
+                    .with_metadata("field", json!("text"))
+                    // The embedded text itself, as Python's Triplet
+                    // payload carries it: TripletRetriever renders
+                    // its context from this key.
+                    .with_metadata("text", json!(triplet.text.clone()))
+                    .with_metadata("source_id", json!(triplet.source_entity_id.to_string()))
+                    .with_metadata("target_id", json!(triplet.target_entity_id.to_string()))
+                    .with_metadata("relationship", json!(triplet.relationship_name.clone()));
+
+                // Triplet special case (gap-05/08 §4.4): copy only the
+                // five `source_*` keys from the originating EdgeType's
+                // DataPoint, so Triplet's own flat fields are not
+                // overwritten.
+                let edge_type = edge_text_by_triple
+                    .get(&(
+                        triplet.source_entity_id,
+                        triplet.target_entity_id,
+                        triplet.relationship_name.as_str(),
+                    ))
+                    .filter(|text| !text.is_empty())
+                    .and_then(|text| edge_type_by_id.get(&EdgeType::deterministic_id(text)));
+                if let Some(edge_type) = edge_type {
+                    for (k, v) in edge_type.base.vector_metadata() {
+                        if matches!(
+                            k.as_str(),
+                            "source_pipeline"
+                                | "source_task"
+                                | "source_user"
+                                | "source_node_set"
+                                | "source_content_hash"
+                        ) {
+                            point = point.with_metadata(k, v);
+                        }
+                    }
+                }
+                point
+            })
+            .collect();
+
+        vector_db
+            .index_points("Triplet", "text", &triplet_points)
+            .await
+            .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
+    }
+
+    Ok(())
+}
+
 /// Announce `points` points to `data_type`/`field_name`, the total the
 /// windows that follow add up to (see [`index_data_points`]).
 async fn announce_index_write(
@@ -6393,122 +6606,7 @@ async fn index_data_points_windowed(
         let triplets = create_triplets_from_graph_with_timestamps(entities, timestamps, edges);
 
         if !triplets.is_empty() {
-            if !vector_db
-                .has_collection("Triplet", "text")
-                .await
-                .map_err(|e| CognifyError::VectorDBError(e.to_string()))?
-            {
-                vector_db
-                    .create_collection("Triplet", "text", dimension)
-                    .await
-                    .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
-            }
-
-            // Index the EdgeType DataPoints so each triplet payload can
-            // inherit its originating edge's provenance (`source_*`) keys per
-            // gap-05/08 §4.4. Triplet itself has no embedded `DataPoint`, so we
-            // narrow the dump to just the five `source_*` keys to avoid
-            // colliding with Triplet's own flat fields (id, type, etc.).
-            //
-            // EdgeTypes are now keyed on each edge's *retrieval text*
-            // (`edge_retrieval_text`: nonblank `edge_text`, else
-            // `relationship_name`) to match Python's `generate_edge_id`, but a
-            // Triplet only carries the bare `relationship_name`. We therefore
-            // map each triplet's (source, target, relationship) tuple to its
-            // edge's retrieval text via the source edges, then look up the
-            // EdgeType by that text — so the provenance copy survives the
-            // Part-3 keying change even when edges carry a description.
-            //
-            // The lookup is keyed on the EdgeType's **derived point id**, not
-            // on its `relationship_name`, because `build_edge_types` folds
-            // spellings that normalize alike onto one DataPoint (SDK-778):
-            // only one of `"is a"` / `"Is A"` / `"is_a"` survives into
-            // `edge_types`, so a raw-text key would miss for every edge that
-            // spelled the relation differently from the survivor and silently
-            // drop that triplet's `source_*` provenance. Routing both sides
-            // through `deterministic_id` makes the lookup follow the same
-            // collapse the writer applied.
-            let edge_type_by_id: std::collections::HashMap<Uuid, &EdgeType> =
-                edge_types.iter().map(|et| (et.base.id, et)).collect();
-            let edge_text_by_triple: std::collections::HashMap<(Uuid, Uuid, &str), String> = edges
-                .iter()
-                .map(|e| {
-                    (
-                        (
-                            e.source_entity_id,
-                            e.target_entity_id,
-                            e.relationship_name.as_str(),
-                        ),
-                        edge_retrieval_text(e),
-                    )
-                })
-                .collect();
-
-            announce_index_write(&vector_db, "Triplet", "text", triplets.len()).await?;
-            for triplet_window in triplets.chunks(window) {
-                let triplet_texts: Vec<_> =
-                    triplet_window.iter().map(|t| t.text.as_str()).collect();
-                let triplet_vectors = engine
-                    .embed(&triplet_texts)
-                    .await
-                    .map_err(|e| CognifyError::EmbeddingError(e.to_string()))?;
-
-                let triplet_points: Vec<VectorPoint> = triplet_window
-                    .iter()
-                    .zip(triplet_vectors)
-                    .map(|(triplet, vector)| {
-                        let mut point = VectorPoint::new(triplet.id, vector)
-                            .with_metadata("type", json!("Triplet"))
-                            .with_metadata("field", json!("text"))
-                            // The embedded text itself, as Python's Triplet
-                            // payload carries it: TripletRetriever renders
-                            // its context from this key.
-                            .with_metadata("text", json!(triplet.text.clone()))
-                            .with_metadata("source_id", json!(triplet.source_entity_id.to_string()))
-                            .with_metadata("target_id", json!(triplet.target_entity_id.to_string()))
-                            .with_metadata(
-                                "relationship",
-                                json!(triplet.relationship_name.clone()),
-                            );
-
-                        // Triplet special case (gap-05/08 §4.4): copy only the
-                        // five `source_*` keys from the originating EdgeType's
-                        // DataPoint, so Triplet's own flat fields are not
-                        // overwritten.
-                        let edge_type = edge_text_by_triple
-                            .get(&(
-                                triplet.source_entity_id,
-                                triplet.target_entity_id,
-                                triplet.relationship_name.as_str(),
-                            ))
-                            .filter(|text| !text.is_empty())
-                            .and_then(|text| {
-                                edge_type_by_id.get(&EdgeType::deterministic_id(text))
-                            });
-                        if let Some(edge_type) = edge_type {
-                            for (k, v) in edge_type.base.vector_metadata() {
-                                if matches!(
-                                    k.as_str(),
-                                    "source_pipeline"
-                                        | "source_task"
-                                        | "source_user"
-                                        | "source_node_set"
-                                        | "source_content_hash"
-                                ) {
-                                    point = point.with_metadata(k, v);
-                                }
-                            }
-                        }
-                        point
-                    })
-                    .collect();
-
-                vector_db
-                    .index_points("Triplet", "text", &triplet_points)
-                    .await
-                    .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
-            }
-
+            index_triplet_points(&triplets, edges, edge_types, &engine, &vector_db, window).await?;
             stats.triplet_count = triplets.len();
             info!("Indexed {} triplets", triplets.len());
         }
@@ -6985,37 +7083,7 @@ pub fn make_extract_graph_task_with_rank(
         Box::pin(async move {
             let mut graph_data = if config.graph_schema.is_some() {
                 let extracted = extract_dynamic_graphs_from_data(&input, llm, &config).await?;
-                let mut chunks = input.chunks.clone();
-                let attachment = config.chunk_attachment.unwrap_or(ChunkAttachment::Direct);
-                for attributed in &extracted.graphs {
-                    let targets = match attachment {
-                        ChunkAttachment::Direct => attributed.graph.direct_attachment_targets(),
-                        ChunkAttachment::All => attributed.graph.all_attachment_targets(),
-                    };
-                    if let Some(chunk) = chunks
-                        .iter_mut()
-                        .find(|chunk| chunk.base.id == attributed.chunk_id)
-                    {
-                        chunk.contains = targets
-                            .into_iter()
-                            .map(|target| json!(target.to_string()))
-                            .collect();
-                    }
-                }
-                ExtractedGraphData {
-                    chunks,
-                    documents: input.documents.clone(),
-                    entities: vec![],
-                    timestamps: vec![],
-                    edges: vec![],
-                    producers: ArtifactProducers::default(),
-                    dynamic_graphs: extracted.graphs,
-                    backend_summaries: vec![],
-                    dataset_id: input.dataset_id,
-                    user_id: input.user_id,
-                    tenant_id: input.tenant_id,
-                    failures: extracted.failures,
-                }
+                attach_dynamic_graphs(&input, extracted, config.chunk_attachment)
             } else {
                 extract_graph_from_data(
                     &input,
@@ -10017,6 +10085,7 @@ mod tests {
 
     #[tokio::test]
     async fn add_data_points_stores_indexes_and_links_dynamic_graphs() {
+        use cognee_database::ops::graph_storage::get_edges_by_dataset;
         use cognee_embedding::MockEmbeddingEngine;
         use cognee_vector::MockVectorDB;
 
@@ -10126,19 +10195,186 @@ mod tests {
         assert_eq!(result.indexed_fields.get("Person", "name"), 1);
         assert_eq!(result.embedding_count, result.embeddings.len());
         assert_eq!(result.embedding_count, 3, "chunk plus two dynamic fields");
+        // Custom endpoints are labelled like Python's `_get_node_label`, so
+        // the chunk's `contains` edge and the field edge get its sentence.
+        let contains_text = "Alice works at Acme contains Acme.";
+        let employees_text = "Acme employees Alice.";
+        let (_, graph_edges) = graph_db.get_graph_data().await.expect("graph data");
+        let graph_edge_text = |relationship: &str, target: Uuid| {
+            graph_edges
+                .iter()
+                .find(|edge| edge.2 == relationship && edge.1 == target.to_string())
+                .and_then(|edge| edge.3.get("edge_text"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        };
+        assert_eq!(
+            graph_edge_text("contains", company_id).as_deref(),
+            Some(contains_text)
+        );
+        assert_eq!(
+            graph_edge_text("employees", person_id).as_deref(),
+            Some(employees_text)
+        );
+        for text in [contains_text, employees_text] {
+            assert!(
+                result
+                    .edge_types
+                    .iter()
+                    .any(|edge_type| edge_type.base.id == EdgeType::deterministic_id(text)),
+                "EdgeType keyed on {text:?}"
+            );
+        }
+        assert!(
+            !result
+                .edge_types
+                .iter()
+                .any(|edge_type| edge_type.base.id == EdgeType::deterministic_id("employees"))
+        );
+
+        // The attributed ledger row for the chunk's `contains` edge is keyed
+        // on the same text as the structural one.
+        let ledger_edges = get_edges_by_dataset(&db, dataset_id).await.expect("ledger");
+        assert!(ledger_edges.iter().any(|row| {
+            row.data_id == document_id
+                && row.relationship_name == contains_text
+                && row.label.as_deref() == Some("contains")
+        }));
+
         let triplet_id = Triplet::new(
             company_id,
             person_id,
             "employees".to_string(),
-            "Acme-›employees-›Alice".to_string(),
+            String::new(),
         )
         .id;
-        assert!(
-            vector_db
-                .get_payload("Triplet", "text", triplet_id)
-                .is_some(),
-            "dynamic relationship should be searchable as a triplet"
+        let triplet = vector_db
+            .get_payload("Triplet", "text", triplet_id)
+            .expect("dynamic relationship should be searchable as a triplet");
+        assert_eq!(
+            triplet.get("text"),
+            Some(&json!(format!("Acme-›{employees_text}-›Alice")))
         );
+        assert!(
+            triplet.contains_key("source_task"),
+            "provenance copied from the EdgeType"
+        );
+    }
+
+    #[tokio::test]
+    async fn add_data_points_skips_null_dynamic_index_fields() {
+        use cognee_embedding::MockEmbeddingEngine;
+        use cognee_vector::MockVectorDB;
+
+        let dataset_id = Uuid::new_v4();
+        let document_id = Uuid::new_v4();
+        let chunk_id = Uuid::new_v4();
+        let graph = DynamicGraphSchema::compile(&json!({
+            "title": "Note",
+            "type": "object",
+            "properties": {
+                "title": {"type": "string"},
+                "summary": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null},
+                "metadata": {"type": "object", "default": {
+                    "index_fields": ["title", "summary"], "identity_fields": ["title"]
+                }}
+            },
+            "required": ["title"]
+        }))
+        .expect("schema compiles")
+        .materialize(&json!({"title": "Plan", "summary": null}), dataset_id)
+        .expect("answer materializes");
+        let mut chunk = test_chunk(chunk_id, document_id, "The plan");
+        chunk.contains = vec![json!(graph.root.to_string())];
+        let input = SummarizedData {
+            chunks: vec![chunk],
+            documents: vec![test_document_with_metadata(document_id, None)],
+            entities: vec![],
+            timestamps: vec![],
+            edges: vec![],
+            producers: ArtifactProducers::default(),
+            dynamic_graphs: vec![AttributedDynamicGraph {
+                graph,
+                chunk_id,
+                data_id: document_id,
+            }],
+            summaries: vec![],
+            dataset_id,
+            user_id: None,
+            tenant_id: None,
+            failures: FailureReport::default(),
+        };
+        let vector_db = Arc::new(MockVectorDB::new());
+        let db = ledger_db(dataset_id).await;
+
+        let result = add_data_points(
+            &input,
+            Arc::new(cognee_graph::MockGraphDB::new()),
+            vector_db.clone(),
+            Arc::new(MockEmbeddingEngine::new(8)),
+            &db,
+            None,
+            &CognifyConfig::default(),
+        )
+        .await
+        .expect("dynamic graph persists");
+
+        assert_eq!(result.indexed_fields.get("Note", "title"), 1);
+        assert_eq!(result.indexed_fields.get("Note", "summary"), 0);
+        assert!(
+            !vector_db
+                .has_collection("Note", "summary")
+                .await
+                .expect("collection lookup")
+        );
+        assert_eq!(result.embedding_count, 2, "chunk plus the non-null title");
+    }
+
+    #[test]
+    fn attach_dynamic_graphs_keeps_only_complete_files_after_an_abort() {
+        let dataset_id = Uuid::new_v4();
+        let schema = DynamicGraphSchema::compile(&json!({
+            "title": "Topic", "type": "object",
+            "properties": {"name": {"type": "string"}},
+            "required": ["name"]
+        }))
+        .expect("schema compiles");
+        let (kept_doc, failed_doc) = (Uuid::new_v4(), Uuid::new_v4());
+        let kept_chunk = test_chunk(Uuid::new_v4(), kept_doc, "kept");
+        let failed_sibling =
+            test_chunk(Uuid::new_v4(), failed_doc, "extracted, but its file failed");
+        let input = ExtractedChunks {
+            chunks: vec![kept_chunk.clone(), failed_sibling],
+            documents: vec![
+                test_document_with_metadata(kept_doc, None),
+                test_document_with_metadata(failed_doc, None),
+            ],
+            dataset_id,
+            user_id: None,
+            tenant_id: None,
+            failures: FailureReport::default(),
+        };
+        let graph = schema
+            .materialize(&json!({"name": "kept"}), dataset_id)
+            .expect("answer materializes");
+        let root = graph.root;
+        let extracted = DynamicExtractionData {
+            graphs: vec![AttributedDynamicGraph {
+                graph,
+                chunk_id: kept_chunk.base.id,
+                data_id: kept_doc,
+            }],
+            failures: FailureReport::default(),
+            excluded_items: HashSet::from([failed_doc]),
+        };
+
+        let data = attach_dynamic_graphs(&input, extracted, None);
+
+        assert_eq!(data.chunks.len(), 1);
+        assert_eq!(data.chunks[0].base.id, kept_chunk.base.id);
+        assert_eq!(data.chunks[0].contains, vec![json!(root.to_string())]);
+        let documents: Vec<Uuid> = data.documents.iter().map(|d| d.base.id).collect();
+        assert_eq!(documents, [kept_doc]);
     }
 
     #[tokio::test]

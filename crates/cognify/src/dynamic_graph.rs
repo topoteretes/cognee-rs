@@ -100,6 +100,49 @@ impl DynamicDataPoint {
         value.extend(self.properties.clone());
         Value::Object(value)
     }
+
+    /// The text of each declared index field Python's `index_data_points`
+    /// would embed, in declaration order. A `None` value is skipped, as
+    /// Python skips it; strings are stripped and skipped when blank. Other
+    /// scalars use their JSON text: Python hands them to the embedding engine
+    /// as non-strings, which writes a zero vector no query can match, so a
+    /// textual embedding is the useful equivalent.
+    pub fn index_field_texts(&self) -> impl Iterator<Item = (&str, String)> + '_ {
+        self.index_fields.iter().filter_map(|field| {
+            let text = match self.properties.get(field)? {
+                Value::Null => return None,
+                Value::String(text) => text.trim().to_string(),
+                value => value.to_string(),
+            };
+            (!text.is_empty()).then_some((field.as_str(), text))
+        })
+    }
+
+    /// Python `_extract_embeddable_text_from_datapoint`: every indexable
+    /// field's text joined with a space.
+    pub fn embeddable_text(&self) -> String {
+        self.index_field_texts()
+            .map(|(_, text)| text)
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// Python `_get_node_label`: the first indexable field's text, else a
+    /// nonblank `name`, else the type name.
+    pub fn label(&self) -> String {
+        self.index_field_texts()
+            .next()
+            .map(|(_, text)| text)
+            .or_else(|| {
+                self.properties
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| self.base.data_type.clone())
+    }
 }
 
 /// A field relationship between two dynamic DataPoints.
@@ -1463,5 +1506,42 @@ mod tests {
                 }
             );
         }
+    }
+
+    #[test]
+    fn index_texts_skip_null_and_blank_values_like_python() {
+        let schema = json!({
+            "title": "Note", "type": "object",
+            "properties": {
+                "title": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null},
+                "body": {"type": "string"},
+                "score": {"type": "integer"},
+                "metadata": {"type": "object", "default": {
+                    "index_fields": ["title", "body", "score"]
+                }}
+            }
+        });
+        let graph = DynamicGraphSchema::compile(&schema)
+            .expect("schema should compile")
+            .materialize(
+                &json!({"title": null, "body": "  hello  ", "score": 3}),
+                Uuid::nil(),
+            )
+            .expect("answer should materialize");
+        let node = &graph.nodes[0];
+        let texts: Vec<(&str, String)> = node.index_field_texts().collect();
+        assert_eq!(
+            texts,
+            [("body", "hello".to_string()), ("score", "3".to_string())]
+        );
+        assert_eq!(node.embeddable_text(), "hello 3");
+        assert_eq!(node.label(), "hello");
+
+        // Nothing indexable: the label falls back to the type name.
+        let graph = DynamicGraphSchema::compile(&schema)
+            .expect("schema should compile")
+            .materialize(&json!({"body": " "}), Uuid::nil())
+            .expect("answer should materialize");
+        assert_eq!(graph.nodes[0].label(), "Note");
     }
 }

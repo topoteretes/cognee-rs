@@ -335,9 +335,12 @@ pub struct CognifyConfig {
 
     /// Optional JSON Schema for custom graph extraction model.
     ///
-    /// When `Some`, the LLM uses this schema instead of the default
-    /// `KnowledgeGraph` schema for entity/relationship extraction.
-    /// Extracted data is stored as-is in chunk metadata.
+    /// When `Some`, the LLM answers this Pydantic-compatible JSON Schema
+    /// instead of the default `KnowledgeGraph`, and each answer is stored,
+    /// vector-indexed and ownership-ledgered as a runtime DataPoint graph (see
+    /// [`crate::dynamic_graph`]). Only the single-pass LLM extractor honours
+    /// it, so [`Self::validate`] rejects it together with `graph_backend` or
+    /// [`ExtractionStrategy::Cascade`].
     ///
     /// Mirrors Python's `graph_model` parameter.
     #[serde(skip)]
@@ -833,6 +836,25 @@ impl CognifyConfig {
         if self.chunk_attachment.is_some() && self.graph_schema.is_none() {
             return Err(ConfigError::InvalidParameter(
                 "chunk_attachment requires graph_schema".to_string(),
+            ));
+        }
+        // Python raises rather than run an extractor other than the one the
+        // caller selected (`cognify.py`: a custom `graph_model` is only
+        // supported by the `llm` extractor). The custom-schema branch drives
+        // neither a graph backend nor the cascade stages, so either would be
+        // silently ignored — and a summarizing backend would also suppress
+        // every summary.
+        if self.graph_schema.is_some() && self.graph_backend.is_some() {
+            return Err(ConfigError::InvalidParameter(
+                "graph_schema is only supported by the LLM extractor; unset graph_backend"
+                    .to_string(),
+            ));
+        }
+        if self.graph_schema.is_some()
+            && matches!(self.extraction_strategy, ExtractionStrategy::Cascade { .. })
+        {
+            return Err(ConfigError::InvalidParameter(
+                "graph_schema is only supported by the single_pass extraction strategy".to_string(),
             ));
         }
         if self.chunk_attachment.is_some() && self.temporal_cognify {
@@ -1425,6 +1447,33 @@ mod tests {
         assert_eq!(
             crate::summarization::SummaryExtractor::DEFAULT_MAX_PARALLEL,
             CognifyConfig::default().max_parallel_extractions,
+        );
+    }
+
+    #[test]
+    fn graph_schema_requires_the_single_pass_llm_extractor() {
+        let schema = serde_json::json!({"title": "Graph", "properties": {}});
+        assert!(
+            CognifyConfig::default()
+                .with_graph_schema(schema.clone())
+                .with_graph_backend(Arc::new(
+                    crate::graph_backend::MockChunkGraphExtractor::new()
+                ))
+                .validate()
+                .is_err()
+        );
+        assert!(
+            CognifyConfig::default()
+                .with_graph_schema(schema.clone())
+                .with_extraction_strategy(ExtractionStrategy::Cascade { rounds: 2 })
+                .validate()
+                .is_err()
+        );
+        assert!(
+            CognifyConfig::default()
+                .with_graph_schema(schema)
+                .validate()
+                .is_ok()
         );
     }
 
