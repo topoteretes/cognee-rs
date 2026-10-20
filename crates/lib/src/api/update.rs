@@ -59,8 +59,11 @@ pub struct UpdateResult {
 /// on another tenant's dataset answer the same, like Python's single
 /// `PermissionDeniedError` (403,
 /// `cognee/modules/users/exceptions/exceptions.py:42-51@37f788bd2`). A failing
-/// ACL backend is `ApiError::InvalidArgument`. Propagates errors from delete,
-/// add, or cognify phases.
+/// ACL backend is `ApiError::InvalidArgument`. A `node_set` (the call's, or
+/// one in an item's `external_metadata`) that is not a list of non-empty
+/// names is `ApiError::Ingestion` (Python's `InvalidNodeSetError`), raised
+/// **before** the old data is touched. Propagates errors from delete, add, or
+/// cognify phases.
 #[allow(clippy::too_many_arguments)]
 pub async fn update(
     data_id: Uuid,
@@ -89,6 +92,24 @@ pub async fn update(
         require_write_permission(acl, owner_id, tenant_id, dataset_id).await?;
     }
 
+    // ── Refuse what the add would refuse, before anything is deleted ─────────
+    // Step 2's `add_with_params` validates the call's `node_set` and every
+    // item's `external_metadata["node_set"]` before it stores anything — but
+    // by then step 1 has already detached (and, with no other dataset holding
+    // it, deleted) the old document, so a bad name would destroy the old data
+    // and store nothing. Python's `update()` cannot lose data this way: its
+    // `forget(memory_only=True)` keeps the row, and `ingest_data` validates
+    // before storing. Validate here, where the old data is still intact.
+    let params = AddParams {
+        node_set,
+        preferred_loaders,
+        dataset_id: Some(dataset_id),
+        importance_weight: None,
+        incremental_loading,
+    };
+    cognee_ingestion::validate_add_inputs(&new_data, params.node_set.as_deref())
+        .map_err(|e| ApiError::Ingestion(e.to_string()))?;
+
     // ── Step 1: Delete old data ───────────────────────────────────────────────
     // By the authorized `dataset_id`, not by name: a by-name scope is
     // re-resolved without a tenant predicate and could detach the item from a
@@ -99,13 +120,6 @@ pub async fn update(
     let delete_result = delete_old_data(delete_service, dataset_id, data_id).await?;
 
     // ── Step 2: Re-add new data ───────────────────────────────────────────────
-    let params = AddParams {
-        node_set,
-        preferred_loaders,
-        dataset_id: Some(dataset_id),
-        importance_weight: None,
-        incremental_loading,
-    };
     let data_items = add_pipeline
         .add_with_params(new_data, dataset_name, owner_id, tenant_id, &params)
         .await
@@ -388,5 +402,121 @@ mod tests {
             vec![data.id],
             "the same-named T1 dataset keeps its link"
         );
+    }
+
+    /// SDK-1129 follow-up. The add step refuses a bad `node_set`, but the
+    /// delete step ran first, so an invalid name used to destroy the old
+    /// document and store nothing. Python's `update()` never loses data that
+    /// way. The name is now refused before the delete, with the old data
+    /// — its row, its dataset link — intact.
+    #[tokio::test]
+    async fn an_invalid_node_set_is_refused_before_the_old_data_is_deleted() {
+        use cognee_database::{DeleteDb, IngestDb, connect, initialize};
+        use cognee_models::Dataset;
+        let db = Arc::new(connect("sqlite::memory:").await.unwrap());
+        initialize(&db).await.unwrap();
+        let owner = Uuid::new_v4();
+        let ingest: &dyn IngestDb = db.as_ref();
+        let dataset = ingest
+            .create_dataset(Dataset::new("x".into(), owner, None, Uuid::new_v4()))
+            .await
+            .unwrap();
+        let loc = format!("file:///tmp/{}.txt", Uuid::new_v4());
+        let old = Data::builder(
+            Uuid::new_v4(),
+            "old.txt",
+            loc.as_str(),
+            loc.as_str(),
+            "txt",
+            "text/plain",
+            "old-hash",
+            owner,
+        )
+        .build();
+        ingest.create_data(old.clone()).await.unwrap();
+        ingest
+            .attach_data_to_dataset(dataset.id, old.id)
+            .await
+            .unwrap();
+
+        let storage: Arc<dyn StorageTrait> = Arc::new(cognee_storage::MockStorage::new());
+        let graph_db: Arc<dyn GraphDBTrait> = Arc::new(cognee_graph::MockGraphDB::new());
+        let vector_db: Arc<dyn VectorDB> = Arc::new(cognee_vector::MockVectorDB::new());
+        let delete_service =
+            DeleteService::new(Arc::clone(&storage), db.clone() as Arc<dyn DeleteDb>);
+        let add_pipeline = AddPipeline::new(Arc::clone(&storage), db.clone() as Arc<dyn IngestDb>)
+            .with_thread_pool(Arc::new(
+                cognee_core::RayonThreadPool::with_default_threads().unwrap(),
+            ))
+            .with_graph_db(Arc::clone(&graph_db))
+            .with_vector_db(Arc::clone(&vector_db))
+            .with_database(db.clone());
+        let llm: Arc<dyn Llm> = Arc::new(cognee_test_utils::MockLlm::empty());
+        let embedding: Arc<dyn EmbeddingEngine> =
+            Arc::new(cognee_embedding::MockEmbeddingEngine::new(8));
+        let ontology: Arc<dyn OntologyResolver> = Arc::new(cognee_ontology::NoOpOntologyResolver);
+        let cognify_config = CognifyConfig::default();
+
+        // The call's own node set, and an item-level one in `external_metadata`.
+        let bad_calls: Vec<(Vec<DataInput>, Option<Vec<String>>)> = vec![
+            (
+                vec![DataInput::Text("replacement".into())],
+                Some(vec!["alpha".into(), " ".into()]),
+            ),
+            (
+                vec![DataInput::DataItem {
+                    data: Box::new(DataInput::Text("replacement".into())),
+                    label: "item".into(),
+                    external_metadata: Some(r#"{"node_set": "alpha"}"#.into()),
+                }],
+                None,
+            ),
+        ];
+        for (new_data, node_set) in bad_calls {
+            let err = update(
+                old.id,
+                new_data,
+                dataset.id,
+                "x",
+                owner,
+                None,
+                node_set,
+                None,
+                true,
+                None,
+                &delete_service,
+                &add_pipeline,
+                Arc::clone(&llm),
+                Arc::clone(&storage),
+                Arc::clone(&graph_db),
+                Arc::clone(&vector_db),
+                Arc::clone(&embedding),
+                Some(db.clone() as Arc<dyn RelationalDb>),
+                Arc::clone(&ontology),
+                &cognify_config,
+            )
+            .await
+            .expect_err("a bad node set is refused");
+            assert!(
+                matches!(&err, ApiError::Ingestion(msg) if msg.contains("Invalid node_set")),
+                "got {err:?}"
+            );
+
+            // The old document is untouched: still a row, still in the dataset.
+            assert!(
+                IngestDb::get_data(db.as_ref(), old.id)
+                    .await
+                    .unwrap()
+                    .is_some(),
+                "the old row survives"
+            );
+            let linked: Vec<Uuid> = DeleteDb::get_dataset_data(db.as_ref(), dataset.id)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|d| d.id)
+                .collect();
+            assert_eq!(linked, vec![old.id], "the old row is still in the dataset");
+        }
     }
 }
