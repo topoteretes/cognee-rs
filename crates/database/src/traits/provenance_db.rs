@@ -58,8 +58,9 @@ pub trait ProvenanceDb: Send + Sync {
     /// number removed.
     async fn delete_edges_for_run(&self, scope: &RunScope<'_>) -> Result<u64, DatabaseError>;
 
-    /// Relationship names the run used that some other run also claims.
-    async fn get_relationship_names_claimed_outside_run(
+    /// `EdgeType` retrieval texts (nonblank `edge_text` attribute, else the
+    /// relationship name) that edge rows outside the scope still claim.
+    async fn get_edge_retrieval_texts_claimed_outside_run(
         &self,
         scope: &RunScope<'_>,
     ) -> Result<Vec<String>, DatabaseError>;
@@ -145,11 +146,11 @@ impl ProvenanceDb for DatabaseConnection {
         graph_storage::delete_edges_for_run(self, scope).await
     }
 
-    async fn get_relationship_names_claimed_outside_run(
+    async fn get_edge_retrieval_texts_claimed_outside_run(
         &self,
         scope: &RunScope<'_>,
     ) -> Result<Vec<String>, DatabaseError> {
-        graph_storage::get_relationship_names_claimed_outside_run(self, scope).await
+        graph_storage::get_edge_retrieval_texts_claimed_outside_run(self, scope).await
     }
 
     async fn update_data_token_count(

@@ -2420,7 +2420,7 @@ fn parse_indexed_fields(value: &serde_json::Value) -> Vec<String> {
 ///
 /// Because that id is many-to-one over edges, this can name a point a surviving
 /// edge of another dataset still needs. The run sweep narrows the set with
-/// `get_relationship_names_claimed_outside_run`; doing the same here changes
+/// `get_edge_retrieval_texts_claimed_outside_run`; doing the same here changes
 /// dataset deletion and belongs with that path's own tests, not this commit's.
 fn unchecked_edge_type_vector_ids(edges: &[GraphEdge]) -> Vec<Uuid> {
     edges.iter().filter_map(edge_type_vector_id).collect()

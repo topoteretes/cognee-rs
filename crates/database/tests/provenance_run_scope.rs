@@ -17,9 +17,9 @@
 use chrono::Utc;
 use cognee_database::ops::datasets::create_dataset;
 use cognee_database::ops::graph_storage::{
-    RunScope, delete_edges_for_run, delete_nodes_for_run, get_data_ids_for_run, get_edges_for_run,
-    get_nodes_for_run, get_relationship_names_claimed_outside_run, get_unique_edges_for_run,
-    get_unique_nodes_for_run, upsert_edges, upsert_nodes,
+    RunScope, delete_edges_for_run, delete_nodes_for_run, get_data_ids_for_run,
+    get_edge_retrieval_texts_claimed_outside_run, get_edges_for_run, get_nodes_for_run,
+    get_unique_edges_for_run, get_unique_nodes_for_run, upsert_edges, upsert_nodes,
 };
 use cognee_database::{DatabaseConnection, GraphEdge, GraphNode, connect, initialize};
 use cognee_models::Dataset;
@@ -305,7 +305,7 @@ async fn claimed_relationship_names_cover_every_kind_of_outsider() {
     ])
     .await;
 
-    let mut whole_run = get_relationship_names_claimed_outside_run(
+    let mut whole_run = get_edge_retrieval_texts_claimed_outside_run(
         &f.db,
         &RunScope::whole_run(f.run_1, f.dataset_d),
     )
@@ -319,7 +319,7 @@ async fn claimed_relationship_names_cover_every_kind_of_outsider() {
     );
 
     let data_ids = [f.data_a];
-    let mut narrowed = get_relationship_names_claimed_outside_run(
+    let mut narrowed = get_edge_retrieval_texts_claimed_outside_run(
         &f.db,
         &RunScope::for_data(f.run_1, f.dataset_d, &data_ids),
     )
@@ -330,6 +330,46 @@ async fn claimed_relationship_names_cover_every_kind_of_outsider() {
         narrowed,
         ["another_dataset", "another_run", "legacy", "sibling_file"],
         "a surviving file of the same run claims its names too",
+    );
+}
+
+/// The claimed set is the rows' *retrieval texts*, not their name column.
+/// Custom graph-model field edges all carry the field name in the column and
+/// their stamped text only in `attributes.edge_text`; reading the column alone
+/// would leave an outside edge's `EdgeType` point unprotected, and a failed
+/// run's sweep would delete a point a successful run still needs.
+#[tokio::test]
+async fn claimed_texts_prefer_the_edge_text_attribute() {
+    let f = Fixture::new().await;
+    let with_attributes = |run: Uuid, name: &str, attributes: serde_json::Value| GraphEdge {
+        relationship_name: name.to_string(),
+        attributes: Some(attributes),
+        ..f.edge(f.dataset_d, f.data_b, Some(run), Uuid::new_v4())
+    };
+    f.seed_edges(&[
+        with_attributes(
+            f.run_2,
+            "employees",
+            json!({ "edge_text": "Acme employees Alice." }),
+        ),
+        with_attributes(f.run_2, "  founded  ", json!({ "edge_text": "   " })),
+        with_attributes(f.run_2, "owns", json!({ "weight": 1 })),
+        // Inside the scope: never claimed, whatever its text.
+        with_attributes(f.run_1, "employees", json!({ "edge_text": "Mine." })),
+    ])
+    .await;
+
+    let mut claimed = get_edge_retrieval_texts_claimed_outside_run(
+        &f.db,
+        &RunScope::whole_run(f.run_1, f.dataset_d),
+    )
+    .await
+    .expect("texts");
+    claimed.sort();
+    assert_eq!(
+        claimed,
+        ["Acme employees Alice.", "founded", "owns"],
+        "edge_text wins when nonblank; otherwise the trimmed name, as cognify keys the point",
     );
 }
 

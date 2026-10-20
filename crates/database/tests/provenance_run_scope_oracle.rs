@@ -64,7 +64,7 @@ mod oracle {
     use cognee_database::ops::datasets::create_dataset;
     use cognee_database::ops::graph_storage::{
         RunScope, delete_edges_for_run, delete_nodes_for_run, get_data_ids_for_run,
-        get_edges_for_run, get_nodes_for_run, get_relationship_names_claimed_outside_run,
+        get_edge_retrieval_texts_claimed_outside_run, get_edges_for_run, get_nodes_for_run,
         get_unique_edges_for_run, get_unique_nodes_for_run, upsert_edges, upsert_nodes,
     };
     use cognee_database::{DatabaseConnection, GraphEdge, GraphNode, connect, initialize};
@@ -541,7 +541,7 @@ mod oracle {
 
             // --- the second identity: relationship names ----------------------
             let sql_names: BTreeSet<String> =
-                get_relationship_names_claimed_outside_run(&world.db, &rs)
+                get_edge_retrieval_texts_claimed_outside_run(&world.db, &rs)
                     .await
                     .expect("names")
                     .into_iter()

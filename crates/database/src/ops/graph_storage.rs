@@ -15,6 +15,7 @@ use crate::database_system_label;
 use crate::entities::{edge, node};
 use crate::types::{DatabaseError, GraphEdge, GraphNode};
 use crate::uuid_hex;
+use cognee_models::EdgeType;
 
 /// Max rows per provenance INSERT. A multi-row `insert_many` binds
 /// `rows × columns` parameters in one statement, and SQLite caps that at
@@ -1031,7 +1032,7 @@ pub async fn get_unique_edges_for_run(
     Ok(rows)
 }
 
-/// The `relationship_name` values edge rows *outside* `scope` still claim.
+/// The `EdgeType` retrieval texts edge rows *outside* `scope` still claim.
 ///
 /// A second exclusivity check, for a second identity. The
 /// `EdgeType_relationship_name` vector point is keyed on an edge's *retrieval
@@ -1042,25 +1043,29 @@ pub async fn get_unique_edges_for_run(
 /// surviving `is_a` edge still needs. Callers subtract this set before issuing
 /// any `EdgeType` delete.
 ///
-/// "Outside" is the same negation [`get_unique_nodes_for_run`] uses, but
-/// *uncorrelated*: one `SELECT DISTINCT` over what is in practice a small
-/// vocabulary of relation names, rather than a per-row `NOT EXISTS` or an `IN`
-/// list of candidate texts — a run owns one text per edge, and that list would
-/// blow past SQLite's `SQLITE_MAX_VARIABLE_NUMBER` and Postgres' 65 535.
+/// Each row's text is derived exactly as cognify derived the point's key:
+/// [`EdgeType::retrieval_text`] over the row's `edge_text` attribute and its
+/// `relationship_name` column — the same derivation the delete lane uses to
+/// compute the candidate ids. Reading the column alone is not enough: custom
+/// graph-model field edges all carry the field name (`"employees"`) in the
+/// column and their stamped text only in `attributes.edge_text`, so a column
+/// read would leave every such outside edge's point unprotected.
 ///
-/// **Residual.** The column carries the retrieval text only for edges with no
-/// `edge_text` attribute, and for `contains` edges (where cognify writes the
-/// text into the column itself). An outside edge whose text lives *only* in its
-/// attributes claims under a name this query cannot see, so a candidate
-/// matching that text is not protected. Hitting it takes two edges with
-/// different endpoints — same endpoints would share a slug, and the slug check
-/// already protects those — and byte-identical descriptions.
+/// "Outside" is the same negation [`get_unique_nodes_for_run`] uses, but
+/// *uncorrelated*, rather than a per-row `NOT EXISTS` or an `IN` list of
+/// candidate texts — a run owns one text per edge, and that list would blow
+/// past SQLite's `SQLITE_MAX_VARIABLE_NUMBER` and Postgres' 65 535. It runs as
+/// two reads: a `SELECT DISTINCT` of the names of rows with no attributes
+/// (their text is the name), and a plain read of the rows that do have
+/// attributes, whose text is derived here. The second is not `DISTINCT`
+/// because Postgres has no equality operator for `json`, and keeping the JSON
+/// extraction in Rust avoids a backend-specific query.
 ///
 /// No `selects_nothing` early return, deliberately: an empty selection makes
 /// every row an outside row, and "everything is claimed" is both the honest and
 /// the safe answer. A caller with nothing to filter should skip the call.
 #[instrument(
-    name = "cognee.db.relational.graph_storage.get_relationship_names_claimed_outside_run",
+    name = "cognee.db.relational.graph_storage.get_edge_retrieval_texts_claimed_outside_run",
     level = "info",
     skip_all,
     fields(
@@ -1069,33 +1074,60 @@ pub async fn get_unique_edges_for_run(
     ),
     err,
 )]
-pub async fn get_relationship_names_claimed_outside_run(
+pub async fn get_edge_retrieval_texts_claimed_outside_run(
     db: &DatabaseConnection,
     scope: &RunScope<'_>,
 ) -> Result<Vec<String>, DatabaseError> {
     Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
 
     // `IS NULL` is not redundant with `<> :run`; see `get_unique_nodes_for_run`.
-    let mut outside = Condition::any()
-        .add(edge::Column::PipelineRunId.is_null())
-        .add(edge::Column::PipelineRunId.ne(scope.run_hex()))
-        .add(edge::Column::DatasetId.ne(scope.dataset_hex()));
-    if let Some(data_hexes) = scope.data_hexes() {
-        outside = outside.add(edge::Column::DataId.is_not_in(data_hexes));
-    }
+    let outside = || {
+        let mut outside = Condition::any()
+            .add(edge::Column::PipelineRunId.is_null())
+            .add(edge::Column::PipelineRunId.ne(scope.run_hex()))
+            .add(edge::Column::DatasetId.ne(scope.dataset_hex()));
+        if let Some(data_hexes) = scope.data_hexes() {
+            outside = outside.add(edge::Column::DataId.is_not_in(data_hexes));
+        }
+        outside
+    };
 
-    let names: Vec<String> = edge::Entity::find()
+    let bare_names: Vec<String> = edge::Entity::find()
         .select_only()
         .column(edge::Column::RelationshipName)
         .distinct()
-        .filter(outside)
+        .filter(outside())
+        .filter(edge::Column::Attributes.is_null())
         .into_tuple::<String>()
         .all(db)
         .await
         .map_err(map_sea_err)?;
 
-    Span::current().record(COGNEE_DB_ROW_COUNT, names.len() as i64);
-    Ok(names)
+    let attributed: Vec<(String, Option<serde_json::Value>)> = edge::Entity::find()
+        .select_only()
+        .column(edge::Column::RelationshipName)
+        .column(edge::Column::Attributes)
+        .filter(outside())
+        .filter(edge::Column::Attributes.is_not_null())
+        .into_tuple::<(String, Option<serde_json::Value>)>()
+        .all(db)
+        .await
+        .map_err(map_sea_err)?;
+
+    let texts: BTreeSet<String> = bare_names
+        .iter()
+        .map(|name| EdgeType::retrieval_text(None, name))
+        .chain(attributed.iter().map(|(name, attributes)| {
+            let edge_text = attributes
+                .as_ref()
+                .and_then(|attributes| attributes.get("edge_text"))
+                .and_then(serde_json::Value::as_str);
+            EdgeType::retrieval_text(edge_text, name)
+        }))
+        .collect();
+
+    Span::current().record(COGNEE_DB_ROW_COUNT, texts.len() as i64);
+    Ok(texts.into_iter().collect())
 }
 
 /// Delete the provenance node rows within `scope`, returning how many went.

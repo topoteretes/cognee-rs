@@ -416,3 +416,105 @@ async fn a_failed_custom_run_is_swept_clean() {
     assert!(harness.ledger_nodes().await.is_empty());
     assert!(harness.ledger_edges().await.is_empty());
 }
+
+/// The custom schema with no `identity_fields`: every node then gets a fresh
+/// uuid4 per run, so two runs over the same text produce field edges with
+/// different slugs but one shared `EdgeType` retrieval text.
+fn config_without_identity() -> CognifyConfig {
+    extraction_config().with_graph_schema(json!({
+        "$defs": {
+            "Person": {
+                "title": "Person",
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "metadata": {"type": "object", "default": {"index_fields": ["name"]}}
+                },
+                "required": ["name"]
+            }
+        },
+        "title": "Company",
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "employees": {"type": "array", "items": {"$ref": "#/$defs/Person"}},
+            "metadata": {"type": "object", "default": {"index_fields": ["name"]}}
+        },
+        "required": ["name", "employees"]
+    }))
+}
+
+/// A failed run's sweep keeps an `EdgeType` point a successful run's field
+/// edge still claims. The slug check cannot protect it — without identity
+/// fields the two runs' field edges have different slugs — so this rests on
+/// the sweep reading the surviving row's stamped `edge_text`, not the
+/// `"employees"` name column every field-edge row shares.
+#[tokio::test]
+async fn a_failed_custom_run_keeps_a_field_edge_point_a_successful_run_claims() {
+    let mut harness = Harness::new().await;
+    let edge_type_point = |harness: &Harness| {
+        harness
+            .vector_db
+            .get_payload(
+                "EdgeType",
+                "relationship_name",
+                EdgeType::deterministic_id(FIELD_EDGE_TEXT),
+            )
+            .is_some()
+    };
+
+    let first = harness.add_file("Alice works at Acme.").await;
+    harness
+        .run_over(&config_without_identity(), &[first], llm(4))
+        .await
+        .expect("the first custom cognify succeeds");
+    assert!(edge_type_point(&harness), "the first run wrote the point");
+
+    let second = harness.add_file("Acme employs Alice.").await;
+    let vector_db = Arc::new(PersonIndexFails(Arc::clone(&harness.vector_db)));
+    let result = cognify(
+        vec![harness.data(second)],
+        harness.dataset_id,
+        Some(harness.owner_id),
+        None,
+        None,
+        llm(4),
+        Arc::clone(&harness.storage),
+        Arc::clone(&harness.graph_db) as Arc<dyn GraphDBTrait>,
+        vector_db as Arc<dyn VectorDB>,
+        Arc::new(MockEmbeddingEngine::new(8)),
+        harness.db.clone(),
+        Arc::clone(&harness.repo),
+        Arc::new(cognee_core::RayonThreadPool::with_default_threads().expect("RayonThreadPool")),
+        Arc::new(NoOpOntologyResolver::new()),
+        &config_without_identity(),
+    )
+    .await;
+    assert!(result.is_err(), "the Person index failure fails the run");
+
+    let first_field_edges = harness
+        .ledger_edges()
+        .await
+        .into_iter()
+        .filter(|row| row.data_id == first && row.relationship_name == "employees")
+        .count();
+    assert_eq!(
+        first_field_edges, 1,
+        "the first run's field-edge row survives"
+    );
+    let leftover: Vec<_> = harness
+        .ledger_edges()
+        .await
+        .into_iter()
+        .filter(|row| row.data_id == second)
+        .map(|row| row.relationship_name)
+        .collect();
+    assert!(
+        leftover.is_empty(),
+        "the failed run's rows are swept: {leftover:?}"
+    );
+    assert!(
+        edge_type_point(&harness),
+        "the sweep kept the EdgeType point the first run's field edge still claims"
+    );
+}

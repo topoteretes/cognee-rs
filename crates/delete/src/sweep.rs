@@ -136,12 +136,11 @@ impl RunSweeper {
     ///
     /// **Residual.** Artifacts are deleted only when the ledger shows nothing
     /// outside the scope claims them, under both identities an edge has (its
-    /// slug and its `EdgeType` retrieval text). The one gap is an outside edge
-    /// whose retrieval text lives only in its attributes and differs from its
-    /// relationship name — see
-    /// `graph_storage::get_relationship_names_claimed_outside_run`. Separately,
-    /// an edge whose endpoints survive stays in the graph while its vectors go;
-    /// that residual is Python's too.
+    /// slug and its `EdgeType` retrieval text, derived per row from the
+    /// `edge_text` attribute and the relationship name — see
+    /// `graph_storage::get_edge_retrieval_texts_claimed_outside_run`. An edge
+    /// whose endpoints survive stays in the graph while its vectors go; that
+    /// residual is Python's too.
     #[instrument(
         name = "cognee.rollback.sweep",
         level = "info",
@@ -318,14 +317,14 @@ impl RunSweeper {
         }
 
         let claimed: HashSet<String> =
-            cognee_database::ProvenanceDb::get_relationship_names_claimed_outside_run(
+            cognee_database::ProvenanceDb::get_edge_retrieval_texts_claimed_outside_run(
                 &*self.database,
                 run_scope,
             )
             .await
             .map_err(|e| {
                 DeleteError::Runtime(format!(
-                    "Failed to get the relationship names claimed outside run {}: {e}",
+                    "Failed to get the edge retrieval texts claimed outside run {}: {e}",
                     run_scope.pipeline_run_id
                 ))
             })?
