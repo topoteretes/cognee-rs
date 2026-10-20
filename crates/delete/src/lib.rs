@@ -18,7 +18,7 @@ pub use authorized::AuthorizedDeleteService;
 pub use startup_recovery::{OrphanArtifactSweep, sweep_orphaned_run_artifacts};
 pub use sweep::{RunSweeper, SweepOutcome, SweepScope};
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 use cognee_core::dataset_locks::DatasetLocks;
@@ -67,7 +67,9 @@ fn mode_label(mode: &DeleteMode) -> &'static str {
 }
 
 /// Fallback vector collections used when `list_collections()` returns an empty
-/// list (e.g. backends that do not implement dynamic discovery).
+/// list (e.g. backends that do not implement dynamic discovery). The store-wide
+/// wipe adds every collection the ownership ledger names to these, which is
+/// what reaches a runtime graph schema's `{Model}_{field}` collections.
 const FALLBACK_VECTOR_COLLECTIONS: &[(&str, &str)] = &[
     ("DocumentChunk", "text"),
     ("Entity", "name"),
@@ -1333,11 +1335,17 @@ impl DeleteService {
             })?;
 
             if collections.is_empty() {
-                // Fallback to known list
-                collections = FALLBACK_VECTOR_COLLECTIONS
+                // Fallback to the known list, plus every collection the
+                // ownership ledger says was written: a runtime graph schema
+                // indexes into `{Model}_{field}` collections no fixed list can
+                // name. The rows are still there — the dataset cascade that
+                // removes them runs after this phase.
+                let mut known: BTreeSet<(String, String)> = FALLBACK_VECTOR_COLLECTIONS
                     .iter()
                     .map(|(dt, fn_)| (dt.to_string(), fn_.to_string()))
                     .collect();
+                known.extend(self.ledger_vector_collections().await?);
+                collections = known.into_iter().collect();
             }
 
             for (data_type, field_name) in &collections {
@@ -1368,6 +1376,33 @@ impl DeleteService {
         }
 
         Ok((graph_nodes, vector_points, 0, 0, warnings))
+    }
+
+    /// Every `(data_type, field_name)` collection a provenance node row names
+    /// through its `node_type` and `indexed_fields`, across all datasets.
+    async fn ledger_vector_collections(&self) -> Result<BTreeSet<(String, String)>, DeleteError> {
+        let mut collections = BTreeSet::new();
+        let datasets = self.database.list_datasets().await.map_err(|e| {
+            DeleteError::Runtime(format!("Failed to list datasets for vector cleanup: {e}"))
+        })?;
+        for dataset in datasets {
+            let nodes = self
+                .database
+                .get_nodes_by_dataset(dataset.id)
+                .await
+                .map_err(|e| {
+                    DeleteError::Runtime(format!(
+                        "Failed to get provenance nodes for dataset {}: {e}",
+                        dataset.id
+                    ))
+                })?;
+            for node in nodes {
+                for field in parse_indexed_fields(&node.indexed_fields) {
+                    collections.insert((node.node_type.clone(), field));
+                }
+            }
+        }
+        Ok(collections)
     }
 
     /// Dataset-scoped cleanup: remove graph nodes and vector points based on
@@ -3002,6 +3037,133 @@ mod tests {
             !vector_db.has_collection("Entity", "name").await.unwrap(),
             "vector collection should be deleted"
         );
+    }
+
+    /// A backend that keeps the trait's default `list_collections`, which
+    /// lists nothing, so the store-wide wipe has to name collections itself.
+    struct UnlistedVectorDb(MockVectorDB);
+
+    #[async_trait::async_trait]
+    impl VectorDB for UnlistedVectorDb {
+        async fn create_collection(
+            &self,
+            data_type: &str,
+            field_name: &str,
+            dimension: usize,
+        ) -> cognee_vector::VectorDBResult<()> {
+            self.0
+                .create_collection(data_type, field_name, dimension)
+                .await
+        }
+        async fn has_collection(
+            &self,
+            data_type: &str,
+            field_name: &str,
+        ) -> cognee_vector::VectorDBResult<bool> {
+            self.0.has_collection(data_type, field_name).await
+        }
+        async fn index_points(
+            &self,
+            data_type: &str,
+            field_name: &str,
+            points: &[cognee_vector::VectorPoint],
+        ) -> cognee_vector::VectorDBResult<()> {
+            self.0.index_points(data_type, field_name, points).await
+        }
+        async fn search_similar(
+            &self,
+            data_type: &str,
+            field_name: &str,
+            query: &[f32],
+            limit: usize,
+        ) -> cognee_vector::VectorDBResult<Vec<cognee_vector::SearchResult>> {
+            self.0
+                .search_similar(data_type, field_name, query, limit)
+                .await
+        }
+        async fn delete_collection(
+            &self,
+            data_type: &str,
+            field_name: &str,
+        ) -> cognee_vector::VectorDBResult<()> {
+            self.0.delete_collection(data_type, field_name).await
+        }
+        async fn retrieve(
+            &self,
+            data_type: &str,
+            field_name: &str,
+            ids: &[Uuid],
+        ) -> cognee_vector::VectorDBResult<Vec<cognee_vector::SearchResult>> {
+            self.0.retrieve(data_type, field_name, ids).await
+        }
+        async fn collection_size(
+            &self,
+            data_type: &str,
+            field_name: &str,
+        ) -> cognee_vector::VectorDBResult<usize> {
+            self.0.collection_size(data_type, field_name).await
+        }
+    }
+
+    /// On a backend that cannot list its collections, the store-wide wipe
+    /// still drops a runtime graph schema's `{Model}_{field}` collection: the
+    /// ownership ledger names it even though the fixed fallback list cannot.
+    #[tokio::test]
+    async fn delete_all_drops_ledger_named_collections_on_an_unlisted_backend() {
+        let db = connect("sqlite::memory:").await.unwrap();
+        initialize(&db).await.unwrap();
+        let db = Arc::new(db);
+        let storage = Arc::new(MockStorage::new());
+        let vector_db = Arc::new(UnlistedVectorDb(MockVectorDB::new()));
+        let svc = DeleteService::new(
+            storage.clone() as Arc<dyn StorageTrait>,
+            db.clone() as Arc<dyn DeleteDb>,
+        )
+        .with_graph_db(Arc::new(MockGraphDB::new()) as Arc<dyn GraphDBTrait>)
+        .with_vector_db(vector_db.clone() as Arc<dyn VectorDB>);
+        let owner = Uuid::new_v4();
+        let (dataset_id, data_id) = seed_dataset_with_data(&db, &storage, owner, "custom_ds").await;
+        let slug = Uuid::new_v4();
+        seed_provenance_nodes(
+            &db,
+            dataset_id,
+            data_id,
+            owner,
+            &[slug],
+            "Company",
+            serde_json::json!(["name"]),
+        )
+        .await;
+        for (data_type, field) in [("Company", "name"), ("Entity", "name")] {
+            vector_db
+                .create_collection(data_type, field, 3)
+                .await
+                .unwrap();
+            vector_db
+                .index_points(
+                    data_type,
+                    field,
+                    &[cognee_vector::VectorPoint::new(slug, vec![1.0, 0.0, 0.0])],
+                )
+                .await
+                .unwrap();
+        }
+        assert!(vector_db.list_collections().await.unwrap().is_empty());
+
+        svc.execute(&DeleteRequest {
+            scope: DeleteScope::All,
+            mode: DeleteMode::Soft,
+            memory_only: false,
+        })
+        .await
+        .expect("execute should succeed");
+
+        for (data_type, field) in [("Company", "name"), ("Entity", "name")] {
+            assert!(
+                !vector_db.has_collection(data_type, field).await.unwrap(),
+                "{data_type}_{field} should be dropped"
+            );
+        }
     }
 
     #[tokio::test]
