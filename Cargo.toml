@@ -202,6 +202,10 @@ tracing = "0.1"
 tracing-appender = "0.2"
 tracing-opentelemetry = { version = "=0.32", default-features = false, features = ["tracing-log"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+# Python identifier rules (XID classes, NFKC) for names a runtime graph schema
+# shares with datamodel-code-generator; see cognee-cognify dynamic_graph.rs.
+unicode-ident = "1"
+unicode-normalization = "0.1"
 url = "2.5"
 # `js` makes uuid's v4 randomness work on wasm32-unknown (routing through
 # wasm-bindgen/js-sys). It is a no-op on native targets — uuid gates its

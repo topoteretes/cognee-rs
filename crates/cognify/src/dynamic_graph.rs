@@ -12,6 +12,7 @@ use cognee_models::DataPoint;
 use serde_json::{Map, Value};
 use thiserror::Error;
 use tracing::warn;
+use unicode_normalization::UnicodeNormalization;
 use uuid::Uuid;
 
 use crate::config::ChunkAttachment;
@@ -60,6 +61,9 @@ pub struct DynamicModelSchema {
     /// Whether this type is a structural container rather than a stored node.
     pub transparent: bool,
     fields: Vec<DynamicFieldSchema>,
+    /// The `metadata` default as declared, which Python's instance holds as
+    /// its `metadata` value.
+    metadata: Option<Value>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -654,11 +658,11 @@ fn compile_model(
         .flatten()
         .filter_map(Value::as_str)
         .collect();
-    let metadata = properties
+    let metadata_default = properties
         .get("metadata")
         .and_then(Value::as_object)
-        .and_then(|metadata| metadata.get("default"))
-        .and_then(Value::as_object);
+        .and_then(|metadata| metadata.get("default"));
+    let metadata = metadata_default.and_then(Value::as_object);
     let identity_fields = string_list(metadata.and_then(|m| m.get("identity_fields")));
     let declared_index_fields = string_list(metadata.and_then(|m| m.get("index_fields")));
     let transparent = metadata
@@ -721,15 +725,25 @@ fn compile_model(
     }
     // Python derives the id from these fields at runtime: an unknown name
     // makes every instance fall back to a random uuid4, and a relationship
-    // field stringifies a whole node, timestamps included. Neither is an
-    // error there, so both are kept and only warned about.
+    // field or a per-instance base field (`id`, timestamps) is random too.
+    // None of that is an error there, so the names are kept and only warned
+    // about. Other DataPoint base fields hold fixed defaults and give a
+    // stable id, as in Python.
     for field in &identity_fields {
-        if field_kind(field) != Some(&DynamicFieldKind::Scalar) {
+        let stable = match field_kind(field) {
+            Some(DynamicFieldKind::Scalar) => true,
+            Some(DynamicFieldKind::Relationship { .. }) => false,
+            None => !matches!(
+                base_identity_text(field, name, metadata_default),
+                None | Some(BaseIdentity::Random)
+            ),
+        };
+        if !stable {
             warn!(
                 model = name,
                 field = %field,
-                "custom graph identity field is not a scalar field of the model; node ids \
-                 fall back to random UUIDs"
+                "custom graph identity field has no stable value; node ids fall back to \
+                 random UUIDs"
             );
         }
     }
@@ -740,6 +754,7 @@ fn compile_model(
         index_fields,
         transparent,
         fields,
+        metadata: metadata_default.cloned(),
     })
 }
 
@@ -846,20 +861,39 @@ fn is_python_class_name(title: &str) -> bool {
 }
 
 /// Whether a reference to anything but a scalar definition appears anywhere
-/// inside a field schema.
+/// inside a field schema, following references into scalar definitions: a
+/// non-object `$defs` entry such as `People = list[Person]` wraps models and
+/// is not a scalar value either.
 fn contains_model_reference(value: &Value, names: &SchemaNames<'_>) -> bool {
+    contains_model_reference_from(value, names, &mut HashSet::new())
+}
+
+fn contains_model_reference_from<'v>(
+    value: &'v Value,
+    names: &SchemaNames<'v>,
+    followed: &mut HashSet<&'v str>,
+) -> bool {
     match value {
         Value::Object(map) => {
-            map.get("$ref")
-                .and_then(Value::as_str)
-                .is_some_and(|reference| !names.is_scalar(reference))
-                || map
-                    .values()
-                    .any(|value| contains_model_reference(value, names))
+            if let Some(reference) = map.get("$ref").and_then(Value::as_str) {
+                let Some((target, definition)) = reference
+                    .strip_prefix("#/$defs/")
+                    .and_then(|target| names.scalars.get_key_value(target))
+                else {
+                    return true;
+                };
+                if followed.insert(target.as_str())
+                    && contains_model_reference_from(definition, names, followed)
+                {
+                    return true;
+                }
+            }
+            map.values()
+                .any(|value| contains_model_reference_from(value, names, followed))
         }
         Value::Array(values) => values
             .iter()
-            .any(|value| contains_model_reference(value, names)),
+            .any(|value| contains_model_reference_from(value, names, followed)),
         _ => false,
     }
 }
@@ -1118,8 +1152,9 @@ impl<'a> Materializer<'a> {
 /// the Pydantic-validated values of the identity fields, each `str()`-ed.
 ///
 /// Every declared field is in the validated instance: an omitted optional
-/// field holds its `None` default, so it contributes `"None"`. Only a name the
-/// model does not declare makes Python fall back to a random uuid4. A
+/// field holds its `None` default, so it contributes `"None"`. An undeclared
+/// DataPoint base field holds its default (see [`base_identity_text`]); only
+/// `id`, the timestamps and a name that is neither make it random. A
 /// relationship value is a whole node whose `str()` carries fresh timestamps,
 /// so it is random in Python too; only an empty one (`None`, `[]`) is stable.
 fn dynamic_id(
@@ -1134,7 +1169,13 @@ fn dynamic_id(
     let mut values = Vec::with_capacity(model.identity_fields.len());
     for name in &model.identity_fields {
         let Some(field) = model.fields.iter().find(|field| field.name == *name) else {
-            return Uuid::new_v4();
+            match base_identity_text(name, &model.name, model.metadata.as_ref()) {
+                Some(BaseIdentity::Fixed(text)) => {
+                    values.push(text);
+                    continue;
+                }
+                Some(BaseIdentity::Random) | None => return Uuid::new_v4(),
+            }
         };
         let text = match field.kind {
             DynamicFieldKind::Scalar => match properties.get(name) {
@@ -1160,6 +1201,45 @@ fn dynamic_id(
         &Uuid::NAMESPACE_OID,
         format!("{}:{}", model.name, values.join("|")).as_bytes(),
     )
+}
+
+/// The identity value of a DataPoint base field the schema does not declare.
+enum BaseIdentity {
+    /// The normalized text of the fixed value Python's fresh instance holds.
+    Fixed(String),
+    /// A per-instance value (`id`, `created_at`, `updated_at`).
+    Random,
+}
+
+/// What a fresh Python instance holds for an inherited DataPoint field when
+/// `_generate_identity_id` reads it from `self.__dict__`: `type` is already
+/// the class name, `metadata` the declared default, and every other field
+/// its `DataPoint` default (cognee @ f154b32). `None` for a name that is not
+/// a base field, which makes Python fall back to uuid4.
+fn base_identity_text(
+    field: &str,
+    model_name: &str,
+    metadata: Option<&Value>,
+) -> Option<BaseIdentity> {
+    let text = match field {
+        "id" | "created_at" | "updated_at" => return Some(BaseIdentity::Random),
+        "type" => python_identity_text(&PyValue::Str(model_name.to_string())),
+        "metadata" => plain_python_value(metadata.unwrap_or(&Value::Null)).to_str(),
+        "ontology_valid" => "False".to_string(),
+        "version" => "1".to_string(),
+        "topological_rank" => "0".to_string(),
+        "feedback_weight" | "importance_weight" => "0.5".to_string(),
+        "ontology_uri"
+        | "valid_to"
+        | "belongs_to_set"
+        | "source_pipeline"
+        | "source_task"
+        | "source_node_set"
+        | "source_user"
+        | "source_content_hash" => "None".to_string(),
+        _ => return None,
+    };
+    Some(BaseIdentity::Fixed(text))
 }
 
 /// Python `DataPoint._normalize_identity_value`: a `str` is lower-cased with
@@ -1309,11 +1389,16 @@ fn python_value(
     }
     let kind = schema.get("type").and_then(Value::as_str);
     if let (Some(choices), Some(class)) = (schema.get("enum").and_then(Value::as_array), enum_class)
-        && let Some(choice) = choices.iter().find(|choice| json_equal(choice, value))
+        && let Some(position) = choices.iter().position(|choice| json_equal(choice, value))
+        && let Some(member) = python_enum_member_names(choices, kind)
+            .into_iter()
+            .nth(position)
+            .flatten()
     {
+        let choice = &choices[position];
         return PyValue::Enum {
             class: class.to_string(),
-            member: python_enum_member_name(choice, kind),
+            member,
             value: Box::new(python_value(choice, &Value::Null, definitions, None)),
             int_enum: kind == Some("integer"),
         };
@@ -1426,7 +1511,7 @@ fn coerce_number(value: &Value, schema: &Value) -> Value {
             .map_or_else(|| value.clone(), Value::Number),
         Some("integer") if number.is_f64() => number
             .as_f64()
-            .filter(|float| float.fract() == 0.0 && float.abs() < i64::MAX as f64)
+            .filter(|float| float.fract() == 0.0 && float.abs() < PYDANTIC_FLOAT_AS_INT_LIMIT)
             .map_or_else(|| value.clone(), |float| Value::from(float as i64)),
         _ => value.clone(),
     }
@@ -1447,45 +1532,163 @@ fn python_class_name(name: &str) -> String {
         .collect()
 }
 
-/// datamodel-code-generator's enum member name: a string value with every
-/// non-identifier character turned into `_`, `field_`-prefixed when it starts
-/// with a digit or is empty, `_`-suffixed when it is a keyword; a non-string
-/// value prefixed with the schema type (`integer_1`, `number_1_5`) or, for an
-/// untyped enum, its Python type (`int_1`, `bool_True`).
-fn python_enum_member_name(choice: &Value, kind: Option<&str>) -> String {
-    let (prefix, raw) = match choice {
-        Value::String(text) => (None, text.clone()),
-        Value::Number(number) => (
-            Some(kind.unwrap_or(if number.is_f64() { "float" } else { "int" })),
-            number.to_string(),
-        ),
-        Value::Bool(flag) => (
-            Some(kind.unwrap_or("bool")),
-            if *flag { "True" } else { "False" }.to_string(),
-        ),
-        Value::Null => (Some(kind.unwrap_or("NoneType")), "None".to_string()),
-        _ => (None, choice.to_string()),
+/// datamodel-code-generator's enum member names for `choices`, in order, as
+/// `parse_enum` assigns them: a string value (or any value of a `string`
+/// enum) is named by its text; any other value by `<type>_<str(value)>`,
+/// with the schema type or, for an untyped enum, its Python type
+/// (`integer_1`, `number_1_5`, `int_1`, `bool_True`). Each name then goes
+/// through [`python_enum_member_identifier`], which sees the names already
+/// taken so collisions get a numeric suffix. A `null` member of a `string`
+/// enum makes the enum nullable instead of naming a member.
+fn python_enum_member_names(choices: &[Value], kind: Option<&str>) -> Vec<Option<String>> {
+    let mut taken = HashSet::new();
+    choices
+        .iter()
+        .map(|choice| {
+            if choice.is_null() && kind == Some("string") {
+                return None;
+            }
+            let text = python_enum_value_text(choice);
+            let source = if kind == Some("string") || choice.is_string() {
+                text
+            } else {
+                let prefix = kind.unwrap_or(match choice {
+                    Value::Null => "NoneType",
+                    Value::Bool(_) => "bool",
+                    Value::Number(number) if number.is_f64() => "float",
+                    Value::Number(_) => "int",
+                    Value::Array(_) => "list",
+                    _ => "dict",
+                });
+                format!("{prefix}_{text}")
+            };
+            let name = python_enum_member_identifier(&source, &taken);
+            taken.insert(name.clone());
+            // Python normalizes identifiers to NFKC when it parses the
+            // generated module, so `field_Ⅷ` is the member `field_VIII`.
+            Some(if name.is_ascii() {
+                name
+            } else {
+                name.nfkc().collect()
+            })
+        })
+        .collect()
+}
+
+/// Python `str()` of a JSON enum value as `json.loads` builds it.
+fn python_enum_value_text(choice: &Value) -> String {
+    match choice {
+        Value::String(text) => text.clone(),
+        Value::Number(number) if number.is_f64() => number
+            .as_f64()
+            .map_or_else(|| number.to_string(), python_float_repr),
+        Value::Number(number) => number.to_string(),
+        Value::Bool(true) => "True".to_string(),
+        Value::Bool(false) => "False".to_string(),
+        Value::Null => "None".to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// Superscript digits datamodel-code-generator replaces even though Python's
+/// `\w` matches them (`⁰` is not among them).
+const SUPERSCRIPT_DIGITS: &str = "¹²³⁴⁵⁶⁷⁸⁹";
+
+/// datamodel-code-generator's `EnumFieldNameResolver.get_valid_name`: `mro`
+/// is renamed, an empty name becomes `_` and a leading `#` is dropped; every
+/// superscript digit and non-word character becomes `_`; a leading numeric
+/// character gets a `field_` prefix and a leading `_` a `field` prefix; a
+/// keyword gets a `_` suffix; a name that is still not an identifier falls
+/// back to `_uXXXX_` escapes; and a name already in `taken` (or `mro`) gets
+/// `_1`, `_2`, ... appended.
+///
+/// Unicode classes come from Rust's tables rather than the target Python's,
+/// so a few non-ASCII characters classify differently: a combining mark that
+/// Rust counts as alphabetic is kept where Python's `\w` replaces it, and a
+/// numeric ideograph such as `一` gets no `field_` prefix. ASCII values are
+/// exact.
+fn python_enum_member_identifier(source: &str, taken: &HashSet<String>) -> String {
+    let mut name = if source == "mro" {
+        "mro_".to_string()
+    } else {
+        source.to_string()
     };
-    let sanitized: String = raw
+    if name.is_empty() {
+        name = "_".to_string();
+    }
+    if let Some(rest) = name.strip_prefix('#') {
+        name = if rest.is_empty() {
+            "_".to_string()
+        } else {
+            rest.to_string()
+        };
+    }
+    name = name
         .chars()
         .map(|c| {
-            if c.is_alphanumeric() || c == '_' {
-                c
-            } else {
+            if SUPERSCRIPT_DIGITS.contains(c) || !(c.is_alphanumeric() || c == '_') {
                 '_'
+            } else {
+                c
             }
         })
         .collect();
-    if let Some(prefix) = prefix {
-        return format!("{prefix}_{sanitized}");
+    if name.starts_with(char::is_numeric) {
+        name = format!("field_{name}");
     }
-    if sanitized.is_empty() || sanitized.starts_with(|c: char| c.is_ascii_digit()) {
-        return format!("field_{sanitized}");
+    if name.starts_with('_') {
+        name = format!("field{name}");
     }
-    if PYTHON_KEYWORDS.contains(&sanitized.as_str()) {
-        return format!("{sanitized}_");
+    if PYTHON_KEYWORDS.contains(&name.as_str()) {
+        name.push('_');
     }
-    sanitized
+    let excluded = |candidate: &str| candidate == "mro" || taken.contains(candidate);
+    let mut candidate = name.clone();
+    let mut count = 1;
+    while !is_python_identifier(&candidate)
+        || PYTHON_KEYWORDS.contains(&candidate.as_str())
+        || excluded(&candidate)
+    {
+        if !candidate.is_ascii() && !is_python_identifier(&candidate) {
+            name = python_ascii_identifier_fallback(&name);
+            count = 1;
+            candidate = name.clone();
+            continue;
+        }
+        candidate = format!("{name}_{count}");
+        count += 1;
+    }
+    candidate
+}
+
+/// Python `str.isidentifier()`.
+fn is_python_identifier(text: &str) -> bool {
+    let mut chars = text.chars();
+    chars
+        .next()
+        .is_some_and(|first| first == '_' || unicode_ident::is_xid_start(first))
+        && chars.all(unicode_ident::is_xid_continue)
+}
+
+/// datamodel-code-generator's `_ascii_identifier_fallback`.
+fn python_ascii_identifier_fallback(name: &str) -> String {
+    let fallback: String = name
+        .chars()
+        .map(|c| {
+            if c == '_' || c.is_ascii_alphanumeric() {
+                c.to_string()
+            } else {
+                format!("_u{:x}_", c as u32)
+            }
+        })
+        .collect();
+    if fallback.starts_with('_') {
+        format!("field{fallback}")
+    } else if fallback.is_empty() || fallback.starts_with(char::is_numeric) {
+        format!("field_{fallback}")
+    } else {
+        fallback
+    }
 }
 
 const PYTHON_KEYWORDS: &[&str] = &[
@@ -1575,25 +1778,82 @@ fn python_str_repr(text: &str) -> String {
     out
 }
 
-/// Parse a string the way Pydantic's `AwareDatetime` accepts it: an ISO 8601
-/// date and time, `T` or space separated, seconds optional, with a `Z` or
-/// numeric offset. A naive datetime is rejected.
+/// Parse a string the way Pydantic's `AwareDatetime` (speedate) accepts it in
+/// JSON: `YYYY-MM-DD`, a `T`, `t`, `_` or space separator, `HH:MM`, optional
+/// `:SS` with an optional `.` or `,` fraction (truncated to microseconds),
+/// then a `Z`/`z` or `±HH:MM`/`±HHMM` offset (`−` counts as a minus). Nothing
+/// may surround it, a second of 60 is rejected, and a naive datetime is
+/// rejected. speedate's Unix-timestamp strings (`"1700000000"`) are not
+/// accepted here.
 fn parse_aware_datetime(text: &str) -> Option<chrono::DateTime<chrono::FixedOffset>> {
-    let text = text.trim();
-    let normalized = match text.strip_suffix(['Z', 'z']) {
-        Some(stem) => format!("{stem}+00:00"),
-        None => text.to_string(),
+    use chrono::TimeZone;
+
+    let mut chars = text.chars().peekable();
+    let year = fixed_digits(&mut chars, 4)?;
+    expect_char(&mut chars, &['-'])?;
+    let month = fixed_digits(&mut chars, 2)?;
+    expect_char(&mut chars, &['-'])?;
+    let day = fixed_digits(&mut chars, 2)?;
+    expect_char(&mut chars, &['T', 't', '_', ' '])?;
+    let hour = fixed_digits(&mut chars, 2)?;
+    expect_char(&mut chars, &[':'])?;
+    let minute = fixed_digits(&mut chars, 2)?;
+    let mut second = 0;
+    let mut micros = 0;
+    if chars.next_if_eq(&':').is_some() {
+        second = fixed_digits(&mut chars, 2)?;
+        if chars.next_if(|c| matches!(c, '.' | ',')).is_some() {
+            let mut seen = 0;
+            while let Some(digit) = chars.next_if(char::is_ascii_digit) {
+                if seen < 6 {
+                    micros = micros * 10 + digit.to_digit(10)?;
+                }
+                seen += 1;
+            }
+            if seen == 0 {
+                return None;
+            }
+            micros *= 10u32.pow(6u32.saturating_sub(seen));
+        }
+    }
+    let offset_seconds = match chars.next()? {
+        'Z' | 'z' => 0,
+        sign @ ('+' | '-' | '\u{2212}') => {
+            let hours = fixed_digits(&mut chars, 2)?;
+            chars.next_if_eq(&':');
+            let minutes = fixed_digits(&mut chars, 2)?;
+            if hours >= 24 || minutes >= 60 {
+                return None;
+            }
+            let magnitude = i32::try_from(hours * 3600 + minutes * 60).ok()?;
+            if sign == '+' { magnitude } else { -magnitude }
+        }
+        _ => return None,
     };
-    [
-        "%Y-%m-%dT%H:%M:%S%.f%:z",
-        "%Y-%m-%d %H:%M:%S%.f%:z",
-        "%Y-%m-%dT%H:%M%:z",
-        "%Y-%m-%d %H:%M%:z",
-        "%Y-%m-%dT%H:%M:%S%.f%z",
-        "%Y-%m-%d %H:%M:%S%.f%z",
-    ]
-    .iter()
-    .find_map(|format| chrono::DateTime::parse_from_str(&normalized, format).ok())
+    if chars.next().is_some() || year == 0 || second >= 60 {
+        return None;
+    }
+    let date = chrono::NaiveDate::from_ymd_opt(i32::try_from(year).ok()?, month, day)?;
+    let time = chrono::NaiveTime::from_hms_micro_opt(hour, minute, second, micros)?;
+    chrono::FixedOffset::east_opt(offset_seconds)?
+        .from_local_datetime(&date.and_time(time))
+        .single()
+}
+
+/// Exactly `width` ASCII digits as a number.
+fn fixed_digits(chars: &mut std::iter::Peekable<std::str::Chars<'_>>, width: usize) -> Option<u32> {
+    let mut value = 0;
+    for _ in 0..width {
+        value = value * 10 + chars.next_if(char::is_ascii_digit)?.to_digit(10)?;
+    }
+    Some(value)
+}
+
+fn expect_char(
+    chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
+    allowed: &[char],
+) -> Option<()> {
+    chars.next_if(|c| allowed.contains(c)).map(|_| ())
 }
 
 /// Python `str(datetime)` for an aware datetime: `YYYY-MM-DD HH:MM:SS`, then
@@ -1644,6 +1904,10 @@ fn json_equal(left: &Value, right: &Value) -> bool {
     }
 }
 
+/// 2^63: Pydantic accepts an integral float for an `int` field only when its
+/// magnitude is strictly below this.
+const PYDANTIC_FLOAT_AS_INT_LIMIT: f64 = 9_223_372_036_854_775_808.0;
+
 /// Reference chains between scalar definitions deeper than this are treated
 /// as cycles and rejected.
 const MAX_SCALAR_REFERENCE_DEPTH: usize = 32;
@@ -1680,13 +1944,16 @@ fn validate_scalar_value(
         let matches = match expected {
             "null" => value.is_null(),
             "boolean" => value.is_boolean(),
-            // Pydantic's lax `int` takes a float with no fractional part.
+            // Pydantic's lax `int` takes a float with no fractional part
+            // whose magnitude is below 2^63 (`1e20` is "too big"). serde
+            // parses an integer literal beyond u64 as a float, so such a
+            // literal is refused here although Python takes it as an `int`.
             "integer" => {
                 value.as_i64().is_some()
                     || value.as_u64().is_some()
-                    || value
-                        .as_f64()
-                        .is_some_and(|number| number.is_finite() && number.fract() == 0.0)
+                    || value.as_f64().is_some_and(|number| {
+                        number.fract() == 0.0 && number.abs() < PYDANTIC_FLOAT_AS_INT_LIMIT
+                    })
             }
             "number" => value.is_number(),
             "string" => value.is_string(),
@@ -2098,6 +2365,11 @@ mod tests {
                 "lower_def".to_string(),
                 json!({"type": "string", "enum": ["x"]}),
             ),
+            (
+                "Odd".to_string(),
+                json!({"type": "string", "enum": ["_x", " a", "mro", "Ⅷ", "x²"]}),
+            ),
+            ("Big".to_string(), json!({"type": "number", "enum": [1e20]})),
         ]);
         python_identity_text(&python_value(
             &value,
@@ -2225,6 +2497,37 @@ mod tests {
                 "c",
                 "Color.field_",
             ),
+            (
+                json!("_x"),
+                json!({"$ref": "#/$defs/Odd"}),
+                "o",
+                "Odd.field_x",
+            ),
+            (
+                json!(" a"),
+                json!({"$ref": "#/$defs/Odd"}),
+                "o",
+                "Odd.field_a",
+            ),
+            (
+                json!("mro"),
+                json!({"$ref": "#/$defs/Odd"}),
+                "o",
+                "Odd.mro_",
+            ),
+            (
+                json!("Ⅷ"),
+                json!({"$ref": "#/$defs/Odd"}),
+                "o",
+                "Odd.field_VIII",
+            ),
+            (json!("x²"), json!({"$ref": "#/$defs/Odd"}), "o", "Odd.x_"),
+            (
+                json!(1e20),
+                json!({"$ref": "#/$defs/Big"}),
+                "b",
+                "Big.number_1e_20",
+            ),
             (json!(1.0), json!({"$ref": "#/$defs/Level"}), "l", "1"),
             (
                 json!(2),
@@ -2271,6 +2574,115 @@ mod tests {
                 "{value} as {schema}"
             );
         }
+    }
+
+    #[test]
+    fn enum_member_names_match_datamodel_code_generator() {
+        // Member names datamodel-code-generator 0.82 generates for each enum,
+        // as Python reports them after parsing the generated module.
+        for (kind, choices, expected) in [
+            (
+                Some("string"),
+                json!([
+                    "_x",
+                    "__x",
+                    " a",
+                    "_",
+                    "mro",
+                    "Ⅷ",
+                    "x²",
+                    "",
+                    "1abc",
+                    "class",
+                    "Foo-Bar",
+                    "dark green",
+                    "#x",
+                    "#",
+                    "ＡＢ",
+                    "None",
+                    "é",
+                    "x⁰",
+                    "a b",
+                    "a_b",
+                    "٣x",
+                    "mro_",
+                    "  ",
+                    "a-",
+                    "self",
+                    "name",
+                    "value"
+                ]),
+                vec![
+                    "field_x",
+                    "field__x",
+                    "field_a",
+                    "field_",
+                    "mro_",
+                    "field_VIII",
+                    "x_",
+                    "field__1",
+                    "field_1abc",
+                    "class_",
+                    "Foo_Bar",
+                    "dark_green",
+                    "x",
+                    "field__2",
+                    "AB",
+                    "None_",
+                    "é",
+                    "x_u2070_",
+                    "a_b",
+                    "a_b_1",
+                    "field_٣x",
+                    "mro__1",
+                    "field__",
+                    "a_",
+                    "self",
+                    "name",
+                    "value",
+                ],
+            ),
+            (
+                Some("number"),
+                json!([1e20, 2.0, 1.5, -1, 0.0001, 1e-05, 100]),
+                vec![
+                    "number_1e_20",
+                    "number_2_0",
+                    "number_1_5",
+                    "number__1",
+                    "number_0_0001",
+                    "number_1e_05",
+                    "number_100",
+                ],
+            ),
+            (
+                Some("integer"),
+                json!([1, -1, 10]),
+                vec!["integer_1", "integer__1", "integer_10"],
+            ),
+            (
+                None,
+                json!([1, 1.5, "s", null]),
+                vec!["int_1", "float_1_5", "s", "NoneType_None"],
+            ),
+            (
+                Some("string"),
+                json!(["a b", "a_b", "a-b"]),
+                vec!["a_b", "a_b_1", "a_b_2"],
+            ),
+        ] {
+            let choices = choices.as_array().unwrap();
+            let names: Vec<String> = python_enum_member_names(choices, kind)
+                .into_iter()
+                .map(Option::unwrap)
+                .collect();
+            assert_eq!(names, expected, "{kind:?} {choices:?}");
+        }
+        // A `null` member of a string enum makes it nullable; it takes no name.
+        assert_eq!(
+            python_enum_member_names(&[json!("a"), Value::Null], Some("string")),
+            [Some("a".to_string()), None]
+        );
     }
 
     #[test]
@@ -2411,6 +2823,67 @@ mod tests {
     }
 
     #[test]
+    fn undeclared_base_identity_fields_use_python_instance_defaults() {
+        // Expected ids come from the model datamodel-code-generator builds,
+        // whose instance holds the DataPoint defaults when the id is derived.
+        let tag = |identity: &str, metadata_extra: Value| {
+            let mut metadata = json!({"index_fields": ["name"], "identity_fields": [identity]});
+            if let (Some(metadata), Some(extra)) =
+                (metadata.as_object_mut(), metadata_extra.as_object())
+            {
+                metadata.extend(extra.clone());
+            }
+            let schema = json!({
+                "title": "Tag", "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "metadata": {"type": "object", "default": metadata}
+                },
+                "required": ["name"]
+            });
+            let compiled = DynamicGraphSchema::compile(&schema).unwrap();
+            let first = compiled
+                .materialize(&json!({"name": "x"}), Uuid::nil())
+                .unwrap()
+                .root;
+            let second = compiled
+                .materialize(&json!({"name": "y"}), Uuid::nil())
+                .unwrap()
+                .root;
+            (first, second)
+        };
+        for (identity, expected) in [
+            ("type", "a5e18678-1459-5b9f-985e-0c7b06301289"),
+            ("version", "a809bdb3-bfc2-5b81-b2dc-c16e79737e52"),
+            ("ontology_valid", "7fc850e7-22f5-5ebf-844a-bc12fe93947a"),
+            ("ontology_uri", "5fb02635-8639-5e8e-87d2-b46ec6a9ca34"),
+            ("topological_rank", "43f7bb39-9346-5e61-a86b-f156700c5392"),
+            ("valid_to", "5fb02635-8639-5e8e-87d2-b46ec6a9ca34"),
+            ("belongs_to_set", "5fb02635-8639-5e8e-87d2-b46ec6a9ca34"),
+            ("source_pipeline", "5fb02635-8639-5e8e-87d2-b46ec6a9ca34"),
+            ("feedback_weight", "91bb3be1-a505-5353-b6a3-42410898bacd"),
+            ("importance_weight", "91bb3be1-a505-5353-b6a3-42410898bacd"),
+        ] {
+            let (first, second) = tag(identity, json!({"transparent": false, "x": 1.0}));
+            assert_eq!(first, Uuid::parse_str(expected).unwrap(), "{identity}");
+            assert_eq!(first, second, "{identity}");
+        }
+        // `metadata` is the declared default dict, printed by `repr`.
+        let (first, second) = tag("metadata", json!({"transparent": false, "x": 1.0}));
+        assert_eq!(
+            first,
+            Uuid::parse_str("d35de72e-eaca-5e4b-ae3d-4c1d5bbd5711").unwrap()
+        );
+        assert_eq!(first, second);
+        // Per-instance base fields stay random.
+        for identity in ["id", "created_at", "updated_at"] {
+            let (first, second) = tag(identity, json!({}));
+            assert_ne!(first, second, "{identity}");
+            assert_eq!(first.get_version_num(), 4, "{identity}");
+        }
+    }
+
+    #[test]
     fn unknown_or_relationship_index_fields_are_skipped() {
         let mut schema = schema();
         schema["properties"]["metadata"]["default"]["index_fields"] =
@@ -2507,6 +2980,53 @@ mod tests {
     }
 
     #[test]
+    fn a_scalar_definition_wrapping_models_is_rejected() {
+        // Pydantic emits `type People = list[Person]` as a non-object
+        // `$defs` entry; it holds models, so it is not a scalar value.
+        let schema = json!({
+            "$defs": {
+                "Person": {"title": "Person", "type": "object",
+                    "properties": {"name": {"type": "string"}}},
+                "People": {"type": "array", "items": {"$ref": "#/$defs/Person"}},
+                "Crowd": {"type": "array", "items": {"$ref": "#/$defs/People"}},
+                "Loop": {"type": "array", "items": {"$ref": "#/$defs/Loop"}}
+            },
+            "title": "Team", "type": "object",
+            "properties": {"people": {"$ref": "#/$defs/People"}},
+            "required": ["people"]
+        });
+        assert_eq!(
+            DynamicGraphSchema::compile(&schema).expect_err("People wraps a model"),
+            DynamicGraphError::UnsupportedReferenceShape {
+                model: "Team".to_string(),
+                field: "people".to_string(),
+            }
+        );
+
+        // Through a chain of scalar definitions too.
+        let mut chained = schema.clone();
+        chained["properties"] = json!({"crowd": {"$ref": "#/$defs/Crowd"}});
+        chained["required"] = json!([]);
+        assert_eq!(
+            DynamicGraphSchema::compile(&chained).expect_err("Crowd wraps People"),
+            DynamicGraphError::UnsupportedReferenceShape {
+                model: "Team".to_string(),
+                field: "crowd".to_string(),
+            }
+        );
+
+        // A self-referencing scalar definition terminates and stays a value.
+        let mut looped = schema;
+        looped["properties"] = json!({"tags": {"$ref": "#/$defs/Loop"}});
+        looped["required"] = json!([]);
+        let compiled = DynamicGraphSchema::compile(&looped).expect("Loop holds no model");
+        assert_eq!(
+            compiled.root_model().fields[0].kind,
+            DynamicFieldKind::Scalar
+        );
+    }
+
+    #[test]
     fn date_time_fields_must_be_timezone_aware() {
         let schema = json!({
             "title": "Meeting", "type": "object",
@@ -2514,16 +3034,63 @@ mod tests {
             "required": ["at"]
         });
         let compiled = DynamicGraphSchema::compile(&schema).unwrap();
-        for accepted in [
-            "2024-03-01T10:00:00Z",
-            "2024-03-01 10:00+01:00",
-            "2024-03-01T10:00:00.25-05:00",
+        // Accepted and rejected exactly as by the Python model's
+        // `model_validate_json`, with Python's `str()` of the value.
+        for (accepted, python_str) in [
+            ("2024-03-01T10:00:00Z", "2024-03-01 10:00:00+00:00"),
+            ("2024-03-01 10:00+01:00", "2024-03-01 10:00:00+01:00"),
+            (
+                "2024-03-01T10:00:00.25-05:00",
+                "2024-03-01 10:00:00.250000-05:00",
+            ),
+            ("2024-03-01t10:00:00Z", "2024-03-01 10:00:00+00:00"),
+            ("2024-03-01_10:00:00Z", "2024-03-01 10:00:00+00:00"),
+            ("2024-03-01T10:00:00,5Z", "2024-03-01 10:00:00.500000+00:00"),
+            ("2024-03-01T10:00:00+0100", "2024-03-01 10:00:00+01:00"),
+            ("2024-03-01T10:00:00z", "2024-03-01 10:00:00+00:00"),
+            (
+                "2024-03-01T10:00:00.123456789Z",
+                "2024-03-01 10:00:00.123456+00:00",
+            ),
+            ("2024-03-01T10:00:00.0000001Z", "2024-03-01 10:00:00+00:00"),
+            ("2024-03-01T10:00:00+23:59", "2024-03-01 10:00:00+23:59"),
+            ("2024-03-01T10:00:00-00:00", "2024-03-01 10:00:00+00:00"),
+            (
+                "2024-03-01T10:00:00\u{2212}01:00",
+                "2024-03-01 10:00:00-01:00",
+            ),
+            ("2024-02-29T10:00:00Z", "2024-02-29 10:00:00+00:00"),
         ] {
             compiled
                 .materialize(&json!({"at": accepted}), Uuid::nil())
                 .unwrap_or_else(|error| panic!("{accepted}: {error}"));
+            let parsed = parse_aware_datetime(accepted).expect(accepted);
+            assert_eq!(python_datetime_str(&parsed), python_str, "{accepted}");
         }
-        for rejected in ["2024-03-01T10:00:00", "yesterday"] {
+        for rejected in [
+            "2024-03-01T10:00:00",
+            "yesterday",
+            " 2024-03-01T10:00:00Z",
+            "2024-03-01T10:00:00Z ",
+            "2024-03-01T10:00:00Z\n",
+            "2024-03-01T10:00:60Z",
+            "2024-03-01T10:00:00+01",
+            "2024-03-01T10Z",
+            "2024-03-01T10:00:00.Z",
+            "2024-03-01T10:00.5Z",
+            "2024-03-01T24:00:00Z",
+            "2024-02-30T10:00:00Z",
+            "2024-03-01T10:00:00+24:00",
+            "2024-03-01T10:00:00+01:60",
+            "2024-03-01",
+            "2024-03-01T1:00:00Z",
+            "2024-3-01T10:00:00Z",
+            "+2024-03-01T10:00:00Z",
+            "2024-03-01T10:00:00+01:00:30",
+            "2024-03-01T10:00:00 Z",
+            "0000-01-01T00:00:00Z",
+            "２024-03-01T10:00:00Z",
+        ] {
             assert!(
                 compiled
                     .materialize(&json!({"at": rejected}), Uuid::nil())
@@ -2549,6 +3116,30 @@ mod tests {
                 .materialize(&json!({"n": 3.5}), Uuid::nil())
                 .is_err()
         );
+        // Pydantic takes an integral float only below 2^63 in magnitude.
+        for (accepted, stored) in [
+            (json!(9.2e18), json!(9_200_000_000_000_000_000_i64)),
+            (json!(-9.2e18), json!(-9_200_000_000_000_000_000_i64)),
+            (json!(-0.0), json!(0)),
+        ] {
+            let graph = compiled
+                .materialize(&json!({"n": accepted}), Uuid::nil())
+                .unwrap_or_else(|error| panic!("{accepted}: {error}"));
+            assert_eq!(graph.nodes[0].properties["n"], stored);
+        }
+        for rejected in [
+            json!(1e20),
+            json!(9.3e18),
+            json!(9_223_372_036_854_775_808.0_f64),
+            json!(-9_223_372_036_854_775_808.0_f64),
+        ] {
+            assert!(
+                compiled
+                    .materialize(&json!({"n": rejected}), Uuid::nil())
+                    .is_err(),
+                "{rejected}"
+            );
+        }
     }
 
     #[test]

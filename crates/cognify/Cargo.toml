@@ -58,6 +58,8 @@ serde_json.workspace = true
 schemars.workspace = true
 futures.workspace = true
 tracing.workspace = true
+unicode-ident.workspace = true
+unicode-normalization.workspace = true
 url.workspace = true
 
 # Integration tests whose whole file is behind a `#![cfg(feature = ...)]`.
