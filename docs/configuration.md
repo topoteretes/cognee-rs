@@ -1501,6 +1501,31 @@ themselves get the configured backend from
 `ComponentManager::configured_graph_extractor` and attach it with
 `with_graph_backend`.
 
+### Custom graph schema (per call)
+
+A custom graph model is a per-call option, not a setting: there is no env var
+and no `keys.rs` row. Python exposes it the same way — `graph_model` is an
+argument of `cognify()` (and a field of the HTTP cognify request), never an
+environment variable — and so is `chunk_attachment`.
+
+| Entry point | Graph schema | Chunk attachment |
+|---|---|---|
+| Rust (`cognee` / `cognee-cognify`) | `CognifyConfig::with_graph_schema(value)` (`parse_graph_schema` reads an object or a JSON string) | `with_chunk_attachment(ChunkAttachment::…)` (`ChunkAttachment::parse`) |
+| CLI `cognify`, `add-and-cognify` | `--graph-schema <FILE>` | `--chunk-attachment direct\|all` |
+| Bindings (Python handle, TS, C, Java) | `graphSchema` opt (alias `graphModel`): an object or a JSON string | `chunkAttachment` opt: `"direct"` or `"all"` |
+| Python compat `cognify()` / `add_and_cognify()` | `graph_model=`: a Pydantic model class, a dict or a JSON string | `chunk_attachment=` |
+
+`null` and `{}` mean the default `KnowledgeGraph`, as Python's HTTP route
+treats an omitted or empty `graph_model`. Every entry point runs
+`CognifyConfig::validate` before any side effect, so an invalid value (an
+unknown attachment, an attachment without a schema, a schema that does not
+compile, a schema with `temporal_cognify`, a `graph_backend` or the `cascade`
+strategy) fails with a validation error. The binding opts are type-checked as
+a whole: a wrongly-typed value for any known cognify option is an error, and an
+unknown key is logged as a warning — Python forwards unknown `cognify()`
+keywords into the LLM call instead of raising. See
+[the custom graph schema guide](guides/custom-graph-schema.md).
+
 ## System paths, users & datasets
 
 | Env var | `Settings` field | Default |

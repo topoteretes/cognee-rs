@@ -2,7 +2,9 @@
 
 cognee-rust mirrors two Python cognify knobs that swap the LLM's structured
 output shape: `graph_model` (graph extraction) and `summarization_model`
-(summaries). Both are consumed by the standalone cognify pipeline.
+(summaries). Both are consumed by the standalone cognify pipeline; the graph
+schema is reachable from every entry point (see
+[Entry points](#entry-points)).
 
 ## Summarization schema — wired
 
@@ -233,6 +235,42 @@ it to every persisted DataPoint reached by the transparent storage walk.
 Chunk attachment requires a custom graph schema. It is also rejected for
 temporal cognify, by the same Rust decision as `graph_schema` above: Python
 ignores `temporal_cognify` on this path rather than rejecting it.
+
+### Entry points
+
+`graph_schema` and `chunk_attachment` are per-call options, like Python's
+`graph_model` and `chunk_attachment` arguments; there is no persistent setting
+or environment variable for either.
+
+- **Rust**: `CognifyConfig::with_graph_schema` / `with_chunk_attachment`, as in
+  the example above. `cognee_cognify::parse_graph_schema` reads a schema given
+  as an object or a JSON string, and `ChunkAttachment::parse` (or `FromStr`)
+  reads `"direct"` / `"all"`.
+- **CLI**: `cognee-cli cognify --graph-schema schema.json --chunk-attachment all`;
+  `add-and-cognify` takes the same two flags.
+- **Bindings** (Python handle, TypeScript, Java, C): the cognify and
+  add-and-cognify options `graphSchema` (an object or a JSON string; alias
+  `graphModel`) and `chunkAttachment`. Python also accepts `graph_schema` /
+  `chunk_attachment`; Java has `CognifyOptions.graphSchema(...)` and
+  `.chunkAttachment(...)`.
+- **Python compat** (`cognee_py.compat`): `cognify(graph_model=..., chunk_attachment=...)`
+  and `add_and_cognify(...)`, as upstream. `graph_model` takes a Pydantic model
+  class, converted as upstream's `graph_model_to_graph_schema` does (through
+  that function when upstream `cognee` is importable, otherwise with
+  `model_json_schema()` minus the default field titles), or the schema as a
+  dict or JSON string. Upstream's own `KnowledgeGraph` means the default
+  pipeline.
+
+`null` and `{}` mean the default `KnowledgeGraph`, as Python's HTTP route reads
+an omitted or empty `graph_model`. Every entry point validates before any side
+effect, so `add-and-cognify` adds nothing when the options are invalid: an
+attachment other than `"direct"` / `"all"` (case-sensitive, as Python compares
+it), an attachment without a schema, a schema that does not compile, or a
+schema combined with `temporal_cognify`, a graph backend or the `cascade`
+strategy is a validation error (exit code 2 in the CLI, `VALIDATION_ERROR` in
+the bindings). In the bindings a wrongly-typed value for any known cognify
+option is an error too, and an unknown option is logged as a warning, as
+Python's `cognify()` forwards unknown keywords instead of raising.
 
 ### Ownership and deletion
 
