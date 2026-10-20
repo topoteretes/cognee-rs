@@ -67,7 +67,12 @@ struct DynamicFieldSchema {
 #[derive(Debug, Clone, PartialEq)]
 enum DynamicFieldKind {
     Scalar,
-    Relationship { target: String, many: bool },
+    /// `targets` holds every model a union field may hold, in declaration
+    /// order; a plain model reference has exactly one.
+    Relationship {
+        targets: Vec<String>,
+        many: bool,
+    },
 }
 
 /// A runtime DataPoint produced from a custom model answer.
@@ -307,6 +312,11 @@ pub enum DynamicGraphError {
         kind: &'static str,
         field: String,
     },
+    #[error(
+        "graph model `{model}` field `{field}` references a model in an unsupported shape; \
+         use a model, an optional model, a union of models, or a list of those"
+    )]
+    UnsupportedReferenceShape { model: String, field: String },
     #[error("custom graph answer for `{model}` must be an object")]
     AnswerNotObject { model: String },
     #[error("custom graph answer for `{model}` is missing required field `{field}`")]
@@ -400,13 +410,7 @@ impl DynamicGraphSchema {
         dataset_id: Uuid,
     ) -> Result<DynamicGraph, DynamicGraphError> {
         let mut graph = Materializer::new(self, dataset_id);
-        let root_occurrence = graph.visit(&self.root, answer)?;
-        let root = graph
-            .nodes
-            .iter()
-            .find(|node| node.occurrence_id == root_occurrence)
-            .map(|node| node.base.id)
-            .expect("materializer records every visited object");
+        let (root_occurrence, root) = graph.visit(&self.root, answer)?;
         Ok(DynamicGraph {
             root,
             root_occurrence,
@@ -457,8 +461,17 @@ fn compile_model(
                 field: field_name.clone(),
             });
         }
-        let kind =
-            relationship_kind(field_schema, model_names)?.unwrap_or(DynamicFieldKind::Scalar);
+        let kind = match relationship_kind(field_schema, model_names)? {
+            Some(kind) => kind,
+            // Never store a model reference as an opaque scalar blob.
+            None if contains_reference(field_schema) => {
+                return Err(DynamicGraphError::UnsupportedReferenceShape {
+                    model: name.to_string(),
+                    field: field_name.clone(),
+                });
+            }
+            None => DynamicFieldKind::Scalar,
+        };
         let default = field_schema.get("default").cloned();
         fields.push(DynamicFieldSchema {
             name: field_name.clone(),
@@ -496,37 +509,82 @@ fn compile_model(
     })
 }
 
+/// Classify a field as a relationship the way Python's storage walk would see
+/// it: any value that is a DataPoint becomes a node and an edge, whatever
+/// `Optional`/`Union`/`List` nesting the annotation used.
 fn relationship_kind(
     schema: &Value,
     model_names: &HashSet<String>,
 ) -> Result<Option<DynamicFieldKind>, DynamicGraphError> {
+    if let Some(targets) = reference_targets(schema, model_names)? {
+        return Ok(Some(DynamicFieldKind::Relationship {
+            targets,
+            many: false,
+        }));
+    }
     if let Some(variants) = schema.get("anyOf").and_then(Value::as_array) {
-        let non_null: Vec<&Value> = variants
-            .iter()
-            .filter(|variant| variant.get("type").and_then(Value::as_str) != Some("null"))
-            .collect();
+        let non_null = non_null_variants(variants);
         if non_null.len() == 1 {
             return relationship_kind(non_null[0], model_names);
         }
     }
-    if let Some(reference) = schema.get("$ref").and_then(Value::as_str) {
-        return Ok(Some(DynamicFieldKind::Relationship {
-            target: reference_target(reference, model_names)?,
-            many: false,
-        }));
-    }
     if schema.get("type").and_then(Value::as_str) == Some("array")
-        && let Some(reference) = schema
-            .get("items")
-            .and_then(|items| items.get("$ref"))
-            .and_then(Value::as_str)
+        && let Some(items) = schema.get("items")
+        && let Some(targets) = reference_targets(items, model_names)?
     {
         return Ok(Some(DynamicFieldKind::Relationship {
-            target: reference_target(reference, model_names)?,
+            targets,
             many: true,
         }));
     }
     Ok(None)
+}
+
+/// Models referenced by a single `$ref`, or by an `anyOf` whose non-null
+/// variants are all `$ref`s. `None` when the schema is not a reference.
+fn reference_targets(
+    schema: &Value,
+    model_names: &HashSet<String>,
+) -> Result<Option<Vec<String>>, DynamicGraphError> {
+    if let Some(reference) = schema.get("$ref").and_then(Value::as_str) {
+        return Ok(Some(vec![reference_target(reference, model_names)?]));
+    }
+    let Some(variants) = schema.get("anyOf").and_then(Value::as_array) else {
+        return Ok(None);
+    };
+    let non_null = non_null_variants(variants);
+    let references: Vec<&str> = non_null
+        .iter()
+        .filter_map(|variant| variant.get("$ref").and_then(Value::as_str))
+        .collect();
+    // A union mixing models with scalars has no single storage shape; the
+    // caller rejects it because a reference is still reachable.
+    if references.is_empty() || references.len() != non_null.len() {
+        return Ok(None);
+    }
+    references
+        .into_iter()
+        .map(|reference| reference_target(reference, model_names))
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
+}
+
+fn non_null_variants(variants: &[Value]) -> Vec<&Value> {
+    variants
+        .iter()
+        .filter(|variant| variant.get("type").and_then(Value::as_str) != Some("null"))
+        .collect()
+}
+
+/// Whether a model reference appears anywhere inside a field schema.
+fn contains_reference(value: &Value) -> bool {
+    match value {
+        Value::Object(map) => {
+            map.get("$ref").is_some_and(Value::is_string) || map.values().any(contains_reference)
+        }
+        Value::Array(values) => values.iter().any(contains_reference),
+        _ => false,
+    }
 }
 
 fn reference_target_from_definitions(
@@ -626,7 +684,12 @@ impl<'a> Materializer<'a> {
         }
     }
 
-    fn visit(&mut self, model_name: &str, value: &Value) -> Result<Uuid, DynamicGraphError> {
+    /// Materialize one object, returning its occurrence id and node UUID.
+    fn visit(
+        &mut self,
+        model_name: &str,
+        value: &Value,
+    ) -> Result<(Uuid, Uuid), DynamicGraphError> {
         let model = &self.schema.models[model_name];
         let object = value
             .as_object()
@@ -658,8 +721,8 @@ impl<'a> Materializer<'a> {
                     })?;
                     properties.insert(field.name.clone(), value.clone());
                 }
-                DynamicFieldKind::Relationship { target, many } => {
-                    relationship_values.push((field.name.clone(), target.clone(), *many, value));
+                DynamicFieldKind::Relationship { targets, many } => {
+                    relationship_values.push((field.name.clone(), targets, *many, value));
                 }
             }
         }
@@ -704,7 +767,7 @@ impl<'a> Materializer<'a> {
             transparent: model.transparent,
         });
 
-        for (field_name, target_model, many, value) in relationship_values {
+        for (field_name, target_models, many, value) in relationship_values {
             if value.is_null() {
                 continue;
             }
@@ -717,8 +780,9 @@ impl<'a> Materializer<'a> {
                             field: field_name.clone(),
                             expected: "an array",
                         })?;
-                for child in values {
-                    let target = self.visit(&target_model, child)?;
+                // Python skips `None` list items: they are not DataPoints.
+                for child in values.iter().filter(|child| !child.is_null()) {
+                    let target = self.visit_any(target_models, child)?;
                     self.relationships.push(DynamicRelationship {
                         source: occurrence_id,
                         target,
@@ -726,7 +790,7 @@ impl<'a> Materializer<'a> {
                     });
                 }
             } else {
-                let target = self.visit(&target_model, value)?;
+                let target = self.visit_any(target_models, value)?;
                 self.relationships.push(DynamicRelationship {
                     source: occurrence_id,
                     target,
@@ -734,7 +798,41 @@ impl<'a> Materializer<'a> {
                 });
             }
         }
-        Ok(occurrence_id)
+        Ok((occurrence_id, id))
+    }
+
+    /// Materialize a value declared as one of several models, returning its
+    /// occurrence id. Like Pydantic's smart-mode union validation, a model
+    /// whose fields cover every key of the object is preferred over a looser
+    /// match; ties keep declaration order. A rejected candidate leaves nothing
+    /// behind.
+    fn visit_any(&mut self, models: &[String], value: &Value) -> Result<Uuid, DynamicGraphError> {
+        let mut candidates: Vec<&String> = models.iter().collect();
+        if let Some(object) = value.as_object() {
+            candidates.sort_by_key(|model| {
+                let fields = &self.schema.models[model.as_str()].fields;
+                !object
+                    .keys()
+                    .all(|key| fields.iter().any(|field| field.name == *key))
+            });
+        }
+        let mut first_error = None;
+        for model in candidates {
+            let (nodes, relationships) = (self.nodes.len(), self.relationships.len());
+            match self.visit(model, value) {
+                Ok((occurrence, _)) => return Ok(occurrence),
+                Err(error) => {
+                    self.nodes.truncate(nodes);
+                    self.relationships.truncate(relationships);
+                    first_error.get_or_insert(error);
+                }
+            }
+        }
+        Err(
+            first_error.unwrap_or_else(|| DynamicGraphError::AnswerNotObject {
+                model: models.join(" | "),
+            }),
+        )
     }
 }
 
@@ -794,6 +892,11 @@ fn python_string(value: &Value) -> String {
 }
 
 fn validate_scalar_value(value: &Value, schema: &Value) -> Result<(), String> {
+    // Compilation routes every model reference to a relationship, so a
+    // reference reaching scalar validation must not match vacuously.
+    if schema.get("$ref").is_some() {
+        return Err("is a model reference, not a scalar".to_string());
+    }
     if let Some(variants) = schema.get("anyOf").and_then(Value::as_array) {
         if variants
             .iter()
@@ -870,7 +973,7 @@ fn validate_scalar_value(value: &Value, schema: &Value) -> Result<(), String> {
 }
 
 #[cfg(test)]
-#[allow(clippy::expect_used)]
+#[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use serde_json::json;
 
@@ -1197,5 +1300,168 @@ mod tests {
             target: bob,
             field_name: "right".to_string(),
         }));
+    }
+
+    fn union_schema() -> Value {
+        json!({
+            "$defs": {
+                "Person": {
+                    "title": "Person", "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "metadata": {"type": "object", "default": {
+                            "index_fields": ["name"], "identity_fields": ["name"]
+                        }}
+                    },
+                    "required": ["name"]
+                },
+                "Org": {
+                    "title": "Org", "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "domain": {"type": "string"},
+                        "metadata": {"type": "object", "default": {
+                            "index_fields": ["name"], "identity_fields": ["name"]
+                        }}
+                    },
+                    "required": ["name", "domain"]
+                }
+            },
+            "title": "Root", "type": "object",
+            "properties": {
+                "owner": {"anyOf": [{"$ref": "#/$defs/Person"}, {"$ref": "#/$defs/Org"}]},
+                "members": {"type": "array", "items": {
+                    "anyOf": [{"$ref": "#/$defs/Person"}, {"type": "null"}]
+                }, "default": []},
+                "partners": {"anyOf": [
+                    {"type": "array", "items": {
+                        "anyOf": [{"$ref": "#/$defs/Person"}, {"$ref": "#/$defs/Org"}]
+                    }},
+                    {"type": "null"}
+                ], "default": null}
+            },
+            "required": ["owner"]
+        })
+    }
+
+    #[test]
+    fn materializes_union_and_optional_item_relationships_as_edges() {
+        let graph = DynamicGraphSchema::compile(&union_schema())
+            .expect("union relationships should compile")
+            .materialize(
+                &json!({
+                    "owner": {"name": "Acme", "domain": "acme.test"},
+                    "members": [{"name": "Alice"}, null],
+                    "partners": [{"name": "Bob"}, {"name": "Initech", "domain": "initech.test"}]
+                }),
+                Uuid::nil(),
+            )
+            .expect("answer should materialize");
+        let type_of = |name: &str| {
+            graph
+                .nodes
+                .iter()
+                .find(|node| node.properties.get("name") == Some(&json!(name)))
+                .map(|node| node.base.data_type.clone())
+        };
+        assert_eq!(type_of("Acme").as_deref(), Some("Org"));
+        assert_eq!(type_of("Alice").as_deref(), Some("Person"));
+        assert_eq!(type_of("Bob").as_deref(), Some("Person"));
+        assert_eq!(type_of("Initech").as_deref(), Some("Org"));
+        // Root + four children; the null member is skipped.
+        assert_eq!(graph.nodes.len(), 5);
+        let mut fields: Vec<&str> = graph
+            .relationships
+            .iter()
+            .map(|relationship| relationship.field_name.as_str())
+            .collect();
+        fields.sort_unstable();
+        assert_eq!(fields, ["members", "owner", "partners", "partners"]);
+        assert!(graph.nodes.iter().all(|node| {
+            node.properties
+                .values()
+                .all(|value| !value.is_object() && !value.is_array())
+        }));
+    }
+
+    #[test]
+    fn union_falls_back_to_a_later_model_without_leaving_partial_nodes() {
+        // `Team` is tried first and is recorded before its `lead` fails as a
+        // `Manager`; that partial node must be rolled back.
+        let schema = json!({
+            "$defs": {
+                "Person": {
+                    "title": "Person", "type": "object",
+                    "properties": {"name": {"type": "string"}},
+                    "required": ["name"]
+                },
+                "Manager": {
+                    "title": "Manager", "type": "object",
+                    "properties": {"name": {"type": "string"}, "level": {"type": "integer"}},
+                    "required": ["name", "level"]
+                },
+                "Team": {
+                    "title": "Team", "type": "object",
+                    "properties": {
+                        "lead": {"$ref": "#/$defs/Manager"},
+                        "name": {"type": "string"}
+                    },
+                    "required": ["lead", "name"]
+                },
+                "Group": {
+                    "title": "Group", "type": "object",
+                    "properties": {
+                        "lead": {"$ref": "#/$defs/Person"},
+                        "name": {"type": "string"}
+                    },
+                    "required": ["lead", "name"]
+                }
+            },
+            "title": "Root", "type": "object",
+            "properties": {
+                "unit": {"anyOf": [{"$ref": "#/$defs/Team"}, {"$ref": "#/$defs/Group"}]}
+            },
+            "required": ["unit"]
+        });
+        let graph = DynamicGraphSchema::compile(&schema)
+            .expect("schema should compile")
+            .materialize(
+                &json!({"unit": {"lead": {"name": "Alice"}, "name": "Platform"}}),
+                Uuid::nil(),
+            )
+            .expect("answer should materialize");
+        let types: Vec<&str> = graph
+            .nodes
+            .iter()
+            .map(|node| node.base.data_type.as_str())
+            .collect();
+        assert_eq!(types, ["Root", "Group", "Person"]);
+        assert_eq!(graph.relationships.len(), 2);
+    }
+
+    #[test]
+    fn rejects_reference_shapes_that_cannot_be_stored_as_edges() {
+        for field in [
+            json!({"anyOf": [{"$ref": "#/$defs/Child"}, {"type": "string"}]}),
+            json!({"type": "object", "additionalProperties": {"$ref": "#/$defs/Child"}}),
+            json!({"type": "array", "items": {"type": "array", "items": {"$ref": "#/$defs/Child"}}}),
+        ] {
+            let error = DynamicGraphSchema::compile(&json!({
+                "$defs": {"Child": {
+                    "title": "Child", "type": "object",
+                    "properties": {"name": {"type": "string"}}
+                }},
+                "title": "Root", "type": "object",
+                "properties": {"child": field}
+            }))
+            .expect_err("unsupported reference shapes must be rejected");
+            assert_eq!(
+                error,
+                DynamicGraphError::UnsupportedReferenceShape {
+                    model: "Root".to_string(),
+                    field: "child".to_string(),
+                }
+            );
+        }
     }
 }
