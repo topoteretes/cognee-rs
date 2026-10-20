@@ -194,21 +194,34 @@ pub fn classify_documents(data_items: &[Data]) -> Vec<Document> {
 
 /// The `node_set` value a document is tagged from: the `node_set` key of its
 /// `external_metadata` when the key is present (whatever it holds — Python
-/// reads only that key), else the `Data.node_set` column.
+/// reads only that key), else, for a row with no metadata or a metadata
+/// object without the key, the `Data.node_set` column.
 ///
 /// The column fallback has no Python counterpart. Before SDK-1129 the Rust
 /// `add` wrote the node set to the column only, so every row ingested with a
 /// node set until then has the column and no metadata key; without the
-/// fallback those rows would stay untagged forever. The key wins when it is
-/// there, so a row that carries both behaves exactly as in Python.
+/// fallback those rows would stay untagged forever. It is scoped to exactly
+/// that shape. Python-written rows carry the key whenever they have a node
+/// set, and Python's `update_node_set` returns early — untagged — on metadata
+/// that is not a JSON object; a row whose metadata is present but not an
+/// object is therefore left untagged here too, column or not, rather than
+/// tagged from a column Python would never read.
 fn node_set_value(
     external_metadata: Option<&str>,
     node_set_column: Option<&str>,
 ) -> Option<serde_json::Value> {
-    external_metadata
-        .and_then(|m| serde_json::from_str::<serde_json::Value>(m).ok())
-        .and_then(|v| v.get("node_set").cloned())
-        .or_else(|| node_set_column.and_then(|c| serde_json::from_str(c).ok()))
+    let from_column = || node_set_column.and_then(|c| serde_json::from_str(c).ok());
+    let Some(metadata) = external_metadata else {
+        return from_column();
+    };
+    match serde_json::from_str::<serde_json::Value>(metadata) {
+        Ok(serde_json::Value::Object(object)) => {
+            object.get("node_set").cloned().or_else(from_column)
+        }
+        // Valid JSON that is not an object, or not JSON at all: Python's
+        // `update_node_set` returns early here.
+        _ => None,
+    }
 }
 
 impl HasDataPoint for Document {
@@ -701,11 +714,11 @@ mod tests {
     }
 
     /// Rows ingested before SDK-1129 carry the node set in the `Data.node_set`
-    /// column only; they are tagged from it when the metadata has no
-    /// `node_set` key.
+    /// column only; they are tagged from it when there is no metadata or the
+    /// metadata object has no `node_set` key.
     #[test]
     fn node_set_column_tags_rows_without_the_metadata_key() {
-        for metadata in [None, Some(r#"{"other_key": "value"}"#), Some("not json")] {
+        for metadata in [None, Some(r#"{"other_key": "value"}"#), Some("{}")] {
             let data = vec![make_data_with_node_set_column(metadata, r#"["legacy"]"#)];
             let docs = classify_documents(&data);
             assert_eq!(docs.len(), 1);
@@ -713,6 +726,26 @@ mod tests {
             assert_eq!(bts.len(), 1, "metadata {metadata:?}");
             assert_eq!(bts[0]["name"], "legacy");
             assert_eq!(docs[0].base.source_node_set.as_deref(), Some("legacy"));
+        }
+    }
+
+    /// Metadata that is present but not a JSON object is where Python's
+    /// `update_node_set` returns early (JSONDecodeError, or not a dict), so
+    /// the column fallback does not apply: the document stays untagged.
+    #[test]
+    fn node_set_column_is_ignored_when_metadata_is_not_an_object() {
+        for metadata in ["not json", "[1, 2]", r#""a string""#, "42", "true"] {
+            let data = vec![make_data_with_node_set_column(
+                Some(metadata),
+                r#"["legacy"]"#,
+            )];
+            let docs = classify_documents(&data);
+            assert_eq!(docs.len(), 1);
+            assert!(
+                docs[0].base.belongs_to_set.is_none(),
+                "metadata {metadata:?} must not fall back to the column"
+            );
+            assert!(docs[0].base.source_node_set.is_none());
         }
     }
 
