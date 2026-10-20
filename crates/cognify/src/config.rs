@@ -85,6 +85,90 @@ pub enum ChunkAttachment {
     All,
 }
 
+impl ChunkAttachment {
+    /// Parse Python's `chunk_attachment` spelling: exactly `"direct"` or
+    /// `"all"`, case-sensitive as `cognify.py` compares it.
+    ///
+    /// # Errors
+    /// [`ConfigError::InvalidParameter`] naming the accepted values, the
+    /// message Python raises for the same input.
+    pub fn parse(value: &str) -> Result<Self, ConfigError> {
+        match value {
+            "direct" => Ok(Self::Direct),
+            "all" => Ok(Self::All),
+            other => Err(ConfigError::InvalidParameter(format!(
+                "Invalid chunk_attachment {other:?}; expected 'direct', 'all', or None."
+            ))),
+        }
+    }
+
+    /// The spelling [`Self::parse`] accepts.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Direct => "direct",
+            Self::All => "all",
+        }
+    }
+}
+
+impl std::str::FromStr for ChunkAttachment {
+    type Err = ConfigError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Self::parse(value)
+    }
+}
+
+/// Read a caller-supplied graph schema for [`CognifyConfig::graph_schema`]:
+/// a JSON Schema object, or a string holding one (what a CLI file, a C string
+/// or a JSON-only binding carries).
+///
+/// `null` and an empty object are `None`, the default `KnowledgeGraph`, as
+/// Python's HTTP cognify route treats an omitted or `{}` `graph_model`. The
+/// schema itself is compiled by [`CognifyConfig::validate`], not here.
+///
+/// # Errors
+/// [`ConfigError::InvalidParameter`] for a string that is not JSON, or for any
+/// value (direct or parsed) that is not an object.
+pub fn parse_graph_schema(
+    value: &serde_json::Value,
+) -> Result<Option<serde_json::Value>, ConfigError> {
+    let parsed;
+    let value = match value {
+        serde_json::Value::String(text) => {
+            parsed = serde_json::from_str::<serde_json::Value>(text).map_err(|error| {
+                ConfigError::InvalidParameter(format!(
+                    "graph_schema string is not valid JSON: {error}"
+                ))
+            })?;
+            &parsed
+        }
+        other => other,
+    };
+    match value {
+        serde_json::Value::Null => Ok(None),
+        serde_json::Value::Object(map) if map.is_empty() => Ok(None),
+        serde_json::Value::Object(_) => Ok(Some(value.clone())),
+        other => Err(ConfigError::InvalidParameter(format!(
+            "graph_schema must be a JSON Schema object, got {}",
+            json_kind(other)
+        ))),
+    }
+}
+
+/// The JSON type name of `value`, for error messages.
+fn json_kind(value: &serde_json::Value) -> &'static str {
+    match value {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "a boolean",
+        serde_json::Value::Number(_) => "a number",
+        serde_json::Value::String(_) => "a string",
+        serde_json::Value::Array(_) => "an array",
+        serde_json::Value::Object(_) => "an object",
+    }
+}
+
 /// Configuration for the cognify pipeline.
 ///
 /// Design Principles:
@@ -1539,6 +1623,72 @@ mod tests {
                 if message.contains("graph_schema") && message.contains("temporal_cognify")),
             "{error}"
         );
+    }
+
+    /// Python compares `chunk_attachment` against exactly `"direct"` / `"all"`
+    /// and raises for anything else, with this message.
+    #[test]
+    fn chunk_attachment_parses_python_spellings_only() {
+        assert_eq!(
+            ChunkAttachment::parse("direct").expect("direct"),
+            ChunkAttachment::Direct
+        );
+        assert_eq!(
+            "all".parse::<ChunkAttachment>().expect("all"),
+            ChunkAttachment::All
+        );
+        for bad in ["Direct", "ALL", "", "everything"] {
+            let error = ChunkAttachment::parse(bad).expect_err("must be rejected");
+            assert!(
+                error
+                    .to_string()
+                    .contains("expected 'direct', 'all', or None"),
+                "{error}"
+            );
+        }
+        assert_eq!(ChunkAttachment::All.as_str(), "all");
+        assert_eq!(ChunkAttachment::Direct.as_str(), "direct");
+    }
+
+    #[test]
+    fn parse_graph_schema_accepts_objects_and_json_strings() {
+        let schema = serde_json::json!({"title": "Graph", "properties": {}});
+        assert_eq!(
+            parse_graph_schema(&schema).expect("object"),
+            Some(schema.clone())
+        );
+        assert_eq!(
+            parse_graph_schema(&serde_json::Value::String(schema.to_string())).expect("string"),
+            Some(schema)
+        );
+        // Omitted and `{}` both mean the default model, as Python's HTTP route.
+        assert_eq!(
+            parse_graph_schema(&serde_json::Value::Null).expect("null"),
+            None
+        );
+        assert_eq!(
+            parse_graph_schema(&serde_json::json!({})).expect("{}"),
+            None
+        );
+        assert_eq!(
+            parse_graph_schema(&serde_json::json!("{}")).expect("\"{}\""),
+            None
+        );
+        for bad in [
+            serde_json::json!([1]),
+            serde_json::json!(3),
+            serde_json::json!(true),
+            serde_json::json!("not json"),
+            serde_json::json!("[1]"),
+        ] {
+            assert!(
+                matches!(
+                    parse_graph_schema(&bad),
+                    Err(ConfigError::InvalidParameter(_))
+                ),
+                "{bad} must be rejected"
+            );
+        }
     }
 
     /// The schema compiles in `validate()`, so a bad one fails before classify

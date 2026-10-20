@@ -43,7 +43,7 @@ pub mod triplet_creation;
 
 pub use config::{
     ChunkAttachment, ChunkStrategy, CognifyConfig, ConfigError, CustomChunker, ExtractionStrategy,
-    GraphBackendHandle,
+    GraphBackendHandle, parse_graph_schema,
 };
 pub use dataset_resolver::{DatasetRef, DatasetResolver, cognify_dataset_refs, cognify_datasets};
 pub use dynamic_graph::{
