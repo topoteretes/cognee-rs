@@ -144,7 +144,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Data.node_set` column when `external_metadata` is present but not a JSON
   object (Python's `update_node_set` returns early there); the fallback now
   covers exactly the pre-#302 Rust rows — no metadata, or an object without
-  the `node_set` key.
+  the `node_set` key. Known limitation, kept for Python parity: a re-add that
+  only changes the node set of content an earlier `cognify` already completed
+  refreshes the row but not the graph — the completion marker stays, so an
+  incremental `cognify` skips the item and its document and chunks keep the
+  old `belongs_to_set`. Use `update()` to re-tag cognified content.
 
 - **`cognee-search`: `TEMPORAL` search is hybrid retrieval reranked by the
   question's time window, and `TemporalRetriever` is gone.** `SearchType::Temporal`

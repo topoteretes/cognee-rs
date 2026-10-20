@@ -575,9 +575,15 @@ pub async fn persist_data_with_acl_and_locks(
         // the tags it was built with — the same as Python, where a plain
         // `add()` skips already-added content (`run_tasks_data_item_incremental`)
         // and `ingest_data` resets `pipeline_status` only when the content
-        // changed. In both SDKs `update()` is the way to re-tag cognified
-        // content: it drops the item's memory and clears the marker before the
-        // pinned re-add and re-cognify.
+        // changed. Clearing the marker here would not be a clean re-tag
+        // either: the next cognify would run a full LLM re-extraction of the
+        // item on top of its existing memory, and whatever the old extraction
+        // produced that the new one does not reproduce (entities, edges,
+        // summaries) would stay in the graph and vector stores. In both SDKs
+        // `update()` is the way to re-tag cognified content: it removes the
+        // item's memory before re-adding and re-cognifying it (Python resets
+        // the marker on the pinned row; Rust deletes the old item and adds
+        // the new content afresh).
         if let Some(names) = node_set {
             let external_metadata = with_node_set_in_external_metadata(
                 existing_data.external_metadata.as_deref(),
