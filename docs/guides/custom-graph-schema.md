@@ -112,10 +112,12 @@ transparent root must have at least one reachable non-transparent descendant;
 otherwise the custom graph intentionally stores no nodes.
 
 The root model needs a `title` that is a valid class name: it starts with an
-uppercase letter and holds only letters and digits (`ResearchGraph`, not
-`research_graph` or `Research Graph`). Python looks the generated class up by
-that title, and its code generator rewrites any other spelling, so Python fails
-on the same titles. A root given as a `$ref` keeps its `$defs` key as the type
+uppercase letter and holds only letters and ASCII digits (`ResearchGraph`, not
+`research_graph`, `Research Graph` or `Graph²`), and it may not be `None`,
+`True`, `False` or `DataPoint`. Python looks the generated class up by that
+title, and its code generator rewrites the other spellings, so Python fails on
+them too. The Rust check is slightly stricter in one place: it rejects
+non-ASCII digits, which Python keeps. A root given as a `$ref` keeps its `$defs` key as the type
 name, but the definition it points at must carry such a title.
 
 Only the single-pass LLM extractor honours a custom schema: `validate()` rejects

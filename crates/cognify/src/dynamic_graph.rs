@@ -343,7 +343,7 @@ pub enum DynamicGraphError {
     MissingTitle,
     #[error(
         "graph schema root model title `{0}` is not a valid class name; use an \
-         identifier that starts with an uppercase letter and holds only letters and digits"
+         identifier that starts with an uppercase letter and holds only letters and ASCII digits"
     )]
     InvalidTitle(String),
     #[error("external graph schema reference `{0}` is not allowed")]
@@ -630,16 +630,27 @@ fn non_null_variants(variants: &[Value]) -> Vec<&Value> {
 /// Whether `title` survives Python's schema-to-model step unchanged, so
 /// `graph_schema_to_graph_model`'s `namespace[schema["title"]]` finds the
 /// generated class. datamodel-code-generator capitalizes the first letter,
-/// drops `_`, `-` and spaces (`person_model` becomes `PersonModel`), rejects
-/// a leading digit and the `None`/`True`/`False` keywords, and renames a
-/// title that collides with its own imports (`BaseModel`); any of those makes
-/// the Python lookup raise `KeyError`. `DataPoint` names the base class every
-/// generated model inherits from.
+/// drops `_`, `-` and spaces (`person_model` becomes `PersonModel`), prefixes
+/// a leading digit or numeric character (`Ⅷ` becomes `FieldⅧ`), strips
+/// superscript digits (`Company²` becomes `Company`) and suffixes the
+/// `None`/`True`/`False` keywords; any of those makes the Python lookup raise
+/// `KeyError`. `DataPoint` resolves to the cognee base class every generated
+/// model inherits from rather than to the generated root. `BaseModel` is kept
+/// as is, as in Python.
+///
+/// The check is slightly stricter than Python: a character Rust classes as
+/// numeric is accepted only as an ASCII digit, so a non-ASCII decimal digit
+/// that Python would keep (`Company٣`) is rejected here. It does not model
+/// Python's NFKC identifier normalisation, so a compatibility character such
+/// as a fullwidth letter still passes; plain ASCII titles are exact.
 fn is_python_class_name(title: &str) -> bool {
+    let is_letter = |c: char| c.is_alphabetic() && !c.is_numeric();
     let mut chars = title.chars();
-    chars.next().is_some_and(char::is_uppercase)
-        && chars.all(char::is_alphanumeric)
-        && !matches!(title, "None" | "True" | "False" | "BaseModel" | "DataPoint")
+    chars
+        .next()
+        .is_some_and(|first| first.is_uppercase() && is_letter(first))
+        && chars.all(|c| is_letter(c) || c.is_ascii_digit())
+        && !matches!(title, "None" | "True" | "False" | "DataPoint")
 }
 
 /// Whether a model reference appears anywhere inside a field schema.
@@ -1192,8 +1203,13 @@ mod tests {
             "_Company",
             "None",
             "True",
-            "BaseModel",
             "DataPoint",
+            // Python's generator prefixes a leading numeric character and
+            // strips superscript digits and other non-decimal numerals.
+            "Ⅷ",
+            "AⅧ",
+            "Company²",
+            "Company½",
         ] {
             assert_eq!(
                 DynamicGraphSchema::compile(&json!({"title": title, "properties": {}}))
@@ -1201,7 +1217,8 @@ mod tests {
                 DynamicGraphError::InvalidTitle(title.to_string()),
             );
         }
-        for title in ["Company", "CompanyGraph2", "COMPANY", "École"] {
+        // `BaseModel` survives the Python generator and its lookup unchanged.
+        for title in ["Company", "CompanyGraph2", "COMPANY", "École", "BaseModel"] {
             let compiled = DynamicGraphSchema::compile(&json!({"title": title, "properties": {}}))
                 .unwrap_or_else(|error| panic!("{title} should compile: {error}"));
             assert_eq!(compiled.root_model().name, title);

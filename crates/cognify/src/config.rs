@@ -861,15 +861,12 @@ impl CognifyConfig {
         }
         // Python pops `temporal_cognify` and runs its custom-model pipeline
         // regardless; the Rust temporal pipeline never reads a graph schema, so
-        // accepting the pair would silently drop the caller's model.
+        // accepting the pair would silently drop the caller's model. Chunk
+        // attachment needs `graph_schema` (checked above), so this also
+        // rejects chunk attachment under temporal cognify.
         if self.graph_schema.is_some() && self.temporal_cognify {
             return Err(ConfigError::InvalidParameter(
                 "graph_schema is not supported with temporal_cognify".to_string(),
-            ));
-        }
-        if self.chunk_attachment.is_some() && self.temporal_cognify {
-            return Err(ConfigError::InvalidParameter(
-                "chunk_attachment is not supported with temporal_cognify".to_string(),
             ));
         }
         // Python builds the model class before any task runs. Compiling here
@@ -1500,19 +1497,24 @@ mod tests {
 
     #[test]
     fn chunk_attachment_requires_custom_non_temporal_graph() {
-        assert!(
-            CognifyConfig::default()
-                .with_chunk_attachment(ChunkAttachment::Direct)
-                .validate()
-                .is_err()
+        let message = |config: CognifyConfig| match config.validate() {
+            Err(ConfigError::InvalidParameter(message)) => message,
+            other => panic!("expected InvalidParameter, got {other:?}"),
+        };
+        assert_eq!(
+            message(CognifyConfig::default().with_chunk_attachment(ChunkAttachment::Direct)),
+            "chunk_attachment requires graph_schema",
         );
-        assert!(
-            CognifyConfig::default()
-                .with_graph_schema(serde_json::json!({"title": "Graph", "properties": {}}))
-                .with_chunk_attachment(ChunkAttachment::All)
-                .with_temporal_cognify(true)
-                .validate()
-                .is_err()
+        // Chunk attachment under temporal cognify is rejected because its
+        // required `graph_schema` is.
+        assert_eq!(
+            message(
+                CognifyConfig::default()
+                    .with_graph_schema(serde_json::json!({"title": "Graph", "properties": {}}))
+                    .with_chunk_attachment(ChunkAttachment::All)
+                    .with_temporal_cognify(true)
+            ),
+            "graph_schema is not supported with temporal_cognify",
         );
         assert!(
             CognifyConfig::default()
