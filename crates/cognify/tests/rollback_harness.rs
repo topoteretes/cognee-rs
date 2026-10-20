@@ -192,6 +192,16 @@ impl Harness {
         data_id
     }
 
+    /// The `Data` row added for `data_id`, for a test that drives `cognify`
+    /// itself.
+    pub fn data(&self, data_id: Uuid) -> Data {
+        self.items
+            .iter()
+            .find(|item| item.id == data_id)
+            .cloned()
+            .expect("a file this harness added")
+    }
+
     /// Run cognify over every file added so far.
     pub async fn run(&self, config: &CognifyConfig) -> Result<CognifyResult, CognifyError> {
         let llm: Arc<dyn cognee_llm::Llm> = Arc::new(

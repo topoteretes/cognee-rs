@@ -180,6 +180,17 @@ Chunk attachment requires a custom graph schema. It is also rejected for
 temporal cognify, by the same Rust decision as `graph_schema` above: Python
 ignores `temporal_cognify` on this path rather than rejecting it.
 
+### Ownership and deletion
+
+Custom nodes and field edges are recorded in the ownership ledger per data
+item before the graph and vector stores see them, as the default path records
+its entities. A node that two data items produce keeps both owners and is
+removed only with the last of them. Data, dataset and `forget` deletes and the
+sweep after a failed run remove the item's custom nodes, their
+`{Model}_{field}` points and the `EdgeType` points of their field edges. The
+store-wide wipe (`DeleteScope::All`) drops the custom collections too, also on
+a vector backend that cannot list its collections.
+
 ## Pointers
 
 - [`CognifyConfig`](../../crates/cognify/src/config.rs) — schema and chunk-attachment configuration.

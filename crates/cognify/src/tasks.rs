@@ -2641,6 +2641,7 @@ pub async fn add_data_points(
         &stored_dynamic,
         &input.chunks,
         &structural_edges,
+        &dynamic_edges,
     )
     .await?;
 
@@ -5530,10 +5531,14 @@ fn semantic_edge_provenance_rows(
 
 /// Record runtime custom graph ownership before either artifact store sees it.
 ///
-/// `stored` is each graph's storage walk, in `graphs` order. Each chunk's
-/// `contains` rows are keyed on the `edge_text` stamped on the matching
-/// structural edge, as [`upsert_provenance`] keys them (Python
-/// `upsert_edges.py`), so both rows for one edge agree on their text.
+/// `stored` is each graph's storage walk, in `graphs` order. Every edge row
+/// carries the edge's properties as `attributes` — above all the `edge_text`
+/// stamped on it, which is what cognify keyed the edge's `EdgeType` point on
+/// and what the delete path and the run sweep re-derive that point's id from
+/// (`cognee_delete::edge_retrieval_text`). The rows otherwise follow Python's
+/// `upsert_edges.py`: a field edge is keyed and labelled on its field name, a
+/// chunk's `contains` row on its `edge_text`, as [`upsert_provenance`] keys
+/// the structural one, so both rows for one edge agree on their text.
 async fn record_dynamic_graph_ownership(
     db: &dyn RelationalDb,
     id: LedgerIdentity,
@@ -5541,17 +5546,29 @@ async fn record_dynamic_graph_ownership(
     stored: &[StoredDynamicGraph],
     chunks: &[DocumentChunk],
     structural_edges: &[EdgeData],
+    // The custom field edges `add_data_points` writes, already stamped.
+    dynamic_edges: &[EdgeData],
 ) -> Result<(), CognifyError> {
-    let contains_text: HashMap<(&str, &str), &str> = structural_edges
-        .iter()
-        .filter(|(_, _, relationship, _)| relationship == "contains")
-        .filter_map(|(source, target, _, properties)| {
-            let text = properties
-                .get("edge_text")
-                .and_then(serde_json::Value::as_str)?;
-            Some(((source.as_str(), target.as_str()), text))
-        })
-        .collect();
+    let properties_by_edge =
+        |edges: &[EdgeData]| -> HashMap<(String, String, String), serde_json::Value> {
+            edges
+                .iter()
+                .filter_map(|(source, target, relationship, properties)| {
+                    Some((
+                        (source.clone(), target.clone(), relationship.clone()),
+                        edge_attributes(properties)?,
+                    ))
+                })
+                .collect()
+        };
+    let contains_properties = properties_by_edge(structural_edges);
+    let field_properties = properties_by_edge(dynamic_edges);
+    let edge_text = |attributes: Option<&serde_json::Value>| {
+        attributes
+            .and_then(|attributes| attributes.get("edge_text"))
+            .and_then(serde_json::Value::as_str)
+            .map(|text| sanitize_string(text.to_string()))
+    };
     let mut nodes = Vec::new();
     let mut edges = Vec::new();
     for (attributed, stored) in graphs.iter().zip(stored) {
@@ -5584,6 +5601,16 @@ async fn record_dynamic_graph_ownership(
             });
         }
         for relationship in &stored.relationships {
+            // Python's `upsert_edges` keys and labels a non-`contains` edge on
+            // its relationship name; `edge_text` rides in the attributes.
+            let field = sanitize_string(relationship.field_name.clone());
+            let attributes = field_properties
+                .get(&(
+                    relationship.source.to_string(),
+                    relationship.target.to_string(),
+                    relationship.field_name.clone(),
+                ))
+                .cloned();
             edges.push(cognee_database::GraphEdge {
                 id: provenance_edge_id(
                     id.tenant_id,
@@ -5591,23 +5618,19 @@ async fn record_dynamic_graph_ownership(
                     id.dataset_id,
                     attributed.data_id,
                     relationship.source,
-                    &relationship.field_name,
+                    &field,
                     relationship.target,
                 ),
-                slug: triplet_slug(
-                    relationship.source,
-                    &relationship.field_name,
-                    relationship.target,
-                ),
+                slug: triplet_slug(relationship.source, &field, relationship.target),
                 user_id: id.user_id,
                 data_id: attributed.data_id,
                 dataset_id: id.dataset_id,
                 pipeline_run_id: id.pipeline_run_id,
                 source_node_id: relationship.source,
                 destination_node_id: relationship.target,
-                relationship_name: relationship.field_name.clone(),
-                label: None,
-                attributes: None,
+                relationship_name: field.clone(),
+                label: Some(field),
+                attributes,
                 created_at: Utc::now(),
             });
         }
@@ -5622,15 +5645,13 @@ async fn record_dynamic_graph_ownership(
                 .filter_map(serde_json::Value::as_str)
                 .filter_map(|target| Uuid::parse_str(target).ok())
             {
-                let target_id = target.to_string();
-                let (row_text, label) =
-                    match contains_text.get(&(chunk_id.as_str(), target_id.as_str())) {
-                        Some(text) => (
-                            sanitize_string(text.to_string()),
-                            Some("contains".to_string()),
-                        ),
-                        None => ("contains".to_string(), None),
-                    };
+                let attributes = contains_properties
+                    .get(&(chunk_id.clone(), target.to_string(), "contains".to_string()))
+                    .cloned();
+                let (row_text, label) = match edge_text(attributes.as_ref()) {
+                    Some(text) => (text, Some("contains".to_string())),
+                    None => ("contains".to_string(), None),
+                };
                 edges.push(cognee_database::GraphEdge {
                     id: provenance_edge_id(
                         id.tenant_id,
@@ -5650,7 +5671,7 @@ async fn record_dynamic_graph_ownership(
                     destination_node_id: target,
                     relationship_name: row_text,
                     label,
-                    attributes: None,
+                    attributes,
                     created_at: Utc::now(),
                 });
             }
@@ -5900,15 +5921,7 @@ async fn upsert_provenance(
         let source_id = Uuid::parse_str(source_id_str).unwrap_or(Uuid::nil());
         let target_id = Uuid::parse_str(target_id_str).unwrap_or(Uuid::nil());
 
-        let attrs = if properties.is_empty() {
-            None
-        } else {
-            let map: serde_json::Map<String, serde_json::Value> = properties
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.clone()))
-                .collect();
-            Some(serde_json::Value::Object(map))
-        };
+        let attrs = edge_attributes(properties);
 
         // Sanitize before deriving the id and the slug, exactly as the semantic
         // branch above does. Python routes structural edges through the same
@@ -5977,6 +5990,21 @@ async fn upsert_provenance(
     }
 
     Ok(())
+}
+
+/// An edge's properties as a ledger row's `attributes` (Python's
+/// `upsert_edges` stores `edge[3]`), or `None` when it has none.
+fn edge_attributes(
+    properties: &HashMap<Cow<'static, str>, serde_json::Value>,
+) -> Option<serde_json::Value> {
+    (!properties.is_empty()).then(|| {
+        serde_json::Value::Object(
+            properties
+                .iter()
+                .map(|(key, value)| (key.to_string(), value.clone()))
+                .collect(),
+        )
+    })
 }
 
 /// Generate embeddings for chunks, entities, and summaries.
@@ -12304,6 +12332,149 @@ mod tests {
             nodes.iter().all(|row| row.pipeline_run_id == Some(run_id))
                 && edges.iter().all(|row| row.pipeline_run_id == Some(run_id)),
             "every row names the run that was writing it, so the sweep can find it"
+        );
+    }
+
+    /// A runtime custom graph is claimed before its first graph write, and its
+    /// field-edge rows carry what the delete path and the run sweep need to
+    /// find the edge's `EdgeType` point again: the stamped `edge_text` in
+    /// `attributes`, keyed and labelled on the field name as Python's
+    /// `upsert_edges` keys a non-`contains` edge. A row holding only the bare
+    /// field name resolves to the `"employees"` point, which cognify never
+    /// writes, and leaves the real one behind on every delete.
+    #[tokio::test]
+    async fn add_data_points_records_custom_graph_ownership_before_the_graph_write() {
+        use cognee_database::ops::graph_storage::{get_edges_by_dataset, get_nodes_by_dataset};
+        use cognee_embedding::MockEmbeddingEngine;
+        use cognee_vector::MockVectorDB;
+
+        let dataset_id = Uuid::new_v4();
+        let document_id = Uuid::new_v4();
+        let chunk_id = Uuid::new_v4();
+        let run_id = Uuid::new_v4();
+        let graph = DynamicGraphSchema::compile(&json!({
+            "$defs": {
+                "Person": {
+                    "title": "Person",
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "metadata": {"type": "object", "default": {
+                            "index_fields": ["name"], "identity_fields": ["name"]
+                        }}
+                    },
+                    "required": ["name"]
+                }
+            },
+            "title": "Company",
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "employees": {"type": "array", "items": {"$ref": "#/$defs/Person"}},
+                "metadata": {"type": "object", "default": {
+                    "index_fields": ["name"], "identity_fields": ["name"]
+                }}
+            },
+            "required": ["name", "employees"]
+        }))
+        .expect("schema compiles")
+        .materialize(
+            &json!({"name": "Acme", "employees": [{"name": "Alice"}]}),
+            dataset_id,
+        )
+        .expect("answer materializes");
+        let company_id = graph.root;
+        let person_id = Uuid::new_v5(&Uuid::NAMESPACE_OID, b"Person:alice");
+        let mut chunk = test_chunk(chunk_id, document_id, "Alice works at Acme");
+        chunk.contains = vec![json!(company_id.to_string())];
+        let input = SummarizedData {
+            chunks: vec![chunk],
+            documents: vec![test_document_with_metadata(document_id, None)],
+            entities: vec![],
+            timestamps: vec![],
+            edges: vec![],
+            producers: ArtifactProducers::default(),
+            dynamic_graphs: vec![AttributedDynamicGraph {
+                graph,
+                chunk_id,
+                data_id: document_id,
+            }],
+            summaries: vec![],
+            dataset_id,
+            user_id: Some(Uuid::new_v4()),
+            tenant_id: None,
+            failures: FailureReport::default(),
+        };
+        let graph_db = Arc::new(cognee_graph::MockGraphDB::new());
+        graph_db.set_add_nodes_error("graph is down");
+        let db = ledger_db(dataset_id).await;
+
+        let result = add_data_points(
+            &input,
+            Arc::clone(&graph_db) as Arc<dyn GraphDBTrait>,
+            Arc::new(MockVectorDB::new()),
+            Arc::new(MockEmbeddingEngine::new(8)),
+            &db,
+            Some(run_id),
+            &CognifyConfig::default(),
+        )
+        .await;
+
+        assert!(result.is_err(), "the failing graph write must surface");
+        assert_eq!(graph_db.node_count(), 0, "nothing reached the graph");
+
+        let nodes = get_nodes_by_dataset(&db, dataset_id).await.expect("query");
+        for (slug, node_type) in [(company_id, "Company"), (person_id, "Person")] {
+            let row = nodes
+                .iter()
+                .find(|row| row.slug == slug)
+                .unwrap_or_else(|| panic!("a {node_type} ownership row"));
+            assert_eq!(row.node_type, node_type);
+            assert_eq!(row.data_id, document_id, "owned by its data item");
+            assert_eq!(row.indexed_fields, json!(["name"]));
+            assert_eq!(row.pipeline_run_id, Some(run_id));
+        }
+
+        let edges = get_edges_by_dataset(&db, dataset_id).await.expect("query");
+        let field_row = edges
+            .iter()
+            .find(|row| row.source_node_id == company_id && row.destination_node_id == person_id)
+            .expect("a field-edge ownership row");
+        assert_eq!(field_row.data_id, document_id);
+        assert_eq!(field_row.relationship_name, "employees");
+        assert_eq!(field_row.label.as_deref(), Some("employees"));
+        assert_eq!(field_row.pipeline_run_id, Some(run_id));
+        let field_text = field_row
+            .attributes
+            .as_ref()
+            .and_then(|attributes| attributes.get("edge_text"))
+            .and_then(serde_json::Value::as_str);
+        assert_eq!(field_text, Some("Acme employees Alice."));
+        assert_eq!(
+            EdgeType::retrieval_text(field_text, &field_row.relationship_name),
+            "Acme employees Alice.",
+            "the delete path re-derives the EdgeType point cognify writes"
+        );
+
+        let contains_row = edges
+            .iter()
+            .find(|row| {
+                row.data_id == document_id
+                    && row.source_node_id == chunk_id
+                    && row.destination_node_id == company_id
+            })
+            .expect("an attributed contains row");
+        assert_eq!(
+            contains_row.relationship_name,
+            "Alice works at Acme contains Acme."
+        );
+        assert_eq!(contains_row.label.as_deref(), Some("contains"));
+        assert_eq!(
+            contains_row
+                .attributes
+                .as_ref()
+                .and_then(|attributes| attributes.get("edge_text")),
+            Some(&json!("Alice works at Acme contains Acme."))
         );
     }
 
