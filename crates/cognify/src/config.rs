@@ -13,6 +13,7 @@ use cognee_llm::{Llm, Transcriber};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::dynamic_graph::{DynamicGraphError, DynamicGraphSchema};
 use crate::failure::{FailurePolicy, FailureStop, RollbackScope};
 use crate::graph_backend::ChunkGraphExtractor;
 
@@ -339,8 +340,9 @@ pub struct CognifyConfig {
     /// instead of the default `KnowledgeGraph`, and each answer is stored,
     /// vector-indexed and ownership-ledgered as a runtime DataPoint graph (see
     /// [`crate::dynamic_graph`]). Only the single-pass LLM extractor honours
-    /// it, so [`Self::validate`] rejects it together with `graph_backend` or
-    /// [`ExtractionStrategy::Cascade`].
+    /// it, so [`Self::validate`] rejects it together with `graph_backend`,
+    /// [`ExtractionStrategy::Cascade`] or `temporal_cognify`, and compiles it
+    /// so an invalid schema fails before the pipeline starts.
     ///
     /// Mirrors Python's `graph_model` parameter.
     #[serde(skip)]
@@ -857,10 +859,26 @@ impl CognifyConfig {
                 "graph_schema is only supported by the single_pass extraction strategy".to_string(),
             ));
         }
+        // Python pops `temporal_cognify` and runs its custom-model pipeline
+        // regardless; the Rust temporal pipeline never reads a graph schema, so
+        // accepting the pair would silently drop the caller's model.
+        if self.graph_schema.is_some() && self.temporal_cognify {
+            return Err(ConfigError::InvalidParameter(
+                "graph_schema is not supported with temporal_cognify".to_string(),
+            ));
+        }
         if self.chunk_attachment.is_some() && self.temporal_cognify {
             return Err(ConfigError::InvalidParameter(
                 "chunk_attachment is not supported with temporal_cognify".to_string(),
             ));
+        }
+        // Python builds the model class before any task runs. Compiling here
+        // fails a bad schema before classify and chunk, and even when every
+        // chunk is a DLT row and extraction never runs. The extraction stage
+        // compiles again; that costs microseconds and keeps the public
+        // `graph_schema` field the single source of truth.
+        if let Some(schema) = &self.graph_schema {
+            DynamicGraphSchema::compile(schema)?;
         }
         // Only an *explicit* chunk size can be validated here: an auto-calculated
         // one is derived from the engines at pipeline time and is always >= 1.
@@ -937,6 +955,8 @@ pub enum ConfigError {
     InvalidParameter(String),
     #[error("Invalid summary schema: {0}")]
     InvalidSummarySchema(String),
+    #[error("Invalid graph schema: {0}")]
+    InvalidGraphSchema(#[from] DynamicGraphError),
 }
 
 /// Validate that a JSON schema supplied for `summary_schema` has a string
@@ -973,6 +993,7 @@ pub fn validate_summary_schema(schema: &serde_json::Value) -> Result<(), ConfigE
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used)]
 mod tests {
     use super::*;
 
@@ -1500,5 +1521,55 @@ mod tests {
                 .validate()
                 .is_ok()
         );
+    }
+
+    /// The temporal pipeline never reads `graph_schema`, so the pair would
+    /// silently drop the caller's model.
+    #[test]
+    fn graph_schema_is_rejected_with_temporal_cognify() {
+        let error = CognifyConfig::default()
+            .with_graph_schema(serde_json::json!({"title": "Graph", "properties": {}}))
+            .with_temporal_cognify(true)
+            .validate()
+            .expect_err("graph_schema + temporal_cognify must be rejected");
+        assert!(
+            matches!(&error, ConfigError::InvalidParameter(message)
+                if message.contains("graph_schema") && message.contains("temporal_cognify")),
+            "{error}"
+        );
+    }
+
+    /// The schema compiles in `validate()`, so a bad one fails before classify
+    /// and chunk run rather than at the extraction stage.
+    #[test]
+    fn an_invalid_graph_schema_fails_validation() {
+        for (schema, expected) in [
+            (
+                serde_json::json!({"title": "graph", "properties": {}}),
+                crate::dynamic_graph::DynamicGraphError::InvalidTitle("graph".to_string()),
+            ),
+            (
+                serde_json::json!({"title": "Graph", "properties": {"id": {"type": "string"}}}),
+                crate::dynamic_graph::DynamicGraphError::ReservedField {
+                    model: "Graph".to_string(),
+                    field: "id".to_string(),
+                },
+            ),
+            (
+                serde_json::json!({"title": "Graph"}),
+                crate::dynamic_graph::DynamicGraphError::MissingProperties {
+                    model: "Graph".to_string(),
+                },
+            ),
+        ] {
+            let error = CognifyConfig::default()
+                .with_graph_schema(schema)
+                .validate()
+                .expect_err("an invalid graph schema must fail validation");
+            assert!(
+                matches!(&error, ConfigError::InvalidGraphSchema(inner) if *inner == expected),
+                "{error}"
+            );
+        }
     }
 }

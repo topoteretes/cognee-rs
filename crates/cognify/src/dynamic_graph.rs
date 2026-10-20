@@ -339,8 +339,13 @@ fn transparent_children(
 pub enum DynamicGraphError {
     #[error("graph schema must be a JSON object")]
     SchemaNotObject,
-    #[error("graph schema is missing a non-empty top-level `title`")]
+    #[error("graph schema root model is missing a non-empty `title`")]
     MissingTitle,
+    #[error(
+        "graph schema root model title `{0}` is not a valid class name; use an \
+         identifier that starts with an uppercase letter and holds only letters and digits"
+    )]
+    InvalidTitle(String),
     #[error("external graph schema reference `{0}` is not allowed")]
     ExternalReference(String),
     #[error("graph schema reference `{0}` does not name a declared model")]
@@ -392,21 +397,24 @@ impl DynamicGraphSchema {
             .and_then(Value::as_str)
             .map(|reference| reference_target_from_definitions(reference, definitions))
             .transpose()?;
-        let root = root_definition
-            .clone()
-            .or_else(|| {
-                root_obj
-                    .get("title")
-                    .and_then(Value::as_str)
-                    .filter(|title| !title.is_empty())
-                    .map(str::to_string)
-            })
-            .ok_or(DynamicGraphError::MissingTitle)?;
         let root_schema = root_definition
             .as_ref()
             .and_then(|name| definitions.and_then(|defs| defs.get(name)))
             .and_then(Value::as_object)
             .unwrap_or(root_obj);
+        // Python looks the generated root class up by the schema's `title`, so
+        // a root without a usable class name cannot be built there. A `$ref`
+        // root keeps its `$defs` key as its type name, like every other model,
+        // but must still point at a titled model.
+        let title = root_schema
+            .get("title")
+            .and_then(Value::as_str)
+            .filter(|title| !title.is_empty())
+            .ok_or(DynamicGraphError::MissingTitle)?;
+        if !is_python_class_name(title) {
+            return Err(DynamicGraphError::InvalidTitle(title.to_string()));
+        }
+        let root = root_definition.unwrap_or_else(|| title.to_string());
 
         let mut raw_models: HashMap<String, &Map<String, Value>> = HashMap::new();
         raw_models.insert(root.clone(), root_schema);
@@ -617,6 +625,21 @@ fn non_null_variants(variants: &[Value]) -> Vec<&Value> {
         .iter()
         .filter(|variant| variant.get("type").and_then(Value::as_str) != Some("null"))
         .collect()
+}
+
+/// Whether `title` survives Python's schema-to-model step unchanged, so
+/// `graph_schema_to_graph_model`'s `namespace[schema["title"]]` finds the
+/// generated class. datamodel-code-generator capitalizes the first letter,
+/// drops `_`, `-` and spaces (`person_model` becomes `PersonModel`), rejects
+/// a leading digit and the `None`/`True`/`False` keywords, and renames a
+/// title that collides with its own imports (`BaseModel`); any of those makes
+/// the Python lookup raise `KeyError`. `DataPoint` names the base class every
+/// generated model inherits from.
+fn is_python_class_name(title: &str) -> bool {
+    let mut chars = title.chars();
+    chars.next().is_some_and(char::is_uppercase)
+        && chars.all(char::is_alphanumeric)
+        && !matches!(title, "None" | "True" | "False" | "BaseModel" | "DataPoint")
 }
 
 /// Whether a model reference appears anywhere inside a field schema.
@@ -1078,6 +1101,137 @@ mod tests {
             error,
             DynamicGraphError::ExternalReference("https://example.com/schema.json".to_string())
         );
+    }
+
+    #[test]
+    fn rejects_an_external_root_reference() {
+        let error = DynamicGraphSchema::compile(&json!({
+            "$ref": "other.json#/$defs/Person",
+            "$defs": {"Person": {"title": "Person", "properties": {}}}
+        }))
+        .expect_err("an external root ref must be rejected");
+        assert_eq!(
+            error,
+            DynamicGraphError::ExternalReference("other.json#/$defs/Person".to_string())
+        );
+    }
+
+    #[test]
+    fn rejects_a_reference_to_an_undeclared_model() {
+        let error = DynamicGraphSchema::compile(&json!({
+            "title": "Company",
+            "properties": {"ceo": {"$ref": "#/$defs/Person"}}
+        }))
+        .expect_err("a dangling field ref must be rejected");
+        assert_eq!(
+            error,
+            DynamicGraphError::UnknownReference("#/$defs/Person".to_string())
+        );
+
+        let error = DynamicGraphSchema::compile(&json!({"$ref": "#/$defs/Person"}))
+            .expect_err("a dangling root ref must be rejected");
+        assert_eq!(
+            error,
+            DynamicGraphError::UnknownReference("#/$defs/Person".to_string())
+        );
+    }
+
+    #[test]
+    fn rejects_reserved_data_point_fields() {
+        for field in ["id", "type", "belongs_to_set", "importance_weight"] {
+            let error = DynamicGraphSchema::compile(&json!({
+                "title": "Company",
+                "properties": {"name": {"type": "string"}, field: {"type": "string"}}
+            }))
+            .expect_err("a reserved DataPoint field must be rejected");
+            assert_eq!(
+                error,
+                DynamicGraphError::ReservedField {
+                    model: "Company".to_string(),
+                    field: field.to_string(),
+                }
+            );
+        }
+        // Nested models are held to the same rule.
+        let mut nested = schema();
+        nested["$defs"]["Person"]["properties"]["created_at"] = json!({"type": "integer"});
+        assert_eq!(
+            DynamicGraphSchema::compile(&nested).expect_err("nested reserved field"),
+            DynamicGraphError::ReservedField {
+                model: "Person".to_string(),
+                field: "created_at".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn requires_a_root_title() {
+        for schema in [
+            json!({"properties": {}}),
+            json!({"title": "", "properties": {}}),
+            json!({"title": 7, "properties": {}}),
+        ] {
+            assert_eq!(
+                DynamicGraphSchema::compile(&schema).expect_err("untitled root"),
+                DynamicGraphError::MissingTitle,
+                "{schema}"
+            );
+        }
+    }
+
+    #[test]
+    fn requires_a_root_title_python_can_use_as_a_class_name() {
+        // Each of these is rewritten or refused by datamodel-code-generator,
+        // so Python's `namespace[schema["title"]]` lookup raises `KeyError`.
+        for title in [
+            "company",
+            "Company Graph",
+            "Company_Graph",
+            "Company-Graph",
+            "1Company",
+            "_Company",
+            "None",
+            "True",
+            "BaseModel",
+            "DataPoint",
+        ] {
+            assert_eq!(
+                DynamicGraphSchema::compile(&json!({"title": title, "properties": {}}))
+                    .expect_err("title must be rejected"),
+                DynamicGraphError::InvalidTitle(title.to_string()),
+            );
+        }
+        for title in ["Company", "CompanyGraph2", "COMPANY", "École"] {
+            let compiled = DynamicGraphSchema::compile(&json!({"title": title, "properties": {}}))
+                .unwrap_or_else(|error| panic!("{title} should compile: {error}"));
+            assert_eq!(compiled.root_model().name, title);
+        }
+    }
+
+    #[test]
+    fn a_reference_root_must_point_at_a_titled_model() {
+        let compiled = DynamicGraphSchema::compile(&json!({
+            "$ref": "#/$defs/Person",
+            "$defs": {"Person": {"title": "Person", "properties": {"name": {"type": "string"}}}}
+        }))
+        .expect("a titled ref root should compile");
+        assert_eq!(compiled.root_model().name, "Person");
+
+        // A top-level title does not stand in for the referenced model's.
+        let error = DynamicGraphSchema::compile(&json!({
+            "title": "Root",
+            "$ref": "#/$defs/Person",
+            "$defs": {"Person": {"properties": {"name": {"type": "string"}}}}
+        }))
+        .expect_err("an untitled ref root must be rejected");
+        assert_eq!(error, DynamicGraphError::MissingTitle);
+
+        let error = DynamicGraphSchema::compile(&json!({
+            "$ref": "#/$defs/person",
+            "$defs": {"person": {"title": "person", "properties": {}}}
+        }))
+        .expect_err("a ref root title must be a class name");
+        assert_eq!(error, DynamicGraphError::InvalidTitle("person".to_string()));
     }
 
     #[test]
