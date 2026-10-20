@@ -259,7 +259,11 @@ or environment variable for either.
   that function when upstream `cognee` is importable, otherwise with
   `model_json_schema()` minus the default field titles), or the schema as a
   dict or JSON string. Upstream's own `KnowledgeGraph` means the default
-  pipeline.
+  pipeline. As upstream, `chunk_attachment` with a class that is not a
+  `DataPoint` subclass raises `CogneeValidationError` — checked when
+  upstream's `DataPoint` is importable. Without upstream `cognee` there is no
+  `DataPoint` to subclass, so a class is accepted as its schema; a schema
+  dict or string is always accepted, as upstream's HTTP route takes it.
 
 `null` and `{}` mean the default `KnowledgeGraph`, as Python's HTTP route reads
 an omitted or empty `graph_model`. Every entry point validates before any side

@@ -282,12 +282,53 @@ def _graph_model_to_schema(graph_model: Any) -> Any:
     )
 
 
+def _upstream_datapoint() -> Optional[type]:
+    """Upstream ``cognee``'s ``DataPoint`` class, or ``None`` when absent.
+
+    ``None`` when upstream ``cognee`` is not importable, including when
+    ``cognee`` is this repo's drop-in shim, which defines no ``DataPoint``.
+    """
+    try:
+        from cognee.infrastructure.engine import DataPoint
+    except ImportError:
+        return None
+    return DataPoint
+
+
+def _check_chunk_attachment_model(graph_model: Any, chunk_attachment: Any) -> None:
+    """Raise as upstream ``cognify`` does for ``chunk_attachment`` with a
+    model class that is not a ``DataPoint`` subclass.
+
+    Upstream (``cognify.py``) requires ``issubclass(graph_model, DataPoint)``
+    whenever ``chunk_attachment`` is set. That check is only possible when
+    upstream's ``DataPoint`` is importable, so it applies then and only to a
+    class: a JSON Schema dict or string, like upstream's HTTP route, always
+    describes a ``DataPoint``-like model, and without upstream there is no
+    ``DataPoint`` to subclass, so a class is accepted as its schema. A missing
+    model (or the default ``KnowledgeGraph``) is rejected natively, because
+    ``chunk_attachment`` without a graph schema fails validation.
+    """
+    if chunk_attachment is None or not isinstance(graph_model, type):
+        return
+    if _is_default_graph_model(graph_model):
+        return
+    data_point = _upstream_datapoint()
+    if data_point is not None and not issubclass(graph_model, data_point):
+        raise CogneeValidationError(
+            "chunk_attachment requires a custom DataPoint graph_model; "
+            f"{graph_model.__name__!r} is not a DataPoint subclass."
+        )
+
+
 def _cognify_opts(kwargs: dict) -> Optional[dict]:
     """The native cognify ``opts`` for compat ``**kwargs``.
 
     ``graph_model`` is converted by :func:`_graph_model_to_schema` and sent as
     ``graph_schema``; ``chunk_attachment`` and every other keyword pass
-    through (snake_case keys are normalised natively). Unknown keywords are
+    through (snake_case keys are normalised natively); a ``chunk_attachment``
+    with a non-``DataPoint`` class raises as upstream does, when upstream's
+    ``DataPoint`` is importable (see :func:`_check_chunk_attachment_model`).
+    Unknown keywords are
     logged as a warning natively — upstream forwards them into the LLM call
     rather than raising — and wrongly-typed or invalid values raise.
     """
@@ -295,7 +336,9 @@ def _cognify_opts(kwargs: dict) -> Optional[dict]:
     if "graph_model" in opts:
         if opts.get("graph_schema") is not None:
             raise CogneeValidationError("pass either graph_model or graph_schema, not both")
-        opts["graph_schema"] = _graph_model_to_schema(opts.pop("graph_model"))
+        graph_model = opts.pop("graph_model")
+        _check_chunk_attachment_model(graph_model, opts.get("chunk_attachment"))
+        opts["graph_schema"] = _graph_model_to_schema(graph_model)
     return opts or None
 
 

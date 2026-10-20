@@ -151,8 +151,11 @@ fn opt_bool(opts: &serde_json::Value, key: &str) -> Result<Option<bool>, SdkErro
 /// async registry) on top of `cfg`.
 ///
 /// Every known key is type-checked: a present value of the wrong shape is a
-/// [`SdkError::Validation`] rather than a silent no-op, and an unknown key is
-/// logged as a warning (see [`unknown_cognify_opts`]). `graphSchema` (alias
+/// [`SdkError::Validation`] rather than a silent no-op. An unknown key is
+/// ignored here; [`check_cognify_opts`], which every public cognify op runs
+/// first, logs it as a warning exactly once (see [`unknown_cognify_opts`]),
+/// so the second application in [`cognify_config_with_opts`] does not repeat
+/// it. `graphSchema` (alias
 /// `graphModel`) takes a JSON Schema object or a string holding one;
 /// `chunkAttachment` takes `"direct"` or `"all"`. The combination is checked
 /// by [`cognee::cognify::CognifyConfig::validate`], which the callers run.
@@ -169,14 +172,6 @@ pub fn apply_cognify_opts(
         return Err(SdkError::Validation(format!(
             "cognify options must be an object, got {opts}"
         )));
-    }
-    let unknown = unknown_cognify_opts(opts);
-    if !unknown.is_empty() {
-        tracing::warn!(
-            unknown = ?unknown,
-            known = ?COGNIFY_OPT_KEYS,
-            "ignoring unknown cognify option(s)"
-        );
     }
     if let Some(n) = opt_usize(opts, "chunkSize")? {
         cfg = cfg.with_chunk_size(n);
@@ -223,6 +218,20 @@ pub fn apply_cognify_opts(
     Ok(cfg)
 }
 
+/// Log the [`unknown_cognify_opts`] of `opts` as one warning naming every
+/// unknown key, so a misspelled option is visible rather than silently
+/// dropped. Called once per op, from [`check_cognify_opts`].
+fn warn_unknown_cognify_opts(opts: &serde_json::Value) {
+    let unknown = unknown_cognify_opts(opts);
+    if !unknown.is_empty() {
+        tracing::warn!(
+            unknown = ?unknown,
+            known = ?COGNIFY_OPT_KEYS,
+            "ignoring unknown cognify option(s)"
+        );
+    }
+}
+
 /// [`CognifyConfig::validate`](cognee::cognify::CognifyConfig::validate) as a
 /// binding-boundary error.
 fn validate_cognify_config(cfg: &cognee::cognify::CognifyConfig) -> Result<(), SdkError> {
@@ -241,6 +250,7 @@ fn validate_cognify_config(cfg: &cognee::cognify::CognifyConfig) -> Result<(), S
 /// rejects — including a graph schema with a non-LLM graph backend.
 pub fn check_cognify_opts(svc: &CogneeServices, opts: &serde_json::Value) -> Result<(), SdkError> {
     let cfg = apply_cognify_opts(svc.cognify_config.clone(), opts)?;
+    warn_unknown_cognify_opts(opts);
     if cfg.graph_schema.is_some() && selects_graph_backend(&svc.component_manager, opts)? {
         return Err(SdkError::Validation(
             "invalid cognify options: graph_schema is only supported by the LLM extractor; \

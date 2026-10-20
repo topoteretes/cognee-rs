@@ -179,6 +179,76 @@ fn unknown_keys_are_reported_and_known_ones_are_not() {
     assert!(unknown_cognify_opts(&Value::Null).is_empty());
 }
 
+/// Captures everything a `fmt` subscriber writes, so a test can read the
+/// warnings an op logs.
+#[derive(Clone, Default)]
+struct CapturedLogs(Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl CapturedLogs {
+    fn text(&self) -> String {
+        // lock poison is unrecoverable
+        String::from_utf8(self.0.lock().unwrap().clone()).expect("utf-8 log output")
+    }
+}
+
+impl std::io::Write for CapturedLogs {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        // lock poison is unrecoverable
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for CapturedLogs {
+    type Writer = Self;
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
+}
+
+const UNKNOWN_WARNING: &str = "ignoring unknown cognify option(s)";
+
+/// The unknown-key warning is what keeps a misspelled option from vanishing,
+/// so it must fire and name the key — and only once per op: `cognify` and
+/// `add_and_cognify` run `check_cognify_opts` and later
+/// `cognify_config_with_opts` on the same opts, and only the first warns.
+#[tokio::test]
+async fn an_unknown_key_is_warned_about_once_by_name() {
+    let dir = TempDir::new().expect("tempdir");
+    let state = HandleState::from_settings(settings_under(&dir));
+    let svc = services_under(&state).await;
+
+    let logs = CapturedLogs::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(logs.clone())
+        .with_ansi(false)
+        .with_max_level(tracing::Level::WARN)
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    let opts = json!({ "chunkAtachment": "all", "chunkSize": 512 });
+    check_cognify_opts(&svc, &opts).expect("an unknown key is not an error");
+    let text = logs.text();
+    assert_eq!(text.matches(UNKNOWN_WARNING).count(), 1, "{text}");
+    // Exactly the misspelled key: the known `chunkSize` is not reported.
+    assert!(text.contains(r#"unknown=["chunkAtachment"]"#), "{text}");
+
+    // The second application on the same opts stays silent.
+    cognify_config_with_opts(&svc, &opts)
+        .await
+        .expect("an unknown key is not an error");
+    apply(opts).expect("an unknown key is not an error");
+    let text = logs.text();
+    assert_eq!(text.matches(UNKNOWN_WARNING).count(), 1, "{text}");
+
+    // Known keys alone warn about nothing.
+    check_cognify_opts(&svc, &json!({ "chunkSize": 512 })).expect("valid");
+    assert_eq!(logs.text().matches(UNKNOWN_WARNING).count(), 1);
+}
+
 // ---------------------------------------------------------------------------
 // Validation through the services-backed entry points.
 // ---------------------------------------------------------------------------

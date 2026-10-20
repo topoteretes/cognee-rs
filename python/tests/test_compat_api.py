@@ -461,6 +461,51 @@ async def test_compat_cognify_sends_graph_schema_and_chunk_attachment():
 
 
 @pytest.mark.asyncio
+async def test_compat_chunk_attachment_requires_a_datapoint_class(monkeypatch):
+    """Upstream ``cognify`` raises for ``chunk_attachment`` with a class that
+    is not a ``DataPoint`` subclass; compat does too when upstream's
+    ``DataPoint`` is importable, and accepts a class as its schema when not."""
+    import cognee_py.compat as _compat
+
+    class DataPoint:
+        pass
+
+    class Entity(DataPoint, _FakeModel):
+        pass
+
+    recorder = _RecordingHandle()
+    _compat._default_handle = recorder
+    try:
+        monkeypatch.setattr(_compat, "_upstream_datapoint", lambda: DataPoint)
+        with pytest.raises(cp.CogneeValidationError, match="not a DataPoint subclass"):
+            await cognee.cognify("ds", graph_model=_FakeModel, chunk_attachment="all")
+        with pytest.raises(cp.CogneeValidationError, match="not a DataPoint subclass"):
+            await cognee.add_and_cognify(
+                "text", "ds", graph_model=_FakeModel, chunk_attachment="direct"
+            )
+        assert recorder.calls == [], "rejected before reaching the native layer"
+
+        monkeypatch.setattr(_compat, "_graph_model_to_schema", lambda model: _GRAPH_SCHEMA)
+        await cognee.cognify("ds", graph_model=Entity, chunk_attachment="all")
+        # Without chunk_attachment any model class is fine, as upstream.
+        await cognee.cognify("ds", graph_model=_FakeModel)
+        # A schema dict is DataPoint-like by construction, as upstream's HTTP route.
+        await cognee.cognify("ds", graph_model=_GRAPH_SCHEMA, chunk_attachment="all")
+
+        # No upstream DataPoint (the drop-in shim): a class is taken as its schema.
+        monkeypatch.setattr(_compat, "_upstream_datapoint", lambda: None)
+        await cognee.cognify("ds", graph_model=_FakeModel, chunk_attachment="all")
+    finally:
+        _compat.reset_default_handle()
+    assert [call[2] for call in recorder.calls] == [
+        {"graph_schema": _GRAPH_SCHEMA, "chunk_attachment": "all"},
+        {"graph_schema": _GRAPH_SCHEMA},
+        {"graph_schema": _GRAPH_SCHEMA, "chunk_attachment": "all"},
+        {"graph_schema": _GRAPH_SCHEMA, "chunk_attachment": "all"},
+    ]
+
+
+@pytest.mark.asyncio
 async def test_compat_cognify_rejects_graph_model_and_graph_schema_together():
     import cognee_py.compat as _compat
     _compat._default_handle = _RecordingHandle()
