@@ -3330,6 +3330,7 @@ mod tests {
                     "required": ["name"]
                 }
             },
+            "title": "Person",
             "$ref": "#/$defs/Person"
         })
     }
