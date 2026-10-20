@@ -63,7 +63,7 @@ use crate::dynamic_graph::{
     store_dynamic_graph_batch,
 };
 use crate::error::CognifyError;
-use crate::fact_extraction::{FactExtractor, KnowledgeGraph};
+use crate::fact_extraction::{FactExtractor, KnowledgeGraph, default_graph_prompt_with_hints};
 use crate::failure::{
     FailurePolicy, FailureReport, FailureStage, FailureStop, RollbackScope, StageFailure,
 };
@@ -751,7 +751,9 @@ fn chunk_entity_links(
 /// Computed once per document over that document's chunks in `chunk_index`
 /// order ([`crate::temporal_hints::document_temporal_hints`]), so the rolling
 /// base flows forward through the document and never crosses into another.
-fn chunk_temporal_hints(chunks: &[DocumentChunk]) -> HashMap<Uuid, Vec<String>> {
+fn chunk_temporal_hints<'a>(
+    chunks: impl IntoIterator<Item = &'a DocumentChunk>,
+) -> HashMap<Uuid, Vec<String>> {
     let mut by_document: HashMap<Uuid, Vec<&DocumentChunk>> = HashMap::new();
     for chunk in chunks {
         by_document
@@ -1864,13 +1866,15 @@ fn web_page_provenance_edge_row(
 }
 
 // ---------------------------------------------------------------------------
-// Task 3b: extract_custom_graph_from_data (custom graph model path)
+// Task 3 (custom schema): extract_dynamic_graphs_from_data
 // ---------------------------------------------------------------------------
 
 /// Extract custom DataPoint graphs from chunks using a runtime JSON Schema.
 ///
-/// This is the object-safe counterpart of [`extract_custom_graph_from_data`].
-/// Python creates Pydantic classes at runtime; Rust compiles the same schema
+/// The custom-model branch of Python's `extract_graph_from_data`: one
+/// `extract_content_graph` call per chunk, with the same prompt the default
+/// path sends (the default graph prompt with the chunk's temporal hints, or
+/// the custom prompt verbatim). Python creates Pydantic classes at runtime; Rust compiles the same schema
 /// boundary into [`DynamicGraphSchema`] and asks the object-safe LLM API for a
 /// raw structured value. Persistence is deliberately a later step so the
 /// fused extraction/summarization task retains its current ownership boundary.
@@ -1894,11 +1898,30 @@ pub async fn extract_dynamic_graphs_from_data(
         .filter(|document| document.document_type == "dlt_row")
         .map(|document| document.base.id)
         .collect();
-    let chunks: Vec<(String, Uuid, Uuid)> = input
+    let extractable: Vec<&DocumentChunk> = input
         .chunks
         .iter()
         .filter(|chunk| !dlt_doc_ids.contains(&chunk.document_id))
-        .map(|chunk| (chunk.text.clone(), chunk.base.id, chunk.document_id))
+        .collect();
+    // Date hints for the default prompt, computed per document over the whole
+    // extraction set exactly as `extract_graph_from_data` does: Python's
+    // `extract_content_graph` renders them into the default prompt whatever
+    // the response model, and sends a custom prompt verbatim with none.
+    let mut temporal_hints = if config.custom_extraction_prompt.is_none() {
+        chunk_temporal_hints(extractable.iter().copied())
+    } else {
+        HashMap::new()
+    };
+    let chunks: Vec<(String, Uuid, Uuid, Vec<String>)> = extractable
+        .into_iter()
+        .map(|chunk| {
+            (
+                chunk.text.clone(),
+                chunk.base.id,
+                chunk.document_id,
+                temporal_hints.remove(&chunk.base.id).unwrap_or_default(),
+            )
+        })
         .collect();
     if chunks.is_empty() {
         return Ok(DynamicExtractionData {
@@ -1910,10 +1933,7 @@ pub async fn extract_dynamic_graphs_from_data(
 
     let failure_policy = config.failure_policy();
     let max_parallel = config.max_parallel_extractions.max(1);
-    let prompt = config
-        .custom_extraction_prompt
-        .clone()
-        .unwrap_or_else(|| FactExtractor::default_graph_prompt().to_string());
+    let custom_prompt = config.custom_extraction_prompt.clone();
     let dataset_id = input.dataset_id;
     let mut failures = input.failures.clone();
     let mut graphs = Vec::new();
@@ -1922,10 +1942,14 @@ pub async fn extract_dynamic_graphs_from_data(
     for (batch_index, batch) in chunks.chunks(config.chunks_per_batch).enumerate() {
         let owned_batch: Vec<_> = batch.to_vec();
         let mut results: Vec<_> = futures::stream::iter(owned_batch.into_iter().enumerate())
-            .map(|(position, (text, chunk_id, data_id))| {
+            .map(|(position, (text, chunk_id, data_id, hints))| {
                 let llm = Arc::clone(&llm);
                 let schema = Arc::clone(&schema);
-                let prompt = prompt.clone();
+                let prompt = match &custom_prompt {
+                    Some(prompt) => prompt.clone(),
+                    None => default_graph_prompt_with_hints(&hints)
+                        .unwrap_or_else(|| FactExtractor::default_graph_prompt().to_string()),
+                };
                 async move {
                     // Spawned like the other extractors: CPU-bound validation
                     // spreads across the runtime, and a panicking chunk becomes

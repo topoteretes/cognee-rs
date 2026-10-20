@@ -171,6 +171,12 @@ top-level `title`, and it must equal the `$defs` key the `$ref` points at
 top-level title, raising `KeyError` without one, and any other title makes its
 generator wrap the model in a `RootModel` it cannot store.
 
+Each chunk is extracted with the same system prompt the default path sends,
+as Python's `extract_content_graph` does for any response model: the default
+graph prompt with that chunk's temporal normalization hints, or a
+`custom_extraction_prompt` verbatim, with no hints. Only the response schema
+differs.
+
 Only the single-pass LLM extractor honours a custom schema: `validate()` rejects
 `graph_schema` together with a `graph_backend` or the `cascade` extraction
 strategy, as Python raises for a custom `graph_model` with a non-LLM extractor.
